@@ -38,9 +38,9 @@ data access patterns, and service-to-service communication.
 
 3. **Multiple owners are allowed.** On both `NODE.md` and leaf files.
 
-4. **No inheritance.** Each `NODE.md` explicitly declares its owners. A parent folder's owners have no implicit authority over child folders.
+4. **Inheritance with override.** If a `NODE.md` does not declare owners, it inherits from the nearest parent directory's `NODE.md` that does. When a `NODE.md` explicitly declares owners, it fully overrides the parent — the parent folder's owners have no implicit authority over child folders.
 
-5. **Every folder requires a NODE.md.** Creating a subfolder means someone must own it. This forces deliberate decisions about when to introduce new subtrees.
+5. **Every folder requires a NODE.md.** Creating a subfolder means someone must think about ownership — either declare owners explicitly or inherit from the parent.
 
 ## Example
 
