@@ -1,6 +1,6 @@
 ---
-title: "Proposal: Node Naming and Ownership Model"
-status: draft
+title: "Node Naming and Ownership Model"
+status: approved
 ---
 
 # Node Naming and Ownership Model
