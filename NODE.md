@@ -49,4 +49,10 @@ Small, agent-centric teams — founders, engineers, and product builders who wor
 
 ---
 
+## Nodes
+
+- [members](members/NODE.md) — Member definitions and work specifications.
+
+---
+
 *This repository is the first node of its own tree. It was initialized by an AI agent.*
