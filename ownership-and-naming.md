@@ -42,6 +42,8 @@ data access patterns, and service-to-service communication.
 
 5. **Every folder requires a NODE.md.** Creating a subfolder means someone must think about ownership — either declare owners explicitly or inherit from the parent.
 
+6. **Wildcard owner.** `owners: [*]` means anyone can approve changes to that file or folder. The parent NODE.md owners still retain authority (per rule 1). Use this for community-editable content like tips, FAQs, or contribution guides.
+
 ## Example
 
 ```
@@ -49,10 +51,12 @@ data access patterns, and service-to-service communication.
   NODE.md          ← owners: [alice]
   auth.md          ← owners: [carol]
   storage.md       ← (no owners declared)
+  tips.md          ← owners: [*]
 ```
 
 - **auth.md** — both Alice and Carol can approve changes
 - **storage.md** — only Alice can approve changes (governed by NODE.md)
+- **tips.md** — anyone can approve changes; Alice also retains authority (governed by NODE.md)
 - **NODE.md** — only Alice can approve changes
 
 ## Leaf Files
