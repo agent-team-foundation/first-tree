@@ -25,23 +25,6 @@ Ask yourself: **Does the tree need updating?**
 - Did you find the tree was wrong or outdated? That's a tree bug — fix it.
 - Not every task changes the tree, but the question must always be asked.
 
-## Ownership Model
+## Reference
 
-- `NODE.md` owners govern all files in their folder.
-- Leaf file owners are additive — the NODE.md owners always retain authority.
-- `owners: []` means ownership is inherited from the nearest parent that declares owners.
-- `owners: [*]` means anyone can edit. When declared on NODE.md, anyone can add or edit leaf nodes in that folder. Parent NODE.md owners still retain authority.
-- When a NODE.md explicitly declares owners, it fully overrides the parent — parent owners have no implicit authority over child folders.
-
-## Tree Structure
-
-- Every folder has a `NODE.md` (the parent node — description + ownership).
-- Other `.md` files are leaf nodes (specific topics within the domain).
-- Domains are organized by concern (what an agent needs to know to act), not by repo or team.
-
-## Key Files
-
-- `NODE.md` — root node, domain map, and principles
-- `principles.md` — detailed explanation of tree principles with examples
-- `practices.md` — tips on building and maintaining the tree
-- `tips.md` — practical tips for working with the tree
+For ownership rules, tree structure, and key files, see [NODE.md](NODE.md) and [ownership-and-naming.md](ownership-and-naming.md).
