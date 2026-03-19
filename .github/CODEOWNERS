@@ -1,0 +1,44 @@
+# Auto-generated from Context Tree. Do not edit manually.
+
+/*                                                 @liuchao-001 @286ljb
+/kael/                                             @liuchao-001 @286ljb
+/kael/agent/                                       @yuezengwu @baixiaohang
+/kael/agent/context.md                             @yuezengwu @baixiaohang
+/kael/agent/memory.md                              @yuezengwu @baixiaohang
+/kael/agent/runtime.md                             @yuezengwu @baixiaohang
+/kael/agent/skills.md                              @yuezengwu @baixiaohang
+/kael/chat/                                        @yuezengwu
+/kael/chat/channels.md                             @yuezengwu
+/kael/chat/frontend.md                             @yuezengwu
+/kael/chat/streaming.md                            @yuezengwu
+/kael/chat/preview/                                @yuezengwu
+/kael/chat/preview/slides.md                       @yuezengwu @liuchao-001
+/kael/environment/                                 @286ljb
+/kael/environment/browser.md                       @286ljb
+/kael/environment/desktop.md                       @286ljb
+/kael/environment/sandbox.md                       @286ljb
+/kael/knowledge/                                   @baixiaohang
+/kael/knowledge/processing.md                      @baixiaohang
+/kael/knowledge/reading.md                         @baixiaohang
+/kael/knowledge/web.md                             @baixiaohang
+/kael/platform/                                    @liuchao-001 @286ljb
+/kael/platform/project-asset-system.md             @liuchao-001 @286ljb @Gandy2025
+/kael/platform/workspace.md                        @liuchao-001 @286ljb @Gandy2025
+/kael/platform/agent-security/                     @liuchao-001 @286ljb
+/kael/platform/auth/                               @liuchao-001 @286ljb
+/kael/platform/integrations/                       @liuchao-001 @286ljb
+/kael/platform/integrations/coding-agent-integrations.md @liuchao-001 @286ljb @Gandy2025
+/kael/platform/integrations/im-channels.md         @liuchao-001 @286ljb @Gandy2025
+/kael/platform/integrations/kael-api.md            @liuchao-001 @286ljb
+/kael/platform/security/                           @liuchao-001 @286ljb
+/kael/skills/                                      @liuchao-001 @286ljb
+/kael/skills/slides/                               @liuchao-001
+/marketing/                                        @liuchao-001 @286ljb
+/members/                                          @liuchao-001 @286ljb
+/members/yuezengwu.md                              @liuchao-001 @286ljb @yuezengwu
+/message-system/                                   @baixiaohang
+/open-source/                                      @liuchao-001 @286ljb
+/proposals/agent-message-system.20260319.md        @baixiaohang
+/about.md                                          @liuchao-001 @286ljb
+/infrastructure.md                                 @liuchao-001 @286ljb
+/ownership-and-naming.md                           @liuchao-001 @286ljb

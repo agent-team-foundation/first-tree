@@ -1,0 +1,230 @@
+name: PR Review
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  issue_comment:
+    types: [created]
+
+jobs:
+  review:
+    if: >
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request &&
+       contains(github.event.comment.body, '@claude'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    env:
+      ANTHROPIC_BASE_URL: "https://openrouter.ai/api"
+      ANTHROPIC_AUTH_TOKEN: ${{ secrets.OPENROUTER_API_KEY }}
+      ANTHROPIC_API_KEY: ""
+      ANTHROPIC_DEFAULT_SONNET_MODEL: "anthropic/claude-sonnet-4.6"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Claude Code
+        run: curl -fsSL https://claude.ai/install.sh | bash
+
+      - name: Get PR info
+        id: pr
+        run: |
+          PR_NUMBER=${{ github.event.pull_request.number || github.event.issue.number }}
+          echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          gh pr diff "$PR_NUMBER" > /tmp/pr-diff.txt
+          gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid > /tmp/pr-head-sha.txt
+
+      - name: Run Claude review
+        run: |
+          # Build prompt as a file to avoid ARG_MAX limits on large diffs
+          {
+            echo "## AGENT.md"
+            echo ""
+            cat AGENT.md
+            echo ""
+            echo "## Root NODE.md"
+            echo ""
+            cat NODE.md
+            echo ""
+            echo "## Review Instructions"
+            echo ""
+            cat .github/prompts/pr-review.md
+            echo ""
+            echo "## PR Diff"
+            echo ""
+            echo '```'
+            cat /tmp/pr-diff.txt
+            echo '```'
+          } > /tmp/review-prompt.txt
+
+          ~/.local/bin/claude -p \
+            --dangerously-skip-permissions \
+            --max-turns 6 \
+            < /tmp/review-prompt.txt \
+            > /tmp/review-output.txt 2>/tmp/review-stderr.txt || true
+
+          echo "=== Claude stderr ==="
+          cat /tmp/review-stderr.txt
+          echo "=== End stderr ==="
+
+      - name: Parse and post review
+        run: |
+          PR_NUMBER=${{ steps.pr.outputs.number }}
+          HEAD_SHA=$(cat /tmp/pr-head-sha.txt)
+          OUTPUT=$(cat /tmp/review-output.txt)
+
+          echo "=== Raw review output ==="
+          echo "$OUTPUT"
+          echo "=== End raw output ==="
+
+          # Extract verdict
+          VERDICT=$(echo "$OUTPUT" | grep -oP '^\s*\**VERDICT:\**\s*\K\S+' | head -1)
+          case "$VERDICT" in
+            APPROVE) EVENT="APPROVE" ;;
+            REQUEST_CHANGES) EVENT="REQUEST_CHANGES" ;;
+            *) EVENT="COMMENT" ;;
+          esac
+
+          # Extract summary
+          SUMMARY=$(echo "$OUTPUT" | grep -oP '^\s*\**SUMMARY:\**\s*\K.*' | head -1)
+          [ -z "$SUMMARY" ] && SUMMARY="Review completed."
+
+          BODY="${SUMMARY}
+
+          ---
+          *Automated review by Claude Code via OpenRouter*"
+
+          # Extract inline comments
+          COMMENTS_BLOCK=$(echo "$OUTPUT" | sed -n '/^INLINE_COMMENTS_START$/,/^INLINE_COMMENTS_END$/p' | sed '1d;$d')
+
+          if [ -z "$COMMENTS_BLOCK" ]; then
+            # No inline comments
+            gh api \
+              "repos/${{ github.repository }}/pulls/${PR_NUMBER}/reviews" \
+              -f body="$BODY" \
+              -f event="$EVENT" \
+              -f commit_id="$HEAD_SHA"
+          else
+            # Parse inline comments into JSON array
+            # Flush pending comment at === or END, handling missing trailing ===
+            echo "$COMMENTS_BLOCK" | awk '
+              BEGIN { printf "["; first=1; has_comment=0 }
+              /^FILE:/ {
+                # Flush previous comment if pending
+                if (has_comment) {
+                  gsub(/\\/, "\\\\", body)
+                  gsub(/"/, "\\\"", body)
+                  gsub(/\n/, "\\n", body)
+                  if (!first) printf ","
+                  first=0
+                  printf "{\"path\":\"%s\",\"line\":%s,\"body\":\"%s\"}", prev_path, prev_line, body
+                }
+                match($0, /^FILE: (.+) LINE: ([0-9]+)/, arr)
+                prev_path = arr[1]
+                prev_line = arr[2]
+                body = ""
+                has_comment = 1
+                next
+              }
+              /^---$/ { next }
+              {
+                if (body != "") body = body "\\n" $0
+                else body = $0
+              }
+              END {
+                if (has_comment) {
+                  gsub(/\\/, "\\\\", body)
+                  gsub(/"/, "\\\"", body)
+                  gsub(/\n/, "\\n", body)
+                  if (!first) printf ","
+                  printf "{\"path\":\"%s\",\"line\":%s,\"body\":\"%s\"}", prev_path, prev_line, body
+                }
+                printf "]"
+              }
+            ' > /tmp/comments.json
+
+            COMMENT_COUNT=$(jq 'length' /tmp/comments.json)
+            if [ "$COMMENT_COUNT" -eq 0 ]; then
+              gh api \
+                "repos/${{ github.repository }}/pulls/${PR_NUMBER}/reviews" \
+                -f body="$BODY" \
+                -f event="$EVENT" \
+                -f commit_id="$HEAD_SHA"
+            else
+              jq -n \
+                --arg body "$BODY" \
+                --arg event "$EVENT" \
+                --arg sha "$HEAD_SHA" \
+                --slurpfile comments /tmp/comments.json \
+                '{
+                  body: $body,
+                  event: $event,
+                  commit_id: $sha,
+                  comments: $comments[0]
+                }' > /tmp/review-payload.json
+
+              # Try inline review; fall back to summary-only if lines can't be resolved
+              if ! gh api \
+                "repos/${{ github.repository }}/pulls/${PR_NUMBER}/reviews" \
+                --input /tmp/review-payload.json 2>/tmp/review-api-error.txt; then
+                echo "Inline review failed, falling back to summary-only review"
+                cat /tmp/review-api-error.txt
+                # Append inline comments to the body as text
+                INLINE_TEXT=$(jq -r '.[] | "**\(.path):\(.line)** — \(.body)"' /tmp/comments.json)
+                FALLBACK_BODY="${SUMMARY}
+
+          ### Inline Comments
+
+          ${INLINE_TEXT}
+
+          ---
+          *Automated review by Claude Code via OpenRouter*"
+                gh api \
+                  "repos/${{ github.repository }}/pulls/${PR_NUMBER}/reviews" \
+                  -f body="$FALLBACK_BODY" \
+                  -f event="$EVENT" \
+                  -f commit_id="$HEAD_SHA"
+              fi
+            fi
+          fi
+
+      - name: Post full review output as comment
+        if: always()
+        run: |
+          PR_NUMBER=${{ steps.pr.outputs.number }}
+          OUTPUT=$(cat /tmp/review-output.txt 2>/dev/null || true)
+          STDERR=$(cat /tmp/review-stderr.txt 2>/dev/null || true)
+
+          # Write comment body to a temp file to avoid shell escaping issues
+          {
+            echo "## Claude Code Review Output"
+            echo ""
+            if [ -n "$OUTPUT" ]; then
+              echo "$OUTPUT" \
+                | sed '/^INLINE_COMMENTS_START$/d; /^INLINE_COMMENTS_END$/d' \
+                | sed '/^---$/d' \
+                | sed 's/^VERDICT: /**Verdict:** /' \
+                | sed 's/^SUMMARY: /**Summary:** /' \
+                | sed 's/^FILE: \(.*\) LINE: \([0-9]*\)$/#### \1:\2/'
+            else
+              echo "*No review output produced.*"
+            fi
+            if [ -n "$STDERR" ]; then
+              echo ""
+              echo "### Errors"
+              echo ""
+              echo '```'
+              echo "$STDERR"
+              echo '```'
+            fi
+            echo ""
+            echo "---"
+            echo "*Automated review by Claude Code via OpenRouter*"
+          } > /tmp/comment-body.md
+          gh pr comment "$PR_NUMBER" --body-file /tmp/comment-body.md

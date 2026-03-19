@@ -1,60 +1,44 @@
 ---
 title: Context Tree
-owners: [liuchao001]
+owners: [liuchao-001, 286ljb]
 ---
 
 # Context Tree
 
-**context-tree.ai** — Organizational memory for agent-centric teams.
+Organizational memory for agent-centric teams. A living knowledge base that agents and humans build and maintain together.
 
 ---
 
-## The Problem
+## Principles
 
-As AI agents become central to how teams work, a fundamental challenge emerges: **context is fragmented and ephemeral**. Design decisions live in someone's head. Reasoning behind code choices goes undocumented. When an agent needs to understand *why* something was built a certain way, there's nowhere to look.
+1. **Source of truth for decisions, not execution.** The tree captures the *what* and *why* — strategic choices, cross-domain relationships, constraints. Execution details stay in source systems. A node earns its place by compressing knowledge that would require traversing multiple systems to derive.
 
-Documents exist, but they decay. PRs are merged, issues closed, and the knowledge that produced them disappears.
+2. **Agents are first-class participants.** The tree is designed to be navigated and updated by agents, not just humans. Domains are organized by concern — what an agent needs to know to act — not by repo, team, or org chart.
 
----
+3. **Transparency by default.** All information is readable by everyone. Writing requires owner approval; reading is open.
 
-## The Idea
+4. **Git-native tree structure.** Each node is a file; each domain is a directory. Soft links allow cross-references without the complexity of a full graph. History, ownership, and review follow Git conventions.
 
-Context Tree is a **living organizational memory** — a tree-structured knowledge base that agents and humans build and maintain together.
-
-Every node in the tree represents a domain, decision, or design. Every node has an **owner**. Owners review and approve changes to their nodes. When a decision is made, it is written to the tree. When the code changes, the tree updates.
-
-The result is an organization where:
-
-- Every agent has access to the full context behind every decision
-- Every human can see the current state of any domain in plain language
-- Knowledge compounds over time instead of evaporating
+See [principles.md](principles.md) for detailed explanations and examples.
 
 ---
 
-## Design Principles
+## Domains
 
-**Transparency by default.** All information in the tree is readable by everyone — humans and agents alike. Writing requires owner approval; reading is open.
-
-**Agents as first-class participants.** The tree is designed to be navigated and updated by agents, not just humans. An agent starts from its assigned node and traverses the tree to build context before acting.
-
-**Tree over graph.** A tree structure keeps information organized and navigable. Soft links allow cross-references where needed without the complexity of a full graph.
-
-**Git as the foundation.** Each node is a file. The tree is a repository. History, merges, and ownership follow the same model that software engineering has refined for decades.
+- **[kael/](kael/NODE.md)** — AI agent product: reasoning, skills, knowledge, chat, environment, platform.
+- **[marketing/](marketing/NODE.md)** — Brand, positioning, campaigns, content strategy.
+- **[members/](members/NODE.md)** — Member definitions and work specifications.
+- **[message-system/](message-system/NODE.md)** — Communication infrastructure for agent-to-agent and agent-to-human collaboration.
+- **[proposals/](proposals/NODE.md)** — Temporary files and process documents (not agent context).
 
 ---
 
-## Who It's For
+## Working with the Tree
 
-Small, agent-centric teams — founders, engineers, and product builders who work alongside AI agents every day and want their organizational knowledge to grow with them, not against them.
+See [AGENT.md](AGENT.md) for agent instructions — the before/during/after workflow, ownership model, and tree maintenance.
 
----
+See [about.md](about.md) for background — the problem, the idea, and who it's for.
 
-## Nodes
+See [ownership-and-naming.md](ownership-and-naming.md) for the node naming and ownership model.
 
-- [members](members/NODE.md) — Member definitions and work specifications.
-- [proposals](proposals/NODE.md) — Temporary files and process documents (not agent context).
-- [message-system](message-system/NODE.md) — Communication infrastructure for agent-to-agent and agent-to-human collaboration.
-
----
-
-*This repository is the first node of its own tree. It was initialized by an AI agent.*
+See [infrastructure.md](infrastructure.md) for the six pillars of an agent-centric organization.

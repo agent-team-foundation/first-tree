@@ -1,3 +1,8 @@
+---
+title: Infrastructure for an Agent-Centric Organization
+owners: [liuchao-001]
+---
+
 # Infrastructure for an Agent-Centric Organization
 
 An agent-centric organization is one where humans and AI agents collaborate as peers — agents are not tools that humans invoke, but participants that own domains, make decisions, and operate continuously.

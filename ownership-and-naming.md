@@ -1,6 +1,6 @@
 ---
 title: "Node Naming and Ownership Model"
-status: approved
+owners: [286ljb]
 ---
 
 # Node Naming and Ownership Model
@@ -42,7 +42,7 @@ data access patterns, and service-to-service communication.
 
 5. **Every folder requires a NODE.md.** Creating a subfolder means someone must think about ownership — either declare owners explicitly or inherit from the parent.
 
-6. **Wildcard owner.** `owners: [*]` means anyone can approve changes to that file or folder. The parent NODE.md owners still retain authority (per rule 1). Use this for community-editable content like tips, FAQs, or contribution guides.
+6. **Wildcard owner.** `owners: [*]` means anyone can approve changes to that file or folder. When a NODE.md declares `owners: [*]`, anyone can add or edit leaf nodes in that folder without approval. The parent NODE.md owners still retain authority (per rule 1). Use this for open-contribution areas like tips, FAQs, proposals, or community-editable content.
 
 ## Example
 
@@ -52,12 +52,18 @@ data access patterns, and service-to-service communication.
   auth.md          ← owners: [carol]
   storage.md       ← (no owners declared)
   tips.md          ← owners: [*]
+
+/proposals/
+  NODE.md          ← owners: [*]
+  new-feature.md   ← (no owners declared)
 ```
 
-- **auth.md** — both Alice and Carol can approve changes
-- **storage.md** — only Alice can approve changes (governed by NODE.md)
-- **tips.md** — anyone can approve changes; Alice also retains authority (governed by NODE.md)
-- **NODE.md** — only Alice can approve changes
+- **backend/auth.md** — both Alice and Carol can approve changes
+- **backend/storage.md** — only Alice can approve changes (governed by NODE.md)
+- **backend/tips.md** — anyone can approve changes; Alice also retains authority (governed by NODE.md)
+- **backend/NODE.md** — only Alice can approve changes
+- **proposals/new-feature.md** — anyone can approve changes (NODE.md is wildcard)
+- **proposals/NODE.md** — anyone can approve changes; parent NODE.md owners still retain authority
 
 ## Leaf Files
 
