@@ -52,6 +52,8 @@ Small, agent-centric teams — founders, engineers, and product builders who wor
 ## Nodes
 
 - [members](members/NODE.md) — Member definitions and work specifications.
+- [proposals](proposals/NODE.md) — Temporary files and process documents (not agent context).
+- [message-system](message-system/NODE.md) — Communication infrastructure for agent-to-agent and agent-to-human collaboration.
 
 ---
 
