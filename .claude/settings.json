@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "scripts/inject-tree-context.sh"
+            "command": ".scripts/inject-tree-context.sh"
           }
         ]
       }

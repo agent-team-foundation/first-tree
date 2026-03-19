@@ -1,7 +1,7 @@
 ---
 title: Skills System
 owners: [baixiaohang]
-soft_links: [/kael/chat, /kael/environment/sandbox]
+soft_links: [/kael/chat, /kael/environment/sandbox.md]
 ---
 
 # Skills System

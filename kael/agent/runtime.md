@@ -1,6 +1,7 @@
 ---
 title: Runtime
 owners: [yuezengwu]
+soft_links: [/kael/chat, /kael/agent/context.md]
 ---
 
 # Runtime
@@ -24,5 +25,3 @@ On backend restart, the runtime detects orphaned tasks (agent_status = RUNNING w
 ## Message Queue
 
 An in-memory per-session queue ensures messages are processed sequentially. If a message arrives while the agent is running, it's queued and processed after the current task completes.
-
-soft_links: [/kael/chat, /kael/agent/context]

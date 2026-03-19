@@ -1,6 +1,6 @@
 ---
 title: Marketing
-owners: []
+owners: [liuchao-001, serenakeyitan]
 ---
 
 # Marketing

@@ -19,7 +19,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - run: python scripts/generate_codeowners.py
+      - run: python .scripts/generate_codeowners.py
 
       - name: Commit if changed
         run: |

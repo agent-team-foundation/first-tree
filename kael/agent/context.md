@@ -1,7 +1,7 @@
 ---
 title: Context Management
 owners: [baixiaohang]
-soft_links: [/kael/agent/memory]
+soft_links: [/kael/agent/memory.md]
 ---
 
 # Context Management

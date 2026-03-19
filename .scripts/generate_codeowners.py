@@ -168,7 +168,7 @@ def generate(check: bool = False) -> int:
             print("CODEOWNERS is up-to-date.")
             return 0
         else:
-            print("CODEOWNERS is out-of-date. Run: python scripts/generate_codeowners.py")
+            print("CODEOWNERS is out-of-date. Run: python .scripts/generate_codeowners.py")
             return 1
 
     CODEOWNERS_PATH.parent.mkdir(parents=True, exist_ok=True)

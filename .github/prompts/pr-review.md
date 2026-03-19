@@ -29,4 +29,4 @@ Rules:
 - Use --- to separate inline comments.
 - If there are no inline comments, omit the INLINE_COMMENTS_START/INLINE_COMMENTS_END tags entirely.
 - CRITICAL: The LINE number MUST be a line that appears in the diff (a changed or added line). GitHub only allows inline comments on lines that are part of the diff. Do NOT comment on unchanged lines — if you need to reference an unchanged line, include it in the SUMMARY instead.
-- Only flag real issues.
+- Only flag real problems in inline comments. Do NOT post positive feedback, praise, or "looks good" comments on individual lines. Do NOT suggest tiny wording improvements or stylistic nitpicks. If a change is correct, say nothing about it — silence means approval.

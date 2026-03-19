@@ -38,7 +38,7 @@ data access patterns, and service-to-service communication.
 
 3. **Multiple owners are allowed.** On both `NODE.md` and leaf files.
 
-4. **Inheritance with override.** If a `NODE.md` does not declare owners, it inherits from the nearest parent directory's `NODE.md` that does. When a `NODE.md` explicitly declares owners, it fully overrides the parent — the parent folder's owners have no implicit authority over child folders.
+4. **Inheritance with override.** Every node must declare an `owners` field. To inherit from the nearest parent `NODE.md` that declares owners, use `owners: []`. Omitting `owners` entirely is not permitted. When a `NODE.md` explicitly declares owners, it fully overrides the parent — the parent folder's owners have no implicit authority over child folders.
 
 5. **Every folder requires a NODE.md.** Creating a subfolder means someone must think about ownership — either declare owners explicitly or inherit from the parent.
 
@@ -50,19 +50,19 @@ data access patterns, and service-to-service communication.
 /backend/
   NODE.md          ← owners: [alice]
   auth.md          ← owners: [carol]
-  storage.md       ← (no owners declared)
+  storage.md       ← owners: [] (inherits from NODE.md)
   tips.md          ← owners: [*]
 
 /proposals/
   NODE.md          ← owners: [*]
-  new-feature.md   ← (no owners declared)
+  new-feature.md   ← owners: [] (inherits from NODE.md)
 ```
 
 - **backend/auth.md** — both Alice and Carol can approve changes
-- **backend/storage.md** — only Alice can approve changes (governed by NODE.md)
+- **backend/storage.md** — only Alice can approve changes (owners: [] inherits from NODE.md)
 - **backend/tips.md** — anyone can approve changes; Alice also retains authority (governed by NODE.md)
 - **backend/NODE.md** — only Alice can approve changes
-- **proposals/new-feature.md** — anyone can approve changes (NODE.md is wildcard)
+- **proposals/new-feature.md** — anyone can approve changes (owners: [] inherits wildcard from NODE.md)
 - **proposals/NODE.md** — anyone can approve changes; parent NODE.md owners still retain authority
 
 ## Leaf Files
