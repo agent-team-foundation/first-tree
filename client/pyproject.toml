@@ -1,0 +1,17 @@
+[project]
+name = "agent-hub-client"
+version = "0.1.0"
+description = "Agent Hub Client (Agent Runtime)"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.28,<1.0",
+    "websockets>=14.0,<15.0",
+    "pydantic>=2.0,<3.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_hub_client"]

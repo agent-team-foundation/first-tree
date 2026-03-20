@@ -1,0 +1,8 @@
+[project]
+name = "agent-hub"
+version = "0.1.0"
+description = "Agent Team Platform"
+requires-python = ">=3.11"
+
+[tool.uv.workspace]
+members = ["server", "client"]
