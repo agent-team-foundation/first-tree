@@ -67,7 +67,7 @@ agent-hub/
 ├── packages/
 │   ├── shared/                # @agent-hub/shared — 共享 Zod schema + 类型
 │   ├── server/                # @agent-hub/server — Fastify API 服务
-│   ├── client/                # @agent-hub/client — Agent Runtime SDK
+│   ├── client/                # @agent-hub/client — Agent Runtime
 │   └── web/                   # @agent-hub/web — React 管理后台
 ```
 
