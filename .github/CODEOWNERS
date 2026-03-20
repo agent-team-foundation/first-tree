@@ -1,6 +1,7 @@
 # Auto-generated from Context Tree. Do not edit manually.
 
-/*                                                 @liuchao-001 @286ljb
+/*                                                 @liuchao-001 @286ljb @baixiaohang
+/agent-hub/                                        @baixiaohang @yuezengwu
 /kael/                                             @liuchao-001 @286ljb
 /kael/agent/                                       @yuezengwu @baixiaohang
 /kael/agent/context.md                             @yuezengwu @baixiaohang
@@ -35,12 +36,13 @@
 /kael/skills/slides/                               @liuchao-001
 /marketing/                                        @liuchao-001 @serenakeyitan
 /marketing/ph-launch/                              @bohyy
-/members/                                          @liuchao-001 @286ljb
-/members/yuezengwu.md                              @liuchao-001 @286ljb @yuezengwu
-/message-system/                                   @baixiaohang
-/open-source/                                      @liuchao-001 @286ljb
+/members/                                          @liuchao-001 @286ljb @baixiaohang
+/members/yuezengwu.md                              @liuchao-001 @286ljb @baixiaohang @yuezengwu
+/open-source/                                      @liuchao-001 @286ljb @baixiaohang
+/proposals/agent-hub-overview.20260320.md          @baixiaohang
+/proposals/agent-hub-server-detailed-design.20260320.md @baixiaohang
 /proposals/agent-message-system.20260319.md        @baixiaohang
-/README.md                                         @liuchao-001 @286ljb
-/about.md                                          @liuchao-001 @286ljb
-/infrastructure.md                                 @liuchao-001 @286ljb
-/ownership-and-naming.md                           @liuchao-001 @286ljb
+/README.md                                         @liuchao-001 @286ljb @baixiaohang
+/about.md                                          @liuchao-001 @286ljb @baixiaohang
+/infrastructure.md                                 @liuchao-001 @286ljb @baixiaohang
+/ownership-and-naming.md                           @liuchao-001 @286ljb @baixiaohang

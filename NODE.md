@@ -1,6 +1,6 @@
 ---
 title: Context Tree
-owners: [liuchao-001, 286ljb]
+owners: [liuchao-001, 286ljb, baixiaohang]
 ---
 
 # Context Tree
@@ -28,7 +28,7 @@ See [principles.md](principles.md) for detailed explanations and examples.
 - **[kael/](kael/NODE.md)** — AI agent product: reasoning, skills, knowledge, chat, environment, platform.
 - **[marketing/](marketing/NODE.md)** — Brand, positioning, campaigns, content strategy.
 - **[members/](members/NODE.md)** — Member definitions and work specifications.
-- **[message-system/](message-system/NODE.md)** — Communication infrastructure for agent-to-agent and agent-to-human collaboration.
+- **[agent-hub/](agent-hub/NODE.md)** — Agent collaboration platform: messaging, agent management, adapter, admin.
 - **[proposals/](proposals/NODE.md)** — Temporary files and process documents (not agent context).
 
 ---
