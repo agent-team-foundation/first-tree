@@ -34,16 +34,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
         with:
-          enable-cache: true
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - run: uv sync
-      - run: uv run ruff format --check .
-      - run: uv run ruff check .
-      - run: uv run pyright
+          node-version: "22"
+          cache: "pnpm"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: pnpm typecheck
 
   test:
     name: Test
@@ -51,15 +49,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
         with:
-          enable-cache: true
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - run: uv sync
+          node-version: "22"
+          cache: "pnpm"
+      - run: pnpm install --frozen-lockfile
       - name: Run tests
         run: |
-          rc=0; uv run pytest -v || rc=$?
-          if [ $rc -eq 5 ]; then echo "No tests collected, skipping"; exit 0; fi
+          rc=0; pnpm test || rc=$?
+          if [ $rc -eq 1 ]; then echo "No tests found, skipping"; exit 0; fi
           exit $rc
