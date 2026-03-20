@@ -1,0 +1,28 @@
+{
+  "name": "@agent-hub/client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsdown src/index.ts --format esm --dts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@agent-hub/shared": "workspace:*",
+    "zod": "^3.25.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.16.0",
+    "@types/ws": "^8.18.0",
+    "tsdown": "^0.12.0",
+    "vitest": "^3.2.0"
+  }
+}
