@@ -1,4 +1,4 @@
-import { createChatSchema, paginationQuerySchema } from "@agent-hub/shared";
+import { addParticipantSchema, createChatSchema, paginationQuerySchema } from "@agent-hub/shared";
 import type { FastifyInstance } from "fastify";
 import { requireAgent } from "../../middleware/require-identity.js";
 import * as chatService from "../../services/chat.js";
@@ -47,4 +47,26 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
       })),
     };
   });
+
+  // Participant management
+  app.post<{ Params: { chatId: string } }>("/:chatId/participants", async (request, reply) => {
+    const identity = requireAgent(request);
+    const body = addParticipantSchema.parse(request.body);
+    const participants = await chatService.addParticipant(app.db, request.params.chatId, identity.id, body);
+    return reply.status(201).send(
+      participants.map((p) => ({
+        ...p,
+        joinedAt: p.joinedAt.toISOString(),
+      })),
+    );
+  });
+
+  app.delete<{ Params: { chatId: string; agentId: string } }>(
+    "/:chatId/participants/:agentId",
+    async (request, reply) => {
+      const identity = requireAgent(request);
+      await chatService.removeParticipant(app.db, request.params.chatId, identity.id, request.params.agentId);
+      return reply.status(204).send();
+    },
+  );
 }

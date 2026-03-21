@@ -6,6 +6,8 @@ export const chats = pgTable("chats", {
   organizationId: text("organization_id").notNull().default("default"),
   type: text("type").notNull().default("direct"),
   topic: text("topic"),
+  lifecyclePolicy: text("lifecycle_policy").notNull().default("persistent"),
+  parentChatId: text("parent_chat_id"),
   metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

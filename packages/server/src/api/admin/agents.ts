@@ -77,4 +77,10 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
     await agentService.revokeToken(app.db, request.params.agentId, request.params.tokenId);
     return reply.status(204).send();
   });
+
+  // DELETE agent (suspend + revoke all tokens)
+  app.delete<{ Params: { agentId: string } }>("/:agentId", async (request, reply) => {
+    await agentService.deleteAgent(app.db, request.params.agentId);
+    return reply.status(204).send();
+  });
 }

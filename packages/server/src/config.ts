@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 const env = process.env;
 
 export type Config = {
@@ -5,6 +7,7 @@ export type Config = {
   serverHost: string;
   serverPort: number;
   jwtSecretKey: string;
+  instanceId: string;
   logger?: boolean;
 };
 
@@ -24,5 +27,6 @@ export function loadConfig(): Config {
     serverHost: env.SERVER_HOST ?? "0.0.0.0",
     serverPort: Number(env.SERVER_PORT ?? "8000"),
     jwtSecretKey,
+    instanceId: env.INSTANCE_ID ?? `srv_${randomUUID().slice(0, 8)}`,
   };
 }

@@ -38,6 +38,8 @@ export {
   createAgentTokenSchema,
 } from "./schemas/agent-token.js";
 export {
+  type AddParticipant,
+  addParticipantSchema,
   CHAT_TYPES,
   type Chat,
   type ChatDetail,
@@ -49,6 +51,8 @@ export {
   chatSchema,
   chatTypeSchema,
   createChatSchema,
+  type RemoveParticipant,
+  removeParticipantSchema,
 } from "./schemas/chat.js";
 export {
   type PaginationQuery,
@@ -73,5 +77,22 @@ export {
   messageFormatSchema,
   messageSchema,
   type SendMessage,
+  type SendToAgent,
   sendMessageSchema,
+  sendToAgentSchema,
 } from "./schemas/message.js";
+export {
+  type AgentPresence,
+  agentPresenceSchema,
+  PRESENCE_STATUSES,
+  type PresenceStatus,
+  presenceStatusSchema,
+} from "./schemas/presence.js";
+export {
+  SYSTEM_CONFIG_DEFAULTS,
+  SYSTEM_CONFIG_KEYS,
+  type SystemConfig,
+  systemConfigSchema,
+  type UpdateSystemConfig,
+  updateSystemConfigSchema,
+} from "./schemas/system-config.js";

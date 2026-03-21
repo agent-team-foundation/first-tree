@@ -79,6 +79,9 @@ importers:
       '@types/node':
         specifier: ^22.16.0
         version: 22.19.15
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
       drizzle-kit:
         specifier: ^0.31.0
         version: 0.31.10

@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
-import type { SendMessage } from "@agent-hub/shared";
+import type { SendMessage, SendToAgent } from "@agent-hub/shared";
 import { and, desc, eq, lt } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatParticipants, chats } from "../db/schema/chats.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
+import { NotFoundError } from "../errors.js";
+import { findOrCreateDirectChat } from "./chat.js";
 
 export async function sendMessage(db: Database, chatId: string, senderId: string, data: SendMessage) {
   return db.transaction(async (tx) => {
@@ -78,6 +80,37 @@ export async function sendMessage(db: Database, chatId: string, senderId: string
 
     if (!msg) throw new Error("Unexpected: INSERT RETURNING produced no row");
     return msg;
+  });
+}
+
+export async function sendToAgent(db: Database, senderId: string, targetAgentId: string, data: SendToAgent) {
+  // Verify target agent exists and is in the same org
+  const [sender] = await db
+    .select({ id: agents.id, organizationId: agents.organizationId })
+    .from(agents)
+    .where(eq(agents.id, senderId))
+    .limit(1);
+
+  if (!sender) throw new NotFoundError(`Agent "${senderId}" not found`);
+
+  const [target] = await db
+    .select({ id: agents.id, organizationId: agents.organizationId })
+    .from(agents)
+    .where(eq(agents.id, targetAgentId))
+    .limit(1);
+
+  if (!target) throw new NotFoundError(`Agent "${targetAgentId}" not found`);
+
+  // Find or create direct chat
+  const chat = await findOrCreateDirectChat(db, senderId, targetAgentId);
+
+  // Send message via existing sendMessage
+  return sendMessage(db, chat.id, senderId, {
+    format: data.format,
+    content: data.content,
+    metadata: data.metadata,
+    replyToInbox: data.replyToInbox,
+    replyToChat: data.replyToChat,
   });
 }
 

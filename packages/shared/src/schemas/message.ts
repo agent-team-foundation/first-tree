@@ -21,6 +21,15 @@ export const sendMessageSchema = z.object({
 });
 export type SendMessage = z.infer<typeof sendMessageSchema>;
 
+export const sendToAgentSchema = z.object({
+  format: messageFormatSchema.default("text"),
+  content: z.unknown(),
+  metadata: z.record(z.unknown()).optional(),
+  replyToInbox: z.string().optional(),
+  replyToChat: z.string().optional(),
+});
+export type SendToAgent = z.infer<typeof sendToAgentSchema>;
+
 export const messageSchema = z.object({
   id: z.string(),
   chatId: z.string(),

@@ -27,6 +27,7 @@
     "@testcontainers/postgresql": "^11.13.0",
     "@types/bcrypt": "^5.0.0",
     "@types/node": "^22.16.0",
+    "@types/ws": "^8.18.1",
     "drizzle-kit": "^0.31.0",
     "testcontainers": "^11.13.0",
     "tsdown": "^0.12.0",
