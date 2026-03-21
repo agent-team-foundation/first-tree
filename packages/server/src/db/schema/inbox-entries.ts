@@ -1,16 +1,21 @@
 import { bigserial, index, integer, pgTable, text, timestamp, unique } from "drizzle-orm/pg-core";
 import { messages } from "./messages.js";
 
+/** Delivery queue (envelope). One entry per recipient created during message fan-out. Uses SKIP LOCKED for concurrent-safe consumption. */
 export const inboxEntries = pgTable(
   "inbox_entries",
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
+    /** Target agent's inbox address */
     inboxId: text("inbox_id").notNull(),
     messageId: text("message_id")
       .notNull()
       .references(() => messages.id),
+    /** Routing tag. May differ from message.chat_id in replyTo scenarios; used by Client to route to the correct Session */
     chatId: text("chat_id"),
+    /** "pending" → "delivered" → "acked" | "failed" */
     status: text("status").notNull().default("pending"),
+    /** Timeout reset count; entry is marked "failed" when this reaches the configured max */
     retryCount: integer("retry_count").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     deliveredAt: timestamp("delivered_at", { withTimezone: true }),

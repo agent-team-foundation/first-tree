@@ -1,7 +1,6 @@
 -- v2 schema updates
 
--- Add new columns to chats table
-ALTER TABLE "chats" ADD COLUMN "lifecycle_policy" text NOT NULL DEFAULT 'persistent';
+-- Add new column to chats table
 ALTER TABLE "chats" ADD COLUMN "parent_chat_id" text;
 
 -- Agent presence table

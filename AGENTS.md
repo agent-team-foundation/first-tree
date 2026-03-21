@@ -100,6 +100,7 @@ agent-hub/
 - **Drizzle 迁移不手动编辑**: `drizzle-kit generate` 生成，`drizzle-kit migrate` 应用
 - **自定义错误类**: Service 层抛异常，API 层映射为 HTTP 状态码；禁止空 `catch {}`
 - **命名**: 文件 `kebab-case.ts`，类型 `PascalCase`，变量/函数 `camelCase`，常量 `UPPER_SNAKE_CASE`
+- **注释和文档字符串使用英文**: 代码中的注释、JSDoc、TODO 等一律用英文
 - **修改后必须运行**: `pnpm check && pnpm typecheck`
 
 ## 开发流程

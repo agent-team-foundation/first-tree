@@ -1,18 +1,21 @@
 import { index, jsonb, pgTable, primaryKey, text, timestamp } from "drizzle-orm/pg-core";
 import { agents } from "./agents.js";
 
+/** Communication container. All messages between agents flow within a Chat. */
 export const chats = pgTable("chats", {
   id: text("id").primaryKey(),
   organizationId: text("organization_id").notNull().default("default"),
+  /** "direct" | "group" | "thread" */
   type: text("type").notNull().default("direct"),
   topic: text("topic"),
-  lifecyclePolicy: text("lifecycle_policy").notNull().default("persistent"),
+  /** Parent chat ID for thread (sub-discussion) scenarios */
   parentChatId: text("parent_chat_id"),
   metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+/** Chat participants (M:N). */
 export const chatParticipants = pgTable(
   "chat_participants",
   {
@@ -22,7 +25,9 @@ export const chatParticipants = pgTable(
     agentId: text("agent_id")
       .notNull()
       .references(() => agents.id),
+    /** "owner" | "member" */
     role: text("role").notNull().default("member"),
+    /** "full" = receive all messages; "mention_only" = consumer-side behavior, does not affect fan-out */
     mode: text("mode").notNull().default("full"),
     joinedAt: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow(),
   },
