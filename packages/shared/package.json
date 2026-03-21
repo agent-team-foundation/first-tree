@@ -12,7 +12,7 @@
   "scripts": {
     "build": "tsdown src/index.ts --format esm --dts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run --passWithNoTests"
   },
   "devDependencies": {
     "tsdown": "^0.12.0",

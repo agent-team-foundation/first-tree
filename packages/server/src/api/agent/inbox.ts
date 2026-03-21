@@ -8,7 +8,7 @@ export async function agentInboxRoutes(app: FastifyInstance): Promise<void> {
     const identity = requireAgent(request);
     const query = inboxPollQuerySchema.parse(request.query);
     const entries = await inboxService.pollInbox(app.db, identity.inboxId, query.limit);
-    return { items: entries };
+    return entries;
   });
 
   app.post<{ Params: { entryId: string } }>("/:entryId/ack", async (request, reply) => {

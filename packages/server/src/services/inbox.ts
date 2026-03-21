@@ -1,6 +1,7 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
+import { messages } from "../db/schema/messages.js";
 import { ForbiddenError, NotFoundError } from "../errors.js";
 
 export async function pollInbox(db: Database, inboxId: string, limit: number) {
@@ -14,9 +15,9 @@ export async function pollInbox(db: Database, inboxId: string, limit: number) {
       chat_id: string | null;
       status: string;
       retry_count: number;
-      created_at: Date;
-      delivered_at: Date | null;
-      acked_at: Date | null;
+      created_at: string;
+      delivered_at: string | null;
+      acked_at: string | null;
     }>(sql`
       UPDATE inbox_entries
       SET status = 'delivered', delivered_at = NOW()
@@ -34,21 +35,9 @@ export async function pollInbox(db: Database, inboxId: string, limit: number) {
       return [];
     }
 
-    // 2. Fetch associated messages
+    // 2. Fetch associated messages via Drizzle query builder
     const messageIds = claimed.map((e) => e.message_id);
-    const msgs = await tx.execute<{
-      id: string;
-      chat_id: string;
-      sender_id: string;
-      format: string;
-      content: unknown;
-      metadata: Record<string, unknown>;
-      reply_to: { inbox: string; chat: string } | null;
-      in_reply_to: string | null;
-      created_at: Date;
-    }>(sql`
-      SELECT * FROM messages WHERE id = ANY(${messageIds})
-    `);
+    const msgs = await tx.select().from(messages).where(inArray(messages.id, messageIds));
 
     const msgMap = new Map(msgs.map((m) => [m.id, m]));
 
@@ -63,19 +52,20 @@ export async function pollInbox(db: Database, inboxId: string, limit: number) {
         chatId: entry.chat_id,
         status: entry.status,
         retryCount: entry.retry_count,
-        createdAt: entry.created_at.toISOString(),
-        deliveredAt: entry.delivered_at?.toISOString() ?? null,
-        ackedAt: entry.acked_at?.toISOString() ?? null,
+        createdAt: entry.created_at,
+        deliveredAt: entry.delivered_at ?? null,
+        ackedAt: entry.acked_at ?? null,
         message: {
           id: msg.id,
-          chatId: msg.chat_id,
-          senderId: msg.sender_id,
+          chatId: msg.chatId,
+          senderId: msg.senderId,
           format: msg.format,
           content: msg.content,
           metadata: msg.metadata,
-          replyTo: msg.reply_to,
-          inReplyTo: msg.in_reply_to,
-          createdAt: msg.created_at.toISOString(),
+          replyToInbox: msg.replyToInbox,
+          replyToChat: msg.replyToChat,
+          inReplyTo: msg.inReplyTo,
+          createdAt: msg.createdAt.toISOString(),
         },
       };
     });

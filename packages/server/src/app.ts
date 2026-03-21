@@ -17,7 +17,7 @@ import { agentAuthHook } from "./middleware/agent-auth.js";
 import "./types.js";
 
 export async function buildApp(config: Config) {
-  const app = Fastify({ logger: true });
+  const app = Fastify({ logger: config.logger ?? true });
 
   // Decorate with config and db
   const db = connectDatabase(config.databaseUrl);

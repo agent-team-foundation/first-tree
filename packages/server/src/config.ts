@@ -5,6 +5,7 @@ export type Config = {
   serverHost: string;
   serverPort: number;
   jwtSecretKey: string;
+  logger?: boolean;
 };
 
 export function loadConfig(): Config {
