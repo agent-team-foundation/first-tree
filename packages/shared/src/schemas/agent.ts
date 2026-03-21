@@ -1,0 +1,52 @@
+import { z } from "zod";
+
+export const AGENT_TYPES = {
+  HUMAN: "human",
+  PERSONAL_ASSISTANT: "personal_assistant",
+  AUTONOMOUS_AGENT: "autonomous_agent",
+} as const;
+
+export const agentTypeSchema = z.enum(["human", "personal_assistant", "autonomous_agent"]);
+export type AgentType = z.infer<typeof agentTypeSchema>;
+
+export const AGENT_STATUSES = {
+  ACTIVE: "active",
+  SUSPENDED: "suspended",
+} as const;
+
+export const agentStatusSchema = z.enum(["active", "suspended"]);
+export type AgentStatus = z.infer<typeof agentStatusSchema>;
+
+export const createAgentSchema = z.object({
+  id: z
+    .string()
+    .min(1)
+    .max(100)
+    .regex(/^[a-z0-9_-]+$/, "Only lowercase alphanumeric, hyphens, and underscores")
+    .optional(),
+  type: agentTypeSchema,
+  displayName: z.string().max(200).optional(),
+  organizationId: z.string().max(100).optional(),
+  metadata: z.record(z.unknown()).optional(),
+});
+export type CreateAgent = z.infer<typeof createAgentSchema>;
+
+export const updateAgentSchema = z.object({
+  displayName: z.string().max(200).nullish(),
+  status: agentStatusSchema.optional(),
+  metadata: z.record(z.unknown()).optional(),
+});
+export type UpdateAgent = z.infer<typeof updateAgentSchema>;
+
+export const agentSchema = z.object({
+  id: z.string(),
+  organizationId: z.string(),
+  type: agentTypeSchema,
+  displayName: z.string().nullable(),
+  inboxId: z.string(),
+  status: z.string(),
+  metadata: z.record(z.unknown()),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type Agent = z.infer<typeof agentSchema>;

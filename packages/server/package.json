@@ -10,7 +10,8 @@
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "admin:create": "tsx src/scripts/create-admin.ts"
   },
   "dependencies": {
     "@agent-hub/shared": "workspace:*",
