@@ -801,15 +801,16 @@ Bot 凭证存 `adapter_configs` 表，Admin API 增删改。
 # 明文仅返回一次
 ```
 
-Token 格式：`aghub_` 前缀 + 随机字符串。bcrypt hash 存入 agent_tokens。
+Token 格式：`aghub_` 前缀 + 随机字符串。SHA-256 hash 存入 agent_tokens。
+
+> **为什么用 SHA-256 而不是 bcrypt？** API token 是高熵随机串（64 hex chars = 256 bits），不需要慢哈希抵抗暴力破解。SHA-256 支持直接按 hash 查询（O(1) 索引命中），是 GitHub PAT、Stripe API Key 等业界标准做法。bcrypt 仅用于 admin 密码（低熵，需要慢哈希）。
 
 **轮转：** 生成新 Token → 两个同时有效（窗口期）→ Client 切换 → 吊销旧 Token。
 
 **认证：**
 ```python
 async def authenticate_agent(token: str) -> Agent:
-    # 查 agent_tokens（未吊销 + 未过期）
-    # bcrypt.verify(token, token_hash)
+    # sha256(token) → 查 agent_tokens（未吊销 + 未过期）
     # 更新 last_used_at
     # 返回关联的 Agent（需 status = 'active'）
 ```
