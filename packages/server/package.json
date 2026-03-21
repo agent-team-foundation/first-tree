@@ -10,22 +10,25 @@
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "admin:create": "tsx src/scripts/create-admin.ts"
   },
   "dependencies": {
     "@agent-hub/shared": "workspace:*",
-    "fastify": "^5.3.0",
     "@fastify/websocket": "^11.2.0",
-    "drizzle-orm": "^0.44.0",
-    "postgres": "^3.4.0",
-    "zod": "^3.25.0",
     "bcrypt": "^6.0.0",
-    "jose": "^6.0.0"
+    "drizzle-orm": "^0.44.0",
+    "fastify": "^5.3.0",
+    "jose": "^6.0.0",
+    "postgres": "^3.4.0",
+    "zod": "^3.25.0"
   },
   "devDependencies": {
+    "@testcontainers/postgresql": "^11.13.0",
     "@types/bcrypt": "^5.0.0",
     "@types/node": "^22.16.0",
     "drizzle-kit": "^0.31.0",
+    "testcontainers": "^11.13.0",
     "tsdown": "^0.12.0",
     "tsx": "^4.19.0",
     "vitest": "^3.2.0"
