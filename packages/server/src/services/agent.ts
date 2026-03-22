@@ -90,6 +90,11 @@ export async function updateAgent(db: Database, id: string, data: UpdateAgent) {
   return agent;
 }
 
+export async function deleteAgent(db: Database, id: string) {
+  // Delete = suspend + revoke all tokens (per design doc)
+  return updateAgent(db, id, { status: "suspended" });
+}
+
 export async function createToken(db: Database, agentId: string, data: CreateAgentToken) {
   // Verify agent exists
   await getAgent(db, agentId);

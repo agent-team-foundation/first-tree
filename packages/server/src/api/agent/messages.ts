@@ -1,4 +1,4 @@
-import { paginationQuerySchema, sendMessageSchema } from "@agent-hub/shared";
+import { paginationQuerySchema, sendMessageSchema, sendToAgentSchema } from "@agent-hub/shared";
 import type { FastifyInstance } from "fastify";
 import { requireAgent } from "../../middleware/require-identity.js";
 import * as chatService from "../../services/chat.js";
@@ -28,5 +28,17 @@ export async function agentMessageRoutes(app: FastifyInstance): Promise<void> {
       })),
       nextCursor: result.nextCursor,
     };
+  });
+}
+
+export async function agentSendToAgentRoutes(app: FastifyInstance): Promise<void> {
+  app.post<{ Params: { agentId: string } }>("/:agentId/messages", async (request, reply) => {
+    const identity = requireAgent(request);
+    const body = sendToAgentSchema.parse(request.body);
+    const msg = await messageService.sendToAgent(app.db, identity.id, request.params.agentId, body);
+    return reply.status(201).send({
+      ...msg,
+      createdAt: msg.createdAt.toISOString(),
+    });
   });
 }

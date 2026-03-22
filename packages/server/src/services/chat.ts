@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { CreateChat } from "@agent-hub/shared";
+import type { AddParticipant, CreateChat } from "@agent-hub/shared";
 import { and, desc, eq, inArray, lt } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatParticipants, chats } from "../db/schema/chats.js";
-import { BadRequestError, ForbiddenError, NotFoundError } from "../errors.js";
+import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 
 export async function createChat(db: Database, creatorId: string, data: CreateChat) {
   const chatId = randomUUID();
@@ -117,4 +117,124 @@ export async function assertParticipant(db: Database, chatId: string, agentId: s
   if (!row) {
     throw new ForbiddenError("Not a participant of this chat");
   }
+}
+
+export async function addParticipant(db: Database, chatId: string, requesterId: string, data: AddParticipant) {
+  // Verify chat exists
+  const chat = await getChat(db, chatId);
+
+  // Verify requester is a participant
+  await assertParticipant(db, chatId, requesterId);
+
+  // Verify target agent exists and is in the same org
+  const [targetAgent] = await db
+    .select({ id: agents.id, organizationId: agents.organizationId })
+    .from(agents)
+    .where(eq(agents.id, data.agentId))
+    .limit(1);
+
+  if (!targetAgent) {
+    throw new NotFoundError(`Agent "${data.agentId}" not found`);
+  }
+
+  if (targetAgent.organizationId !== chat.organizationId) {
+    throw new BadRequestError("Cannot add agent from different organization");
+  }
+
+  // Check not already a participant
+  const [existing] = await db
+    .select({ chatId: chatParticipants.chatId })
+    .from(chatParticipants)
+    .where(and(eq(chatParticipants.chatId, chatId), eq(chatParticipants.agentId, data.agentId)))
+    .limit(1);
+
+  if (existing) {
+    throw new ConflictError(`Agent "${data.agentId}" is already a participant`);
+  }
+
+  await db.insert(chatParticipants).values({
+    chatId,
+    agentId: data.agentId,
+    mode: data.mode ?? "full",
+  });
+
+  return db.select().from(chatParticipants).where(eq(chatParticipants.chatId, chatId));
+}
+
+export async function removeParticipant(db: Database, chatId: string, requesterId: string, targetAgentId: string) {
+  // Verify requester is a participant
+  await assertParticipant(db, chatId, requesterId);
+
+  // Cannot remove self (use leave instead, if implemented)
+  if (requesterId === targetAgentId) {
+    throw new BadRequestError("Cannot remove yourself from a chat");
+  }
+
+  const [removed] = await db
+    .delete(chatParticipants)
+    .where(and(eq(chatParticipants.chatId, chatId), eq(chatParticipants.agentId, targetAgentId)))
+    .returning();
+
+  if (!removed) {
+    throw new NotFoundError(`Agent "${targetAgentId}" is not a participant of this chat`);
+  }
+
+  return db.select().from(chatParticipants).where(eq(chatParticipants.chatId, chatId));
+}
+
+export async function findOrCreateDirectChat(db: Database, agentAId: string, agentBId: string) {
+  // Find existing direct chat between the two agents
+  const aChats = await db
+    .select({ chatId: chatParticipants.chatId })
+    .from(chatParticipants)
+    .where(eq(chatParticipants.agentId, agentAId));
+
+  const bChats = await db
+    .select({ chatId: chatParticipants.chatId })
+    .from(chatParticipants)
+    .where(eq(chatParticipants.agentId, agentBId));
+
+  const bChatIds = new Set(bChats.map((r) => r.chatId));
+  const commonChatIds = aChats.map((r) => r.chatId).filter((id) => bChatIds.has(id));
+
+  if (commonChatIds.length > 0) {
+    // Check if any common chat is a direct chat
+    const directChats = await db
+      .select()
+      .from(chats)
+      .where(and(inArray(chats.id, commonChatIds), eq(chats.type, "direct")));
+
+    if (directChats.length > 0 && directChats[0]) {
+      return directChats[0];
+    }
+  }
+
+  // Create new direct chat
+  const [agentA] = await db
+    .select({ organizationId: agents.organizationId })
+    .from(agents)
+    .where(eq(agents.id, agentAId))
+    .limit(1);
+
+  if (!agentA) throw new NotFoundError(`Agent "${agentAId}" not found`);
+
+  const chatId = randomUUID();
+  return db.transaction(async (tx) => {
+    const [chat] = await tx
+      .insert(chats)
+      .values({
+        id: chatId,
+        organizationId: agentA.organizationId,
+        type: "direct",
+      })
+      .returning();
+
+    await tx.insert(chatParticipants).values([
+      { chatId, agentId: agentAId, role: "member" },
+      { chatId, agentId: agentBId, role: "member" },
+    ]);
+
+    if (!chat) throw new Error("Unexpected: INSERT RETURNING produced no row");
+    return chat;
+  });
 }

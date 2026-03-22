@@ -39,3 +39,14 @@ export const chatDetailSchema = chatSchema.extend({
   participants: z.array(chatParticipantSchema),
 });
 export type ChatDetail = z.infer<typeof chatDetailSchema>;
+
+export const addParticipantSchema = z.object({
+  agentId: z.string().min(1),
+  mode: z.enum(["full", "mention_only"]).default("full"),
+});
+export type AddParticipant = z.infer<typeof addParticipantSchema>;
+
+export const removeParticipantSchema = z.object({
+  agentId: z.string().min(1),
+});
+export type RemoveParticipant = z.infer<typeof removeParticipantSchema>;

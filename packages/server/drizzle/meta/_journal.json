@@ -8,6 +8,13 @@
       "when": 1774010814105,
       "tag": "0000_shocking_darkhawk",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1774060655637,
+      "tag": "0001_v2_schema_updates",
+      "breakpoints": true
     }
   ]
 }

@@ -10,6 +10,7 @@ export async function createTestApp(): Promise<FastifyInstance> {
     serverPort: 0,
     logger: false,
     jwtSecretKey: process.env.JWT_SECRET_KEY ?? "test-jwt-secret-key-for-vitest",
+    instanceId: "test-instance",
   };
   const app = await buildApp(config);
   await app.ready();

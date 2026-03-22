@@ -17,4 +17,11 @@ export async function agentInboxRoutes(app: FastifyInstance): Promise<void> {
     await inboxService.ackEntry(app.db, entryId, identity.inboxId);
     return reply.status(204).send();
   });
+
+  app.post<{ Params: { entryId: string } }>("/:entryId/renew", async (request, reply) => {
+    const identity = requireAgent(request);
+    const entryId = Number(request.params.entryId);
+    await inboxService.renewEntry(app.db, entryId, identity.inboxId);
+    return reply.status(204).send();
+  });
 }
