@@ -1,9 +1,9 @@
 ---
-title: Fragmented Thoughts
+title: Notebook
 owners: [liuchao-001]
 ---
 
-# Fragmented Thoughts
+# Notebook
 
 A personal scratchpad. Low friction, high cadence.
 
