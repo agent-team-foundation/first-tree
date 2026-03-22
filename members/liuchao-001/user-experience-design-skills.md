@@ -1,6 +1,7 @@
 ---
 title: "User Experience Design Skills"
 owners: [liuchao-001]
+soft_links: [kael/NODE.md]
 ---
 
 # User Experience Design Skills
