@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import type { AdapterManager } from "./adapter-manager.js";
 import * as inboxService from "./inbox.js";
 import * as presenceService from "./presence.js";
 import * as systemConfigService from "./system-config.js";
@@ -8,9 +9,14 @@ export type BackgroundTasks = {
   stop(): void;
 };
 
-export function createBackgroundTasks(app: FastifyInstance, instanceId: string): BackgroundTasks {
+export function createBackgroundTasks(
+  app: FastifyInstance,
+  instanceId: string,
+  adapterManager: AdapterManager,
+): BackgroundTasks {
   let inboxTimer: ReturnType<typeof setInterval> | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  let adapterOutboundTimer: ReturnType<typeof setInterval> | null = null;
 
   return {
     start() {
@@ -38,6 +44,15 @@ export function createBackgroundTasks(app: FastifyInstance, instanceId: string):
         }
       }, 30_000);
 
+      // Adapter outbound processing — runs every 5 seconds
+      adapterOutboundTimer = setInterval(async () => {
+        try {
+          await adapterManager.processOutbound();
+        } catch (err) {
+          app.log.error(err, "Adapter outbound processing failed");
+        }
+      }, 5_000);
+
       // Initial heartbeat
       presenceService.heartbeatInstance(app.db, instanceId).catch((err) => {
         app.log.error(err, "Failed initial heartbeat");
@@ -52,6 +67,10 @@ export function createBackgroundTasks(app: FastifyInstance, instanceId: string):
       if (heartbeatTimer) {
         clearInterval(heartbeatTimer);
         heartbeatTimer = null;
+      }
+      if (adapterOutboundTimer) {
+        clearInterval(adapterOutboundTimer);
+        adapterOutboundTimer = null;
       }
     },
   };
