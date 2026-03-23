@@ -1,1 +1,1 @@
-// @agent-hub/web
+export { App } from "./app.js";
