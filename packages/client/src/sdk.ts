@@ -14,7 +14,6 @@ export type RegisterResult = {
 
 export type PullResult = {
   entries: InboxEntryWithMessage[];
-  remaining: number;
 };
 
 export class AgentHubSDK {
@@ -29,7 +28,7 @@ export class AgentHubSDK {
 
   /** Validate token, return agent identity. */
   async register(): Promise<RegisterResult> {
-    const agent = await this.request<Agent>("/agent/me");
+    const agent = await this.requestJson<Agent>("/agent/me");
     return {
       agentId: agent.id,
       inboxId: agent.inboxId,
@@ -40,24 +39,36 @@ export class AgentHubSDK {
 
   /** Fetch pending inbox entries. */
   async pull(limit = 10): Promise<PullResult> {
-    const entries = await this.request<InboxEntryWithMessage[]>(`/agent/inbox?limit=${limit}`);
-    return {
-      entries,
-      remaining: 0, // Server doesn't return remaining count yet
-    };
+    const entries = await this.requestJson<InboxEntryWithMessage[]>(`/agent/inbox?limit=${limit}`);
+    return { entries };
   }
 
   /** Acknowledge an inbox entry. */
   async ack(entryId: number): Promise<void> {
-    await this.request(`/agent/inbox/${entryId}/ack`, { method: "POST" });
+    await this.requestVoid(`/agent/inbox/${entryId}/ack`, { method: "POST" });
   }
 
   /** Renew lease on an inbox entry. */
   async renew(entryId: number): Promise<void> {
-    await this.request(`/agent/inbox/${entryId}/renew`, { method: "POST" });
+    await this.requestVoid(`/agent/inbox/${entryId}/renew`, { method: "POST" });
   }
 
-  private async request<T>(path: string, init?: RequestInit): Promise<T> {
+  private async requestVoid(path: string, init?: RequestInit): Promise<void> {
+    const response = await this.doFetch(path, init);
+    if (!response.ok) {
+      throw await this.toSdkError(response);
+    }
+  }
+
+  private async requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+    const response = await this.doFetch(path, init);
+    if (!response.ok) {
+      throw await this.toSdkError(response);
+    }
+    return (await response.json()) as T;
+  }
+
+  private async doFetch(path: string, init?: RequestInit): Promise<Response> {
     const url = `${this.baseUrl}${path}`;
     const headers: Record<string, string> = {
       Authorization: `Bearer ${this.token}`,
@@ -66,26 +77,19 @@ export class AgentHubSDK {
     if (init?.body) {
       headers["Content-Type"] = "application/json";
     }
-    const response = await fetch(url, { ...init, headers });
+    return fetch(url, { ...init, headers });
+  }
 
-    if (!response.ok) {
-      const body = await response.text();
-      let message: string;
-      try {
-        const json = JSON.parse(body) as { error?: string };
-        message = json.error ?? body;
-      } catch {
-        message = body;
-      }
-      throw new SdkError(response.status, message);
+  private async toSdkError(response: Response): Promise<SdkError> {
+    const body = await response.text();
+    let message: string;
+    try {
+      const json = JSON.parse(body) as { error?: string };
+      message = json.error ?? body;
+    } catch {
+      message = body;
     }
-
-    // 204 No Content
-    if (response.status === 204) {
-      return undefined as T;
-    }
-
-    return (await response.json()) as T;
+    return new SdkError(response.status, message);
   }
 }
 

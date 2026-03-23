@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { Database } from "../../db/connection.js";
 import { agents } from "../../db/schema/agents.js";
-import { BadRequestError, UnauthorizedError } from "../../errors.js";
+import { BadRequestError, ConflictError, UnauthorizedError } from "../../errors.js";
 import { createAgent } from "../../services/agent.js";
 import { sendToAgent } from "../../services/message.js";
 
@@ -68,14 +68,26 @@ async function ensureGitHubAdapterAgent(db: Database): Promise<string> {
     return existing.id;
   }
 
-  const agent = await createAgent(db, {
-    id: GITHUB_ADAPTER_ID,
-    type: "autonomous_agent",
-    displayName: "GitHub Adapter",
-    metadata: { source: "github", managed: true },
-  });
-
-  return agent.id;
+  try {
+    const agent = await createAgent(db, {
+      id: GITHUB_ADAPTER_ID,
+      type: "autonomous_agent",
+      displayName: "GitHub Adapter",
+      metadata: { source: "github", managed: true },
+    });
+    return agent.id;
+  } catch (err) {
+    if (err instanceof ConflictError) {
+      // Another concurrent request created it first
+      const [created] = await db
+        .select({ id: agents.id })
+        .from(agents)
+        .where(eq(agents.id, GITHUB_ADAPTER_ID))
+        .limit(1);
+      if (created) return created.id;
+    }
+    throw err;
+  }
 }
 
 async function findTargetAgent(db: Database, repoFullName: string): Promise<string | null> {
@@ -96,14 +108,6 @@ async function findTargetAgent(db: Database, repoFullName: string): Promise<stri
           return agent.id;
         }
       }
-    }
-  }
-
-  // Fallback: any autonomous_agent that is not the github-adapter
-  for (const agent of allAgents) {
-    if (agent.id === GITHUB_ADAPTER_ID) continue;
-    if (agent.type === "autonomous_agent") {
-      return agent.id;
     }
   }
 
@@ -147,10 +151,10 @@ function parseIssuesPayload(body: unknown): GitHubIssuesPayload {
 
 function parseIssueCommentPayload(body: unknown): GitHubIssueCommentPayload {
   const base = parseIssuesPayload(body);
-  const record = body as Record<string, unknown>; // validated by parseIssuesPayload
-  if (!isRecord(record.comment)) throw new BadRequestError("Invalid payload: missing comment");
+  if (!isRecord(body)) throw new BadRequestError("Invalid payload: expected object");
+  if (!isRecord(body.comment)) throw new BadRequestError("Invalid payload: missing comment");
 
-  const comment = record.comment;
+  const comment = body.comment;
   const commentUser = isRecord(comment.user) ? comment.user : { login: "" };
 
   return {
@@ -168,10 +172,16 @@ function parseIssueCommentPayload(body: unknown): GitHubIssueCommentPayload {
 // ── Route ───────────────────────────────────────────────────────────
 
 export async function githubWebhookRoutes(app: FastifyInstance): Promise<void> {
-  // Register a custom content type parser to capture the raw body for signature verification
+  // Scoped to this plugin only (/webhooks). If other webhook adapters (Slack, Feishu)
+  // are added under the same prefix, they should be registered as separate sub-plugins
+  // to avoid inheriting this raw-buffer parser.
   app.addContentTypeParser("application/json", { parseAs: "buffer" }, (_request, body, done) => {
     done(null, body);
   });
+
+  if (!app.config.githubWebhookSecret) {
+    app.log.warn("GITHUB_WEBHOOK_SECRET is not set — webhook signature verification is disabled");
+  }
 
   app.post("/github", async (request, reply) => {
     const rawBody = request.body;

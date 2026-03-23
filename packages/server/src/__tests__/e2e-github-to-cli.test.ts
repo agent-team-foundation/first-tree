@@ -1,7 +1,9 @@
 import { createHmac } from "node:crypto";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../app.js";
+import { agents } from "../db/schema/agents.js";
+import { createAgent, createToken } from "../services/agent.js";
 
 /**
  * E2E: GitHub webhook → Server routes message → Agent pulls via SDK-equivalent fetch calls.
@@ -46,7 +48,6 @@ function sdkAck(baseUrl: string, token: string, entryId: number) {
 
 // Helper: create agent + token directly via admin-like DB operations
 async function createTestAgent(app: Awaited<ReturnType<typeof buildApp>>, opts: { id: string; displayName?: string }) {
-  const { createAgent, createToken } = await import("../services/agent.js");
   const agent = await createAgent(app.db, {
     id: opts.id,
     type: "autonomous_agent",
@@ -92,8 +93,6 @@ describe("E2E: GitHub issue → Server → CLI pull", () => {
       displayName: "Issue Handler",
     });
 
-    const { agents } = await import("../db/schema/agents.js");
-    const { eq } = await import("drizzle-orm");
     await app.db
       .update(agents)
       .set({ metadata: { github: { repos: ["acme/my-repo"] } } })
@@ -234,7 +233,11 @@ describe("E2E: GitHub issue → Server → CLI pull", () => {
   });
 
   it("issue_comment event", async () => {
-    const { token } = await createTestAgent(app, { id: "comment-handler" });
+    const { agent, token } = await createTestAgent(app, { id: "comment-handler" });
+    await app.db
+      .update(agents)
+      .set({ metadata: { github: { repos: ["acme/repo"] } } })
+      .where(eq(agents.id, agent.id));
 
     const res = await fetch(`${address}/webhooks/github`, {
       method: "POST",
