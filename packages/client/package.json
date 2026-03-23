@@ -1,8 +1,8 @@
 {
-  "name": "@agent-hub/client",
+  "name": "@unispark.ai/agent-hub",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
+  "description": "Agent Hub CLI and SDK — agent-facing client for Agent Hub server",
   "exports": {
     ".": {
       "import": "./dist/index.js",
@@ -12,20 +12,32 @@
   "bin": {
     "agent-hub": "./dist/cli/index.js"
   },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsdown src/index.ts src/cli/index.ts --format esm --dts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests"
   },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/agent-team-foundation/agent-hub.git",
+    "directory": "packages/client"
+  },
+  "engines": {
+    "node": ">=22.16.0"
+  },
   "dependencies": {
-    "@agent-hub/shared": "workspace:*",
-    "commander": "^13.1.0",
-    "ws": "^8.18.0",
-    "zod": "^3.25.0"
+    "commander": "^13.1.0"
   },
   "devDependencies": {
+    "@agent-hub/shared": "workspace:*",
     "@types/node": "^22.16.0",
-    "@types/ws": "^8.18.0",
     "tsdown": "^0.12.0",
     "vitest": "^3.2.0"
   }

@@ -16,7 +16,7 @@ Agent Hub ≠ Context Tree
 
 **Server:** Fastify / Drizzle ORM / PostgreSQL / Zod / bcrypt / jose
 
-**Client:** fetch / ws / Zod
+**Client:** fetch / Commander.js
 
 **Shared:** Zod schemas + TypeScript 类型（三端共享）
 
@@ -67,7 +67,7 @@ agent-hub/
 ├── packages/
 │   ├── shared/                # @agent-hub/shared — 共享 Zod schema + 类型
 │   ├── server/                # @agent-hub/server — Fastify API 服务
-│   ├── client/                # @agent-hub/client — Agent Runtime
+│   ├── client/                # @unispark.ai/agent-hub — Agent Runtime
 │   └── web/                   # @agent-hub/web — React 管理后台
 ```
 
