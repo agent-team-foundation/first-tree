@@ -11,7 +11,7 @@ describe("Agent Messages API", () => {
 
     const res = await app.inject({
       method: "POST",
-      url: "/agent/chats",
+      url: "/api/v1/agent/chats",
       headers: { authorization: `Bearer ${t1}` },
       payload: { type: "direct", participantIds: [a2.id] },
     });
@@ -25,7 +25,7 @@ describe("Agent Messages API", () => {
 
     const sendRes = await app.inject({
       method: "POST",
-      url: `/agent/chats/${chatId}/messages`,
+      url: `/api/v1/agent/chats/${chatId}/messages`,
       headers: { authorization: `Bearer ${t1}` },
       payload: { format: "text", content: "Hello!" },
     });
@@ -34,7 +34,7 @@ describe("Agent Messages API", () => {
 
     const listRes = await app.inject({
       method: "GET",
-      url: `/agent/chats/${chatId}/messages`,
+      url: `/api/v1/agent/chats/${chatId}/messages`,
       headers: { authorization: `Bearer ${t1}` },
     });
     expect(listRes.statusCode).toBe(200);
@@ -47,7 +47,7 @@ describe("Agent Messages API", () => {
 
     const sendRes = await app.inject({
       method: "POST",
-      url: `/agent/chats/${chatId}/messages`,
+      url: `/api/v1/agent/chats/${chatId}/messages`,
       headers: { authorization: `Bearer ${t1}` },
       payload: {
         format: "text",
@@ -68,7 +68,7 @@ describe("Agent Messages API", () => {
 
     await app.inject({
       method: "POST",
-      url: `/agent/chats/${chatId}/messages`,
+      url: `/api/v1/agent/chats/${chatId}/messages`,
       headers: { authorization: `Bearer ${t1}` },
       payload: { format: "text", content: "Fan-out test" },
     });
@@ -76,7 +76,7 @@ describe("Agent Messages API", () => {
     // Recipient should have inbox entries
     const pollRes = await app.inject({
       method: "GET",
-      url: "/agent/inbox",
+      url: "/api/v1/agent/inbox",
       headers: { authorization: `Bearer ${t2}` },
     });
     expect(pollRes.statusCode).toBe(200);
@@ -92,7 +92,7 @@ describe("Agent Messages API", () => {
 
     const res = await app.inject({
       method: "POST",
-      url: `/agent/chats/${chatId}/messages`,
+      url: `/api/v1/agent/chats/${chatId}/messages`,
       headers: { authorization: `Bearer ${outsider}` },
       payload: { format: "text", content: "Intruder!" },
     });

@@ -13,7 +13,7 @@ describe("Agent Inbox API", () => {
     // Create chat and send message
     const chatRes = await app.inject({
       method: "POST",
-      url: "/agent/chats",
+      url: "/api/v1/agent/chats",
       headers: { authorization: `Bearer ${t1}` },
       payload: { type: "direct", participantIds: [a2.id] },
     });
@@ -21,7 +21,7 @@ describe("Agent Inbox API", () => {
 
     await app.inject({
       method: "POST",
-      url: `/agent/chats/${chatId}/messages`,
+      url: `/api/v1/agent/chats/${chatId}/messages`,
       headers: { authorization: `Bearer ${t1}` },
       payload: { format: "text", content: "Inbox test" },
     });
@@ -29,7 +29,7 @@ describe("Agent Inbox API", () => {
     // Poll inbox as recipient
     const pollRes = await app.inject({
       method: "GET",
-      url: "/agent/inbox",
+      url: "/api/v1/agent/inbox",
       headers: { authorization: `Bearer ${t2}` },
     });
     expect(pollRes.statusCode).toBe(200);
@@ -40,7 +40,7 @@ describe("Agent Inbox API", () => {
     // ACK the entry
     const ackRes = await app.inject({
       method: "POST",
-      url: `/agent/inbox/${entryId}/ack`,
+      url: `/api/v1/agent/inbox/${entryId}/ack`,
       headers: { authorization: `Bearer ${t2}` },
     });
     expect(ackRes.statusCode).toBe(204);
@@ -48,7 +48,7 @@ describe("Agent Inbox API", () => {
     // Poll again — should be empty
     const pollRes2 = await app.inject({
       method: "GET",
-      url: "/agent/inbox",
+      url: "/api/v1/agent/inbox",
       headers: { authorization: `Bearer ${t2}` },
     });
     expect(pollRes2.json()).toHaveLength(0);
@@ -56,7 +56,7 @@ describe("Agent Inbox API", () => {
 
   it("rejects unauthenticated inbox access", async () => {
     const app = await appPromise;
-    const res = await app.inject({ method: "GET", url: "/agent/inbox" });
+    const res = await app.inject({ method: "GET", url: "/api/v1/agent/inbox" });
     expect(res.statusCode).toBe(401);
   });
 });

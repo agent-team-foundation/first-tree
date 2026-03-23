@@ -51,7 +51,7 @@ export async function createTestAdmin(app: FastifyInstance, opts: { username?: s
 
   const loginRes = await app.inject({
     method: "POST",
-    url: "/admin/auth/login",
+    url: "/api/v1/admin/auth/login",
     payload: { username, password },
   });
   const body = loginRes.json<{ accessToken: string; refreshToken: string }>();

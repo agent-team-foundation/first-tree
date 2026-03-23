@@ -12,7 +12,7 @@ describe("Agent Send-to-Agent API", () => {
 
     const res = await app.inject({
       method: "POST",
-      url: `/agent/agents/${a2.id}/messages`,
+      url: `/api/v1/agent/agents/${a2.id}/messages`,
       headers: { authorization: `Bearer ${t1}` },
       payload: { format: "text", content: "Hello agent!" },
     });
@@ -24,7 +24,7 @@ describe("Agent Send-to-Agent API", () => {
     // Recipient should see the message in inbox
     const pollRes = await app.inject({
       method: "GET",
-      url: "/agent/inbox",
+      url: "/api/v1/agent/inbox",
       headers: { authorization: `Bearer ${t2}` },
     });
     expect(pollRes.statusCode).toBe(200);
@@ -40,7 +40,7 @@ describe("Agent Send-to-Agent API", () => {
 
     const res1 = await app.inject({
       method: "POST",
-      url: `/agent/agents/${a2.id}/messages`,
+      url: `/api/v1/agent/agents/${a2.id}/messages`,
       headers: { authorization: `Bearer ${t1}` },
       payload: { format: "text", content: "First message" },
     });
@@ -48,7 +48,7 @@ describe("Agent Send-to-Agent API", () => {
 
     const res2 = await app.inject({
       method: "POST",
-      url: `/agent/agents/${a2.id}/messages`,
+      url: `/api/v1/agent/agents/${a2.id}/messages`,
       headers: { authorization: `Bearer ${t1}` },
       payload: { format: "text", content: "Second message" },
     });
@@ -63,7 +63,7 @@ describe("Agent Send-to-Agent API", () => {
 
     const res = await app.inject({
       method: "POST",
-      url: "/agent/agents/non-existent/messages",
+      url: "/api/v1/agent/agents/non-existent/messages",
       headers: { authorization: `Bearer ${t1}` },
       payload: { format: "text", content: "Hello?" },
     });
@@ -77,7 +77,7 @@ describe("Agent Send-to-Agent API", () => {
 
     const res = await app.inject({
       method: "POST",
-      url: `/agent/agents/${a2.id}/messages`,
+      url: `/api/v1/agent/agents/${a2.id}/messages`,
       headers: { authorization: `Bearer ${t1}` },
       payload: {
         format: "text",

@@ -14,14 +14,14 @@ describe("Admin Overview API", () => {
     // Create a chat
     await app.inject({
       method: "POST",
-      url: "/agent/chats",
+      url: "/api/v1/agent/chats",
       headers: { authorization: `Bearer ${t1}` },
       payload: { type: "direct", participantIds: [a2.id] },
     });
 
     const res = await app.inject({
       method: "GET",
-      url: "/admin/overview",
+      url: "/api/v1/admin/overview",
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
     expect(res.statusCode).toBe(200);
@@ -33,7 +33,7 @@ describe("Admin Overview API", () => {
 
   it("rejects unauthenticated requests", async () => {
     const app = await appPromise;
-    const res = await app.inject({ method: "GET", url: "/admin/overview" });
+    const res = await app.inject({ method: "GET", url: "/api/v1/admin/overview" });
     expect(res.statusCode).toBe(401);
   });
 });

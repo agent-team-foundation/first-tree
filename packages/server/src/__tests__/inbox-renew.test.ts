@@ -13,7 +13,7 @@ describe("Inbox Renew & Timeout API", () => {
     // Create chat and send message
     const chatRes = await app.inject({
       method: "POST",
-      url: "/agent/chats",
+      url: "/api/v1/agent/chats",
       headers: { authorization: `Bearer ${t1}` },
       payload: { type: "direct", participantIds: [a2.id] },
     });
@@ -21,7 +21,7 @@ describe("Inbox Renew & Timeout API", () => {
 
     await app.inject({
       method: "POST",
-      url: `/agent/chats/${chatId}/messages`,
+      url: `/api/v1/agent/chats/${chatId}/messages`,
       headers: { authorization: `Bearer ${t1}` },
       payload: { format: "text", content: "Renew test" },
     });
@@ -29,7 +29,7 @@ describe("Inbox Renew & Timeout API", () => {
     // Poll to get delivered entry
     const pollRes = await app.inject({
       method: "GET",
-      url: "/agent/inbox",
+      url: "/api/v1/agent/inbox",
       headers: { authorization: `Bearer ${t2}` },
     });
     const entries = pollRes.json();
@@ -42,7 +42,7 @@ describe("Inbox Renew & Timeout API", () => {
 
     const res = await app.inject({
       method: "POST",
-      url: `/agent/inbox/${entryId}/renew`,
+      url: `/api/v1/agent/inbox/${entryId}/renew`,
       headers: { authorization: `Bearer ${t2}` },
     });
     expect(res.statusCode).toBe(204);
@@ -54,7 +54,7 @@ describe("Inbox Renew & Timeout API", () => {
 
     const res = await app.inject({
       method: "POST",
-      url: "/agent/inbox/999999/renew",
+      url: "/api/v1/agent/inbox/999999/renew",
       headers: { authorization: `Bearer ${t2}` },
     });
     expect(res.statusCode).toBe(404);
@@ -67,14 +67,14 @@ describe("Inbox Renew & Timeout API", () => {
     // ACK first
     await app.inject({
       method: "POST",
-      url: `/agent/inbox/${entryId}/ack`,
+      url: `/api/v1/agent/inbox/${entryId}/ack`,
       headers: { authorization: `Bearer ${t2}` },
     });
 
     // Try to renew
     const res = await app.inject({
       method: "POST",
-      url: `/agent/inbox/${entryId}/renew`,
+      url: `/api/v1/agent/inbox/${entryId}/renew`,
       headers: { authorization: `Bearer ${t2}` },
     });
     expect(res.statusCode).toBe(404);

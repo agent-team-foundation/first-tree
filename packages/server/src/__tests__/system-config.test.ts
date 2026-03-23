@@ -20,7 +20,7 @@ describe("Admin System Config API", () => {
     const app = await appPromise;
     const req = await authedRequest(app);
 
-    const res = await req("GET", "/admin/system/config");
+    const res = await req("GET", "/api/v1/admin/system/config");
     expect(res.statusCode).toBe(200);
     const config = res.json();
     expect(config.inbox_timeout_seconds).toBe(300);
@@ -33,7 +33,7 @@ describe("Admin System Config API", () => {
     const app = await appPromise;
     const req = await authedRequest(app);
 
-    const res = await req("PATCH", "/admin/system/config", {
+    const res = await req("PATCH", "/api/v1/admin/system/config", {
       inbox_timeout_seconds: 600,
       max_retry_count: 5,
     });
@@ -49,15 +49,15 @@ describe("Admin System Config API", () => {
     const app = await appPromise;
     const req = await authedRequest(app);
 
-    await req("PATCH", "/admin/system/config", { inbox_timeout_seconds: 100 });
-    const res = await req("PATCH", "/admin/system/config", { inbox_timeout_seconds: 200 });
+    await req("PATCH", "/api/v1/admin/system/config", { inbox_timeout_seconds: 100 });
+    const res = await req("PATCH", "/api/v1/admin/system/config", { inbox_timeout_seconds: 200 });
     expect(res.statusCode).toBe(200);
     expect(res.json().inbox_timeout_seconds).toBe(200);
   });
 
   it("rejects unauthenticated requests", async () => {
     const app = await appPromise;
-    const res = await app.inject({ method: "GET", url: "/admin/system/config" });
+    const res = await app.inject({ method: "GET", url: "/api/v1/admin/system/config" });
     expect(res.statusCode).toBe(401);
   });
 });

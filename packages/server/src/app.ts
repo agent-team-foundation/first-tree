@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
+import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
 import Fastify from "fastify";
 import postgres from "postgres";
@@ -60,49 +63,70 @@ export async function buildApp(config: Config) {
     return reply.status(500).send({ error: "Internal server error" });
   });
 
-  // Public routes
-  await app.register(healthRoutes);
-  await app.register(githubWebhookRoutes, { prefix: "/webhooks" });
-  await app.register(adminAuthRoutes, { prefix: "/admin/auth" });
-
-  // Admin routes (JWT protected)
+  // All API routes under /api/v1 prefix
   await app.register(
-    async (adminApp) => {
-      adminApp.addHook("onRequest", adminAuth);
-      await adminApp.register(adminAgentRoutes);
+    async (api) => {
+      // Public routes
+      await api.register(healthRoutes);
+      await api.register(githubWebhookRoutes, { prefix: "/webhooks" });
+      await api.register(adminAuthRoutes, { prefix: "/admin/auth" });
+
+      // Admin routes (JWT protected)
+      await api.register(
+        async (adminApp) => {
+          adminApp.addHook("onRequest", adminAuth);
+          await adminApp.register(adminAgentRoutes);
+        },
+        { prefix: "/admin/agents" },
+      );
+
+      await api.register(
+        async (adminApp) => {
+          adminApp.addHook("onRequest", adminAuth);
+          await adminApp.register(adminSystemConfigRoutes);
+        },
+        { prefix: "/admin/system/config" },
+      );
+
+      await api.register(
+        async (adminApp) => {
+          adminApp.addHook("onRequest", adminAuth);
+          await adminApp.register(adminOverviewRoutes);
+        },
+        { prefix: "/admin/overview" },
+      );
+
+      // Agent routes (Bearer token protected)
+      await api.register(
+        async (agentApp) => {
+          agentApp.addHook("onRequest", agentAuth);
+          await agentApp.register(agentMeRoutes);
+          await agentApp.register(agentChatRoutes, { prefix: "/chats" });
+          await agentApp.register(agentMessageRoutes, { prefix: "/chats" });
+          await agentApp.register(agentSendToAgentRoutes, { prefix: "/agents" });
+          await agentApp.register(agentInboxRoutes, { prefix: "/inbox" });
+          await agentApp.register(agentWsRoutes(notifier, config.instanceId), { prefix: "/ws" });
+        },
+        { prefix: "/agent" },
+      );
     },
-    { prefix: "/admin/agents" },
+    { prefix: "/api/v1" },
   );
 
-  await app.register(
-    async (adminApp) => {
-      adminApp.addHook("onRequest", adminAuth);
-      await adminApp.register(adminSystemConfigRoutes);
-    },
-    { prefix: "/admin/system/config" },
-  );
-
-  await app.register(
-    async (adminApp) => {
-      adminApp.addHook("onRequest", adminAuth);
-      await adminApp.register(adminOverviewRoutes);
-    },
-    { prefix: "/admin/overview" },
-  );
-
-  // Agent routes (Bearer token protected)
-  await app.register(
-    async (agentApp) => {
-      agentApp.addHook("onRequest", agentAuth);
-      await agentApp.register(agentMeRoutes);
-      await agentApp.register(agentChatRoutes, { prefix: "/chats" });
-      await agentApp.register(agentMessageRoutes, { prefix: "/chats" });
-      await agentApp.register(agentSendToAgentRoutes, { prefix: "/agents" });
-      await agentApp.register(agentInboxRoutes, { prefix: "/inbox" });
-      await agentApp.register(agentWsRoutes(notifier, config.instanceId), { prefix: "/ws" });
-    },
-    { prefix: "/agent" },
-  );
+  // Serve Web static files when WEB_DIST_PATH is configured
+  if (config.webDistPath) {
+    const webRoot = resolve(config.webDistPath);
+    if (existsSync(webRoot)) {
+      await app.register(fastifyStatic, { root: webRoot, wildcard: false });
+      app.setNotFoundHandler((request, reply) => {
+        if (request.url.startsWith("/api/")) {
+          return reply.status(404).send({ error: "Not found" });
+        }
+        // SPA fallback: serve index.html for non-API routes
+        return reply.sendFile("index.html");
+      });
+    }
+  }
 
   // Background tasks
   const backgroundTasks = createBackgroundTasks(app, config.instanceId);
