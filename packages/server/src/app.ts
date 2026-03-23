@@ -5,6 +5,7 @@ import websocket from "@fastify/websocket";
 import Fastify from "fastify";
 import postgres from "postgres";
 import { ZodError } from "zod";
+import { adminAdapterRoutes } from "./api/admin/adapters.js";
 import { adminAgentRoutes } from "./api/admin/agents.js";
 import { adminAuthRoutes } from "./api/admin/auth.js";
 import { adminOverviewRoutes } from "./api/admin/overview.js";
@@ -96,6 +97,14 @@ export async function buildApp(config: Config) {
         { prefix: "/admin/overview" },
       );
 
+      await api.register(
+        async (adminApp) => {
+          adminApp.addHook("onRequest", adminAuth);
+          await adminApp.register(adminAdapterRoutes);
+        },
+        { prefix: "/admin/adapters" },
+      );
+
       // Agent routes (Bearer token protected)
       await api.register(
         async (agentApp) => {
@@ -135,6 +144,9 @@ export async function buildApp(config: Config) {
   app.addHook("onReady", async () => {
     await notifier.start();
     backgroundTasks.start();
+    if (!config.adapterEncryptionKey) {
+      app.log.warn("ADAPTER_ENCRYPTION_KEY is not set — adapter create/update will be unavailable");
+    }
   });
 
   // Cleanup on close

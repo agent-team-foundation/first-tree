@@ -13,6 +13,7 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
     return {
       items: result.items.map((a) => ({
         ...a,
+        presenceStatus: a.presenceStatus ?? "offline",
         createdAt: a.createdAt.toISOString(),
         updatedAt: a.updatedAt.toISOString(),
       })),

@@ -1,4 +1,4 @@
-import { Bot, LayoutDashboard, LogOut, Settings } from "lucide-react";
+import { Bot, Cable, LayoutDashboard, LogOut, Settings } from "lucide-react";
 import { NavLink, Outlet } from "react-router";
 import { useAuth } from "../auth/auth-context.js";
 import { cn } from "../lib/utils.js";
@@ -6,6 +6,7 @@ import { cn } from "../lib/utils.js";
 const navItems = [
   { to: "/", icon: LayoutDashboard, label: "Overview" },
   { to: "/agents", icon: Bot, label: "Agents" },
+  { to: "/adapters", icon: Cable, label: "Adapters" },
   { to: "/settings", icon: Settings, label: "Settings" },
 ];
 

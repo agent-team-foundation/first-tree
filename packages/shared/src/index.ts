@@ -1,6 +1,23 @@
 // Schemas
 
 export {
+  ADAPTER_BIND_METHODS,
+  ADAPTER_PLATFORMS,
+  ADAPTER_STATUSES,
+  type AdapterBindMethod,
+  type AdapterConfig,
+  type AdapterPlatform,
+  type AdapterStatus,
+  adapterBindMethodSchema,
+  adapterConfigSchema,
+  adapterPlatformSchema,
+  adapterStatusSchema,
+  type CreateAdapterConfig,
+  createAdapterConfigSchema,
+  type UpdateAdapterConfig,
+  updateAdapterConfigSchema,
+} from "./schemas/adapter.js";
+export {
   ADMIN_ROLES,
   type AdminRole,
   type AdminUser,
@@ -13,7 +30,6 @@ export {
   type RefreshToken,
   refreshTokenSchema,
 } from "./schemas/admin-auth.js";
-
 export {
   AGENT_STATUSES,
   AGENT_TYPES,
@@ -28,7 +44,6 @@ export {
   type UpdateAgent,
   updateAgentSchema,
 } from "./schemas/agent.js";
-
 export {
   type AgentToken,
   type AgentTokenCreated,

@@ -8,6 +8,7 @@ export const chats = pgTable("chats", {
   /** "direct" | "group" | "thread" */
   type: text("type").notNull().default("direct"),
   topic: text("topic"),
+  lifecyclePolicy: text("lifecycle_policy").default("persistent"),
   /** Parent chat ID for thread (sub-discussion) scenarios */
   parentChatId: text("parent_chat_id"),
   metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),

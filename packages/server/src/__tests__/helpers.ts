@@ -11,6 +11,7 @@ export async function createTestApp(): Promise<FastifyInstance> {
     logger: false,
     jwtSecretKey: process.env.JWT_SECRET_KEY ?? "test-jwt-secret-key-for-vitest",
     instanceId: "test-instance",
+    adapterEncryptionKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   };
   const app = await buildApp(config);
   await app.ready();
