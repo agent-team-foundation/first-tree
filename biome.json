@@ -26,6 +26,11 @@
       }
     }
   },
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
+    }
+  },
   "files": {
     "includes": ["**", "!**/node_modules", "!**/dist", "!**/.turbo", "!**/drizzle", "!**/.venv", "!**/*.code-workspace"]
   }
