@@ -9,15 +9,19 @@
       "types": "./dist/index.d.ts"
     }
   },
+  "bin": {
+    "agent-hub": "./dist/cli/index.js"
+  },
   "scripts": {
-    "build": "tsdown src/index.ts --format esm --dts",
+    "build": "tsdown src/index.ts src/cli/index.ts --format esm --dts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "@agent-hub/shared": "workspace:*",
-    "zod": "^3.25.0",
-    "ws": "^8.18.0"
+    "commander": "^13.1.0",
+    "ws": "^8.18.0",
+    "zod": "^3.25.0"
   },
   "devDependencies": {
     "@types/node": "^22.16.0",

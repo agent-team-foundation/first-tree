@@ -9,6 +9,7 @@ export type Config = {
   jwtSecretKey: string;
   instanceId: string;
   logger?: boolean;
+  githubWebhookSecret?: string;
 };
 
 export function loadConfig(): Config {
@@ -28,5 +29,6 @@ export function loadConfig(): Config {
     serverPort: Number(env.SERVER_PORT ?? "8000"),
     jwtSecretKey,
     instanceId: env.INSTANCE_ID ?? `srv_${randomUUID().slice(0, 8)}`,
+    githubWebhookSecret: env.GITHUB_WEBHOOK_SECRET || undefined,
   };
 }

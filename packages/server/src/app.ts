@@ -12,6 +12,7 @@ import { agentMeRoutes } from "./api/agent/me.js";
 import { agentMessageRoutes, agentSendToAgentRoutes } from "./api/agent/messages.js";
 import { agentWsRoutes } from "./api/agent/ws.js";
 import { healthRoutes } from "./api/health.js";
+import { githubWebhookRoutes } from "./api/webhooks/github.js";
 import type { Config } from "./config.js";
 import { connectDatabase } from "./db/connection.js";
 import { AppError } from "./errors.js";
@@ -61,6 +62,7 @@ export async function buildApp(config: Config) {
 
   // Public routes
   await app.register(healthRoutes);
+  await app.register(githubWebhookRoutes, { prefix: "/webhooks" });
   await app.register(adminAuthRoutes, { prefix: "/admin/auth" });
 
   // Admin routes (JWT protected)
