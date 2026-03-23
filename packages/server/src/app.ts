@@ -22,6 +22,7 @@ import { connectDatabase } from "./db/connection.js";
 import { AppError } from "./errors.js";
 import { adminAuthHook } from "./middleware/admin-auth.js";
 import { agentAuthHook } from "./middleware/agent-auth.js";
+import { type AdapterManager, createAdapterManager } from "./services/adapter-manager.js";
 import { type BackgroundTasks, createBackgroundTasks } from "./services/background-tasks.js";
 import { createNotifier, type Notifier } from "./services/notifier.js";
 
@@ -31,6 +32,7 @@ import "./types.js";
 export type AppContext = {
   notifier: Notifier;
   backgroundTasks: BackgroundTasks;
+  adapterManager: AdapterManager;
 };
 
 export async function buildApp(config: Config) {
@@ -137,8 +139,12 @@ export async function buildApp(config: Config) {
     }
   }
 
+  // Adapter manager — decorated so admin routes can trigger reload
+  const adapterManager = createAdapterManager(db, config.adapterEncryptionKey, app.log);
+  app.decorate("adapterManager", adapterManager);
+
   // Background tasks
-  const backgroundTasks = createBackgroundTasks(app, config.instanceId);
+  const backgroundTasks = createBackgroundTasks(app, config.instanceId, adapterManager);
 
   // Start notifier and background tasks on server start
   app.addHook("onReady", async () => {
@@ -146,12 +152,15 @@ export async function buildApp(config: Config) {
     backgroundTasks.start();
     if (!config.adapterEncryptionKey) {
       app.log.warn("ADAPTER_ENCRYPTION_KEY is not set — adapter create/update will be unavailable");
+    } else {
+      await adapterManager.reload();
     }
   });
 
   // Cleanup on close
   app.addHook("onClose", async () => {
     backgroundTasks.stop();
+    adapterManager.shutdown();
     await notifier.stop();
     await listenClient.end();
   });
