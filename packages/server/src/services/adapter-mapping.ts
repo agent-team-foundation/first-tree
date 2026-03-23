@@ -20,6 +20,14 @@ export async function claimEvent(db: Database, eventId: string, platform: string
   return result.length > 0;
 }
 
+/**
+ * Remove a claimed event so it can be retried on next delivery.
+ * Called when processing fails after claimEvent() succeeded.
+ */
+export async function unclaimEvent(db: Database, eventId: string, platform: string): Promise<void> {
+  await db.execute(sql`DELETE FROM processed_events WHERE event_id = ${eventId} AND platform = ${platform}`);
+}
+
 // ── Agent mapping ───────────────────────────────────────────────────
 
 /** Look up the internal agent ID for an external user. */

@@ -42,6 +42,8 @@ const OUTBOUND_BATCH_SIZE = 10;
 
 type ManagedBot = {
   configId: number;
+  /** Track updatedAt to detect credential/setting changes on same config row. */
+  configUpdatedAt: string;
   appId: string;
   agentId: string | null;
   adapterAgentId: string;
@@ -83,7 +85,13 @@ export function createAdapterManager(
       // Skip bot messages (avoid echo)
       if (event.senderType === "bot") return;
 
-      await processInboundMessage(db, event, appId, log);
+      try {
+        await processInboundMessage(db, event, appId, log);
+      } catch (err) {
+        // Unclaim the event so it can be retried on next delivery
+        await mappingService.unclaimEvent(db, event.eventId, "feishu");
+        throw err;
+      }
     } catch (err) {
       log.error({ appId, err }, "Failed to handle inbound Feishu event");
     }
@@ -113,9 +121,10 @@ export function createAdapterManager(
         const appId = creds.app_id;
         seen.add(appId);
 
-        // Skip if already running with same config
+        // Skip if already running with same config version (detect credential changes)
+        const configVersion = config.updatedAt.toISOString();
         const existing = bots.get(appId);
-        if (existing && existing.configId === config.id) continue;
+        if (existing && existing.configId === config.id && existing.configUpdatedAt === configVersion) continue;
 
         // Stop old connection if config changed
         if (existing) {
@@ -154,6 +163,7 @@ export function createAdapterManager(
 
         bots.set(appId, {
           configId: config.id,
+          configUpdatedAt: configVersion,
           appId,
           agentId: config.agentId,
           adapterAgentId,
