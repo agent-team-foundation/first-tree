@@ -40,8 +40,14 @@ export function SettingsPage() {
     mutationFn: () => {
       const payload: Record<string, unknown> = {};
       for (const [key, val] of Object.entries(values)) {
-        const num = Number(val);
-        payload[key] = Number.isNaN(num) ? val : num;
+        const trimmed = val.trim();
+        if (trimmed === "") {
+          // Restore default instead of sending 0
+          payload[key] = SYSTEM_CONFIG_DEFAULTS[key as keyof typeof SYSTEM_CONFIG_DEFAULTS] ?? 0;
+        } else {
+          const num = Number(trimmed);
+          payload[key] = Number.isNaN(num) ? trimmed : num;
+        }
       }
       return updateConfigs(payload);
     },

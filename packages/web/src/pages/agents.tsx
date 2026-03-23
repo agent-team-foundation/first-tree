@@ -28,7 +28,7 @@ export function AgentsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [form, setForm] = useState({ id: "", type: "autonomous_agent", displayName: "" });
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ["agents", cursor],
     queryFn: () => listAgents({ limit: 20, cursor }),
   });
@@ -129,6 +129,12 @@ export function AgentsPage() {
               <TableRow>
                 <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
                   Loading...
+                </TableCell>
+              </TableRow>
+            ) : error ? (
+              <TableRow>
+                <TableCell colSpan={5} className="text-center py-8 text-destructive">
+                  Failed to load agents: {error instanceof Error ? error.message : "Unknown error"}
                 </TableCell>
               </TableRow>
             ) : data?.items.length === 0 ? (

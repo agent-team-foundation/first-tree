@@ -76,6 +76,13 @@ export function AgentDetailPage() {
   if (agentQuery.isLoading) {
     return <div className="text-muted-foreground">Loading...</div>;
   }
+  if (agentQuery.error) {
+    return (
+      <div className="text-destructive">
+        Failed to load agent: {agentQuery.error instanceof Error ? agentQuery.error.message : "Unknown error"}
+      </div>
+    );
+  }
   if (!agent) {
     return <div className="text-muted-foreground">Agent not found</div>;
   }

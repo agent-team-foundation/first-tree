@@ -48,9 +48,14 @@ async function tryRefresh(refreshToken: string): Promise<StoredTokens | null> {
         body: JSON.stringify({ refreshToken }),
       });
       if (!res.ok) return null;
-      const tokens = (await res.json()) as StoredTokens;
-      setStoredTokens(tokens);
-      return tokens;
+      const body = (await res.json()) as { accessToken: string; refreshToken?: string };
+      // Server refresh only returns accessToken — preserve existing refreshToken
+      const updated: StoredTokens = {
+        accessToken: body.accessToken,
+        refreshToken: body.refreshToken ?? refreshToken,
+      };
+      setStoredTokens(updated);
+      return updated;
     } catch {
       return null;
     } finally {

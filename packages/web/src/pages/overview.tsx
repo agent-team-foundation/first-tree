@@ -4,7 +4,7 @@ import { getOverview } from "../api/overview.js";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card.js";
 
 export function OverviewPage() {
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ["overview"],
     queryFn: getOverview,
     refetchInterval: 30_000,
@@ -19,6 +19,11 @@ export function OverviewPage() {
   return (
     <div>
       <h1 className="text-2xl font-semibold mb-6">Overview</h1>
+      {error && (
+        <div className="mb-4 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+          Failed to load overview: {error instanceof Error ? error.message : "Unknown error"}
+        </div>
+      )}
       <div className="grid gap-4 md:grid-cols-3">
         {stats.map((stat) => (
           <Card key={stat.label}>
