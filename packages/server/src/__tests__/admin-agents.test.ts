@@ -48,6 +48,20 @@ describe("Admin Agents API", () => {
     expect(body.nextCursor).toBeDefined();
   });
 
+  it("lists agents with presenceStatus field", async () => {
+    const app = await appPromise;
+    const req = await authedRequest(app);
+    await req("POST", "/api/v1/admin/agents", { id: "presence-test", type: "autonomous_agent" });
+
+    const res = await req("GET", "/api/v1/admin/agents?limit=50");
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    const agent = body.items.find((a: { id: string }) => a.id === "presence-test");
+    expect(agent).toBeDefined();
+    // No presence record → defaults to "offline"
+    expect(agent.presenceStatus).toBe("offline");
+  });
+
   it("updates an agent", async () => {
     const app = await appPromise;
     const req = await authedRequest(app);

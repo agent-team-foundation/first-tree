@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { CreateAgent, CreateAgentToken, UpdateAgent } from "@agent-hub/shared";
 import { and, desc, eq, isNull, lt } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
+import { agentPresence } from "../db/schema/agent-presence.js";
 import { agentTokens } from "../db/schema/agent-tokens.js";
 import { agents } from "../db/schema/agents.js";
 import { ConflictError, NotFoundError } from "../errors.js";
@@ -47,14 +48,25 @@ export async function getAgent(db: Database, id: string) {
 export async function listAgents(db: Database, limit: number, cursor?: string) {
   const where = cursor ? lt(agents.createdAt, new Date(cursor)) : undefined;
 
-  const query = db
-    .select()
+  const rows = await db
+    .select({
+      id: agents.id,
+      organizationId: agents.organizationId,
+      type: agents.type,
+      displayName: agents.displayName,
+      inboxId: agents.inboxId,
+      status: agents.status,
+      metadata: agents.metadata,
+      createdAt: agents.createdAt,
+      updatedAt: agents.updatedAt,
+      presenceStatus: agentPresence.status,
+    })
     .from(agents)
+    .leftJoin(agentPresence, eq(agents.id, agentPresence.agentId))
     .where(where)
     .orderBy(desc(agents.createdAt))
     .limit(limit + 1);
 
-  const rows = await query;
   const hasMore = rows.length > limit;
   const items = hasMore ? rows.slice(0, limit) : rows;
   const last = items[items.length - 1];

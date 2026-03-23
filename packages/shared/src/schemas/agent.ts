@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { presenceStatusSchema } from "./presence.js";
 
 export const AGENT_TYPES = {
   HUMAN: "human",
@@ -46,6 +47,7 @@ export const agentSchema = z.object({
   inboxId: z.string(),
   status: z.string(),
   metadata: z.record(z.unknown()),
+  presenceStatus: presenceStatusSchema.optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

@@ -11,6 +11,7 @@ export type Config = {
   logger?: boolean;
   githubWebhookSecret?: string;
   webDistPath?: string;
+  adapterEncryptionKey?: string;
 };
 
 export function loadConfig(): Config {
@@ -32,5 +33,6 @@ export function loadConfig(): Config {
     instanceId: env.INSTANCE_ID ?? `srv_${randomUUID().slice(0, 8)}`,
     githubWebhookSecret: env.GITHUB_WEBHOOK_SECRET || undefined,
     webDistPath: env.WEB_DIST_PATH,
+    adapterEncryptionKey: env.ADAPTER_ENCRYPTION_KEY || undefined,
   };
 }

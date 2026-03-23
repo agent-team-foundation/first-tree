@@ -3,9 +3,10 @@ import { z } from "zod";
 export const CHAT_TYPES = {
   DIRECT: "direct",
   GROUP: "group",
+  THREAD: "thread",
 } as const;
 
-export const chatTypeSchema = z.enum(["direct", "group"]);
+export const chatTypeSchema = z.enum(["direct", "group", "thread"]);
 export type ChatType = z.infer<typeof chatTypeSchema>;
 
 export const createChatSchema = z.object({
@@ -29,6 +30,7 @@ export const chatSchema = z.object({
   organizationId: z.string(),
   type: z.string(),
   topic: z.string().nullable(),
+  lifecyclePolicy: z.string().nullable().optional(),
   metadata: z.record(z.unknown()),
   createdAt: z.string(),
   updatedAt: z.string(),

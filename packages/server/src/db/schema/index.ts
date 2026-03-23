@@ -1,3 +1,7 @@
+export { adapterAgentMappings } from "./adapter-agent-mappings.js";
+export { adapterChatMappings } from "./adapter-chat-mappings.js";
+export { adapterConfigs } from "./adapter-configs.js";
+export { adapterMessageReferences } from "./adapter-message-references.js";
 export { adminUsers } from "./admin-users.js";
 export { agentPresence } from "./agent-presence.js";
 export { agentTokens } from "./agent-tokens.js";

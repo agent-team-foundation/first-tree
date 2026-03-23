@@ -17,7 +17,7 @@ import {
 import { Input } from "../components/ui/input.js";
 import { Label } from "../components/ui/label.js";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.js";
-import { formatDate } from "../lib/utils.js";
+import { cn, formatDate } from "../lib/utils.js";
 
 const agentTypeValues = Object.values(AGENT_TYPES);
 
@@ -120,6 +120,7 @@ export function AgentsPage() {
               <TableHead>ID</TableHead>
               <TableHead>Display Name</TableHead>
               <TableHead>Type</TableHead>
+              <TableHead>Online</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Created</TableHead>
             </TableRow>
@@ -127,19 +128,19 @@ export function AgentsPage() {
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
                   Loading...
                 </TableCell>
               </TableRow>
             ) : error ? (
               <TableRow>
-                <TableCell colSpan={5} className="text-center py-8 text-destructive">
+                <TableCell colSpan={6} className="text-center py-8 text-destructive">
                   Failed to load agents: {error instanceof Error ? error.message : "Unknown error"}
                 </TableCell>
               </TableRow>
             ) : data?.items.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
                   No agents yet
                 </TableCell>
               </TableRow>
@@ -150,6 +151,15 @@ export function AgentsPage() {
                   <TableCell>{agent.displayName ?? "—"}</TableCell>
                   <TableCell>
                     <Badge variant="secondary">{agent.type}</Badge>
+                  </TableCell>
+                  <TableCell>
+                    <span
+                      className={cn(
+                        "inline-block h-2 w-2 rounded-full",
+                        agent.presenceStatus === "online" ? "bg-green-500" : "bg-gray-300",
+                      )}
+                      title={agent.presenceStatus ?? "offline"}
+                    />
                   </TableCell>
                   <TableCell>
                     <Badge variant={agent.status === "active" ? "default" : "destructive"}>{agent.status}</Badge>
