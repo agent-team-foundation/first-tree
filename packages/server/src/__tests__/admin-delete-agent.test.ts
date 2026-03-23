@@ -21,32 +21,32 @@ describe("Admin DELETE Agent API", () => {
     const req = await authedRequest(app);
 
     // Create agent with token
-    await req("POST", "/admin/agents", { id: "del-agent", type: "autonomous_agent" });
-    const tokenRes = await req("POST", "/admin/agents/del-agent/tokens", { name: "test" });
+    await req("POST", "/api/v1/admin/agents", { id: "del-agent", type: "autonomous_agent" });
+    const tokenRes = await req("POST", "/api/v1/admin/agents/del-agent/tokens", { name: "test" });
     expect(tokenRes.statusCode).toBe(201);
     const token = tokenRes.json().token;
 
     // Verify agent works
     const meRes = await app.inject({
       method: "GET",
-      url: "/agent/me",
+      url: "/api/v1/agent/me",
       headers: { authorization: `Bearer ${token}` },
     });
     expect(meRes.statusCode).toBe(200);
 
     // Delete agent
-    const delRes = await req("DELETE", "/admin/agents/del-agent");
+    const delRes = await req("DELETE", "/api/v1/admin/agents/del-agent");
     expect(delRes.statusCode).toBe(204);
 
     // Verify agent is suspended
-    const getRes = await req("GET", "/admin/agents/del-agent");
+    const getRes = await req("GET", "/api/v1/admin/agents/del-agent");
     expect(getRes.statusCode).toBe(200);
     expect(getRes.json().status).toBe("suspended");
 
     // Token should no longer work
     const meRes2 = await app.inject({
       method: "GET",
-      url: "/agent/me",
+      url: "/api/v1/agent/me",
       headers: { authorization: `Bearer ${token}` },
     });
     expect(meRes2.statusCode).toBe(401);
@@ -56,7 +56,7 @@ describe("Admin DELETE Agent API", () => {
     const app = await appPromise;
     const req = await authedRequest(app);
 
-    const res = await req("DELETE", "/admin/agents/non-existent");
+    const res = await req("DELETE", "/api/v1/admin/agents/non-existent");
     expect(res.statusCode).toBe(404);
   });
 });

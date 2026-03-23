@@ -15,7 +15,7 @@ describe("Inbox Timeout Reset", () => {
     // Create chat and send message
     const chatRes = await app.inject({
       method: "POST",
-      url: "/agent/chats",
+      url: "/api/v1/agent/chats",
       headers: { authorization: `Bearer ${t1}` },
       payload: { type: "direct", participantIds: [a2.id] },
     });
@@ -23,7 +23,7 @@ describe("Inbox Timeout Reset", () => {
 
     await app.inject({
       method: "POST",
-      url: `/agent/chats/${chatId}/messages`,
+      url: `/api/v1/agent/chats/${chatId}/messages`,
       headers: { authorization: `Bearer ${t1}` },
       payload: { format: "text", content: "Timeout test" },
     });
@@ -31,7 +31,7 @@ describe("Inbox Timeout Reset", () => {
     // Poll to deliver
     const pollRes = await app.inject({
       method: "GET",
-      url: "/agent/inbox",
+      url: "/api/v1/agent/inbox",
       headers: { authorization: `Bearer ${t2}` },
     });
     const entries = pollRes.json();
@@ -52,7 +52,7 @@ describe("Inbox Timeout Reset", () => {
     // Entry should be pending again — pollable
     const pollRes2 = await app.inject({
       method: "GET",
-      url: "/agent/inbox",
+      url: "/api/v1/agent/inbox",
       headers: { authorization: `Bearer ${t2}` },
     });
     expect(pollRes2.json()).toHaveLength(1);
@@ -65,7 +65,7 @@ describe("Inbox Timeout Reset", () => {
 
     const chatRes = await app.inject({
       method: "POST",
-      url: "/agent/chats",
+      url: "/api/v1/agent/chats",
       headers: { authorization: `Bearer ${t1}` },
       payload: { type: "direct", participantIds: [a2.id] },
     });
@@ -73,7 +73,7 @@ describe("Inbox Timeout Reset", () => {
 
     await app.inject({
       method: "POST",
-      url: `/agent/chats/${chatId}/messages`,
+      url: `/api/v1/agent/chats/${chatId}/messages`,
       headers: { authorization: `Bearer ${t1}` },
       payload: { format: "text", content: "Fail test" },
     });
@@ -81,7 +81,7 @@ describe("Inbox Timeout Reset", () => {
     // Poll to deliver
     const pollRes = await app.inject({
       method: "GET",
-      url: "/agent/inbox",
+      url: "/api/v1/agent/inbox",
       headers: { authorization: `Bearer ${t2}` },
     });
     const entryId = pollRes.json()[0].id;
@@ -101,7 +101,7 @@ describe("Inbox Timeout Reset", () => {
     // Entry should not be pollable (it's failed)
     const pollRes2 = await app.inject({
       method: "GET",
-      url: "/agent/inbox",
+      url: "/api/v1/agent/inbox",
       headers: { authorization: `Bearer ${t2}` },
     });
     expect(pollRes2.json()).toHaveLength(0);

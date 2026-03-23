@@ -13,7 +13,7 @@ describe("Agent Participants API", () => {
 
     const res = await app.inject({
       method: "POST",
-      url: "/agent/chats",
+      url: "/api/v1/agent/chats",
       headers: { authorization: `Bearer ${t1}` },
       payload: { type: "group", participantIds: [a2.id] },
     });
@@ -27,7 +27,7 @@ describe("Agent Participants API", () => {
 
     const res = await app.inject({
       method: "POST",
-      url: `/agent/chats/${chatId}/participants`,
+      url: `/api/v1/agent/chats/${chatId}/participants`,
       headers: { authorization: `Bearer ${t1}` },
       payload: { agentId: a3.id },
     });
@@ -43,7 +43,7 @@ describe("Agent Participants API", () => {
 
     const res = await app.inject({
       method: "POST",
-      url: `/agent/chats/${chatId}/participants`,
+      url: `/api/v1/agent/chats/${chatId}/participants`,
       headers: { authorization: `Bearer ${t1}` },
       payload: { agentId: a2.id },
     });
@@ -56,7 +56,7 @@ describe("Agent Participants API", () => {
 
     const res = await app.inject({
       method: "POST",
-      url: `/agent/chats/${chatId}/participants`,
+      url: `/api/v1/agent/chats/${chatId}/participants`,
       headers: { authorization: `Bearer ${t1}` },
       payload: { agentId: "non-existent-agent" },
     });
@@ -69,7 +69,7 @@ describe("Agent Participants API", () => {
 
     const res = await app.inject({
       method: "DELETE",
-      url: `/agent/chats/${chatId}/participants/${a2.id}`,
+      url: `/api/v1/agent/chats/${chatId}/participants/${a2.id}`,
       headers: { authorization: `Bearer ${t1}` },
     });
     expect(res.statusCode).toBe(204);
@@ -77,7 +77,7 @@ describe("Agent Participants API", () => {
     // Verify participant is removed
     const detail = await app.inject({
       method: "GET",
-      url: `/agent/chats/${chatId}`,
+      url: `/api/v1/agent/chats/${chatId}`,
       headers: { authorization: `Bearer ${t1}` },
     });
     const participants = detail.json().participants;
@@ -91,7 +91,7 @@ describe("Agent Participants API", () => {
 
     const res = await app.inject({
       method: "DELETE",
-      url: `/agent/chats/${chatId}/participants/${a3.id}`,
+      url: `/api/v1/agent/chats/${chatId}/participants/${a3.id}`,
       headers: { authorization: `Bearer ${t1}` },
     });
     expect(res.statusCode).toBe(404);
@@ -103,7 +103,7 @@ describe("Agent Participants API", () => {
 
     const res = await app.inject({
       method: "DELETE",
-      url: `/agent/chats/${chatId}/participants/${a1.id}`,
+      url: `/api/v1/agent/chats/${chatId}/participants/${a1.id}`,
       headers: { authorization: `Bearer ${t1}` },
     });
     expect(res.statusCode).toBe(400);
@@ -115,7 +115,7 @@ describe("Agent Participants API", () => {
 
     const res = await app.inject({
       method: "POST",
-      url: `/agent/chats/${chatId}/participants`,
+      url: `/api/v1/agent/chats/${chatId}/participants`,
       headers: { authorization: `Bearer ${t3}` },
       payload: { agentId: a3.id },
     });

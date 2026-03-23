@@ -28,7 +28,7 @@ export class AgentHubSDK {
 
   /** Validate token, return agent identity. */
   async register(): Promise<RegisterResult> {
-    const agent = await this.requestJson<Agent>("/agent/me");
+    const agent = await this.requestJson<Agent>("/api/v1/agent/me");
     return {
       agentId: agent.id,
       inboxId: agent.inboxId,
@@ -39,18 +39,18 @@ export class AgentHubSDK {
 
   /** Fetch pending inbox entries. */
   async pull(limit = 10): Promise<PullResult> {
-    const entries = await this.requestJson<InboxEntryWithMessage[]>(`/agent/inbox?limit=${limit}`);
+    const entries = await this.requestJson<InboxEntryWithMessage[]>(`/api/v1/agent/inbox?limit=${limit}`);
     return { entries };
   }
 
   /** Acknowledge an inbox entry. */
   async ack(entryId: number): Promise<void> {
-    await this.requestVoid(`/agent/inbox/${entryId}/ack`, { method: "POST" });
+    await this.requestVoid(`/api/v1/agent/inbox/${entryId}/ack`, { method: "POST" });
   }
 
   /** Renew lease on an inbox entry. */
   async renew(entryId: number): Promise<void> {
-    await this.requestVoid(`/agent/inbox/${entryId}/renew`, { method: "POST" });
+    await this.requestVoid(`/api/v1/agent/inbox/${entryId}/renew`, { method: "POST" });
   }
 
   private async requestVoid(path: string, init?: RequestInit): Promise<void> {

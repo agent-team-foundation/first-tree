@@ -31,19 +31,19 @@ async function sdkRequest<T>(baseUrl: string, token: string, path: string, init?
 }
 
 function sdkRegister(baseUrl: string, token: string) {
-  return sdkRequest<{ id: string; inboxId: string; status: string }>(baseUrl, token, "/agent/me");
+  return sdkRequest<{ id: string; inboxId: string; status: string }>(baseUrl, token, "/api/v1/agent/me");
 }
 
 function sdkPull(baseUrl: string, token: string, limit = 10) {
   return sdkRequest<Array<{ id: number; message: Record<string, unknown> }>>(
     baseUrl,
     token,
-    `/agent/inbox?limit=${limit}`,
+    `/api/v1/agent/inbox?limit=${limit}`,
   );
 }
 
 function sdkAck(baseUrl: string, token: string, entryId: number) {
-  return sdkRequest<void>(baseUrl, token, `/agent/inbox/${entryId}/ack`, { method: "POST" });
+  return sdkRequest<void>(baseUrl, token, `/api/v1/agent/inbox/${entryId}/ack`, { method: "POST" });
 }
 
 // Helper: create agent + token directly via admin-like DB operations
@@ -99,7 +99,7 @@ describe("E2E: GitHub issue → Server → CLI pull", () => {
       .where(eq(agents.id, agent.id));
 
     // 2. Send GitHub issue webhook
-    const webhookRes = await fetch(`${address}/webhooks/github`, {
+    const webhookRes = await fetch(`${address}/api/v1/webhooks/github`, {
       method: "POST",
       headers: { "x-github-event": "issues", "content-type": "application/json" },
       body: JSON.stringify({
@@ -185,7 +185,7 @@ describe("E2E: GitHub issue → Server → CLI pull", () => {
       });
 
       // No signature → 401
-      const noSig = await fetch(`${addr2}/webhooks/github`, {
+      const noSig = await fetch(`${addr2}/api/v1/webhooks/github`, {
         method: "POST",
         headers: { "x-github-event": "issues", "content-type": "application/json" },
         body: payload,
@@ -193,7 +193,7 @@ describe("E2E: GitHub issue → Server → CLI pull", () => {
       expect(noSig.status).toBe(401);
 
       // Wrong signature → 401
-      const wrongSig = await fetch(`${addr2}/webhooks/github`, {
+      const wrongSig = await fetch(`${addr2}/api/v1/webhooks/github`, {
         method: "POST",
         headers: {
           "x-github-event": "issues",
@@ -206,7 +206,7 @@ describe("E2E: GitHub issue → Server → CLI pull", () => {
 
       // Correct signature → 200
       const sig = `sha256=${createHmac("sha256", secret).update(payload).digest("hex")}`;
-      const ok = await fetch(`${addr2}/webhooks/github`, {
+      const ok = await fetch(`${addr2}/api/v1/webhooks/github`, {
         method: "POST",
         headers: {
           "x-github-event": "issues",
@@ -222,7 +222,7 @@ describe("E2E: GitHub issue → Server → CLI pull", () => {
   });
 
   it("ping event", async () => {
-    const res = await fetch(`${address}/webhooks/github`, {
+    const res = await fetch(`${address}/api/v1/webhooks/github`, {
       method: "POST",
       headers: { "x-github-event": "ping", "content-type": "application/json" },
       body: JSON.stringify({ zen: "Anything added dilutes everything else." }),
@@ -239,7 +239,7 @@ describe("E2E: GitHub issue → Server → CLI pull", () => {
       .set({ metadata: { github: { repos: ["acme/repo"] } } })
       .where(eq(agents.id, agent.id));
 
-    const res = await fetch(`${address}/webhooks/github`, {
+    const res = await fetch(`${address}/api/v1/webhooks/github`, {
       method: "POST",
       headers: { "x-github-event": "issue_comment", "content-type": "application/json" },
       body: JSON.stringify({

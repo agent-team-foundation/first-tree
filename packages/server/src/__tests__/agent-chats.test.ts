@@ -12,7 +12,7 @@ describe("Agent Chats API", () => {
 
     const createRes = await app.inject({
       method: "POST",
-      url: "/agent/chats",
+      url: "/api/v1/agent/chats",
       headers: { authorization: `Bearer ${t1}` },
       payload: {
         type: "direct",
@@ -28,7 +28,7 @@ describe("Agent Chats API", () => {
 
     const getRes = await app.inject({
       method: "GET",
-      url: `/agent/chats/${chat.id}`,
+      url: `/api/v1/agent/chats/${chat.id}`,
       headers: { authorization: `Bearer ${t1}` },
     });
     expect(getRes.statusCode).toBe(200);
@@ -42,14 +42,14 @@ describe("Agent Chats API", () => {
 
     await app.inject({
       method: "POST",
-      url: "/agent/chats",
+      url: "/api/v1/agent/chats",
       headers: { authorization: `Bearer ${t1}` },
       payload: { type: "direct", participantIds: [a2.id] },
     });
 
     const res = await app.inject({
       method: "GET",
-      url: "/agent/chats",
+      url: "/api/v1/agent/chats",
       headers: { authorization: `Bearer ${t1}` },
     });
     expect(res.statusCode).toBe(200);
@@ -62,7 +62,7 @@ describe("Agent Chats API", () => {
 
     const res = await app.inject({
       method: "POST",
-      url: "/agent/chats",
+      url: "/api/v1/agent/chats",
       headers: { authorization: `Bearer ${t1}` },
       payload: { type: "direct", participantIds: ["non-existent"] },
     });
@@ -77,7 +77,7 @@ describe("Agent Chats API", () => {
 
     const createRes = await app.inject({
       method: "POST",
-      url: "/agent/chats",
+      url: "/api/v1/agent/chats",
       headers: { authorization: `Bearer ${t2}` },
       payload: { type: "direct", participantIds: [a3.id] },
     });
@@ -85,7 +85,7 @@ describe("Agent Chats API", () => {
 
     const res = await app.inject({
       method: "GET",
-      url: `/agent/chats/${chatId}`,
+      url: `/api/v1/agent/chats/${chatId}`,
       headers: { authorization: `Bearer ${t1}` },
     });
     expect(res.statusCode).toBe(403);

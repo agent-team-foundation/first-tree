@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@agent-hub/shared": "workspace:*",
+    "@fastify/static": "^9.0.0",
     "@fastify/websocket": "^11.2.0",
     "bcrypt": "^6.0.0",
     "drizzle-orm": "^0.44.0",

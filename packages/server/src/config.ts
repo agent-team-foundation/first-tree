@@ -10,6 +10,7 @@ export type Config = {
   instanceId: string;
   logger?: boolean;
   githubWebhookSecret?: string;
+  webDistPath?: string;
 };
 
 export function loadConfig(): Config {
@@ -30,5 +31,6 @@ export function loadConfig(): Config {
     jwtSecretKey,
     instanceId: env.INSTANCE_ID ?? `srv_${randomUUID().slice(0, 8)}`,
     githubWebhookSecret: env.GITHUB_WEBHOOK_SECRET || undefined,
+    webDistPath: env.WEB_DIST_PATH,
   };
 }
