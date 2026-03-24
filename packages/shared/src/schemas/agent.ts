@@ -13,6 +13,7 @@ export type AgentType = z.infer<typeof agentTypeSchema>;
 export const AGENT_STATUSES = {
   ACTIVE: "active",
   SUSPENDED: "suspended",
+  DELETED: "deleted",
 } as const;
 
 export const agentStatusSchema = z.enum(["active", "suspended"]);

@@ -29,6 +29,13 @@
       "when": 1774531200000,
       "tag": "0003_feishu_adapter",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1774972800000,
+      "tag": "0004_adapter_refactor",
+      "breakpoints": true
     }
   ]
 }

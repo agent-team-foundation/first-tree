@@ -1,7 +1,10 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { CreateAgent, CreateAgentToken, UpdateAgent } from "@agent-hub/shared";
-import { and, desc, eq, isNull, lt } from "drizzle-orm";
+import { AGENT_STATUSES } from "@agent-hub/shared";
+import { and, desc, eq, isNull, lt, ne } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
+import { adapterAgentMappings } from "../db/schema/adapter-agent-mappings.js";
+import { adapterConfigs } from "../db/schema/adapter-configs.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
 import { agentTokens } from "../db/schema/agent-tokens.js";
 import { agents } from "../db/schema/agents.js";
@@ -15,9 +18,31 @@ export async function createAgent(db: Database, data: CreateAgent) {
   const id = data.id ?? randomUUID();
   const inboxId = `inbox_${id}`;
 
-  const [existing] = await db.select({ id: agents.id }).from(agents).where(eq(agents.id, id)).limit(1);
+  const [existing] = await db
+    .select({ id: agents.id, status: agents.status })
+    .from(agents)
+    .where(eq(agents.id, id))
+    .limit(1);
+
   if (existing) {
-    throw new ConflictError(`Agent "${id}" already exists`);
+    if (existing.status !== AGENT_STATUSES.DELETED) {
+      throw new ConflictError(`Agent "${id}" already exists`);
+    }
+    // Overwrite deleted agent — reuse the row
+    const [agent] = await db
+      .update(agents)
+      .set({
+        organizationId: data.organizationId ?? "default",
+        type: data.type,
+        displayName: data.displayName ?? null,
+        status: "active",
+        metadata: data.metadata ?? {},
+        updatedAt: new Date(),
+      })
+      .where(eq(agents.id, id))
+      .returning();
+    if (!agent) throw new Error("Unexpected: UPDATE RETURNING produced no row");
+    return agent;
   }
 
   const [agent] = await db
@@ -38,7 +63,11 @@ export async function createAgent(db: Database, data: CreateAgent) {
 }
 
 export async function getAgent(db: Database, id: string) {
-  const [agent] = await db.select().from(agents).where(eq(agents.id, id)).limit(1);
+  const [agent] = await db
+    .select()
+    .from(agents)
+    .where(and(eq(agents.id, id), ne(agents.status, AGENT_STATUSES.DELETED)))
+    .limit(1);
   if (!agent) {
     throw new NotFoundError(`Agent "${id}" not found`);
   }
@@ -46,7 +75,8 @@ export async function getAgent(db: Database, id: string) {
 }
 
 export async function listAgents(db: Database, limit: number, cursor?: string) {
-  const where = cursor ? lt(agents.createdAt, new Date(cursor)) : undefined;
+  const notDeleted = ne(agents.status, AGENT_STATUSES.DELETED);
+  const where = cursor ? and(notDeleted, lt(agents.createdAt, new Date(cursor))) : notDeleted;
 
   const rows = await db
     .select({
@@ -84,7 +114,7 @@ export async function updateAgent(db: Database, id: string, data: UpdateAgent) {
       ...(data.metadata !== undefined ? { metadata: data.metadata } : {}),
       updatedAt: new Date(),
     })
-    .where(eq(agents.id, id))
+    .where(and(eq(agents.id, id), ne(agents.status, AGENT_STATUSES.DELETED)))
     .returning();
 
   if (!agent) {
@@ -103,8 +133,35 @@ export async function updateAgent(db: Database, id: string, data: UpdateAgent) {
 }
 
 export async function deleteAgent(db: Database, id: string) {
-  // Delete = suspend + revoke all tokens (per design doc)
-  return updateAgent(db, id, { status: "suspended" });
+  // Verify agent exists and is not already deleted
+  const [existing] = await db
+    .select({ id: agents.id, status: agents.status })
+    .from(agents)
+    .where(eq(agents.id, id))
+    .limit(1);
+  if (!existing || existing.status === AGENT_STATUSES.DELETED) {
+    throw new NotFoundError(`Agent "${id}" not found`);
+  }
+
+  // 1. Set status to deleted
+  const [agent] = await db
+    .update(agents)
+    .set({ status: AGENT_STATUSES.DELETED, updatedAt: new Date() })
+    .where(eq(agents.id, id))
+    .returning();
+
+  // 2. Revoke all active tokens
+  await db
+    .update(agentTokens)
+    .set({ revokedAt: new Date() })
+    .where(and(eq(agentTokens.agentId, id), isNull(agentTokens.revokedAt)));
+
+  // 3. Clean up adapter bindings (bot credentials + user mappings)
+  await db.delete(adapterConfigs).where(eq(adapterConfigs.agentId, id));
+  await db.delete(adapterAgentMappings).where(eq(adapterAgentMappings.agentId, id));
+
+  if (!agent) throw new Error("Unexpected: UPDATE RETURNING produced no row");
+  return agent;
 }
 
 export async function createToken(db: Database, agentId: string, data: CreateAgentToken) {

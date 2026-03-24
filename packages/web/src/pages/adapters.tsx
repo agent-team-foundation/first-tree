@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { createAdapter, deleteAdapter, listAdapters, updateAdapter } from "../api/adapters.js";
+import { listAgents } from "../api/agents.js";
 import { Badge } from "../components/ui/badge.js";
 import { Button } from "../components/ui/button.js";
 import {
@@ -23,11 +24,36 @@ const platformValues = Object.values(ADAPTER_PLATFORMS);
 type FormState = {
   platform: string;
   agentId: string;
-  credentials: string;
+  /** Raw JSON fallback for non-feishu platforms */
+  credentialsJson: string;
+  /** Feishu-specific fields */
+  feishuAppId: string;
+  feishuAppSecret: string;
   status: string;
 };
 
-const emptyForm: FormState = { platform: "feishu", agentId: "", credentials: "{}", status: "active" };
+const emptyForm: FormState = {
+  platform: "feishu",
+  agentId: "",
+  credentialsJson: "{}",
+  feishuAppId: "",
+  feishuAppSecret: "",
+  status: "active",
+};
+
+/** Build credentials object from form state. Returns null if empty (edit mode, keep existing). */
+function buildCredentials(form: FormState, isCreate: boolean): Record<string, unknown> | null {
+  if (form.platform === "feishu") {
+    if (!form.feishuAppId && !form.feishuAppSecret) {
+      return isCreate ? null : null; // empty = keep existing in edit mode
+    }
+    return { app_id: form.feishuAppId, app_secret: form.feishuAppSecret };
+  }
+  // Fallback: raw JSON for other platforms
+  const trimmed = form.credentialsJson.trim();
+  if (!trimmed) return null;
+  return JSON.parse(trimmed) as Record<string, unknown>;
+}
 
 export function AdaptersPage() {
   const queryClient = useQueryClient();
@@ -38,12 +64,18 @@ export function AdaptersPage() {
 
   const { data: adapters, isLoading, error } = useQuery({ queryKey: ["adapters"], queryFn: listAdapters });
 
+  const { data: agentsData } = useQuery({
+    queryKey: ["agents", "all"],
+    queryFn: () => listAgents({ limit: 100 }),
+  });
+
   const createMutation = useMutation({
     mutationFn: () => {
-      const creds = JSON.parse(form.credentials) as Record<string, unknown>;
+      const creds = buildCredentials(form, true);
+      if (!creds) throw new Error("Credentials are required");
       return createAdapter({
         platform: form.platform as "feishu" | "slack",
-        agentId: form.agentId || undefined,
+        agentId: form.agentId,
         credentials: creds,
         status: form.status as "active" | "inactive",
       });
@@ -57,11 +89,9 @@ export function AdaptersPage() {
   const updateMutation = useMutation({
     mutationFn: () => {
       const data: Record<string, unknown> = { status: form.status as "active" | "inactive" };
-      if (form.agentId !== undefined) data.agentId = form.agentId || null;
-      const credsTrimmed = form.credentials.trim();
-      if (credsTrimmed) {
-        data.credentials = JSON.parse(credsTrimmed) as Record<string, unknown>;
-      }
+      if (form.agentId) data.agentId = form.agentId;
+      const creds = buildCredentials(form, false);
+      if (creds) data.credentials = creds;
       if (!editingId) throw new Error("No adapter selected for editing");
       return updateAdapter(editingId, data);
     },
@@ -83,12 +113,14 @@ export function AdaptersPage() {
     setCredError("");
   }
 
-  function openEdit(adapter: { id: number; platform: string; agentId: string | null; status: string }) {
+  function openEdit(adapter: { id: number; platform: string; agentId: string; status: string }) {
     setEditingId(adapter.id);
     setForm({
       platform: adapter.platform,
-      agentId: adapter.agentId ?? "",
-      credentials: "",
+      agentId: adapter.agentId,
+      credentialsJson: "",
+      feishuAppId: "",
+      feishuAppSecret: "",
       status: adapter.status,
     });
     setDialogOpen(true);
@@ -96,23 +128,32 @@ export function AdaptersPage() {
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    const credsTrimmed = form.credentials.trim();
-    // Empty credentials = "unchanged" in edit mode, required in create mode
-    if (!editingId && !credsTrimmed) {
-      setCredError("Credentials are required");
-      return;
-    }
-    if (credsTrimmed) {
-      try {
-        JSON.parse(credsTrimmed);
-        setCredError("");
-      } catch {
-        setCredError("Invalid JSON");
+    setCredError("");
+
+    if (!editingId && !form.agentId) return;
+
+    // Validate credentials
+    if (form.platform === "feishu") {
+      if (!editingId && (!form.feishuAppId || !form.feishuAppSecret)) {
+        setCredError("App ID and App Secret are required");
         return;
       }
     } else {
-      setCredError("");
+      const trimmed = form.credentialsJson.trim();
+      if (!editingId && !trimmed) {
+        setCredError("Credentials are required");
+        return;
+      }
+      if (trimmed) {
+        try {
+          JSON.parse(trimmed);
+        } catch {
+          setCredError("Invalid JSON");
+          return;
+        }
+      }
     }
+
     if (editingId) {
       updateMutation.mutate();
     } else {
@@ -128,6 +169,8 @@ export function AdaptersPage() {
 
   const mutationError = createMutation.error ?? updateMutation.error;
   const isPending = createMutation.isPending || updateMutation.isPending;
+  const availableAgents = agentsData?.items?.filter((a) => a.type !== "human") ?? [];
+  const isFeishu = form.platform === "feishu";
 
   return (
     <div>
@@ -162,28 +205,68 @@ export function AdaptersPage() {
                 </select>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="adapter-agent">Agent ID (optional)</Label>
-                <Input
+                <Label htmlFor="adapter-agent">Agent</Label>
+                <select
                   id="adapter-agent"
                   value={form.agentId}
                   onChange={(e) => setForm({ ...form, agentId: e.target.value })}
-                  placeholder="Bound agent ID"
-                />
+                  required={!editingId}
+                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
+                >
+                  <option value="">Select an agent...</option>
+                  {availableAgents.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.displayName ? `${a.displayName} (${a.id})` : a.id}
+                    </option>
+                  ))}
+                </select>
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="adapter-creds">
-                  Credentials (JSON){editingId ? " — leave empty to keep existing" : ""}
-                </Label>
-                <textarea
-                  id="adapter-creds"
-                  value={form.credentials}
-                  onChange={(e) => setForm({ ...form, credentials: e.target.value })}
-                  rows={4}
-                  className="flex w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm font-mono transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  placeholder='{"app_id": "...", "app_secret": "..."}'
-                />
-                {credError && <p className="text-sm text-destructive">{credError}</p>}
-              </div>
+
+              {/* Platform-specific credential fields */}
+              {isFeishu ? (
+                <>
+                  <div className="space-y-2">
+                    <Label htmlFor="feishu-app-id">App ID{editingId ? " — leave empty to keep existing" : ""}</Label>
+                    <Input
+                      id="feishu-app-id"
+                      value={form.feishuAppId}
+                      onChange={(e) => setForm({ ...form, feishuAppId: e.target.value })}
+                      placeholder="cli_xxxxxxxx"
+                      className="font-mono"
+                      autoComplete="off"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="feishu-app-secret">
+                      App Secret{editingId ? " — leave empty to keep existing" : ""}
+                    </Label>
+                    <Input
+                      id="feishu-app-secret"
+                      type="password"
+                      autoComplete="new-password"
+                      value={form.feishuAppSecret}
+                      onChange={(e) => setForm({ ...form, feishuAppSecret: e.target.value })}
+                      placeholder="••••••••"
+                    />
+                  </div>
+                </>
+              ) : (
+                <div className="space-y-2">
+                  <Label htmlFor="adapter-creds">
+                    Credentials (JSON){editingId ? " — leave empty to keep existing" : ""}
+                  </Label>
+                  <textarea
+                    id="adapter-creds"
+                    value={form.credentialsJson}
+                    onChange={(e) => setForm({ ...form, credentialsJson: e.target.value })}
+                    rows={4}
+                    className="flex w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm font-mono transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    placeholder='{"bot_token": "xoxb-...", "signing_secret": "..."}'
+                  />
+                </div>
+              )}
+              {credError && <p className="text-sm text-destructive">{credError}</p>}
+
               <div className="space-y-2">
                 <Label htmlFor="adapter-status">Status</Label>
                 <select
@@ -247,7 +330,7 @@ export function AdaptersPage() {
                   <TableCell>
                     <Badge variant="secondary">{a.platform}</Badge>
                   </TableCell>
-                  <TableCell className="font-mono text-sm">{a.agentId ?? "—"}</TableCell>
+                  <TableCell className="font-mono text-sm">{a.agentId}</TableCell>
                   <TableCell>
                     <Badge variant={a.status === "active" ? "default" : "destructive"}>{a.status}</Badge>
                   </TableCell>

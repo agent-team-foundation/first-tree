@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from "vitest";
-import { createTestAdmin, createTestApp } from "./helpers.js";
+import { createTestAdmin, createTestAgent, createTestApp } from "./helpers.js";
 
 describe("Feishu Adapter (WebSocket mode)", () => {
   const appPromise = createTestApp();
@@ -16,26 +16,31 @@ describe("Feishu Adapter (WebSocket mode)", () => {
       });
   }
 
-  it("creates adapter config with feishu credentials", async () => {
+  it("creates adapter config with feishu credentials (agentId required)", async () => {
     const app = await appPromise;
     const req = await authedRequest(app);
+    const { agent } = await createTestAgent(app, { id: "feishu-ws-agent" });
 
     const res = await req("POST", "/api/v1/admin/adapters", {
       platform: "feishu",
+      agentId: agent.id,
       credentials: { app_id: "cli_ws_test", app_secret: "secret_123" },
     });
     expect(res.statusCode).toBe(201);
     expect(res.json().platform).toBe("feishu");
+    expect(res.json().agentId).toBe(agent.id);
     expect(res.json().hasCredentials).toBe(true);
   });
 
   it("adapter manager reload picks up new config", async () => {
     const app = await appPromise;
     const req = await authedRequest(app);
+    const { agent } = await createTestAgent(app, { id: "feishu-reload-agent" });
 
     // Create a new adapter config
     const createRes = await req("POST", "/api/v1/admin/adapters", {
       platform: "feishu",
+      agentId: agent.id,
       credentials: { app_id: "cli_reload_test", app_secret: "secret_reload" },
     });
     expect(createRes.statusCode).toBe(201);
@@ -52,9 +57,11 @@ describe("Feishu Adapter (WebSocket mode)", () => {
   it("adapter manager reloads on config update", async () => {
     const app = await appPromise;
     const req = await authedRequest(app);
+    const { agent } = await createTestAgent(app, { id: "feishu-upd-reload-agent" });
 
     const createRes = await req("POST", "/api/v1/admin/adapters", {
       platform: "feishu",
+      agentId: agent.id,
       credentials: { app_id: "cli_update_reload", app_secret: "secret_u" },
     });
     const created = createRes.json();
@@ -69,9 +76,11 @@ describe("Feishu Adapter (WebSocket mode)", () => {
   it("adapter manager reloads on config delete", async () => {
     const app = await appPromise;
     const req = await authedRequest(app);
+    const { agent } = await createTestAgent(app, { id: "feishu-del-reload-agent" });
 
     const createRes = await req("POST", "/api/v1/admin/adapters", {
       platform: "feishu",
+      agentId: agent.id,
       credentials: { app_id: "cli_delete_reload", app_secret: "secret_d" },
     });
     const created = createRes.json();
@@ -89,5 +98,16 @@ describe("Feishu Adapter (WebSocket mode)", () => {
     });
     // Should be 404 since webhook route was removed
     expect(res.statusCode).toBe(404);
+  });
+
+  it("rejects adapter config without agentId", async () => {
+    const app = await appPromise;
+    const req = await authedRequest(app);
+
+    const res = await req("POST", "/api/v1/admin/adapters", {
+      platform: "feishu",
+      credentials: { app_id: "cli_no_agent", app_secret: "secret" },
+    });
+    expect(res.statusCode).toBe(400);
   });
 });
