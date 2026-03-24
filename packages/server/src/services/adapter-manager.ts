@@ -49,6 +49,8 @@ type ManagedBot = {
   bypassProxy: boolean;
   client: InstanceType<typeof Client>;
   wsClient: WSClient;
+  /** Timestamp of the last successful inbound or outbound activity. */
+  lastActiveAt: Date | null;
 };
 
 /** Wrap an SDK API call with proxy bypass if needed. */
@@ -118,6 +120,7 @@ export function createAdapterManager(
 
       try {
         await processInboundMessage(db, event, bot, log);
+        bot.lastActiveAt = new Date();
       } catch (err) {
         // Unclaim the event so it can be retried on next delivery
         await mappingService.unclaimEvent(db, event.eventId, "feishu");
@@ -196,6 +199,7 @@ export function createAdapterManager(
           bypassProxy,
           client,
           wsClient,
+          lastActiveAt: null,
         });
 
         log.info({ appId, configId: config.id, agentId: config.agentId }, "Started Feishu adapter bot (WebSocket)");
@@ -264,8 +268,8 @@ export function createAdapterManager(
           platform: "feishu",
           agentId: bot.agentId,
           appId: bot.appId,
-          connected: true,
-          lastActiveAt: new Date().toISOString(),
+          connected: bots.has(bot.appId),
+          lastActiveAt: bot.lastActiveAt?.toISOString() ?? null,
         });
       }
       return statuses;
@@ -512,6 +516,7 @@ async function processFeishuOutbound(
       }
 
       await ackEntry(db, entry.id);
+      bot.lastActiveAt = new Date();
       sent++;
     } catch (err) {
       log.error({ entryId: entry.id, err }, "Failed to send outbound Feishu message");

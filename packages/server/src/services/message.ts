@@ -116,12 +116,14 @@ export async function sendToAgent(db: Database, senderId: string, targetAgentId:
 
 export async function editMessage(
   db: Database,
+  chatId: string,
   messageId: string,
   senderId: string,
   data: { format?: string; content?: unknown },
 ) {
   const [msg] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1);
   if (!msg) throw new NotFoundError(`Message "${messageId}" not found`);
+  if (msg.chatId !== chatId) throw new NotFoundError(`Message "${messageId}" not found in this chat`);
   if (msg.senderId !== senderId) throw new ForbiddenError("Only the sender can edit a message");
 
   const setClause: Record<string, unknown> = {};

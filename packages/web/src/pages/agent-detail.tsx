@@ -107,7 +107,7 @@ export function AgentDetailPage() {
   // Mutations — bot binding (non-human agents)
   const createAdapterMutation = useMutation({
     mutationFn: () => {
-      const creds = buildCredentials(bindingForm, true);
+      const creds = buildCredentials(bindingForm);
       if (!creds) throw new Error("Credentials are required");
       return createAdapter({
         platform: bindingForm.platform as "feishu" | "slack",
@@ -126,7 +126,7 @@ export function AgentDetailPage() {
     mutationFn: () => {
       if (!bindingEditId) throw new Error("No adapter selected");
       const data: Record<string, unknown> = { status: bindingForm.status };
-      const creds = buildCredentials(bindingForm, false);
+      const creds = buildCredentials(bindingForm);
       if (creds) data.credentials = creds;
       return updateAdapter(bindingEditId, data);
     },
@@ -755,13 +755,17 @@ export function AgentDetailPage() {
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
-function buildCredentials(
-  form: { platform: string; feishuAppId: string; feishuAppSecret: string; credentialsJson: string },
-  isCreate: boolean,
-): Record<string, unknown> | null {
+function buildCredentials(form: {
+  platform: string;
+  feishuAppId: string;
+  feishuAppSecret: string;
+  credentialsJson: string;
+}): Record<string, unknown> | null {
   if (form.platform === "feishu") {
-    if (!form.feishuAppId && !form.feishuAppSecret) {
-      return isCreate ? null : null;
+    // Both fields must be filled or both empty — partial input would corrupt stored credentials
+    if (!form.feishuAppId && !form.feishuAppSecret) return null;
+    if (!form.feishuAppId || !form.feishuAppSecret) {
+      throw new Error("Both App ID and App Secret are required");
     }
     return { app_id: form.feishuAppId, app_secret: form.feishuAppSecret };
   }

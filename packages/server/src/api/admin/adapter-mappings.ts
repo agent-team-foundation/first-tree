@@ -40,6 +40,9 @@ export async function adminAdapterMappingRoutes(app: FastifyInstance): Promise<v
     if (!agent || agent.status === "deleted") {
       throw new NotFoundError(`Agent "${body.agentId}" not found`);
     }
+    if (agent.type !== "human") {
+      throw new BadRequestError("User bindings can only be created for human agents");
+    }
 
     const row = await createAgentMapping(app.db, {
       platform: body.platform,
