@@ -15,4 +15,4 @@ Practical tips for working with the context tree efficiently.
 - **Use `/add-dir` to add source repos.** When you need to explore or modify source systems, add the relevant repos as additional working directories.
 - **Decide in the tree, execute in source systems.** Ask the agent to read tree nodes and draft a decision before diving into execution.
 - **Tree context is auto-injected.** A hook in `.claude/settings.json` injects NODE.md at session start. If you use a different agent tool, configure its project instructions to do the same.
-- **PRs are auto-reviewed.** A GitHub Action runs Claude on every PR to check tree structure, ownership, and consistency.
+- **PRs are auto-reviewed.** A GitHub Action runs Claude on every PR to check tree structure, ownership, and consistency. You can also comment `@claude` on any PR to trigger a review.
