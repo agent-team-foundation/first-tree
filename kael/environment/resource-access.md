@@ -2,7 +2,7 @@
 title: Resource Access Control
 owners: []
 soft_links:
-  - kael/platform/agent-security
+  - /kael/platform/agent-security
 ---
 
 # Resource Access Control

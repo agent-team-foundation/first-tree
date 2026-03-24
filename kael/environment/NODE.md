@@ -31,7 +31,7 @@ When the agent attempts a risky action, the backend sends a confirmation request
 
 **Fail-safe design:** timeout = denied, disconnection = denied, window closed = denied. The system never defaults to approved.
 
-Desktop has a **dual-path confirmation**: the request is sent both to the desktop app (WebSocket dialog) and to the web frontend (SSE dialog). First responder wins; the other is cancelled. This ensures the user can approve from whichever surface is active.
+Desktop and browser use **dual-path confirmation**: the request is sent both to the client app (desktop tray dialog or browser extension popup) and to the web frontend (SSE dialog). First responder wins; the other is cancelled. This ensures the user can approve from whichever surface is active.
 
 ### Resource Access Control
 
@@ -41,11 +41,20 @@ See **[resource-access.md](resource-access.md)** — the full check pipeline, pe
 
 Each environment injects connection status into the agent's message context (e.g., `<desktop_context>Desktop app: Connected</desktop_context>`). These tags are stripped before displaying messages to the user in the frontend. This gives the agent awareness of which environments are available without leaking internal metadata to the UI.
 
+### Two-Layer Permission Model
+
+Desktop and browser share the same two-layer permission model:
+
+1. **Resource access** — `ResourceAccessService` gates access to URLs, commands, and file paths. Confirmation appears as an SSE dialog in the chat frontend. Grants are cached per session and persisted in the database with expiry. See [resource-access.md](resource-access.md).
+2. **Action safety** — LLM self-assessment classifies each state-modifying action by sensitivity. High-risk categories (FINANCIAL, DESTRUCTIVE, EXTERNAL_COMM, AUTHENTICATION) and low-confidence assessments trigger confirmation via dual-path delivery (client app + SSE chat). Read-only actions skip this layer.
+
+The two layers serve different concerns: resource access controls *where* the agent can operate, action safety controls *what* it can do once there.
+
 ### Tool Execution Pattern
 
 All environment tools follow the same sequence:
 1. Check client connection (is the extension/app/sandbox available?)
 2. Check resource access (is the agent allowed to access this URL/path/command?)
-3. Check safety (is this action safe, or does it need user confirmation?)
+3. Check action safety (is this action risky, or does it need user confirmation?)
 4. Execute command via the appropriate service
 5. Process output (stream to frontend, store screenshots, truncate large output)

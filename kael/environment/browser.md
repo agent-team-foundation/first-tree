@@ -1,6 +1,7 @@
 ---
 title: Browser Control
 owners: [286ljb]
+soft_links: [/kael/platform]
 ---
 
 # Browser Control
@@ -37,17 +38,13 @@ Agent-controlled tabs live in a dedicated "Kael" tab group (blue). This prevents
 
 ## Safety
 
-Browser safety has two layers (enforcement of policies defined in platform/):
+Browser safety has two layers, matching the desktop model:
 
-**Hard rules** — deterministic checks on URLs and domains. Curated lists of banking domains, payment URLs, email providers, and OAuth endpoints that always trigger user confirmation. The lists are intentionally small and focused on highest-risk providers.
+**Resource access (URL navigation)** — handled entirely by `ResourceAccessService`. When the agent navigates to a URL, the backend's check pipeline (deny list → session cache → DB grants → user confirmation via SSE chat dialog) is the sole gate. No browser-specific domain lists. See [resource-access.md](resource-access.md).
 
-**LLM self-assessment** — the agent provides a sensitivity classification (category + confidence) for each state-modifying action. Hard-confirm categories (FINANCIAL, DESTRUCTIVE, EXTERNAL_COMM, AUTHENTICATION) always require approval. Low confidence (<0.8) triggers confirmation as a safety net.
+**Action safety (clicks, form submissions, typing)** — the agent provides a sensitivity classification (category + confidence) for each state-modifying action. Hard-confirm categories (FINANCIAL, DESTRUCTIVE, EXTERNAL_COMM, AUTHENTICATION) always require approval. Low confidence (<0.8) triggers confirmation as a safety net. Confirmation uses **dual-path delivery**: both the browser extension popup and the chat frontend SSE dialog race to deliver the confirmation. First responder wins; the other is dismissed.
 
 Read-only actions (screenshot, scroll, hover, find) skip safety checks entirely.
-
-> **Note:** There is a `trust_domain` feature in the code (backend safety.py, extension confirm flow) that allows users to skip domain-based hard rules for the rest of a session after approving an action. This may have been superseded by the Resource Access Control system. Needs investigation and cleanup.
-
-soft_links: [/kael/platform]
 
 ---
 
