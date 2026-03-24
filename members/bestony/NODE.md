@@ -1,6 +1,7 @@
 ---
 title: "bestony"
 owners: [bestony]
+type: human
 role: "Engineer"
 domains:
   - "system design"

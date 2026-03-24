@@ -1,6 +1,7 @@
 ---
 title: "serenakeyitan"
 owners: [serenakeyitan]
+type: human
 role: "Growth"
 domains:
   - "growth operations"

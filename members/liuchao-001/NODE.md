@@ -1,6 +1,7 @@
 ---
 title: "Liu Chao"
 owners: [liuchao-001]
+type: human
 role: "Founder"
 domains:
   - "product direction"

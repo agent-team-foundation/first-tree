@@ -1,6 +1,7 @@
 ---
 title: "yuezengwu"
 owners: [yuezengwu]
+type: human
 role: "Engineer"
 domains:
   - "system design"
