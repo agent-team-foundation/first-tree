@@ -1,6 +1,6 @@
 ---
 title: Context Tree
-owners: [liuchao-001, 286ljb, baixiaohang]
+owners: [liuchao-001, 286ljb]
 ---
 
 # Context Tree

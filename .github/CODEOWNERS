@@ -1,6 +1,6 @@
 # Auto-generated from Context Tree. Do not edit manually.
 
-/*                                                 @liuchao-001 @286ljb @baixiaohang
+/*                                                 @liuchao-001 @286ljb
 /agent-hub/                                        @baixiaohang @yuezengwu
 /kael/                                             @liuchao-001 @286ljb
 /kael/agent/                                       @yuezengwu @baixiaohang
@@ -36,18 +36,19 @@
 /kael/skills/slides/                               @liuchao-001
 /marketing/                                        @liuchao-001 @serenakeyitan
 /marketing/ph-launch/                              @bohyy
-/members/                                          @liuchao-001 @286ljb @baixiaohang
-/members/bestony.md                                @liuchao-001 @286ljb @baixiaohang @bestony
-/members/serenakeyitan.md                          @liuchao-001 @286ljb @baixiaohang @serenakeyitan
-/members/yuezengwu.md                              @liuchao-001 @286ljb @baixiaohang @yuezengwu
+/members/                                          @liuchao-001 @286ljb
+/members/bestony.md                                @liuchao-001 @286ljb @bestony
+/members/serenakeyitan.md                          @liuchao-001 @286ljb @serenakeyitan
+/members/yuezengwu.md                              @liuchao-001 @286ljb @yuezengwu
 /members/liuchao-001/                              @liuchao-001
 /members/liuchao-001/notebook.md                   @liuchao-001
 /members/liuchao-001/user-experience-design-skills.md @liuchao-001
-/open-source/                                      @liuchao-001 @286ljb @baixiaohang
+/open-source/                                      @liuchao-001 @286ljb
 /proposals/agent-hub-overview.20260320.md          @baixiaohang
 /proposals/agent-hub-server-detailed-design.20260320.md @baixiaohang
+/proposals/agent-hub-web-design.20260323.md        @baixiaohang
 /proposals/agent-message-system.20260319.md        @baixiaohang
-/README.md                                         @liuchao-001 @286ljb @baixiaohang
-/about.md                                          @liuchao-001 @286ljb @baixiaohang
-/infrastructure.md                                 @liuchao-001 @286ljb @baixiaohang
-/ownership-and-naming.md                           @liuchao-001 @286ljb @baixiaohang
+/README.md                                         @liuchao-001 @286ljb
+/about.md                                          @liuchao-001 @286ljb
+/infrastructure.md                                 @liuchao-001 @286ljb
+/ownership-and-naming.md                           @liuchao-001 @286ljb
