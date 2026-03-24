@@ -1,7 +1,10 @@
 import type postgres from "postgres";
 import type { WebSocket } from "ws";
 
-const CHANNEL = "inbox_notifications";
+const INBOX_CHANNEL = "inbox_notifications";
+const CONFIG_CHANNEL = "config_changes";
+
+export type ConfigChangeHandler = (channel: string) => void;
 
 export type Notifier = {
   /** Subscribe a WebSocket connection for an inbox */
@@ -10,6 +13,10 @@ export type Notifier = {
   unsubscribe(inboxId: string, ws: WebSocket): void;
   /** Notify that new messages are available for an inbox */
   notify(inboxId: string, messageId: string): Promise<void>;
+  /** Notify that a config has changed */
+  notifyConfigChange(configType: string): Promise<void>;
+  /** Register a handler for config change notifications */
+  onConfigChange(handler: ConfigChangeHandler): void;
   /** Start listening for PG notifications */
   start(): Promise<void>;
   /** Stop listening */
@@ -18,7 +25,9 @@ export type Notifier = {
 
 export function createNotifier(listenClient: postgres.Sql): Notifier {
   const subscriptions = new Map<string, Set<WebSocket>>();
-  let unlistenFn: (() => Promise<void>) | null = null;
+  const configChangeHandlers: ConfigChangeHandler[] = [];
+  let unlistenInboxFn: (() => Promise<void>) | null = null;
+  let unlistenConfigFn: (() => Promise<void>) | null = null;
 
   function handleNotification(payload: string) {
     // payload format: "inboxId:messageId"
@@ -60,23 +69,48 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
 
     async notify(inboxId: string, messageId: string) {
       try {
-        await listenClient`SELECT pg_notify(${CHANNEL}, ${`${inboxId}:${messageId}`})`;
+        await listenClient`SELECT pg_notify(${INBOX_CHANNEL}, ${`${inboxId}:${messageId}`})`;
       } catch {
         // fire-and-forget: notification loss is acceptable, polling covers it
       }
     },
 
+    async notifyConfigChange(configType: string) {
+      try {
+        await listenClient`SELECT pg_notify(${CONFIG_CHANNEL}, ${configType})`;
+      } catch {
+        // fire-and-forget
+      }
+    },
+
+    onConfigChange(handler: ConfigChangeHandler) {
+      configChangeHandlers.push(handler);
+    },
+
     async start() {
-      const result = await listenClient.listen(CHANNEL, (payload) => {
+      const inboxResult = await listenClient.listen(INBOX_CHANNEL, (payload) => {
         if (payload) handleNotification(payload);
       });
-      unlistenFn = result.unlisten;
+      unlistenInboxFn = inboxResult.unlisten;
+
+      const configResult = await listenClient.listen(CONFIG_CHANNEL, (payload) => {
+        if (payload) {
+          for (const handler of configChangeHandlers) {
+            handler(payload);
+          }
+        }
+      });
+      unlistenConfigFn = configResult.unlisten;
     },
 
     async stop() {
-      if (unlistenFn) {
-        await unlistenFn();
-        unlistenFn = null;
+      if (unlistenInboxFn) {
+        await unlistenInboxFn();
+        unlistenInboxFn = null;
+      }
+      if (unlistenConfigFn) {
+        await unlistenConfigFn();
+        unlistenConfigFn = null;
       }
     },
   };

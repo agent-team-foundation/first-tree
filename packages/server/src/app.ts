@@ -5,11 +5,15 @@ import websocket from "@fastify/websocket";
 import Fastify from "fastify";
 import postgres from "postgres";
 import { ZodError } from "zod";
+import { adminAdapterMappingRoutes } from "./api/admin/adapter-mappings.js";
+import { adminAdapterStatusRoutes } from "./api/admin/adapter-status.js";
 import { adminAdapterRoutes } from "./api/admin/adapters.js";
 import { adminAgentRoutes } from "./api/admin/agents.js";
 import { adminAuthRoutes } from "./api/admin/auth.js";
+import { adminChatRoutes } from "./api/admin/chats.js";
 import { adminOverviewRoutes } from "./api/admin/overview.js";
 import { adminSystemConfigRoutes } from "./api/admin/system-config.js";
+import { adminUserRoutes } from "./api/admin/users.js";
 import { agentChatRoutes } from "./api/agent/chats.js";
 import { agentInboxRoutes } from "./api/agent/inbox.js";
 import { agentMeRoutes } from "./api/agent/me.js";
@@ -107,6 +111,38 @@ export async function buildApp(config: Config) {
         { prefix: "/admin/adapters" },
       );
 
+      await api.register(
+        async (adminApp) => {
+          adminApp.addHook("onRequest", adminAuth);
+          await adminApp.register(adminAdapterMappingRoutes);
+        },
+        { prefix: "/admin/adapter-mappings" },
+      );
+
+      await api.register(
+        async (adminApp) => {
+          adminApp.addHook("onRequest", adminAuth);
+          await adminApp.register(adminAdapterStatusRoutes);
+        },
+        { prefix: "/admin/adapters/status" },
+      );
+
+      await api.register(
+        async (adminApp) => {
+          adminApp.addHook("onRequest", adminAuth);
+          await adminApp.register(adminUserRoutes);
+        },
+        { prefix: "/admin/users" },
+      );
+
+      await api.register(
+        async (adminApp) => {
+          adminApp.addHook("onRequest", adminAuth);
+          await adminApp.register(adminChatRoutes);
+        },
+        { prefix: "/admin/chats" },
+      );
+
       // Agent routes (Bearer token protected)
       await api.register(
         async (agentApp) => {
@@ -139,12 +175,23 @@ export async function buildApp(config: Config) {
     }
   }
 
+  // Decorate notifier so routes can trigger PG NOTIFY
+  app.decorate("notifier", notifier);
+
   // Adapter manager — decorated so admin routes can trigger reload
   const adapterManager = createAdapterManager(db, config.adapterEncryptionKey, app.log);
   app.decorate("adapterManager", adapterManager);
 
   // Background tasks
   const backgroundTasks = createBackgroundTasks(app, config.instanceId, adapterManager);
+
+  // Register config change handler for hot reload
+  notifier.onConfigChange((configType) => {
+    if (configType === "adapter_configs") {
+      adapterManager.reload().catch((err) => app.log.error(err, "Adapter hot-reload failed (PG NOTIFY)"));
+    }
+    // system_configs changes are handled by reading fresh values on each timer tick
+  });
 
   // Start notifier and background tasks on server start
   app.addHook("onReady", async () => {
