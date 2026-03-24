@@ -1,21 +1,11 @@
 import { AGENT_TYPES } from "@agent-hub/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus } from "lucide-react";
-import { type FormEvent, useState } from "react";
+import { RefreshCw } from "lucide-react";
+import { useState } from "react";
 import { useNavigate } from "react-router";
-import { createAgent, listAgents } from "../api/agents.js";
+import { getSyncStatus, listAgents, triggerSync } from "../api/agents.js";
 import { Badge } from "../components/ui/badge.js";
 import { Button } from "../components/ui/button.js";
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "../components/ui/dialog.js";
-import { Input } from "../components/ui/input.js";
-import { Label } from "../components/ui/label.js";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.js";
 import { cn, formatDate } from "../lib/utils.js";
 
@@ -26,32 +16,25 @@ export function AgentsPage() {
   const queryClient = useQueryClient();
   const [cursor, setCursor] = useState<string | undefined>();
   const [typeFilter, setTypeFilter] = useState<string>("");
-  const [createOpen, setCreateOpen] = useState(false);
-  const [form, setForm] = useState({ id: "", type: "autonomous_agent", displayName: "" });
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["agents", cursor],
     queryFn: () => listAgents({ limit: 20, cursor }),
   });
 
-  const createMutation = useMutation({
-    mutationFn: () =>
-      createAgent({
-        id: form.id || undefined,
-        type: form.type as "human" | "personal_assistant" | "autonomous_agent",
-        displayName: form.displayName || undefined,
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["agents"] });
-      setCreateOpen(false);
-      setForm({ id: "", type: "autonomous_agent", displayName: "" });
-    },
+  const { data: syncStatus } = useQuery({
+    queryKey: ["sync-status"],
+    queryFn: getSyncStatus,
+    refetchInterval: 30_000,
   });
 
-  const handleCreate = (e: FormEvent) => {
-    e.preventDefault();
-    createMutation.mutate();
-  };
+  const syncMutation = useMutation({
+    mutationFn: triggerSync,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["agents"] });
+      queryClient.invalidateQueries({ queryKey: ["sync-status"] });
+    },
+  });
 
   return (
     <div>
@@ -74,62 +57,47 @@ export function AgentsPage() {
             ))}
           </select>
         </div>
-        <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-          <DialogTrigger asChild>
-            <Button>
-              <Plus className="h-4 w-4 mr-2" />
-              Create Agent
-            </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Create Agent</DialogTitle>
-            </DialogHeader>
-            <form onSubmit={handleCreate} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="agent-id">ID (optional)</Label>
-                <Input
-                  id="agent-id"
-                  value={form.id}
-                  onChange={(e) => setForm({ ...form, id: e.target.value })}
-                  placeholder="auto-generated if empty"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="agent-type">Type</Label>
-                <select
-                  id="agent-type"
-                  value={form.type}
-                  onChange={(e) => setForm({ ...form, type: e.target.value })}
-                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                >
-                  {agentTypeValues.map((t) => (
-                    <option key={t} value={t}>
-                      {t}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="agent-name">Display Name</Label>
-                <Input
-                  id="agent-name"
-                  value={form.displayName}
-                  onChange={(e) => setForm({ ...form, displayName: e.target.value })}
-                />
-              </div>
-              {createMutation.error instanceof Error && (
-                <div className="text-sm text-destructive">{createMutation.error.message}</div>
-              )}
-              <DialogFooter>
-                <Button type="submit" disabled={createMutation.isPending}>
-                  {createMutation.isPending ? "Creating..." : "Create"}
-                </Button>
-              </DialogFooter>
-            </form>
-          </DialogContent>
-        </Dialog>
+        <div className="flex items-center gap-3">
+          {syncStatus?.lastSync && (
+            <span className="text-xs text-muted-foreground">Last sync: {formatDate(syncStatus.lastSync.syncedAt)}</span>
+          )}
+          <Button variant="outline" size="sm" onClick={() => syncMutation.mutate()} disabled={syncMutation.isPending}>
+            <RefreshCw className={cn("h-4 w-4 mr-2", syncMutation.isPending && "animate-spin")} />
+            {syncMutation.isPending ? "Syncing..." : "Sync Now"}
+          </Button>
+        </div>
       </div>
+
+      {/* Sync result banner */}
+      {syncMutation.data && (
+        <div className="mb-4 rounded-md border bg-muted/50 p-3 text-sm">
+          <span className="font-medium">Sync complete: </span>
+          {syncMutation.data.summary.created > 0 && (
+            <Badge variant="default" className="mr-1">
+              +{syncMutation.data.summary.created} created
+            </Badge>
+          )}
+          {syncMutation.data.summary.updated > 0 && (
+            <Badge variant="secondary" className="mr-1">
+              {syncMutation.data.summary.updated} updated
+            </Badge>
+          )}
+          {syncMutation.data.summary.suspended > 0 && (
+            <Badge variant="destructive" className="mr-1">
+              {syncMutation.data.summary.suspended} suspended
+            </Badge>
+          )}
+          {syncMutation.data.summary.unchanged > 0 && (
+            <span className="text-muted-foreground mr-1">{syncMutation.data.summary.unchanged} unchanged</span>
+          )}
+          {syncMutation.data.summary.errors > 0 && (
+            <Badge variant="destructive">{syncMutation.data.summary.errors} errors</Badge>
+          )}
+        </div>
+      )}
+      {syncMutation.error instanceof Error && (
+        <div className="mb-4 text-sm text-destructive">{syncMutation.error.message}</div>
+      )}
 
       <div className="border rounded-lg">
         <Table>
@@ -163,7 +131,9 @@ export function AgentsPage() {
                   return (
                     <TableRow>
                       <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
-                        {typeFilter ? `No ${typeFilter} agents` : "No agents yet"}
+                        {typeFilter
+                          ? `No ${typeFilter} agents`
+                          : "No agents yet — click Sync Now to import from Context Tree"}
                       </TableCell>
                     </TableRow>
                   );

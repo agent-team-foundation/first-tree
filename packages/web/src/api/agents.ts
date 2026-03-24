@@ -1,4 +1,4 @@
-import type { Agent, CreateAgent, UpdateAgent } from "@agent-hub/shared";
+import type { Agent, SyncReport } from "@agent-hub/shared";
 import { api } from "./client.js";
 
 type PaginatedAgents = {
@@ -18,14 +18,20 @@ export function getAgent(agentId: string): Promise<Agent> {
   return api.get<Agent>(`/admin/agents/${encodeURIComponent(agentId)}`);
 }
 
-export function createAgent(data: CreateAgent): Promise<Agent> {
-  return api.post<Agent>("/admin/agents", data);
-}
-
-export function updateAgent(agentId: string, data: UpdateAgent): Promise<Agent> {
-  return api.patch<Agent>(`/admin/agents/${encodeURIComponent(agentId)}`, data);
-}
-
 export function deleteAgent(agentId: string): Promise<void> {
   return api.delete<void>(`/admin/agents/${encodeURIComponent(agentId)}`);
+}
+
+// -- Sync API --
+
+export function triggerSync(): Promise<SyncReport> {
+  return api.post<SyncReport>("/admin/agents/sync", {});
+}
+
+type SyncStatus = {
+  lastSync: SyncReport | null;
+};
+
+export function getSyncStatus(): Promise<SyncStatus> {
+  return api.get<SyncStatus>("/admin/agents/sync/status");
 }

@@ -8,6 +8,7 @@ export type Config = {
   serverPort: number;
   jwtSecretKey: string;
   instanceId: string;
+  contextTreePath: string;
   logger?: boolean;
   githubWebhookSecret?: string;
   webDistPath?: string;
@@ -25,12 +26,18 @@ export function loadConfig(): Config {
     throw new Error("JWT_SECRET_KEY is required");
   }
 
+  const contextTreePath = env.CONTEXT_TREE_PATH;
+  if (!contextTreePath) {
+    throw new Error("CONTEXT_TREE_PATH is required");
+  }
+
   return {
     databaseUrl,
     serverHost: env.SERVER_HOST ?? "0.0.0.0",
     serverPort: Number(env.SERVER_PORT ?? "8000"),
     jwtSecretKey,
     instanceId: env.INSTANCE_ID ?? `srv_${randomUUID().slice(0, 8)}`,
+    contextTreePath,
     githubWebhookSecret: env.GITHUB_WEBHOOK_SECRET || undefined,
     webDistPath: env.WEB_DIST_PATH,
     adapterEncryptionKey: env.ADAPTER_ENCRYPTION_KEY || undefined,

@@ -11,6 +11,7 @@ export async function createTestApp(): Promise<FastifyInstance> {
     logger: false,
     jwtSecretKey: process.env.JWT_SECRET_KEY ?? "test-jwt-secret-key-for-vitest",
     instanceId: "test-instance",
+    contextTreePath: process.env.CONTEXT_TREE_PATH ?? "/tmp/agent-hub-test-tree",
     adapterEncryptionKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   };
   const app = await buildApp(config);

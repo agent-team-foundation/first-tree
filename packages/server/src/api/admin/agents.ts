@@ -1,4 +1,4 @@
-import { createAgentSchema, createAgentTokenSchema, paginationQuerySchema, updateAgentSchema } from "@agent-hub/shared";
+import { createAgentTokenSchema, paginationQuerySchema } from "@agent-hub/shared";
 import type { FastifyInstance } from "fastify";
 import * as agentService from "../../services/agent.js";
 
@@ -21,28 +21,11 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
     };
   });
 
-  app.post("/", async (request, reply) => {
-    const body = createAgentSchema.parse(request.body);
-    const agent = await agentService.createAgent(app.db, body);
-    return reply.status(201).send({
-      ...agent,
-      createdAt: agent.createdAt.toISOString(),
-      updatedAt: agent.updatedAt.toISOString(),
-    });
-  });
+  // POST / (create) removed — agents are created by Context Tree sync
+  // PATCH /:agentId (update) removed — status is managed by sync, admin controls via token revocation
 
   app.get<{ Params: { agentId: string } }>("/:agentId", async (request) => {
     const agent = await agentService.getAgent(app.db, request.params.agentId);
-    return {
-      ...agent,
-      createdAt: agent.createdAt.toISOString(),
-      updatedAt: agent.updatedAt.toISOString(),
-    };
-  });
-
-  app.patch<{ Params: { agentId: string } }>("/:agentId", async (request) => {
-    const body = updateAgentSchema.parse(request.body);
-    const agent = await agentService.updateAgent(app.db, request.params.agentId, body);
     return {
       ...agent,
       createdAt: agent.createdAt.toISOString(),
@@ -79,7 +62,7 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
     return reply.status(204).send();
   });
 
-  // DELETE agent (suspend + revoke all tokens)
+  // DELETE agent — only allowed for suspended agents (removed from tree)
   app.delete<{ Params: { agentId: string } }>("/:agentId", async (request, reply) => {
     await agentService.deleteAgent(app.db, request.params.agentId);
     return reply.status(204).send();

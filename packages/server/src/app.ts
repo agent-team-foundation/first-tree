@@ -8,6 +8,7 @@ import { ZodError } from "zod";
 import { adminAdapterMappingRoutes } from "./api/admin/adapter-mappings.js";
 import { adminAdapterStatusRoutes } from "./api/admin/adapter-status.js";
 import { adminAdapterRoutes } from "./api/admin/adapters.js";
+import { adminAgentSyncRoutes } from "./api/admin/agent-sync.js";
 import { adminAgentRoutes } from "./api/admin/agents.js";
 import { adminAuthRoutes } from "./api/admin/auth.js";
 import { adminChatRoutes } from "./api/admin/chats.js";
@@ -27,8 +28,10 @@ import { AppError } from "./errors.js";
 import { adminAuthHook } from "./middleware/admin-auth.js";
 import { agentAuthHook } from "./middleware/agent-auth.js";
 import { type AdapterManager, createAdapterManager } from "./services/adapter-manager.js";
+import { startPeriodicSync, stopPeriodicSync, syncAgents } from "./services/agent-sync.js";
 import { type BackgroundTasks, createBackgroundTasks } from "./services/background-tasks.js";
 import { createNotifier, type Notifier } from "./services/notifier.js";
+import * as systemConfigService from "./services/system-config.js";
 
 // Fastify type augmentation
 import "./types.js";
@@ -85,6 +88,14 @@ export async function buildApp(config: Config) {
           await adminApp.register(adminAgentRoutes);
         },
         { prefix: "/admin/agents" },
+      );
+
+      await api.register(
+        async (adminApp) => {
+          adminApp.addHook("onRequest", adminAuth);
+          await adminApp.register(adminAgentSyncRoutes);
+        },
+        { prefix: "/admin/agents/sync" },
       );
 
       await api.register(
@@ -202,10 +213,27 @@ export async function buildApp(config: Config) {
     } else {
       await adapterManager.reload();
     }
+
+    // Initial agent sync from Context Tree
+    try {
+      const report = await syncAgents(db, config.contextTreePath);
+      const s = report.summary;
+      app.log.info(
+        `Initial agent sync: created=${s.created} updated=${s.updated} suspended=${s.suspended} unchanged=${s.unchanged} errors=${s.errors}`,
+      );
+    } catch (err) {
+      app.log.error(err, "Initial agent sync failed");
+    }
+
+    // Start periodic sync
+    const configs = await systemConfigService.getAllConfigs(db);
+    const intervalSeconds = (configs.agent_sync_interval_seconds as number) ?? 60;
+    startPeriodicSync(db, config.contextTreePath, intervalSeconds, app.log);
   });
 
   // Cleanup on close
   app.addHook("onClose", async () => {
+    stopPeriodicSync();
     backgroundTasks.stop();
     adapterManager.shutdown();
     await notifier.stop();

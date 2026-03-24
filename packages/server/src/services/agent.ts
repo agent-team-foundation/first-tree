@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import type { CreateAgent, CreateAgentToken, UpdateAgent } from "@agent-hub/shared";
+import type { CreateAgent, CreateAgentToken } from "@agent-hub/shared";
 import { AGENT_STATUSES } from "@agent-hub/shared";
 import { and, desc, eq, isNull, lt, ne } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
@@ -8,7 +8,7 @@ import { adapterConfigs } from "../db/schema/adapter-configs.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
 import { agentTokens } from "../db/schema/agent-tokens.js";
 import { agents } from "../db/schema/agents.js";
-import { ConflictError, NotFoundError } from "../errors.js";
+import { BadRequestError, ConflictError, NotFoundError } from "../errors.js";
 
 function hashToken(raw: string): string {
   return createHash("sha256").update(raw).digest("hex");
@@ -105,15 +105,14 @@ export async function listAgents(db: Database, limit: number, cursor?: string) {
   return { items, nextCursor };
 }
 
-export async function updateAgent(db: Database, id: string, data: UpdateAgent) {
+/**
+ * Suspend an agent (called by sync when member is removed from tree).
+ * Revokes all active tokens so the agent can no longer authenticate.
+ */
+export async function suspendAgent(db: Database, id: string) {
   const [agent] = await db
     .update(agents)
-    .set({
-      ...(data.displayName !== undefined ? { displayName: data.displayName ?? null } : {}),
-      ...(data.status !== undefined ? { status: data.status } : {}),
-      ...(data.metadata !== undefined ? { metadata: data.metadata } : {}),
-      updatedAt: new Date(),
-    })
+    .set({ status: AGENT_STATUSES.SUSPENDED, updatedAt: new Date() })
     .where(and(eq(agents.id, id), ne(agents.status, AGENT_STATUSES.DELETED)))
     .returning();
 
@@ -121,19 +120,19 @@ export async function updateAgent(db: Database, id: string, data: UpdateAgent) {
     throw new NotFoundError(`Agent "${id}" not found`);
   }
 
-  // Suspend = revoke all active tokens (design: "停用 = suspended + 吊销所有 Token")
-  if (data.status === "suspended") {
-    await db
-      .update(agentTokens)
-      .set({ revokedAt: new Date() })
-      .where(and(eq(agentTokens.agentId, id), isNull(agentTokens.revokedAt)));
-  }
+  // Revoke all active tokens
+  await db
+    .update(agentTokens)
+    .set({ revokedAt: new Date() })
+    .where(and(eq(agentTokens.agentId, id), isNull(agentTokens.revokedAt)));
 
   return agent;
 }
 
+/**
+ * Delete an agent. Only allowed when status is "suspended" (removed from tree).
+ */
 export async function deleteAgent(db: Database, id: string) {
-  // Verify agent exists and is not already deleted
   const [existing] = await db
     .select({ id: agents.id, status: agents.status })
     .from(agents)
@@ -141,6 +140,9 @@ export async function deleteAgent(db: Database, id: string) {
     .limit(1);
   if (!existing || existing.status === AGENT_STATUSES.DELETED) {
     throw new NotFoundError(`Agent "${id}" not found`);
+  }
+  if (existing.status !== AGENT_STATUSES.SUSPENDED) {
+    throw new BadRequestError("Only suspended agents can be deleted. Active agents are managed by Context Tree.");
   }
 
   // 1. Set status to deleted
@@ -150,7 +152,7 @@ export async function deleteAgent(db: Database, id: string) {
     .where(eq(agents.id, id))
     .returning();
 
-  // 2. Revoke all active tokens
+  // 2. Revoke all active tokens (may already be revoked by suspend, but be safe)
   await db
     .update(agentTokens)
     .set({ revokedAt: new Date() })
