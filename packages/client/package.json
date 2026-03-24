@@ -33,11 +33,15 @@
     "node": ">=22.16.0"
   },
   "dependencies": {
-    "commander": "^13.1.0"
+    "commander": "^13.1.0",
+    "ws": "^8.20.0",
+    "yaml": "^2.8.3",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@agent-hub/shared": "workspace:*",
     "@types/node": "^22.16.0",
+    "@types/ws": "^8.18.1",
     "tsdown": "^0.21.4",
     "vitest": "^3.2.0"
   }

@@ -1,4 +1,4 @@
-import type { Agent, InboxEntryWithMessage } from "@agent-hub/shared";
+import type { Agent, InboxEntryWithMessage, Message, SendMessage, SendToAgent } from "@agent-hub/shared";
 
 export type SdkConfig = {
   serverUrl: string;
@@ -51,6 +51,22 @@ export class AgentHubSDK {
   /** Renew lease on an inbox entry. */
   async renew(entryId: number): Promise<void> {
     await this.requestVoid(`/api/v1/agent/inbox/${entryId}/renew`, { method: "POST" });
+  }
+
+  /** Send a message to a chat. */
+  async sendMessage(chatId: string, data: SendMessage): Promise<Message> {
+    return this.requestJson<Message>(`/api/v1/agent/chats/${chatId}/messages`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  /** Send a direct message to another agent. */
+  async sendToAgent(agentId: string, data: SendToAgent): Promise<Message> {
+    return this.requestJson<Message>(`/api/v1/agent/agents/${agentId}/messages`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
   }
 
   private async requestVoid(path: string, init?: RequestInit): Promise<void> {
