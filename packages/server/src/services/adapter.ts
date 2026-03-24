@@ -79,8 +79,7 @@ export async function createAdapterConfig(db: Database, data: CreateAdapterConfi
   } catch (err) {
     // PostgreSQL unique_violation (23505) on (agent_id, platform)
     // Drizzle wraps the PG error; the code may be on the error itself or on a nested cause
-    const pgCode =
-      (err as { code?: string })?.code ?? (err as { cause?: { code?: string } })?.cause?.code ?? "";
+    const pgCode = (err as { code?: string })?.code ?? (err as { cause?: { code?: string } })?.cause?.code ?? "";
     if (pgCode === "23505") {
       throw new ConflictError(`Agent "${data.agentId}" already has a ${data.platform} adapter config`);
     }
