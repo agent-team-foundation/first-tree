@@ -57,8 +57,10 @@ export {
   agentTypeSchema,
   type CreateAgent,
   createAgentSchema,
-  type UpdateAgent,
-  updateAgentSchema,
+  type MemberNode,
+  memberNodeSchema,
+  type SyncReport,
+  syncReportSchema,
 } from "./schemas/agent.js";
 export {
   type AgentToken,

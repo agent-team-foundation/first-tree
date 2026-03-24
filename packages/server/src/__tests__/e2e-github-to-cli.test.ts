@@ -69,6 +69,7 @@ describe("E2E: GitHub issue → Server → CLI pull", () => {
       logger: false,
       jwtSecretKey: "test-jwt-secret-key-for-e2e",
       instanceId: "e2e-test",
+      contextTreePath: "/tmp/agent-hub-test-tree",
     });
     await app.ready();
     address = await app.listen({ port: 0, host: "127.0.0.1" });
@@ -171,6 +172,7 @@ describe("E2E: GitHub issue → Server → CLI pull", () => {
       logger: false,
       jwtSecretKey: "test-jwt-secret-key-for-e2e-sig",
       instanceId: "e2e-test-sig",
+      contextTreePath: "/tmp/agent-hub-test-tree",
       githubWebhookSecret: secret,
     });
     await app2.ready();

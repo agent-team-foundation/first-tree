@@ -6,7 +6,7 @@ import { useNavigate, useParams } from "react-router";
 import { createAdapterMapping, deleteAdapterMapping, listAdapterMappings } from "../api/adapter-mappings.js";
 import { getAdapterStatuses } from "../api/adapter-status.js";
 import { createAdapter, deleteAdapter, listAdapters, updateAdapter } from "../api/adapters.js";
-import { deleteAgent, getAgent, updateAgent } from "../api/agents.js";
+import { deleteAgent, getAgent } from "../api/agents.js";
 import { createToken, listTokens, revokeToken } from "../api/tokens.js";
 import { Badge } from "../components/ui/badge.js";
 import { Button } from "../components/ui/button.js";
@@ -51,11 +51,6 @@ export function AgentDetailPage() {
   const agentAdapters = adaptersQuery.data?.filter((a) => a.agentId === agentId) ?? [];
   const agentMappings = mappingsQuery.data?.filter((m) => m.agentId === agentId) ?? [];
 
-  // Edit state
-  const [editing, setEditing] = useState(false);
-  const [editName, setEditName] = useState("");
-  const [editStatus, setEditStatus] = useState("");
-
   // Token dialog
   const [tokenDialogOpen, setTokenDialogOpen] = useState(false);
   const [tokenName, setTokenName] = useState("");
@@ -76,14 +71,6 @@ export function AgentDetailPage() {
   const [bindingCredError, setBindingCredError] = useState("");
 
   // Mutations — agent
-  const updateMutation = useMutation({
-    mutationFn: (data: { displayName?: string | null; status?: "active" | "suspended" }) => updateAgent(agentId, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["agent", agentId] });
-      setEditing(false);
-    },
-  });
-
   const deleteMutation = useMutation({
     mutationFn: () => deleteAgent(agentId),
     onSuccess: () => navigate("/agents"),
@@ -251,22 +238,8 @@ export function AgentDetailPage() {
     return <div className="text-muted-foreground">Agent not found</div>;
   }
 
-  const startEdit = () => {
-    setEditName(agent.displayName ?? "");
-    setEditStatus(agent.status);
-    setEditing(true);
-  };
-
-  const handleUpdate = (e: FormEvent) => {
-    e.preventDefault();
-    updateMutation.mutate({
-      displayName: editName || null,
-      status: editStatus as "active" | "suspended",
-    });
-  };
-
   const handleDelete = () => {
-    if (window.confirm("Are you sure you want to delete this agent?")) {
+    if (window.confirm("Are you sure you want to delete this agent? This cannot be undone.")) {
       deleteMutation.mutate();
     }
   };
@@ -281,6 +254,11 @@ export function AgentDetailPage() {
   const bindingIsPending =
     createAdapterMutation.isPending || updateAdapterMutation.isPending || createMappingMutation.isPending;
 
+  const metadata = agent.metadata as Record<string, unknown> | undefined;
+  const treeMeta = metadata?.tree as Record<string, unknown> | undefined;
+  const role = treeMeta?.role as string | undefined;
+  const domains = treeMeta?.domains as string[] | undefined;
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -292,84 +270,69 @@ export function AgentDetailPage() {
           <h1 className="text-2xl font-semibold">{agent.displayName ?? agent.id}</h1>
           <p className="text-sm text-muted-foreground font-mono">{agent.id}</p>
         </div>
-        <Button variant="destructive" size="sm" onClick={handleDelete}>
-          <Trash2 className="h-4 w-4 mr-2" />
-          Delete
-        </Button>
+        {agent.status === "suspended" && (
+          <Button variant="destructive" size="sm" onClick={handleDelete}>
+            <Trash2 className="h-4 w-4 mr-2" />
+            Delete
+          </Button>
+        )}
       </div>
 
-      {/* Agent Info */}
+      {/* Agent Info — read-only, managed by Context Tree */}
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle>Agent Info</CardTitle>
-          {!editing && (
-            <Button variant="outline" size="sm" onClick={startEdit}>
-              Edit
-            </Button>
-          )}
+          <span className="text-xs text-muted-foreground">Managed by Context Tree</span>
         </CardHeader>
         <CardContent>
-          {editing ? (
-            <form onSubmit={handleUpdate} className="space-y-4">
-              <div className="space-y-2">
-                <Label>Display Name</Label>
-                <Input value={editName} onChange={(e) => setEditName(e.target.value)} />
-              </div>
-              <div className="space-y-2">
-                <Label>Status</Label>
-                <select
-                  value={editStatus}
-                  onChange={(e) => setEditStatus(e.target.value)}
-                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                >
-                  <option value="active">active</option>
-                  <option value="suspended">suspended</option>
-                </select>
-              </div>
-              {updateMutation.error instanceof Error && (
-                <div className="text-sm text-destructive">{updateMutation.error.message}</div>
-              )}
-              <div className="flex gap-2">
-                <Button type="submit" size="sm" disabled={updateMutation.isPending}>
-                  Save
-                </Button>
-                <Button type="button" variant="outline" size="sm" onClick={() => setEditing(false)}>
-                  Cancel
-                </Button>
-              </div>
-            </form>
-          ) : (
-            <dl className="grid grid-cols-2 gap-4 text-sm">
+          <dl className="grid grid-cols-2 gap-4 text-sm">
+            <div>
+              <dt className="text-muted-foreground mb-1">Display Name</dt>
+              <dd>{agent.displayName ?? "—"}</dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground mb-1">Type</dt>
+              <dd>
+                <Badge variant="secondary">{agent.type}</Badge>
+              </dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground mb-1">Status</dt>
+              <dd>
+                <Badge variant={agent.status === "active" ? "default" : "destructive"}>{agent.status}</Badge>
+              </dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground mb-1">Inbox ID</dt>
+              <dd className="font-mono">{agent.inboxId}</dd>
+            </div>
+            {role && (
               <div>
-                <dt className="text-muted-foreground mb-1">Type</dt>
-                <dd>
-                  <Badge variant="secondary">{agent.type}</Badge>
+                <dt className="text-muted-foreground mb-1">Role</dt>
+                <dd>{role}</dd>
+              </div>
+            )}
+            {domains && domains.length > 0 && (
+              <div>
+                <dt className="text-muted-foreground mb-1">Domains</dt>
+                <dd className="flex flex-wrap gap-1">
+                  {domains.map((d) => (
+                    <Badge key={d} variant="outline">
+                      {d}
+                    </Badge>
+                  ))}
                 </dd>
               </div>
-              <div>
-                <dt className="text-muted-foreground mb-1">Status</dt>
-                <dd>
-                  <Badge variant={agent.status === "active" ? "default" : "destructive"}>{agent.status}</Badge>
-                </dd>
-              </div>
-              <div>
-                <dt className="text-muted-foreground mb-1">Inbox ID</dt>
-                <dd className="font-mono">{agent.inboxId}</dd>
-              </div>
-              <div>
-                <dt className="text-muted-foreground mb-1">Organization</dt>
-                <dd className="font-mono">{agent.organizationId}</dd>
-              </div>
-              <div>
-                <dt className="text-muted-foreground mb-1">Created</dt>
-                <dd>{formatDate(agent.createdAt)}</dd>
-              </div>
-              <div>
-                <dt className="text-muted-foreground mb-1">Updated</dt>
-                <dd>{formatDate(agent.updatedAt)}</dd>
-              </div>
-            </dl>
-          )}
+            )}
+            <div>
+              <dt className="text-muted-foreground mb-1">Organization</dt>
+              <dd className="font-mono">{agent.organizationId}</dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground mb-1">Created</dt>
+              <dd>{formatDate(agent.createdAt)}</dd>
+            </div>
+          </dl>
         </CardContent>
       </Card>
 

@@ -33,12 +33,38 @@ export const createAgentSchema = z.object({
 });
 export type CreateAgent = z.infer<typeof createAgentSchema>;
 
-export const updateAgentSchema = z.object({
-  displayName: z.string().max(200).nullish(),
-  status: agentStatusSchema.optional(),
-  metadata: z.record(z.unknown()).optional(),
+// -- Context Tree sync schemas --
+
+export const memberNodeSchema = z.object({
+  title: z.string().min(1),
+  type: agentTypeSchema,
+  owners: z.array(z.string()).min(1),
+  role: z.string().optional(),
+  domains: z.array(z.string()).optional(),
 });
-export type UpdateAgent = z.infer<typeof updateAgentSchema>;
+export type MemberNode = z.infer<typeof memberNodeSchema>;
+
+export const syncReportSchema = z.object({
+  syncedAt: z.string(),
+  treePath: z.string(),
+  summary: z.object({
+    created: z.number(),
+    updated: z.number(),
+    suspended: z.number(),
+    unchanged: z.number(),
+    errors: z.number(),
+  }),
+  created: z.array(z.string()),
+  updated: z.array(z.string()),
+  suspended: z.array(z.string()),
+  errors: z.array(
+    z.object({
+      memberId: z.string(),
+      error: z.string(),
+    }),
+  ),
+});
+export type SyncReport = z.infer<typeof syncReportSchema>;
 
 export const agentSchema = z.object({
   id: z.string(),

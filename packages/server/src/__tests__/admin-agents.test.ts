@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, it } from "vitest";
+import { createAgent } from "../services/agent.js";
 import { createTestAdmin, createTestApp } from "./helpers.js";
 
 describe("Admin Agents API", () => {
@@ -16,30 +17,23 @@ describe("Admin Agents API", () => {
       });
   }
 
-  it("creates and retrieves an agent", async () => {
+  it("retrieves an agent created via service", async () => {
     const app = await appPromise;
     const req = await authedRequest(app);
 
-    const createRes = await req("POST", "/api/v1/admin/agents", {
-      id: "agent-1",
-      type: "autonomous_agent",
-      displayName: "Bot One",
-    });
-    expect(createRes.statusCode).toBe(201);
-    const agent = createRes.json();
-    expect(agent.id).toBe("agent-1");
-    expect(agent.inboxId).toBe("inbox_agent-1");
+    await createAgent(app.db, { id: "agent-1", type: "autonomous_agent", displayName: "Bot One" });
 
     const getRes = await req("GET", "/api/v1/admin/agents/agent-1");
     expect(getRes.statusCode).toBe(200);
     expect(getRes.json().id).toBe("agent-1");
+    expect(getRes.json().inboxId).toBe("inbox_agent-1");
   });
 
   it("lists agents with pagination", async () => {
     const app = await appPromise;
     const req = await authedRequest(app);
-    await req("POST", "/api/v1/admin/agents", { id: "a1", type: "human" });
-    await req("POST", "/api/v1/admin/agents", { id: "a2", type: "human" });
+    await createAgent(app.db, { id: "a1", type: "human" });
+    await createAgent(app.db, { id: "a2", type: "human" });
 
     const res = await req("GET", "/api/v1/admin/agents?limit=1");
     expect(res.statusCode).toBe(200);
@@ -51,7 +45,7 @@ describe("Admin Agents API", () => {
   it("lists agents with presenceStatus field", async () => {
     const app = await appPromise;
     const req = await authedRequest(app);
-    await req("POST", "/api/v1/admin/agents", { id: "presence-test", type: "autonomous_agent" });
+    await createAgent(app.db, { id: "presence-test", type: "autonomous_agent" });
 
     const res = await req("GET", "/api/v1/admin/agents?limit=50");
     expect(res.statusCode).toBe(200);
@@ -60,20 +54,6 @@ describe("Admin Agents API", () => {
     expect(agent).toBeDefined();
     // No presence record → defaults to "offline"
     expect(agent.presenceStatus).toBe("offline");
-  });
-
-  it("updates an agent", async () => {
-    const app = await appPromise;
-    const req = await authedRequest(app);
-    await req("POST", "/api/v1/admin/agents", { id: "upd-1", type: "human" });
-
-    const res = await req("PATCH", "/api/v1/admin/agents/upd-1", {
-      displayName: "Updated",
-      status: "suspended",
-    });
-    expect(res.statusCode).toBe(200);
-    expect(res.json().displayName).toBe("Updated");
-    expect(res.json().status).toBe("suspended");
   });
 
   it("rejects unauthenticated requests", async () => {
@@ -86,7 +66,7 @@ describe("Admin Agents API", () => {
     it("creates, lists, and revokes tokens", async () => {
       const app = await appPromise;
       const req = await authedRequest(app);
-      await req("POST", "/api/v1/admin/agents", { id: "tok-agent", type: "autonomous_agent" });
+      await createAgent(app.db, { id: "tok-agent", type: "autonomous_agent" });
 
       // Create token
       const createRes = await req("POST", "/api/v1/admin/agents/tok-agent/tokens", { name: "dev" });
