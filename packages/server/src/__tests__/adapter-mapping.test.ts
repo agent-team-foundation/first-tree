@@ -88,14 +88,14 @@ describe("Adapter mapping service", () => {
   describe("chat mapping", () => {
     it("creates chat for new external channel", async () => {
       const app = await appPromise;
-      const { agent: adapter } = await createTestAgent(app, { id: "chat-map-adapter" });
+      const { agent: botAgent } = await createTestAgent(app, { id: "chat-map-bot-agent" });
       const { agent: sender } = await createTestAgent(app, { id: "chat-map-sender" });
 
       const chatId = await mappingService.findOrCreateChatForChannel(app.db, {
         platform: "feishu",
         externalChannelId: "oc_new_channel_1",
         chatType: "group",
-        adapterAgentId: adapter.id,
+        botAgentId: botAgent.id,
         senderAgentId: sender.id,
       });
 
@@ -106,7 +106,7 @@ describe("Adapter mapping service", () => {
         platform: "feishu",
         externalChannelId: "oc_new_channel_1",
         chatType: "group",
-        adapterAgentId: adapter.id,
+        botAgentId: botAgent.id,
         senderAgentId: sender.id,
       });
       expect(chatId2).toBe(chatId);
@@ -114,14 +114,14 @@ describe("Adapter mapping service", () => {
 
     it("creates separate chats for different external channels", async () => {
       const app = await appPromise;
-      const { agent: adapter } = await createTestAgent(app, { id: "multi-ch-adapter" });
+      const { agent: botAgent } = await createTestAgent(app, { id: "multi-ch-bot-agent" });
       const { agent: sender } = await createTestAgent(app, { id: "multi-ch-sender" });
 
       const chatId1 = await mappingService.findOrCreateChatForChannel(app.db, {
         platform: "feishu",
         externalChannelId: "oc_multi_1",
         chatType: "group",
-        adapterAgentId: adapter.id,
+        botAgentId: botAgent.id,
         senderAgentId: sender.id,
       });
 
@@ -129,7 +129,7 @@ describe("Adapter mapping service", () => {
         platform: "feishu",
         externalChannelId: "oc_multi_2",
         chatType: "p2p",
-        adapterAgentId: adapter.id,
+        botAgentId: botAgent.id,
         senderAgentId: sender.id,
       });
 
@@ -138,20 +138,35 @@ describe("Adapter mapping service", () => {
 
     it("finds external channel by chat", async () => {
       const app = await appPromise;
-      const { agent: adapter } = await createTestAgent(app, { id: "reverse-ch-adapter" });
+      const { agent: botAgent } = await createTestAgent(app, { id: "reverse-ch-bot-agent" });
       const { agent: sender } = await createTestAgent(app, { id: "reverse-ch-sender" });
 
       const chatId = await mappingService.findOrCreateChatForChannel(app.db, {
         platform: "feishu",
         externalChannelId: "oc_reverse_1",
         chatType: "group",
-        adapterAgentId: adapter.id,
+        botAgentId: botAgent.id,
         senderAgentId: sender.id,
       });
 
       const found = await mappingService.findExternalChannelByChat(app.db, "feishu", chatId);
       expect(found).not.toBeNull();
       expect(found?.externalChannelId).toBe("oc_reverse_1");
+    });
+
+    it("handles same agent as both bot and sender (p2p self-chat)", async () => {
+      const app = await appPromise;
+      const { agent } = await createTestAgent(app, { id: "self-chat-agent" });
+
+      const chatId = await mappingService.findOrCreateChatForChannel(app.db, {
+        platform: "feishu",
+        externalChannelId: "oc_self_chat",
+        chatType: "p2p",
+        botAgentId: agent.id,
+        senderAgentId: agent.id,
+      });
+
+      expect(chatId).toBeTruthy();
     });
   });
 

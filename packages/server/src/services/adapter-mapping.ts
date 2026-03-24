@@ -149,7 +149,7 @@ export async function findExternalChannelByChat(
 
 /**
  * Find or create an internal Chat for an external channel.
- * Also ensures the adapter agent is a participant.
+ * Ensures the bot's bound agent and the sender are participants.
  */
 export async function findOrCreateChatForChannel(
   db: Database,
@@ -159,15 +159,16 @@ export async function findOrCreateChatForChannel(
     threadId?: string | null;
     chatType: string;
     topic?: string;
-    adapterAgentId: string;
+    /** The agent bound to the bot via adapter_configs.agentId */
+    botAgentId: string;
     senderAgentId: string;
   },
 ): Promise<string> {
   // Check existing mapping
   const existing = await findChatByExternalChannel(db, data.platform, data.externalChannelId, data.threadId);
   if (existing) {
-    // Ensure both adapter and sender are participants
-    await ensureParticipant(db, existing.chatId, data.adapterAgentId);
+    // Ensure both bot agent and sender are participants
+    await ensureParticipant(db, existing.chatId, data.botAgentId);
     await ensureParticipant(db, existing.chatId, data.senderAgentId);
     return existing.chatId;
   }
@@ -177,14 +178,14 @@ export async function findOrCreateChatForChannel(
   const internalType = data.chatType === "p2p" ? "direct" : "group";
 
   return db.transaction(async (tx) => {
-    // Get adapter agent's org
-    const [adapterAgent] = await tx
+    // Get bot agent's org
+    const [botAgent] = await tx
       .select({ organizationId: agents.organizationId })
       .from(agents)
-      .where(eq(agents.id, data.adapterAgentId))
+      .where(eq(agents.id, data.botAgentId))
       .limit(1);
 
-    const orgId = adapterAgent?.organizationId ?? "default";
+    const orgId = botAgent?.organizationId ?? "default";
 
     await tx.insert(chats).values({
       id: chatId,
@@ -192,14 +193,18 @@ export async function findOrCreateChatForChannel(
       type: internalType,
       topic: data.topic ?? null,
       lifecyclePolicy: "adapter_managed",
-      metadata: { source: "feishu", externalChannelId: data.externalChannelId },
+      metadata: { source: data.platform, externalChannelId: data.externalChannelId },
     });
 
-    // Add adapter and sender as participants
-    await tx.insert(chatParticipants).values([
-      { chatId, agentId: data.adapterAgentId, role: "member" },
-      { chatId, agentId: data.senderAgentId, role: "member" },
-    ]);
+    // Add bot agent and sender as participants
+    const participants =
+      data.botAgentId === data.senderAgentId
+        ? [{ chatId, agentId: data.botAgentId, role: "member" as const }]
+        : [
+            { chatId, agentId: data.botAgentId, role: "member" as const },
+            { chatId, agentId: data.senderAgentId, role: "member" as const },
+          ];
+    await tx.insert(chatParticipants).values(participants);
 
     // Create mapping
     await tx.insert(adapterChatMappings).values({

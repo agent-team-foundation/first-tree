@@ -1,9 +1,9 @@
 import type { CreateAdapterConfig, UpdateAdapterConfig } from "@agent-hub/shared";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, ne } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { adapterConfigs } from "../db/schema/adapter-configs.js";
 import { agents } from "../db/schema/agents.js";
-import { AppError, NotFoundError } from "../errors.js";
+import { AppError, BadRequestError, ConflictError, NotFoundError } from "../errors.js";
 import { encryptCredentials } from "./crypto.js";
 
 /** Server misconfiguration — not a client error. */
@@ -22,9 +22,16 @@ function requireEncryptionKey(key: string | undefined): string {
 }
 
 async function validateAgentId(db: Database, agentId: string): Promise<void> {
-  const [agent] = await db.select({ id: agents.id }).from(agents).where(eq(agents.id, agentId)).limit(1);
+  const [agent] = await db
+    .select({ id: agents.id, type: agents.type })
+    .from(agents)
+    .where(and(eq(agents.id, agentId), ne(agents.status, "deleted")))
+    .limit(1);
   if (!agent) {
     throw new NotFoundError(`Agent "${agentId}" not found`);
+  }
+  if (agent.type === "human") {
+    throw new BadRequestError("Adapter configs can only be bound to non-human agents");
   }
 }
 
@@ -53,21 +60,31 @@ export async function getAdapterConfig(db: Database, id: number) {
 
 export async function createAdapterConfig(db: Database, data: CreateAdapterConfig, encryptionKey: string | undefined) {
   const key = requireEncryptionKey(encryptionKey);
-  if (data.agentId) await validateAgentId(db, data.agentId);
+  await validateAgentId(db, data.agentId);
   const encrypted = encryptCredentials(data.credentials, key);
 
-  const [row] = await db
-    .insert(adapterConfigs)
-    .values({
-      platform: data.platform,
-      agentId: data.agentId ?? null,
-      credentials: encrypted,
-      status: data.status ?? "active",
-    })
-    .returning();
+  try {
+    const [row] = await db
+      .insert(adapterConfigs)
+      .values({
+        platform: data.platform,
+        agentId: data.agentId,
+        credentials: encrypted,
+        status: data.status ?? "active",
+      })
+      .returning();
 
-  if (!row) throw new Error("Unexpected: INSERT RETURNING produced no row");
-  return toResponse(row);
+    if (!row) throw new Error("Unexpected: INSERT RETURNING produced no row");
+    return toResponse(row);
+  } catch (err) {
+    // PostgreSQL unique_violation (23505) on (agent_id, platform)
+    // Drizzle wraps the PG error; the code may be on the error itself or on a nested cause
+    const pgCode = (err as { code?: string })?.code ?? (err as { cause?: { code?: string } })?.cause?.code ?? "";
+    if (pgCode === "23505") {
+      throw new ConflictError(`Agent "${data.agentId}" already has a ${data.platform} adapter config`);
+    }
+    throw err;
+  }
 }
 
 export async function updateAdapterConfig(
@@ -79,8 +96,8 @@ export async function updateAdapterConfig(
   const setClause: Record<string, unknown> = { updatedAt: new Date() };
 
   if (data.agentId !== undefined) {
-    if (data.agentId) await validateAgentId(db, data.agentId);
-    setClause.agentId = data.agentId ?? null;
+    await validateAgentId(db, data.agentId);
+    setClause.agentId = data.agentId;
   }
   if (data.status !== undefined) setClause.status = data.status;
   if (data.credentials !== undefined) {

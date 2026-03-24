@@ -1,5 +1,4 @@
 import { index, jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core";
-import { agents } from "./agents.js";
 import { chats } from "./chats.js";
 
 /** Messages. Immutable after creation. Each message belongs to exactly one Chat. */
@@ -10,9 +9,8 @@ export const messages = pgTable(
     chatId: text("chat_id")
       .notNull()
       .references(() => chats.id),
-    senderId: text("sender_id")
-      .notNull()
-      .references(() => agents.id),
+    /** No FK constraint — agents may be soft-deleted while messages are preserved. */
+    senderId: text("sender_id").notNull(),
     /** "text" | "markdown" | "card" | "reference" | "file" */
     format: text("format").notNull(),
     content: jsonb("content").$type<unknown>().notNull(),

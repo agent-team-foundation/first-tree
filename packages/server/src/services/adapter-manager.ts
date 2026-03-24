@@ -3,16 +3,13 @@ import { eq, sql } from "drizzle-orm";
 import type { FastifyBaseLogger } from "fastify";
 import type { Database } from "../db/connection.js";
 import { adapterConfigs } from "../db/schema/adapter-configs.js";
-import { agents } from "../db/schema/agents.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
 import * as mappingService from "./adapter-mapping.js";
-import { createAgent } from "./agent.js";
 import { decryptCredentials } from "./crypto.js";
 import type { FeishuBotCredentials, InboundEvent } from "./feishu/types.js";
 import { sendMessage } from "./message.js";
 
-const FEISHU_ADAPTER_ID_PREFIX = "feishu-adapter";
 const PROXY_ENV_KEYS = ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"];
 
 /**
@@ -38,6 +35,7 @@ async function withoutProxy<T>(fn: () => Promise<T>): Promise<T> {
     }
   }
 }
+
 const OUTBOUND_BATCH_SIZE = 10;
 
 type ManagedBot = {
@@ -45,16 +43,23 @@ type ManagedBot = {
   /** Track updatedAt to detect credential/setting changes on same config row. */
   configUpdatedAt: string;
   appId: string;
-  agentId: string | null;
-  adapterAgentId: string;
+  /** The agent bound to this bot via adapter_configs.agentId (required). */
+  agentId: string;
+  /** Whether to clear proxy env vars for SDK API calls (Lark SDK ignores NO_PROXY). */
+  bypassProxy: boolean;
   client: InstanceType<typeof Client>;
   wsClient: WSClient;
 };
 
+/** Wrap an SDK API call with proxy bypass if needed. */
+function botApiCall<T>(bot: ManagedBot, fn: () => Promise<T>): Promise<T> {
+  return bot.bypassProxy ? withoutProxy(fn) : fn();
+}
+
 export type AdapterManager = {
   /** Load active adapter configs and start/stop WS connections. */
   reload(): Promise<void>;
-  /** Process pending outbound messages for all adapter agents. */
+  /** Process pending outbound messages for feishu-bound human agents. */
   processOutbound(): Promise<{ sent: number; errors: number }>;
   /** Stop all WS connections. */
   shutdown(): void;
@@ -64,6 +69,8 @@ export type AdapterManager = {
  * Manages Feishu adapter bot instances using the official Lark SDK.
  * - Inbound: WSClient receives events via WebSocket (no public URL needed)
  * - Outbound: SDK Client sends messages via Feishu API
+ *
+ * Adapter is a service, not an agent — no adapter agents are created.
  */
 export function createAdapterManager(
   db: Database,
@@ -71,6 +78,14 @@ export function createAdapterManager(
   log: FastifyBaseLogger,
 ): AdapterManager {
   const bots = new Map<string, ManagedBot>();
+
+  /** Find a managed bot by its bound agentId. */
+  function findBotByAgentId(agentId: string): ManagedBot | undefined {
+    for (const bot of bots.values()) {
+      if (bot.agentId === agentId) return bot;
+    }
+    return undefined;
+  }
 
   /** Handle an inbound message event from Feishu WebSocket. */
   async function handleInboundEvent(appId: string, data: Record<string, unknown>): Promise<void> {
@@ -85,8 +100,11 @@ export function createAdapterManager(
       // Skip bot messages (avoid echo)
       if (event.senderType === "bot") return;
 
+      const bot = bots.get(appId);
+      if (!bot) return;
+
       try {
-        await processInboundMessage(db, event, appId, log);
+        await processInboundMessage(db, event, bot, log);
       } catch (err) {
         // Unclaim the event so it can be retried on next delivery
         await mappingService.unclaimEvent(db, event.eventId, "feishu");
@@ -132,10 +150,6 @@ export function createAdapterManager(
           log.info({ appId }, "Stopped old Feishu WS connection (config changed)");
         }
 
-        // Ensure adapter system agent
-        const adapterAgentId = `${FEISHU_ADAPTER_ID_PREFIX}-${appId}`;
-        await ensureAdapterAgent(db, adapterAgentId, appId);
-
         // bypass_proxy defaults to true (Lark SDK ignores NO_PROXY — known bug)
         const bypassProxy = creds.bypass_proxy !== false;
         const wrap = bypassProxy ? withoutProxy : <T>(fn: () => Promise<T>) => fn();
@@ -166,12 +180,12 @@ export function createAdapterManager(
           configUpdatedAt: configVersion,
           appId,
           agentId: config.agentId,
-          adapterAgentId,
+          bypassProxy,
           client,
           wsClient,
         });
 
-        log.info({ appId, configId: config.id }, "Started Feishu adapter bot (WebSocket)");
+        log.info({ appId, configId: config.id, agentId: config.agentId }, "Started Feishu adapter bot (WebSocket)");
       }
 
       // Stop bots that are no longer active
@@ -185,21 +199,14 @@ export function createAdapterManager(
     },
 
     async processOutbound() {
-      let sent = 0;
-      let errors = 0;
+      if (bots.size === 0) return { sent: 0, errors: 0 };
 
-      for (const [, bot] of bots) {
-        try {
-          const result = await processAdapterOutbound(db, bot, log);
-          sent += result.sent;
-          errors += result.errors;
-        } catch (err) {
-          log.error({ appId: bot.appId, err }, "Adapter outbound processing error");
-          errors++;
-        }
+      try {
+        return await processFeishuOutbound(db, findBotByAgentId, log);
+      } catch (err) {
+        log.error({ err }, "Feishu outbound processing error");
+        return { sent: 0, errors: 1 };
       }
-
-      return { sent, errors };
     },
 
     shutdown() {
@@ -259,59 +266,32 @@ function parseEventData(appId: string, data: Record<string, unknown>): InboundEv
 async function processInboundMessage(
   db: Database,
   event: InboundEvent,
-  appId: string,
+  bot: ManagedBot,
   log: FastifyBaseLogger,
 ): Promise<void> {
   // 1. Resolve sender → internal agent
   const agentMapping = await mappingService.findAgentByExternalUser(db, "feishu", event.senderId);
 
-  let senderAgentId: string;
-  if (agentMapping) {
-    senderAgentId = agentMapping.agentId;
-  } else {
-    // Auto-create agent for Feishu user
-    const autoAgentId = `feishu-user-${event.senderId}`;
-    const [existing] = await db.select({ id: agents.id }).from(agents).where(eq(agents.id, autoAgentId)).limit(1);
-
-    if (existing) {
-      senderAgentId = existing.id;
-    } else {
-      try {
-        const agent = await createAgent(db, {
-          id: autoAgentId,
-          type: "human",
-          displayName: `Feishu User ${event.senderId.slice(0, 8)}`,
-          metadata: { source: "feishu", externalUserId: event.senderId, autoCreated: true },
-        });
-        senderAgentId = agent.id;
-      } catch {
-        senderAgentId = autoAgentId;
-      }
-    }
-    await mappingService.createAgentMapping(db, {
-      platform: "feishu",
-      externalUserId: event.senderId,
-      agentId: senderAgentId,
-      boundVia: "auto",
-      metadata: { appId },
-    });
+  if (!agentMapping) {
+    // Unknown user — reply with binding prompt, do not create agent
+    await replyUnknownUser(bot, event, log);
+    return;
   }
 
-  // 2. Ensure adapter system agent
-  const adapterAgentId = `${FEISHU_ADAPTER_ID_PREFIX}-${appId}`;
-  await ensureAdapterAgent(db, adapterAgentId, appId);
+  const senderAgentId = agentMapping.agentId;
 
-  // 3. Resolve chat → internal chat (auto-create if needed)
+  // 2. Resolve chat → internal chat (auto-create if needed)
+  //    Use bot.agentId (from adapter_configs) as the chat participant, not an adapter agent
   const chatId = await mappingService.findOrCreateChatForChannel(db, {
     platform: "feishu",
     externalChannelId: event.externalChannelId,
     threadId: event.threadId,
     chatType: event.chatType,
-    adapterAgentId,
+    botAgentId: bot.agentId,
     senderAgentId,
   });
 
-  // 4. Send message into internal system
+  // 3. Send message into internal system
   const content =
     typeof event.content === "object" && event.content !== null && "text" in event.content
       ? (event.content as { text: string }).text
@@ -328,7 +308,7 @@ async function processInboundMessage(
     },
   });
 
-  // 5. Store message reference
+  // 4. Store message reference
   await mappingService.createMessageReference(db, {
     messageId: msg.id,
     platform: "feishu",
@@ -336,27 +316,49 @@ async function processInboundMessage(
     externalChannelId: event.externalChannelId,
   });
 
-  log.info({ appId, chatId, messageId: msg.id }, "Processed inbound Feishu message");
+  log.info({ appId: bot.appId, chatId, messageId: msg.id }, "Processed inbound Feishu message");
+}
+
+/** Reply to unknown (unbound) user with binding instructions. */
+async function replyUnknownUser(bot: ManagedBot, event: InboundEvent, log: FastifyBaseLogger): Promise<void> {
+  const text = [
+    "Your account is not linked to Agent Hub yet.",
+    "Please contact your admin to set up the binding.",
+    `Your user ID: ${event.senderId}`,
+  ].join("\n");
+
+  try {
+    await botApiCall(bot, () =>
+      bot.client.im.v1.message.create({
+        params: { receive_id_type: "chat_id" },
+        data: {
+          receive_id: event.externalChannelId,
+          msg_type: "text",
+          content: JSON.stringify({ text }),
+        },
+      }),
+    );
+  } catch (err) {
+    log.warn({ senderId: event.senderId, err }, "Failed to send unknown-user reply");
+  }
 }
 
 // ── Outbound helpers ────────────────────────────────────────────────
 
-async function processAdapterOutbound(
+/**
+ * Process outbound messages for all feishu-bound human agents.
+ * Consumes pending inbox entries for human agents that have feishu platform bindings,
+ * then sends via the message sender's bound bot.
+ */
+async function processFeishuOutbound(
   db: Database,
-  bot: ManagedBot,
+  findBotByAgentId: (agentId: string) => ManagedBot | undefined,
   log: FastifyBaseLogger,
 ): Promise<{ sent: number; errors: number }> {
   let sent = 0;
   let errorCount = 0;
 
-  const [adapterAgent] = await db
-    .select({ inboxId: agents.inboxId })
-    .from(agents)
-    .where(eq(agents.id, bot.adapterAgentId))
-    .limit(1);
-
-  if (!adapterAgent) return { sent: 0, errors: 0 };
-
+  // Claim pending inbox entries for feishu-bound human agents
   const claimed = await db.execute<{
     id: number;
     inbox_id: string;
@@ -366,26 +368,26 @@ async function processAdapterOutbound(
     UPDATE inbox_entries
     SET status = 'delivered', delivered_at = NOW()
     WHERE id IN (
-      SELECT id FROM inbox_entries
-      WHERE inbox_id = ${adapterAgent.inboxId} AND status = 'pending'
-      ORDER BY created_at
+      SELECT ie.id FROM inbox_entries ie
+      JOIN agents a ON ie.inbox_id = a.inbox_id
+      JOIN adapter_agent_mappings aam ON a.id = aam.agent_id
+      WHERE aam.platform = 'feishu' AND ie.status = 'pending'
+      ORDER BY ie.created_at
       LIMIT ${OUTBOUND_BATCH_SIZE}
       FOR UPDATE SKIP LOCKED
     )
     RETURNING id, inbox_id, message_id, chat_id
   `);
 
+  // Dedup: when a chat has multiple feishu-bound humans, the same message
+  // produces multiple inbox entries. We only send once per (message, channel).
+  const sentMessages = new Set<string>();
+
   for (const entry of claimed) {
     try {
       const [msg] = await db.select().from(messages).where(eq(messages.id, entry.message_id)).limit(1);
 
       if (!msg) {
-        await ackEntry(db, entry.id);
-        continue;
-      }
-
-      // Skip messages from adapter itself
-      if (msg.senderId === bot.adapterAgentId) {
         await ackEntry(db, entry.id);
         continue;
       }
@@ -404,17 +406,37 @@ async function processAdapterOutbound(
         continue;
       }
 
+      // Dedup: skip if this message was already sent to this channel
+      const dedupKey = `${msg.id}:${channelMapping.externalChannelId}`;
+      if (sentMessages.has(dedupKey)) {
+        await ackEntry(db, entry.id);
+        continue;
+      }
+
+      // Find the sender's bot (the agent who sent the message must have a feishu bot binding)
+      const bot = findBotByAgentId(msg.senderId);
+      if (!bot) {
+        // Sender has no feishu bot — cannot deliver to external platform
+        log.warn({ messageId: msg.id, senderId: msg.senderId }, "Outbound skip: sender has no feishu bot binding");
+        await ackEntry(db, entry.id);
+        continue;
+      }
+
       // Format and send via official SDK
       const { msgType, content } = formatForFeishu(msg.format, msg.content);
 
-      const result = await bot.client.im.v1.message.create({
-        params: { receive_id_type: "chat_id" },
-        data: {
-          receive_id: channelMapping.externalChannelId,
-          msg_type: msgType,
-          content,
-        },
-      });
+      const result = await botApiCall(bot, () =>
+        bot.client.im.v1.message.create({
+          params: { receive_id_type: "chat_id" },
+          data: {
+            receive_id: channelMapping.externalChannelId,
+            msg_type: msgType,
+            content,
+          },
+        }),
+      );
+
+      sentMessages.add(dedupKey);
 
       // Store message reference
       const externalMsgId = result?.data?.message_id;
@@ -439,22 +461,6 @@ async function processAdapterOutbound(
 }
 
 // ── Shared helpers ──────────────────────────────────────────────────
-
-async function ensureAdapterAgent(db: Database, adapterAgentId: string, appId: string): Promise<void> {
-  const [existing] = await db.select({ id: agents.id }).from(agents).where(eq(agents.id, adapterAgentId)).limit(1);
-  if (existing) return;
-
-  try {
-    await createAgent(db, {
-      id: adapterAgentId,
-      type: "autonomous_agent",
-      displayName: `Feishu Adapter (${appId})`,
-      metadata: { source: "feishu", managed: true, appId },
-    });
-  } catch {
-    // Concurrent creation — OK
-  }
-}
 
 async function ackEntry(db: Database, entryId: number): Promise<void> {
   await db.update(inboxEntries).set({ status: "acked", ackedAt: new Date() }).where(eq(inboxEntries.id, entryId));

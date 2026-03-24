@@ -18,14 +18,14 @@ export type AdapterStatus = z.infer<typeof adapterStatusSchema>;
 
 export const createAdapterConfigSchema = z.object({
   platform: adapterPlatformSchema,
-  agentId: z.string().optional(),
+  agentId: z.string().min(1),
   credentials: z.record(z.unknown()),
   status: adapterStatusSchema.default("active"),
 });
 export type CreateAdapterConfig = z.infer<typeof createAdapterConfigSchema>;
 
 export const updateAdapterConfigSchema = z.object({
-  agentId: z.string().nullish(),
+  agentId: z.string().min(1).optional(),
   credentials: z.record(z.unknown()).optional(),
   status: adapterStatusSchema.optional(),
 });
@@ -35,7 +35,7 @@ export type UpdateAdapterConfig = z.infer<typeof updateAdapterConfigSchema>;
 export const adapterConfigSchema = z.object({
   id: z.number(),
   platform: z.string(),
-  agentId: z.string().nullable(),
+  agentId: z.string(),
   hasCredentials: z.boolean(),
   status: z.string(),
   createdAt: z.string(),
