@@ -56,11 +56,24 @@ function botApiCall<T>(bot: ManagedBot, fn: () => Promise<T>): Promise<T> {
   return bot.bypassProxy ? withoutProxy(fn) : fn();
 }
 
+export type BotStatus = {
+  configId: number;
+  platform: string;
+  agentId: string;
+  appId: string;
+  connected: boolean;
+  lastActiveAt: string | null;
+};
+
 export type AdapterManager = {
   /** Load active adapter configs and start/stop WS connections. */
   reload(): Promise<void>;
   /** Process pending outbound messages for feishu-bound human agents. */
   processOutbound(): Promise<{ sent: number; errors: number }>;
+  /** Edit an already-sent message on external platforms. */
+  editOutboundMessage(messageId: string, format: string, content: unknown): Promise<boolean>;
+  /** Get connection status for all managed bots. */
+  getBotStatuses(): BotStatus[];
   /** Stop all WS connections. */
   shutdown(): void;
 };
@@ -207,6 +220,55 @@ export function createAdapterManager(
         log.error({ err }, "Feishu outbound processing error");
         return { sent: 0, errors: 1 };
       }
+    },
+
+    async editOutboundMessage(messageId: string, format: string, content: unknown): Promise<boolean> {
+      const ref = await mappingService.findExternalMessageByInternalId(db, "feishu", messageId);
+      if (!ref) return false;
+
+      // Find which bot sent this message — look up the original message sender
+      const [msg] = await db
+        .select({ senderId: messages.senderId })
+        .from(messages)
+        .where(eq(messages.id, messageId))
+        .limit(1);
+      if (!msg) return false;
+
+      const bot = findBotByAgentId(msg.senderId);
+      if (!bot) return false;
+
+      const { content: feishuContent } = formatForFeishu(format, content);
+
+      try {
+        await botApiCall(bot, () =>
+          bot.client.im.v1.message.patch({
+            path: { message_id: ref.externalMessageId },
+            data: { content: feishuContent },
+          }),
+        );
+        return true;
+      } catch (err) {
+        log.warn(
+          { messageId, externalMessageId: ref.externalMessageId, err },
+          "Failed to edit outbound Feishu message",
+        );
+        return false;
+      }
+    },
+
+    getBotStatuses() {
+      const statuses: BotStatus[] = [];
+      for (const bot of bots.values()) {
+        statuses.push({
+          configId: bot.configId,
+          platform: "feishu",
+          agentId: bot.agentId,
+          appId: bot.appId,
+          connected: true,
+          lastActiveAt: new Date().toISOString(),
+        });
+      }
+      return statuses;
     },
 
     shutdown() {

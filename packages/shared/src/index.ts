@@ -18,6 +18,16 @@ export {
   updateAdapterConfigSchema,
 } from "./schemas/adapter.js";
 export {
+  type AdapterMapping,
+  adapterMappingSchema,
+  type CreateAdapterMapping,
+  createAdapterMappingSchema,
+} from "./schemas/adapter-mapping.js";
+export {
+  type AdapterBotStatus,
+  adapterBotStatusSchema,
+} from "./schemas/adapter-status.js";
+export {
   ADMIN_ROLES,
   type AdminRole,
   type AdminUser,
@@ -30,6 +40,12 @@ export {
   type RefreshToken,
   refreshTokenSchema,
 } from "./schemas/admin-auth.js";
+export {
+  type CreateAdminUser,
+  createAdminUserSchema,
+  type UpdateAdminUser,
+  updateAdminUserSchema,
+} from "./schemas/admin-user.js";
 export {
   AGENT_STATUSES,
   AGENT_TYPES,

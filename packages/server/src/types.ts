@@ -1,5 +1,6 @@
 import type { Database } from "./db/connection.js";
 import type { AdapterManager } from "./services/adapter-manager.js";
+import type { Notifier } from "./services/notifier.js";
 
 export type AgentIdentity = {
   id: string;
@@ -18,6 +19,7 @@ declare module "fastify" {
     db: Database;
     config: import("./config.js").Config;
     adapterManager: AdapterManager;
+    notifier: Notifier;
   }
   interface FastifyRequest {
     agent?: AgentIdentity;

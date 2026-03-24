@@ -25,6 +25,7 @@ export function AgentsPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [cursor, setCursor] = useState<string | undefined>();
+  const [typeFilter, setTypeFilter] = useState<string>("");
   const [createOpen, setCreateOpen] = useState(false);
   const [form, setForm] = useState({ id: "", type: "autonomous_agent", displayName: "" });
 
@@ -55,7 +56,24 @@ export function AgentsPage() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-semibold">Agents</h1>
+        <div className="flex items-center gap-4">
+          <h1 className="text-2xl font-semibold">Agents</h1>
+          <select
+            value={typeFilter}
+            onChange={(e) => {
+              setTypeFilter(e.target.value);
+              setCursor(undefined);
+            }}
+            className="h-8 rounded-md border border-input bg-transparent px-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          >
+            <option value="">All types</option>
+            {agentTypeValues.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+        </div>
         <Dialog open={createOpen} onOpenChange={setCreateOpen}>
           <DialogTrigger asChild>
             <Button>
@@ -138,35 +156,41 @@ export function AgentsPage() {
                   Failed to load agents: {error instanceof Error ? error.message : "Unknown error"}
                 </TableCell>
               </TableRow>
-            ) : data?.items.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
-                  No agents yet
-                </TableCell>
-              </TableRow>
             ) : (
-              data?.items.map((agent) => (
-                <TableRow key={agent.id} className="cursor-pointer" onClick={() => navigate(`/agents/${agent.id}`)}>
-                  <TableCell className="font-mono text-sm">{agent.id}</TableCell>
-                  <TableCell>{agent.displayName ?? "—"}</TableCell>
-                  <TableCell>
-                    <Badge variant="secondary">{agent.type}</Badge>
-                  </TableCell>
-                  <TableCell>
-                    <span
-                      className={cn(
-                        "inline-block h-2 w-2 rounded-full",
-                        agent.presenceStatus === "online" ? "bg-green-500" : "bg-gray-300",
-                      )}
-                      title={agent.presenceStatus ?? "offline"}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant={agent.status === "active" ? "default" : "destructive"}>{agent.status}</Badge>
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">{formatDate(agent.createdAt)}</TableCell>
-                </TableRow>
-              ))
+              (() => {
+                const filtered = typeFilter ? data?.items.filter((a) => a.type === typeFilter) : data?.items;
+                if (!filtered || filtered.length === 0) {
+                  return (
+                    <TableRow>
+                      <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                        {typeFilter ? `No ${typeFilter} agents` : "No agents yet"}
+                      </TableCell>
+                    </TableRow>
+                  );
+                }
+                return filtered.map((agent) => (
+                  <TableRow key={agent.id} className="cursor-pointer" onClick={() => navigate(`/agents/${agent.id}`)}>
+                    <TableCell className="font-mono text-sm">{agent.id}</TableCell>
+                    <TableCell>{agent.displayName ?? "—"}</TableCell>
+                    <TableCell>
+                      <Badge variant="secondary">{agent.type}</Badge>
+                    </TableCell>
+                    <TableCell>
+                      <span
+                        className={cn(
+                          "inline-block h-2 w-2 rounded-full",
+                          agent.presenceStatus === "online" ? "bg-green-500" : "bg-gray-300",
+                        )}
+                        title={agent.presenceStatus ?? "offline"}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={agent.status === "active" ? "default" : "destructive"}>{agent.status}</Badge>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">{formatDate(agent.createdAt)}</TableCell>
+                  </TableRow>
+                ));
+              })()
             )}
           </TableBody>
         </Table>

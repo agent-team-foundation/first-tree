@@ -9,6 +9,8 @@ export async function adminSystemConfigRoutes(app: FastifyInstance): Promise<voi
 
   app.patch("/", async (request) => {
     const body = updateSystemConfigSchema.parse(request.body);
-    return systemConfigService.updateConfigs(app.db, body);
+    const result = await systemConfigService.updateConfigs(app.db, body);
+    app.notifier.notifyConfigChange("system_configs").catch(() => {});
+    return result;
   });
 }

@@ -5,12 +5,12 @@
   "description": "Agent Hub CLI and SDK — agent-facing client for Agent Hub server",
   "exports": {
     ".": {
-      "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "import": "./dist/index.mjs",
+      "types": "./dist/index.d.mts"
     }
   },
   "bin": {
-    "agent-hub": "./dist/cli/index.js"
+    "agent-hub": "./dist/cli/index.mjs"
   },
   "files": [
     "dist"
@@ -19,7 +19,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsdown src/index.ts src/cli/index.ts --format esm --dts",
+    "build": "tsdown src/index.ts src/cli/index.ts --format esm --dts.eager",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests"
   },
@@ -38,7 +38,7 @@
   "devDependencies": {
     "@agent-hub/shared": "workspace:*",
     "@types/node": "^22.16.0",
-    "tsdown": "^0.12.0",
+    "tsdown": "^0.21.4",
     "vitest": "^3.2.0"
   }
 }

@@ -6,7 +6,7 @@ import { agents } from "../db/schema/agents.js";
 import { chatParticipants, chats } from "../db/schema/chats.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
-import { NotFoundError } from "../errors.js";
+import { ForbiddenError, NotFoundError } from "../errors.js";
 import { findOrCreateDirectChat } from "./chat.js";
 
 export async function sendMessage(db: Database, chatId: string, senderId: string, data: SendMessage) {
@@ -112,6 +112,30 @@ export async function sendToAgent(db: Database, senderId: string, targetAgentId:
     replyToInbox: data.replyToInbox,
     replyToChat: data.replyToChat,
   });
+}
+
+export async function editMessage(
+  db: Database,
+  messageId: string,
+  senderId: string,
+  data: { format?: string; content?: unknown },
+) {
+  const [msg] = await db.select().from(messages).where(eq(messages.id, messageId)).limit(1);
+  if (!msg) throw new NotFoundError(`Message "${messageId}" not found`);
+  if (msg.senderId !== senderId) throw new ForbiddenError("Only the sender can edit a message");
+
+  const setClause: Record<string, unknown> = {};
+  if (data.format !== undefined) setClause.format = data.format;
+  if (data.content !== undefined) setClause.content = data.content;
+
+  // Track edit in metadata
+  const meta = (msg.metadata ?? {}) as Record<string, unknown>;
+  meta.editedAt = new Date().toISOString();
+  setClause.metadata = meta;
+
+  const [updated] = await db.update(messages).set(setClause).where(eq(messages.id, messageId)).returning();
+  if (!updated) throw new Error("Unexpected: UPDATE RETURNING produced no row");
+  return updated;
 }
 
 export async function listMessages(db: Database, chatId: string, limit: number, cursor?: string) {
