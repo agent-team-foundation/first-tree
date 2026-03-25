@@ -48,18 +48,18 @@ importers:
 
   packages/command:
     dependencies:
-      '@agent-hub/client':
-        specifier: workspace:*
-        version: link:../client
-      '@agent-hub/server':
-        specifier: workspace:*
-        version: link:../server
-      '@agent-hub/shared':
-        specifier: workspace:*
-        version: link:../shared
+      '@fastify/static':
+        specifier: ^9.0.0
+        version: 9.0.0
+      '@fastify/websocket':
+        specifier: ^11.2.0
+        version: 11.2.0
       '@inquirer/prompts':
         specifier: ^8.3.0
         version: 8.3.2(@types/node@22.19.15)
+      '@larksuiteoapi/node-sdk':
+        specifier: ^1.59.0
+        version: 1.59.0
       bcrypt:
         specifier: ^6.0.0
         version: 6.0.0
@@ -69,10 +69,37 @@ importers:
       drizzle-orm:
         specifier: ^0.44.0
         version: 0.44.7(postgres@3.4.8)
+      fastify:
+        specifier: ^5.3.0
+        version: 5.8.2
+      gray-matter:
+        specifier: ^4.0.3
+        version: 4.0.3
+      jose:
+        specifier: ^6.0.0
+        version: 6.2.2
       postgres:
         specifier: ^3.4.0
         version: 3.4.8
+      ws:
+        specifier: ^8.20.0
+        version: 8.20.0
+      yaml:
+        specifier: ^2.8.3
+        version: 2.8.3
+      zod:
+        specifier: ^3.25.0
+        version: 3.25.76
     devDependencies:
+      '@agent-hub/client':
+        specifier: workspace:*
+        version: link:../client
+      '@agent-hub/server':
+        specifier: workspace:*
+        version: link:../server
+      '@agent-hub/shared':
+        specifier: workspace:*
+        version: link:../shared
       '@agent-hub/web':
         specifier: workspace:*
         version: link:../web

@@ -30,6 +30,7 @@ import { agentAuthHook } from "./middleware/agent-auth.js";
 import { type AdapterManager, createAdapterManager } from "./services/adapter-manager.js";
 import { stopPeriodicSync } from "./services/agent-sync.js";
 import { type BackgroundTasks, createBackgroundTasks } from "./services/background-tasks.js";
+import { syncFromGitHub } from "./services/context-tree-graphql.js";
 import { createNotifier, type Notifier } from "./services/notifier.js";
 
 // Fastify type augmentation
@@ -212,7 +213,6 @@ export async function buildApp(config: Config) {
     // Context Tree sync via GitHub GraphQL
     const { repo: ctRepo, branch: ctBranch, syncInterval } = config.contextTree;
     const { token: ghToken } = config.github;
-    const { syncFromGitHub } = await import("./services/context-tree-graphql.js");
     try {
       const report = await syncFromGitHub(db, ctRepo, ctBranch, ghToken);
       app.log.info(

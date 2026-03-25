@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -5,13 +6,26 @@ import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
 
 /**
+ * Resolve the drizzle migrations directory.
+ * 1. npm install: embedded at dist/drizzle/ (relative to the built CLI)
+ * 2. Monorepo dev: resolved from @agent-hub/server package
+ */
+function resolveMigrationsFolder(): string {
+  // npm publish: migrations are embedded next to the built CLI
+  const cliDir = dirname(fileURLToPath(import.meta.url));
+  const embeddedPath = join(cliDir, "..", "drizzle");
+  if (existsSync(embeddedPath)) return embeddedPath;
+
+  // Monorepo dev: resolve from server package
+  const serverDir = dirname(fileURLToPath(import.meta.resolve("@agent-hub/server/package.json")));
+  return join(serverDir, "drizzle");
+}
+
+/**
  * Run Drizzle database migrations.
- * Migration files are located in the server package's drizzle/ directory.
  */
 export async function runMigrations(databaseUrl: string): Promise<number> {
-  // Resolve migration path relative to the server package
-  const serverDir = dirname(fileURLToPath(import.meta.resolve("@agent-hub/server/package.json")));
-  const migrationsFolder = join(serverDir, "drizzle");
+  const migrationsFolder = resolveMigrationsFolder();
 
   const client = postgres(databaseUrl, { max: 1 });
   const db = drizzle(client);
