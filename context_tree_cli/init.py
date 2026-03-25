@@ -101,6 +101,15 @@ def _format_task_list(groups: list[dict]) -> str:
     lines.append("- [ ] `validate_nodes.py` passes with no errors")
     lines.append("- [ ] At least one member node exists")
     lines.append("")
+    lines.append("---")
+    lines.append("")
+    lines.append(
+        "**Important:** As you complete each task, check it off in"
+        " `.context-tree/progress.md` by changing `- [ ]` to `- [x]`."
+        " Run `context-tree verify` when done — it will fail if any"
+        " items remain unchecked."
+    )
+    lines.append("")
     return "\n".join(lines)
 
 
