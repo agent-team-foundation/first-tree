@@ -4,6 +4,11 @@ import { buildApp } from "../app.js";
 import type { Config } from "../config.js";
 
 export async function createTestApp(): Promise<FastifyInstance> {
+  // Disable rate limiting in tests
+  process.env.AGENT_HUB_RATE_LIMIT_MAX = "10000";
+  process.env.AGENT_HUB_RATE_LIMIT_LOGIN_MAX = "10000";
+  process.env.AGENT_HUB_RATE_LIMIT_WEBHOOK_MAX = "10000";
+
   const config: Config = {
     database: {
       url: process.env.DATABASE_URL ?? "",

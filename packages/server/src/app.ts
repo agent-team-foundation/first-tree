@@ -1,5 +1,7 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import cors from "@fastify/cors";
+import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
 import Fastify from "fastify";
@@ -56,6 +58,20 @@ export async function buildApp(config: Config) {
 
   // WebSocket plugin
   await app.register(websocket);
+
+  // CORS — default: same-origin only; configurable via env
+  const corsOrigin = process.env.AGENT_HUB_CORS_ORIGIN;
+  await app.register(cors, {
+    origin: corsOrigin ? corsOrigin.split(",").map((s) => s.trim()) : false,
+    credentials: true,
+  });
+
+  // Rate limiting — global default; overridden per-route where needed
+  const globalMax = Number(process.env.AGENT_HUB_RATE_LIMIT_MAX) || 100;
+  await app.register(rateLimit, {
+    max: globalMax,
+    timeWindow: "1 minute",
+  });
 
   // Auth hooks
   const agentAuth = agentAuthHook(db);
