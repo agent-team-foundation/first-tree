@@ -22,15 +22,15 @@ jobs:
       - name: Validate branch name
         run: |
           BRANCH="${{ github.head_ref }}"
-          PATTERN="^(feat|fix|refactor|test|doc|chore)/"
+          PATTERN="^(feat|fix|refactor|test|docs|chore)/"
           if [[ ! "$BRANCH" =~ $PATTERN ]]; then
-            echo "::error::Branch name '$BRANCH' does not follow convention: feat/, fix/, refactor/, test/, doc/, chore/"
+            echo "::error::Branch name '$BRANCH' does not follow convention: feat/, fix/, refactor/, test/, docs/, chore/"
             exit 1
           fi
 
   lint:
     name: Lint & Type Check
-    if: ${{ !startsWith(github.head_ref || github.ref_name, 'doc/') }}
+    if: ${{ !startsWith(github.head_ref || github.ref_name, 'docs/') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -46,7 +46,7 @@ jobs:
 
   test:
     name: Test
-    if: ${{ !startsWith(github.head_ref || github.ref_name, 'doc/') }}
+    if: ${{ !startsWith(github.head_ref || github.ref_name, 'docs/') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

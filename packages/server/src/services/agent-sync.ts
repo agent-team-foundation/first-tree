@@ -131,8 +131,9 @@ export async function syncAgents(db: Database, treePath: string): Promise<SyncRe
   }
 
   // 4b. Suspend orphans — agents in DB but not in tree
+  // Skip managed agents (e.g. github-adapter) — they are created by the system, not the tree
   for (const agent of dbAgents) {
-    if (!treeMap.has(agent.id) && agent.status === AGENT_STATUSES.ACTIVE) {
+    if (!treeMap.has(agent.id) && agent.status === AGENT_STATUSES.ACTIVE && !agent.metadata?.managed) {
       try {
         await agentService.suspendAgent(db, agent.id);
         report.suspended.push(agent.id);
