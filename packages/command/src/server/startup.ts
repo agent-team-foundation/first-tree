@@ -107,7 +107,7 @@ export async function startServer(options: StartOptions): Promise<void> {
   }
 
   // 6. Resolve web dist (build if needed)
-  const webDistPath = serverConfig.web?.distPath ?? resolveWebDist();
+  const webDistPath = resolveWebDist();
   if (webDistPath) {
     status("Web", `serving from ${webDistPath}`);
   } else {
@@ -117,7 +117,7 @@ export async function startServer(options: StartOptions): Promise<void> {
   // 7. Start Fastify
   const config: Config = {
     ...serverConfig,
-    ...(webDistPath ? { web: { distPath: webDistPath } } : {}),
+    webDistPath: webDistPath ?? undefined,
     instanceId: `srv_${randomUUID().slice(0, 8)}`,
     logger: true,
   };

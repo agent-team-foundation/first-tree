@@ -24,7 +24,9 @@ export async function createTestApp(): Promise<FastifyInstance> {
     },
     github: {
       token: "test-github-token",
+      webhookSecret: "test-webhook-secret",
     },
+    rateLimit: { max: 10000, loginMax: 10000, webhookMax: 10000 },
     instanceId: "test-instance",
     logger: false,
   };

@@ -1,5 +1,7 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import cors from "@fastify/cors";
+import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
 import Fastify from "fastify";
@@ -56,6 +58,20 @@ export async function buildApp(config: Config) {
 
   // WebSocket plugin
   await app.register(websocket);
+
+  // CORS — explicit origins if configured; allow all in dev; same-origin in production
+  const corsOrigin = config.cors?.origin;
+  const isDev = process.env.NODE_ENV !== "production";
+  await app.register(cors, {
+    origin: corsOrigin ? corsOrigin.split(",").map((s) => s.trim()) : isDev,
+    credentials: true,
+  });
+
+  // Rate limiting — global default; overridden per-route where needed
+  await app.register(rateLimit, {
+    max: config.rateLimit?.max ?? 100,
+    timeWindow: "1 minute",
+  });
 
   // Auth hooks
   const agentAuth = agentAuthHook(db);
@@ -172,7 +188,7 @@ export async function buildApp(config: Config) {
   );
 
   // Serve Web static files
-  const webDistPath = config.web?.distPath;
+  const webDistPath = config.webDistPath;
   if (webDistPath) {
     const webRoot = resolve(webDistPath);
     if (existsSync(webRoot)) {

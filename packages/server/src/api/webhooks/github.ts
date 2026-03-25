@@ -271,63 +271,68 @@ export async function githubWebhookRoutes(app: FastifyInstance): Promise<void> {
     done(null, body);
   });
 
-  if (!process.env.AGENT_HUB_GITHUB_WEBHOOK_SECRET) {
-    app.log.warn("GITHUB_WEBHOOK_SECRET is not set — webhook signature verification is disabled");
+  // Fail-fast: webhook secret must be configured at startup
+  const webhookSecret = app.config.github.webhookSecret;
+  if (!webhookSecret) {
+    throw new Error("AGENT_HUB_GITHUB_WEBHOOK_SECRET is required — configure it before starting the server");
   }
 
-  app.post("/github", async (request, reply) => {
-    const rawBody = request.body;
-    if (!Buffer.isBuffer(rawBody)) {
-      throw new BadRequestError("Expected raw body buffer");
-    }
+  const webhookMax = app.config.rateLimit?.webhookMax ?? 60;
 
-    // Verify signature if secret is configured
-    const secret = process.env.AGENT_HUB_GITHUB_WEBHOOK_SECRET;
-    if (secret) {
+  app.post(
+    "/github",
+    { config: { rateLimit: { max: webhookMax, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const rawBody = request.body;
+      if (!Buffer.isBuffer(rawBody)) {
+        throw new BadRequestError("Expected raw body buffer");
+      }
+
+      // Verify webhook signature
       const signatureHeader = request.headers["x-hub-signature-256"];
       if (typeof signatureHeader !== "string") {
         throw new UnauthorizedError("Missing x-hub-signature-256 header");
       }
-      verifySignature(secret, rawBody, signatureHeader);
-    }
+      verifySignature(webhookSecret, rawBody, signatureHeader);
 
-    // Parse JSON from raw body
-    let payload: unknown;
-    try {
-      payload = JSON.parse(rawBody.toString("utf8"));
-    } catch {
-      throw new BadRequestError("Invalid JSON payload");
-    }
+      // Parse JSON from raw body
+      let payload: unknown;
+      try {
+        payload = JSON.parse(rawBody.toString("utf8"));
+      } catch {
+        throw new BadRequestError("Invalid JSON payload");
+      }
 
-    const eventType = request.headers["x-github-event"];
-    if (typeof eventType !== "string") {
-      throw new BadRequestError("Missing x-github-event header");
-    }
+      const eventType = request.headers["x-github-event"];
+      if (typeof eventType !== "string") {
+        throw new BadRequestError("Missing x-github-event header");
+      }
 
-    // Handle ping event (GitHub sends this when webhook is first configured)
-    if (eventType === "ping") {
-      return reply.status(200).send({ ok: true, event: "ping" });
-    }
+      // Handle ping event (GitHub sends this when webhook is first configured)
+      if (eventType === "ping") {
+        return reply.status(200).send({ ok: true, event: "ping" });
+      }
 
-    // --- Event-specific handlers (mention delegation runs inside, after action gating) ---
-    if (eventType === "issues") {
-      return handleIssuesEvent(app, eventType, payload, reply);
-    }
+      // --- Event-specific handlers (mention delegation runs inside, after action gating) ---
+      if (eventType === "issues") {
+        return handleIssuesEvent(app, eventType, payload, reply);
+      }
 
-    if (eventType === "issue_comment") {
-      return handleIssueCommentEvent(app, eventType, payload, reply);
-    }
+      if (eventType === "issue_comment") {
+        return handleIssueCommentEvent(app, eventType, payload, reply);
+      }
 
-    // Other event types with @mention support (PRs, discussions, reviews, etc.)
-    // Only run delegation if the action represents new/changed content
-    let mentionsRouted = 0;
-    const allowedActions = MENTION_ACTIONS[eventType];
-    const action = isRecord(payload) && typeof payload.action === "string" ? payload.action : undefined;
-    if (allowedActions && action && allowedActions.includes(action)) {
-      mentionsRouted = await handleMentionDelegation(app, eventType, payload);
-    }
-    return reply.status(200).send({ ok: true, event: eventType, handled: mentionsRouted > 0, mentionsRouted });
-  });
+      // Other event types with @mention support (PRs, discussions, reviews, etc.)
+      // Only run delegation if the action represents new/changed content
+      let mentionsRouted = 0;
+      const allowedActions = MENTION_ACTIONS[eventType];
+      const action = isRecord(payload) && typeof payload.action === "string" ? payload.action : undefined;
+      if (allowedActions && action && allowedActions.includes(action)) {
+        mentionsRouted = await handleMentionDelegation(app, eventType, payload);
+      }
+      return reply.status(200).send({ ok: true, event: eventType, handled: mentionsRouted > 0, mentionsRouted });
+    },
+  );
 }
 
 /** Extract text body from any GitHub webhook event for @mention scanning. */

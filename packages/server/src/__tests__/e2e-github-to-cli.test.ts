@@ -57,6 +57,13 @@ async function createTestAgent(app: Awaited<ReturnType<typeof buildApp>>, opts: 
   return { agent, token: tokenResult.token };
 }
 
+const WEBHOOK_SECRET = "test-webhook-secret-e2e";
+
+/** Sign a payload with the test webhook secret for GitHub webhook requests. */
+function signPayload(body: string): string {
+  return `sha256=${createHmac("sha256", WEBHOOK_SECRET).update(body).digest("hex")}`;
+}
+
 describe("E2E: GitHub issue → Server → CLI pull", () => {
   let app: Awaited<ReturnType<typeof buildApp>>;
   let address: string;
@@ -67,7 +74,8 @@ describe("E2E: GitHub issue → Server → CLI pull", () => {
       server: { port: 0, host: "127.0.0.1" },
       secrets: { jwtSecret: "test-jwt-secret-key-for-e2e", encryptionKey: "0".repeat(64) },
       contextTree: { repo: "test/tree", branch: "main", syncInterval: 3600 },
-      github: { token: "test-token" },
+      github: { token: "test-token", webhookSecret: WEBHOOK_SECRET },
+      rateLimit: { max: 10000, loginMax: 10000, webhookMax: 10000 },
       logger: false,
       instanceId: "e2e-test",
     });
@@ -100,22 +108,27 @@ describe("E2E: GitHub issue → Server → CLI pull", () => {
       .where(eq(agents.id, agent.id));
 
     // 2. Send GitHub issue webhook
+    const issuePayload = JSON.stringify({
+      action: "opened",
+      issue: {
+        number: 42,
+        title: "Login page broken on mobile",
+        body: "Steps to reproduce:\n1. Open on iPhone\n2. Blank page",
+        html_url: "https://github.com/acme/my-repo/issues/42",
+        labels: [{ name: "bug" }, { name: "priority:high" }],
+        state: "open",
+      },
+      repository: { full_name: "acme/my-repo" },
+      sender: { login: "alice" },
+    });
     const webhookRes = await fetch(`${address}/api/v1/webhooks/github`, {
       method: "POST",
-      headers: { "x-github-event": "issues", "content-type": "application/json" },
-      body: JSON.stringify({
-        action: "opened",
-        issue: {
-          number: 42,
-          title: "Login page broken on mobile",
-          body: "Steps to reproduce:\n1. Open on iPhone\n2. Blank page",
-          html_url: "https://github.com/acme/my-repo/issues/42",
-          labels: [{ name: "bug" }, { name: "priority:high" }],
-          state: "open",
-        },
-        repository: { full_name: "acme/my-repo" },
-        sender: { login: "alice" },
-      }),
+      headers: {
+        "x-github-event": "issues",
+        "content-type": "application/json",
+        "x-hub-signature-256": signPayload(issuePayload),
+      },
+      body: issuePayload,
     });
 
     expect(webhookRes.status).toBe(200);
@@ -163,72 +176,57 @@ describe("E2E: GitHub issue → Server → CLI pull", () => {
   });
 
   it("webhook signature verification", async () => {
-    // Create app with webhook secret via env var
-    const secret = "test-secret-123";
-    process.env.AGENT_HUB_GITHUB_WEBHOOK_SECRET = secret;
-    const app2 = await buildApp({
-      database: { url: DATABASE_URL, provider: "external" },
-      server: { port: 0, host: "127.0.0.1" },
-      secrets: { jwtSecret: "test-jwt-secret-key-for-e2e-sig", encryptionKey: "0".repeat(64) },
-      contextTree: { repo: "test/tree", branch: "main", syncInterval: 3600 },
-      github: { token: "test-token" },
-      logger: false,
-      instanceId: "e2e-test-sig",
+    // Uses the shared WEBHOOK_SECRET set in beforeAll
+    const payload = JSON.stringify({
+      action: "opened",
+      issue: { number: 1, title: "Test", body: null, html_url: "", labels: [], state: "open" },
+      repository: { full_name: "acme/test" },
+      sender: { login: "bob" },
     });
-    await app2.ready();
-    const addr2 = await app2.listen({ port: 0, host: "127.0.0.1" });
 
-    try {
-      const payload = JSON.stringify({
-        action: "opened",
-        issue: { number: 1, title: "Test", body: null, html_url: "", labels: [], state: "open" },
-        repository: { full_name: "acme/test" },
-        sender: { login: "bob" },
-      });
+    // No signature → 401
+    const noSig = await fetch(`${address}/api/v1/webhooks/github`, {
+      method: "POST",
+      headers: { "x-github-event": "issues", "content-type": "application/json" },
+      body: payload,
+    });
+    expect(noSig.status).toBe(401);
 
-      // No signature → 401
-      const noSig = await fetch(`${addr2}/api/v1/webhooks/github`, {
-        method: "POST",
-        headers: { "x-github-event": "issues", "content-type": "application/json" },
-        body: payload,
-      });
-      expect(noSig.status).toBe(401);
+    // Wrong signature → 401
+    const wrongSig = await fetch(`${address}/api/v1/webhooks/github`, {
+      method: "POST",
+      headers: {
+        "x-github-event": "issues",
+        "content-type": "application/json",
+        "x-hub-signature-256": "sha256=wrong",
+      },
+      body: payload,
+    });
+    expect(wrongSig.status).toBe(401);
 
-      // Wrong signature → 401
-      const wrongSig = await fetch(`${addr2}/api/v1/webhooks/github`, {
-        method: "POST",
-        headers: {
-          "x-github-event": "issues",
-          "content-type": "application/json",
-          "x-hub-signature-256": "sha256=wrong",
-        },
-        body: payload,
-      });
-      expect(wrongSig.status).toBe(401);
-
-      // Correct signature → 200
-      const sig = `sha256=${createHmac("sha256", secret).update(payload).digest("hex")}`;
-      const ok = await fetch(`${addr2}/api/v1/webhooks/github`, {
-        method: "POST",
-        headers: {
-          "x-github-event": "issues",
-          "content-type": "application/json",
-          "x-hub-signature-256": sig,
-        },
-        body: payload,
-      });
-      expect(ok.status).toBe(200);
-    } finally {
-      delete process.env.AGENT_HUB_GITHUB_WEBHOOK_SECRET;
-      await app2.close();
-    }
+    // Correct signature → 200
+    const ok = await fetch(`${address}/api/v1/webhooks/github`, {
+      method: "POST",
+      headers: {
+        "x-github-event": "issues",
+        "content-type": "application/json",
+        "x-hub-signature-256": signPayload(payload),
+      },
+      body: payload,
+    });
+    expect(ok.status).toBe(200);
   });
 
   it("ping event", async () => {
+    const pingPayload = JSON.stringify({ zen: "Anything added dilutes everything else." });
     const res = await fetch(`${address}/api/v1/webhooks/github`, {
       method: "POST",
-      headers: { "x-github-event": "ping", "content-type": "application/json" },
-      body: JSON.stringify({ zen: "Anything added dilutes everything else." }),
+      headers: {
+        "x-github-event": "ping",
+        "content-type": "application/json",
+        "x-hub-signature-256": signPayload(pingPayload),
+      },
+      body: pingPayload,
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
@@ -242,27 +240,32 @@ describe("E2E: GitHub issue → Server → CLI pull", () => {
       .set({ metadata: { github: { repos: ["acme/repo"] } } })
       .where(eq(agents.id, agent.id));
 
+    const commentPayload = JSON.stringify({
+      action: "created",
+      issue: {
+        number: 7,
+        title: "Feature request",
+        body: "Add dark mode",
+        html_url: "https://github.com/acme/repo/issues/7",
+        labels: [{ name: "enhancement" }],
+        state: "open",
+      },
+      comment: {
+        body: "I'd love this feature too! +1",
+        html_url: "https://github.com/acme/repo/issues/7#issuecomment-123",
+        user: { login: "charlie" },
+      },
+      repository: { full_name: "acme/repo" },
+      sender: { login: "charlie" },
+    });
     const res = await fetch(`${address}/api/v1/webhooks/github`, {
       method: "POST",
-      headers: { "x-github-event": "issue_comment", "content-type": "application/json" },
-      body: JSON.stringify({
-        action: "created",
-        issue: {
-          number: 7,
-          title: "Feature request",
-          body: "Add dark mode",
-          html_url: "https://github.com/acme/repo/issues/7",
-          labels: [{ name: "enhancement" }],
-          state: "open",
-        },
-        comment: {
-          body: "I'd love this feature too! +1",
-          html_url: "https://github.com/acme/repo/issues/7#issuecomment-123",
-          user: { login: "charlie" },
-        },
-        repository: { full_name: "acme/repo" },
-        sender: { login: "charlie" },
-      }),
+      headers: {
+        "x-github-event": "issue_comment",
+        "content-type": "application/json",
+        "x-hub-signature-256": signPayload(commentPayload),
+      },
+      body: commentPayload,
     });
     expect(res.status).toBe(200);
     expect(((await res.json()) as Record<string, unknown>).routed).toBe(true);

@@ -9,4 +9,6 @@ export type Config = ServerConfig & {
   instanceId: string;
   /** Fastify logger config */
   logger?: boolean;
+  /** Web static files dist path — resolved by CLI startup */
+  webDistPath?: string;
 };
