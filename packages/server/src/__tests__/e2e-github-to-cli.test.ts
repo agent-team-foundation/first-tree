@@ -63,13 +63,13 @@ describe("E2E: GitHub issue → Server → CLI pull", () => {
 
   beforeAll(async () => {
     app = await buildApp({
-      databaseUrl: DATABASE_URL,
-      serverHost: "127.0.0.1",
-      serverPort: 0,
+      database: { url: DATABASE_URL, provider: "external" },
+      server: { port: 0, host: "127.0.0.1" },
+      secrets: { jwtSecret: "test-jwt-secret-key-for-e2e", encryptionKey: "0".repeat(64) },
+      contextTree: { repo: "test/tree", branch: "main", syncInterval: 3600 },
+      github: { token: "test-token" },
       logger: false,
-      jwtSecretKey: "test-jwt-secret-key-for-e2e",
       instanceId: "e2e-test",
-      contextTreePath: "/tmp/agent-hub-test-tree",
     });
     await app.ready();
     address = await app.listen({ port: 0, host: "127.0.0.1" });
@@ -166,14 +166,14 @@ describe("E2E: GitHub issue → Server → CLI pull", () => {
     // Create app with webhook secret
     const secret = "test-secret-123";
     const app2 = await buildApp({
-      databaseUrl: DATABASE_URL,
-      serverHost: "127.0.0.1",
-      serverPort: 0,
+      database: { url: DATABASE_URL, provider: "external" },
+      server: { port: 0, host: "127.0.0.1" },
+      secrets: { jwtSecret: "test-jwt-secret-key-for-e2e-sig", encryptionKey: "0".repeat(64) },
+      contextTree: { repo: "test/tree", branch: "main", syncInterval: 3600 },
+      github: { token: "test-token" },
+      webhooks: { githubSecret: secret },
       logger: false,
-      jwtSecretKey: "test-jwt-secret-key-for-e2e-sig",
       instanceId: "e2e-test-sig",
-      contextTreePath: "/tmp/agent-hub-test-tree",
-      githubWebhookSecret: secret,
     });
     await app2.ready();
     const addr2 = await app2.listen({ port: 0, host: "127.0.0.1" });

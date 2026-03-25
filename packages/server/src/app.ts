@@ -28,10 +28,9 @@ import { AppError } from "./errors.js";
 import { adminAuthHook } from "./middleware/admin-auth.js";
 import { agentAuthHook } from "./middleware/agent-auth.js";
 import { type AdapterManager, createAdapterManager } from "./services/adapter-manager.js";
-import { startPeriodicSync, stopPeriodicSync, syncAgents } from "./services/agent-sync.js";
+import { stopPeriodicSync } from "./services/agent-sync.js";
 import { type BackgroundTasks, createBackgroundTasks } from "./services/background-tasks.js";
 import { createNotifier, type Notifier } from "./services/notifier.js";
-import * as systemConfigService from "./services/system-config.js";
 
 // Fastify type augmentation
 import "./types.js";
@@ -46,12 +45,12 @@ export async function buildApp(config: Config) {
   const app = Fastify({ logger: config.logger ?? true });
 
   // Decorate with config and db
-  const db = connectDatabase(config.databaseUrl);
+  const db = connectDatabase(config.database.url);
   app.decorate("db", db);
   app.decorate("config", config);
 
   // Notifier: dedicated PG connection for LISTEN/NOTIFY
-  const listenClient = postgres(config.databaseUrl, { max: 1 });
+  const listenClient = postgres(config.database.url, { max: 1 });
   const notifier = createNotifier(listenClient);
 
   // WebSocket plugin
@@ -59,7 +58,7 @@ export async function buildApp(config: Config) {
 
   // Auth hooks
   const agentAuth = agentAuthHook(db);
-  const adminAuth = adminAuthHook(db, config.jwtSecretKey);
+  const adminAuth = adminAuthHook(db, config.secrets.jwtSecret);
 
   // Error handler
   app.setErrorHandler((error, _request, reply) => {
@@ -171,9 +170,10 @@ export async function buildApp(config: Config) {
     { prefix: "/api/v1" },
   );
 
-  // Serve Web static files when WEB_DIST_PATH is configured
-  if (config.webDistPath) {
-    const webRoot = resolve(config.webDistPath);
+  // Serve Web static files
+  const webDistPath = config.web?.distPath;
+  if (webDistPath) {
+    const webRoot = resolve(webDistPath);
     if (existsSync(webRoot)) {
       await app.register(fastifyStatic, { root: webRoot, wildcard: false });
       app.setNotFoundHandler((request, reply) => {
@@ -190,7 +190,7 @@ export async function buildApp(config: Config) {
   app.decorate("notifier", notifier);
 
   // Adapter manager — decorated so admin routes can trigger reload
-  const adapterManager = createAdapterManager(db, config.adapterEncryptionKey, app.log, notifier);
+  const adapterManager = createAdapterManager(db, config.secrets.encryptionKey, app.log, notifier);
   app.decorate("adapterManager", adapterManager);
 
   // Background tasks
@@ -201,34 +201,35 @@ export async function buildApp(config: Config) {
     if (configType === "adapter_configs") {
       adapterManager.reload().catch((err) => app.log.error(err, "Adapter hot-reload failed (PG NOTIFY)"));
     }
-    // system_configs changes are handled by reading fresh values on each timer tick
   });
 
   // Start notifier and background tasks on server start
   app.addHook("onReady", async () => {
     await notifier.start();
     backgroundTasks.start();
-    if (!config.adapterEncryptionKey) {
-      app.log.warn("ADAPTER_ENCRYPTION_KEY is not set — adapter create/update will be unavailable");
-    } else {
-      await adapterManager.reload();
-    }
+    await adapterManager.reload();
 
-    // Initial agent sync from Context Tree
+    // Context Tree sync via GitHub GraphQL
+    const { repo: ctRepo, branch: ctBranch, syncInterval } = config.contextTree;
+    const { token: ghToken } = config.github;
+    const { syncFromGitHub } = await import("./services/context-tree-graphql.js");
     try {
-      const report = await syncAgents(db, config.contextTreePath);
-      const s = report.summary;
+      const report = await syncFromGitHub(db, ctRepo, ctBranch, ghToken);
       app.log.info(
-        `Initial agent sync: created=${s.created} updated=${s.updated} suspended=${s.suspended} unchanged=${s.unchanged} errors=${s.errors}`,
+        `Context Tree sync: created=${report.created} updated=${report.updated} unchanged=${report.unchanged} errors=${report.errors}`,
       );
     } catch (err) {
-      app.log.error(err, "Initial agent sync failed");
+      app.log.error(err, "Initial Context Tree sync failed");
     }
 
-    // Start periodic sync
-    const configs = await systemConfigService.getAllConfigs(db);
-    const intervalSeconds = (configs.agent_sync_interval_seconds as number) ?? 60;
-    startPeriodicSync(db, config.contextTreePath, intervalSeconds, app.log);
+    // Periodic sync
+    const intervalMs = syncInterval * 1000;
+    const timer = setInterval(() => {
+      syncFromGitHub(db, ctRepo, ctBranch, ghToken).catch((err) =>
+        app.log.error(err, "Periodic Context Tree sync failed"),
+      );
+    }, intervalMs);
+    app.addHook("onClose", async () => clearInterval(timer));
   });
 
   // Cleanup on close

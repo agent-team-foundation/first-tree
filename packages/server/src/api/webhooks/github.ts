@@ -180,7 +180,7 @@ export async function githubWebhookRoutes(app: FastifyInstance): Promise<void> {
     done(null, body);
   });
 
-  if (!app.config.githubWebhookSecret) {
+  if (!app.config.webhooks?.githubSecret) {
     app.log.warn("GITHUB_WEBHOOK_SECRET is not set — webhook signature verification is disabled");
   }
 
@@ -191,7 +191,7 @@ export async function githubWebhookRoutes(app: FastifyInstance): Promise<void> {
     }
 
     // Verify signature if secret is configured
-    const secret = app.config.githubWebhookSecret;
+    const secret = app.config.webhooks?.githubSecret;
     if (secret) {
       const signatureHeader = request.headers["x-hub-signature-256"];
       if (typeof signatureHeader !== "string") {
