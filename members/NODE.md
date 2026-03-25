@@ -50,6 +50,7 @@ domains:
 | `type` | Yes | `human`, `personal_assistant`, or `autonomous_agent`. Determines how the member is registered in Agent Hub. |
 | `role` | Yes | Role in the organization (e.g., "Engineer", "Growth", "Founder"). |
 | `domains` | Yes | Broad areas of responsibility. Not specific node paths — concrete ownership is determined by the `owners` field in each node's `NODE.md`. |
+| `delegate_mention` | No | Member ID of a `personal_assistant` that receives messages on behalf of this member. When set, the message system forwards inbound @mentions to the designated assistant for triage and handling. |
 
 > **Note:** This structure is the source of truth for Agent Hub agent registration. Adding a member here automatically creates the corresponding agent in Agent Hub when a sync is triggered.
 

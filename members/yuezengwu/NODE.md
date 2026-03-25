@@ -6,6 +6,7 @@ role: "Engineer"
 domains:
   - "system design"
   - "kael agent development"
+delegate_mention: yuezengwu-assistant
 ---
 
 ## About
