@@ -55,13 +55,13 @@ export function registerClientCommands(program: Command): void {
         await runtime.start();
 
         // Graceful shutdown
-        const shutdown = () => {
+        const shutdown = async () => {
           process.stderr.write("\n  Shutting down...\n");
-          runtime.stop();
+          await runtime.stop();
           process.exit(0);
         };
-        process.on("SIGINT", shutdown);
-        process.on("SIGTERM", shutdown);
+        process.on("SIGINT", () => void shutdown());
+        process.on("SIGTERM", () => void shutdown());
 
         // Keep process alive
         await new Promise(() => {});

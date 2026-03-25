@@ -1,20 +1,19 @@
-import { AgentHubSDK } from "@agent-hub/client";
+import { AgentConnection } from "@agent-hub/client";
 import type { AgentConfig } from "@agent-hub/shared/config";
 
 type AgentInstance = {
   name: string;
-  sdk: AgentHubSDK;
-  pollTimer: ReturnType<typeof setInterval> | null;
+  connection: AgentConnection;
   connected: boolean;
 };
 
 /**
  * Client runtime — manages multiple agent connections to a single server.
+ * Uses WebSocket-based AgentConnection for real-time message delivery.
  */
 export class ClientRuntime {
   private readonly serverUrl: string;
   private readonly agents: Map<string, AgentInstance> = new Map();
-  private running = false;
 
   constructor(serverUrl: string) {
     this.serverUrl = serverUrl;
@@ -22,34 +21,37 @@ export class ClientRuntime {
 
   /** Add an agent to manage. */
   addAgent(name: string, config: AgentConfig): void {
-    const sdk = new AgentHubSDK({
+    const connection = new AgentConnection({
       serverUrl: this.serverUrl,
       token: config.token,
     });
-    this.agents.set(name, { name, sdk, pollTimer: null, connected: false });
+    this.agents.set(name, { name, connection, connected: false });
   }
 
   /** Start all agent connections. */
   async start(): Promise<void> {
-    this.running = true;
-
     for (const [name, agent] of this.agents) {
       try {
-        // Verify token is valid
-        const identity = await agent.sdk.register();
+        agent.connection.on("error", (err) => {
+          process.stderr.write(`  [${name}] error: ${err.message}\n`);
+        });
+        agent.connection.on("reconnecting", (attempt) => {
+          process.stderr.write(`  [${name}] reconnecting (attempt ${attempt})...\n`);
+        });
+
+        // Register message handler — log and auto-ack for now
+        agent.connection.onMessage(async (entry) => {
+          const msg = entry.message;
+          process.stderr.write(`  [${name}] inbox: ${msg.format} from ${msg.senderId} in chat ${msg.chatId}\n`);
+          await agent.connection.sdk.ack(entry.id);
+        });
+
+        const identity = await agent.connection.connect();
         agent.connected = true;
-        process.stderr.write(`  ✓ ${name}: connected (agent: ${identity.displayName ?? identity.agentId})\n`);
-
-        // Start polling inbox
-        agent.pollTimer = setInterval(() => {
-          void this.pollAgent(agent);
-        }, 5000);
-
-        // Initial poll
-        void this.pollAgent(agent);
+        process.stderr.write(`  \u2713 ${name}: connected (agent: ${identity.displayName ?? identity.agentId})\n`);
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        process.stderr.write(`  ✗ ${name}: connection failed — ${msg}\n`);
+        process.stderr.write(`  \u2717 ${name}: connection failed \u2014 ${msg}\n`);
       }
     }
 
@@ -58,12 +60,10 @@ export class ClientRuntime {
   }
 
   /** Stop all agent connections. */
-  stop(): void {
-    this.running = false;
+  async stop(): Promise<void> {
     for (const agent of this.agents.values()) {
-      if (agent.pollTimer) {
-        clearInterval(agent.pollTimer);
-        agent.pollTimer = null;
+      if (agent.connected) {
+        await agent.connection.disconnect();
       }
       agent.connected = false;
     }
@@ -75,23 +75,5 @@ export class ClientRuntime {
       name,
       connected: agent.connected,
     }));
-  }
-
-  private async pollAgent(agent: AgentInstance): Promise<void> {
-    if (!this.running) return;
-    try {
-      const result = await agent.sdk.pull(10);
-      for (const entry of result.entries) {
-        // Log received messages (P1: basic — future: route to agent session)
-        const msg = entry.message;
-        process.stderr.write(`  [${agent.name}] inbox: ${msg.format} from ${msg.senderId} in chat ${msg.chatId}\n`);
-        // Auto-ack for now
-        await agent.sdk.ack(entry.id);
-      }
-    } catch (error) {
-      if (!this.running) return;
-      const msg = error instanceof Error ? error.message : String(error);
-      process.stderr.write(`  [${agent.name}] poll error: ${msg}\n`);
-    }
   }
 }

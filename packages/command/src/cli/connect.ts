@@ -1,10 +1,7 @@
+import type { HandlerContext } from "@agent-hub/client";
+import { AgentConnection, getHandlerFactory, registerBuiltinHandlers, Semaphore } from "@agent-hub/client";
 import type { InboxEntryWithMessage } from "@agent-hub/shared";
 import type { Command } from "commander";
-import { AgentConnection } from "../connection.js";
-import { registerBuiltinHandlers } from "../handlers/index.js";
-import type { HandlerContext } from "../runtime/handler.js";
-import { getHandlerFactory } from "../runtime/handler.js";
-import { Semaphore } from "../runtime/semaphore.js";
 import { handleError, log, resolveConfig } from "./util.js";
 
 export function registerConnectCommand(program: Command): void {

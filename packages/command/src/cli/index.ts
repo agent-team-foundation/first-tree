@@ -8,6 +8,8 @@ import { registerConfigCommands } from "../commands/config.js";
 import { registerDbCommands } from "../commands/db.js";
 import { registerServerCommands } from "../commands/server.js";
 import { registerStatusCommand } from "../commands/status.js";
+import { registerConnectCommand } from "./connect.js";
+import { registerStartCommand } from "./start.js";
 
 const program = new Command();
 
@@ -23,6 +25,10 @@ registerDbCommands(program);
 registerAdminCommands(program);
 registerConfigCommands(program);
 registerStatusCommand(program);
+
+// Agent runtime commands (from PR #18 — connect single agent, start multi-agent runtime)
+registerConnectCommand(program);
+registerStartCommand(program);
 
 // Legacy agent commands (register, pull) — at top level
 registerAgentCommands(program);

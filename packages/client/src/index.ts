@@ -11,6 +11,7 @@ export type { AgentHandler, HandlerContext, HandlerFactory } from "./runtime/han
 export { getHandlerFactory, registerHandler } from "./runtime/handler.js";
 export type { AgentRuntimeOptions } from "./runtime/runtime.js";
 export { AgentRuntime } from "./runtime/runtime.js";
+export { Semaphore } from "./runtime/semaphore.js";
 export { SessionManager } from "./runtime/session-manager.js";
 export type { PullResult, RegisterResult, SdkConfig } from "./sdk.js";
 export { AgentHubSDK, SdkError } from "./sdk.js";
