@@ -19,7 +19,7 @@ FRAMEWORK_DIR = ".context-tree"
 TEMPLATE_MAP = [
     ("root-node.md.template", "NODE.md"),
     ("agent.md.template", "AGENT.md"),
-    ("member-node.md.template", "members/NODE.md"),
+    ("members-domain.md.template", "members/NODE.md"),
 ]
 
 
