@@ -120,7 +120,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** Extract unique @mentions from text. Returns lowercase usernames. */
-function extractMentions(text: string | null | undefined): string[] {
+export function extractMentions(text: string | null | undefined): string[] {
   if (!text) return [];
   const matches = text.match(/@([a-zA-Z0-9][\w-]*)/g);
   if (!matches) return [];

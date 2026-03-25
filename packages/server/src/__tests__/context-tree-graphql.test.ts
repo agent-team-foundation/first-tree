@@ -99,4 +99,35 @@ display_name: 'My Agent'
     expect(meta.type).toBe("autonomous_agent");
     expect(meta.displayName).toBe("My Agent");
   });
+
+  it("parses delegate_mention field", () => {
+    const content = `---
+title: "baixiaohang"
+type: human
+delegate_mention: kael-agent
+---`;
+
+    const meta = parseNodeMetadata(content);
+    expect(meta.delegateMention).toBe("kael-agent");
+  });
+
+  it("returns null delegateMention when not specified", () => {
+    const content = `---
+title: "bestony"
+type: human
+---`;
+
+    const meta = parseNodeMetadata(content);
+    expect(meta.delegateMention).toBeNull();
+  });
+
+  it("parses delegate_mention with quotes", () => {
+    const content = `---
+type: human
+delegate_mention: "my-assistant"
+---`;
+
+    const meta = parseNodeMetadata(content);
+    expect(meta.delegateMention).toBe("my-assistant");
+  });
 });
