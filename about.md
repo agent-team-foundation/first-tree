@@ -5,32 +5,32 @@ owners: [liuchao-001]
 
 # About Context Tree
 
-**context-tree.ai** — Organizational memory for agent-centric teams.
+**context-tree.ai** — The living source of truth for your organization.
 
 ---
 
 ## The Problem
 
-As AI agents become central to how teams work, a fundamental challenge emerges: **context is fragmented and ephemeral**. Design decisions live in someone's head. Reasoning behind code choices goes undocumented. When an agent needs to understand *why* something was built a certain way, there's nowhere to look.
+Organizations generate decisions constantly — in PRs, meetings, Slack threads, documents. But none of these systems stay current. PRs get merged, issues get closed, documents decay. The knowledge that produced them scatters and disappears.
 
-Documents exist, but they decay. PRs are merged, issues closed, and the knowledge that produced them disappears.
+When an agent — or a new teammate — needs to understand *why* something was built a certain way, there's nowhere to look. The information existed once, but no system kept it alive.
 
 ---
 
 ## The Idea
 
-Context Tree is a **living organizational memory** — a tree-structured knowledge base that agents and humans build and maintain together.
+Context Tree is the **living source of truth** for an organization — a tree-structured knowledge base that agents and humans build and maintain together.
 
-Every node in the tree represents a domain, decision, or design. Every node has an **owner**. Owners review and approve changes to their nodes. When a decision is made, it is written to the tree. When the code changes, the tree updates.
+Every node represents a domain, decision, or design. Every node has an **owner**. When a decision is made, it is written to the tree. When things change, the tree updates. The tree is never a snapshot — it's the current state.
 
 The result is an organization where:
 
-- Every agent has access to the full context behind every decision
-- Every human can see the current state of any domain in plain language
+- Every agent and every human reads from the same, always-current source
+- Decisions are traceable — the *what*, the *why*, and who owns it
 - Knowledge compounds over time instead of evaporating
 
 ---
 
 ## Who It's For
 
-Small, agent-centric teams — founders, engineers, and product builders who work alongside AI agents every day and want their organizational knowledge to grow with them, not against them.
+Agent-centric teams — founders, engineers, and product builders who work alongside AI agents every day and want their organizational knowledge to grow with them, not against them.

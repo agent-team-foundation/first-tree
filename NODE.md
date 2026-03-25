@@ -5,7 +5,7 @@ owners: [liuchao-001, 286ljb]
 
 # Context Tree
 
-Organizational memory for agent-centric teams. A living knowledge base that agents and humans build and maintain together.
+The living source of truth for your organization. A structured knowledge base that agents and humans build and maintain together.
 
 ---
 
