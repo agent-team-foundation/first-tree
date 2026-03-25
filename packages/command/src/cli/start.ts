@@ -1,7 +1,5 @@
+import { AgentRuntime, loadRuntimeConfig, registerBuiltinHandlers } from "@agent-hub/client";
 import type { Command } from "commander";
-import { registerBuiltinHandlers } from "../handlers/index.js";
-import { loadRuntimeConfig } from "../runtime/config.js";
-import { AgentRuntime } from "../runtime/runtime.js";
 import { fail } from "./output.js";
 import { log } from "./util.js";
 

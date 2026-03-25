@@ -17,11 +17,13 @@ export function setConnection(agentId: string, ws: WebSocket): void {
   activeConnections.set(agentId, ws);
 }
 
-/** Remove a WS connection if it matches the registered one. */
-export function removeConnection(agentId: string, ws: WebSocket): void {
+/** Remove a WS connection if it matches the registered one. Returns true if removed. */
+export function removeConnection(agentId: string, ws: WebSocket): boolean {
   if (activeConnections.get(agentId) === ws) {
     activeConnections.delete(agentId);
+    return true;
   }
+  return false;
 }
 
 /** Force-disconnect an agent's active WS connection. Returns true if a connection was closed. */

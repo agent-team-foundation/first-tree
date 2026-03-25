@@ -23,7 +23,7 @@ export async function adminAdapterRoutes(app: FastifyInstance): Promise<void> {
 
   app.post("/", async (request, reply) => {
     const body = createAdapterConfigSchema.parse(request.body);
-    const config = await adapterService.createAdapterConfig(app.db, body, app.config.adapterEncryptionKey);
+    const config = await adapterService.createAdapterConfig(app.db, body, app.config.secrets.encryptionKey);
     // Fire-and-forget: reload local instance + notify others via PG NOTIFY
     app.adapterManager.reload().catch((err) => app.log.error(err, "Adapter reload failed after create"));
     app.notifier.notifyConfigChange("adapter_configs").catch(() => {});
@@ -47,7 +47,7 @@ export async function adminAdapterRoutes(app: FastifyInstance): Promise<void> {
   app.patch<{ Params: { id: string } }>("/:id", async (request) => {
     const body = updateAdapterConfigSchema.parse(request.body);
     const id = parseId(request.params.id);
-    const config = await adapterService.updateAdapterConfig(app.db, id, body, app.config.adapterEncryptionKey);
+    const config = await adapterService.updateAdapterConfig(app.db, id, body, app.config.secrets.encryptionKey);
     app.adapterManager.reload().catch((err) => app.log.error(err, "Adapter reload failed after update"));
     app.notifier.notifyConfigChange("adapter_configs").catch(() => {});
     return {

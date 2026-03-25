@@ -1,4 +1,4 @@
-import { AgentHubSDK, SdkError } from "../sdk.js";
+import { AgentHubSDK, SdkError } from "@agent-hub/client";
 import { fail } from "./output.js";
 
 export function resolveConfig(): { serverUrl: string; token: string } {

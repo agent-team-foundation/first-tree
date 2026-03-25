@@ -5,14 +5,28 @@ import type { Config } from "../config.js";
 
 export async function createTestApp(): Promise<FastifyInstance> {
   const config: Config = {
-    databaseUrl: process.env.DATABASE_URL ?? "",
-    serverHost: "127.0.0.1",
-    serverPort: 0,
-    logger: false,
-    jwtSecretKey: process.env.JWT_SECRET_KEY ?? "test-jwt-secret-key-for-vitest",
+    database: {
+      url: process.env.DATABASE_URL ?? "",
+      provider: "external",
+    },
+    server: {
+      port: 0,
+      host: "127.0.0.1",
+    },
+    secrets: {
+      jwtSecret: process.env.JWT_SECRET ?? "test-jwt-secret-key-for-vitest",
+      encryptionKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    },
+    contextTree: {
+      repo: "test/context-tree",
+      branch: "main",
+      syncInterval: 3600,
+    },
+    github: {
+      token: "test-github-token",
+    },
     instanceId: "test-instance",
-    contextTreePath: process.env.CONTEXT_TREE_PATH ?? "/tmp/agent-hub-test-tree",
-    adapterEncryptionKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    logger: false,
   };
   const app = await buildApp(config);
   await app.ready();

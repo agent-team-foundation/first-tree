@@ -7,18 +7,24 @@
     ".": {
       "types": "./src/index.ts",
       "import": "./dist/index.mjs"
+    },
+    "./config": {
+      "types": "./src/config/index.ts",
+      "import": "./dist/config/index.mjs"
     }
   },
   "scripts": {
-    "build": "tsdown src/index.ts --format esm --dts",
+    "build": "tsdown src/index.ts src/config/index.ts --format esm --dts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests"
   },
   "devDependencies": {
+    "@types/node": "^22.16.0",
     "tsdown": "^0.21.4",
     "vitest": "^3.2.0"
   },
   "dependencies": {
+    "yaml": "^2.7.0",
     "zod": "^3.25.0"
   }
 }

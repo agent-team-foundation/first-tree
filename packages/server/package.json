@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": "./src/app.ts",
+    "./config": "./src/config.ts",
+    "./package.json": "./package.json"
+  },
   "scripts": {
     "dev": "tsx watch --env-file=../../.env src/index.ts",
     "build": "tsdown src/index.ts --format esm --dts",

@@ -1,39 +1,24 @@
 {
-  "name": "@unispark.ai/agent-hub",
+  "name": "@agent-hub/client",
   "version": "0.1.0",
+  "private": true,
   "type": "module",
-  "description": "Agent Hub CLI and SDK — agent-facing client for Agent Hub server",
+  "description": "Agent Hub SDK — programmatic client for Agent Hub server",
   "exports": {
     ".": {
-      "import": "./dist/index.mjs",
-      "types": "./dist/index.d.mts"
+      "types": "./src/index.ts",
+      "import": "./dist/index.mjs"
     }
   },
-  "bin": {
-    "agent-hub": "./dist/cli/index.mjs"
-  },
-  "files": [
-    "dist"
-  ],
-  "publishConfig": {
-    "access": "public"
-  },
   "scripts": {
-    "build": "tsdown src/index.ts src/cli/index.ts --format esm --dts.eager",
+    "build": "tsdown src/index.ts --format esm --dts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests"
-  },
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/agent-team-foundation/agent-hub.git",
-    "directory": "packages/client"
   },
   "engines": {
     "node": ">=22.16.0"
   },
   "dependencies": {
-    "commander": "^13.1.0",
     "ws": "^8.20.0",
     "yaml": "^2.8.3",
     "zod": "^3.25.76"

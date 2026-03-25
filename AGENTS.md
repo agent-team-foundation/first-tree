@@ -16,9 +16,11 @@ Agent Hub ≠ Context Tree
 
 **Server:** Fastify / Drizzle ORM / PostgreSQL / Zod / bcrypt / jose
 
-**Client:** fetch / Commander.js
+**Client:** fetch（SDK 包）
 
-**Shared:** Zod schemas + TypeScript 类型（三端共享）
+**Command:** Commander.js / @inquirer/prompts（统一 CLI）
+
+**Shared:** Zod schemas + TypeScript 类型 + 配置系统（三端共享）
 
 **Web:** React 19 / Vite
 
@@ -31,10 +33,13 @@ Agent Hub ≠ Context Tree
 ```bash
 # 环境
 pnpm install                          # 安装全部依赖
-docker compose up -d                  # 启动 PostgreSQL
+docker compose up -d                  # 启动 PostgreSQL（开发用）
 
-# 启动
-pnpm --filter @agent-hub/server dev   # 启动 server（tsx watch）
+# 一键启动（CLI 方式，含交互式配置、自动迁移、Web 内嵌）
+pnpm --filter @unispark.ai/agent-hub dev -- server start
+
+# 分别启动（传统开发方式）
+pnpm --filter @agent-hub/server dev   # 启动 server（tsx watch，需 .env）
 pnpm --filter @agent-hub/web dev      # 启动 web（Vite dev server）
 
 # 质量
@@ -53,6 +58,8 @@ pnpm --filter @agent-hub/server db:migrate     # 应用迁移
 pnpm --filter @agent-hub/server db:studio      # Drizzle Studio
 ```
 
+> CLI 完整命令和环境变量参考：[docs/cli-reference.md](docs/cli-reference.md)
+
 ## Monorepo 结构
 
 ```
@@ -64,16 +71,20 @@ agent-hub/
 ├── biome.json                 # Biome lint + format
 ├── docker-compose.yml         # 本地开发 PostgreSQL
 │
+├── docs/                          # 文档
+│   └── cli-reference.md          # CLI 命令 + 环境变量参考
+│
 ├── packages/
-│   ├── shared/                # @agent-hub/shared — 共享 Zod schema + 类型
+│   ├── shared/                # @agent-hub/shared — 共享 Zod schema + 类型 + 配置系统
 │   ├── server/                # @agent-hub/server — Fastify API 服务
-│   ├── client/                # @unispark.ai/agent-hub — Agent Runtime
+│   ├── client/                # @agent-hub/client — Agent SDK（纯库）
+│   ├── command/               # @unispark.ai/agent-hub — 统一 CLI（发布包）
 │   └── web/                   # @agent-hub/web — React 管理后台
 ```
 
 ## 架构规则
 
-**四包独立，Shared 共享：** Server、Client、Web 独立打包部署，通过 `@agent-hub/shared` 共享类型和 Zod schema。Shared 不含业务逻辑。
+**五包独立，Shared 共享：** Server、Client、Command、Web 独立打包部署，通过 `@agent-hub/shared` 共享类型、Zod schema 和配置系统。Command 包是统一 CLI 入口，依赖 Server 和 Client。
 
 **Server 无状态：** 所有持久数据在 PostgreSQL，Server 不持有业务状态。
 
