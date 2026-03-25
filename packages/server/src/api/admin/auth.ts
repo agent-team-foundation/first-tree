@@ -3,7 +3,7 @@ import type { FastifyInstance } from "fastify";
 import * as adminAuthService from "../../services/admin-auth.js";
 
 export async function adminAuthRoutes(app: FastifyInstance): Promise<void> {
-  const loginMax = Number(process.env.AGENT_HUB_RATE_LIMIT_LOGIN_MAX) || 5;
+  const loginMax = app.config.rateLimit?.loginMax ?? 5;
 
   app.post("/login", { config: { rateLimit: { max: loginMax, timeWindow: "1 minute" } } }, async (request, reply) => {
     const body = loginSchema.parse(request.body);

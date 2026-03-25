@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineConfig, field } from "./schema.js";
+import { defineConfig, field, optional } from "./schema.js";
 import { getConfig } from "./singleton.js";
 import type { InferConfig } from "./types.js";
 
@@ -52,7 +52,23 @@ export const serverConfigSchema = defineConfig({
         type: "password",
       },
     }),
+    webhookSecret: field(z.string(), {
+      env: "AGENT_HUB_GITHUB_WEBHOOK_SECRET",
+      secret: true,
+      prompt: {
+        message: "GitHub webhook secret (set the same value in your GitHub repo webhook settings):",
+        type: "password",
+      },
+    }),
   },
+  cors: optional({
+    origin: field(z.string(), { env: "AGENT_HUB_CORS_ORIGIN" }),
+  }),
+  rateLimit: optional({
+    max: field(z.number().default(100), { env: "AGENT_HUB_RATE_LIMIT_MAX" }),
+    loginMax: field(z.number().default(5), { env: "AGENT_HUB_RATE_LIMIT_LOGIN_MAX" }),
+    webhookMax: field(z.number().default(60), { env: "AGENT_HUB_RATE_LIMIT_WEBHOOK_MAX" }),
+  }),
 });
 
 export type ServerConfig = InferConfig<typeof serverConfigSchema>;

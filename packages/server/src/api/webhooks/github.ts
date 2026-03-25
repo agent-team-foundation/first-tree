@@ -271,7 +271,13 @@ export async function githubWebhookRoutes(app: FastifyInstance): Promise<void> {
     done(null, body);
   });
 
-  const webhookMax = Number(process.env.AGENT_HUB_RATE_LIMIT_WEBHOOK_MAX) || 30;
+  // Fail-fast: webhook secret must be configured at startup
+  const webhookSecret = app.config.github.webhookSecret;
+  if (!webhookSecret) {
+    throw new Error("AGENT_HUB_GITHUB_WEBHOOK_SECRET is required — configure it before starting the server");
+  }
+
+  const webhookMax = app.config.rateLimit?.webhookMax ?? 60;
 
   app.post(
     "/github",
@@ -282,20 +288,12 @@ export async function githubWebhookRoutes(app: FastifyInstance): Promise<void> {
         throw new BadRequestError("Expected raw body buffer");
       }
 
-      // Verify webhook signature — mandatory, reject if secret is not configured
-      const secret = process.env.AGENT_HUB_GITHUB_WEBHOOK_SECRET;
-      if (!secret) {
-        app.log.error("AGENT_HUB_GITHUB_WEBHOOK_SECRET is not set — rejecting webhook");
-        return reply.status(503).send({ error: "Webhook signature verification is not configured" });
+      // Verify webhook signature
+      const signatureHeader = request.headers["x-hub-signature-256"];
+      if (typeof signatureHeader !== "string") {
+        throw new UnauthorizedError("Missing x-hub-signature-256 header");
       }
-
-      {
-        const signatureHeader = request.headers["x-hub-signature-256"];
-        if (typeof signatureHeader !== "string") {
-          throw new UnauthorizedError("Missing x-hub-signature-256 header");
-        }
-        verifySignature(secret, rawBody, signatureHeader);
-      }
+      verifySignature(webhookSecret, rawBody, signatureHeader);
 
       // Parse JSON from raw body
       let payload: unknown;

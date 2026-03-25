@@ -69,14 +69,13 @@ describe("E2E: GitHub issue → Server → CLI pull", () => {
   let address: string;
 
   beforeAll(async () => {
-    process.env.AGENT_HUB_GITHUB_WEBHOOK_SECRET = WEBHOOK_SECRET;
-    process.env.AGENT_HUB_RATE_LIMIT_MAX = "10000";
     app = await buildApp({
       database: { url: DATABASE_URL, provider: "external" },
       server: { port: 0, host: "127.0.0.1" },
       secrets: { jwtSecret: "test-jwt-secret-key-for-e2e", encryptionKey: "0".repeat(64) },
       contextTree: { repo: "test/tree", branch: "main", syncInterval: 3600 },
-      github: { token: "test-token" },
+      github: { token: "test-token", webhookSecret: WEBHOOK_SECRET },
+      rateLimit: { max: 10000, loginMax: 10000, webhookMax: 10000 },
       logger: false,
       instanceId: "e2e-test",
     });
@@ -86,7 +85,6 @@ describe("E2E: GitHub issue → Server → CLI pull", () => {
 
   afterAll(async () => {
     await app?.close();
-    delete process.env.AGENT_HUB_GITHUB_WEBHOOK_SECRET;
   });
 
   afterEach(async () => {

@@ -59,17 +59,17 @@ export async function buildApp(config: Config) {
   // WebSocket plugin
   await app.register(websocket);
 
-  // CORS — default: same-origin only; configurable via env
-  const corsOrigin = process.env.AGENT_HUB_CORS_ORIGIN;
+  // CORS — explicit origins if configured; allow all in dev; same-origin in production
+  const corsOrigin = config.cors?.origin;
+  const isDev = process.env.NODE_ENV !== "production";
   await app.register(cors, {
-    origin: corsOrigin ? corsOrigin.split(",").map((s) => s.trim()) : false,
+    origin: corsOrigin ? corsOrigin.split(",").map((s) => s.trim()) : isDev,
     credentials: true,
   });
 
   // Rate limiting — global default; overridden per-route where needed
-  const globalMax = Number(process.env.AGENT_HUB_RATE_LIMIT_MAX) || 100;
   await app.register(rateLimit, {
-    max: globalMax,
+    max: config.rateLimit?.max ?? 100,
     timeWindow: "1 minute",
   });
 

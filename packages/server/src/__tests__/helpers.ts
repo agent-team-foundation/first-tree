@@ -4,11 +4,6 @@ import { buildApp } from "../app.js";
 import type { Config } from "../config.js";
 
 export async function createTestApp(): Promise<FastifyInstance> {
-  // Disable rate limiting in tests
-  process.env.AGENT_HUB_RATE_LIMIT_MAX = "10000";
-  process.env.AGENT_HUB_RATE_LIMIT_LOGIN_MAX = "10000";
-  process.env.AGENT_HUB_RATE_LIMIT_WEBHOOK_MAX = "10000";
-
   const config: Config = {
     database: {
       url: process.env.DATABASE_URL ?? "",
@@ -29,7 +24,9 @@ export async function createTestApp(): Promise<FastifyInstance> {
     },
     github: {
       token: "test-github-token",
+      webhookSecret: "test-webhook-secret",
     },
+    rateLimit: { max: 10000, loginMax: 10000, webhookMax: 10000 },
     instanceId: "test-instance",
     logger: false,
   };
