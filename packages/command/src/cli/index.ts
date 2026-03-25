@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { createRequire } from "node:module";
 import { Command } from "commander";
 import { registerAdminCommands } from "../commands/admin.js";
 import { registerAgentCommands } from "../commands/agent.js";
@@ -14,12 +15,15 @@ import { registerStatusCommand } from "../commands/status.js";
 import { registerConnectCommand } from "./connect.js";
 import { registerStartCommand } from "./start.js";
 
+const require = createRequire(import.meta.url);
+const { version } = require("../../package.json") as { version: string };
+
 const program = new Command();
 
 program
   .name("agent-hub")
   .description("Agent Hub — centralized collaboration platform for agent teams")
-  .version("0.1.0");
+  .version(version);
 
 // Command groups
 registerServerCommands(program);
