@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { Database } from "../../db/connection.js";
 import { agents } from "../../db/schema/agents.js";
@@ -119,6 +119,97 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** Extract unique @mentions from text. Returns lowercase usernames.
+ * Excludes email patterns (user@example.com) and team mentions (@org/team). */
+export function extractMentions(text: string | null | undefined): string[] {
+  if (!text) return [];
+  // Negative lookbehind: @ must not be preceded by a word char (excludes emails)
+  // Capture optional trailing / to detect team mentions (@org/team) and skip them
+  const re = /(?<!\w)@([a-zA-Z0-9][\w-]*)(\/)?/g;
+  const names = new Set<string>();
+  for (const m of text.matchAll(re)) {
+    if (m[2]) continue; // Skip team mentions like @org/team
+    names.add((m[1] as string).toLowerCase());
+  }
+  return [...names];
+}
+
+type MentionContext = {
+  event: string;
+  repository: string;
+  sender: string;
+  title: string;
+  body: string;
+  url: string;
+};
+
+/**
+ * Route @mentions to delegate agents.
+ * For each mentioned user who has delegate_mention configured,
+ * send a card message from the mentioned user to their delegate.
+ */
+async function routeMentionDelegations(
+  app: FastifyInstance,
+  mentionedNames: string[],
+  ctx: MentionContext,
+): Promise<number> {
+  if (mentionedNames.length === 0) return 0;
+
+  // Batch lookup: find agents with delegate_mention set
+  const delegates = await app.db
+    .select({
+      id: agents.id,
+      delegateMention: agents.delegateMention,
+      status: agents.status,
+    })
+    .from(agents)
+    .where(and(inArray(agents.id, mentionedNames), isNotNull(agents.delegateMention)));
+
+  let routed = 0;
+  for (const agent of delegates) {
+    if (agent.status !== "active" || !agent.delegateMention) continue;
+
+    // Verify delegate target exists and is active
+    const [target] = await app.db
+      .select({ id: agents.id, status: agents.status })
+      .from(agents)
+      .where(eq(agents.id, agent.delegateMention))
+      .limit(1);
+
+    if (!target || target.status !== "active") {
+      app.log.warn(`delegate_mention target "${agent.delegateMention}" for "${agent.id}" is not active, skipping`);
+      continue;
+    }
+
+    try {
+      const { message: msg, recipients } = await sendToAgent(app.db, agent.id, agent.delegateMention, {
+        format: "card",
+        content: {
+          type: "github_mention",
+          mentionedUser: agent.id,
+          event: ctx.event,
+          repository: ctx.repository,
+          sender: ctx.sender,
+          title: ctx.title,
+          body: ctx.body,
+          url: ctx.url,
+        },
+        metadata: {
+          source: "github",
+          event: "mention_delegation",
+          mentionedUser: agent.id,
+        },
+      });
+      notifyRecipients(app.notifier, recipients, msg.id);
+      routed++;
+    } catch (err) {
+      app.log.error(err, `Failed to route mention delegation from "${agent.id}" to "${agent.delegateMention}"`);
+    }
+  }
+
+  return routed;
+}
+
 function parseIssuesPayload(body: unknown): GitHubIssuesPayload {
   if (!isRecord(body)) throw new BadRequestError("Invalid payload: expected object");
   if (typeof body.action !== "string") throw new BadRequestError("Invalid payload: missing action");
@@ -218,23 +309,215 @@ export async function githubWebhookRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(200).send({ ok: true, event: "ping" });
     }
 
+    // --- Event-specific handlers (mention delegation runs inside, after action gating) ---
     if (eventType === "issues") {
-      return handleIssuesEvent(app, payload, reply);
+      return handleIssuesEvent(app, eventType, payload, reply);
     }
 
     if (eventType === "issue_comment") {
-      return handleIssueCommentEvent(app, payload, reply);
+      return handleIssueCommentEvent(app, eventType, payload, reply);
     }
 
-    // Unhandled event type — acknowledge but do nothing
-    return reply.status(200).send({ ok: true, event: eventType, handled: false });
+    // Other event types with @mention support (PRs, discussions, reviews, etc.)
+    // Only run delegation if the action represents new/changed content
+    let mentionsRouted = 0;
+    const allowedActions = MENTION_ACTIONS[eventType];
+    const action = isRecord(payload) && typeof payload.action === "string" ? payload.action : undefined;
+    if (allowedActions && action && allowedActions.includes(action)) {
+      mentionsRouted = await handleMentionDelegation(app, eventType, payload);
+    }
+    return reply.status(200).send({ ok: true, event: eventType, handled: mentionsRouted > 0, mentionsRouted });
   });
 }
 
-async function handleIssuesEvent(app: FastifyInstance, payload: unknown, reply: FastifyReply): Promise<unknown> {
+/** Extract text body from any GitHub webhook event for @mention scanning. */
+function extractEventText(eventType: string, payload: unknown): string | null {
+  if (!isRecord(payload)) return null;
+
+  switch (eventType) {
+    case "issues": {
+      const issue = isRecord(payload.issue) ? payload.issue : null;
+      return typeof issue?.body === "string" ? issue.body : null;
+    }
+    case "issue_comment":
+    case "pull_request_review_comment":
+    case "commit_comment":
+    case "discussion_comment": {
+      const comment = isRecord(payload.comment) ? payload.comment : null;
+      return typeof comment?.body === "string" ? comment.body : null;
+    }
+    case "pull_request": {
+      const pr = isRecord(payload.pull_request) ? payload.pull_request : null;
+      return typeof pr?.body === "string" ? pr.body : null;
+    }
+    case "pull_request_review": {
+      const review = isRecord(payload.review) ? payload.review : null;
+      return typeof review?.body === "string" ? review.body : null;
+    }
+    case "discussion": {
+      const disc = isRecord(payload.discussion) ? payload.discussion : null;
+      return typeof disc?.body === "string" ? disc.body : null;
+    }
+    default:
+      return null;
+  }
+}
+
+/** Extract context info from any GitHub webhook event for delegation messages. */
+function extractEventContext(eventType: string, payload: unknown): MentionContext | null {
+  if (!isRecord(payload)) return null;
+
+  const repo = isRecord(payload.repository) ? payload.repository : null;
+  const sender = isRecord(payload.sender) ? payload.sender : null;
+  const repository = typeof repo?.full_name === "string" ? repo.full_name : "";
+  const senderLogin = typeof sender?.login === "string" ? sender.login : "";
+
+  switch (eventType) {
+    case "issues": {
+      const issue = isRecord(payload.issue) ? payload.issue : null;
+      if (!issue) return null;
+      return {
+        event: "issues",
+        repository,
+        sender: senderLogin,
+        title: `Issue #${issue.number}: ${issue.title}`,
+        body: typeof issue.body === "string" ? issue.body : "",
+        url: typeof issue.html_url === "string" ? issue.html_url : "",
+      };
+    }
+    case "issue_comment": {
+      const issue = isRecord(payload.issue) ? payload.issue : null;
+      const comment = isRecord(payload.comment) ? payload.comment : null;
+      if (!issue || !comment) return null;
+      return {
+        event: "issue_comment",
+        repository,
+        sender: senderLogin,
+        title: `Issue #${issue.number}: ${issue.title}`,
+        body: typeof comment.body === "string" ? comment.body : "",
+        url: typeof comment.html_url === "string" ? comment.html_url : "",
+      };
+    }
+    case "pull_request": {
+      const pr = isRecord(payload.pull_request) ? payload.pull_request : null;
+      if (!pr) return null;
+      return {
+        event: "pull_request",
+        repository,
+        sender: senderLogin,
+        title: `PR #${pr.number}: ${pr.title}`,
+        body: typeof pr.body === "string" ? pr.body : "",
+        url: typeof pr.html_url === "string" ? pr.html_url : "",
+      };
+    }
+    case "pull_request_review": {
+      const pr = isRecord(payload.pull_request) ? payload.pull_request : null;
+      const review = isRecord(payload.review) ? payload.review : null;
+      if (!pr || !review) return null;
+      return {
+        event: "pull_request_review",
+        repository,
+        sender: senderLogin,
+        title: `PR #${pr.number}: ${pr.title}`,
+        body: typeof review.body === "string" ? review.body : "",
+        url: typeof review.html_url === "string" ? review.html_url : "",
+      };
+    }
+    case "pull_request_review_comment": {
+      const pr = isRecord(payload.pull_request) ? payload.pull_request : null;
+      const comment = isRecord(payload.comment) ? payload.comment : null;
+      if (!pr || !comment) return null;
+      return {
+        event: "pull_request_review_comment",
+        repository,
+        sender: senderLogin,
+        title: `PR #${pr.number}: ${pr.title}`,
+        body: typeof comment.body === "string" ? comment.body : "",
+        url: typeof comment.html_url === "string" ? comment.html_url : "",
+      };
+    }
+    case "discussion": {
+      const disc = isRecord(payload.discussion) ? payload.discussion : null;
+      if (!disc) return null;
+      return {
+        event: "discussion",
+        repository,
+        sender: senderLogin,
+        title: typeof disc.title === "string" ? disc.title : "",
+        body: typeof disc.body === "string" ? disc.body : "",
+        url: typeof disc.html_url === "string" ? disc.html_url : "",
+      };
+    }
+    case "discussion_comment": {
+      const disc = isRecord(payload.discussion) ? payload.discussion : null;
+      const comment = isRecord(payload.comment) ? payload.comment : null;
+      if (!disc || !comment) return null;
+      return {
+        event: "discussion_comment",
+        repository,
+        sender: senderLogin,
+        title: typeof disc.title === "string" ? disc.title : "",
+        body: typeof comment.body === "string" ? comment.body : "",
+        url: typeof comment.html_url === "string" ? comment.html_url : "",
+      };
+    }
+    case "commit_comment": {
+      const comment = isRecord(payload.comment) ? payload.comment : null;
+      if (!comment) return null;
+      return {
+        event: "commit_comment",
+        repository,
+        sender: senderLogin,
+        title: "Commit comment",
+        body: typeof comment.body === "string" ? comment.body : "",
+        url: typeof comment.html_url === "string" ? comment.html_url : "",
+      };
+    }
+    default:
+      return null;
+  }
+}
+
+/**
+ * Run mention delegation for a given event type and payload.
+ * Only called after action gating confirms this is a "new content" event.
+ */
+async function handleMentionDelegation(app: FastifyInstance, eventType: string, payload: unknown): Promise<number> {
+  const mentionText = extractEventText(eventType, payload);
+  const mentions = extractMentions(mentionText);
+  const mentionCtx = extractEventContext(eventType, payload);
+  if (mentions.length > 0 && mentionCtx) {
+    return routeMentionDelegations(app, mentions, mentionCtx);
+  }
+  return 0;
+}
+
+/** Actions that represent new/changed content (worth scanning for @mentions). */
+const MENTION_ACTIONS: Record<string, string[]> = {
+  issues: ["opened", "edited"],
+  issue_comment: ["created"],
+  pull_request: ["opened", "edited"],
+  pull_request_review: ["submitted"],
+  pull_request_review_comment: ["created"],
+  discussion: ["created", "edited"],
+  discussion_comment: ["created"],
+  commit_comment: ["created"],
+};
+
+async function handleIssuesEvent(
+  app: FastifyInstance,
+  eventType: string,
+  payload: unknown,
+  reply: FastifyReply,
+): Promise<unknown> {
   const data = parseIssuesPayload(payload);
 
-  // Only handle specific actions
+  // Mention delegation — only on new/changed content
+  if (MENTION_ACTIONS.issues?.includes(data.action)) {
+    await handleMentionDelegation(app, eventType, payload);
+  }
+
+  // Only handle specific actions for repo-targeted routing
   const handledActions = ["opened", "edited", "labeled"];
   if (!handledActions.includes(data.action)) {
     return reply.status(200).send({ ok: true, event: "issues", action: data.action, handled: false });
@@ -282,10 +565,20 @@ async function handleIssuesEvent(app: FastifyInstance, payload: unknown, reply: 
   return reply.status(200).send({ ok: true, event: "issues", action: data.action, routed: true });
 }
 
-async function handleIssueCommentEvent(app: FastifyInstance, payload: unknown, reply: FastifyReply): Promise<unknown> {
+async function handleIssueCommentEvent(
+  app: FastifyInstance,
+  eventType: string,
+  payload: unknown,
+  reply: FastifyReply,
+): Promise<unknown> {
   const data = parseIssueCommentPayload(payload);
 
-  // Only handle "created" action
+  // Mention delegation — only on new comments
+  if (MENTION_ACTIONS.issue_comment?.includes(data.action)) {
+    await handleMentionDelegation(app, eventType, payload);
+  }
+
+  // Only handle "created" action for repo-targeted routing
   if (data.action !== "created") {
     return reply.status(200).send({ ok: true, event: "issue_comment", action: data.action, handled: false });
   }

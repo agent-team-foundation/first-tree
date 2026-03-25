@@ -106,6 +106,7 @@ export function AgentsPage() {
               <TableHead>ID</TableHead>
               <TableHead>Display Name</TableHead>
               <TableHead>Type</TableHead>
+              <TableHead>Delegate</TableHead>
               <TableHead>Online</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Created</TableHead>
@@ -114,13 +115,13 @@ export function AgentsPage() {
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
                   Loading...
                 </TableCell>
               </TableRow>
             ) : error ? (
               <TableRow>
-                <TableCell colSpan={6} className="text-center py-8 text-destructive">
+                <TableCell colSpan={7} className="text-center py-8 text-destructive">
                   Failed to load agents: {error instanceof Error ? error.message : "Unknown error"}
                 </TableCell>
               </TableRow>
@@ -130,7 +131,7 @@ export function AgentsPage() {
                 if (!filtered || filtered.length === 0) {
                   return (
                     <TableRow>
-                      <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                      <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
                         {typeFilter
                           ? `No ${typeFilter} agents`
                           : "No agents yet — click Sync Now to import from Context Tree"}
@@ -144,6 +145,9 @@ export function AgentsPage() {
                     <TableCell>{agent.displayName ?? "—"}</TableCell>
                     <TableCell>
                       <Badge variant="secondary">{agent.type}</Badge>
+                    </TableCell>
+                    <TableCell className="font-mono text-sm text-muted-foreground">
+                      {agent.delegateMention ?? "—"}
                     </TableCell>
                     <TableCell>
                       <span

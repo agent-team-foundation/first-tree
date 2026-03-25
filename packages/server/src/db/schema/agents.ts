@@ -9,6 +9,8 @@ export const agents = pgTable(
     /** "human" | "personal_assistant" | "autonomous_agent" */
     type: text("type").notNull(),
     displayName: text("display_name"),
+    /** Agent ID to forward @mentions to (e.g. personal assistant) */
+    delegateMention: text("delegate_mention"),
     /** Delivery address, auto-generated as inbox_{id} */
     inboxId: text("inbox_id").unique().notNull(),
     /** "active" | "suspended". Suspended agents have all API requests rejected. */
