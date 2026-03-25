@@ -38,11 +38,16 @@ describe("extractMentions", () => {
     expect(extractMentions("just some text")).toEqual([]);
   });
 
-  it("ignores email-like patterns", () => {
-    // @mention must not be preceded by a word character
+  it("ignores email addresses", () => {
     const result = extractMentions("email user@example.com but @real mention");
-    expect(result).toContain("real");
-    // email pattern has @ preceded by word char, may or may not match depending on regex
+    expect(result).toEqual(["real"]);
+    expect(result).not.toContain("example");
+  });
+
+  it("ignores team mentions (@org/team)", () => {
+    const result = extractMentions("cc @org/team-name and @baixiaohang");
+    expect(result).toEqual(["baixiaohang"]);
+    expect(result).not.toContain("org");
   });
 
   it("handles mention at start of text", () => {

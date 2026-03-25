@@ -119,13 +119,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Extract unique @mentions from text. Returns lowercase usernames. */
+/** Extract unique @mentions from text. Returns lowercase usernames.
+ * Excludes email patterns (user@example.com) and team mentions (@org/team). */
 export function extractMentions(text: string | null | undefined): string[] {
   if (!text) return [];
-  const matches = text.match(/@([a-zA-Z0-9][\w-]*)/g);
-  if (!matches) return [];
-  const unique = new Set(matches.map((m) => m.slice(1).toLowerCase()));
-  return [...unique];
+  // Negative lookbehind: @ must not be preceded by a word char (excludes emails)
+  // Capture optional trailing / to detect team mentions (@org/team) and skip them
+  const re = /(?<!\w)@([a-zA-Z0-9][\w-]*)(\/)?/g;
+  const names = new Set<string>();
+  for (const m of text.matchAll(re)) {
+    if (m[2]) continue; // Skip team mentions like @org/team
+    names.add((m[1] as string).toLowerCase());
+  }
+  return [...names];
 }
 
 type MentionContext = {
@@ -303,25 +309,23 @@ export async function githubWebhookRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(200).send({ ok: true, event: "ping" });
     }
 
-    // --- @mention delegation (all event types) ---
-    const mentionText = extractEventText(eventType, payload);
-    const mentions = extractMentions(mentionText);
-    const mentionCtx = extractEventContext(eventType, payload);
-    let mentionsRouted = 0;
-    if (mentions.length > 0 && mentionCtx) {
-      mentionsRouted = await routeMentionDelegations(app, mentions, mentionCtx);
-    }
-
-    // --- Existing event-specific handlers ---
+    // --- Event-specific handlers (mention delegation runs inside, after action gating) ---
     if (eventType === "issues") {
-      return handleIssuesEvent(app, payload, reply);
+      return handleIssuesEvent(app, eventType, payload, reply);
     }
 
     if (eventType === "issue_comment") {
-      return handleIssueCommentEvent(app, payload, reply);
+      return handleIssueCommentEvent(app, eventType, payload, reply);
     }
 
-    // Other event types — mention delegation may have been routed above
+    // Other event types with @mention support (PRs, discussions, reviews, etc.)
+    // Only run delegation if the action represents new/changed content
+    let mentionsRouted = 0;
+    const allowedActions = MENTION_ACTIONS[eventType];
+    const action = isRecord(payload) && typeof payload.action === "string" ? payload.action : undefined;
+    if (allowedActions && action && allowedActions.includes(action)) {
+      mentionsRouted = await handleMentionDelegation(app, eventType, payload);
+    }
     return reply.status(200).send({ ok: true, event: eventType, handled: mentionsRouted > 0, mentionsRouted });
   });
 }
@@ -474,10 +478,46 @@ function extractEventContext(eventType: string, payload: unknown): MentionContex
   }
 }
 
-async function handleIssuesEvent(app: FastifyInstance, payload: unknown, reply: FastifyReply): Promise<unknown> {
+/**
+ * Run mention delegation for a given event type and payload.
+ * Only called after action gating confirms this is a "new content" event.
+ */
+async function handleMentionDelegation(app: FastifyInstance, eventType: string, payload: unknown): Promise<number> {
+  const mentionText = extractEventText(eventType, payload);
+  const mentions = extractMentions(mentionText);
+  const mentionCtx = extractEventContext(eventType, payload);
+  if (mentions.length > 0 && mentionCtx) {
+    return routeMentionDelegations(app, mentions, mentionCtx);
+  }
+  return 0;
+}
+
+/** Actions that represent new/changed content (worth scanning for @mentions). */
+const MENTION_ACTIONS: Record<string, string[]> = {
+  issues: ["opened", "edited"],
+  issue_comment: ["created"],
+  pull_request: ["opened", "edited"],
+  pull_request_review: ["submitted"],
+  pull_request_review_comment: ["created"],
+  discussion: ["created", "edited"],
+  discussion_comment: ["created"],
+  commit_comment: ["created"],
+};
+
+async function handleIssuesEvent(
+  app: FastifyInstance,
+  eventType: string,
+  payload: unknown,
+  reply: FastifyReply,
+): Promise<unknown> {
   const data = parseIssuesPayload(payload);
 
-  // Only handle specific actions
+  // Mention delegation — only on new/changed content
+  if (MENTION_ACTIONS.issues?.includes(data.action)) {
+    await handleMentionDelegation(app, eventType, payload);
+  }
+
+  // Only handle specific actions for repo-targeted routing
   const handledActions = ["opened", "edited", "labeled"];
   if (!handledActions.includes(data.action)) {
     return reply.status(200).send({ ok: true, event: "issues", action: data.action, handled: false });
@@ -525,10 +565,20 @@ async function handleIssuesEvent(app: FastifyInstance, payload: unknown, reply: 
   return reply.status(200).send({ ok: true, event: "issues", action: data.action, routed: true });
 }
 
-async function handleIssueCommentEvent(app: FastifyInstance, payload: unknown, reply: FastifyReply): Promise<unknown> {
+async function handleIssueCommentEvent(
+  app: FastifyInstance,
+  eventType: string,
+  payload: unknown,
+  reply: FastifyReply,
+): Promise<unknown> {
   const data = parseIssueCommentPayload(payload);
 
-  // Only handle "created" action
+  // Mention delegation — only on new comments
+  if (MENTION_ACTIONS.issue_comment?.includes(data.action)) {
+    await handleMentionDelegation(app, eventType, payload);
+  }
+
+  // Only handle "created" action for repo-targeted routing
   if (data.action !== "created") {
     return reply.status(200).send({ ok: true, event: "issue_comment", action: data.action, handled: false });
   }
