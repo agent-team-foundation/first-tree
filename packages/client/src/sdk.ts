@@ -1,4 +1,4 @@
-import type { Agent, InboxEntryWithMessage, Message, SendMessage, SendToAgent } from "@agent-hub/shared";
+import type { Agent, Chat, InboxEntryWithMessage, Message, SendMessage, SendToAgent } from "@agent-hub/shared";
 
 export type SdkConfig = {
   serverUrl: string;
@@ -14,6 +14,11 @@ export type RegisterResult = {
 
 export type PullResult = {
   entries: InboxEntryWithMessage[];
+};
+
+export type PaginatedResult<T> = {
+  items: T[];
+  nextCursor: string | null;
 };
 
 export class AgentHubSDK {
@@ -67,6 +72,24 @@ export class AgentHubSDK {
       method: "POST",
       body: JSON.stringify(data),
     });
+  }
+
+  /** List chats the current agent participates in. */
+  async listChats(options?: { limit?: number; cursor?: string }): Promise<PaginatedResult<Chat>> {
+    return this.requestJson(`/api/v1/agent/chats${this.queryString(options)}`);
+  }
+
+  /** List messages in a chat. Requires caller to be a participant. */
+  async listMessages(chatId: string, options?: { limit?: number; cursor?: string }): Promise<PaginatedResult<Message>> {
+    return this.requestJson(`/api/v1/agent/chats/${chatId}/messages${this.queryString(options)}`);
+  }
+
+  private queryString(options?: { limit?: number; cursor?: string }): string {
+    const params = new URLSearchParams();
+    if (options?.limit !== undefined) params.set("limit", String(options.limit));
+    if (options?.cursor) params.set("cursor", options.cursor);
+    const qs = params.toString();
+    return qs ? `?${qs}` : "";
   }
 
   private async requestVoid(path: string, init?: RequestInit): Promise<void> {

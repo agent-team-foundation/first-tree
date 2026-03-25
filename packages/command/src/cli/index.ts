@@ -3,9 +3,12 @@
 import { Command } from "commander";
 import { registerAdminCommands } from "../commands/admin.js";
 import { registerAgentCommands } from "../commands/agent.js";
+import { registerChatsCommand } from "../commands/chats.js";
 import { registerClientCommands } from "../commands/client.js";
 import { registerConfigCommands } from "../commands/config.js";
 import { registerDbCommands } from "../commands/db.js";
+import { registerHistoryCommand } from "../commands/history.js";
+import { registerSendCommand } from "../commands/send.js";
 import { registerServerCommands } from "../commands/server.js";
 import { registerStatusCommand } from "../commands/status.js";
 import { registerConnectCommand } from "./connect.js";
@@ -32,5 +35,10 @@ registerStartCommand(program);
 
 // Legacy agent commands (register, pull) — at top level
 registerAgentCommands(program);
+
+// Messaging commands (send, chats, history) — at top level
+registerSendCommand(program);
+registerChatsCommand(program);
+registerHistoryCommand(program);
 
 program.parse();
