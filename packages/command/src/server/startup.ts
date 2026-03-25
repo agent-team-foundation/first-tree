@@ -138,9 +138,17 @@ export async function startServer(options: StartOptions): Promise<void> {
 }
 
 /**
- * Resolve web dist path — find and build @agent-hub/web if available.
+ * Resolve web dist path.
+ * 1. npm install: embedded at dist/web/ (relative to the built CLI)
+ * 2. Monorepo dev: resolved from @agent-hub/web package (builds if needed)
  */
 function resolveWebDist(): string | undefined {
+  // npm publish: web assets are embedded next to the built CLI
+  const cliDir = dirname(fileURLToPath(import.meta.url));
+  const embeddedPath = join(cliDir, "..", "web");
+  if (existsSync(join(embeddedPath, "index.html"))) return embeddedPath;
+
+  // Monorepo dev: resolve from web package
   try {
     const webPkgUrl = import.meta.resolve("@agent-hub/web/package.json");
     const webDir = dirname(fileURLToPath(webPkgUrl));

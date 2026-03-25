@@ -4,13 +4,16 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/app.ts",
+    ".": {
+      "types": "./src/app.ts",
+      "import": "./dist/app.mjs"
+    },
     "./config": "./src/config.ts",
     "./package.json": "./package.json"
   },
   "scripts": {
     "dev": "tsx watch --env-file=../../.env src/index.ts",
-    "build": "tsdown src/index.ts --format esm --dts",
+    "build": "tsdown src/index.ts src/app.ts --format esm --no-dts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",

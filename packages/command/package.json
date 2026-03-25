@@ -13,15 +13,14 @@
     "agent-hub": "./dist/cli/index.mjs"
   },
   "files": [
-    "dist",
-    "templates"
+    "dist"
   ],
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
     "dev": "tsx src/cli/index.ts",
-    "build": "tsdown src/cli/index.ts src/index.ts --format esm --no-dts",
+    "build": "tsdown src/cli/index.ts src/index.ts --format esm --no-dts && node scripts/embed-assets.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests"
   },
@@ -35,16 +34,25 @@
     "node": ">=22.16.0"
   },
   "dependencies": {
-    "@agent-hub/client": "workspace:*",
-    "@agent-hub/server": "workspace:*",
-    "@agent-hub/shared": "workspace:*",
+    "@fastify/static": "^9.0.0",
+    "@fastify/websocket": "^11.2.0",
     "@inquirer/prompts": "^8.3.0",
+    "@larksuiteoapi/node-sdk": "^1.59.0",
     "bcrypt": "^6.0.0",
     "commander": "^13.1.0",
     "drizzle-orm": "^0.44.0",
-    "postgres": "^3.4.0"
+    "fastify": "^5.3.0",
+    "gray-matter": "^4.0.3",
+    "jose": "^6.0.0",
+    "postgres": "^3.4.0",
+    "ws": "^8.20.0",
+    "yaml": "^2.8.3",
+    "zod": "^3.25.0"
   },
   "devDependencies": {
+    "@agent-hub/client": "workspace:*",
+    "@agent-hub/server": "workspace:*",
+    "@agent-hub/shared": "workspace:*",
     "@agent-hub/web": "workspace:*",
     "@types/bcrypt": "^5.0.0",
     "@types/node": "^22.16.0",

@@ -11,7 +11,7 @@
     }
   },
   "scripts": {
-    "build": "tsdown src/index.ts --format esm --dts",
+    "build": "tsdown src/index.ts --format esm --no-dts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests"
   },
