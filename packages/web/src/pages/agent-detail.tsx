@@ -306,6 +306,12 @@ export function AgentDetailPage() {
               <dt className="text-muted-foreground mb-1">Inbox ID</dt>
               <dd className="font-mono">{agent.inboxId}</dd>
             </div>
+            {agent.delegateMention && (
+              <div>
+                <dt className="text-muted-foreground mb-1">Delegate Mention</dt>
+                <dd className="font-mono">{agent.delegateMention}</dd>
+              </div>
+            )}
             {role && (
               <div>
                 <dt className="text-muted-foreground mb-1">Role</dt>

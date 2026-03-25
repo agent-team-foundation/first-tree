@@ -123,10 +123,11 @@ async function fetchMembers(repo: string, branch: string, token: string): Promis
 export function parseNodeMetadata(content: string): {
   type: string;
   displayName: string | null;
+  delegateMention: string | null;
 } {
   const match = /^---\n([\s\S]*?)\n---/.exec(content);
   if (!match) {
-    return { type: "autonomous_agent", displayName: null };
+    return { type: "autonomous_agent", displayName: null, delegateMention: null };
   }
 
   const frontmatter = match[1] ?? "";
@@ -138,6 +139,7 @@ export function parseNodeMetadata(content: string): {
   return {
     type: getValue("type") ?? "autonomous_agent",
     displayName: getValue("display_name") ?? getValue("title") ?? getValue("name"),
+    delegateMention: getValue("delegate_mention"),
   };
 }
 
@@ -182,33 +184,43 @@ export async function syncFromGitHub(
     try {
       const meta = member.nodeContent
         ? parseNodeMetadata(member.nodeContent)
-        : { type: "autonomous_agent", displayName: null };
+        : { type: "autonomous_agent", displayName: null, delegateMention: null };
 
       const existing = await db.execute(
-        sql`SELECT id, status, type, display_name FROM agents WHERE id = ${member.name}`,
+        sql`SELECT id, status, type, display_name, delegate_mention FROM agents WHERE id = ${member.name}`,
       );
 
       if (existing.length === 0) {
         // New agent — create
         await db.execute(sql`
-          INSERT INTO agents (id, type, display_name, status, inbox_id)
-          VALUES (${member.name}, ${meta.type}, ${meta.displayName}, 'active', ${`inbox_${member.name}`})
+          INSERT INTO agents (id, type, display_name, delegate_mention, status, inbox_id)
+          VALUES (${member.name}, ${meta.type}, ${meta.displayName}, ${meta.delegateMention}, 'active', ${`inbox_${member.name}`})
         `);
         result.created++;
       } else {
-        const agent = existing[0] as { id: string; status: string; type: string; display_name: string | null };
+        const agent = existing[0] as {
+          id: string;
+          status: string;
+          type: string;
+          display_name: string | null;
+          delegate_mention: string | null;
+        };
 
         if (agent.status === "suspended") {
           // Reactivate — member is back in tree
           await db.execute(sql`
-            UPDATE agents SET status = 'active', type = ${meta.type}, display_name = ${meta.displayName}
+            UPDATE agents SET status = 'active', type = ${meta.type}, display_name = ${meta.displayName}, delegate_mention = ${meta.delegateMention}
             WHERE id = ${member.name}
           `);
           result.reactivated++;
-        } else if (agent.type !== meta.type || agent.display_name !== meta.displayName) {
+        } else if (
+          agent.type !== meta.type ||
+          agent.display_name !== meta.displayName ||
+          agent.delegate_mention !== meta.delegateMention
+        ) {
           // Fields changed — update
           await db.execute(sql`
-            UPDATE agents SET type = ${meta.type}, display_name = ${meta.displayName}
+            UPDATE agents SET type = ${meta.type}, display_name = ${meta.displayName}, delegate_mention = ${meta.delegateMention}
             WHERE id = ${member.name}
           `);
           result.updated++;

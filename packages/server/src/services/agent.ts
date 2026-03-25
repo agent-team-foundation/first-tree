@@ -84,6 +84,7 @@ export async function listAgents(db: Database, limit: number, cursor?: string) {
       organizationId: agents.organizationId,
       type: agents.type,
       displayName: agents.displayName,
+      delegateMention: agents.delegateMention,
       inboxId: agents.inboxId,
       status: agents.status,
       metadata: agents.metadata,
