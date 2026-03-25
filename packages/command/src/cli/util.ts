@@ -27,6 +27,15 @@ export function handleError(error: unknown): never {
   fail("UNKNOWN_ERROR", msg, 1);
 }
 
+/** Parse and validate a numeric limit option from Commander string. */
+export function parseLimit(value: string, max: number): number {
+  const limit = Number.parseInt(value, 10);
+  if (Number.isNaN(limit) || limit < 1 || limit > max) {
+    fail("INVALID_LIMIT", `Limit must be between 1 and ${max}.`, 2);
+  }
+  return limit;
+}
+
 /** Write a log line to stderr. */
 export function log(tag: string, message: string): void {
   process.stderr.write(`[${tag}] ${message}\n`);
