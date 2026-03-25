@@ -9,7 +9,18 @@ import { messages } from "../db/schema/messages.js";
 import { ForbiddenError, NotFoundError } from "../errors.js";
 import { findOrCreateDirectChat } from "./chat.js";
 
-export async function sendMessage(db: Database, chatId: string, senderId: string, data: SendMessage) {
+export type SendMessageResult = {
+  message: typeof messages.$inferSelect;
+  /** Inbox IDs that received this message (for notification). */
+  recipients: string[];
+};
+
+export async function sendMessage(
+  db: Database,
+  chatId: string,
+  senderId: string,
+  data: SendMessage,
+): Promise<SendMessageResult> {
   return db.transaction(async (tx) => {
     // 1. Store message
     const messageId = randomUUID();
@@ -51,6 +62,9 @@ export async function sendMessage(db: Database, chatId: string, senderId: string
       await tx.insert(inboxEntries).values(entries);
     }
 
+    // Collect recipient inboxIds for notification
+    const recipients = entries.map((e) => e.inboxId);
+
     // 4. replyTo routing: if this message replies to another message that has a replyTo,
     //    create an additional inbox entry for the original requester
     if (data.inReplyTo) {
@@ -72,6 +86,11 @@ export async function sendMessage(db: Database, chatId: string, senderId: string
             chatId: original.replyToChat,
           })
           .onConflictDoNothing();
+
+        // Include replyTo recipient for notification
+        if (!recipients.includes(original.replyToInbox)) {
+          recipients.push(original.replyToInbox);
+        }
       }
     }
 
@@ -79,11 +98,16 @@ export async function sendMessage(db: Database, chatId: string, senderId: string
     await tx.update(chats).set({ updatedAt: new Date() }).where(eq(chats.id, chatId));
 
     if (!msg) throw new Error("Unexpected: INSERT RETURNING produced no row");
-    return msg;
+    return { message: msg, recipients };
   });
 }
 
-export async function sendToAgent(db: Database, senderId: string, targetAgentId: string, data: SendToAgent) {
+export async function sendToAgent(
+  db: Database,
+  senderId: string,
+  targetAgentId: string,
+  data: SendToAgent,
+): Promise<SendMessageResult> {
   // Verify target agent exists and is in the same org
   const [sender] = await db
     .select({ id: agents.id, organizationId: agents.organizationId })

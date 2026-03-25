@@ -115,3 +115,10 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
     },
   };
 }
+
+/** Fire-and-forget: notify all recipients that a new message is available. */
+export function notifyRecipients(notifier: Notifier, recipients: string[], messageId: string): void {
+  for (const inboxId of recipients) {
+    notifier.notify(inboxId, messageId).catch(() => {});
+  }
+}

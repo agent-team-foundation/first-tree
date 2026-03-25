@@ -1,5 +1,6 @@
 import { AgentSlot } from "./agent-slot.js";
 import type { RuntimeConfig } from "./config.js";
+import { getHandlerFactory } from "./handler.js";
 
 export type AgentRuntimeOptions = {
   config: RuntimeConfig;
@@ -18,15 +19,16 @@ export class AgentRuntime {
     this.shutdownTimeout = options.shutdownTimeout ?? DEFAULT_SHUTDOWN_TIMEOUT;
 
     for (const [name, agentConfig] of Object.entries(config.agents)) {
+      const handlerFactory = getHandlerFactory(agentConfig.type);
       this.slots.push(
         new AgentSlot({
           name,
           serverUrl: config.server,
           token: agentConfig.token,
-          command: agentConfig.command,
+          type: agentConfig.type,
+          handlerFactory,
           session: agentConfig.session,
           concurrency: agentConfig.concurrency,
-          env: agentConfig.env,
         }),
       );
     }

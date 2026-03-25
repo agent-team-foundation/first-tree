@@ -9,6 +9,7 @@ import * as mappingService from "./adapter-mapping.js";
 import { decryptCredentials } from "./crypto.js";
 import type { FeishuBotCredentials, InboundEvent } from "./feishu/types.js";
 import { sendMessage } from "./message.js";
+import { type Notifier, notifyRecipients } from "./notifier.js";
 
 const PROXY_ENV_KEYS = ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"];
 
@@ -91,6 +92,7 @@ export function createAdapterManager(
   db: Database,
   encryptionKey: string | undefined,
   log: FastifyBaseLogger,
+  notifier?: Notifier,
 ): AdapterManager {
   const bots = new Map<string, ManagedBot>();
 
@@ -119,7 +121,7 @@ export function createAdapterManager(
       if (!bot) return;
 
       try {
-        await processInboundMessage(db, event, bot, log);
+        await processInboundMessage(db, event, bot, log, notifier);
         bot.lastActiveAt = new Date();
       } catch (err) {
         // Unclaim the event so it can be retried on next delivery
@@ -334,6 +336,7 @@ async function processInboundMessage(
   event: InboundEvent,
   bot: ManagedBot,
   log: FastifyBaseLogger,
+  inboxNotifier?: Notifier,
 ): Promise<void> {
   // 1. Resolve sender → internal agent
   const agentMapping = await mappingService.findAgentByExternalUser(db, "feishu", event.senderId);
@@ -363,7 +366,7 @@ async function processInboundMessage(
       ? (event.content as { text: string }).text
       : JSON.stringify(event.content);
 
-  const msg = await sendMessage(db, chatId, senderAgentId, {
+  const { message: msg, recipients } = await sendMessage(db, chatId, senderAgentId, {
     format: event.messageType === "text" ? "text" : "card",
     content: event.messageType === "text" ? content : event.content,
     metadata: {
@@ -381,6 +384,10 @@ async function processInboundMessage(
     externalMessageId: event.messageId,
     externalChannelId: event.externalChannelId,
   });
+
+  if (inboxNotifier) {
+    notifyRecipients(inboxNotifier, recipients, msg.id);
+  }
 
   log.info({ appId: bot.appId, chatId, messageId: msg.id }, "Processed inbound Feishu message");
 }

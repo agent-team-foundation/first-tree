@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { registerBuiltinHandlers } from "../handlers/index.js";
 import { loadRuntimeConfig } from "../runtime/config.js";
 import { AgentRuntime } from "../runtime/runtime.js";
 import { fail } from "./output.js";
@@ -13,6 +14,8 @@ export function registerStartCommand(program: Command): void {
     .option("--shutdown-timeout <ms>", "Graceful shutdown timeout in ms", "30000")
     .action(async (options: { config: string; server?: string; shutdownTimeout: string }) => {
       try {
+        registerBuiltinHandlers();
+
         log("runtime", `Loading config from ${options.config}`);
         const config = loadRuntimeConfig(options.config);
 

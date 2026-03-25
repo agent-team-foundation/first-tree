@@ -95,7 +95,7 @@ export class AgentConnection extends EventEmitter<ConnectionEvents> {
   // ---- WebSocket management ------------------------------------------------
 
   private openWebSocket(): void {
-    const wsUrl = this.serverUrl.replace(/^http/, "ws") + "/api/v1/agent/ws/inbox";
+    const wsUrl = `${this.serverUrl.replace(/^http/, "ws")}/api/v1/agent/ws/inbox`;
     const ws = new WebSocket(wsUrl, {
       headers: { Authorization: `Bearer ${this.token}` },
     });

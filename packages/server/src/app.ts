@@ -190,7 +190,7 @@ export async function buildApp(config: Config) {
   app.decorate("notifier", notifier);
 
   // Adapter manager — decorated so admin routes can trigger reload
-  const adapterManager = createAdapterManager(db, config.adapterEncryptionKey, app.log);
+  const adapterManager = createAdapterManager(db, config.adapterEncryptionKey, app.log, notifier);
   app.decorate("adapterManager", adapterManager);
 
   // Background tasks

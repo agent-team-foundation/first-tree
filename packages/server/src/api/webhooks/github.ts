@@ -6,6 +6,7 @@ import { agents } from "../../db/schema/agents.js";
 import { BadRequestError, ConflictError, UnauthorizedError } from "../../errors.js";
 import { createAgent } from "../../services/agent.js";
 import { sendToAgent } from "../../services/message.js";
+import { notifyRecipients } from "../../services/notifier.js";
 
 // ── GitHub payload types ────────────────────────────────────────────
 
@@ -270,11 +271,13 @@ async function handleIssuesEvent(app: FastifyInstance, payload: unknown, reply: 
     action: data.action,
   };
 
-  await sendToAgent(app.db, senderId, targetAgentId, {
+  const { message: msg, recipients } = await sendToAgent(app.db, senderId, targetAgentId, {
     format: "card",
     content,
     metadata,
   });
+
+  notifyRecipients(app.notifier, recipients, msg.id);
 
   return reply.status(200).send({ ok: true, event: "issues", action: data.action, routed: true });
 }
@@ -322,11 +325,13 @@ async function handleIssueCommentEvent(app: FastifyInstance, payload: unknown, r
     action: data.action,
   };
 
-  await sendToAgent(app.db, senderId, targetAgentId, {
+  const { message: msg, recipients } = await sendToAgent(app.db, senderId, targetAgentId, {
     format: "card",
     content,
     metadata,
   });
+
+  notifyRecipients(app.notifier, recipients, msg.id);
 
   return reply.status(200).send({ ok: true, event: "issue_comment", action: data.action, routed: true });
 }

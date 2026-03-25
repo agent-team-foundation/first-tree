@@ -6,26 +6,16 @@ import { z } from "zod";
 // Schema definitions
 // ---------------------------------------------------------------------------
 
-export const SESSION_MODES = {
-  PER_CHAT: "per_chat",
-  SINGLETON: "singleton",
-  PER_MESSAGE: "per_message",
-} as const;
-
-export type SessionMode = (typeof SESSION_MODES)[keyof typeof SESSION_MODES];
-
 const sessionConfigSchema = z.object({
-  mode: z.enum(["per_chat", "singleton", "per_message"]).default("per_message"),
   idle_timeout: z.number().int().positive().default(300),
   max_sessions: z.number().int().positive().default(10),
 });
 
 const agentSlotConfigSchema = z.object({
   token: z.string().min(1),
-  command: z.string().min(1),
+  type: z.string().min(1),
   session: sessionConfigSchema.default({}),
   concurrency: z.number().int().positive().default(5),
-  env: z.record(z.string()).optional(),
 });
 
 const runtimeConfigSchema = z.object({

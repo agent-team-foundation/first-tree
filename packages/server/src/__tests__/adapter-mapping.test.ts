@@ -182,7 +182,7 @@ describe("Adapter mapping service", () => {
         type: "direct",
         participantIds: [agent.id],
       });
-      const msg = await sendMessage(app.db, chat.id, agent.id, {
+      const { message: msg } = await sendMessage(app.db, chat.id, agent.id, {
         format: "text",
         content: "test message for ref",
       });
