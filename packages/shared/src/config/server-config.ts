@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineConfig, field, optional } from "./schema.js";
+import { defineConfig, field } from "./schema.js";
 import { getConfig } from "./singleton.js";
 import type { InferConfig } from "./types.js";
 
@@ -53,9 +53,6 @@ export const serverConfigSchema = defineConfig({
       },
     }),
   },
-  web: optional({
-    distPath: field(z.string(), { env: "AGENT_HUB_WEB_DIST_PATH" }),
-  }),
 });
 
 export type ServerConfig = InferConfig<typeof serverConfigSchema>;

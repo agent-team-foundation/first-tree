@@ -188,7 +188,7 @@ export async function buildApp(config: Config) {
   );
 
   // Serve Web static files
-  const webDistPath = config.web?.distPath;
+  const webDistPath = config.webDistPath;
   if (webDistPath) {
     const webRoot = resolve(webDistPath);
     if (existsSync(webRoot)) {
