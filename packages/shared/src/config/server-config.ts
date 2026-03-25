@@ -6,7 +6,7 @@ import type { InferConfig } from "./types.js";
 export const serverConfigSchema = defineConfig({
   database: {
     url: field(z.string(), {
-      env: "DATABASE_URL",
+      env: "AGENT_HUB_DATABASE_URL",
       auto: "docker-pg",
       prompt: {
         message: "PostgreSQL:",
@@ -20,24 +20,24 @@ export const serverConfigSchema = defineConfig({
     provider: field(z.enum(["docker", "external"]).default("docker")),
   },
   server: {
-    port: field(z.number().default(8000), { env: "PORT" }),
-    host: field(z.string().default("127.0.0.1"), { env: "HOST" }),
+    port: field(z.number().default(8000), { env: "AGENT_HUB_PORT" }),
+    host: field(z.string().default("127.0.0.1"), { env: "AGENT_HUB_HOST" }),
   },
   secrets: {
     jwtSecret: field(z.string(), {
-      env: "JWT_SECRET",
+      env: "AGENT_HUB_JWT_SECRET",
       auto: "random:base64url:32",
       secret: true,
     }),
     encryptionKey: field(z.string(), {
-      env: "ENCRYPTION_KEY",
+      env: "AGENT_HUB_ENCRYPTION_KEY",
       auto: "random:hex:32",
       secret: true,
     }),
   },
   contextTree: {
     repo: field(z.string(), {
-      env: "CONTEXT_TREE_REPO",
+      env: "AGENT_HUB_CONTEXT_TREE_REPO",
       prompt: { message: "Context Tree repo URL (e.g. https://github.com/org/first-tree):" },
     }),
     branch: field(z.string().default("main")),
@@ -45,7 +45,7 @@ export const serverConfigSchema = defineConfig({
   },
   github: {
     token: field(z.string(), {
-      env: "GITHUB_TOKEN",
+      env: "AGENT_HUB_GITHUB_TOKEN",
       secret: true,
       prompt: {
         message: "GitHub token (create at https://github.com/settings/tokens → repo scope):",
@@ -54,10 +54,7 @@ export const serverConfigSchema = defineConfig({
     }),
   },
   web: optional({
-    distPath: field(z.string(), { env: "WEB_DIST_PATH" }),
-  }),
-  webhooks: optional({
-    githubSecret: field(z.string(), { env: "GITHUB_WEBHOOK_SECRET", secret: true }),
+    distPath: field(z.string(), { env: "AGENT_HUB_WEB_DIST_PATH" }),
   }),
 });
 

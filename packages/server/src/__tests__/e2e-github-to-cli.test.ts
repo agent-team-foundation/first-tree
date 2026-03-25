@@ -163,15 +163,15 @@ describe("E2E: GitHub issue → Server → CLI pull", () => {
   });
 
   it("webhook signature verification", async () => {
-    // Create app with webhook secret
+    // Create app with webhook secret via env var
     const secret = "test-secret-123";
+    process.env.AGENT_HUB_GITHUB_WEBHOOK_SECRET = secret;
     const app2 = await buildApp({
       database: { url: DATABASE_URL, provider: "external" },
       server: { port: 0, host: "127.0.0.1" },
       secrets: { jwtSecret: "test-jwt-secret-key-for-e2e-sig", encryptionKey: "0".repeat(64) },
       contextTree: { repo: "test/tree", branch: "main", syncInterval: 3600 },
       github: { token: "test-token" },
-      webhooks: { githubSecret: secret },
       logger: false,
       instanceId: "e2e-test-sig",
     });
@@ -219,6 +219,7 @@ describe("E2E: GitHub issue → Server → CLI pull", () => {
       });
       expect(ok.status).toBe(200);
     } finally {
+      delete process.env.AGENT_HUB_GITHUB_WEBHOOK_SECRET;
       await app2.close();
     }
   });

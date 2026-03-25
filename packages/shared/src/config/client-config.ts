@@ -10,7 +10,7 @@ export const clientConfigSchema = defineConfig({
       prompt: { message: "Server URL:", default: "http://localhost:8000" },
     }),
   },
-  logLevel: field(z.enum(["debug", "info", "warn", "error"]).default("info"), { env: "LOG_LEVEL" }),
+  logLevel: field(z.enum(["debug", "info", "warn", "error"]).default("info"), { env: "AGENT_HUB_LOG_LEVEL" }),
 });
 
 export type ClientConfig = InferConfig<typeof clientConfigSchema>;
