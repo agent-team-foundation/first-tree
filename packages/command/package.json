@@ -21,7 +21,7 @@
   },
   "scripts": {
     "dev": "tsx src/cli/index.ts",
-    "build": "tsdown src/index.ts src/cli/index.ts --format esm --dts.eager",
+    "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests"
   },
