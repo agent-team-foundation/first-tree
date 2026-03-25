@@ -91,11 +91,16 @@ export async function startServer(options: StartOptions): Promise<void> {
   // 5. Check/create admin
   const hasAdmin = await hasAdminUser(serverConfig.database.url);
   if (!hasAdmin) {
-    const admin = await createAdminUser(serverConfig.database.url, "admin");
+    const envPassword = process.env.AGENT_HUB_ADMIN_PASSWORD;
+    const admin = await createAdminUser(serverConfig.database.url, "admin", envPassword || undefined);
     status("Admin", "created");
     blank();
     status("  Username:", admin.username);
-    status("  Password:", `${admin.password}  (save this — shown only once)`);
+    if (envPassword) {
+      status("  Password:", "(set via AGENT_HUB_ADMIN_PASSWORD)");
+    } else {
+      status("  Password:", `${admin.password}  (save this — shown only once)`);
+    }
     blank();
   } else {
     status("Admin", "exists");
