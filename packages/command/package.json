@@ -5,8 +5,8 @@
   "description": "Agent Hub — unified CLI for server, client, and agent management",
   "exports": {
     ".": {
-      "import": "./dist/index.mjs",
-      "types": "./dist/index.d.mts"
+      "types": "./src/index.ts",
+      "import": "./dist/index.mjs"
     }
   },
   "bin": {
@@ -21,7 +21,7 @@
   },
   "scripts": {
     "dev": "tsx src/cli/index.ts",
-    "build": "tsc --noEmit",
+    "build": "tsdown src/cli/index.ts src/index.ts --format esm --no-dts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests"
   },
@@ -35,19 +35,19 @@
     "node": ">=22.16.0"
   },
   "dependencies": {
-    "@inquirer/prompts": "^8.3.0",
-    "commander": "^13.1.0"
-  },
-  "devDependencies": {
     "@agent-hub/client": "workspace:*",
     "@agent-hub/server": "workspace:*",
     "@agent-hub/shared": "workspace:*",
+    "@inquirer/prompts": "^8.3.0",
+    "bcrypt": "^6.0.0",
+    "commander": "^13.1.0",
+    "drizzle-orm": "^0.44.0",
+    "postgres": "^3.4.0"
+  },
+  "devDependencies": {
     "@agent-hub/web": "workspace:*",
     "@types/bcrypt": "^5.0.0",
     "@types/node": "^22.16.0",
-    "bcrypt": "^6.0.0",
-    "drizzle-orm": "^0.44.0",
-    "postgres": "^3.4.0",
     "tsdown": "^0.21.4",
     "vitest": "^3.2.0"
   }

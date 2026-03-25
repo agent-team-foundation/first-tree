@@ -127,9 +127,10 @@ export class SessionManager {
     const { max_sessions } = this.config.session;
     if (this.sessions.size < max_sessions) return;
 
-    // Find least recently active session
+    // Find least recently active IDLE session — skip busy ones to avoid data loss
     let oldest: { key: string; lastActivity: number } | null = null;
     for (const [key, session] of this.sessions) {
+      if (session.processing || session.messageQueue.length > 0) continue;
       if (!oldest || session.lastActivity < oldest.lastActivity) {
         oldest = { key, lastActivity: session.lastActivity };
       }
@@ -143,6 +144,7 @@ export class SessionManager {
         this.sessions.delete(oldest.key);
       }
     }
+    // If all sessions are busy, allow temporary overflow rather than dropping messages
   }
 
   private evictIdle(): void {

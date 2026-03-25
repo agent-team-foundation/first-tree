@@ -1,79 +1,62 @@
-import { AgentConnection } from "@agent-hub/client";
+import { AgentSlot, getHandlerFactory, registerBuiltinHandlers } from "@agent-hub/client";
 import type { AgentConfig } from "@agent-hub/shared/config";
 
-type AgentInstance = {
+type AgentEntry = {
   name: string;
-  connection: AgentConnection;
-  connected: boolean;
+  slot: AgentSlot;
 };
 
 /**
- * Client runtime — manages multiple agent connections to a single server.
- * Uses WebSocket-based AgentConnection for real-time message delivery.
+ * Client runtime — manages multiple agent connections via AgentSlot.
+ * Each agent runs a full Handler + SessionManager pipeline.
  */
 export class ClientRuntime {
   private readonly serverUrl: string;
-  private readonly agents: Map<string, AgentInstance> = new Map();
+  private readonly agents: AgentEntry[] = [];
 
   constructor(serverUrl: string) {
     this.serverUrl = serverUrl;
+    registerBuiltinHandlers();
   }
 
-  /** Add an agent to manage. */
+  /** Add an agent to manage. Config includes type, concurrency, session settings. */
   addAgent(name: string, config: AgentConfig): void {
-    const connection = new AgentConnection({
+    const handlerFactory = getHandlerFactory(config.type);
+    const slot = new AgentSlot({
+      name,
       serverUrl: this.serverUrl,
       token: config.token,
+      type: config.type,
+      handlerFactory,
+      session: {
+        idle_timeout: config.session.idle_timeout,
+        max_sessions: config.session.max_sessions,
+      },
+      concurrency: config.concurrency,
     });
-    this.agents.set(name, { name, connection, connected: false });
+    this.agents.push({ name, slot });
   }
 
-  /** Start all agent connections. */
+  /** Start all agent connections with handler pipelines. */
   async start(): Promise<void> {
-    for (const [name, agent] of this.agents) {
+    for (const agent of this.agents) {
       try {
-        agent.connection.on("error", (err) => {
-          process.stderr.write(`  [${name}] error: ${err.message}\n`);
-        });
-        agent.connection.on("reconnecting", (attempt) => {
-          process.stderr.write(`  [${name}] reconnecting (attempt ${attempt})...\n`);
-        });
-
-        // Register message handler — log and auto-ack for now
-        agent.connection.onMessage(async (entry) => {
-          const msg = entry.message;
-          process.stderr.write(`  [${name}] inbox: ${msg.format} from ${msg.senderId} in chat ${msg.chatId}\n`);
-          await agent.connection.sdk.ack(entry.id);
-        });
-
-        const identity = await agent.connection.connect();
-        agent.connected = true;
-        process.stderr.write(`  \u2713 ${name}: connected (agent: ${identity.displayName ?? identity.agentId})\n`);
+        const identity = await agent.slot.start();
+        process.stderr.write(
+          `  \u2713 ${agent.name}: connected (agent: ${identity.displayName ?? identity.agentId})\n`,
+        );
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        process.stderr.write(`  \u2717 ${name}: connection failed \u2014 ${msg}\n`);
+        process.stderr.write(`  \u2717 ${agent.name}: connection failed \u2014 ${msg}\n`);
       }
     }
 
-    const connected = [...this.agents.values()].filter((a) => a.connected).length;
-    process.stderr.write(`\n  ${connected}/${this.agents.size} agent(s) running. Press Ctrl+C to stop.\n`);
+    const connected = this.agents.length;
+    process.stderr.write(`\n  ${connected} agent(s) running. Press Ctrl+C to stop.\n`);
   }
 
-  /** Stop all agent connections. */
+  /** Stop all agent connections gracefully. */
   async stop(): Promise<void> {
-    for (const agent of this.agents.values()) {
-      if (agent.connected) {
-        await agent.connection.disconnect();
-      }
-      agent.connected = false;
-    }
-  }
-
-  /** Get status of all agents. */
-  getStatus(): Array<{ name: string; connected: boolean }> {
-    return [...this.agents.entries()].map(([name, agent]) => ({
-      name,
-      connected: agent.connected,
-    }));
+    await Promise.allSettled(this.agents.map((a) => a.slot.stop()));
   }
 }

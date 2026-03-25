@@ -98,7 +98,7 @@ export function registerClientCommands(program: Command): void {
         process.stderr.write("\n  Configured agents:\n\n");
         for (const [name, config] of agents) {
           const masked = config.token.length > 8 ? `${config.token.slice(0, 6)}***${config.token.slice(-2)}` : "***";
-          process.stderr.write(`  ${name.padEnd(24)} token: ${masked}\n`);
+          process.stderr.write(`  ${name.padEnd(20)} type: ${config.type.padEnd(14)} token: ${masked}\n`);
         }
         process.stderr.write("\n");
       } catch {
@@ -165,7 +165,7 @@ export function registerClientCommands(program: Command): void {
         }
         for (const [name, config] of agents) {
           const masked = config.token.length > 8 ? `${config.token.slice(0, 6)}***${config.token.slice(-2)}` : "***";
-          process.stderr.write(`  ${name.padEnd(24)} token: ${masked}\n`);
+          process.stderr.write(`  ${name.padEnd(20)} type: ${config.type.padEnd(14)} token: ${masked}\n`);
         }
       } catch {
         process.stderr.write("  No agents configured.\n");

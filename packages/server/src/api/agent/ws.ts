@@ -25,11 +25,15 @@ export function agentWsRoutes(notifier: Notifier, instanceId: string) {
 
       socket.on("close", async () => {
         notifier.unsubscribe(inboxId, socket);
-        connectionManager.removeConnection(agent.id, socket);
-        try {
-          await presenceService.setOffline(app.db, agent.id);
-        } catch {
-          // best-effort
+        const wasActive = connectionManager.removeConnection(agent.id, socket);
+        // Only set offline if this socket was still the active connection.
+        // A newer socket may have replaced it — avoid overwriting its online status.
+        if (wasActive) {
+          try {
+            await presenceService.setOffline(app.db, agent.id);
+          } catch {
+            // best-effort
+          }
         }
       });
     });

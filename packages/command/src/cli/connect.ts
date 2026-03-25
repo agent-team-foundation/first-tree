@@ -1,6 +1,4 @@
-import type { HandlerContext } from "@agent-hub/client";
-import { AgentConnection, getHandlerFactory, registerBuiltinHandlers, Semaphore } from "@agent-hub/client";
-import type { InboxEntryWithMessage } from "@agent-hub/shared";
+import { AgentSlot, getHandlerFactory, registerBuiltinHandlers } from "@agent-hub/client";
 import type { Command } from "commander";
 import { handleError, log, resolveConfig } from "./util.js";
 
@@ -20,48 +18,29 @@ export function registerConnectCommand(program: Command): void {
           config.serverUrl = options.server;
         }
 
-        const handlerFactory = getHandlerFactory(options.type);
-        const handler = handlerFactory({});
         const concurrency = Number.parseInt(options.concurrency, 10) || 5;
-        const semaphore = new Semaphore(concurrency);
+        const handlerFactory = getHandlerFactory(options.type);
 
-        const conn = new AgentConnection({
+        const slot = new AgentSlot({
+          name: "connect",
           serverUrl: config.serverUrl,
           token: config.token,
+          type: options.type,
+          handlerFactory,
+          session: { idle_timeout: 300, max_sessions: 10 },
+          concurrency,
         });
 
-        conn.on("connected", () => log("connect", "Connected"));
-        conn.on("reconnecting", (attempt) => log("connect", `Reconnecting (attempt ${attempt})...`));
-        conn.on("error", (err) => log("connect", `Error: ${err.message}`));
-
-        const agent = await conn.connect();
+        const agent = await slot.start();
         log("connect", `Registered as ${agent.displayName ?? agent.agentId} (${agent.agentId})`);
-
-        const ctx: HandlerContext = {
-          agent: { agentId: agent.agentId, displayName: agent.displayName },
-          sdk: conn.sdk,
-          log: (msg) => log("connect", msg),
-        };
-
-        conn.onMessage(async (entry: InboxEntryWithMessage) => {
-          await semaphore.acquire();
-          try {
-            await handler.handle(entry, ctx);
-          } catch (err) {
-            log("connect", `Handler error: ${err instanceof Error ? err.message : String(err)}`);
-          } finally {
-            semaphore.release();
-          }
-        });
 
         const shutdown = async () => {
           log("connect", "Shutting down...");
-          await handler.shutdown?.();
-          await conn.disconnect();
+          await slot.stop();
           process.exit(0);
         };
-        process.on("SIGINT", shutdown);
-        process.on("SIGTERM", shutdown);
+        process.on("SIGINT", () => void shutdown());
+        process.on("SIGTERM", () => void shutdown());
       } catch (error) {
         handleError(error);
       }
