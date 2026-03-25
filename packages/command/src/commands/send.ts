@@ -1,3 +1,4 @@
+import type { MessageFormat } from "@agent-hub/shared";
 import type { Command } from "commander";
 import { fail, success } from "../cli/output.js";
 import { createSdk, handleError } from "../cli/util.js";
@@ -26,7 +27,7 @@ function readStdin(): Promise<string | null> {
 }
 
 interface SendOptions {
-  format: string;
+  format: MessageFormat;
   chat?: boolean;
   metadata?: string;
   replyTo?: string;
