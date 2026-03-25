@@ -1,6 +1,8 @@
 import { createAgentTokenSchema, paginationQuerySchema } from "@agent-hub/shared";
 import type { FastifyInstance } from "fastify";
 import * as agentService from "../../services/agent.js";
+import { forceDisconnect } from "../../services/connection-manager.js";
+import * as presenceService from "../../services/presence.js";
 
 function serializeDate(d: Date | null): string | null {
   return d ? d.toISOString() : null;
@@ -60,6 +62,17 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
   app.delete<{ Params: { agentId: string; tokenId: string } }>("/:agentId/tokens/:tokenId", async (request, reply) => {
     await agentService.revokeToken(app.db, request.params.agentId, request.params.tokenId);
     return reply.status(204).send();
+  });
+
+  // Force-disconnect an agent's WebSocket connection
+  app.post<{ Params: { agentId: string } }>("/:agentId/disconnect", async (request, reply) => {
+    const { agentId } = request.params;
+    // Verify agent exists
+    await agentService.getAgent(app.db, agentId);
+    // Close WebSocket and set presence offline
+    const wasConnected = forceDisconnect(agentId);
+    await presenceService.setOffline(app.db, agentId);
+    return reply.status(200).send({ disconnected: wasConnected });
   });
 
   // DELETE agent — only allowed for suspended agents (removed from tree)
