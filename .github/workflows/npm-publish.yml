@@ -1,0 +1,59 @@
+name: npm Publish
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Build & Publish
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      # Check version early to avoid unnecessary install/build
+      - name: Check version
+        id: version
+        working-directory: packages/command
+        run: |
+          LOCAL=$(node -p "require('./package.json').version")
+          PUBLISHED=$(npm view @unispark.ai/agent-hub version 2>/dev/null || echo "0.0.0")
+          if [[ "$LOCAL" != "$PUBLISHED" ]]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Version changed: $PUBLISHED -> $LOCAL"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Version unchanged ($LOCAL), skipping publish"
+          fi
+
+      - if: steps.version.outputs.changed == 'true'
+        uses: pnpm/action-setup@v4
+
+      - if: steps.version.outputs.changed == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - if: steps.version.outputs.changed == 'true'
+        run: pnpm build
+
+      - name: Publish to npm
+        if: steps.version.outputs.changed == 'true'
+        working-directory: packages/command
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
