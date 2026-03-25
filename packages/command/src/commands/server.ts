@@ -11,9 +11,10 @@ export function registerServerCommands(program: Command): void {
     .option("--port <number>", "Server port (default: 8000)", Number.parseInt)
     .option("--host <address>", "Bind address (default: 127.0.0.1)")
     .option("--database-url <url>", "Use an existing PostgreSQL (skip Docker)")
-    .action(async (options: { port?: number; host?: string; databaseUrl?: string }) => {
+    .option("--no-interactive", "Skip interactive prompts (for Docker/CI)")
+    .action(async (options: { port?: number; host?: string; databaseUrl?: string; interactive?: boolean }) => {
       try {
-        await startServer(options);
+        await startServer({ ...options, noInteractive: options.interactive === false });
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         process.stderr.write(`\n  Error: ${msg}\n\n`);

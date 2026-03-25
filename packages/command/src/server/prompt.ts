@@ -4,19 +4,52 @@ import { collectMissingPrompts, DEFAULT_CONFIG_DIR, setConfigValue } from "@agen
 import { input, password, select } from "@inquirer/prompts";
 
 /**
+ * Check if interactive mode is available.
+ * Returns false if --no-interactive flag is set or stdin is not a TTY.
+ */
+export function isInteractive(noInteractiveFlag?: boolean): boolean {
+  if (noInteractiveFlag) return false;
+  return process.stdin.isTTY === true;
+}
+
+/**
  * Schema-driven interactive setup.
- * Scans the config schema for fields with `prompt` that are missing,
- * prompts the user, and writes results to the YAML file.
+ * Scans the config schema for fields with `prompt` that are missing.
+ *
+ * In interactive mode: prompts the user and writes results to YAML.
+ * In non-interactive mode: fails with a clear error listing missing fields.
  */
 export async function promptMissingFields(options: {
   schema: Record<string, unknown>;
   role: string;
   configDir?: string;
   cliArgs?: Record<string, unknown>;
+  noInteractive?: boolean;
 }): Promise<Record<string, unknown>> {
-  const missing = collectMissingPrompts(options);
+  const missing = collectMissingPrompts({
+    schema: options.schema,
+    role: options.role,
+    configDir: options.configDir,
+    cliArgs: options.cliArgs,
+  });
   if (missing.length === 0) return {};
 
+  // Non-interactive: fail with actionable error
+  if (!isInteractive(options.noInteractive)) {
+    const lines = missing.map((m) => {
+      // Find the env var from the field schema
+      const envHint = findEnvVar(options.schema, m.dotPath);
+      const envStr = envHint ? `  (env: ${envHint})` : "";
+      return `  ${m.dotPath}${envStr}`;
+    });
+    throw new Error(
+      `Missing required configuration:\n${lines.join("\n")}\n\n` +
+        "Provide values via environment variables, config file (~/.agent-hub/server.yaml),\n" +
+        "or run without --no-interactive to use the interactive setup wizard.",
+    );
+  }
+
+  // Interactive: prompt for each missing field
   const configDir = options.configDir ?? DEFAULT_CONFIG_DIR;
   const configPath = join(configDir, `${options.role}.yaml`);
   const results: Record<string, unknown> = {};
@@ -80,6 +113,26 @@ async function askPrompt(dotPath: string, prompt: PromptDef): Promise<unknown> {
     message: prompt.message,
     default: prompt.default,
   });
+}
+
+/** Walk schema to find the env var name for a given dot path. */
+function findEnvVar(schema: Record<string, unknown>, dotPath: string): string | undefined {
+  const parts = dotPath.split(".");
+  let current: unknown = schema;
+  for (const part of parts) {
+    if (current === null || current === undefined || typeof current !== "object") return undefined;
+    const obj = current as Record<string, unknown>;
+    if (obj._tag === "optional") {
+      current = (obj.shape as Record<string, unknown>)[part];
+    } else {
+      current = obj[part];
+    }
+  }
+  if (typeof current === "object" && current !== null && "_tag" in current) {
+    const field = current as { _tag: string; options?: { env?: string } };
+    if (field._tag === "field") return field.options?.env;
+  }
+  return undefined;
 }
 
 function setNestedByDot(obj: Record<string, unknown>, dotPath: string, value: unknown): void {

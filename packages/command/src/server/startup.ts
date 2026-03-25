@@ -16,6 +16,7 @@ type StartOptions = {
   port?: number;
   host?: string;
   databaseUrl?: string;
+  noInteractive?: boolean;
 };
 
 /**
@@ -46,6 +47,7 @@ export async function startServer(options: StartOptions): Promise<void> {
     schema: serverConfigSchema as Record<string, unknown>,
     role: "server",
     cliArgs,
+    noInteractive: options.noInteractive,
   });
 
   // 3. docker-pg auto generator

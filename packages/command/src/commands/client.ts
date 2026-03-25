@@ -20,12 +20,14 @@ export function registerClientCommands(program: Command): void {
   client
     .command("start")
     .description("Start client — connect all configured agents to the server")
-    .action(async () => {
+    .option("--no-interactive", "Skip interactive prompts (for Docker/CI)")
+    .action(async (options: { interactive?: boolean }) => {
       try {
-        // Schema-driven interactive prompts for missing required fields
+        // Schema-driven prompts for missing required fields
         await promptMissingFields({
           schema: clientConfigSchema as Record<string, unknown>,
           role: "client",
+          noInteractive: options.interactive === false,
         });
 
         const config = await initConfig({
