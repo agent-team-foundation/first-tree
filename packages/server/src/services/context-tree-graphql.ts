@@ -137,7 +137,7 @@ export function parseNodeMetadata(content: string): {
 
   return {
     type: getValue("type") ?? "autonomous_agent",
-    displayName: getValue("display_name") ?? getValue("name"),
+    displayName: getValue("display_name") ?? getValue("title") ?? getValue("name"),
   };
 }
 
