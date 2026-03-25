@@ -18,7 +18,7 @@ This repo is the **template source and CLI** for Context Tree. It is NOT a conte
 
 ## Before Making Changes
 
-1. Read `docs/about.md` for the vision, and `.context-tree/principles.md` for the core ideas
+1. Read [docs/onboarding.md](docs/onboarding.md) — the full onboarding guide for setting up a context tree
 2. Read `.context-tree/principles.md` — the core ideas that Context Tree is built on
 3. Read `.context-tree/ownership-and-naming.md` — how nodes and ownership work
 

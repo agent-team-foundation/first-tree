@@ -56,6 +56,7 @@ context-tree upgrade      # shows what changed and what to do
 
 ## Documentation
 
+- [docs/onboarding.md](docs/onboarding.md) — Onboarding guide for setting up a context tree (for agents)
 - [docs/about.md](docs/about.md) — What is Context Tree and who it's for
 - [.context-tree/principles.md](.context-tree/principles.md) — Core principles with examples
 - [.context-tree/ownership-and-naming.md](.context-tree/ownership-and-naming.md) — Node naming and ownership model
