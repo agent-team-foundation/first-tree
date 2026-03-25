@@ -6,6 +6,7 @@ role: "Engineer"
 domains:
   - "agent-hub"
   - "kael agent development"
+delegate_mention: baixiaohang-assistant
 ---
 
 ## About
