@@ -7,7 +7,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from context_tree_cli.verify import _check, run_verify
+from context_tree_cli.verify import _check, _check_progress, run_verify
 from context_tree_cli.repo import Repo
 
 
@@ -27,6 +27,41 @@ class TestCheck:
         out = capsys.readouterr().out
         assert "FAIL" in out
         assert "my check" in out
+
+
+# ---------------------------------------------------------------------------
+# _check_progress
+# ---------------------------------------------------------------------------
+
+class TestCheckProgress:
+    def test_no_progress_file(self, tmp_path: Path) -> None:
+        repo = Repo(root=tmp_path)
+        assert _check_progress(repo) == []
+
+    def test_all_checked(self, tmp_path: Path) -> None:
+        ct = tmp_path / ".context-tree"
+        ct.mkdir()
+        (ct / "progress.md").write_text(
+            "# Progress\n- [x] Task one\n- [x] Task two\n"
+        )
+        repo = Repo(root=tmp_path)
+        assert _check_progress(repo) == []
+
+    def test_some_unchecked(self, tmp_path: Path) -> None:
+        ct = tmp_path / ".context-tree"
+        ct.mkdir()
+        (ct / "progress.md").write_text(
+            "# Progress\n- [x] Done task\n- [ ] Pending task\n- [ ] Another pending\n"
+        )
+        repo = Repo(root=tmp_path)
+        assert _check_progress(repo) == ["Pending task", "Another pending"]
+
+    def test_empty_progress(self, tmp_path: Path) -> None:
+        ct = tmp_path / ".context-tree"
+        ct.mkdir()
+        (ct / "progress.md").write_text("")
+        repo = Repo(root=tmp_path)
+        assert _check_progress(repo) == []
 
 
 # ---------------------------------------------------------------------------
