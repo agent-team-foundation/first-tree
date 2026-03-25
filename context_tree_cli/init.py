@@ -12,7 +12,6 @@ from context_tree_cli.repo import Repo
 from context_tree_cli.rules import evaluate_all
 
 SEED_TREE_URL = "https://github.com/agent-team-foundation/seed-tree"
-SEED_TREE_BRANCH = "feat/seed-tree-v0.1.0"  # TODO: change to "main" before release
 
 FRAMEWORK_DIR = ".context-tree"
 
@@ -30,7 +29,7 @@ def _clone_seed_tree() -> Path:
     tmp = tempfile.mkdtemp(prefix="context-tree-")
     print(f"Cloning seed-tree from {SEED_TREE_URL}...")
     result = subprocess.run(
-        ["git", "clone", "--depth", "1", "--branch", SEED_TREE_BRANCH, SEED_TREE_URL, tmp],
+        ["git", "clone", "--depth", "1", SEED_TREE_URL, tmp],
         capture_output=True,
         text=True,
     )
