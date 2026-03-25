@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 
 from context_tree_cli.repo import Repo
+
+UNCHECKED_RE = re.compile(r"^- \[ \] (.+)$", re.MULTILINE)
 
 
 def _check(label: str, passed: bool) -> bool:
@@ -15,11 +18,35 @@ def _check(label: str, passed: bool) -> bool:
     return passed
 
 
+def _check_progress(repo: Repo) -> list[str]:
+    """Read progress.md and return any unchecked items."""
+    text = repo.read_file(".context-tree/progress.md")
+    if text is None:
+        return []
+    return UNCHECKED_RE.findall(text)
+
+
 def run_verify() -> int:
     repo = Repo()
     all_passed = True
 
     print("Context Tree Verification\n")
+
+    # --- Progress file check ---
+    unchecked = _check_progress(repo)
+    if unchecked:
+        print("  Unchecked items in .context-tree/progress.md:\n")
+        for item in unchecked:
+            print(f"    - [ ] {item}")
+        print()
+        print(
+            "  Verify each step above and check it off in progress.md"
+            " before running verify again.\n"
+        )
+        all_passed = False
+
+    # --- Deterministic checks ---
+    print("  Checks:\n")
 
     # 1. Framework exists
     all_passed &= _check(
