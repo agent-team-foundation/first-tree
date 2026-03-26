@@ -8,7 +8,6 @@ import { registerChatsCommand } from "../commands/chats.js";
 import { registerClientCommands } from "../commands/client.js";
 import { registerConfigCommands } from "../commands/config.js";
 import { registerDbCommands } from "../commands/db.js";
-import { registerDoctorCommand } from "../commands/doctor.js";
 import { registerHistoryCommand } from "../commands/history.js";
 import { registerSendCommand } from "../commands/send.js";
 import { registerServerCommands } from "../commands/server.js";
@@ -33,7 +32,6 @@ registerDbCommands(program);
 registerAdminCommands(program);
 registerConfigCommands(program);
 registerStatusCommand(program);
-registerDoctorCommand(program);
 
 // Agent runtime commands (from PR #18 — connect single agent, start multi-agent runtime)
 registerConnectCommand(program);

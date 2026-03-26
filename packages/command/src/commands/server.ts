@@ -1,6 +1,16 @@
 import type { Command } from "commander";
 import { stopPostgres } from "../server/docker-postgres.js";
 import { startServer } from "../server/startup.js";
+import {
+  checkContextTreeRepo,
+  checkDatabase,
+  checkDocker,
+  checkGitHubToken,
+  checkNodeVersion,
+  checkPort,
+  checkServerConfig,
+  printResults,
+} from "./doctor.js";
 
 export function registerServerCommands(program: Command): void {
   const server = program.command("server").description("Manage Agent Hub server");
@@ -32,6 +42,23 @@ export function registerServerCommands(program: Command): void {
       } else {
         process.stderr.write("  No managed PostgreSQL container found.\n");
       }
+    });
+
+  server
+    .command("doctor")
+    .description("Check server environment readiness")
+    .action(async () => {
+      process.stderr.write("\n  Agent Hub Server Doctor\n\n");
+      const results = [
+        checkNodeVersion(),
+        checkDocker(),
+        checkServerConfig(),
+        await checkDatabase(),
+        await checkGitHubToken(),
+        await checkContextTreeRepo(),
+        await checkPort(),
+      ];
+      printResults(results);
     });
 
   server

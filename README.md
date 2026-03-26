@@ -67,8 +67,9 @@ docker run -e AGENT_HUB_SERVER_URL=https://hub.example.com \
 ## Diagnostics
 
 ```bash
-agent-hub doctor   # Check environment readiness
-agent-hub status   # Server health + configured agents
+agent-hub server doctor   # Check server environment readiness
+agent-hub client doctor   # Check client environment readiness
+agent-hub status          # Server health + configured agents
 ```
 
 ## Documentation

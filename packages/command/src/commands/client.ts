@@ -13,6 +13,15 @@ import {
 import type { Command } from "commander";
 import { ClientRuntime } from "../client/runtime.js";
 import { promptAddAgent, promptMissingFields } from "../server/prompt.js";
+import {
+  checkAgentConfigs,
+  checkAgentTokens,
+  checkClientConfig,
+  checkNodeVersion,
+  checkServerReachable,
+  checkWebSocket,
+  printResults,
+} from "./doctor.js";
 
 export function registerClientCommands(program: Command): void {
   const client = program.command("client").description("Manage Agent Hub client");
@@ -74,6 +83,22 @@ export function registerClientCommands(program: Command): void {
         resetConfig();
         resetConfigMeta();
       }
+    });
+
+  client
+    .command("doctor")
+    .description("Check client environment readiness")
+    .action(async () => {
+      process.stderr.write("\n  Agent Hub Client Doctor\n\n");
+      const results = [
+        checkNodeVersion(),
+        checkClientConfig(),
+        await checkServerReachable(),
+        checkAgentConfigs(),
+        await checkAgentTokens(),
+        await checkWebSocket(),
+      ];
+      printResults(results);
     });
 
   client
