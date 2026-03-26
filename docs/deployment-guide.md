@@ -33,12 +33,12 @@ These must be set for Docker / CI / `--no-interactive` deployments. Interactive 
 | `AGENT_HUB_HOST` | Bind address — **must be `0.0.0.0` for Docker** (default: `127.0.0.1`) |
 | `AGENT_HUB_CONTEXT_TREE_REPO` | Context Tree GitHub repo (URL or `owner/repo`) |
 | `AGENT_HUB_GITHUB_TOKEN` | GitHub personal access token (repo scope) |
-| `AGENT_HUB_GITHUB_WEBHOOK_SECRET` | GitHub webhook secret |
 
 ### Server — Optional
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `AGENT_HUB_GITHUB_WEBHOOK_SECRET` | — | GitHub webhook secret (only needed if using github webhooks) |
 | `AGENT_HUB_PORT` | `8000` | Server port |
 | `AGENT_HUB_JWT_SECRET` | auto-generated | JWT signing secret |
 | `AGENT_HUB_ENCRYPTION_KEY` | auto-generated | Adapter credential encryption key |
