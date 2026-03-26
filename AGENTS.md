@@ -1,135 +1,155 @@
 # AGENTS.md
 
-Agent Hub — Agent Team 中心化协作平台（Server + Client + Shared + Web monorepo）。
+Agent Hub — centralized collaboration platform for Agent Team (Server + Client + Command + Shared + Web monorepo).
 
-## 系统定位
+## Overview
 
-Agent Hub 是 Agent Team 的基础设施，提供 Agent 注册/认证、消息通信、外部 IM 桥接和管理后台。
+Agent Hub is the infrastructure for Agent Team, providing agent registration/authentication, messaging, external IM bridging, and an admin dashboard.
 
 ```
-Agent Hub ≠ Agent 本身（具体的 LLM agent 逻辑不在 Hub 内）
-Agent Hub ≠ 编排框架
+Agent Hub ≠ Agents themselves (LLM agent logic lives outside Hub)
+Agent Hub ≠ Orchestration framework
 Agent Hub ≠ Context Tree
 ```
 
-## 技术栈
+## Tech Stack
 
-**Server:** Fastify / Drizzle ORM / PostgreSQL / Zod / bcrypt / jose
+**Server:** Fastify / Drizzle ORM / PostgreSQL / Zod / bcrypt / jose / @fastify/websocket / @fastify/rate-limit
 
-**Client:** fetch（SDK 包）
+**Client:** fetch + ws (SDK + AgentRuntime + pluggable Handlers)
 
-**Command:** Commander.js / @inquirer/prompts（统一 CLI）
+**Command:** Commander.js / @inquirer/prompts (unified CLI)
 
-**Shared:** Zod schemas + TypeScript 类型 + 配置系统（三端共享）
+**Shared:** Zod schemas + TypeScript types + config system (shared across all packages)
 
 **Web:** React 19 / Vite
 
-**工具链:** pnpm (workspace) / Turborepo / Biome / Vitest / tsdown / tsc
+**Tooling:** pnpm (workspace) / Turborepo / Biome / Vitest / tsdown / tsc
 
-**Node.js:** 最低 22.16，推荐 24
+**Node.js:** minimum 22.16, recommended 24
 
-## 常用命令
+## Common Commands
 
 ```bash
-# 环境
-pnpm install                          # 安装全部依赖
-docker compose up -d                  # 启动 PostgreSQL（开发用）
+# Environment
+pnpm install                          # Install all dependencies
+docker compose up -d                  # Start PostgreSQL (dev)
 
-# 一键启动（CLI 方式，含交互式配置、自动迁移、Web 内嵌）
+# One-command start (CLI, interactive config + auto-migration + embedded Web)
 pnpm --filter @unispark.ai/agent-hub dev -- server start
 
-# 分别启动（传统开发方式）
-pnpm --filter @agent-hub/server dev   # 启动 server（tsx watch，需 .env）
-pnpm --filter @agent-hub/web dev      # 启动 web（Vite dev server）
+# Separate start (traditional dev)
+pnpm --filter @agent-hub/server dev   # Start server (tsx watch, requires .env)
+pnpm --filter @agent-hub/web dev      # Start web (Vite dev server)
 
-# 质量
-pnpm check                            # Biome lint + format 检查
-pnpm format                           # Biome 格式化
+# Quality
+pnpm check                            # Biome lint + format check
+pnpm format                           # Biome format
 pnpm typecheck                        # tsc --noEmit
 pnpm test                             # Vitest
-pnpm --filter @agent-hub/server test  # 测试（仅 server）
+pnpm --filter @agent-hub/server test  # Test (server only)
 
-# 构建
-pnpm build                            # Turborepo 编排全量构建
+# Build
+pnpm build                            # Turborepo orchestrated full build
 
-# 数据库
-pnpm --filter @agent-hub/server db:generate    # 生成迁移
-pnpm --filter @agent-hub/server db:migrate     # 应用迁移
+# Database
+pnpm --filter @agent-hub/server db:generate    # Generate migrations
+pnpm --filter @agent-hub/server db:migrate     # Apply migrations
 pnpm --filter @agent-hub/server db:studio      # Drizzle Studio
 ```
 
-> CLI 完整命令和环境变量参考：[docs/cli-reference.md](docs/cli-reference.md)
+> Full CLI commands and environment variables: [docs/cli-reference.md](docs/cli-reference.md)
 
-## Monorepo 结构
+## Monorepo Structure
 
 ```
 agent-hub/
-├── package.json               # pnpm workspace 根配置
-├── pnpm-workspace.yaml        # workspace 成员
-├── turbo.json                 # Turborepo 任务编排
-├── tsconfig.json              # 根 tsconfig（项目引用）
+├── package.json               # pnpm workspace root config
+├── pnpm-workspace.yaml        # Workspace members
+├── turbo.json                 # Turborepo task orchestration
+├── tsconfig.json              # Root tsconfig (project references)
 ├── biome.json                 # Biome lint + format
-├── docker-compose.yml         # 本地开发 PostgreSQL
+├── docker-compose.yml         # Local dev PostgreSQL
 │
-├── docs/                          # 文档
-│   └── cli-reference.md          # CLI 命令 + 环境变量参考
+├── docs/                          # Documentation
+│   ├── cli-reference.md          # CLI commands + env var reference
+│   └── claim-agent-guide.md      # Claim Agent setup guide
 │
 ├── packages/
-│   ├── shared/                # @agent-hub/shared — 共享 Zod schema + 类型 + 配置系统
-│   ├── server/                # @agent-hub/server — Fastify API 服务
-│   ├── client/                # @agent-hub/client — Agent SDK（纯库）
-│   ├── command/               # @unispark.ai/agent-hub — 统一 CLI（发布包）
-│   └── web/                   # @agent-hub/web — React 管理后台
+│   ├── shared/                # @agent-hub/shared — Shared Zod schemas + types + config system
+│   ├── server/                # @agent-hub/server — Fastify API server
+│   ├── client/                # @agent-hub/client — Agent SDK + Runtime
+│   ├── command/               # @unispark.ai/agent-hub — Unified CLI (published package)
+│   └── web/                   # @agent-hub/web — React admin dashboard
 ```
 
-## 架构规则
+## Architecture Rules
 
-**五包独立，Shared 共享：** Server、Client、Command、Web 独立打包部署，通过 `@agent-hub/shared` 共享类型、Zod schema 和配置系统。Command 包是统一 CLI 入口，依赖 Server 和 Client。
+**Five independent packages, Shared in common:** Server, Client, Command, Web are independently packaged and deployed, sharing types, Zod schemas, and config system via `@agent-hub/shared`. Command is the unified CLI entry point, depending on Server and Client.
 
-**Server 无状态：** 所有持久数据在 PostgreSQL，Server 不持有业务状态。
+**Stateless Server:** All persistent data lives in PostgreSQL. Server holds no business state.
 
-**仅依赖 PostgreSQL：** 不引入 Redis / MQ。PG 覆盖存储、队列（SKIP LOCKED）、通知（LISTEN/NOTIFY）。
+**PostgreSQL only:** No Redis / MQ. PG covers storage, queuing (SKIP LOCKED), and notifications (LISTEN/NOTIFY).
 
-**双轨认证隔离：**
-- Agent Token（Bearer）→ Agent API — 机器凭证
-- Admin JWT → Admin API — 人类凭证
-- 两套认证**完全隔离**，localhost 也必须认证
+**Dual-track auth isolation:**
+- Agent Token (Bearer) → Agent API — machine credentials
+- Admin JWT → Admin API — human credentials
+- Two auth paths are **completely isolated**; localhost must authenticate too
 
-**Inbox 是 Server/Client 边界：** Server 写入 Inbox，Client 读取 Inbox。
+**Inbox is the Server/Client boundary:** Server writes to Inbox (fan-out on write), Client pulls / receives WebSocket notifications. At-least-once delivery; Client is responsible for deduplication.
 
-## 编码规范
+**Context Tree is the single source of agent identity:** Server syncs agent identities from the Context Tree GitHub repo via GraphQL API (on startup + periodic + manual trigger). Server reads only, never writes back; agents are suspended (not deleted) when removed from the tree; token management remains manual. PG advisory lock ensures single-instance sync.
 
-- **禁止 `any`**: 用 `unknown` + 类型收窄
-- **禁止 `as` 断言**: 除非与第三方库交互无法避免，需注释原因
-- **禁止 `enum`**: 用 `as const` 对象替代，保持与 Zod 兼容
-- **类型导入**: `import type { Foo } from ...`
-- **优先 `type`**: 需要 `extends` / `implements` 时才用 `interface`
-- **公共 API 必须标注返回类型**, 内部函数可推导
-- **Barrel 导出**: 每个包 `src/index.ts` 为唯一公共出口
-- **Zod 单一来源**: DTO 用 Zod 定义，`z.infer<typeof schema>` 派生类型
-- **Schema 命名**: schema camelCase（`createAgentSchema`），类型 PascalCase（`CreateAgent`）
-- **Drizzle 迁移不手动编辑**: `drizzle-kit generate` 生成，`drizzle-kit migrate` 应用
-- **自定义错误类**: Service 层抛异常，API 层映射为 HTTP 状态码；禁止空 `catch {}`
-- **命名**: 文件 `kebab-case.ts`，类型 `PascalCase`，变量/函数 `camelCase`，常量 `UPPER_SNAKE_CASE`
-- **注释和文档字符串使用英文**: 代码中的注释、JSDoc、TODO 等一律用英文
-- **修改后必须运行**: `pnpm check && pnpm typecheck`
+**Adapter 1:1 identity binding:** External IM users (Feishu/Slack) map to human agents. Adapter credentials are AES-256-GCM encrypted at the application layer. PG NOTIFY triggers adapter config hot-reload.
 
-## 开发流程
+**UUID v7 as Message ID:** Time-ordered; messages are immutable after creation.
 
-### 新功能开发步骤（Server）
+## Coding Conventions
 
-1. 定义 Zod Schema（`shared/src/schemas/`）
-2. 定义 Drizzle 表结构（`server/src/db/schema/`）— 如需持久化
-3. 实现 Service（`server/src/services/`）
-4. 定义 API 路由（`server/src/api/`）
-5. 生成迁移: `pnpm --filter @agent-hub/server db:generate`
-6. 应用迁移: `pnpm --filter @agent-hub/server db:migrate`
-7. 编写测试（`server/src/__tests__/`）
+- **No `any`**: Use `unknown` + type narrowing
+- **No `as` assertions**: Unless unavoidable with third-party libs; add comment explaining why
+- **No `enum`**: Use `as const` objects for Zod compatibility
+- **Type imports**: `import type { Foo } from ...`
+- **Prefer `type`**: Use `interface` only when `extends` / `implements` is needed
+- **Public APIs must have explicit return types**; internal functions may rely on inference
+- **Barrel exports**: Each package's `src/index.ts` is the sole public entry point
+- **Zod as single source of truth**: Define DTOs with Zod, derive types via `z.infer<typeof schema>`
+- **Schema naming**: schemas in camelCase (`createAgentSchema`), types in PascalCase (`CreateAgent`)
+- **Never hand-edit Drizzle migrations**: `drizzle-kit generate` to create, `drizzle-kit migrate` to apply
+- **Custom error classes**: Services throw exceptions, API layer maps to HTTP status codes; no empty `catch {}`
+- **Naming**: files `kebab-case.ts`, types `PascalCase`, variables/functions `camelCase`, constants `UPPER_SNAKE_CASE`
+- **English everywhere on GitHub**: All GitHub-visible content must be in English — code, comments, JSDoc, TODO, commit messages, PR titles/descriptions, issue titles/descriptions, branch names, release notes, CI logs, and any other content visible in the repository
+- **Run after changes**: `pnpm check && pnpm typecheck`
 
-### Git 规范
+## Development Workflow
 
-- **分支策略**: trunk-based，feature branch → PR → squash merge → main
-- **分支命名**: `feat/xxx`、`fix/xxx`、`refactor/xxx`、`test/xxx`、`doc/xxx`、`chore/xxx`
-- **Commit 消息**: Conventional Commits — `feat: xxx`、`fix: xxx`、`refactor: xxx`、`test: xxx`、`docs: xxx`
-- **版本发布**: tag + GitHub Release
-- 不要自动 commit，等用户测试确认后再提交
+### New Feature Steps (Server)
+
+1. Define Zod schema (`shared/src/schemas/`)
+2. Define Drizzle table (`server/src/db/schema/`) — if persistence is needed
+3. Implement service (`server/src/services/`)
+4. Define API routes (`server/src/api/`)
+5. Generate migration: `pnpm --filter @agent-hub/server db:generate`
+6. Apply migration: `pnpm --filter @agent-hub/server db:migrate`
+7. Write tests (`server/src/__tests__/`)
+
+### New Feature Steps (Client)
+
+1. New SDK method → add in `client/src/sdk.ts`
+2. New handler type → implement and register in `client/src/handlers/`
+3. Runtime changes → `client/src/runtime/` (AgentRuntime / AgentSlot / SessionManager)
+4. If shared types are involved → update `shared/src/schemas/` first
+
+### New Feature Steps (Command)
+
+1. Add command module in `command/src/commands/`
+2. Register command in `command/src/cli/index.ts`
+3. If config changes are needed → update schema in `shared/src/config/`
+
+### Git Conventions
+
+- **Branching**: trunk-based; feature branch → PR → squash merge → main
+- **Branch naming**: `feat/xxx`, `fix/xxx`, `refactor/xxx`, `test/xxx`, `docs/xxx`, `chore/xxx`
+- **Commit messages**: Conventional Commits — `feat: xxx`, `fix: xxx`, `refactor: xxx`, `test: xxx`, `docs: xxx`
+- **Releases**: tag + GitHub Release
+- Do not auto-commit; wait for user to test and confirm before committing
