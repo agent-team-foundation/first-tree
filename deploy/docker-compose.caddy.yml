@@ -1,8 +1,39 @@
+# Production deployment with automatic HTTPS via Caddy
+#
+# Prerequisites:
+#   1. Domain DNS A record pointing to this server's public IP
+#   2. Ports 80 and 443 open
+#
+# Usage:
+#   cp .env.example .env   # edit required values
+#   DOMAIN=hub.example.com docker compose -f deploy/docker-compose.caddy.yml up -d
+#
+# Caddy automatically obtains and renews Let's Encrypt SSL certificates.
+
 services:
-  server:
-    build: .
+  caddy:
+    image: caddy:2-alpine
     ports:
-      - "${AGENT_HUB_PORT:-8000}:8000"
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN in .env or environment}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      server:
+        condition: service_healthy
+    restart: unless-stopped
+
+  server:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    expose:
+      - "8000"
     environment:
       AGENT_HUB_DATABASE_URL: postgresql://${POSTGRES_USER:-agenthub}:${POSTGRES_PASSWORD:-agenthub}@postgres:5432/${POSTGRES_DB:-agenthub}
       AGENT_HUB_HOST: "0.0.0.0"
@@ -11,6 +42,9 @@ services:
       AGENT_HUB_ENCRYPTION_KEY: ${AGENT_HUB_ENCRYPTION_KEY}
       AGENT_HUB_CONTEXT_TREE_REPO: ${AGENT_HUB_CONTEXT_TREE_REPO}
       AGENT_HUB_GITHUB_TOKEN: ${AGENT_HUB_GITHUB_TOKEN}
+      AGENT_HUB_GITHUB_WEBHOOK_SECRET: ${AGENT_HUB_GITHUB_WEBHOOK_SECRET:-}
+      AGENT_HUB_ADMIN_PASSWORD: ${AGENT_HUB_ADMIN_PASSWORD:-}
+      AGENT_HUB_CORS_ORIGIN: https://${DOMAIN}
     depends_on:
       postgres:
         condition: service_healthy
@@ -39,3 +73,5 @@ services:
 
 volumes:
   pgdata:
+  caddy_data:
+  caddy_config:

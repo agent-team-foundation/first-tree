@@ -23,6 +23,7 @@ import { agentMeRoutes } from "./api/agent/me.js";
 import { agentMessageRoutes, agentSendToAgentRoutes } from "./api/agent/messages.js";
 import { agentWsRoutes } from "./api/agent/ws.js";
 import { healthRoutes } from "./api/health.js";
+import { healthzRoutes } from "./api/healthz.js";
 import { githubWebhookRoutes } from "./api/webhooks/github.js";
 import type { Config } from "./config.js";
 import { connectDatabase } from "./db/connection.js";
@@ -88,6 +89,9 @@ export async function buildApp(config: Config) {
     app.log.error(error);
     return reply.status(500).send({ error: "Internal server error" });
   });
+
+  // Root-level health check for container orchestration (outside /api/v1)
+  await app.register(healthzRoutes);
 
   // All API routes under /api/v1 prefix
   await app.register(

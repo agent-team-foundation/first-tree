@@ -271,18 +271,20 @@ export async function githubWebhookRoutes(app: FastifyInstance): Promise<void> {
     done(null, body);
   });
 
-  // Fail-fast: webhook secret must be configured at startup
   const webhookSecret = app.config.github.webhookSecret;
-  if (!webhookSecret) {
-    throw new Error("AGENT_HUB_GITHUB_WEBHOOK_SECRET is required — configure it before starting the server");
-  }
-
   const webhookMax = app.config.rateLimit?.webhookMax ?? 60;
 
   app.post(
     "/github",
     { config: { rateLimit: { max: webhookMax, timeWindow: "1 minute" } } },
     async (request, reply) => {
+      // Webhook secret not configured — reject requests
+      if (!webhookSecret) {
+        return reply
+          .status(501)
+          .send({ error: "GitHub webhook is not configured. Set AGENT_HUB_GITHUB_WEBHOOK_SECRET to enable." });
+      }
+
       const rawBody = request.body;
       if (!Buffer.isBuffer(rawBody)) {
         throw new BadRequestError("Expected raw body buffer");

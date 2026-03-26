@@ -52,13 +52,9 @@ export const serverConfigSchema = defineConfig({
         type: "password",
       },
     }),
-    webhookSecret: field(z.string(), {
+    webhookSecret: field(z.string().optional(), {
       env: "AGENT_HUB_GITHUB_WEBHOOK_SECRET",
       secret: true,
-      prompt: {
-        message: "GitHub webhook secret (set the same value in your GitHub repo webhook settings):",
-        type: "password",
-      },
     }),
   },
   cors: optional({
