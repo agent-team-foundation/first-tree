@@ -13,7 +13,8 @@ type SessionEntry = {
   handler: AgentHandler;
   status: SessionStatus;
   lastActivity: number;
-  retryCount: number;
+  /** In-flight suspend promise; awaited before resume to avoid race conditions. */
+  suspending: Promise<void> | null;
 };
 
 type PendingMessage = {
@@ -50,6 +51,7 @@ export class SessionManager {
   private readonly registry: SessionRegistry | null;
   private readonly pendingQueue: PendingMessage[] = [];
   private idleTimer: ReturnType<typeof setInterval> | null = null;
+  private _activeCount = 0;
 
   constructor(config: SessionManagerConfig) {
     this.config = config;
@@ -104,14 +106,11 @@ export class SessionManager {
 
     this.sessions.clear();
     this.evictedMappings.clear();
+    this._activeCount = 0;
   }
 
   get activeCount(): number {
-    let count = 0;
-    for (const s of this.sessions.values()) {
-      if (s.status === "active") count++;
-    }
-    return count;
+    return this._activeCount;
   }
 
   get totalCount(): number {
@@ -163,10 +162,11 @@ export class SessionManager {
       handler,
       status: "active",
       lastActivity: Date.now(),
-      retryCount: 0,
+      suspending: null,
     };
 
     this.sessions.set(chatId, entry);
+    this._activeCount++;
     if (evicted) this.evictedMappings.delete(chatId);
 
     try {
@@ -185,15 +185,22 @@ export class SessionManager {
         `Session ${chatId}: ${evicted ? "resume" : "start"} failed: ${err instanceof Error ? err.message : String(err)}`,
       );
       this.sessions.delete(chatId);
+      this._activeCount--;
     }
   }
 
   private async resumeSession(entry: SessionEntry, message: SessionMessage): Promise<void> {
+    // Wait for in-flight suspension to complete before resuming
+    if (entry.suspending) {
+      await entry.suspending;
+    }
+
     // Enforce concurrency limit
     if (!this.acquireActiveSlot(entry.chatId, message)) return;
 
     const ctx = this.buildSessionContext(entry.chatId);
     entry.status = "active";
+    this._activeCount++;
     entry.lastActivity = Date.now();
 
     try {
@@ -203,32 +210,33 @@ export class SessionManager {
     } catch (err) {
       this.config.log(`Session ${entry.chatId}: resume failed: ${err instanceof Error ? err.message : String(err)}`);
       entry.status = "suspended";
+      this._activeCount--;
     }
   }
 
   /**
    * Try to acquire an active slot. If at concurrency limit:
-   * 1. Suspend oldest idle active session
-   * 2. If all busy, queue the message
+   * 1. Suspend the least-recently-active session to free a slot
+   * 2. If no candidates, queue the message
    *
    * Returns true if slot acquired, false if queued.
    */
   private acquireActiveSlot(chatId: string, message: SessionMessage): boolean {
-    if (this.activeCount < this.config.concurrency) return true;
+    if (this._activeCount < this.config.concurrency) return true;
 
-    // Try to suspend oldest idle session
-    let oldestIdle: SessionEntry | null = null;
+    // Find least-recently-active session (excluding the target chat)
+    let oldestActive: SessionEntry | null = null;
     for (const session of this.sessions.values()) {
       if (session.status !== "active") continue;
       if (session.chatId === chatId) continue;
-      if (!oldestIdle || session.lastActivity < oldestIdle.lastActivity) {
-        oldestIdle = session;
+      if (!oldestActive || session.lastActivity < oldestActive.lastActivity) {
+        oldestActive = session;
       }
     }
 
-    if (oldestIdle) {
-      this.config.log(`Session ${oldestIdle.chatId}: preempted for concurrency`);
-      this.suspendSession(oldestIdle);
+    if (oldestActive) {
+      this.config.log(`Session ${oldestActive.chatId}: preempted for concurrency`);
+      this.suspendSession(oldestActive);
       return true;
     }
 
@@ -240,9 +248,15 @@ export class SessionManager {
 
   private suspendSession(entry: SessionEntry): void {
     entry.status = "suspended";
-    entry.handler.suspend().catch((err) => {
-      this.config.log(`Session ${entry.chatId}: suspend error: ${err instanceof Error ? err.message : String(err)}`);
-    });
+    this._activeCount--;
+    entry.suspending = entry.handler
+      .suspend()
+      .catch((err) => {
+        this.config.log(`Session ${entry.chatId}: suspend error: ${err instanceof Error ? err.message : String(err)}`);
+      })
+      .finally(() => {
+        entry.suspending = null;
+      });
     this.persistRegistry();
 
     // Drain pending queue
@@ -251,7 +265,7 @@ export class SessionManager {
 
   private drainPendingQueue(): void {
     if (this.pendingQueue.length === 0) return;
-    if (this.activeCount >= this.config.concurrency) return;
+    if (this._activeCount >= this.config.concurrency) return;
 
     const next = this.pendingQueue.shift();
     if (!next) return;
@@ -290,6 +304,7 @@ export class SessionManager {
 
       this.config.log(`Session ${candidate.key}: evicted (max_sessions reached)`);
       if (candidate.session.status === "active") {
+        this._activeCount--;
         candidate.session.handler.shutdown().catch(() => {});
       }
       candidate.session.status = "evicted";
@@ -357,7 +372,7 @@ export class SessionManager {
           handler,
           status: "suspended",
           lastActivity: data.lastActivity,
-          retryCount: 0,
+          suspending: null,
         });
       }
     }

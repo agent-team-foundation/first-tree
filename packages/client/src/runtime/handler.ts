@@ -31,8 +31,6 @@ export type SessionMessage = {
   content: string | Record<string, unknown>;
   /** Optional metadata. */
   metadata: Record<string, unknown> | null;
-  /** Agent working directory. */
-  cwd?: string;
 };
 
 /**
