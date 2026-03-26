@@ -36,7 +36,7 @@ export function AgentDetailPage() {
   const tokensQuery = useQuery({
     queryKey: ["tokens", agentId],
     queryFn: () => listTokens(agentId),
-    enabled: !!agentId && agentQuery.data?.type !== "human",
+    enabled: !!agentId && agentQuery.isSuccess && agentQuery.data?.type !== "human",
   });
 
   // Adapter bindings for this agent
