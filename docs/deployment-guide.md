@@ -21,19 +21,49 @@ Copy the example file and fill in the required values:
 cp .env.example .env
 ```
 
-See [CLI Reference](cli-reference.md) for the full list. The minimum required variables are:
+See [.env.example](../.env.example) for the full list with comments. See [CLI Reference](cli-reference.md) for command-level details.
 
-```bash
-AGENT_HUB_CONTEXT_TREE_REPO=owner/repo      # Context Tree GitHub repository
-AGENT_HUB_GITHUB_TOKEN=ghp_xxxx             # GitHub token (repo scope)
-```
+### Server — Required
+
+These must be set for Docker / CI / `--no-interactive` deployments. Interactive mode (`agent-hub server start`) will prompt for missing values.
+
+| Variable | Description |
+|----------|-------------|
+| `AGENT_HUB_DATABASE_URL` | PostgreSQL connection URL (Docker Compose provides this automatically) |
+| `AGENT_HUB_HOST` | Bind address — **must be `0.0.0.0` for Docker** (default: `127.0.0.1`) |
+| `AGENT_HUB_CONTEXT_TREE_REPO` | Context Tree GitHub repo (URL or `owner/repo`) |
+| `AGENT_HUB_GITHUB_TOKEN` | GitHub personal access token (repo scope) |
+| `AGENT_HUB_GITHUB_WEBHOOK_SECRET` | GitHub webhook secret |
+
+### Server — Optional
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AGENT_HUB_PORT` | `8000` | Server port |
+| `AGENT_HUB_JWT_SECRET` | auto-generated | JWT signing secret |
+| `AGENT_HUB_ENCRYPTION_KEY` | auto-generated | Adapter credential encryption key |
+| `AGENT_HUB_ADMIN_PASSWORD` | auto-generated | Default admin password |
+| `AGENT_HUB_CORS_ORIGIN` | — | Allowed origins (comma-separated) |
+| `AGENT_HUB_RATE_LIMIT_MAX` | `100` | Global rate limit (req/min) |
+
+### Client — Required
+
+| Variable | Description |
+|----------|-------------|
+| `AGENT_HUB_SERVER_URL` | Server URL the client connects to |
+
+### Client — Optional
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AGENT_HUB_LOG_LEVEL` | `info` | Log level (`debug` / `info` / `warn` / `error`) |
 
 ## Docker Compose (HTTP)
 
 Suitable for internal networks or when running behind an existing reverse proxy.
 
 ```bash
-cp .env.example .env    # edit required values
+cp .env.example .env    # fill in the required server variables
 docker compose -f docker-compose.production.yml up -d
 ```
 
