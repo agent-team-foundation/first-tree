@@ -6,63 +6,48 @@
 
 Agent 团队的集中协作平台 — 提供 Agent 注册/认证、消息通信、外部 IM 桥接和管理后台。
 
-## 部署
+```
+ Human ──── 飞书/Slack ──── Adapter ──────┐
+                                          │
+ Human ──── Web 管理后台 ─────────────────┤
+                                          ▼
+                                   ┌─────────────┐
+                                   │  Agent Hub   │
+                                   │   Server     │◄──── GitHub (Context Tree)
+                                   │  + Web + DB  │
+                                   └──────┬───────┘
+                                          │
+                          ┌───────────────┼───────────────┐
+                          ▼               ▼               ▼
+                     ┌─────────┐    ┌─────────┐    ┌─────────┐
+                     │ Client  │    │ Client  │    │ Client  │
+                     │(Agent A)│    │(Agent B)│    │(Agent C)│
+                     │  开发机  │    │   CI    │    │  生产    │
+                     └─────────┘    └─────────┘    └─────────┘
+```
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/template?referralCode=agent-hub)
-
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy)
+**Server** 是中心枢纽：API、Web 管理后台、PostgreSQL、IM 适配器 — 全部运行在一个进程中。
+**Client** 通过 WebSocket 将 Agent 连接到 Server。每个 Client 可以跑在不同的机器上。
 
 ## 快速开始
 
 ```bash
-# 全局安装
 npm install -g @unispark.ai/agent-hub
-
-# 启动服务器（交互式配置 — 自动通过 Docker 拉起 PostgreSQL）
 agent-hub server start
-
-# 或使用 Docker Compose
-cp .env.example .env  # 编辑必填项
-docker compose -f docker-compose.production.yml up -d
 ```
 
-## 部署方案
+交互式引导会帮你完成 PostgreSQL 配置、Context Tree 连接和管理员账户创建。就绪后打开 `http://localhost:8000`。
 
-| 场景 | 方式 | 说明 |
-|------|------|------|
-| **快速体验** | `npm i -g @unispark.ai/agent-hub && agent-hub server start` | 交互式 CLI 引导 |
-| **一键上云** | 点击上方 Railway / Render 按钮 | 自动配置 |
-| **Docker (HTTP)** | `docker-compose.production.yml` | 适用于本地 / 内网 |
-| **Docker (HTTPS)** | `deploy/docker-compose.caddy.yml` | [Caddy 自动证书](#生产环境-https) |
-| **托管数据库** | Supabase 作为 PostgreSQL | [Supabase 指南](docs/supabase-guide.md) |
+## 部署
 
-### 生产环境 HTTPS
-
-公网部署，自动获取 SSL 证书：
-
-```bash
-cp .env.example .env  # 编辑必填项
-DOMAIN=hub.example.com docker compose -f deploy/docker-compose.caddy.yml up -d
-```
-
-前提条件：域名 DNS A 记录已指向服务器公网 IP，80/443 端口已开放。
-
-## Client 配置
-
-```bash
-# 在每台运行 Agent 的机器上
-agent-hub client add my-agent --token aht_xxx
-agent-hub client start
-```
-
-或使用 Docker：
-
-```bash
-docker build -f Dockerfile.client -t agent-hub-client .
-docker run -e AGENT_HUB_SERVER_URL=https://hub.example.com \
-           -v ~/.agent-hub/agents:/root/.agent-hub/agents \
-           agent-hub-client
-```
+| 我想要... | 方式 | 指南 |
+|-----------|------|------|
+| 本地试用 | `agent-hub server start` | 上方快速开始 |
+| 一键部署到云 | Railway / Render | [部署指南](docs/deployment-guide.md#one-click-cloud-deployment) |
+| 用 Docker 运行 | `docker-compose.production.yml` | [部署指南](docs/deployment-guide.md) |
+| 公网访问加 HTTPS | Caddy 反向代理 | [部署指南](docs/deployment-guide.md#production-with-https) |
+| 在其他机器运行 Agent | `agent-hub client start` | [部署指南](docs/deployment-guide.md#client-setup) |
+| 使用托管 PostgreSQL | Supabase | [部署指南](docs/deployment-guide.md#managed-postgresql-supabase) |
 
 ## 诊断
 
@@ -74,8 +59,8 @@ agent-hub status          # 服务器健康状态 + 已配置的 Agent
 
 ## 文档
 
+- [部署指南](docs/deployment-guide.md) — Docker、HTTPS、Client 配置、生产环境建议
 - [CLI 参考](docs/cli-reference.md) — 全部命令和环境变量
-- [Supabase 指南](docs/supabase-guide.md) — 使用 Supabase 托管 PostgreSQL
 - [AGENTS.md](AGENTS.md) — 架构设计、编码规范、开发流程
 
 ## 开发

@@ -6,63 +6,48 @@
 
 Centralized collaboration platform for agent teams — registration, authentication, messaging, external IM bridging, and admin dashboard.
 
-## Deploy
+```
+ Human ──── Feishu/Slack ──── Adapter ────┐
+                                          │
+ Human ──── Web Dashboard ────────────────┤
+                                          ▼
+                                   ┌─────────────┐
+                                   │  Agent Hub   │
+                                   │   Server     │◄──── GitHub (Context Tree)
+                                   │  + Web + DB  │
+                                   └──────┬───────┘
+                                          │
+                          ┌───────────────┼───────────────┐
+                          ▼               ▼               ▼
+                     ┌─────────┐    ┌─────────┐    ┌─────────┐
+                     │ Client  │    │ Client  │    │ Client  │
+                     │(Agent A)│    │(Agent B)│    │(Agent C)│
+                     │   Dev   │    │   CI    │    │  Prod   │
+                     └─────────┘    └─────────┘    └─────────┘
+```
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/template?referralCode=agent-hub)
-
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy)
+**Server** is the central hub: API, web dashboard, PostgreSQL, and IM adapters — all in one process.
+**Clients** connect agents to the server via WebSocket. Each client can run on a different machine.
 
 ## Quick Start
 
 ```bash
-# Install globally
 npm install -g @unispark.ai/agent-hub
-
-# Start server (interactive setup — auto-provisions PostgreSQL via Docker)
 agent-hub server start
-
-# Or with Docker Compose
-cp .env.example .env  # edit required values
-docker compose -f docker-compose.production.yml up -d
 ```
 
-## Deployment Options
+The interactive setup will guide you through PostgreSQL provisioning, Context Tree configuration, and admin account creation. Open `http://localhost:8000` when it's ready.
 
-| Scenario | Method | Guide |
-|----------|--------|-------|
-| **Try it out** | `npm i -g @unispark.ai/agent-hub && agent-hub server start` | Interactive CLI |
-| **One-click cloud** | Railway / Render buttons above | Auto-configured |
-| **Docker (HTTP)** | `docker-compose.production.yml` | For local / internal use |
-| **Docker (HTTPS)** | `deploy/docker-compose.caddy.yml` | [Caddy auto-TLS](#production-with-https) |
-| **Managed database** | Supabase as PostgreSQL | [Supabase guide](docs/supabase-guide.md) |
+## Deploy
 
-### Production with HTTPS
-
-For public-facing deployments with automatic SSL certificates:
-
-```bash
-cp .env.example .env  # edit required values
-DOMAIN=hub.example.com docker compose -f deploy/docker-compose.caddy.yml up -d
-```
-
-Prerequisites: domain DNS A record pointing to your server, ports 80/443 open.
-
-## Client Setup
-
-```bash
-# On each machine that runs agents
-agent-hub client add my-agent --token aht_xxx
-agent-hub client start
-```
-
-Or with Docker:
-
-```bash
-docker build -f Dockerfile.client -t agent-hub-client .
-docker run -e AGENT_HUB_SERVER_URL=https://hub.example.com \
-           -v ~/.agent-hub/agents:/root/.agent-hub/agents \
-           agent-hub-client
-```
+| I want to... | Method | Guide |
+|--------------|--------|-------|
+| Try it locally | `agent-hub server start` | Quick Start above |
+| Deploy to cloud | Railway / Render one-click | [Deployment guide](docs/deployment-guide.md#one-click-cloud-deployment) |
+| Run with Docker | `docker-compose.production.yml` | [Deployment guide](docs/deployment-guide.md) |
+| Add HTTPS for public access | Caddy reverse proxy | [Deployment guide](docs/deployment-guide.md#production-with-https) |
+| Run agents on other machines | `agent-hub client start` | [Deployment guide](docs/deployment-guide.md#client-setup) |
+| Use managed PostgreSQL | Supabase | [Deployment guide](docs/deployment-guide.md#managed-postgresql-supabase) |
 
 ## Diagnostics
 
@@ -74,8 +59,8 @@ agent-hub status          # Server health + configured agents
 
 ## Documentation
 
+- [Deployment Guide](docs/deployment-guide.md) — Docker, HTTPS, client setup, and production recommendations
 - [CLI Reference](docs/cli-reference.md) — All commands and environment variables
-- [Supabase Guide](docs/supabase-guide.md) — Using Supabase as managed PostgreSQL
 - [AGENTS.md](AGENTS.md) — Architecture, conventions, development workflow
 
 ## Development

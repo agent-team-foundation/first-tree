@@ -18,6 +18,7 @@ export {
   initConfig,
   readConfigFile,
   resetConfigMeta,
+  resolveConfigReadonly,
   setConfigValue,
 } from "./resolver.js";
 export { defineConfig, field, optional } from "./schema.js";

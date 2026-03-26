@@ -1,7 +1,14 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { agentConfigSchema, DEFAULT_CONFIG_DIR, loadAgents, readConfigFile } from "@agent-hub/shared/config";
+import {
+  agentConfigSchema,
+  clientConfigSchema,
+  DEFAULT_CONFIG_DIR,
+  loadAgents,
+  resolveConfigReadonly,
+  serverConfigSchema,
+} from "@agent-hub/shared/config";
 import { blank } from "../cli/output.js";
 
 export type CheckResult = {
@@ -9,6 +16,28 @@ export type CheckResult = {
   ok: boolean;
   detail: string;
 };
+
+// ---------------------------------------------------------------------------
+// Config resolution helpers — delegates to shared config system
+// ---------------------------------------------------------------------------
+
+function getServerConfig(): Record<string, unknown> {
+  return resolveConfigReadonly({ schema: serverConfigSchema, role: "server" });
+}
+
+function getClientConfig(): Record<string, unknown> {
+  return resolveConfigReadonly({ schema: clientConfigSchema, role: "client" });
+}
+
+function get(obj: Record<string, unknown>, dotPath: string): unknown {
+  const parts = dotPath.split(".");
+  let current: unknown = obj;
+  for (const part of parts) {
+    if (current === null || current === undefined || typeof current !== "object") return undefined;
+    current = (current as Record<string, unknown>)[part];
+  }
+  return current;
+}
 
 // ---------------------------------------------------------------------------
 // Shared checks
@@ -39,20 +68,25 @@ export function checkDocker(): CheckResult {
 }
 
 export function checkServerConfig(): CheckResult {
-  const configPath = join(DEFAULT_CONFIG_DIR, "server.yaml");
-  const exists = existsSync(configPath);
-  return {
-    label: "Config",
-    ok: exists,
-    detail: exists ? configPath : "not found — run: agent-hub config setup -s",
-  };
+  const hasFile = existsSync(join(DEFAULT_CONFIG_DIR, "server.yaml"));
+  // Check if key required env vars are set
+  const hasEnv = !!(
+    process.env.AGENT_HUB_DATABASE_URL ||
+    process.env.AGENT_HUB_CONTEXT_TREE_REPO ||
+    process.env.AGENT_HUB_GITHUB_TOKEN
+  );
+
+  if (hasFile && hasEnv) return { label: "Config", ok: true, detail: "config file + env vars" };
+  if (hasFile) return { label: "Config", ok: true, detail: join(DEFAULT_CONFIG_DIR, "server.yaml") };
+  if (hasEnv) return { label: "Config", ok: true, detail: "via environment variables" };
+  return { label: "Config", ok: false, detail: "no config file or env vars — run: agent-hub config setup -s" };
 }
 
 export async function checkDatabase(): Promise<CheckResult> {
-  const serverConfig = readConfigFile(join(DEFAULT_CONFIG_DIR, "server.yaml"));
-  const dbUrl = getNestedValue(serverConfig, "database.url");
+  const config = getServerConfig();
+  const dbUrl = get(config, "database.url");
   if (typeof dbUrl !== "string" || !dbUrl) {
-    return { label: "Database", ok: false, detail: "no database URL configured" };
+    return { label: "Database", ok: false, detail: "not configured (AGENT_HUB_DATABASE_URL or config file)" };
   }
 
   try {
@@ -71,10 +105,10 @@ export async function checkDatabase(): Promise<CheckResult> {
 }
 
 export async function checkGitHubToken(): Promise<CheckResult> {
-  const serverConfig = readConfigFile(join(DEFAULT_CONFIG_DIR, "server.yaml"));
-  const token = getNestedValue(serverConfig, "github.token") ?? process.env.AGENT_HUB_GITHUB_TOKEN;
+  const config = getServerConfig();
+  const token = get(config, "github.token");
   if (typeof token !== "string" || !token) {
-    return { label: "GitHub Token", ok: false, detail: "not configured" };
+    return { label: "GitHub Token", ok: false, detail: "not configured (AGENT_HUB_GITHUB_TOKEN or config file)" };
   }
 
   try {
@@ -93,18 +127,17 @@ export async function checkGitHubToken(): Promise<CheckResult> {
 }
 
 export async function checkContextTreeRepo(): Promise<CheckResult> {
-  const serverConfig = readConfigFile(join(DEFAULT_CONFIG_DIR, "server.yaml"));
-  const repo = getNestedValue(serverConfig, "contextTree.repo");
-  const token = getNestedValue(serverConfig, "github.token") ?? process.env.AGENT_HUB_GITHUB_TOKEN;
+  const config = getServerConfig();
+  const repo = get(config, "contextTree.repo");
+  const token = get(config, "github.token");
 
   if (typeof repo !== "string" || !repo) {
-    return { label: "Context Tree", ok: false, detail: "not configured" };
+    return { label: "Context Tree", ok: false, detail: "not configured (AGENT_HUB_CONTEXT_TREE_REPO or config file)" };
   }
   if (typeof token !== "string" || !token) {
     return { label: "Context Tree", ok: false, detail: "cannot check (no GitHub token)" };
   }
 
-  // Normalize repo: extract owner/repo from URL if needed
   const ownerRepo = repo.replace(/^https?:\/\/github\.com\//, "").replace(/\.git$/, "");
 
   try {
@@ -121,18 +154,20 @@ export async function checkContextTreeRepo(): Promise<CheckResult> {
   }
 }
 
-export async function checkPort(): Promise<CheckResult> {
-  const serverConfig = readConfigFile(join(DEFAULT_CONFIG_DIR, "server.yaml"));
-  const port = (getNestedValue(serverConfig, "server.port") as number) ?? 8000;
+export async function checkServerHealth(): Promise<CheckResult> {
+  const config = getServerConfig();
+  const host = (get(config, "server.host") as string) ?? "127.0.0.1";
+  const port = (get(config, "server.port") as number) ?? 8000;
+  const url = `http://${host}:${port}/healthz`;
 
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/healthz`, { signal: AbortSignal.timeout(1000) });
+    const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
     if (res.ok) {
-      return { label: `Port ${port}`, ok: true, detail: "in use by Agent Hub" };
+      return { label: "Server Health", ok: true, detail: `running at ${host}:${port}` };
     }
-    return { label: `Port ${port}`, ok: false, detail: "in use by another process" };
+    return { label: "Server Health", ok: false, detail: `unhealthy (HTTP ${res.status}) at ${host}:${port}` };
   } catch {
-    return { label: `Port ${port}`, ok: true, detail: "available" };
+    return { label: "Server Health", ok: false, detail: `not running at ${host}:${port}` };
   }
 }
 
@@ -141,20 +176,20 @@ export async function checkPort(): Promise<CheckResult> {
 // ---------------------------------------------------------------------------
 
 export function checkClientConfig(): CheckResult {
-  const configPath = join(DEFAULT_CONFIG_DIR, "client.yaml");
-  const exists = existsSync(configPath);
-  return {
-    label: "Config",
-    ok: exists,
-    detail: exists ? configPath : "not found — run: agent-hub config setup -c",
-  };
+  const hasFile = existsSync(join(DEFAULT_CONFIG_DIR, "client.yaml"));
+  const hasEnv = !!process.env.AGENT_HUB_SERVER_URL;
+
+  if (hasFile && hasEnv) return { label: "Config", ok: true, detail: "config file + env vars" };
+  if (hasFile) return { label: "Config", ok: true, detail: join(DEFAULT_CONFIG_DIR, "client.yaml") };
+  if (hasEnv) return { label: "Config", ok: true, detail: "via environment variables" };
+  return { label: "Config", ok: false, detail: "no config file or env vars — run: agent-hub config setup -c" };
 }
 
 export async function checkServerReachable(): Promise<CheckResult> {
-  const clientConfig = readConfigFile(join(DEFAULT_CONFIG_DIR, "client.yaml"));
-  const serverUrl = getNestedValue(clientConfig, "server.url") ?? process.env.AGENT_HUB_SERVER_URL;
+  const config = getClientConfig();
+  const serverUrl = get(config, "server.url");
   if (typeof serverUrl !== "string" || !serverUrl) {
-    return { label: "Server URL", ok: false, detail: "not configured" };
+    return { label: "Server URL", ok: false, detail: "not configured (AGENT_HUB_SERVER_URL or config file)" };
   }
 
   try {
@@ -194,8 +229,8 @@ export function checkAgentConfigs(): CheckResult {
 }
 
 export async function checkAgentTokens(): Promise<CheckResult> {
-  const clientConfig = readConfigFile(join(DEFAULT_CONFIG_DIR, "client.yaml"));
-  const serverUrl = getNestedValue(clientConfig, "server.url") ?? process.env.AGENT_HUB_SERVER_URL;
+  const config = getClientConfig();
+  const serverUrl = get(config, "server.url");
   if (typeof serverUrl !== "string" || !serverUrl) {
     return { label: "Agent Tokens", ok: false, detail: "cannot check (no server URL)" };
   }
@@ -219,10 +254,10 @@ export async function checkAgentTokens(): Promise<CheckResult> {
   const valid: string[] = [];
   const invalid: string[] = [];
 
-  for (const [name, config] of agents) {
+  for (const [name, agentConfig] of agents) {
     try {
       const res = await fetch(`${serverUrl}/api/v1/agent/me`, {
-        headers: { Authorization: `Bearer ${config.token}` },
+        headers: { Authorization: `Bearer ${agentConfig.token}` },
         signal: AbortSignal.timeout(3000),
       });
       if (res.ok) {
@@ -242,17 +277,14 @@ export async function checkAgentTokens(): Promise<CheckResult> {
 }
 
 export async function checkWebSocket(): Promise<CheckResult> {
-  const clientConfig = readConfigFile(join(DEFAULT_CONFIG_DIR, "client.yaml"));
-  const serverUrl = getNestedValue(clientConfig, "server.url") ?? process.env.AGENT_HUB_SERVER_URL;
+  const config = getClientConfig();
+  const serverUrl = get(config, "server.url");
   if (typeof serverUrl !== "string" || !serverUrl) {
     return { label: "WebSocket", ok: false, detail: "cannot check (no server URL)" };
   }
 
-  // Just verify the WS upgrade endpoint exists by checking the server is reachable
-  // Full WS connection requires a valid token, so we only check reachability
   const wsUrl = serverUrl.replace(/^http/, "ws");
   try {
-    // We use HTTP to check the base URL; actual WS test would require auth
     const res = await fetch(`${serverUrl}/healthz`, { signal: AbortSignal.timeout(3000) });
     if (res.ok) {
       return { label: "WebSocket", ok: true, detail: `${wsUrl} (server reachable)` };
@@ -282,14 +314,4 @@ export function printResults(results: CheckResult[]): void {
     process.stderr.write(`  ${failures.length} issue(s) found.\n`);
   }
   blank();
-}
-
-function getNestedValue(obj: Record<string, unknown>, dotPath: string): unknown {
-  const parts = dotPath.split(".");
-  let current: unknown = obj;
-  for (const part of parts) {
-    if (current === null || current === undefined || typeof current !== "object") return undefined;
-    current = (current as Record<string, unknown>)[part];
-  }
-  return current;
 }

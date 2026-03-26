@@ -7,8 +7,8 @@ import {
   checkDocker,
   checkGitHubToken,
   checkNodeVersion,
-  checkPort,
   checkServerConfig,
+  checkServerHealth,
   printResults,
 } from "./doctor.js";
 
@@ -56,7 +56,7 @@ export function registerServerCommands(program: Command): void {
         await checkDatabase(),
         await checkGitHubToken(),
         await checkContextTreeRepo(),
-        await checkPort(),
+        await checkServerHealth(),
       ];
       printResults(results);
     });
