@@ -1,18 +1,19 @@
-import { describe, expect, it } from "vitest";
-import type { HandlerFactory } from "../runtime/handler.js";
+import { describe, expect, it, vi } from "vitest";
+import type { AgentHandler, HandlerFactory } from "../runtime/handler.js";
 import { getHandlerFactory, registerHandler } from "../runtime/handler.js";
 
+function createMockHandler(): AgentHandler {
+  return {
+    start: vi.fn().mockResolvedValue("session-id"),
+    resume: vi.fn().mockResolvedValue("session-id"),
+    inject: vi.fn(),
+    suspend: vi.fn().mockResolvedValue(undefined),
+    shutdown: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
 describe("Handler Registry", () => {
-  // We can't "unregister" handlers, but tests for the registry API itself
-  const echoFactory: HandlerFactory = () => ({
-    async handle(entry, ctx) {
-      await ctx.sdk.sendMessage(entry.chatId ?? entry.message.chatId, {
-        format: "text",
-        content: `echo: ${entry.message.content}`,
-      });
-      await ctx.sdk.ack(entry.id);
-    },
-  });
+  const echoFactory: HandlerFactory = () => createMockHandler();
 
   it("registers and retrieves a handler factory", () => {
     registerHandler("echo", echoFactory);
@@ -27,27 +28,12 @@ describe("Handler Registry", () => {
   it("creates a handler with the factory", () => {
     registerHandler("test-handler", echoFactory);
     const factory = getHandlerFactory("test-handler");
-    const handler = factory({});
+    const handler = factory({ cwd: "/tmp" });
     expect(handler).toBeDefined();
-    expect(typeof handler.handle).toBe("function");
-  });
-
-  it("handler can have optional shutdown method", () => {
-    const factoryWithShutdown: HandlerFactory = () => ({
-      async handle() {},
-      async shutdown() {},
-    });
-    registerHandler("with-shutdown", factoryWithShutdown);
-    const handler = getHandlerFactory("with-shutdown")({});
+    expect(typeof handler.start).toBe("function");
+    expect(typeof handler.resume).toBe("function");
+    expect(typeof handler.inject).toBe("function");
+    expect(typeof handler.suspend).toBe("function");
     expect(typeof handler.shutdown).toBe("function");
-  });
-
-  it("handler shutdown is optional", () => {
-    const factoryNoShutdown: HandlerFactory = () => ({
-      async handle() {},
-    });
-    registerHandler("no-shutdown", factoryNoShutdown);
-    const handler = getHandlerFactory("no-shutdown")({});
-    expect(handler.shutdown).toBeUndefined();
   });
 });

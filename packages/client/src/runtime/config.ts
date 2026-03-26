@@ -14,6 +14,7 @@ const sessionConfigSchema = z.object({
 const agentSlotConfigSchema = z.object({
   token: z.string().min(1),
   type: z.string().min(1),
+  cwd: z.string().optional(),
   session: sessionConfigSchema.default({}),
   concurrency: z.number().int().positive().default(5),
 });

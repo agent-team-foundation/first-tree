@@ -37,6 +37,7 @@
     "zod": "^3.25.0"
   },
   "devDependencies": {
+    "@agent-hub/client": "workspace:*",
     "@testcontainers/postgresql": "^11.13.0",
     "@types/bcrypt": "^5.0.0",
     "@types/node": "^22.16.0",

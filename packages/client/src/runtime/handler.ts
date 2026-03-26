@@ -1,4 +1,3 @@
-import type { InboxEntryWithMessage } from "@agent-hub/shared";
 import type { AgentHubSDK } from "../sdk.js";
 
 export type HandlerContext = {
@@ -10,19 +9,68 @@ export type HandlerContext = {
   log: (msg: string) => void;
 };
 
-export type AgentHandler = {
-  /** Process an incoming message. Called by Runtime for each inbox entry. */
-  handle(entry: InboxEntryWithMessage, ctx: HandlerContext): Promise<void>;
+/** Extended context for session-oriented handlers. */
+export type SessionContext = HandlerContext & {
+  /** The server-side chat this session belongs to. */
+  chatId: string;
+  /** Refresh `lastActivity` timestamp to prevent idle timeout. */
+  touch: () => void;
+};
 
-  /** Cleanup when Session is recycled (idle timeout) or Runtime shuts down. */
-  shutdown?(): Promise<void>;
+/** Message content extracted from an inbox entry (no entry metadata). */
+export type SessionMessage = {
+  /** Message ID (UUID v7). */
+  id: string;
+  /** Chat this message belongs to. */
+  chatId: string;
+  /** Sender agent ID. */
+  senderId: string;
+  /** Message format. */
+  format: string;
+  /** Message content (text or structured). */
+  content: string | Record<string, unknown>;
+  /** Optional metadata. */
+  metadata: Record<string, unknown> | null;
+  /** Agent working directory. */
+  cwd?: string;
+};
+
+/**
+ * Session-oriented agent handler.
+ *
+ * Each handler instance owns the full lifecycle of a Claude session
+ * for a single chat. The Runtime manages one handler per chatId.
+ */
+export type AgentHandler = {
+  /** First message in a new chat. Spawn query, start consumer loop. Returns claudeSessionId. */
+  start(message: SessionMessage, ctx: SessionContext): Promise<string>;
+
+  /** Message arrives for a suspended/evicted chat. Resume query from disk. Returns claudeSessionId. */
+  resume(message: SessionMessage, sessionId: string, ctx: SessionContext): Promise<string>;
+
+  /** Message arrives while session is active. Push into InputController. Synchronous. */
+  inject(message: SessionMessage): void;
+
+  /** Idle timeout. Close query, preserve state for resume. */
+  suspend(): Promise<void>;
+
+  /** Eviction or runtime shutdown. Same as suspend(). */
+  shutdown(): Promise<void>;
 };
 
 /**
  * Factory function that each handler module exports.
- * Called once per Session to create a handler instance.
+ * Called once per session to create a handler instance.
  */
-export type HandlerFactory = (config: Record<string, unknown>) => AgentHandler;
+export type HandlerFactory = (config: HandlerConfig) => AgentHandler;
+
+/** Configuration passed to handler factory. */
+export type HandlerConfig = {
+  /** Agent's working directory. */
+  cwd: string;
+  /** Additional handler-specific config. */
+  [key: string]: unknown;
+};
 
 /** Built-in handler registry. Populated by handler modules. */
 const HANDLER_REGISTRY = new Map<string, HandlerFactory>();
