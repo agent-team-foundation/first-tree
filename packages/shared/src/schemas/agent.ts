@@ -35,15 +35,6 @@ export type CreateAgent = z.infer<typeof createAgentSchema>;
 
 // -- Context Tree sync schemas --
 
-export const memberNodeSchema = z.object({
-  title: z.string().min(1),
-  type: agentTypeSchema,
-  owners: z.array(z.string()).min(1),
-  role: z.string().optional(),
-  domains: z.array(z.string()).optional(),
-});
-export type MemberNode = z.infer<typeof memberNodeSchema>;
-
 export const syncReportSchema = z.object({
   syncedAt: z.string(),
   treePath: z.string(),
