@@ -43,6 +43,9 @@ type SessionManagerConfig = {
  * - Concurrency limit on simultaneously active sessions
  * - Registry persistence for crash recovery
  */
+/** Maximum number of evicted session mappings to retain for resume recovery. */
+const MAX_EVICTED_MAPPINGS = 500;
+
 export class SessionManager {
   private readonly sessions = new Map<string, SessionEntry>();
   private readonly evictedMappings = new Map<string, { claudeSessionId: string; lastActivity: number }>();
@@ -297,7 +300,7 @@ export class SessionManager {
 
     if (candidate) {
       // Preserve mapping for future recovery
-      this.evictedMappings.set(candidate.key, {
+      this.addEvictedMapping(candidate.key, {
         claudeSessionId: candidate.session.claudeSessionId,
         lastActivity: candidate.session.lastActivity,
       });
@@ -322,6 +325,16 @@ export class SessionManager {
         this.config.log(`Session ${session.chatId}: idle ${this.config.session.idle_timeout}s, suspending`);
         this.suspendSession(session);
       }
+    }
+  }
+
+  /** Add an evicted mapping, pruning the oldest if over capacity. */
+  private addEvictedMapping(chatId: string, mapping: { claudeSessionId: string; lastActivity: number }): void {
+    this.evictedMappings.set(chatId, mapping);
+    if (this.evictedMappings.size > MAX_EVICTED_MAPPINGS) {
+      // Map iteration order is insertion order — first key is the oldest
+      const oldest = this.evictedMappings.keys().next().value;
+      if (oldest !== undefined) this.evictedMappings.delete(oldest);
     }
   }
 
@@ -357,30 +370,17 @@ export class SessionManager {
 
     const persisted = this.registry.load();
     for (const [chatId, data] of persisted) {
-      if (data.status === "evicted") {
-        // Evicted: keep mapping only, no handler allocation
-        this.evictedMappings.set(chatId, {
-          claudeSessionId: data.claudeSessionId,
-          lastActivity: data.lastActivity,
-        });
-      } else {
-        // Suspended/active → load as suspended, wait for incoming message
-        const handler = this.config.handlerFactory(this.config.handlerConfig);
-        this.sessions.set(chatId, {
-          chatId,
-          claudeSessionId: data.claudeSessionId,
-          handler,
-          status: "suspended",
-          lastActivity: data.lastActivity,
-          suspending: null,
-        });
-      }
+      // All persisted sessions become evicted mappings on load.
+      // Handlers are allocated lazily when a message arrives (startNewSession
+      // checks evictedMappings and calls handler.resume instead of start).
+      this.addEvictedMapping(chatId, {
+        claudeSessionId: data.claudeSessionId,
+        lastActivity: data.lastActivity,
+      });
     }
 
     if (persisted.size > 0) {
-      this.config.log(
-        `Loaded ${persisted.size} persisted session(s)${this.evictedMappings.size > 0 ? ` (${this.evictedMappings.size} evicted)` : ""}`,
-      );
+      this.config.log(`Loaded ${persisted.size} persisted session mapping(s)`);
     }
   }
 

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Query, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { PermissionMode, Query, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { query as claudeQuery } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
 import { InputController } from "../runtime/input-controller.js";
@@ -39,17 +39,29 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   function buildEnv(sessionCtx: SessionContext): Record<string, string | undefined> {
     return {
       ...process.env,
-      // Access private fields via cast — SDK does not expose these publicly
-      AGENT_HUB_SERVER_URL: (sessionCtx.sdk as unknown as { baseUrl: string }).baseUrl,
-      AGENT_HUB_AGENT_TOKEN: (sessionCtx.sdk as unknown as { token: string }).token,
+      AGENT_HUB_SERVER_URL: sessionCtx.sdk.serverUrl,
+      AGENT_HUB_AGENT_TOKEN: sessionCtx.sdk.agentToken,
       AGENT_HUB_CHAT_ID: sessionCtx.chatId,
       AGENT_HUB_AGENT_ID: sessionCtx.agent.agentId,
     };
   }
 
+  /** Create query and input controller, then start consumer loop. */
   function spawnQuery(sessionId: string, sessionCtx: SessionContext, resume?: string): void {
+    buildQuery(sessionId, sessionCtx, resume);
+    consumerDone = consumeOutput(sessionCtx);
+  }
+
+  /** Rebuild query and input controller without starting a new consumer loop (used for retry within the existing loop). */
+  function respawnQuery(sessionId: string, sessionCtx: SessionContext): void {
+    buildQuery(sessionId, sessionCtx, sessionId);
+  }
+
+  function buildQuery(sessionId: string, sessionCtx: SessionContext, resume?: string): void {
     inputController = new InputController<SDKUserMessage>();
     abortController = new AbortController();
+
+    const permissionMode = (config.permissionMode as PermissionMode | undefined) ?? "bypassPermissions";
 
     currentQuery = claudeQuery({
       prompt: inputController.iterable,
@@ -59,55 +71,54 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         cwd,
         persistSession: true,
         abortController,
-        permissionMode: "bypassPermissions",
-        allowDangerouslySkipPermissions: true,
+        permissionMode,
+        allowDangerouslySkipPermissions: permissionMode === "bypassPermissions",
         env: buildEnv(sessionCtx),
       },
     });
-
-    consumerDone = consumeOutput(sessionCtx);
   }
 
   async function consumeOutput(sessionCtx: SessionContext): Promise<void> {
-    if (!currentQuery) return;
+    while (true) {
+      if (!currentQuery) return;
 
-    try {
-      for await (const message of currentQuery) {
-        // Every message refreshes lastActivity to prevent idle timeout
-        sessionCtx.touch();
+      try {
+        for await (const message of currentQuery) {
+          // Every message refreshes lastActivity to prevent idle timeout
+          sessionCtx.touch();
 
-        if (message.type === "result") {
-          const result = message as { type: "result"; subtype: string; errors?: string[] };
-          if (result.subtype === "success") {
-            // Session processing complete — reset retry count
-            retryCount = 0;
-          } else {
-            // Error result — log it
-            const errors = result.errors ? result.errors.join("; ") : result.subtype;
-            sessionCtx.log(`Query result error: ${errors}`);
+          if (message.type === "result") {
+            const result = message as { type: "result"; subtype: string; errors?: string[] };
+            if (result.subtype === "success") {
+              retryCount = 0;
+            } else {
+              const errors = result.errors ? result.errors.join("; ") : result.subtype;
+              sessionCtx.log(`Query result error: ${errors}`);
+            }
           }
         }
-        // All other message types are silently consumed for lifecycle tracking
-      }
-    } catch (err) {
-      // Process crash, OOM, or unexpected termination
-      const errMsg = err instanceof Error ? err.message : String(err);
-      sessionCtx.log(`Query error: ${errMsg}`);
+        // Normal completion — exit loop
+        return;
+      } catch (err) {
+        // Process crash, OOM, or unexpected termination
+        const errMsg = err instanceof Error ? err.message : String(err);
+        sessionCtx.log(`Query error: ${errMsg}`);
 
-      // Layer 1: Automatic resume (silent recovery)
-      if (retryCount < MAX_RETRIES && claudeSessionId) {
+        if (retryCount >= MAX_RETRIES || !claudeSessionId) {
+          sessionCtx.log("Exhausted retries, session will be suspended");
+          return;
+        }
+
+        // Automatic retry — respawn query and continue loop
         retryCount++;
         sessionCtx.log(`Attempting auto-resume (retry ${retryCount}/${MAX_RETRIES})`);
         try {
-          spawnQuery(claudeSessionId, sessionCtx, claudeSessionId);
-          return;
+          respawnQuery(claudeSessionId, sessionCtx);
         } catch (resumeErr) {
           sessionCtx.log(`Auto-resume failed: ${resumeErr instanceof Error ? resumeErr.message : String(resumeErr)}`);
+          return;
         }
       }
-
-      // Layer 2: Log and suspend (graceful degradation)
-      sessionCtx.log("Exhausted retries, session will be suspended");
     }
   }
 

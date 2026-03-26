@@ -23,6 +23,7 @@ type RegistryData = {
 export class SessionRegistry {
   private readonly filePath: string;
   private writeTimer: ReturnType<typeof setTimeout> | null = null;
+  private pendingEntries: Map<string, { claudeSessionId: string; lastActivity: number; status: string }> | null = null;
 
   constructor(filePath: string) {
     this.filePath = filePath;
@@ -57,10 +58,14 @@ export class SessionRegistry {
 
   /** Mark the registry as dirty; a debounced write will follow. */
   save(entries: Map<string, { claudeSessionId: string; lastActivity: number; status: string }>): void {
+    this.pendingEntries = entries;
     if (!this.writeTimer) {
       this.writeTimer = setTimeout(() => {
         this.writeTimer = null;
-        this.flush(entries);
+        if (this.pendingEntries) {
+          this.flush(this.pendingEntries);
+          this.pendingEntries = null;
+        }
       }, 1000);
     }
   }
