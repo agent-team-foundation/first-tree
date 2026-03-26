@@ -22,13 +22,23 @@ export type PaginatedResult<T> = {
 };
 
 export class AgentHubSDK {
-  private readonly baseUrl: string;
-  private readonly token: string;
+  private readonly _baseUrl: string;
+  private readonly _token: string;
 
   constructor(config: SdkConfig) {
     // Strip trailing slash
-    this.baseUrl = config.serverUrl.replace(/\/+$/, "");
-    this.token = config.token;
+    this._baseUrl = config.serverUrl.replace(/\/+$/, "");
+    this._token = config.token;
+  }
+
+  /** Server base URL (without trailing slash). */
+  get serverUrl(): string {
+    return this._baseUrl;
+  }
+
+  /** Agent bearer token. */
+  get agentToken(): string {
+    return this._token;
   }
 
   /** Validate token, return agent identity. */
@@ -108,9 +118,9 @@ export class AgentHubSDK {
   }
 
   private async doFetch(path: string, init?: RequestInit): Promise<Response> {
-    const url = `${this.baseUrl}${path}`;
+    const url = `${this._baseUrl}${path}`;
     const headers: Record<string, string> = {
-      Authorization: `Bearer ${this.token}`,
+      Authorization: `Bearer ${this._token}`,
     };
     // Only set Content-Type for requests with a body — Fastify rejects empty JSON bodies
     if (init?.body) {

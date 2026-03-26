@@ -11,13 +11,16 @@ describe("Built-in Handlers", () => {
     expect(typeof factory).toBe("function");
   });
 
-  it("claude-code factory returns a valid handler", () => {
+  it("claude-code factory returns a valid session-oriented handler", () => {
     registerBuiltinHandlers();
 
     const factory = getHandlerFactory("claude-code");
-    const handler = factory({});
+    const handler = factory({ cwd: "/tmp/test" });
     expect(handler).toBeDefined();
-    expect(typeof handler.handle).toBe("function");
+    expect(typeof handler.start).toBe("function");
+    expect(typeof handler.resume).toBe("function");
+    expect(typeof handler.inject).toBe("function");
+    expect(typeof handler.suspend).toBe("function");
     expect(typeof handler.shutdown).toBe("function");
   });
 });

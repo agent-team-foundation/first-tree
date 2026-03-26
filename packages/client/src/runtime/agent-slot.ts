@@ -1,9 +1,10 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { InboxEntryWithMessage } from "@agent-hub/shared";
 import { AgentConnection } from "../connection.js";
 import type { RegisterResult } from "../sdk.js";
 import type { SessionConfig } from "./config.js";
 import type { HandlerFactory } from "./handler.js";
-import { Semaphore } from "./semaphore.js";
 import { SessionManager } from "./session-manager.js";
 
 export type AgentSlotConfig = {
@@ -14,6 +15,7 @@ export type AgentSlotConfig = {
   handlerFactory: HandlerFactory;
   session: SessionConfig;
   concurrency: number;
+  cwd?: string;
 };
 
 export class AgentSlot {
@@ -21,11 +23,9 @@ export class AgentSlot {
   private sessionManager: SessionManager | null = null;
   private readonly config: AgentSlotConfig;
   private readonly logFn: (msg: string) => void;
-  private readonly semaphore: Semaphore;
 
   constructor(config: AgentSlotConfig) {
     this.config = config;
-    this.semaphore = new Semaphore(config.concurrency);
     this.logFn = (msg: string) => {
       process.stderr.write(`[${config.name}] ${msg}\n`);
     };
@@ -43,22 +43,21 @@ export class AgentSlot {
     const agent = await this.connection.connect();
     this.logFn(`Registered as ${agent.displayName ?? agent.agentId} (${agent.agentId})`);
 
+    const registryPath = join(homedir(), ".agent-hub", "data", "sessions", `${this.config.name}.json`);
+
     this.sessionManager = new SessionManager({
       session: this.config.session,
+      concurrency: this.config.concurrency,
       handlerFactory: this.config.handlerFactory,
-      handlerConfig: {},
+      handlerConfig: { cwd: this.config.cwd ?? process.cwd() },
       agentIdentity: { agentId: agent.agentId, displayName: agent.displayName },
       sdk: this.connection.sdk,
       log: this.logFn,
+      registryPath,
     });
 
     this.connection.onMessage(async (entry: InboxEntryWithMessage) => {
-      await this.semaphore.acquire();
-      try {
-        await this.sessionManager?.dispatch(entry);
-      } finally {
-        this.semaphore.release();
-      }
+      await this.sessionManager?.dispatch(entry);
     });
 
     return agent;

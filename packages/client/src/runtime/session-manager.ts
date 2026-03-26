@@ -1,61 +1,94 @@
 import type { InboxEntryWithMessage } from "@agent-hub/shared";
 import type { AgentHubSDK } from "../sdk.js";
 import type { SessionConfig } from "./config.js";
-import type { AgentHandler, HandlerContext, HandlerFactory } from "./handler.js";
+import { Deduplicator } from "./deduplicator.js";
+import type { AgentHandler, HandlerConfig, HandlerFactory, SessionContext, SessionMessage } from "./handler.js";
+import { SessionRegistry } from "./session-registry.js";
 
-type Session = {
+type SessionStatus = "active" | "suspended" | "evicted";
+
+type SessionEntry = {
   chatId: string;
+  claudeSessionId: string;
   handler: AgentHandler;
+  status: SessionStatus;
   lastActivity: number;
-  /** Queued messages waiting for the current one to finish. */
-  messageQueue: InboxEntryWithMessage[];
-  /** Whether a message is currently being processed. */
-  processing: boolean;
+  /** In-flight suspend promise; awaited before resume to avoid race conditions. */
+  suspending: Promise<void> | null;
+};
+
+type PendingMessage = {
+  message: SessionMessage;
+  chatId: string;
 };
 
 type SessionManagerConfig = {
   session: SessionConfig;
+  concurrency: number;
   handlerFactory: HandlerFactory;
-  handlerConfig: Record<string, unknown>;
+  handlerConfig: HandlerConfig;
   agentIdentity: { agentId: string; displayName: string | null };
   sdk: AgentHubSDK;
   log: (msg: string) => void;
+  registryPath?: string;
 };
 
 /**
- * Manages per-chat Sessions. Each (Agent, Chat) pair gets its own Handler instance.
- * Messages within the same chat are delivered serially; different chats run in parallel.
+ * Manages per-chat session entries with session-oriented handler lifecycle.
+ *
+ * Key differences from the old SessionManager:
+ * - Immediate ACK at dispatch (before handler processing)
+ * - Three session states: active / suspended / evicted
+ * - Streaming input injection for active sessions
+ * - Concurrency limit on simultaneously active sessions
+ * - Registry persistence for crash recovery
  */
+/** Maximum number of evicted session mappings to retain for resume recovery. */
+const MAX_EVICTED_MAPPINGS = 500;
+
 export class SessionManager {
-  private readonly sessions = new Map<string, Session>();
+  private readonly sessions = new Map<string, SessionEntry>();
+  private readonly evictedMappings = new Map<string, { claudeSessionId: string; lastActivity: number }>();
   private readonly config: SessionManagerConfig;
+  private readonly deduplicator = new Deduplicator(1000);
+  private readonly registry: SessionRegistry | null;
+  private readonly pendingQueue: PendingMessage[] = [];
   private idleTimer: ReturnType<typeof setInterval> | null = null;
+  private _activeCount = 0;
 
   constructor(config: SessionManagerConfig) {
     this.config = config;
+    this.registry = config.registryPath ? new SessionRegistry(config.registryPath) : null;
     this.idleTimer = setInterval(() => this.evictIdle(), 10_000);
+
+    // Load persisted sessions (all start as suspended)
+    this.loadPersistedSessions();
   }
 
-  /** Dispatch an inbox entry to the appropriate session. */
+  /** Dispatch an inbox entry. ACK immediately, then route by session state. */
   async dispatch(entry: InboxEntryWithMessage): Promise<void> {
     const chatId = entry.chatId ?? entry.message.chatId;
-    const session = this.sessions.get(chatId);
+    const messageId = entry.message.id;
 
-    if (session) {
-      session.lastActivity = Date.now();
-      if (session.processing) {
-        // Queue for serial delivery within the same chat
-        session.messageQueue.push(entry);
-      } else {
-        await this.processEntry(session, entry);
-      }
-    } else {
-      // Evict LRU if at capacity
-      this.evictIfNeeded();
-      // Create new session
-      const newSession = this.createSession(chatId);
-      await this.processEntry(newSession, entry);
+    // 1. Immediate ACK — Runtime owns processing guarantee from here
+    try {
+      await this.config.sdk.ack(entry.id);
+    } catch {
+      // ACK failure is non-fatal; message may be redelivered
+      this.config.log(`Session ${chatId}: ACK failed for entry ${entry.id}, continuing`);
     }
+
+    // 2. Deduplication
+    if (this.deduplicator.isDuplicate(messageId)) {
+      this.config.log(`Session ${chatId}: duplicate message ${messageId}, skipping`);
+      return;
+    }
+
+    // 3. Extract message content (handler does not see inbox metadata)
+    const message = this.extractMessage(entry);
+
+    // 4. Route by session state
+    await this.routeMessage(chatId, message);
   }
 
   /** Shut down all sessions gracefully. */
@@ -64,99 +97,312 @@ export class SessionManager {
       clearInterval(this.idleTimer);
       this.idleTimer = null;
     }
-    const shutdowns = [...this.sessions.values()].map((s) => s.handler.shutdown?.() ?? Promise.resolve());
+
+    const shutdowns = [...this.sessions.values()].map((s) =>
+      s.status === "active" ? s.handler.shutdown() : Promise.resolve(),
+    );
     await Promise.allSettled(shutdowns);
+
+    // Persist final state
+    this.persistRegistry();
+    this.registry?.dispose();
+
     this.sessions.clear();
+    this.evictedMappings.clear();
+    this._activeCount = 0;
   }
 
   get activeCount(): number {
+    return this._activeCount;
+  }
+
+  get totalCount(): number {
     return this.sessions.size;
   }
 
   // ---- Internal -----------------------------------------------------------
 
-  private createSession(chatId: string): Session {
-    const handler = this.config.handlerFactory(this.config.handlerConfig);
+  private async routeMessage(chatId: string, message: SessionMessage): Promise<void> {
+    const existing = this.sessions.get(chatId);
 
-    const session: Session = {
-      chatId,
-      handler,
-      lastActivity: Date.now(),
-      messageQueue: [],
-      processing: false,
-    };
+    if (existing) {
+      switch (existing.status) {
+        case "active":
+          // Inject into running session
+          existing.handler.inject(message);
+          existing.lastActivity = Date.now();
+          this.config.log(`Session ${chatId}: message injected`);
+          return;
 
-    this.sessions.set(chatId, session);
-    this.config.log(`Session ${chatId}: created`);
-    return session;
+        case "suspended":
+        case "evicted":
+          // Resume session
+          await this.resumeSession(existing, message);
+          return;
+      }
+    }
+
+    // No existing session — create new
+    await this.startNewSession(chatId, message);
   }
 
-  private async processEntry(session: Session, entry: InboxEntryWithMessage): Promise<void> {
-    session.processing = true;
-    session.lastActivity = Date.now();
+  private async startNewSession(chatId: string, message: SessionMessage): Promise<void> {
+    // Enforce concurrency limit
+    if (!this.acquireActiveSlot(chatId, message)) return;
 
-    const ctx: HandlerContext = {
-      agent: this.config.agentIdentity,
-      sdk: this.config.sdk,
-      log: (msg) => this.config.log(`Session ${session.chatId}: ${msg}`),
+    // Enforce max_sessions (evict LRU)
+    this.evictIfNeeded();
+
+    // Check for prior evicted session mapping
+    const evicted = this.evictedMappings.get(chatId);
+
+    const handler = this.config.handlerFactory(this.config.handlerConfig);
+    const ctx = this.buildSessionContext(chatId);
+
+    const entry: SessionEntry = {
+      chatId,
+      claudeSessionId: evicted?.claudeSessionId ?? "",
+      handler,
+      status: "active",
+      lastActivity: Date.now(),
+      suspending: null,
     };
+
+    this.sessions.set(chatId, entry);
+    this._activeCount++;
+    if (evicted) this.evictedMappings.delete(chatId);
 
     try {
-      await session.handler.handle(entry, ctx);
+      if (evicted) {
+        const sessionId = await handler.resume(message, evicted.claudeSessionId, ctx);
+        entry.claudeSessionId = sessionId;
+        this.config.log(`Session ${chatId}: resumed from eviction (${sessionId})`);
+      } else {
+        const sessionId = await handler.start(message, ctx);
+        entry.claudeSessionId = sessionId;
+        this.config.log(`Session ${chatId}: created (${sessionId})`);
+      }
+      this.persistRegistry();
     } catch (err) {
-      this.config.log(`Session ${session.chatId}: handler error: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      session.processing = false;
-      this.drainQueue(session.chatId);
+      this.config.log(
+        `Session ${chatId}: ${evicted ? "resume" : "start"} failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      this.sessions.delete(chatId);
+      this._activeCount--;
     }
   }
 
-  private drainQueue(chatId: string): void {
-    const session = this.sessions.get(chatId);
-    if (!session) return;
-
-    const next = session.messageQueue.shift();
-    if (next) {
-      this.processEntry(session, next).catch((err) => {
-        this.config.log(`Session ${chatId}: drain error: ${err instanceof Error ? err.message : String(err)}`);
-      });
+  private async resumeSession(entry: SessionEntry, message: SessionMessage): Promise<void> {
+    // Wait for in-flight suspension to complete before resuming
+    if (entry.suspending) {
+      await entry.suspending;
     }
+
+    // Enforce concurrency limit
+    if (!this.acquireActiveSlot(entry.chatId, message)) return;
+
+    const ctx = this.buildSessionContext(entry.chatId);
+    entry.status = "active";
+    this._activeCount++;
+    entry.lastActivity = Date.now();
+
+    try {
+      await entry.handler.resume(message, entry.claudeSessionId, ctx);
+      this.config.log(`Session ${entry.chatId}: resumed (${entry.claudeSessionId})`);
+      this.persistRegistry();
+    } catch (err) {
+      this.config.log(`Session ${entry.chatId}: resume failed: ${err instanceof Error ? err.message : String(err)}`);
+      entry.status = "suspended";
+      this._activeCount--;
+    }
+  }
+
+  /**
+   * Try to acquire an active slot. If at concurrency limit:
+   * 1. Suspend the least-recently-active session to free a slot
+   * 2. If no candidates, queue the message
+   *
+   * Returns true if slot acquired, false if queued.
+   */
+  private acquireActiveSlot(chatId: string, message: SessionMessage): boolean {
+    if (this._activeCount < this.config.concurrency) return true;
+
+    // Find least-recently-active session (excluding the target chat)
+    let oldestActive: SessionEntry | null = null;
+    for (const session of this.sessions.values()) {
+      if (session.status !== "active") continue;
+      if (session.chatId === chatId) continue;
+      if (!oldestActive || session.lastActivity < oldestActive.lastActivity) {
+        oldestActive = session;
+      }
+    }
+
+    if (oldestActive) {
+      this.config.log(`Session ${oldestActive.chatId}: preempted for concurrency`);
+      this.suspendSession(oldestActive);
+      return true;
+    }
+
+    // All active sessions are busy — queue
+    this.config.log(`Session ${chatId}: concurrency limit reached, queuing`);
+    this.pendingQueue.push({ message, chatId });
+    return false;
+  }
+
+  private suspendSession(entry: SessionEntry): void {
+    entry.status = "suspended";
+    this._activeCount--;
+    entry.suspending = entry.handler
+      .suspend()
+      .catch((err) => {
+        this.config.log(`Session ${entry.chatId}: suspend error: ${err instanceof Error ? err.message : String(err)}`);
+      })
+      .finally(() => {
+        entry.suspending = null;
+      });
+    this.persistRegistry();
+
+    // Drain pending queue
+    this.drainPendingQueue();
+  }
+
+  private drainPendingQueue(): void {
+    if (this.pendingQueue.length === 0) return;
+    if (this._activeCount >= this.config.concurrency) return;
+
+    const next = this.pendingQueue.shift();
+    if (!next) return;
+    // Route asynchronously
+    this.routeMessage(next.chatId, next.message).catch((err) => {
+      this.config.log(
+        `Session ${next.chatId}: pending drain error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
   }
 
   private evictIfNeeded(): void {
     const { max_sessions } = this.config.session;
     if (this.sessions.size < max_sessions) return;
 
-    // Find least recently active IDLE session — skip busy ones to avoid data loss
-    let oldest: { key: string; lastActivity: number } | null = null;
+    // Single pass: find LRU session, preferring non-active over active
+    let candidate: { key: string; session: SessionEntry } | null = null;
     for (const [key, session] of this.sessions) {
-      if (session.processing || session.messageQueue.length > 0) continue;
-      if (!oldest || session.lastActivity < oldest.lastActivity) {
-        oldest = { key, lastActivity: session.lastActivity };
+      if (!candidate) {
+        candidate = { key, session };
+        continue;
+      }
+      const preferNonActive = session.status !== "active" && candidate.session.status === "active";
+      const sameCategory = (session.status === "active") === (candidate.session.status === "active");
+      if (preferNonActive || (sameCategory && session.lastActivity < candidate.session.lastActivity)) {
+        candidate = { key, session };
       }
     }
 
-    if (oldest) {
-      const session = this.sessions.get(oldest.key);
-      if (session) {
-        this.config.log(`Session ${oldest.key}: evicted (max_sessions reached)`);
-        session.handler.shutdown?.().catch(() => {});
-        this.sessions.delete(oldest.key);
+    if (candidate) {
+      // Preserve mapping for future recovery
+      this.addEvictedMapping(candidate.key, {
+        claudeSessionId: candidate.session.claudeSessionId,
+        lastActivity: candidate.session.lastActivity,
+      });
+
+      this.config.log(`Session ${candidate.key}: evicted (max_sessions reached)`);
+      if (candidate.session.status === "active") {
+        this._activeCount--;
+        candidate.session.handler.shutdown().catch(() => {});
       }
+      candidate.session.status = "evicted";
+      this.sessions.delete(candidate.key);
+      this.persistRegistry();
     }
-    // If all sessions are busy, allow temporary overflow rather than dropping messages
   }
 
   private evictIdle(): void {
     const timeoutMs = this.config.session.idle_timeout * 1000;
     const now = Date.now();
 
-    for (const [key, session] of this.sessions) {
-      if (!session.processing && now - session.lastActivity > timeoutMs) {
-        this.config.log(`Session ${key}: idle ${this.config.session.idle_timeout}s, recycling`);
-        session.handler.shutdown?.().catch(() => {});
-        this.sessions.delete(key);
+    for (const [, session] of this.sessions) {
+      if (session.status === "active" && now - session.lastActivity > timeoutMs) {
+        this.config.log(`Session ${session.chatId}: idle ${this.config.session.idle_timeout}s, suspending`);
+        this.suspendSession(session);
       }
     }
+  }
+
+  /** Add an evicted mapping, pruning the oldest if over capacity. */
+  private addEvictedMapping(chatId: string, mapping: { claudeSessionId: string; lastActivity: number }): void {
+    this.evictedMappings.set(chatId, mapping);
+    if (this.evictedMappings.size > MAX_EVICTED_MAPPINGS) {
+      // Map iteration order is insertion order — first key is the oldest
+      const oldest = this.evictedMappings.keys().next().value;
+      if (oldest !== undefined) this.evictedMappings.delete(oldest);
+    }
+  }
+
+  private buildSessionContext(chatId: string): SessionContext {
+    return {
+      agent: this.config.agentIdentity,
+      sdk: this.config.sdk,
+      log: (msg) => this.config.log(`Session ${chatId}: ${msg}`),
+      chatId,
+      touch: () => {
+        const entry = this.sessions.get(chatId);
+        if (entry) {
+          entry.lastActivity = Date.now();
+        }
+      },
+    };
+  }
+
+  private extractMessage(entry: InboxEntryWithMessage): SessionMessage {
+    const msg = entry.message;
+    return {
+      id: msg.id,
+      chatId: entry.chatId ?? msg.chatId,
+      senderId: msg.senderId,
+      format: msg.format,
+      content: msg.content as string | Record<string, unknown>,
+      metadata: msg.metadata,
+    };
+  }
+
+  private loadPersistedSessions(): void {
+    if (!this.registry) return;
+
+    const persisted = this.registry.load();
+    for (const [chatId, data] of persisted) {
+      // All persisted sessions become evicted mappings on load.
+      // Handlers are allocated lazily when a message arrives (startNewSession
+      // checks evictedMappings and calls handler.resume instead of start).
+      this.addEvictedMapping(chatId, {
+        claudeSessionId: data.claudeSessionId,
+        lastActivity: data.lastActivity,
+      });
+    }
+
+    if (persisted.size > 0) {
+      this.config.log(`Loaded ${persisted.size} persisted session mapping(s)`);
+    }
+  }
+
+  private persistRegistry(): void {
+    if (!this.registry) return;
+
+    const entries = new Map<string, { claudeSessionId: string; lastActivity: number; status: string }>();
+    for (const [chatId, session] of this.sessions) {
+      entries.set(chatId, {
+        claudeSessionId: session.claudeSessionId,
+        lastActivity: session.lastActivity,
+        status: session.status,
+      });
+    }
+    // Include evicted mappings for crash recovery
+    for (const [chatId, mapping] of this.evictedMappings) {
+      entries.set(chatId, {
+        claudeSessionId: mapping.claudeSessionId,
+        lastActivity: mapping.lastActivity,
+        status: "evicted",
+      });
+    }
+    this.registry.save(entries);
   }
 }

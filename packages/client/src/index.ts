@@ -7,11 +7,20 @@ export type { AgentSlotConfig } from "./runtime/agent-slot.js";
 export { AgentSlot } from "./runtime/agent-slot.js";
 export type { AgentSlotYamlConfig, RuntimeConfig, SessionConfig } from "./runtime/config.js";
 export { loadRuntimeConfig } from "./runtime/config.js";
-export type { AgentHandler, HandlerContext, HandlerFactory } from "./runtime/handler.js";
+export { Deduplicator } from "./runtime/deduplicator.js";
+export type {
+  AgentHandler,
+  HandlerConfig,
+  HandlerContext,
+  HandlerFactory,
+  SessionContext,
+  SessionMessage,
+} from "./runtime/handler.js";
 export { getHandlerFactory, registerHandler } from "./runtime/handler.js";
+export { InputController } from "./runtime/input-controller.js";
 export type { AgentRuntimeOptions } from "./runtime/runtime.js";
 export { AgentRuntime } from "./runtime/runtime.js";
-export { Semaphore } from "./runtime/semaphore.js";
 export { SessionManager } from "./runtime/session-manager.js";
+export { SessionRegistry } from "./runtime/session-registry.js";
 export type { PaginatedResult, PullResult, RegisterResult, SdkConfig } from "./sdk.js";
 export { AgentHubSDK, SdkError } from "./sdk.js";
