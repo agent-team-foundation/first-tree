@@ -57,8 +57,6 @@ export {
   agentTypeSchema,
   type CreateAgent,
   createAgentSchema,
-  type MemberNode,
-  memberNodeSchema,
   type SyncReport,
   syncReportSchema,
 } from "./schemas/agent.js";

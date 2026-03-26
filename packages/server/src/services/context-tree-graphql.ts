@@ -235,8 +235,11 @@ export async function syncFromGitHub(
   }
 
   // Phase 2: Suspend agents that are no longer in the tree
+  // Skip managed agents (e.g. github-adapter) — they are created by the system, not the tree
   try {
-    const activeAgents = await db.execute(sql`SELECT id FROM agents WHERE status = 'active'`);
+    const activeAgents = await db.execute(
+      sql`SELECT id FROM agents WHERE status = 'active' AND (metadata->>'managed')::boolean IS NOT TRUE`,
+    );
     for (const row of activeAgents) {
       const agent = row as { id: string };
       if (!memberNames.has(agent.id)) {

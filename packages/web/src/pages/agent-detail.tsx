@@ -32,11 +32,11 @@ export function AgentDetailPage() {
     enabled: !!agentId,
   });
 
-  // Tokens data
+  // Tokens data (only for non-human agents)
   const tokensQuery = useQuery({
     queryKey: ["tokens", agentId],
     queryFn: () => listTokens(agentId),
-    enabled: !!agentId,
+    enabled: !!agentId && agentQuery.isSuccess && agentQuery.data?.type !== "human",
   });
 
   // Adapter bindings for this agent
@@ -476,77 +476,79 @@ export function AgentDetailPage() {
         </CardContent>
       </Card>
 
-      {/* Token Management */}
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle className="flex items-center gap-2">
-            <Key className="h-4 w-4" />
-            Tokens
-          </CardTitle>
-          <Button
-            size="sm"
-            onClick={() => {
-              setCreatedToken(null);
-              setTokenName("");
-              setTokenDialogOpen(true);
-            }}
-          >
-            <Plus className="h-4 w-4 mr-2" />
-            Create Token
-          </Button>
-        </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead>Last Used</TableHead>
-                <TableHead>Expires</TableHead>
-                <TableHead className="w-20" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {tokensQuery.data?.length === 0 ? (
+      {/* Token Management — only for non-human agents */}
+      {!isHuman && (
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle className="flex items-center gap-2">
+              <Key className="h-4 w-4" />
+              Tokens
+            </CardTitle>
+            <Button
+              size="sm"
+              onClick={() => {
+                setCreatedToken(null);
+                setTokenName("");
+                setTokenDialogOpen(true);
+              }}
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              Create Token
+            </Button>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center py-4 text-muted-foreground">
-                    No tokens
-                  </TableCell>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Created</TableHead>
+                  <TableHead>Last Used</TableHead>
+                  <TableHead>Expires</TableHead>
+                  <TableHead className="w-20" />
                 </TableRow>
-              ) : (
-                tokensQuery.data?.map((token) => (
-                  <TableRow key={token.id}>
-                    <TableCell>{token.name ?? "—"}</TableCell>
-                    <TableCell className="text-muted-foreground">{formatDate(token.createdAt)}</TableCell>
-                    <TableCell className="text-muted-foreground">{formatDate(token.lastUsedAt)}</TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {token.revokedAt ? (
-                        <Badge variant="destructive">Revoked</Badge>
-                      ) : token.expiresAt ? (
-                        formatDate(token.expiresAt)
-                      ) : (
-                        "Never"
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {!token.revokedAt && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => revokeTokenMutation.mutate(token.id)}
-                          disabled={revokeTokenMutation.isPending}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      )}
+              </TableHeader>
+              <TableBody>
+                {tokensQuery.data?.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={5} className="text-center py-4 text-muted-foreground">
+                      No tokens
                     </TableCell>
                   </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+                ) : (
+                  tokensQuery.data?.map((token) => (
+                    <TableRow key={token.id}>
+                      <TableCell>{token.name ?? "—"}</TableCell>
+                      <TableCell className="text-muted-foreground">{formatDate(token.createdAt)}</TableCell>
+                      <TableCell className="text-muted-foreground">{formatDate(token.lastUsedAt)}</TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {token.revokedAt ? (
+                          <Badge variant="destructive">Revoked</Badge>
+                        ) : token.expiresAt ? (
+                          formatDate(token.expiresAt)
+                        ) : (
+                          "Never"
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {!token.revokedAt && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => revokeTokenMutation.mutate(token.id)}
+                            disabled={revokeTokenMutation.isPending}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Binding Dialog — adapts based on agent type */}
       <Dialog
@@ -676,48 +678,54 @@ export function AgentDetailPage() {
       </Dialog>
 
       {/* Create Token Dialog */}
-      <Dialog
-        open={tokenDialogOpen}
-        onOpenChange={(open) => {
-          setTokenDialogOpen(open);
-          if (!open) setCreatedToken(null);
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{createdToken ? "Token Created" : "Create Token"}</DialogTitle>
-          </DialogHeader>
-          {createdToken ? (
-            <div className="space-y-4">
-              <p className="text-sm text-muted-foreground">Copy this token now. It will not be shown again.</p>
-              <div className="flex gap-2">
-                <Input value={createdToken} readOnly className="font-mono text-xs" />
-                <Button variant="outline" size="icon" onClick={() => navigator.clipboard.writeText(createdToken)}>
-                  <Copy className="h-4 w-4" />
-                </Button>
+      {!isHuman && (
+        <Dialog
+          open={tokenDialogOpen}
+          onOpenChange={(open) => {
+            setTokenDialogOpen(open);
+            if (!open) setCreatedToken(null);
+          }}
+        >
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>{createdToken ? "Token Created" : "Create Token"}</DialogTitle>
+            </DialogHeader>
+            {createdToken ? (
+              <div className="space-y-4">
+                <p className="text-sm text-muted-foreground">Copy this token now. It will not be shown again.</p>
+                <div className="flex gap-2">
+                  <Input value={createdToken} readOnly className="font-mono text-xs" />
+                  <Button variant="outline" size="icon" onClick={() => navigator.clipboard.writeText(createdToken)}>
+                    <Copy className="h-4 w-4" />
+                  </Button>
+                </div>
+                <DialogFooter>
+                  <Button onClick={() => setTokenDialogOpen(false)}>Done</Button>
+                </DialogFooter>
               </div>
-              <DialogFooter>
-                <Button onClick={() => setTokenDialogOpen(false)}>Done</Button>
-              </DialogFooter>
-            </div>
-          ) : (
-            <form onSubmit={handleCreateToken} className="space-y-4">
-              <div className="space-y-2">
-                <Label>Name (optional)</Label>
-                <Input value={tokenName} onChange={(e) => setTokenName(e.target.value)} placeholder="e.g. production" />
-              </div>
-              {createTokenMutation.error instanceof Error && (
-                <div className="text-sm text-destructive">{createTokenMutation.error.message}</div>
-              )}
-              <DialogFooter>
-                <Button type="submit" disabled={createTokenMutation.isPending}>
-                  {createTokenMutation.isPending ? "Creating..." : "Create"}
-                </Button>
-              </DialogFooter>
-            </form>
-          )}
-        </DialogContent>
-      </Dialog>
+            ) : (
+              <form onSubmit={handleCreateToken} className="space-y-4">
+                <div className="space-y-2">
+                  <Label>Name (optional)</Label>
+                  <Input
+                    value={tokenName}
+                    onChange={(e) => setTokenName(e.target.value)}
+                    placeholder="e.g. production"
+                  />
+                </div>
+                {createTokenMutation.error instanceof Error && (
+                  <div className="text-sm text-destructive">{createTokenMutation.error.message}</div>
+                )}
+                <DialogFooter>
+                  <Button type="submit" disabled={createTokenMutation.isPending}>
+                    {createTokenMutation.isPending ? "Creating..." : "Create"}
+                  </Button>
+                </DialogFooter>
+              </form>
+            )}
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 }
