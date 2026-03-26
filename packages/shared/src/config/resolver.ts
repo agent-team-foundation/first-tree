@@ -455,3 +455,63 @@ export function collectMissingPrompts(options: {
 
   return missing;
 }
+
+// ── Read-only config resolution (for doctor / diagnostics) ──────────
+
+/**
+ * Resolve config values through the same priority chain as initConfig()
+ * (env vars > YAML file > Zod defaults), but **without side effects**:
+ * - No auto-generation
+ * - No file writes
+ * - No singleton mutation
+ * - Partial results (unresolvable fields are omitted, no validation error)
+ *
+ * Returns the best-effort resolved config as a plain object.
+ */
+export function resolveConfigReadonly<T extends Record<string, unknown>>(options: {
+  schema: T;
+  role: string;
+  configDir?: string;
+}): Record<string, unknown> {
+  const { schema, role } = options;
+  const configDir = options.configDir ?? DEFAULT_CONFIG_DIR;
+  const configPath = join(configDir, `${role}.yaml`);
+
+  // Read YAML config file
+  let fileValues: Record<string, unknown> = {};
+  if (existsSync(configPath)) {
+    const raw: unknown = parseYaml(readFileSync(configPath, "utf-8"));
+    if (typeof raw === "object" && raw !== null) {
+      fileValues = raw as Record<string, unknown>;
+    }
+  }
+
+  const fields = collectFields(schema as Record<string, unknown>);
+  const resolved: Record<string, unknown> = {};
+
+  for (const { path, fieldDef } of fields) {
+    // Environment variable (highest priority for readonly resolution)
+    if (fieldDef.options.env) {
+      const envValue = process.env[fieldDef.options.env];
+      if (envValue !== undefined && envValue !== "") {
+        setByPath(resolved, path, coerceEnvValue(envValue, fieldDef.schema));
+        continue;
+      }
+    }
+
+    // Config file
+    const fileValue = getByPath(fileValues, path);
+    if (fileValue !== undefined) {
+      setByPath(resolved, path, fileValue);
+      continue;
+    }
+
+    // Zod default (if any)
+    const defaultResult = fieldDef.schema.safeParse(undefined);
+    if (defaultResult.success && defaultResult.data !== undefined) {
+      setByPath(resolved, path, defaultResult.data);
+    }
+  }
+
+  return resolved;
+}
