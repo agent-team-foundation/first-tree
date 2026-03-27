@@ -1,10 +1,10 @@
 import { execFileSync, execSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 
-const CONTAINER_NAME = "first-tree-core-postgres";
+const CONTAINER_NAME = "first-tree-hub-postgres";
 const PG_IMAGE = "postgres:16-alpine";
-const PG_DB = "firsttreecore";
-const PG_USER = "firsttreecore";
+const PG_DB = "firsttreehub";
+const PG_USER = "firsttreehub";
 
 type DockerPgResult = {
   url: string;
@@ -23,7 +23,7 @@ export function isDockerAvailable(): boolean {
   }
 }
 
-/** Get the state of the first-tree-core-postgres container. */
+/** Get the state of the first-tree-hub-postgres container. */
 function getContainerState(): "running" | "stopped" | "none" {
   try {
     const output = execFileSync("docker", ["inspect", "--format", "{{.State.Running}}", CONTAINER_NAME], {
@@ -114,7 +114,7 @@ export function ensurePostgres(password: string | undefined): DockerPgResult {
       "-p",
       `127.0.0.1:${port}:5432`,
       "-v",
-      "first-tree-core-pgdata:/var/lib/postgresql/data",
+      "first-tree-hub-pgdata:/var/lib/postgresql/data",
       "--health-cmd",
       `pg_isready -U ${PG_USER}`,
       "--health-interval",

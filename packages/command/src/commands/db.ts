@@ -1,6 +1,6 @@
-import { initConfig, serverConfigSchema } from "@first-tree-core/shared/config";
+import { initConfig, serverConfigSchema } from "@first-tree-hub/shared/config";
 import type { Command } from "commander";
-import { runMigrations } from "../server/migrate.js";
+import { runMigrations } from "../core/index.js";
 
 export function registerDbCommands(program: Command): void {
   const db = program.command("db").description("Database management");

@@ -1,8 +1,8 @@
-import type { InboxEntryWithMessage } from "@first-tree-core/shared";
+import type { InboxEntryWithMessage } from "@first-tree-hub/shared";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentHandler, HandlerFactory, SessionContext } from "../runtime/handler.js";
 import { SessionManager } from "../runtime/session-manager.js";
-import type { FirstTreeCoreSDK } from "../sdk.js";
+import type { FirstTreeHubSDK } from "../sdk.js";
 
 /** Create a mock inbox entry for testing. */
 function mockEntry(opts: { id?: number; chatId?: string; content?: string } = {}): InboxEntryWithMessage {
@@ -32,8 +32,8 @@ function mockEntry(opts: { id?: number; chatId?: string; content?: string } = {}
   };
 }
 
-/** Create a mock SDK that satisfies FirstTreeCoreSDK shape. */
-function mockSdk(): FirstTreeCoreSDK {
+/** Create a mock SDK that satisfies FirstTreeHubSDK shape. */
+function mockSdk(): FirstTreeHubSDK {
   return {
     register: vi.fn(),
     pull: vi.fn(),
@@ -41,7 +41,7 @@ function mockSdk(): FirstTreeCoreSDK {
     renew: vi.fn().mockResolvedValue(undefined),
     sendMessage: vi.fn().mockResolvedValue({ id: "msg-reply" }),
     sendToAgent: vi.fn().mockResolvedValue({ id: "msg-dm" }),
-  } as unknown as FirstTreeCoreSDK;
+  } as unknown as FirstTreeHubSDK;
 }
 
 /** Create a mock handler conforming to the new session-oriented interface. */
@@ -57,7 +57,7 @@ function createMockHandler(overrides?: Partial<AgentHandler>): AgentHandler {
 }
 
 function createSessionManager(opts: {
-  sdk?: FirstTreeCoreSDK;
+  sdk?: FirstTreeHubSDK;
   handler?: AgentHandler;
   session?: { idle_timeout: number; max_sessions: number };
   concurrency?: number;

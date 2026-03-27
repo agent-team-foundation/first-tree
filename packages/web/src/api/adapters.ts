@@ -1,4 +1,4 @@
-import type { AdapterConfig, CreateAdapterConfig, UpdateAdapterConfig } from "@first-tree-core/shared";
+import type { AdapterConfig, CreateAdapterConfig, UpdateAdapterConfig } from "@first-tree-hub/shared";
 import { api } from "./client.js";
 
 export function listAdapters(): Promise<AdapterConfig[]> {

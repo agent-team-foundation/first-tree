@@ -33,7 +33,7 @@ importers:
         specifier: ^3.25.76
         version: 3.25.76
     devDependencies:
-      '@first-tree-core/shared':
+      '@first-tree-hub/shared':
         specifier: workspace:*
         version: link:../shared
       '@types/node':
@@ -100,16 +100,16 @@ importers:
         specifier: ^3.25.0
         version: 3.25.76
     devDependencies:
-      '@first-tree-core/client':
+      '@first-tree-hub/client':
         specifier: workspace:*
         version: link:../client
-      '@first-tree-core/server':
+      '@first-tree-hub/server':
         specifier: workspace:*
         version: link:../server
-      '@first-tree-core/shared':
+      '@first-tree-hub/shared':
         specifier: workspace:*
         version: link:../shared
-      '@first-tree-core/web':
+      '@first-tree-hub/web':
         specifier: workspace:*
         version: link:../web
       '@types/bcrypt':
@@ -139,7 +139,7 @@ importers:
       '@fastify/websocket':
         specifier: ^11.2.0
         version: 11.2.0
-      '@first-tree-core/shared':
+      '@first-tree-hub/shared':
         specifier: workspace:*
         version: link:../shared
       '@larksuiteoapi/node-sdk':
@@ -167,7 +167,7 @@ importers:
         specifier: ^3.25.0
         version: 3.25.76
     devDependencies:
-      '@first-tree-core/client':
+      '@first-tree-hub/client':
         specifier: workspace:*
         version: link:../client
       '@testcontainers/postgresql':
@@ -222,7 +222,7 @@ importers:
 
   packages/web:
     dependencies:
-      '@first-tree-core/shared':
+      '@first-tree-hub/shared':
         specifier: workspace:*
         version: link:../shared
       '@radix-ui/react-dialog':

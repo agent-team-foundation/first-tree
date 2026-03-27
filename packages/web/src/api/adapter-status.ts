@@ -1,4 +1,4 @@
-import type { AdapterBotStatus } from "@first-tree-core/shared";
+import type { AdapterBotStatus } from "@first-tree-hub/shared";
 import { api } from "./client.js";
 
 export function getAdapterStatuses(): Promise<AdapterBotStatus[]> {

@@ -12,8 +12,7 @@ import { createAgent, createToken } from "../services/agent.js";
  * to avoid Docker registry connectivity issues.
  */
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ?? "postgresql://firsttreecore:firsttreecore@localhost:5432/firsttreecore";
+const DATABASE_URL = process.env.DATABASE_URL ?? "postgresql://firsttreehub:firsttreehub@localhost:5432/firsttreehub";
 
 // SDK-equivalent helpers (same HTTP calls the CLI makes)
 async function sdkRequest<T>(baseUrl: string, token: string, path: string, init?: RequestInit): Promise<T> {

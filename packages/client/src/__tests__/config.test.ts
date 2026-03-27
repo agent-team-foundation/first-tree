@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { loadRuntimeConfig } from "../runtime/config.js";
 
 function writeTempYaml(content: string): string {
-  const path = join(tmpdir(), `first-tree-core-test-${crypto.randomUUID().slice(0, 8)}.yaml`);
+  const path = join(tmpdir(), `first-tree-hub-test-${crypto.randomUUID().slice(0, 8)}.yaml`);
   writeFileSync(path, content, "utf-8");
   return path;
 }

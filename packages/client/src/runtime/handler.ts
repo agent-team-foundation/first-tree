@@ -1,10 +1,10 @@
-import type { FirstTreeCoreSDK } from "../sdk.js";
+import type { FirstTreeHubSDK } from "../sdk.js";
 
 export type HandlerContext = {
   /** Agent identity from Server. */
   agent: { agentId: string; displayName: string | null };
   /** SDK for sending messages and managing inbox. */
-  sdk: FirstTreeCoreSDK;
+  sdk: FirstTreeHubSDK;
   /** Logger scoped to this agent slot. */
   log: (msg: string) => void;
 };

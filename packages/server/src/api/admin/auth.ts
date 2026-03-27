@@ -1,4 +1,4 @@
-import { loginSchema, refreshTokenSchema } from "@first-tree-core/shared";
+import { loginSchema, refreshTokenSchema } from "@first-tree-hub/shared";
 import type { FastifyInstance } from "fastify";
 import * as adminAuthService from "../../services/admin-auth.js";
 

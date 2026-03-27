@@ -39,10 +39,10 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   function buildEnv(sessionCtx: SessionContext): Record<string, string | undefined> {
     return {
       ...process.env,
-      FIRST_TREE_SERVER_URL: sessionCtx.sdk.serverUrl,
-      FIRST_TREE_AGENT_TOKEN: sessionCtx.sdk.agentToken,
-      FIRST_TREE_CHAT_ID: sessionCtx.chatId,
-      FIRST_TREE_AGENT_ID: sessionCtx.agent.agentId,
+      FIRST_TREE_HUB_SERVER_URL: sessionCtx.sdk.serverUrl,
+      FIRST_TREE_HUB_AGENT_TOKEN: sessionCtx.sdk.agentToken,
+      FIRST_TREE_HUB_CHAT_ID: sessionCtx.chatId,
+      FIRST_TREE_HUB_AGENT_ID: sessionCtx.agent.agentId,
     };
   }
 

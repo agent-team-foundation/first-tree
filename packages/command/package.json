@@ -1,8 +1,8 @@
 {
-  "name": "@agent-team-foundation/first-tree-core",
+  "name": "@agent-team-foundation/first-tree-hub",
   "version": "0.2.0",
   "type": "module",
-  "description": "First Tree Core — unified CLI for server, client, and agent management",
+  "description": "First Tree Hub — unified CLI for server, client, and agent management",
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -10,7 +10,7 @@
     }
   },
   "bin": {
-    "first-tree-core": "./dist/cli/index.mjs"
+    "first-tree-hub": "./dist/cli/index.mjs"
   },
   "files": [
     "dist"
@@ -27,7 +27,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/agent-team-foundation/first-tree-core.git",
+    "url": "https://github.com/agent-team-foundation/first-tree-hub.git",
     "directory": "packages/command"
   },
   "engines": {
@@ -52,10 +52,10 @@
     "zod": "^3.25.0"
   },
   "devDependencies": {
-    "@first-tree-core/client": "workspace:*",
-    "@first-tree-core/server": "workspace:*",
-    "@first-tree-core/shared": "workspace:*",
-    "@first-tree-core/web": "workspace:*",
+    "@first-tree-hub/client": "workspace:*",
+    "@first-tree-hub/server": "workspace:*",
+    "@first-tree-hub/shared": "workspace:*",
+    "@first-tree-hub/web": "workspace:*",
     "@types/bcrypt": "^5.0.0",
     "@types/node": "^22.16.0",
     "tsdown": "^0.21.4",

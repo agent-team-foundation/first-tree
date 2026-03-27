@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { InboxEntryWithMessage } from "@first-tree-core/shared";
+import type { InboxEntryWithMessage } from "@first-tree-hub/shared";
 import { AgentConnection } from "../connection.js";
 import type { RegisterResult } from "../sdk.js";
 import type { SessionConfig } from "./config.js";
@@ -43,7 +43,7 @@ export class AgentSlot {
     const agent = await this.connection.connect();
     this.logFn(`Registered as ${agent.displayName ?? agent.agentId} (${agent.agentId})`);
 
-    const registryPath = join(homedir(), ".first-tree-core", "data", "sessions", `${this.config.name}.json`);
+    const registryPath = join(homedir(), ".first-tree-hub", "data", "sessions", `${this.config.name}.json`);
 
     this.sessionManager = new SessionManager({
       session: this.config.session,

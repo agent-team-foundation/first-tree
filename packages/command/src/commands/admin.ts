@@ -1,6 +1,6 @@
-import { initConfig, serverConfigSchema } from "@first-tree-core/shared/config";
+import { initConfig, serverConfigSchema } from "@first-tree-hub/shared/config";
 import type { Command } from "commander";
-import { createAdminUser } from "../server/admin.js";
+import { createAdminUser } from "../core/index.js";
 
 export function registerAdminCommands(program: Command): void {
   const admin = program.command("admin").description("Admin user management");

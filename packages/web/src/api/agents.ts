@@ -1,4 +1,4 @@
-import type { Agent, SyncReport } from "@first-tree-core/shared";
+import type { Agent, SyncReport } from "@first-tree-hub/shared";
 import { api } from "./client.js";
 
 type PaginatedAgents = {

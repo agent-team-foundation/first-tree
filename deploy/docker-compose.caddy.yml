@@ -35,16 +35,16 @@ services:
     expose:
       - "8000"
     environment:
-      FIRST_TREE_DATABASE_URL: postgresql://${POSTGRES_USER:-firsttreecore}:${POSTGRES_PASSWORD:-firsttreecore}@postgres:5432/${POSTGRES_DB:-firsttreecore}
-      FIRST_TREE_HOST: "0.0.0.0"
-      FIRST_TREE_PORT: "8000"
-      FIRST_TREE_JWT_SECRET: ${FIRST_TREE_JWT_SECRET}
-      FIRST_TREE_ENCRYPTION_KEY: ${FIRST_TREE_ENCRYPTION_KEY}
-      FIRST_TREE_CONTEXT_TREE_REPO: ${FIRST_TREE_CONTEXT_TREE_REPO}
-      FIRST_TREE_GITHUB_TOKEN: ${FIRST_TREE_GITHUB_TOKEN}
-      FIRST_TREE_GITHUB_WEBHOOK_SECRET: ${FIRST_TREE_GITHUB_WEBHOOK_SECRET:-}
-      FIRST_TREE_ADMIN_PASSWORD: ${FIRST_TREE_ADMIN_PASSWORD:-}
-      FIRST_TREE_CORS_ORIGIN: https://${DOMAIN}
+      FIRST_TREE_HUB_DATABASE_URL: postgresql://${POSTGRES_USER:-firsttreehub}:${POSTGRES_PASSWORD:-firsttreehub}@postgres:5432/${POSTGRES_DB:-firsttreehub}
+      FIRST_TREE_HUB_HOST: "0.0.0.0"
+      FIRST_TREE_HUB_PORT: "8000"
+      FIRST_TREE_HUB_JWT_SECRET: ${FIRST_TREE_HUB_JWT_SECRET}
+      FIRST_TREE_HUB_ENCRYPTION_KEY: ${FIRST_TREE_HUB_ENCRYPTION_KEY}
+      FIRST_TREE_HUB_CONTEXT_TREE_REPO: ${FIRST_TREE_HUB_CONTEXT_TREE_REPO}
+      FIRST_TREE_HUB_GITHUB_TOKEN: ${FIRST_TREE_HUB_GITHUB_TOKEN}
+      FIRST_TREE_HUB_GITHUB_WEBHOOK_SECRET: ${FIRST_TREE_HUB_GITHUB_WEBHOOK_SECRET:-}
+      FIRST_TREE_HUB_ADMIN_PASSWORD: ${FIRST_TREE_HUB_ADMIN_PASSWORD:-}
+      FIRST_TREE_HUB_CORS_ORIGIN: https://${DOMAIN}
     depends_on:
       postgres:
         condition: service_healthy
@@ -59,13 +59,13 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-firsttreecore}
-      POSTGRES_USER: ${POSTGRES_USER:-firsttreecore}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-firsttreecore}
+      POSTGRES_DB: ${POSTGRES_DB:-firsttreehub}
+      POSTGRES_USER: ${POSTGRES_USER:-firsttreehub}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-firsttreehub}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-firsttreecore}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-firsttreehub}"]
       interval: 5s
       timeout: 3s
       retries: 5

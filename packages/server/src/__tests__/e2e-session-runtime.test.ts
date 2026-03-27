@@ -1,6 +1,6 @@
-import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "@first-tree-core/client";
-import { FirstTreeCoreSDK, SessionManager } from "@first-tree-core/client";
-import type { InboxEntryWithMessage } from "@first-tree-core/shared";
+import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "@first-tree-hub/client";
+import { FirstTreeHubSDK, SessionManager } from "@first-tree-hub/client";
+import type { InboxEntryWithMessage } from "@first-tree-hub/shared";
 import { sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../app.js";
@@ -23,8 +23,7 @@ function entry(arr: InboxEntryWithMessage[], idx: number): InboxEntryWithMessage
  * Handler is a test double (no Claude CLI required).
  */
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ?? "postgresql://firsttreecore:firsttreecore@localhost:5432/firsttreecore";
+const DATABASE_URL = process.env.DATABASE_URL ?? "postgresql://firsttreehub:firsttreehub@localhost:5432/firsttreehub";
 
 // -- Test handler: records all lifecycle calls for assertions ----------------
 
@@ -109,8 +108,8 @@ describe("E2E: Session-oriented Runtime", () => {
     const sender = await createTestAgent(app, { id: "sender-agent", displayName: "Sender" });
     const receiver = await createTestAgent(app, { id: "receiver-agent", displayName: "Receiver" });
 
-    const senderSdk = new FirstTreeCoreSDK({ serverUrl: address, token: sender.token });
-    const receiverSdk = new FirstTreeCoreSDK({ serverUrl: address, token: receiver.token });
+    const senderSdk = new FirstTreeHubSDK({ serverUrl: address, token: sender.token });
+    const receiverSdk = new FirstTreeHubSDK({ serverUrl: address, token: receiver.token });
 
     // Verify both agents are registered
     const senderIdentity = await senderSdk.register();
@@ -203,9 +202,9 @@ describe("E2E: Session-oriented Runtime", () => {
     const receiver = await createTestAgent(app, { id: "receiver-2", displayName: "Receiver" });
     const otherAgent = await createTestAgent(app, { id: "other-agent", displayName: "Other" });
 
-    const senderSdk = new FirstTreeCoreSDK({ serverUrl: address, token: sender.token });
-    const otherSdk = new FirstTreeCoreSDK({ serverUrl: address, token: otherAgent.token });
-    const receiverSdk = new FirstTreeCoreSDK({ serverUrl: address, token: receiver.token });
+    const senderSdk = new FirstTreeHubSDK({ serverUrl: address, token: sender.token });
+    const otherSdk = new FirstTreeHubSDK({ serverUrl: address, token: otherAgent.token });
+    const receiverSdk = new FirstTreeHubSDK({ serverUrl: address, token: receiver.token });
 
     // Create handlers per session (factory creates new handler each time)
     const allEvents: Array<{ handler: number; event: LifecycleEvent }> = [];
@@ -280,8 +279,8 @@ describe("E2E: Session-oriented Runtime", () => {
     const sender = await createTestAgent(app, { id: "sender-3" });
     const receiver = await createTestAgent(app, { id: "receiver-3" });
 
-    const senderSdk = new FirstTreeCoreSDK({ serverUrl: address, token: sender.token });
-    const receiverSdk = new FirstTreeCoreSDK({ serverUrl: address, token: receiver.token });
+    const senderSdk = new FirstTreeHubSDK({ serverUrl: address, token: sender.token });
+    const receiverSdk = new FirstTreeHubSDK({ serverUrl: address, token: receiver.token });
 
     const events: LifecycleEvent[] = [];
     const factory: HandlerFactory = () => createTestHandler(events);
@@ -316,8 +315,8 @@ describe("E2E: Session-oriented Runtime", () => {
     const sender = await createTestAgent(app, { id: "sender-4" });
     const receiver = await createTestAgent(app, { id: "receiver-4" });
 
-    const senderSdk = new FirstTreeCoreSDK({ serverUrl: address, token: sender.token });
-    const receiverSdk = new FirstTreeCoreSDK({ serverUrl: address, token: receiver.token });
+    const senderSdk = new FirstTreeHubSDK({ serverUrl: address, token: sender.token });
+    const receiverSdk = new FirstTreeHubSDK({ serverUrl: address, token: receiver.token });
 
     const events: LifecycleEvent[] = [];
     const factory: HandlerFactory = () => createTestHandler(events);
@@ -360,8 +359,8 @@ describe("E2E: Session-oriented Runtime", () => {
     const sender = await createTestAgent(app, { id: "sender-6" });
     const receiver = await createTestAgent(app, { id: "receiver-6" });
 
-    const senderSdk = new FirstTreeCoreSDK({ serverUrl: address, token: sender.token });
-    const receiverSdk = new FirstTreeCoreSDK({ serverUrl: address, token: receiver.token });
+    const senderSdk = new FirstTreeHubSDK({ serverUrl: address, token: sender.token });
+    const receiverSdk = new FirstTreeHubSDK({ serverUrl: address, token: receiver.token });
 
     const events: LifecycleEvent[] = [];
     const testHandler = createTestHandler(events);
@@ -422,10 +421,10 @@ describe("E2E: Session-oriented Runtime", () => {
     const other1 = await createTestAgent(app, { id: "other-7a" });
     const other2 = await createTestAgent(app, { id: "other-7b" });
 
-    const senderSdk = new FirstTreeCoreSDK({ serverUrl: address, token: sender.token });
-    const other1Sdk = new FirstTreeCoreSDK({ serverUrl: address, token: other1.token });
-    const other2Sdk = new FirstTreeCoreSDK({ serverUrl: address, token: other2.token });
-    const receiverSdk = new FirstTreeCoreSDK({ serverUrl: address, token: receiver.token });
+    const senderSdk = new FirstTreeHubSDK({ serverUrl: address, token: sender.token });
+    const other1Sdk = new FirstTreeHubSDK({ serverUrl: address, token: other1.token });
+    const other2Sdk = new FirstTreeHubSDK({ serverUrl: address, token: other2.token });
+    const receiverSdk = new FirstTreeHubSDK({ serverUrl: address, token: receiver.token });
 
     const allEvents: Array<{ handler: number; event: LifecycleEvent }> = [];
     let handlerCount = 0;
@@ -504,10 +503,10 @@ describe("E2E: Session-oriented Runtime", () => {
     const other1 = await createTestAgent(app, { id: "other-8a" });
     const other2 = await createTestAgent(app, { id: "other-8b" });
 
-    const senderSdk = new FirstTreeCoreSDK({ serverUrl: address, token: sender.token });
-    const other1Sdk = new FirstTreeCoreSDK({ serverUrl: address, token: other1.token });
-    const other2Sdk = new FirstTreeCoreSDK({ serverUrl: address, token: other2.token });
-    const receiverSdk = new FirstTreeCoreSDK({ serverUrl: address, token: receiver.token });
+    const senderSdk = new FirstTreeHubSDK({ serverUrl: address, token: sender.token });
+    const other1Sdk = new FirstTreeHubSDK({ serverUrl: address, token: other1.token });
+    const other2Sdk = new FirstTreeHubSDK({ serverUrl: address, token: other2.token });
+    const receiverSdk = new FirstTreeHubSDK({ serverUrl: address, token: receiver.token });
 
     const lifecycleCalls: Array<{ type: string; chatId: string; sessionId?: string }> = [];
 
@@ -588,8 +587,8 @@ describe("E2E: Session-oriented Runtime", () => {
     const sender = await createTestAgent(app, { id: "sender-5" });
     const receiver = await createTestAgent(app, { id: "receiver-5" });
 
-    const senderSdk = new FirstTreeCoreSDK({ serverUrl: address, token: sender.token });
-    const receiverSdk = new FirstTreeCoreSDK({ serverUrl: address, token: receiver.token });
+    const senderSdk = new FirstTreeHubSDK({ serverUrl: address, token: sender.token });
+    const receiverSdk = new FirstTreeHubSDK({ serverUrl: address, token: receiver.token });
 
     const captured: { ctx: SessionContext | null; message: SessionMessage | null } = {
       ctx: null,

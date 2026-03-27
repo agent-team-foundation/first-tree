@@ -21,8 +21,8 @@ const { version } = require("../../package.json") as { version: string };
 const program = new Command();
 
 program
-  .name("first-tree-core")
-  .description("First Tree Core — centralized collaboration platform for agent teams")
+  .name("first-tree-hub")
+  .description("First Tree Hub — centralized collaboration platform for agent teams")
   .version(version);
 
 // Command groups

@@ -282,7 +282,7 @@ export async function githubWebhookRoutes(app: FastifyInstance): Promise<void> {
       if (!webhookSecret) {
         return reply
           .status(501)
-          .send({ error: "GitHub webhook is not configured. Set FIRST_TREE_GITHUB_WEBHOOK_SECRET to enable." });
+          .send({ error: "GitHub webhook is not configured. Set FIRST_TREE_HUB_GITHUB_WEBHOOK_SECRET to enable." });
       }
 
       const rawBody = request.body;

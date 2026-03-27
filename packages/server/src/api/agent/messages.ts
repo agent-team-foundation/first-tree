@@ -1,4 +1,4 @@
-import { paginationQuerySchema, sendMessageSchema, sendToAgentSchema } from "@first-tree-core/shared";
+import { paginationQuerySchema, sendMessageSchema, sendToAgentSchema } from "@first-tree-hub/shared";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { requireAgent } from "../../middleware/require-identity.js";

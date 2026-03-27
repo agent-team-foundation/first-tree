@@ -1,4 +1,4 @@
-import { createAdminUserSchema, updateAdminUserSchema } from "@first-tree-core/shared";
+import { createAdminUserSchema, updateAdminUserSchema } from "@first-tree-hub/shared";
 import type { FastifyInstance } from "fastify";
 import { ForbiddenError } from "../../errors.js";
 import * as adminUserService from "../../services/admin-user.js";

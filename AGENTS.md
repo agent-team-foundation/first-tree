@@ -1,15 +1,15 @@
 # AGENTS.md
 
-First Tree Core — centralized collaboration platform for Agent Team (Server + Client + Command + Shared + Web monorepo).
+First Tree Hub — centralized collaboration platform for Agent Team (Server + Client + Command + Shared + Web monorepo).
 
 ## Overview
 
-First Tree Core is the infrastructure for Agent Team, providing agent registration/authentication, messaging, external IM bridging, and an admin dashboard.
+First Tree Hub is the infrastructure for Agent Team, providing agent registration/authentication, messaging, external IM bridging, and an admin dashboard.
 
 ```
-First Tree Core ≠ Agents themselves (LLM agent logic lives outside First Tree Core)
-First Tree Core ≠ Orchestration framework
-First Tree Core ≠ Context Tree
+First Tree Hub ≠ Agents themselves (LLM agent logic lives outside First Tree Hub)
+First Tree Hub ≠ Orchestration framework
+First Tree Hub ≠ Context Tree
 ```
 
 ## Tech Stack
@@ -36,26 +36,26 @@ pnpm install                          # Install all dependencies
 docker compose up -d                  # Start PostgreSQL (dev)
 
 # One-command start (CLI, interactive config + auto-migration + embedded Web)
-pnpm --filter @agent-team-foundation/first-tree-core dev -- server start
+pnpm --filter @agent-team-foundation/first-tree-hub dev -- server start
 
 # Separate start (traditional dev)
-pnpm --filter @first-tree-core/server dev   # Start server (tsx watch, requires .env)
-pnpm --filter @first-tree-core/web dev      # Start web (Vite dev server)
+pnpm --filter @first-tree-hub/server dev   # Start server (tsx watch, requires .env)
+pnpm --filter @first-tree-hub/web dev      # Start web (Vite dev server)
 
 # Quality
 pnpm check                            # Biome lint + format check
 pnpm format                           # Biome format
 pnpm typecheck                        # tsc --noEmit
 pnpm test                             # Vitest
-pnpm --filter @first-tree-core/server test  # Test (server only)
+pnpm --filter @first-tree-hub/server test  # Test (server only)
 
 # Build
 pnpm build                            # Turborepo orchestrated full build
 
 # Database
-pnpm --filter @first-tree-core/server db:generate    # Generate migrations
-pnpm --filter @first-tree-core/server db:migrate     # Apply migrations
-pnpm --filter @first-tree-core/server db:studio      # Drizzle Studio
+pnpm --filter @first-tree-hub/server db:generate    # Generate migrations
+pnpm --filter @first-tree-hub/server db:migrate     # Apply migrations
+pnpm --filter @first-tree-hub/server db:studio      # Drizzle Studio
 ```
 
 > Full CLI commands and environment variables: [docs/cli-reference.md](docs/cli-reference.md)
@@ -63,7 +63,7 @@ pnpm --filter @first-tree-core/server db:studio      # Drizzle Studio
 ## Monorepo Structure
 
 ```
-first-tree-core/
+first-tree-hub/
 ├── package.json               # pnpm workspace root config
 ├── pnpm-workspace.yaml        # Workspace members
 ├── turbo.json                 # Turborepo task orchestration
@@ -76,16 +76,16 @@ first-tree-core/
 │   └── claim-agent-guide.md      # Claim Agent setup guide
 │
 ├── packages/
-│   ├── shared/                # @first-tree-core/shared — Shared Zod schemas + types + config system
-│   ├── server/                # @first-tree-core/server — Fastify API server
-│   ├── client/                # @first-tree-core/client — Agent SDK + Runtime
-│   ├── command/               # @agent-team-foundation/first-tree-core — Unified CLI (published package)
-│   └── web/                   # @first-tree-core/web — React admin dashboard
+│   ├── shared/                # @first-tree-hub/shared — Shared Zod schemas + types + config system
+│   ├── server/                # @first-tree-hub/server — Fastify API server
+│   ├── client/                # @first-tree-hub/client — Agent SDK + Runtime
+│   ├── command/               # @agent-team-foundation/first-tree-hub — Unified CLI (published package)
+│   └── web/                   # @first-tree-hub/web — React admin dashboard
 ```
 
 ## Architecture Rules
 
-**Five independent packages, Shared in common:** Server, Client, Command, Web are independently packaged and deployed, sharing types, Zod schemas, and config system via `@first-tree-core/shared`. Command is the unified CLI entry point, depending on Server and Client.
+**Five independent packages, Shared in common:** Server, Client, Command, Web are independently packaged and deployed, sharing types, Zod schemas, and config system via `@first-tree-hub/shared`. Command is the unified CLI entry point, depending on Server and Client.
 
 **Stateless Server:** All persistent data lives in PostgreSQL. Server holds no business state.
 
@@ -129,8 +129,8 @@ first-tree-core/
 2. Define Drizzle table (`server/src/db/schema/`) — if persistence is needed
 3. Implement service (`server/src/services/`)
 4. Define API routes (`server/src/api/`)
-5. Generate migration: `pnpm --filter @first-tree-core/server db:generate`
-6. Apply migration: `pnpm --filter @first-tree-core/server db:migrate`
+5. Generate migration: `pnpm --filter @first-tree-hub/server db:generate`
+6. Apply migration: `pnpm --filter @first-tree-hub/server db:migrate`
 7. Write tests (`server/src/__tests__/`)
 
 ### New Feature Steps (Client)
@@ -142,9 +142,19 @@ first-tree-core/
 
 ### New Feature Steps (Command)
 
-1. Add command module in `command/src/commands/`
-2. Register command in `command/src/cli/index.ts`
-3. If config changes are needed → update schema in `shared/src/config/`
+1. Add core logic in `command/src/core/` — all exportable business logic lives here
+2. Add CLI command module in `command/src/commands/` — thin arg parsing layer only
+3. Register command in `command/src/cli/index.ts`
+4. Export new core functions from `command/src/core/index.ts` and `command/src/index.ts`
+5. If config changes are needed → update schema in `shared/src/config/`
+
+**Command package structure:**
+- `src/core/` — exportable core functions (server start, doctor, admin, migrate, docker, prompts)
+- `src/cli/` — Commander.js CLI entry point + CLI-specific output helpers
+- `src/commands/` — individual command registrations (thin: arg parsing → `core/*` calls)
+- `src/index.ts` — barrel export: re-exports `core/*` + SDK for external consumers
+
+External CLI projects (e.g. context-tree) can `import { startServer, checkDatabase } from "@agent-team-foundation/first-tree-hub"` to reuse core logic with their own arg parsing.
 
 ### Git Conventions
 

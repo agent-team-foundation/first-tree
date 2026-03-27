@@ -1,4 +1,4 @@
-import type { AdminUser, CreateAdminUser, UpdateAdminUser } from "@first-tree-core/shared";
+import type { AdminUser, CreateAdminUser, UpdateAdminUser } from "@first-tree-hub/shared";
 import { api } from "./client.js";
 
 export function listAdminUsers(): Promise<AdminUser[]> {

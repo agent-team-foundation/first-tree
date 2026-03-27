@@ -3,16 +3,16 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildApp } from "@first-tree-core/server";
-import type { Config } from "@first-tree-core/server/config";
-import { initConfig, serverConfigSchema } from "@first-tree-core/shared/config";
-import { blank, status } from "../cli/output.js";
+import { buildApp } from "@first-tree-hub/server";
+import type { Config } from "@first-tree-hub/server/config";
+import { initConfig, serverConfigSchema } from "@first-tree-hub/shared/config";
 import { createAdminUser, hasAdminUser } from "./admin.js";
 import { ensurePostgres, isDockerAvailable } from "./docker-postgres.js";
 import { runMigrations } from "./migrate.js";
+import { blank, status } from "./output.js";
 import { promptMissingFields } from "./prompt.js";
 
-type StartOptions = {
+export type StartOptions = {
   port?: number;
   host?: string;
   databaseUrl?: string;
@@ -30,7 +30,7 @@ type StartOptions = {
  * 7. Start Fastify server
  */
 export async function startServer(options: StartOptions): Promise<void> {
-  process.stderr.write("\n  First Tree Core v0.1.0\n\n");
+  process.stderr.write("\n  First Tree Hub v0.1.0\n\n");
 
   // 1. Build CLI args
   const cliArgs: Record<string, unknown> = {};
@@ -56,11 +56,11 @@ export async function startServer(options: StartOptions): Promise<void> {
       if (!isDockerAvailable()) {
         throw new Error(
           "Docker is not available.\n\n" +
-            "  First Tree Core needs PostgreSQL. Two options:\n\n" +
+            "  First Tree Hub needs PostgreSQL. Two options:\n\n" +
             "  1. Install Docker → https://docs.docker.com/get-docker/\n" +
-            "     Then re-run: first-tree-core server start\n\n" +
+            "     Then re-run: first-tree-hub server start\n\n" +
             "  2. Provide an existing PostgreSQL URL:\n" +
-            "     first-tree-core server start --database-url postgresql://user:pass@host:5432/db",
+            "     first-tree-hub server start --database-url postgresql://user:pass@host:5432/db",
         );
       }
       status("PostgreSQL", "starting via Docker...");
@@ -91,13 +91,13 @@ export async function startServer(options: StartOptions): Promise<void> {
   // 5. Check/create admin
   const hasAdmin = await hasAdminUser(serverConfig.database.url);
   if (!hasAdmin) {
-    const envPassword = process.env.FIRST_TREE_ADMIN_PASSWORD;
+    const envPassword = process.env.FIRST_TREE_HUB_ADMIN_PASSWORD;
     const admin = await createAdminUser(serverConfig.database.url, "admin", envPassword || undefined);
     status("Admin", "created");
     blank();
     status("  Username:", admin.username);
     if (envPassword) {
-      status("  Password:", "(set via FIRST_TREE_ADMIN_PASSWORD)");
+      status("  Password:", "(set via FIRST_TREE_HUB_ADMIN_PASSWORD)");
     } else {
       status("  Password:", `${admin.password}  (save this — shown only once)`);
     }
@@ -145,7 +145,7 @@ export async function startServer(options: StartOptions): Promise<void> {
 /**
  * Resolve web dist path.
  * 1. npm install: embedded at dist/web/ (relative to the built CLI)
- * 2. Monorepo dev: resolved from @first-tree-core/web package (builds if needed)
+ * 2. Monorepo dev: resolved from @first-tree-hub/web package (builds if needed)
  */
 function resolveWebDist(): string | undefined {
   // npm publish: web assets are embedded next to the built CLI
@@ -155,7 +155,7 @@ function resolveWebDist(): string | undefined {
 
   // Monorepo dev: resolve from web package
   try {
-    const webPkgUrl = import.meta.resolve("@first-tree-core/web/package.json");
+    const webPkgUrl = import.meta.resolve("@first-tree-hub/web/package.json");
     const webDir = dirname(fileURLToPath(webPkgUrl));
     const distPath = join(webDir, "dist");
     const indexPath = join(distPath, "index.html");
@@ -166,7 +166,7 @@ function resolveWebDist(): string | undefined {
 
     // dist not built — build it
     status("Web", "building...");
-    execSync("pnpm --filter @first-tree-core/web build", {
+    execSync("pnpm --filter @first-tree-hub/web build", {
       stdio: ["ignore", "ignore", "pipe"],
       cwd: join(webDir, "../.."),
     });
@@ -175,7 +175,7 @@ function resolveWebDist(): string | undefined {
       return distPath;
     }
   } catch {
-    // @first-tree-core/web not available
+    // @first-tree-hub/web not available
   }
   return undefined;
 }

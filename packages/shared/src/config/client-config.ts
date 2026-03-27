@@ -6,11 +6,11 @@ import type { InferConfig } from "./types.js";
 export const clientConfigSchema = defineConfig({
   server: {
     url: field(z.string(), {
-      env: "FIRST_TREE_SERVER_URL",
+      env: "FIRST_TREE_HUB_SERVER_URL",
       prompt: { message: "Server URL:", default: "http://localhost:8000" },
     }),
   },
-  logLevel: field(z.enum(["debug", "info", "warn", "error"]).default("info"), { env: "FIRST_TREE_LOG_LEVEL" }),
+  logLevel: field(z.enum(["debug", "info", "warn", "error"]).default("info"), { env: "FIRST_TREE_HUB_LOG_LEVEL" }),
 });
 
 export type ClientConfig = InferConfig<typeof clientConfigSchema>;

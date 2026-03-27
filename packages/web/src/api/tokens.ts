@@ -1,4 +1,4 @@
-import type { AgentToken, AgentTokenCreated, CreateAgentToken } from "@first-tree-core/shared";
+import type { AgentToken, AgentTokenCreated, CreateAgentToken } from "@first-tree-hub/shared";
 import { api } from "./client.js";
 
 export function listTokens(agentId: string): Promise<AgentToken[]> {

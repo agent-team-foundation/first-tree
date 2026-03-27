@@ -1,4 +1,4 @@
-import { AGENT_TYPES } from "@first-tree-core/shared";
+import { AGENT_TYPES } from "@first-tree-hub/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { useState } from "react";
