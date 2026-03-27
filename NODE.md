@@ -26,9 +26,11 @@ See [principles.md](principles.md) for detailed explanations and examples.
 ## Domains
 
 - **[kael/](kael/NODE.md)** — AI agent product: reasoning, skills, knowledge, chat, environment, platform.
+- **[context-tree/](context-tree/NODE.md)** — Context Tree CLI, framework, templates, and onboarding.
 - **[marketing/](marketing/NODE.md)** — Brand, positioning, campaigns, content strategy.
 - **[members/](members/NODE.md)** — Member definitions and work specifications.
 - **[agent-hub/](agent-hub/NODE.md)** — Agent collaboration platform: messaging, agent management, adapter, admin.
+- **[open-source/](open-source/NODE.md)** — Open-source products, repo structure, and distribution.
 - **[proposals/](proposals/NODE.md)** — Temporary files and process documents (not agent context).
 
 ---

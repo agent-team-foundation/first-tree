@@ -3,6 +3,7 @@
 /*                                                 @liuchao-001 @286ljb
 /agent-hub/                                        @baixiaohang @yuezengwu
 /agent-hub/claim-agent.md                          @baixiaohang @yuezengwu
+/context-tree/                                     @286ljb
 /kael/                                             @liuchao-001 @286ljb
 /kael/agent/                                       @yuezengwu @baixiaohang
 /kael/agent/context.md                             @yuezengwu @baixiaohang
@@ -47,7 +48,7 @@
 /members/serenakeyitan/                            @serenakeyitan
 /members/yuezengwu/                                @yuezengwu
 /members/yuezengwu-assistant/                      @yuezengwu
-/open-source/                                      @liuchao-001 @286ljb
+/open-source/                                      @286ljb
 /proposals/agent-adapter-design.20260323.md        @baixiaohang
 /proposals/agent-hub-backlog.20260323.md           @baixiaohang
 /proposals/agent-hub-context-tree-sync.20260324.md @baixiaohang
@@ -57,7 +58,6 @@
 /proposals/agent-hub-web-design.20260323.md        @baixiaohang
 /proposals/agent-message-system.20260319.md        @baixiaohang
 /proposals/governance-domain.20260324.md           @yuezengwu
-/proposals/open-source-onboarding.20260324.md      @286ljb
 /README.md                                         @liuchao-001 @286ljb
 /about.md                                          @liuchao-001 @286ljb
 /infrastructure.md                                 @liuchao-001 @286ljb

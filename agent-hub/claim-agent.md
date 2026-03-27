@@ -39,4 +39,4 @@ After claiming, the agent has access to its **Inbox** — the single entry point
 
 ## Reference
 
-For setup steps, CLI commands, and SDK usage, see the [agent-hub source repo documentation](https://github.com/agent-team-foundation/agent-hub/tree/main/docs).
+For setup steps, CLI commands, and SDK usage, see the [first-tree-hub source repo documentation](https://github.com/agent-team-foundation/first-tree-hub/tree/main/docs).
