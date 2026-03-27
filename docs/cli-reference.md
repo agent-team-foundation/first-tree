@@ -14,7 +14,9 @@ first-tree-hub
 │   ├── status
 │   ├── add [name] [--token]
 │   ├── remove <name>
-│   └── list
+│   ├── list
+│   └── workspace
+│       └── clean [agent-name] [--ttl <days>]
 ├── config
 │   ├── setup [-s|-c]
 │   ├── set [-s|-c|-a <name>] <key> <value>
@@ -58,9 +60,9 @@ first-tree-hub config list -s
 first-tree-hub config list -s --show-secrets
 
 # Scope 标志
-#   -s / --server    → ~/.first-tree-hub/server.yaml
-#   -c / --client    → ~/.first-tree-hub/client.yaml
-#   -a <name>        → ~/.first-tree-hub/agents/<name>/agent.yaml
+#   -s / --server    → ~/.first-tree-hub/config/server.yaml
+#   -c / --client    → ~/.first-tree-hub/config/client.yaml
+#   -a <name>        → ~/.first-tree-hub/config/agents/<name>/agent.yaml
 ```
 
 ## client
@@ -103,17 +105,22 @@ first-tree-hub client start
 | `FIRST_TREE_HUB_SERVER_URL` | Server 地址 | 交互式输入 |
 | `FIRST_TREE_HUB_LOG_LEVEL` | 日志级别 (`debug`/`info`/`warn`/`error`) | `info` |
 
-## Config Directory
+## Directory Structure
 
 ```
 ~/.first-tree-hub/
-├── server.yaml              # Server 配置
-├── client.yaml              # Client 配置
-├── agents/                  # Agent 实例
-│   ├── my-agent/agent.yaml
-│   └── another/agent.yaml
-└── data/
-    └── postgres/            # Docker PG 数据
+├── config/                      # 配置（人工编辑）
+│   ├── server.yaml
+│   ├── client.yaml
+│   └── agents/
+│       ├── my-agent/agent.yaml
+│       └── another/agent.yaml
+└── data/                        # 运行时数据（系统管理）
+    ├── sessions/                # Agent session registry
+    ├── workspaces/              # Per-chat 隔离工作区
+    │   └── <agent-name>/
+    │       └── <chatId>/
+    └── postgres/                # Docker PG 数据
 ```
 
 ## Config Resolution Order
@@ -122,6 +129,6 @@ first-tree-hub client start
 
 1. CLI 参数（`--port 9000`）
 2. 环境变量（`FIRST_TREE_HUB_PORT=9000`）
-3. 配置文件（`~/.first-tree-hub/server.yaml`）
+3. 配置文件（`~/.first-tree-hub/config/server.yaml`）
 4. 自动生成（secrets、Docker PG URL）
 5. 内置默认值（`port: 8000`）

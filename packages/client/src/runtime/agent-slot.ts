@@ -1,6 +1,6 @@
-import { homedir } from "node:os";
 import { join } from "node:path";
 import type { InboxEntryWithMessage } from "@first-tree-hub/shared";
+import { DEFAULT_DATA_DIR } from "@first-tree-hub/shared/config";
 import { AgentConnection } from "../connection.js";
 import type { RegisterResult } from "../sdk.js";
 import type { SessionConfig } from "./config.js";
@@ -15,7 +15,6 @@ export type AgentSlotConfig = {
   handlerFactory: HandlerFactory;
   session: SessionConfig;
   concurrency: number;
-  cwd?: string;
 };
 
 export class AgentSlot {
@@ -43,13 +42,13 @@ export class AgentSlot {
     const agent = await this.connection.connect();
     this.logFn(`Registered as ${agent.displayName ?? agent.agentId} (${agent.agentId})`);
 
-    const registryPath = join(homedir(), ".first-tree-hub", "data", "sessions", `${this.config.name}.json`);
+    const registryPath = join(DEFAULT_DATA_DIR, "sessions", `${this.config.name}.json`);
 
     this.sessionManager = new SessionManager({
       session: this.config.session,
       concurrency: this.config.concurrency,
       handlerFactory: this.config.handlerFactory,
-      handlerConfig: { cwd: this.config.cwd ?? process.cwd() },
+      handlerConfig: { workspaceRoot: join(DEFAULT_DATA_DIR, "workspaces", this.config.name) },
       agentIdentity: { agentId: agent.agentId, displayName: agent.displayName },
       sdk: this.connection.sdk,
       log: this.logFn,

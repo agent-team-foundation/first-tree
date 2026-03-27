@@ -64,8 +64,8 @@ export type HandlerFactory = (config: HandlerConfig) => AgentHandler;
 
 /** Configuration passed to handler factory. */
 export type HandlerConfig = {
-  /** Agent's working directory. */
-  cwd: string;
+  /** Root directory for per-chat workspaces (`<dataDir>/workspaces/<agentName>`). */
+  workspaceRoot: string;
   /** Additional handler-specific config. */
   [key: string]: unknown;
 };

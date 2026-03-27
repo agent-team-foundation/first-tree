@@ -3,6 +3,7 @@ import type { PermissionMode, Query, SDKUserMessage } from "@anthropic-ai/claude
 import { query as claudeQuery } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
 import { InputController } from "../runtime/input-controller.js";
+import { acquireWorkspace } from "../runtime/workspace.js";
 
 const MAX_RETRIES = 2;
 
@@ -14,8 +15,9 @@ const MAX_RETRIES = 2;
  * and session resume from disk for idle reclaim recovery.
  */
 export const createClaudeCodeHandler: HandlerFactory = (config) => {
-  const cwd = config.cwd;
+  const workspaceRoot = config.workspaceRoot as string;
 
+  let cwd: string | null = null;
   let claudeSessionId: string | null = null;
   let currentQuery: Query | null = null;
   let inputController: InputController<SDKUserMessage> | null = null;
@@ -68,7 +70,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       options: {
         sessionId: resume ? undefined : sessionId,
         resume,
-        cwd,
+        cwd: cwd ?? undefined,
         persistSession: true,
         abortController,
         permissionMode,
@@ -146,6 +148,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     async start(message, sessionCtx) {
       ctx = sessionCtx;
       claudeSessionId = randomUUID();
+      cwd = acquireWorkspace(workspaceRoot, sessionCtx.chatId);
 
       sessionCtx.log(
         `Starting session (${claudeSessionId}), cwd=${cwd}, permissionMode=${config.permissionMode ?? "bypassPermissions"}`,
@@ -161,6 +164,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       ctx = sessionCtx;
       claudeSessionId = sessionId;
       retryCount = 0;
+      cwd = acquireWorkspace(workspaceRoot, sessionCtx.chatId);
 
       sessionCtx.log(`Resuming session (${sessionId}), cwd=${cwd}`);
       spawnQuery(sessionId, sessionCtx, sessionId);

@@ -15,7 +15,7 @@ describe("Built-in Handlers", () => {
     registerBuiltinHandlers();
 
     const factory = getHandlerFactory("claude-code");
-    const handler = factory({ cwd: "/tmp/test" });
+    const handler = factory({ workspaceRoot: "/tmp/test" });
     expect(handler).toBeDefined();
     expect(typeof handler.start).toBe("function");
     expect(typeof handler.resume).toBe("function");

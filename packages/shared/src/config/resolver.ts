@@ -14,7 +14,9 @@ import type {
   ResolvedFieldInfo,
 } from "./types.js";
 
-export const DEFAULT_CONFIG_DIR = join(homedir(), ".first-tree-hub");
+export const DEFAULT_HOME_DIR = join(homedir(), ".first-tree-hub");
+export const DEFAULT_CONFIG_DIR = join(DEFAULT_HOME_DIR, "config");
+export const DEFAULT_DATA_DIR = join(DEFAULT_HOME_DIR, "data");
 
 // ── Type guards ──────────────────────────────────────────────────────
 
