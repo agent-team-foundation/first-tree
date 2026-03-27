@@ -4,7 +4,7 @@ import bcrypt from "bcrypt";
 import { desc, eq } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { adminUsers } from "../db/schema/admin-users.js";
-import { ConflictError, NotFoundError } from "../errors.js";
+import { ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 
 const SALT_ROUNDS = 10;
 
@@ -71,6 +71,10 @@ export async function updateAdminUser(db: Database, id: string, data: UpdateAdmi
 }
 
 export async function deleteAdminUser(db: Database, id: string) {
-  const [row] = await db.delete(adminUsers).where(eq(adminUsers.id, id)).returning();
-  if (!row) throw new NotFoundError(`Admin user "${id}" not found`);
+  const [target] = await db.select().from(adminUsers).where(eq(adminUsers.id, id)).limit(1);
+  if (!target) throw new NotFoundError(`Admin user "${id}" not found`);
+  if (target.role === "super_admin") {
+    throw new ForbiddenError("Cannot delete a super_admin account");
+  }
+  await db.delete(adminUsers).where(eq(adminUsers.id, id));
 }
