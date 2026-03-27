@@ -1,4 +1,4 @@
-import { updateSystemConfigSchema } from "@agent-hub/shared";
+import { updateSystemConfigSchema } from "@first-tree-core/shared";
 import type { FastifyInstance } from "fastify";
 import * as systemConfigService from "../../services/system-config.js";
 

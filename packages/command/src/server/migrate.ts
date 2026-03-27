@@ -8,7 +8,7 @@ import postgres from "postgres";
 /**
  * Resolve the drizzle migrations directory.
  * 1. npm install: embedded at dist/drizzle/ (relative to the built CLI)
- * 2. Monorepo dev: resolved from @agent-hub/server package
+ * 2. Monorepo dev: resolved from @first-tree-core/server package
  */
 function resolveMigrationsFolder(): string {
   // npm publish: migrations are embedded next to the built CLI
@@ -17,7 +17,7 @@ function resolveMigrationsFolder(): string {
   if (existsSync(embeddedPath)) return embeddedPath;
 
   // Monorepo dev: resolve from server package
-  const serverDir = dirname(fileURLToPath(import.meta.resolve("@agent-hub/server/package.json")));
+  const serverDir = dirname(fileURLToPath(import.meta.resolve("@first-tree-core/server/package.json")));
   return join(serverDir, "drizzle");
 }
 

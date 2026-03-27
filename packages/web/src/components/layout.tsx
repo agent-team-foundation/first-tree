@@ -20,7 +20,7 @@ export function Layout() {
       {/* Sidebar */}
       <aside className="w-60 shrink-0 border-r border-border bg-card flex flex-col">
         <div className="p-4 border-b border-border">
-          <h1 className="text-lg font-semibold tracking-tight">Agent Hub</h1>
+          <h1 className="text-lg font-semibold tracking-tight">First Tree</h1>
           <p className="text-xs text-muted-foreground">Admin Console</p>
         </div>
         <nav className="flex-1 p-2 space-y-1">

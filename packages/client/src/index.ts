@@ -23,4 +23,4 @@ export { AgentRuntime } from "./runtime/runtime.js";
 export { SessionManager } from "./runtime/session-manager.js";
 export { SessionRegistry } from "./runtime/session-registry.js";
 export type { PaginatedResult, PullResult, RegisterResult, SdkConfig } from "./sdk.js";
-export { AgentHubSDK, SdkError } from "./sdk.js";
+export { FirstTreeCoreSDK, SdkError } from "./sdk.js";

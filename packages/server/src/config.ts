@@ -1,4 +1,4 @@
-import type { ServerConfig } from "@agent-hub/shared/config";
+import type { ServerConfig } from "@first-tree-core/shared/config";
 
 /**
  * Server runtime config extends the shared ServerConfig with

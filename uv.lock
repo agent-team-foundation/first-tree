@@ -4,13 +4,13 @@ requires-python = ">=3.11"
 
 [manifest]
 members = [
-    "agent-hub",
-    "agent-hub-client",
-    "agent-hub-server",
+    "first-tree-core",
+    "first-tree-core-client",
+    "first-tree-core-server",
 ]
 
 [[package]]
-name = "agent-hub"
+name = "first-tree-core"
 version = "0.1.0"
 source = { virtual = "." }
 
@@ -33,7 +33,7 @@ dev = [
 ]
 
 [[package]]
-name = "agent-hub-client"
+name = "first-tree-core-client"
 version = "0.1.0"
 source = { editable = "client" }
 dependencies = [
@@ -50,7 +50,7 @@ requires-dist = [
 ]
 
 [[package]]
-name = "agent-hub-server"
+name = "first-tree-core-server"
 version = "0.1.0"
 source = { editable = "server" }
 dependencies = [

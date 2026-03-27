@@ -2,15 +2,15 @@ services:
   server:
     build: .
     ports:
-      - "${AGENT_HUB_PORT:-8000}:8000"
+      - "${FIRST_TREE_PORT:-8000}:8000"
     environment:
-      AGENT_HUB_DATABASE_URL: postgresql://${POSTGRES_USER:-agenthub}:${POSTGRES_PASSWORD:-agenthub}@postgres:5432/${POSTGRES_DB:-agenthub}
-      AGENT_HUB_HOST: "0.0.0.0"
-      AGENT_HUB_PORT: "8000"
-      AGENT_HUB_JWT_SECRET: ${AGENT_HUB_JWT_SECRET}
-      AGENT_HUB_ENCRYPTION_KEY: ${AGENT_HUB_ENCRYPTION_KEY}
-      AGENT_HUB_CONTEXT_TREE_REPO: ${AGENT_HUB_CONTEXT_TREE_REPO}
-      AGENT_HUB_GITHUB_TOKEN: ${AGENT_HUB_GITHUB_TOKEN}
+      FIRST_TREE_DATABASE_URL: postgresql://${POSTGRES_USER:-firsttreecore}:${POSTGRES_PASSWORD:-firsttreecore}@postgres:5432/${POSTGRES_DB:-firsttreecore}
+      FIRST_TREE_HOST: "0.0.0.0"
+      FIRST_TREE_PORT: "8000"
+      FIRST_TREE_JWT_SECRET: ${FIRST_TREE_JWT_SECRET}
+      FIRST_TREE_ENCRYPTION_KEY: ${FIRST_TREE_ENCRYPTION_KEY}
+      FIRST_TREE_CONTEXT_TREE_REPO: ${FIRST_TREE_CONTEXT_TREE_REPO}
+      FIRST_TREE_GITHUB_TOKEN: ${FIRST_TREE_GITHUB_TOKEN}
     depends_on:
       postgres:
         condition: service_healthy
@@ -25,13 +25,13 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-agenthub}
-      POSTGRES_USER: ${POSTGRES_USER:-agenthub}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agenthub}
+      POSTGRES_DB: ${POSTGRES_DB:-firsttreecore}
+      POSTGRES_USER: ${POSTGRES_USER:-firsttreecore}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-firsttreecore}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agenthub}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-firsttreecore}"]
       interval: 5s
       timeout: 3s
       retries: 5

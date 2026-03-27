@@ -1,4 +1,4 @@
-import type { CreateAdapterConfig, UpdateAdapterConfig } from "@agent-hub/shared";
+import type { CreateAdapterConfig, UpdateAdapterConfig } from "@first-tree-core/shared";
 import { and, desc, eq, ne } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { adapterConfigs } from "../db/schema/adapter-configs.js";

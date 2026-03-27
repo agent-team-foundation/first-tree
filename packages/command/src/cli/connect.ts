@@ -1,4 +1,4 @@
-import { AgentSlot, getHandlerFactory, registerBuiltinHandlers } from "@agent-hub/client";
+import { AgentSlot, getHandlerFactory, registerBuiltinHandlers } from "@first-tree-core/client";
 import type { Command } from "commander";
 import { handleError, log, resolveConfig } from "./util.js";
 
@@ -8,7 +8,7 @@ export function registerConnectCommand(program: Command): void {
     .description("Connect a single agent to server and process messages")
     .option("-t, --type <type>", "Handler type", "claude-code")
     .option("--concurrency <n>", "Max parallel message processing", "5")
-    .option("--server <url>", "Override AGENT_HUB_SERVER")
+    .option("--server <url>", "Override FIRST_TREE_SERVER")
     .action(async (options: { type: string; concurrency: string; server?: string }) => {
       try {
         registerBuiltinHandlers();

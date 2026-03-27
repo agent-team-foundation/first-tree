@@ -1,19 +1,19 @@
-import { AgentHubSDK, SdkError } from "@agent-hub/client";
+import { FirstTreeCoreSDK, SdkError } from "@first-tree-core/client";
 import type { Command } from "commander";
 import { fail, success } from "../cli/output.js";
 
 function resolveAgentConfig(): { serverUrl: string; token: string } {
-  const token = process.env.AGENT_HUB_TOKEN;
+  const token = process.env.FIRST_TREE_TOKEN;
   if (!token) {
-    fail("MISSING_TOKEN", "AGENT_HUB_TOKEN environment variable is required.", 2);
+    fail("MISSING_TOKEN", "FIRST_TREE_TOKEN environment variable is required.", 2);
   }
-  const serverUrl = process.env.AGENT_HUB_SERVER ?? "http://localhost:8000";
+  const serverUrl = process.env.FIRST_TREE_SERVER ?? "http://localhost:8000";
   return { serverUrl, token };
 }
 
-function createSdk(): AgentHubSDK {
+function createSdk(): FirstTreeCoreSDK {
   const config = resolveAgentConfig();
-  return new AgentHubSDK(config);
+  return new FirstTreeCoreSDK(config);
 }
 
 function handleError(error: unknown): never {

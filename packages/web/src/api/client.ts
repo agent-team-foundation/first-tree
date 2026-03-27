@@ -1,5 +1,5 @@
 const BASE_URL = "/api/v1";
-const TOKEN_KEY = "agent-hub:tokens";
+const TOKEN_KEY = "first-tree-core:tokens";
 
 type StoredTokens = {
   accessToken: string;

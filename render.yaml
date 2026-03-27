@@ -2,37 +2,37 @@
 # Deploy: connect this repo in Render Dashboard → auto-detects render.yaml
 
 databases:
-  - name: agent-hub-db
+  - name: first-tree-core-db
     plan: starter
-    databaseName: agenthub
-    user: agenthub
+    databaseName: firsttreecore
+    user: firsttreecore
     ipAllowList: []
 
 services:
   - type: web
-    name: agent-hub
+    name: first-tree-core
     runtime: docker
     plan: starter
     dockerfilePath: ./Dockerfile
     healthCheckPath: /healthz
     envVars:
-      - key: AGENT_HUB_DATABASE_URL
+      - key: FIRST_TREE_DATABASE_URL
         fromDatabase:
-          name: agent-hub-db
+          name: first-tree-core-db
           property: connectionString
-      - key: AGENT_HUB_HOST
+      - key: FIRST_TREE_HOST
         value: "0.0.0.0"
-      - key: AGENT_HUB_PORT
+      - key: FIRST_TREE_PORT
         value: "8000"
-      - key: AGENT_HUB_CONTEXT_TREE_REPO
+      - key: FIRST_TREE_CONTEXT_TREE_REPO
         sync: false
-      - key: AGENT_HUB_GITHUB_TOKEN
+      - key: FIRST_TREE_GITHUB_TOKEN
         sync: false
-      - key: AGENT_HUB_GITHUB_WEBHOOK_SECRET
+      - key: FIRST_TREE_GITHUB_WEBHOOK_SECRET
         sync: false
-      - key: AGENT_HUB_ADMIN_PASSWORD
+      - key: FIRST_TREE_ADMIN_PASSWORD
         generateValue: true
-      - key: AGENT_HUB_JWT_SECRET
+      - key: FIRST_TREE_JWT_SECRET
         generateValue: true
-      - key: AGENT_HUB_ENCRYPTION_KEY
+      - key: FIRST_TREE_ENCRYPTION_KEY
         generateValue: true

@@ -1,4 +1,4 @@
-import type { MessageFormat } from "@agent-hub/shared";
+import type { MessageFormat } from "@first-tree-core/shared";
 import type { Command } from "commander";
 import { fail, success } from "../cli/output.js";
 import { createSdk, handleError } from "../cli/util.js";

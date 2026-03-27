@@ -7,7 +7,7 @@ import {
   readConfigFile,
   serverConfigSchema,
   setConfigValue,
-} from "@agent-hub/shared/config";
+} from "@first-tree-core/shared/config";
 import type { Command } from "commander";
 import { promptMissingFields } from "../server/prompt.js";
 

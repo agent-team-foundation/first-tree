@@ -1,4 +1,4 @@
-import { ADAPTER_PLATFORMS } from "@agent-hub/shared";
+import { ADAPTER_PLATFORMS } from "@first-tree-core/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Cable, Copy, Key, Link2, Pencil, Plus, Trash2 } from "lucide-react";
 import { type FormEvent, useState } from "react";

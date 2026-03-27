@@ -9,7 +9,7 @@ import {
   resetConfig,
   resetConfigMeta,
   setConfigValue,
-} from "@agent-hub/shared/config";
+} from "@first-tree-core/shared/config";
 import type { Command } from "commander";
 import { ClientRuntime } from "../client/runtime.js";
 import { promptAddAgent, promptMissingFields } from "../server/prompt.js";
@@ -24,7 +24,7 @@ import {
 } from "./doctor.js";
 
 export function registerClientCommands(program: Command): void {
-  const client = program.command("client").description("Manage Agent Hub client");
+  const client = program.command("client").description("Manage First Tree Core client");
 
   client
     .command("start")
@@ -50,7 +50,7 @@ export function registerClientCommands(program: Command): void {
 
         if (agents.size === 0) {
           process.stderr.write("  No agents configured.\n");
-          process.stderr.write("  Add one with: agent-hub client add <name> --token <token>\n");
+          process.stderr.write("  Add one with: first-tree-core client add <name> --token <token>\n");
           process.exit(1);
         }
 
@@ -89,7 +89,7 @@ export function registerClientCommands(program: Command): void {
     .command("doctor")
     .description("Check client environment readiness")
     .action(async () => {
-      process.stderr.write("\n  Agent Hub Client Doctor\n\n");
+      process.stderr.write("\n  First Tree Core Client Doctor\n\n");
       const results = [
         checkNodeVersion(),
         checkClientConfig(),

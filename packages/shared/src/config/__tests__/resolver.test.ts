@@ -20,7 +20,7 @@ import { getConfig, resetConfig } from "../singleton.js";
 let testDir: string;
 
 beforeEach(() => {
-  testDir = join(tmpdir(), `agent-hub-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  testDir = join(tmpdir(), `first-tree-core-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(testDir, { recursive: true });
   resetConfig();
   resetConfigMeta();

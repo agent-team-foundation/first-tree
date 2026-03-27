@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { initConfig, serverConfigSchema } from "@agent-hub/shared/config";
+import { initConfig, serverConfigSchema } from "@first-tree-core/shared/config";
 import { buildApp } from "./app.js";
 import type { Config } from "./config.js";
 

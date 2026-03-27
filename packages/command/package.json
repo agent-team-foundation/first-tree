@@ -1,8 +1,8 @@
 {
-  "name": "@unispark.ai/agent-hub",
+  "name": "@agent-team-foundation/first-tree-core",
   "version": "0.2.0",
   "type": "module",
-  "description": "Agent Hub — unified CLI for server, client, and agent management",
+  "description": "First Tree Core — unified CLI for server, client, and agent management",
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -10,7 +10,7 @@
     }
   },
   "bin": {
-    "agent-hub": "./dist/cli/index.mjs"
+    "first-tree-core": "./dist/cli/index.mjs"
   },
   "files": [
     "dist"
@@ -27,7 +27,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/agent-team-foundation/agent-hub.git",
+    "url": "https://github.com/agent-team-foundation/first-tree-core.git",
     "directory": "packages/command"
   },
   "engines": {
@@ -52,10 +52,10 @@
     "zod": "^3.25.0"
   },
   "devDependencies": {
-    "@agent-hub/client": "workspace:*",
-    "@agent-hub/server": "workspace:*",
-    "@agent-hub/shared": "workspace:*",
-    "@agent-hub/web": "workspace:*",
+    "@first-tree-core/client": "workspace:*",
+    "@first-tree-core/server": "workspace:*",
+    "@first-tree-core/shared": "workspace:*",
+    "@first-tree-core/web": "workspace:*",
     "@types/bcrypt": "^5.0.0",
     "@types/node": "^22.16.0",
     "tsdown": "^0.21.4",

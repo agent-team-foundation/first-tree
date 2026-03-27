@@ -1,9 +1,9 @@
 {
-  "name": "@agent-hub/client",
+  "name": "@first-tree-core/client",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Agent Hub SDK — programmatic client for Agent Hub server",
+  "description": "First Tree Core SDK — programmatic client for First Tree Core server",
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -25,7 +25,7 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
-    "@agent-hub/shared": "workspace:*",
+    "@first-tree-core/shared": "workspace:*",
     "@types/node": "^22.16.0",
     "@types/ws": "^8.18.1",
     "tsdown": "^0.21.4",

@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import type { CreateAgent, CreateAgentToken } from "@agent-hub/shared";
-import { AGENT_STATUSES } from "@agent-hub/shared";
+import type { CreateAgent, CreateAgentToken } from "@first-tree-core/shared";
+import { AGENT_STATUSES } from "@first-tree-core/shared";
 import { and, desc, eq, isNull, lt, ne } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { adapterAgentMappings } from "../db/schema/adapter-agent-mappings.js";

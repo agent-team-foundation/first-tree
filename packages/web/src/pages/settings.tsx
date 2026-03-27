@@ -1,4 +1,4 @@
-import { SYSTEM_CONFIG_DEFAULTS, SYSTEM_CONFIG_KEYS } from "@agent-hub/shared";
+import { SYSTEM_CONFIG_DEFAULTS, SYSTEM_CONFIG_KEYS } from "@first-tree-core/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useEffect, useState } from "react";
 import { getConfigs, updateConfigs } from "../api/system-config.js";

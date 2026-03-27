@@ -1,4 +1,4 @@
-import { initConfig, serverConfigSchema } from "@agent-hub/shared/config";
+import { initConfig, serverConfigSchema } from "@first-tree-core/shared/config";
 import type { Command } from "commander";
 import { runMigrations } from "../server/migrate.js";
 

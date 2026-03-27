@@ -1,5 +1,5 @@
-import { AgentSlot, getHandlerFactory, registerBuiltinHandlers } from "@agent-hub/client";
-import type { AgentConfig } from "@agent-hub/shared/config";
+import { AgentSlot, getHandlerFactory, registerBuiltinHandlers } from "@first-tree-core/client";
+import type { AgentConfig } from "@first-tree-core/shared/config";
 
 type AgentEntry = {
   name: string;

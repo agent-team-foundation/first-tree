@@ -1,4 +1,4 @@
-import { SYSTEM_CONFIG_DEFAULTS } from "@agent-hub/shared";
+import { SYSTEM_CONFIG_DEFAULTS } from "@first-tree-core/shared";
 import { eq } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { systemConfigs } from "../db/schema/system-configs.js";

@@ -1,4 +1,4 @@
-import { createAgentTokenSchema, paginationQuerySchema } from "@agent-hub/shared";
+import { createAgentTokenSchema, paginationQuerySchema } from "@first-tree-core/shared";
 import type { FastifyInstance } from "fastify";
 import * as agentService from "../../services/agent.js";
 import { forceDisconnect } from "../../services/connection-manager.js";

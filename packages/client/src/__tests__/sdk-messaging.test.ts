@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AgentHubSDK, SdkError } from "../sdk.js";
+import { FirstTreeCoreSDK, SdkError } from "../sdk.js";
 
-describe("AgentHubSDK messaging methods", () => {
-  let sdk: AgentHubSDK;
+describe("FirstTreeCoreSDK messaging methods", () => {
+  let sdk: FirstTreeCoreSDK;
   const mockFetch = vi.fn<typeof globalThis.fetch>();
 
   beforeEach(() => {
-    sdk = new AgentHubSDK({ serverUrl: "http://localhost:8000", token: "aghub_test" });
+    sdk = new FirstTreeCoreSDK({ serverUrl: "http://localhost:8000", token: "aghub_test" });
     vi.stubGlobal("fetch", mockFetch);
   });
 

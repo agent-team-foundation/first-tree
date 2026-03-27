@@ -1,4 +1,4 @@
-import { createAdapterConfigSchema, updateAdapterConfigSchema } from "@agent-hub/shared";
+import { createAdapterConfigSchema, updateAdapterConfigSchema } from "@first-tree-core/shared";
 import type { FastifyInstance } from "fastify";
 import { BadRequestError } from "../../errors.js";
 import * as adapterService from "../../services/adapter.js";

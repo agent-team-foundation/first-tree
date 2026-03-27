@@ -13,7 +13,7 @@ import {
 } from "./doctor.js";
 
 export function registerServerCommands(program: Command): void {
-  const server = program.command("server").description("Manage Agent Hub server");
+  const server = program.command("server").description("Manage First Tree Core server");
 
   server
     .command("start")
@@ -48,7 +48,7 @@ export function registerServerCommands(program: Command): void {
     .command("doctor")
     .description("Check server environment readiness")
     .action(async () => {
-      process.stderr.write("\n  Agent Hub Server Doctor\n\n");
+      process.stderr.write("\n  First Tree Core Server Doctor\n\n");
       const results = [
         checkNodeVersion(),
         checkDocker(),
@@ -66,7 +66,7 @@ export function registerServerCommands(program: Command): void {
     .description("Show server health and status")
     .action(async () => {
       // P0: simple health check against local server
-      const url = process.env.AGENT_HUB_SERVER_URL ?? "http://localhost:8000";
+      const url = process.env.FIRST_TREE_SERVER_URL ?? "http://localhost:8000";
       try {
         const res = await fetch(`${url}/api/v1/health`);
         if (res.ok) {
