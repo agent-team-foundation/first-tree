@@ -34,7 +34,7 @@ function buildPrompt(diffPath: string): string {
   return parts.join("\n\n");
 }
 
-function extractStreamText(jsonl: string): string {
+export function extractStreamText(jsonl: string): string {
   const textParts: string[] = [];
   let resultText = "";
   for (const line of jsonl.split("\n")) {
@@ -95,13 +95,13 @@ function runClaude(opts: { prompt?: string; continueSession?: boolean }): string
   }
 }
 
-interface Review {
+export interface Review {
   verdict: string;
   summary?: string;
   inline_comments?: Array<{ file: string; line: number; comment: string }>;
 }
 
-function extractReviewJson(text: string): Review | null {
+export function extractReviewJson(text: string): Review | null {
   if (!text.trim()) return null;
   // Strip markdown fences
   let cleaned = text.replace(/```json\s*/g, "").replace(/```\s*/g, "");
@@ -168,4 +168,9 @@ function main(): void {
   }
 }
 
-main();
+const isDirectRun =
+  process.argv[1]?.endsWith("run-review.ts") ||
+  process.argv[1]?.endsWith("run-review.js");
+if (isDirectRun) {
+  main();
+}
