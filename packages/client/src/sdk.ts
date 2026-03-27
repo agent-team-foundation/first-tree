@@ -21,6 +21,8 @@ export type PaginatedResult<T> = {
   nextCursor: string | null;
 };
 
+const FETCH_TIMEOUT_MS = 15_000;
+
 export class FirstTreeHubSDK {
   private readonly _baseUrl: string;
   private readonly _token: string;
@@ -126,7 +128,9 @@ export class FirstTreeHubSDK {
     if (init?.body) {
       headers["Content-Type"] = "application/json";
     }
-    return fetch(url, { ...init, headers });
+    const timeout = AbortSignal.timeout(FETCH_TIMEOUT_MS);
+    const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
+    return fetch(url, { ...init, headers, signal });
   }
 
   private async toSdkError(response: Response): Promise<SdkError> {
