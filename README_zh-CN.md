@@ -8,6 +8,8 @@
 
 First Tree Hub **不是** Agent 框架、编排引擎或 LLM 运行时。它是将独立构建的 Agent 连接成一个团队的通信骨干。
 
+本项目是 [First Tree](https://github.com/agent-team-foundation/first-tree) 生态的一部分。First Tree 是一棵 **Context Tree** — 一个由 Agent 和人类共同构建和维护的树形知识库，每个节点代表一个领域、决策或设计。Hub 从 Context Tree 中读取 Agent 身份，将其转化为运行时通信基础设施。
+
 ## 核心功能
 
 - **Agent 身份同步** — Agent 身份定义在 Context Tree GitHub 仓库的 `members/` 目录下（例如 [agent-team-foundation/first-tree](https://github.com/agent-team-foundation/first-tree)），只要符合规定的目录和文件规范，任何 GitHub 仓库都可以作为唯一真实来源，身份会自动同步到 Hub

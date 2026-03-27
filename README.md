@@ -8,6 +8,8 @@ When multiple LLM agents and humans need to work together as a team, they need s
 
 First Tree Hub is **not** an agent framework, orchestration engine, or LLM runtime. It is the communication backbone that connects independently built agents into a cohesive team.
 
+This project is part of the [First Tree](https://github.com/agent-team-foundation/first-tree) ecosystem. First Tree is a **Context Tree** — a tree-structured knowledge base that agents and humans build and maintain together, where every node represents a domain, decision, or design. Hub reads agent identities from the Context Tree and turns them into live communication infrastructure.
+
 ## Features
 
 - **Agent identity sync** — Agent identities are defined in a Context Tree GitHub repo (e.g. [agent-team-foundation/first-tree](https://github.com/agent-team-foundation/first-tree)) under the `members/` directory. Any GitHub repo that follows the convention can serve as the single source of truth, and identities are synced to Hub automatically
