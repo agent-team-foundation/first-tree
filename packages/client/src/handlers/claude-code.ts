@@ -88,12 +88,22 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
           sessionCtx.touch();
 
           if (message.type === "result") {
-            const result = message as { type: "result"; subtype: string; errors?: string[] };
+            const result = message as {
+              type: "result";
+              subtype: string;
+              errors?: string[];
+              duration_ms?: number;
+              total_cost_usd?: number;
+              num_turns?: number;
+              session_id?: string;
+            };
             if (result.subtype === "success") {
               retryCount = 0;
             } else {
               const errors = result.errors ? result.errors.join("; ") : result.subtype;
-              sessionCtx.log(`Query result error: ${errors}`);
+              sessionCtx.log(
+                `Query result error: ${errors} (subtype=${result.subtype}, turns=${result.num_turns ?? "?"}, duration=${result.duration_ms ?? "?"}ms)`,
+              );
             }
           }
         }
@@ -103,6 +113,16 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         // Process crash, OOM, or unexpected termination
         const errMsg = err instanceof Error ? err.message : String(err);
         sessionCtx.log(`Query error: ${errMsg}`);
+
+        // Log additional diagnostic details when available
+        if (err instanceof Error) {
+          if (err.cause)
+            sessionCtx.log(`  cause: ${err.cause instanceof Error ? err.cause.message : String(err.cause)}`);
+          if ("exitCode" in err) sessionCtx.log(`  exitCode: ${(err as Record<string, unknown>).exitCode}`);
+          if ("stderr" in err) sessionCtx.log(`  stderr: ${(err as Record<string, unknown>).stderr}`);
+          if ("code" in err) sessionCtx.log(`  code: ${(err as Record<string, unknown>).code}`);
+          if (err.stack) sessionCtx.log(`  stack: ${err.stack.split("\n").slice(1, 4).join(" | ")}`);
+        }
 
         if (retryCount >= MAX_RETRIES || !claudeSessionId) {
           sessionCtx.log("Exhausted retries, session will be suspended");
@@ -127,6 +147,9 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       ctx = sessionCtx;
       claudeSessionId = randomUUID();
 
+      sessionCtx.log(
+        `Starting session (${claudeSessionId}), cwd=${cwd}, permissionMode=${config.permissionMode ?? "bypassPermissions"}`,
+      );
       spawnQuery(claudeSessionId, sessionCtx);
       inputController?.push(toSDKUserMessage(message, claudeSessionId));
 
@@ -139,6 +162,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       claudeSessionId = sessionId;
       retryCount = 0;
 
+      sessionCtx.log(`Resuming session (${sessionId}), cwd=${cwd}`);
       spawnQuery(sessionId, sessionCtx, sessionId);
       inputController?.push(toSDKUserMessage(message, sessionId));
 
