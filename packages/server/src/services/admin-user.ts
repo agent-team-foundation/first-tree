@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { CreateAdminUser, UpdateAdminUser } from "@agent-hub/shared";
+import type { CreateAdminUser, UpdateAdminUser } from "@first-tree-hub/shared";
 import bcrypt from "bcrypt";
 import { desc, eq } from "drizzle-orm";
 import type { Database } from "../db/connection.js";

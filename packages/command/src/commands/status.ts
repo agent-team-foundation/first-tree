@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { agentConfigSchema, DEFAULT_CONFIG_DIR, loadAgents, readConfigFile } from "@agent-hub/shared/config";
+import { agentConfigSchema, DEFAULT_CONFIG_DIR, loadAgents, readConfigFile } from "@first-tree-hub/shared/config";
 import type { Command } from "commander";
 
 export function registerStatusCommand(program: Command): void {

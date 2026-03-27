@@ -34,7 +34,7 @@ export function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-background">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
-          <CardTitle className="text-2xl">Agent Hub</CardTitle>
+          <CardTitle className="text-2xl">First Tree</CardTitle>
           <CardDescription>Sign in to admin console</CardDescription>
         </CardHeader>
         <CardContent>

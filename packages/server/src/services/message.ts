@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { SendMessage, SendToAgent } from "@agent-hub/shared";
+import type { SendMessage, SendToAgent } from "@first-tree-hub/shared";
 import { and, desc, eq, lt } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";

@@ -1,4 +1,4 @@
-# Agent Hub
+# First Tree Hub
 
 <p align="center">
   <a href="README_zh-CN.md">中文</a>
@@ -11,11 +11,11 @@ Centralized collaboration platform for agent teams — registration, authenticat
                                           │
  Human ──── Web Dashboard ────────────────┤
                                           ▼
-                                   ┌─────────────┐
-                                   │  Agent Hub   │
-                                   │   Server     │◄──── GitHub (Context Tree)
-                                   │  + Web + DB  │
-                                   └──────┬───────┘
+                                ┌───────────────────┐
+                                │  First Tree Hub  │
+                                │      Server       │◄── GitHub (Context Tree)
+                                │    + Web + DB     │
+                                └─────────┬─────────┘
                                           │
                           ┌───────────────┼───────────────┐
                           ▼               ▼               ▼
@@ -32,8 +32,8 @@ Centralized collaboration platform for agent teams — registration, authenticat
 ## Quick Start
 
 ```bash
-npm install -g @unispark.ai/agent-hub
-agent-hub server start
+npm install -g @agent-team-foundation/first-tree-hub
+first-tree-hub server start
 ```
 
 The interactive setup will guide you through PostgreSQL provisioning, Context Tree configuration, and admin account creation. Open `http://localhost:8000` when it's ready.
@@ -42,19 +42,19 @@ The interactive setup will guide you through PostgreSQL provisioning, Context Tr
 
 | I want to... | Method | Guide |
 |--------------|--------|-------|
-| Try it locally | `agent-hub server start` | Quick Start above |
+| Try it locally | `first-tree-hub server start` | Quick Start above |
 | Deploy to cloud | Railway / Render one-click | [Deployment guide](docs/deployment-guide.md#one-click-cloud-deployment) |
 | Run with Docker | `docker-compose.production.yml` | [Deployment guide](docs/deployment-guide.md) |
 | Add HTTPS for public access | Caddy reverse proxy | [Deployment guide](docs/deployment-guide.md#production-with-https) |
-| Run agents on other machines | `agent-hub client start` | [Deployment guide](docs/deployment-guide.md#client-setup) |
+| Run agents on other machines | `first-tree-hub client start` | [Deployment guide](docs/deployment-guide.md#client-setup) |
 | Use managed PostgreSQL | Supabase | [Deployment guide](docs/deployment-guide.md#managed-postgresql-supabase) |
 
 ## Diagnostics
 
 ```bash
-agent-hub server doctor   # Check server environment readiness
-agent-hub client doctor   # Check client environment readiness
-agent-hub status          # Server health + configured agents
+first-tree-hub server doctor   # Check server environment readiness
+first-tree-hub client doctor   # Check client environment readiness
+first-tree-hub status          # Server health + configured agents
 ```
 
 ## Documentation
@@ -68,8 +68,8 @@ agent-hub status          # Server health + configured agents
 ```bash
 pnpm install                          # Install dependencies
 docker compose up -d                  # Start dev PostgreSQL
-pnpm --filter @agent-hub/server dev   # Start server (dev mode)
-pnpm --filter @agent-hub/web dev      # Start web dashboard (dev mode)
+pnpm --filter @first-tree-hub/server dev   # Start server (dev mode)
+pnpm --filter @first-tree-hub/web dev      # Start web dashboard (dev mode)
 pnpm check && pnpm typecheck          # Lint + type check
 pnpm test                             # Run tests
 ```

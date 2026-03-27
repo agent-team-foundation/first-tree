@@ -1,5 +1,5 @@
 {
-  "name": "@agent-hub/web",
+  "name": "@first-tree-hub/web",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -14,7 +14,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@agent-hub/shared": "workspace:*",
+    "@first-tree-hub/shared": "workspace:*",
     "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-label": "^2.1.8",
     "@radix-ui/react-slot": "^1.2.4",

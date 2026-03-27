@@ -1,5 +1,5 @@
-import type { InboxEntryWithMessage } from "@agent-hub/shared";
-import type { AgentHubSDK } from "../sdk.js";
+import type { InboxEntryWithMessage } from "@first-tree-hub/shared";
+import type { FirstTreeHubSDK } from "../sdk.js";
 import type { SessionConfig } from "./config.js";
 import { Deduplicator } from "./deduplicator.js";
 import type { AgentHandler, HandlerConfig, HandlerFactory, SessionContext, SessionMessage } from "./handler.js";
@@ -28,7 +28,7 @@ type SessionManagerConfig = {
   handlerFactory: HandlerFactory;
   handlerConfig: HandlerConfig;
   agentIdentity: { agentId: string; displayName: string | null };
-  sdk: AgentHubSDK;
+  sdk: FirstTreeHubSDK;
   log: (msg: string) => void;
   registryPath?: string;
 };

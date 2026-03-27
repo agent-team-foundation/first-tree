@@ -1,10 +1,10 @@
 # Deployment Guide
 
-This guide covers production deployment of Agent Hub. For a quick local setup, see the [Quick Start](../README.md#quick-start) in the README.
+This guide covers production deployment of First Tree Hub. For a quick local setup, see the [Quick Start](../README.md#quick-start) in the README.
 
 ## Overview
 
-Agent Hub has two deployable components:
+First Tree Hub has two deployable components:
 
 | Component | What it does | Where to run |
 |-----------|-------------|-------------|
@@ -25,38 +25,38 @@ See [.env.example](../.env.example) for the full list with comments. See [CLI Re
 
 ### Server — Required
 
-These must be set for Docker / CI / `--no-interactive` deployments. Interactive mode (`agent-hub server start`) will prompt for missing values.
+These must be set for Docker / CI / `--no-interactive` deployments. Interactive mode (`first-tree-hub server start`) will prompt for missing values.
 
 | Variable | Description |
 |----------|-------------|
-| `AGENT_HUB_DATABASE_URL` | PostgreSQL connection URL (Docker Compose provides this automatically) |
-| `AGENT_HUB_HOST` | Bind address — **must be `0.0.0.0` for Docker** (default: `127.0.0.1`) |
-| `AGENT_HUB_CONTEXT_TREE_REPO` | Context Tree GitHub repo (URL or `owner/repo`) |
-| `AGENT_HUB_GITHUB_TOKEN` | GitHub personal access token (repo scope) |
+| `FIRST_TREE_HUB_DATABASE_URL` | PostgreSQL connection URL (Docker Compose provides this automatically) |
+| `FIRST_TREE_HUB_HOST` | Bind address — **must be `0.0.0.0` for Docker** (default: `127.0.0.1`) |
+| `FIRST_TREE_HUB_CONTEXT_TREE_REPO` | Context Tree GitHub repo (URL or `owner/repo`) |
+| `FIRST_TREE_HUB_GITHUB_TOKEN` | GitHub personal access token (repo scope) |
 
 ### Server — Optional
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AGENT_HUB_GITHUB_WEBHOOK_SECRET` | — | GitHub webhook secret (only needed if using github webhooks) |
-| `AGENT_HUB_PORT` | `8000` | Server port |
-| `AGENT_HUB_JWT_SECRET` | auto-generated | JWT signing secret |
-| `AGENT_HUB_ENCRYPTION_KEY` | auto-generated | Adapter credential encryption key |
-| `AGENT_HUB_ADMIN_PASSWORD` | auto-generated | Default admin password |
-| `AGENT_HUB_CORS_ORIGIN` | — | Allowed origins (comma-separated) |
-| `AGENT_HUB_RATE_LIMIT_MAX` | `100` | Global rate limit (req/min) |
+| `FIRST_TREE_HUB_GITHUB_WEBHOOK_SECRET` | — | GitHub webhook secret (only needed if using github webhooks) |
+| `FIRST_TREE_HUB_PORT` | `8000` | Server port |
+| `FIRST_TREE_HUB_JWT_SECRET` | auto-generated | JWT signing secret |
+| `FIRST_TREE_HUB_ENCRYPTION_KEY` | auto-generated | Adapter credential encryption key |
+| `FIRST_TREE_HUB_ADMIN_PASSWORD` | auto-generated | Default admin password |
+| `FIRST_TREE_HUB_CORS_ORIGIN` | — | Allowed origins (comma-separated) |
+| `FIRST_TREE_HUB_RATE_LIMIT_MAX` | `100` | Global rate limit (req/min) |
 
 ### Client — Required
 
 | Variable | Description |
 |----------|-------------|
-| `AGENT_HUB_SERVER_URL` | Server URL the client connects to |
+| `FIRST_TREE_HUB_SERVER_URL` | Server URL the client connects to |
 
 ### Client — Optional
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AGENT_HUB_LOG_LEVEL` | `info` | Log level (`debug` / `info` / `warn` / `error`) |
+| `FIRST_TREE_HUB_LOG_LEVEL` | `info` | Log level (`debug` / `info` / `warn` / `error`) |
 
 ## Docker Compose (HTTP)
 
@@ -92,12 +92,12 @@ The default [Caddyfile](../deploy/Caddyfile) is minimal. To add custom headers, 
 
 ### Railway
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/template?referralCode=agent-hub)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/template?referralCode=first-tree-hub)
 
 Railway auto-detects the Dockerfile, provisions PostgreSQL, and exposes the service with HTTPS. Set these environment variables in Railway's dashboard:
 
-- `AGENT_HUB_CONTEXT_TREE_REPO`
-- `AGENT_HUB_GITHUB_TOKEN`
+- `FIRST_TREE_HUB_CONTEXT_TREE_REPO`
+- `FIRST_TREE_HUB_GITHUB_TOKEN`
 
 ### Render
 
@@ -111,25 +111,25 @@ On each machine that runs agents:
 
 ```bash
 # Install
-npm install -g @unispark.ai/agent-hub
+npm install -g @agent-team-foundation/first-tree-hub
 
 # Configure server URL
-agent-hub config set -c server.url https://hub.example.com
+first-tree-hub config set -c server.url https://hub.example.com
 
 # Add agents
-agent-hub client add my-agent --token aht_xxxxxxxxxxxx
+first-tree-hub client add my-agent --token aht_xxxxxxxxxxxx
 
 # Start
-agent-hub client start
+first-tree-hub client start
 ```
 
 ### Client with Docker
 
 ```bash
-docker build -f Dockerfile.client -t agent-hub-client .
-docker run -e AGENT_HUB_SERVER_URL=https://hub.example.com \
-           -v ~/.agent-hub/agents:/root/.agent-hub/agents \
-           agent-hub-client
+docker build -f Dockerfile.client -t first-tree-hub-client .
+docker run -e FIRST_TREE_HUB_SERVER_URL=https://hub.example.com \
+           -v ~/.first-tree-hub/agents:/root/.first-tree-hub/agents \
+           first-tree-hub-client
 ```
 
 ### Client in CI (GitHub Actions)
@@ -142,16 +142,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: npm install -g @unispark.ai/agent-hub
+      - run: npm install -g @agent-team-foundation/first-tree-hub
       - run: |
-          agent-hub config set -c server.url ${{ secrets.HUB_URL }}
-          agent-hub client add ci-agent --token ${{ secrets.AGENT_TOKEN }}
-          agent-hub client start
+          first-tree-hub config set -c server.url ${{ secrets.HUB_URL }}
+          first-tree-hub client add ci-agent --token ${{ secrets.AGENT_TOKEN }}
+          first-tree-hub client start
 ```
 
 ## Managed PostgreSQL (Supabase)
 
-You can use [Supabase](https://supabase.com) instead of self-hosted PostgreSQL. **Use the direct connection URL (port 5432), not the pooled URL (port 6543)** — Agent Hub requires `LISTEN/NOTIFY` which does not work through connection poolers.
+You can use [Supabase](https://supabase.com) instead of self-hosted PostgreSQL. **Use the direct connection URL (port 5432), not the pooled URL (port 6543)** — First Tree Hub requires `LISTEN/NOTIFY` which does not work through connection poolers.
 
 ## Health Checks
 
@@ -163,16 +163,16 @@ This endpoint is used by:
 - Docker `HEALTHCHECK` (configured in Dockerfile)
 - `docker-compose.production.yml` and `deploy/docker-compose.caddy.yml`
 - Railway and Render health check configuration
-- `agent-hub server doctor` and `agent-hub client doctor`
+- `first-tree-hub server doctor` and `first-tree-hub client doctor`
 
 ## Diagnostics
 
 ```bash
 # On the server machine
-agent-hub server doctor
+first-tree-hub server doctor
 
 # On a client machine
-agent-hub client doctor
+first-tree-hub client doctor
 ```
 
 `server doctor` checks: Node.js version, Docker, configuration, database connectivity, GitHub token, Context Tree access, server health.

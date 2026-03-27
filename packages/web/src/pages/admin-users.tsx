@@ -1,4 +1,4 @@
-import { ADMIN_ROLES } from "@agent-hub/shared";
+import { ADMIN_ROLES } from "@first-tree-hub/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { type FormEvent, useState } from "react";

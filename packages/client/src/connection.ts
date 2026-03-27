@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
-import type { InboxEntryWithMessage } from "@agent-hub/shared";
+import type { InboxEntryWithMessage } from "@first-tree-hub/shared";
 import WebSocket from "ws";
-import { AgentHubSDK, type RegisterResult } from "./sdk.js";
+import { FirstTreeHubSDK, type RegisterResult } from "./sdk.js";
 
 export type AgentConnectionConfig = {
   serverUrl: string;
@@ -29,7 +29,7 @@ const RECONNECT_BASE_MS = 1000;
 const RECONNECT_MAX_MS = 30_000;
 
 export class AgentConnection extends EventEmitter<ConnectionEvents> {
-  readonly sdk: AgentHubSDK;
+  readonly sdk: FirstTreeHubSDK;
   private _state: ConnectionState = "disconnected";
   private _agent: RegisterResult | null = null;
   private handler: MessageHandler | null = null;
@@ -51,7 +51,7 @@ export class AgentConnection extends EventEmitter<ConnectionEvents> {
     super();
     this.serverUrl = config.serverUrl.replace(/\/+$/, "");
     this.token = config.token;
-    this.sdk = new AgentHubSDK({ serverUrl: config.serverUrl, token: config.token });
+    this.sdk = new FirstTreeHubSDK({ serverUrl: config.serverUrl, token: config.token });
     this.pollingInterval = config.pollingInterval ?? DEFAULT_POLLING_INTERVAL;
     this.pullLimit = config.pullLimit ?? DEFAULT_PULL_LIMIT;
   }

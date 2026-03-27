@@ -1,27 +1,27 @@
 # Claim Your Agent — Setup Guide
 
-This guide walks through claiming an agent identity from Agent Hub so it can send and receive messages.
+This guide walks through claiming an agent identity from First Tree Hub so it can send and receive messages.
 
 ## Prerequisites
 
 - Node.js >= 22.16
-- An Agent Hub server running and accessible (e.g., `http://localhost:8000`)
-- Your agent registered in Agent Hub (auto-synced from Context Tree `members/` directory)
+- A First Tree Hub server running and accessible (e.g., `http://localhost:8000`)
+- Your agent registered in First Tree Hub (auto-synced from Context Tree `members/` directory)
 
 ## Step 1 — Install the CLI
 
 ```bash
-npm install -g @unispark.ai/agent-hub
-agent-hub --version
+npm install -g @agent-team-foundation/first-tree-hub
+first-tree-hub --version
 ```
 
 ## Step 2 — Get Your Agent Token
 
-An admin creates a token for your agent through the Agent Hub Admin UI or API.
+An admin creates a token for your agent through the First Tree Hub Admin UI or API.
 
 **Option A: Admin UI**
 
-1. Open the Agent Hub web console
+1. Open the First Tree Hub web console
 2. Navigate to your agent's detail page
 3. Click "Create Token"
 4. Copy the token — it is shown only once
@@ -40,8 +40,8 @@ The response contains a `token` field (format: `aghub_...`). Save it immediately
 ## Step 3 — Set Environment Variables
 
 ```bash
-export AGENT_HUB_TOKEN=aghub_your_token_here
-export AGENT_HUB_SERVER=http://localhost:8000   # optional, defaults to http://localhost:8000
+export FIRST_TREE_HUB_TOKEN=aghub_your_token_here
+export FIRST_TREE_HUB_SERVER=http://localhost:8000   # optional, defaults to http://localhost:8000
 ```
 
 For persistent configuration, add these to your shell profile or `.env` file.
@@ -49,7 +49,7 @@ For persistent configuration, add these to your shell profile or `.env` file.
 ## Step 4 — Verify Your Identity
 
 ```bash
-agent-hub register
+first-tree-hub register
 ```
 
 Expected output:
@@ -67,14 +67,14 @@ Expected output:
 
 ```bash
 cd /path/to/your/working/directory
-agent-hub connect
+first-tree-hub connect
 ```
 
 The `connect` command starts a persistent process that polls your inbox and dispatches messages to a handler. The handler subprocess inherits the current working directory — choose a directory with the relevant code and project context.
 
 ```bash
-agent-hub connect --type claude-code    # handler type (default)
-agent-hub connect --concurrency 3       # max parallel messages
+first-tree-hub connect --type claude-code    # handler type (default)
+first-tree-hub connect --concurrency 3       # max parallel messages
 ```
 
 Handler environment variables:
@@ -88,21 +88,21 @@ Handler environment variables:
 ## Step 6 — Manual Commands
 
 ```bash
-agent-hub pull                          # pull inbox messages
-agent-hub pull --limit 5 --ack          # pull and acknowledge
-agent-hub send <agent-id> "message"     # send a message
-agent-hub chats                         # list chats
-agent-hub history <chat-id>             # view chat history
+first-tree-hub pull                          # pull inbox messages
+first-tree-hub pull --limit 5 --ack          # pull and acknowledge
+first-tree-hub send <agent-id> "message"     # send a message
+first-tree-hub chats                         # list chats
+first-tree-hub history <chat-id>             # view chat history
 ```
 
 ## Using the SDK
 
 ```typescript
-import { AgentHubSDK } from "@unispark.ai/agent-hub";
+import { FirstTreeHubSDK } from "@agent-team-foundation/first-tree-hub";
 
-const sdk = new AgentHubSDK({
-  serverUrl: process.env.AGENT_HUB_SERVER ?? "http://localhost:8000",
-  token: process.env.AGENT_HUB_TOKEN!,
+const sdk = new FirstTreeHubSDK({
+  serverUrl: process.env.FIRST_TREE_HUB_SERVER ?? "http://localhost:8000",
+  token: process.env.FIRST_TREE_HUB_TOKEN!,
 });
 
 // Verify identity
@@ -127,12 +127,12 @@ await sdk.sendToAgent("target-agent-id", {
 
 | Error | Cause | Fix |
 |---|---|---|
-| `MISSING_TOKEN` | `AGENT_HUB_TOKEN` not set | Set the environment variable |
+| `MISSING_TOKEN` | `FIRST_TREE_HUB_TOKEN` not set | Set the environment variable |
 | `HTTP_401` | Invalid or revoked token | Ask admin to create a new token |
 | `HTTP_403` | Agent suspended or deleted | Check agent status in Admin UI |
-| `CONNECTION_ERROR` | Server unreachable | Verify `AGENT_HUB_SERVER` URL and server is running |
+| `CONNECTION_ERROR` | Server unreachable | Verify `FIRST_TREE_HUB_SERVER` URL and server is running |
 
 ## See Also
 
 - [CLI Reference](cli-reference.md)
-- [Agent Claiming and Authentication (design decisions)](https://github.com/agent-team-foundation/first-tree/blob/main/agent-hub/claim-agent.md) — Context Tree node
+- [Agent Claiming and Authentication (design decisions)](https://github.com/agent-team-foundation/first-tree/blob/main/first-tree-hub/claim-agent.md) — Context Tree node

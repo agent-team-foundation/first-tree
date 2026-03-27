@@ -8,8 +8,8 @@ import {
   loadAgents,
   resolveConfigReadonly,
   serverConfigSchema,
-} from "@agent-hub/shared/config";
-import { blank } from "../cli/output.js";
+} from "@first-tree-hub/shared/config";
+import { blank } from "./output.js";
 
 export type CheckResult = {
   label: string;
@@ -71,22 +71,22 @@ export function checkServerConfig(): CheckResult {
   const hasFile = existsSync(join(DEFAULT_CONFIG_DIR, "server.yaml"));
   // Check if key required env vars are set
   const hasEnv = !!(
-    process.env.AGENT_HUB_DATABASE_URL ||
-    process.env.AGENT_HUB_CONTEXT_TREE_REPO ||
-    process.env.AGENT_HUB_GITHUB_TOKEN
+    process.env.FIRST_TREE_HUB_DATABASE_URL ||
+    process.env.FIRST_TREE_HUB_CONTEXT_TREE_REPO ||
+    process.env.FIRST_TREE_HUB_GITHUB_TOKEN
   );
 
   if (hasFile && hasEnv) return { label: "Config", ok: true, detail: "config file + env vars" };
   if (hasFile) return { label: "Config", ok: true, detail: join(DEFAULT_CONFIG_DIR, "server.yaml") };
   if (hasEnv) return { label: "Config", ok: true, detail: "via environment variables" };
-  return { label: "Config", ok: false, detail: "no config file or env vars — run: agent-hub config setup -s" };
+  return { label: "Config", ok: false, detail: "no config file or env vars found" };
 }
 
 export async function checkDatabase(): Promise<CheckResult> {
   const config = getServerConfig();
   const dbUrl = get(config, "database.url");
   if (typeof dbUrl !== "string" || !dbUrl) {
-    return { label: "Database", ok: false, detail: "not configured (AGENT_HUB_DATABASE_URL or config file)" };
+    return { label: "Database", ok: false, detail: "not configured (FIRST_TREE_HUB_DATABASE_URL or config file)" };
   }
 
   try {
@@ -108,7 +108,7 @@ export async function checkGitHubToken(): Promise<CheckResult> {
   const config = getServerConfig();
   const token = get(config, "github.token");
   if (typeof token !== "string" || !token) {
-    return { label: "GitHub Token", ok: false, detail: "not configured (AGENT_HUB_GITHUB_TOKEN or config file)" };
+    return { label: "GitHub Token", ok: false, detail: "not configured (FIRST_TREE_HUB_GITHUB_TOKEN or config file)" };
   }
 
   try {
@@ -132,7 +132,11 @@ export async function checkContextTreeRepo(): Promise<CheckResult> {
   const token = get(config, "github.token");
 
   if (typeof repo !== "string" || !repo) {
-    return { label: "Context Tree", ok: false, detail: "not configured (AGENT_HUB_CONTEXT_TREE_REPO or config file)" };
+    return {
+      label: "Context Tree",
+      ok: false,
+      detail: "not configured (FIRST_TREE_HUB_CONTEXT_TREE_REPO or config file)",
+    };
   }
   if (typeof token !== "string" || !token) {
     return { label: "Context Tree", ok: false, detail: "cannot check (no GitHub token)" };
@@ -177,19 +181,19 @@ export async function checkServerHealth(): Promise<CheckResult> {
 
 export function checkClientConfig(): CheckResult {
   const hasFile = existsSync(join(DEFAULT_CONFIG_DIR, "client.yaml"));
-  const hasEnv = !!process.env.AGENT_HUB_SERVER_URL;
+  const hasEnv = !!process.env.FIRST_TREE_HUB_SERVER_URL;
 
   if (hasFile && hasEnv) return { label: "Config", ok: true, detail: "config file + env vars" };
   if (hasFile) return { label: "Config", ok: true, detail: join(DEFAULT_CONFIG_DIR, "client.yaml") };
   if (hasEnv) return { label: "Config", ok: true, detail: "via environment variables" };
-  return { label: "Config", ok: false, detail: "no config file or env vars — run: agent-hub config setup -c" };
+  return { label: "Config", ok: false, detail: "no config file or env vars found" };
 }
 
 export async function checkServerReachable(): Promise<CheckResult> {
   const config = getClientConfig();
   const serverUrl = get(config, "server.url");
   if (typeof serverUrl !== "string" || !serverUrl) {
-    return { label: "Server URL", ok: false, detail: "not configured (AGENT_HUB_SERVER_URL or config file)" };
+    return { label: "Server URL", ok: false, detail: "not configured (FIRST_TREE_HUB_SERVER_URL or config file)" };
   }
 
   try {
@@ -209,7 +213,7 @@ export function checkAgentConfigs(): CheckResult {
     return {
       label: "Agents",
       ok: false,
-      detail: "no agents configured — run: agent-hub client add <name> --token <token>",
+      detail: "no agents configured",
     };
   }
   try {
@@ -218,7 +222,7 @@ export function checkAgentConfigs(): CheckResult {
       return {
         label: "Agents",
         ok: false,
-        detail: "no agents configured — run: agent-hub client add <name> --token <token>",
+        detail: "no agents configured",
       };
     }
     const names = [...agents.keys()].join(", ");

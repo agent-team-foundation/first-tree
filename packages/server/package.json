@@ -1,5 +1,5 @@
 {
-  "name": "@agent-hub/server",
+  "name": "@first-tree-hub/server",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -22,7 +22,7 @@
     "admin:create": "tsx src/scripts/create-admin.ts"
   },
   "dependencies": {
-    "@agent-hub/shared": "workspace:*",
+    "@first-tree-hub/shared": "workspace:*",
     "@fastify/cors": "^11.2.0",
     "@fastify/rate-limit": "^10.3.0",
     "@fastify/static": "^9.0.0",
@@ -37,7 +37,7 @@
     "zod": "^3.25.0"
   },
   "devDependencies": {
-    "@agent-hub/client": "workspace:*",
+    "@first-tree-hub/client": "workspace:*",
     "@testcontainers/postgresql": "^11.13.0",
     "@types/bcrypt": "^5.0.0",
     "@types/node": "^22.16.0",

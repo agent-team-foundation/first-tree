@@ -1,4 +1,4 @@
-import type { Agent, Chat, InboxEntryWithMessage, Message, SendMessage, SendToAgent } from "@agent-hub/shared";
+import type { Agent, Chat, InboxEntryWithMessage, Message, SendMessage, SendToAgent } from "@first-tree-hub/shared";
 
 export type SdkConfig = {
   serverUrl: string;
@@ -21,7 +21,7 @@ export type PaginatedResult<T> = {
   nextCursor: string | null;
 };
 
-export class AgentHubSDK {
+export class FirstTreeHubSDK {
   private readonly _baseUrl: string;
   private readonly _token: string;
 
