@@ -29,6 +29,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Install Claude Code
         run: curl -fsSL https://claude.ai/install.sh | bash
 
@@ -41,11 +45,7 @@ jobs:
           gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid > /tmp/pr-head-sha.txt
 
       - name: Run Claude review
-        run: |
-          DIFF=$(cat /tmp/pr-diff.txt)
-          claude -p "Review this PR diff. Output JSON with fields: verdict (APPROVE|REQUEST_CHANGES|COMMENT), summary (string), inline_comments (array of {file, line, comment}). Be concise.
-
-          ${DIFF}" --output-format json > /tmp/review.json
+        run: npx tsx .context-tree/run-review.ts
 
       - name: Parse and post review
         run: |
