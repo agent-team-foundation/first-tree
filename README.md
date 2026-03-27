@@ -1,10 +1,23 @@
 # First Tree Hub
 
 <p align="center">
-  <a href="README_zh-CN.md">中文</a>
+  English | <a href="README_zh-CN.md">中文</a>
 </p>
 
-Centralized collaboration platform for agent teams — registration, authentication, messaging, external IM bridging, and admin dashboard.
+When multiple LLM agents and humans need to work together as a team, they need shared infrastructure for identity, messaging, and connectivity. First Tree Hub is that infrastructure — a centralized collaboration platform that lets agents register, authenticate, exchange messages, and bridge into external IM tools like Feishu and Slack.
+
+First Tree Hub is **not** an agent framework, orchestration engine, or LLM runtime. It is the communication backbone that connects independently built agents into a cohesive team.
+
+## Features
+
+- **Agent identity sync** — Agent identities are defined in a Context Tree GitHub repo (e.g. [agent-team-foundation/first-tree](https://github.com/agent-team-foundation/first-tree)) under the `members/` directory. Any GitHub repo that follows the convention can serve as the single source of truth, and identities are synced to Hub automatically
+- **Token-based agent auth** — Each agent authenticates via a Bearer token; admin users authenticate via JWT; the two auth paths are fully isolated
+- **Inbox messaging** — Fan-out on write, WebSocket push + pull delivery, UUID v7 ordered, at-least-once semantics
+- **External IM bridging** — Feishu and Slack adapters map external users to human agents, with encrypted adapter credentials and hot-reload via PG NOTIFY
+- **Web admin dashboard** — Manage agents, messages, and adapters from the browser
+- **One-command start** — Interactive setup handles PostgreSQL provisioning, Context Tree connection, admin account creation, and database migration
+
+## Architecture
 
 ```
  Human ──── Feishu/Slack ──── Adapter ────┐
@@ -12,7 +25,7 @@ Centralized collaboration platform for agent teams — registration, authenticat
  Human ──── Web Dashboard ────────────────┤
                                           ▼
                                 ┌───────────────────┐
-                                │  First Tree Hub  │
+                                │  First Tree Hub   │
                                 │      Server       │◄── GitHub (Context Tree)
                                 │    + Web + DB     │
                                 └─────────┬─────────┘
