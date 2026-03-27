@@ -1,0 +1,9 @@
+{
+  "id": "node-folder-name",
+  "name": "Node Folder Name",
+  "version": "1.0.0",
+  "minAppVersion": "0.15.0",
+  "description": "Displays NODE.md files using their parent folder name in graph view, tabs, and file explorer.",
+  "author": "Context Tree",
+  "isDesktopOnly": false
+}
