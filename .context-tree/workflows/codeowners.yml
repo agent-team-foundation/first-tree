@@ -15,11 +15,11 @@ jobs:
           ref: ${{ github.head_ref }}
           token: ${{ github.token }}
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-node@v4
         with:
-          python-version: "3.12"
+          node-version: "22"
 
-      - run: python .context-tree/generate_codeowners.py
+      - run: npx context-tree codeowners
 
       - name: Commit if changed
         run: |

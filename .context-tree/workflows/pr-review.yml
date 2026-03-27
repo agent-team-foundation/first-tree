@@ -29,6 +29,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Install Claude Code
         run: curl -fsSL https://claude.ai/install.sh | bash
 
@@ -41,7 +45,7 @@ jobs:
           gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid > /tmp/pr-head-sha.txt
 
       - name: Run Claude review
-        run: python3 .context-tree/run_review.py
+        run: npx tsx .context-tree/run-review.ts
 
       - name: Parse and post review
         run: |

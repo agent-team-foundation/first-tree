@@ -11,12 +11,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-node@v4
         with:
-          python-version: "3.12"
+          node-version: "22"
 
-      - name: Validate nodes
-        run: python .context-tree/validate_nodes.py
-
-      - name: Validate members
-        run: python .context-tree/validate_members.py
+      - name: Validate tree
+        run: npx context-tree verify

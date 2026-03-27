@@ -13,11 +13,7 @@
 .DS_Store
 Thumbs.db
 
-# Python
-__pycache__/
-*.pyc
-*.egg-info/
+# Node.js
+node_modules/
 dist/
-build/
-.venv/
-.pytest_cache/
+*.tsbuildinfo

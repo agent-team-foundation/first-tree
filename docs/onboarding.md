@@ -54,8 +54,8 @@ Information an agent needs to **decide** on an approach — not to execute it.
 ### Prerequisites
 
 - A Git repository for your tree (separate from your code repos)
-- Python 3.10+
-- `pip install context-tree`
+- Node.js 18+
+- `npm install -g context-tree` (or use `npx context-tree` without installing)
 
 ### Step 1: Initialize
 
