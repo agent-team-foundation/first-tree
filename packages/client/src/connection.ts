@@ -27,6 +27,7 @@ const DEFAULT_POLLING_INTERVAL = 5000;
 const DEFAULT_PULL_LIMIT = 10;
 const RECONNECT_BASE_MS = 1000;
 const RECONNECT_MAX_MS = 30_000;
+const WS_CONNECT_TIMEOUT_MS = 10_000;
 
 export class AgentConnection extends EventEmitter<ConnectionEvents> {
   readonly sdk: FirstTreeHubSDK;
@@ -35,6 +36,7 @@ export class AgentConnection extends EventEmitter<ConnectionEvents> {
   private handler: MessageHandler | null = null;
 
   private ws: WebSocket | null = null;
+  private wsConnectTimer: ReturnType<typeof setTimeout> | null = null;
   private pollingTimer: ReturnType<typeof setInterval> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
@@ -100,7 +102,20 @@ export class AgentConnection extends EventEmitter<ConnectionEvents> {
       headers: { Authorization: `Bearer ${this.token}` },
     });
 
+    // Guard against handshake hanging forever (DNS/TCP/TLS no response).
+    // If still CONNECTING after timeout, force-terminate → triggers close → scheduleReconnect.
+    this.wsConnectTimer = setTimeout(() => {
+      this.wsConnectTimer = null;
+      if (ws.readyState === WebSocket.CONNECTING) {
+        ws.terminate();
+      }
+    }, WS_CONNECT_TIMEOUT_MS);
+
     ws.on("open", () => {
+      if (this.wsConnectTimer) {
+        clearTimeout(this.wsConnectTimer);
+        this.wsConnectTimer = null;
+      }
       this.reconnectAttempt = 0;
       this._state = "connected";
       this.emit("connected");
@@ -202,6 +217,10 @@ export class AgentConnection extends EventEmitter<ConnectionEvents> {
 
   private clearTimers(): void {
     this.stopPolling();
+    if (this.wsConnectTimer) {
+      clearTimeout(this.wsConnectTimer);
+      this.wsConnectTimer = null;
+    }
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
