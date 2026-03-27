@@ -229,15 +229,17 @@ export function AdminUsersPage() {
                       <Button variant="ghost" size="sm" onClick={() => openResetPassword(u.id)} title="Reset password">
                         Reset PW
                       </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => handleDelete(u.id)}
-                        disabled={deleteMutation.isPending}
-                        title="Delete"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      {u.role !== "super_admin" && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => handleDelete(u.id)}
+                          disabled={deleteMutation.isPending}
+                          title="Delete"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>
