@@ -41,7 +41,11 @@ jobs:
           gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid > /tmp/pr-head-sha.txt
 
       - name: Run Claude review
-        run: python3 .context-tree/run_review.py
+        run: |
+          DIFF=$(cat /tmp/pr-diff.txt)
+          claude -p "Review this PR diff. Output JSON with fields: verdict (APPROVE|REQUEST_CHANGES|COMMENT), summary (string), inline_comments (array of {file, line, comment}). Be concise.
+
+          ${DIFF}" --output-format json > /tmp/review.json
 
       - name: Parse and post review
         run: |

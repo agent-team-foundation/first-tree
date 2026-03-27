@@ -9,13 +9,10 @@ A tree-structured knowledge base that agents and humans build and maintain toget
 ## Quick Start
 
 ```bash
-pip install context-tree
-
-mkdir my-tree && cd my-tree && git init
-context-tree init
+npx context-tree init
 ```
 
-`context-tree init` clones the framework, renders scaffolding, and generates a task list for your agent to work through.
+Run this inside a git repo. It clones the framework, renders scaffolding, and generates a task list for your agent to work through.
 
 ## Commands
 
@@ -33,12 +30,8 @@ your-tree/
     VERSION
     principles.md
     ownership-and-naming.md
-    validate_nodes.py
-    validate_members.py
-    generate_codeowners.py
     templates/
     workflows/
-    scripts/
     examples/
   NODE.md                  # root node — your domains (from template)
   AGENT.md                 # agent instructions with framework markers (from template)
@@ -63,8 +56,10 @@ context-tree upgrade      # shows what changed and what to do
 ## Development
 
 ```bash
-uv run pytest              # run tests
-uv run context-tree --help # run CLI locally
+pnpm install
+pnpm test              # run tests
+pnpm typecheck         # type check
+pnpm build             # build CLI
 ```
 
 ## License
