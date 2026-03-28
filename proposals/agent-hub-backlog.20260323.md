@@ -3,11 +3,11 @@ title: "Agent Hub — 剩余功能清单与实施计划"
 status: draft
 owners: [baixiaohang]
 soft_links:
-  - agent-hub-overview.20260320.md
-  - agent-hub-server-detailed-design.20260320.md
-  - agent-hub-web-design.20260323.md
-  - agent-adapter-design.20260323.md
-  - agent-hub-context-tree-sync.20260324.md
+  - proposals/agent-hub-overview.20260320.md
+  - proposals/agent-hub-server-detailed-design.20260320.md
+  - proposals/agent-hub-web-design.20260323.md
+  - proposals/agent-adapter-design.20260323.md
+  - proposals/agent-hub-context-tree-sync.20260324.md
 ---
 
 # Agent Hub — 剩余功能清单与实施计划

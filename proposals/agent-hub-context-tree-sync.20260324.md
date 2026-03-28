@@ -3,10 +3,10 @@ title: "Agent Hub — Context Tree Agent Auto-Sync Design"
 status: draft
 owners: [baixiaohang]
 soft_links:
-  - agent-hub-overview.20260320.md
-  - agent-hub-server-detailed-design.20260320.md
-  - agent-adapter-design.20260323.md
-  - ../members/NODE.md
+  - proposals/agent-hub-overview.20260320.md
+  - proposals/agent-hub-server-detailed-design.20260320.md
+  - proposals/agent-adapter-design.20260323.md
+  - members/NODE.md
 ---
 
 # Context Tree Agent Auto-Sync Design

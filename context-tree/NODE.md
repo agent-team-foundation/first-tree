@@ -33,7 +33,7 @@ The CLI is a **harness for the agent** — it assesses the repo state and genera
 - **Source:** `src/` in the first-tree repo
   - `src/repo.ts` — Repo class for inspecting tree state (frontmatter, files, git remotes)
   - `src/rules/` — Rule modules that evaluate repo state and produce task groups
-  - `src/validators/` — Node validation, member validation, CODEOWNERS generation
+  - `src/validators/` — Node validation, member validation
   - `src/init.ts`, `src/verify.ts`, `src/upgrade.ts` — Command implementations
 
 
@@ -67,6 +67,7 @@ The `.context-tree/` directory is shipped to every user's repo via `context-tree
 | `scripts/` | Utility scripts (inject-tree-context.sh) |
 | `examples/` | Per-agent integration examples (Claude Code, Codex, Kael) |
 | `prompts/` | Prompt templates (pr-review) |
+| `generate-codeowners.ts` | CODEOWNERS generation script for CI (standalone, not a CLI command) |
 | `run-review.ts` | PR review script for CI (invokes Claude Code, extracts structured JSON) |
 
 ### Framework/content split
@@ -107,6 +108,5 @@ The CLI runs these checks via `context-tree verify`:
 - Root NODE.md has valid frontmatter (title, owners)
 - AGENT.md exists with framework markers
 - Node validation passes (owners syntax, soft_links resolve, folder structure, directory listing, root domain sync, empty nodes, title mismatch)
-- Member validation passes (required fields: title, owners, type, role, domains)
-- At least one member node exists
+- Member validation passes (at least one member exists; required fields: title, owners, type, role, domains)
 - Progress file has no unchecked items

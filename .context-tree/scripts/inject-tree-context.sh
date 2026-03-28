@@ -2,7 +2,7 @@
 # Injects NODE.md content as additionalContext at session start.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-TREE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+TREE_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 NODE_MD="$TREE_ROOT/NODE.md"
 
 if [ -f "$NODE_MD" ]; then

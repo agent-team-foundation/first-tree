@@ -3,8 +3,8 @@ title: "Agent Hub — Agent 身份与 IM Adapter 设计"
 status: draft
 owners: [baixiaohang]
 soft_links:
-  - agent-hub-overview.20260320.md
-  - agent-hub-server-detailed-design.20260320.md
+  - proposals/agent-hub-overview.20260320.md
+  - proposals/agent-hub-server-detailed-design.20260320.md
 ---
 
 # Agent 身份与 IM Adapter 设计
