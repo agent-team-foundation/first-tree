@@ -205,7 +205,7 @@ export function generate(
       return 0;
     }
     console.log(
-      "CODEOWNERS is out-of-date. Run: npx context-tree codeowners",
+      "CODEOWNERS is out-of-date. Run: npx tsx .context-tree/generate-codeowners.ts",
     );
     return 1;
   }
@@ -214,4 +214,11 @@ export function generate(
   writeFileSync(codeownersFile, content);
   console.log(`Wrote ${relative(treeRoot, codeownersFile)}`);
   return 0;
+}
+
+const isDirectRun =
+  process.argv[1]?.endsWith("generate-codeowners.ts") ||
+  process.argv[1]?.endsWith("generate-codeowners.js");
+if (isDirectRun) {
+  process.exit(generate(process.cwd()));
 }

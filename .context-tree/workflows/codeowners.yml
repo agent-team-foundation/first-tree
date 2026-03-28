@@ -19,7 +19,7 @@ jobs:
         with:
           node-version: "22"
 
-      - run: npx context-tree codeowners
+      - run: npx tsx .context-tree/generate-codeowners.ts
 
       - name: Commit if changed
         run: |

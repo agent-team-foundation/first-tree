@@ -1,6 +1,6 @@
 {
   "name": "first-tree",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "CLI tools for Context Tree — the living source of truth for your organization.",
   "type": "module",
   "bin": {
