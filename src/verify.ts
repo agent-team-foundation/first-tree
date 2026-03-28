@@ -1,4 +1,5 @@
 import { Repo } from "./repo.js";
+import { runValidateMembers } from "./validators/members.js";
 import { runValidateNodes } from "./validators/nodes.js";
 
 const UNCHECKED_RE = /^- \[ \] (.+)$/gm;
@@ -79,11 +80,9 @@ export function runVerify(repo?: Repo, nodeValidator?: NodeValidator): number {
   const { exitCode } = validate(r.root);
   allPassed = check("Node validation passes", exitCode === 0) && allPassed;
 
-  // 5. At least one member node exists
-  allPassed = check(
-    "At least one member node exists under members/",
-    r.memberCount() > 0,
-  ) && allPassed;
+  // 5. Member validation
+  const members = runValidateMembers(r.root);
+  allPassed = check("Member validation passes", members.exitCode === 0) && allPassed;
 
   console.log();
   if (allPassed) {

@@ -6,7 +6,7 @@ import {
   resolveNodeOwners,
   collectEntries,
   formatOwners,
-} from "../src/validators/codeowners.js";
+} from "../.context-tree/generate-codeowners.js";
 import { useTmpDir } from "./helpers.js";
 
 function write(root: string, relPath: string, content: string): string {

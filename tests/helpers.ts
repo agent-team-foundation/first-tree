@@ -64,6 +64,6 @@ export function makeMembers(root: string, count = 1): void {
   for (let i = 0; i < count; i++) {
     const d = join(membersDir, `member-${i}`);
     mkdirSync(d);
-    writeFileSync(join(d, "NODE.md"), `---\ntitle: Member ${i}\n---\n`);
+    writeFileSync(join(d, "NODE.md"), `---\ntitle: Member ${i}\nowners: [member-${i}]\ntype: human\nrole: Engineer\ndomains:\n  - engineering\n---\n`);
   }
 }
