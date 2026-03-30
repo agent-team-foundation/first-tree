@@ -5,7 +5,8 @@ export function evaluate(repo: Repo): RuleResult {
   const tasks: string[] = [];
   if (!repo.pathExists("NODE.md")) {
     tasks.push(
-      "NODE.md is missing — create from `.context-tree/templates/root-node.md.template`, fill in your project's domains",
+      "NODE.md is missing — create from `.context-tree/templates/root-node.md.template`. " +
+      "Ask the user for their code repositories or project directories, then analyze the source to determine the project description and domain structure",
     );
   } else {
     const fm = repo.frontmatter("NODE.md");
@@ -31,7 +32,7 @@ export function evaluate(repo: Repo): RuleResult {
     }
     if (repo.hasPlaceholderNode()) {
       tasks.push(
-        "NODE.md has placeholder content — fill in your project's domains and description",
+        "NODE.md has placeholder content — ask the user for their code repositories or project directories, then analyze the source to fill in the project description and domain structure",
       );
     }
   }

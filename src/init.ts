@@ -17,6 +17,13 @@ import type { RuleResult } from "./rules/index.js";
 const SEED_TREE_URL = "https://github.com/agent-team-foundation/seed-tree";
 const FRAMEWORK_DIR = ".context-tree";
 
+/**
+ * The interactive prompt tool the agent should use to present choices.
+ * Different agents may name this differently — change it here to update
+ * all generated task text at once.
+ */
+export const INTERACTIVE_TOOL = "AskUserQuestion";
+
 const TEMPLATE_MAP: [string, string][] = [
   ["root-node.md.template", "NODE.md"],
   ["agent.md.template", "AGENT.md"],
@@ -88,7 +95,17 @@ function addUpstreamRemote(target: string): void {
 }
 
 export function formatTaskList(groups: RuleResult[]): string {
-  const lines: string[] = ["# Context Tree Init\n"];
+  const lines: string[] = [
+    "# Context Tree Init\n",
+    "**Agent instructions:** Before starting work, analyze the full task list below and" +
+      " identify all information you need from the user. Ask the user for their code" +
+      " repositories or project directories so you can analyze the source yourself —" +
+      " derive project descriptions, domains, and members from the code instead of" +
+      " asking the user to describe them. Collect everything upfront using the" +
+      ` **${INTERACTIVE_TOOL}** tool with structured options — present selectable choices` +
+      " (with label and description) so the user can pick instead of typing free-form" +
+      ` answers. You may batch up to 4 questions per ${INTERACTIVE_TOOL} call.\n`,
+  ];
   for (const group of groups) {
     lines.push(`## ${group.group}`);
     for (const task of group.tasks) {
