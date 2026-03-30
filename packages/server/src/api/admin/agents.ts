@@ -1,5 +1,5 @@
 import { createAgentTokenSchema, paginationQuerySchema } from "@first-tree-hub/shared";
-import { and, eq, ne, sql } from "drizzle-orm";
+import { and, eq, gt, ne } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { agents } from "../../db/schema/agents.js";
 import { messages } from "../../db/schema/messages.js";
@@ -147,9 +147,7 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
       const [response] = await app.db
         .select()
         .from(messages)
-        .where(
-          and(eq(messages.chatId, chat.id), eq(messages.senderId, agentId), sql`${messages.createdAt} > ${threshold}`),
-        )
+        .where(and(eq(messages.chatId, chat.id), eq(messages.senderId, agentId), gt(messages.createdAt, threshold)))
         .limit(1);
 
       if (response) {
