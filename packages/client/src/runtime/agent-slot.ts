@@ -38,7 +38,7 @@ export class AgentSlot {
     this.connection.on("error", (err) => this.logFn(`Error: ${err.message}`));
   }
 
-  async start(): Promise<RegisterResult> {
+  async start(contextTreePath?: string | null): Promise<RegisterResult> {
     const agent = await this.connection.connect();
     this.logFn(`Registered as ${agent.displayName ?? agent.agentId} (${agent.agentId})`);
 
@@ -48,8 +48,17 @@ export class AgentSlot {
       session: this.config.session,
       concurrency: this.config.concurrency,
       handlerFactory: this.config.handlerFactory,
-      handlerConfig: { workspaceRoot: join(DEFAULT_DATA_DIR, "workspaces", this.config.name) },
-      agentIdentity: { agentId: agent.agentId, displayName: agent.displayName },
+      handlerConfig: {
+        workspaceRoot: join(DEFAULT_DATA_DIR, "workspaces", this.config.name),
+        contextTreePath: contextTreePath ?? undefined,
+      },
+      agentIdentity: {
+        agentId: agent.agentId,
+        displayName: agent.displayName,
+        type: agent.type,
+        delegateMention: agent.delegateMention,
+        metadata: agent.metadata,
+      },
       sdk: this.connection.sdk,
       log: this.logFn,
       registryPath,

@@ -1,7 +1,16 @@
 import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { PermissionMode, Query, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { query as claudeQuery } from "@anthropic-ai/claude-agent-sdk";
-import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
+import { bootstrapWorkspace } from "../runtime/bootstrap.js";
+import type {
+  AgentHandler,
+  AgentIdentity,
+  HandlerFactory,
+  SessionContext,
+  SessionMessage,
+} from "../runtime/handler.js";
 import { InputController } from "../runtime/input-controller.js";
 import { acquireWorkspace } from "../runtime/workspace.js";
 
@@ -144,11 +153,28 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     }
   }
 
+  const contextTreePath = (config.contextTreePath as string | undefined) ?? null;
+
+  /** Bootstrap workspace and generate CLAUDE.md. */
+  function runBootstrap(workspace: string, sessionCtx: SessionContext): void {
+    bootstrapWorkspace({
+      workspacePath: workspace,
+      identity: sessionCtx.agent,
+      contextTreePath,
+      serverUrl: sessionCtx.sdk.serverUrl,
+      chatId: sessionCtx.chatId,
+    });
+    generateClaudeMd(workspace, sessionCtx.agent, contextTreePath);
+  }
+
   const handler: AgentHandler = {
     async start(message, sessionCtx) {
       ctx = sessionCtx;
       claudeSessionId = randomUUID();
       cwd = acquireWorkspace(workspaceRoot, sessionCtx.chatId);
+
+      // Always bootstrap on start
+      runBootstrap(cwd, sessionCtx);
 
       sessionCtx.log(
         `Starting session (${claudeSessionId}), cwd=${cwd}, permissionMode=${config.permissionMode ?? "bypassPermissions"}`,
@@ -165,6 +191,11 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       claudeSessionId = sessionId;
       retryCount = 0;
       cwd = acquireWorkspace(workspaceRoot, sessionCtx.chatId);
+
+      // Bootstrap on resume only if .agent/ is missing
+      if (!existsSync(join(cwd, ".agent", "identity.json"))) {
+        runBootstrap(cwd, sessionCtx);
+      }
 
       sessionCtx.log(`Resuming session (${sessionId}), cwd=${cwd}`);
       spawnQuery(sessionId, sessionCtx, sessionId);
@@ -211,3 +242,50 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
 
   return handler;
 };
+
+/**
+ * Generate a CLAUDE.md file from .agent/ bootstrap data.
+ *
+ * Adapts content based on agent type (personal_assistant vs autonomous_agent).
+ */
+function generateClaudeMd(workspacePath: string, identity: AgentIdentity, contextTreePath: string | null): void {
+  const sections: string[] = [];
+
+  // Identity section
+  if (identity.type === "personal_assistant" && identity.delegateMention) {
+    sections.push(
+      `# Agent Identity\n\nYou are ${identity.displayName ?? identity.agentId}, a personal assistant to ${identity.delegateMention}.\n`,
+    );
+    sections.push(
+      `## Your Responsibilities\n\n- Answer queries and execute tasks on behalf of ${identity.delegateMention}\n- Escalate when: cross-domain ownership changes, architectural decisions, ambiguous requests\n- When unsure, ask ${identity.delegateMention} for clarification rather than guessing\n`,
+    );
+  } else {
+    sections.push(`# Agent Identity\n\nYou are ${identity.displayName ?? identity.agentId}, an autonomous agent.\n`);
+    sections.push(
+      "## Your Responsibilities\n\n- Execute your assigned responsibilities independently\n- Collaborate with other agents through the messaging system when needed\n",
+    );
+  }
+
+  // Self context from Context Tree
+  const selfMdPath = join(workspacePath, ".agent", "context", "self.md");
+  if (existsSync(selfMdPath)) {
+    const selfContent = readFileSync(selfMdPath, "utf-8");
+    sections.push(`## Context Tree Profile\n\n${selfContent}\n`);
+  }
+
+  // Context Tree location
+  if (contextTreePath) {
+    sections.push(
+      `## Context Tree\n\nThe organization's Context Tree is available at: \`${contextTreePath}\`\n\nYou can read files from this directory for organizational context. If your work requires updating the Context Tree, commit and push changes there.\n`,
+    );
+  }
+
+  // SDK tools reference
+  const toolsPath = join(workspacePath, ".agent", "tools.md");
+  if (existsSync(toolsPath)) {
+    const toolsContent = readFileSync(toolsPath, "utf-8");
+    sections.push(toolsContent);
+  }
+
+  writeFileSync(join(workspacePath, "CLAUDE.md"), sections.join("\n"), "utf-8");
+}
