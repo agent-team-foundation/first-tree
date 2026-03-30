@@ -13,6 +13,8 @@ export {
   buildZodSchema,
   collectMissingPrompts,
   DEFAULT_CONFIG_DIR,
+  DEFAULT_DATA_DIR,
+  DEFAULT_HOME_DIR,
   getConfigMeta,
   getConfigValue,
   initConfig,

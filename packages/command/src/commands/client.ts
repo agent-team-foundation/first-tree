@@ -1,9 +1,11 @@
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { cleanWorkspaces, DEFAULT_WORKSPACE_TTL_MS, SessionRegistry } from "@first-tree-hub/client";
 import {
   agentConfigSchema,
   clientConfigSchema,
   DEFAULT_CONFIG_DIR,
+  DEFAULT_DATA_DIR,
   initConfig,
   loadAgents,
   resetConfig,
@@ -167,7 +169,7 @@ export function registerClientCommands(program: Command): void {
 
   client
     .command("remove <name>")
-    .description("Remove an agent instance")
+    .description("Remove an agent instance and its runtime data")
     .action((name: string) => {
       const agentDir = join(DEFAULT_CONFIG_DIR, "agents", name);
       if (!existsSync(agentDir)) {
@@ -175,6 +177,11 @@ export function registerClientCommands(program: Command): void {
         process.exit(1);
       }
       rmSync(agentDir, { recursive: true, force: true });
+
+      // Clean runtime data
+      rmSync(join(DEFAULT_DATA_DIR, "workspaces", name), { recursive: true, force: true });
+      rmSync(join(DEFAULT_DATA_DIR, "sessions", `${name}.json`), { force: true });
+
       process.stderr.write(`  Agent "${name}" removed.\n`);
     });
 
@@ -196,5 +203,51 @@ export function registerClientCommands(program: Command): void {
       } catch {
         process.stderr.write("  No agents configured.\n");
       }
+    });
+
+  // ── Workspace management ────────────────────────────────────────────
+
+  const workspace = client.command("workspace").description("Manage agent workspaces");
+
+  workspace
+    .command("clean [agent-name]")
+    .description("Remove stale workspace directories (older than TTL with no active session)")
+    .option("--ttl <days>", "TTL in days", String(DEFAULT_WORKSPACE_TTL_MS / (24 * 60 * 60 * 1000)))
+    .action((agentName?: string, options?: { ttl: string }) => {
+      const defaultDays = DEFAULT_WORKSPACE_TTL_MS / (24 * 60 * 60 * 1000);
+      const ttlMs = Number.parseInt(options?.ttl ?? String(defaultDays), 10) * 24 * 60 * 60 * 1000;
+      const workspacesDir = join(DEFAULT_DATA_DIR, "workspaces");
+
+      if (!existsSync(workspacesDir)) {
+        process.stderr.write("  No workspaces found.\n");
+        return;
+      }
+
+      const agentNames = agentName ? [agentName] : readdirSync(workspacesDir);
+      let totalRemoved = 0;
+
+      for (const name of agentNames) {
+        const agentWorkspaceRoot = join(workspacesDir, name);
+        if (!existsSync(agentWorkspaceRoot)) continue;
+
+        // Load active chatIds from session registry
+        const registryPath = join(DEFAULT_DATA_DIR, "sessions", `${name}.json`);
+        const registry = new SessionRegistry(registryPath);
+        const persisted = registry.load();
+        const activeChatIds = new Set<string>();
+        for (const [chatId, data] of persisted) {
+          if (data.status !== "evicted") {
+            activeChatIds.add(chatId);
+          }
+        }
+
+        const removed = cleanWorkspaces(agentWorkspaceRoot, activeChatIds, ttlMs);
+        totalRemoved += removed.length;
+        for (const chatId of removed) {
+          process.stderr.write(`  Removed: ${name}/${chatId}\n`);
+        }
+      }
+
+      process.stderr.write(`  ${totalRemoved} workspace(s) cleaned.\n`);
     });
 }

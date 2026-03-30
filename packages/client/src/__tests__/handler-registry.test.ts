@@ -28,7 +28,7 @@ describe("Handler Registry", () => {
   it("creates a handler with the factory", () => {
     registerHandler("test-handler", echoFactory);
     const factory = getHandlerFactory("test-handler");
-    const handler = factory({ cwd: "/tmp" });
+    const handler = factory({ workspaceRoot: "/tmp" });
     expect(handler).toBeDefined();
     expect(typeof handler.start).toBe("function");
     expect(typeof handler.resume).toBe("function");

@@ -29,7 +29,6 @@ export class AgentRuntime {
           handlerFactory,
           session: agentConfig.session,
           concurrency: agentConfig.concurrency,
-          cwd: agentConfig.cwd,
         }),
       );
     }
