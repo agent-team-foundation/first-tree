@@ -1,4 +1,4 @@
-# Context Tree Onboarding
+const ONBOARDING_TEXT = `# Context Tree Onboarding
 
 You are setting up a **Context Tree** — the living source of truth for an organization. This document tells you what it is and how to bootstrap one.
 
@@ -10,7 +10,7 @@ A Context Tree is a Git repository where every directory is a **domain** and eve
 
 Key properties:
 
-- **Nodes are markdown files.** Each directory has a `NODE.md` that describes the domain. Leaf `.md` files capture specific decisions or designs.
+- **Nodes are markdown files.** Each directory has a \`NODE.md\` that describes the domain. Leaf \`.md\` files capture specific decisions or designs.
 - **Every node has an owner.** Declared in YAML frontmatter. Owners approve changes to their nodes.
 - **Organized by concern, not by repo or team.** An agent working on "add SSO" finds all auth context in one place — not split across 4 repos.
 - **The tree is never a snapshot — it's the current state.** When decisions change, the tree updates. Stale nodes are bugs.
@@ -19,16 +19,16 @@ Key properties:
 
 Every node has frontmatter:
 
-```yaml
+\`\`\`yaml
 ---
 title: "Auth Architecture"
 owners: [alice, bob]
 soft_links: [/infrastructure/deployments]
 ---
-```
+\`\`\`
 
-- `owners` — who can approve changes. `owners: []` inherits from parent. `owners: [*]` means anyone.
-- `soft_links` — cross-references to related nodes in other domains.
+- \`owners\` — who can approve changes. \`owners: []\` inherits from parent. \`owners: [*]\` means anyone.
+- \`soft_links\` — cross-references to related nodes in other domains.
 
 ### What Belongs in the Tree
 
@@ -36,7 +36,7 @@ Information an agent needs to **decide** on an approach — not to execute it.
 
 **Yes:** "Auth spans 4 repos: backend issues JWTs, frontend uses Better Auth, extension uses OAuth popup, desktop uses localhost callback."
 
-**No:** The function signature of `auth_service.verify()` — that's in the code.
+**No:** The function signature of \`auth_service.verify()\` — that's in the code.
 
 ---
 
@@ -55,43 +55,43 @@ Information an agent needs to **decide** on an approach — not to execute it.
 
 - A Git repository for your tree (separate from your code repos)
 - Node.js 18+
-- `npm install -g context-tree` (or use `npx context-tree` without installing)
+- \`npm install -g context-tree\` (or use \`npx context-tree\` without installing)
 
 ### Step 1: Initialize
 
-```bash
+\`\`\`bash
 mkdir my-org-tree && cd my-org-tree
 git init
 context-tree init
-```
+\`\`\`
 
-This clones the framework into `.context-tree/`, renders scaffolding (`NODE.md`, `AGENT.md`, `members/NODE.md`), and generates a task list in `.context-tree/progress.md`.
+This clones the framework into \`.context-tree/\`, renders scaffolding (\`NODE.md\`, \`AGENT.md\`, \`members/NODE.md\`), and generates a task list in \`.context-tree/progress.md\`.
 
 ### Step 2: Work Through the Task List
 
-Read `.context-tree/progress.md`. It contains a checklist tailored to the current state of the repo. Complete each task:
+Read \`.context-tree/progress.md\`. It contains a checklist tailored to the current state of the repo. Complete each task:
 
-- Fill in `NODE.md` with your organization name, owners, and domains
-- Add project-specific instructions to `AGENT.md` below the framework markers
-- Create member nodes under `members/`
+- Fill in \`NODE.md\` with your organization name, owners, and domains
+- Add project-specific instructions to \`AGENT.md\` below the framework markers
+- Create member nodes under \`members/\`
 - Optionally configure agent integration (e.g., Claude Code session hooks)
-- Copy validation workflows to `.github/workflows/`
+- Copy validation workflows to \`.github/workflows/\`
 
-As you complete each task, check it off in `progress.md` by changing `- [ ]` to `- [x]`.
+As you complete each task, check it off in \`progress.md\` by changing \`- [ ]\` to \`- [x]\`.
 
 ### Step 3: Verify
 
-```bash
+\`\`\`bash
 context-tree verify
-```
+\`\`\`
 
-This fails if any items in `progress.md` remain unchecked, and runs deterministic checks (valid frontmatter, node structure, member nodes exist).
+This fails if any items in \`progress.md\` remain unchecked, and runs deterministic checks (valid frontmatter, node structure, member nodes exist).
 
 ### Step 4: Design Your Domains
 
-Create top-level directories for your organization's primary concerns. Each needs a `NODE.md`:
+Create top-level directories for your organization's primary concerns. Each needs a \`NODE.md\`:
 
-```
+\`\`\`
 my-org-tree/
   NODE.md              # root — lists all domains
   engineering/
@@ -104,7 +104,7 @@ my-org-tree/
     NODE.md            # team members and agents
     alice/
       NODE.md          # individual member node
-```
+\`\`\`
 
 ### Step 5: Populate from Existing Work
 
@@ -122,27 +122,33 @@ The tree doesn't duplicate source code — it captures what connects things and 
 
 | Command | Description |
 |---------|-------------|
-| `context-tree init` | Bootstrap a new tree. Clones framework, renders templates, generates task list. |
-| `context-tree verify` | Check progress.md for unchecked items + run deterministic validation. |
-| `context-tree upgrade` | Compare local framework version to upstream, generate upgrade task list. |
-| `context-tree onboarding` | Print this onboarding guide. |
+| \`context-tree init\` | Bootstrap a new tree. Clones framework, renders templates, generates task list. |
+| \`context-tree verify\` | Check progress.md for unchecked items + run deterministic validation. |
+| \`context-tree upgrade\` | Compare local framework version to upstream, generate upgrade task list. |
+| \`context-tree onboarding\` | Print this onboarding guide. |
 
 ---
 
 ## Upgrading the Framework
 
-After init, the seed-tree repo is added as a git remote (`context-tree-upstream`). When the framework updates:
+After init, the seed-tree repo is added as a git remote (\`context-tree-upstream\`). When the framework updates:
 
-```bash
+\`\`\`bash
 context-tree upgrade
-```
+\`\`\`
 
-This compares your `.context-tree/VERSION` to upstream and generates a task list. The framework directory (`.context-tree/`) is upgradable without touching your content.
+This compares your \`.context-tree/VERSION\` to upstream and generates a task list. The framework directory (\`.context-tree/\`) is upgradable without touching your content.
 
 ---
 
 ## Further Reading
 
-- `.context-tree/principles.md` — Core principles with detailed examples
-- `.context-tree/ownership-and-naming.md` — How nodes are named and owned
-- `AGENT.md` in your tree — The before/during/after workflow for every task
+- \`.context-tree/principles.md\` — Core principles with detailed examples
+- \`.context-tree/ownership-and-naming.md\` — How nodes are named and owned
+- \`AGENT.md\` in your tree — The before/during/after workflow for every task
+`;
+
+export function runOnboarding(): number {
+  console.log(ONBOARDING_TEXT);
+  return 0;
+}

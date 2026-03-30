@@ -3,9 +3,10 @@
 const USAGE = `usage: context-tree <command>
 
 Commands:
-  init      Bootstrap a new context tree (clones seed-tree, copies framework files)
-  verify    Run verification checks against the current tree
-  upgrade   Generate an upgrade task list from upstream changes
+  init         Bootstrap a new context tree (clones seed-tree, copies framework files)
+  verify       Run verification checks against the current tree
+  upgrade      Generate an upgrade task list from upstream changes
+  onboarding   Print the onboarding guide for setting up a context tree
 
 Options:
   --help    Show this help message
@@ -33,6 +34,10 @@ async function main(): Promise<number> {
     case "upgrade": {
       const { runUpgrade } = await import("./upgrade.js");
       return runUpgrade();
+    }
+    case "onboarding": {
+      const { runOnboarding } = await import("./onboarding.js");
+      return runOnboarding();
     }
     default:
       console.log(`Unknown command: ${command}`);
