@@ -10,11 +10,11 @@ export function evaluate(repo: Repo): RuleResult {
   }
   if (repo.hasMembers() && repo.memberCount() === 0) {
     tasks.push(
-      "Add at least one member node for a team member or agent under `members/`",
+      "Add at least one member node under `members/`. Analyze the user's code repositories (git history, CODEOWNERS, README contributors) to suggest members, then confirm with the user",
     );
   } else if (!repo.hasMembers()) {
     tasks.push(
-      "Add at least one member node for a team member or agent under `members/`",
+      "Add at least one member node under `members/`. Analyze the user's code repositories (git history, CODEOWNERS, README contributors) to suggest members, then confirm with the user",
     );
   }
   return { group: "Members", order: 4, tasks };

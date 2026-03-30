@@ -211,20 +211,23 @@ describe("ciValidation rule", () => {
     const tmp = useTmpDir();
     const repo = new Repo(tmp.path);
     const result = ciValidation.evaluate(repo);
-    expect(result.tasks).toHaveLength(1);
+    expect(result.tasks).toHaveLength(3);
+    expect(result.tasks[0]).toContain("validation workflow");
+    expect(result.tasks[1]).toContain("PR reviews");
+    expect(result.tasks[2]).toContain("API secret");
   });
 
-  it("reports workflow without validate", () => {
+  it("reports workflow without validate or pr-review", () => {
     const tmp = useTmpDir();
     const wfDir = join(tmp.path, ".github", "workflows");
     mkdirSync(wfDir, { recursive: true });
     writeFileSync(join(wfDir, "ci.yml"), "name: CI\non: push\njobs: {}\n");
     const repo = new Repo(tmp.path);
     const result = ciValidation.evaluate(repo);
-    expect(result.tasks).toHaveLength(1);
+    expect(result.tasks).toHaveLength(3);
   });
 
-  it("passes with validate workflow", () => {
+  it("passes validation but reports missing pr-review", () => {
     const tmp = useTmpDir();
     const wfDir = join(tmp.path, ".github", "workflows");
     mkdirSync(wfDir, { recursive: true });
@@ -234,7 +237,60 @@ describe("ciValidation rule", () => {
     );
     const repo = new Repo(tmp.path);
     const result = ciValidation.evaluate(repo);
+    expect(result.tasks).toHaveLength(2);
+    expect(result.tasks[0]).toContain("PR reviews");
+    expect(result.tasks[1]).toContain("API secret");
+  });
+
+  it("passes pr-review but reports missing validation", () => {
+    const tmp = useTmpDir();
+    const wfDir = join(tmp.path, ".github", "workflows");
+    mkdirSync(wfDir, { recursive: true });
+    writeFileSync(
+      join(wfDir, "pr-review.yml"),
+      "name: PR Review\non: pull_request\njobs:\n  review:\n    steps:\n      - run: npx tsx .context-tree/run-review.ts\n",
+    );
+    const repo = new Repo(tmp.path);
+    const result = ciValidation.evaluate(repo);
+    expect(result.tasks).toHaveLength(1);
+    expect(result.tasks[0]).toContain("validation workflow");
+  });
+
+  it("passes with both validate and pr-review workflows", () => {
+    const tmp = useTmpDir();
+    const wfDir = join(tmp.path, ".github", "workflows");
+    mkdirSync(wfDir, { recursive: true });
+    writeFileSync(
+      join(wfDir, "validate.yml"),
+      "name: Validate\non: push\njobs:\n  validate:\n    steps:\n      - run: python validate_nodes.py\n",
+    );
+    writeFileSync(
+      join(wfDir, "pr-review.yml"),
+      "name: PR Review\non: pull_request\njobs:\n  review:\n    steps:\n      - run: npx tsx .context-tree/run-review.ts\n",
+    );
+    const repo = new Repo(tmp.path);
+    const result = ciValidation.evaluate(repo);
     expect(result.tasks).toEqual([]);
+  });
+
+  it("pr-review task presents numbered options", () => {
+    const tmp = useTmpDir();
+    const repo = new Repo(tmp.path);
+    const result = ciValidation.evaluate(repo);
+    const prTask = result.tasks.find((t) => t.includes("PR review"));
+    expect(prTask).toContain("OpenRouter");
+    expect(prTask).toContain("Claude API");
+    expect(prTask).toContain("Skip");
+  });
+
+  it("secret task presents options for gh CLI or manual setup", () => {
+    const tmp = useTmpDir();
+    const repo = new Repo(tmp.path);
+    const result = ciValidation.evaluate(repo);
+    const secretTask = result.tasks.find((t) => t.includes("API secret"));
+    expect(secretTask).toContain("Set it now");
+    expect(secretTask).toContain("I'll do it myself");
+    expect(secretTask).toContain("gh secret set");
   });
 });
 
@@ -265,7 +321,7 @@ describe("evaluateAll", () => {
     mkdirSync(wfDir, { recursive: true });
     writeFileSync(
       join(wfDir, "validate.yml"),
-      "steps:\n  - run: validate_nodes\n",
+      "steps:\n  - run: validate_nodes\n  - run: run-review\n",
     );
     const repo = new Repo(tmp.path);
     const groups = evaluateAll(repo);
