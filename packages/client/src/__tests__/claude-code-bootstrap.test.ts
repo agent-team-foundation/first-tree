@@ -75,7 +75,9 @@ function generateClaudeMd(workspacePath: string, identity: AgentIdentity, contex
     const degradedPath = join(contextDir, "degraded.md");
     if (existsSync(degradedPath)) {
       const degradedMsg = readFileSync(degradedPath, "utf-8");
-      sections.push(`## Context Tree Location\n\nWARNING: ${degradedMsg}\nYou can still use the SDK tools below, but you lack organizational context for decisions.\n`);
+      sections.push(
+        `## Context Tree Location\n\nWARNING: ${degradedMsg}\nYou can still use the SDK tools below, but you lack organizational context for decisions.\n`,
+      );
     }
   }
 
