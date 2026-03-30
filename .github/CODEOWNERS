@@ -2,7 +2,14 @@
 
 /*                                                 @liuchao-001 @286ljb
 /agent-hub/                                        @baixiaohang @yuezengwu
+/agent-hub/adapter.md                              @baixiaohang @yuezengwu
 /agent-hub/claim-agent.md                          @baixiaohang @yuezengwu
+/agent-hub/cli.md                                  @baixiaohang @yuezengwu
+/agent-hub/client-runtime.md                       @baixiaohang @yuezengwu
+/agent-hub/context-tree-sync.md                    @baixiaohang @yuezengwu
+/agent-hub/deployment.md                           @baixiaohang @yuezengwu
+/agent-hub/messaging.md                            @baixiaohang @yuezengwu
+/agent-hub/web-console.md                          @baixiaohang @yuezengwu
 /context-tree/                                     @286ljb
 /kael/                                             @liuchao-001 @286ljb
 /kael/agent/                                       @yuezengwu @baixiaohang
