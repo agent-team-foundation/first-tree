@@ -28,6 +28,7 @@ const DEFAULT_PULL_LIMIT = 10;
 const RECONNECT_BASE_MS = 1000;
 const RECONNECT_MAX_MS = 30_000;
 const WS_CONNECT_TIMEOUT_MS = 10_000;
+const WS_PING_INTERVAL_MS = 3_000;
 
 export class AgentConnection extends EventEmitter<ConnectionEvents> {
   readonly sdk: FirstTreeHubSDK;
@@ -37,6 +38,7 @@ export class AgentConnection extends EventEmitter<ConnectionEvents> {
 
   private ws: WebSocket | null = null;
   private wsConnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private wsPingTimer: ReturnType<typeof setInterval> | null = null;
   private pollingTimer: ReturnType<typeof setInterval> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
@@ -48,6 +50,7 @@ export class AgentConnection extends EventEmitter<ConnectionEvents> {
   private readonly pollingInterval: number;
   private readonly pullLimit: number;
   private readonly serverUrl: string;
+  private rateLimitedUntil = 0;
 
   constructor(config: AgentConnectionConfig) {
     super();
@@ -119,11 +122,8 @@ export class AgentConnection extends EventEmitter<ConnectionEvents> {
       this.reconnectAttempt = 0;
       this._state = "connected";
       this.emit("connected");
-      // Always poll — Server does not yet push inbox notifications via WS.
-      // WebSocket currently only handles presence; polling is the primary
-      // message delivery mechanism until Server adds pg_notify on send.
+      this.startPing();
       this.startPolling();
-      // Immediate catch-up pull
       this.pullAndDispatch();
     });
 
@@ -139,12 +139,14 @@ export class AgentConnection extends EventEmitter<ConnectionEvents> {
     });
 
     ws.on("close", () => {
+      this.stopPing();
       if (!this.closing) {
         this.scheduleReconnect();
       }
     });
 
     ws.on("error", (err) => {
+      if (this.handleRateLimit(err)) return;
       this.emit("error", err);
       // close event will follow and trigger reconnect
     });
@@ -153,6 +155,8 @@ export class AgentConnection extends EventEmitter<ConnectionEvents> {
   }
 
   private scheduleReconnect(): void {
+    if (Date.now() < this.rateLimitedUntil) return;
+
     this._state = "reconnecting";
     this.reconnectAttempt++;
     this.emit("reconnecting", this.reconnectAttempt);
@@ -165,6 +169,24 @@ export class AgentConnection extends EventEmitter<ConnectionEvents> {
         this.openWebSocket();
       }
     }, delay);
+  }
+
+  // ---- WebSocket keepalive --------------------------------------------------
+
+  private startPing(): void {
+    this.stopPing();
+    this.wsPingTimer = setInterval(() => {
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.ping();
+      }
+    }, WS_PING_INTERVAL_MS);
+  }
+
+  private stopPing(): void {
+    if (this.wsPingTimer) {
+      clearInterval(this.wsPingTimer);
+      this.wsPingTimer = null;
+    }
   }
 
   // ---- Polling fallback ----------------------------------------------------
@@ -187,8 +209,8 @@ export class AgentConnection extends EventEmitter<ConnectionEvents> {
 
   private async pullAndDispatch(): Promise<void> {
     if (this.closing || !this.handler) return;
+    if (Date.now() < this.rateLimitedUntil) return;
     if (this.isPulling) {
-      // A pull is in flight — mark dirty so it re-pulls when done
       this.pullAgain = true;
       return;
     }
@@ -207,16 +229,48 @@ export class AgentConnection extends EventEmitter<ConnectionEvents> {
         }
       } while (this.pullAgain && !this.closing);
     } catch (err) {
+      if (this.handleRateLimit(err)) return;
       this.emit("error", err instanceof Error ? err : new Error(String(err)));
     } finally {
       this.isPulling = false;
     }
   }
 
+  /** Detect 429 responses and pause all activity. Returns true if rate-limited. */
+  private handleRateLimit(err: unknown): boolean {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!msg.includes("429") && !msg.toLowerCase().includes("rate limit")) return false;
+
+    const backoff = 60_000;
+    this.rateLimitedUntil = Date.now() + backoff;
+    this.emit("error", new Error(`Rate limited, pausing for ${backoff / 1000}s`));
+
+    // Stop polling and WebSocket reconnection during backoff
+    this.stopPolling();
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
+    // Resume after backoff
+    setTimeout(() => {
+      if (this.closing) return;
+      this.rateLimitedUntil = 0;
+      this.startPolling();
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        this.reconnectAttempt = 0;
+        this.openWebSocket();
+      }
+    }, backoff);
+
+    return true;
+  }
+
   // ---- Cleanup -------------------------------------------------------------
 
   private clearTimers(): void {
     this.stopPolling();
+    this.stopPing();
     if (this.wsConnectTimer) {
       clearTimeout(this.wsConnectTimer);
       this.wsConnectTimer = null;
