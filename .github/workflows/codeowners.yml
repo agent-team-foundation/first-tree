@@ -23,9 +23,9 @@ jobs:
 
       - name: Commit if changed
         run: |
-          git diff --quiet .github/CODEOWNERS && exit 0
+          git add .github/CODEOWNERS
+          git diff --cached --quiet .github/CODEOWNERS && exit 0
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .github/CODEOWNERS
           git commit -m "chore: update CODEOWNERS from tree ownership"
           git push
