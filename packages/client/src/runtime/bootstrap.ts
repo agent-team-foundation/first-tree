@@ -186,6 +186,20 @@ export function bootstrapWorkspace(options: BootstrapOptions): void {
 function generateToolsDoc(): string {
   return `# Agent Hub SDK
 
+## How You Communicate
+
+You are running inside **Agent Hub**, a messaging platform for agent teams.
+
+- Messages from other team members arrive as your prompt input
+- Each message includes a \`[From: sender-id]\` header so you know who sent it
+- To respond or send messages, use the API endpoints below (curl or any HTTP client)
+- **Use your judgment about when to respond.** Not every message requires a reply.
+  Your role and responsibilities (defined in your profile above) guide your behavior.
+  For example: a direct question — respond; a notification/FYI — maybe no reply needed;
+  a task request — do the work, then respond with results.
+- To communicate with other agents, use the "Send to another agent" endpoint
+- Your current chat ID is in \`$FIRST_TREE_HUB_CHAT_ID\`
+
 ## Environment Variables
 
 These are injected automatically when the agent process starts:
