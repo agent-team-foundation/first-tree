@@ -15,6 +15,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
+  "packageManager": "pnpm@10.25.0",
   "license": "Apache-2.0",
   "devDependencies": {
     "@types/node": "^25.5.0",
