@@ -1,7 +1,13 @@
 import { createAgentTokenSchema, paginationQuerySchema } from "@first-tree-hub/shared";
+import { and, eq, ne, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
+import { agents } from "../../db/schema/agents.js";
+import { messages } from "../../db/schema/messages.js";
 import * as agentService from "../../services/agent.js";
+import { findOrCreateDirectChat } from "../../services/chat.js";
 import { forceDisconnect } from "../../services/connection-manager.js";
+import { sendMessage } from "../../services/message.js";
+import { notifyRecipients } from "../../services/notifier.js";
 import * as presenceService from "../../services/presence.js";
 
 function serializeDate(d: Date | null): string | null {
@@ -79,5 +85,91 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
   app.delete<{ Params: { agentId: string } }>("/:agentId", async (request, reply) => {
     await agentService.deleteAgent(app.db, request.params.agentId);
     return reply.status(204).send();
+  });
+
+  app.post<{ Params: { agentId: string } }>("/:agentId/test", async (request, reply) => {
+    const { agentId } = request.params;
+
+    const [, presence] = await Promise.all([
+      agentService.getAgent(app.db, agentId),
+      presenceService.getPresence(app.db, agentId),
+    ]);
+
+    if (!presence || presence.status !== "online") {
+      return reply.status(200).send({
+        status: "offline",
+        message: "Agent is not connected. Start the client first.",
+      });
+    }
+
+    // Find sender: look for human owner (whose delegateMention points to this agent), then fall back to any other active agent
+    const [owner] = await app.db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(and(eq(agents.delegateMention, agentId), eq(agents.status, "active")))
+      .limit(1);
+
+    let senderId = owner?.id ?? null;
+    if (!senderId) {
+      const [other] = await app.db
+        .select({ id: agents.id })
+        .from(agents)
+        .where(and(ne(agents.id, agentId), eq(agents.status, "active")))
+        .limit(1);
+      senderId = other?.id ?? null;
+    }
+
+    if (!senderId) {
+      return reply.status(200).send({
+        status: "error",
+        message: "No suitable sender found. Need at least one other active agent.",
+      });
+    }
+
+    const chat = await findOrCreateDirectChat(app.db, senderId, agentId);
+
+    const testContent = `[System Test] Verify your connection. Respond with your identity and role. Time: ${new Date().toISOString()}`;
+    const result = await sendMessage(app.db, chat.id, senderId, {
+      format: "text",
+      content: testContent,
+    });
+    notifyRecipients(app.notifier, result.recipients, result.message.id);
+
+    // Poll for response (admin diagnostic, acceptable to hold connection)
+    const POLL_TIMEOUT = 30_000;
+    const POLL_INTERVAL = 1_000;
+    const threshold = result.message.createdAt;
+    const pollStart = Date.now();
+
+    while (Date.now() - pollStart < POLL_TIMEOUT) {
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL));
+
+      const [response] = await app.db
+        .select()
+        .from(messages)
+        .where(
+          and(eq(messages.chatId, chat.id), eq(messages.senderId, agentId), sql`${messages.createdAt} > ${threshold}`),
+        )
+        .limit(1);
+
+      if (response) {
+        const content =
+          typeof response.content === "string"
+            ? response.content.slice(0, 500)
+            : JSON.stringify(response.content).slice(0, 500);
+        return reply.status(200).send({
+          status: "success",
+          chatId: chat.id,
+          responseContent: content,
+          responseTime: response.createdAt.getTime() - threshold.getTime(),
+        });
+      }
+    }
+
+    return reply.status(200).send({
+      status: "timeout",
+      chatId: chat.id,
+      message: "Agent is connected but did not respond within 30 seconds.",
+    });
   });
 }

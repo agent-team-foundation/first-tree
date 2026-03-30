@@ -22,6 +22,20 @@ export function deleteAgent(agentId: string): Promise<void> {
   return api.delete<void>(`/admin/agents/${encodeURIComponent(agentId)}`);
 }
 
+// -- Test Connection --
+
+export type TestResult = {
+  status: "success" | "timeout" | "offline" | "error";
+  message?: string;
+  chatId?: string;
+  responseContent?: string;
+  responseTime?: number;
+};
+
+export function testAgentConnection(agentId: string): Promise<TestResult> {
+  return api.post<TestResult>(`/admin/agents/${encodeURIComponent(agentId)}/test`, {});
+}
+
 // -- Sync API --
 
 export function triggerSync(): Promise<SyncReport> {

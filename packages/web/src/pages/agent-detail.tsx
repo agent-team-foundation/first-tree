@@ -1,12 +1,12 @@
 import { ADAPTER_PLATFORMS } from "@first-tree-hub/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Cable, Copy, Key, Link2, Pencil, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, Cable, Copy, Key, Link2, Pencil, Play, Plus, Trash2 } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { createAdapterMapping, deleteAdapterMapping, listAdapterMappings } from "../api/adapter-mappings.js";
 import { getAdapterStatuses } from "../api/adapter-status.js";
 import { createAdapter, deleteAdapter, listAdapters, updateAdapter } from "../api/adapters.js";
-import { deleteAgent, getAgent } from "../api/agents.js";
+import { deleteAgent, getAgent, type TestResult, testAgentConnection } from "../api/agents.js";
 import { createToken, listTokens, revokeToken } from "../api/tokens.js";
 import { Badge } from "../components/ui/badge.js";
 import { Button } from "../components/ui/button.js";
@@ -149,6 +149,11 @@ export function AgentDetailPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["adapter-mappings"] }),
   });
 
+  // Test connection
+  const testMutation = useMutation({
+    mutationFn: () => testAgentConnection(agentId),
+  });
+
   const agent = agentQuery.data;
   const isHuman = agent?.type === "human";
 
@@ -270,6 +275,20 @@ export function AgentDetailPage() {
           <h1 className="text-2xl font-semibold">{agent.displayName ?? agent.id}</h1>
           <p className="text-sm text-muted-foreground font-mono">{agent.id}</p>
         </div>
+        {!isHuman && agent.status === "active" && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              testMutation.reset();
+              testMutation.mutate();
+            }}
+            disabled={testMutation.isPending}
+          >
+            <Play className="h-4 w-4 mr-2" />
+            {testMutation.isPending ? "Testing..." : "Test Connection"}
+          </Button>
+        )}
         {agent.status === "suspended" && (
           <Button variant="destructive" size="sm" onClick={handleDelete}>
             <Trash2 className="h-4 w-4 mr-2" />
@@ -277,6 +296,14 @@ export function AgentDetailPage() {
           </Button>
         )}
       </div>
+
+      {/* Test Connection Result */}
+      {(testMutation.data || testMutation.error) && (
+        <TestResultCard
+          result={testMutation.data ?? { status: "error", message: "Failed to reach server" }}
+          onDismiss={() => testMutation.reset()}
+        />
+      )}
 
       {/* Agent Info — read-only, managed by Context Tree */}
       <Card>
@@ -727,6 +754,53 @@ export function AgentDetailPage() {
         </Dialog>
       )}
     </div>
+  );
+}
+
+// ── Components ──────────────────────────────────────────────────────
+
+const STATUS_LABELS: Record<TestResult["status"], string> = {
+  success: "Connected",
+  timeout: "Timed out",
+  offline: "Offline",
+  error: "Error",
+};
+
+function TestResultCard({ result, onDismiss }: { result: TestResult; onDismiss: () => void }) {
+  const borderColor = {
+    success: "border-l-green-500",
+    timeout: "border-l-yellow-500",
+    offline: "border-l-gray-400",
+    error: "border-l-red-500",
+  }[result.status];
+
+  const badgeVariant =
+    result.status === "success" ? "default" : result.status === "timeout" ? "secondary" : "destructive";
+
+  return (
+    <Card className={cn("border-l-4", borderColor)}>
+      <CardContent className="pt-4">
+        <div className="flex items-start justify-between">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <Badge variant={badgeVariant}>{STATUS_LABELS[result.status]}</Badge>
+              {result.responseTime != null && (
+                <span className="text-xs text-muted-foreground">{(result.responseTime / 1000).toFixed(1)}s</span>
+              )}
+            </div>
+            {result.message && <p className="text-sm text-muted-foreground">{result.message}</p>}
+            {result.responseContent && (
+              <p className="text-sm mt-2 whitespace-pre-wrap bg-muted rounded p-2 max-h-40 overflow-auto">
+                {result.responseContent}
+              </p>
+            )}
+          </div>
+          <Button variant="ghost" size="sm" onClick={onDismiss}>
+            Dismiss
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
