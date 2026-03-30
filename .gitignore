@@ -32,3 +32,4 @@ drizzle/meta/
 
 # Claude Code
 .claude/
+.gstack/

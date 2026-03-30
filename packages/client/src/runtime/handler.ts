@@ -1,8 +1,17 @@
 import type { FirstTreeHubSDK } from "../sdk.js";
 
+/** Agent identity fields flowing from Server through the runtime pipeline. */
+export type AgentIdentity = {
+  agentId: string;
+  displayName: string | null;
+  type: string;
+  delegateMention: string | null;
+  metadata: Record<string, unknown>;
+};
+
 export type HandlerContext = {
   /** Agent identity from Server. */
-  agent: { agentId: string; displayName: string | null };
+  agent: AgentIdentity;
   /** SDK for sending messages and managing inbox. */
   sdk: FirstTreeHubSDK;
   /** Logger scoped to this agent slot. */

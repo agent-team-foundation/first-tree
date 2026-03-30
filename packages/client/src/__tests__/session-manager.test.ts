@@ -72,7 +72,13 @@ function createSessionManager(opts: {
     concurrency: opts.concurrency ?? 5,
     handlerFactory: factory,
     handlerConfig: { workspaceRoot: "/tmp/test" },
-    agentIdentity: { agentId: "agent-1", displayName: "Agent" },
+    agentIdentity: {
+      agentId: "agent-1",
+      displayName: "Agent",
+      type: "autonomous_agent",
+      delegateMention: null,
+      metadata: {},
+    },
     sdk,
     log: opts.log ?? (() => {}),
   });
@@ -143,7 +149,13 @@ describe("SessionManager", () => {
       concurrency: 5,
       handlerFactory: factory,
       handlerConfig: { workspaceRoot: "/tmp/test" },
-      agentIdentity: { agentId: "agent-1", displayName: null },
+      agentIdentity: {
+        agentId: "agent-1",
+        displayName: null,
+        type: "autonomous_agent",
+        delegateMention: null,
+        metadata: {},
+      },
       sdk,
       log: () => {},
     });
@@ -222,7 +234,13 @@ describe("SessionManager", () => {
       concurrency: 5,
       handlerFactory: factory,
       handlerConfig: { workspaceRoot: "/tmp/test" },
-      agentIdentity: { agentId: "agent-1", displayName: null },
+      agentIdentity: {
+        agentId: "agent-1",
+        displayName: null,
+        type: "autonomous_agent",
+        delegateMention: null,
+        metadata: {},
+      },
       sdk,
       log: () => {},
     });
@@ -259,7 +277,13 @@ describe("SessionManager", () => {
       concurrency: 5,
       handlerFactory: factory,
       handlerConfig: { workspaceRoot: "/tmp/test" },
-      agentIdentity: { agentId: "agent-1", displayName: null },
+      agentIdentity: {
+        agentId: "agent-1",
+        displayName: null,
+        type: "autonomous_agent",
+        delegateMention: null,
+        metadata: {},
+      },
       sdk,
       log: () => {},
     });
@@ -305,7 +329,13 @@ describe("SessionManager", () => {
       concurrency: 2,
       handlerFactory: factory,
       handlerConfig: { workspaceRoot: "/tmp/test" },
-      agentIdentity: { agentId: "agent-1", displayName: null },
+      agentIdentity: {
+        agentId: "agent-1",
+        displayName: null,
+        type: "autonomous_agent",
+        delegateMention: null,
+        metadata: {},
+      },
       sdk,
       log: () => {},
     });

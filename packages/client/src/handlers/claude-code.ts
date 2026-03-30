@@ -1,7 +1,16 @@
 import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { PermissionMode, Query, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { query as claudeQuery } from "@anthropic-ai/claude-agent-sdk";
-import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
+import { bootstrapWorkspace } from "../runtime/bootstrap.js";
+import type {
+  AgentHandler,
+  AgentIdentity,
+  HandlerFactory,
+  SessionContext,
+  SessionMessage,
+} from "../runtime/handler.js";
 import { InputController } from "../runtime/input-controller.js";
 import { acquireWorkspace } from "../runtime/workspace.js";
 
@@ -144,11 +153,28 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     }
   }
 
+  const contextTreePath = (config.contextTreePath as string | undefined) ?? null;
+
+  /** Bootstrap workspace and generate CLAUDE.md. */
+  function runBootstrap(workspace: string, sessionCtx: SessionContext): void {
+    bootstrapWorkspace({
+      workspacePath: workspace,
+      identity: sessionCtx.agent,
+      contextTreePath,
+      serverUrl: sessionCtx.sdk.serverUrl,
+      chatId: sessionCtx.chatId,
+    });
+    generateClaudeMd(workspace, sessionCtx.agent, contextTreePath);
+  }
+
   const handler: AgentHandler = {
     async start(message, sessionCtx) {
       ctx = sessionCtx;
       claudeSessionId = randomUUID();
       cwd = acquireWorkspace(workspaceRoot, sessionCtx.chatId);
+
+      // Always bootstrap on start
+      runBootstrap(cwd, sessionCtx);
 
       sessionCtx.log(
         `Starting session (${claudeSessionId}), cwd=${cwd}, permissionMode=${config.permissionMode ?? "bypassPermissions"}`,
@@ -165,6 +191,11 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       claudeSessionId = sessionId;
       retryCount = 0;
       cwd = acquireWorkspace(workspaceRoot, sessionCtx.chatId);
+
+      // Bootstrap on resume only if .agent/ is missing
+      if (!existsSync(join(cwd, ".agent", "identity.json"))) {
+        runBootstrap(cwd, sessionCtx);
+      }
 
       sessionCtx.log(`Resuming session (${sessionId}), cwd=${cwd}`);
       spawnQuery(sessionId, sessionCtx, sessionId);
@@ -211,3 +242,77 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
 
   return handler;
 };
+
+/**
+ * Generate a CLAUDE.md file from .agent/ bootstrap data.
+ *
+ * Layered Bootstrap:
+ *   Layer 1 (always): Agent identity + member profile + AGENT.md operating instructions
+ *   Layer 2 (if available): Organization domain map from root NODE.md
+ *   Layer 3 (on-demand): Agent reads specific domain nodes via contextTreePath
+ */
+function generateClaudeMd(workspacePath: string, identity: AgentIdentity, contextTreePath: string | null): void {
+  const sections: string[] = [];
+  const contextDir = join(workspacePath, ".agent", "context");
+
+  // --- Identity (1 sentence based on type) ---
+  const name = identity.displayName ?? identity.agentId;
+  if (identity.type === "personal_assistant") {
+    sections.push(`# Agent Identity\n\nYou are ${name}, a personal assistant agent.\n`);
+  } else {
+    sections.push(`# Agent Identity\n\nYou are ${name}, an autonomous agent.\n`);
+  }
+
+  // --- Layer 1: Member profile from Context Tree (self.md = member NODE.md) ---
+  const selfMdPath = join(contextDir, "self.md");
+  if (existsSync(selfMdPath)) {
+    const selfContent = readFileSync(selfMdPath, "utf-8");
+    sections.push(`## Your Profile\n\n${selfContent}\n`);
+  } else {
+    sections.push(
+      "## Your Profile\n\nNo member profile available. Your responsibilities are not loaded from the Context Tree.\n",
+    );
+  }
+
+  // --- Layer 1: Context Tree operating instructions (AGENT.md) ---
+  const agentInstructionsPath = join(contextDir, "agent-instructions.md");
+  if (existsSync(agentInstructionsPath)) {
+    const instructions = readFileSync(agentInstructionsPath, "utf-8");
+    sections.push(`## Context Tree Operating Instructions\n\n${instructions}\n`);
+  } else {
+    sections.push(
+      "## Context Tree Operating Instructions\n\nContext Tree instructions unavailable. Organizational context is not loaded for this session.\n",
+    );
+  }
+
+  // --- Layer 2: Organization domain map (root NODE.md) ---
+  const domainMapPath = join(contextDir, "domain-map.md");
+  if (existsSync(domainMapPath)) {
+    const domainMap = readFileSync(domainMapPath, "utf-8");
+    sections.push(`## Organization Domain Map\n\n${domainMap}\n`);
+  }
+
+  // --- Layer 3: Context Tree location for on-demand reading ---
+  if (contextTreePath) {
+    sections.push(
+      `## Context Tree Location\n\nThe full Context Tree is available at: \`${contextTreePath}\`\n\nRead specific domain nodes as needed following the operating instructions above.\n`,
+    );
+  } else {
+    const degradedPath = join(contextDir, "degraded.md");
+    if (existsSync(degradedPath)) {
+      const degradedMsg = readFileSync(degradedPath, "utf-8");
+      sections.push(
+        `## Context Tree Location\n\nWARNING: ${degradedMsg}\nYou can still use the SDK tools below, but you lack organizational context for decisions.\n`,
+      );
+    }
+  }
+
+  // --- SDK tools reference ---
+  const toolsPath = join(workspacePath, ".agent", "tools.md");
+  if (existsSync(toolsPath)) {
+    const toolsContent = readFileSync(toolsPath, "utf-8");
+    sections.push(toolsContent);
+  }
+
+  writeFileSync(join(workspacePath, "CLAUDE.md"), sections.join("\n"), "utf-8");
+}

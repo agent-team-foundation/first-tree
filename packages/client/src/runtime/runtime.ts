@@ -1,4 +1,5 @@
 import { AgentSlot } from "./agent-slot.js";
+import { syncContextTree } from "./bootstrap.js";
 import type { RuntimeConfig } from "./config.js";
 import { getHandlerFactory } from "./handler.js";
 
@@ -11,19 +12,20 @@ const DEFAULT_SHUTDOWN_TIMEOUT = 30_000;
 
 export class AgentRuntime {
   private readonly slots: AgentSlot[] = [];
+  private readonly config: RuntimeConfig;
   private readonly shutdownTimeout: number;
   private stopping = false;
 
   constructor(options: AgentRuntimeOptions) {
-    const { config } = options;
+    this.config = options.config;
     this.shutdownTimeout = options.shutdownTimeout ?? DEFAULT_SHUTDOWN_TIMEOUT;
 
-    for (const [name, agentConfig] of Object.entries(config.agents)) {
+    for (const [name, agentConfig] of Object.entries(this.config.agents)) {
       const handlerFactory = getHandlerFactory(agentConfig.type);
       this.slots.push(
         new AgentSlot({
           name,
-          serverUrl: config.server,
+          serverUrl: this.config.server,
           token: agentConfig.token,
           type: agentConfig.type,
           handlerFactory,
@@ -37,9 +39,20 @@ export class AgentRuntime {
   /** Start all agent slots and block until shutdown signal. */
   async start(): Promise<void> {
     const log = (msg: string) => process.stderr.write(`[runtime] ${msg}\n`);
+
+    // Sync shared Context Tree clone (uses first agent's token)
+    const firstToken = Object.values(this.config.agents)[0]?.token;
+    let contextTreePath: string | null = null;
+    if (firstToken) {
+      contextTreePath = await syncContextTree(this.config.server, firstToken, log);
+    }
+    if (!contextTreePath) {
+      log("WARNING: Context Tree sync failed — agents will start without organizational context");
+    }
+
     log(`Starting ${this.slots.length} agent(s)...`);
 
-    const results = await Promise.allSettled(this.slots.map((slot) => slot.start()));
+    const results = await Promise.allSettled(this.slots.map((slot) => slot.start(contextTreePath)));
 
     let failed = 0;
     for (const result of results) {

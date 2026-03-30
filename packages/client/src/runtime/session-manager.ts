@@ -2,7 +2,14 @@ import type { InboxEntryWithMessage } from "@first-tree-hub/shared";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import type { SessionConfig } from "./config.js";
 import { Deduplicator } from "./deduplicator.js";
-import type { AgentHandler, HandlerConfig, HandlerFactory, SessionContext, SessionMessage } from "./handler.js";
+import type {
+  AgentHandler,
+  AgentIdentity,
+  HandlerConfig,
+  HandlerFactory,
+  SessionContext,
+  SessionMessage,
+} from "./handler.js";
 import { SessionRegistry } from "./session-registry.js";
 
 type SessionStatus = "active" | "suspended" | "evicted";
@@ -27,7 +34,7 @@ type SessionManagerConfig = {
   concurrency: number;
   handlerFactory: HandlerFactory;
   handlerConfig: HandlerConfig;
-  agentIdentity: { agentId: string; displayName: string | null };
+  agentIdentity: AgentIdentity;
   sdk: FirstTreeHubSDK;
   log: (msg: string) => void;
   registryPath?: string;

@@ -18,6 +18,7 @@ import { adminOverviewRoutes } from "./api/admin/overview.js";
 import { adminSystemConfigRoutes } from "./api/admin/system-config.js";
 import { adminUserRoutes } from "./api/admin/users.js";
 import { agentChatRoutes } from "./api/agent/chats.js";
+import { agentContextTreeRoutes } from "./api/agent/context-tree.js";
 import { agentInboxRoutes } from "./api/agent/inbox.js";
 import { agentMeRoutes } from "./api/agent/me.js";
 import { agentMessageRoutes, agentSendToAgentRoutes } from "./api/agent/messages.js";
@@ -182,6 +183,7 @@ export async function buildApp(config: Config) {
           await agentApp.register(agentMessageRoutes, { prefix: "/chats" });
           await agentApp.register(agentSendToAgentRoutes, { prefix: "/agents" });
           await agentApp.register(agentInboxRoutes, { prefix: "/inbox" });
+          await agentApp.register(agentContextTreeRoutes, { prefix: "/context-tree" });
           await agentApp.register(agentWsRoutes(notifier, config.instanceId), { prefix: "/ws" });
         },
         { prefix: "/agent" },

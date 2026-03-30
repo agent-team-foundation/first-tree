@@ -135,7 +135,13 @@ describe("E2E: Session-oriented Runtime", () => {
       concurrency: 5,
       handlerFactory: factory,
       handlerConfig: { workspaceRoot: "/tmp/e2e-test" },
-      agentIdentity: { agentId: receiverIdentity.agentId, displayName: receiverIdentity.displayName },
+      agentIdentity: {
+        agentId: receiverIdentity.agentId,
+        displayName: receiverIdentity.displayName,
+        type: receiverIdentity.type ?? "autonomous_agent",
+        delegateMention: receiverIdentity.delegateMention ?? null,
+        metadata: receiverIdentity.metadata ?? {},
+      },
       sdk: receiverSdk,
       log: (msg) => process.stderr.write(`[e2e-receiver] ${msg}\n`),
     });
@@ -247,7 +253,13 @@ describe("E2E: Session-oriented Runtime", () => {
       concurrency: 5,
       handlerFactory: factory,
       handlerConfig: { workspaceRoot: "/tmp/e2e-test" },
-      agentIdentity: { agentId: "receiver-2", displayName: "Receiver" },
+      agentIdentity: {
+        agentId: "receiver-2",
+        displayName: "Receiver",
+        type: "autonomous_agent",
+        delegateMention: null,
+        metadata: {},
+      },
       sdk: receiverSdk,
       log: () => {},
     });
@@ -290,7 +302,13 @@ describe("E2E: Session-oriented Runtime", () => {
       concurrency: 5,
       handlerFactory: factory,
       handlerConfig: { workspaceRoot: "/tmp/e2e-test" },
-      agentIdentity: { agentId: "receiver-3", displayName: null },
+      agentIdentity: {
+        agentId: "receiver-3",
+        displayName: null,
+        type: "autonomous_agent",
+        delegateMention: null,
+        metadata: {},
+      },
       sdk: receiverSdk,
       log: () => {},
     });
@@ -326,7 +344,13 @@ describe("E2E: Session-oriented Runtime", () => {
       concurrency: 5,
       handlerFactory: factory,
       handlerConfig: { workspaceRoot: "/tmp/e2e-test" },
-      agentIdentity: { agentId: "receiver-4", displayName: null },
+      agentIdentity: {
+        agentId: "receiver-4",
+        displayName: null,
+        type: "autonomous_agent",
+        delegateMention: null,
+        metadata: {},
+      },
       sdk: receiverSdk,
       log: () => {},
     });
@@ -372,7 +396,13 @@ describe("E2E: Session-oriented Runtime", () => {
       concurrency: 5,
       handlerFactory: factory,
       handlerConfig: { workspaceRoot: "/tmp/e2e-test" },
-      agentIdentity: { agentId: "receiver-6", displayName: null },
+      agentIdentity: {
+        agentId: "receiver-6",
+        displayName: null,
+        type: "autonomous_agent",
+        delegateMention: null,
+        metadata: {},
+      },
       sdk: receiverSdk,
       log: () => {},
     });
@@ -465,7 +495,13 @@ describe("E2E: Session-oriented Runtime", () => {
       concurrency: 2,
       handlerFactory: factory,
       handlerConfig: { workspaceRoot: "/tmp/e2e-test" },
-      agentIdentity: { agentId: "receiver-7", displayName: null },
+      agentIdentity: {
+        agentId: "receiver-7",
+        displayName: null,
+        type: "autonomous_agent",
+        delegateMention: null,
+        metadata: {},
+      },
       sdk: receiverSdk,
       log: () => {},
     });
@@ -537,7 +573,13 @@ describe("E2E: Session-oriented Runtime", () => {
       concurrency: 5,
       handlerFactory: factory,
       handlerConfig: { workspaceRoot: "/tmp/e2e-test" },
-      agentIdentity: { agentId: "receiver-8", displayName: null },
+      agentIdentity: {
+        agentId: "receiver-8",
+        displayName: null,
+        type: "autonomous_agent",
+        delegateMention: null,
+        metadata: {},
+      },
       sdk: receiverSdk,
       log: () => {},
     });
@@ -614,7 +656,13 @@ describe("E2E: Session-oriented Runtime", () => {
       concurrency: 5,
       handlerFactory: factory,
       handlerConfig: { workspaceRoot: "/tmp/e2e-test" },
-      agentIdentity: { agentId: "receiver-5", displayName: "Receiver Five" },
+      agentIdentity: {
+        agentId: "receiver-5",
+        displayName: "Receiver Five",
+        type: "autonomous_agent",
+        delegateMention: null,
+        metadata: {},
+      },
       sdk: receiverSdk,
       log: () => {},
     });
