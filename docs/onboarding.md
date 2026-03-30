@@ -125,7 +125,7 @@ The tree doesn't duplicate source code — it captures what connects things and 
 | `context-tree init` | Bootstrap a new tree. Clones framework, renders templates, generates task list. |
 | `context-tree verify` | Check progress.md for unchecked items + run deterministic validation. |
 | `context-tree upgrade` | Compare local framework version to upstream, generate upgrade task list. |
-| `context-tree onboarding` | Print this onboarding guide. |
+| `context-tree help onboarding` | Print this onboarding guide. |
 
 ---
 

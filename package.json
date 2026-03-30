@@ -10,7 +10,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsdown src/cli.ts --format esm --out-dir dist",
+    "build": "tsdown",
     "prepack": "pnpm build",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
