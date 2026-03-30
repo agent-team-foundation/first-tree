@@ -8,6 +8,7 @@ export function evaluate(repo: Repo): RuleResult {
   const tasks: string[] = [];
   let hasValidation = false;
   let hasPrReview = false;
+  let hasCodeowners = false;
   const workflowsDir = join(repo.root, ".github", "workflows");
   try {
     if (statSync(workflowsDir).isDirectory()) {
@@ -25,6 +26,9 @@ export function evaluate(repo: Repo): RuleResult {
           }
           if (content.includes("run-review")) {
             hasPrReview = true;
+          }
+          if (content.includes("generate-codeowners")) {
+            hasCodeowners = true;
           }
         } catch {
           continue;
@@ -56,6 +60,11 @@ export function evaluate(repo: Repo): RuleResult {
       "If (1): ask the user to provide the key, then run `gh secret set` with the secret name from the previous step. " +
       "If (2): tell the user to go to their repo → Settings → Secrets and variables → Actions → New repository secret, and create the secret with the name from the previous step. " +
       "Skip this task if the user chose Skip in the previous step.",
+    );
+  }
+  if (!hasCodeowners) {
+    tasks.push(
+      "No CODEOWNERS workflow found — copy `.context-tree/workflows/codeowners.yml` to `.github/workflows/codeowners.yml` to auto-generate CODEOWNERS from tree ownership on every PR.",
     );
   }
   return { group: "CI / Validation", order: 6, tasks };

@@ -211,10 +211,11 @@ describe("ciValidation rule", () => {
     const tmp = useTmpDir();
     const repo = new Repo(tmp.path);
     const result = ciValidation.evaluate(repo);
-    expect(result.tasks).toHaveLength(3);
+    expect(result.tasks).toHaveLength(4);
     expect(result.tasks[0]).toContain("validation workflow");
     expect(result.tasks[1]).toContain("PR reviews");
     expect(result.tasks[2]).toContain("API secret");
+    expect(result.tasks[3]).toContain("CODEOWNERS");
   });
 
   it("reports workflow without validate or pr-review", () => {
@@ -224,10 +225,10 @@ describe("ciValidation rule", () => {
     writeFileSync(join(wfDir, "ci.yml"), "name: CI\non: push\njobs: {}\n");
     const repo = new Repo(tmp.path);
     const result = ciValidation.evaluate(repo);
-    expect(result.tasks).toHaveLength(3);
+    expect(result.tasks).toHaveLength(4);
   });
 
-  it("passes validation but reports missing pr-review", () => {
+  it("passes validation but reports missing pr-review and codeowners", () => {
     const tmp = useTmpDir();
     const wfDir = join(tmp.path, ".github", "workflows");
     mkdirSync(wfDir, { recursive: true });
@@ -237,15 +238,35 @@ describe("ciValidation rule", () => {
     );
     const repo = new Repo(tmp.path);
     const result = ciValidation.evaluate(repo);
-    expect(result.tasks).toHaveLength(2);
+    expect(result.tasks).toHaveLength(3);
     expect(result.tasks[0]).toContain("PR reviews");
     expect(result.tasks[1]).toContain("API secret");
+    expect(result.tasks[2]).toContain("CODEOWNERS");
   });
 
-  it("passes pr-review but reports missing validation", () => {
+  it("passes pr-review but reports missing validation and codeowners", () => {
     const tmp = useTmpDir();
     const wfDir = join(tmp.path, ".github", "workflows");
     mkdirSync(wfDir, { recursive: true });
+    writeFileSync(
+      join(wfDir, "pr-review.yml"),
+      "name: PR Review\non: pull_request\njobs:\n  review:\n    steps:\n      - run: npx tsx .context-tree/run-review.ts\n",
+    );
+    const repo = new Repo(tmp.path);
+    const result = ciValidation.evaluate(repo);
+    expect(result.tasks).toHaveLength(2);
+    expect(result.tasks[0]).toContain("validation workflow");
+    expect(result.tasks[1]).toContain("CODEOWNERS");
+  });
+
+  it("passes with validate and pr-review but reports missing codeowners", () => {
+    const tmp = useTmpDir();
+    const wfDir = join(tmp.path, ".github", "workflows");
+    mkdirSync(wfDir, { recursive: true });
+    writeFileSync(
+      join(wfDir, "validate.yml"),
+      "name: Validate\non: push\njobs:\n  validate:\n    steps:\n      - run: python validate_nodes.py\n",
+    );
     writeFileSync(
       join(wfDir, "pr-review.yml"),
       "name: PR Review\non: pull_request\njobs:\n  review:\n    steps:\n      - run: npx tsx .context-tree/run-review.ts\n",
@@ -253,10 +274,10 @@ describe("ciValidation rule", () => {
     const repo = new Repo(tmp.path);
     const result = ciValidation.evaluate(repo);
     expect(result.tasks).toHaveLength(1);
-    expect(result.tasks[0]).toContain("validation workflow");
+    expect(result.tasks[0]).toContain("CODEOWNERS");
   });
 
-  it("passes with both validate and pr-review workflows", () => {
+  it("passes with all three workflows", () => {
     const tmp = useTmpDir();
     const wfDir = join(tmp.path, ".github", "workflows");
     mkdirSync(wfDir, { recursive: true });
@@ -267,6 +288,10 @@ describe("ciValidation rule", () => {
     writeFileSync(
       join(wfDir, "pr-review.yml"),
       "name: PR Review\non: pull_request\njobs:\n  review:\n    steps:\n      - run: npx tsx .context-tree/run-review.ts\n",
+    );
+    writeFileSync(
+      join(wfDir, "codeowners.yml"),
+      "name: Update CODEOWNERS\non: pull_request\njobs:\n  update:\n    steps:\n      - run: npx tsx .context-tree/generate-codeowners.ts\n",
     );
     const repo = new Repo(tmp.path);
     const result = ciValidation.evaluate(repo);
@@ -321,7 +346,7 @@ describe("evaluateAll", () => {
     mkdirSync(wfDir, { recursive: true });
     writeFileSync(
       join(wfDir, "validate.yml"),
-      "steps:\n  - run: validate_nodes\n  - run: run-review\n",
+      "steps:\n  - run: validate_nodes\n  - run: run-review\n  - run: generate-codeowners\n",
     );
     const repo = new Repo(tmp.path);
     const groups = evaluateAll(repo);
