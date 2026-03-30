@@ -150,11 +150,8 @@ export function AgentDetailPage() {
   });
 
   // Test connection
-  const [testResult, setTestResult] = useState<TestResult | null>(null);
   const testMutation = useMutation({
     mutationFn: () => testAgentConnection(agentId),
-    onSuccess: (data) => setTestResult(data),
-    onError: () => setTestResult({ status: "error", message: "Failed to reach server" }),
   });
 
   const agent = agentQuery.data;
@@ -283,7 +280,7 @@ export function AgentDetailPage() {
             variant="outline"
             size="sm"
             onClick={() => {
-              setTestResult(null);
+              testMutation.reset();
               testMutation.mutate();
             }}
             disabled={testMutation.isPending}
@@ -301,50 +298,11 @@ export function AgentDetailPage() {
       </div>
 
       {/* Test Connection Result */}
-      {testResult && (
-        <Card
-          className={cn(
-            "border-l-4",
-            testResult.status === "success" && "border-l-green-500",
-            testResult.status === "timeout" && "border-l-yellow-500",
-            testResult.status === "offline" && "border-l-gray-400",
-            testResult.status === "error" && "border-l-red-500",
-          )}
-        >
-          <CardContent className="pt-4">
-            <div className="flex items-start justify-between">
-              <div className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <Badge
-                    variant={
-                      testResult.status === "success"
-                        ? "default"
-                        : testResult.status === "error" || testResult.status === "offline"
-                          ? "destructive"
-                          : "secondary"
-                    }
-                  >
-                    {testResult.status}
-                  </Badge>
-                  {testResult.responseTime != null && (
-                    <span className="text-xs text-muted-foreground">
-                      {(testResult.responseTime / 1000).toFixed(1)}s
-                    </span>
-                  )}
-                </div>
-                {testResult.message && <p className="text-sm text-muted-foreground">{testResult.message}</p>}
-                {testResult.responseContent && (
-                  <p className="text-sm mt-2 whitespace-pre-wrap bg-muted rounded p-2 max-h-40 overflow-auto">
-                    {testResult.responseContent}
-                  </p>
-                )}
-              </div>
-              <Button variant="ghost" size="sm" onClick={() => setTestResult(null)}>
-                Dismiss
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+      {(testMutation.data || testMutation.error) && (
+        <TestResultCard
+          result={testMutation.data ?? { status: "error", message: "Failed to reach server" }}
+          onDismiss={() => testMutation.reset()}
+        />
       )}
 
       {/* Agent Info — read-only, managed by Context Tree */}
@@ -796,6 +754,53 @@ export function AgentDetailPage() {
         </Dialog>
       )}
     </div>
+  );
+}
+
+// ── Components ──────────────────────────────────────────────────────
+
+const STATUS_LABELS: Record<TestResult["status"], string> = {
+  success: "Connected",
+  timeout: "Timed out",
+  offline: "Offline",
+  error: "Error",
+};
+
+function TestResultCard({ result, onDismiss }: { result: TestResult; onDismiss: () => void }) {
+  const borderColor = {
+    success: "border-l-green-500",
+    timeout: "border-l-yellow-500",
+    offline: "border-l-gray-400",
+    error: "border-l-red-500",
+  }[result.status];
+
+  const badgeVariant =
+    result.status === "success" ? "default" : result.status === "timeout" ? "secondary" : "destructive";
+
+  return (
+    <Card className={cn("border-l-4", borderColor)}>
+      <CardContent className="pt-4">
+        <div className="flex items-start justify-between">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <Badge variant={badgeVariant}>{STATUS_LABELS[result.status]}</Badge>
+              {result.responseTime != null && (
+                <span className="text-xs text-muted-foreground">{(result.responseTime / 1000).toFixed(1)}s</span>
+              )}
+            </div>
+            {result.message && <p className="text-sm text-muted-foreground">{result.message}</p>}
+            {result.responseContent && (
+              <p className="text-sm mt-2 whitespace-pre-wrap bg-muted rounded p-2 max-h-40 overflow-auto">
+                {result.responseContent}
+              </p>
+            )}
+          </div>
+          <Button variant="ghost" size="sm" onClick={onDismiss}>
+            Dismiss
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
