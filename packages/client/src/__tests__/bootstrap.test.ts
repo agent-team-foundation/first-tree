@@ -73,6 +73,10 @@ describe("bootstrapWorkspace", () => {
     const content = readFileSync(toolsPath, "utf-8");
     expect(content).toContain("FIRST_TREE_HUB_SERVER_URL");
     expect(content).toContain("FIRST_TREE_HUB_AGENT_TOKEN");
+    expect(content).toContain("How You Communicate");
+    expect(content).toContain("Agent Hub");
+    expect(content).toContain("[From: sender-id]");
+    expect(content).toContain("Use your judgment about when to respond");
   });
 
   it("copies self.md from context tree when available", () => {

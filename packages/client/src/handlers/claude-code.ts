@@ -36,11 +36,13 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   let ctx: SessionContext | null = null;
 
   function toSDKUserMessage(message: SessionMessage, sessionId: string): SDKUserMessage {
+    const rawContent = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+    const content = message.senderId ? `[From: ${message.senderId}]\n\n${rawContent}` : rawContent;
     return {
       type: "user",
       message: {
         role: "user",
-        content: typeof message.content === "string" ? message.content : JSON.stringify(message.content),
+        content,
       },
       parent_tool_use_id: null,
       session_id: sessionId,
