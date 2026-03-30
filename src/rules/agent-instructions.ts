@@ -1,6 +1,6 @@
-import { FRAMEWORK_END_MARKER } from "../repo.js";
-import type { Repo } from "../repo.js";
-import type { RuleResult } from "./index.js";
+import { FRAMEWORK_END_MARKER } from "#src/repo.js";
+import type { Repo } from "#src/repo.js";
+import type { RuleResult } from "#src/rules/index.js";
 
 export function evaluate(repo: Repo): RuleResult {
   const tasks: string[] = [];

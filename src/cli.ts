@@ -30,7 +30,7 @@ async function runHelp(args: string[]): Promise<number> {
 
   switch (topic) {
     case "onboarding": {
-      const { runOnboarding } = await import("./onboarding.js");
+      const { runOnboarding } = await import("#src/onboarding.js");
       return runOnboarding();
     }
     default:
@@ -52,15 +52,15 @@ async function main(): Promise<number> {
 
   switch (command) {
     case "init": {
-      const { runInit } = await import("./init.js");
+      const { runInit } = await import("#src/init.js");
       return runInit();
     }
     case "verify": {
-      const { runVerify } = await import("./verify.js");
+      const { runVerify } = await import("#src/verify.js");
       return runVerify();
     }
     case "upgrade": {
-      const { runUpgrade } = await import("./upgrade.js");
+      const { runUpgrade } = await import("#src/upgrade.js");
       return runUpgrade();
     }
     case "help":

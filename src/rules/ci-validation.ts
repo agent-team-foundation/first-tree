@@ -1,8 +1,8 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { INTERACTIVE_TOOL } from "../init.js";
-import type { Repo } from "../repo.js";
-import type { RuleResult } from "./index.js";
+import { INTERACTIVE_TOOL } from "#src/init.js";
+import type { Repo } from "#src/repo.js";
+import type { RuleResult } from "#src/rules/index.js";
 
 export function evaluate(repo: Repo): RuleResult {
   const tasks: string[] = [];

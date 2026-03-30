@@ -6,6 +6,10 @@
   "bin": {
     "context-tree": "./dist/cli.js"
   },
+  "imports": {
+    "#src/*.js": "./src/*.ts",
+    "#docs/*": "./docs/*"
+  },
   "files": [
     "dist"
   ],

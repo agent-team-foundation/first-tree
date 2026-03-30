@@ -1,4 +1,4 @@
-import ONBOARDING_TEXT from "../docs/onboarding.md";
+import ONBOARDING_TEXT from "#docs/onboarding.md";
 
 export { ONBOARDING_TEXT };
 

@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { Repo } from "../src/repo.js";
+import { Repo } from "#src/repo.js";
 import { useTmpDir } from "./helpers.js";
 
 // --- pathExists ---

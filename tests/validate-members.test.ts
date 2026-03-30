@@ -5,7 +5,7 @@ import {
   extractScalar,
   extractList,
   validateMember,
-} from "../src/validators/members.js";
+} from "#src/validators/members.js";
 import { useTmpDir } from "./helpers.js";
 
 function write(root: string, relPath: string, content: string): string {

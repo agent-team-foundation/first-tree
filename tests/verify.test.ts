@@ -1,8 +1,8 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { check, checkProgress, runVerify } from "../src/verify.js";
-import { Repo } from "../src/repo.js";
+import { check, checkProgress, runVerify } from "#src/verify.js";
+import { Repo } from "#src/repo.js";
 import { useTmpDir, makeFramework, makeNode, makeAgentMd, makeMembers } from "./helpers.js";
 
 // --- check ---

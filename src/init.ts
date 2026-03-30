@@ -10,10 +10,10 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { Repo } from "./repo.js";
-import { ONBOARDING_TEXT } from "./onboarding.js";
-import { evaluateAll } from "./rules/index.js";
-import type { RuleResult } from "./rules/index.js";
+import { Repo } from "#src/repo.js";
+import { ONBOARDING_TEXT } from "#src/onboarding.js";
+import { evaluateAll } from "#src/rules/index.js";
+import type { RuleResult } from "#src/rules/index.js";
 
 const SEED_TREE_URL = "https://github.com/agent-team-foundation/seed-tree";
 const FRAMEWORK_DIR = ".context-tree";

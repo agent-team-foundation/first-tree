@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { Repo } from "./repo.js";
+import { Repo } from "#src/repo.js";
 
 const SEED_TREE_URL = "https://github.com/agent-team-foundation/seed-tree";
 

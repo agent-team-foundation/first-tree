@@ -1,10 +1,10 @@
-import type { Repo } from "../repo.js";
-import * as agentInstructions from "./agent-instructions.js";
-import * as agentIntegration from "./agent-integration.js";
-import * as ciValidation from "./ci-validation.js";
-import * as framework from "./framework.js";
-import * as members from "./members.js";
-import * as rootNode from "./root-node.js";
+import type { Repo } from "#src/repo.js";
+import * as agentInstructions from "#src/rules/agent-instructions.js";
+import * as agentIntegration from "#src/rules/agent-integration.js";
+import * as ciValidation from "#src/rules/ci-validation.js";
+import * as framework from "#src/rules/framework.js";
+import * as members from "#src/rules/members.js";
+import * as rootNode from "#src/rules/root-node.js";
 
 export interface RuleResult {
   group: string;

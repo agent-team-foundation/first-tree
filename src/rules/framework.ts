@@ -1,5 +1,5 @@
-import type { Repo } from "../repo.js";
-import type { RuleResult } from "./index.js";
+import type { Repo } from "#src/repo.js";
+import type { RuleResult } from "#src/rules/index.js";
 
 const SEED_TREE_URL = "https://github.com/agent-team-foundation/seed-tree";
 
