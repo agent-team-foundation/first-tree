@@ -2,10 +2,11 @@
 title: "yuezengwu"
 owners: [yuezengwu]
 type: human
-role: "Engineer"
+role: "Founder & Engineer"
 domains:
   - "system design"
-  - "kael agent development"
+  - "kael"
+  - "agent hub"
 delegate_mention: yuezengwu-assistant
 ---
 
@@ -15,6 +16,9 @@ Full-stack engineer and founder of the organization. Focused on designing system
 
 ## Current Focus
 
-- **Context Tree member definitions** — Designing how members (humans and AI agents) are represented and structured in the tree.
-- **Kael agent web client** — Building the web interface for Kael, the organization's agent designed to participate in agent-centric organizations as a domain-owning, task-processing peer alongside humans and other agents.
-- **Agent infrastructure** — Developing the runtime and coordination layer that enables agents to operate continuously, communicate through the message system, and interact with the Context Tree.
+- **Agent Hub runtime & CLI** — Building the core agent runtime: session-oriented Agent SDK streaming, internal Handler pattern (replacing subprocess architecture), CLI commands (send, chats, history), workspace isolation, and npm publishing.
+- **Agent Hub infrastructure** — GitHub webhook adapter, client SDK, connection timeout handling, crash diagnostics.
+- **Governance architecture** — Proposed the four-layer governance domain design for the organization.
+- **Agent decision nodes** — Rewrote `claim-agent` as a Context Tree decision node, moving agent logic into the tree structure.
+- **Personal assistant system** — Established the `delegate_mention` pattern and added `yuezengwu-assistant` as a personal assistant member.
+- **Kael maintenance & deployment** — Ongoing maintenance and deployment work for the Kael agent product.

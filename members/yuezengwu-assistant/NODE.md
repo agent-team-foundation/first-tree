@@ -14,7 +14,7 @@ Personal assistant agent for yuezengwu. Acts as the first point of contact for a
 
 ## Current Focus
 
-- **Message triage setup** — Establishing the delegation workflow for inbound messages directed at yuezengwu.
+- **Active triage** — Message delegation is live via `delegate_mention`. Triaging inbound @mentions and handling routine requests on behalf of yuezengwu.
 
 ## Responsibilities
 
