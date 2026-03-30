@@ -28,6 +28,7 @@ const DEFAULT_PULL_LIMIT = 10;
 const RECONNECT_BASE_MS = 1000;
 const RECONNECT_MAX_MS = 30_000;
 const WS_CONNECT_TIMEOUT_MS = 10_000;
+const WS_PING_INTERVAL_MS = 3_000;
 
 export class AgentConnection extends EventEmitter<ConnectionEvents> {
   readonly sdk: FirstTreeHubSDK;
@@ -37,6 +38,7 @@ export class AgentConnection extends EventEmitter<ConnectionEvents> {
 
   private ws: WebSocket | null = null;
   private wsConnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private wsPingTimer: ReturnType<typeof setInterval> | null = null;
   private pollingTimer: ReturnType<typeof setInterval> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
@@ -120,11 +122,8 @@ export class AgentConnection extends EventEmitter<ConnectionEvents> {
       this.reconnectAttempt = 0;
       this._state = "connected";
       this.emit("connected");
-      // Always poll — Server does not yet push inbox notifications via WS.
-      // WebSocket currently only handles presence; polling is the primary
-      // message delivery mechanism until Server adds pg_notify on send.
+      this.startPing();
       this.startPolling();
-      // Immediate catch-up pull
       this.pullAndDispatch();
     });
 
@@ -140,6 +139,7 @@ export class AgentConnection extends EventEmitter<ConnectionEvents> {
     });
 
     ws.on("close", () => {
+      this.stopPing();
       if (!this.closing) {
         this.scheduleReconnect();
       }
@@ -169,6 +169,24 @@ export class AgentConnection extends EventEmitter<ConnectionEvents> {
         this.openWebSocket();
       }
     }, delay);
+  }
+
+  // ---- WebSocket keepalive --------------------------------------------------
+
+  private startPing(): void {
+    this.stopPing();
+    this.wsPingTimer = setInterval(() => {
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.ping();
+      }
+    }, WS_PING_INTERVAL_MS);
+  }
+
+  private stopPing(): void {
+    if (this.wsPingTimer) {
+      clearInterval(this.wsPingTimer);
+      this.wsPingTimer = null;
+    }
   }
 
   // ---- Polling fallback ----------------------------------------------------
@@ -252,6 +270,7 @@ export class AgentConnection extends EventEmitter<ConnectionEvents> {
 
   private clearTimers(): void {
     this.stopPolling();
+    this.stopPing();
     if (this.wsConnectTimer) {
       clearTimeout(this.wsConnectTimer);
       this.wsConnectTimer = null;
