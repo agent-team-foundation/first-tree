@@ -246,41 +246,66 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
 /**
  * Generate a CLAUDE.md file from .agent/ bootstrap data.
  *
- * Adapts content based on agent type (personal_assistant vs autonomous_agent).
+ * Layered Bootstrap:
+ *   Layer 1 (always): Agent identity + member profile + AGENT.md operating instructions
+ *   Layer 2 (if available): Organization domain map from root NODE.md
+ *   Layer 3 (on-demand): Agent reads specific domain nodes via contextTreePath
  */
 function generateClaudeMd(workspacePath: string, identity: AgentIdentity, contextTreePath: string | null): void {
   const sections: string[] = [];
+  const contextDir = join(workspacePath, ".agent", "context");
 
-  // Identity section
-  if (identity.type === "personal_assistant" && identity.delegateMention) {
-    sections.push(
-      `# Agent Identity\n\nYou are ${identity.displayName ?? identity.agentId}, a personal assistant to ${identity.delegateMention}.\n`,
-    );
-    sections.push(
-      `## Your Responsibilities\n\n- Answer queries and execute tasks on behalf of ${identity.delegateMention}\n- Escalate when: cross-domain ownership changes, architectural decisions, ambiguous requests\n- When unsure, ask ${identity.delegateMention} for clarification rather than guessing\n`,
-    );
+  // --- Identity (1 sentence based on type) ---
+  const name = identity.displayName ?? identity.agentId;
+  if (identity.type === "personal_assistant") {
+    sections.push(`# Agent Identity\n\nYou are ${name}, a personal assistant agent.\n`);
   } else {
-    sections.push(`# Agent Identity\n\nYou are ${identity.displayName ?? identity.agentId}, an autonomous agent.\n`);
-    sections.push(
-      "## Your Responsibilities\n\n- Execute your assigned responsibilities independently\n- Collaborate with other agents through the messaging system when needed\n",
-    );
+    sections.push(`# Agent Identity\n\nYou are ${name}, an autonomous agent.\n`);
   }
 
-  // Self context from Context Tree
-  const selfMdPath = join(workspacePath, ".agent", "context", "self.md");
+  // --- Layer 1: Member profile from Context Tree (self.md = member NODE.md) ---
+  const selfMdPath = join(contextDir, "self.md");
   if (existsSync(selfMdPath)) {
     const selfContent = readFileSync(selfMdPath, "utf-8");
-    sections.push(`## Context Tree Profile\n\n${selfContent}\n`);
-  }
-
-  // Context Tree location
-  if (contextTreePath) {
+    sections.push(`## Your Profile\n\n${selfContent}\n`);
+  } else {
     sections.push(
-      `## Context Tree\n\nThe organization's Context Tree is available at: \`${contextTreePath}\`\n\nYou can read files from this directory for organizational context. If your work requires updating the Context Tree, commit and push changes there.\n`,
+      "## Your Profile\n\nNo member profile available. Your responsibilities are not loaded from the Context Tree.\n",
     );
   }
 
-  // SDK tools reference
+  // --- Layer 1: Context Tree operating instructions (AGENT.md) ---
+  const agentInstructionsPath = join(contextDir, "agent-instructions.md");
+  if (existsSync(agentInstructionsPath)) {
+    const instructions = readFileSync(agentInstructionsPath, "utf-8");
+    sections.push(`## Context Tree Operating Instructions\n\n${instructions}\n`);
+  } else {
+    sections.push(
+      "## Context Tree Operating Instructions\n\nContext Tree instructions unavailable. Organizational context is not loaded for this session.\n",
+    );
+  }
+
+  // --- Layer 2: Organization domain map (root NODE.md) ---
+  const domainMapPath = join(contextDir, "domain-map.md");
+  if (existsSync(domainMapPath)) {
+    const domainMap = readFileSync(domainMapPath, "utf-8");
+    sections.push(`## Organization Domain Map\n\n${domainMap}\n`);
+  }
+
+  // --- Layer 3: Context Tree location for on-demand reading ---
+  if (contextTreePath) {
+    sections.push(
+      `## Context Tree Location\n\nThe full Context Tree is available at: \`${contextTreePath}\`\n\nRead specific domain nodes as needed following the operating instructions above.\n`,
+    );
+  } else {
+    const degradedPath = join(contextDir, "degraded.md");
+    if (existsSync(degradedPath)) {
+      const degradedMsg = readFileSync(degradedPath, "utf-8");
+      sections.push(`## Context Tree Location\n\nWARNING: ${degradedMsg}\nYou can still use the SDK tools below, but you lack organizational context for decisions.\n`);
+    }
+  }
+
+  // --- SDK tools reference ---
   const toolsPath = join(workspacePath, ".agent", "tools.md");
   if (existsSync(toolsPath)) {
     const toolsContent = readFileSync(toolsPath, "utf-8");

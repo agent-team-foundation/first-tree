@@ -131,6 +131,63 @@ describe("bootstrapWorkspace", () => {
     expect(existsSync(join(workspace, ".agent", "identity.json"))).toBe(true);
   });
 
+  it("copies AGENT.md as agent-instructions.md from context tree", () => {
+    const workspace = join(tmpBase, "ws-agent-md");
+    const ctxTree = join(tmpBase, "ctx-agent-md");
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(join(ctxTree, "members", "test-agent"), { recursive: true });
+    writeFileSync(join(ctxTree, "AGENT.md"), "## Before Every Task\n\nRead the root NODE.md.");
+
+    bootstrapWorkspace({
+      workspacePath: workspace,
+      identity: makeIdentity(),
+      contextTreePath: ctxTree,
+      serverUrl: "http://localhost:8000",
+      chatId: "chat-1",
+    });
+
+    const instructionsPath = join(workspace, ".agent", "context", "agent-instructions.md");
+    expect(existsSync(instructionsPath)).toBe(true);
+    expect(readFileSync(instructionsPath, "utf-8")).toContain("Before Every Task");
+  });
+
+  it("copies root NODE.md as domain-map.md from context tree", () => {
+    const workspace = join(tmpBase, "ws-domain-map");
+    const ctxTree = join(tmpBase, "ctx-domain-map");
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(join(ctxTree, "members", "test-agent"), { recursive: true });
+    writeFileSync(join(ctxTree, "NODE.md"), "# Context Tree\n\n## Domains\n\n- kael/\n- agent-hub/");
+
+    bootstrapWorkspace({
+      workspacePath: workspace,
+      identity: makeIdentity(),
+      contextTreePath: ctxTree,
+      serverUrl: "http://localhost:8000",
+      chatId: "chat-1",
+    });
+
+    const domainMapPath = join(workspace, ".agent", "context", "domain-map.md");
+    expect(existsSync(domainMapPath)).toBe(true);
+    expect(readFileSync(domainMapPath, "utf-8")).toContain("kael/");
+  });
+
+  it("writes degraded.md when contextTreePath is null", () => {
+    const workspace = join(tmpBase, "ws-degraded");
+    mkdirSync(workspace, { recursive: true });
+
+    bootstrapWorkspace({
+      workspacePath: workspace,
+      identity: makeIdentity(),
+      contextTreePath: null,
+      serverUrl: "http://localhost:8000",
+      chatId: "chat-1",
+    });
+
+    const degradedPath = join(workspace, ".agent", "context", "degraded.md");
+    expect(existsSync(degradedPath)).toBe(true);
+    expect(readFileSync(degradedPath, "utf-8")).toContain("Context Tree is not available");
+  });
+
   it("overwrites existing files on re-bootstrap", () => {
     const workspace = join(tmpBase, "ws-overwrite");
     mkdirSync(join(workspace, ".agent"), { recursive: true });

@@ -150,12 +150,33 @@ export function bootstrapWorkspace(options: BootstrapOptions): void {
   };
   writeFileSync(join(agentDir, "identity.json"), JSON.stringify(identityData, null, 2), "utf-8");
 
-  // 2. Copy self NODE.md from context tree
+  // 2. Copy context files from Context Tree
   if (contextTreePath) {
+    // Member profile (self NODE.md)
     const selfNodePath = join(contextTreePath, "members", identity.agentId, "NODE.md");
     if (existsSync(selfNodePath)) {
       copyFileSync(selfNodePath, join(contextDir, "self.md"));
     }
+
+    // Agent operating instructions (AGENT.md)
+    const agentMdPath = join(contextTreePath, "AGENT.md");
+    if (existsSync(agentMdPath)) {
+      copyFileSync(agentMdPath, join(contextDir, "agent-instructions.md"));
+    }
+
+    // Organization domain map (root NODE.md)
+    const rootNodePath = join(contextTreePath, "NODE.md");
+    if (existsSync(rootNodePath)) {
+      copyFileSync(rootNodePath, join(contextDir, "domain-map.md"));
+    }
+  } else {
+    // Mark degraded mode so CLAUDE.md generator can warn
+    writeFileSync(
+      join(contextDir, "degraded.md"),
+      "Context Tree is not available for this session.\n" +
+        "Organizational context, domain structure, and ownership information are not loaded.\n",
+      "utf-8",
+    );
   }
 
   // 3. Write tools.md (static SDK reference)
