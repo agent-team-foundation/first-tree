@@ -1,4 +1,4 @@
-const ONBOARDING_TEXT = `# Context Tree Onboarding
+export const ONBOARDING_TEXT = `# Context Tree Onboarding
 
 You are setting up a **Context Tree** — the living source of truth for an organization. This document tells you what it is and how to bootstrap one.
 

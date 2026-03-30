@@ -11,6 +11,7 @@ import {
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { Repo } from "./repo.js";
+import { ONBOARDING_TEXT } from "./onboarding.js";
 import { evaluateAll } from "./rules/index.js";
 import type { RuleResult } from "./rules/index.js";
 
@@ -164,6 +165,9 @@ export function runInit(repo?: Repo): number {
     }
     console.log();
   }
+
+  console.log(ONBOARDING_TEXT);
+  console.log("---\n");
 
   const groups = evaluateAll(r);
   if (groups.length === 0) {
