@@ -1,12 +1,12 @@
 import { ADAPTER_PLATFORMS } from "@first-tree-hub/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Cable, Copy, Key, Link2, Pencil, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, Cable, Copy, Key, Link2, Pencil, Play, Plus, Trash2 } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { createAdapterMapping, deleteAdapterMapping, listAdapterMappings } from "../api/adapter-mappings.js";
 import { getAdapterStatuses } from "../api/adapter-status.js";
 import { createAdapter, deleteAdapter, listAdapters, updateAdapter } from "../api/adapters.js";
-import { deleteAgent, getAgent } from "../api/agents.js";
+import { deleteAgent, getAgent, type TestResult, testAgentConnection } from "../api/agents.js";
 import { createToken, listTokens, revokeToken } from "../api/tokens.js";
 import { Badge } from "../components/ui/badge.js";
 import { Button } from "../components/ui/button.js";
@@ -149,6 +149,14 @@ export function AgentDetailPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["adapter-mappings"] }),
   });
 
+  // Test connection
+  const [testResult, setTestResult] = useState<TestResult | null>(null);
+  const testMutation = useMutation({
+    mutationFn: () => testAgentConnection(agentId),
+    onSuccess: (data) => setTestResult(data),
+    onError: () => setTestResult({ status: "error", message: "Failed to reach server" }),
+  });
+
   const agent = agentQuery.data;
   const isHuman = agent?.type === "human";
 
@@ -270,6 +278,20 @@ export function AgentDetailPage() {
           <h1 className="text-2xl font-semibold">{agent.displayName ?? agent.id}</h1>
           <p className="text-sm text-muted-foreground font-mono">{agent.id}</p>
         </div>
+        {!isHuman && agent.status === "active" && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setTestResult(null);
+              testMutation.mutate();
+            }}
+            disabled={testMutation.isPending}
+          >
+            <Play className="h-4 w-4 mr-2" />
+            {testMutation.isPending ? "Testing..." : "Test Connection"}
+          </Button>
+        )}
         {agent.status === "suspended" && (
           <Button variant="destructive" size="sm" onClick={handleDelete}>
             <Trash2 className="h-4 w-4 mr-2" />
@@ -277,6 +299,53 @@ export function AgentDetailPage() {
           </Button>
         )}
       </div>
+
+      {/* Test Connection Result */}
+      {testResult && (
+        <Card
+          className={cn(
+            "border-l-4",
+            testResult.status === "success" && "border-l-green-500",
+            testResult.status === "timeout" && "border-l-yellow-500",
+            testResult.status === "offline" && "border-l-gray-400",
+            testResult.status === "error" && "border-l-red-500",
+          )}
+        >
+          <CardContent className="pt-4">
+            <div className="flex items-start justify-between">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <Badge
+                    variant={
+                      testResult.status === "success"
+                        ? "default"
+                        : testResult.status === "error" || testResult.status === "offline"
+                          ? "destructive"
+                          : "secondary"
+                    }
+                  >
+                    {testResult.status}
+                  </Badge>
+                  {testResult.responseTime != null && (
+                    <span className="text-xs text-muted-foreground">
+                      {(testResult.responseTime / 1000).toFixed(1)}s
+                    </span>
+                  )}
+                </div>
+                {testResult.message && <p className="text-sm text-muted-foreground">{testResult.message}</p>}
+                {testResult.responseContent && (
+                  <p className="text-sm mt-2 whitespace-pre-wrap bg-muted rounded p-2 max-h-40 overflow-auto">
+                    {testResult.responseContent}
+                  </p>
+                )}
+              </div>
+              <Button variant="ghost" size="sm" onClick={() => setTestResult(null)}>
+                Dismiss
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Agent Info — read-only, managed by Context Tree */}
       <Card>
