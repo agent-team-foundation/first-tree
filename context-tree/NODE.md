@@ -47,7 +47,7 @@ Current rules (in order):
 3. **Agent Instructions** — AGENT.md exists with framework markers, has user content
 4. **Members** — `members/` exists with at least one member node
 5. **Agent Integration** — Agent config detected (Claude Code, Codex, etc.)
-6. **CI / Validation** — GitHub Actions workflow with validation steps
+6. **CI / Validation** — GitHub Actions workflow with validation steps and optional PR review
 
 ---
 
