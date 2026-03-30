@@ -48,6 +48,7 @@ export class AgentConnection extends EventEmitter<ConnectionEvents> {
   private readonly pollingInterval: number;
   private readonly pullLimit: number;
   private readonly serverUrl: string;
+  private rateLimitedUntil = 0;
 
   constructor(config: AgentConnectionConfig) {
     super();
@@ -145,6 +146,7 @@ export class AgentConnection extends EventEmitter<ConnectionEvents> {
     });
 
     ws.on("error", (err) => {
+      if (this.handleRateLimit(err)) return;
       this.emit("error", err);
       // close event will follow and trigger reconnect
     });
@@ -153,6 +155,8 @@ export class AgentConnection extends EventEmitter<ConnectionEvents> {
   }
 
   private scheduleReconnect(): void {
+    if (Date.now() < this.rateLimitedUntil) return;
+
     this._state = "reconnecting";
     this.reconnectAttempt++;
     this.emit("reconnecting", this.reconnectAttempt);
@@ -187,8 +191,8 @@ export class AgentConnection extends EventEmitter<ConnectionEvents> {
 
   private async pullAndDispatch(): Promise<void> {
     if (this.closing || !this.handler) return;
+    if (Date.now() < this.rateLimitedUntil) return;
     if (this.isPulling) {
-      // A pull is in flight — mark dirty so it re-pulls when done
       this.pullAgain = true;
       return;
     }
@@ -207,10 +211,41 @@ export class AgentConnection extends EventEmitter<ConnectionEvents> {
         }
       } while (this.pullAgain && !this.closing);
     } catch (err) {
+      if (this.handleRateLimit(err)) return;
       this.emit("error", err instanceof Error ? err : new Error(String(err)));
     } finally {
       this.isPulling = false;
     }
+  }
+
+  /** Detect 429 responses and pause all activity. Returns true if rate-limited. */
+  private handleRateLimit(err: unknown): boolean {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!msg.includes("429") && !msg.toLowerCase().includes("rate limit")) return false;
+
+    const backoff = 60_000;
+    this.rateLimitedUntil = Date.now() + backoff;
+    this.emit("error", new Error(`Rate limited, pausing for ${backoff / 1000}s`));
+
+    // Stop polling and WebSocket reconnection during backoff
+    this.stopPolling();
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
+    // Resume after backoff
+    setTimeout(() => {
+      if (this.closing) return;
+      this.rateLimitedUntil = 0;
+      this.startPolling();
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        this.reconnectAttempt = 0;
+        this.openWebSocket();
+      }
+    }, backoff);
+
+    return true;
   }
 
   // ---- Cleanup -------------------------------------------------------------
