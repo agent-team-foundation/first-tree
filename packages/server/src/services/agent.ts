@@ -8,7 +8,7 @@ import { adapterConfigs } from "../db/schema/adapter-configs.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
 import { agentTokens } from "../db/schema/agent-tokens.js";
 import { agents } from "../db/schema/agents.js";
-import { BadRequestError, ConflictError, NotFoundError } from "../errors.js";
+import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 
 function hashToken(raw: string): string {
   return createHash("sha256").update(raw).digest("hex");
@@ -166,6 +166,36 @@ export async function deleteAgent(db: Database, id: string) {
 
   if (!agent) throw new Error("Unexpected: UPDATE RETURNING produced no row");
   return agent;
+}
+
+/**
+ * Bootstrap a token for an agent using GitHub identity.
+ * Only works when the agent has no active (non-revoked, non-expired) tokens.
+ */
+export async function bootstrapToken(db: Database, agentId: string, githubUsername: string, tokenName?: string) {
+  // 1. Get agent — must exist and not be deleted
+  const agent = await getAgent(db, agentId);
+
+  // 2. Check agent has owners metadata from Context Tree sync
+  const owners: string[] = Array.isArray(agent.metadata?.owners) ? (agent.metadata.owners as string[]) : [];
+  if (!owners.includes(githubUsername)) {
+    throw new ForbiddenError(`GitHub user "${githubUsername}" is not in the owners list for agent "${agentId}"`);
+  }
+
+  // 3. Check no active tokens exist (non-revoked = active for bootstrap purposes)
+  const activeTokens = await db
+    .select({ id: agentTokens.id })
+    .from(agentTokens)
+    .where(and(eq(agentTokens.agentId, agentId), isNull(agentTokens.revokedAt)));
+
+  if (activeTokens.length > 0) {
+    throw new ConflictError(
+      `Agent "${agentId}" already has ${activeTokens.length} active token(s). Revoke all tokens first to re-bootstrap.`,
+    );
+  }
+
+  // 4. Create token
+  return createToken(db, agentId, { name: tokenName ?? "bootstrap" });
 }
 
 export async function createToken(db: Database, agentId: string, data: CreateAgentToken) {

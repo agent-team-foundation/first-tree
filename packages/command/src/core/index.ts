@@ -2,6 +2,14 @@
 
 // Admin management
 export { createAdminUser, hasAdminUser } from "./admin.js";
+// Bootstrap
+export {
+  bootstrapToken,
+  checkBootstrapStatus,
+  getGitHubToken,
+  getGitHubUsername,
+  resolveServerUrl,
+} from "./bootstrap.js";
 // Client runtime
 export { ClientRuntime } from "./client-runtime.js";
 // Docker PostgreSQL
@@ -23,8 +31,19 @@ export {
   checkWebSocket,
   printResults,
 } from "./doctor.js";
+// Feishu
+export { bindFeishuBot, bindFeishuUser, searchFeishuUsers } from "./feishu.js";
 // Database
 export { runMigrations } from "./migrate.js";
+// Onboard
+export {
+  formatCheckReport,
+  loadOnboardState,
+  onboardCheck,
+  onboardContinue,
+  onboardCreate,
+  saveOnboardState,
+} from "./onboard.js";
 // Output helpers
 export { blank, status } from "./output.js";
 // Interactive prompts

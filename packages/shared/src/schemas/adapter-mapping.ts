@@ -20,3 +20,32 @@ export const adapterMappingSchema = z.object({
   createdAt: z.string(),
 });
 export type AdapterMapping = z.infer<typeof adapterMappingSchema>;
+
+// -- Delegate Feishu user binding --
+
+export const delegateFeishuUserSchema = z.object({
+  feishuUserId: z.string().min(1),
+  displayName: z.string().max(200).optional(),
+});
+export type DelegateFeishuUser = z.infer<typeof delegateFeishuUserSchema>;
+
+// -- Feishu search --
+
+export const feishuSearchQuerySchema = z.object({
+  q: z.string().min(1),
+  by: z.enum(["name", "email", "mobile"]).default("name"),
+});
+export type FeishuSearchQuery = z.infer<typeof feishuSearchQuerySchema>;
+
+export const feishuSearchResultSchema = z.object({
+  users: z.array(
+    z.object({
+      userId: z.string(),
+      name: z.string(),
+      email: z.string().nullable(),
+      department: z.string().nullable(),
+    }),
+  ),
+  botUsed: z.string().nullable(),
+});
+export type FeishuSearchResult = z.infer<typeof feishuSearchResultSchema>;

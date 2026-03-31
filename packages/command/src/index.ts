@@ -6,11 +6,17 @@ export { FirstTreeHubSDK, SdkError } from "@first-tree-hub/client";
 // Core types
 export type { CheckResult, StartOptions } from "./core/index.js";
 export {
+  // Feishu
+  bindFeishuBot,
+  bindFeishuUser,
   blank,
+  // Bootstrap
+  bootstrapToken,
   // Client runtime
   ClientRuntime,
   checkAgentConfigs,
   checkAgentTokens,
+  checkBootstrapStatus,
   checkClientConfig,
   checkContextTreeRepo,
   checkDatabase,
@@ -24,17 +30,25 @@ export {
   checkWebSocket,
   createAdminUser,
   ensurePostgres,
+  formatCheckReport,
+  getGitHubToken,
+  getGitHubUsername,
   // Admin management
   hasAdminUser,
   // Docker PostgreSQL
   isDockerAvailable,
   isInteractive,
+  onboardCheck,
+  onboardContinue,
+  onboardCreate,
   printResults,
   promptAddAgent,
   // Interactive prompts
   promptMissingFields,
+  resolveServerUrl,
   // Database
   runMigrations,
+  searchFeishuUsers,
   // Server lifecycle
   startServer,
   // Output helpers

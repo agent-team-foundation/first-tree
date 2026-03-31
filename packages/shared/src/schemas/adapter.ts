@@ -52,3 +52,11 @@ export const ADAPTER_BIND_METHODS = {
 
 export const adapterBindMethodSchema = z.enum(["code", "reverse_token", "oauth", "manual"]);
 export type AdapterBindMethod = z.infer<typeof adapterBindMethodSchema>;
+
+// -- Self-service Feishu bot binding --
+
+export const selfServiceFeishuBotSchema = z.object({
+  appId: z.string().min(1),
+  appSecret: z.string().min(1),
+});
+export type SelfServiceFeishuBot = z.infer<typeof selfServiceFeishuBotSchema>;

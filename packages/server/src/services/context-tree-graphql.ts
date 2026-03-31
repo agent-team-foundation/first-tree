@@ -257,10 +257,12 @@ export function parseNodeMetadata(content: string): {
   type: string;
   displayName: string | null;
   delegateMention: string | null;
+  owners: string[];
+  github: string | null;
 } {
   const match = /^---\n([\s\S]*?)\n---/.exec(content);
   if (!match) {
-    return { type: "autonomous_agent", displayName: null, delegateMention: null };
+    return { type: "autonomous_agent", displayName: null, delegateMention: null, owners: [], github: null };
   }
 
   const frontmatter = match[1] ?? "";
@@ -269,10 +271,25 @@ export function parseNodeMetadata(content: string): {
     return lineMatch ? (lineMatch[1]?.trim().replace(/^["']|["']$/g, "") ?? null) : null;
   };
 
+  // Parse owners: [user1, user2] (inline YAML list)
+  const ownersRaw = getValue("owners");
+  let owners: string[] = [];
+  if (ownersRaw) {
+    const listMatch = /^\[([^\]]*)\]$/.exec(ownersRaw);
+    if (listMatch?.[1]) {
+      owners = listMatch[1]
+        .split(",")
+        .map((s) => s.trim().replace(/^["']|["']$/g, ""))
+        .filter(Boolean);
+    }
+  }
+
   return {
     type: getValue("type") ?? "autonomous_agent",
     displayName: getValue("display_name") ?? getValue("title") ?? getValue("name"),
     delegateMention: getValue("delegate_mention"),
+    owners,
+    github: getValue("github"),
   };
 }
 
@@ -317,17 +334,26 @@ export async function syncFromGitHub(
     try {
       const meta = member.nodeContent
         ? parseNodeMetadata(member.nodeContent)
-        : { type: "autonomous_agent", displayName: null, delegateMention: null };
+        : {
+            type: "autonomous_agent",
+            displayName: null,
+            delegateMention: null,
+            owners: [] as string[],
+            github: null as string | null,
+          };
+
+      // Store owners and github in JSONB metadata so bootstrap / webhook can use them
+      const metadataJson = JSON.stringify({ owners: meta.owners, github: meta.github });
 
       const existing = await db.execute(
-        sql`SELECT id, status, type, display_name, delegate_mention, tree_path FROM agents WHERE id = ${member.name}`,
+        sql`SELECT id, status, type, display_name, delegate_mention, tree_path, metadata FROM agents WHERE id = ${member.name}`,
       );
 
       if (existing.length === 0) {
         // New agent — create
         await db.execute(sql`
-          INSERT INTO agents (id, type, display_name, delegate_mention, tree_path, status, inbox_id)
-          VALUES (${member.name}, ${meta.type}, ${meta.displayName}, ${meta.delegateMention}, ${member.treePath}, 'active', ${`inbox_${member.name}`})
+          INSERT INTO agents (id, type, display_name, delegate_mention, tree_path, status, inbox_id, metadata)
+          VALUES (${member.name}, ${meta.type}, ${meta.displayName}, ${meta.delegateMention}, ${member.treePath}, 'active', ${`inbox_${member.name}`}, ${metadataJson}::jsonb)
         `);
         result.created++;
       } else {
@@ -338,12 +364,17 @@ export async function syncFromGitHub(
           display_name: string | null;
           delegate_mention: string | null;
           tree_path: string | null;
+          metadata: Record<string, unknown>;
         };
 
-        if (agent.status === "suspended") {
-          // Reactivate — member is back in tree
+        // Merge new metadata with existing (preserve managed flag etc.)
+        const existingMeta = agent.metadata ?? {};
+        const mergedMeta = JSON.stringify({ ...existingMeta, owners: meta.owners, github: meta.github });
+
+        if (agent.status === "suspended" || agent.status === "deleted") {
+          // Reactivate — member is back in tree (works for both suspended and deleted)
           await db.execute(sql`
-            UPDATE agents SET status = 'active', type = ${meta.type}, display_name = ${meta.displayName}, delegate_mention = ${meta.delegateMention}, tree_path = ${member.treePath}
+            UPDATE agents SET status = 'active', type = ${meta.type}, display_name = ${meta.displayName}, delegate_mention = ${meta.delegateMention}, tree_path = ${member.treePath}, metadata = ${mergedMeta}::jsonb
             WHERE id = ${member.name}
           `);
           result.reactivated++;
@@ -351,11 +382,13 @@ export async function syncFromGitHub(
           agent.type !== meta.type ||
           agent.display_name !== meta.displayName ||
           agent.delegate_mention !== meta.delegateMention ||
-          agent.tree_path !== member.treePath
+          agent.tree_path !== member.treePath ||
+          JSON.stringify(existingMeta.owners) !== JSON.stringify(meta.owners) ||
+          (existingMeta.github ?? null) !== (meta.github ?? null)
         ) {
           // Fields changed — update
           await db.execute(sql`
-            UPDATE agents SET type = ${meta.type}, display_name = ${meta.displayName}, delegate_mention = ${meta.delegateMention}, tree_path = ${member.treePath}
+            UPDATE agents SET type = ${meta.type}, display_name = ${meta.displayName}, delegate_mention = ${meta.delegateMention}, tree_path = ${member.treePath}, metadata = ${mergedMeta}::jsonb
             WHERE id = ${member.name}
           `);
           result.updated++;
