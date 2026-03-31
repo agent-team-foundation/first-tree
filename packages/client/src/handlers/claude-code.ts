@@ -104,6 +104,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             const result = message as {
               type: "result";
               subtype: string;
+              result?: string;
               errors?: string[];
               duration_ms?: number;
               total_cost_usd?: number;
@@ -112,6 +113,15 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             };
             if (result.subtype === "success") {
               retryCount = 0;
+              // Auto-bridge: forward result text back to the chat
+              if (result.result && sessionCtx.chatId) {
+                sessionCtx.sdk
+                  .sendMessage(sessionCtx.chatId, { format: "text", content: result.result })
+                  .then(() => sessionCtx.log("Result forwarded to chat"))
+                  .catch((err) =>
+                    sessionCtx.log(`Failed to forward result: ${err instanceof Error ? err.message : String(err)}`),
+                  );
+              }
             } else {
               const errors = result.errors ? result.errors.join("; ") : result.subtype;
               sessionCtx.log(
@@ -182,7 +192,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         `Starting session (${claudeSessionId}), cwd=${cwd}, permissionMode=${config.permissionMode ?? "bypassPermissions"}`,
       );
       spawnQuery(claudeSessionId, sessionCtx);
-      inputController?.push(toSDKUserMessage(message, claudeSessionId));
+      const sdkMsg = toSDKUserMessage(message, claudeSessionId);
+      inputController?.push(sdkMsg);
 
       sessionCtx.log(`Session started (${claudeSessionId})`);
       return claudeSessionId;
