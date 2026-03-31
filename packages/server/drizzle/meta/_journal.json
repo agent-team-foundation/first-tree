@@ -43,6 +43,13 @@
       "when": 1774972900000,
       "tag": "0005_delegate_mention",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1775073600000,
+      "tag": "0006_agent_tree_path",
+      "breakpoints": true
     }
   ]
 }

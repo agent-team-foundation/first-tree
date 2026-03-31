@@ -63,6 +63,7 @@ export const agentSchema = z.object({
   type: agentTypeSchema,
   displayName: z.string().nullable(),
   delegateMention: z.string().nullable(),
+  treePath: z.string().nullable(),
   inboxId: z.string(),
   status: z.string(),
   metadata: z.record(z.unknown()),
