@@ -48,6 +48,7 @@ Current rules (in order):
 4. **Members** — `members/` exists with at least one member node
 5. **Agent Integration** — Agent config detected (Claude Code, Codex, etc.)
 6. **CI / Validation** — GitHub Actions workflow with validation steps and optional PR review
+7. **Populate Tree** — Asks user whether to deep-populate the full tree; if yes, agent analyzes source repos, creates sub-domains with NODE.md files, and uses sub-tasks to parallelize work across domains
 
 ---
 
