@@ -4,6 +4,7 @@ import * as agentIntegration from "#src/rules/agent-integration.js";
 import * as ciValidation from "#src/rules/ci-validation.js";
 import * as framework from "#src/rules/framework.js";
 import * as members from "#src/rules/members.js";
+import * as populateTree from "#src/rules/populate-tree.js";
 import * as rootNode from "#src/rules/root-node.js";
 
 export interface RuleResult {
@@ -23,6 +24,7 @@ const ALL_RULES: Rule[] = [
   members,
   agentIntegration,
   ciValidation,
+  populateTree,
 ];
 
 export function evaluateAll(repo: Repo): RuleResult[] {
@@ -36,4 +38,4 @@ export function evaluateAll(repo: Repo): RuleResult[] {
   return results.sort((a, b) => a.order - b.order);
 }
 
-export { framework, rootNode, agentInstructions, members, agentIntegration, ciValidation };
+export { framework, rootNode, agentInstructions, members, agentIntegration, ciValidation, populateTree };

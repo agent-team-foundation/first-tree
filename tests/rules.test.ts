@@ -10,6 +10,7 @@ import {
   members,
   agentIntegration,
   ciValidation,
+  populateTree,
 } from "#src/rules/index.js";
 import {
   useTmpDir,
@@ -319,6 +320,34 @@ describe("ciValidation rule", () => {
   });
 });
 
+// --- populateTree rule ---
+
+describe("populateTree rule", () => {
+  it("always produces tasks", () => {
+    const tmp = useTmpDir();
+    const repo = new Repo(tmp.path);
+    const result = populateTree.evaluate(repo);
+    expect(result.group).toBe("Populate Tree");
+    expect(result.order).toBe(7);
+    expect(result.tasks.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("first task asks user whether to populate", () => {
+    const tmp = useTmpDir();
+    const repo = new Repo(tmp.path);
+    const result = populateTree.evaluate(repo);
+    expect(result.tasks[0]).toContain("Yes");
+    expect(result.tasks[0]).toContain("No");
+  });
+
+  it("includes sub-task parallelization instruction", () => {
+    const tmp = useTmpDir();
+    const repo = new Repo(tmp.path);
+    const result = populateTree.evaluate(repo);
+    expect(result.tasks.some((t) => t.includes("sub-task") || t.includes("TaskCreate"))).toBe(true);
+  });
+});
+
 // --- evaluateAll ---
 
 describe("evaluateAll", () => {
@@ -353,5 +382,12 @@ describe("evaluateAll", () => {
     for (const g of groups) {
       expect(g.tasks.length).toBeGreaterThan(0);
     }
+  });
+
+  it("includes populate tree group", () => {
+    const tmp = useTmpDir();
+    const repo = new Repo(tmp.path);
+    const groups = evaluateAll(repo);
+    expect(groups.some((g) => g.group === "Populate Tree")).toBe(true);
   });
 });
