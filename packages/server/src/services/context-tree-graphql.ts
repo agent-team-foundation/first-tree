@@ -101,7 +101,9 @@ async function fetchRecursiveTree(owner: string, name: string, treeSha: string, 
   const json = (await res.json()) as TreeResponse;
 
   if (json.truncated) {
-    console.warn("[context-tree-sync] Warning: tree response was truncated — very large members/ directory");
+    throw new Error(
+      "[context-tree-sync] GitHub REST tree API returned truncated response — members/ subtree is too large. Sync aborted to prevent incorrect agent suspension from partial data.",
+    );
   }
 
   return json.tree;
