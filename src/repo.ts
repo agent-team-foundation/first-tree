@@ -113,19 +113,21 @@ export class Repo {
       return 0;
     }
     let count = 0;
-    for (const entry of readdirSync(membersDir)) {
-      const childPath = join(membersDir, entry);
-      try {
-        if (
-          statSync(childPath).isDirectory() &&
-          existsSync(join(childPath, "NODE.md"))
-        ) {
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir)) {
+        const childPath = join(dir, entry);
+        try {
+          if (!statSync(childPath).isDirectory()) continue;
+        } catch {
+          continue;
+        }
+        if (existsSync(join(childPath, "NODE.md"))) {
           count++;
         }
-      } catch {
-        // skip unreadable entries
+        walk(childPath);
       }
-    }
+    };
+    walk(membersDir);
     return count;
   }
 
