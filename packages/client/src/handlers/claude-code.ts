@@ -49,9 +49,27 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     };
   }
 
+  /**
+   * Build env for the child Claude Code process.
+   *
+   * When the client runtime runs inside a Claude Code session (nested env),
+   * process.env contains internal markers (CLAUDECODE, CLAUDE_CODE_ENTRYPOINT,
+   * CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS, npm_lifecycle_script) that cause the
+   * child to enable Agent Teams infrastructure and use wrong init paths,
+   * resulting in ~90s cold start vs ~17s standalone. Strip these so the child
+   * starts clean; the SDK sets its own CLAUDE_CODE_ENTRYPOINT="sdk-ts".
+   */
   function buildEnv(sessionCtx: SessionContext): Record<string, string | undefined> {
+    const env: Record<string, string | undefined> = { ...process.env };
+
+    // Parent session markers — not needed by the child
+    delete env.CLAUDECODE;
+    delete env.CLAUDE_CODE_ENTRYPOINT;
+    delete env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS;
+    delete env.npm_lifecycle_script;
+
     return {
-      ...process.env,
+      ...env,
       FIRST_TREE_HUB_SERVER_URL: sessionCtx.sdk.serverUrl,
       FIRST_TREE_HUB_AGENT_TOKEN: sessionCtx.sdk.agentToken,
       FIRST_TREE_HUB_CHAT_ID: sessionCtx.chatId,
