@@ -63,7 +63,7 @@ function setByPath(obj: Record<string, unknown>, path: string[], value: unknown)
 
 /** Unwrap ZodDefault / ZodOptional to get the inner type for coercion. */
 function unwrapZodType(schema: z.ZodType): z.ZodType {
-  // Accessing Zod internals for env-var coercion
+  // Zod internal API (ZodDefault._def.innerType) — verified working with zod@4.3.6
   if (schema instanceof z.ZodDefault) {
     return unwrapZodType(schema._def.innerType as z.ZodType);
   }
