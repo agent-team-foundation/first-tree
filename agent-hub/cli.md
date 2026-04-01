@@ -63,7 +63,7 @@ This means `server start` on a fresh machine walks the user through database set
 
 ## Doctor Diagnostics
 
-`first-tree-hub status` runs a suite of health checks that verify the entire stack:
+`first-tree-hub status` and per-subsystem `doctor` commands run health checks that verify the entire stack:
 
 - Node.js version, Docker availability
 - Database connectivity and migration status
@@ -77,4 +77,4 @@ The doctor system exists because Agent Hub spans multiple concerns (database, se
 
 ## Command Structure
 
-Two core verbs — `server start` and `client start` — cover daily use. Everything else is auxiliary setup, diagnostics, or management. See [deployment.md](deployment.md) for the full command tree, startup flow, and configuration system.
+Three top-level groups — `server`, `client`, and `agent` — cover all use cases. `server start` and `client start` cover daily use; `agent` centralizes all agent-related operations (config, tokens, bindings, messaging). Everything else is auxiliary setup, diagnostics, or management. See [deployment.md](deployment.md) for the full command tree, startup flow, and configuration system.

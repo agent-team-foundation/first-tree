@@ -43,18 +43,24 @@ Two core verbs — `server start` and `client start` — cover daily use. Everyt
 first-tree-hub
 ├── server
 │   ├── start [--port] [--database-url]     # Start server (interactive config on first run)
-│   ├── stop                                 # Stop server + managed PG container
-│   └── status                               # Health + connected agents
+│   ├── stop                                 # Stop managed PG container
+│   ├── status                               # Health check
+│   ├── doctor                               # Environment readiness
+│   ├── db:migrate                           # Run pending migrations
+│   └── admin:create                         # Create admin user
 ├── client
 │   ├── start                                # Start all configured agents
-│   ├── add [name] [--token]                 # Add agent config
-│   ├── remove <name>                        # Remove agent config
-│   └── list                                 # List configured agents
+│   └── stop / status / doctor               # Lifecycle + diagnostics
+├── agent
+│   ├── add / remove / list                  # Agent config management
+│   ├── token bootstrap                      # Bootstrap token via GitHub identity
+│   ├── bind bot / bind user                 # Feishu bindings
+│   ├── send / chats / history               # Messaging (debugging)
+│   └── register / pull                      # Low-level SDK debugging
 ├── config
 │   ├── setup                                # Interactive configuration
-│   ├── set/get/list                         # Manage config values
-├── db migrate                               # Run pending migrations
-├── admin create                             # Create admin user
+│   └── set / get / list                     # Manage config values
+├── onboard [--check|--continue]             # Self-service onboarding
 └── status                                   # Global overview
 ```
 
@@ -93,11 +99,13 @@ CLI arguments > Environment variables > Config files > Auto-generated > Defaults
 
 ```
 ~/.first-tree-hub/
-├── server.yaml              # Server config (port, database, JWT secret, etc.)
-├── client.yaml              # Client config (server URL, log level)
-└── agents/
-    ├── agent-a.yaml          # Per-agent config (token, type, concurrency)
-    └── agent-b.yaml
+├── config/
+│   ├── server.yaml              # Server config (port, database, JWT secret, etc.)
+│   ├── client.yaml              # Client config (server URL, log level)
+│   └── agents/
+│       ├── agent-a/agent.yaml   # Per-agent config (token, type, concurrency)
+│       └── agent-b/agent.yaml
+└── data/                        # Runtime data (system-managed)
 ```
 
 ### Environment Variables
