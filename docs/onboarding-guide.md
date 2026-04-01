@@ -197,10 +197,9 @@ User:   Human, backend engineer, backend + infra, GitHub is zhangsan-gh,
 
 Agent:  → runs: first-tree-hub onboard --check --id zhangsan --type human
                 --role "Backend Engineer" --domains "backend,infra"
-                --owner zhangsan-gh --assistant zhangsan-assistant
+                --assistant zhangsan-assistant
                 --feishu-bot-app-id "$FEISHU_APP_ID"
                 --feishu-bot-app-secret "$FEISHU_APP_SECRET"
-                --feishu-search "Zhang San"
         → all ✅
 
 Agent:  All ready. Creating PR now.
@@ -210,19 +209,10 @@ Agent:  All ready. Creating PR now.
 
 User:   Merged
 
-Agent:  → runs: first-tree-hub onboard --continue --check
-        → all ✅
-        → runs: first-tree-hub onboard --continue
-        → search results: 1. Zhang San (ou_abc123)  2. Zhang Sanfeng (ou_def456)
-
-Agent:  Found 2 Feishu users. Which one is zhangsan?
-        1. Zhang San (Engineering)
-        2. Zhang Sanfeng (Product)
-
-User:   1
-
-Agent:  → runs: first-tree-hub onboard --continue --feishu-user-select 1
-        → done!
+Agent:  → runs: first-tree-hub onboard --continue
+        → sync ✅ → token ✅ → feishu bot ✅
+        → Onboard complete! To bind your Feishu account,
+          send "/bind zhangsan" to the bot in Feishu.
 ```
 
 ## Scenario 2: Onboard a Standalone Agent
@@ -343,3 +333,57 @@ On first use, provide `--server`. The value is saved to config for future use.
 **Server URL not configured**: Provide via `--server <url>`, `FIRST_TREE_HUB_SERVER` env var, or `first-tree-hub config set server.url <url>`.
 
 **Context Tree repo not found**: Either clone it (`gh repo clone <org>/<repo>`) and provide `--repo <path>`, or set `FIRST_TREE_HUB_CONTEXT_TREE_REPO`.
+
+## For AI Agents
+
+If you are an AI agent (e.g., Claude Code) performing onboarding on behalf of a user, follow this workflow:
+
+### Recommended Flow
+
+1. Run `first-tree-hub onboard --check` with whatever parameters you have.
+2. Read the checklist output. Ask the user for **all ❌ (required) items in one question** — do not ask one at a time.
+3. Run `--check` again with the full parameters to verify all ✅.
+4. Run `first-tree-hub onboard` (without `--check`) to create the Context Tree PR.
+5. Tell the user the PR URL and ask them to review and merge.
+6. After the user confirms the PR is merged, run `first-tree-hub onboard --continue`.
+7. Report the result and tell the user to send `/bind <agent-id>` in Feishu if Feishu binding is needed.
+
+### Key Behaviors
+
+- **`--check` mode** outputs a full readiness checklist. Use it to gather all missing info in one round instead of failing one parameter at a time.
+- **`--owner` is auto-detected** from `gh api /user`. You do not need to ask the user for their GitHub username.
+- **Context Tree repo is auto-cloned** to `~/.first-tree-hub/context-tree/`. You do not need to ask for a repo path.
+- **Structured output**: stdout produces JSON (`{ ok, data }` or `{ ok, error }`). stderr produces human-readable progress messages. Parse stdout for programmatic decisions.
+- **State file** (`~/.first-tree-hub/.onboard-state.json`) persists across runs. If a previous run failed, the next `--check` will reflect already-entered values.
+- **Feishu user binding** is not part of the onboard flow. After onboarding, the user self-binds by sending `/bind <agent-id>` to the Feishu bot.
+
+### Example Minimal Interaction
+
+```
+User:   Help me onboard a new member "alice" as an engineer
+
+Agent:  I'll check what's needed.
+        → runs: first-tree-hub onboard --check --id alice --type human --role Engineer
+        → ❌ domains missing
+
+Agent:  What domains is alice responsible for?
+
+User:   backend, databases
+
+Agent:  → runs: first-tree-hub onboard --check --id alice --type human
+                --role Engineer --domains "backend,databases"
+        → all ✅
+        → runs: first-tree-hub onboard --id alice --type human
+                --role Engineer --domains "backend,databases"
+        → PR created
+
+Agent:  PR created: https://github.com/org/repo/pull/5
+        Please review and merge, then tell me to continue.
+
+User:   Done
+
+Agent:  → runs: first-tree-hub onboard --continue
+        → ✅ Onboard complete!
+
+Agent:  Alice is onboarded. To bind Feishu, send "/bind alice" to the bot.
+```
