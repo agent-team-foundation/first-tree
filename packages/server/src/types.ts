@@ -14,6 +14,10 @@ export type AdminIdentity = {
   role: string;
 };
 
+export type GitHubUserIdentity = {
+  username: string;
+};
+
 declare module "fastify" {
   interface FastifyInstance {
     db: Database;
@@ -24,5 +28,6 @@ declare module "fastify" {
   interface FastifyRequest {
     agent?: AgentIdentity;
     admin?: AdminIdentity;
+    githubUser?: GitHubUserIdentity;
   }
 }

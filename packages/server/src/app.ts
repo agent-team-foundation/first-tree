@@ -19,10 +19,14 @@ import { adminSystemConfigRoutes } from "./api/admin/system-config.js";
 import { adminUserRoutes } from "./api/admin/users.js";
 import { agentChatRoutes } from "./api/agent/chats.js";
 import { agentContextTreeRoutes } from "./api/agent/context-tree.js";
+import { agentFeishuBotRoutes } from "./api/agent/feishu-bot.js";
+import { agentFeishuUserRoutes } from "./api/agent/feishu-user.js";
 import { agentInboxRoutes } from "./api/agent/inbox.js";
 import { agentMeRoutes } from "./api/agent/me.js";
 import { agentMessageRoutes, agentSendToAgentRoutes } from "./api/agent/messages.js";
 import { agentWsRoutes } from "./api/agent/ws.js";
+import { bootstrapRoutes } from "./api/bootstrap/token.js";
+import { contextTreeInfoRoutes } from "./api/context-tree-info.js";
 import { healthRoutes } from "./api/health.js";
 import { healthzRoutes } from "./api/healthz.js";
 import { githubWebhookRoutes } from "./api/webhooks/github.js";
@@ -31,6 +35,7 @@ import { connectDatabase } from "./db/connection.js";
 import { AppError } from "./errors.js";
 import { adminAuthHook } from "./middleware/admin-auth.js";
 import { agentAuthHook } from "./middleware/agent-auth.js";
+import { githubAuthHook } from "./middleware/github-auth.js";
 import { type AdapterManager, createAdapterManager } from "./services/adapter-manager.js";
 import { type BackgroundTasks, createBackgroundTasks } from "./services/background-tasks.js";
 import { syncFromGitHub } from "./services/context-tree-graphql.js";
@@ -77,6 +82,7 @@ export async function buildApp(config: Config) {
   // Auth hooks
   const agentAuth = agentAuthHook(db);
   const adminAuth = adminAuthHook(db, config.secrets.jwtSecret);
+  const githubAuth = githubAuthHook();
 
   // Error handler
   app.setErrorHandler((error, _request, reply) => {
@@ -100,6 +106,16 @@ export async function buildApp(config: Config) {
       await api.register(healthRoutes);
       await api.register(githubWebhookRoutes, { prefix: "/webhooks" });
       await api.register(adminAuthRoutes, { prefix: "/admin/auth" });
+      await api.register(contextTreeInfoRoutes, { prefix: "/context-tree" });
+
+      // Bootstrap routes (GitHub token protected)
+      await api.register(
+        async (bootstrapApp) => {
+          bootstrapApp.addHook("onRequest", githubAuth);
+          await bootstrapApp.register(bootstrapRoutes);
+        },
+        { prefix: "/bootstrap" },
+      );
 
       // Admin routes (JWT protected)
       await api.register(
@@ -184,6 +200,8 @@ export async function buildApp(config: Config) {
           await agentApp.register(agentSendToAgentRoutes, { prefix: "/agents" });
           await agentApp.register(agentInboxRoutes, { prefix: "/inbox" });
           await agentApp.register(agentContextTreeRoutes, { prefix: "/context-tree" });
+          await agentApp.register(agentFeishuBotRoutes);
+          await agentApp.register(agentFeishuUserRoutes, { prefix: "/delegated" });
           await agentApp.register(agentWsRoutes(notifier, config.instanceId), { prefix: "/ws" });
         },
         { prefix: "/agent" },

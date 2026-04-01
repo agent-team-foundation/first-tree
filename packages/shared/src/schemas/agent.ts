@@ -72,3 +72,23 @@ export const agentSchema = z.object({
   updatedAt: z.string(),
 });
 export type Agent = z.infer<typeof agentSchema>;
+
+// -- Bootstrap schemas --
+
+export const bootstrapTokenRequestSchema = z.object({
+  name: z.string().max(100).optional(),
+});
+export type BootstrapTokenRequest = z.infer<typeof bootstrapTokenRequestSchema>;
+
+export const bootstrapStatusSchema = z.object({
+  exists: z.boolean(),
+  status: z.enum(["active", "suspended"]).nullable(),
+});
+export type BootstrapStatus = z.infer<typeof bootstrapStatusSchema>;
+
+export const contextTreeInfoSchema = z.object({
+  repo: z.string(),
+  branch: z.string(),
+  lastSync: z.string().nullable(),
+});
+export type ContextTreeInfo = z.infer<typeof contextTreeInfoSchema>;

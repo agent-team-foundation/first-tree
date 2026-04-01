@@ -20,3 +20,11 @@ export const adapterMappingSchema = z.object({
   createdAt: z.string(),
 });
 export type AdapterMapping = z.infer<typeof adapterMappingSchema>;
+
+// -- Delegate Feishu user binding --
+
+export const delegateFeishuUserSchema = z.object({
+  feishuUserId: z.string().min(1),
+  displayName: z.string().max(200).optional(),
+});
+export type DelegateFeishuUser = z.infer<typeof delegateFeishuUserSchema>;

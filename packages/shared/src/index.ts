@@ -14,6 +14,8 @@ export {
   adapterStatusSchema,
   type CreateAdapterConfig,
   createAdapterConfigSchema,
+  type SelfServiceFeishuBot,
+  selfServiceFeishuBotSchema,
   type UpdateAdapterConfig,
   updateAdapterConfigSchema,
 } from "./schemas/adapter.js";
@@ -22,6 +24,8 @@ export {
   adapterMappingSchema,
   type CreateAdapterMapping,
   createAdapterMappingSchema,
+  type DelegateFeishuUser,
+  delegateFeishuUserSchema,
 } from "./schemas/adapter-mapping.js";
 export {
   type AdapterBotStatus,
@@ -55,7 +59,13 @@ export {
   agentSchema,
   agentStatusSchema,
   agentTypeSchema,
+  type BootstrapStatus,
+  type BootstrapTokenRequest,
+  bootstrapStatusSchema,
+  bootstrapTokenRequestSchema,
+  type ContextTreeInfo,
   type CreateAgent,
+  contextTreeInfoSchema,
   createAgentSchema,
   type SyncReport,
   syncReportSchema,

@@ -3,6 +3,7 @@ import { eq, sql } from "drizzle-orm";
 import type { FastifyBaseLogger } from "fastify";
 import type { Database } from "../db/connection.js";
 import { adapterConfigs } from "../db/schema/adapter-configs.js";
+import { agents } from "../db/schema/agents.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
 import * as mappingService from "./adapter-mapping.js";
@@ -338,6 +339,14 @@ async function processInboundMessage(
   log: FastifyBaseLogger,
   inboxNotifier?: Notifier,
 ): Promise<void> {
+  // 0. Check for /bind command (works for both bound and unbound users)
+  const messageText = extractTextContent(event);
+  const bindMatch = /^\/bind\s+(\S+)/.exec(messageText);
+  if (bindMatch?.[1]) {
+    await handleBindCommand(db, bot, event, bindMatch[1], log);
+    return;
+  }
+
   // 1. Resolve sender → internal agent
   const agentMapping = await mappingService.findAgentByExternalUser(db, "feishu", event.senderId);
 
@@ -396,8 +405,9 @@ async function processInboundMessage(
 async function replyUnknownUser(bot: ManagedBot, event: InboundEvent, log: FastifyBaseLogger): Promise<void> {
   const text = [
     "Your account is not linked to First Tree Hub yet.",
-    "Please contact your admin to set up the binding.",
-    `Your user ID: ${event.senderId}`,
+    "To bind, send:  /bind <your-agent-id>",
+    "",
+    "Example:  /bind alice",
   ].join("\n");
 
   try {
@@ -414,6 +424,101 @@ async function replyUnknownUser(bot: ManagedBot, event: InboundEvent, log: Fasti
   } catch (err) {
     log.warn({ senderId: event.senderId, err }, "Failed to send unknown-user reply");
   }
+}
+
+/** Extract plain text from a Feishu message event. */
+function extractTextContent(event: InboundEvent): string {
+  if (typeof event.content === "object" && event.content !== null && "text" in event.content) {
+    return ((event.content as { text: string }).text ?? "").trim();
+  }
+  return "";
+}
+
+/**
+ * Handle `/bind <agentId>` command from Feishu.
+ * Binds the sender's Feishu user ID to the specified human agent.
+ */
+async function handleBindCommand(
+  db: Database,
+  bot: ManagedBot,
+  event: InboundEvent,
+  agentId: string,
+  log: FastifyBaseLogger,
+): Promise<void> {
+  const reply = async (text: string) => {
+    try {
+      await botApiCall(bot, () =>
+        bot.client.im.v1.message.create({
+          params: { receive_id_type: "chat_id" },
+          data: {
+            receive_id: event.externalChannelId,
+            msg_type: "text",
+            content: JSON.stringify({ text }),
+          },
+        }),
+      );
+    } catch (err) {
+      log.warn({ err }, "Failed to send /bind reply");
+    }
+  };
+
+  // 1. Check if sender is already bound
+  const existingMapping = await mappingService.findAgentByExternalUser(db, "feishu", event.senderId);
+  if (existingMapping) {
+    await reply(`You are already bound to agent "${existingMapping.agentId}". Unbind first if you want to rebind.`);
+    return;
+  }
+
+  // 2. Check if target agent exists
+  const [agent] = await db
+    .select({ id: agents.id, type: agents.type, status: agents.status })
+    .from(agents)
+    .where(eq(agents.id, agentId))
+    .limit(1);
+
+  if (!agent) {
+    await reply(`Agent "${agentId}" not found. Check the ID and try again.`);
+    return;
+  }
+
+  if (agent.status !== "active") {
+    await reply(`Agent "${agentId}" is ${agent.status}. Only active agents can be bound.`);
+    return;
+  }
+
+  if (agent.type !== "human") {
+    await reply(
+      `Agent "${agentId}" is not a human agent (type: ${agent.type}). Only human agents can bind Feishu users.`,
+    );
+    return;
+  }
+
+  // 3. Check if this agent already has a Feishu binding
+  const existingAgentBinding = await mappingService.findExternalUserByAgent(db, "feishu", agentId);
+  if (existingAgentBinding) {
+    await reply(
+      `Agent "${agentId}" is already bound to Feishu user ${existingAgentBinding.externalUserId}. Unbind first if you want to rebind.`,
+    );
+    return;
+  }
+
+  // 4. Create binding
+  try {
+    await mappingService.createAgentMapping(db, {
+      platform: "feishu",
+      externalUserId: event.senderId,
+      agentId,
+      boundVia: "command",
+      displayName: undefined,
+    });
+  } catch (err) {
+    log.error({ err, agentId, senderId: event.senderId }, "/bind: failed to create mapping");
+    await reply("Binding failed due to an internal error. Please try again or contact your admin.");
+    return;
+  }
+
+  await reply(`Binding successful! Your Feishu account is now linked to "${agentId}".`);
+  log.info({ agentId, senderId: event.senderId, appId: bot.appId }, "/bind: Feishu user bound via command");
 }
 
 // ── Outbound helpers ────────────────────────────────────────────────
