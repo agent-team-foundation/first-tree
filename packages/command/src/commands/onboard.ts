@@ -68,18 +68,6 @@ async function promptMissing(args: Record<string, unknown>): Promise<void> {
     }
   }
 
-  if (!args.repo) {
-    const { onboardCheck } = await import("../core/onboard.js");
-    const checkItems = await onboardCheck(args as Parameters<typeof onboardCheck>[0]);
-    const repoItem = checkItems.find((i) => i.key === "repo");
-    if (!repoItem || repoItem.status !== "ok") {
-      const envVal = process.env.FIRST_TREE_HUB_CONTEXT_TREE_REPO;
-      const hint = envVal ? ` (env has URL: ${envVal}, need local clone path)` : "";
-      args.repo = await input({ message: `Context Tree local repo path${hint}:` });
-      saveOnboardState(args);
-    }
-  }
-
   if (!args.feishuBotAppId) {
     const wantFeishu = await confirm({ message: "Bind Feishu bot?", default: false });
     if (wantFeishu) {

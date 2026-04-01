@@ -324,7 +324,10 @@ export async function onboardCreate(args: OnboardArgs): Promise<{ prUrl: string 
 
   const commitMsg = args.assistant ? `feat: onboard ${args.id} + ${args.assistant}` : `feat: onboard ${args.id}`;
   execSync(`git commit -m "${commitMsg}"`, { cwd: repoPath, stdio: "pipe" });
-  execSync(`git push -u origin ${branch}`, { cwd: repoPath, stdio: "pipe" });
+  // Push with gh token auth
+  const pushToken = execSync("gh auth token", { encoding: "utf-8", stdio: "pipe" }).trim();
+  const pushGitConfig = `-c url."https://x-access-token:${pushToken}@github.com/".insteadOf="https://github.com/"`;
+  execSync(`git ${pushGitConfig} push -u origin ${branch}`, { cwd: repoPath, stdio: "pipe" });
 
   // Create PR
   const prTitle = args.assistant ? `Onboard ${args.id} + assistant` : `Onboard ${args.id}`;
@@ -417,6 +420,13 @@ export async function onboardContinue(args: OnboardArgs): Promise<void> {
   if (mergedArgs.feishuBotAppId) {
     process.stderr.write(`  Feishu:    bot bound (${mergedArgs.feishuBotAppId})\n`);
   }
+
+  // Feishu user binding hint
+  if (mergedArgs.type === "human" && mergedArgs.feishuBotAppId) {
+    process.stderr.write("\n  Next step — bind your Feishu account:\n");
+    process.stderr.write(`    Send this message to the bot in Feishu:  /bind ${mergedArgs.id}\n`);
+  }
+
   process.stderr.write("\n");
 }
 
@@ -467,51 +477,116 @@ function isUrl(value: string): boolean {
   return value.startsWith("http://") || value.startsWith("https://");
 }
 
+const CONTEXT_TREE_DIR = join(process.env.HOME ?? "~", ".first-tree-hub", "context-tree");
+
 /**
  * Resolve Context Tree to a **local path**.
- * - If --repo flag is a local path → use it
- * - If env var is a local path → use it
- * - If env var is a URL → try to find a local clone in common locations
- * - Otherwise → return null (caller should prompt)
+ *
+ * Priority:
+ *   1. --repo flag (local path)
+ *   2. Env var FIRST_TREE_HUB_CONTEXT_TREE_REPO (local path)
+ *   3. URL (env var or --repo) → find existing clone or auto-clone to ~/.first-tree-hub/context-tree/
+ *   4. Query server for repo URL → auto-clone
  */
-function resolveContextTreeRepo(_serverUrl?: string, repoFlag?: string): string | null {
+function resolveContextTreeRepo(serverUrl?: string, repoFlag?: string): string | null {
+  // Direct local paths take priority
   if (repoFlag && !isUrl(repoFlag)) return repoFlag;
-  if (repoFlag && isUrl(repoFlag)) {
-    return findLocalClone(repoFlag);
-  }
 
   const envVal = process.env.FIRST_TREE_HUB_CONTEXT_TREE_REPO;
   if (envVal && !isUrl(envVal)) return envVal;
-  if (envVal && isUrl(envVal)) {
-    return findLocalClone(envVal);
+
+  // Try to get repo URL from flag, env, or server
+  const repoUrl =
+    (repoFlag && isUrl(repoFlag) ? repoFlag : null) ??
+    (envVal && isUrl(envVal) ? envVal : null) ??
+    fetchRepoUrlFromServer(serverUrl);
+
+  if (!repoUrl) return null;
+
+  // Get gh token once for all git operations
+  let ghToken: string;
+  try {
+    ghToken = execSync("gh auth token", { encoding: "utf-8", stdio: "pipe" }).trim();
+  } catch {
+    return null;
   }
 
-  return null;
+  // Helper: set GIT_ASKPASS to inject token without modifying URLs
+  const gitEnv = {
+    ...process.env,
+    GIT_ASKPASS: "echo",
+    GIT_TERMINAL_PROMPT: "0",
+    GH_TOKEN: ghToken,
+    GITHUB_TOKEN: ghToken,
+  };
+
+  // Configure git to use gh token for github.com
+  const gitConfigArgs = `-c url."https://x-access-token:${ghToken}@github.com/".insteadOf="https://github.com/"`;
+
+  // Check if already cloned with matching remote
+  if (existsSync(join(CONTEXT_TREE_DIR, ".git"))) {
+    try {
+      const remote = execSync("git remote get-url origin", {
+        cwd: CONTEXT_TREE_DIR,
+        encoding: "utf-8",
+        stdio: "pipe",
+      }).trim();
+      if (remote.includes(repoUrl.replace(/^https?:\/\/github\.com\//, "").replace(/\.git$/, ""))) {
+        process.stderr.write("Updating Context Tree...\n");
+        execSync("git checkout main 2>/dev/null || git checkout master", {
+          cwd: CONTEXT_TREE_DIR,
+          stdio: "pipe",
+        });
+        try {
+          execSync(`git ${gitConfigArgs} pull --ff-only`, { cwd: CONTEXT_TREE_DIR, stdio: "pipe", env: gitEnv });
+        } catch {
+          // Pull failed, still usable
+        }
+        return CONTEXT_TREE_DIR;
+      }
+    } catch {
+      // Can't read remote, re-clone
+    }
+
+    // Different repo or broken — delete and re-clone
+    const safePrefix = join(process.env.HOME ?? "", ".first-tree-hub");
+    if (!CONTEXT_TREE_DIR.startsWith(safePrefix) || CONTEXT_TREE_DIR === safePrefix) {
+      throw new Error(`Refusing to delete unsafe path: ${CONTEXT_TREE_DIR}`);
+    }
+    execSync(`rm -rf ${CONTEXT_TREE_DIR}`);
+  }
+
+  // Fresh clone
+  try {
+    process.stderr.write(`Cloning Context Tree to ${CONTEXT_TREE_DIR}...\n`);
+    mkdirSync(join(process.env.HOME ?? "~", ".first-tree-hub"), { recursive: true });
+    execSync(`git ${gitConfigArgs} clone ${repoUrl} ${CONTEXT_TREE_DIR}`, { stdio: "pipe", env: gitEnv });
+    return CONTEXT_TREE_DIR;
+  } catch {
+    return null;
+  }
 }
 
-/**
- * Try to find a local clone of a GitHub repo URL by checking common locations.
- */
-function findLocalClone(repoUrl: string): string | null {
-  // Extract repo name from URL: https://github.com/owner/repo → repo
-  const match = /\/([^/]+?)(?:\.git)?$/.exec(repoUrl);
-  if (!match?.[1]) return null;
-  const repoName = match[1];
-
-  // Check common locations relative to CWD and home
-  const candidates = [
-    join(process.cwd(), "..", repoName),
-    join(process.env.HOME ?? "~", "dev", repoName),
-    join(process.env.HOME ?? "~", repoName),
-  ];
-
-  for (const candidate of candidates) {
-    if (existsSync(join(candidate, ".git"))) {
-      return candidate;
+/** Query server for Context Tree repo URL. */
+function fetchRepoUrlFromServer(serverUrl?: string): string | null {
+  if (!serverUrl) {
+    try {
+      serverUrl = resolveServerUrl();
+    } catch {
+      return null;
     }
   }
-
-  return null;
+  try {
+    const output = execSync(`curl -sf ${serverUrl.replace(/\/+$/, "")}/api/v1/context-tree/info`, {
+      encoding: "utf-8",
+      timeout: 5000,
+      stdio: "pipe",
+    });
+    const data = JSON.parse(output) as { repo?: string };
+    return data.repo ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function sleep(ms: number): Promise<void> {
