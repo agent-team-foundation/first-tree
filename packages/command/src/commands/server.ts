@@ -1,3 +1,4 @@
+import { initConfig, serverConfigSchema } from "@first-tree-hub/shared/config";
 import type { Command } from "commander";
 import {
   checkContextTreeRepo,
@@ -7,7 +8,9 @@ import {
   checkNodeVersion,
   checkServerConfig,
   checkServerHealth,
+  createAdminUser,
   printResults,
+  runMigrations,
   startServer,
   stopPostgres,
 } from "../core/index.js";
@@ -78,6 +81,46 @@ export function registerServerCommands(program: Command): void {
         }
       } catch {
         process.stderr.write(`  Cannot connect to ${url}\n`);
+        process.exit(1);
+      }
+    });
+
+  // ── Database management ─────────────────────────────────────────────
+
+  server
+    .command("db:migrate")
+    .description("Run database migrations")
+    .action(async () => {
+      try {
+        const config = await initConfig({ schema: serverConfigSchema, role: "server" });
+        const tableCount = await runMigrations(config.database.url);
+        process.stderr.write(`  Migrations complete (${tableCount} tables)\n`);
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        process.stderr.write(`  Error: ${msg}\n`);
+        process.exit(1);
+      }
+    });
+
+  // ── Admin management ────────────────────────────────────────────────
+
+  server
+    .command("admin:create")
+    .description("Create an admin user")
+    .option("-u, --username <name>", "Admin username", "admin")
+    .option("-p, --password <pass>", "Admin password (auto-generated if omitted)")
+    .action(async (options: { username: string; password?: string }) => {
+      try {
+        const config = await initConfig({ schema: serverConfigSchema, role: "server" });
+        const result = await createAdminUser(config.database.url, options.username, options.password);
+
+        process.stderr.write(`  Admin user "${result.username}" created.\n`);
+        if (!options.password) {
+          process.stderr.write(`  Password: ${result.password}  (save this — shown only once)\n`);
+        }
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        process.stderr.write(`  Error: ${msg}\n`);
         process.exit(1);
       }
     });

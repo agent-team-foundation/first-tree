@@ -1,8 +1,7 @@
 import { execSync } from "node:child_process";
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { getClientConfig } from "@first-tree-hub/shared/config";
+import { DEFAULT_CONFIG_DIR, getClientConfig } from "@first-tree-hub/shared/config";
 
 /**
  * Get the current GitHub username from `gh auth status`.
@@ -84,7 +83,7 @@ export async function bootstrapToken(
 
   // Save token to agent config if requested
   if (options.saveTo === "agent" || !options.saveTo) {
-    const configDir = join(homedir(), ".first-tree-hub", "agents", agentId);
+    const configDir = join(DEFAULT_CONFIG_DIR, "agents", agentId);
     const configPath = `${configDir}/agent.yaml`;
     mkdirSync(configDir, { recursive: true, mode: 0o700 });
     writeFileSync(configPath, `token: "${data.token}"\ntype: claude-code\n`, { mode: 0o600 });

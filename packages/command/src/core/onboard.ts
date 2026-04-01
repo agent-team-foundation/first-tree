@@ -2,6 +2,7 @@ import { execFileSync, execSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { DEFAULT_CONFIG_DIR, setConfigValue } from "@first-tree-hub/shared/config";
 import { bootstrapToken, checkBootstrapStatus, getGitHubUsername, resolveServerUrl } from "./bootstrap.js";
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -461,10 +462,14 @@ export async function onboardContinue(args: OnboardArgs): Promise<void> {
   if (mergedArgs.assistant) {
     process.stderr.write(`  Assistant: ${mergedArgs.assistant}\n`);
   }
-  process.stderr.write(`  Token:     ~/.first-tree-hub/agents/${agentToBootstrap}/agent.yaml\n`);
+  process.stderr.write(`  Token:     ~/.first-tree-hub/config/agents/${agentToBootstrap}/agent.yaml\n`);
   if (mergedArgs.feishuBotAppId) {
     process.stderr.write(`  Feishu:    bot bound (${mergedArgs.feishuBotAppId})\n`);
   }
+
+  // 4. Auto-configure client config (server URL) so `client start` works zero-config
+  const clientConfigPath = join(DEFAULT_CONFIG_DIR, "client.yaml");
+  setConfigValue(clientConfigPath, "server.url", serverUrl);
 
   // Feishu user binding hint (show for all human agents)
   if (mergedArgs.type === "human") {
@@ -474,6 +479,10 @@ export async function onboardContinue(args: OnboardArgs): Promise<void> {
       process.stderr.write("    (requires a Feishu bot to be configured in the system)\n");
     }
   }
+
+  // Start hint
+  process.stderr.write("\n  Start the agent:\n");
+  process.stderr.write("    first-tree-hub client start\n");
 
   process.stderr.write("\n");
 }
