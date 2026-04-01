@@ -11,7 +11,8 @@ Commands:
   help      Show help for a topic (e.g. \`help onboarding\`)
 
 Options:
-  --help    Show this help message
+  --help       Show this help message
+  --version    Show version number
 `;
 
 const HELP_USAGE = `usage: context-tree help <topic>
@@ -45,6 +46,14 @@ async function main(): Promise<number> {
 
   if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
     console.log(USAGE);
+    return 0;
+  }
+
+  if (args[0] === "--version" || args[0] === "-v") {
+    const { createRequire } = await import("node:module");
+    const require = createRequire(import.meta.url);
+    const pkg = require("../package.json") as { version: string };
+    console.log(pkg.version);
     return 0;
   }
 
