@@ -1,6 +1,7 @@
 import { execSync } from "node:child_process";
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import { getClientConfig } from "@first-tree-hub/shared/config";
 
 /**
@@ -83,7 +84,7 @@ export async function bootstrapToken(
 
   // Save token to agent config if requested
   if (options.saveTo === "agent" || !options.saveTo) {
-    const configDir = `${process.env.HOME ?? "~"}/.first-tree-hub/agents/${agentId}`;
+    const configDir = join(homedir(), ".first-tree-hub", "agents", agentId);
     const configPath = `${configDir}/agent.yaml`;
     mkdirSync(configDir, { recursive: true, mode: 0o700 });
     writeFileSync(configPath, `token: "${data.token}"\ntype: claude-code\n`, { mode: 0o600 });
@@ -94,6 +95,18 @@ export async function bootstrapToken(
   }
 
   return data;
+}
+
+/**
+ * Resolve agent token from FIRST_TREE_HUB_TOKEN env var.
+ * Throws if not set.
+ */
+export function resolveAgentToken(): string {
+  const token = process.env.FIRST_TREE_HUB_TOKEN;
+  if (!token) {
+    throw new Error("FIRST_TREE_HUB_TOKEN environment variable is required.");
+  }
+  return token;
 }
 
 /**

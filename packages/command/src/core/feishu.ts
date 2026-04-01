@@ -1,34 +1,6 @@
 /**
- * Feishu-related core operations: search, bind-bot, bind-user.
+ * Feishu-related core operations: bind-bot, bind-user.
  */
-
-/**
- * Search Feishu users via Hub server API.
- */
-export async function searchFeishuUsers(
-  serverUrl: string,
-  agentToken: string,
-  query: string,
-  by: "name" | "email" | "mobile" = "name",
-): Promise<{
-  users: Array<{ userId: string; name: string; email: string | null; department: string | null }>;
-  botUsed: string | null;
-}> {
-  const url = `${serverUrl}/api/v1/agent/feishu/search?q=${encodeURIComponent(query)}&by=${by}`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${agentToken}` },
-  });
-
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error ?? `Feishu search failed: HTTP ${res.status}`);
-  }
-
-  return (await res.json()) as {
-    users: Array<{ userId: string; name: string; email: string | null; department: string | null }>;
-    botUsed: string | null;
-  };
-}
 
 /**
  * Self-service bind a Feishu bot (agent binds its own bot).

@@ -20,7 +20,6 @@ import { adminUserRoutes } from "./api/admin/users.js";
 import { agentChatRoutes } from "./api/agent/chats.js";
 import { agentContextTreeRoutes } from "./api/agent/context-tree.js";
 import { agentFeishuBotRoutes } from "./api/agent/feishu-bot.js";
-import { agentFeishuSearchRoutes } from "./api/agent/feishu-search.js";
 import { agentFeishuUserRoutes } from "./api/agent/feishu-user.js";
 import { agentInboxRoutes } from "./api/agent/inbox.js";
 import { agentMeRoutes } from "./api/agent/me.js";
@@ -202,7 +201,6 @@ export async function buildApp(config: Config) {
           await agentApp.register(agentInboxRoutes, { prefix: "/inbox" });
           await agentApp.register(agentContextTreeRoutes, { prefix: "/context-tree" });
           await agentApp.register(agentFeishuBotRoutes);
-          await agentApp.register(agentFeishuSearchRoutes, { prefix: "/feishu" });
           await agentApp.register(agentFeishuUserRoutes, { prefix: "/delegated" });
           await agentApp.register(agentWsRoutes(notifier, config.instanceId), { prefix: "/ws" });
         },

@@ -45,10 +45,10 @@ export {
   promptAddAgent,
   // Interactive prompts
   promptMissingFields,
+  resolveAgentToken,
   resolveServerUrl,
   // Database
   runMigrations,
-  searchFeishuUsers,
   // Server lifecycle
   startServer,
   // Output helpers

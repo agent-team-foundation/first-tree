@@ -8,6 +8,7 @@ export {
   checkBootstrapStatus,
   getGitHubToken,
   getGitHubUsername,
+  resolveAgentToken,
   resolveServerUrl,
 } from "./bootstrap.js";
 // Client runtime
@@ -32,7 +33,7 @@ export {
   printResults,
 } from "./doctor.js";
 // Feishu
-export { bindFeishuBot, bindFeishuUser, searchFeishuUsers } from "./feishu.js";
+export { bindFeishuBot, bindFeishuUser } from "./feishu.js";
 // Database
 export { runMigrations } from "./migrate.js";
 // Onboard

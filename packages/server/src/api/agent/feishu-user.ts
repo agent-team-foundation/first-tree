@@ -2,7 +2,7 @@ import { delegateFeishuUserSchema } from "@first-tree-hub/shared";
 import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { adapterAgentMappings } from "../../db/schema/adapter-agent-mappings.js";
-import { BadRequestError, ConflictError, ForbiddenError } from "../../errors.js";
+import { BadRequestError, ForbiddenError } from "../../errors.js";
 import { requireAgent } from "../../middleware/require-identity.js";
 import { createAgentMapping } from "../../services/adapter-mapping.js";
 import * as agentService from "../../services/agent.js";
@@ -31,34 +31,24 @@ export async function agentFeishuUserRoutes(app: FastifyInstance): Promise<void>
       );
     }
 
-    // 3. Create mapping
-    try {
-      const mapping = await createAgentMapping(app.db, {
-        platform: "feishu",
-        externalUserId: body.feishuUserId,
-        agentId: humanAgentId,
-        boundVia: "delegate",
-        displayName: body.displayName,
-      });
+    // 3. Create mapping (onConflictDoNothing — returns existing row on conflict)
+    const mapping = await createAgentMapping(app.db, {
+      platform: "feishu",
+      externalUserId: body.feishuUserId,
+      agentId: humanAgentId,
+      boundVia: "delegate",
+      displayName: body.displayName,
+    });
 
-      return reply.status(201).send({
-        id: mapping.id,
-        platform: mapping.platform,
-        externalUserId: mapping.externalUserId,
-        agentId: mapping.agentId,
-        boundVia: mapping.boundVia,
-        displayName: mapping.displayName,
-        createdAt: mapping.createdAt.toISOString(),
-      });
-    } catch (err) {
-      if (err instanceof ConflictError) throw err;
-      // Check if it's a unique constraint violation
-      const pgCode = (err as { code?: string })?.code ?? (err as { cause?: { code?: string } })?.cause?.code ?? "";
-      if (pgCode === "23505") {
-        throw new ConflictError(`Feishu user "${body.feishuUserId}" is already bound to an agent`);
-      }
-      throw err;
-    }
+    return reply.status(201).send({
+      id: mapping.id,
+      platform: mapping.platform,
+      externalUserId: mapping.externalUserId,
+      agentId: mapping.agentId,
+      boundVia: mapping.boundVia,
+      displayName: mapping.displayName,
+      createdAt: mapping.createdAt.toISOString(),
+    });
   });
 
   /**

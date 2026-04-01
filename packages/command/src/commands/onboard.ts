@@ -90,7 +90,6 @@ export function registerOnboardCommand(program: Command): void {
     .option("--assistant <id>", "Also create a personal_assistant with this ID")
     .option("--delegate-mention <id>", "Set delegate_mention field")
     .option("--server <url>", "Hub server URL")
-    .option("--repo <path>", "Context Tree local repo path")
     .option("--feishu-bot-app-id <id>", "Feishu bot App ID")
     .option("--feishu-bot-app-secret <secret>", "Feishu bot App Secret")
     .option("--check", "Dry-run: show readiness checklist without executing")
@@ -109,7 +108,6 @@ export function registerOnboardCommand(program: Command): void {
           ...(options.assistant && { assistant: options.assistant }),
           ...(options.delegateMention && { delegateMention: options.delegateMention }),
           ...(options.server && { server: options.server }),
-          ...(options.repo && { repo: options.repo }),
           ...(options.feishuBotAppId && { feishuBotAppId: options.feishuBotAppId }),
           ...(options.feishuBotAppSecret && { feishuBotAppSecret: options.feishuBotAppSecret }),
           check: options.check,

@@ -26,10 +26,6 @@ export {
   createAdapterMappingSchema,
   type DelegateFeishuUser,
   delegateFeishuUserSchema,
-  type FeishuSearchQuery,
-  type FeishuSearchResult,
-  feishuSearchQuerySchema,
-  feishuSearchResultSchema,
 } from "./schemas/adapter-mapping.js";
 export {
   type AdapterBotStatus,

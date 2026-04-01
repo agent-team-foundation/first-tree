@@ -9,7 +9,6 @@ import { registerChatsCommand } from "../commands/chats.js";
 import { registerClientCommands } from "../commands/client.js";
 import { registerConfigCommands } from "../commands/config.js";
 import { registerDbCommands } from "../commands/db.js";
-import { registerFeishuCommands } from "../commands/feishu.js";
 import { registerHistoryCommand } from "../commands/history.js";
 import { registerOnboardCommand } from "../commands/onboard.js";
 import { registerSendCommand } from "../commands/send.js";
@@ -47,7 +46,6 @@ registerAgentCommands(program);
 // Onboarding + self-service commands
 registerOnboardCommand(program);
 registerTokenCommands(program);
-registerFeishuCommands(program);
 registerBindCommands(program);
 
 // Messaging commands (send, chats, history) — at top level
