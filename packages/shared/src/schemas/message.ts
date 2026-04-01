@@ -14,7 +14,7 @@ export type MessageFormat = z.infer<typeof messageFormatSchema>;
 export const sendMessageSchema = z.object({
   format: messageFormatSchema.default("text"),
   content: z.unknown(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
   inReplyTo: z.string().optional(),
   replyToInbox: z.string().optional(),
   replyToChat: z.string().optional(),
@@ -24,7 +24,7 @@ export type SendMessage = z.infer<typeof sendMessageSchema>;
 export const sendToAgentSchema = z.object({
   format: messageFormatSchema.default("text"),
   content: z.unknown(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
   replyToInbox: z.string().optional(),
   replyToChat: z.string().optional(),
 });
@@ -36,7 +36,7 @@ export const messageSchema = z.object({
   senderId: z.string(),
   format: z.string(),
   content: z.unknown(),
-  metadata: z.record(z.unknown()),
+  metadata: z.record(z.string(), z.unknown()),
   replyToInbox: z.string().nullable(),
   replyToChat: z.string().nullable(),
   inReplyTo: z.string().nullable(),

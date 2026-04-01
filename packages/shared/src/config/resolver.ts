@@ -63,7 +63,7 @@ function setByPath(obj: Record<string, unknown>, path: string[], value: unknown)
 
 /** Unwrap ZodDefault / ZodOptional to get the inner type for coercion. */
 function unwrapZodType(schema: z.ZodType): z.ZodType {
-  // Accessing Zod internals for env-var coercion
+  // Zod internal API (ZodDefault._def.innerType) — verified working with zod@4.3.6
   if (schema instanceof z.ZodDefault) {
     return unwrapZodType(schema._def.innerType as z.ZodType);
   }
@@ -176,8 +176,8 @@ export function buildZodSchema(shape: Record<string, unknown>): z.ZodType {
       const inner = buildZodSchema(value.shape as Record<string, unknown>);
       zodShape[key] = inner.optional();
     } else if (typeof value === "object" && value !== null) {
-      // Required group — .default({}) lets Zod apply child defaults when group is absent
-      zodShape[key] = buildZodSchema(value as Record<string, unknown>).default({});
+      // Required group — .prefault({}) lets Zod apply child defaults when group is absent
+      zodShape[key] = buildZodSchema(value as Record<string, unknown>).prefault({});
     }
   }
   return z.object(zodShape);

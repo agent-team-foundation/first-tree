@@ -34,7 +34,7 @@
     "gray-matter": "^4.0.3",
     "jose": "^6.0.0",
     "postgres": "^3.4.0",
-    "zod": "^3.25.0"
+    "zod": "^4.0.0"
   },
   "devDependencies": {
     "@first-tree-hub/client": "workspace:*",

@@ -13,7 +13,7 @@ export const createChatSchema = z.object({
   type: chatTypeSchema,
   topic: z.string().max(500).optional(),
   participantIds: z.array(z.string()).min(1),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 export type CreateChat = z.infer<typeof createChatSchema>;
 
@@ -31,7 +31,7 @@ export const chatSchema = z.object({
   type: z.string(),
   topic: z.string().nullable(),
   lifecyclePolicy: z.string().nullable().optional(),
-  metadata: z.record(z.unknown()),
+  metadata: z.record(z.string(), z.unknown()),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

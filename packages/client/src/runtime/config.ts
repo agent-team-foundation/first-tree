@@ -14,14 +14,14 @@ const sessionConfigSchema = z.object({
 const agentSlotConfigSchema = z.object({
   token: z.string().min(1),
   type: z.string().min(1),
-  session: sessionConfigSchema.default({}),
+  session: sessionConfigSchema.prefault({}),
   concurrency: z.number().int().positive().default(5),
 });
 
 const runtimeConfigSchema = z.object({
-  server: z.string().url().default("http://localhost:8000"),
+  server: z.url().default("http://localhost:8000"),
   agents: z
-    .record(agentSlotConfigSchema)
+    .record(z.string(), agentSlotConfigSchema)
     .refine((agents) => Object.keys(agents).length > 0, "At least one agent must be defined"),
 });
 

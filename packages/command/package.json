@@ -1,6 +1,6 @@
 {
   "name": "@agent-team-foundation/first-tree-hub",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "type": "module",
   "description": "First Tree Hub — unified CLI for server, client, and agent management",
   "exports": {
@@ -50,7 +50,7 @@
     "postgres": "^3.4.0",
     "ws": "^8.20.0",
     "yaml": "^2.8.3",
-    "zod": "^3.25.0"
+    "zod": "^4.0.0"
   },
   "devDependencies": {
     "@first-tree-hub/client": "workspace:*",
