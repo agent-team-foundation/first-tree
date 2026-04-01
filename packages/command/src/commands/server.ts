@@ -39,11 +39,17 @@ export function registerServerCommands(program: Command): void {
     .command("stop")
     .description("Stop the managed PostgreSQL container")
     .action(() => {
-      const stopped = stopPostgres();
-      if (stopped) {
-        process.stderr.write("  PostgreSQL container stopped.\n");
-      } else {
-        process.stderr.write("  No managed PostgreSQL container found.\n");
+      try {
+        const stopped = stopPostgres();
+        if (stopped) {
+          process.stderr.write("  PostgreSQL container stopped.\n");
+        } else {
+          process.stderr.write("  No managed PostgreSQL container found.\n");
+        }
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        process.stderr.write(`  Error stopping PostgreSQL: ${msg}\n`);
+        process.exit(1);
       }
     });
 

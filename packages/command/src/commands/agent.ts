@@ -24,7 +24,12 @@ function resolveAgentConfig(): { serverUrl: string; token: string } {
   if (!token) {
     fail("MISSING_TOKEN", "FIRST_TREE_HUB_TOKEN environment variable is required.", 2);
   }
-  const serverUrl = process.env.FIRST_TREE_HUB_SERVER ?? "http://localhost:8000";
+  let serverUrl: string;
+  try {
+    serverUrl = resolveServerUrl(process.env.FIRST_TREE_HUB_SERVER);
+  } catch {
+    serverUrl = "http://localhost:8000";
+  }
   return { serverUrl, token };
 }
 
@@ -393,10 +398,7 @@ export function registerAgentCommands(program: Command): void {
     .action(async (options: { limit: string; ack?: boolean }) => {
       try {
         const sdk = createSdk();
-        const limit = Number.parseInt(options.limit, 10);
-        if (Number.isNaN(limit) || limit < 1 || limit > 50) {
-          fail("INVALID_LIMIT", "Limit must be between 1 and 50.", 2);
-        }
+        const limit = parseLimit(options.limit, 50);
         const result = await sdk.pull(limit);
 
         if (options.ack && result.entries.length > 0) {
