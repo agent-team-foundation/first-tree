@@ -55,7 +55,21 @@ export function loadOnboardState(): Record<string, unknown> | null {
 export async function onboardCheck(args: OnboardArgs): Promise<CheckItem[]> {
   const items: CheckItem[] = [];
 
-  // Environment
+  // GitHub CLI — check first, everything else depends on it
+  let ghUsername: string | null = null;
+  try {
+    ghUsername = getGitHubUsername();
+    items.push({ key: "github_cli", label: "GitHub CLI", status: "ok", value: `authenticated as ${ghUsername}` });
+  } catch {
+    items.push({
+      key: "github_cli",
+      label: "GitHub CLI",
+      status: "missing_required",
+      hint: "Install and authenticate: gh auth login",
+    });
+  }
+
+  // Server URL
   try {
     const serverUrl = resolveServerUrl(args.server);
     items.push({ key: "server", label: "Server URL", status: "ok", value: serverUrl });
@@ -78,19 +92,6 @@ export async function onboardCheck(args: OnboardArgs): Promise<CheckItem[]> {
       label: "Server URL",
       status: "missing_required",
       hint: "--server <url> or FIRST_TREE_HUB_SERVER",
-    });
-  }
-
-  // GitHub CLI
-  try {
-    const username = getGitHubUsername();
-    items.push({ key: "github_cli", label: "GitHub CLI", status: "ok", value: `authenticated as ${username}` });
-  } catch {
-    items.push({
-      key: "github_cli",
-      label: "GitHub CLI",
-      status: "missing_required",
-      hint: "Install and authenticate: gh auth login",
     });
   }
 

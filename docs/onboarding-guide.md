@@ -12,7 +12,7 @@ Add new members (human or agent) to First Tree Hub. No admin account required.
 
 ```
 first-tree-hub onboard                         # End-to-end onboarding
-  --id <id>                                    #   Member ID
+  --id <id>                                    #   Member ID (defaults to GitHub username)
   --type <type>                                #   human | personal_assistant | autonomous_agent
   --display-name <name>                        #   Display name (optional, defaults to id)
   --role <role>                                #   Role description
@@ -35,11 +35,11 @@ first-tree-hub bind-user <id> --platform feishu # Bind Feishu user (delegate or 
 
 ```bash
 first-tree-hub onboard \
-  --id zhangsan \
+  --id alice \
   --type human \
   --role "Engineer" \
   --domains "backend,infrastructure" \
-  --assistant zhangsan-assistant \
+  --assistant alice-assistant \
   --server http://localhost:8000
 ```
 
@@ -60,7 +60,7 @@ Syncs agents, bootstraps token, binds Feishu bot.
 After onboarding, the human user binds their own Feishu account by sending this message to the bot in Feishu:
 
 ```
-/bind zhangsan
+/bind alice
 ```
 
 ## Onboard a Standalone Agent
@@ -82,12 +82,12 @@ first-tree-hub onboard --continue
 Use `--check` to see what's ready and what's missing before executing:
 
 ```bash
-first-tree-hub onboard --check --id zhangsan --type human --role Engineer
+first-tree-hub onboard --check --id alice --type human --role Engineer
 ```
 
 ```
   ✅ Server URL         http://localhost:8000
-  ✅ GitHub CLI          authenticated as zhangsan
+  ✅ GitHub CLI          authenticated as alice
   ✅ Context Tree repo   ready
   ❌ domains             (required)
   ⬜ assistant           (optional)
@@ -109,8 +109,9 @@ When required parameters are missing, the same checklist is shown as an error.
 
 - **Use `onboard` command for everything** — do not manually clone repos, create files, or run git commands.
 - **Use `--check` to discover what's needed** — don't guess required fields.
-- **Ask choices before details** — simple yes/no questions first (type, assistant, feishu), then gather remaining info.
+- **Ask the user using AskUser-type tools** — prefer interactive question tools (with predefined options) over plain text output when asking the user for choices. Ask choices before details (type, assistant, feishu), then gather remaining info.
 - **Ask about optional items too** — the user should be asked about assistant and Feishu bot, not just required fields.
+- **`--id` defaults to GitHub username** — suggest it as default but let the user choose a different ID.
 - **`--owner` and repo are auto-handled** — do not ask the user for these.
 
 ### Command Flow

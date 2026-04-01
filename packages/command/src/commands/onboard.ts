@@ -12,8 +12,20 @@ import {
 import { isInteractive } from "../core/prompt.js";
 
 async function promptMissing(args: Record<string, unknown>): Promise<void> {
+  // Get GitHub username for defaults
+  let ghUsername: string | null = null;
+  try {
+    const { getGitHubUsername } = await import("../core/bootstrap.js");
+    ghUsername = getGitHubUsername();
+  } catch {
+    // gh not available, no defaults
+  }
+
   if (!args.id) {
-    args.id = await input({ message: "Member ID (directory name):" });
+    args.id = await input({
+      message: "Member ID (directory name):",
+      default: ghUsername ?? undefined,
+    });
     saveOnboardState(args);
   }
 

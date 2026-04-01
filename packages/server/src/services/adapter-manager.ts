@@ -407,7 +407,7 @@ async function replyUnknownUser(bot: ManagedBot, event: InboundEvent, log: Fasti
     "Your account is not linked to First Tree Hub yet.",
     "To bind, send:  /bind <your-agent-id>",
     "",
-    "Example:  /bind zhangsan",
+    "Example:  /bind alice",
   ].join("\n");
 
   try {
