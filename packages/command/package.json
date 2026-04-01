@@ -1,6 +1,6 @@
 {
   "name": "@agent-team-foundation/first-tree-hub",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "type": "module",
   "description": "First Tree Hub — unified CLI for server, client, and agent management",
   "exports": {
@@ -20,7 +20,7 @@
   },
   "scripts": {
     "dev": "tsx src/cli/index.ts",
-    "build": "tsdown src/cli/index.ts src/index.ts --format esm --no-dts && node scripts/embed-assets.mjs",
+    "build": "tsdown src/cli/index.ts src/index.ts --format esm --no-dts --external @anthropic-ai/claude-agent-sdk && node scripts/embed-assets.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests"
   },
@@ -34,6 +34,7 @@
     "node": ">=22.16.0"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.84",
     "@fastify/cors": "^11.2.0",
     "@fastify/rate-limit": "^10.3.0",
     "@fastify/static": "^9.0.0",
