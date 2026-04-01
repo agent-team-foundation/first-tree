@@ -176,8 +176,8 @@ export function buildZodSchema(shape: Record<string, unknown>): z.ZodType {
       const inner = buildZodSchema(value.shape as Record<string, unknown>);
       zodShape[key] = inner.optional();
     } else if (typeof value === "object" && value !== null) {
-      // Required group — .default({}) lets Zod apply child defaults when group is absent
-      zodShape[key] = buildZodSchema(value as Record<string, unknown>).default({});
+      // Required group — .prefault({}) lets Zod apply child defaults when group is absent
+      zodShape[key] = buildZodSchema(value as Record<string, unknown>).prefault({});
     }
   }
   return z.object(zodShape);

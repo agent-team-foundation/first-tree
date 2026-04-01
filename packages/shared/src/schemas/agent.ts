@@ -29,7 +29,7 @@ export const createAgentSchema = z.object({
   type: agentTypeSchema,
   displayName: z.string().max(200).optional(),
   organizationId: z.string().max(100).optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 export type CreateAgent = z.infer<typeof createAgentSchema>;
 
@@ -66,7 +66,7 @@ export const agentSchema = z.object({
   treePath: z.string().nullable(),
   inboxId: z.string(),
   status: z.string(),
-  metadata: z.record(z.unknown()),
+  metadata: z.record(z.string(), z.unknown()),
   presenceStatus: presenceStatusSchema.optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
