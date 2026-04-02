@@ -475,6 +475,8 @@ export function AgentDetailPage() {
                 ) : (
                   agentAdapters.map((a) => {
                     const status = botStatuses?.find((s) => s.configId === a.id);
+                    // Kael is server-embedded: connected whenever the config is active (no bot status needed)
+                    const isConnected = a.platform === "kael" ? a.status === "active" : !!status?.connected;
                     return (
                       <TableRow key={a.id}>
                         <TableCell>
@@ -488,12 +490,10 @@ export function AgentDetailPage() {
                             <span
                               className={cn(
                                 "inline-block h-2 w-2 rounded-full",
-                                status?.connected ? "bg-green-500" : "bg-gray-300",
+                                isConnected ? "bg-green-500" : "bg-gray-300",
                               )}
                             />
-                            <span className="text-xs text-muted-foreground">
-                              {status?.connected ? "Online" : "Offline"}
-                            </span>
+                            <span className="text-xs text-muted-foreground">{isConnected ? "Online" : "Offline"}</span>
                           </span>
                         </TableCell>
                         <TableCell className="text-muted-foreground">{formatDate(a.createdAt)}</TableCell>
