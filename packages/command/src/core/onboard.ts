@@ -1,8 +1,7 @@
 import { execFileSync, execSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_CONFIG_DIR, setConfigValue } from "@first-tree-hub/shared/config";
+import { DEFAULT_CONFIG_DIR, DEFAULT_HOME_DIR, setConfigValue } from "@first-tree-hub/shared/config";
 import { bootstrapToken, checkBootstrapStatus, getGitHubUsername, resolveServerUrl } from "./bootstrap.js";
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -32,12 +31,11 @@ type CheckItem = {
   hint?: string;
 };
 
-export const STATE_FILE = join(homedir(), ".first-tree-hub", ".onboard-state.json");
+export const STATE_FILE = join(DEFAULT_HOME_DIR, ".onboard-state.json");
 
 /** Save current onboard args to state file for resume. */
 export function saveOnboardState(args: Record<string, unknown>): void {
-  const dir = join(homedir(), ".first-tree-hub");
-  mkdirSync(dir, { recursive: true });
+  mkdirSync(DEFAULT_HOME_DIR, { recursive: true });
   writeFileSync(STATE_FILE, JSON.stringify({ args }, null, 2));
 }
 
@@ -96,7 +94,7 @@ export async function onboardCheck(args: OnboardArgs): Promise<CheckItem[]> {
     });
   }
 
-  // Context Tree repo (auto-managed at ~/.first-tree-hub/context-tree/)
+  // Context Tree repo (auto-managed at $FIRST_TREE_HUB_HOME/context-tree/)
   const repoPath = await resolveContextTreeRepo(args.server);
   if (repoPath) {
     items.push({ key: "repo", label: "Context Tree repo", status: "ok", value: repoPath });
@@ -153,23 +151,33 @@ export async function onboardCheck(args: OnboardArgs): Promise<CheckItem[]> {
         },
   );
 
-  items.push(
-    args.assistant
-      ? { key: "assistant", label: "assistant", status: "ok", value: args.assistant }
-      : { key: "assistant", label: "assistant", status: "missing_optional", hint: "Also create a personal_assistant" },
-  );
+  // Assistant is only applicable for human agents
+  if (args.type === "human") {
+    items.push(
+      args.assistant
+        ? { key: "assistant", label: "assistant", status: "ok", value: args.assistant }
+        : {
+            key: "assistant",
+            label: "assistant",
+            status: "missing_optional",
+            hint: "Also create a personal_assistant",
+          },
+    );
+  }
 
-  // Feishu (optional)
-  items.push(
-    args.feishuBotAppId
-      ? { key: "feishu_bot", label: "feishu-bot-app-id", status: "ok", value: args.feishuBotAppId }
-      : {
-          key: "feishu_bot",
-          label: "feishu-bot-app-id",
-          status: "missing_optional",
-          hint: "Feishu bot App ID for assistant",
-        },
-  );
+  // Feishu bot binding is only applicable for non-human agents
+  if (args.type !== "human") {
+    items.push(
+      args.feishuBotAppId
+        ? { key: "feishu_bot", label: "feishu-bot-app-id", status: "ok", value: args.feishuBotAppId }
+        : {
+            key: "feishu_bot",
+            label: "feishu-bot-app-id",
+            status: "missing_optional",
+            hint: "Feishu bot App ID for this agent",
+          },
+    );
+  }
 
   // Check conflicts — distinguish between committed (real conflict) and uncommitted (resume)
   if (args.id && repoPath) {
@@ -231,6 +239,11 @@ export async function onboardCreate(args: OnboardArgs): Promise<{ prUrl: string 
   const repoPath = await resolveContextTreeRepo(args.server);
   if (!repoPath)
     throw new Error("Context Tree repo not available. Ensure --server is configured and the server is running.");
+
+  // Autonomous agents and personal assistants cannot have a personal assistant
+  if (args.assistant && args.type !== "human") {
+    throw new Error(`--assistant is only valid for human agents, not ${args.type}`);
+  }
 
   const ghUsername = getGitHubUsername();
 
@@ -370,7 +383,7 @@ export async function onboardCreate(args: OnboardArgs): Promise<{ prUrl: string 
 
   // Save state for --continue
   const state = { args, branch, prUrl: prOutput };
-  mkdirSync(join(homedir(), ".first-tree-hub"), { recursive: true });
+  mkdirSync(DEFAULT_HOME_DIR, { recursive: true });
   writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
 
   return { prUrl: prOutput };
@@ -393,6 +406,8 @@ export async function onboardContinue(args: OnboardArgs): Promise<void> {
 
   const mergedArgs = { ...state?.args, ...stripUndefined(args) };
   const serverUrl = resolveServerUrl(mergedArgs.server).replace(/\/+$/, "");
+  // For human+assistant, bootstrap the assistant (it's the one that runs as a client).
+  // For autonomous_agent or standalone personal_assistant, bootstrap the agent itself.
   const agentToBootstrap = mergedArgs.assistant ?? mergedArgs.id;
 
   if (!agentToBootstrap)
@@ -438,7 +453,7 @@ export async function onboardContinue(args: OnboardArgs): Promise<void> {
     }
     throw err;
   }
-  process.stderr.write(`Token saved to ~/.first-tree-hub/agents/${agentToBootstrap}/agent.yaml\n`);
+  process.stderr.write(`Token saved to ${DEFAULT_HOME_DIR}/config/agents/${agentToBootstrap}/agent.yaml\n`);
 
   // 3. Bind Feishu bot (if requested)
   if (mergedArgs.feishuBotAppId && mergedArgs.feishuBotAppSecret) {
@@ -457,12 +472,14 @@ export async function onboardContinue(args: OnboardArgs): Promise<void> {
   }
 
   // Summary
+  const typeLabel =
+    mergedArgs.type === "human" ? "Human" : mergedArgs.type === "autonomous_agent" ? "Agent" : "Assistant";
   process.stderr.write("\n✅ Onboard complete!\n\n");
-  process.stderr.write(`  Human:     ${mergedArgs.id}\n`);
+  process.stderr.write(`  ${typeLabel}:${" ".repeat(Math.max(1, 10 - typeLabel.length))}${mergedArgs.id}\n`);
   if (mergedArgs.assistant) {
     process.stderr.write(`  Assistant: ${mergedArgs.assistant}\n`);
   }
-  process.stderr.write(`  Token:     ~/.first-tree-hub/config/agents/${agentToBootstrap}/agent.yaml\n`);
+  process.stderr.write(`  Token:     ${DEFAULT_HOME_DIR}/config/agents/${agentToBootstrap}/agent.yaml\n`);
   if (mergedArgs.feishuBotAppId) {
     process.stderr.write(`  Feishu:    bot bound (${mergedArgs.feishuBotAppId})\n`);
   }
@@ -509,7 +526,23 @@ function createMemberNodeMd(
 
   const domainsList = data.domains.map((d) => `  - "${d}"`).join("\n");
   const githubLine = data.github ? `\ngithub: ${data.github}` : "";
-  const delegateLine = data.delegateMention ? `\ndelegate_mention: ${data.delegateMention}` : "";
+  // delegate_mention is only meaningful for human agents (points to their PA)
+  const delegateLine =
+    data.delegateMention && data.type === "human" ? `\ndelegate_mention: ${data.delegateMention}` : "";
+
+  // Type-specific body sections
+  const bodySections =
+    data.type === "autonomous_agent"
+      ? `## About
+
+## Capabilities
+
+## Current Focus
+`
+      : `## About
+
+## Current Focus
+`;
 
   const content = `---
 title: "${data.displayName}"
@@ -522,10 +555,7 @@ ${domainsList}${githubLine}${delegateLine}
 
 # ${data.displayName}
 
-## About
-
-## Current Focus
-`;
+${bodySections}`;
 
   writeFileSync(join(memberDir, "NODE.md"), content);
 }
@@ -539,10 +569,10 @@ function isTrackedByGit(repoPath: string, filePath: string): boolean {
   }
 }
 
-const CONTEXT_TREE_DIR = join(homedir(), ".first-tree-hub", "context-tree");
+const CONTEXT_TREE_DIR = join(DEFAULT_HOME_DIR, "context-tree");
 
 /**
- * Resolve Context Tree to a **local path** at ~/.first-tree-hub/context-tree/.
+ * Resolve Context Tree to a **local path** at $FIRST_TREE_HUB_HOME/context-tree/.
  *
  * Repo URL is obtained from the Hub server. The local clone is always
  * managed in the standard location — no custom paths allowed.
@@ -599,7 +629,7 @@ async function resolveContextTreeRepo(serverUrl?: string): Promise<string | null
     }
 
     // Different repo or broken — delete and re-clone
-    const safePrefix = join(homedir(), ".first-tree-hub");
+    const safePrefix = DEFAULT_HOME_DIR;
     if (!CONTEXT_TREE_DIR.startsWith(safePrefix) || CONTEXT_TREE_DIR === safePrefix) {
       throw new Error(`Refusing to delete unsafe path: ${CONTEXT_TREE_DIR}`);
     }
@@ -609,7 +639,7 @@ async function resolveContextTreeRepo(serverUrl?: string): Promise<string | null
   // Fresh clone
   try {
     process.stderr.write(`Cloning Context Tree to ${CONTEXT_TREE_DIR}...\n`);
-    mkdirSync(join(homedir(), ".first-tree-hub"), { recursive: true });
+    mkdirSync(DEFAULT_HOME_DIR, { recursive: true });
     execSync(`git ${gitConfigArgs} clone ${repoUrl} ${CONTEXT_TREE_DIR}`, { stdio: "pipe", env: gitEnv });
     return CONTEXT_TREE_DIR;
   } catch {

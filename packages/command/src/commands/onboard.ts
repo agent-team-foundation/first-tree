@@ -59,7 +59,8 @@ async function promptMissing(args: Record<string, unknown>): Promise<void> {
     }
   }
 
-  if (!args.assistant) {
+  // Only human agents can have a personal assistant
+  if (!args.assistant && args.type === "human") {
     const wantAssistant = await confirm({ message: "Create a personal assistant?", default: false });
     if (wantAssistant) {
       args.assistant = await input({
@@ -80,8 +81,9 @@ async function promptMissing(args: Record<string, unknown>): Promise<void> {
     }
   }
 
-  if (!args.feishuBotAppId) {
-    const wantFeishu = await confirm({ message: "Bind Feishu bot?", default: false });
+  // Feishu bot binding is relevant for non-human agents
+  if (!args.feishuBotAppId && args.type !== "human") {
+    const wantFeishu = await confirm({ message: "Bind Feishu bot for this agent?", default: false });
     if (wantFeishu) {
       args.feishuBotAppId = await input({ message: "Feishu App ID:" });
       args.feishuBotAppSecret = await input({ message: "Feishu App Secret:" });
