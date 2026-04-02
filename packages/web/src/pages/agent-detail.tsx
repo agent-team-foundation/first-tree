@@ -67,6 +67,9 @@ export function AgentDetailPage() {
     status: "active",
     externalUserId: "",
     displayName: "",
+    kaelUserId: "",
+    kaelProjectId: "",
+    kaelAgentToken: "",
   });
   const [bindingCredError, setBindingCredError] = useState("");
 
@@ -97,7 +100,7 @@ export function AgentDetailPage() {
       const creds = buildCredentials(bindingForm);
       if (!creds) throw new Error("Credentials are required");
       return createAdapter({
-        platform: bindingForm.platform as "feishu" | "slack",
+        platform: bindingForm.platform as "feishu" | "slack" | "kael",
         agentId,
         credentials: creds,
         status: bindingForm.status as "active" | "inactive",
@@ -132,7 +135,7 @@ export function AgentDetailPage() {
   const createMappingMutation = useMutation({
     mutationFn: () =>
       createAdapterMapping({
-        platform: bindingForm.platform as "feishu" | "slack",
+        platform: bindingForm.platform as "feishu" | "slack" | "kael",
         externalUserId: bindingForm.externalUserId,
         agentId,
         boundVia: "manual",
@@ -170,6 +173,9 @@ export function AgentDetailPage() {
       status: "active",
       externalUserId: "",
       displayName: "",
+      kaelUserId: "",
+      kaelProjectId: "",
+      kaelAgentToken: "",
     });
     setBindingCredError("");
   }
@@ -184,6 +190,9 @@ export function AgentDetailPage() {
       status: adapter.status,
       externalUserId: "",
       displayName: "",
+      kaelUserId: "",
+      kaelProjectId: "",
+      kaelAgentToken: "",
     });
     setBindingDialogOpen(true);
   }
@@ -202,6 +211,11 @@ export function AgentDetailPage() {
     if (bindingForm.platform === "feishu") {
       if (!bindingEditId && (!bindingForm.feishuAppId || !bindingForm.feishuAppSecret)) {
         setBindingCredError("App ID and App Secret are required");
+        return;
+      }
+    } else if (bindingForm.platform === "kael") {
+      if (!bindingEditId && (!bindingForm.kaelUserId || !bindingForm.kaelProjectId || !bindingForm.kaelAgentToken)) {
+        setBindingCredError("User ID, Project ID, and Agent Token are required");
         return;
       }
     } else {
@@ -661,6 +675,48 @@ export function AgentDetailPage() {
                       />
                     </div>
                   </>
+                ) : bindingForm.platform === "kael" ? (
+                  <>
+                    <div className="space-y-2">
+                      <Label htmlFor="kael-user-id">
+                        User ID{bindingEditId ? " — leave empty to keep existing" : ""}
+                      </Label>
+                      <Input
+                        id="kael-user-id"
+                        value={bindingForm.kaelUserId}
+                        onChange={(e) => setBindingForm({ ...bindingForm, kaelUserId: e.target.value })}
+                        placeholder="user_xxxxxxxx"
+                        className="font-mono"
+                        autoComplete="off"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="kael-project-id">
+                        Project ID{bindingEditId ? " — leave empty to keep existing" : ""}
+                      </Label>
+                      <Input
+                        id="kael-project-id"
+                        value={bindingForm.kaelProjectId}
+                        onChange={(e) => setBindingForm({ ...bindingForm, kaelProjectId: e.target.value })}
+                        placeholder="proj_xxxxxxxx"
+                        className="font-mono"
+                        autoComplete="off"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="kael-agent-token">
+                        Agent Token{bindingEditId ? " — leave empty to keep existing" : ""}
+                      </Label>
+                      <Input
+                        id="kael-agent-token"
+                        type="password"
+                        autoComplete="new-password"
+                        value={bindingForm.kaelAgentToken}
+                        onChange={(e) => setBindingForm({ ...bindingForm, kaelAgentToken: e.target.value })}
+                        placeholder="••••••••"
+                      />
+                    </div>
+                  </>
                 ) : (
                   <div className="space-y-2">
                     <Label htmlFor="binding-creds">
@@ -811,6 +867,9 @@ function buildCredentials(form: {
   feishuAppId: string;
   feishuAppSecret: string;
   credentialsJson: string;
+  kaelUserId: string;
+  kaelProjectId: string;
+  kaelAgentToken: string;
 }): Record<string, unknown> | null {
   if (form.platform === "feishu") {
     // Both fields must be filled or both empty — partial input would corrupt stored credentials
@@ -819,6 +878,17 @@ function buildCredentials(form: {
       throw new Error("Both App ID and App Secret are required");
     }
     return { app_id: form.feishuAppId, app_secret: form.feishuAppSecret };
+  }
+  if (form.platform === "kael") {
+    if (!form.kaelUserId && !form.kaelProjectId && !form.kaelAgentToken) return null;
+    if (!form.kaelUserId || !form.kaelProjectId || !form.kaelAgentToken) {
+      throw new Error("User ID, Project ID, and Agent Token are all required");
+    }
+    return {
+      kaelUserId: form.kaelUserId,
+      kaelProjectId: form.kaelProjectId,
+      agentToken: form.kaelAgentToken,
+    };
   }
   const trimmed = form.credentialsJson.trim();
   if (!trimmed) return null;

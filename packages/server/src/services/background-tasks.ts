@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { AdapterManager } from "./adapter-manager.js";
 import * as inboxService from "./inbox.js";
+import type { KaelRuntime } from "./kael-runtime.js";
 import * as presenceService from "./presence.js";
 import * as systemConfigService from "./system-config.js";
 
@@ -13,10 +14,12 @@ export function createBackgroundTasks(
   app: FastifyInstance,
   instanceId: string,
   adapterManager: AdapterManager,
+  kaelRuntime?: KaelRuntime,
 ): BackgroundTasks {
   let inboxTimer: ReturnType<typeof setInterval> | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let adapterOutboundTimer: ReturnType<typeof setInterval> | null = null;
+  let kaelOutboundTimer: ReturnType<typeof setInterval> | null = null;
 
   return {
     start() {
@@ -53,6 +56,17 @@ export function createBackgroundTasks(
         }
       }, 5_000);
 
+      // Kael outbound processing — runs every 5 seconds
+      if (kaelRuntime) {
+        kaelOutboundTimer = setInterval(async () => {
+          try {
+            await kaelRuntime.processOutbound();
+          } catch (err) {
+            app.log.error(err, "Kael outbound processing failed");
+          }
+        }, 5_000);
+      }
+
       // Initial heartbeat
       presenceService.heartbeatInstance(app.db, instanceId).catch((err) => {
         app.log.error(err, "Failed initial heartbeat");
@@ -71,6 +85,10 @@ export function createBackgroundTasks(
       if (adapterOutboundTimer) {
         clearInterval(adapterOutboundTimer);
         adapterOutboundTimer = null;
+      }
+      if (kaelOutboundTimer) {
+        clearInterval(kaelOutboundTimer);
+        kaelOutboundTimer = null;
       }
     },
   };

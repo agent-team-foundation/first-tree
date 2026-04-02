@@ -39,6 +39,7 @@ import { githubAuthHook } from "./middleware/github-auth.js";
 import { type AdapterManager, createAdapterManager } from "./services/adapter-manager.js";
 import { type BackgroundTasks, createBackgroundTasks } from "./services/background-tasks.js";
 import { syncFromGitHub } from "./services/context-tree-graphql.js";
+import { createKaelRuntime, type KaelRuntime } from "./services/kael-runtime.js";
 import { createNotifier, type Notifier } from "./services/notifier.js";
 
 // Fastify type augmentation
@@ -48,6 +49,7 @@ export type AppContext = {
   notifier: Notifier;
   backgroundTasks: BackgroundTasks;
   adapterManager: AdapterManager;
+  kaelRuntime: KaelRuntime | undefined;
 };
 
 export async function buildApp(config: Config) {
@@ -233,13 +235,26 @@ export async function buildApp(config: Config) {
   const adapterManager = createAdapterManager(db, config.secrets.encryptionKey, app.log, notifier);
   app.decorate("adapterManager", adapterManager);
 
+  // Kael runtime — server-embedded forwarding to Kael API
+  const kaelRuntime = config.kael?.endpoint
+    ? createKaelRuntime(
+        db,
+        config.secrets.encryptionKey,
+        config.kael.endpoint,
+        config.kael.apiKey,
+        config.kael.hubPublicUrl,
+        app.log,
+      )
+    : undefined;
+
   // Background tasks
-  const backgroundTasks = createBackgroundTasks(app, config.instanceId, adapterManager);
+  const backgroundTasks = createBackgroundTasks(app, config.instanceId, adapterManager, kaelRuntime);
 
   // Register config change handler for hot reload
   notifier.onConfigChange((configType) => {
     if (configType === "adapter_configs") {
       adapterManager.reload().catch((err) => app.log.error(err, "Adapter hot-reload failed (PG NOTIFY)"));
+      kaelRuntime?.reload().catch((err) => app.log.error(err, "Kael hot-reload failed (PG NOTIFY)"));
     }
   });
 
@@ -248,6 +263,7 @@ export async function buildApp(config: Config) {
     await notifier.start();
     backgroundTasks.start();
     await adapterManager.reload();
+    await kaelRuntime?.reload();
 
     // Context Tree sync via GitHub GraphQL
     const { repo: ctRepo, branch: ctBranch, syncInterval } = config.contextTree;
@@ -275,6 +291,7 @@ export async function buildApp(config: Config) {
   app.addHook("onClose", async () => {
     backgroundTasks.stop();
     adapterManager.shutdown();
+    kaelRuntime?.shutdown();
     await notifier.stop();
     await listenClient.end();
   });

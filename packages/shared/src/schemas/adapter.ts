@@ -3,9 +3,10 @@ import { z } from "zod";
 export const ADAPTER_PLATFORMS = {
   FEISHU: "feishu",
   SLACK: "slack",
+  KAEL: "kael",
 } as const;
 
-export const adapterPlatformSchema = z.enum(["feishu", "slack"]);
+export const adapterPlatformSchema = z.enum(["feishu", "slack", "kael"]);
 export type AdapterPlatform = z.infer<typeof adapterPlatformSchema>;
 
 export const ADAPTER_STATUSES = {

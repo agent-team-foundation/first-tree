@@ -65,6 +65,12 @@ export const serverConfigSchema = defineConfig({
     loginMax: field(z.number().default(5), { env: "FIRST_TREE_HUB_RATE_LIMIT_LOGIN_MAX" }),
     webhookMax: field(z.number().default(60), { env: "FIRST_TREE_HUB_RATE_LIMIT_WEBHOOK_MAX" }),
   }),
+  kael: optional({
+    endpoint: field(z.string(), { env: "KAEL_ENDPOINT" }),
+    apiKey: field(z.string(), { env: "KAEL_API_KEY", secret: true }),
+    /** Public URL of this Hub server, reachable from Kael for API callbacks */
+    hubPublicUrl: field(z.string(), { env: "FIRST_TREE_HUB_PUBLIC_URL" }),
+  }),
 });
 
 export type ServerConfig = InferConfig<typeof serverConfigSchema>;
