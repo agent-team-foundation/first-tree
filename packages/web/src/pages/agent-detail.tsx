@@ -96,9 +96,16 @@ export function AgentDetailPage() {
 
   // Mutations — bot binding (non-human agents)
   const createAdapterMutation = useMutation({
-    mutationFn: () => {
-      const creds = buildCredentials(bindingForm);
+    mutationFn: async () => {
+      let creds = buildCredentials(bindingForm);
       if (!creds) throw new Error("Credentials are required");
+
+      // For Kael: auto-create a dedicated agent token
+      if (bindingForm.platform === "kael" && !creds.agentToken) {
+        const tokenResult = await createToken(agentId, { name: "kael-hub-binding" });
+        creds = { ...creds, agentToken: tokenResult.token };
+      }
+
       return createAdapter({
         platform: bindingForm.platform as "feishu" | "slack" | "kael",
         agentId,
@@ -108,6 +115,7 @@ export function AgentDetailPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["adapters"] });
+      queryClient.invalidateQueries({ queryKey: ["tokens", agentId] });
       closeBindingDialog();
     },
   });
@@ -214,8 +222,8 @@ export function AgentDetailPage() {
         return;
       }
     } else if (bindingForm.platform === "kael") {
-      if (!bindingEditId && (!bindingForm.kaelUserId || !bindingForm.kaelProjectId || !bindingForm.kaelAgentToken)) {
-        setBindingCredError("User ID, Project ID, and Agent Token are required");
+      if (!bindingEditId && (!bindingForm.kaelUserId || !bindingForm.kaelProjectId)) {
+        setBindingCredError("User ID and Project ID are required");
         return;
       }
     } else {
@@ -467,6 +475,8 @@ export function AgentDetailPage() {
                 ) : (
                   agentAdapters.map((a) => {
                     const status = botStatuses?.find((s) => s.configId === a.id);
+                    // Kael is server-embedded: connected whenever the config is active (no bot status needed)
+                    const isConnected = a.platform === "kael" ? a.status === "active" : !!status?.connected;
                     return (
                       <TableRow key={a.id}>
                         <TableCell>
@@ -480,12 +490,10 @@ export function AgentDetailPage() {
                             <span
                               className={cn(
                                 "inline-block h-2 w-2 rounded-full",
-                                status?.connected ? "bg-green-500" : "bg-gray-300",
+                                isConnected ? "bg-green-500" : "bg-gray-300",
                               )}
                             />
-                            <span className="text-xs text-muted-foreground">
-                              {status?.connected ? "Online" : "Offline"}
-                            </span>
+                            <span className="text-xs text-muted-foreground">{isConnected ? "Online" : "Offline"}</span>
                           </span>
                         </TableCell>
                         <TableCell className="text-muted-foreground">{formatDate(a.createdAt)}</TableCell>
@@ -703,19 +711,11 @@ export function AgentDetailPage() {
                         autoComplete="off"
                       />
                     </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="kael-agent-token">
-                        Agent Token{bindingEditId ? " — leave empty to keep existing" : ""}
-                      </Label>
-                      <Input
-                        id="kael-agent-token"
-                        type="password"
-                        autoComplete="new-password"
-                        value={bindingForm.kaelAgentToken}
-                        onChange={(e) => setBindingForm({ ...bindingForm, kaelAgentToken: e.target.value })}
-                        placeholder="••••••••"
-                      />
-                    </div>
+                    {!bindingEditId && (
+                      <p className="text-sm text-muted-foreground">
+                        Agent Token will be created automatically when you save.
+                      </p>
+                    )}
                   </>
                 ) : (
                   <div className="space-y-2">
@@ -880,14 +880,14 @@ function buildCredentials(form: {
     return { app_id: form.feishuAppId, app_secret: form.feishuAppSecret };
   }
   if (form.platform === "kael") {
-    if (!form.kaelUserId && !form.kaelProjectId && !form.kaelAgentToken) return null;
-    if (!form.kaelUserId || !form.kaelProjectId || !form.kaelAgentToken) {
-      throw new Error("User ID, Project ID, and Agent Token are all required");
+    if (!form.kaelUserId && !form.kaelProjectId) return null;
+    if (!form.kaelUserId || !form.kaelProjectId) {
+      throw new Error("User ID and Project ID are required");
     }
+    // agentToken is auto-created by the mutation, not from the form
     return {
       kaelUserId: form.kaelUserId,
       kaelProjectId: form.kaelProjectId,
-      agentToken: form.kaelAgentToken,
     };
   }
   const trimmed = form.credentialsJson.trim();
