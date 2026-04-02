@@ -11,7 +11,7 @@ This skill is meant to keep working even after the `skills/first-tree-cli-framew
 Snapshot source:
 
 - live repo: `agent-team-foundation/first-tree`
-- snapshot base commit when this portable copy was refreshed: `5974c552454524af3485af9d8a06067512276044`
+- snapshot base commit when this portable copy was refreshed: `edc0c437ba437c20f8a1893277499d604aa7abd0`
 
 ## If You Have A Live `first-tree` Checkout
 
