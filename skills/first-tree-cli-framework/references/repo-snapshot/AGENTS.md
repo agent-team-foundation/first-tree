@@ -26,7 +26,8 @@ This repo is the **template source and CLI** for Context Tree. It is NOT a conte
 
 ## Repo-Local Skill
 
-- Use `skills/first-tree-cli-framework/SKILL.md` when working on `src/cli.ts`, `src/init.ts`, `src/verify.ts`, `src/upgrade.ts`, `.context-tree/`, or any task that needs the exact Context Tree maintenance model implemented in this repo. The skill includes a local CLI runner plus references for rules, validators, templates, workflows, and framework philosophy.
+- Use `skills/first-tree-cli-framework/SKILL.md` as the source-of-truth skill when working on `src/cli.ts`, `src/init.ts`, `src/verify.ts`, `src/upgrade.ts`, `.context-tree/`, or any task that needs the exact Context Tree maintenance model implemented in this repo.
+- `.agents/skills/first-tree-cli-framework/` and `.claude/skills/first-tree-cli-framework/` are generated mirrors for agent discovery. Do not edit those mirrors directly; refresh them from the source skill with `bash skills/first-tree-cli-framework/scripts/sync-skill-artifacts.sh`.
 
 ## Rules
 

@@ -19,7 +19,8 @@
     "prepack": "pnpm build",
     "test": "vitest run",
     "eval": "vitest run --config vitest.eval.config.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "validate:skill": "python3 ./skills/first-tree-cli-framework/scripts/quick_validate.py ./skills/first-tree-cli-framework && bash ./skills/first-tree-cli-framework/scripts/check-skill-sync.sh && bash ./skills/first-tree-cli-framework/scripts/portable-smoke-test.sh"
   },
   "packageManager": "pnpm@10.25.0",
   "license": "Apache-2.0",
