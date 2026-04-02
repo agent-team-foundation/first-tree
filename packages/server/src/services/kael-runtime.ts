@@ -38,6 +38,7 @@ export function createKaelRuntime(
   log: FastifyBaseLogger,
 ): KaelRuntime {
   const agentConfigs = new Map<string, KaelAgentConfig>();
+  const inboxToConfig = new Map<string, KaelAgentConfig>();
   let aborted = false;
 
   return {
@@ -50,6 +51,7 @@ export function createKaelRuntime(
       if (!kaelEndpoint) {
         log.debug("KAEL_ENDPOINT not configured — Kael runtime idle");
         agentConfigs.clear();
+        inboxToConfig.clear();
         return;
       }
 
@@ -57,6 +59,19 @@ export function createKaelRuntime(
         .select()
         .from(adapterConfigs)
         .where(and(eq(adapterConfigs.platform, "kael"), eq(adapterConfigs.status, "active")));
+
+      // Batch-resolve agent inboxIds in one query (avoid N+1)
+      const configAgentIds = configs.filter((c) => c.credentials).map((c) => c.agentId);
+      const agentRows =
+        configAgentIds.length > 0
+          ? await db.execute<{ id: string; inbox_id: string }>(
+              sql`SELECT id, inbox_id FROM agents WHERE id IN (${sql.join(
+                configAgentIds.map((id) => sql`${id}`),
+                sql`, `,
+              )}) AND status = 'active'`,
+            )
+          : [];
+      const agentInboxMap = new Map(agentRows.map((a) => [a.id, a.inbox_id]));
 
       const seen = new Set<string>();
 
@@ -73,23 +88,22 @@ export function createKaelRuntime(
 
         seen.add(config.agentId);
 
-        // Resolve agent's inboxId
-        const [agent] = await db.execute<{ inbox_id: string }>(
-          sql`SELECT inbox_id FROM agents WHERE id = ${config.agentId} AND status = 'active' LIMIT 1`,
-        );
-        if (!agent) {
+        const inboxId = agentInboxMap.get(config.agentId);
+        if (!inboxId) {
           log.warn({ configId: config.id, agentId: config.agentId }, "Kael config agent not found or inactive");
           continue;
         }
 
-        agentConfigs.set(config.agentId, {
+        const entry: KaelAgentConfig = {
           configId: config.id,
           agentId: config.agentId,
-          inboxId: agent.inbox_id,
+          inboxId,
           kaelUserId: creds.kaelUserId,
           kaelProjectId: creds.kaelProjectId,
           agentToken: creds.agentToken,
-        });
+        };
+        agentConfigs.set(config.agentId, entry);
+        inboxToConfig.set(inboxId, entry);
 
         log.info({ configId: config.id, agentId: config.agentId }, "Loaded Kael adapter config");
       }
@@ -97,6 +111,8 @@ export function createKaelRuntime(
       // Remove configs that are no longer active
       for (const agentId of agentConfigs.keys()) {
         if (!seen.has(agentId)) {
+          const old = agentConfigs.get(agentId);
+          if (old) inboxToConfig.delete(old.inboxId);
           agentConfigs.delete(agentId);
           log.info({ agentId }, "Removed inactive Kael adapter config");
         }
@@ -148,8 +164,8 @@ export function createKaelRuntime(
               continue;
             }
 
-            // Find which agent this entry belongs to
-            const config = findConfigByInboxId(entry.inbox_id);
+            // Find which agent this entry belongs to (O(1) reverse map lookup)
+            const config = inboxToConfig.get(entry.inbox_id);
             if (!config) {
               await ackEntry(db, entry.id);
               continue;
@@ -208,15 +224,9 @@ export function createKaelRuntime(
     shutdown(): void {
       aborted = true;
       agentConfigs.clear();
+      inboxToConfig.clear();
     },
   };
-
-  function findConfigByInboxId(inboxId: string): KaelAgentConfig | undefined {
-    for (const config of agentConfigs.values()) {
-      if (config.inboxId === inboxId) return config;
-    }
-    return undefined;
-  }
 }
 
 async function ackEntry(db: Database, entryId: number): Promise<void> {
@@ -226,16 +236,12 @@ async function ackEntry(db: Database, entryId: number): Promise<void> {
 const MAX_RETRY_COUNT = 3;
 
 async function nackEntry(db: Database, entryId: number): Promise<void> {
-  // Increment retry count; if exceeded, mark as failed instead of retrying
-  const [entry] = await db.execute<{ retry_count: number }>(
-    sql`SELECT retry_count FROM inbox_entries WHERE id = ${entryId}`,
-  );
-  if (entry && entry.retry_count >= MAX_RETRY_COUNT) {
-    await db.update(inboxEntries).set({ status: "failed" }).where(eq(inboxEntries.id, entryId));
-    return;
-  }
-  await db
-    .update(inboxEntries)
-    .set({ status: "pending", retryCount: sql`retry_count + 1` })
-    .where(eq(inboxEntries.id, entryId));
+  // Atomic: increment retry_count and set status in one UPDATE (no TOCTOU race)
+  await db.execute(sql`
+    UPDATE inbox_entries
+    SET
+      status = CASE WHEN retry_count >= ${MAX_RETRY_COUNT} THEN 'failed' ELSE 'pending' END,
+      retry_count = retry_count + 1
+    WHERE id = ${entryId}
+  `);
 }
