@@ -13,7 +13,8 @@
     "check": "biome check .",
     "format": "biome check --write .",
     "typecheck": "turbo run typecheck",
-    "test": "turbo run test"
+    "test": "turbo run test",
+    "validate:skill": "python3 ./skills/first-tree-hub-cli/scripts/quick_validate.py ./skills/first-tree-hub-cli && bash ./skills/first-tree-hub-cli/scripts/check-skill-sync.sh"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.0",

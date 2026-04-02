@@ -31,5 +31,9 @@ drizzle/meta/
 *.log
 
 # Claude Code
-.claude/
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/first-tree-hub-cli/
+!.claude/skills/first-tree-hub-cli/**
 .gstack/
