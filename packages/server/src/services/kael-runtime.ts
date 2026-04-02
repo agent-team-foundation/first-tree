@@ -128,7 +128,10 @@ export function createKaelRuntime(
             JOIN adapter_configs ac ON a.id = ac.agent_id
             WHERE ac.platform = 'kael' AND ac.status = 'active'
               AND ie.status = 'pending'
-              AND a.id IN (${sql.join(agentIds.map((id) => sql`${id}`), sql`, `)})
+              AND a.id IN (${sql.join(
+                agentIds.map((id) => sql`${id}`),
+                sql`, `,
+              )})
             ORDER BY ie.created_at
             LIMIT ${OUTBOUND_BATCH_SIZE}
             FOR UPDATE OF ie SKIP LOCKED

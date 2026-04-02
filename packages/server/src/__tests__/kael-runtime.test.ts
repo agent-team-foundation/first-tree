@@ -68,11 +68,9 @@ describe("KaelRuntime", () => {
 
   // ---- helpers ----
 
-  async function insertKaelConfig(
-    agentId: string,
-    opts: { status?: string; credentials?: unknown } = {},
-  ) {
-    const creds = opts.credentials ??
+  async function insertKaelConfig(agentId: string, opts: { status?: string; credentials?: unknown } = {}) {
+    const creds =
+      opts.credentials ??
       encryptCredentials(
         { kaelUserId: "kael-user-1", kaelProjectId: "kael-proj-1", agentToken: "kael-tok-1" },
         ENCRYPTION_KEY,
@@ -146,16 +144,12 @@ describe("KaelRuntime", () => {
       await insertKaelConfig(agent.id);
 
       const log = createMockLogger();
-      const runtime = createKaelRuntime(
-        app.db, ENCRYPTION_KEY, KAEL_ENDPOINT, KAEL_API_KEY, SERVER_URL, log,
-      );
+      const runtime = createKaelRuntime(app.db, ENCRYPTION_KEY, KAEL_ENDPOINT, KAEL_API_KEY, SERVER_URL, log);
       await runtime.reload();
 
       // reload should have logged that config was loaded
       expect(log.info).toHaveBeenCalled();
-      const infoArgs = log.info.mock.calls.map(
-        (c: unknown[]) => (c[0] as Record<string, unknown>)?.agentId,
-      );
+      const infoArgs = log.info.mock.calls.map((c: unknown[]) => (c[0] as Record<string, unknown>)?.agentId);
       expect(infoArgs).toContain(agent.id);
 
       // Verify config was loaded by sending a message through processOutbound
@@ -180,7 +174,12 @@ describe("KaelRuntime", () => {
       await insertFeishuConfig(agent.id);
 
       const runtime = createKaelRuntime(
-        app.db, ENCRYPTION_KEY, KAEL_ENDPOINT, KAEL_API_KEY, SERVER_URL, createMockLogger(),
+        app.db,
+        ENCRYPTION_KEY,
+        KAEL_ENDPOINT,
+        KAEL_API_KEY,
+        SERVER_URL,
+        createMockLogger(),
       );
       await runtime.reload();
 
@@ -195,7 +194,12 @@ describe("KaelRuntime", () => {
       await insertKaelConfig(agent.id, { status: "inactive" });
 
       const runtime = createKaelRuntime(
-        app.db, ENCRYPTION_KEY, KAEL_ENDPOINT, KAEL_API_KEY, SERVER_URL, createMockLogger(),
+        app.db,
+        ENCRYPTION_KEY,
+        KAEL_ENDPOINT,
+        KAEL_API_KEY,
+        SERVER_URL,
+        createMockLogger(),
       );
       await runtime.reload();
 
@@ -210,13 +214,23 @@ describe("KaelRuntime", () => {
 
       // First load with endpoint
       const runtime = createKaelRuntime(
-        app.db, ENCRYPTION_KEY, KAEL_ENDPOINT, KAEL_API_KEY, SERVER_URL, createMockLogger(),
+        app.db,
+        ENCRYPTION_KEY,
+        KAEL_ENDPOINT,
+        KAEL_API_KEY,
+        SERVER_URL,
+        createMockLogger(),
       );
       await runtime.reload();
 
       // Create a new runtime without endpoint
       const runtimeNoEndpoint = createKaelRuntime(
-        app.db, ENCRYPTION_KEY, undefined, undefined, SERVER_URL, createMockLogger(),
+        app.db,
+        ENCRYPTION_KEY,
+        undefined,
+        undefined,
+        SERVER_URL,
+        createMockLogger(),
       );
       await runtimeNoEndpoint.reload();
 
@@ -231,9 +245,7 @@ describe("KaelRuntime", () => {
       await insertKaelConfig(agent.id, { credentials: "not-valid-encrypted-data" });
 
       const log = createMockLogger();
-      const runtime = createKaelRuntime(
-        app.db, ENCRYPTION_KEY, KAEL_ENDPOINT, KAEL_API_KEY, SERVER_URL, log,
-      );
+      const runtime = createKaelRuntime(app.db, ENCRYPTION_KEY, KAEL_ENDPOINT, KAEL_API_KEY, SERVER_URL, log);
       await runtime.reload();
 
       // Should have logged error but not thrown
@@ -251,7 +263,12 @@ describe("KaelRuntime", () => {
   describe("processOutbound()", () => {
     it("returns {sent:0, errors:0} when no configs loaded", async () => {
       const runtime = createKaelRuntime(
-        app.db, ENCRYPTION_KEY, KAEL_ENDPOINT, KAEL_API_KEY, SERVER_URL, createMockLogger(),
+        app.db,
+        ENCRYPTION_KEY,
+        KAEL_ENDPOINT,
+        KAEL_API_KEY,
+        SERVER_URL,
+        createMockLogger(),
       );
       // Don't call reload — no configs loaded
       const result = await runtime.processOutbound();
@@ -263,7 +280,12 @@ describe("KaelRuntime", () => {
       await insertKaelConfig(agent.id);
 
       const runtime = createKaelRuntime(
-        app.db, ENCRYPTION_KEY, KAEL_ENDPOINT, KAEL_API_KEY, SERVER_URL, createMockLogger(),
+        app.db,
+        ENCRYPTION_KEY,
+        KAEL_ENDPOINT,
+        KAEL_API_KEY,
+        SERVER_URL,
+        createMockLogger(),
       );
       await runtime.reload();
 
@@ -279,10 +301,7 @@ describe("KaelRuntime", () => {
       await runtime.processOutbound();
 
       // Entry should be acked (not pending anymore)
-      const [updated] = await app.db
-        .select()
-        .from(inboxEntries)
-        .where(eq(inboxEntries.id, entry.id));
+      const [updated] = await app.db.select().from(inboxEntries).where(eq(inboxEntries.id, entry.id));
       expect(updated.status).toBe("acked");
 
       vi.unstubAllGlobals();
@@ -296,7 +315,12 @@ describe("KaelRuntime", () => {
       });
 
       const runtime = createKaelRuntime(
-        app.db, ENCRYPTION_KEY, KAEL_ENDPOINT, KAEL_API_KEY, SERVER_URL, createMockLogger(),
+        app.db,
+        ENCRYPTION_KEY,
+        KAEL_ENDPOINT,
+        KAEL_API_KEY,
+        SERVER_URL,
+        createMockLogger(),
       );
       await runtime.reload();
 
@@ -343,7 +367,12 @@ describe("KaelRuntime", () => {
       await insertKaelConfig(agent.id);
 
       const runtime = createKaelRuntime(
-        app.db, ENCRYPTION_KEY, KAEL_ENDPOINT, KAEL_API_KEY, SERVER_URL, createMockLogger(),
+        app.db,
+        ENCRYPTION_KEY,
+        KAEL_ENDPOINT,
+        KAEL_API_KEY,
+        SERVER_URL,
+        createMockLogger(),
       );
       await runtime.reload();
 
@@ -369,7 +398,12 @@ describe("KaelRuntime", () => {
       await insertKaelConfig(agent.id);
 
       const runtime = createKaelRuntime(
-        app.db, ENCRYPTION_KEY, KAEL_ENDPOINT, KAEL_API_KEY, SERVER_URL, createMockLogger(),
+        app.db,
+        ENCRYPTION_KEY,
+        KAEL_ENDPOINT,
+        KAEL_API_KEY,
+        SERVER_URL,
+        createMockLogger(),
       );
       await runtime.reload();
 
@@ -404,7 +438,12 @@ describe("KaelRuntime", () => {
       await insertKaelConfig(agent.id);
 
       const runtime = createKaelRuntime(
-        app.db, ENCRYPTION_KEY, KAEL_ENDPOINT, KAEL_API_KEY, SERVER_URL, createMockLogger(),
+        app.db,
+        ENCRYPTION_KEY,
+        KAEL_ENDPOINT,
+        KAEL_API_KEY,
+        SERVER_URL,
+        createMockLogger(),
       );
       await runtime.reload();
 
@@ -431,7 +470,12 @@ describe("KaelRuntime", () => {
       await insertKaelConfig(agent.id);
 
       const runtime = createKaelRuntime(
-        app.db, ENCRYPTION_KEY, KAEL_ENDPOINT, KAEL_API_KEY, SERVER_URL, createMockLogger(),
+        app.db,
+        ENCRYPTION_KEY,
+        KAEL_ENDPOINT,
+        KAEL_API_KEY,
+        SERVER_URL,
+        createMockLogger(),
       );
       await runtime.reload();
 
@@ -474,7 +518,12 @@ describe("KaelRuntime", () => {
       await insertKaelConfig(kaelAgent.id);
 
       const runtime = createKaelRuntime(
-        app.db, ENCRYPTION_KEY, KAEL_ENDPOINT, KAEL_API_KEY, SERVER_URL, createMockLogger(),
+        app.db,
+        ENCRYPTION_KEY,
+        KAEL_ENDPOINT,
+        KAEL_API_KEY,
+        SERVER_URL,
+        createMockLogger(),
       );
       await runtime.reload();
 
@@ -502,7 +551,12 @@ describe("KaelRuntime", () => {
       await insertKaelConfig(agent.id);
 
       const runtime = createKaelRuntime(
-        app.db, ENCRYPTION_KEY, KAEL_ENDPOINT, KAEL_API_KEY, SERVER_URL, createMockLogger(),
+        app.db,
+        ENCRYPTION_KEY,
+        KAEL_ENDPOINT,
+        KAEL_API_KEY,
+        SERVER_URL,
+        createMockLogger(),
       );
       await runtime.reload();
 
@@ -538,7 +592,12 @@ describe("KaelRuntime", () => {
       await insertKaelConfig(agent.id);
 
       const runtime = createKaelRuntime(
-        app.db, ENCRYPTION_KEY, KAEL_ENDPOINT, KAEL_API_KEY, SERVER_URL, createMockLogger(),
+        app.db,
+        ENCRYPTION_KEY,
+        KAEL_ENDPOINT,
+        KAEL_API_KEY,
+        SERVER_URL,
+        createMockLogger(),
       );
       await runtime.reload();
 
@@ -554,7 +613,12 @@ describe("KaelRuntime", () => {
       await insertKaelConfig(agent.id);
 
       const runtime = createKaelRuntime(
-        app.db, ENCRYPTION_KEY, KAEL_ENDPOINT, KAEL_API_KEY, SERVER_URL, createMockLogger(),
+        app.db,
+        ENCRYPTION_KEY,
+        KAEL_ENDPOINT,
+        KAEL_API_KEY,
+        SERVER_URL,
+        createMockLogger(),
       );
       await runtime.reload();
 
