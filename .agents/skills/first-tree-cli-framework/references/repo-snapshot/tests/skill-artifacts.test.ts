@@ -5,6 +5,15 @@ import { describe, expect, it } from "vitest";
 
 const ROOT = process.cwd();
 
+function readPortableSnapshotCommit(quickstart: string): string {
+  const match = quickstart.match(
+    /snapshot base commit when this portable copy was refreshed: `([0-9a-f]{40})`/,
+  );
+
+  expect(match, "portable quickstart should record the snapshot source commit").not.toBeNull();
+  return match![1];
+}
+
 describe("skill artifacts", () => {
   it("keeps the source-of-truth skill and generated mirrors present", () => {
     expect(existsSync(join(ROOT, "skills", "first-tree-cli-framework", "SKILL.md"))).toBe(true);
@@ -42,8 +51,13 @@ describe("skill artifacts", () => {
     const quickstart = read("skills/first-tree-cli-framework/references/portable-quickstart.md");
     expect(quickstart).toContain("npx first-tree --help");
     expect(quickstart).toContain("npm install -g first-tree");
-    expect(quickstart).toMatch(
-      /snapshot base commit when this portable copy was refreshed: `[0-9a-f]{40}`/,
-    );
+
+    const snapshotCommit = readPortableSnapshotCommit(quickstart);
+    const headCommit = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: ROOT,
+      encoding: "utf-8",
+    }).trim();
+
+    expect(snapshotCommit).toBe(headCommit);
   });
 });

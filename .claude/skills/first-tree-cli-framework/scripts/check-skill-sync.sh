@@ -70,4 +70,17 @@ compare_dir "$REPO_ROOT/tests" "$SNAPSHOT_DIR/tests"
 compare_dir "$SOURCE_DIR" "$REPO_ROOT/.agents/skills/first-tree-cli-framework"
 compare_dir "$SOURCE_DIR" "$REPO_ROOT/.claude/skills/first-tree-cli-framework"
 
+recorded_commit="$(perl -ne 'print "$1\n" if /snapshot base commit when this portable copy was refreshed: `([0-9a-f]{40})`/' "$SOURCE_DIR/references/portable-quickstart.md")"
+current_commit="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+
+if [[ -z "$recorded_commit" ]]; then
+  echo "Could not find the recorded snapshot base commit in references/portable-quickstart.md." >&2
+  exit 1
+fi
+
+if [[ "$recorded_commit" != "$current_commit" ]]; then
+  echo "Portable snapshot commit mismatch: quickstart records $recorded_commit but repo HEAD is $current_commit." >&2
+  exit 1
+fi
+
 echo "Skill source, mirrors, and bundled snapshot are in sync."
