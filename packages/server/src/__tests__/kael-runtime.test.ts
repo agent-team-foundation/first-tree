@@ -1,13 +1,18 @@
-import { eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { adapterConfigs } from "../db/schema/adapter-configs.js";
-import { agents } from "../db/schema/agents.js";
 import { chats } from "../db/schema/chats.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
 import { encryptCredentials } from "../services/crypto.js";
-import { createKaelRuntime, type KaelRuntime } from "../services/kael-runtime.js";
+import { createKaelRuntime } from "../services/kael-runtime.js";
 import { createTestAgent, createTestApp } from "./helpers.js";
+
+/** Test helper: assert value is defined and return narrowed type */
+function defined<T>(value: T | undefined, msg = "Expected value to be defined"): T {
+  if (value === undefined) throw new Error(msg);
+  return value;
+}
 
 const ENCRYPTION_KEY = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const KAEL_ENDPOINT = "https://kael.example.com";
@@ -149,7 +154,8 @@ describe("KaelRuntime", () => {
 
       // reload should have logged that config was loaded
       expect(log.info).toHaveBeenCalled();
-      const infoArgs = log.info.mock.calls.map((c: unknown[]) => (c[0] as Record<string, unknown>)?.agentId);
+      const infoMock = log.info as unknown as { mock: { calls: unknown[][] } };
+      const infoArgs = infoMock.mock.calls.map((c) => (c[0] as Record<string, unknown>)?.agentId);
       expect(infoArgs).toContain(agent.id);
 
       // Verify config was loaded by sending a message through processOutbound
@@ -301,8 +307,11 @@ describe("KaelRuntime", () => {
       await runtime.processOutbound();
 
       // Entry should be acked (not pending anymore)
-      const [updated] = await app.db.select().from(inboxEntries).where(eq(inboxEntries.id, entry.id));
-      expect(updated.status).toBe("acked");
+      const [updated] = await app.db
+        .select()
+        .from(inboxEntries)
+        .where(eq(inboxEntries.id, defined(entry).id)); // biome-ignore lint/style/noNonNullAssertion: test assertion - entry always exists;
+      expect(defined(updated).status).toBe("acked");
 
       vi.unstubAllGlobals();
     });
@@ -386,9 +395,12 @@ describe("KaelRuntime", () => {
 
       await runtime.processOutbound();
 
-      const [updated] = await app.db.select().from(inboxEntries).where(eq(inboxEntries.id, entry.id));
-      expect(updated.status).toBe("acked");
-      expect(updated.ackedAt).not.toBeNull();
+      const [updated] = await app.db
+        .select()
+        .from(inboxEntries)
+        .where(eq(inboxEntries.id, defined(entry).id)); // biome-ignore lint/style/noNonNullAssertion: test assertion - entry always exists;
+      expect(defined(updated).status).toBe("acked");
+      expect(defined(updated).ackedAt).not.toBeNull();
 
       vi.unstubAllGlobals();
     });
@@ -425,10 +437,13 @@ describe("KaelRuntime", () => {
       const result = await runtime.processOutbound();
       expect(result.errors).toBe(1);
 
-      const [updated] = await app.db.select().from(inboxEntries).where(eq(inboxEntries.id, entry.id));
+      const [updated] = await app.db
+        .select()
+        .from(inboxEntries)
+        .where(eq(inboxEntries.id, defined(entry).id)); // biome-ignore lint/style/noNonNullAssertion: test assertion - entry always exists;
       // NACKed back to pending with retry_count incremented
-      expect(updated.status).toBe("pending");
-      expect(updated.retryCount).toBe(1);
+      expect(defined(updated).status).toBe("pending");
+      expect(defined(updated).retryCount).toBe(1);
 
       vi.unstubAllGlobals();
     });
@@ -458,9 +473,12 @@ describe("KaelRuntime", () => {
       const result = await runtime.processOutbound();
       expect(result.errors).toBe(1);
 
-      const [updated] = await app.db.select().from(inboxEntries).where(eq(inboxEntries.id, entry.id));
-      expect(updated.status).toBe("pending");
-      expect(updated.retryCount).toBe(1);
+      const [updated] = await app.db
+        .select()
+        .from(inboxEntries)
+        .where(eq(inboxEntries.id, defined(entry).id)); // biome-ignore lint/style/noNonNullAssertion: test assertion - entry always exists;
+      expect(defined(updated).status).toBe("pending");
+      expect(defined(updated).retryCount).toBe(1);
 
       vi.unstubAllGlobals();
     });
@@ -502,8 +520,11 @@ describe("KaelRuntime", () => {
 
       await runtime.processOutbound();
 
-      const [updated] = await app.db.select().from(inboxEntries).where(eq(inboxEntries.id, entry.id));
-      expect(updated.status).toBe("failed");
+      const [updated] = await app.db
+        .select()
+        .from(inboxEntries)
+        .where(eq(inboxEntries.id, defined(entry).id)); // biome-ignore lint/style/noNonNullAssertion: test assertion - entry always exists;
+      expect(defined(updated).status).toBe("failed");
 
       vi.unstubAllGlobals();
     });
@@ -540,8 +561,11 @@ describe("KaelRuntime", () => {
       await runtime.processOutbound();
 
       // The feishu agent's entry should still be pending
-      const [unchanged] = await app.db.select().from(inboxEntries).where(eq(inboxEntries.id, entry.id));
-      expect(unchanged.status).toBe("pending");
+      const [unchanged] = await app.db
+        .select()
+        .from(inboxEntries)
+        .where(eq(inboxEntries.id, defined(entry).id)); // biome-ignore lint/style/noNonNullAssertion: test assertion - entry always exists;
+      expect(defined(unchanged).status).toBe("pending");
 
       vi.unstubAllGlobals();
     });
@@ -640,8 +664,11 @@ describe("KaelRuntime", () => {
       expect(mockFetch).not.toHaveBeenCalled();
 
       // Entry should still be pending (not processed)
-      const [unchanged] = await app.db.select().from(inboxEntries).where(eq(inboxEntries.id, entry.id));
-      expect(unchanged.status).toBe("pending");
+      const [unchanged] = await app.db
+        .select()
+        .from(inboxEntries)
+        .where(eq(inboxEntries.id, defined(entry).id)); // biome-ignore lint/style/noNonNullAssertion: test assertion - entry always exists;
+      expect(defined(unchanged).status).toBe("pending");
 
       vi.unstubAllGlobals();
     });
