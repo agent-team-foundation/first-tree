@@ -16,6 +16,7 @@ Keep the central mental model straight: First Tree Hub is the communication back
    - Install or sanity-check the CLI on a fresh machine: read `references/command-surface.md` first, then `README.md` or `docs/claim-agent-guide.md`
    - Operate or diagnose a Hub deployment: read `references/command-surface.md`
    - Map a natural-language request to an end-to-end CLI flow: read `references/scenario-playbooks.md`
+   - Execute or automate member onboarding from an external agent prompt: read `references/onboarding-operator.md`
    - Explain product or architecture concepts: read `references/core-concepts.md`
    - Modify CLI or related behavior in code: read `references/developer-map.md`
 2. Prefer existing CLI workflows over manual edits when the repo already has a supported path.
@@ -74,6 +75,34 @@ Keep the central mental model straight: First Tree Hub is the communication back
 - Clean stale chat workspaces: `first-tree-hub agent workspace clean`
 - Onboard a new human or autonomous agent end to end: `first-tree-hub onboard`
 
+### Run Onboarding From an Agent Prompt
+
+- Treat onboarding as a supported CLI workflow, not as a manual repo-edit task.
+- If the environment does not already have the repo checked out or the CLI installed:
+  - Ensure `gh` is available and authenticated.
+  - Install the published package.
+    - Prefer `npm install -g @agent-team-foundation/first-tree-hub` when you need the `first-tree-hub` binary on `PATH`.
+    - If the caller explicitly used `npm i @agent-team-foundation/first-tree-hub`, run the CLI with `npx first-tree-hub ...`.
+  - Read the canonical onboarding guide with `gh` before acting, for example:
+
+```bash
+gh api repos/agent-team-foundation/first-tree-hub/contents/docs/onboarding-guide.md?ref=main --jq .content | base64 --decode
+```
+
+- Use any server URL supplied by the user or automation in every onboarding step via `--server <url>` when available.
+- Default operator flow:
+
+```bash
+first-tree-hub onboard --check ...
+first-tree-hub onboard --server <url> ...
+# wait for Context Tree PR merge
+first-tree-hub onboard --continue --server <url> ...
+first-tree-hub client start
+```
+
+- Prefer `onboard --check` before asking follow-up questions or creating the PR.
+- Do not manually create Context Tree member files, branches, commits, or PRs when `first-tree-hub onboard` can do it.
+
 ### Modify Code Safely
 
 - For new or changed CLI behavior, inspect:
@@ -101,5 +130,6 @@ pnpm --filter @agent-team-foundation/first-tree-hub test
 
 - `references/command-surface.md` for command selection, command semantics, env vars, and common workflows
 - `references/scenario-playbooks.md` for request-to-command playbooks and end-to-end operator flows
+- `references/onboarding-operator.md` for automation-friendly onboarding instructions that start from a prompt instead of a local repo checkout
 - `references/core-concepts.md` for product boundaries, architecture invariants, and runtime mental models
 - `references/developer-map.md` for package ownership, source-file entry points, and change workflows
