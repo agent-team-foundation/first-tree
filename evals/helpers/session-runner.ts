@@ -51,7 +51,7 @@ export function parseNDJSON(lines: string[]): ParsedNDJSON {
         }
       }
 
-      if (event.type === 'result' && !resultLine) resultLine = event;
+      if (event.type === 'result') resultLine = event;
     } catch { /* skip malformed lines */ }
   }
 
@@ -249,16 +249,38 @@ export async function runSession(options: {
     }
   }
 
-  // Extract cost from result line
+  // Extract cost from result line.
+  // Prefer modelUsage (session-wide totals) over per-turn usage.
   const turnsUsed = resultLine?.num_turns || 0;
-  const estimatedCost = resultLine?.total_cost_usd || 0;
-  const usage = resultLine?.usage || {};
-  const inputTokens = (usage.input_tokens || 0)
-    + (usage.cache_creation_input_tokens || 0)
-    + (usage.cache_read_input_tokens || 0);
-  const outputTokens = usage.output_tokens || 0;
-  const cacheCreationTokens = usage.cache_creation_input_tokens || 0;
-  const cacheReadTokens = usage.cache_read_input_tokens || 0;
+  const modelUsage = resultLine?.modelUsage
+    ? Object.values(resultLine.modelUsage as Record<string, any>)[0]
+    : null;
+
+  let estimatedCost: number;
+  let inputTokens: number;
+  let outputTokens: number;
+  let cacheCreationTokens: number;
+  let cacheReadTokens: number;
+
+  if (modelUsage) {
+    estimatedCost = modelUsage.costUSD || 0;
+    inputTokens = (modelUsage.inputTokens || 0)
+      + (modelUsage.cacheCreationInputTokens || 0)
+      + (modelUsage.cacheReadInputTokens || 0);
+    outputTokens = modelUsage.outputTokens || 0;
+    cacheCreationTokens = modelUsage.cacheCreationInputTokens || 0;
+    cacheReadTokens = modelUsage.cacheReadInputTokens || 0;
+  } else {
+    // Fallback to per-turn usage field
+    estimatedCost = resultLine?.total_cost_usd || 0;
+    const usage = resultLine?.usage || {};
+    inputTokens = (usage.input_tokens || 0)
+      + (usage.cache_creation_input_tokens || 0)
+      + (usage.cache_read_input_tokens || 0);
+    outputTokens = usage.output_tokens || 0;
+    cacheCreationTokens = usage.cache_creation_input_tokens || 0;
+    cacheReadTokens = usage.cache_read_input_tokens || 0;
+  }
 
   const costEstimate: CostEstimate = {
     inputTokens,
