@@ -116,25 +116,30 @@ Use this when the user wants to add a real person to the team through the suppor
 
 ### Recommended flow
 
-1. Dry-run requirements first:
+1. If the task starts from an external agent prompt instead of a repo checkout:
+   - Install the CLI if needed.
+   - Read `references/onboarding-operator.md`.
+   - Fetch `docs/onboarding-guide.md` with `gh` if you need the canonical public doc text.
+
+2. Dry-run requirements first:
 
 ```bash
-first-tree-hub onboard --check --id <id> --type human --role "<role>" --domains "<d1,d2>"
+first-tree-hub onboard --check --server <url> --id <id> --type human --role "<role>" --domains "<d1,d2>"
 ```
 
-2. Create the Context Tree PR:
+3. Create the Context Tree PR:
 
 ```bash
-first-tree-hub onboard --id <id> --type human --role "<role>" --domains "<d1,d2>"
+first-tree-hub onboard --server <url> --id <id> --type human --role "<role>" --domains "<d1,d2>"
 ```
 
-3. After the PR is merged, continue:
+4. After the PR is merged, continue:
 
 ```bash
-first-tree-hub onboard --continue
+first-tree-hub onboard --continue --server <url>
 ```
 
-4. Start the local runtime if this machine should run the assistant:
+5. Start the local runtime if this machine should run the assistant:
 
 ```bash
 first-tree-hub client start
@@ -144,6 +149,7 @@ first-tree-hub client start
 
 - `onboard` creates a PR in the Context Tree repo, not in `first-tree-hub`.
 - For humans, a personal assistant is optional and may be created with `--assistant <id>`.
+- When a server URL is provided in the user prompt or automation payload, thread it through the onboarding commands instead of assuming local defaults.
 - If a Feishu bot is configured for the assistant path, the human usually still needs to send `/bind <id>` in Feishu afterwards.
 
 ## 4. "Onboard a standalone autonomous agent"
@@ -152,28 +158,34 @@ Use this when the new member is a bot with no human owner.
 
 ### Recommended flow
 
-1. Check:
+1. If the task starts from an external agent prompt instead of a repo checkout:
+   - Install the CLI if needed.
+   - Read `references/onboarding-operator.md`.
+   - Fetch `docs/onboarding-guide.md` with `gh` if you need the canonical public doc text.
+
+2. Check:
 
 ```bash
-first-tree-hub onboard --check --id <id> --type autonomous_agent --role "<role>" --domains "<d1,d2>"
+first-tree-hub onboard --check --server <url> --id <id> --type autonomous_agent --role "<role>" --domains "<d1,d2>"
 ```
 
-2. Create the Context Tree PR:
+3. Create the Context Tree PR:
 
 ```bash
-first-tree-hub onboard --id <id> --type autonomous_agent --role "<role>" --domains "<d1,d2>"
+first-tree-hub onboard --server <url> --id <id> --type autonomous_agent --role "<role>" --domains "<d1,d2>"
 ```
 
-3. After merge:
+4. After merge:
 
 ```bash
-first-tree-hub onboard --continue
+first-tree-hub onboard --continue --server <url>
 first-tree-hub client start
 ```
 
 ### What to remember
 
 - Do not use `--assistant` for `autonomous_agent`.
+- When a server URL is provided in the user prompt or automation payload, thread it through the onboarding commands instead of assuming local defaults.
 - Feishu bot binding is optional here, unlike the human `/bind` flow.
 
 ## 5. "Why can't the client connect?" or "Why does startup fail?"
