@@ -1,5 +1,15 @@
 # First Tree Hub CLI Reference
 
+## Prerequisites
+
+```bash
+npm install -g @agent-team-foundation/first-tree-hub
+first-tree-hub --version
+```
+
+- Node.js `>= 22.16`
+- `gh` authenticated when using `onboard` or `agent token bootstrap`
+
 ## Commands
 
 ```
@@ -24,7 +34,8 @@ first-tree-hub
 │   ├── token bootstrap <agentId> [--save-to] [--server]
 │   ├── bind bot --platform feishu --app-id <id> --app-secret <s>
 │   ├── bind user <humanAgentId> --platform feishu --feishu-id <id>
-│   ├── send <target> [message] [-f format] [--chat]
+│   ├── send <target> [message] [-f format] [--chat] [--metadata]
+│   │   [--reply-to] [--reply-to-inbox] [--reply-to-chat]
 │   ├── chats [-l <limit>] [--cursor]
 │   ├── history <chatId> [-l <limit>] [--cursor]
 │   ├── register
@@ -36,6 +47,7 @@ first-tree-hub
 │   └── list [-s|-c|-a <name>] [--show-secrets]
 ├── onboard [--check] [--continue]
 │   [--id] [--type] [--display-name] [--role] [--domains]
+│   [--delegate-mention]
 │   [--assistant] [--server] [--feishu-bot-app-id] [--feishu-bot-app-secret]
 └── status
 ```
@@ -132,6 +144,11 @@ first-tree-hub agent send <agentId> "hello"
 first-tree-hub agent send <chatId> "hello" --chat
 echo "piped message" | first-tree-hub agent send <agentId>
 
+# Attach metadata or reply routing
+first-tree-hub agent send <agentId> "hello" --metadata '{"priority":"high"}'
+first-tree-hub agent send <chatId> "follow-up" --chat --reply-to <messageId>
+first-tree-hub agent send <agentId> "continue there" --reply-to-inbox <inboxId> --reply-to-chat <chatId>
+
 # List chats / view history
 first-tree-hub agent chats
 first-tree-hub agent history <chatId>
@@ -142,7 +159,7 @@ first-tree-hub agent pull
 first-tree-hub agent pull --ack
 ```
 
-Messaging commands require `FIRST_TREE_HUB_TOKEN` environment variable.
+Messaging commands require `FIRST_TREE_HUB_TOKEN`. Use `FIRST_TREE_HUB_SERVER` to override the server URL for these low-level agent commands.
 
 ## config
 
@@ -173,6 +190,7 @@ first-tree-hub onboard --check --id alice --type human --role Engineer
 
 # Phase 1: Create Context Tree PR
 first-tree-hub onboard --id alice --type human --role Engineer --domains backend,infra
+first-tree-hub onboard --id alice --type human --role Engineer --domains backend,infra --delegate-mention alice-assistant
 
 # Phase 2: After PR merge — sync + token + bindings + client config
 first-tree-hub onboard --continue
@@ -185,7 +203,13 @@ See [onboarding-guide.md](onboarding-guide.md) for the full walkthrough.
 
 ## Environment Variables
 
-All environment variables use the `FIRST_TREE_HUB_` prefix. When set, interactive prompts automatically skip the corresponding field.
+Most environment variables use the `FIRST_TREE_HUB_` prefix. `onboard` also accepts `FEISHU_APP_ID` and `FEISHU_APP_SECRET`. When set, interactive prompts automatically skip the corresponding field.
+
+### Global
+
+| Variable | Purpose | Default |
+|---------|------|--------|
+| `FIRST_TREE_HUB_HOME` | Override the CLI home directory for config, data, cloned Context Tree, and onboard resume state | `~/.first-tree-hub` |
 
 ### Server
 
@@ -214,10 +238,20 @@ All environment variables use the `FIRST_TREE_HUB_` prefix. When set, interactiv
 | `FIRST_TREE_HUB_TOKEN` | Agent token (required for `agent send/chats/history/register/pull`) |
 | `FIRST_TREE_HUB_SERVER` | Server URL override for messaging commands |
 
+### Onboard
+
+| Variable | Purpose |
+|---------|------|
+| `FIRST_TREE_HUB_SERVER` | Hub server URL alternative to `--server` |
+| `FEISHU_APP_ID` | Feishu bot App ID alternative to `--feishu-bot-app-id` |
+| `FEISHU_APP_SECRET` | Feishu bot App Secret alternative to `--feishu-bot-app-secret` |
+
 ## Directory Structure
 
 ```
 ~/.first-tree-hub/
+├── .onboard-state.json           # Saved args for `onboard --continue`
+├── context-tree/                 # Auto-managed clone used by onboarding
 ├── config/                      # Configuration (human-edited)
 │   ├── server.yaml
 │   ├── client.yaml
@@ -231,6 +265,8 @@ All environment variables use the `FIRST_TREE_HUB_` prefix. When set, interactiv
     │       └── <chatId>/
     └── postgres/                # Docker PG data
 ```
+
+If `FIRST_TREE_HUB_HOME` is set, replace `~/.first-tree-hub/` with that location.
 
 ## Config Resolution Order
 

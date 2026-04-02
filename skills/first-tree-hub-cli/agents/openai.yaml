@@ -1,4 +1,4 @@
 interface:
   display_name: "First Tree Hub CLI"
-  short_description: "Understand and operate First Tree Hub CLI"
-  default_prompt: "Use $first-tree-hub-cli to inspect, configure, onboard, and operate First Tree Hub correctly."
+  short_description: "Install, operate, and modify First Tree Hub CLI"
+  default_prompt: "Use $first-tree-hub-cli to install, inspect, configure, onboard, debug, and operate First Tree Hub correctly."
