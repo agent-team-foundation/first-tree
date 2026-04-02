@@ -1,8 +1,11 @@
 #!/bin/bash
 # Verification for pydantic-importstring-error eval case.
 #
-# Tests that ImportString surfaces the real ModuleNotFoundError for broken
-# internal imports instead of masking it as "No module named X".
+# Tests that _import_string_logic surfaces the real ModuleNotFoundError for
+# broken internal imports instead of masking it as "No module named X".
+#
+# Uses the low-level import function directly to avoid requiring pydantic-core
+# Rust compilation.
 
 set -euo pipefail
 
@@ -14,64 +17,69 @@ import json, sys, os, tempfile
 passed = 0
 total = 2
 
+# Import the internal function directly
+sys.path.insert(0, ".")
+from pydantic._internal._validators import _import_string_logic
+
 # Test 1: Module with broken internal import should surface the real error
-# Create a temporary module that imports a nonexistent dependency
 tmpdir = tempfile.mkdtemp()
-mod_path = os.path.join(tmpdir, "broken_mod.py")
+mod_path = os.path.join(tmpdir, "broken_mod_eval.py")
 with open(mod_path, "w") as f:
-    f.write("import definitely_missing_dep_xyz\n")
+    f.write("import definitely_missing_dep_xyz_eval\n")
 
 sys.path.insert(0, tmpdir)
 
 try:
-    from pydantic import TypeAdapter, ImportString
-
-    ta = TypeAdapter(ImportString)
     try:
-        ta.validate_python("broken_mod")
+        _import_string_logic("broken_mod_eval")
         print("FAIL: No error raised for broken module")
     except ModuleNotFoundError as e:
-        # The real error should mention the missing dependency, not the module itself
-        if "definitely_missing_dep_xyz" in str(e):
+        if "definitely_missing_dep_xyz_eval" in str(e):
             passed += 1
             print(f"PASS: Real ModuleNotFoundError surfaced: {e}")
-        elif "broken_mod" in str(e):
-            print(f"FAIL: Error masked as 'No module named broken_mod': {e}")
+        elif "broken_mod_eval" in str(e):
+            print(f"FAIL: Error masked as 'No module named broken_mod_eval': {e}")
         else:
             print(f"FAIL: Unexpected error message: {e}")
-    except Exception as e:
-        # Check if it's an ImportError that mentions the real dependency
-        if "definitely_missing_dep_xyz" in str(e):
+    except ImportError as e:
+        # The function wraps some errors in ImportError
+        if "definitely_missing_dep_xyz_eval" in str(e):
             passed += 1
-            print(f"PASS: Real error surfaced (as {type(e).__name__}): {e}")
+            print(f"PASS: Real error surfaced (as ImportError): {e}")
         else:
-            print(f"FAIL: Unexpected error: {type(e).__name__}: {e}")
+            print(f"FAIL: ImportError but wrong message: {e}")
+    except Exception as e:
+        print(f"FAIL: Unexpected error: {type(e).__name__}: {e}")
 finally:
     sys.path.remove(tmpdir)
-    # Clean up
     try:
         os.unlink(mod_path)
         os.rmdir(tmpdir)
     except:
         pass
-    # Remove from module cache
-    sys.modules.pop("broken_mod", None)
+    sys.modules.pop("broken_mod_eval", None)
 
 # Test 2: Explicit colon path should not trigger dot-fallback incorrectly
 try:
-    ta = TypeAdapter(ImportString)
     try:
-        ta.validate_python("os:nonexistent_attr")
-        print("FAIL: No error raised for nonexistent attribute")
-    except (ImportError, AttributeError) as e:
-        # Should get an AttributeError or ImportError about the attribute, not crash
-        if "nonexistent_attr" in str(e):
-            passed += 1
-            print(f"PASS: Explicit colon path handled correctly: {e}")
+        result = _import_string_logic("os:path")
+        # os:path should work — it's a valid attribute
+        import os.path as ospath
+        if result is ospath:
+            # Now test that a non-existent attribute raises properly
+            try:
+                _import_string_logic("os:nonexistent_attr_xyz")
+                print("FAIL: No error raised for nonexistent attribute")
+            except (ImportError, AttributeError) as e:
+                if "nonexistent_attr_xyz" in str(e):
+                    passed += 1
+                    print(f"PASS: Explicit colon path handled correctly: {e}")
+                else:
+                    print(f"FAIL: Wrong error for colon path: {e}")
         else:
-            print(f"FAIL: Unexpected error for colon path: {e}")
+            print(f"FAIL: os:path returned unexpected value: {result}")
     except Exception as e:
-        print(f"FAIL: Unexpected error: {type(e).__name__}: {e}")
+        print(f"FAIL: os:path raised error: {type(e).__name__}: {e}")
 except Exception as e:
     print(f"FAIL: Could not test colon path: {type(e).__name__}: {e}")
 
