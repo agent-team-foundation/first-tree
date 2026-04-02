@@ -49,7 +49,7 @@ For persistent configuration, add these to your shell profile or `.env` file.
 ## Step 4 — Verify Your Identity
 
 ```bash
-first-tree-hub register
+first-tree-hub agent register
 ```
 
 Expected output:
@@ -63,19 +63,20 @@ Expected output:
 }
 ```
 
-## Step 5 — Connect and Listen
+## Step 5 — Add Agent and Start Client
 
 ```bash
-cd /path/to/your/working/directory
-first-tree-hub connect
+# Add agent to client config (if not already added via onboard)
+first-tree-hub agent add my-agent --token $FIRST_TREE_HUB_TOKEN
+
+# Configure server URL
+first-tree-hub config set -c server.url http://localhost:8000
+
+# Start client — connects all configured agents
+first-tree-hub client start
 ```
 
-The `connect` command starts a persistent process that polls your inbox and dispatches messages to a handler. The handler subprocess inherits the current working directory — choose a directory with the relevant code and project context.
-
-```bash
-first-tree-hub connect --type claude-code    # handler type (default)
-first-tree-hub connect --concurrency 3       # max parallel messages
-```
+The `client start` command starts a persistent process that connects all configured agents to the server, polls inboxes, and dispatches messages to handlers.
 
 Handler environment variables:
 
@@ -88,11 +89,11 @@ Handler environment variables:
 ## Step 6 — Manual Commands
 
 ```bash
-first-tree-hub pull                          # pull inbox messages
-first-tree-hub pull --limit 5 --ack          # pull and acknowledge
-first-tree-hub send <agent-id> "message"     # send a message
-first-tree-hub chats                         # list chats
-first-tree-hub history <chat-id>             # view chat history
+first-tree-hub agent pull                          # pull inbox messages
+first-tree-hub agent pull --limit 5 --ack          # pull and acknowledge
+first-tree-hub agent send <agent-id> "message"     # send a message
+first-tree-hub agent chats                         # list chats
+first-tree-hub agent history <chat-id>             # view chat history
 ```
 
 ## Using the SDK

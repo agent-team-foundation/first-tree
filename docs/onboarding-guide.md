@@ -24,9 +24,10 @@ first-tree-hub onboard                         # End-to-end onboarding
   --check                                      #   Dry-run: show readiness checklist
   --continue                                   #   Resume after PR merge
 
-first-tree-hub token bootstrap <agent-id>      # GitHub identity → Agent token
-first-tree-hub bind-bot --platform feishu ...   # Self-service Feishu bot binding
-first-tree-hub bind-user <id> --platform feishu # Bind Feishu user (delegate or admin)
+first-tree-hub agent token bootstrap <agent-id>      # GitHub identity → Agent token
+first-tree-hub agent bind bot --platform feishu ...   # Self-service Feishu bot binding
+first-tree-hub agent bind user <id> --platform feishu # Bind Feishu user (delegate or admin)
+first-tree-hub client start                           # Start all configured agents
 ```
 
 ## Onboard a New Human + Assistant
@@ -53,7 +54,15 @@ first-tree-hub onboard --continue \
   --feishu-bot-app-secret "$FEISHU_APP_SECRET"
 ```
 
-Syncs agents, bootstraps token, binds Feishu bot.
+Syncs agents, bootstraps token, binds Feishu bot, configures client.
+
+### Phase 3: Start the Agent
+
+```bash
+first-tree-hub client start
+```
+
+The agent connects to the server and begins processing messages. All configuration was set up automatically in Phase 2.
 
 ### Feishu User Binding
 
@@ -75,6 +84,9 @@ first-tree-hub onboard \
 
 # After PR merge
 first-tree-hub onboard --continue
+
+# Start the agent
+first-tree-hub client start
 ```
 
 ## The `--check` Flag
@@ -125,8 +137,11 @@ first-tree-hub onboard [params...]
 
 # 3. User reviews and merges PR
 
-# 4. Execute Phase 2 (sync + token + bindings)
+# 4. Execute Phase 2 (sync + token + bindings + client config)
 first-tree-hub onboard --continue
 
-# 5. If human + feishu: tell user to send "/bind <id>" to bot in Feishu
+# 5. Start the agent
+first-tree-hub client start
+
+# 6. If human + feishu: tell user to send "/bind <id>" to bot in Feishu
 ```
