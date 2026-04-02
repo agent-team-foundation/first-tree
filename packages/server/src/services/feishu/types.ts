@@ -6,7 +6,10 @@ export type InboundEvent = {
   eventId: string;
   platform: "feishu";
   appId: string;
+  /** Feishu union_id — stable across all apps within the same enterprise. */
   senderId: string;
+  /** Feishu open_id — per-app, used for API calls that require it. */
+  senderOpenId: string;
   senderType: string;
   externalChannelId: string;
   chatType: string;

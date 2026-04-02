@@ -310,7 +310,7 @@ describe("KaelRuntime", () => {
       const [updated] = await app.db
         .select()
         .from(inboxEntries)
-        .where(eq(inboxEntries.id, defined(entry).id)); // biome-ignore lint/style/noNonNullAssertion: test assertion - entry always exists;
+        .where(eq(inboxEntries.id, defined(entry).id));
       expect(defined(updated).status).toBe("acked");
 
       vi.unstubAllGlobals();
@@ -398,7 +398,7 @@ describe("KaelRuntime", () => {
       const [updated] = await app.db
         .select()
         .from(inboxEntries)
-        .where(eq(inboxEntries.id, defined(entry).id)); // biome-ignore lint/style/noNonNullAssertion: test assertion - entry always exists;
+        .where(eq(inboxEntries.id, defined(entry).id));
       expect(defined(updated).status).toBe("acked");
       expect(defined(updated).ackedAt).not.toBeNull();
 
@@ -440,7 +440,7 @@ describe("KaelRuntime", () => {
       const [updated] = await app.db
         .select()
         .from(inboxEntries)
-        .where(eq(inboxEntries.id, defined(entry).id)); // biome-ignore lint/style/noNonNullAssertion: test assertion - entry always exists;
+        .where(eq(inboxEntries.id, defined(entry).id));
       // NACKed back to pending with retry_count incremented
       expect(defined(updated).status).toBe("pending");
       expect(defined(updated).retryCount).toBe(1);
@@ -476,7 +476,7 @@ describe("KaelRuntime", () => {
       const [updated] = await app.db
         .select()
         .from(inboxEntries)
-        .where(eq(inboxEntries.id, defined(entry).id)); // biome-ignore lint/style/noNonNullAssertion: test assertion - entry always exists;
+        .where(eq(inboxEntries.id, defined(entry).id));
       expect(defined(updated).status).toBe("pending");
       expect(defined(updated).retryCount).toBe(1);
 
@@ -523,7 +523,7 @@ describe("KaelRuntime", () => {
       const [updated] = await app.db
         .select()
         .from(inboxEntries)
-        .where(eq(inboxEntries.id, defined(entry).id)); // biome-ignore lint/style/noNonNullAssertion: test assertion - entry always exists;
+        .where(eq(inboxEntries.id, defined(entry).id));
       expect(defined(updated).status).toBe("failed");
 
       vi.unstubAllGlobals();
@@ -564,7 +564,7 @@ describe("KaelRuntime", () => {
       const [unchanged] = await app.db
         .select()
         .from(inboxEntries)
-        .where(eq(inboxEntries.id, defined(entry).id)); // biome-ignore lint/style/noNonNullAssertion: test assertion - entry always exists;
+        .where(eq(inboxEntries.id, defined(entry).id));
       expect(defined(unchanged).status).toBe("pending");
 
       vi.unstubAllGlobals();
@@ -667,7 +667,7 @@ describe("KaelRuntime", () => {
       const [unchanged] = await app.db
         .select()
         .from(inboxEntries)
-        .where(eq(inboxEntries.id, defined(entry).id)); // biome-ignore lint/style/noNonNullAssertion: test assertion - entry always exists;
+        .where(eq(inboxEntries.id, defined(entry).id));
       expect(defined(unchanged).status).toBe("pending");
 
       vi.unstubAllGlobals();

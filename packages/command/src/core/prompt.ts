@@ -1,6 +1,11 @@
 import { join } from "node:path";
 import type { PromptDef } from "@first-tree-hub/shared/config";
-import { collectMissingPrompts, DEFAULT_CONFIG_DIR, setConfigValue } from "@first-tree-hub/shared/config";
+import {
+  collectMissingPrompts,
+  DEFAULT_CONFIG_DIR,
+  DEFAULT_HOME_DIR,
+  setConfigValue,
+} from "@first-tree-hub/shared/config";
 import { input, password, select } from "@inquirer/prompts";
 
 /**
@@ -44,7 +49,7 @@ export async function promptMissingFields(options: {
     });
     throw new Error(
       `Missing required configuration:\n${lines.join("\n")}\n\n` +
-        "Provide values via environment variables, config file (~/.first-tree-hub/server.yaml),\n" +
+        `Provide values via environment variables, config file (${DEFAULT_HOME_DIR}/server.yaml),\n` +
         "or run without --no-interactive to use the interactive setup wizard.",
     );
   }

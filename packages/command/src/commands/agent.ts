@@ -6,6 +6,7 @@ import {
   agentConfigSchema,
   DEFAULT_CONFIG_DIR,
   DEFAULT_DATA_DIR,
+  DEFAULT_HOME_DIR,
   loadAgents,
   setConfigValue,
 } from "@first-tree-hub/shared/config";
@@ -217,7 +218,7 @@ export function registerAgentCommands(program: Command): void {
         const result = await bootstrapToken(serverUrl, agentId, { saveTo: options.saveTo });
 
         if (options.saveTo === "agent") {
-          process.stderr.write(`Token saved to ~/.first-tree-hub/config/agents/${agentId}/agent.yaml\n`);
+          process.stderr.write(`Token saved to ${DEFAULT_HOME_DIR}/config/agents/${agentId}/agent.yaml\n`);
         } else {
           process.stderr.write(`Token saved to ${options.saveTo}\n`);
         }
