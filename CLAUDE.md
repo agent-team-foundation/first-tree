@@ -24,6 +24,10 @@ This repo is the **template source and CLI** for Context Tree. It is NOT a conte
 2. Read `.context-tree/principles.md` — the core ideas that Context Tree is built on
 3. Read `.context-tree/ownership-and-naming.md` — how nodes and ownership work
 
+## Repo-Local Skill
+
+- Use `.codex/skills/first-tree-cli-framework/SKILL.md` when working on `src/cli.ts`, `src/init.ts`, `src/verify.ts`, `src/upgrade.ts`, `.context-tree/`, or any task that needs the exact Context Tree maintenance model implemented in this repo. The skill includes a local CLI runner plus references for rules, validators, templates, workflows, and framework philosophy.
+
 ## Rules
 
 - **Framework files** (`.context-tree/`) must stay generic — no org-specific content. These get copied to every user's tree.
