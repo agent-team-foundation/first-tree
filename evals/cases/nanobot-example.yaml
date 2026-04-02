@@ -1,0 +1,32 @@
+# Eval case: ExecTool regex bug — Windows drive-root paths bypass workspace guard.
+# Based on: https://github.com/HKUDS/nanobot/pull/2683
+# Issue: https://github.com/HKUDS/nanobot/issues/2671
+
+id: nanobot-exectool-regex
+source: custom
+repo: HKUDS/nanobot
+commit_sha: "ddc9fc4fd286025aebaab5fb3f2f032a18ed2478"
+task: |
+  Fix a bug in ExecTool._extract_absolute_paths (nanobot/agent/tools/shell.py).
+
+  The regex for extracting Windows absolute paths uses `+` quantifier:
+    r"[A-Za-z]:\\[^\s\"'|><;]+"
+
+  This requires at least one character after the backslash, so bare Windows
+  drive-root paths like `E:\` are never extracted. This means commands like
+  `dir E:\` bypass the workspace safety guard when restrict_to_workspace=True.
+
+  Fix the regex so that `E:\` (nothing after the backslash) is correctly
+  extracted and blocked by the safety guard.
+
+  Write tests to verify:
+  1. _extract_absolute_paths("dir E:\\") returns ["E:\\"]
+  2. _guard_command("dir E:\\", "E:\\workspace") returns an error when
+     restrict_to_workspace=True
+setup: |
+  uv venv .venv --quiet
+  uv pip install -e ".[dev]" --quiet --python .venv/bin/python
+verification: fixtures/nanobot-example/verify.sh
+difficulty: easy
+timeout_ms: 300000
+max_turns: 20
