@@ -1,0 +1,39 @@
+# Eval case: merge_lists incorrectly merges parallel tool calls
+# Based on: https://github.com/langchain-ai/langchain/pull/35281
+# Issue: https://github.com/langchain-ai/langchain/issues/34807
+# Bug: merge_lists only checks index field, not id, so parallel tool calls
+#      with same index but different IDs get merged (names/IDs concatenated).
+
+id: langchain-merge-parallel-tools
+source: custom
+repo: langchain-ai/langchain
+commit_sha: "3686bcbd966ff1ef13e5fdbde28aa0e630ddd5c4"
+task: |
+  Fix a bug in `merge_lists()` in `libs/core/langchain_core/utils/_merge.py`.
+
+  When LLMs (e.g. Claude via Bedrock) stream parallel tool calls, `merge_lists()`
+  incorrectly merges separate tool calls into one by concatenating their names
+  and IDs. This happens because the merge condition only checks if the `index`
+  field matches, but parallel tool calls from some providers can share the same
+  `index` while having different `id` values.
+
+  For example, two parallel tool calls both with `index=0` but different IDs
+  ("call_1" vs "call_2") get merged into a single tool call with concatenated
+  name and ID.
+
+  Fix the merge condition to also check the `id` field: chunks with different
+  non-None IDs should be kept separate, while streaming continuations (where
+  id is None) should still merge correctly with their parent chunk.
+
+  Write tests to verify:
+  1. Two parallel tool calls with same index but different IDs remain separate
+  2. A streaming continuation chunk (id=None) still merges with its parent
+  3. Three parallel tool calls all with same index stay separate
+setup: |
+  cd libs/core
+  uv venv .venv --quiet
+  uv pip install -e ".[test]" --quiet --python .venv/bin/python
+verification: fixtures/langchain-merge-parallel-tools/verify.sh
+difficulty: medium
+timeout_ms: 300000
+max_turns: 30

@@ -30,3 +30,7 @@ verification: fixtures/nanobot-example/verify.sh
 difficulty: easy
 timeout_ms: 300000
 max_turns: 20
+
+context_tree_versions:
+  - label: cli-v0.0.2
+    tree_sha: "26b3af02d0e1c460e0ca7ced30260f061011aa36"

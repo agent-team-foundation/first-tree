@@ -120,6 +120,11 @@ export class EvalCollector {
       byCondition.set(t.condition, list);
     }
 
+    // If 2+ conditions, show comparison table first
+    if (byCondition.size >= 2) {
+      this.printComparisonTable(lines, byCondition);
+    }
+
     for (const [condition, trials] of byCondition) {
       const passed = trials.filter(t => t.passed).length;
       const totalCost = trials.reduce((s, t) => s + t.cost_usd, 0);
@@ -146,5 +151,77 @@ export class EvalCollector {
     lines.push(`  Saved: ${filepath}`);
 
     process.stderr.write(lines.join('\n') + '\n');
+  }
+
+  /**
+   * Print a side-by-side comparison table grouped by case, with deltas relative to baseline.
+   */
+  private printComparisonTable(
+    lines: string[],
+    byCondition: Map<string, TrialResult[]>,
+  ): void {
+    lines.push('\n  Comparison (vs baseline)');
+    lines.push('  ' + '═'.repeat(71));
+
+    // Collect all case IDs
+    const caseIds = [...new Set(this.trials.map(t => t.case_id))];
+    const conditionLabels = [...byCondition.keys()];
+
+    // Build baseline lookup: case_id -> averaged metrics
+    const baselineTrials = byCondition.get('baseline') || [];
+    const baselineByCase = new Map<string, { pass: number; total: number; cost: number; time: number; inTok: number; outTok: number }>();
+    for (const caseId of caseIds) {
+      const trials = baselineTrials.filter(t => t.case_id === caseId);
+      if (trials.length === 0) continue;
+      baselineByCase.set(caseId, {
+        pass: trials.filter(t => t.passed).length,
+        total: trials.length,
+        cost: trials.reduce((s, t) => s + t.cost_usd, 0) / trials.length,
+        time: trials.reduce((s, t) => s + t.wall_clock_ms, 0) / trials.length,
+        inTok: trials.reduce((s, t) => s + t.input_tokens, 0) / trials.length,
+        outTok: trials.reduce((s, t) => s + t.output_tokens, 0) / trials.length,
+      });
+    }
+
+    for (const caseId of caseIds) {
+      const name = caseId.length > 30 ? caseId.slice(0, 27) + '...' : caseId;
+      lines.push(`\n    ${name}`);
+      lines.push('    ' + '─'.repeat(67));
+      lines.push('    Condition'.padEnd(24) + 'Pass  Cost     Time   Tokens        Delta');
+
+      const baseline = baselineByCase.get(caseId);
+
+      for (const label of conditionLabels) {
+        const trials = (byCondition.get(label) || []).filter(t => t.case_id === caseId);
+        if (trials.length === 0) continue;
+
+        const pass = trials.filter(t => t.passed).length;
+        const total = trials.length;
+        const avgCost = trials.reduce((s, t) => s + t.cost_usd, 0) / total;
+        const avgTime = trials.reduce((s, t) => s + t.wall_clock_ms, 0) / total;
+        const avgIn = trials.reduce((s, t) => s + t.input_tokens, 0) / total;
+        const avgOut = trials.reduce((s, t) => s + t.output_tokens, 0) / total;
+
+        const passStr = `${pass}/${total}`;
+        const costStr = `$${avgCost.toFixed(2)}`;
+        const timeStr = `${Math.round(avgTime / 1000)}s`;
+        const tokStr = `${Math.round(avgIn / 1000)}k/${Math.round(avgOut / 1000)}k`;
+
+        let delta = '—';
+        if (baseline && label !== 'baseline') {
+          const costDelta = baseline.cost > 0
+            ? Math.round(((avgCost - baseline.cost) / baseline.cost) * 100)
+            : 0;
+          const sign = costDelta <= 0 ? '' : '+';
+          delta = `${sign}${costDelta}% cost`;
+        }
+
+        lines.push(
+          `    ${label.padEnd(20)}${passStr.padEnd(6)}${costStr.padStart(7)}  ${timeStr.padStart(5)}  ${tokStr.padStart(12)}  ${delta}`,
+        );
+      }
+    }
+
+    lines.push('\n  ' + '═'.repeat(71));
   }
 }

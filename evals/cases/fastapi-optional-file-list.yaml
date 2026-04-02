@@ -1,0 +1,34 @@
+# Eval case: Optional[List[bytes]] file upload causes TypeError
+# Based on: https://github.com/fastapi/fastapi/pull/14297
+# Bug: origin_type resolves to Union for optional sequences, and Union
+#      is not a valid argument to issubclass().
+
+id: fastapi-optional-file-list
+source: custom
+repo: fastapi/fastapi
+commit_sha: "3c54a8f07b70cdd40e3d81ea319e9fcccd2481d2"
+task: |
+  Fix a bug in `serialize_sequence_value()` in `fastapi/_compat/v2.py`.
+
+  Using `Optional[List[bytes]]` (or `Union[List[str], None]`) as a parameter
+  annotation with `File(None)` causes:
+    TypeError: issubclass() arg 1 must be a class
+
+  Root cause: `get_origin()` on `Optional[List[bytes]]` returns `Union`, and
+  `Union` is not a valid argument to `issubclass()`. The function needs to
+  unwrap the Union, skip NoneType, and use the first real type argument as
+  `origin_type`.
+
+  Write tests to verify:
+  1. `serialize_sequence_value` works with `Union[List[str], None]`
+  2. `serialize_sequence_value` works with `Union[None, List[str]]` (None first)
+  3. An endpoint with `Optional[List[bytes]] = File(None)` accepts file uploads
+  4. The same endpoint returns a valid response when no files are sent
+setup: |
+  uv venv .venv --quiet
+  uv pip install -e ".[all]" --quiet --python .venv/bin/python
+  uv pip install pytest httpx python-multipart --quiet --python .venv/bin/python
+verification: fixtures/fastapi-optional-file-list/verify.sh
+difficulty: medium
+timeout_ms: 300000
+max_turns: 30

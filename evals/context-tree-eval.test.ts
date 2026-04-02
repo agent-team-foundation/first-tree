@@ -12,16 +12,13 @@
  */
 
 import { describe, test, afterAll } from 'vitest';
-import type { EvalCondition, AgentConfig, ContextTreeConfig } from '#evals/helpers/types.js';
+import type { AgentConfig, ContextTreeConfig } from '#evals/helpers/types.js';
 import { loadCases } from '#evals/helpers/case-loader.js';
 import { runTrial } from '#evals/helpers/condition-runner.js';
 import { EvalCollector } from '#evals/helpers/eval-store.js';
+import { resolveConditions } from '#evals/helpers/resolve-conditions.js';
 
 const evalsEnabled = !!process.env.EVALS;
-
-import { parseConditions } from '#evals/helpers/parse-conditions.js';
-
-const conditions = parseConditions(process.env.EVALS_CONDITIONS || 'baseline');
 const trialCount = parseInt(process.env.EVALS_TRIALS || '1', 10);
 
 const agent: AgentConfig = {
@@ -58,6 +55,8 @@ describeEval('context-tree eval', () => {
 
   for (const evalCase of cases) {
     describe(evalCase.id, () => {
+      const conditions = resolveConditions(evalCase);
+
       for (const condition of conditions) {
         for (let trial = 1; trial <= trialCount; trial++) {
           const testName = trialCount > 1

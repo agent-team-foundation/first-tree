@@ -1,0 +1,38 @@
+# Eval case: Streaming callbacks drop inbound metadata
+# Based on: https://github.com/HKUDS/nanobot/pull/2633
+# Bug: on_stream and on_stream_end closures in _dispatch hardcode metadata dicts,
+#      dropping channel-specific fields like message_thread_id.
+
+id: nanobot-streaming-metadata
+source: custom
+repo: HKUDS/nanobot
+commit_sha: "80403d352bc7725dca2bdda97605cee352b8f26d"
+task: |
+  Fix a bug in the agent dispatch loop (nanobot/agent/loop.py).
+
+  The `on_stream` and `on_stream_end` closures inside `_dispatch` create fresh
+  metadata dicts containing only internal streaming keys (`_stream_delta`,
+  `_stream_id`, `_stream_end`, `_resuming`). This drops channel-specific
+  metadata fields like `message_thread_id` that were present on the inbound
+  message.
+
+  For example, when a Telegram message arrives with
+  `metadata={"message_thread_id": "42"}`, the streaming response messages
+  lose that field, breaking topic-thread routing.
+
+  Fix the closures so they copy `msg.metadata` first (via `dict(msg.metadata or {})`),
+  then add the internal streaming keys on top. This matches the pattern already
+  used by `_bus_progress` in the same file.
+
+  Write tests to verify:
+  1. on_stream forwards inbound message metadata (e.g. message_thread_id)
+  2. on_stream_end forwards inbound message metadata
+  3. Arbitrary metadata keys (message_thread_id, custom_flag, reply_to_id) are
+     all preserved in both stream delta and stream end messages
+setup: |
+  uv venv .venv --quiet
+  uv pip install -e ".[dev]" --quiet --python .venv/bin/python
+verification: fixtures/nanobot-streaming-metadata/verify.sh
+difficulty: medium
+timeout_ms: 300000
+max_turns: 30

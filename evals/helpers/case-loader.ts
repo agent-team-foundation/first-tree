@@ -9,7 +9,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import type { EvalCase, RepoRef } from '#evals/helpers/types.js';
+import type { EvalCase, RepoRef, TreeVersionRef } from '#evals/helpers/types.js';
 
 function parseRepos(data: any, filePath: string): RepoRef[] {
   // Multi-repo format: repos[]
@@ -55,6 +55,14 @@ function validateCase(data: any, filePath: string): EvalCase {
 
   const repos = parseRepos(data, filePath);
 
+  const context_tree_versions: TreeVersionRef[] | undefined =
+    Array.isArray(data.context_tree_versions)
+      ? data.context_tree_versions.map((v: any) => ({
+          label: String(v.label),
+          tree_sha: String(v.tree_sha),
+        }))
+      : undefined;
+
   return {
     id: data.id,
     source: data.source,
@@ -65,6 +73,7 @@ function validateCase(data: any, filePath: string): EvalCase {
     difficulty: data.difficulty || 'medium',
     timeout_ms: data.timeout_ms,
     max_turns: data.max_turns,
+    context_tree_versions,
   };
 }
 

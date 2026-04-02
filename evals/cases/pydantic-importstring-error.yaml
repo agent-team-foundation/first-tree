@@ -1,0 +1,40 @@
+# Eval case: ImportString masks internal import failures
+# Based on: https://github.com/pydantic/pydantic/pull/12740
+# Issue: https://github.com/pydantic/pydantic/issues/12715
+# Bug: When a module has a broken internal import, pydantic reports
+#      "No module named X" instead of the real ModuleNotFoundError.
+
+id: pydantic-importstring-error
+source: custom
+repo: pydantic/pydantic
+commit_sha: "c42224acb31dd9f374124a74809332246e595194"
+task: |
+  Fix a bug in `_import_string_logic()` in `pydantic/_internal/_validators.py`.
+
+  When using `ImportString` and a module exists but has a broken internal import
+  (e.g. it imports a missing dependency), pydantic incorrectly reports
+  "No module named X" instead of surfacing the real `ModuleNotFoundError`.
+
+  For example, if module `mymod` does `import definitely_missing_dep`, validating
+  `ImportString` with "mymod" should raise an error about `definitely_missing_dep`,
+  not about `mymod`.
+
+  Root cause: the `except ModuleNotFoundError as e:` handler always wraps the
+  error with `raise ImportError(f'No module named {module_path!r}') from e`,
+  masking the original exception. The fix should check whether the missing module
+  name (`e.name`) refers to the requested module path or one of its parents —
+  if not, re-raise the original error.
+
+  Also fix: when the import path already has an explicit colon (e.g. "mod:attr"),
+  the dot-fallback logic should not try further splitting.
+
+  Write tests to verify:
+  1. A module with a broken internal import surfaces the real ModuleNotFoundError
+  2. An explicit colon path does not trigger the dot-fallback logic incorrectly
+setup: |
+  uv venv .venv --quiet
+  uv sync --frozen --all-groups --all-packages --all-extras --quiet --python .venv/bin/python 2>/dev/null || uv pip install -e ".[testing]" --quiet --python .venv/bin/python
+verification: fixtures/pydantic-importstring-error/verify.sh
+difficulty: medium
+timeout_ms: 300000
+max_turns: 30

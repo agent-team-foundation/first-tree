@@ -21,6 +21,7 @@ export interface EvalCase {
   difficulty: 'easy' | 'medium' | 'hard';
   timeout_ms?: number;
   max_turns?: number;
+  context_tree_versions?: TreeVersionRef[];
 }
 
 /**
@@ -30,6 +31,12 @@ export interface EvalCase {
 export interface EvalCondition {
   label: string;
   tree_sha?: string;
+}
+
+/** A pinned context tree version embedded in a case YAML. */
+export interface TreeVersionRef {
+  label: string;      // e.g. "cli-v0.0.3"
+  tree_sha: string;   // commit SHA in the context tree repo
 }
 
 /** Global config for how to find context trees. */
