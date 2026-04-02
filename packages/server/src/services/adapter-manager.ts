@@ -296,7 +296,15 @@ function parseEventData(appId: string, data: Record<string, unknown>): InboundEv
   const sender = data.sender as { sender_id?: Record<string, string>; sender_type?: string } | undefined;
   const message = data.message as Record<string, unknown> | undefined;
 
-  if (!sender?.sender_id?.open_id || !sender.sender_id.union_id || !message) return null;
+  if (!sender?.sender_id?.open_id || !message) return null;
+
+  // Prefer union_id (stable across apps), fallback to open_id (per-app)
+  if (!sender.sender_id.union_id) {
+    process.stderr.write(
+      `[warn] Feishu event missing union_id for sender ${sender.sender_id.open_id}, falling back to open_id\n`,
+    );
+  }
+  const resolvedSenderId = sender.sender_id.union_id ?? sender.sender_id.open_id;
 
   const eventId = (data.event_id as string) ?? `ws_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
@@ -319,7 +327,7 @@ function parseEventData(appId: string, data: Record<string, unknown>): InboundEv
     eventId,
     platform: "feishu",
     appId,
-    senderId: sender.sender_id.union_id,
+    senderId: resolvedSenderId,
     senderOpenId: sender.sender_id.open_id,
     senderType: sender.sender_type ?? "user",
     externalChannelId: (message.chat_id as string) ?? "",

@@ -165,8 +165,8 @@ export async function onboardCheck(args: OnboardArgs): Promise<CheckItem[]> {
     );
   }
 
-  // Feishu bot binding is only applicable for non-human agents
-  if (args.type !== "human") {
+  // Feishu bot binding: applicable for non-human agents, or human with assistant (bot binds to assistant)
+  if (args.type !== "human" || args.assistant) {
     items.push(
       args.feishuBotAppId
         ? { key: "feishu_bot", label: "feishu-bot-app-id", status: "ok", value: args.feishuBotAppId }
@@ -174,7 +174,7 @@ export async function onboardCheck(args: OnboardArgs): Promise<CheckItem[]> {
             key: "feishu_bot",
             label: "feishu-bot-app-id",
             status: "missing_optional",
-            hint: "Feishu bot App ID for this agent",
+            hint: "Feishu bot App ID",
           },
     );
   }

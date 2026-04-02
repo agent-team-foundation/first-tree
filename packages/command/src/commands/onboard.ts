@@ -81,9 +81,9 @@ async function promptMissing(args: Record<string, unknown>): Promise<void> {
     }
   }
 
-  // Feishu bot binding is relevant for non-human agents
-  if (!args.feishuBotAppId && args.type !== "human") {
-    const wantFeishu = await confirm({ message: "Bind Feishu bot for this agent?", default: false });
+  // Feishu bot binding is relevant for non-human agents, or human with assistant (bot binds to assistant)
+  if (!args.feishuBotAppId && (args.type !== "human" || args.assistant)) {
+    const wantFeishu = await confirm({ message: "Bind Feishu bot?", default: false });
     if (wantFeishu) {
       args.feishuBotAppId = await input({ message: "Feishu App ID:" });
       args.feishuBotAppSecret = await input({ message: "Feishu App Secret:" });
