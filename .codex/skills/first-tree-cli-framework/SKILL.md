@@ -21,8 +21,9 @@ Use this skill when the task lives inside the `first-tree` repository or depends
 1. Read `../../../AGENTS.md` and `../../../README.md`.
 2. Read `references/context-tree-maintenance-principles.md` for the operating model.
 3. Read `references/context-tree-source-map.md` to locate the exact source files for the task.
-4. Use `./scripts/run-local-cli.sh <command>` from this skill directory when you need repo-local CLI behavior. The script builds the local CLI and runs `node dist/cli.js ...` from the repo root.
-5. After edits, run the smallest relevant check first, then the default repo checks: `pnpm typecheck`, `pnpm test`, `pnpm build`.
+4. Run `bash ./scripts/locate-context-tree-source.sh <topic>` when you want a task-specific reading list before opening files.
+5. Use `./scripts/run-local-cli.sh <command>` from this skill directory when you need repo-local CLI behavior. The script builds the local CLI and runs `node dist/cli.js ...` from the repo root.
+6. After edits, run the smallest relevant check first, then the default repo checks: `pnpm typecheck`, `pnpm test`, `pnpm build`.
 
 ## Command Workflow
 
@@ -31,6 +32,7 @@ Use this skill when the task lives inside the `first-tree` repository or depends
 - Run `./scripts/run-local-cli.sh init` to exercise framework copy, template rendering, upstream remote setup, and progress generation.
 - Run `./scripts/run-local-cli.sh verify` to exercise progress checks plus node/member validation.
 - Run `./scripts/run-local-cli.sh upgrade` to exercise upstream version comparison and upgrade task generation.
+- Run `bash ./scripts/locate-context-tree-source.sh --list` to see the supported reading topics.
 - Prefer the local runner while editing this repo. Use a published/global `context-tree` binary only when the task is explicitly about consumer-side usage outside the repo.
 
 ## Task Playbooks
