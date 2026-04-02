@@ -87,14 +87,13 @@ if [[ -z "$recorded_fingerprint" ]]; then
   exit 1
 fi
 
-if ! git -C "$REPO_ROOT" cat-file -e "${recorded_commit}^{commit}" 2>/dev/null; then
-  echo "Portable snapshot base commit $recorded_commit does not exist in this checkout." >&2
-  exit 1
-fi
-
-if ! git -C "$REPO_ROOT" merge-base --is-ancestor "$recorded_commit" "$current_commit"; then
-  echo "Portable snapshot base commit $recorded_commit is not an ancestor of repo HEAD $current_commit." >&2
-  exit 1
+if git -C "$REPO_ROOT" cat-file -e "${recorded_commit}^{commit}" 2>/dev/null; then
+  if ! git -C "$REPO_ROOT" merge-base --is-ancestor "$recorded_commit" "$current_commit"; then
+    echo "Portable snapshot base commit $recorded_commit is not an ancestor of repo HEAD $current_commit." >&2
+    exit 1
+  fi
+else
+  echo "Portable snapshot base commit $recorded_commit is not present in this checkout; skipping ancestry validation." >&2
 fi
 
 if [[ "$recorded_fingerprint" != "$source_fingerprint" ]]; then

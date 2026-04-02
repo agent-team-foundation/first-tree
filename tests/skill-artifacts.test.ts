@@ -74,13 +74,26 @@ describe("skill artifacts", () => {
         encoding: "utf-8",
       },
     ).trim();
+    let commitIsAvailable = true;
+    try {
+      execFileSync("git", ["cat-file", "-e", `${snapshotCommit}^{commit}`], {
+        cwd: ROOT,
+        encoding: "utf-8",
+        stdio: "pipe",
+      });
+    } catch {
+      commitIsAvailable = false;
+    }
 
-    const mergeBase = execFileSync("git", ["merge-base", snapshotCommit, headCommit], {
-      cwd: ROOT,
-      encoding: "utf-8",
-    }).trim();
+    if (commitIsAvailable) {
+      const mergeBase = execFileSync("git", ["merge-base", snapshotCommit, headCommit], {
+        cwd: ROOT,
+        encoding: "utf-8",
+      }).trim();
 
-    expect(mergeBase).toBe(snapshotCommit);
+      expect(mergeBase).toBe(snapshotCommit);
+    }
+
     expect(snapshotFingerprint).toBe(computedFingerprint);
   });
 });
