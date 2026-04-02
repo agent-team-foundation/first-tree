@@ -51,7 +51,7 @@ export function parseNDJSON(lines: string[]): ParsedNDJSON {
         }
       }
 
-      if (event.type === 'result') resultLine = event;
+      if (event.type === 'result' && !resultLine) resultLine = event;
     } catch { /* skip malformed lines */ }
   }
 
