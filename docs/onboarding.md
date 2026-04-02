@@ -55,7 +55,7 @@ Information an agent needs to **decide** on an approach — not to execute it.
 
 - A Git repository for your tree (separate from your code repos)
 - Node.js 18+
-- `npm install -g context-tree` (or use `npx context-tree` without installing)
+- The npm package is `first-tree`. Use `npx first-tree init` for one-off runs, or `npm install -g first-tree` to add the `context-tree` command to your PATH
 
 ### Step 1: Initialize
 
@@ -131,7 +131,7 @@ The tree doesn't duplicate source code — it captures what connects things and 
 
 ## Upgrading the Framework
 
-After init, the seed-tree repo is added as a git remote (`context-tree-upstream`). When the framework updates:
+After init, the first-tree repo is added as a git remote (`context-tree-upstream`). When the framework updates:
 
 ```bash
 context-tree upgrade

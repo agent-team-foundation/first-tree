@@ -15,7 +15,7 @@ import { ONBOARDING_TEXT } from "#src/onboarding.js";
 import { evaluateAll } from "#src/rules/index.js";
 import type { RuleResult } from "#src/rules/index.js";
 
-const SEED_TREE_URL = "https://github.com/agent-team-foundation/seed-tree";
+const FIRST_TREE_REPO_URL = "https://github.com/agent-team-foundation/first-tree";
 const FRAMEWORK_DIR = ".context-tree";
 
 /**
@@ -31,18 +31,18 @@ const TEMPLATE_MAP: [string, string][] = [
   ["members-domain.md.template", "members/NODE.md"],
 ];
 
-function cloneSeedTree(): string {
+function cloneFirstTree(): string {
   const tmp = mkdtempSync(join(tmpdir(), "context-tree-"));
-  console.log(`Cloning seed-tree from ${SEED_TREE_URL}...`);
+  console.log(`Cloning first-tree from ${FIRST_TREE_REPO_URL}...`);
   try {
-    execFileSync("git", ["clone", "--depth", "1", SEED_TREE_URL, tmp], {
+    execFileSync("git", ["clone", "--depth", "1", FIRST_TREE_REPO_URL, tmp], {
       encoding: "utf-8",
       stdio: "pipe",
     });
   } catch (err) {
     const message =
       err instanceof Error ? err.message : "unknown error";
-    console.error(`Failed to clone seed-tree: ${message}`);
+    console.error(`Failed to clone first-tree: ${message}`);
     rmSync(tmp, { recursive: true, force: true });
     process.exit(1);
   }
@@ -83,11 +83,11 @@ function addUpstreamRemote(target: string): void {
     if (!result.split(/\s+/).includes("context-tree-upstream")) {
       execFileSync(
         "git",
-        ["remote", "add", "context-tree-upstream", SEED_TREE_URL],
+        ["remote", "add", "context-tree-upstream", FIRST_TREE_REPO_URL],
         { cwd: target, encoding: "utf-8", stdio: "pipe" },
       );
       console.log(
-        `  Added git remote 'context-tree-upstream' -> ${SEED_TREE_URL}`,
+        `  Added git remote 'context-tree-upstream' -> ${FIRST_TREE_REPO_URL}`,
       );
     }
   } catch {
@@ -153,7 +153,7 @@ export function runInit(repo?: Repo): number {
   }
 
   if (!r.hasFramework()) {
-    const seed = cloneSeedTree();
+    const seed = cloneFirstTree();
     try {
       console.log("Copying framework and scaffolding...");
       copyFramework(seed, r.root);

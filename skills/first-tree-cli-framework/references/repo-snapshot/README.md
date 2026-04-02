@@ -1,4 +1,4 @@
-# seed-tree
+# first-tree
 
 Template source and CLI for [Context Tree](https://context-tree.ai) — the living source of truth for your organization.
 
@@ -9,10 +9,10 @@ A tree-structured knowledge base that agents and humans build and maintain toget
 ## Quick Start
 
 ```bash
-npx context-tree init
+npx first-tree init
 ```
 
-Run this inside a git repo. It clones the framework, renders scaffolding, and generates a task list for your agent to work through.
+Run this inside a git repo. The npm package is `first-tree`; it installs the `context-tree` command. For a global install, run `npm install -g first-tree` and then use `context-tree init`.
 
 ## Commands
 
@@ -26,7 +26,7 @@ Run this inside a git repo. It clones the framework, renders scaffolding, and ge
 
 ```
 your-tree/
-  .context-tree/           # framework (upgradable from seed-tree)
+  .context-tree/           # framework (upgradable from first-tree)
     VERSION
     principles.md
     ownership-and-naming.md
@@ -41,7 +41,7 @@ your-tree/
 
 ## Upgrades
 
-After init, seed-tree is added as a git remote (`context-tree-upstream`). To upgrade the framework:
+After init, first-tree is added as a git remote (`context-tree-upstream`). To upgrade the framework:
 
 ```bash
 context-tree upgrade      # shows what changed and what to do

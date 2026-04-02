@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -26,5 +26,24 @@ describe("skill artifacts", () => {
       stdio: "pipe",
       encoding: "utf-8",
     });
+  });
+
+  it("keeps naming and installation guidance aligned", () => {
+    const read = (path: string) => readFileSync(join(ROOT, path), "utf-8");
+
+    expect(read("README.md")).not.toContain("seed-tree");
+    expect(read("docs/onboarding.md")).not.toContain("seed-tree");
+    expect(read("AGENTS.md")).not.toContain("seed-tree");
+
+    const onboarding = read("docs/onboarding.md");
+    expect(onboarding).toContain("npx first-tree init");
+    expect(onboarding).toContain("npm install -g first-tree");
+
+    const quickstart = read("skills/first-tree-cli-framework/references/portable-quickstart.md");
+    expect(quickstart).toContain("npx first-tree --help");
+    expect(quickstart).toContain("npm install -g first-tree");
+    expect(quickstart).toMatch(
+      /snapshot base commit when this portable copy was refreshed: `[0-9a-f]{40}`/,
+    );
   });
 });

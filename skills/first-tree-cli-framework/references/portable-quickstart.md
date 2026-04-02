@@ -11,7 +11,7 @@ This skill is meant to keep working even after the `skills/first-tree-cli-framew
 Snapshot source:
 
 - live repo: `agent-team-foundation/first-tree`
-- snapshot base commit when this portable copy was refreshed: `50f157ac815ab1d1cd94eddb113ea7b0b3ae1df9`
+- snapshot base commit when this portable copy was refreshed: `7654fa51341659cf24ab2b03bc1b066f881919ed`
 
 ## If You Have A Live `first-tree` Checkout
 
@@ -27,25 +27,33 @@ The script will detect the repo root, build the local CLI, and run `node dist/cl
 
 ## If You Only Copied This Skill Folder
 
-Install or expose a `context-tree` binary first.
+Install or expose the CLI first. The npm package is `first-tree`, and it installs the `context-tree` command.
 
 Practical options:
 
-1. Clone `agent-team-foundation/first-tree`, then from that repo run:
+1. For one-off runs without installing anything globally, use the published package directly:
+
+```bash
+npx first-tree --help
+npx first-tree help onboarding
+```
+
+2. To make this skill's helper script work outside the repo, install the package so `context-tree` is on your PATH:
+
+```bash
+npm install -g first-tree
+context-tree --help
+context-tree help onboarding
+```
+
+3. Clone `agent-team-foundation/first-tree`, then from that repo run:
 
 ```bash
 pnpm install
 pnpm build
-node dist/cli.js --help
-```
-
-If you want the `context-tree` command on your PATH, use your preferred link/install workflow after building.
-
-2. If your environment already has a `context-tree` binary installed, run:
-
-```bash
+npm install -g .
 context-tree --help
-context-tree help onboarding
+node dist/cli.js --help
 ```
 
 After that, this skill's helper script can use the installed binary:

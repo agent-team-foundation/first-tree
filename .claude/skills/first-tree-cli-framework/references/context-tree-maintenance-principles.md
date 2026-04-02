@@ -31,7 +31,7 @@ Read these first when the boundary is unclear:
 
 - `context-tree init`:
   - requires a git repo
-  - clones `https://github.com/agent-team-foundation/seed-tree`
+  - clones `https://github.com/agent-team-foundation/first-tree`
   - copies `.context-tree/`
   - renders `NODE.md`, `AGENT.md`, and `members/NODE.md` from templates when missing
   - adds `context-tree-upstream`

@@ -39,4 +39,7 @@ cp -R "${REPO_ROOT}/tests" "${SNAPSHOT_DIR}/"
 cp "${REPO_ROOT}/evals/helpers/case-loader.ts" "${SNAPSHOT_DIR}/evals/helpers/"
 cp "${REPO_ROOT}/evals/tests/eval-helpers.test.ts" "${SNAPSHOT_DIR}/evals/tests/"
 
+CURRENT_COMMIT="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
+perl -0pi -e 's/snapshot base commit when this portable copy was refreshed: `[^`]+`/snapshot base commit when this portable copy was refreshed: `'"${CURRENT_COMMIT}"'`/g' "${SKILL_DIR}/references/portable-quickstart.md"
+
 echo "Refreshed portable snapshot at ${SNAPSHOT_DIR}"

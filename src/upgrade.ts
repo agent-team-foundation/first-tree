@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Repo } from "#src/repo.js";
 
-const SEED_TREE_URL = "https://github.com/agent-team-foundation/seed-tree";
+const FIRST_TREE_REPO_URL = "https://github.com/agent-team-foundation/first-tree";
 
 function getUpstreamVersion(repo: Repo): string | null {
   try {
@@ -51,7 +51,7 @@ export function runUpgrade(): number {
     const lines = [
       "# Context Tree Upgrade\n",
       "## Setup",
-      `- [ ] Add upstream remote: \`git remote add context-tree-upstream ${SEED_TREE_URL}\``,
+      `- [ ] Add upstream remote: \`git remote add context-tree-upstream ${FIRST_TREE_REPO_URL}\``,
       "- [ ] Then run `context-tree upgrade` again to check for updates",
     ];
     const output = lines.join("\n");

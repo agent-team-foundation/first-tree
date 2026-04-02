@@ -1,4 +1,4 @@
-# Agent Instructions for seed-tree
+# Agent Instructions for first-tree
 
 This repo is the **template source and CLI** for Context Tree. It is NOT a context tree itself.
 
@@ -16,7 +16,7 @@ This repo is the **template source and CLI** for Context Tree. It is NOT a conte
 - The CLI is a **harness for the agent** — it generates situation-aware task lists, not executes them
 - `.context-tree/` is the framework directory that gets copied wholesale into users' repos
 - Templates in `.context-tree/templates/` are rendered to `NODE.md`, `AGENT.md`, `members/NODE.md` in users' repos
-- The CLI is installed via npm (`npx context-tree`) — it is never bundled in `.context-tree/`
+- The npm package is `first-tree`, and it installs the `context-tree` command. Use `npx first-tree ...` for one-off runs or `npm install -g first-tree` to put `context-tree` on your PATH.
 
 ## Before Making Changes
 
