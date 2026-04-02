@@ -14,6 +14,7 @@ Keep the central mental model straight: First Tree Hub is the communication back
 
 1. Classify the task before acting.
    - Operate or diagnose a Hub deployment: read `references/command-surface.md`
+   - Map a natural-language request to an end-to-end CLI flow: read `references/scenario-playbooks.md`
    - Explain product or architecture concepts: read `references/core-concepts.md`
    - Modify CLI or related behavior in code: read `references/developer-map.md`
 2. Prefer existing CLI workflows over manual edits when the repo already has a supported path.
@@ -87,5 +88,6 @@ pnpm --filter @agent-team-foundation/first-tree-hub test
 ## References
 
 - `references/command-surface.md` for command selection, command semantics, env vars, and common workflows
+- `references/scenario-playbooks.md` for request-to-command playbooks and end-to-end operator flows
 - `references/core-concepts.md` for product boundaries, architecture invariants, and runtime mental models
 - `references/developer-map.md` for package ownership, source-file entry points, and change workflows
