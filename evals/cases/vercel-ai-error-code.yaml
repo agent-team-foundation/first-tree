@@ -40,3 +40,7 @@ verification: fixtures/vercel-ai-error-code/verify.sh
 difficulty: medium
 timeout_ms: 600000
 max_turns: 40
+
+context_tree_versions:
+  - label: cli-v0.0.2
+    tree_sha: "a6161a18648c217ae4e615c0c109d58027055d80"

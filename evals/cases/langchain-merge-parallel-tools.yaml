@@ -37,3 +37,7 @@ verification: fixtures/langchain-merge-parallel-tools/verify.sh
 difficulty: medium
 timeout_ms: 300000
 max_turns: 30
+
+context_tree_versions:
+  - label: cli-v0.0.2
+    tree_sha: "f78c7a9841343ff041bf7372e7e3367b7b65b75d"

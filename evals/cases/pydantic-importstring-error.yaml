@@ -38,3 +38,7 @@ verification: fixtures/pydantic-importstring-error/verify.sh
 difficulty: medium
 timeout_ms: 300000
 max_turns: 30
+
+context_tree_versions:
+  - label: cli-v0.0.2
+    tree_sha: "b4f9694f69d10a15a4e04f7097796a0a4ed6c80d"
