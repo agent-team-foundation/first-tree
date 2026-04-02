@@ -14,7 +14,7 @@
 
 ## Product Boundary
 
-All paths below are relative to the `first-tree` repo root.
+Unless noted otherwise, paths below refer to the bundled snapshot under `references/repo-snapshot/`.
 
 - `first-tree` is the template source and CLI for Context Tree. It is not a tree repo itself.
 - `.context-tree/` is the shipped framework payload. `context-tree init` copies it into a user repo and renders top-level scaffolding from templates.
@@ -22,10 +22,10 @@ All paths below are relative to the `first-tree` repo root.
 
 Read these first when the boundary is unclear:
 
-- `AGENTS.md`
-- `README.md`
-- `src/cli.ts`
-- `src/init.ts`
+- `references/repo-snapshot/AGENTS.md`
+- `references/repo-snapshot/README.md`
+- `references/repo-snapshot/src/cli.ts`
+- `references/repo-snapshot/src/init.ts`
 
 ## Command Model
 
@@ -53,11 +53,11 @@ Read these first when the boundary is unclear:
 
 Authoritative sources:
 
-- `src/cli.ts`
-- `src/init.ts`
-- `src/verify.ts`
-- `src/upgrade.ts`
-- `src/onboarding.ts`
+- `references/repo-snapshot/src/cli.ts`
+- `references/repo-snapshot/src/init.ts`
+- `references/repo-snapshot/src/verify.ts`
+- `references/repo-snapshot/src/upgrade.ts`
+- `references/repo-snapshot/src/onboarding.ts`
 
 ## Decision Model
 
@@ -73,10 +73,10 @@ Keep these ideas intact:
 
 Authoritative sources:
 
-- `.context-tree/principles.md`
-- `docs/about.md`
-- `docs/onboarding.md`
-- `.context-tree/templates/agent.md.template`
+- `references/repo-snapshot/.context-tree/principles.md`
+- `references/repo-snapshot/docs/about.md`
+- `references/repo-snapshot/docs/onboarding.md`
+- `references/repo-snapshot/.context-tree/templates/agent.md.template`
 
 ## Organization Model
 
@@ -89,10 +89,10 @@ Authoritative sources:
 
 Authoritative sources:
 
-- `.context-tree/principles.md`
-- `docs/onboarding.md`
-- `.context-tree/templates/root-node.md.template`
-- `src/validators/nodes.ts`
+- `references/repo-snapshot/.context-tree/principles.md`
+- `references/repo-snapshot/docs/onboarding.md`
+- `references/repo-snapshot/.context-tree/templates/root-node.md.template`
+- `references/repo-snapshot/src/validators/nodes.ts`
 
 ## Ownership Model
 
@@ -106,9 +106,9 @@ Authoritative sources:
 
 Authoritative sources:
 
-- `.context-tree/ownership-and-naming.md`
-- `src/validators/nodes.ts`
-- `.context-tree/generate-codeowners.ts`
+- `references/repo-snapshot/.context-tree/ownership-and-naming.md`
+- `references/repo-snapshot/src/validators/nodes.ts`
+- `references/repo-snapshot/.context-tree/generate-codeowners.ts`
 
 ## Member Model
 
@@ -131,9 +131,9 @@ Authoritative sources:
 
 Authoritative sources:
 
-- `.context-tree/templates/members-domain.md.template`
-- `.context-tree/templates/member-node.md.template`
-- `src/validators/members.ts`
+- `references/repo-snapshot/.context-tree/templates/members-domain.md.template`
+- `references/repo-snapshot/.context-tree/templates/member-node.md.template`
+- `references/repo-snapshot/src/validators/members.ts`
 
 ## Validation Invariants
 
@@ -154,9 +154,9 @@ These are the non-obvious checks that shape correct tree maintenance:
 
 Authoritative sources:
 
-- `src/verify.ts`
-- `src/validators/nodes.ts`
-- `src/validators/members.ts`
+- `references/repo-snapshot/src/verify.ts`
+- `references/repo-snapshot/src/validators/nodes.ts`
+- `references/repo-snapshot/src/validators/members.ts`
 
 ## Upgrade And Workflow Model
 
@@ -170,14 +170,14 @@ Authoritative sources:
 
 Authoritative sources:
 
-- `src/upgrade.ts`
-- `src/rules/ci-validation.ts`
-- `.context-tree/workflows/validate.yml`
-- `.context-tree/workflows/pr-review.yml`
-- `.context-tree/workflows/codeowners.yml`
-- `.context-tree/generate-codeowners.ts`
-- `.context-tree/scripts/inject-tree-context.sh`
-- `.context-tree/examples/claude-code/README.md`
+- `references/repo-snapshot/src/upgrade.ts`
+- `references/repo-snapshot/src/rules/ci-validation.ts`
+- `references/repo-snapshot/.context-tree/workflows/validate.yml`
+- `references/repo-snapshot/.context-tree/workflows/pr-review.yml`
+- `references/repo-snapshot/.context-tree/workflows/codeowners.yml`
+- `references/repo-snapshot/.context-tree/generate-codeowners.ts`
+- `references/repo-snapshot/.context-tree/scripts/inject-tree-context.sh`
+- `references/repo-snapshot/.context-tree/examples/claude-code/README.md`
 
 ## Common Failure Modes
 

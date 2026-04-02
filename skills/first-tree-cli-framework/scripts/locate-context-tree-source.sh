@@ -34,12 +34,13 @@ case "$topic" in
     print_block "Topic: overview
 
 Read in order:
-- AGENTS.md — repo boundary and working rules
-- README.md — user-facing command surface and framework shape
-- docs/about.md — product intent and problem statement
-- docs/onboarding.md — onboarding flow emitted by the CLI
-- src/cli.ts — command dispatch
-- src/init.ts — framework copy + task generation
+- references/portable-quickstart.md — how to use this skill after copying it elsewhere
+- references/repo-snapshot/AGENTS.md — repo boundary and working rules
+- references/repo-snapshot/README.md — user-facing command surface and framework shape
+- references/repo-snapshot/docs/about.md — product intent and problem statement
+- references/repo-snapshot/docs/onboarding.md — onboarding flow emitted by the CLI
+- references/repo-snapshot/src/cli.ts — command dispatch
+- references/repo-snapshot/src/init.ts — framework copy + task generation
 
 Use after reading:
 - ./scripts/run-local-cli.sh --help
@@ -49,9 +50,9 @@ Use after reading:
     print_block "Topic: cli
 
 Read in order:
-- src/cli.ts — command names, usage text, dispatch
-- src/onboarding.ts — onboarding bridge
-- src/repo.ts — repo inspection helpers used by commands
+- references/repo-snapshot/src/cli.ts — command names, usage text, dispatch
+- references/repo-snapshot/src/onboarding.ts — onboarding bridge
+- references/repo-snapshot/src/repo.ts — repo inspection helpers used by commands
 - references/context-tree-source-map.md — companion map for nearby files
 
 Use after reading:
@@ -62,11 +63,11 @@ Use after reading:
     print_block "Topic: init
 
 Read in order:
-- src/init.ts — clone/copy/template/progress flow
-- src/rules/index.ts — rule ordering
-- src/rules/*.ts — task generation content
-- .context-tree/templates/*.template — rendered scaffolds
-- tests/init.test.ts and tests/rules.test.ts — expected behavior
+- references/repo-snapshot/src/init.ts — clone/copy/template/progress flow
+- references/repo-snapshot/src/rules/index.ts — rule ordering
+- references/repo-snapshot/src/rules/*.ts — task generation content
+- references/repo-snapshot/.context-tree/templates/*.template — rendered scaffolds
+- references/repo-snapshot/tests/init.test.ts and references/repo-snapshot/tests/rules.test.ts — expected behavior
 
 Use after reading:
 - ./scripts/run-local-cli.sh init"
@@ -75,12 +76,12 @@ Use after reading:
     print_block "Topic: verify
 
 Read in order:
-- src/verify.ts — progress gating and top-level checks
-- src/validators/nodes.ts — structural validation
-- src/validators/members.ts — member validation
-- tests/verify.test.ts
-- tests/validate-nodes.test.ts
-- tests/validate-members.test.ts
+- references/repo-snapshot/src/verify.ts — progress gating and top-level checks
+- references/repo-snapshot/src/validators/nodes.ts — structural validation
+- references/repo-snapshot/src/validators/members.ts — member validation
+- references/repo-snapshot/tests/verify.test.ts
+- references/repo-snapshot/tests/validate-nodes.test.ts
+- references/repo-snapshot/tests/validate-members.test.ts
 
 Use after reading:
 - ./scripts/run-local-cli.sh verify"
@@ -89,11 +90,11 @@ Use after reading:
     print_block "Topic: upgrade
 
 Read in order:
-- src/upgrade.ts — upstream comparison and upgrade tasks
-- src/repo.ts — upstream remote detection
-- .context-tree/VERSION — local framework version marker
-- .context-tree/templates/agent.md.template — framework block expectations
-- tests/init.test.ts and tests/verify.test.ts for adjacent behavior
+- references/repo-snapshot/src/upgrade.ts — upstream comparison and upgrade tasks
+- references/repo-snapshot/src/repo.ts — upstream remote detection
+- references/repo-snapshot/.context-tree/VERSION — local framework version marker
+- references/repo-snapshot/.context-tree/templates/agent.md.template — framework block expectations
+- references/repo-snapshot/tests/init.test.ts and references/repo-snapshot/tests/verify.test.ts for adjacent behavior
 
 Use after reading:
 - ./scripts/run-local-cli.sh upgrade"
@@ -103,10 +104,10 @@ Use after reading:
 
 Read in order:
 - references/context-tree-maintenance-principles.md
-- .context-tree/principles.md
-- docs/about.md
-- docs/onboarding.md
-- .context-tree/templates/agent.md.template
+- references/repo-snapshot/.context-tree/principles.md
+- references/repo-snapshot/docs/about.md
+- references/repo-snapshot/docs/onboarding.md
+- references/repo-snapshot/.context-tree/templates/agent.md.template
 
 Goal:
 - recover the full decision-vs-execution model before changing framework guidance"
@@ -116,59 +117,59 @@ Goal:
 
 Read in order:
 - references/context-tree-maintenance-principles.md
-- .context-tree/ownership-and-naming.md
-- src/validators/nodes.ts
-- .context-tree/generate-codeowners.ts
-- tests/validate-nodes.test.ts
-- tests/generate-codeowners.test.ts"
+- references/repo-snapshot/.context-tree/ownership-and-naming.md
+- references/repo-snapshot/src/validators/nodes.ts
+- references/repo-snapshot/.context-tree/generate-codeowners.ts
+- references/repo-snapshot/tests/validate-nodes.test.ts
+- references/repo-snapshot/tests/generate-codeowners.test.ts"
     ;;
   members)
     print_block "Topic: members
 
 Read in order:
 - references/context-tree-maintenance-principles.md
-- .context-tree/templates/members-domain.md.template
-- .context-tree/templates/member-node.md.template
-- src/validators/members.ts
-- tests/validate-members.test.ts"
+- references/repo-snapshot/.context-tree/templates/members-domain.md.template
+- references/repo-snapshot/.context-tree/templates/member-node.md.template
+- references/repo-snapshot/src/validators/members.ts
+- references/repo-snapshot/tests/validate-members.test.ts"
     ;;
   workflows)
     print_block "Topic: workflows
 
 Read in order:
-- src/rules/ci-validation.ts
-- .context-tree/workflows/validate.yml
-- .context-tree/workflows/pr-review.yml
-- .context-tree/workflows/codeowners.yml
-- .context-tree/run-review.ts
-- .context-tree/generate-codeowners.ts
-- .context-tree/examples/claude-code/README.md"
+- references/repo-snapshot/src/rules/ci-validation.ts
+- references/repo-snapshot/.context-tree/workflows/validate.yml
+- references/repo-snapshot/.context-tree/workflows/pr-review.yml
+- references/repo-snapshot/.context-tree/workflows/codeowners.yml
+- references/repo-snapshot/.context-tree/run-review.ts
+- references/repo-snapshot/.context-tree/generate-codeowners.ts
+- references/repo-snapshot/.context-tree/examples/claude-code/README.md"
     ;;
   templates)
     print_block "Topic: templates
 
 Read in order:
-- .context-tree/templates/root-node.md.template
-- .context-tree/templates/agent.md.template
-- .context-tree/templates/members-domain.md.template
-- .context-tree/templates/member-node.md.template
-- src/init.ts — how templates are rendered
-- tests/init.test.ts"
+- references/repo-snapshot/.context-tree/templates/root-node.md.template
+- references/repo-snapshot/.context-tree/templates/agent.md.template
+- references/repo-snapshot/.context-tree/templates/members-domain.md.template
+- references/repo-snapshot/.context-tree/templates/member-node.md.template
+- references/repo-snapshot/src/init.ts — how templates are rendered
+- references/repo-snapshot/tests/init.test.ts"
     ;;
   tests)
     print_block "Topic: tests
 
 Read in order:
 - references/context-tree-source-map.md
-- tests/init.test.ts
-- tests/rules.test.ts
-- tests/verify.test.ts
-- tests/validate-nodes.test.ts
-- tests/validate-members.test.ts
-- tests/generate-codeowners.test.ts
-- tests/repo.test.ts
-- tests/run-review.test.ts
-- evals/tests/eval-helpers.test.ts"
+- references/repo-snapshot/tests/init.test.ts
+- references/repo-snapshot/tests/rules.test.ts
+- references/repo-snapshot/tests/verify.test.ts
+- references/repo-snapshot/tests/validate-nodes.test.ts
+- references/repo-snapshot/tests/validate-members.test.ts
+- references/repo-snapshot/tests/generate-codeowners.test.ts
+- references/repo-snapshot/tests/repo.test.ts
+- references/repo-snapshot/tests/run-review.test.ts
+- references/repo-snapshot/evals/tests/eval-helpers.test.ts"
     ;;
   *)
     echo "Unknown topic: $topic" >&2

@@ -7,7 +7,7 @@ description: Work on the `first-tree` CLI repo and its shipped `.context-tree` f
 
 ## Overview
 
-Use this skill when the task lives inside the `first-tree` repository or depends on the exact behavior of the framework that `first-tree` ships to user repos. Treat the repo as two coupled products: the CLI under `src/` and the framework payload under `.context-tree/`.
+Use this skill when the task depends on the exact behavior of the `first-tree` CLI or the Context Tree framework it ships to user repos. This skill is designed to be portable: if someone copies `skills/first-tree-cli-framework` into another environment, they can still learn the model, inspect a bundled snapshot of the relevant repo files, and get explicit CLI install/run instructions.
 
 ## Non-Negotiables
 
@@ -18,12 +18,15 @@ Use this skill when the task lives inside the `first-tree` repository or depends
 
 ## Quick Start
 
-1. Read `../../AGENTS.md` and `../../README.md`.
-2. Read `references/context-tree-maintenance-principles.md` for the operating model.
-3. Read `references/context-tree-source-map.md` to locate the exact source files for the task.
-4. Run `bash ./scripts/locate-context-tree-source.sh <topic>` when you want a task-specific reading list before opening files.
-5. Use `./scripts/run-local-cli.sh <command>` from this skill directory when you need repo-local CLI behavior. The script builds the local CLI and runs `node dist/cli.js ...` from the repo root.
-6. After edits, run the smallest relevant check first, then the default repo checks: `pnpm typecheck`, `pnpm test`, `pnpm build`.
+1. Read `references/portable-quickstart.md`.
+2. Read `references/repo-snapshot/AGENTS.md` and `references/repo-snapshot/README.md`.
+3. Read `references/context-tree-maintenance-principles.md` for the operating model.
+4. Read `references/context-tree-source-map.md` to locate the exact bundled files for the task.
+5. Run `bash ./scripts/locate-context-tree-source.sh <topic>` when you want a task-specific reading list before opening files.
+6. Use `./scripts/run-local-cli.sh <command>` from this skill directory:
+   - inside a live `first-tree` checkout, it builds and runs the local CLI
+   - outside the repo, it falls back to an installed `context-tree` binary if available
+7. If you are maintaining the skill inside the live repo and you change the framework or source references, refresh the bundled snapshot with `bash ./scripts/sync-portable-snapshot.sh`.
 
 ## Command Workflow
 
@@ -35,19 +38,29 @@ Use this skill when the task lives inside the `first-tree` repository or depends
 - Run `bash ./scripts/locate-context-tree-source.sh --list` to see the supported reading topics.
 - Prefer the local runner while editing this repo. Use a published/global `context-tree` binary only when the task is explicitly about consumer-side usage outside the repo.
 
+## Portable Snapshot
+
+- `references/repo-snapshot/` contains a bundled snapshot of the key `first-tree` repo materials that this skill depends on.
+- The snapshot includes:
+  - the full current `.context-tree/` directory
+  - docs that explain the product and onboarding model
+  - CLI source files, rule modules, validator modules, and tests used by this skill
+- When the skill is copied elsewhere, treat the snapshot as the portable source of truth.
+- When the skill is used inside a live `first-tree` checkout, compare the snapshot against the live repo before making changes so you do not reason from stale copies.
+
 ## Task Playbooks
 
 ### CLI, Rules, and Validators
 
-- Inspect the command module in `src/` and the paired test file in `tests/`.
-- If a change alters generated task text, also review `src/rules/*.ts`, `.context-tree/templates/`, and the onboarding docs the task text points at.
-- If a change alters validation behavior, inspect both `src/validators/*.ts` and any workflow or template content that teaches users how to satisfy those checks.
+- Inspect the bundled command module in `references/repo-snapshot/src/` and the paired test file in `references/repo-snapshot/tests/`.
+- If a change alters generated task text, also review `references/repo-snapshot/src/rules/*.ts`, `references/repo-snapshot/.context-tree/templates/`, and the bundled onboarding docs the task text points at.
+- If a change alters validation behavior, inspect both `references/repo-snapshot/src/validators/*.ts` and any bundled workflow or template content that teaches users how to satisfy those checks.
 
 ### Framework Payload
 
-- Read `.context-tree/principles.md`, `.context-tree/ownership-and-naming.md`, templates, workflows, and helper scripts before editing.
+- Read `references/repo-snapshot/.context-tree/principles.md`, `references/repo-snapshot/.context-tree/ownership-and-naming.md`, templates, workflows, and helper scripts before editing.
 - Remember that framework edits affect every repo initialized or upgraded from `first-tree`.
-- Keep workflow files, helper scripts, rule text, and docs aligned. If one changes and the others still teach the old behavior, treat that as an incomplete change.
+- Keep workflow files, helper scripts, rule text, docs, and the bundled snapshot aligned. If one changes and the others still teach the old behavior, treat that as an incomplete change.
 
 ### Tree-Model Questions
 
@@ -67,5 +80,7 @@ Use this skill when the task lives inside the `first-tree` repository or depends
 
 ## References
 
+- `references/portable-quickstart.md`: installation and usage guidance for a copied skill folder.
 - `references/context-tree-maintenance-principles.md`: the maintenance philosophy, ownership model, member model, and validation invariants.
-- `references/context-tree-source-map.md`: the authoritative file-by-file map for CLI commands, rules, validators, templates, workflows, and helper scripts.
+- `references/context-tree-source-map.md`: the authoritative file-by-file map for the bundled snapshot and nearby helper scripts.
+- `references/repo-snapshot/`: the portable snapshot, including the full `.context-tree/` contents from this repo.

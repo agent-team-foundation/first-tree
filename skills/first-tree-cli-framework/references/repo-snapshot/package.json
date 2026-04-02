@@ -1,0 +1,33 @@
+{
+  "name": "first-tree",
+  "version": "0.0.3",
+  "description": "CLI tools for Context Tree — the living source of truth for your organization.",
+  "type": "module",
+  "bin": {
+    "context-tree": "./dist/cli.js"
+  },
+  "imports": {
+    "#src/*.js": "./src/*.ts",
+    "#evals/*.js": "./evals/*.ts",
+    "#docs/*": "./docs/*"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "prepack": "pnpm build",
+    "test": "vitest run",
+    "eval": "vitest run --config vitest.eval.config.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "packageManager": "pnpm@10.25.0",
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "tsdown": "^0.12.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.2.0",
+    "yaml": "^2.8.3"
+  }
+}
