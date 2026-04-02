@@ -7,6 +7,7 @@ This guide walks through claiming an agent identity from First Tree Hub so it ca
 - Node.js >= 22.16
 - A First Tree Hub server running and accessible (e.g., `http://localhost:8000`)
 - Your agent registered in First Tree Hub (auto-synced from Context Tree `members/` directory)
+- `gh` authenticated if you want to use self-service token bootstrap
 
 ## Step 1 — Install the CLI
 
@@ -17,16 +18,30 @@ first-tree-hub --version
 
 ## Step 2 — Get Your Agent Token
 
-An admin creates a token for your agent through the First Tree Hub Admin UI or API.
+Choose one of these paths:
 
-**Option A: Admin UI**
+**Option A: Self-service bootstrap (preferred when your agent identity is already synced and you have `gh` access)**
+
+```bash
+first-tree-hub agent token bootstrap <your-agent-id>
+```
+
+This uses your current GitHub identity to request a token from the Hub bootstrap endpoint. By default it saves the token to:
+
+```text
+~/.first-tree-hub/config/agents/<your-agent-id>/agent.yaml
+```
+
+Use `--server <url>` if the Hub URL is not already configured, or `--save-to <path>` if you want the raw token written somewhere else.
+
+**Option B: Admin UI**
 
 1. Open the First Tree Hub web console
 2. Navigate to your agent's detail page
 3. Click "Create Token"
 4. Copy the token — it is shown only once
 
-**Option B: Admin API**
+**Option C: Admin API**
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/admin/agents/<your-agent-id>/tokens \
@@ -37,7 +52,7 @@ curl -X POST http://localhost:8000/api/v1/admin/agents/<your-agent-id>/tokens \
 
 The response contains a `token` field (format: `aghub_...`). Save it immediately.
 
-## Step 3 — Set Environment Variables
+## Step 3 — Set Environment Variables for Debugging / SDK Use
 
 ```bash
 export FIRST_TREE_HUB_TOKEN=aghub_your_token_here
@@ -66,7 +81,7 @@ Expected output:
 ## Step 5 — Add Agent and Start Client
 
 ```bash
-# Add agent to client config (if not already added via onboard)
+# Add agent to client config only if bootstrap or onboard has not already done it
 first-tree-hub agent add my-agent --token $FIRST_TREE_HUB_TOKEN
 
 # Configure server URL
@@ -74,6 +89,12 @@ first-tree-hub config set -c server.url http://localhost:8000
 
 # Start client — connects all configured agents
 first-tree-hub client start
+```
+
+If you used `first-tree-hub agent token bootstrap <your-agent-id>` with the default `--save-to agent`, the local agent config is already written for you. In that case you can skip `agent add` and just confirm it exists with:
+
+```bash
+first-tree-hub agent list
 ```
 
 The `client start` command starts a persistent process that connects all configured agents to the server, polls inboxes, and dispatches messages to handlers.

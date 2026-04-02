@@ -117,7 +117,7 @@ npm install -g @agent-team-foundation/first-tree-hub
 first-tree-hub config set -c server.url https://hub.example.com
 
 # Add agents
-first-tree-hub client add my-agent --token aht_xxxxxxxxxxxx
+first-tree-hub agent add my-agent --token aghub_xxxxxxxxxxxx
 
 # Start
 first-tree-hub client start
@@ -128,7 +128,7 @@ first-tree-hub client start
 ```bash
 docker build -f Dockerfile.client -t first-tree-hub-client .
 docker run -e FIRST_TREE_HUB_SERVER_URL=https://hub.example.com \
-           -v ~/.first-tree-hub/agents:/root/.first-tree-hub/agents \
+           -v ~/.first-tree-hub/config/agents:/root/.first-tree-hub/config/agents \
            first-tree-hub-client
 ```
 
@@ -145,7 +145,7 @@ jobs:
       - run: npm install -g @agent-team-foundation/first-tree-hub
       - run: |
           first-tree-hub config set -c server.url ${{ secrets.HUB_URL }}
-          first-tree-hub client add ci-agent --token ${{ secrets.AGENT_TOKEN }}
+          first-tree-hub agent add ci-agent --token ${{ secrets.AGENT_TOKEN }}
           first-tree-hub client start
 ```
 

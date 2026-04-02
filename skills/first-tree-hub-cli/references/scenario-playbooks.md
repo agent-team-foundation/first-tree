@@ -2,19 +2,51 @@
 
 Use this file when the user describes a goal in natural language and you need to translate it into the right First Tree Hub CLI sequence.
 
+## 0. "I do not have first-tree-hub installed yet"
+
+Use this before any operational flow when the machine may not have the CLI.
+
+### Recommended flow
+
+1. Verify Node.js is supported:
+
+```bash
+node --version
+```
+
+2. Install and verify the CLI:
+
+```bash
+npm install -g @agent-team-foundation/first-tree-hub
+first-tree-hub --version
+```
+
+3. If the user will use `onboard` or `agent token bootstrap`, make sure GitHub CLI is authenticated:
+
+```bash
+gh auth status
+```
+
+### What to remember
+
+- First Tree Hub requires Node.js `>= 22.16`.
+- Do not jump straight to `server start`, `client start`, or `onboard` on a machine where installation is still unknown.
+
 ## 1. "Help me get First Tree Hub running locally"
 
 Use this when the user is setting up a local Hub for the first time.
 
 ### Recommended flow
 
-1. Start with:
+1. If installation is unknown, do scenario 0 first.
+
+2. Start with:
 
 ```bash
 first-tree-hub server start
 ```
 
-2. If the user wants a non-interactive setup, switch to:
+3. If the user wants a non-interactive setup, switch to:
 
 ```bash
 first-tree-hub server start --no-interactive
@@ -22,7 +54,7 @@ first-tree-hub server start --no-interactive
 
 and make sure the required environment variables or config already exist.
 
-3. If startup fails, move to:
+4. If startup fails, move to:
 
 ```bash
 first-tree-hub server doctor
@@ -34,6 +66,7 @@ first-tree-hub status
 - `server start` is the happy-path bootstrap command.
 - It can provision Docker PostgreSQL, run migrations, create the first admin, and serve the web UI.
 - If the user already has PostgreSQL, prefer `--database-url` instead of forcing Docker.
+- If the CLI is not installed yet, installation is part of the correct flow rather than a side detail.
 
 ## 2. "Connect my local agent machine to an existing Hub"
 

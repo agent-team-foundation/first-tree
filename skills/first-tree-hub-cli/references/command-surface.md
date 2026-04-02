@@ -4,6 +4,7 @@
 
 | User intent | Preferred entry point | Non-obvious note |
 | --- | --- | --- |
+| Install or verify the CLI on a fresh machine | `npm install -g @agent-team-foundation/first-tree-hub` then `first-tree-hub --version` | Requires Node.js `>= 22.16`; use this before proposing runtime commands on a machine that may not have the CLI yet |
 | Bring up a full local Hub quickly | `first-tree-hub server start` | Interactive on first run; can auto-provision PostgreSQL with Docker, run migrations, create the default admin, and serve the embedded web UI |
 | Check whether a machine is ready for Hub | `first-tree-hub server doctor` or `first-tree-hub client doctor` | `doctor` is readiness-oriented; top-level `status` is a current-state summary |
 | See if the server is alive | `first-tree-hub server status` | Hits `/api/v1/health`; defaults to `http://localhost:8000` unless `FIRST_TREE_HUB_SERVER_URL` is set |
@@ -33,6 +34,7 @@
   - Checks Node version, Docker availability, server config, database connectivity, GitHub token, Context Tree access, and server health.
 - `server status`
   - Performs a health request against `/api/v1/health`.
+  - Uses `FIRST_TREE_HUB_SERVER_URL` when set; otherwise defaults to `http://localhost:8000`.
 - `server db:migrate`
   - Uses the configured database and applies migrations.
 - `server admin:create`
@@ -107,6 +109,7 @@
   - Bootstraps the token.
   - Optionally binds a Feishu bot.
   - Writes `client.yaml` so `client start` works without extra setup.
+  - Persists resume state under `$FIRST_TREE_HUB_HOME/.onboard-state.json`.
 
 ## Config and Environment Model
 
@@ -120,18 +123,23 @@
 
 ### Default config paths
 
-- `~/.first-tree-hub/config/server.yaml`
-- `~/.first-tree-hub/config/client.yaml`
-- `~/.first-tree-hub/config/agents/<name>/agent.yaml`
+- Home root defaults to `~/.first-tree-hub`, but `FIRST_TREE_HUB_HOME` overrides it.
+- `$FIRST_TREE_HUB_HOME/config/server.yaml`
+- `$FIRST_TREE_HUB_HOME/config/client.yaml`
+- `$FIRST_TREE_HUB_HOME/config/agents/<name>/agent.yaml`
 
 ### Default runtime paths
 
-- `~/.first-tree-hub/data/sessions/`
-- `~/.first-tree-hub/data/workspaces/`
-- `~/.first-tree-hub/data/postgres/`
+- `$FIRST_TREE_HUB_HOME/.onboard-state.json`
+- `$FIRST_TREE_HUB_HOME/context-tree/`
+- `$FIRST_TREE_HUB_HOME/data/sessions/`
+- `$FIRST_TREE_HUB_HOME/data/workspaces/`
+- `$FIRST_TREE_HUB_HOME/data/postgres/`
 
 ### Important environment variables
 
+- Global:
+  - `FIRST_TREE_HUB_HOME`
 - Server:
   - `FIRST_TREE_HUB_DATABASE_URL`
   - `FIRST_TREE_HUB_PORT`
@@ -144,9 +152,11 @@
 - Client:
   - `FIRST_TREE_HUB_SERVER_URL`
   - `FIRST_TREE_HUB_LOG_LEVEL`
-- Agent debugging:
+- Onboard and agent debugging:
   - `FIRST_TREE_HUB_TOKEN`
   - `FIRST_TREE_HUB_SERVER`
+  - `FEISHU_APP_ID`
+  - `FEISHU_APP_SECRET`
 
 ## When to Read Other Docs
 

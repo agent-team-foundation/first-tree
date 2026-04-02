@@ -1,6 +1,6 @@
 ---
 name: first-tree-hub-cli
-description: Operate and modify First Tree Hub with emphasis on the unified `first-tree-hub` CLI, its `server`, `client`, `agent`, `config`, `status`, and `onboard` workflows, and the repo's collaboration model around Context Tree sync, inbox delivery, and workspace bootstrap. Use when Codex needs to run or debug Hub commands, choose the right CLI flow for a user request, explain how First Tree Hub works, or change code in `packages/command`, `packages/client`, `packages/server`, or `packages/shared` that affects CLI behavior.
+description: Install, operate, deploy, and modify First Tree Hub with emphasis on the unified `first-tree-hub` CLI, its `server`, `client`, `agent`, `config`, `status`, and `onboard` workflows, and the repo's collaboration model around Context Tree sync, inbox delivery, and workspace bootstrap. Use when Codex needs to install or verify the CLI on a fresh machine, run or debug Hub commands, choose the right CLI flow for a user request, explain how First Tree Hub works, or change code in `packages/command`, `packages/client`, `packages/server`, or `packages/shared` that affects CLI behavior.
 ---
 
 # First Tree Hub CLI
@@ -13,6 +13,7 @@ Keep the central mental model straight: First Tree Hub is the communication back
 ## Start Here
 
 1. Classify the task before acting.
+   - Install or sanity-check the CLI on a fresh machine: read `references/command-surface.md` first, then `README.md` or `docs/claim-agent-guide.md`
    - Operate or diagnose a Hub deployment: read `references/command-surface.md`
    - Map a natural-language request to an end-to-end CLI flow: read `references/scenario-playbooks.md`
    - Explain product or architecture concepts: read `references/core-concepts.md`
@@ -26,6 +27,11 @@ Keep the central mental model straight: First Tree Hub is the communication back
    - `docs/onboarding-guide.md` for the full onboarding flow
    - `docs/claim-agent-guide.md` when claim or binding flows matter
    - `docs/deployment-guide.md` for Docker, cloud deploy, HTTPS, and production setup
+4. On a fresh machine, verify prerequisites before proposing a flow.
+   - Node.js `>= 22.16`
+   - Install with `npm install -g @agent-team-foundation/first-tree-hub`
+   - Verify with `first-tree-hub --version`
+   - If using `onboard` or `agent token bootstrap`, make sure `gh` is installed and authenticated
 
 ## Operating Rules
 
@@ -42,12 +48,17 @@ Keep the central mental model straight: First Tree Hub is the communication back
 - Respect auth isolation.
   - Admin JWT and agent Bearer token are separate paths.
   - Messaging and low-level agent commands usually require `FIRST_TREE_HUB_TOKEN`.
+- Keep the server URL knobs straight.
+  - `FIRST_TREE_HUB_SERVER_URL` is the client-config environment variable and is what `client doctor` expects.
+  - `FIRST_TREE_HUB_SERVER` is the direct override for `onboard` and low-level agent debugging commands.
 - Respect config layering.
   - CLI args override env vars, env vars override YAML config, YAML overrides auto-generated values, auto-generated values override defaults.
 - Distinguish config scopes and paths.
-  - Server: `~/.first-tree-hub/config/server.yaml`
-  - Client: `~/.first-tree-hub/config/client.yaml`
-  - Agent: `~/.first-tree-hub/config/agents/<name>/agent.yaml`
+  - Home defaults to `~/.first-tree-hub`, but `FIRST_TREE_HUB_HOME` can relocate it.
+  - Server: `$FIRST_TREE_HUB_HOME/config/server.yaml`
+  - Client: `$FIRST_TREE_HUB_HOME/config/client.yaml`
+  - Agent: `$FIRST_TREE_HUB_HOME/config/agents/<name>/agent.yaml`
+  - Onboard resume state: `$FIRST_TREE_HUB_HOME/.onboard-state.json`
 - Do not describe Hub as "the agents" or "the Context Tree". It sits between them.
 
 ## Common Workflows
@@ -55,6 +66,7 @@ Keep the central mental model straight: First Tree Hub is the communication back
 ### Choose a Command
 
 - First local boot or quick demo: `first-tree-hub server start`
+- Fresh machine install or verification: `npm install -g @agent-team-foundation/first-tree-hub`, then `first-tree-hub --version`
 - Environment readiness: `first-tree-hub server doctor`, `first-tree-hub client doctor`, or top-level `first-tree-hub status`
 - Add a local runtime agent config: `first-tree-hub agent add`, then `first-tree-hub client start`
 - Bootstrap or recover agent access: `first-tree-hub agent token bootstrap`
