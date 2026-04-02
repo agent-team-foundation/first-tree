@@ -12,6 +12,9 @@ Snapshot source:
 
 - live repo: `agent-team-foundation/first-tree`
 - snapshot base commit when this portable copy was refreshed: `edc0c437ba437c20f8a1893277499d604aa7abd0`
+- snapshot content fingerprint: `sha256:10cd8d5bf3c72022698b886dcd4f2ff79e5ac1b80faec2523059fec1a73f484a`
+
+The base commit records which live checkout the refresh started from. Generated artifact updates may land in a later commit, so strict sync validation uses the content fingerprint above.
 
 ## If You Have A Live `first-tree` Checkout
 

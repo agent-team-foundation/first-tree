@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+FINGERPRINT_SCRIPT="${SCRIPT_DIR}/snapshot_fingerprint.py"
 
 find_repo_root() {
   local dir="$SKILL_DIR"
@@ -71,15 +72,38 @@ compare_dir "$SOURCE_DIR" "$REPO_ROOT/.agents/skills/first-tree-cli-framework"
 compare_dir "$SOURCE_DIR" "$REPO_ROOT/.claude/skills/first-tree-cli-framework"
 
 recorded_commit="$(perl -ne 'print "$1\n" if /snapshot base commit when this portable copy was refreshed: `([0-9a-f]{40})`/' "$SOURCE_DIR/references/portable-quickstart.md")"
+recorded_fingerprint="$(perl -ne 'print "$1\n" if /snapshot content fingerprint: `(sha256:[0-9a-f]{64})`/' "$SOURCE_DIR/references/portable-quickstart.md")"
 current_commit="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+source_fingerprint="$(python3 "${FINGERPRINT_SCRIPT}" --root "${REPO_ROOT}")"
+snapshot_fingerprint="$(python3 "${FINGERPRINT_SCRIPT}" --root "${SNAPSHOT_DIR}")"
 
 if [[ -z "$recorded_commit" ]]; then
   echo "Could not find the recorded snapshot base commit in references/portable-quickstart.md." >&2
   exit 1
 fi
 
-if [[ "$recorded_commit" != "$current_commit" ]]; then
-  echo "Portable snapshot commit mismatch: quickstart records $recorded_commit but repo HEAD is $current_commit." >&2
+if [[ -z "$recorded_fingerprint" ]]; then
+  echo "Could not find the recorded snapshot content fingerprint in references/portable-quickstart.md." >&2
+  exit 1
+fi
+
+if ! git -C "$REPO_ROOT" cat-file -e "${recorded_commit}^{commit}" 2>/dev/null; then
+  echo "Portable snapshot base commit $recorded_commit does not exist in this checkout." >&2
+  exit 1
+fi
+
+if ! git -C "$REPO_ROOT" merge-base --is-ancestor "$recorded_commit" "$current_commit"; then
+  echo "Portable snapshot base commit $recorded_commit is not an ancestor of repo HEAD $current_commit." >&2
+  exit 1
+fi
+
+if [[ "$recorded_fingerprint" != "$source_fingerprint" ]]; then
+  echo "Portable snapshot fingerprint mismatch: quickstart records $recorded_fingerprint but repo source fingerprint is $source_fingerprint." >&2
+  exit 1
+fi
+
+if [[ "$recorded_fingerprint" != "$snapshot_fingerprint" ]]; then
+  echo "Portable snapshot fingerprint mismatch: quickstart records $recorded_fingerprint but bundled snapshot fingerprint is $snapshot_fingerprint." >&2
   exit 1
 fi
 

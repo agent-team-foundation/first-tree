@@ -14,6 +14,13 @@ function readPortableSnapshotCommit(quickstart: string): string {
   return match![1];
 }
 
+function readPortableSnapshotFingerprint(quickstart: string): string {
+  const match = quickstart.match(/snapshot content fingerprint: `(sha256:[0-9a-f]{64})`/);
+
+  expect(match, "portable quickstart should record the snapshot fingerprint").not.toBeNull();
+  return match![1];
+}
+
 describe("skill artifacts", () => {
   it("keeps the source-of-truth skill and generated mirrors present", () => {
     expect(existsSync(join(ROOT, "skills", "first-tree-cli-framework", "SKILL.md"))).toBe(true);
@@ -51,13 +58,29 @@ describe("skill artifacts", () => {
     const quickstart = read("skills/first-tree-cli-framework/references/portable-quickstart.md");
     expect(quickstart).toContain("npx first-tree --help");
     expect(quickstart).toContain("npm install -g first-tree");
+    expect(quickstart).toContain("strict sync validation uses the content fingerprint above");
 
     const snapshotCommit = readPortableSnapshotCommit(quickstart);
+    const snapshotFingerprint = readPortableSnapshotFingerprint(quickstart);
     const headCommit = execFileSync("git", ["rev-parse", "HEAD"], {
       cwd: ROOT,
       encoding: "utf-8",
     }).trim();
+    const computedFingerprint = execFileSync(
+      "python3",
+      ["./skills/first-tree-cli-framework/scripts/snapshot_fingerprint.py", "--root", ROOT],
+      {
+        cwd: ROOT,
+        encoding: "utf-8",
+      },
+    ).trim();
 
-    expect(snapshotCommit).toBe(headCommit);
+    const mergeBase = execFileSync("git", ["merge-base", snapshotCommit, headCommit], {
+      cwd: ROOT,
+      encoding: "utf-8",
+    }).trim();
+
+    expect(mergeBase).toBe(snapshotCommit);
+    expect(snapshotFingerprint).toBe(computedFingerprint);
   });
 });
