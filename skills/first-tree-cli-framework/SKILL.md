@@ -18,7 +18,7 @@ Use this skill when the task lives inside the `first-tree` repository or depends
 
 ## Quick Start
 
-1. Read `../../../AGENTS.md` and `../../../README.md`.
+1. Read `../../AGENTS.md` and `../../README.md`.
 2. Read `references/context-tree-maintenance-principles.md` for the operating model.
 3. Read `references/context-tree-source-map.md` to locate the exact source files for the task.
 4. Run `bash ./scripts/locate-context-tree-source.sh <topic>` when you want a task-specific reading list before opening files.
