@@ -1,5 +1,6 @@
 /**
- * Load eval case definitions from YAML files in evals/cases/.
+ * Load eval case definitions from YAML files in
+ * skills/first-tree-cli-framework/evals/cases/.
  *
  * Supports two YAML formats:
  *   Single-repo:  repo + commit_sha + setup (top-level fields)

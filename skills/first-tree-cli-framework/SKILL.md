@@ -36,7 +36,9 @@ repos.
    repo inspection, rules, runtime helpers, or validators.
 5. Open `assets/framework/` only when the task changes shipped templates,
    workflows, prompts, examples, or helper scripts.
-6. Use `./scripts/run-local-cli.sh <command>` when you need to exercise the
+6. Open `tests/` and `evals/` when changing validation coverage, eval harness
+   behavior, or maintainer workflows.
+7. Use `./scripts/run-local-cli.sh <command>` when you need to exercise the
    live CLI from this repo.
 
 ## Working Modes
@@ -88,6 +90,8 @@ repos.
 - `assets/framework/workflows/`: CI templates
 - `assets/framework/helpers/`: shipped helper scripts and review tooling
 - `engine/`: canonical framework and CLI behavior
+- `tests/`: canonical unit and structure validation
+- `evals/`: canonical eval harness, fixtures, and report tooling
 - `references/source-map.md`: canonical reading index
 - `references/maintainer-architecture.md`: source-repo architecture and
   invariants

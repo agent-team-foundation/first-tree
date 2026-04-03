@@ -63,6 +63,13 @@ require_file "$SOURCE_DIR/engine/runtime/upgrader.ts"
 require_file "$SOURCE_DIR/engine/runtime/adapters.ts"
 require_file "$SOURCE_DIR/engine/validators/members.ts"
 require_file "$SOURCE_DIR/engine/validators/nodes.ts"
+require_file "$SOURCE_DIR/tests/init.test.ts"
+require_file "$SOURCE_DIR/tests/verify.test.ts"
+require_file "$SOURCE_DIR/tests/skill-artifacts.test.ts"
+require_file "$SOURCE_DIR/evals/context-tree-eval.test.ts"
+require_file "$SOURCE_DIR/evals/helpers/case-loader.ts"
+require_file "$SOURCE_DIR/evals/scripts/tree-manager.ts"
+require_file "$SOURCE_DIR/evals/tests/eval-helpers.test.ts"
 require_file "$SOURCE_DIR/assets/framework/manifest.json"
 require_file "$SOURCE_DIR/assets/framework/VERSION"
 require_file "$SOURCE_DIR/assets/framework/prompts/pr-review.md"
@@ -84,6 +91,8 @@ for legacy_path in \
   "$REPO_ROOT/.claude" \
   "$REPO_ROOT/.context-tree" \
   "$REPO_ROOT/docs" \
+  "$REPO_ROOT/tests" \
+  "$REPO_ROOT/evals" \
   "$SOURCE_DIR/references/repo-snapshot"
 do
   if [[ -e "$legacy_path" ]]; then

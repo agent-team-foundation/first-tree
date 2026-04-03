@@ -19,9 +19,10 @@ that install the framework.
 3. `assets/framework/` stores the runtime payload that gets installed into user
    repos.
 4. `engine/` stores the canonical framework and CLI behavior.
-5. The root CLI/package files are implementation shell code. They should call
-   into the skill-owned engine, not become a second source of framework
-   knowledge.
+5. `tests/` and `evals/` store the canonical validation surface.
+6. The root CLI/package files are implementation shell code. They should call
+   into the skill-owned engine and validation surface, not become a second
+   source of framework knowledge.
 
 ## Non-Negotiables
 
@@ -44,8 +45,6 @@ that install the framework.
   the code change so the skill remains self-sufficient.
 
 ## End-State Target
-
-The intended end state is:
 
 - skill owns knowledge, runtime payload, framework engine, tests, and evals
 - root owns only the light CLI/bootstrap/build shell needed to distribute and

@@ -6,7 +6,7 @@
  * a new commit on the existing branch.
  *
  * Usage:
- *   npx tsx evals/scripts/update-tree.ts \
+ *   npx tsx skills/first-tree-cli-framework/evals/scripts/update-tree.ts \
  *     --repo HKUDS/nanobot \
  *     --commit ddc9fc4f \
  *     --cli-version def456 \
@@ -45,10 +45,10 @@ You are working in a context tree repository. This is where the context tree wil
 Run \`context-tree help onboarding\` to understand what a context tree is, how it is structured, and the full setup workflow.
 
 ## Step 2: Initialize
-Run \`context-tree init\` in this directory. This bootstraps the framework, creates template files, and generates a task list in .context-tree/progress.md.
+Run \`context-tree init\` in this directory. This bootstraps the framework, creates template files, and generates a task list in skills/first-tree-cli-framework/progress.md.
 
 ## Step 3: Complete the task list
-Read .context-tree/progress.md and complete every task. Check off each task as you finish it by changing \`- [ ]\` to \`- [x]\`.
+Read skills/first-tree-cli-framework/progress.md and complete every task. Check off each task as you finish it by changing \`- [ ]\` to \`- [x]\`.
 
 ## Step 4: Populate the full tree
 When the task list asks whether to populate the tree, choose **Yes**. Then:

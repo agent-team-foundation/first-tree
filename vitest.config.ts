@@ -14,6 +14,9 @@ export default defineConfig({
     },
   ],
   test: {
-    include: ["tests/**/*.test.ts", "evals/tests/**/*.test.ts"],
+    include: [
+      "skills/first-tree-cli-framework/tests/**/*.test.ts",
+      "skills/first-tree-cli-framework/evals/tests/**/*.test.ts",
+    ],
   },
 });

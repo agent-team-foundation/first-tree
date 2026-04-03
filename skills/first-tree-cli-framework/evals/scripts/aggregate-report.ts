@@ -3,8 +3,8 @@
  * Aggregate multiple eval result JSON files into a single HTML report.
  *
  * Usage:
- *   npx tsx evals/scripts/aggregate-report.ts file1.json file2.json ...
- *   npx tsx evals/scripts/aggregate-report.ts ~/.context-tree/evals/feat-eval-phase1-2026-04-03-05*.json
+ *   npx tsx skills/first-tree-cli-framework/evals/scripts/aggregate-report.ts file1.json file2.json ...
+ *   npx tsx skills/first-tree-cli-framework/evals/scripts/aggregate-report.ts ~/.context-tree/evals/feat-eval-phase1-2026-04-03-05*.json
  *
  * Outputs an HTML file to the same directory as the first input file.
  */

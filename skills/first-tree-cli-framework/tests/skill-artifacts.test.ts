@@ -11,6 +11,14 @@ describe("skill artifacts", () => {
     expect(existsSync(join(ROOT, "skills", "first-tree-cli-framework", "references", "onboarding.md"))).toBe(true);
     expect(existsSync(join(ROOT, "skills", "first-tree-cli-framework", "assets", "framework", "manifest.json"))).toBe(true);
     expect(existsSync(join(ROOT, "skills", "first-tree-cli-framework", "engine", "init.ts"))).toBe(true);
+    expect(existsSync(join(ROOT, "skills", "first-tree-cli-framework", "tests", "init.test.ts"))).toBe(
+      true,
+    );
+    expect(
+      existsSync(
+        join(ROOT, "skills", "first-tree-cli-framework", "evals", "context-tree-eval.test.ts"),
+      ),
+    ).toBe(true);
     expect(
       existsSync(
         join(
@@ -95,6 +103,8 @@ describe("skill artifacts", () => {
     expect(existsSync(join(ROOT, ".claude"))).toBe(false);
     expect(existsSync(join(ROOT, ".context-tree"))).toBe(false);
     expect(existsSync(join(ROOT, "docs"))).toBe(false);
+    expect(existsSync(join(ROOT, "tests"))).toBe(false);
+    expect(existsSync(join(ROOT, "evals"))).toBe(false);
     expect(existsSync(join(ROOT, "src", "commands"))).toBe(false);
     expect(existsSync(join(ROOT, "src", "runtime"))).toBe(false);
     expect(existsSync(join(ROOT, "src", "rules"))).toBe(false);
@@ -157,6 +167,8 @@ describe("skill artifacts", () => {
     expect(sourceMap).toContain("maintainer-testing-and-evals.md");
     expect(sourceMap).toContain("engine/commands/");
     expect(sourceMap).toContain("engine/runtime/asset-loader.ts");
+    expect(sourceMap).toContain("tests/init.test.ts");
+    expect(sourceMap).toContain("evals/context-tree-eval.test.ts");
     expect(sourceMap).toContain("package.json");
     expect(sourceMap).toContain("vitest.eval.config.ts");
     expect(sourceMap).toContain(".github/workflows/ci.yml");

@@ -6,7 +6,7 @@ import {
   resolveNodeOwners,
   collectEntries,
   formatOwners,
-} from "../skills/first-tree-cli-framework/assets/framework/helpers/generate-codeowners.js";
+} from "../assets/framework/helpers/generate-codeowners.js";
 import { useTmpDir } from "./helpers.js";
 
 function write(root: string, relPath: string, content: string): string {

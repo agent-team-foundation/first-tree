@@ -2,8 +2,8 @@
  * List available context trees and their versions in the tree repo.
  *
  * Usage:
- *   npx tsx evals/scripts/list-trees.ts --tree-repo agent-team-foundation/eval-context-trees
- *   npx tsx evals/scripts/list-trees.ts --tree-repo <repo> --repo HKUDS/nanobot --commit ddc9fc4f
+ *   npx tsx skills/first-tree-cli-framework/evals/scripts/list-trees.ts --tree-repo agent-team-foundation/eval-context-trees
+ *   npx tsx skills/first-tree-cli-framework/evals/scripts/list-trees.ts --tree-repo <repo> --repo HKUDS/nanobot --commit ddc9fc4f
  *
  * Environment:
  *   EVALS_TREE_REPO — default tree repo slug
