@@ -14,6 +14,34 @@ This skill supports two common modes:
 - framework maintenance: changing the CLI, templates, validators, workflows, or shipped docs
 - onboarding and demo delivery: walking someone through the product idea, initializing a tree, showing the first successful collaboration loop, and explaining how downstream automation should consume the tree
 
+## What First Tree Is
+
+`first-tree` is the template source and CLI for Context Tree — the living source of truth for an organization.
+
+Context Tree is a tree-structured knowledge base that humans and agents build and maintain together. Every node represents a domain, decision, or design. Every node has an owner. When things change, the tree updates, so the tree stays current instead of decaying like a static doc set.
+
+Treat this as the top-level product framing:
+
+- `first-tree` is not itself a user's Context Tree repo
+- `first-tree` ships the reusable framework and the CLI that initializes and validates tree repos
+- the user's separate tree repo stores the organization's real knowledge
+
+## Problem / Idea / Audience
+
+Use this framing when onboarding someone new to the product.
+
+### The Problem
+
+Organizations produce important decisions in PRs, issues, chat threads, meetings, and docs, but those systems do not remain a current source of truth. The reasoning behind architecture, process, and product decisions scatters and becomes hard for a teammate or agent to recover later.
+
+### The Idea
+
+Context Tree is the living, current source of truth for organizational decisions and relationships. It captures the `what`, `why`, and ownership of a domain in a Git-native tree so agents and humans can read the same context before making changes.
+
+### Who It Is For
+
+Agent-centric teams — founders, engineers, and product builders who work alongside AI agents every day and want organizational knowledge to compound instead of evaporate.
+
 ## Source Of Truth
 
 - `skills/first-tree-cli-framework/` is the only source-of-truth copy that humans should edit.
@@ -32,6 +60,38 @@ This skill supports two common modes:
 
 ## Quick Start
 
+### Fastest End-User Path
+
+For a user who wants to start using `first-tree`, the shortest path is:
+
+1. Create or enter a dedicated Git repository for the tree.
+2. Run `npx first-tree init`.
+3. Complete `.context-tree/progress.md`.
+4. Run `context-tree verify`.
+
+Important installation details:
+
+- Run initialization inside a Git repo.
+- The npm package is `first-tree`.
+- For one-off runs, use `npx first-tree init`.
+- For a global install, use `npm install -g first-tree`, then run `context-tree init`.
+
+### What `init` Creates
+
+After initialization, the repo should contain at least:
+
+- `.context-tree/`
+- `NODE.md`
+- `AGENT.md`
+- `members/NODE.md`
+- `.context-tree/progress.md`
+
+Initialization also adds the `context-tree-upstream` Git remote so the framework can be upgraded later.
+
+### Skill / Maintainer Path
+
+When using this skill to inspect, maintain, or explain the live `first-tree` repo:
+
 1. Read `references/portable-quickstart.md`.
 2. Read `references/repo-snapshot/AGENTS.md` and `references/repo-snapshot/README.md`.
 3. Read `references/context-tree-maintenance-principles.md` for the operating model.
@@ -41,6 +101,44 @@ This skill supports two common modes:
    - inside a live `first-tree` checkout, it builds and runs the local CLI
    - outside the repo, it falls back to an installed `context-tree` binary if available
 7. If you are maintaining the skill inside the live repo and you change the framework, source references, or source-of-truth skill files, refresh everything with `bash ./scripts/sync-skill-artifacts.sh`.
+
+## Core Model To Teach
+
+### What Belongs In The Tree
+
+The tree stores information an agent needs to decide on an approach, not execution detail that already belongs in code or source systems.
+
+Good tree content includes:
+
+- decisions and their rationale
+- cross-domain relationships
+- constraints that are not obvious from the code
+- ownership and approval boundaries
+
+Avoid putting routine execution detail into the tree unless it is itself decision-critical.
+
+Example boundary:
+
+- yes: "Auth spans 4 repos: backend issues JWTs, frontend uses Better Auth, extension uses OAuth popup, desktop uses localhost callback."
+- no: the exact function signature of `auth_service.verify()`
+
+### Four Principles
+
+When explaining Context Tree, keep these four principles intact:
+
+1. source of truth for decisions, not execution
+2. agents are first-class participants
+3. transparency by default
+4. Git-native structure, review, and history
+
+### User-Facing Command Summary
+
+These are the core end-user commands that should stay visible in explanations:
+
+- `context-tree init` — bootstrap a new tree in the current Git repo
+- `context-tree verify` — validate the tree and fail if progress tasks remain unchecked
+- `context-tree upgrade` — compare local framework version to upstream and generate upgrade tasks
+- `context-tree help onboarding` — print the onboarding guide
 
 ## User Journey / Aha Moments / Multi-Agent Flow
 
