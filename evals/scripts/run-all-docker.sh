@@ -80,4 +80,5 @@ Important:
 PROMPT
 )" \
   --dangerously-skip-permissions \
-  --verbose
+  --output-format text \
+  --verbose 2>&1
