@@ -12,27 +12,29 @@ Keep the central mental model straight: First Tree Hub is the communication back
 
 ## Start Here
 
-1. Classify the task before acting.
+1. Read `references/portable-quickstart.md`.
+2. Classify the task before acting.
    - Install or sanity-check the CLI on a fresh machine: read `references/command-surface.md` first, then `README.md` or `docs/claim-agent-guide.md`
    - Operate or diagnose a Hub deployment: read `references/command-surface.md`
    - Map a natural-language request to an end-to-end CLI flow: read `references/scenario-playbooks.md`
    - Execute or automate member onboarding from an external agent prompt: read `references/onboarding-operator.md`
    - Explain product or architecture concepts: read `references/core-concepts.md`
    - Modify CLI or related behavior in code: read `references/developer-map.md`
-2. Prefer existing CLI workflows over manual edits when the repo already has a supported path.
+3. Prefer existing CLI workflows over manual edits when the repo already has a supported path.
    - Use `onboard` for member onboarding
    - Use `config` for config inspection and updates
    - Use `server start` or `client start` instead of stitching together ad hoc boot flows
-3. Read the canonical repo docs directly when the task becomes specialized.
+4. Read the canonical repo docs directly when the task becomes specialized.
    - `docs/cli-reference.md` for exact flags and environment variables
    - `docs/onboarding-guide.md` for the full onboarding flow
    - `docs/claim-agent-guide.md` when claim or binding flows matter
    - `docs/deployment-guide.md` for Docker, cloud deploy, HTTPS, and production setup
-4. On a fresh machine, verify prerequisites before proposing a flow.
+5. On a fresh machine, verify prerequisites before proposing a flow.
    - Node.js `>= 22.16`
    - Install with `npm install -g @agent-team-foundation/first-tree-hub`
    - Verify with `first-tree-hub --version`
    - If using `onboard` or `agent token bootstrap`, make sure `gh` is installed and authenticated
+6. If you are maintaining the skill inside the live repo and you change the framework, references, or source-of-truth skill files, refresh everything with `bash ./scripts/sync-skill-artifacts.sh`.
 
 ## Operating Rules
 
@@ -128,8 +130,10 @@ pnpm --filter @agent-team-foundation/first-tree-hub test
 
 ## References
 
+- `references/portable-quickstart.md` for installation and usage guidance when the skill is copied elsewhere
 - `references/command-surface.md` for command selection, command semantics, env vars, and common workflows
 - `references/scenario-playbooks.md` for request-to-command playbooks and end-to-end operator flows
 - `references/onboarding-operator.md` for automation-friendly onboarding instructions that start from a prompt instead of a local repo checkout
 - `references/core-concepts.md` for product boundaries, architecture invariants, and runtime mental models
 - `references/developer-map.md` for package ownership, source-file entry points, and change workflows
+- `references/repo-snapshot/` for the bundled portable snapshot of the repo materials this skill depends on
