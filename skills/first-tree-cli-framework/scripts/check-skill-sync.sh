@@ -46,7 +46,7 @@ require_file "$SOURCE_DIR/references/upgrade-contract.md"
 require_file "$SOURCE_DIR/references/maintainer-architecture.md"
 require_file "$SOURCE_DIR/references/maintainer-thin-cli.md"
 require_file "$SOURCE_DIR/references/maintainer-build-and-distribution.md"
-require_file "$SOURCE_DIR/references/maintainer-testing-and-evals.md"
+require_file "$SOURCE_DIR/references/maintainer-testing.md"
 require_file "$SOURCE_DIR/engine/init.ts"
 require_file "$SOURCE_DIR/engine/onboarding.ts"
 require_file "$SOURCE_DIR/engine/repo.ts"
@@ -66,10 +66,6 @@ require_file "$SOURCE_DIR/engine/validators/nodes.ts"
 require_file "$SOURCE_DIR/tests/init.test.ts"
 require_file "$SOURCE_DIR/tests/verify.test.ts"
 require_file "$SOURCE_DIR/tests/skill-artifacts.test.ts"
-require_file "$SOURCE_DIR/evals/context-tree-eval.test.ts"
-require_file "$SOURCE_DIR/evals/helpers/case-loader.ts"
-require_file "$SOURCE_DIR/evals/scripts/tree-manager.ts"
-require_file "$SOURCE_DIR/evals/tests/eval-helpers.test.ts"
 require_file "$SOURCE_DIR/assets/framework/manifest.json"
 require_file "$SOURCE_DIR/assets/framework/VERSION"
 require_file "$SOURCE_DIR/assets/framework/prompts/pr-review.md"
@@ -92,7 +88,6 @@ for legacy_path in \
   "$REPO_ROOT/.context-tree" \
   "$REPO_ROOT/docs" \
   "$REPO_ROOT/tests" \
-  "$REPO_ROOT/evals" \
   "$SOURCE_DIR/references/repo-snapshot"
 do
   if [[ -e "$legacy_path" ]]; then
@@ -100,6 +95,17 @@ do
     exit 1
   fi
 done
+
+if [[ -e "$SOURCE_DIR/evals" ]]; then
+  echo "Skill should not contain repo-only eval tooling." >&2
+  exit 1
+fi
+
+require_file "$REPO_ROOT/evals/context-tree-eval.test.ts"
+require_file "$REPO_ROOT/evals/README.md"
+require_file "$REPO_ROOT/evals/helpers/case-loader.ts"
+require_file "$REPO_ROOT/evals/scripts/tree-manager.ts"
+require_file "$REPO_ROOT/evals/tests/eval-helpers.test.ts"
 
 if grep -q '"#docs/\*"' "$REPO_ROOT/package.json"; then
   echo "package.json still exposes the legacy #docs import alias." >&2
@@ -113,6 +119,11 @@ fi
 
 if ! grep -q '"#skill/\*"' "$REPO_ROOT/package.json"; then
   echo "package.json is missing the canonical #skill import alias." >&2
+  exit 1
+fi
+
+if ! grep -q '"skills/first-tree-cli-framework"' "$REPO_ROOT/package.json"; then
+  echo "package.json is missing the canonical skill in the published files list." >&2
   exit 1
 fi
 

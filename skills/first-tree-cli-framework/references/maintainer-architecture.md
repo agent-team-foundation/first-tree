@@ -7,6 +7,8 @@ This reference explains how to maintain the `first-tree` source repo itself.
 - One canonical skill: `skills/first-tree-cli-framework/`
 - One thin CLI package: the `context-tree` command distributed by the `first-tree`
   npm package
+- The published package carries that canonical skill directly; normal install
+  and upgrade flows should not depend on cloning this source repo
 
 This repo is not a user context tree. User decision content lives in the repos
 that install the framework.
@@ -19,8 +21,10 @@ that install the framework.
 3. `assets/framework/` stores the runtime payload that gets installed into user
    repos.
 4. `engine/` stores the canonical framework and CLI behavior.
-5. `tests/` and `evals/` store the canonical validation surface.
-6. The root CLI/package files are implementation shell code. They should call
+5. `tests/` store the canonical skill validation surface.
+6. The root repo may also keep maintainer-only developer tooling such as
+   `evals/` when that tooling should not ship with the skill.
+7. The root CLI/package files are implementation shell code. They should call
    into the skill-owned engine and validation surface, not become a second
    source of framework knowledge.
 

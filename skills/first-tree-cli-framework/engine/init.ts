@@ -11,16 +11,13 @@ import type { RuleResult } from "#skill/engine/rules/index.js";
 import {
   copyCanonicalSkill,
   renderTemplateFile,
+  resolveBundledPackageRoot,
 } from "#skill/engine/runtime/installer.js";
 import {
   FRAMEWORK_ASSET_ROOT,
   FRAMEWORK_VERSION,
   INSTALLED_PROGRESS,
 } from "#skill/engine/runtime/asset-loader.js";
-import {
-  cleanupUpstreamRepo,
-  cloneUpstreamRepo,
-} from "#skill/engine/runtime/upgrader.js";
 
 /**
  * The interactive prompt tool the agent should use to present choices.
@@ -37,7 +34,9 @@ const TEMPLATE_MAP: [string, string][] = [
 
 function installSkill(source: string, target: string): void {
   copyCanonicalSkill(source, target);
-  console.log("  Installed skills/first-tree-cli-framework/ from the upstream skill");
+  console.log(
+    "  Installed skills/first-tree-cli-framework/ from the bundled first-tree package",
+  );
 }
 
 function renderTemplates(target: string): void {
@@ -98,7 +97,11 @@ export function writeProgress(repo: Repo, content: string): void {
   writeFileSync(progressPath, content);
 }
 
-export function runInit(repo?: Repo): number {
+export interface InitOptions {
+  sourceRoot?: string;
+}
+
+export function runInit(repo?: Repo, options?: InitOptions): number {
   const r = repo ?? new Repo();
 
   if (!r.isGitRepo()) {
@@ -109,16 +112,20 @@ export function runInit(repo?: Repo): number {
   }
 
   if (!r.hasFramework()) {
-    console.log("Cloning first-tree to install the framework skill...");
-    const seed = cloneUpstreamRepo();
     try {
+      const sourceRoot = options?.sourceRoot ?? resolveBundledPackageRoot();
+      console.log(
+        "Installing the framework skill bundled with this first-tree package...",
+      );
       console.log("Installing skill and scaffolding...");
-      installSkill(seed, r.root);
+      installSkill(sourceRoot, r.root);
       renderTemplates(r.root);
-    } finally {
-      cleanupUpstreamRepo(seed);
+      console.log();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "unknown error";
+      console.error(`Error: ${message}`);
+      return 1;
     }
-    console.log();
   }
 
   console.log(ONBOARDING_TEXT);

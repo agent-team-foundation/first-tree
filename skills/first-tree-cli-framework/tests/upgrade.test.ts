@@ -7,31 +7,26 @@ import {
   FRAMEWORK_VERSION,
   INSTALLED_PROGRESS,
 } from "#skill/engine/runtime/asset-loader.js";
-import { makeFramework, makeLegacyFramework, useTmpDir } from "./helpers.js";
-
-function makeUpstreamSkill(root: string, version: string): void {
-  const skillRoot = join(root, "skills", "first-tree-cli-framework");
-  mkdirSync(join(skillRoot, "assets", "framework"), { recursive: true });
-  writeFileSync(
-    join(skillRoot, "SKILL.md"),
-    "---\nname: first-tree-cli-framework\ndescription: test\n---\n",
-  );
-  writeFileSync(join(root, FRAMEWORK_VERSION), `${version}\n`);
-}
+import {
+  makeFramework,
+  makeLegacyFramework,
+  makeSourceSkill,
+  useTmpDir,
+} from "./helpers.js";
 
 describe("runUpgrade", () => {
   it("migrates a legacy repo to the installed skill layout", () => {
     const repoDir = useTmpDir();
-    const upstreamDir = useTmpDir();
+    const sourceDir = useTmpDir();
     makeLegacyFramework(repoDir.path, "0.1.0");
     writeFileSync(
       join(repoDir.path, "AGENT.md"),
       "<!-- BEGIN CONTEXT-TREE FRAMEWORK -->\nstuff\n<!-- END CONTEXT-TREE FRAMEWORK -->\n",
     );
-    makeUpstreamSkill(upstreamDir.path, "0.2.0");
+    makeSourceSkill(sourceDir.path, "0.2.0");
 
     const result = runUpgrade(new Repo(repoDir.path), {
-      upstreamRoot: upstreamDir.path,
+      sourceRoot: sourceDir.path,
     });
 
     expect(result).toBe(0);
@@ -42,17 +37,32 @@ describe("runUpgrade", () => {
     );
   });
 
-  it("returns early when the installed skill is already current", () => {
+  it("returns early when the installed skill already matches the packaged skill", () => {
     const repoDir = useTmpDir();
-    const upstreamDir = useTmpDir();
+    const sourceDir = useTmpDir();
     makeFramework(repoDir.path, "0.2.0");
-    makeUpstreamSkill(upstreamDir.path, "0.2.0");
+    makeSourceSkill(sourceDir.path, "0.2.0");
 
     const result = runUpgrade(new Repo(repoDir.path), {
-      upstreamRoot: upstreamDir.path,
+      sourceRoot: sourceDir.path,
     });
 
     expect(result).toBe(0);
+    expect(existsSync(join(repoDir.path, INSTALLED_PROGRESS))).toBe(false);
+  });
+
+  it("refuses to replace a newer installed skill with an older packaged skill", () => {
+    const repoDir = useTmpDir();
+    const sourceDir = useTmpDir();
+    makeFramework(repoDir.path, "0.3.0");
+    makeSourceSkill(sourceDir.path, "0.2.0");
+
+    const result = runUpgrade(new Repo(repoDir.path), {
+      sourceRoot: sourceDir.path,
+    });
+
+    expect(result).toBe(1);
+    expect(readFileSync(join(repoDir.path, FRAMEWORK_VERSION), "utf-8").trim()).toBe("0.3.0");
     expect(existsSync(join(repoDir.path, INSTALLED_PROGRESS))).toBe(false);
   });
 });

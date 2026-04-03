@@ -1,6 +1,6 @@
 ---
 name: first-tree-cli-framework
-description: Maintain the canonical `first-tree-cli-framework` skill and the thin `first-tree` / `context-tree` CLI that distributes it. Use when modifying `context-tree` commands (`init`, `verify`, `upgrade`, `help onboarding`), the installed skill payload under `assets/framework/`, maintainer references, or the build, packaging, test, eval, and CI wiring that supports the framework.
+description: Maintain the canonical `first-tree-cli-framework` skill and the thin `first-tree` / `context-tree` CLI that distributes it. Use when modifying `context-tree` commands (`init`, `verify`, `upgrade`, `help onboarding`), the installed skill payload under `assets/framework/`, maintainer references, or the build, packaging, test, and CI wiring that supports the framework.
 ---
 
 # First Tree CLI Framework
@@ -31,13 +31,12 @@ repos.
    - `references/maintainer-architecture.md`
    - `references/maintainer-thin-cli.md`
    - `references/maintainer-build-and-distribution.md`
-   - `references/maintainer-testing-and-evals.md`
+   - `references/maintainer-testing.md`
 4. Open `engine/` when changing `init`, `verify`, `upgrade`, command routing,
    repo inspection, rules, runtime helpers, or validators.
 5. Open `assets/framework/` only when the task changes shipped templates,
    workflows, prompts, examples, or helper scripts.
-6. Open `tests/` and `evals/` when changing validation coverage, eval harness
-   behavior, or maintainer workflows.
+6. Open `tests/` when changing validation coverage or maintainer workflows.
 7. Use `./scripts/run-local-cli.sh <command>` when you need to exercise the
    live CLI from this repo.
 
@@ -57,6 +56,9 @@ repos.
 
 - `context-tree init` installs this skill into the user's repo and scaffolds
   `NODE.md`, `AGENT.md`, and `members/NODE.md`.
+- `context-tree upgrade` refreshes the installed skill from the copy bundled
+  with the currently running `first-tree` package. To pick up a newer
+  framework, run a newer package version first.
 - The user's tree content lives outside the skill; the skill only carries the
   reusable framework payload plus maintenance guidance.
 - The tree still stores decisions, constraints, and ownership; execution detail
@@ -70,6 +72,8 @@ repos.
 - Keep decision knowledge in the tree and execution detail in source systems.
 - Keep the skill as the only canonical knowledge source. The root CLI/package
   shell must not become a second source of framework semantics.
+- Keep normal `init` / `upgrade` flows self-contained. They must work from the
+  skill bundled in the current package without cloning the source repo.
 - Make upgrade behavior explicit. If you change installed paths, update
   `references/upgrade-contract.md`, task text, and tests together.
 
@@ -91,12 +95,11 @@ repos.
 - `assets/framework/helpers/`: shipped helper scripts and review tooling
 - `engine/`: canonical framework and CLI behavior
 - `tests/`: canonical unit and structure validation
-- `evals/`: canonical eval harness, fixtures, and report tooling
 - `references/source-map.md`: canonical reading index
 - `references/maintainer-architecture.md`: source-repo architecture and
   invariants
 - `references/maintainer-thin-cli.md`: root shell contract
 - `references/maintainer-build-and-distribution.md`: packaging and release
   guidance
-- `references/maintainer-testing-and-evals.md`: validation and eval workflow
+- `references/maintainer-testing.md`: validation workflow
 - `references/upgrade-contract.md`: installed layout and upgrade semantics

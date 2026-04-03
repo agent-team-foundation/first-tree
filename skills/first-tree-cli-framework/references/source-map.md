@@ -17,7 +17,7 @@ information should be discoverable from this file.
 | `references/maintainer-architecture.md` | Source-repo architecture and invariants |
 | `references/maintainer-thin-cli.md` | Root shell contract and anti-duplication rules |
 | `references/maintainer-build-and-distribution.md` | Build, pack, and distribution contract |
-| `references/maintainer-testing-and-evals.md` | Test/eval workflow and expectations |
+| `references/maintainer-testing.md` | Test workflow and maintainer validation expectations |
 
 ## Runtime Payload
 
@@ -47,8 +47,8 @@ These skill-owned files implement the framework behavior.
 | `engine/rules/` | Situation-aware task generation after `init` |
 | `engine/validators/` | Deterministic tree and member validation |
 | `engine/runtime/asset-loader.ts` | Path constants plus legacy-layout detection |
-| `engine/runtime/installer.ts` | Copy and template-render helpers |
-| `engine/runtime/upgrader.ts` | Upstream clone/version helpers |
+| `engine/runtime/installer.ts` | Bundled-package discovery, skill copy, and template-render helpers |
+| `engine/runtime/upgrader.ts` | Packaged-skill version comparison helpers |
 | `engine/runtime/adapters.ts` | Agent-integration path helpers |
 
 ## Thin CLI Shell Surface
@@ -64,12 +64,11 @@ not become the only place important maintainer knowledge lives.
 | `tsconfig.json` | TypeScript compile boundaries |
 | `tsdown.config.ts` | Build entry and asset handling |
 | `vitest.config.ts` | Unit-test entrypoints |
-| `vitest.eval.config.ts` | Eval-test entrypoint and timeouts |
 | `.github/workflows/ci.yml` | Thin CI shell |
 | `README.md` | Thin distribution overview |
 | `AGENT.md` | Thin maintainer pointer for agent sessions |
 
-## Validation And Evals
+## Validation
 
 | Path | Coverage |
 | --- | --- |
@@ -81,10 +80,6 @@ not become the only place important maintainer knowledge lives.
 | `tests/run-review.test.ts` | Review helper behavior |
 | `tests/skill-artifacts.test.ts` | Skill export and documentation integrity |
 | `tests/upgrade.test.ts` | Installed-skill upgrade behavior |
-| `evals/context-tree-eval.test.ts` | End-to-end eval harness |
-| `evals/helpers/` | Eval orchestration and reporting |
-| `evals/scripts/` | Context-tree management and report scripts |
-| `evals/tests/` | Eval helper coverage |
 
 ## Compatibility Notes
 

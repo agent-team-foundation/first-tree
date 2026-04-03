@@ -1,19 +1,27 @@
 /**
- * Re-generate a context tree with a newer CLI version on an existing branch.
+ * Create a new context tree for a code repo at a specific commit.
  *
- * Same workflow as create-tree, but the branch must already exist.
- * Clears existing tree content, re-runs agent from scratch, creates
- * a new commit on the existing branch.
+ * Workflow:
+ * 1. Clone code repo at commit (read-only reference)
+ * 2. Install context-tree CLI globally (pnpm build && npm link)
+ * 3. Clone tree repo, create orphan branch, init as git repo
+ * 4. Spawn Claude Code IN the tree repo with a prompt that points
+ *    to the source code path — agent runs context-tree init and
+ *    populates the full tree
+ * 5. Commit and push
  *
  * Usage:
- *   npx tsx skills/first-tree-cli-framework/evals/scripts/update-tree.ts \
+ *   npx tsx evals/scripts/create-tree.ts \
  *     --repo HKUDS/nanobot \
  *     --commit ddc9fc4f \
- *     --cli-version def456 \
+ *     --cli-version abc123 \
  *     --tree-repo agent-team-foundation/nanobot-eval-tree
+ *
+ * Authentication: relies on ambient git credentials (gh auth / GH_TOKEN).
  */
 
 import * as fs from 'node:fs';
+import { execSync } from 'node:child_process';
 import {
   parseArgs,
   preflight,
@@ -21,11 +29,13 @@ import {
   installCliAtVersion,
   getCliVersion,
   cloneTreeRepo,
+  createOrphanBranch,
   commitTree,
   pushBranch,
   treeBranch,
   remoteBranchExists,
-  type UpdateTreeOptions,
+  initBareTreeDir,
+  type CreateTreeOptions,
   type TreeProvenance,
 } from './tree-manager.js';
 import { runSession } from '#evals/helpers/session-runner.js';
@@ -71,18 +81,18 @@ When the task list asks whether to populate the tree, choose **Yes**. Then:
 }
 
 const POPULATE_MAX_TURNS = 80;
-const POPULATE_TIMEOUT = 900_000;
+const POPULATE_TIMEOUT = 900_000; // 15 minutes
 
-export async function updateTree(options: UpdateTreeOptions): Promise<{ branch: string; sha: string }> {
+export async function createTree(options: CreateTreeOptions): Promise<{ branch: string; sha: string }> {
   const { repo, commit, cliVersion, treeRepo, model = 'claude-sonnet-4-6' } = options;
   const branch = treeBranch(repo, commit);
 
   // Preflight
   preflight(treeRepo, repo, commit);
 
-  if (!remoteBranchExists(treeRepo, branch)) {
+  if (remoteBranchExists(treeRepo, branch)) {
     throw new Error(
-      `Branch ${branch} does not exist in ${treeRepo}. Use create-tree first.`,
+      `Branch ${branch} already exists in ${treeRepo}. Use update-tree to add a new version.`,
     );
   }
 
@@ -103,15 +113,11 @@ export async function updateTree(options: UpdateTreeOptions): Promise<{ branch: 
     tmpdirs.push(cliDir);
     const cliVer = getCliVersion(cliDir);
 
-    // 3. Clone tree repo at existing branch, clear contents for fresh generation
-    const treeDir = cloneTreeRepo(treeRepo, branch);
+    // 3. Clone tree repo, create orphan branch, init as git repo
+    const treeDir = cloneTreeRepo(treeRepo);
     tmpdirs.push(treeDir);
-
-    const entries = fs.readdirSync(treeDir);
-    for (const entry of entries) {
-      if (entry === '.git') continue;
-      fs.rmSync(`${treeDir}/${entry}`, { recursive: true, force: true });
-    }
+    createOrphanBranch(treeDir, branch);
+    initBareTreeDir(treeDir);
 
     // 4. Spawn Claude Code in the tree repo directory
     process.stderr.write('Spawning agent to init and populate context tree...\n');
@@ -122,7 +128,7 @@ export async function updateTree(options: UpdateTreeOptions): Promise<{ branch: 
       agent,
       maxTurns: POPULATE_MAX_TURNS,
       timeout: POPULATE_TIMEOUT,
-      testName: `update-tree/${repo}`,
+      testName: `create-tree/${repo}`,
     });
 
     const exitOk = session.exitReason === 'success';
@@ -146,7 +152,7 @@ export async function updateTree(options: UpdateTreeOptions): Promise<{ branch: 
     const sha = commitTree(treeDir, provenance);
     pushBranch(treeDir, branch);
 
-    process.stderr.write(`\nDone! Tree updated:\n`);
+    process.stderr.write(`\nDone! Tree created:\n`);
     process.stderr.write(`  Branch: ${branch}\n`);
     process.stderr.write(`  Commit: ${sha}\n`);
     process.stderr.write(`  CLI:    context-tree v${cliVer} (${cliVersion.slice(0, 7)})\n`);
@@ -158,12 +164,12 @@ export async function updateTree(options: UpdateTreeOptions): Promise<{ branch: 
 }
 
 // CLI entry point
-if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith('/update-tree.ts')) {
+if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith('/create-tree.ts')) {
   const args = parseArgs(process.argv.slice(2));
   const treeRepo = args['tree-repo'] || process.env.EVALS_TREE_REPO;
 
   if (!args.repo || !args.commit || !args['cli-version'] || !treeRepo) {
-    console.error('Usage: update-tree --repo <org/repo> --commit <sha> --cli-version <sha> --tree-repo <repo>');
+    console.error('Usage: create-tree --repo <org/repo> --commit <sha> --cli-version <sha> --tree-repo <repo>');
     console.error('  --repo          Code repository (e.g. HKUDS/nanobot)');
     console.error('  --commit        Code repo commit SHA');
     console.error('  --cli-version   first-tree commit SHA for CLI version');
@@ -172,7 +178,7 @@ if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith
     process.exit(1);
   }
 
-  updateTree({
+  createTree({
     repo: args.repo,
     commit: args.commit,
     cliVersion: args['cli-version'],

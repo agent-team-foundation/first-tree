@@ -124,7 +124,7 @@ The tree doesn't duplicate source code — it captures what connects things and 
 |---------|-------------|
 | `context-tree init` | Bootstrap a new tree. Installs the framework skill, renders templates, generates a task list. |
 | `context-tree verify` | Check the installed progress file for unchecked items + run deterministic validation. |
-| `context-tree upgrade` | Refresh the installed framework skill from upstream and generate follow-up tasks. |
+| `context-tree upgrade` | Refresh the installed framework skill from the currently running `first-tree` package and generate follow-up tasks. |
 | `context-tree help onboarding` | Print this onboarding guide. |
 
 ---
@@ -137,7 +137,14 @@ When the framework updates:
 context-tree upgrade
 ```
 
-This refreshes `skills/first-tree-cli-framework/` from upstream, preserves your tree content, and generates follow-up tasks in `skills/first-tree-cli-framework/progress.md`.
+`context-tree upgrade` refreshes `skills/first-tree-cli-framework/` from the
+skill bundled with the currently running `first-tree` package, preserves your
+tree content, and generates follow-up tasks in
+`skills/first-tree-cli-framework/progress.md`.
+
+To pick up a newer framework release, first run a newer package version, for
+example `npx first-tree@latest upgrade`, or update your global `first-tree`
+install before running `context-tree upgrade`.
 
 ---
 

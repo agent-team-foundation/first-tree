@@ -11,6 +11,8 @@ npx first-tree init
 
 The npm package is `first-tree`; it installs the `context-tree` command. Use
 `npm install -g first-tree` if you want the command on your PATH.
+The package carries the canonical `first-tree-cli-framework` skill, and
+`context-tree init` / `context-tree upgrade` install from that bundled skill.
 
 ## Commands
 
@@ -18,7 +20,7 @@ The npm package is `first-tree`; it installs the `context-tree` command. Use
 | --- | --- |
 | `context-tree init` | Bootstrap a new context tree in the current git repo |
 | `context-tree verify` | Run verification checks against the current tree |
-| `context-tree upgrade` | Refresh the installed framework skill and write follow-up tasks |
+| `context-tree upgrade` | Refresh the installed framework skill from the current `first-tree` package and write follow-up tasks |
 | `context-tree help onboarding` | Print the onboarding guide |
 
 ## Canonical Documentation

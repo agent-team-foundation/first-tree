@@ -1,44 +1,22 @@
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
-import {
-  frameworkVersionCandidates,
-  resolveFirstExistingPath,
-} from "#skill/engine/runtime/asset-loader.js";
+import { resolveCanonicalSkillRoot } from "#skill/engine/runtime/installer.js";
 
-export const FIRST_TREE_REPO_URL =
-  "https://github.com/agent-team-foundation/first-tree";
-
-export function cloneUpstreamRepo(
-  repoUrl = FIRST_TREE_REPO_URL,
-): string {
-  const tmp = mkdtempSync(join(tmpdir(), "context-tree-upstream-"));
-  try {
-    execFileSync("git", ["clone", "--depth", "1", repoUrl, tmp], {
-      encoding: "utf-8",
-      stdio: "pipe",
-    });
-    return tmp;
-  } catch (err) {
-    rmSync(tmp, { recursive: true, force: true });
-    const message = err instanceof Error ? err.message : "unknown error";
-    throw new Error(`Failed to clone ${repoUrl}: ${message}`);
-  }
+export function compareFrameworkVersions(left: string, right: string): number {
+  const result = left.localeCompare(right, undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
+  if (result < 0) return -1;
+  if (result > 0) return 1;
+  return 0;
 }
 
-export function cleanupUpstreamRepo(root: string): void {
-  rmSync(root, { recursive: true, force: true });
-}
-
-export function readUpstreamVersion(sourceRoot: string): string | null {
-  const versionPath = resolveFirstExistingPath(
-    sourceRoot,
-    frameworkVersionCandidates(),
-  );
-  if (versionPath === null) return null;
+export function readSourceVersion(sourceRoot: string): string | null {
+  const skillRoot = resolveCanonicalSkillRoot(sourceRoot);
+  const versionPath = join(skillRoot, "assets", "framework", "VERSION");
   try {
-    return readFileSync(join(sourceRoot, versionPath), "utf-8").trim();
+    return readFileSync(versionPath, "utf-8").trim();
   } catch {
     return null;
   }

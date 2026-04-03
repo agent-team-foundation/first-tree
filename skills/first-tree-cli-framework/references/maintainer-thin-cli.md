@@ -24,7 +24,7 @@ These root files are shell code, not canonical knowledge stores:
 - `tsconfig.json`
 - `tsdown.config.ts`
 - `vitest.config.ts`
-- `vitest.eval.config.ts`
+- `vitest.eval.config.ts` (repo-only maintainer eval entrypoint)
 - `.github/workflows/ci.yml`
 - root `README.md` and `AGENT.md`
 

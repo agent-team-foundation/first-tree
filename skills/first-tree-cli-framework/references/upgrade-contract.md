@@ -8,6 +8,8 @@ compatibility rules we keep while the repo is migrating.
 - `skills/first-tree-cli-framework/` is the only source of truth.
 - `references/` contains explanatory material.
 - `assets/framework/` contains the shipped runtime payload.
+- The distributable `first-tree` package must carry the canonical skill inside
+  the package itself.
 - The source repo does not keep a root `.context-tree/`, `docs/`, mirror skill
   directories, or a bundled repo snapshot.
 
@@ -49,7 +51,8 @@ The tree content still lives outside the skill:
   - validates root/frontmatter/agent markers
   - runs node and member validators
 - `context-tree upgrade`
-  - compares the installed skill payload version to upstream
+  - compares the installed skill payload version to the skill bundled with the
+    currently running `first-tree` package
   - refreshes the installed skill payload without overwriting tree content
   - migrates legacy `.context-tree/` repos onto the installed skill layout
   - preserves user-authored sections such as the editable part of `AGENT.md`
@@ -58,6 +61,8 @@ The tree content still lives outside the skill:
 
 - `context-tree init` only installs the skill layout; it never creates a new
   `.context-tree/`.
+- Normal `context-tree init` and `context-tree upgrade` flows do not clone the
+  source repo or require network access.
 - `context-tree verify` may still read a legacy `.context-tree/...` layout in
   an existing user repo so the repo can be upgraded in place.
 - `context-tree upgrade` must migrate a legacy `.context-tree/` repo onto the
@@ -68,6 +73,8 @@ The tree content still lives outside the skill:
 
 - Templates, workflows, prompts, helper scripts, and explanatory references
   must stay aligned.
+- If a change affects installed payload contents, bump
+  `assets/framework/VERSION` so packaged upgrades can detect it.
 - Ownership behavior must stay identical across layout changes.
 - The tree remains decision-focused; execution detail stays in source systems.
 - A path migration is incomplete if task text, docs, tests, and runtime assets

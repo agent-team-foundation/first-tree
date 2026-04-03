@@ -1,9 +1,10 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { formatTaskList, writeProgress, runInit } from "#skill/engine/init.js";
 import { Repo } from "#skill/engine/repo.js";
 import {
+  FRAMEWORK_VERSION,
   INSTALLED_PROGRESS,
   LEGACY_PROGRESS,
 } from "#skill/engine/runtime/asset-loader.js";
@@ -11,6 +12,7 @@ import {
   useTmpDir,
   makeFramework,
   makeLegacyFramework,
+  makeSourceSkill,
 } from "./helpers.js";
 
 // --- formatTaskList ---
@@ -116,13 +118,36 @@ describe("runInit", () => {
     expect(ret).toBe(1);
   });
 
-  it("skips clone when framework exists", () => {
-    const tmp = useTmpDir();
-    mkdirSync(join(tmp.path, ".git"));
-    makeFramework(tmp.path);
-    const repo = new Repo(tmp.path);
-    // Should not throw or try to clone — just evaluate rules
-    const ret = runInit(repo);
+  it("installs the bundled skill and scaffolding when framework is missing", () => {
+    const repoDir = useTmpDir();
+    const sourceDir = useTmpDir();
+    mkdirSync(join(repoDir.path, ".git"));
+    makeSourceSkill(sourceDir.path, "0.2.0");
+
+    const ret = runInit(new Repo(repoDir.path), { sourceRoot: sourceDir.path });
+
     expect(ret).toBe(0);
+    expect(
+      existsSync(join(repoDir.path, "skills", "first-tree-cli-framework", "SKILL.md")),
+    ).toBe(true);
+    expect(readFileSync(join(repoDir.path, FRAMEWORK_VERSION), "utf-8").trim()).toBe("0.2.0");
+    expect(existsSync(join(repoDir.path, "NODE.md"))).toBe(true);
+    expect(existsSync(join(repoDir.path, "AGENT.md"))).toBe(true);
+    expect(existsSync(join(repoDir.path, "members", "NODE.md"))).toBe(true);
+    expect(existsSync(join(repoDir.path, INSTALLED_PROGRESS))).toBe(true);
+  });
+
+  it("skips reinstall when framework exists", () => {
+    const tmp = useTmpDir();
+    const sourceDir = useTmpDir();
+    mkdirSync(join(tmp.path, ".git"));
+    makeFramework(tmp.path, "0.1.0");
+    makeSourceSkill(sourceDir.path, "0.2.0");
+
+    const repo = new Repo(tmp.path);
+    const ret = runInit(repo, { sourceRoot: sourceDir.path });
+
+    expect(ret).toBe(0);
+    expect(readFileSync(join(tmp.path, FRAMEWORK_VERSION), "utf-8").trim()).toBe("0.1.0");
   });
 });

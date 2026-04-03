@@ -24,4 +24,8 @@ pnpm validate:skill
 pnpm typecheck
 pnpm test
 pnpm build
+pnpm pack
 ```
+
+Maintainer-only eval tooling lives in `evals/`. See `evals/README.md` before
+running `EVALS=1 pnpm eval`.

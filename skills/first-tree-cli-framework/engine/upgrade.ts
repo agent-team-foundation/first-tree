@@ -9,12 +9,13 @@ import {
   LEGACY_FRAMEWORK_ROOT,
   SKILL_ROOT,
 } from "#skill/engine/runtime/asset-loader.js";
-import { copyCanonicalSkill } from "#skill/engine/runtime/installer.js";
 import {
-  cleanupUpstreamRepo,
-  cloneUpstreamRepo,
-  FIRST_TREE_REPO_URL,
-  readUpstreamVersion,
+  copyCanonicalSkill,
+  resolveBundledPackageRoot,
+} from "#skill/engine/runtime/installer.js";
+import {
+  compareFrameworkVersions,
+  readSourceVersion,
 } from "#skill/engine/runtime/upgrader.js";
 
 function writeProgress(repo: Repo, content: string): void {
@@ -26,11 +27,11 @@ function writeProgress(repo: Repo, content: string): void {
 function formatUpgradeTaskList(
   repo: Repo,
   localVersion: string,
-  upstreamVersion: string,
+  packagedVersion: string,
   migratedFromLegacy: boolean,
 ): string {
   const lines: string[] = [
-    `# Context Tree Upgrade — v${localVersion} -> v${upstreamVersion}\n`,
+    `# Context Tree Upgrade — v${localVersion} -> v${packagedVersion}\n`,
     "## Installed Skill",
     `- [ ] Review local customizations under \`${SKILL_ROOT}/\` and reapply them if needed`,
     `- [ ] Re-copy any workflow updates you want from \`${FRAMEWORK_WORKFLOWS_DIR}/\` into \`.github/workflows/\``,
@@ -56,7 +57,7 @@ function formatUpgradeTaskList(
 
   lines.push(
     "## Verification",
-    `- [ ] \`${FRAMEWORK_VERSION}\` reads \`${upstreamVersion}\``,
+    `- [ ] \`${FRAMEWORK_VERSION}\` reads \`${packagedVersion}\``,
     "- [ ] `context-tree verify` passes",
     "",
     "---",
@@ -72,7 +73,7 @@ function formatUpgradeTaskList(
 }
 
 export interface UpgradeOptions {
-  upstreamRoot?: string;
+  sourceRoot?: string;
 }
 
 export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
@@ -89,51 +90,67 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
   const localVersion = workingRepo.readVersion() ?? "unknown";
   console.log(`Local framework version: ${localVersion}\n`);
 
-  console.log(`Checking ${FIRST_TREE_REPO_URL} for the latest framework skill...`);
+  console.log(
+    "Checking the framework skill bundled with this first-tree package...",
+  );
 
-  const clonedUpstream = options?.upstreamRoot === undefined;
-  const upstreamRoot = options?.upstreamRoot ?? cloneUpstreamRepo();
-
+  let sourceRoot: string;
   try {
-    const upstreamVersion = readUpstreamVersion(upstreamRoot);
-    if (upstreamVersion === null) {
-      console.log(
-        "Could not read the upstream framework version. Check your network and try again.",
-      );
-      return 1;
-    }
-
-    if (layout === "skill" && upstreamVersion === localVersion) {
-      console.log(`Already up to date (${FRAMEWORK_VERSION} = ${localVersion}).`);
-      return 0;
-    }
-
-    copyCanonicalSkill(upstreamRoot, workingRepo.root);
-    if (layout === "legacy") {
-      rmSync(join(workingRepo.root, LEGACY_FRAMEWORK_ROOT), {
-        recursive: true,
-        force: true,
-      });
-      console.log(
-        "Migrated legacy .context-tree/ layout to skills/first-tree-cli-framework/.",
-      );
-    } else {
-      console.log("Refreshed skills/first-tree-cli-framework/ from upstream.");
-    }
-
-    const output = formatUpgradeTaskList(
-      workingRepo,
-      localVersion,
-      upstreamVersion,
-      layout === "legacy",
-    );
-    console.log(`\n${output}`);
-    writeProgress(workingRepo, output);
-    console.log(`Progress file written to ${workingRepo.preferredProgressPath()}`);
-    return 0;
-  } finally {
-    if (clonedUpstream) {
-      cleanupUpstreamRepo(upstreamRoot);
-    }
+    sourceRoot = options?.sourceRoot ?? resolveBundledPackageRoot();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "unknown error";
+    console.error(`Error: ${message}`);
+    return 1;
   }
+
+  const packagedVersion = readSourceVersion(sourceRoot);
+  if (packagedVersion === null) {
+    console.log(
+      "Could not read the bundled framework version. Reinstall or update `first-tree` and try again.",
+    );
+    return 1;
+  }
+
+  if (
+    localVersion !== "unknown" &&
+    compareFrameworkVersions(localVersion, packagedVersion) > 0
+  ) {
+    console.log(
+      "The installed framework is newer than the skill bundled with this `first-tree` package. Install a newer package version before running `context-tree upgrade`.",
+    );
+    return 1;
+  }
+
+  if (layout === "skill" && packagedVersion === localVersion) {
+    console.log(
+      `Already up to date with the bundled skill (${FRAMEWORK_VERSION} = ${localVersion}).`,
+    );
+    return 0;
+  }
+
+  copyCanonicalSkill(sourceRoot, workingRepo.root);
+  if (layout === "legacy") {
+    rmSync(join(workingRepo.root, LEGACY_FRAMEWORK_ROOT), {
+      recursive: true,
+      force: true,
+    });
+    console.log(
+      "Migrated legacy .context-tree/ layout to skills/first-tree-cli-framework/.",
+    );
+  } else {
+    console.log(
+      "Refreshed skills/first-tree-cli-framework/ from the bundled first-tree package.",
+    );
+  }
+
+  const output = formatUpgradeTaskList(
+    workingRepo,
+    localVersion,
+    packagedVersion,
+    layout === "legacy",
+  );
+  console.log(`\n${output}`);
+  writeProgress(workingRepo, output);
+  console.log(`Progress file written to ${workingRepo.preferredProgressPath()}`);
+  return 0;
 }

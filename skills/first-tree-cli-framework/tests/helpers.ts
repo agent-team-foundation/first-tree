@@ -32,6 +32,61 @@ export function makeLegacyFramework(root: string, version = "0.1.0"): void {
   writeFileSync(join(root, LEGACY_VERSION), `${version}\n`);
 }
 
+export function makeSourceSkill(root: string, version = "0.2.0"): void {
+  const skillRoot = join(root, "skills", "first-tree-cli-framework");
+  mkdirSync(join(skillRoot, "agents"), { recursive: true });
+  mkdirSync(join(skillRoot, "assets", "framework", "templates"), {
+    recursive: true,
+  });
+
+  writeFileSync(
+    join(skillRoot, "SKILL.md"),
+    "---\nname: first-tree-cli-framework\ndescription: test\n---\n",
+  );
+  writeFileSync(
+    join(skillRoot, "agents", "openai.yaml"),
+    "display_name: First Tree CLI Framework\nshort_description: test\n",
+  );
+  writeFileSync(
+    join(skillRoot, "assets", "framework", "manifest.json"),
+    "{}\n",
+  );
+  writeFileSync(
+    join(skillRoot, "assets", "framework", "VERSION"),
+    `${version}\n`,
+  );
+  writeFileSync(
+    join(
+      skillRoot,
+      "assets",
+      "framework",
+      "templates",
+      "root-node.md.template",
+    ),
+    "---\ntitle: Example Tree\nowners: [alice]\n---\n# Example Tree\n",
+  );
+  writeFileSync(
+    join(
+      skillRoot,
+      "assets",
+      "framework",
+      "templates",
+      "agent.md.template",
+    ),
+    "<!-- BEGIN CONTEXT-TREE FRAMEWORK -->\nframework text\n<!-- END CONTEXT-TREE FRAMEWORK -->\n",
+  );
+  writeFileSync(
+    join(
+      skillRoot,
+      "assets",
+      "framework",
+      "templates",
+      "members-domain.md.template",
+    ),
+    "---\ntitle: Members\nowners: [alice]\n---\n# Members\n",
+  );
+}
+
 export function makeNode(
   root: string,
   opts?: { placeholder?: boolean },
