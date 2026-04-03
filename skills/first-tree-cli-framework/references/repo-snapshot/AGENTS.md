@@ -43,3 +43,51 @@ pnpm test                            # all tests
 pnpm test tests/rules.test.ts        # specific test file
 pnpm typecheck                       # type check
 ```
+
+## Evals
+
+Eval cases live in `evals/cases/*.yaml`. Each case defines a bug-fix task, a repo+commit to clone, a verification script, and optional context tree versions for A/B comparison.
+
+### Running evals
+
+```bash
+# Run a single case (baseline + tree conditions)
+EVALS=1 EVALS_CASES='pydantic-importstring-error' EVALS_TREE_REPO='agent-team-foundation/eval-context-trees' pnpm run eval
+
+# Run all cases
+EVALS=1 EVALS_TREE_REPO='agent-team-foundation/eval-context-trees' pnpm run eval
+
+# Override model or number of trials
+EVALS=1 EVALS_MODEL='claude-opus-4' EVALS_TRIALS=3 EVALS_CASES='...' EVALS_TREE_REPO='...' pnpm run eval
+```
+
+Results are saved to `~/.context-tree/evals/` as JSON (with transcript) and HTML (report).
+
+### Generating reports
+
+Each eval run automatically produces an HTML report alongside the JSON. To aggregate multiple runs into one report:
+
+```bash
+npx tsx evals/scripts/aggregate-report.ts ~/.context-tree/evals/file1.json file2.json ...
+```
+
+### Managing context trees for evals
+
+```bash
+# Create a new context tree for a repo at a specific commit
+npx tsx evals/scripts/create-tree.ts --repo org/repo --commit <sha> --cli-version <first-tree-sha> --tree-repo agent-team-foundation/eval-context-trees
+
+# List existing trees
+npx tsx evals/scripts/list-trees.ts --tree-repo agent-team-foundation/eval-context-trees
+```
+
+### Key env vars
+
+| Variable | Description |
+|----------|-------------|
+| `EVALS=1` | Required to enable evals (otherwise skipped) |
+| `EVALS_CASES` | Comma-separated case IDs to run |
+| `EVALS_TREE_REPO` | GitHub repo slug for context trees |
+| `EVALS_CONDITIONS` | Filter conditions (e.g. `baseline,cli-v0.0.2`) |
+| `EVALS_TRIALS` | Number of trials per condition (default: 1) |
+| `EVALS_MODEL` | Model to use (default: `claude-sonnet-4-6`) |

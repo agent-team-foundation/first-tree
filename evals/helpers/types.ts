@@ -49,6 +49,15 @@ export interface AgentConfig {
   model: string;
 }
 
+export interface ModelTokens {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+  costUSD: number;
+}
+
 export interface CostEstimate {
   inputTokens: number;
   outputTokens: number;
@@ -56,6 +65,8 @@ export interface CostEstimate {
   cacheReadTokens: number;
   estimatedCost: number;
   turnsUsed: number;
+  /** Per-model breakdown (main agent + subagents). */
+  modelBreakdown?: ModelTokens[];
 }
 
 export interface SessionResult {
@@ -95,6 +106,7 @@ export interface TrialResult {
   model: string;
   cli: string;
   error?: string;
+  model_breakdown?: ModelTokens[];
 }
 
 export interface EvalRun {

@@ -11,7 +11,7 @@ import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import type { AgentConfig, SessionResult, CostEstimate } from '#evals/helpers/types.js';
+import type { AgentConfig, SessionResult, CostEstimate, ModelTokens } from '#evals/helpers/types.js';
 
 // --- NDJSON parser (pure, no I/O) ---
 
@@ -250,28 +250,50 @@ export async function runSession(options: {
   }
 
   // Extract cost from result line.
-  // Prefer modelUsage (session-wide totals) over per-turn usage.
+  // Aggregate across all models (main agent + subagents like Explorer).
   const turnsUsed = resultLine?.num_turns || 0;
-  const modelUsage = resultLine?.modelUsage
-    ? Object.values(resultLine.modelUsage as Record<string, any>)[0]
-    : null;
+  const rawModelUsage = resultLine?.modelUsage as Record<string, any> | undefined;
 
   let estimatedCost: number;
   let inputTokens: number;
   let outputTokens: number;
   let cacheCreationTokens: number;
   let cacheReadTokens: number;
+  let modelBreakdown: ModelTokens[] | undefined;
 
-  if (modelUsage) {
-    estimatedCost = modelUsage.costUSD || 0;
-    inputTokens = (modelUsage.inputTokens || 0)
-      + (modelUsage.cacheCreationInputTokens || 0)
-      + (modelUsage.cacheReadInputTokens || 0);
-    outputTokens = modelUsage.outputTokens || 0;
-    cacheCreationTokens = modelUsage.cacheCreationInputTokens || 0;
-    cacheReadTokens = modelUsage.cacheReadInputTokens || 0;
+  if (rawModelUsage && Object.keys(rawModelUsage).length > 0) {
+    // Sum across all models (main + subagents)
+    estimatedCost = 0;
+    inputTokens = 0;
+    outputTokens = 0;
+    cacheCreationTokens = 0;
+    cacheReadTokens = 0;
+    modelBreakdown = [];
+
+    for (const [model, usage] of Object.entries(rawModelUsage)) {
+      const mIn = (usage.inputTokens || 0);
+      const mOut = (usage.outputTokens || 0);
+      const mCC = (usage.cacheCreationInputTokens || 0);
+      const mCR = (usage.cacheReadInputTokens || 0);
+      const mCost = (usage.costUSD || 0);
+
+      inputTokens += mIn + mCC + mCR;
+      outputTokens += mOut;
+      cacheCreationTokens += mCC;
+      cacheReadTokens += mCR;
+      estimatedCost += mCost;
+
+      modelBreakdown.push({
+        model,
+        inputTokens: mIn + mCC + mCR,
+        outputTokens: mOut,
+        cacheCreationTokens: mCC,
+        cacheReadTokens: mCR,
+        costUSD: mCost,
+      });
+    }
   } else {
-    // Fallback to per-turn usage field
+    // Fallback to per-turn usage field + total_cost_usd
     estimatedCost = resultLine?.total_cost_usd || 0;
     const usage = resultLine?.usage || {};
     inputTokens = (usage.input_tokens || 0)
@@ -289,6 +311,7 @@ export async function runSession(options: {
     cacheReadTokens,
     estimatedCost: Math.round(estimatedCost * 100) / 100,
     turnsUsed,
+    modelBreakdown,
   };
 
   if (testName && (exitReason !== 'success')) {

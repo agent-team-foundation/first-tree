@@ -13,6 +13,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import type { TrialResult, EvalRun } from '#evals/helpers/types.js';
+import { generateHtmlReport } from '#evals/helpers/html-report.js';
 
 const SCHEMA_VERSION = 1;
 const EVAL_DIR = path.join(os.homedir(), '.context-tree', 'evals');
@@ -77,10 +78,24 @@ export class EvalCollector {
     const filepath = path.join(this.evalDir, filename);
     fs.writeFileSync(filepath, JSON.stringify(run, null, 2) + '\n');
 
+    // Write HTML report
+    const htmlFilename = filename.replace('.json', '.html');
+    const htmlPath = path.join(this.evalDir, htmlFilename);
+    const git = getGitInfo();
+    const htmlContent = generateHtmlReport(this.trials, {
+      model: this.model,
+      cli: this.cli,
+      branch: git.branch,
+      sha: git.sha,
+      timestamp: run.timestamp,
+    });
+    fs.writeFileSync(htmlPath, htmlContent);
+
     // Clean up partial file
     try { fs.unlinkSync(path.join(this.evalDir, '_partial-eval.json')); } catch { /* ignore */ }
 
     this.printSummary(run, filepath);
+    process.stderr.write(`  HTML:  ${htmlPath}\n`);
     return filepath;
   }
 
