@@ -58,6 +58,19 @@ fi
 
 SNAPSHOT_DIR="$SOURCE_DIR/references/repo-snapshot"
 
+compare_file "$SOURCE_DIR/references/about.md" "$REPO_ROOT/docs/about.md"
+compare_file "$SOURCE_DIR/references/onboarding.md" "$REPO_ROOT/docs/onboarding.md"
+compare_file "$SOURCE_DIR/references/principles.md" "$REPO_ROOT/.context-tree/principles.md"
+compare_file "$SOURCE_DIR/references/ownership-and-naming.md" "$REPO_ROOT/.context-tree/ownership-and-naming.md"
+compare_file "$SOURCE_DIR/assets/framework/VERSION" "$REPO_ROOT/.context-tree/VERSION"
+compare_dir "$SOURCE_DIR/assets/framework/templates" "$REPO_ROOT/.context-tree/templates"
+compare_dir "$SOURCE_DIR/assets/framework/workflows" "$REPO_ROOT/.context-tree/workflows"
+compare_dir "$SOURCE_DIR/assets/framework/prompts" "$REPO_ROOT/.context-tree/prompts"
+compare_dir "$SOURCE_DIR/assets/framework/examples" "$REPO_ROOT/.context-tree/examples"
+compare_file "$SOURCE_DIR/assets/framework/helpers/generate-codeowners.ts" "$REPO_ROOT/.context-tree/generate-codeowners.ts"
+compare_file "$SOURCE_DIR/assets/framework/helpers/run-review.ts" "$REPO_ROOT/.context-tree/run-review.ts"
+compare_file "$SOURCE_DIR/assets/framework/helpers/inject-tree-context.sh" "$REPO_ROOT/.context-tree/scripts/inject-tree-context.sh"
+
 compare_file "$REPO_ROOT/AGENTS.md" "$SNAPSHOT_DIR/AGENTS.md"
 compare_file "$REPO_ROOT/README.md" "$SNAPSHOT_DIR/README.md"
 compare_file "$REPO_ROOT/package.json" "$SNAPSHOT_DIR/package.json"

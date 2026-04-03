@@ -24,6 +24,8 @@ function readPortableSnapshotFingerprint(quickstart: string): string {
 describe("skill artifacts", () => {
   it("keeps the source-of-truth skill and generated mirrors present", () => {
     expect(existsSync(join(ROOT, "skills", "first-tree-cli-framework", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(ROOT, "skills", "first-tree-cli-framework", "references", "onboarding.md"))).toBe(true);
+    expect(existsSync(join(ROOT, "skills", "first-tree-cli-framework", "assets", "framework", "manifest.json"))).toBe(true);
     expect(existsSync(join(ROOT, ".agents", "skills", "first-tree-cli-framework", "SKILL.md"))).toBe(true);
     expect(existsSync(join(ROOT, ".claude", "skills", "first-tree-cli-framework", "SKILL.md"))).toBe(true);
   });

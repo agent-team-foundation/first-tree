@@ -15,32 +15,6 @@ Options:
   --version    Show version number
 `;
 
-const HELP_USAGE = `usage: context-tree help <topic>
-
-Topics:
-  onboarding   How to set up a context tree from scratch
-`;
-
-async function runHelp(args: string[]): Promise<number> {
-  const topic = args[0];
-
-  if (!topic || topic === "--help" || topic === "-h") {
-    console.log(HELP_USAGE);
-    return 0;
-  }
-
-  switch (topic) {
-    case "onboarding": {
-      const { runOnboarding } = await import("#src/onboarding.js");
-      return runOnboarding();
-    }
-    default:
-      console.log(`Unknown help topic: ${topic}`);
-      console.log(HELP_USAGE);
-      return 1;
-  }
-}
-
 async function main(): Promise<number> {
   const args = process.argv.slice(2);
 
@@ -61,19 +35,19 @@ async function main(): Promise<number> {
 
   switch (command) {
     case "init": {
-      const { runInit } = await import("#src/init.js");
+      const { runInit } = await import("#src/commands/init.js");
       return runInit();
     }
     case "verify": {
-      const { runVerify } = await import("#src/verify.js");
+      const { runVerify } = await import("#src/commands/verify.js");
       return runVerify();
     }
     case "upgrade": {
-      const { runUpgrade } = await import("#src/upgrade.js");
+      const { runUpgrade } = await import("#src/commands/upgrade.js");
       return runUpgrade();
     }
     case "help":
-      return runHelp(args.slice(1));
+      return (await import("#src/commands/help.js")).runHelp(args.slice(1));
     default:
       console.log(`Unknown command: ${command}`);
       console.log(USAGE);

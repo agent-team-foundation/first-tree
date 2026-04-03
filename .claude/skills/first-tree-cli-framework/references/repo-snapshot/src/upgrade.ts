@@ -1,30 +1,15 @@
-import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Repo } from "#src/repo.js";
+import { fetchUpstream, readUpstreamVersion } from "#src/runtime/upgrader.js";
 
 const FIRST_TREE_REPO_URL = "https://github.com/agent-team-foundation/first-tree";
 
 function getUpstreamVersion(repo: Repo): string | null {
-  try {
-    execFileSync("git", ["fetch", "context-tree-upstream", "--depth", "1"], {
-      cwd: repo.root,
-      encoding: "utf-8",
-      stdio: "pipe",
-    });
-  } catch {
+  if (!fetchUpstream(repo.root)) {
     return null;
   }
-  try {
-    const result = execFileSync(
-      "git",
-      ["show", "context-tree-upstream/main:.context-tree/VERSION"],
-      { cwd: repo.root, encoding: "utf-8", stdio: "pipe" },
-    );
-    return result.trim();
-  } catch {
-    return null;
-  }
+  return readUpstreamVersion(repo.root);
 }
 
 function writeProgress(repo: Repo, content: string): void {

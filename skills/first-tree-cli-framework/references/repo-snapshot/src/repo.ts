@@ -1,6 +1,15 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
+import {
+  FRAMEWORK_VERSION,
+  LEGACY_PROGRESS,
+  LEGACY_VERSION,
+  INSTALLED_PROGRESS,
+  detectFrameworkLayout,
+  progressFileCandidates,
+  resolveFirstExistingPath,
+} from "#src/runtime/asset-loader.js";
 
 const FRONTMATTER_RE = /^---\s*\n(.*?)\n---/s;
 const OWNERS_RE = /^owners:\s*\[([^\]]*)\]/m;
@@ -81,12 +90,23 @@ export class Repo {
   }
 
   hasFramework(): boolean {
-    return this.pathExists(".context-tree/VERSION");
+    return detectFrameworkLayout(this.root) !== null;
   }
 
   readVersion(): string | null {
-    const text = this.readFile(".context-tree/VERSION");
+    const versionPath =
+      resolveFirstExistingPath(this.root, [FRAMEWORK_VERSION, LEGACY_VERSION]);
+    if (versionPath === null) return null;
+    const text = this.readFile(versionPath);
     return text ? text.trim() : null;
+  }
+
+  progressPath(): string | null {
+    return resolveFirstExistingPath(this.root, progressFileCandidates());
+  }
+
+  preferredProgressPath(): string {
+    return this.pathExists(INSTALLED_PROGRESS) ? INSTALLED_PROGRESS : LEGACY_PROGRESS;
   }
 
   hasAgentMdMarkers(): boolean {

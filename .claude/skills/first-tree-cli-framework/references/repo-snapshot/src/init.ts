@@ -1,7 +1,5 @@
 import { execFileSync } from "node:child_process";
 import {
-  copyFileSync,
-  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -14,9 +12,13 @@ import { Repo } from "#src/repo.js";
 import { ONBOARDING_TEXT } from "#src/onboarding.js";
 import { evaluateAll } from "#src/rules/index.js";
 import type { RuleResult } from "#src/rules/index.js";
+import {
+  copyLegacyFrameworkMirror,
+  renderTemplateFile,
+} from "#src/runtime/installer.js";
+import { FRAMEWORK_ASSET_ROOT } from "#src/runtime/asset-loader.js";
 
 const FIRST_TREE_REPO_URL = "https://github.com/agent-team-foundation/first-tree";
-const FRAMEWORK_DIR = ".context-tree";
 
 /**
  * The interactive prompt tool the agent should use to present choices.
@@ -50,25 +52,15 @@ function cloneFirstTree(): string {
 }
 
 function copyFramework(source: string, target: string): void {
-  const src = join(source, FRAMEWORK_DIR);
-  const dst = join(target, FRAMEWORK_DIR);
-  if (existsSync(dst)) {
-    rmSync(dst, { recursive: true, force: true });
-  }
-  cpSync(src, dst, { recursive: true });
-  console.log(`  Copied ${FRAMEWORK_DIR}/`);
+  copyLegacyFrameworkMirror(source, target);
+  console.log("  Copied .context-tree/ from the canonical skill assets");
 }
 
 function renderTemplates(frameworkDir: string, target: string): void {
-  const templatesDir = join(frameworkDir, "templates");
   for (const [templateName, targetPath] of TEMPLATE_MAP) {
-    const src = join(templatesDir, templateName);
-    const dst = join(target, targetPath);
-    if (existsSync(dst)) {
+    if (existsSync(join(target, targetPath))) {
       console.log(`  Skipped ${targetPath} (already exists)`);
-    } else if (existsSync(src)) {
-      mkdirSync(dirname(dst), { recursive: true });
-      copyFileSync(src, dst);
+    } else if (renderTemplateFile(frameworkDir, templateName, target, targetPath)) {
       console.log(`  Created ${targetPath}`);
     }
   }
@@ -157,7 +149,7 @@ export function runInit(repo?: Repo): number {
     try {
       console.log("Copying framework and scaffolding...");
       copyFramework(seed, r.root);
-      const frameworkDir = join(r.root, FRAMEWORK_DIR);
+      const frameworkDir = join(seed, FRAMEWORK_ASSET_ROOT);
       renderTemplates(frameworkDir, r.root);
       addUpstreamRemote(r.root);
     } finally {

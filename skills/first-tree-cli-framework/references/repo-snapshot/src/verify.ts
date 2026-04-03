@@ -12,7 +12,8 @@ export function check(label: string, passed: boolean): boolean {
 }
 
 export function checkProgress(repo: Repo): string[] {
-  const text = repo.readFile(".context-tree/progress.md");
+  const progressPath = repo.progressPath();
+  const text = progressPath === null ? null : repo.readFile(progressPath);
   if (text === null) return [];
   const matches: string[] = [];
   let m: RegExpExecArray | null;
