@@ -1,0 +1,43 @@
+# Eval case: Structured logging serialization drops subclass fields
+# Based on: https://github.com/microsoft/autogen/pull/6889
+# Issue: https://github.com/microsoft/autogen/issues/6855
+# Bug: model_dump_json() on BaseModel fields typed as base classes
+#      silently drops subclass-specific fields (e.g. content, type).
+
+id: autogen-serialization-data-loss
+source: custom
+repo: microsoft/autogen
+commit_sha: "9cb067e6ab48b4cb29e6384cd229b9aa78b57b7b"
+task: |
+  Fix a bug where structured logging loses message data during JSON
+  serialization.
+
+  When agents produce messages (e.g. TextMessage with content="Hello"),
+  and those messages are serialized for logging via `model_dump_json()`,
+  subclass-specific fields like `content` and `type` are silently
+  dropped. Only base class fields (like `id`, `source`, `created_at`)
+  survive serialization.
+
+  For example:
+    - A TextMessage with content="Hello, world!" and source="Agent"
+    - Gets wrapped in a GroupChatMessage and serialized
+    - The JSON output is missing `content` and `type` entirely
+    - This makes structured logs useless for debugging
+
+  The problem affects multiple model classes that hold message fields
+  typed as base classes but containing subclass instances. All of them
+  lose subclass data during serialization.
+
+  Find and fix the root cause across all affected model classes. Write
+  tests that verify subclass fields are preserved during serialization
+  for GroupChatMessage, GroupChatStart, GroupChatAgentResponse, and
+  GroupChatTeamResponse.
+setup: |
+  cd python/packages/autogen-agentchat
+  
+  uv venv .venv --quiet
+  uv pip install -e ".[dev]" --quiet --python .venv/bin/python 2>/dev/null || uv pip install -e "." --quiet --python .venv/bin/python
+verification: fixtures/autogen-serialization-data-loss/verify.sh
+difficulty: medium
+timeout_ms: 600000
+max_turns: 30

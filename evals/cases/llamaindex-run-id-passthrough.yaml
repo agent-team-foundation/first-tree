@@ -1,0 +1,37 @@
+# Eval case: Run ID not passed through agent workflow layers
+# Based on: https://github.com/run-llama/llama_index/pull/20928
+# Bug: Run ID is lost when flowing through agent context, base agent,
+#      and multi-agent workflow — breaking tracing and observability.
+
+id: llamaindex-run-id-passthrough
+source: custom
+repo: run-llama/llama_index
+commit_sha: "1ea49bf5f9e78336bf465107c168c82cd49f3312"
+task: |
+  Fix a bug where the run ID is not correctly passed through agent
+  workflow execution.
+
+  When running agent workflows with observability/tracing enabled, the
+  run ID should be propagated through all layers so that traces can be
+  correlated. Currently, the run ID is either dropped or not forwarded
+  correctly when execution flows through the agent context, base agent,
+  and multi-agent workflow modules.
+
+  This means traces from sub-steps of an agent workflow cannot be
+  correlated back to the parent run, breaking observability dashboards
+  and debugging workflows.
+
+  The fix needs to ensure the run ID is correctly plumbed through all
+  three modules in the agent workflow subsystem. Find all the places
+  where the run ID should be passed but isn't, and fix them. Write tests
+  that verify run IDs are correctly propagated in both single-agent and
+  multi-agent workflow scenarios.
+setup: |
+  cd llama-index-core
+  uv venv .venv --quiet
+  uv pip install -e . --quiet --python .venv/bin/python
+  uv pip install pytest pytest-asyncio --quiet --python .venv/bin/python
+verification: fixtures/llamaindex-run-id-passthrough/verify.sh
+difficulty: medium
+timeout_ms: 600000
+max_turns: 30

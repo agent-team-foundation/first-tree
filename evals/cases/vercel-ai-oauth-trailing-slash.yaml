@@ -1,0 +1,34 @@
+# Eval case: OAuth resource parameter gets trailing slash appended
+# Based on: https://github.com/vercel/ai/pull/14081
+# Issue: https://github.com/vercel/ai/issues/13988
+# Bug: URL.href appends trailing slash to pathless URLs, breaking
+#      auth servers that do exact string matching on the resource param.
+
+id: vercel-ai-oauth-trailing-slash
+source: custom
+repo: vercel/ai
+commit_sha: "f51c95e962d0e73c9574db6dd6b6c89e2bfe8aeb"
+task: |
+  Fix a bug where MCP OAuth authentication fails because the resource
+  parameter has a trailing slash appended.
+
+  When an MCP server's Protected Resource Metadata returns a resource
+  URL like "https://mcp.example.com", the OAuth resource parameter
+  gets sent as "https://mcp.example.com/" (with a trailing slash).
+  Auth servers that do exact string matching reject this as a mismatch.
+
+  The problem is that `URL.href` always appends a trailing slash to
+  pathless URLs per the URL spec. The MCP spec says the resource
+  pathname shouldn't be just a trailing slash.
+
+  Find where the resource URL is processed in the MCP OAuth flow and
+  fix it to strip the trailing slash when the pathname is just "/".
+  Write tests that verify the resource parameter is sent without a
+  trailing slash for pathless URLs, while preserving slashes for URLs
+  that have actual paths.
+setup: |
+  pnpm install
+verification: fixtures/vercel-ai-oauth-trailing-slash/verify.sh
+difficulty: medium
+timeout_ms: 600000
+max_turns: 30

@@ -1,0 +1,40 @@
+# Eval case: Async retrieval paths call sync postprocess_nodes instead of async
+# Based on: https://github.com/run-llama/llama_index/pull/20974
+# Issue: https://github.com/run-llama/llama_index/issues/20973
+# Bug: Multiple async retrieval methods call sync postprocess_nodes(),
+#      blocking the event loop and bypassing async postprocessor logic.
+
+id: llamaindex-async-postprocess
+source: custom
+repo: run-llama/llama_index
+commit_sha: "a2b7c3c17afc65d63815551c82160763c5a51d12"
+task: |
+  Fix a bug where async retrieval paths block the event loop by calling
+  sync postprocessor methods instead of their async counterparts.
+
+  Node postprocessors implement both sync (`postprocess_nodes`) and async
+  (`apostprocess_nodes`) methods. Several async retrieval code paths
+  (chat engines, query engines, retriever tools) incorrectly call the
+  sync version, which blocks the event loop and skips any async-only
+  postprocessor logic.
+
+  For example, a custom postprocessor that overrides only
+  `apostprocess_nodes` (the async method) will never have its async
+  logic called during async retrieval — the sync fallback runs instead.
+
+  The bug affects multiple modules across chat engines, query engines,
+  and tools. Some modules call postprocessors inline in a loop, while
+  others delegate through a sync helper method.
+
+  Find all affected async code paths and fix them to use the async
+  postprocessor methods. Write tests that verify async postprocessors
+  are correctly invoked during async retrieval.
+setup: |
+  cd llama-index-core
+  uv venv .venv --quiet
+  uv pip install -e . --quiet --python .venv/bin/python
+  uv pip install pytest pytest-asyncio --quiet --python .venv/bin/python
+verification: fixtures/llamaindex-async-postprocess/verify.sh
+difficulty: medium
+timeout_ms: 600000
+max_turns: 30

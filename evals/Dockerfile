@@ -1,0 +1,70 @@
+# Dockerfile for running context-tree evals with claude --dangerously-skip-permissions
+#
+# Build:
+#   docker build -t ct-eval -f evals/Dockerfile .
+#
+# Run (single case):
+#   docker run --rm \
+#     -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
+#     -e EVALS=1 \
+#     -e EVALS_CASES=pydantic-importstring-error \
+#     -e EVALS_TREE_REPO=agent-team-foundation/eval-context-trees \
+#     -v ~/.context-tree/evals:/home/eval/.context-tree/evals \
+#     ct-eval
+#
+# Run (all cases):
+#   docker run --rm \
+#     -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
+#     -e EVALS=1 \
+#     -e EVALS_TREE_REPO=agent-team-foundation/eval-context-trees \
+#     -v ~/.context-tree/evals:/home/eval/.context-tree/evals \
+#     ct-eval
+#
+# The -v mount persists eval results (JSON + HTML) to your host.
+
+FROM node:22-bookworm
+
+# System dependencies for cloning repos and running Python evals
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    python3 \
+    python3-pip \
+    python3-venv \
+    curl \
+    jq \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install pnpm
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
+# Install uv (fast Python package manager used by eval setup scripts)
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:$PATH"
+
+# Install Claude Code CLI
+RUN npm install -g @anthropic-ai/claude-code
+
+# Install GitHub CLI (needed for cloning private repos / tree repos)
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+    | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+    | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+    && apt-get update && apt-get install -y gh && rm -rf /var/lib/apt/lists/*
+
+# Install deps as root first (corepack needs root), then switch to non-root
+WORKDIR /app
+COPY . .
+RUN CI=true pnpm install --frozen-lockfile
+
+# Create non-root user for eval runs
+RUN useradd -m -s /bin/bash eval \
+    && cp -a /app /home/eval/first-tree \
+    && chown -R eval:eval /home/eval
+USER eval
+WORKDIR /home/eval/first-tree
+
+# Create eval results directory
+RUN mkdir -p /home/eval/.context-tree/evals
+
+# Default: run evals
+ENTRYPOINT ["pnpm", "run", "eval"]

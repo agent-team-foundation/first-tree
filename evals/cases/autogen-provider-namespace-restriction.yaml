@@ -1,0 +1,35 @@
+# Eval case: Arbitrary module loading via untrusted provider strings
+# Based on: https://github.com/microsoft/autogen/pull/7463
+# Bug: ComponentLoader.load_component() loads any module via importlib
+#      without namespace restriction, enabling arbitrary code execution.
+
+id: autogen-provider-namespace-restriction
+source: custom
+repo: microsoft/autogen
+commit_sha: "b0477309d2a0baf489aa256646e41e513ab3bfe8"
+task: |
+  Fix a security vulnerability where the component loader allows loading
+  arbitrary Python modules from untrusted provider strings.
+
+  `ComponentLoader.load_component()` uses importlib to dynamically load
+  provider modules, but it accepts any module path without restriction.
+  An attacker who can influence the provider string (e.g. through a
+  serialized component config) can load arbitrary Python modules,
+  leading to code execution.
+
+  Additionally, the VideoSurfer tool's `extract_audio()` function
+  accepts URL inputs without validation, creating an SSRF risk, and
+  doesn't validate file paths for traversal attacks.
+
+  Fix the component loader to restrict provider loading to trusted
+  first-party AutoGen namespaces. Also harden the VideoSurfer audio
+  extraction against SSRF and path traversal. Write tests that verify
+  untrusted providers are rejected and trusted ones still work.
+setup: |
+  cd python/packages/autogen-core
+  uv venv .venv --quiet
+  uv pip install -e ".[dev]" --quiet --python .venv/bin/python 2>/dev/null || uv pip install -e "." --quiet --python .venv/bin/python
+verification: fixtures/autogen-provider-namespace-restriction/verify.sh
+difficulty: medium
+timeout_ms: 600000
+max_turns: 30
