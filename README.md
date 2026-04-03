@@ -4,7 +4,7 @@ Template source and CLI for [Context Tree](https://context-tree.ai) — the livi
 
 ## What is Context Tree?
 
-A tree-structured knowledge base that agents and humans build and maintain together. Every node represents a domain, decision, or design. Every node has an owner. When things change, the tree updates. See [docs/about.md](docs/about.md) for the full story.
+A tree-structured knowledge base that agents and humans build and maintain together. Every node represents a domain, decision, or design. Every node has an owner. When things change, the tree updates. See [about.md](skills/first-tree-cli-framework/references/about.md) for the full story.
 
 ## Quick Start
 
@@ -20,19 +20,22 @@ Run this inside a git repo. The npm package is `first-tree`; it installs the `co
 |---------|-------------|
 | `context-tree init` | Bootstrap a new context tree in the current git repo |
 | `context-tree verify` | Run checks against the tree, report pass/fail |
-| `context-tree upgrade` | Compare local framework version to upstream, generate upgrade tasks |
+| `context-tree upgrade` | Refresh the installed framework skill from upstream and generate follow-up tasks |
 
 ## What `init` creates
 
 ```
 your-tree/
-  .context-tree/           # framework (upgradable from first-tree)
-    VERSION
-    principles.md
-    ownership-and-naming.md
-    templates/
-    workflows/
-    examples/
+  skills/
+    first-tree-cli-framework/
+      progress.md
+      references/
+      assets/
+        framework/
+          VERSION
+          templates/
+          workflows/
+          examples/
   NODE.md                  # root node — your domains (from template)
   AGENT.md                 # agent instructions with framework markers (from template)
   members/
@@ -41,18 +44,18 @@ your-tree/
 
 ## Upgrades
 
-After init, first-tree is added as a git remote (`context-tree-upstream`). To upgrade the framework:
+To upgrade the installed framework skill:
 
 ```bash
-context-tree upgrade      # shows what changed and what to do
+context-tree upgrade      # refreshes the installed skill and shows follow-up tasks
 ```
 
 ## Documentation
 
-- [docs/onboarding.md](docs/onboarding.md) — Onboarding guide for setting up a context tree (for agents)
-- [docs/about.md](docs/about.md) — What is Context Tree and who it's for
-- [.context-tree/principles.md](.context-tree/principles.md) — Core principles with examples
-- [.context-tree/ownership-and-naming.md](.context-tree/ownership-and-naming.md) — Node naming and ownership model
+- [onboarding.md](skills/first-tree-cli-framework/references/onboarding.md) — Onboarding guide for setting up a context tree
+- [about.md](skills/first-tree-cli-framework/references/about.md) — What Context Tree is and who it's for
+- [principles.md](skills/first-tree-cli-framework/references/principles.md) — Core principles with examples
+- [ownership-and-naming.md](skills/first-tree-cli-framework/references/ownership-and-naming.md) — Node naming and ownership model
 
 ## Development
 

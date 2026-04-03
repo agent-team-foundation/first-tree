@@ -13,9 +13,9 @@ repos.
 
 - `skills/first-tree-cli-framework/` is the only canonical copy.
 - `references/` holds the explanatory docs the skill should load on demand.
-- `assets/framework/` holds the runtime payload that gets installed or exported.
-- `scripts/` holds maintenance helpers for validating, exporting, and running
-  the skill.
+- `assets/framework/` holds the runtime payload that gets installed into user
+  repos.
+- `scripts/` holds maintenance helpers for validating and running the skill.
 
 ## When To Read What
 
@@ -38,8 +38,7 @@ repos.
 - Treat this repo as the CLI and skill source, not as a tree repo.
 - Keep command behavior, validator behavior, shipped assets, and the
   explanatory references aligned.
-- If you change runtime assets, run
-  `bash ./skills/first-tree-cli-framework/scripts/sync-skill-artifacts.sh`.
+- If you change runtime assets or skill references, run `pnpm validate:skill`.
 
 ### Working In A User Tree Repo
 
@@ -63,9 +62,9 @@ repos.
 
 - Repo checks: `pnpm typecheck`, `pnpm test`, `pnpm build`
 - Skill checks:
+  - `pnpm validate:skill`
   - `python3 ./skills/first-tree-cli-framework/scripts/quick_validate.py ./skills/first-tree-cli-framework`
   - `bash ./skills/first-tree-cli-framework/scripts/check-skill-sync.sh`
-  - `bash ./skills/first-tree-cli-framework/scripts/portable-smoke-test.sh`
 
 ## Key Files
 
