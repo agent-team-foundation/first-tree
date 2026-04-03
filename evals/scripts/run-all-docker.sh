@@ -41,6 +41,7 @@ echo ""
 
 exec docker run --rm \
   -e GH_TOKEN="$(gh auth token)" \
+  -v "$HOME/.claude.json:/home/eval/.claude.json" \
   -v "$HOME/.claude:/home/eval/.claude" \
   -v "$HOME/.context-tree/evals:/home/eval/.context-tree/evals" \
   --entrypoint claude \
