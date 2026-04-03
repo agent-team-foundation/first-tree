@@ -1,6 +1,6 @@
 # Context Tree Source Map
 
-This file is the fast index for the new single-skill architecture.
+This file is the fast index for the canonical single-skill architecture.
 
 ## Read First
 
@@ -21,9 +21,9 @@ This file is the fast index for the new single-skill architecture.
 | `src/commands/help.ts` | Help topic routing |
 | `src/init.ts` / `src/verify.ts` / `src/upgrade.ts` | Command implementations for install, verify, and upgrade |
 | `src/commands/` | Stable command entrypoints the CLI imports |
-| `src/runtime/asset-loader.ts` | Canonical path constants and layout detection |
+| `src/runtime/asset-loader.ts` | Canonical path constants plus legacy-layout detection for user-repo migration |
 | `src/runtime/installer.ts` | Copy and template-render helpers |
-| `src/runtime/upgrader.ts` | Upstream version resolution |
+| `src/runtime/upgrader.ts` | Upstream clone/version helpers |
 | `src/runtime/adapters.ts` | Agent-integration path helpers |
 
 ## Runtime Payload
@@ -57,8 +57,9 @@ The installed skill payload lives under `assets/framework/`.
 
 ## Compatibility Notes
 
-- In the source repo, `docs/` and root `.context-tree/` are temporary exported
-  mirrors. They are no longer part of the user-repo contract.
-- `references/repo-snapshot/` is a portable artifact, not the source of truth.
-- If you change `references/` or `assets/framework/`, run
-  `bash ./skills/first-tree-cli-framework/scripts/sync-skill-artifacts.sh`.
+- The source repo intentionally contains no root `.context-tree/`, `docs/`,
+  mirror skills, or bundled repo snapshot.
+- Legacy `.context-tree/...` paths still matter only for migrating existing
+  user repos; the compatibility logic lives in `src/runtime/asset-loader.ts`
+  and `src/upgrade.ts`.
+- If you change `references/` or `assets/framework/`, run `pnpm validate:skill`.

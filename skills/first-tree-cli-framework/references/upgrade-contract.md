@@ -8,7 +8,8 @@ compatibility rules we keep while the repo is migrating.
 - `skills/first-tree-cli-framework/` is the only source of truth.
 - `references/` contains explanatory material.
 - `assets/framework/` contains the shipped runtime payload.
-- `docs/` and root `.context-tree/` are exported mirrors during the transition.
+- The source repo does not keep a root `.context-tree/`, `docs/`, mirror skill
+  directories, or a bundled repo snapshot.
 
 ## Installed Layout
 
@@ -55,16 +56,13 @@ The tree content still lives outside the skill:
 
 ## Compatibility Rules During Migration
 
-- The CLI may temporarily read either:
-  - `skills/first-tree-cli-framework/...`
-  - legacy `.context-tree/...`
+- `context-tree init` only installs the skill layout; it never creates a new
+  `.context-tree/`.
+- `context-tree verify` may still read a legacy `.context-tree/...` layout in
+  an existing user repo so the repo can be upgraded in place.
+- `context-tree upgrade` must migrate a legacy `.context-tree/` repo onto the
+  installed skill layout and remove the legacy directory afterward.
 - When both layouts are present, prefer the installed skill layout.
-- `context-tree init` only installs the skill layout; it does not create a new `.context-tree/`.
-- `context-tree upgrade` should remove legacy `.context-tree/` after migrating a repo.
-- The legacy layout must be derivable from the canonical skill via
-  `scripts/export-runtime-assets.sh`.
-- `references/repo-snapshot/` may exist as a portable artifact until cleanup,
-  but it is not authoritative.
 
 ## Invariants
 
