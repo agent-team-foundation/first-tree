@@ -6,6 +6,7 @@
 # Run (single case):
 #   docker run --rm \
 #     -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
+#     -e GH_TOKEN="$(gh auth token)" \
 #     -e EVALS=1 \
 #     -e EVALS_CASES=pydantic-importstring-error \
 #     -e EVALS_TREE_REPO=agent-team-foundation/eval-context-trees \
@@ -15,6 +16,7 @@
 # Run (all cases):
 #   docker run --rm \
 #     -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
+#     -e GH_TOKEN="$(gh auth token)" \
 #     -e EVALS=1 \
 #     -e EVALS_TREE_REPO=agent-team-foundation/eval-context-trees \
 #     -v ~/.context-tree/evals:/home/eval/.context-tree/evals \
