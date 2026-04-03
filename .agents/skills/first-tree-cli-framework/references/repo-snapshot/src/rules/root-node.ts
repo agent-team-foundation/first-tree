@@ -1,11 +1,12 @@
 import type { Repo } from "#src/repo.js";
 import type { RuleResult } from "#src/rules/index.js";
+import { FRAMEWORK_TEMPLATES_DIR } from "#src/runtime/asset-loader.js";
 
 export function evaluate(repo: Repo): RuleResult {
   const tasks: string[] = [];
   if (!repo.pathExists("NODE.md")) {
     tasks.push(
-      "NODE.md is missing — create from `.context-tree/templates/root-node.md.template`. " +
+      `NODE.md is missing — create from \`${FRAMEWORK_TEMPLATES_DIR}/root-node.md.template\`. ` +
       "Ask the user for their code repositories or project directories, then analyze the source to determine the project description and domain structure",
     );
   } else {

@@ -3,7 +3,18 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { check, checkProgress, runVerify } from "#src/verify.js";
 import { Repo } from "#src/repo.js";
-import { useTmpDir, makeFramework, makeNode, makeAgentMd, makeMembers } from "./helpers.js";
+import {
+  INSTALLED_PROGRESS,
+  LEGACY_PROGRESS,
+} from "#src/runtime/asset-loader.js";
+import {
+  useTmpDir,
+  makeFramework,
+  makeLegacyFramework,
+  makeNode,
+  makeAgentMd,
+  makeMembers,
+} from "./helpers.js";
 
 // --- check ---
 
@@ -28,10 +39,9 @@ describe("checkProgress", () => {
 
   it("returns empty when all checked", () => {
     const tmp = useTmpDir();
-    const ct = join(tmp.path, ".context-tree");
-    mkdirSync(ct);
+    mkdirSync(join(tmp.path, "skills", "first-tree-cli-framework"), { recursive: true });
     writeFileSync(
-      join(ct, "progress.md"),
+      join(tmp.path, INSTALLED_PROGRESS),
       "# Progress\n- [x] Task one\n- [x] Task two\n",
     );
     const repo = new Repo(tmp.path);
@@ -40,10 +50,9 @@ describe("checkProgress", () => {
 
   it("returns unchecked items", () => {
     const tmp = useTmpDir();
-    const ct = join(tmp.path, ".context-tree");
-    mkdirSync(ct);
+    mkdirSync(join(tmp.path, "skills", "first-tree-cli-framework"), { recursive: true });
     writeFileSync(
-      join(ct, "progress.md"),
+      join(tmp.path, INSTALLED_PROGRESS),
       "# Progress\n- [x] Done task\n- [ ] Pending task\n- [ ] Another pending\n",
     );
     const repo = new Repo(tmp.path);
@@ -52,11 +61,21 @@ describe("checkProgress", () => {
 
   it("returns empty for empty progress", () => {
     const tmp = useTmpDir();
-    const ct = join(tmp.path, ".context-tree");
-    mkdirSync(ct);
-    writeFileSync(join(ct, "progress.md"), "");
+    mkdirSync(join(tmp.path, "skills", "first-tree-cli-framework"), { recursive: true });
+    writeFileSync(join(tmp.path, INSTALLED_PROGRESS), "");
     const repo = new Repo(tmp.path);
     expect(checkProgress(repo)).toEqual([]);
+  });
+
+  it("falls back to the legacy progress file", () => {
+    const tmp = useTmpDir();
+    makeLegacyFramework(tmp.path);
+    writeFileSync(
+      join(tmp.path, LEGACY_PROGRESS),
+      "# Progress\n- [ ] Legacy task\n",
+    );
+    const repo = new Repo(tmp.path);
+    expect(checkProgress(repo)).toEqual(["Legacy task"]);
   });
 });
 

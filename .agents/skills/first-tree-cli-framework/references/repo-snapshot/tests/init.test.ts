@@ -3,7 +3,15 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { formatTaskList, writeProgress, runInit } from "#src/init.js";
 import { Repo } from "#src/repo.js";
-import { useTmpDir, makeFramework } from "./helpers.js";
+import {
+  INSTALLED_PROGRESS,
+  LEGACY_PROGRESS,
+} from "#src/runtime/asset-loader.js";
+import {
+  useTmpDir,
+  makeFramework,
+  makeLegacyFramework,
+} from "./helpers.js";
 
 // --- formatTaskList ---
 
@@ -66,7 +74,7 @@ describe("writeProgress", () => {
     const tmp = useTmpDir();
     const repo = new Repo(tmp.path);
     writeProgress(repo, "# hello\n");
-    const progress = join(tmp.path, ".context-tree", "progress.md");
+    const progress = join(tmp.path, INSTALLED_PROGRESS);
     expect(readFileSync(progress, "utf-8")).toBe("# hello\n");
   });
 
@@ -74,18 +82,27 @@ describe("writeProgress", () => {
     const tmp = useTmpDir();
     const repo = new Repo(tmp.path);
     writeProgress(repo, "content");
-    const progress = join(tmp.path, ".context-tree", "progress.md");
+    const progress = join(tmp.path, INSTALLED_PROGRESS);
     expect(readFileSync(progress, "utf-8")).toBe("content");
   });
 
   it("overwrites existing file", () => {
     const tmp = useTmpDir();
-    const ct = join(tmp.path, ".context-tree");
-    mkdirSync(ct);
-    writeFileSync(join(ct, "progress.md"), "old");
+    mkdirSync(join(tmp.path, "skills", "first-tree-cli-framework"), {
+      recursive: true,
+    });
+    writeFileSync(join(tmp.path, INSTALLED_PROGRESS), "old");
     const repo = new Repo(tmp.path);
     writeProgress(repo, "new");
-    expect(readFileSync(join(ct, "progress.md"), "utf-8")).toBe("new");
+    expect(readFileSync(join(tmp.path, INSTALLED_PROGRESS), "utf-8")).toBe("new");
+  });
+
+  it("keeps using the legacy progress path for legacy repos", () => {
+    const tmp = useTmpDir();
+    makeLegacyFramework(tmp.path);
+    const repo = new Repo(tmp.path);
+    writeProgress(repo, "legacy");
+    expect(readFileSync(join(tmp.path, LEGACY_PROGRESS), "utf-8")).toBe("legacy");
   });
 });
 

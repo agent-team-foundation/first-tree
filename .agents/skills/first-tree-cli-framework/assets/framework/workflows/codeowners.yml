@@ -19,7 +19,7 @@ jobs:
         with:
           node-version: "22"
 
-      - run: npx tsx .context-tree/generate-codeowners.ts
+      - run: npx tsx skills/first-tree-cli-framework/assets/framework/helpers/generate-codeowners.ts
 
       - name: Commit if changed
         run: |

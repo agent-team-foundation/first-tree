@@ -19,7 +19,7 @@ This file is the fast index for the new single-skill architecture.
 | --- | --- |
 | `src/cli.ts` | Top-level command dispatch |
 | `src/commands/help.ts` | Help topic routing |
-| `src/init.ts` / `src/verify.ts` / `src/upgrade.ts` | Existing command implementations while the refactor converges |
+| `src/init.ts` / `src/verify.ts` / `src/upgrade.ts` | Command implementations for install, verify, and upgrade |
 | `src/commands/` | Stable command entrypoints the CLI imports |
 | `src/runtime/asset-loader.ts` | Canonical path constants and layout detection |
 | `src/runtime/installer.ts` | Copy and template-render helpers |
@@ -39,6 +39,7 @@ The installed skill payload lives under `assets/framework/`.
 | `assets/framework/prompts/` | Review prompt payload |
 | `assets/framework/examples/` | Agent integration examples |
 | `assets/framework/helpers/` | Shipped helper scripts and TypeScript utilities |
+| `progress.md` | Generated in user repos to track unfinished setup or upgrade tasks |
 
 ## Validation Surface
 
@@ -56,8 +57,8 @@ The installed skill payload lives under `assets/framework/`.
 
 ## Compatibility Notes
 
-- `docs/` and root `.context-tree/` are temporary exported mirrors while the
-  repo transitions to a single canonical skill.
+- In the source repo, `docs/` and root `.context-tree/` are temporary exported
+  mirrors. They are no longer part of the user-repo contract.
 - `references/repo-snapshot/` is a portable artifact, not the source of truth.
 - If you change `references/` or `assets/framework/`, run
   `bash ./skills/first-tree-cli-framework/scripts/sync-skill-artifacts.sh`.

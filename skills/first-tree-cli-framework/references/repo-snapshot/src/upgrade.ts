@@ -1,100 +1,139 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Repo } from "#src/repo.js";
-import { fetchUpstream, readUpstreamVersion } from "#src/runtime/upgrader.js";
-
-const FIRST_TREE_REPO_URL = "https://github.com/agent-team-foundation/first-tree";
-
-function getUpstreamVersion(repo: Repo): string | null {
-  if (!fetchUpstream(repo.root)) {
-    return null;
-  }
-  return readUpstreamVersion(repo.root);
-}
+import {
+  FRAMEWORK_WORKFLOWS_DIR,
+  FRAMEWORK_TEMPLATES_DIR,
+  FRAMEWORK_VERSION,
+  INSTALLED_PROGRESS,
+  LEGACY_FRAMEWORK_ROOT,
+  SKILL_ROOT,
+} from "#src/runtime/asset-loader.js";
+import { copyCanonicalSkill } from "#src/runtime/installer.js";
+import {
+  cleanupUpstreamRepo,
+  cloneUpstreamRepo,
+  FIRST_TREE_REPO_URL,
+  readUpstreamVersion,
+} from "#src/runtime/upgrader.js";
 
 function writeProgress(repo: Repo, content: string): void {
-  const progressPath = join(repo.root, ".context-tree", "progress.md");
+  const progressPath = join(repo.root, repo.preferredProgressPath());
   mkdirSync(dirname(progressPath), { recursive: true });
   writeFileSync(progressPath, content);
 }
 
-export function runUpgrade(): number {
-  const repo = new Repo();
-
-  if (!repo.hasFramework()) {
-    console.error(
-      "Error: no .context-tree/ found. Run `context-tree init` first.",
-    );
-    return 1;
-  }
-
-  const localVersion = repo.readVersion() ?? "unknown";
-  console.log(`Local framework version: ${localVersion}\n`);
-
-  // Check for upstream remote
-  if (!repo.hasUpstreamRemote()) {
-    const lines = [
-      "# Context Tree Upgrade\n",
-      "## Setup",
-      `- [ ] Add upstream remote: \`git remote add context-tree-upstream ${FIRST_TREE_REPO_URL}\``,
-      "- [ ] Then run `context-tree upgrade` again to check for updates",
-    ];
-    const output = lines.join("\n");
-    console.log(output);
-    writeProgress(repo, output + "\n");
-    console.log("\nProgress file written to .context-tree/progress.md");
-    return 0;
-  }
-
-  // Fetch upstream version
-  const upstreamVersion = getUpstreamVersion(repo);
-  if (upstreamVersion === null) {
-    console.log(
-      "Could not fetch upstream version. Check your network and try again.",
-    );
-    return 1;
-  }
-
-  if (upstreamVersion === localVersion) {
-    console.log(`Already up to date (v${localVersion}).`);
-    return 0;
-  }
-
+function formatUpgradeTaskList(
+  repo: Repo,
+  localVersion: string,
+  upstreamVersion: string,
+  migratedFromLegacy: boolean,
+): string {
   const lines: string[] = [
     `# Context Tree Upgrade — v${localVersion} -> v${upstreamVersion}\n`,
-    "## Framework",
-    "- [ ] Pull latest from upstream: `git fetch context-tree-upstream && git merge context-tree-upstream/main`",
-    "- [ ] Resolve any conflicts in `.context-tree/` (framework files should generally take upstream version)",
+    "## Installed Skill",
+    `- [ ] Review local customizations under \`${SKILL_ROOT}/\` and reapply them if needed`,
+    `- [ ] Re-copy any workflow updates you want from \`${FRAMEWORK_WORKFLOWS_DIR}/\` into \`.github/workflows/\``,
+    `- [ ] Re-check any local agent setup that references \`${SKILL_ROOT}/assets/framework/examples/\` or \`${SKILL_ROOT}/assets/framework/helpers/\``,
     "",
   ];
 
-  // Check AGENT.md
+  if (migratedFromLegacy) {
+    lines.push(
+      "## Migration",
+      "- [ ] Remove any stale `.context-tree/` references from repo-specific docs, scripts, or workflow files",
+      "",
+    );
+  }
+
   if (repo.hasAgentMdMarkers()) {
     lines.push(
       "## Agent Instructions",
-      "- [ ] Check if AGENT.md framework section needs updating — compare content between markers to the new template",
+      `- [ ] Compare the framework section in \`AGENT.md\` with \`${FRAMEWORK_TEMPLATES_DIR}/agent.md.template\` and update the content between the markers if needed`,
       "",
     );
   }
 
   lines.push(
     "## Verification",
-    `- [ ] \`.context-tree/VERSION\` reads \`${upstreamVersion}\``,
+    `- [ ] \`${FRAMEWORK_VERSION}\` reads \`${upstreamVersion}\``,
     "- [ ] `context-tree verify` passes",
-    "- [ ] AGENT.md framework section matches upstream",
     "",
     "---",
     "",
     "**Important:** As you complete each task, check it off in" +
-      " `.context-tree/progress.md` by changing `- [ ]` to `- [x]`." +
+      ` \`${INSTALLED_PROGRESS}\` by changing \`- [ ]\` to \`- [x]\`.` +
       " Run `context-tree verify` when done — it will fail if any" +
       " items remain unchecked.",
     "",
   );
 
-  const output = lines.join("\n");
-  console.log(output);
-  writeProgress(repo, output);
-  console.log("Progress file written to .context-tree/progress.md");
-  return 0;
+  return lines.join("\n");
+}
+
+export interface UpgradeOptions {
+  upstreamRoot?: string;
+}
+
+export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
+  const workingRepo = repo ?? new Repo();
+
+  if (!workingRepo.hasFramework()) {
+    console.error(
+      "Error: no installed framework skill found. Run `context-tree init` first.",
+    );
+    return 1;
+  }
+
+  const layout = workingRepo.frameworkLayout();
+  const localVersion = workingRepo.readVersion() ?? "unknown";
+  console.log(`Local framework version: ${localVersion}\n`);
+
+  console.log(`Checking ${FIRST_TREE_REPO_URL} for the latest framework skill...`);
+
+  const clonedUpstream = options?.upstreamRoot === undefined;
+  const upstreamRoot = options?.upstreamRoot ?? cloneUpstreamRepo();
+
+  try {
+    const upstreamVersion = readUpstreamVersion(upstreamRoot);
+    if (upstreamVersion === null) {
+      console.log(
+        "Could not read the upstream framework version. Check your network and try again.",
+      );
+      return 1;
+    }
+
+    if (layout === "skill" && upstreamVersion === localVersion) {
+      console.log(`Already up to date (${FRAMEWORK_VERSION} = ${localVersion}).`);
+      return 0;
+    }
+
+    copyCanonicalSkill(upstreamRoot, workingRepo.root);
+    if (layout === "legacy") {
+      rmSync(join(workingRepo.root, LEGACY_FRAMEWORK_ROOT), {
+        recursive: true,
+        force: true,
+      });
+      console.log(
+        "Migrated legacy .context-tree/ layout to skills/first-tree-cli-framework/.",
+      );
+    } else {
+      console.log("Refreshed skills/first-tree-cli-framework/ from upstream.");
+    }
+
+    const output = formatUpgradeTaskList(
+      workingRepo,
+      localVersion,
+      upstreamVersion,
+      layout === "legacy",
+    );
+    console.log(`\n${output}`);
+    writeProgress(workingRepo, output);
+    console.log(`Progress file written to ${workingRepo.preferredProgressPath()}`);
+    return 0;
+  } finally {
+    if (clonedUpstream) {
+      cleanupUpstreamRepo(upstreamRoot);
+    }
+  }
 }

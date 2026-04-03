@@ -1,12 +1,13 @@
 import { FRAMEWORK_END_MARKER } from "#src/repo.js";
 import type { Repo } from "#src/repo.js";
 import type { RuleResult } from "#src/rules/index.js";
+import { FRAMEWORK_TEMPLATES_DIR } from "#src/runtime/asset-loader.js";
 
 export function evaluate(repo: Repo): RuleResult {
   const tasks: string[] = [];
   if (!repo.pathExists("AGENT.md")) {
     tasks.push(
-      "AGENT.md is missing — create from `.context-tree/templates/agent.md.template`",
+      `AGENT.md is missing — create from \`${FRAMEWORK_TEMPLATES_DIR}/agent.md.template\``,
     );
   } else if (!repo.hasAgentMdMarkers()) {
     tasks.push(

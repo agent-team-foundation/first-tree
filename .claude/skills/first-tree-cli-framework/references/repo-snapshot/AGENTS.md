@@ -9,7 +9,7 @@ This repo is the **template source and CLI** for Context Tree. It is NOT a conte
   - `src/validators/` — Node, member, and CODEOWNERS validation
 - `src/runtime/` — Shared path, install, adapter, and upgrade helpers
 - `skills/first-tree-cli-framework/` — Canonical skill source for docs and shipped runtime assets
-- `.context-tree/` — Temporary exported mirror of the shipped runtime assets during the single-skill migration
+- `.context-tree/` — Temporary exported mirror in the source repo during the single-skill migration
   - `tests/` — Unit tests (Vitest)
   - `docs/` — Introduction and documentation
 
@@ -17,7 +17,7 @@ This repo is the **template source and CLI** for Context Tree. It is NOT a conte
 
 - The CLI is a **harness for the agent** — it generates situation-aware task lists, not executes them
 - `skills/first-tree-cli-framework/` is the single canonical source; `assets/framework/` is the shipped runtime payload
-- `.context-tree/` is currently an exported compatibility mirror while the refactor converges
+- New user repos install `skills/first-tree-cli-framework/` directly; `.context-tree/` remains only as a source-repo compatibility mirror while the refactor converges
 - Templates in `skills/first-tree-cli-framework/assets/framework/templates/` ultimately render `NODE.md`, `AGENT.md`, `members/NODE.md` in users' repos
 - The npm package is `first-tree`, and it installs the `context-tree` command. Use `npx first-tree ...` for one-off runs or `npm install -g first-tree` to put `context-tree` on your PATH.
 

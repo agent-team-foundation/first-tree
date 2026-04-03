@@ -1,24 +1,26 @@
-import { execFileSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
-  mkdtempSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
 import { Repo } from "#src/repo.js";
 import { ONBOARDING_TEXT } from "#src/onboarding.js";
 import { evaluateAll } from "#src/rules/index.js";
 import type { RuleResult } from "#src/rules/index.js";
 import {
-  copyLegacyFrameworkMirror,
+  copyCanonicalSkill,
   renderTemplateFile,
 } from "#src/runtime/installer.js";
-import { FRAMEWORK_ASSET_ROOT } from "#src/runtime/asset-loader.js";
-
-const FIRST_TREE_REPO_URL = "https://github.com/agent-team-foundation/first-tree";
+import {
+  FRAMEWORK_ASSET_ROOT,
+  FRAMEWORK_VERSION,
+  INSTALLED_PROGRESS,
+} from "#src/runtime/asset-loader.js";
+import {
+  cleanupUpstreamRepo,
+  cloneUpstreamRepo,
+} from "#src/runtime/upgrader.js";
 
 /**
  * The interactive prompt tool the agent should use to present choices.
@@ -33,57 +35,19 @@ const TEMPLATE_MAP: [string, string][] = [
   ["members-domain.md.template", "members/NODE.md"],
 ];
 
-function cloneFirstTree(): string {
-  const tmp = mkdtempSync(join(tmpdir(), "context-tree-"));
-  console.log(`Cloning first-tree from ${FIRST_TREE_REPO_URL}...`);
-  try {
-    execFileSync("git", ["clone", "--depth", "1", FIRST_TREE_REPO_URL, tmp], {
-      encoding: "utf-8",
-      stdio: "pipe",
-    });
-  } catch (err) {
-    const message =
-      err instanceof Error ? err.message : "unknown error";
-    console.error(`Failed to clone first-tree: ${message}`);
-    rmSync(tmp, { recursive: true, force: true });
-    process.exit(1);
-  }
-  return tmp;
+function installSkill(source: string, target: string): void {
+  copyCanonicalSkill(source, target);
+  console.log("  Installed skills/first-tree-cli-framework/ from the upstream skill");
 }
 
-function copyFramework(source: string, target: string): void {
-  copyLegacyFrameworkMirror(source, target);
-  console.log("  Copied .context-tree/ from the canonical skill assets");
-}
-
-function renderTemplates(frameworkDir: string, target: string): void {
+function renderTemplates(target: string): void {
+  const frameworkDir = join(target, FRAMEWORK_ASSET_ROOT);
   for (const [templateName, targetPath] of TEMPLATE_MAP) {
     if (existsSync(join(target, targetPath))) {
       console.log(`  Skipped ${targetPath} (already exists)`);
     } else if (renderTemplateFile(frameworkDir, templateName, target, targetPath)) {
       console.log(`  Created ${targetPath}`);
     }
-  }
-}
-
-function addUpstreamRemote(target: string): void {
-  try {
-    const result = execFileSync("git", ["remote"], {
-      cwd: target,
-      encoding: "utf-8",
-    });
-    if (!result.split(/\s+/).includes("context-tree-upstream")) {
-      execFileSync(
-        "git",
-        ["remote", "add", "context-tree-upstream", FIRST_TREE_REPO_URL],
-        { cwd: target, encoding: "utf-8", stdio: "pipe" },
-      );
-      console.log(
-        `  Added git remote 'context-tree-upstream' -> ${FIRST_TREE_REPO_URL}`,
-      );
-    }
-  } catch {
-    // ignore
   }
 }
 
@@ -110,7 +74,7 @@ export function formatTaskList(groups: RuleResult[]): string {
   lines.push(
     "After completing the tasks above, run `context-tree verify` to confirm:",
   );
-  lines.push("- [ ] `.context-tree/VERSION` exists");
+  lines.push(`- [ ] \`${FRAMEWORK_VERSION}\` exists`);
   lines.push("- [ ] Root NODE.md has valid frontmatter (title, owners)");
   lines.push("- [ ] AGENT.md exists with framework markers");
   lines.push("- [ ] `context-tree verify` passes with no errors");
@@ -120,7 +84,7 @@ export function formatTaskList(groups: RuleResult[]): string {
   lines.push("");
   lines.push(
     "**Important:** As you complete each task, check it off in" +
-      " `.context-tree/progress.md` by changing `- [ ]` to `- [x]`." +
+      ` \`${INSTALLED_PROGRESS}\` by changing \`- [ ]\` to \`- [x]\`.` +
       " Run `context-tree verify` when done — it will fail if any" +
       " items remain unchecked.",
   );
@@ -129,7 +93,7 @@ export function formatTaskList(groups: RuleResult[]): string {
 }
 
 export function writeProgress(repo: Repo, content: string): void {
-  const progressPath = join(repo.root, ".context-tree", "progress.md");
+  const progressPath = join(repo.root, repo.preferredProgressPath());
   mkdirSync(dirname(progressPath), { recursive: true });
   writeFileSync(progressPath, content);
 }
@@ -145,15 +109,14 @@ export function runInit(repo?: Repo): number {
   }
 
   if (!r.hasFramework()) {
-    const seed = cloneFirstTree();
+    console.log("Cloning first-tree to install the framework skill...");
+    const seed = cloneUpstreamRepo();
     try {
-      console.log("Copying framework and scaffolding...");
-      copyFramework(seed, r.root);
-      const frameworkDir = join(seed, FRAMEWORK_ASSET_ROOT);
-      renderTemplates(frameworkDir, r.root);
-      addUpstreamRemote(r.root);
+      console.log("Installing skill and scaffolding...");
+      installSkill(seed, r.root);
+      renderTemplates(r.root);
     } finally {
-      rmSync(seed, { recursive: true, force: true });
+      cleanupUpstreamRepo(seed);
     }
     console.log();
   }
@@ -170,6 +133,6 @@ export function runInit(repo?: Repo): number {
   const output = formatTaskList(groups);
   console.log(output);
   writeProgress(r, output);
-  console.log("Progress file written to .context-tree/progress.md");
+  console.log(`Progress file written to ${r.preferredProgressPath()}`);
   return 0;
 }

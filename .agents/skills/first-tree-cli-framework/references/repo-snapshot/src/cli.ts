@@ -5,9 +5,9 @@ const USAGE = `usage: context-tree <command>
   New to context-tree? Run \`context-tree help onboarding\` first.
 
 Commands:
-  init      Bootstrap a new context tree (clones first-tree, copies framework files)
+  init      Bootstrap a new context tree (installs the framework skill)
   verify    Run verification checks against the current tree
-  upgrade   Generate an upgrade task list from upstream changes
+  upgrade   Refresh the installed skill from upstream and generate follow-up tasks
   help      Show help for a topic (e.g. \`help onboarding\`)
 
 Options:

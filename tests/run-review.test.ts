@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   extractStreamText,
   extractReviewJson,
-} from "../.context-tree/run-review.js";
+} from "../skills/first-tree-cli-framework/assets/framework/helpers/run-review.js";
 
 // --- extractStreamText ---
 
