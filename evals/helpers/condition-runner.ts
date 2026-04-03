@@ -157,6 +157,7 @@ export async function runTrial(
       model: session.model,
       cli: agent.cli,
       error: verification.error,
+      model_breakdown: session.costEstimate.modelBreakdown,
     };
   } catch (err: any) {
     process.stderr.write(`  ✗ ERROR: ${err.message}\n`);

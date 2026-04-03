@@ -32,4 +32,4 @@ max_turns: 30
 
 context_tree_versions:
   - label: cli-v0.0.3
-    tree_sha: "64fa94114ed3223052896a61dde95ca7d3c0e443"
+    tree_sha: "9f7bb386665b53bece28b2a6fc235fb93ab3ddd9"
