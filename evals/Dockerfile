@@ -58,7 +58,7 @@ WORKDIR /app
 COPY . .
 RUN CI=true pnpm install --frozen-lockfile
 
-# Create non-root user for eval runs
+# Create non-root user (required: claude blocks --dangerously-skip-permissions as root)
 RUN useradd -m -s /bin/bash eval \
     && cp -a /app /home/eval/first-tree \
     && chown -R eval:eval /home/eval

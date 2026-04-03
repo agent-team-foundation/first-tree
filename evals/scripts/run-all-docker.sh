@@ -25,10 +25,21 @@ if ! gh auth token &>/dev/null; then
   exit 1
 fi
 
-if [ ! -f "$HOME/.claude/.credentials.json" ]; then
-  echo "Claude credentials not found at ~/.claude/.credentials.json"
-  echo "Run: claude login"
-  exit 1
+# Use a named volume for Claude credentials (persists across runs)
+CLAUDE_VOL="ct-eval-claude-home"
+
+# Check if credentials exist in the volume
+if ! docker run --rm -v "$CLAUDE_VOL:/home/eval/.claude" --entrypoint sh "$IMAGE" -c 'test -f /home/eval/.claude/.credentials.json' 2>/dev/null; then
+  echo "Claude credentials not set up in Docker volume '$CLAUDE_VOL'."
+  echo "Launching interactive Claude for login..."
+  echo ""
+  docker run --rm -it \
+    -v "$CLAUDE_VOL:/home/eval/.claude" \
+    --entrypoint claude \
+    "$IMAGE"
+  echo ""
+  echo "Login complete. Re-run this script to start evals."
+  exit 0
 fi
 
 # Ensure output directory exists
@@ -80,8 +91,7 @@ echo ""
 
 docker run --rm \
   -e GH_TOKEN="$(gh auth token)" \
-  -v "$HOME/.claude.json:/home/eval/.claude.json" \
-  -v "$HOME/.claude:/home/eval/.claude" \
+  -v "$CLAUDE_VOL:/home/eval/.claude" \
   -v "$HOME/.context-tree/evals:/home/eval/.context-tree/evals" \
   -v "$PROMPT_FILE:/tmp/eval-prompt.txt:ro" \
   --entrypoint sh \
