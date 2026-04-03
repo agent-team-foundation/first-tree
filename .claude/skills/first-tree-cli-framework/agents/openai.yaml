@@ -1,0 +1,4 @@
+interface:
+  display_name: "First Tree CLI"
+  short_description: "Work on the first-tree CLI and Context Tree framework"
+  default_prompt: "Use $first-tree-cli-framework to work on the first-tree CLI or maintain its .context-tree framework."

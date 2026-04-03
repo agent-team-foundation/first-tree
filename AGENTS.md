@@ -1,4 +1,4 @@
-# Agent Instructions for seed-tree
+# Agent Instructions for first-tree
 
 This repo is the **template source and CLI** for Context Tree. It is NOT a context tree itself.
 
@@ -16,13 +16,18 @@ This repo is the **template source and CLI** for Context Tree. It is NOT a conte
 - The CLI is a **harness for the agent** — it generates situation-aware task lists, not executes them
 - `.context-tree/` is the framework directory that gets copied wholesale into users' repos
 - Templates in `.context-tree/templates/` are rendered to `NODE.md`, `AGENT.md`, `members/NODE.md` in users' repos
-- The CLI is installed via npm (`npx context-tree`) — it is never bundled in `.context-tree/`
+- The npm package is `first-tree`, and it installs the `context-tree` command. Use `npx first-tree ...` for one-off runs or `npm install -g first-tree` to put `context-tree` on your PATH.
 
 ## Before Making Changes
 
 1. Read [docs/onboarding.md](docs/onboarding.md) — the full onboarding guide for setting up a context tree
 2. Read `.context-tree/principles.md` — the core ideas that Context Tree is built on
 3. Read `.context-tree/ownership-and-naming.md` — how nodes and ownership work
+
+## Repo-Local Skill
+
+- Use `skills/first-tree-cli-framework/SKILL.md` as the source-of-truth skill when working on `src/cli.ts`, `src/init.ts`, `src/verify.ts`, `src/upgrade.ts`, `.context-tree/`, or any task that needs the exact Context Tree maintenance model implemented in this repo.
+- `.agents/skills/first-tree-cli-framework/` and `.claude/skills/first-tree-cli-framework/` are generated mirrors for agent discovery. Do not edit those mirrors directly; refresh them from the source skill with `bash skills/first-tree-cli-framework/scripts/sync-skill-artifacts.sh`.
 
 ## Rules
 

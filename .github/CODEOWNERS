@@ -1,0 +1,8 @@
+# Skill source of truth and generated mirrors
+/skills/first-tree-cli-framework/ @bingran-you
+/.agents/skills/first-tree-cli-framework/ @bingran-you
+/.claude/skills/first-tree-cli-framework/ @bingran-you
+
+# Validation and ownership metadata
+/.github/CODEOWNERS @bingran-you
+/.github/workflows/ci.yml @bingran-you

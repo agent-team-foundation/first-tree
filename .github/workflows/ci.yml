@@ -20,6 +20,8 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - run: pnpm validate:skill
+
       - run: pnpm typecheck
 
       - run: pnpm test
