@@ -7,6 +7,7 @@ domains:
   - "product direction"
   - "agent team methodology"
   - "open source"
+delegate_mention: liuchao-001-assistant
 ---
 
 ## About
