@@ -50,13 +50,13 @@ echo "  Log: $LOG_FILE"
 echo ""
 
 # Prompt file is baked into the image at evals/scripts/eval-prompt.txt
-docker run --rm \
+docker run --rm -it \
   -e CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_TOKEN" \
   -e GH_TOKEN="$(gh auth token)" \
   -v "$HOME/.context-tree/evals:/home/eval/.context-tree/evals" \
   --entrypoint sh \
   "$IMAGE" \
-  -c 'echo "{\"bypassPermissionsModeAccepted\": true}" > ~/.claude.json && claude -p "$(cat evals/scripts/eval-prompt.txt)" --dangerously-skip-permissions --output-format stream-json --verbose' \
+  -c 'echo "{\"bypassPermissionsModeAccepted\": true}" > ~/.claude.json && claude --dangerously-skip-permissions' \
   2>&1 | tee "$LOG_FILE"
 
 echo ""
