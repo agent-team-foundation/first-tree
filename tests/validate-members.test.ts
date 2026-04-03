@@ -6,7 +6,7 @@ import {
   extractList,
   validateMember,
   runValidateMembers,
-} from "#src/validators/members.js";
+} from "#skill/engine/validators/members.js";
 import { useTmpDir } from "./helpers.js";
 
 function write(root: string, relPath: string, content: string): string {

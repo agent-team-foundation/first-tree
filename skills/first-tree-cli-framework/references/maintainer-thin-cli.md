@@ -19,7 +19,7 @@ skill and have the shell call it.
 These root files are shell code, not canonical knowledge stores:
 
 - `src/cli.ts`
-- `src/commands/`
+- `src/md.d.ts`
 - `package.json`
 - `tsconfig.json`
 - `tsdown.config.ts`

@@ -1,6 +1,6 @@
-import type { Repo } from "#src/repo.js";
-import type { RuleResult } from "#src/rules/index.js";
-import { INTERACTIVE_TOOL } from "#src/init.js";
+import type { Repo } from "#skill/engine/repo.js";
+import type { RuleResult } from "#skill/engine/rules/index.js";
+import { INTERACTIVE_TOOL } from "#skill/engine/init.js";
 
 export function evaluate(repo: Repo): RuleResult {
   const tasks: string[] = [];

@@ -1,6 +1,6 @@
-import type { Repo } from "#src/repo.js";
-import type { RuleResult } from "#src/rules/index.js";
-import { SKILL_ROOT } from "#src/runtime/asset-loader.js";
+import type { Repo } from "#skill/engine/repo.js";
+import type { RuleResult } from "#skill/engine/rules/index.js";
+import { SKILL_ROOT } from "#skill/engine/runtime/asset-loader.js";
 
 const FIRST_TREE_REPO_URL = "https://github.com/agent-team-foundation/first-tree";
 

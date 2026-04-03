@@ -1,12 +1,12 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { Repo } from "#src/repo.js";
-import { runUpgrade } from "#src/upgrade.js";
+import { Repo } from "#skill/engine/repo.js";
+import { runUpgrade } from "#skill/engine/upgrade.js";
 import {
   FRAMEWORK_VERSION,
   INSTALLED_PROGRESS,
-} from "#src/runtime/asset-loader.js";
+} from "#skill/engine/runtime/asset-loader.js";
 import { makeFramework, makeLegacyFramework, useTmpDir } from "./helpers.js";
 
 function makeUpstreamSkill(root: string, version: string): void {

@@ -1,6 +1,6 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { Repo } from "#src/repo.js";
+import { Repo } from "#skill/engine/repo.js";
 import {
   FRAMEWORK_WORKFLOWS_DIR,
   FRAMEWORK_TEMPLATES_DIR,
@@ -8,14 +8,14 @@ import {
   INSTALLED_PROGRESS,
   LEGACY_FRAMEWORK_ROOT,
   SKILL_ROOT,
-} from "#src/runtime/asset-loader.js";
-import { copyCanonicalSkill } from "#src/runtime/installer.js";
+} from "#skill/engine/runtime/asset-loader.js";
+import { copyCanonicalSkill } from "#skill/engine/runtime/installer.js";
 import {
   cleanupUpstreamRepo,
   cloneUpstreamRepo,
   FIRST_TREE_REPO_URL,
   readUpstreamVersion,
-} from "#src/runtime/upgrader.js";
+} from "#skill/engine/runtime/upgrader.js";
 
 function writeProgress(repo: Repo, content: string): void {
   const progressPath = join(repo.root, repo.preferredProgressPath());

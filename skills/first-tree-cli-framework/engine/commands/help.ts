@@ -16,7 +16,7 @@ export async function runHelp(args: string[]): Promise<number> {
 
   switch (topic) {
     case "onboarding": {
-      const { runOnboarding } = await import("#src/onboarding.js");
+      const { runOnboarding } = await import("#skill/engine/onboarding.js");
       return runOnboarding();
     }
     default:

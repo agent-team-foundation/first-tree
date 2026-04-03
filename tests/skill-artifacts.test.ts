@@ -10,6 +10,43 @@ describe("skill artifacts", () => {
     expect(existsSync(join(ROOT, "skills", "first-tree-cli-framework", "SKILL.md"))).toBe(true);
     expect(existsSync(join(ROOT, "skills", "first-tree-cli-framework", "references", "onboarding.md"))).toBe(true);
     expect(existsSync(join(ROOT, "skills", "first-tree-cli-framework", "assets", "framework", "manifest.json"))).toBe(true);
+    expect(existsSync(join(ROOT, "skills", "first-tree-cli-framework", "engine", "init.ts"))).toBe(true);
+    expect(
+      existsSync(
+        join(
+          ROOT,
+          "skills",
+          "first-tree-cli-framework",
+          "engine",
+          "runtime",
+          "asset-loader.ts",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      existsSync(
+        join(
+          ROOT,
+          "skills",
+          "first-tree-cli-framework",
+          "engine",
+          "rules",
+          "index.ts",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      existsSync(
+        join(
+          ROOT,
+          "skills",
+          "first-tree-cli-framework",
+          "engine",
+          "validators",
+          "nodes.ts",
+        ),
+      ),
+    ).toBe(true);
     expect(
       existsSync(
         join(
@@ -58,6 +95,15 @@ describe("skill artifacts", () => {
     expect(existsSync(join(ROOT, ".claude"))).toBe(false);
     expect(existsSync(join(ROOT, ".context-tree"))).toBe(false);
     expect(existsSync(join(ROOT, "docs"))).toBe(false);
+    expect(existsSync(join(ROOT, "src", "commands"))).toBe(false);
+    expect(existsSync(join(ROOT, "src", "runtime"))).toBe(false);
+    expect(existsSync(join(ROOT, "src", "rules"))).toBe(false);
+    expect(existsSync(join(ROOT, "src", "validators"))).toBe(false);
+    expect(existsSync(join(ROOT, "src", "init.ts"))).toBe(false);
+    expect(existsSync(join(ROOT, "src", "verify.ts"))).toBe(false);
+    expect(existsSync(join(ROOT, "src", "upgrade.ts"))).toBe(false);
+    expect(existsSync(join(ROOT, "src", "repo.ts"))).toBe(false);
+    expect(existsSync(join(ROOT, "src", "onboarding.ts"))).toBe(false);
     expect(
       existsSync(join(ROOT, "skills", "first-tree-cli-framework", "references", "repo-snapshot")),
     ).toBe(false);
@@ -109,6 +155,8 @@ describe("skill artifacts", () => {
     expect(sourceMap).toContain("maintainer-thin-cli.md");
     expect(sourceMap).toContain("maintainer-build-and-distribution.md");
     expect(sourceMap).toContain("maintainer-testing-and-evals.md");
+    expect(sourceMap).toContain("engine/commands/");
+    expect(sourceMap).toContain("engine/runtime/asset-loader.ts");
     expect(sourceMap).toContain("package.json");
     expect(sourceMap).toContain("vitest.eval.config.ts");
     expect(sourceMap).toContain(".github/workflows/ci.yml");

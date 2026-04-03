@@ -4,23 +4,23 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { Repo } from "#src/repo.js";
-import { ONBOARDING_TEXT } from "#src/onboarding.js";
-import { evaluateAll } from "#src/rules/index.js";
-import type { RuleResult } from "#src/rules/index.js";
+import { Repo } from "#skill/engine/repo.js";
+import { ONBOARDING_TEXT } from "#skill/engine/onboarding.js";
+import { evaluateAll } from "#skill/engine/rules/index.js";
+import type { RuleResult } from "#skill/engine/rules/index.js";
 import {
   copyCanonicalSkill,
   renderTemplateFile,
-} from "#src/runtime/installer.js";
+} from "#skill/engine/runtime/installer.js";
 import {
   FRAMEWORK_ASSET_ROOT,
   FRAMEWORK_VERSION,
   INSTALLED_PROGRESS,
-} from "#src/runtime/asset-loader.js";
+} from "#skill/engine/runtime/asset-loader.js";
 import {
   cleanupUpstreamRepo,
   cloneUpstreamRepo,
-} from "#src/runtime/upgrader.js";
+} from "#skill/engine/runtime/upgrader.js";
 
 /**
  * The interactive prompt tool the agent should use to present choices.

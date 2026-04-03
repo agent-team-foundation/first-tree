@@ -7,7 +7,6 @@
     "context-tree": "./dist/cli.js"
   },
   "imports": {
-    "#src/*.js": "./src/*.ts",
     "#evals/*.js": "./evals/*.ts",
     "#skill/*": "./skills/first-tree-cli-framework/*"
   },

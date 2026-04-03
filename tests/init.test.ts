@@ -1,12 +1,12 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { formatTaskList, writeProgress, runInit } from "#src/init.js";
-import { Repo } from "#src/repo.js";
+import { formatTaskList, writeProgress, runInit } from "#skill/engine/init.js";
+import { Repo } from "#skill/engine/repo.js";
 import {
   INSTALLED_PROGRESS,
   LEGACY_PROGRESS,
-} from "#src/runtime/asset-loader.js";
+} from "#skill/engine/runtime/asset-loader.js";
 import {
   useTmpDir,
   makeFramework,

@@ -15,6 +15,7 @@ repos.
 - `references/` holds the explanatory docs the skill should load on demand.
 - `assets/framework/` holds the runtime payload that gets installed into user
   repos.
+- `engine/` holds the canonical framework and CLI behavior.
 - `scripts/` holds maintenance helpers for validating and running the skill.
 
 ## When To Read What
@@ -31,9 +32,11 @@ repos.
    - `references/maintainer-thin-cli.md`
    - `references/maintainer-build-and-distribution.md`
    - `references/maintainer-testing-and-evals.md`
-4. Open `assets/framework/` only when the task changes shipped templates,
+4. Open `engine/` when changing `init`, `verify`, `upgrade`, command routing,
+   repo inspection, rules, runtime helpers, or validators.
+5. Open `assets/framework/` only when the task changes shipped templates,
    workflows, prompts, examples, or helper scripts.
-5. Use `./scripts/run-local-cli.sh <command>` when you need to exercise the
+6. Use `./scripts/run-local-cli.sh <command>` when you need to exercise the
    live CLI from this repo.
 
 ## Working Modes
@@ -84,6 +87,7 @@ repos.
 - `assets/framework/templates/`: generated scaffolds
 - `assets/framework/workflows/`: CI templates
 - `assets/framework/helpers/`: shipped helper scripts and review tooling
+- `engine/`: canonical framework and CLI behavior
 - `references/source-map.md`: canonical reading index
 - `references/maintainer-architecture.md`: source-repo architecture and
   invariants

@@ -18,8 +18,10 @@ that install the framework.
    and the thin CLI without reading repo-local prose.
 3. `assets/framework/` stores the runtime payload that gets installed into user
    repos.
-4. The root CLI/package files are implementation shell code. They should call
-   into canonical behavior, not become a second source of framework knowledge.
+4. `engine/` stores the canonical framework and CLI behavior.
+5. The root CLI/package files are implementation shell code. They should call
+   into the skill-owned engine, not become a second source of framework
+   knowledge.
 
 ## Non-Negotiables
 

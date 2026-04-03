@@ -5,7 +5,7 @@ import {
   FRAMEWORK_TEMPLATES_DIR,
   LEGACY_FRAMEWORK_ROOT,
   SKILL_ROOT,
-} from "#src/runtime/asset-loader.js";
+} from "#skill/engine/runtime/asset-loader.js";
 
 export function copyCanonicalSkill(sourceRoot: string, targetRoot: string): void {
   const src = join(sourceRoot, SKILL_ROOT);

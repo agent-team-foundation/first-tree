@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import {
   frameworkVersionCandidates,
   resolveFirstExistingPath,
-} from "#src/runtime/asset-loader.js";
+} from "#skill/engine/runtime/asset-loader.js";
 
 export const FIRST_TREE_REPO_URL =
   "https://github.com/agent-team-foundation/first-tree";

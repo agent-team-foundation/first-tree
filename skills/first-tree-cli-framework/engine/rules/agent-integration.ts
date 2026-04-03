@@ -1,6 +1,6 @@
-import type { Repo } from "#src/repo.js";
-import type { RuleResult } from "#src/rules/index.js";
-import { FRAMEWORK_EXAMPLES_DIR } from "#src/runtime/asset-loader.js";
+import type { Repo } from "#skill/engine/repo.js";
+import type { RuleResult } from "#skill/engine/rules/index.js";
+import { FRAMEWORK_EXAMPLES_DIR } from "#skill/engine/runtime/asset-loader.js";
 
 export function evaluate(repo: Repo): RuleResult {
   const tasks: string[] = [];

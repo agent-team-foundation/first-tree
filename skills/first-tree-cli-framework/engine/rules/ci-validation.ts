@@ -1,9 +1,9 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { INTERACTIVE_TOOL } from "#src/init.js";
-import type { Repo } from "#src/repo.js";
-import type { RuleResult } from "#src/rules/index.js";
-import { FRAMEWORK_WORKFLOWS_DIR } from "#src/runtime/asset-loader.js";
+import { INTERACTIVE_TOOL } from "#skill/engine/init.js";
+import type { Repo } from "#skill/engine/repo.js";
+import type { RuleResult } from "#skill/engine/rules/index.js";
+import { FRAMEWORK_WORKFLOWS_DIR } from "#skill/engine/runtime/asset-loader.js";
 
 export function evaluate(repo: Repo): RuleResult {
   const tasks: string[] = [];

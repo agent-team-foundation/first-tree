@@ -47,6 +47,22 @@ require_file "$SOURCE_DIR/references/maintainer-architecture.md"
 require_file "$SOURCE_DIR/references/maintainer-thin-cli.md"
 require_file "$SOURCE_DIR/references/maintainer-build-and-distribution.md"
 require_file "$SOURCE_DIR/references/maintainer-testing-and-evals.md"
+require_file "$SOURCE_DIR/engine/init.ts"
+require_file "$SOURCE_DIR/engine/onboarding.ts"
+require_file "$SOURCE_DIR/engine/repo.ts"
+require_file "$SOURCE_DIR/engine/upgrade.ts"
+require_file "$SOURCE_DIR/engine/verify.ts"
+require_file "$SOURCE_DIR/engine/commands/help.ts"
+require_file "$SOURCE_DIR/engine/commands/init.ts"
+require_file "$SOURCE_DIR/engine/commands/upgrade.ts"
+require_file "$SOURCE_DIR/engine/commands/verify.ts"
+require_file "$SOURCE_DIR/engine/rules/index.ts"
+require_file "$SOURCE_DIR/engine/runtime/asset-loader.ts"
+require_file "$SOURCE_DIR/engine/runtime/installer.ts"
+require_file "$SOURCE_DIR/engine/runtime/upgrader.ts"
+require_file "$SOURCE_DIR/engine/runtime/adapters.ts"
+require_file "$SOURCE_DIR/engine/validators/members.ts"
+require_file "$SOURCE_DIR/engine/validators/nodes.ts"
 require_file "$SOURCE_DIR/assets/framework/manifest.json"
 require_file "$SOURCE_DIR/assets/framework/VERSION"
 require_file "$SOURCE_DIR/assets/framework/prompts/pr-review.md"
@@ -81,13 +97,18 @@ if grep -q '"#docs/\*"' "$REPO_ROOT/package.json"; then
   exit 1
 fi
 
+if grep -q '"#src/\*"' "$REPO_ROOT/package.json"; then
+  echo "package.json still exposes the legacy #src import alias." >&2
+  exit 1
+fi
+
 if ! grep -q '"#skill/\*"' "$REPO_ROOT/package.json"; then
   echo "package.json is missing the canonical #skill import alias." >&2
   exit 1
 fi
 
-if ! grep -q '#skill/references/onboarding.md' "$REPO_ROOT/src/onboarding.ts"; then
-  echo "src/onboarding.ts is not loading the canonical onboarding reference." >&2
+if ! grep -q '#skill/engine/commands/init.js' "$REPO_ROOT/src/cli.ts"; then
+  echo "src/cli.ts is not dispatching to the skill-owned engine." >&2
   exit 1
 fi
 

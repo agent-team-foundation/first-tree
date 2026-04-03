@@ -1,7 +1,7 @@
-import { FRAMEWORK_END_MARKER } from "#src/repo.js";
-import type { Repo } from "#src/repo.js";
-import type { RuleResult } from "#src/rules/index.js";
-import { FRAMEWORK_TEMPLATES_DIR } from "#src/runtime/asset-loader.js";
+import { FRAMEWORK_END_MARKER } from "#skill/engine/repo.js";
+import type { Repo } from "#skill/engine/repo.js";
+import type { RuleResult } from "#skill/engine/rules/index.js";
+import { FRAMEWORK_TEMPLATES_DIR } from "#skill/engine/runtime/asset-loader.js";
 
 export function evaluate(repo: Repo): RuleResult {
   const tasks: string[] = [];

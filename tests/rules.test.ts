@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { Repo } from "#src/repo.js";
+import { Repo } from "#skill/engine/repo.js";
 import {
   evaluateAll,
   framework,
@@ -11,7 +11,7 @@ import {
   agentIntegration,
   ciValidation,
   populateTree,
-} from "#src/rules/index.js";
+} from "#skill/engine/rules/index.js";
 import {
   useTmpDir,
   makeFramework,

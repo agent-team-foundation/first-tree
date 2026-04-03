@@ -1,13 +1,13 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { Repo } from "#src/repo.js";
+import { Repo } from "#skill/engine/repo.js";
 import {
   FRAMEWORK_VERSION,
   INSTALLED_PROGRESS,
   LEGACY_PROGRESS,
   LEGACY_VERSION,
-} from "#src/runtime/asset-loader.js";
+} from "#skill/engine/runtime/asset-loader.js";
 import { useTmpDir, makeFramework, makeLegacyFramework } from "./helpers.js";
 
 // --- pathExists ---

@@ -5,7 +5,7 @@ import { afterEach } from "vitest";
 import {
   FRAMEWORK_VERSION,
   LEGACY_VERSION,
-} from "#src/runtime/asset-loader.js";
+} from "#skill/engine/runtime/asset-loader.js";
 
 interface TmpDir {
   path: string;

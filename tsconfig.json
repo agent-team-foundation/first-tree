@@ -7,10 +7,10 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "outDir": "dist",
-    "rootDir": "src",
+    "rootDir": ".",
     "declaration": true,
     "sourceMap": true
   },
-  "include": ["src"],
+  "include": ["src", "skills/first-tree-cli-framework/engine"],
   "exclude": ["node_modules", "dist", "tests"]
 }

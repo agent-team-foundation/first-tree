@@ -36,22 +36,20 @@ The installed skill payload lives under `assets/framework/`.
 
 ## Framework Engine Surface
 
-These files currently implement the framework behavior. Their contracts must
-also be described in the maintainer references above.
+These skill-owned files implement the framework behavior.
 
 | Path | Purpose |
 | --- | --- |
-| `src/cli.ts` | Top-level command dispatch |
-| `src/commands/help.ts` | Help topic routing |
-| `src/init.ts` / `src/verify.ts` / `src/upgrade.ts` | Command implementations for install, verify, and upgrade |
-| `src/commands/` | Stable command entrypoints the CLI imports |
-| `src/repo.ts` | Repo inspection and layout helpers |
-| `src/rules/` | Situation-aware task generation after `init` |
-| `src/validators/` | Deterministic tree and member validation |
-| `src/runtime/asset-loader.ts` | Path constants plus legacy-layout detection |
-| `src/runtime/installer.ts` | Copy and template-render helpers |
-| `src/runtime/upgrader.ts` | Upstream clone/version helpers |
-| `src/runtime/adapters.ts` | Agent-integration path helpers |
+| `engine/commands/` | Stable command entrypoints that the thin CLI imports |
+| `engine/init.ts` / `engine/verify.ts` / `engine/upgrade.ts` | Command implementations for install, verify, and upgrade |
+| `engine/onboarding.ts` | Canonical onboarding text loader |
+| `engine/repo.ts` | Repo inspection and layout helpers |
+| `engine/rules/` | Situation-aware task generation after `init` |
+| `engine/validators/` | Deterministic tree and member validation |
+| `engine/runtime/asset-loader.ts` | Path constants plus legacy-layout detection |
+| `engine/runtime/installer.ts` | Copy and template-render helpers |
+| `engine/runtime/upgrader.ts` | Upstream clone/version helpers |
+| `engine/runtime/adapters.ts` | Agent-integration path helpers |
 
 ## Thin CLI Shell Surface
 
@@ -60,6 +58,8 @@ not become the only place important maintainer knowledge lives.
 
 | Path | Purpose |
 | --- | --- |
+| `src/cli.ts` | Thin command parser and dispatcher |
+| `src/md.d.ts` | Build-time markdown module typing |
 | `package.json` | Package metadata, import aliases, and scripts |
 | `tsconfig.json` | TypeScript compile boundaries |
 | `tsdown.config.ts` | Build entry and asset handling |
@@ -91,8 +91,8 @@ not become the only place important maintainer knowledge lives.
 - The source repo intentionally contains no root `.context-tree/`, `docs/`,
   mirror skills, or bundled repo snapshot.
 - Legacy `.context-tree/...` paths still matter only for migrating existing
-  user repos; the compatibility logic lives in `src/runtime/asset-loader.ts`
-  and `src/upgrade.ts`.
+  user repos; the compatibility logic lives in
+  `engine/runtime/asset-loader.ts` and `engine/upgrade.ts`.
 - Root `README.md` and `AGENT.md` are intentionally brief. Important
   information must live in the skill references instead.
 - If you change `references/` or `assets/framework/`, run `pnpm validate:skill`.

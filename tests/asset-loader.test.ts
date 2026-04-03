@@ -9,7 +9,7 @@ import {
   detectFrameworkLayout,
   progressFileCandidates,
   resolveFirstExistingPath,
-} from "#src/runtime/asset-loader.js";
+} from "#skill/engine/runtime/asset-loader.js";
 import { useTmpDir } from "./helpers.js";
 
 describe("asset-loader", () => {

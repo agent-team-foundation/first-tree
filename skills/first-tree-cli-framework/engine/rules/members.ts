@@ -1,5 +1,5 @@
-import type { Repo } from "#src/repo.js";
-import type { RuleResult } from "#src/rules/index.js";
+import type { Repo } from "#skill/engine/repo.js";
+import type { RuleResult } from "#skill/engine/rules/index.js";
 
 export function evaluate(repo: Repo): RuleResult {
   const tasks: string[] = [];

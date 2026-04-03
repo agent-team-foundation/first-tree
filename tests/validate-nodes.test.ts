@@ -10,7 +10,7 @@ import {
   validateEmptyNodes,
   validateTitleMismatch,
   setTreeRoot,
-} from "#src/validators/nodes.js";
+} from "#skill/engine/validators/nodes.js";
 import { useTmpDir } from "./helpers.js";
 
 function write(root: string, relPath: string, content: string): string {

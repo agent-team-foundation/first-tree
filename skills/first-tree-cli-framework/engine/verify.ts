@@ -1,6 +1,6 @@
-import { Repo } from "#src/repo.js";
-import { runValidateMembers } from "#src/validators/members.js";
-import { runValidateNodes } from "#src/validators/nodes.js";
+import { Repo } from "#skill/engine/repo.js";
+import { runValidateMembers } from "#skill/engine/validators/members.js";
+import { runValidateNodes } from "#skill/engine/validators/nodes.js";
 
 const UNCHECKED_RE = /^- \[ \] (.+)$/gm;
 

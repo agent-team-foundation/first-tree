@@ -9,7 +9,7 @@ import {
   detectFrameworkLayout,
   progressFileCandidates,
   resolveFirstExistingPath,
-} from "#src/runtime/asset-loader.js";
+} from "#skill/engine/runtime/asset-loader.js";
 
 const FRONTMATTER_RE = /^---\s*\n(.*?)\n---/s;
 const OWNERS_RE = /^owners:\s*\[([^\]]*)\]/m;

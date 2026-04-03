@@ -35,19 +35,19 @@ async function main(): Promise<number> {
 
   switch (command) {
     case "init": {
-      const { runInit } = await import("#src/commands/init.js");
+      const { runInit } = await import("#skill/engine/commands/init.js");
       return runInit();
     }
     case "verify": {
-      const { runVerify } = await import("#src/commands/verify.js");
+      const { runVerify } = await import("#skill/engine/commands/verify.js");
       return runVerify();
     }
     case "upgrade": {
-      const { runUpgrade } = await import("#src/commands/upgrade.js");
+      const { runUpgrade } = await import("#skill/engine/commands/upgrade.js");
       return runUpgrade();
     }
     case "help":
-      return (await import("#src/commands/help.js")).runHelp(args.slice(1));
+      return (await import("#skill/engine/commands/help.js")).runHelp(args.slice(1));
     default:
       console.log(`Unknown command: ${command}`);
       console.log(USAGE);
