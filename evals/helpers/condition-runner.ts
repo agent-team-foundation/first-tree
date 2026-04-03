@@ -11,9 +11,9 @@
 
 import { execSync } from 'node:child_process';
 import * as path from 'node:path';
-import type { EvalCase, EvalCondition, AgentConfig, TrialResult, ContextTreeConfig } from '#evals/helpers/types.js';
-import { createSandbox } from '#evals/helpers/repo-sandbox.js';
-import { runSession } from '#evals/helpers/session-runner.js';
+import type { EvalCase, EvalCondition, AgentConfig, TrialResult, ContextTreeConfig } from './types.js';
+import { createSandbox } from './repo-sandbox.js';
+import { runSession } from './session-runner.js';
 
 // --- Prompt construction ---
 

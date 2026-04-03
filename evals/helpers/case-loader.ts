@@ -10,7 +10,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import type { EvalCase, RepoRef, TreeVersionRef } from '#evals/helpers/types.js';
+import type { EvalCase, RepoRef, TreeVersionRef } from './types.js';
 
 function parseRepos(data: any, filePath: string): RepoRef[] {
   // Multi-repo format: repos[]

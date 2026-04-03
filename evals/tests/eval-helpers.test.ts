@@ -9,10 +9,10 @@ import { mkdirSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { parseNDJSON } from '#evals/helpers/session-runner.js';
-import { loadCases } from '#evals/helpers/case-loader.js';
-import { parseConditions } from '#evals/helpers/parse-conditions.js';
-import { EvalCollector } from '#evals/helpers/eval-store.js';
+import { parseNDJSON } from '../helpers/session-runner.js';
+import { loadCases } from '../helpers/case-loader.js';
+import { parseConditions } from '../helpers/parse-conditions.js';
+import { EvalCollector } from '../helpers/eval-store.js';
 
 // --- Temp dir helper ---
 

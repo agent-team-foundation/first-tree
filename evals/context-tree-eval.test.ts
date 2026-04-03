@@ -12,11 +12,11 @@
  */
 
 import { describe, test, afterAll } from 'vitest';
-import type { AgentConfig, ContextTreeConfig } from '#evals/helpers/types.js';
-import { loadCases } from '#evals/helpers/case-loader.js';
-import { runTrial } from '#evals/helpers/condition-runner.js';
-import { EvalCollector } from '#evals/helpers/eval-store.js';
-import { resolveConditions } from '#evals/helpers/resolve-conditions.js';
+import type { AgentConfig, ContextTreeConfig } from './helpers/types.js';
+import { loadCases } from './helpers/case-loader.js';
+import { runTrial } from './helpers/condition-runner.js';
+import { EvalCollector } from './helpers/eval-store.js';
+import { resolveConditions } from './helpers/resolve-conditions.js';
 
 const evalsEnabled = !!process.env.EVALS;
 const trialCount = parseInt(process.env.EVALS_TRIALS || '1', 10);

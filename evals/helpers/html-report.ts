@@ -6,7 +6,7 @@
  * - Per-case detail: token breakdown, per-model costs, turn-by-turn timeline
  */
 
-import type { TrialResult, ModelTokens } from '#evals/helpers/types.js';
+import type { TrialResult, ModelTokens } from './types.js';
 
 // --- Helpers ---
 

@@ -38,8 +38,8 @@ import {
   type CreateTreeOptions,
   type TreeProvenance,
 } from './tree-manager.js';
-import { runSession } from '#evals/helpers/session-runner.js';
-import type { AgentConfig } from '#evals/helpers/types.js';
+import { runSession } from '../helpers/session-runner.js';
+import type { AgentConfig } from '../helpers/types.js';
 
 function buildPrompt(codeDir: string): string {
   return `You are initializing and populating a context tree for a codebase.

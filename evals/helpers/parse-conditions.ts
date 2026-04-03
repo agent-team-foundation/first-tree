@@ -5,7 +5,7 @@
  * Each entry is either "label" (no tree) or "label:tree_sha".
  */
 
-import type { EvalCondition } from '#evals/helpers/types.js';
+import type { EvalCondition } from './types.js';
 
 export function parseConditions(env: string): EvalCondition[] {
   return env.split(',').map(s => {

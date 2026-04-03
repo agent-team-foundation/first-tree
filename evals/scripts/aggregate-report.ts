@@ -11,8 +11,8 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { TrialResult, EvalRun } from '#evals/helpers/types.js';
-import { generateHtmlReport } from '#evals/helpers/html-report.js';
+import type { TrialResult, EvalRun } from '../helpers/types.js';
+import { generateHtmlReport } from '../helpers/html-report.js';
 
 const files = process.argv.slice(2);
 if (files.length === 0) {

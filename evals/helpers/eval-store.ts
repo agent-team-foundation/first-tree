@@ -12,8 +12,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { spawnSync } from 'node:child_process';
-import type { TrialResult, EvalRun } from '#evals/helpers/types.js';
-import { generateHtmlReport } from '#evals/helpers/html-report.js';
+import type { TrialResult, EvalRun } from './types.js';
+import { generateHtmlReport } from './html-report.js';
 
 const SCHEMA_VERSION = 1;
 const EVAL_DIR = path.join(os.homedir(), '.context-tree', 'evals');

@@ -117,6 +117,11 @@ if grep -q '"#src/\*"' "$REPO_ROOT/package.json"; then
   exit 1
 fi
 
+if grep -q '"#evals/\*"' "$REPO_ROOT/package.json"; then
+  echo "package.json should not expose the repo-only #evals import alias." >&2
+  exit 1
+fi
+
 if ! grep -q '"#skill/\*"' "$REPO_ROOT/package.json"; then
   echo "package.json is missing the canonical #skill import alias." >&2
   exit 1

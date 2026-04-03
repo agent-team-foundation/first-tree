@@ -190,6 +190,7 @@ describe("skill artifacts", () => {
     expect(read("AGENTS.md")).not.toContain("### Running evals");
     expect(read("AGENTS.md")).not.toContain("EVALS_TREE_REPO");
     expect(read("src/cli.ts")).not.toContain("from upstream");
+    expect(read("package.json")).not.toContain('"#evals/*"');
 
     const onboarding = read("skills/first-tree-cli-framework/references/onboarding.md");
     expect(onboarding).toContain("npx first-tree init");

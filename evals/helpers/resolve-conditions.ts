@@ -4,8 +4,8 @@
  * Priority: EVALS_CONDITIONS env var > case-embedded context_tree_versions > baseline.
  */
 
-import type { EvalCase, EvalCondition } from '#evals/helpers/types.js';
-import { parseConditions } from '#evals/helpers/parse-conditions.js';
+import type { EvalCase, EvalCondition } from './types.js';
+import { parseConditions } from './parse-conditions.js';
 
 export function resolveConditions(evalCase: EvalCase): EvalCondition[] {
   if (process.env.EVALS_CONDITIONS) {

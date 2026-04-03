@@ -11,7 +11,7 @@ import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import type { AgentConfig, SessionResult, CostEstimate, ModelTokens } from '#evals/helpers/types.js';
+import type { AgentConfig, SessionResult, CostEstimate, ModelTokens } from './types.js';
 
 // --- NDJSON parser (pure, no I/O) ---
 

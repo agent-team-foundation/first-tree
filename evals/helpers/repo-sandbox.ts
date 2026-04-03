@@ -15,7 +15,7 @@ import { execSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import type { EvalCase, EvalCondition, ContextTreeConfig, RepoRef } from '#evals/helpers/types.js';
+import type { EvalCase, EvalCondition, ContextTreeConfig, RepoRef } from './types.js';
 
 export interface Sandbox {
   dir: string;
