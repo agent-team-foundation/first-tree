@@ -1,7 +1,7 @@
 ---
 title: IM Channels
 owners: [Gandy2025]
-soft_links: [/kael/platform/workspace.md, /kael/chat]
+soft_links: [/kael/platform/workspace.md, /kael/chat/NODE.md]
 ---
 
 # IM Channels
