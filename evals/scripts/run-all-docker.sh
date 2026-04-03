@@ -71,12 +71,14 @@ docker run --rm -it \
   --entrypoint sh \
   "$IMAGE" \
   -c '
-    # Write credentials if not already present (first run or token refresh)
-    if [ ! -f ~/.claude/.credentials.json ] || [ -n "$_CREDS_B64" ]; then
-      echo "$_CREDS_B64" | base64 -d > ~/.claude/.credentials.json
-      chmod 600 ~/.claude/.credentials.json
-    fi
+    # Inject credentials from host
+    echo "$_CREDS_B64" | base64 -d > ~/.claude/.credentials.json
+    chmod 600 ~/.claude/.credentials.json
+    # Claude also checks ~/.claude.json for config
     echo "{\"bypassPermissionsModeAccepted\":true}" > ~/.claude.json
+    # Debug: verify auth before launching
+    echo "Auth check:" && claude -p "hi" --dangerously-skip-permissions --max-turns 1 2>&1 | tail -1
+    echo "Launching TUI..."
     claude --dangerously-skip-permissions
   ' \
   2>&1 | tee "$LOG_FILE"
