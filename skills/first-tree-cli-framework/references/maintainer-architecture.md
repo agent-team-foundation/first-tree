@@ -50,9 +50,10 @@ that install the framework.
 
 ## End-State Target
 
-- skill owns knowledge, runtime payload, framework engine, tests, and evals
-- root owns only the light CLI/bootstrap/build shell needed to distribute and
-  execute the skill
+- skill owns knowledge, runtime payload, framework engine, and the canonical
+  framework test surface
+- root owns only the light CLI/bootstrap/build shell plus maintainer-only
+  developer tooling such as `evals/`
 
 When deciding where a new file should live, bias toward the skill unless the
 file is purely package-tooling shell code.

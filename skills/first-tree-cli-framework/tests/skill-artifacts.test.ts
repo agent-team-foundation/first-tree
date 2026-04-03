@@ -222,5 +222,12 @@ describe("skill artifacts", () => {
     expect(sourceMap).toContain("package.json");
     expect(sourceMap).not.toContain("vitest.eval.config.ts");
     expect(sourceMap).toContain(".github/workflows/ci.yml");
+
+    const maintainerArchitecture = read(
+      "skills/first-tree-cli-framework/references/maintainer-architecture.md",
+    );
+    expect(maintainerArchitecture).toContain("maintainer-only developer tooling");
+    expect(maintainerArchitecture).toContain("`evals/`");
+    expect(maintainerArchitecture).not.toContain("tests, and evals");
   });
 });
