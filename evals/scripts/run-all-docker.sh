@@ -80,5 +80,4 @@ Important:
 PROMPT
 )" \
   --dangerously-skip-permissions \
-  --output-format stream-json \
   --verbose
