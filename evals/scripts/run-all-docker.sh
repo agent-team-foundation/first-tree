@@ -34,28 +34,18 @@ fi
 # Ensure output directory exists
 mkdir -p "$HOME/.context-tree/evals"
 
-echo "Starting eval run in Docker..."
-echo "  Image: $IMAGE"
-echo "  Results: ~/.context-tree/evals/"
-echo ""
+# Write prompt to a temp file (avoids shell quoting issues)
+PROMPT_FILE="$(mktemp)"
+trap 'rm -f "$PROMPT_FILE"' EXIT
 
-exec docker run --rm -it \
-  -e GH_TOKEN="$(gh auth token)" \
-  -v "$HOME/.claude.json:/home/eval/.claude.json" \
-  -v "$HOME/.claude:/home/eval/.claude" \
-  -v "$HOME/.context-tree/evals:/home/eval/.context-tree/evals" \
-  --entrypoint claude \
-  "$IMAGE" \
-  -p "$(cat <<'PROMPT'
+cat > "$PROMPT_FILE" <<'PROMPT'
 You are working in the first-tree repo at /home/eval/first-tree. Read AGENT.md for context.
 
 Your task: run ALL eval cases sequentially and fix any issues.
 
 For each .yaml file in evals/cases/:
 
-1. Check if the case has context_tree_versions defined. If it does, verify the tree exists by running:
-   EVALS=1 EVALS_CASES='<case-id>' EVALS_CONDITIONS='baseline' EVALS_TREE_REPO='agent-team-foundation/eval-context-trees' pnpm run eval
-   Then run with tree:
+1. Check if the case has context_tree_versions defined. If it does, run:
    EVALS=1 EVALS_CASES='<case-id>' EVALS_TREE_REPO='agent-team-foundation/eval-context-trees' pnpm run eval
 
 2. If the case does NOT have context_tree_versions, first run baseline only:
@@ -78,7 +68,48 @@ Important:
 - If a case times out or hits an unrecoverable error after 2 attempts, skip it and move on.
 - Commit any verify.sh fixes or YAML updates before moving to the next case.
 PROMPT
-)" \
-  --dangerously-skip-permissions \
-  --output-format stream-json \
-  --verbose 2>&1
+
+LOG_FILE="$HOME/.context-tree/evals/_run-$(date +%Y%m%d-%H%M%S).log"
+
+echo "Starting eval run in Docker..."
+echo "  Image: $IMAGE"
+echo "  Results: ~/.context-tree/evals/"
+echo "  Log: $LOG_FILE"
+echo "  Follow with: tail -f $LOG_FILE"
+echo ""
+
+docker run --rm \
+  -e GH_TOKEN="$(gh auth token)" \
+  -v "$HOME/.claude.json:/home/eval/.claude.json" \
+  -v "$HOME/.claude:/home/eval/.claude" \
+  -v "$HOME/.context-tree/evals:/home/eval/.context-tree/evals" \
+  -v "$PROMPT_FILE:/tmp/eval-prompt.txt:ro" \
+  --entrypoint sh \
+  "$IMAGE" \
+  -c 'claude -p "$(cat /tmp/eval-prompt.txt)" --dangerously-skip-permissions --output-format stream-json --verbose 2>&1 | tee /home/eval/.context-tree/evals/_run.log' &
+
+DOCKER_PID=$!
+
+# Wait for log file to appear, then tail it
+for i in $(seq 1 10); do
+  if [ -f "$HOME/.context-tree/evals/_run.log" ]; then
+    break
+  fi
+  sleep 1
+done
+
+tail -f "$HOME/.context-tree/evals/_run.log" &
+TAIL_PID=$!
+
+# Wait for docker to finish, then stop tail
+wait "$DOCKER_PID" 2>/dev/null
+EXIT_CODE=$?
+kill "$TAIL_PID" 2>/dev/null
+
+# Copy log with timestamp
+cp "$HOME/.context-tree/evals/_run.log" "$LOG_FILE" 2>/dev/null
+
+echo ""
+echo "Done. Exit code: $EXIT_CODE"
+echo "Log saved to: $LOG_FILE"
+exit "$EXIT_CODE"
