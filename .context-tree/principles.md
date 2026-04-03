@@ -3,7 +3,7 @@ title: "Tree Principles: Explanation and Examples"
 owners: []
 ---
 
-# Tree Principles
+# Tree Principles: Explanation and Examples
 
 This document explains the core principles of Context Tree with concrete examples.
 

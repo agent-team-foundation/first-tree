@@ -3,7 +3,7 @@ title: Product Hunt Launch Guide
 owners: []
 ---
 
-# Context Tree - Product Hunt 打榜前四周准备指南
+# Product Hunt Launch Guide
 
 > **目标**: 在 Product Hunt 上成功发布 Context Tree，冲击 AI Agent 类目 Top 5
 

@@ -42,3 +42,11 @@ Browser extension and desktop app need persistent WebSocket connections directly
 
 - `KAEL_CLI_JWT_SECRET` — separate JWT secret for kael-cli/kael-api MCP endpoint authentication
 - `OAUTH_ENCRYPTION_KEY` — Fernet key encrypting third-party OAuth tokens in the database
+
+## Detailed Nodes
+
+- **[Frontend](frontend.md)** — BetterAuth setup, user-facing auth flows
+- **[Backend](backend.md)** — INTERNAL_API_KEY validation on `/api/v1` routes
+- **[Browser Extension](browser-extension.md)** — Extension auth flow and JWT token management
+- **[Desktop](desktop.md)** — Desktop app auth flow via one-shot HTTP server
+- **[Database](database.md)** — Database access, connection architecture, and credentials

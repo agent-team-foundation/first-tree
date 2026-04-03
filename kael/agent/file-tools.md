@@ -1,10 +1,10 @@
 ---
 title: File Tools
 owners: [286ljb, baixiaohang]
-soft_links: [../platform/project-asset-system.md]
+soft_links: [/kael/platform/project-asset-system.md]
 ---
 
-# File Tools (`file_*`)
+# File Tools
 
 Four tools for reading, linking, downloading, and presenting files. All file references use **URI scheme notation** to make the storage backend explicit at the call site.
 

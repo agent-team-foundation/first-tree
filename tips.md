@@ -3,7 +3,7 @@ title: Tips for Working with Context Tree
 owners: [*]
 ---
 
-# Tips
+# Tips for Working with Context Tree
 
 Practical tips for working with the context tree efficiently.
 

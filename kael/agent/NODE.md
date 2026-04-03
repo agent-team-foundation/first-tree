@@ -14,6 +14,7 @@ Native tools are low-level, reusable utilities the agent can invoke directly —
 - **[Runtime](runtime.md)** — Long-running task execution, recovery, message queue
 - **[Memory](memory.md)** — Three-layer memory system (Core + Archival + Episodic Buffer). How Kael remembers across sessions.
 - **[Context Management](context.md)** — Two-layer progressive context management. How Kael prevents long conversations from overflowing.
+- **[File Tools](file-tools.md)** — Four tools for reading, linking, downloading, and presenting files. URI scheme notation and asset types.
 - **[Skills](skills.md)** — Skill runtime mechanics: SKILL.md format, discover/activate/execute lifecycle, storage architecture, admin platform, and Skills UI protocol. For the conceptual definition of what a skill is and individual skill implementations, see [skills/](../skills/).
 
 ---

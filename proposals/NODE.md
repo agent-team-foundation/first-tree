@@ -28,3 +28,9 @@ The only exception: when a human explicitly asks an agent to read a specific fil
 ## Naming Convention
 
 `<topic>.<date>.md`, e.g. `agent-message-system.20260319.md`. The date helps assess timeliness.
+
+---
+
+## Current Proposals
+
+- **[governance-domain.20260324.md](governance-domain.20260324.md)** — Proposal for a governance domain (draft)
