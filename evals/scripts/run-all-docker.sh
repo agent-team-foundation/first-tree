@@ -31,8 +31,9 @@ if [ ! -f "$HOME/.claude/.credentials.json" ]; then
   exit 1
 fi
 
-# Extract OAuth token from credentials
+# Extract OAuth token and full credentials JSON
 CLAUDE_TOKEN=$(python3 -c "import json; d=json.load(open('$HOME/.claude/.credentials.json')); print(d['claudeAiOauth']['accessToken'])")
+CLAUDE_CREDS_JSON=$(python3 -c "import json; print(json.dumps(json.load(open('$HOME/.claude/.credentials.json'))))")
 if [ -z "$CLAUDE_TOKEN" ]; then
   echo "Failed to extract OAuth token from ~/.claude/.credentials.json"
   exit 1
@@ -56,7 +57,8 @@ docker run --rm -it \
   -v "$HOME/.context-tree/evals:/home/eval/.context-tree/evals" \
   --entrypoint sh \
   "$IMAGE" \
-  -c 'echo "{\"bypassPermissionsModeAccepted\": true}" > ~/.claude.json && claude --dangerously-skip-permissions' \
+  -e CLAUDE_CREDS_JSON="$CLAUDE_CREDS_JSON" \
+  -c 'mkdir -p ~/.claude && echo "$CLAUDE_CREDS_JSON" > ~/.claude/.credentials.json && chmod 600 ~/.claude/.credentials.json && echo "{\"bypassPermissionsModeAccepted\": true}" > ~/.claude.json && claude --dangerously-skip-permissions' \
   2>&1 | tee "$LOG_FILE"
 
 echo ""
