@@ -20,6 +20,32 @@ owners: [Gandy2025]
 - `INTERNAL`: system-derived files such as extracted images or rendered slide previews.
 - `REFERENCE`: project-visible references to content stored in another system, such as slide records.
 
+## Asset Status Lifecycle
+
+Each asset moves through a status that reflects its current readiness:
+
+| Status | Meaning |
+|--------|---------|
+| `ACTIVE` | Ready to use — file is in S3, parsing complete (if applicable) |
+| `PROCESSING` | Parsing/indexing in progress (primarily PDF) |
+| `DOWNLOADING` | `file_download` tool is actively fetching from a remote URL |
+| `RETRYING` | Download failed and is being retried (max 3 retries) |
+| `FAILED` | Terminal error — parse or download failed permanently |
+| `ARCHIVED` | Soft-deleted, no longer visible |
+
+EXTERNAL and REFERENCE assets go ACTIVE on creation. ARTIFACT files start ACTIVE (workspace sync writes them directly). PDF EXTERNAL assets start PROCESSING and transition to ACTIVE when the parsing pipeline completes.
+
+The `status_message` and `retry_count` fields carry error context during DOWNLOADING/RETRYING/FAILED states. These are also surfaced to the agent in the `<file_context>` tag so it understands which files are usable.
+
+## Document Panel Visibility
+
+Assets shown in the frontend document panel follow a type-based rule:
+
+- **EXTERNAL**: always visible
+- **REFERENCE**: always visible (slides and similar references)
+- **ARTIFACT**: visible only if the filename has a recognized user-facing extension (`.md`, `.pdf`, `.csv`, `.png`, `.jpg`, `.mp4`, `.zip`, etc.)
+- **INTERNAL**: never visible — these are system-derived intermediates
+
 ## Addressing And Sharing
 
 - `file://` is the canonical ID-based lookup for assets.
@@ -43,5 +69,7 @@ owners: [Gandy2025]
 ## Cross-Domain Links
 
 - Workspace as the durable unit that owns asset state: [workspace.md](workspace.md)
+- How assets are surfaced to the agent before each message: [../agent/file-context.md](../agent/file-context.md)
+- File tools that operate on asset URIs: [../agent/file-tools.md](../agent/file-tools.md)
 - Chat and preview surfaces that expose assets to users: [../chat/NODE.md](../chat/NODE.md)
 - Knowledge systems that parse and retrieve from these assets: [../knowledge/NODE.md](../knowledge/NODE.md)

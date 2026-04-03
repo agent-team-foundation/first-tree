@@ -10,6 +10,7 @@ How Kael thinks and acts internally — the AI brain. Tools, memory, scheduling,
 Native tools are low-level, reusable utilities the agent can invoke directly — not tied to any specific skill. Skill-specific tools live in [skills/](../skills/) alongside their skill.
 
 - **[Tools](tools.md)** — 30+ tools across 10 domains (react, file, document, web, browser, sandbox, desktop, slides, subtasks, memory, cronjob, skills)
+- **[File Context](file-context.md)** — How the agent learns about project files before each message (`<file_context>` / `<file_update>` injection)
 - **[Runtime](runtime.md)** — Long-running task execution, recovery, message queue
 - **[Memory](memory.md)** — Three-layer memory system (Core + Archival + Episodic Buffer). How Kael remembers across sessions.
 - **[Context Management](context.md)** — Two-layer progressive context management. How Kael prevents long conversations from overflowing.

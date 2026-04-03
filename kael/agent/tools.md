@@ -10,7 +10,7 @@ owners: [*]
 | Domain | Examples | Description |
 |--------|----------|-------------|
 | **react** | `send_message`, `manage_todos` | Communication with user, task tracking |
-| **file** | `file_read`, `file_get_url`, `file_download`, `file_present` | Project file operations |
+| **file** | `file_read`, `file_get_url`, `file_download`, `file_present` | Project file operations (see [file-tools.md](file-tools.md)) |
 | **document** | `doc_read_overview`, `doc_read_section`, `doc_search` | Structured document analysis |
 | **web** | `web_search`, `web_fetch` | Internet search and page fetching |
 | **browser** | `browser_navigate`, `browser_read`, `browser_computer`, `browser_find`, `browser_tabs` | Chrome control (see [/environment/browser](../environment/browser.md)) |
