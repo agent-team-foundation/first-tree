@@ -76,7 +76,7 @@ docker run --rm -it \
     chmod 600 ~/.claude/.credentials.json
     # Skip onboarding + accept permissions bypass
     echo "{\"hasCompletedOnboarding\":true,\"bypassPermissionsModeAccepted\":true}" > ~/.claude.json
-    claude --dangerously-skip-permissions --model claude-opus-4-6
+    claude --dangerously-skip-permissions --model opus
   ' \
   2>&1 | tee "$LOG_FILE"
 
