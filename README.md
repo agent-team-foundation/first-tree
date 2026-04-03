@@ -1,10 +1,7 @@
 # first-tree
 
-Template source and CLI for [Context Tree](https://context-tree.ai) — the living source of truth for your organization.
-
-## What is Context Tree?
-
-A tree-structured knowledge base that agents and humans build and maintain together. Every node represents a domain, decision, or design. Every node has an owner. When things change, the tree updates. See [about.md](skills/first-tree-cli-framework/references/about.md) for the full story.
+Thin distribution package for the canonical `first-tree-cli-framework` skill
+and the `context-tree` CLI.
 
 ## Quick Start
 
@@ -12,59 +9,29 @@ A tree-structured knowledge base that agents and humans build and maintain toget
 npx first-tree init
 ```
 
-Run this inside a git repo. The npm package is `first-tree`; it installs the `context-tree` command. For a global install, run `npm install -g first-tree` and then use `context-tree init`.
+The npm package is `first-tree`; it installs the `context-tree` command. Use
+`npm install -g first-tree` if you want the command on your PATH.
 
 ## Commands
 
 | Command | What it does |
-|---------|-------------|
+| --- | --- |
 | `context-tree init` | Bootstrap a new context tree in the current git repo |
-| `context-tree verify` | Run checks against the tree, report pass/fail |
-| `context-tree upgrade` | Refresh the installed framework skill from upstream and generate follow-up tasks |
+| `context-tree verify` | Run verification checks against the current tree |
+| `context-tree upgrade` | Refresh the installed framework skill and write follow-up tasks |
+| `context-tree help onboarding` | Print the onboarding guide |
 
-## What `init` creates
+## Canonical Documentation
 
-```
-your-tree/
-  skills/
-    first-tree-cli-framework/
-      progress.md
-      references/
-      assets/
-        framework/
-          VERSION
-          templates/
-          workflows/
-          examples/
-  NODE.md                  # root node — your domains (from template)
-  AGENT.md                 # agent instructions with framework markers (from template)
-  members/
-    NODE.md                # members domain (from template)
-```
+All framework documentation, maintainer guidance, and shipped runtime assets
+live in `skills/first-tree-cli-framework/`.
 
-## Upgrades
+- User-facing overview: `skills/first-tree-cli-framework/references/about.md`
+- User onboarding: `skills/first-tree-cli-framework/references/onboarding.md`
+- Maintainer entrypoint: `skills/first-tree-cli-framework/references/source-map.md`
 
-To upgrade the installed framework skill:
-
-```bash
-context-tree upgrade      # refreshes the installed skill and shows follow-up tasks
-```
-
-## Documentation
-
-- [onboarding.md](skills/first-tree-cli-framework/references/onboarding.md) — Onboarding guide for setting up a context tree
-- [about.md](skills/first-tree-cli-framework/references/about.md) — What Context Tree is and who it's for
-- [principles.md](skills/first-tree-cli-framework/references/principles.md) — Core principles with examples
-- [ownership-and-naming.md](skills/first-tree-cli-framework/references/ownership-and-naming.md) — Node naming and ownership model
-
-## Development
-
-```bash
-pnpm install
-pnpm test              # run tests
-pnpm typecheck         # type check
-pnpm build             # build CLI
-```
+If you are maintaining this repo, start with the source map instead of relying
+on root-level prose.
 
 ## License
 

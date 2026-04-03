@@ -1,6 +1,6 @@
 ---
 name: first-tree-cli-framework
-description: Work on the `first-tree` CLI and the single canonical `first-tree-cli-framework` skill it ships to Context Tree repos. Use when modifying `context-tree` commands (`init`, `verify`, `upgrade`, `help onboarding`), the installed skill payload under `assets/framework/`, or the decision/ownership model captured in the skill references.
+description: Maintain the canonical `first-tree-cli-framework` skill and the thin `first-tree` / `context-tree` CLI that distributes it. Use when modifying `context-tree` commands (`init`, `verify`, `upgrade`, `help onboarding`), the installed skill payload under `assets/framework/`, maintainer references, or the build, packaging, test, eval, and CI wiring that supports the framework.
 ---
 
 # First Tree CLI Framework
@@ -20,24 +20,32 @@ repos.
 ## When To Read What
 
 1. Start with `references/source-map.md` to locate the right files.
-2. Read the specific reference that matches the task:
+2. Read the user-facing reference that matches the task:
    - `references/onboarding.md`
    - `references/about.md`
    - `references/principles.md`
    - `references/ownership-and-naming.md`
    - `references/upgrade-contract.md`
-3. Open `assets/framework/` only when the task changes shipped templates,
+3. Read the maintainer reference that matches the shell or validation surface:
+   - `references/maintainer-architecture.md`
+   - `references/maintainer-thin-cli.md`
+   - `references/maintainer-build-and-distribution.md`
+   - `references/maintainer-testing-and-evals.md`
+4. Open `assets/framework/` only when the task changes shipped templates,
    workflows, prompts, examples, or helper scripts.
-4. Use `./scripts/run-local-cli.sh <command>` when you need to exercise the
+5. Use `./scripts/run-local-cli.sh <command>` when you need to exercise the
    live CLI from this repo.
 
 ## Working Modes
 
 ### Maintaining `first-tree`
 
-- Treat this repo as the CLI and skill source, not as a tree repo.
-- Keep command behavior, validator behavior, shipped assets, and the
-  explanatory references aligned.
+- Treat this repo as the distribution source for one canonical skill plus a
+  thin CLI shell, not as a tree repo.
+- Keep command behavior, validator behavior, shipped assets, maintainer
+  references, and package shell aligned.
+- If root README/AGENT/CI text explains something non-obvious, migrate that
+  information into `references/` and trim the root file back down.
 - If you change runtime assets or skill references, run `pnpm validate:skill`.
 
 ### Working In A User Tree Repo
@@ -55,12 +63,16 @@ repos.
   state; it does not fully automate tree maintenance.
 - Keep shipped assets generic. They must not contain org-specific content.
 - Keep decision knowledge in the tree and execution detail in source systems.
+- Keep the skill as the only canonical knowledge source. The root CLI/package
+  shell must not become a second source of framework semantics.
 - Make upgrade behavior explicit. If you change installed paths, update
   `references/upgrade-contract.md`, task text, and tests together.
 
 ## Validation
 
 - Repo checks: `pnpm typecheck`, `pnpm test`, `pnpm build`
+- Packaging check: `pnpm pack` when changing package contents or install/upgrade
+  behavior
 - Skill checks:
   - `pnpm validate:skill`
   - `python3 ./skills/first-tree-cli-framework/scripts/quick_validate.py ./skills/first-tree-cli-framework`
@@ -73,4 +85,10 @@ repos.
 - `assets/framework/workflows/`: CI templates
 - `assets/framework/helpers/`: shipped helper scripts and review tooling
 - `references/source-map.md`: canonical reading index
+- `references/maintainer-architecture.md`: source-repo architecture and
+  invariants
+- `references/maintainer-thin-cli.md`: root shell contract
+- `references/maintainer-build-and-distribution.md`: packaging and release
+  guidance
+- `references/maintainer-testing-and-evals.md`: validation and eval workflow
 - `references/upgrade-contract.md`: installed layout and upgrade semantics

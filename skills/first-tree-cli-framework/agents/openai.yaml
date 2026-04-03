@@ -1,4 +1,4 @@
 interface:
-  display_name: "First Tree CLI"
-  short_description: "Work on the first-tree CLI and Context Tree framework"
-  default_prompt: "Use $first-tree-cli-framework to work on the first-tree CLI or maintain the single canonical skill and runtime payload it ships to Context Tree repos."
+  display_name: "First Tree Framework"
+  short_description: "Maintain the skill and thin Context Tree CLI"
+  default_prompt: "Use $first-tree-cli-framework to maintain the first-tree framework skill, its thin context-tree CLI, or its build, packaging, test, eval, and CI wiring."

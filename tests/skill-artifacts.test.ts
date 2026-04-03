@@ -10,6 +10,50 @@ describe("skill artifacts", () => {
     expect(existsSync(join(ROOT, "skills", "first-tree-cli-framework", "SKILL.md"))).toBe(true);
     expect(existsSync(join(ROOT, "skills", "first-tree-cli-framework", "references", "onboarding.md"))).toBe(true);
     expect(existsSync(join(ROOT, "skills", "first-tree-cli-framework", "assets", "framework", "manifest.json"))).toBe(true);
+    expect(
+      existsSync(
+        join(
+          ROOT,
+          "skills",
+          "first-tree-cli-framework",
+          "references",
+          "maintainer-architecture.md",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      existsSync(
+        join(
+          ROOT,
+          "skills",
+          "first-tree-cli-framework",
+          "references",
+          "maintainer-thin-cli.md",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      existsSync(
+        join(
+          ROOT,
+          "skills",
+          "first-tree-cli-framework",
+          "references",
+          "maintainer-build-and-distribution.md",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      existsSync(
+        join(
+          ROOT,
+          "skills",
+          "first-tree-cli-framework",
+          "references",
+          "maintainer-testing-and-evals.md",
+        ),
+      ),
+    ).toBe(true);
     expect(existsSync(join(ROOT, ".agents"))).toBe(false);
     expect(existsSync(join(ROOT, ".claude"))).toBe(false);
     expect(existsSync(join(ROOT, ".context-tree"))).toBe(false);
@@ -41,6 +85,11 @@ describe("skill artifacts", () => {
 
     expect(read("README.md")).not.toContain("seed-tree");
     expect(read("AGENTS.md")).not.toContain("seed-tree");
+    expect(read("README.md")).toContain("Canonical Documentation");
+    expect(read("README.md")).toContain("references/source-map.md");
+    expect(read("AGENTS.md")).toContain("references/source-map.md");
+    expect(read("AGENTS.md")).not.toContain("### Running evals");
+    expect(read("AGENTS.md")).not.toContain("EVALS_TREE_REPO");
 
     const onboarding = read("skills/first-tree-cli-framework/references/onboarding.md");
     expect(onboarding).toContain("npx first-tree init");
@@ -50,9 +99,18 @@ describe("skill artifacts", () => {
     const skillMd = read("skills/first-tree-cli-framework/SKILL.md");
     expect(skillMd).not.toContain("sync-skill-artifacts.sh");
     expect(skillMd).not.toContain("portable-smoke-test.sh");
+    expect(skillMd).toContain("maintainer-build-and-distribution.md");
+    expect(skillMd).toContain("maintainer-testing-and-evals.md");
 
     const sourceMap = read("skills/first-tree-cli-framework/references/source-map.md");
     expect(sourceMap).not.toContain("repo-snapshot");
     expect(sourceMap).not.toContain("sync-skill-artifacts.sh");
+    expect(sourceMap).toContain("maintainer-architecture.md");
+    expect(sourceMap).toContain("maintainer-thin-cli.md");
+    expect(sourceMap).toContain("maintainer-build-and-distribution.md");
+    expect(sourceMap).toContain("maintainer-testing-and-evals.md");
+    expect(sourceMap).toContain("package.json");
+    expect(sourceMap).toContain("vitest.eval.config.ts");
+    expect(sourceMap).toContain(".github/workflows/ci.yml");
   });
 });
