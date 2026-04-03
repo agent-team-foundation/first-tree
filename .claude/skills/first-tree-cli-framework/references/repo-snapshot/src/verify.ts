@@ -39,19 +39,21 @@ export function runVerify(repo?: Repo, nodeValidator?: NodeValidator): number {
   const r = repo ?? new Repo();
   const validate = nodeValidator ?? defaultNodeValidator;
   let allPassed = true;
+  const progressPath = r.progressPath() ?? r.preferredProgressPath();
+  const frameworkVersionPath = r.frameworkVersionPath();
 
   console.log("Context Tree Verification\n");
 
   // Progress file check
   const unchecked = checkProgress(r);
   if (unchecked.length > 0) {
-    console.log("  Unchecked items in .context-tree/progress.md:\n");
+    console.log(`  Unchecked items in ${progressPath}:\n`);
     for (const item of unchecked) {
       console.log(`    - [ ] ${item}`);
     }
     console.log();
     console.log(
-      "  Verify each step above and check it off in progress.md before running verify again.\n",
+      `  Verify each step above and check it off in ${progressPath} before running verify again.\n`,
     );
     allPassed = false;
   }
@@ -60,7 +62,7 @@ export function runVerify(repo?: Repo, nodeValidator?: NodeValidator): number {
   console.log("  Checks:\n");
 
   // 1. Framework exists
-  allPassed = check(".context-tree/VERSION exists", r.hasFramework()) && allPassed;
+  allPassed = check(`${frameworkVersionPath} exists`, r.hasFramework()) && allPassed;
 
   // 2. Root NODE.md has valid frontmatter
   const fm = r.frontmatter("NODE.md");

@@ -1,38 +1,45 @@
 import { execFileSync } from "node:child_process";
-import { frameworkVersionCandidates } from "#src/runtime/asset-loader.js";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import {
+  frameworkVersionCandidates,
+  resolveFirstExistingPath,
+} from "#src/runtime/asset-loader.js";
 
-export function fetchUpstream(
-  repoRoot: string,
-  remote = "context-tree-upstream",
-): boolean {
+export const FIRST_TREE_REPO_URL =
+  "https://github.com/agent-team-foundation/first-tree";
+
+export function cloneUpstreamRepo(
+  repoUrl = FIRST_TREE_REPO_URL,
+): string {
+  const tmp = mkdtempSync(join(tmpdir(), "context-tree-upstream-"));
   try {
-    execFileSync("git", ["fetch", remote, "--depth", "1"], {
-      cwd: repoRoot,
+    execFileSync("git", ["clone", "--depth", "1", repoUrl, tmp], {
       encoding: "utf-8",
       stdio: "pipe",
     });
-    return true;
-  } catch {
-    return false;
+    return tmp;
+  } catch (err) {
+    rmSync(tmp, { recursive: true, force: true });
+    const message = err instanceof Error ? err.message : "unknown error";
+    throw new Error(`Failed to clone ${repoUrl}: ${message}`);
   }
 }
 
-export function readUpstreamVersion(
-  repoRoot: string,
-  remote = "context-tree-upstream",
-  ref = "main",
-): string | null {
-  for (const candidate of frameworkVersionCandidates()) {
-    try {
-      const result = execFileSync("git", ["show", `${remote}/${ref}:${candidate}`], {
-        cwd: repoRoot,
-        encoding: "utf-8",
-        stdio: "pipe",
-      });
-      return result.trim();
-    } catch {
-      continue;
-    }
+export function cleanupUpstreamRepo(root: string): void {
+  rmSync(root, { recursive: true, force: true });
+}
+
+export function readUpstreamVersion(sourceRoot: string): string | null {
+  const versionPath = resolveFirstExistingPath(
+    sourceRoot,
+    frameworkVersionCandidates(),
+  );
+  if (versionPath === null) return null;
+  try {
+    return readFileSync(join(sourceRoot, versionPath), "utf-8").trim();
+  } catch {
+    return null;
   }
-  return null;
 }

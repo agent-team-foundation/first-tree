@@ -65,19 +65,19 @@ git init
 context-tree init
 ```
 
-This clones the framework into `.context-tree/`, renders scaffolding (`NODE.md`, `AGENT.md`, `members/NODE.md`), and generates a task list in `.context-tree/progress.md`.
+This installs the framework skill into `skills/first-tree-cli-framework/`, renders scaffolding (`NODE.md`, `AGENT.md`, `members/NODE.md`), and generates a task list in `skills/first-tree-cli-framework/progress.md`.
 
 ### Step 2: Work Through the Task List
 
-Read `.context-tree/progress.md`. It contains a checklist tailored to the current state of the repo. Complete each task:
+Read `skills/first-tree-cli-framework/progress.md`. It contains a checklist tailored to the current state of the repo. Complete each task:
 
 - Fill in `NODE.md` with your organization name, owners, and domains
 - Add project-specific instructions to `AGENT.md` below the framework markers
 - Create member nodes under `members/`
 - Optionally configure agent integration (e.g., Claude Code session hooks)
-- Copy validation workflows to `.github/workflows/`
+- Copy validation workflows from `skills/first-tree-cli-framework/assets/framework/workflows/` to `.github/workflows/`
 
-As you complete each task, check it off in `progress.md` by changing `- [ ]` to `- [x]`.
+As you complete each task, check it off in `skills/first-tree-cli-framework/progress.md` by changing `- [ ]` to `- [x]`.
 
 ### Step 3: Verify
 
@@ -85,7 +85,7 @@ As you complete each task, check it off in `progress.md` by changing `- [ ]` to 
 context-tree verify
 ```
 
-This fails if any items in `progress.md` remain unchecked, and runs deterministic checks (valid frontmatter, node structure, member nodes exist).
+This fails if any items in `skills/first-tree-cli-framework/progress.md` remain unchecked, and runs deterministic checks (valid frontmatter, node structure, member nodes exist).
 
 ### Step 4: Design Your Domains
 
@@ -122,27 +122,27 @@ The tree doesn't duplicate source code — it captures what connects things and 
 
 | Command | Description |
 |---------|-------------|
-| `context-tree init` | Bootstrap a new tree. Clones framework, renders templates, generates task list. |
-| `context-tree verify` | Check progress.md for unchecked items + run deterministic validation. |
-| `context-tree upgrade` | Compare local framework version to upstream, generate upgrade task list. |
+| `context-tree init` | Bootstrap a new tree. Installs the framework skill, renders templates, generates a task list. |
+| `context-tree verify` | Check the installed progress file for unchecked items + run deterministic validation. |
+| `context-tree upgrade` | Refresh the installed framework skill from upstream and generate follow-up tasks. |
 | `context-tree help onboarding` | Print this onboarding guide. |
 
 ---
 
 ## Upgrading the Framework
 
-After init, the first-tree repo is added as a git remote (`context-tree-upstream`). When the framework updates:
+When the framework updates:
 
 ```bash
 context-tree upgrade
 ```
 
-This compares your `.context-tree/VERSION` to upstream and generates a task list. The framework directory (`.context-tree/`) is upgradable without touching your content.
+This refreshes `skills/first-tree-cli-framework/` from upstream, preserves your tree content, and generates follow-up tasks in `skills/first-tree-cli-framework/progress.md`.
 
 ---
 
 ## Further Reading
 
-- `.context-tree/principles.md` — Core principles with detailed examples
-- `.context-tree/ownership-and-naming.md` — How nodes are named and owned
+- `skills/first-tree-cli-framework/references/principles.md` — Core principles with detailed examples
+- `skills/first-tree-cli-framework/references/ownership-and-naming.md` — How nodes are named and owned
 - `AGENT.md` in your tree — The before/during/after workflow for every task

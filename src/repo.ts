@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
@@ -6,6 +5,7 @@ import {
   LEGACY_PROGRESS,
   LEGACY_VERSION,
   INSTALLED_PROGRESS,
+  type FrameworkLayout,
   detectFrameworkLayout,
   progressFileCandidates,
   resolveFirstExistingPath,
@@ -90,7 +90,11 @@ export class Repo {
   }
 
   hasFramework(): boolean {
-    return detectFrameworkLayout(this.root) !== null;
+    return this.frameworkLayout() !== null;
+  }
+
+  frameworkLayout(): FrameworkLayout | null {
+    return detectFrameworkLayout(this.root);
   }
 
   readVersion(): string | null {
@@ -106,7 +110,11 @@ export class Repo {
   }
 
   preferredProgressPath(): string {
-    return this.pathExists(INSTALLED_PROGRESS) ? INSTALLED_PROGRESS : LEGACY_PROGRESS;
+    return this.frameworkLayout() === "legacy" ? LEGACY_PROGRESS : INSTALLED_PROGRESS;
+  }
+
+  frameworkVersionPath(): string {
+    return this.frameworkLayout() === "legacy" ? LEGACY_VERSION : FRAMEWORK_VERSION;
   }
 
   hasAgentMdMarkers(): boolean {
@@ -153,17 +161,5 @@ export class Repo {
 
   hasPlaceholderNode(): boolean {
     return this.fileContains("NODE.md", "<!-- PLACEHOLDER");
-  }
-
-  hasUpstreamRemote(): boolean {
-    try {
-      const result = execFileSync("git", ["remote"], {
-        cwd: this.root,
-        encoding: "utf-8",
-      });
-      return result.split(/\s+/).includes("context-tree-upstream");
-    } catch {
-      return false;
-    }
   }
 }

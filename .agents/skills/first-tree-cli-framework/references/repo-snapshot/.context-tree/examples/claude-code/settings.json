@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".context-tree/scripts/inject-tree-context.sh"
+            "command": "./skills/first-tree-cli-framework/assets/framework/helpers/inject-tree-context.sh"
           }
         ]
       }

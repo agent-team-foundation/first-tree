@@ -2,6 +2,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach } from "vitest";
+import {
+  FRAMEWORK_VERSION,
+  LEGACY_VERSION,
+} from "#src/runtime/asset-loader.js";
 
 interface TmpDir {
   path: string;
@@ -15,10 +19,17 @@ export function useTmpDir(): TmpDir {
   return { path: dir };
 }
 
-export function makeFramework(root: string): void {
+export function makeFramework(root: string, version = "0.1.0"): void {
+  mkdirSync(join(root, "skills", "first-tree-cli-framework", "assets", "framework"), {
+    recursive: true,
+  });
+  writeFileSync(join(root, FRAMEWORK_VERSION), `${version}\n`);
+}
+
+export function makeLegacyFramework(root: string, version = "0.1.0"): void {
   const ct = join(root, ".context-tree");
   mkdirSync(ct, { recursive: true });
-  writeFileSync(join(ct, "VERSION"), "0.1.0\n");
+  writeFileSync(join(root, LEGACY_VERSION), `${version}\n`);
 }
 
 export function makeNode(

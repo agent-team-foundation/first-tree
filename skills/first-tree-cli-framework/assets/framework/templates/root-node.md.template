@@ -31,8 +31,8 @@ The living source of truth for your organization. A structured knowledge base th
 
 See [AGENT.md](AGENT.md) for agent instructions — the before/during/after workflow, ownership model, and tree maintenance.
 
-See [about.md](about.md) for background — the problem, the idea, and who it's for.
+See [about.md](skills/first-tree-cli-framework/references/about.md) for background — the problem, the idea, and who it's for.
 
-See the framework documentation in `.context-tree/`:
-- [principles.md](.context-tree/principles.md) — core principles with examples
-- [ownership-and-naming.md](.context-tree/ownership-and-naming.md) — node naming and ownership model
+See the installed framework documentation:
+- [principles.md](skills/first-tree-cli-framework/references/principles.md) — core principles with examples
+- [ownership-and-naming.md](skills/first-tree-cli-framework/references/ownership-and-naming.md) — node naming and ownership model

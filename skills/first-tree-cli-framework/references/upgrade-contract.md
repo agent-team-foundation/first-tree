@@ -18,6 +18,7 @@ The end-state installed layout in a user repo is:
 skills/
   first-tree-cli-framework/
     SKILL.md
+    progress.md
     references/
     assets/
       framework/
@@ -41,15 +42,15 @@ The tree content still lives outside the skill:
 - `context-tree init`
   - installs the skill into the target repo
   - renders top-level tree scaffolding from the skill templates
-  - writes progress state
-  - wires an upstream remote for future upgrades
+  - writes progress state to `skills/first-tree-cli-framework/progress.md`
 - `context-tree verify`
-  - checks progress state
+  - checks progress state from the installed skill
   - validates root/frontmatter/agent markers
   - runs node and member validators
 - `context-tree upgrade`
   - compares the installed skill payload version to upstream
   - refreshes the installed skill payload without overwriting tree content
+  - migrates legacy `.context-tree/` repos onto the installed skill layout
   - preserves user-authored sections such as the editable part of `AGENT.md`
 
 ## Compatibility Rules During Migration
@@ -58,6 +59,8 @@ The tree content still lives outside the skill:
   - `skills/first-tree-cli-framework/...`
   - legacy `.context-tree/...`
 - When both layouts are present, prefer the installed skill layout.
+- `context-tree init` only installs the skill layout; it does not create a new `.context-tree/`.
+- `context-tree upgrade` should remove legacy `.context-tree/` after migrating a repo.
 - The legacy layout must be derivable from the canonical skill via
   `scripts/export-runtime-assets.sh`.
 - `references/repo-snapshot/` may exist as a portable artifact until cleanup,

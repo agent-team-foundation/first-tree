@@ -2,7 +2,13 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { Repo } from "#src/repo.js";
-import { useTmpDir } from "./helpers.js";
+import {
+  FRAMEWORK_VERSION,
+  INSTALLED_PROGRESS,
+  LEGACY_PROGRESS,
+  LEGACY_VERSION,
+} from "#src/runtime/asset-loader.js";
+import { useTmpDir, makeFramework, makeLegacyFramework } from "./helpers.js";
 
 // --- pathExists ---
 
@@ -136,10 +142,16 @@ describe("isGitRepo", () => {
 // --- hasFramework ---
 
 describe("hasFramework", () => {
-  it("returns true with VERSION file", () => {
+  it("returns true with installed skill version file", () => {
     const tmp = useTmpDir();
-    mkdirSync(join(tmp.path, ".context-tree"));
-    writeFileSync(join(tmp.path, ".context-tree", "VERSION"), "0.1.0\n");
+    makeFramework(tmp.path);
+    const repo = new Repo(tmp.path);
+    expect(repo.hasFramework()).toBe(true);
+  });
+
+  it("returns true with legacy version file", () => {
+    const tmp = useTmpDir();
+    makeLegacyFramework(tmp.path);
     const repo = new Repo(tmp.path);
     expect(repo.hasFramework()).toBe(true);
   });
@@ -154,18 +166,43 @@ describe("hasFramework", () => {
 // --- readVersion ---
 
 describe("readVersion", () => {
-  it("reads valid version", () => {
+  it("reads the installed skill version", () => {
     const tmp = useTmpDir();
-    mkdirSync(join(tmp.path, ".context-tree"));
-    writeFileSync(join(tmp.path, ".context-tree", "VERSION"), "0.2.0\n");
+    makeFramework(tmp.path, "0.2.0");
     const repo = new Repo(tmp.path);
     expect(repo.readVersion()).toBe("0.2.0");
+  });
+
+  it("falls back to the legacy version", () => {
+    const tmp = useTmpDir();
+    makeLegacyFramework(tmp.path, "0.3.0");
+    const repo = new Repo(tmp.path);
+    expect(repo.readVersion()).toBe("0.3.0");
   });
 
   it("returns null when missing", () => {
     const tmp = useTmpDir();
     const repo = new Repo(tmp.path);
     expect(repo.readVersion()).toBeNull();
+  });
+});
+
+// --- preferredProgressPath / frameworkVersionPath ---
+
+describe("path preferences", () => {
+  it("prefers the installed-skill paths by default", () => {
+    const tmp = useTmpDir();
+    const repo = new Repo(tmp.path);
+    expect(repo.preferredProgressPath()).toBe(INSTALLED_PROGRESS);
+    expect(repo.frameworkVersionPath()).toBe(FRAMEWORK_VERSION);
+  });
+
+  it("switches path preferences for legacy repos", () => {
+    const tmp = useTmpDir();
+    makeLegacyFramework(tmp.path);
+    const repo = new Repo(tmp.path);
+    expect(repo.preferredProgressPath()).toBe(LEGACY_PROGRESS);
+    expect(repo.frameworkVersionPath()).toBe(LEGACY_VERSION);
   });
 });
 

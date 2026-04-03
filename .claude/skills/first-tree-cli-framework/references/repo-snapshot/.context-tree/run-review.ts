@@ -23,7 +23,10 @@ function buildPrompt(diffPath: string): string {
   const files: [string, string][] = [
     ["AGENT.md", "AGENT.md"],
     ["Root NODE.md", "NODE.md"],
-    ["Review Instructions", ".context-tree/prompts/pr-review.md"],
+    [
+      "Review Instructions",
+      "skills/first-tree-cli-framework/assets/framework/prompts/pr-review.md",
+    ],
   ];
   for (const [heading, path] of files) {
     const content = readFileSync(path, "utf-8");

@@ -11,8 +11,8 @@ This skill is meant to keep working even after the `skills/first-tree-cli-framew
 Snapshot source:
 
 - live repo: `agent-team-foundation/first-tree`
-- snapshot base commit when this portable copy was refreshed: `7f7567ef117edc1102800d8b0e9dff96aa11c524`
-- snapshot content fingerprint: `sha256:5321c1ceb28664c9fcfa7d4b29c136734ac73fef9ed8cb6b19c79a70dd3d20f3`
+- snapshot base commit when this portable copy was refreshed: `ef75cac3c112cea4475c095b000274cc97301cd7`
+- snapshot content fingerprint: `sha256:8de9030ffc5666ebcce8dab5f381da03fbc46f5c178218a62acb8ad1cfb7fd12`
 
 The base commit records which live checkout the refresh started from. Generated artifact updates may land in a later commit, so strict sync validation uses the content fingerprint above.
 
