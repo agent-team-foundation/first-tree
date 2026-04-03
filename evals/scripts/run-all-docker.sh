@@ -39,7 +39,7 @@ echo "  Image: $IMAGE"
 echo "  Results: ~/.context-tree/evals/"
 echo ""
 
-exec docker run --rm \
+exec docker run --rm -it \
   -e GH_TOKEN="$(gh auth token)" \
   -v "$HOME/.claude.json:/home/eval/.claude.json" \
   -v "$HOME/.claude:/home/eval/.claude" \
@@ -80,4 +80,5 @@ Important:
 PROMPT
 )" \
   --dangerously-skip-permissions \
+  --output-format stream-json \
   --verbose
