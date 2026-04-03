@@ -80,5 +80,5 @@ Important:
 PROMPT
 )" \
   --dangerously-skip-permissions \
-  --output-format text \
+  --output-format stream-json \
   --verbose 2>&1
