@@ -74,11 +74,8 @@ docker run --rm -it \
     # Inject credentials from host
     echo "$_CREDS_B64" | base64 -d > ~/.claude/.credentials.json
     chmod 600 ~/.claude/.credentials.json
-    # Claude also checks ~/.claude.json for config
-    echo "{\"bypassPermissionsModeAccepted\":true}" > ~/.claude.json
-    # Debug: verify auth before launching
-    echo "Auth check:" && claude -p "hi" --dangerously-skip-permissions --max-turns 1 2>&1 | tail -1
-    echo "Launching TUI..."
+    # Skip onboarding + accept permissions bypass
+    echo "{\"hasCompletedOnboarding\":true,\"bypassPermissionsModeAccepted\":true}" > ~/.claude.json
     claude --dangerously-skip-permissions
   ' \
   2>&1 | tee "$LOG_FILE"
