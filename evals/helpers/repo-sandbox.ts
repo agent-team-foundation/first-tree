@@ -28,7 +28,7 @@ function cloneRepo(ref: RepoRef, targetDir: string): void {
 
   process.stderr.write(`  Cloning ${ref.repo} @ ${ref.commit_sha.slice(0, 8)}...\n`);
   execSync(
-    `git clone --quiet --no-checkout ${JSON.stringify(cloneUrl)} ${JSON.stringify(targetDir)}`,
+    `git clone --quiet --no-checkout --filter=blob:none ${JSON.stringify(cloneUrl)} ${JSON.stringify(targetDir)}`,
     { stdio: 'pipe', timeout: 120_000 },
   );
   execSync(

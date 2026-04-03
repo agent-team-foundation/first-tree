@@ -9,30 +9,21 @@ source: custom
 repo: vercel/ai
 commit_sha: "7362d1ecc26e334eb02c5289c1c314667b524eeb"
 task: |
-  Fix a bug in the streaming pipeline that loses structured error data from
-  provider-executed tools.
+  Fix a bug where provider-executed tool errors cause Anthropic API 400 errors
+  on the follow-up request.
 
   When a provider-executed tool (like `web_fetch`) returns a structured error
   (e.g. `{ type: 'web_fetch_tool_result_error', errorCode: 'url_not_accessible' }`),
-  the error flows through `toUIMessageStream` where the `onError` callback
-  converts it into a generic string, losing the structured data. On the next
-  request, the error code falls back to `unknown`, and Anthropic rejects with
-  a 400 because `unknown` is not a valid error code.
+  the error data is lost somewhere in the streaming pipeline. By the time the
+  next request is sent to Anthropic, the error code has become `unknown`, and
+  Anthropic rejects it with a 400 because `unknown` is not a valid error code.
 
-  Two fixes needed:
+  The structured error object should survive the streaming pipeline intact so
+  that valid error codes are preserved. Additionally, when no error code is
+  available at all, the fallback should be a code that Anthropic actually accepts.
 
-  1. In `packages/ai/src/generate-text/stream-text.ts`: For `tool-output-error`
-     parts where `providerExecuted` is true, bypass the `onError` callback and
-     serialize the error directly (strings pass through, objects get JSON.stringify'd).
-
-  2. In `packages/anthropic/src/convert-to-anthropic-messages-prompt.ts`: Change
-     the fallback error code from `'unknown'` to `'unavailable'` (which is a
-     valid Anthropic error code).
-
-  Write tests to verify:
-  1. Provider-executed tool errors with structured objects preserve the error
-     data in the UI message stream even when a custom onError is provided
-  2. The Anthropic prompt converter uses 'unavailable' as the fallback error code
+  Find and fix the root cause(s). Write tests that verify structured error data
+  from provider-executed tools is preserved through the streaming pipeline.
 setup: |
   pnpm install
   pnpm build

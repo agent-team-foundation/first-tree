@@ -9,33 +9,29 @@ source: custom
 repo: langchain-ai/langchain
 commit_sha: "3686bcbd966ff1ef13e5fdbde28aa0e630ddd5c4"
 task: |
-  Fix a bug in `merge_lists()` in `libs/core/langchain_core/utils/_merge.py`.
+  Fix a bug where parallel tool calls get incorrectly merged during streaming.
 
-  When LLMs (e.g. Claude via Bedrock) stream parallel tool calls, `merge_lists()`
-  incorrectly merges separate tool calls into one by concatenating their names
-  and IDs. This happens because the merge condition only checks if the `index`
-  field matches, but parallel tool calls from some providers can share the same
-  `index` while having different `id` values.
+  When LLMs (e.g. Claude via Bedrock) stream parallel tool calls, separate tool
+  calls are incorrectly merged into one — their names and IDs get concatenated
+  into a single tool call. This produces corrupted tool call objects that
+  downstream code cannot parse.
 
-  For example, two parallel tool calls both with `index=0` but different IDs
-  ("call_1" vs "call_2") get merged into a single tool call with concatenated
-  name and ID.
+  For example, two parallel tool calls with different IDs ("call_1" and
+  "call_2") end up as a single tool call with a concatenated name like
+  "get_weatherget_stock_price" and a concatenated ID "call_1call_2".
 
-  Fix the merge condition to also check the `id` field: chunks with different
-  non-None IDs should be kept separate, while streaming continuations (where
-  id is None) should still merge correctly with their parent chunk.
+  Normal sequential streaming (where continuation chunks extend an existing
+  tool call) should still work correctly.
 
-  Write tests to verify:
-  1. Two parallel tool calls with same index but different IDs remain separate
-  2. A streaming continuation chunk (id=None) still merges with its parent
-  3. Three parallel tool calls all with same index stay separate
+  Find and fix the root cause. Write tests that cover both parallel tool calls
+  staying separate and sequential streaming continuations still merging.
 setup: |
   cd libs/core
   uv venv .venv --quiet
   uv pip install -e ".[test]" --quiet --python .venv/bin/python
 verification: fixtures/langchain-merge-parallel-tools/verify.sh
 difficulty: medium
-timeout_ms: 300000
+timeout_ms: 600000
 max_turns: 30
 
 context_tree_versions:

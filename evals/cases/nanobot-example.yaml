@@ -7,28 +7,21 @@ source: custom
 repo: HKUDS/nanobot
 commit_sha: "ddc9fc4fd286025aebaab5fb3f2f032a18ed2478"
 task: |
-  Fix a bug in ExecTool._extract_absolute_paths (nanobot/agent/tools/shell.py).
+  Fix a security bug in the shell tool's workspace safety guard.
 
-  The regex for extracting Windows absolute paths uses `+` quantifier:
-    r"[A-Za-z]:\\[^\s\"'|><;]+"
+  When `restrict_to_workspace=True`, the tool is supposed to block commands that
+  reference paths outside the workspace. However, bare Windows drive-root paths
+  like `E:\` are not detected. A command like `dir E:\` bypasses the workspace
+  guard entirely, allowing access to files outside the workspace.
 
-  This requires at least one character after the backslash, so bare Windows
-  drive-root paths like `E:\` are never extracted. This means commands like
-  `dir E:\` bypass the workspace safety guard when restrict_to_workspace=True.
-
-  Fix the regex so that `E:\` (nothing after the backslash) is correctly
-  extracted and blocked by the safety guard.
-
-  Write tests to verify:
-  1. _extract_absolute_paths("dir E:\\") returns ["E:\\"]
-  2. _guard_command("dir E:\\", "E:\\workspace") returns an error when
-     restrict_to_workspace=True
+  Find and fix the root cause. Write tests that verify the guard correctly
+  blocks commands referencing bare drive-root paths.
 setup: |
   uv venv .venv --quiet
   uv pip install -e ".[dev]" --quiet --python .venv/bin/python
 verification: fixtures/nanobot-example/verify.sh
 difficulty: easy
-timeout_ms: 300000
+timeout_ms: 600000
 max_turns: 20
 
 context_tree_versions:

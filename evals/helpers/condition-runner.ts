@@ -127,7 +127,7 @@ export async function runTrial(
       workingDirectory: sandbox.dir,
       agent,
       maxTurns: evalCase.max_turns || 30,
-      timeout: evalCase.timeout_ms || 300_000,
+      timeout: evalCase.timeout_ms || 600_000,
       testName,
     });
 
