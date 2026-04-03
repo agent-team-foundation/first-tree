@@ -25,21 +25,17 @@ if ! gh auth token &>/dev/null; then
   exit 1
 fi
 
-# Use a named volume for Claude credentials (persists across runs)
-CLAUDE_VOL="ct-eval-claude-home"
+if [ ! -f "$HOME/.claude/.credentials.json" ]; then
+  echo "Claude credentials not found at ~/.claude/.credentials.json"
+  echo "Run: claude login"
+  exit 1
+fi
 
-# Check if credentials exist in the volume
-if ! docker run --rm -v "$CLAUDE_VOL:/home/eval/.claude" --entrypoint sh "$IMAGE" -c 'test -f /home/eval/.claude/.credentials.json' 2>/dev/null; then
-  echo "Claude credentials not set up in Docker volume '$CLAUDE_VOL'."
-  echo "Launching interactive Claude for login..."
-  echo ""
-  docker run --rm -it \
-    -v "$CLAUDE_VOL:/home/eval/.claude" \
-    --entrypoint claude \
-    "$IMAGE"
-  echo ""
-  echo "Login complete. Re-run this script to start evals."
-  exit 0
+# Extract OAuth token from credentials
+CLAUDE_TOKEN=$(python3 -c "import json; d=json.load(open('$HOME/.claude/.credentials.json')); print(d['claudeAiOauth']['accessToken'])")
+if [ -z "$CLAUDE_TOKEN" ]; then
+  echo "Failed to extract OAuth token from ~/.claude/.credentials.json"
+  exit 1
 fi
 
 # Ensure output directory exists
@@ -86,40 +82,17 @@ echo "Starting eval run in Docker..."
 echo "  Image: $IMAGE"
 echo "  Results: ~/.context-tree/evals/"
 echo "  Log: $LOG_FILE"
-echo "  Follow with: tail -f $LOG_FILE"
 echo ""
 
 docker run --rm \
+  -e CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_TOKEN" \
   -e GH_TOKEN="$(gh auth token)" \
-  -v "$CLAUDE_VOL:/home/eval/.claude" \
   -v "$HOME/.context-tree/evals:/home/eval/.context-tree/evals" \
   -v "$PROMPT_FILE:/tmp/eval-prompt.txt:ro" \
   --entrypoint sh \
   "$IMAGE" \
-  -c 'claude -p "$(cat /tmp/eval-prompt.txt)" --dangerously-skip-permissions --output-format stream-json --verbose 2>&1 | tee /home/eval/.context-tree/evals/_run.log' &
-
-DOCKER_PID=$!
-
-# Wait for log file to appear, then tail it
-for i in $(seq 1 10); do
-  if [ -f "$HOME/.context-tree/evals/_run.log" ]; then
-    break
-  fi
-  sleep 1
-done
-
-tail -f "$HOME/.context-tree/evals/_run.log" &
-TAIL_PID=$!
-
-# Wait for docker to finish, then stop tail
-wait "$DOCKER_PID" 2>/dev/null
-EXIT_CODE=$?
-kill "$TAIL_PID" 2>/dev/null
-
-# Copy log with timestamp
-cp "$HOME/.context-tree/evals/_run.log" "$LOG_FILE" 2>/dev/null
+  -c 'echo "{\"bypassPermissionsModeAccepted\": true}" > ~/.claude.json && claude -p "$(cat /tmp/eval-prompt.txt)" --dangerously-skip-permissions --output-format stream-json --verbose' \
+  2>&1 | tee "$LOG_FILE"
 
 echo ""
-echo "Done. Exit code: $EXIT_CODE"
-echo "Log saved to: $LOG_FILE"
-exit "$EXIT_CODE"
+echo "Done. Log saved to: $LOG_FILE"
