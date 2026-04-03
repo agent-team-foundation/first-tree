@@ -51,14 +51,17 @@ echo "  Log: $LOG_FILE"
 echo ""
 
 # Prompt file is baked into the image at evals/scripts/eval-prompt.txt
+# Write a startup script to a temp file, pipe credentials via env var
+CREDS_B64=$(echo "$CLAUDE_CREDS_JSON" | base64 -w0)
+
 docker run --rm -it \
   -e CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_TOKEN" \
   -e GH_TOKEN="$(gh auth token)" \
+  -e _CREDS_B64="$CREDS_B64" \
   -v "$HOME/.context-tree/evals:/home/eval/.context-tree/evals" \
   --entrypoint sh \
   "$IMAGE" \
-  -e CLAUDE_CREDS_JSON="$CLAUDE_CREDS_JSON" \
-  -c 'mkdir -p ~/.claude && echo "$CLAUDE_CREDS_JSON" > ~/.claude/.credentials.json && chmod 600 ~/.claude/.credentials.json && echo "{\"bypassPermissionsModeAccepted\": true}" > ~/.claude.json && claude --dangerously-skip-permissions' \
+  -c 'mkdir -p ~/.claude && echo "$_CREDS_B64" | base64 -d > ~/.claude/.credentials.json && chmod 600 ~/.claude/.credentials.json && echo "{\"bypassPermissionsModeAccepted\":true}" > ~/.claude.json && claude --dangerously-skip-permissions' \
   2>&1 | tee "$LOG_FILE"
 
 echo ""
