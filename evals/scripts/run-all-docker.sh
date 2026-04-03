@@ -55,6 +55,13 @@ echo ""
 CREDS_B64=$(echo "$CLAUDE_CREDS_JSON" | base64 -w0)
 
 # Named volume persists ~/.claude across container restarts
+# Fix ownership on first use (volume is created as root)
+docker run --rm --user root \
+  -v ct-eval-claude-config:/home/eval/.claude \
+  --entrypoint chown \
+  "$IMAGE" \
+  -R eval:eval /home/eval/.claude
+
 docker run --rm -it \
   -e CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_TOKEN" \
   -e GH_TOKEN="$(gh auth token)" \
