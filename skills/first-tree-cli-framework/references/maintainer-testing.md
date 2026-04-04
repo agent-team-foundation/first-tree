@@ -28,6 +28,7 @@ Examples:
 pnpm test -- skills/first-tree-cli-framework/tests/rules.test.ts
 pnpm test -- skills/first-tree-cli-framework/tests/verify.test.ts
 pnpm test -- skills/first-tree-cli-framework/tests/skill-artifacts.test.ts
+pnpm test -- skills/first-tree-cli-framework/tests/thin-cli.test.ts
 ```
 
 If a future refactor changes these paths again, keep the command semantics and

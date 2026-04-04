@@ -82,7 +82,9 @@ on root-level prose.
 
 ## Contributing And Security
 
+- Use the GitHub issue forms for bug reports and feature requests so maintainers get reproducible context up front.
 - See `CONTRIBUTING.md` for local setup, validation expectations, and where changes should live.
+- See `CODE_OF_CONDUCT.md` for community expectations.
 - See `SECURITY.md` for vulnerability reporting guidance.
 
 ## License

@@ -74,6 +74,10 @@ Helpful PRs for this repo usually include:
 - the validation commands you ran
 - notes about package/install behavior if the published tarball changes
 
+Use the GitHub issue forms for bug reports and feature requests, and follow the
+pull request template when opening a PR so maintainers get the same core
+context every time.
+
 ## Where To Start Reading
 
 - `README.md` for the public entrypoint
