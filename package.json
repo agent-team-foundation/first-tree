@@ -2,6 +2,21 @@
   "name": "first-tree",
   "version": "0.0.3",
   "description": "CLI tools for Context Tree — the living source of truth for your organization.",
+  "homepage": "https://github.com/agent-team-foundation/first-tree#readme",
+  "bugs": {
+    "url": "https://github.com/agent-team-foundation/first-tree/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/agent-team-foundation/first-tree.git"
+  },
+  "keywords": [
+    "context-tree",
+    "cli",
+    "agents",
+    "knowledge-base",
+    "markdown"
+  ],
   "type": "module",
   "bin": {
     "context-tree": "./dist/cli.js"

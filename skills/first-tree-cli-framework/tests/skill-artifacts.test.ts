@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 
 const ROOT = process.cwd();
 
@@ -229,5 +230,60 @@ describe("skill artifacts", () => {
     expect(maintainerArchitecture).toContain("maintainer-only developer tooling");
     expect(maintainerArchitecture).toContain("`evals/`");
     expect(maintainerArchitecture).not.toContain("tests, and evals");
+  });
+
+  it("keeps public OSS entrypoints and package metadata in place", () => {
+    const read = (path: string) => readFileSync(join(ROOT, path), "utf-8");
+    const pkg = JSON.parse(read("package.json")) as {
+      homepage?: string;
+      bugs?: { url?: string };
+      repository?: { type?: string; url?: string };
+      keywords?: string[];
+    };
+
+    expect(read("README.md")).toContain("Package Name vs Command");
+    expect(read("README.md")).toContain("CONTRIBUTING.md");
+    expect(read("README.md")).toContain("CODE_OF_CONDUCT.md");
+    expect(read("README.md")).toContain("SECURITY.md");
+
+    expect(read("CONTRIBUTING.md")).toContain("pnpm validate:skill");
+    expect(read("CONTRIBUTING.md")).toContain("pull request template");
+    expect(read("CONTRIBUTING.md")).toContain("source-map.md");
+    expect(read("CODE_OF_CONDUCT.md")).toContain("private maintainer follow-up");
+    expect(read("SECURITY.md")).toContain("Private Vulnerability Reporting");
+    expect(read("SECURITY.md")).toContain("do not post exploit details");
+
+    expect(existsSync(join(ROOT, ".github", "PULL_REQUEST_TEMPLATE.md"))).toBe(true);
+
+    const bugTemplate = parse(read(".github/ISSUE_TEMPLATE/bug-report.yml")) as {
+      name?: string;
+      body?: unknown[];
+    };
+    const featureTemplate = parse(read(".github/ISSUE_TEMPLATE/feature-request.yml")) as {
+      name?: string;
+      body?: unknown[];
+    };
+    const issueConfig = parse(read(".github/ISSUE_TEMPLATE/config.yml")) as {
+      contact_links?: unknown[];
+    };
+
+    expect(bugTemplate.name).toBe("Bug report");
+    expect(Array.isArray(bugTemplate.body)).toBe(true);
+    expect(featureTemplate.name).toBe("Feature request");
+    expect(Array.isArray(featureTemplate.body)).toBe(true);
+    expect(Array.isArray(issueConfig.contact_links)).toBe(true);
+    expect(issueConfig.contact_links).toHaveLength(3);
+
+    expect(pkg.homepage).toBe("https://github.com/agent-team-foundation/first-tree#readme");
+    expect(pkg.bugs).toEqual({
+      url: "https://github.com/agent-team-foundation/first-tree/issues",
+    });
+    expect(pkg.repository).toEqual({
+      type: "git",
+      url: "git+https://github.com/agent-team-foundation/first-tree.git",
+    });
+    expect(pkg.keywords).toEqual(
+      expect.arrayContaining(["context-tree", "cli", "agents"]),
+    );
   });
 });

@@ -1,7 +1,7 @@
 # Upgrade Contract
 
-This file describes the intended contract for the single-skill refactor and the
-compatibility rules we keep while the repo is migrating.
+This file describes the current installed-layout contract and the compatibility
+rules we keep for legacy `.context-tree/` repos.
 
 ## Canonical Source
 
@@ -15,7 +15,7 @@ compatibility rules we keep while the repo is migrating.
 
 ## Installed Layout
 
-The end-state installed layout in a user repo is:
+The current installed layout in a user repo is:
 
 ```text
 skills/
@@ -57,7 +57,7 @@ The tree content still lives outside the skill:
   - migrates legacy `.context-tree/` repos onto the installed skill layout
   - preserves user-authored sections such as the editable part of `AGENT.md`
 
-## Compatibility Rules During Migration
+## Compatibility Rules For Legacy Trees
 
 - `context-tree init` only installs the skill layout; it never creates a new
   `.context-tree/`.

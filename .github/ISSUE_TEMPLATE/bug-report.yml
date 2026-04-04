@@ -1,0 +1,51 @@
+name: Bug report
+description: Report a concrete problem in the first-tree CLI, framework payload, docs, or packaging.
+title: "[Bug]: "
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the bug and why it matters.
+      placeholder: context-tree verify rejects a valid tree after upgrading from 0.0.x
+    validations:
+      required: true
+  - type: input
+    id: command
+    attributes:
+      label: Command or surface area
+      description: Which command, doc, or package surface is affected?
+      placeholder: context-tree init
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Include the smallest reproducible sequence you can.
+      placeholder: |
+        1. Create a new git repo
+        2. Run npx first-tree init
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      placeholder: The CLI should scaffold AGENT.md and write progress.md
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Share versions and context that might affect the result.
+      placeholder: |
+        OS:
+        Node:
+        Package manager:
+        first-tree version:
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional context
+      description: Screenshots, logs, tree layout notes, or related links.

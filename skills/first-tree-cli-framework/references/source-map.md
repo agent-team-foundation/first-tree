@@ -79,6 +79,7 @@ not become the only place important maintainer knowledge lives.
 | `tests/generate-codeowners.test.ts` | Ownership helper behavior |
 | `tests/run-review.test.ts` | Review helper behavior |
 | `tests/skill-artifacts.test.ts` | Skill export and documentation integrity |
+| `tests/thin-cli.test.ts` | Thin CLI entrypoint smoke coverage |
 | `tests/upgrade.test.ts` | Installed-skill upgrade behavior |
 
 ## Compatibility Notes

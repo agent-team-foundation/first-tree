@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import { pathToFileURL } from "node:url";
+
 const USAGE = `usage: context-tree <command>
 
   New to context-tree? Run \`context-tree help onboarding\` first.
@@ -15,11 +17,18 @@ Options:
   --version    Show version number
 `;
 
-async function main(): Promise<number> {
-  const args = process.argv.slice(2);
+type Output = (text: string) => void;
+
+export { USAGE };
+
+export async function runCli(
+  args: string[],
+  output: Output = console.log,
+): Promise<number> {
+  const write = (text: string): void => output(text);
 
   if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
-    console.log(USAGE);
+    write(USAGE);
     return 0;
   }
 
@@ -27,7 +36,7 @@ async function main(): Promise<number> {
     const { createRequire } = await import("node:module");
     const require = createRequire(import.meta.url);
     const pkg = require("../package.json") as { version: string };
-    console.log(pkg.version);
+    write(pkg.version);
     return 0;
   }
 
@@ -47,12 +56,21 @@ async function main(): Promise<number> {
       return runUpgrade();
     }
     case "help":
-      return (await import("#skill/engine/commands/help.js")).runHelp(args.slice(1));
+      return (await import("#skill/engine/commands/help.js")).runHelp(args.slice(1), write);
     default:
-      console.log(`Unknown command: ${command}`);
-      console.log(USAGE);
+      write(`Unknown command: ${command}`);
+      write(USAGE);
       return 1;
   }
 }
 
-main().then((code) => process.exit(code));
+async function main(): Promise<number> {
+  return runCli(process.argv.slice(2));
+}
+
+if (
+  process.argv[1] !== undefined &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
+  main().then((code) => process.exit(code));
+}

@@ -6,22 +6,27 @@ Topics:
 
 export { HELP_USAGE };
 
-export async function runHelp(args: string[]): Promise<number> {
+type Output = (text: string) => void;
+
+export async function runHelp(
+  args: string[],
+  output: Output = console.log,
+): Promise<number> {
   const topic = args[0];
 
   if (!topic || topic === "--help" || topic === "-h") {
-    console.log(HELP_USAGE);
+    output(HELP_USAGE);
     return 0;
   }
 
   switch (topic) {
     case "onboarding": {
       const { runOnboarding } = await import("#skill/engine/onboarding.js");
-      return runOnboarding();
+      return runOnboarding(output);
     }
     default:
-      console.log(`Unknown help topic: ${topic}`);
-      console.log(HELP_USAGE);
+      output(`Unknown help topic: ${topic}`);
+      output(HELP_USAGE);
       return 1;
   }
 }
