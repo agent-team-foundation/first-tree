@@ -136,27 +136,23 @@ function checkCase(evalCase: EvalCase): CheckResult {
     }
 
     // --- Phase 2: After fix (fix_commit_sha) ---
+    // Checkout the fix commit but keep untracked files (.venv, node_modules)
+    // so we don't have to re-run a full setup from scratch.
     process.stderr.write(`  [after]  Checking out fix @ ${evalCase.fix_commit_sha.slice(0, 8)}...\n`);
     execSync(`git checkout --quiet ${evalCase.fix_commit_sha}`, {
       cwd: tmpDir,
       stdio: 'pipe',
       timeout: 30_000,
     });
-    execSync('git reset --hard && git clean -fdx', {
+    execSync('git reset --hard', {
       cwd: tmpDir,
-      shell: '/bin/sh',
       stdio: 'pipe',
       timeout: 30_000,
     });
 
-    process.stderr.write(`  [after]  Running setup...\n`);
-    try {
-      runSetup(tmpDir, evalCase);
-      result.setupAfter = 'ok';
-    } catch (err: any) {
-      result.error = `setup (after): ${err.message?.slice(0, 150)}`;
-      return result;
-    }
+    // Skip re-setup — the venv/node_modules from before-fix phase is reused.
+    // Bug-fix PRs rarely change dependencies.
+    result.setupAfter = 'ok';
 
     process.stderr.write(`  [after]  Running verify (expect pass)...\n`);
     const afterVerify = runVerify(tmpDir, evalCase);

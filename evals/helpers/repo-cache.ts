@@ -46,6 +46,16 @@ export function repoUrl(slug: string): string {
 /** Track repos already fetched this session to avoid redundant network calls. */
 const fetchedThisSession = new Set<string>();
 
+/** Mark a cached repo as safe for git operations (avoids "dubious ownership" in Docker). */
+function ensureSafeDir(repoDir: string): void {
+  try {
+    execSync(`git config --global --add safe.directory ${JSON.stringify(repoDir)}`, {
+      stdio: 'pipe',
+      timeout: 5_000,
+    });
+  } catch { /* non-fatal */ }
+}
+
 /**
  * Ensure a repo is present in the cache. Clones on first use, fetches on subsequent.
  * Returns the absolute path to the cached repo directory.
@@ -55,6 +65,7 @@ export function ensureCached(repoSlug: string): string {
   const repoDir = path.join(cacheDir, cacheKey(repoSlug));
 
   if (fs.existsSync(path.join(repoDir, '.git'))) {
+    ensureSafeDir(repoDir);
     if (fetchedThisSession.has(repoSlug)) {
       process.stderr.write(`  Cache hit: ${repoSlug} (already fetched)\n`);
     } else {

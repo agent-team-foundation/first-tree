@@ -29,20 +29,23 @@ FROM node:22-bookworm
 # System dependencies for cloning repos and running Python evals
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
-    python3 \
-    python3-pip \
-    python3-venv \
     curl \
     jq \
     && rm -rf /var/lib/apt/lists/*
 
-# Install pnpm
-RUN corepack enable && corepack prepare pnpm@latest --activate
-
-# Install uv (fast Python package manager used by eval setup scripts)
+# Install uv and Python 3.12 (eval cases require 3.12+).
+# We install Python via uv, then symlink into /usr/local/bin so both
+# the system `python3` and `uv venv` find Python 3.12.
+ENV UV_PYTHON_INSTALL_DIR=/opt/uv-python
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
     && cp /root/.local/bin/uv /usr/local/bin/uv \
-    && cp /root/.local/bin/uvx /usr/local/bin/uvx
+    && cp /root/.local/bin/uvx /usr/local/bin/uvx \
+    && uv python install 3.12 \
+    && ln -sf $(uv python find 3.12) /usr/local/bin/python3.12 \
+    && ln -sf /usr/local/bin/python3.12 /usr/bin/python3
+
+# Install pnpm
+RUN corepack enable && corepack prepare pnpm@latest --activate
 
 # Install Claude Code CLI
 RUN npm install -g @anthropic-ai/claude-code
@@ -66,8 +69,12 @@ RUN useradd -m -s /bin/bash eval \
 USER eval
 WORKDIR /home/eval/first-tree
 
-# Create eval results directory
-RUN mkdir -p /home/eval/.context-tree/evals
+# Create eval results directory and set git safe.directory globally
+RUN mkdir -p /home/eval/.context-tree/evals \
+    && git config --global --add safe.directory '*'
+
+# Ensure uv/pnpm caches are writable inside the container
+ENV UV_CACHE_DIR=/tmp/uv-cache
 
 # Default: run evals
 ENTRYPOINT ["pnpm", "run", "eval"]
