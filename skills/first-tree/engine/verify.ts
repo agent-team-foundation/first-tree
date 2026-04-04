@@ -1,4 +1,8 @@
 import { Repo } from "#skill/engine/repo.js";
+import {
+  AGENT_INSTRUCTIONS_FILE,
+  LEGACY_AGENT_INSTRUCTIONS_FILE,
+} from "#skill/engine/runtime/asset-loader.js";
 import { runValidateMembers } from "#skill/engine/validators/members.js";
 import { runValidateNodes } from "#skill/engine/validators/nodes.js";
 
@@ -73,10 +77,20 @@ export function runVerify(repo?: Repo, nodeValidator?: NodeValidator): number {
     hasValidNode,
   ) && allPassed;
 
-  // 3. AGENT.md exists with framework markers
+  // 3. AGENTS.md is canonical and contains framework markers
+  const hasCanonicalAgentInstructions = r.hasCanonicalAgentInstructionsFile();
+  const hasLegacyAgentInstructions = r.hasLegacyAgentInstructionsFile();
+  if (hasLegacyAgentInstructions) {
+    const followUp = hasCanonicalAgentInstructions
+      ? `Remove legacy \`${LEGACY_AGENT_INSTRUCTIONS_FILE}\` after confirming its contents are in \`${AGENT_INSTRUCTIONS_FILE}\`.`
+      : `Rename \`${LEGACY_AGENT_INSTRUCTIONS_FILE}\` to \`${AGENT_INSTRUCTIONS_FILE}\`.`;
+    console.log(`  Legacy agent instructions detected. ${followUp}\n`);
+  }
   allPassed = check(
-    "AGENT.md exists with framework markers",
-    r.hasAgentMdMarkers(),
+    `${AGENT_INSTRUCTIONS_FILE} is the only agent instructions file and has framework markers`,
+    hasCanonicalAgentInstructions &&
+      !hasLegacyAgentInstructions &&
+      r.hasAgentInstructionsMarkers(),
   ) && allPassed;
 
   // 4. Node validation

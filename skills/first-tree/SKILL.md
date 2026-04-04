@@ -51,14 +51,14 @@ Use this skill when the task depends on the exact behavior of the
   thin CLI shell, not as a tree repo.
 - Keep command behavior, validator behavior, shipped assets, maintainer
   references, and package shell aligned.
-- If root README/AGENT/CI text explains something non-obvious, migrate that
+- If root README/AGENTS/CI text explains something non-obvious, migrate that
   information into `references/` and trim the root file back down.
 - If you change runtime assets or skill references, run `pnpm validate:skill`.
 
 ### Working In A User Tree Repo
 
 - `context-tree init` installs this skill into the user's repo and scaffolds
-  `NODE.md`, `AGENT.md`, and `members/NODE.md`.
+  `NODE.md`, `AGENTS.md`, and `members/NODE.md`.
 - `context-tree upgrade` refreshes the installed skill from the copy bundled
   with the currently running `first-tree` package. To pick up a newer
   framework, run a newer package version first. It also migrates older repos

@@ -1,13 +1,16 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { Repo } from "#skill/engine/repo.js";
 import { runUpgrade } from "#skill/engine/upgrade.js";
 import {
+  AGENT_INSTRUCTIONS_FILE,
   FRAMEWORK_VERSION,
   INSTALLED_PROGRESS,
+  LEGACY_AGENT_INSTRUCTIONS_FILE,
 } from "#skill/engine/runtime/asset-loader.js";
 import {
+  makeAgentsMd,
   makeFramework,
   makeLegacyFramework,
   makeLegacyNamedFramework,
@@ -20,10 +23,7 @@ describe("runUpgrade", () => {
     const repoDir = useTmpDir();
     const sourceDir = useTmpDir();
     makeLegacyFramework(repoDir.path, "0.1.0");
-    writeFileSync(
-      join(repoDir.path, "AGENT.md"),
-      "<!-- BEGIN CONTEXT-TREE FRAMEWORK -->\nstuff\n<!-- END CONTEXT-TREE FRAMEWORK -->\n",
-    );
+    makeAgentsMd(repoDir.path, { legacyName: true, markers: true, userContent: true });
     makeSourceSkill(sourceDir.path, "0.2.0");
 
     const result = runUpgrade(new Repo(repoDir.path), {
@@ -35,6 +35,12 @@ describe("runUpgrade", () => {
     expect(readFileSync(join(repoDir.path, FRAMEWORK_VERSION), "utf-8").trim()).toBe("0.2.0");
     expect(readFileSync(join(repoDir.path, INSTALLED_PROGRESS), "utf-8")).toContain(
       "skills/first-tree/assets/framework/VERSION",
+    );
+    expect(readFileSync(join(repoDir.path, INSTALLED_PROGRESS), "utf-8")).toContain(
+      `Rename \`${LEGACY_AGENT_INSTRUCTIONS_FILE}\` to \`${AGENT_INSTRUCTIONS_FILE}\``,
+    );
+    expect(readFileSync(join(repoDir.path, INSTALLED_PROGRESS), "utf-8")).toContain(
+      "skills/first-tree/assets/framework/templates/agents.md.template",
     );
   });
 

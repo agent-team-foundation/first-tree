@@ -69,14 +69,14 @@ git init
 context-tree init
 ```
 
-This installs the framework skill into `skills/first-tree/`, renders scaffolding (`NODE.md`, `AGENT.md`, `members/NODE.md`), and generates a task list in `skills/first-tree/progress.md`.
+This installs the framework skill into `skills/first-tree/`, renders scaffolding (`NODE.md`, `AGENTS.md`, `members/NODE.md`), and generates a task list in `skills/first-tree/progress.md`.
 
 ### Step 2: Work Through the Task List
 
 Read `skills/first-tree/progress.md`. It contains a checklist tailored to the current state of the repo. Complete each task:
 
 - Fill in `NODE.md` with your organization name, owners, and domains
-- Add project-specific instructions to `AGENT.md` below the framework markers
+- Add project-specific instructions to `AGENTS.md` below the framework markers
 - Create member nodes under `members/`
 - Optionally configure agent integration (e.g., Claude Code session hooks)
 - Copy validation workflows from `skills/first-tree/assets/framework/workflows/` to `.github/workflows/`
@@ -159,4 +159,4 @@ install before running `context-tree upgrade`.
 
 - `skills/first-tree/references/principles.md` — Core principles with detailed examples
 - `skills/first-tree/references/ownership-and-naming.md` — How nodes are named and owned
-- `AGENT.md` in your tree — The before/during/after workflow for every task
+- `AGENTS.md` in your tree — The before/during/after workflow for every task

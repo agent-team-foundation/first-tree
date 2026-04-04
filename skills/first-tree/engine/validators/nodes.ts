@@ -1,5 +1,9 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, posix } from "node:path";
+import {
+  AGENT_INSTRUCTIONS_FILE,
+  LEGACY_AGENT_INSTRUCTIONS_FILE,
+} from "#skill/engine/runtime/asset-loader.js";
 
 const FRONTMATTER_RE = /^---\s*\n(.*?)\n---/s;
 const OWNERS_RE = /^owners:\s*\[([^\]]*)\]/m;
@@ -11,7 +15,11 @@ const MD_LINK_RE = /\[.*?\]\(([^)]+\.md)\)/g;
 const DOMAIN_LINK_RE = /\[(\w[\w-]*)\/?\]\((\w[\w-]*)\/NODE\.md\)/g;
 
 const SKIP = new Set(["node_modules", "__pycache__"]);
-const SKIP_FILES = new Set(["AGENT.md", "CLAUDE.md"]);
+const SKIP_FILES = new Set([
+  AGENT_INSTRUCTIONS_FILE,
+  LEGACY_AGENT_INSTRUCTIONS_FILE,
+  "CLAUDE.md",
+]);
 const MIN_BODY_LENGTH = 20;
 
 export class Findings {

@@ -29,7 +29,7 @@ The living source of truth for your organization. A structured knowledge base th
 
 ## Working with the Tree
 
-See [AGENT.md](AGENT.md) for agent instructions — the before/during/after workflow, ownership model, and tree maintenance.
+See [AGENTS.md](AGENTS.md) for agent instructions — the before/during/after workflow, ownership model, and tree maintenance.
 
 See [about.md](skills/first-tree/references/about.md) for background — the problem, the idea, and who it's for.
 
