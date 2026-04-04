@@ -230,4 +230,35 @@ describe("skill artifacts", () => {
     expect(maintainerArchitecture).toContain("`evals/`");
     expect(maintainerArchitecture).not.toContain("tests, and evals");
   });
+
+  it("keeps public OSS entrypoints and package metadata in place", () => {
+    const read = (path: string) => readFileSync(join(ROOT, path), "utf-8");
+    const pkg = JSON.parse(read("package.json")) as {
+      homepage?: string;
+      bugs?: { url?: string };
+      repository?: { type?: string; url?: string };
+      keywords?: string[];
+    };
+
+    expect(read("README.md")).toContain("Package Name vs Command");
+    expect(read("README.md")).toContain("CONTRIBUTING.md");
+    expect(read("README.md")).toContain("SECURITY.md");
+
+    expect(read("CONTRIBUTING.md")).toContain("pnpm validate:skill");
+    expect(read("CONTRIBUTING.md")).toContain("source-map.md");
+    expect(read("SECURITY.md")).toContain("Private Vulnerability Reporting");
+    expect(read("SECURITY.md")).toContain("do not post exploit details");
+
+    expect(pkg.homepage).toBe("https://github.com/agent-team-foundation/first-tree#readme");
+    expect(pkg.bugs).toEqual({
+      url: "https://github.com/agent-team-foundation/first-tree/issues",
+    });
+    expect(pkg.repository).toEqual({
+      type: "git",
+      url: "git+https://github.com/agent-team-foundation/first-tree.git",
+    });
+    expect(pkg.keywords).toEqual(
+      expect.arrayContaining(["context-tree", "cli", "agents"]),
+    );
+  });
 });
