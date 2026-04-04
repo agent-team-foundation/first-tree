@@ -49,9 +49,11 @@ export function loadEnv(): void {
 
 /**
  * Get an env var with an optional fallback.
+ * Automatically loads .env on first call.
  * Resolves ~ to the home directory for path values.
  */
 export function getEnv(key: string, fallback?: string): string | undefined {
+  loadEnv();
   const value = process.env[key] || fallback;
   if (value && value.startsWith('~')) {
     return path.join(os.homedir(), value.slice(1));

@@ -75,7 +75,7 @@ function buildCommand(agent: AgentConfig, maxTurns?: number): { cmd: string; arg
         '--verbose',
         '--dangerously-skip-permissions',
       ];
-      if (maxTurns) {
+      if (maxTurns != null) {
         args.push('--max-turns', String(maxTurns));
       }
       return { cmd: 'claude', args };

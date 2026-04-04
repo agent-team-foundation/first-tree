@@ -9,8 +9,7 @@ import { execFileSync, execSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { cloneFromCache } from '#evals/helpers/repo-cache.js';
-import { loadEnv } from '#evals/helpers/env.js';
+import { cloneFromCache, repoUrl } from '#evals/helpers/repo-cache.js';
 import {
   TIMEOUT_GIT_LS_REMOTE,
   TIMEOUT_GIT_PUSH,
@@ -19,8 +18,6 @@ import {
   TIMEOUT_GIT_LOG,
   TIMEOUT_GIT_INFO,
 } from '#evals/helpers/timeouts.js';
-
-loadEnv();
 
 // ---------------------------------------------------------------------------
 // Types
@@ -111,10 +108,6 @@ export function parseArgs(argv: string[]): Record<string, string> {
 // ---------------------------------------------------------------------------
 // Git operations
 // ---------------------------------------------------------------------------
-
-function repoUrl(slug: string): string {
-  return `https://github.com/${slug}.git`;
-}
 
 /**
  * Preflight: verify repos exist and git auth works.

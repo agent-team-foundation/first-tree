@@ -13,7 +13,7 @@
 import { execSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { loadEnv, getEnv } from '#evals/helpers/env.js';
+import { getEnv } from '#evals/helpers/env.js';
 import {
   TIMEOUT_GIT_CLONE,
   TIMEOUT_GIT_FETCH,
@@ -23,13 +23,15 @@ import {
   TIMEOUT_COPY,
 } from '#evals/helpers/timeouts.js';
 
-loadEnv();
+let _cacheDir: string | undefined;
 
 /** Return the cache root directory, creating it if needed. */
 export function getRepoCacheDir(): string {
-  const dir = getEnv('EVALS_REPO_CACHE', '~/.context-tree/repo-cache')!;
-  fs.mkdirSync(dir, { recursive: true });
-  return dir;
+  if (!_cacheDir) {
+    _cacheDir = getEnv('EVALS_REPO_CACHE', '~/.context-tree/repo-cache')!;
+    fs.mkdirSync(_cacheDir, { recursive: true });
+  }
+  return _cacheDir;
 }
 
 /** Convert a repo slug to a cache-safe directory name. */
@@ -37,9 +39,12 @@ function cacheKey(repoSlug: string): string {
   return repoSlug.replace(/\//g, '--');
 }
 
-function repoUrl(slug: string): string {
+export function repoUrl(slug: string): string {
   return `https://github.com/${slug}.git`;
 }
+
+/** Track repos already fetched this session to avoid redundant network calls. */
+const fetchedThisSession = new Set<string>();
 
 /**
  * Ensure a repo is present in the cache. Clones on first use, fetches on subsequent.
@@ -50,25 +55,28 @@ export function ensureCached(repoSlug: string): string {
   const repoDir = path.join(cacheDir, cacheKey(repoSlug));
 
   if (fs.existsSync(path.join(repoDir, '.git'))) {
-    // Cache hit — fetch latest refs
-    process.stderr.write(`  Cache hit: ${repoSlug} — fetching updates...\n`);
-    try {
-      execSync('git fetch origin', {
-        cwd: repoDir,
-        stdio: 'pipe',
-        timeout: TIMEOUT_GIT_FETCH,
-      });
-    } catch (err: any) {
-      process.stderr.write(`  Warning: fetch failed for cached ${repoSlug}: ${err.message}\n`);
+    if (fetchedThisSession.has(repoSlug)) {
+      process.stderr.write(`  Cache hit: ${repoSlug} (already fetched)\n`);
+    } else {
+      process.stderr.write(`  Cache hit: ${repoSlug} — fetching updates...\n`);
+      try {
+        execSync('git fetch origin', {
+          cwd: repoDir,
+          stdio: 'pipe',
+          timeout: TIMEOUT_GIT_FETCH,
+        });
+      } catch (err: any) {
+        process.stderr.write(`  Warning: fetch failed for cached ${repoSlug}: ${err.message}\n`);
+      }
+      fetchedThisSession.add(repoSlug);
     }
   } else {
-    // Cache miss — full clone
     process.stderr.write(`  Cache miss: ${repoSlug} — cloning into cache...\n`);
-    const url = repoUrl(repoSlug);
     execSync(
-      `git clone --quiet --no-checkout ${JSON.stringify(url)} ${JSON.stringify(repoDir)}`,
+      `git clone --quiet --no-checkout ${JSON.stringify(repoUrl(repoSlug))} ${JSON.stringify(repoDir)}`,
       { stdio: 'pipe', timeout: TIMEOUT_GIT_CLONE },
     );
+    fetchedThisSession.add(repoSlug);
   }
 
   return repoDir;
@@ -115,15 +123,11 @@ export function cloneFromCache(
     );
   }
 
-  // Ensure pristine working tree — remove any stale files
-  execSync('git clean -fdx', {
+  // Ensure pristine working tree
+  execSync('git reset --hard && git clean -fdx', {
     cwd: targetDir,
+    shell: '/bin/sh',
     stdio: 'pipe',
     timeout: TIMEOUT_GIT_CLEAN,
-  });
-  execSync('git reset --hard', {
-    cwd: targetDir,
-    stdio: 'pipe',
-    timeout: TIMEOUT_GIT_RESET,
   });
 }

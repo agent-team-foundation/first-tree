@@ -14,10 +14,8 @@ import * as os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import type { TrialResult, EvalRun } from '#evals/helpers/types.js';
 import { generateHtmlReport } from '#evals/helpers/html-report.js';
-import { loadEnv, getEnv } from '#evals/helpers/env.js';
+import { getEnv } from '#evals/helpers/env.js';
 import { TIMEOUT_GIT_INFO } from '#evals/helpers/timeouts.js';
-
-loadEnv();
 
 const SCHEMA_VERSION = 1;
 const EVAL_DIR = getEnv('EVALS_STORE_DIR', '~/.context-tree/evals')!;
@@ -85,12 +83,11 @@ export class EvalCollector {
     // Write HTML report
     const htmlFilename = filename.replace('.json', '.html');
     const htmlPath = path.join(this.evalDir, htmlFilename);
-    const git = getGitInfo();
     const htmlContent = generateHtmlReport(this.trials, {
       model: this.model,
       cli: this.cli,
-      branch: git.branch,
-      sha: git.sha,
+      branch: run.branch,
+      sha: run.git_sha,
       timestamp: run.timestamp,
     });
     fs.writeFileSync(htmlPath, htmlContent);

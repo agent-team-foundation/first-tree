@@ -17,10 +17,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import type { EvalCase, EvalCondition, ContextTreeConfig, RepoRef } from '#evals/helpers/types.js';
 import { cloneFromCache } from '#evals/helpers/repo-cache.js';
-import { loadEnv } from '#evals/helpers/env.js';
 import { TIMEOUT_GIT_CLONE, TIMEOUT_GIT_CHECKOUT, TIMEOUT_SETUP } from '#evals/helpers/timeouts.js';
-
-loadEnv();
 
 export interface Sandbox {
   dir: string;

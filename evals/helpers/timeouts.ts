@@ -5,9 +5,7 @@
  * Values are in milliseconds. Each has a sensible default.
  */
 
-import { loadEnv, getEnv } from '#evals/helpers/env.js';
-
-loadEnv();
+import { getEnv } from '#evals/helpers/env.js';
 
 function ms(key: string, defaultMs: number): number {
   const val = getEnv(key);
