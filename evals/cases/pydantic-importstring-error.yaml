@@ -26,14 +26,13 @@ task: |
   (e.g. "mod:attr"), the fallback logic incorrectly tries to split on dots
   and produces confusing errors.
 
-  Find and fix the root cause. Write tests that cover both issues.
+  Find and fix the root cause. Add a test case that verifies broken internal imports surface the real error instead of 'No module named X'.
 setup: |
   uv venv .venv --quiet
   uv sync --frozen --all-groups --all-packages --all-extras --quiet --python .venv/bin/python 2>/dev/null || uv pip install -e ".[testing]" --quiet --python .venv/bin/python
 verification: fixtures/pydantic-importstring-error/verify.sh
 difficulty: medium
 timeout_ms: 600000
-max_turns: 30
 
 context_tree_versions:
   - label: cli-v0.0.2

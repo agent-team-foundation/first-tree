@@ -19,9 +19,7 @@ task: |
   Non-optional `List[bytes]` works fine; the bug only triggers when the list
   type is wrapped in `Optional` or `Union[..., None]`.
 
-  Find and fix the root cause. Write tests that verify:
-  1. An endpoint with `Optional[List[bytes]] = File(None)` accepts file uploads
-  2. The same endpoint returns a valid response when no files are sent
+  Find and fix the root cause. Add a test that verifies `Optional[List[bytes]]` and `Optional[List[UploadFile]]` parameters work without crashing.
 setup: |
   uv venv .venv --quiet
   uv pip install -e ".[all]" --quiet --python .venv/bin/python
@@ -29,7 +27,6 @@ setup: |
 verification: fixtures/fastapi-optional-file-list/verify.sh
 difficulty: medium
 timeout_ms: 600000
-max_turns: 30
 
 context_tree_versions:
   - label: cli-v0.0.2

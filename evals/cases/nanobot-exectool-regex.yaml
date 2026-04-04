@@ -14,15 +14,13 @@ task: |
   like `E:\` are not detected. A command like `dir E:\` bypasses the workspace
   guard entirely, allowing access to files outside the workspace.
 
-  Find and fix the root cause. Write tests that verify the guard correctly
-  blocks commands referencing bare drive-root paths.
+  Find and fix the root cause. Add a test case to the existing test file that verifies the guard blocks bare drive-root paths like `E:\`.
 setup: |
   uv venv .venv --quiet
   uv pip install -e ".[dev]" --quiet --python .venv/bin/python
-verification: fixtures/nanobot-example/verify.sh
+verification: fixtures/nanobot-exectool-regex/verify.sh
 difficulty: easy
 timeout_ms: 600000
-max_turns: 20
 
 context_tree_versions:
   - label: cli-v0.0.2

@@ -20,15 +20,13 @@ task: |
   triggers a streaming response, but the streamed chunks and the stream-end
   message no longer carry `message_thread_id`.
 
-  Find and fix the root cause. Write tests that verify inbound message metadata
-  is preserved in both streaming chunks and stream-end messages.
+  Find and fix the root cause. Add a test case that verifies inbound message metadata (e.g. message_thread_id) is preserved in streaming responses.
 setup: |
   uv venv .venv --quiet
   uv pip install -e ".[dev]" --quiet --python .venv/bin/python
 verification: fixtures/nanobot-streaming-metadata/verify.sh
 difficulty: medium
 timeout_ms: 600000
-max_turns: 30
 
 context_tree_versions:
   - label: cli-v0.0.3

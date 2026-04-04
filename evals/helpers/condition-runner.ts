@@ -14,6 +14,7 @@ import * as path from 'node:path';
 import type { EvalCase, EvalCondition, AgentConfig, TrialResult, ContextTreeConfig } from '#evals/helpers/types.js';
 import { createSandbox } from '#evals/helpers/repo-sandbox.js';
 import { runSession } from '#evals/helpers/session-runner.js';
+import { TIMEOUT_SESSION, TIMEOUT_VERIFY } from '#evals/helpers/timeouts.js';
 
 // --- Prompt construction ---
 
@@ -38,6 +39,15 @@ function buildPrompt(evalCase: EvalCase, condition: EvalCondition): string {
     '\n\n## Instructions',
     'Make the minimal changes needed to complete the task.',
     'Do not refactor unrelated code or add unnecessary features.',
+    '',
+    '## Testing rules',
+    '- Add test cases to existing test files whenever possible. Only create a new test file if no relevant test file exists.',
+    '- Write focused, minimal tests — one or two test functions that directly verify the fix. Do not write comprehensive test suites.',
+    '- Do not test unrelated functionality or add edge-case tests beyond what the task requires.',
+    '- Run tests to confirm they pass, but limit to one or two pytest invocations. If tests fail on the first run, fix and re-run once.',
+    '',
+    '## Tool restrictions',
+    '- Do NOT use the Agent tool to spawn sub-agents. Do all work directly — reading, searching, editing, and running commands yourself.',
   );
 
   return parts.join('\n');
@@ -63,7 +73,7 @@ function runVerification(
     const output = execSync(`bash ${JSON.stringify(absVerification)}`, {
       cwd: sandboxDir,
       stdio: 'pipe',
-      timeout: 120_000,
+      timeout: TIMEOUT_VERIFY,
       env: { ...process.env, SANDBOX_DIR: sandboxDir },
     }).toString();
 
@@ -126,8 +136,8 @@ export async function runTrial(
       prompt,
       workingDirectory: sandbox.dir,
       agent,
-      maxTurns: evalCase.max_turns || 30,
-      timeout: evalCase.timeout_ms || 600_000,
+      maxTurns: evalCase.max_turns,
+      timeout: evalCase.timeout_ms || TIMEOUT_SESSION,
       testName,
     });
 

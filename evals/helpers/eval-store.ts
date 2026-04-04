@@ -14,14 +14,18 @@ import * as os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import type { TrialResult, EvalRun } from '#evals/helpers/types.js';
 import { generateHtmlReport } from '#evals/helpers/html-report.js';
+import { loadEnv, getEnv } from '#evals/helpers/env.js';
+import { TIMEOUT_GIT_INFO } from '#evals/helpers/timeouts.js';
+
+loadEnv();
 
 const SCHEMA_VERSION = 1;
-const EVAL_DIR = path.join(os.homedir(), '.context-tree', 'evals');
+const EVAL_DIR = getEnv('EVALS_STORE_DIR', '~/.context-tree/evals')!;
 
 function getGitInfo(): { branch: string; sha: string } {
   try {
-    const branch = spawnSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { stdio: 'pipe', timeout: 5000 });
-    const sha = spawnSync('git', ['rev-parse', '--short', 'HEAD'], { stdio: 'pipe', timeout: 5000 });
+    const branch = spawnSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { stdio: 'pipe', timeout: TIMEOUT_GIT_INFO });
+    const sha = spawnSync('git', ['rev-parse', '--short', 'HEAD'], { stdio: 'pipe', timeout: TIMEOUT_GIT_INFO });
     return {
       branch: branch.stdout?.toString().trim() || 'unknown',
       sha: sha.stdout?.toString().trim() || 'unknown',

@@ -23,12 +23,12 @@ task: |
 
   Find where the resource URL is processed in the MCP OAuth flow and
   fix it to strip the trailing slash when the pathname is just "/".
-  Write tests that verify the resource parameter is sent without a
-  trailing slash for pathless URLs, while preserving slashes for URLs
-  that have actual paths.
+  Add a test that verifies the resource parameter for 'https://example.com' is sent without a trailing slash.
 setup: |
   pnpm install
+context_tree_versions:
+  - label: cli-v0.0.3
+    tree_sha: "c1f4e7d5ea105da34a3fa14cf663d7aa31050c07"
 verification: fixtures/vercel-ai-oauth-trailing-slash/verify.sh
 difficulty: medium
 timeout_ms: 600000
-max_turns: 30

@@ -23,13 +23,16 @@ task: |
 
   Fix the component loader to restrict provider loading to trusted
   first-party AutoGen namespaces. Also harden the VideoSurfer audio
-  extraction against SSRF and path traversal. Write tests that verify
-  untrusted providers are rejected and trusted ones still work.
+  extraction against SSRF and path traversal. Add a test that verifies an untrusted provider string is rejected by ComponentLoader.
 setup: |
   cd python/packages/autogen-core
   uv venv .venv --quiet
   uv pip install -e ".[dev]" --quiet --python .venv/bin/python 2>/dev/null || uv pip install -e "." --quiet --python .venv/bin/python
+  uv pip install -e ../autogen-test-utils --quiet --python .venv/bin/python 2>/dev/null || true
+  uv pip install pytest-asyncio --quiet --python .venv/bin/python 2>/dev/null || true
+context_tree_versions:
+  - label: cli-v0.0.3
+    tree_sha: "478a410bc69d38635a868093e49db5f5ea5e5c30"
 verification: fixtures/autogen-provider-namespace-restriction/verify.sh
 difficulty: medium
 timeout_ms: 600000
-max_turns: 30

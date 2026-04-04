@@ -23,8 +23,7 @@ task: |
   Normal sequential streaming (where continuation chunks extend an existing
   tool call) should still work correctly.
 
-  Find and fix the root cause. Write tests that cover both parallel tool calls
-  staying separate and sequential streaming continuations still merging.
+  Find and fix the root cause. Add a test that verifies parallel tool calls with different indices are not incorrectly merged.
 setup: |
   cd libs/core
   uv venv .venv --quiet
@@ -32,7 +31,6 @@ setup: |
 verification: fixtures/langchain-merge-parallel-tools/verify.sh
 difficulty: medium
 timeout_ms: 600000
-max_turns: 30
 
 context_tree_versions:
   - label: cli-v0.0.2

@@ -22,15 +22,13 @@ task: |
   that valid error codes are preserved. Additionally, when no error code is
   available at all, the fallback should be a code that Anthropic actually accepts.
 
-  Find and fix the root cause(s). Write tests that verify structured error data
-  from provider-executed tools is preserved through the streaming pipeline.
+  Find and fix the root cause(s). Add a test that verifies structured error data from provider-executed tools is preserved through the streaming pipeline.
 setup: |
   pnpm install
   pnpm build
 verification: fixtures/vercel-ai-error-code/verify.sh
 difficulty: medium
 timeout_ms: 600000
-max_turns: 40
 
 context_tree_versions:
   - label: cli-v0.0.2

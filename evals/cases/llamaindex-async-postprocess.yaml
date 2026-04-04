@@ -27,14 +27,15 @@ task: |
   others delegate through a sync helper method.
 
   Find all affected async code paths and fix them to use the async
-  postprocessor methods. Write tests that verify async postprocessors
-  are correctly invoked during async retrieval.
+  postprocessor methods. Add a test that verifies apostprocess_nodes (async) is called instead of postprocess_nodes in async retrieval paths.
 setup: |
   cd llama-index-core
   uv venv .venv --quiet
   uv pip install -e . --quiet --python .venv/bin/python
   uv pip install pytest pytest-asyncio --quiet --python .venv/bin/python
+context_tree_versions:
+  - label: cli-v0.0.3
+    tree_sha: "0349e5a548d8ec34aa3dda2e9b3f7ea1eac4bd5f"
 verification: fixtures/llamaindex-async-postprocess/verify.sh
 difficulty: medium
 timeout_ms: 600000
-max_turns: 30

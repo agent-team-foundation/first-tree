@@ -17,6 +17,7 @@ import { loadCases } from '#evals/helpers/case-loader.js';
 import { runTrial } from '#evals/helpers/condition-runner.js';
 import { EvalCollector } from '#evals/helpers/eval-store.js';
 import { resolveConditions } from '#evals/helpers/resolve-conditions.js';
+import { TIMEOUT_SESSION } from '#evals/helpers/timeouts.js';
 
 const evalsEnabled = !!process.env.EVALS;
 const trialCount = parseInt(process.env.EVALS_TRIALS || '1', 10);
@@ -66,7 +67,7 @@ describeEval('context-tree eval', () => {
           test(testName, async () => {
             const result = await runTrial(evalCase, condition, trial, agent, treeConfig);
             collector.addTrial(result);
-          }, evalCase.timeout_ms || 600_000);
+          }, evalCase.timeout_ms || TIMEOUT_SESSION);
         }
       }
     });

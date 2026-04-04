@@ -28,16 +28,15 @@ task: |
   typed as base classes but containing subclass instances. All of them
   lose subclass data during serialization.
 
-  Find and fix the root cause across all affected model classes. Write
-  tests that verify subclass fields are preserved during serialization
-  for GroupChatMessage, GroupChatStart, GroupChatAgentResponse, and
-  GroupChatTeamResponse.
+  Find and fix the root cause across all affected model classes. Add tests that verify subclass fields (e.g. content, type) survive serialization in GroupChatMessage and GroupChatStart.
 setup: |
   cd python/packages/autogen-agentchat
   
   uv venv .venv --quiet
   uv pip install -e ".[dev]" --quiet --python .venv/bin/python 2>/dev/null || uv pip install -e "." --quiet --python .venv/bin/python
+context_tree_versions:
+  - label: cli-v0.0.3
+    tree_sha: "1ec771084bb17da2dd1979d059c052236d202d08"
 verification: fixtures/autogen-serialization-data-loss/verify.sh
 difficulty: medium
 timeout_ms: 600000
-max_turns: 30

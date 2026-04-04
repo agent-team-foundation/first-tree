@@ -9,6 +9,18 @@ import { execFileSync, execSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { cloneFromCache } from '#evals/helpers/repo-cache.js';
+import { loadEnv } from '#evals/helpers/env.js';
+import {
+  TIMEOUT_GIT_LS_REMOTE,
+  TIMEOUT_GIT_PUSH,
+  TIMEOUT_INSTALL,
+  TIMEOUT_BUILD,
+  TIMEOUT_GIT_LOG,
+  TIMEOUT_GIT_INFO,
+} from '#evals/helpers/timeouts.js';
+
+loadEnv();
 
 // ---------------------------------------------------------------------------
 // Types
@@ -44,6 +56,7 @@ export interface ListTreesOptions {
 // ---------------------------------------------------------------------------
 
 const FIRST_TREE_REPO = 'https://github.com/agent-team-foundation/first-tree.git';
+const FIRST_TREE_SLUG = 'agent-team-foundation/first-tree';
 
 // ---------------------------------------------------------------------------
 // Pure functions
@@ -114,7 +127,7 @@ export function preflight(treeRepo: string, codeRepo: string, codeSha: string): 
   try {
     execFileSync('git', ['ls-remote', '--exit-code', repoUrl(codeRepo), 'HEAD'], {
       stdio: 'pipe',
-      timeout: 30_000,
+      timeout: TIMEOUT_GIT_LS_REMOTE,
     });
   } catch {
     throw new Error(`Code repo not accessible: ${codeRepo}`);
@@ -126,7 +139,7 @@ export function preflight(treeRepo: string, codeRepo: string, codeSha: string): 
   try {
     execFileSync('git', ['ls-remote', repoUrl(treeRepo)], {
       stdio: 'pipe',
-      timeout: 30_000,
+      timeout: TIMEOUT_GIT_LS_REMOTE,
     });
   } catch {
     throw new Error(`Tree repo not accessible: ${treeRepo}. Create it first with: gh repo create ${treeRepo} --private`);
@@ -137,18 +150,14 @@ export function preflight(treeRepo: string, codeRepo: string, codeSha: string): 
 
 /**
  * Clone the context tree repo. If branch is specified, clone that branch.
- * Returns the tmpdir path.
+ * Returns the tmpdir path. Uses the repo cache to avoid redundant network clones.
  */
 export function cloneTreeRepo(treeRepo: string, branch?: string): string {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ct-tree-repo-'));
-  const url = repoUrl(treeRepo);
 
   if (branch) {
     try {
-      execSync(
-        `git clone --quiet --branch ${JSON.stringify(branch)} ${JSON.stringify(url)} ${JSON.stringify(tmp)}`,
-        { stdio: 'pipe', timeout: 120_000 },
-      );
+      cloneFromCache(treeRepo, tmp, { branch });
       return tmp;
     } catch {
       // Branch may not exist yet — clone default and create orphan later
@@ -157,29 +166,19 @@ export function cloneTreeRepo(treeRepo: string, branch?: string): string {
   }
 
   const tmp2 = fs.mkdtempSync(path.join(os.tmpdir(), 'ct-tree-repo-'));
-  execSync(
-    `git clone --quiet ${JSON.stringify(url)} ${JSON.stringify(tmp2)}`,
-    { stdio: 'pipe', timeout: 120_000 },
-  );
+  cloneFromCache(treeRepo, tmp2);
   return tmp2;
 }
 
 /**
  * Clone code repo at a specific commit into a tmpdir. Returns the tmpdir path.
+ * Uses the repo cache to avoid redundant network clones.
  */
 export function cloneCodeRepo(codeRepo: string, commitSha: string): string {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ct-code-repo-'));
-  const url = repoUrl(codeRepo);
 
-  process.stderr.write(`Cloning ${codeRepo} @ ${commitSha.slice(0, 8)}...\n`);
-  execSync(
-    `git clone --quiet --no-checkout ${JSON.stringify(url)} ${JSON.stringify(tmp)}`,
-    { stdio: 'pipe', timeout: 120_000 },
-  );
-  execSync(
-    `git checkout --quiet ${commitSha}`,
-    { cwd: tmp, stdio: 'pipe', timeout: 30_000 },
-  );
+  process.stderr.write(`Cloning ${codeRepo} @ ${commitSha.slice(0, 8)} (cached)...\n`);
+  cloneFromCache(codeRepo, tmp, { commitSha });
   return tmp;
 }
 
@@ -193,27 +192,20 @@ export function installCliAtVersion(cliCommit: string): string {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ct-cli-'));
 
   process.stderr.write(`Installing context-tree CLI @ ${cliCommit.slice(0, 7)}...\n`);
-  execSync(
-    `git clone --quiet --no-checkout ${JSON.stringify(FIRST_TREE_REPO)} ${JSON.stringify(tmp)}`,
-    { stdio: 'pipe', timeout: 120_000 },
-  );
-  execSync(
-    `git checkout --quiet ${cliCommit}`,
-    { cwd: tmp, stdio: 'pipe', timeout: 30_000 },
-  );
+  cloneFromCache(FIRST_TREE_SLUG, tmp, { commitSha: cliCommit });
 
   process.stderr.write('  Installing dependencies...\n');
   execSync('pnpm install --frozen-lockfile', {
     cwd: tmp,
     stdio: 'pipe',
-    timeout: 120_000,
+    timeout: TIMEOUT_INSTALL,
   });
 
   process.stderr.write('  Building and linking CLI...\n');
   execSync('pnpm build && npm link', {
     cwd: tmp,
     stdio: 'pipe',
-    timeout: 60_000,
+    timeout: TIMEOUT_BUILD,
     shell: '/bin/bash',
   });
 
@@ -293,7 +285,7 @@ export function pushBranch(treeDir: string, branch: string): void {
   execSync(`git push origin ${JSON.stringify(branch)}`, {
     cwd: treeDir,
     stdio: 'pipe',
-    timeout: 60_000,
+    timeout: TIMEOUT_GIT_PUSH,
   });
 }
 
@@ -305,7 +297,7 @@ export function remoteBranchExists(treeRepo: string, branch: string): boolean {
     const output = execFileSync(
       'git',
       ['ls-remote', '--heads', repoUrl(treeRepo), branch],
-      { stdio: 'pipe', timeout: 30_000, encoding: 'utf-8' },
+      { stdio: 'pipe', timeout: TIMEOUT_GIT_LS_REMOTE, encoding: 'utf-8' },
     );
     return output.trim().length > 0;
   } catch {
@@ -321,7 +313,7 @@ export function listRemoteBranches(treeRepo: string): string[] {
   const output = execFileSync(
     'git',
     ['ls-remote', '--heads', repoUrl(treeRepo)],
-    { stdio: 'pipe', timeout: 30_000, encoding: 'utf-8' },
+    { stdio: 'pipe', timeout: TIMEOUT_GIT_LS_REMOTE, encoding: 'utf-8' },
   );
 
   return output
@@ -344,15 +336,12 @@ export function listBranchCommits(
 ): Array<{ sha: string; message: string }> {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ct-list-'));
   try {
-    execSync(
-      `git clone --quiet --branch ${JSON.stringify(branch)} --single-branch ${JSON.stringify(repoUrl(treeRepo))} ${JSON.stringify(tmp)}`,
-      { stdio: 'pipe', timeout: 120_000 },
-    );
+    cloneFromCache(treeRepo, tmp, { branch });
 
     const output = execSync('git log --format=%H%x00%s', {
       cwd: tmp,
       encoding: 'utf-8',
-      timeout: 10_000,
+      timeout: TIMEOUT_GIT_LOG,
     });
 
     return output

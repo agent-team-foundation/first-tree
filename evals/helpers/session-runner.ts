@@ -12,6 +12,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import type { AgentConfig, SessionResult, CostEstimate, ModelTokens } from '#evals/helpers/types.js';
+import { TIMEOUT_SESSION } from '#evals/helpers/timeouts.js';
 
 // --- NDJSON parser (pure, no I/O) ---
 
@@ -64,20 +65,21 @@ function truncate(s: string, max: number): string {
 
 // --- CLI adapter ---
 
-function buildCommand(agent: AgentConfig, maxTurns: number): { cmd: string; args: string[] } {
+function buildCommand(agent: AgentConfig, maxTurns?: number): { cmd: string; args: string[] } {
   switch (agent.cli) {
-    case 'claude-code':
-      return {
-        cmd: 'claude',
-        args: [
-          '-p',
-          '--model', agent.model,
-          '--output-format', 'stream-json',
-          '--verbose',
-          '--dangerously-skip-permissions',
-          '--max-turns', String(maxTurns),
-        ],
-      };
+    case 'claude-code': {
+      const args = [
+        '-p',
+        '--model', agent.model,
+        '--output-format', 'stream-json',
+        '--verbose',
+        '--dangerously-skip-permissions',
+      ];
+      if (maxTurns) {
+        args.push('--max-turns', String(maxTurns));
+      }
+      return { cmd: 'claude', args };
+    }
     case 'codex':
       return {
         cmd: 'codex',
@@ -115,8 +117,8 @@ export async function runSession(options: {
     prompt,
     workingDirectory,
     agent,
-    maxTurns = 30,
-    timeout = 300_000,
+    maxTurns,
+    timeout = TIMEOUT_SESSION,
     testName,
   } = options;
 
@@ -240,12 +242,12 @@ export async function runSession(options: {
 
   // Refine exit reason from result line (Claude Code specific)
   if (resultLine) {
-    if (resultLine.is_error) {
-      exitReason = 'error_api';
-    } else if (resultLine.subtype === 'success') {
+    if (resultLine.subtype === 'success') {
       exitReason = 'success';
     } else if (resultLine.subtype) {
       exitReason = resultLine.subtype;
+    } else if (resultLine.is_error) {
+      exitReason = 'error';
     }
   }
 

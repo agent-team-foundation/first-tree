@@ -29,6 +29,38 @@ function shortenPath(p: string): string {
   return p.replace(/\/tmp\/ct-eval-[^/]+\//, '');
 }
 
+function formatFailureReason(t: TrialResult): string {
+  if (t.passed) return '';
+
+  const parts: string[] = [];
+
+  // Exit reason (e.g. error_api, timeout, max_turns)
+  if (t.exit_reason && t.exit_reason !== 'success') {
+    parts.push(`exit: ${esc(t.exit_reason)}`);
+  }
+
+  // Error message (truncated)
+  if (t.error) {
+    // Extract a meaningful message, skip generic "Command failed: bash .../verify.sh" wrappers
+    const cleaned = t.error
+      .replace(/^Command failed:.*?verify\.sh"?\s*\n?/s, '')
+      .trim();
+    if (cleaned) {
+      const msg = cleaned.split('\n')[0].trim();
+      if (msg) {
+        parts.push(esc(msg.length > 120 ? msg.slice(0, 117) + '...' : msg));
+      }
+    }
+  }
+
+  // If exit was success but tests failed, note it
+  if (t.exit_reason === 'success' && t.tests_passed < t.tests_total) {
+    parts.push('verify.sh failed');
+  }
+
+  return parts.join('<br>') || (t.passed ? '' : 'unknown');
+}
+
 // --- Turn extraction (mirrors analyze_eval.py) ---
 
 interface Turn {
@@ -137,9 +169,9 @@ function renderSummaryTable(trials: TrialResult[]): string {
 
   let html = `<table class="summary">
 <thead><tr>
-  <th>Case</th><th>Condition</th><th>Pass</th><th>Cost</th><th>Time</th>
+  <th>Case</th><th>Condition</th><th>Result</th><th>Pass/Total</th><th>Cost</th><th>Time</th>
   <th>Input Tok</th><th>Output Tok</th><th>Cache Read</th><th>Cache Create</th>
-  <th>API Calls</th><th>Cost Delta</th><th>Time Delta</th>
+  <th>API Calls</th><th>Cost Delta</th><th>Time Delta</th><th>Failure Reason</th>
 </tr></thead><tbody>`;
 
   for (const caseId of caseIds) {
@@ -153,10 +185,13 @@ function renderSummaryTable(trials: TrialResult[]): string {
       const passClass = t.passed ? 'pass' : 'fail';
       const timeDeltaClass = bl && !isBaseline && t.wall_clock_ms < bl.wall_clock_ms ? 'good' : (bl && !isBaseline && t.wall_clock_ms > bl.wall_clock_ms ? 'bad' : '');
 
+      const failureReason = t.passed ? '' : formatFailureReason(t);
+
       html += `<tr class="${isBaseline ? 'baseline-row' : 'tree-row'}">
   <td>${isBaseline ? esc(caseId) : ''}</td>
   <td>${esc(cond)}</td>
   <td class="${passClass}">${t.passed ? 'PASS' : 'FAIL'}</td>
+  <td>${t.tests_passed}/${t.tests_total}</td>
   <td>$${t.cost_usd.toFixed(2)}</td>
   <td>${Math.round(t.wall_clock_ms / 1000)}s</td>
   <td class="num">${fmt(t.input_tokens)}</td>
@@ -166,6 +201,7 @@ function renderSummaryTable(trials: TrialResult[]): string {
   <td class="num">${t.api_calls}</td>
   <td class="${timeDeltaClass}">${costDelta}</td>
   <td class="${timeDeltaClass}">${timeDelta}</td>
+  <td class="failure-reason">${failureReason}</td>
 </tr>`;
     }
   }
@@ -339,6 +375,7 @@ export function generateHtmlReport(
   .note { color: var(--muted); font-size: 12px; font-style: italic; }
   .model-breakdown, .token-summary { width: auto; }
   .model-breakdown td, .model-breakdown th, .token-summary td, .token-summary th { padding: 4px 8px; }
+  .failure-reason { font-size: 12px; color: var(--muted); max-width: 250px; word-break: break-word; }
 </style>
 </head>
 <body>

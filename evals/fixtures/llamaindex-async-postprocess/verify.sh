@@ -13,6 +13,9 @@ export PATH=".venv/bin:$PATH"
 # 2. Sync helper delegation (e.g. RetrieverTool.acall)
 python3 -c "
 import asyncio
+import warnings
+warnings.filterwarnings('ignore', category=DeprecationWarning)
+from pydantic import ConfigDict
 from llama_index.core.postprocessor.types import BaseNodePostprocessor
 from llama_index.core.schema import NodeWithScore, TextNode, QueryBundle
 
@@ -20,8 +23,7 @@ class AsyncOnlyPostprocessor(BaseNodePostprocessor):
     \"\"\"Postprocessor that only works correctly in async mode.\"\"\"
     _async_called: bool = False
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def _postprocess_nodes(self, nodes, query_bundle=None, **kwargs):
         # Sync path: return nodes unmodified (wrong behavior if called in async context)

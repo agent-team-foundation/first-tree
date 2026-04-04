@@ -30,6 +30,7 @@ import {
 } from './tree-manager.js';
 import { runSession } from '#evals/helpers/session-runner.js';
 import type { AgentConfig } from '#evals/helpers/types.js';
+import { TIMEOUT_POPULATE } from '#evals/helpers/timeouts.js';
 
 function buildPrompt(codeDir: string): string {
   return `You are initializing and populating a context tree for a codebase.
@@ -71,7 +72,6 @@ When the task list asks whether to populate the tree, choose **Yes**. Then:
 }
 
 const POPULATE_MAX_TURNS = 80;
-const POPULATE_TIMEOUT = 900_000;
 
 export async function updateTree(options: UpdateTreeOptions): Promise<{ branch: string; sha: string }> {
   const { repo, commit, cliVersion, treeRepo, model = 'claude-sonnet-4-6' } = options;
@@ -121,7 +121,7 @@ export async function updateTree(options: UpdateTreeOptions): Promise<{ branch: 
       workingDirectory: treeDir,
       agent,
       maxTurns: POPULATE_MAX_TURNS,
-      timeout: POPULATE_TIMEOUT,
+      timeout: TIMEOUT_POPULATE,
       testName: `update-tree/${repo}`,
     });
 

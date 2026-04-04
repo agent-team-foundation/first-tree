@@ -1,9 +1,9 @@
 /**
  * Repo sandbox: create isolated working directories for eval trials.
  *
- * Clones one or more repos into a tmpdir at specific commits.
- * If the condition specifies a context tree (tree_sha), clones the
- * tree repo and overlays it into the sandbox.
+ * Uses the repo cache to avoid redundant network clones. Each sandbox
+ * is a full independent copy — patches from eval tasks are confined
+ * to the sandbox and destroyed on cleanup.
  *
  * Single-repo layout:   /tmp/ct-eval-xxx/  (repo cloned at root)
  * Multi-repo layout:    /tmp/ct-eval-xxx/backend/
@@ -16,6 +16,11 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import type { EvalCase, EvalCondition, ContextTreeConfig, RepoRef } from '#evals/helpers/types.js';
+import { cloneFromCache } from '#evals/helpers/repo-cache.js';
+import { loadEnv } from '#evals/helpers/env.js';
+import { TIMEOUT_GIT_CLONE, TIMEOUT_GIT_CHECKOUT, TIMEOUT_SETUP } from '#evals/helpers/timeouts.js';
+
+loadEnv();
 
 export interface Sandbox {
   dir: string;
@@ -24,24 +29,30 @@ export interface Sandbox {
 
 function cloneRepo(ref: RepoRef, targetDir: string): void {
   const isLocal = !ref.repo.includes('/') || fs.existsSync(ref.repo);
-  const cloneUrl = isLocal ? ref.repo : `https://github.com/${ref.repo}.git`;
 
-  process.stderr.write(`  Cloning ${ref.repo} @ ${ref.commit_sha.slice(0, 8)}...\n`);
-  execSync(
-    `git clone --quiet --no-checkout --filter=blob:none ${JSON.stringify(cloneUrl)} ${JSON.stringify(targetDir)}`,
-    { stdio: 'pipe', timeout: 300_000 },
-  );
-  execSync(
-    `git checkout --quiet ${ref.commit_sha}`,
-    { cwd: targetDir, stdio: 'pipe', timeout: 120_000 },
-  );
+  if (isLocal) {
+    // Local path — clone directly (no caching needed)
+    process.stderr.write(`  Cloning ${ref.repo} @ ${ref.commit_sha.slice(0, 8)}...\n`);
+    execSync(
+      `git clone --quiet --no-checkout ${JSON.stringify(ref.repo)} ${JSON.stringify(targetDir)}`,
+      { stdio: 'pipe', timeout: TIMEOUT_GIT_CLONE },
+    );
+    execSync(
+      `git checkout --quiet ${ref.commit_sha}`,
+      { cwd: targetDir, stdio: 'pipe', timeout: TIMEOUT_GIT_CHECKOUT },
+    );
+  } else {
+    // Remote repo — use cache
+    process.stderr.write(`  Cloning ${ref.repo} @ ${ref.commit_sha.slice(0, 8)} (cached)...\n`);
+    cloneFromCache(ref.repo, targetDir, { commitSha: ref.commit_sha });
+  }
 
   if (ref.setup) {
     process.stderr.write(`  Running setup for ${ref.repo}...\n`);
     execSync(ref.setup, {
       cwd: targetDir,
       stdio: 'pipe',
-      timeout: 300_000,
+      timeout: TIMEOUT_SETUP,
       shell: '/bin/bash',
     });
   }
@@ -66,6 +77,7 @@ export async function createSandbox(
       for (const ref of evalCase.repos) {
         const subdir = ref.path || defaultPath(ref.repo);
         const targetDir = path.join(tmpDir, subdir);
+        fs.mkdirSync(targetDir, { recursive: true });
         cloneRepo(ref, targetDir);
       }
     } else {
@@ -76,24 +88,17 @@ export async function createSandbox(
 
     // Inject context tree if the condition specifies one
     if (condition.tree_sha && treeConfig) {
-      const treeUrl = `https://github.com/${treeConfig.repo}.git`;
+      const primaryRepo = evalCase.repos[0];
+      const repoName = defaultPath(primaryRepo.repo);
+      const branch = `${repoName}/${primaryRepo.commit_sha.slice(0, 8)}`;
       const treeTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ct-eval-tree-'));
 
       try {
-        // Derive branch name from primary repo
-        const primaryRepo = evalCase.repos[0];
-        const repoName = defaultPath(primaryRepo.repo);
-        const branch = `${repoName}/${primaryRepo.commit_sha.slice(0, 8)}`;
-
         process.stderr.write(`  Cloning context tree @ ${condition.tree_sha.slice(0, 8)} (${condition.label})...\n`);
-        execSync(
-          `git clone --quiet --branch ${JSON.stringify(branch)} ${JSON.stringify(treeUrl)} ${JSON.stringify(treeTmp)}`,
-          { stdio: 'pipe', timeout: 60_000 },
-        );
-        execSync(
-          `git checkout --quiet ${condition.tree_sha}`,
-          { cwd: treeTmp, stdio: 'pipe', timeout: 10_000 },
-        );
+        cloneFromCache(treeConfig.repo, treeTmp, {
+          branch,
+          commitSha: condition.tree_sha,
+        });
 
         // Overlay tree files into sandbox root (skip .git)
         const entries = fs.readdirSync(treeTmp);
