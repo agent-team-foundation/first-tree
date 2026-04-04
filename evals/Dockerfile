@@ -33,6 +33,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Rust (needed for pydantic-core compilation)
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
+    && ln -s /root/.cargo/bin/* /usr/local/bin/
+
 # Install uv and Python 3.12 (eval cases require 3.12+).
 # We install Python via uv, then symlink into /usr/local/bin so both
 # the system `python3` and `uv venv` find Python 3.12.

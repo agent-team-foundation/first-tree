@@ -10,6 +10,8 @@ cd "${SANDBOX_DIR:-.}"
 
 # Run from the langchain-core package directory
 cd libs/core
+source .venv/bin/activate 2>/dev/null || true
+export PATH=".venv/bin:$PATH"
 
 python3 << 'PYEOF'
 import json, sys

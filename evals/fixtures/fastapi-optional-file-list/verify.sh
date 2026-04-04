@@ -10,6 +10,8 @@
 set -euo pipefail
 
 cd "${SANDBOX_DIR:-.}"
+source .venv/bin/activate 2>/dev/null || true
+export PATH=".venv/bin:$PATH"
 
 python3 << 'PYEOF'
 import json
