@@ -1,9 +1,17 @@
-import { readFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
-import { USAGE, runCli } from "../../../src/cli.ts";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { afterEach, describe, expect, it } from "vitest";
+import { USAGE, isDirectExecution, runCli } from "../../../src/cli.ts";
 
-const ROOT = process.cwd();
+const TEMP_DIRS: string[] = [];
 
 function captureOutput(): { lines: string[]; write: (text: string) => void } {
   const lines: string[] = [];
@@ -15,7 +23,45 @@ function captureOutput(): { lines: string[]; write: (text: string) => void } {
   };
 }
 
+function makeTempDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), "first-tree-thin-cli-"));
+  TEMP_DIRS.push(dir);
+  return dir;
+}
+
+afterEach(() => {
+  while (TEMP_DIRS.length > 0) {
+    const dir = TEMP_DIRS.pop();
+    if (dir) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
 describe("thin CLI shell", () => {
+  it("treats a symlinked npm bin path as direct execution", () => {
+    const dir = makeTempDir();
+    const target = join(dir, "cli.js");
+    const symlinkPath = join(dir, "context-tree");
+
+    writeFileSync(target, "#!/usr/bin/env node\n");
+    symlinkSync(target, symlinkPath);
+
+    expect(isDirectExecution(symlinkPath, pathToFileURL(target).href)).toBe(true);
+  });
+
+  it("does not treat unrelated argv[1] values as direct execution", () => {
+    const dir = makeTempDir();
+    const target = join(dir, "cli.js");
+    const other = join(dir, "other.js");
+
+    writeFileSync(target, "#!/usr/bin/env node\n");
+    writeFileSync(other, "#!/usr/bin/env node\n");
+
+    expect(isDirectExecution(other, pathToFileURL(target).href)).toBe(false);
+    expect(isDirectExecution(undefined, pathToFileURL(target).href)).toBe(false);
+  });
+
   it("prints usage with no args", async () => {
     const output = captureOutput();
 
@@ -27,9 +73,8 @@ describe("thin CLI shell", () => {
 
   it("prints the package version", async () => {
     const output = captureOutput();
-    const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf-8")) as {
-      version: string;
-    };
+    const pkgPath = fileURLToPath(new URL("../../../package.json", import.meta.url));
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as { version: string };
 
     const code = await runCli(["--version"], output.write);
 

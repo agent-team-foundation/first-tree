@@ -1,6 +1,7 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { runInit } from "#skill/engine/init.js";
 import { check, checkProgress, runVerify } from "#skill/engine/verify.js";
 import { Repo } from "#skill/engine/repo.js";
 import {
@@ -15,6 +16,7 @@ import {
   makeLegacyFramework,
   makeNode,
   makeMembers,
+  makeSourceSkill,
 } from "./helpers.js";
 
 // --- check ---
@@ -105,6 +107,74 @@ describe("runVerify all passing", () => {
     const repo = new Repo(tmp.path);
     const ret = runVerify(repo, passValidator);
     expect(ret).toBe(0);
+  });
+
+  it("passes after a real init flow when only the user tree remains to validate", () => {
+    const repoDir = useTmpDir();
+    const sourceDir = useTmpDir();
+    mkdirSync(join(repoDir.path, ".git"));
+    makeSourceSkill(sourceDir.path, "0.2.0");
+
+    expect(runInit(new Repo(repoDir.path), { sourceRoot: sourceDir.path })).toBe(0);
+
+    writeFileSync(
+      join(repoDir.path, "NODE.md"),
+      [
+        "---",
+        'title: "Example Tree"',
+        "owners: [alice]",
+        "---",
+        "",
+        "# Example Tree",
+        "",
+        "A repository initialized from the bundled skill for verification coverage.",
+        "",
+        "## Domains",
+        "",
+        "- **[members/](members/NODE.md)** — Team member definitions and responsibilities.",
+        "",
+      ].join("\n"),
+    );
+
+    const agentPath = join(repoDir.path, AGENT_INSTRUCTIONS_FILE);
+    writeFileSync(
+      agentPath,
+      `${readFileSync(agentPath, "utf-8").trim()}\n\nProject-specific verification instructions.\n`,
+    );
+
+    mkdirSync(join(repoDir.path, "members", "alice"), { recursive: true });
+    writeFileSync(
+      join(repoDir.path, "members", "alice", "NODE.md"),
+      [
+        "---",
+        'title: "Alice"',
+        "owners: [alice]",
+        'type: "human"',
+        'role: "Maintainer"',
+        "domains:",
+        '  - "members"',
+        "---",
+        "",
+        "# Alice",
+        "",
+        "## About",
+        "",
+        "Maintains the initialized tree and keeps the docs current.",
+        "",
+        "## Current Focus",
+        "",
+        "Validating the init-to-verify workflow.",
+        "",
+      ].join("\n"),
+    );
+
+    const progressPath = join(repoDir.path, INSTALLED_PROGRESS);
+    writeFileSync(
+      progressPath,
+      readFileSync(progressPath, "utf-8").replace(/^- \[ \]/gm, "- [x]"),
+    );
+
+    expect(runVerify(new Repo(repoDir.path))).toBe(0);
   });
 });
 

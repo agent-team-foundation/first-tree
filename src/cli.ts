@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 const USAGE = `usage: context-tree <command>
 
@@ -20,6 +21,22 @@ Options:
 type Output = (text: string) => void;
 
 export { USAGE };
+
+export function isDirectExecution(
+  argv1: string | undefined,
+  metaUrl: string = import.meta.url,
+): boolean {
+  if (argv1 === undefined) {
+    return false;
+  }
+
+  try {
+    // npm commonly invokes bins through a symlink or shim path.
+    return realpathSync(argv1) === realpathSync(fileURLToPath(metaUrl));
+  } catch {
+    return false;
+  }
+}
 
 export async function runCli(
   args: string[],
@@ -71,9 +88,6 @@ async function main(): Promise<number> {
   return runCli(process.argv.slice(2));
 }
 
-if (
-  process.argv[1] !== undefined &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (isDirectExecution(process.argv[1])) {
   main().then((code) => process.exit(code));
 }
