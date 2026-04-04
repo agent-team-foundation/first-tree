@@ -1,8 +1,8 @@
 # Upgrade Contract
 
 This file describes the current installed-layout contract and the compatibility
-rules we keep for legacy `skills/first-tree-cli-framework/` and
-`.context-tree/` repos.
+rules we keep for legacy `skills/first-tree/`,
+`skills/first-tree-cli-framework/`, and `.context-tree/` repos.
 
 ## Canonical Source
 
@@ -19,20 +19,35 @@ rules we keep for legacy `skills/first-tree-cli-framework/` and
 The current installed layout in a user repo is:
 
 ```text
-skills/
-  first-tree/
-    SKILL.md
-    progress.md
-    references/
-    assets/
-      framework/
-        manifest.json
-        VERSION
-        templates/
-        workflows/
-        prompts/
-        examples/
-        helpers/
+.agents/
+  skills/
+    first-tree/
+      SKILL.md
+      progress.md
+      references/
+      assets/
+        framework/
+          manifest.json
+          VERSION
+          templates/
+          workflows/
+          prompts/
+          examples/
+          helpers/
+.claude/
+  skills/
+    first-tree/
+      SKILL.md
+      references/
+      assets/
+        framework/
+          manifest.json
+          VERSION
+          templates/
+          workflows/
+          prompts/
+          examples/
+          helpers/
 ```
 
 The tree content still lives outside the skill:
@@ -41,6 +56,11 @@ The tree content still lives outside the skill:
 - `AGENTS.md`
 - `members/`
 
+The repo-owned `.agents/skills/first-tree/` path is the primary installed root
+for progress state, workflow references, and helper scripts. The matching
+`.claude/skills/first-tree/` path mirrors the same payload for Claude-facing
+skill discovery and hooks.
+
 ## Command Intent
 
 - `context-tree init`
@@ -48,7 +68,7 @@ The tree content still lives outside the skill:
     tree repo by default
   - installs the skill into the target tree repo
   - renders top-level tree scaffolding from the skill templates
-  - writes progress state to `skills/first-tree/progress.md`
+  - writes progress state to `.agents/skills/first-tree/progress.md`
 - `context-tree verify`
   - checks progress state from the installed skill
   - validates root/frontmatter/agent markers
@@ -57,8 +77,11 @@ The tree content still lives outside the skill:
   - compares the installed skill payload version to the skill bundled with the
     currently running `first-tree` package
   - refreshes the installed skill payload without overwriting tree content
+  - migrates repos that still use the previous `skills/first-tree/` path onto
+    `.agents/skills/first-tree/` and `.claude/skills/first-tree/`
   - migrates repos that still use the previous
-    `skills/first-tree-cli-framework/` path onto `skills/first-tree/`
+    `skills/first-tree-cli-framework/` path onto `.agents/skills/first-tree/`
+    and `.claude/skills/first-tree/`
   - migrates legacy `.context-tree/` repos onto the installed skill layout
   - preserves user-authored sections such as the editable part of `AGENTS.md`
 
@@ -73,14 +96,17 @@ The tree content still lives outside the skill:
 - Normal `context-tree init` and `context-tree upgrade` flows do not clone the
   source repo or require network access.
 - `context-tree verify` may still read a legacy
-  `skills/first-tree-cli-framework/...` or `.context-tree/...` layout in an
-  existing user repo so the repo can be upgraded in place.
+  `.claude/skills/first-tree/...`, `skills/first-tree/...`,
+  `skills/first-tree-cli-framework/...`, or `.context-tree/...` layout in an
+  existing user repo so the repo can be repaired or upgraded in place.
 - `context-tree upgrade` must migrate either legacy layout onto
-  `skills/first-tree/` and remove the old directory afterward.
-- When both layouts are present, prefer the installed skill layout.
+  `.agents/skills/first-tree/` and `.claude/skills/first-tree/`, and remove
+  old skill directories afterward.
+- When both current and legacy layouts are present, prefer the
+  `.agents/skills/first-tree/` layout.
 - Existing repos may still have a legacy `AGENT.md`; `init` and `upgrade`
   must not silently overwrite it, and follow-up tasks should direct users to
-  rename it to `AGENTS.md`.
+  rename or merge it into `AGENTS.md`.
 
 ## Invariants
 

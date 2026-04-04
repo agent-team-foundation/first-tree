@@ -56,8 +56,9 @@ Information an agent needs to **decide** on an approach — not to execute it.
 - A source/workspace Git repository, or an already-created dedicated tree repo
 - Node.js 18+
 - The npm package is `first-tree`, the installed CLI command is
-  `context-tree`, and the installed skill directory in the tree is
-  `skills/first-tree/`
+  `context-tree`.
+- `context-tree init` installs the framework skill into
+  `.agents/skills/first-tree/` and `.claude/skills/first-tree/`.
 - Use `npx first-tree init` for one-off runs, or `npm install -g first-tree`
   to add the `context-tree` command to your PATH
 
@@ -81,24 +82,30 @@ git init
 context-tree init --here
 ```
 
-Either way, the framework installs into `skills/first-tree/`, renders
-scaffolding (`NODE.md`, `AGENTS.md`, `members/NODE.md`), and generates a task
-list in `skills/first-tree/progress.md`.
+Either way, the framework installs into `.agents/skills/first-tree/` and
+`.claude/skills/first-tree/`, renders scaffolding (`NODE.md`, `AGENTS.md`,
+`members/NODE.md`), and generates a task list in
+`.agents/skills/first-tree/progress.md`.
 
 Publishing tip: keep the tree repo in the same GitHub organization as the
 source repo unless you have a reason not to.
 
 ### Step 2: Work Through the Task List
 
-Read `skills/first-tree/progress.md`. It contains a checklist tailored to the current state of the repo. Complete each task:
+Read `.agents/skills/first-tree/progress.md`. It contains a checklist tailored
+to the current state of the repo. Complete each task:
 
 - Fill in `NODE.md` with your organization name, owners, and domains
 - Add project-specific instructions to `AGENTS.md` below the framework markers
 - Create member nodes under `members/`
-- Optionally configure agent integration (e.g., Claude Code session hooks)
-- Copy validation workflows from `skills/first-tree/assets/framework/workflows/` to `.github/workflows/`
+- Optionally configure agent integration (for Claude Code, the installed hook
+  assets live under `.claude/skills/first-tree/`)
+- Copy validation workflows from
+  `.agents/skills/first-tree/assets/framework/workflows/` to
+  `.github/workflows/`
 
-As you complete each task, check it off in `skills/first-tree/progress.md` by changing `- [ ]` to `- [x]`.
+As you complete each task, check it off in
+`.agents/skills/first-tree/progress.md` by changing `- [ ]` to `- [x]`.
 
 ### Step 3: Verify
 
@@ -112,7 +119,9 @@ Or, from your source/workspace repo:
 context-tree verify --tree-path ../my-org-context
 ```
 
-This fails if any items in `skills/first-tree/progress.md` remain unchecked, and runs deterministic checks (valid frontmatter, node structure, member nodes exist).
+This fails if any items in `.agents/skills/first-tree/progress.md` remain
+unchecked, and runs deterministic checks (valid frontmatter, node structure,
+member nodes exist).
 
 ### Step 4: Design Your Domains
 
@@ -164,13 +173,14 @@ When the framework updates:
 context-tree upgrade
 ```
 
-`context-tree upgrade` refreshes `skills/first-tree/` from the
-skill bundled with the currently running `first-tree` npm package, preserves your
-tree content, and generates follow-up tasks in
-`skills/first-tree/progress.md`.
+`context-tree upgrade` refreshes `.agents/skills/first-tree/` and
+`.claude/skills/first-tree/` from the skill bundled with the currently running
+`first-tree` npm package, preserves your tree content, and generates follow-up
+tasks in `.agents/skills/first-tree/progress.md`.
 
-If your repo still uses the older `skills/first-tree-cli-framework/` path,
-`context-tree upgrade` will migrate it to `skills/first-tree/` first.
+If your repo still uses the older `skills/first-tree/`,
+`skills/first-tree-cli-framework/`, or `.context-tree/` layouts,
+`context-tree upgrade` will migrate it to the current installed layout first.
 
 To pick up a newer framework release, first run a newer package version, for
 example `npx first-tree@latest upgrade`, or update your global `first-tree`
@@ -180,6 +190,6 @@ install before running `context-tree upgrade`.
 
 ## Further Reading
 
-- `skills/first-tree/references/principles.md` — Core principles with detailed examples
-- `skills/first-tree/references/ownership-and-naming.md` — How nodes are named and owned
+- `.agents/skills/first-tree/references/principles.md` — Core principles with detailed examples
+- `.agents/skills/first-tree/references/ownership-and-naming.md` — How nodes are named and owned
 - `AGENTS.md` in your tree — The before/during/after workflow for every task

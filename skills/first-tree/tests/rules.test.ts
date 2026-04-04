@@ -29,7 +29,7 @@ describe("framework rule", () => {
     const result = framework.evaluate(repo);
     expect(result.group).toBe("Framework");
     expect(result.tasks).toHaveLength(1);
-    expect(result.tasks[0]).toContain("skills/first-tree/");
+    expect(result.tasks[0]).toContain(".agents/skills/first-tree/");
   });
 
   it("passes when framework exists", () => {
@@ -233,7 +233,9 @@ describe("ciValidation rule", () => {
     const result = ciValidation.evaluate(repo);
     expect(result.tasks).toHaveLength(4);
     expect(result.tasks[0]).toContain("validation workflow");
-    expect(result.tasks[0]).toContain("skills/first-tree/assets/framework/workflows/validate.yml");
+    expect(result.tasks[0]).toContain(
+      ".agents/skills/first-tree/assets/framework/workflows/validate.yml",
+    );
     expect(result.tasks[1]).toContain("PR reviews");
     expect(result.tasks[2]).toContain("API secret");
     expect(result.tasks[3]).toContain("CODEOWNERS");
@@ -271,7 +273,7 @@ describe("ciValidation rule", () => {
     mkdirSync(wfDir, { recursive: true });
     writeFileSync(
       join(wfDir, "pr-review.yml"),
-      "name: PR Review\non: pull_request\njobs:\n  review:\n    steps:\n      - run: npx tsx skills/first-tree/assets/framework/helpers/run-review.ts\n",
+      "name: PR Review\non: pull_request\njobs:\n  review:\n    steps:\n      - run: npx tsx .agents/skills/first-tree/assets/framework/helpers/run-review.ts\n",
     );
     const repo = new Repo(tmp.path);
     const result = ciValidation.evaluate(repo);
@@ -290,7 +292,7 @@ describe("ciValidation rule", () => {
     );
     writeFileSync(
       join(wfDir, "pr-review.yml"),
-      "name: PR Review\non: pull_request\njobs:\n  review:\n    steps:\n      - run: npx tsx skills/first-tree/assets/framework/helpers/run-review.ts\n",
+      "name: PR Review\non: pull_request\njobs:\n  review:\n    steps:\n      - run: npx tsx .agents/skills/first-tree/assets/framework/helpers/run-review.ts\n",
     );
     const repo = new Repo(tmp.path);
     const result = ciValidation.evaluate(repo);
@@ -308,11 +310,11 @@ describe("ciValidation rule", () => {
     );
     writeFileSync(
       join(wfDir, "pr-review.yml"),
-      "name: PR Review\non: pull_request\njobs:\n  review:\n    steps:\n      - run: npx tsx skills/first-tree/assets/framework/helpers/run-review.ts\n",
+      "name: PR Review\non: pull_request\njobs:\n  review:\n    steps:\n      - run: npx tsx .agents/skills/first-tree/assets/framework/helpers/run-review.ts\n",
     );
     writeFileSync(
       join(wfDir, "codeowners.yml"),
-      "name: Update CODEOWNERS\non: pull_request\njobs:\n  update:\n    steps:\n      - run: npx tsx skills/first-tree/assets/framework/helpers/generate-codeowners.ts\n",
+      "name: Update CODEOWNERS\non: pull_request\njobs:\n  update:\n    steps:\n      - run: npx tsx .agents/skills/first-tree/assets/framework/helpers/generate-codeowners.ts\n",
     );
     const repo = new Repo(tmp.path);
     const result = ciValidation.evaluate(repo);
@@ -386,7 +388,7 @@ describe("evaluateAll", () => {
     makeNode(tmp.path);
     makeAgentsMd(tmp.path, { markers: true, userContent: true });
     makeMembers(tmp.path, 1);
-    mkdirSync(join(tmp.path, ".claude"));
+    mkdirSync(join(tmp.path, ".claude"), { recursive: true });
     writeFileSync(
       join(tmp.path, ".claude", "settings.json"),
       '{"hooks": {"inject-tree-context": true}}',

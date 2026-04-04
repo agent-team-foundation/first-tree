@@ -201,6 +201,8 @@ describe("skill artifacts", () => {
     expect(read("README.md")).toContain("Canonical Documentation");
     expect(read("README.md")).toContain("references/source-map.md");
     expect(read("README.md")).toContain("skills/first-tree/");
+    expect(read("README.md")).toContain(".agents/skills/first-tree/");
+    expect(read("README.md")).toContain(".claude/skills/first-tree/");
     expect(read("README.md")).toContain("bundled canonical");
     expect(read("README.md")).toContain("dedicated tree repo");
     expect(read("README.md")).toContain("`first-tree` skill");
@@ -218,6 +220,8 @@ describe("skill artifacts", () => {
     expect(onboarding).toContain("installed CLI command is");
     expect(onboarding).toContain("currently running `first-tree` npm package");
     expect(onboarding).toContain("npx first-tree@latest upgrade");
+    expect(onboarding).toContain(".agents/skills/first-tree/");
+    expect(onboarding).toContain(".claude/skills/first-tree/");
     expect(onboarding).not.toContain("This clones the framework into `.context-tree/`");
     expect(onboarding).not.toContain("from upstream");
 
@@ -228,6 +232,8 @@ describe("skill artifacts", () => {
     expect(skillMd).toContain("maintainer-testing.md");
     expect(skillMd).toContain("currently running `first-tree` package");
     expect(skillMd).toContain("so it is not confused with the `first-tree`");
+    expect(skillMd).toContain(".agents/skills/first-tree/");
+    expect(skillMd).toContain(".claude/skills/first-tree/");
     expect(skillMd).not.toContain("canonical eval harness");
 
     const sourceMap = read("skills/first-tree/references/source-map.md");

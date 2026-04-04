@@ -6,8 +6,9 @@ description: Maintain the canonical `first-tree` skill and the thin `context-tre
 # First Tree
 
 Use this skill when the task depends on the exact behavior of the
-`context-tree` CLI or the installed `skills/first-tree/` payload that
-`context-tree init` ships to user repos.
+`context-tree` CLI or the installed `.agents/skills/first-tree/` and
+`.claude/skills/first-tree/` payloads that `context-tree init` ships to user
+repos.
 
 ## Source Of Truth
 
@@ -17,9 +18,9 @@ Use this skill when the task depends on the exact behavior of the
   repos.
 - `engine/` holds the canonical framework and CLI behavior.
 - `scripts/` holds maintenance helpers for validating and running the skill.
-- In maintainer docs, use `context-tree` for the CLI and `skills/first-tree/`
-  for the installed skill path so it is not confused with the `first-tree`
-  npm package.
+- In maintainer docs, use `context-tree` for the CLI, `skills/first-tree/` for
+  the bundled source path, and `.agents/skills/first-tree/` /
+  `.claude/skills/first-tree/` for installed user-repo paths.
 
 ## When To Read What
 
@@ -61,11 +62,12 @@ Use this skill when the task depends on the exact behavior of the
   repo when invoked from a source/workspace repo. Use `--here` to initialize
   the current repo in place when you are already inside the tree repo.
 - `context-tree init` installs this skill into the target tree repo and
+  scaffolds `.agents/skills/first-tree/`, `.claude/skills/first-tree/`,
   `NODE.md`, `AGENTS.md`, and `members/NODE.md`.
 - `context-tree upgrade` refreshes the installed skill from the copy bundled
   with the currently running `first-tree` package. To pick up a newer
   framework, run a newer package version first. It also migrates older repos
-  that still use `skills/first-tree-cli-framework/`.
+  that still use `skills/first-tree/` or `skills/first-tree-cli-framework/`.
 - The user's tree content lives outside the skill; the skill only carries the
   reusable framework payload plus maintenance guidance.
 - The tree still stores decisions, constraints, and ownership; execution detail
@@ -79,6 +81,8 @@ Use this skill when the task depends on the exact behavior of the
 - Keep decision knowledge in the tree and execution detail in source systems.
 - Keep the skill as the only canonical knowledge source. The root CLI/package
   shell must not become a second source of framework semantics.
+- Keep the CLI name written as `context-tree` in maintainer and user-facing
+  docs so it is not confused with the `first-tree` package that ships it.
 - Keep normal `init` / `upgrade` flows self-contained. They must work from the
   skill bundled in the current package without cloning the source repo or
   relying on network access.

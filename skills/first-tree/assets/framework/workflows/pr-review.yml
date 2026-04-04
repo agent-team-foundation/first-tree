@@ -45,7 +45,7 @@ jobs:
           gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid > /tmp/pr-head-sha.txt
 
       - name: Run Claude review
-        run: npx tsx skills/first-tree/assets/framework/helpers/run-review.ts
+        run: npx tsx .agents/skills/first-tree/assets/framework/helpers/run-review.ts
 
       - name: Parse and post review
         run: |

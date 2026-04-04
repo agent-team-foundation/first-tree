@@ -205,7 +205,7 @@ export function generate(
       return 0;
     }
     console.log(
-      "CODEOWNERS is out-of-date. Run: npx tsx skills/first-tree/assets/framework/helpers/generate-codeowners.ts",
+      "CODEOWNERS is out-of-date. Run: npx tsx .agents/skills/first-tree/assets/framework/helpers/generate-codeowners.ts",
     );
     return 1;
   }

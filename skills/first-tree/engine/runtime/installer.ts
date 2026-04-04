@@ -2,9 +2,10 @@ import { copyFileSync, cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  FRAMEWORK_ASSET_ROOT,
+  BUNDLED_SKILL_ROOT,
+  INSTALLED_SKILL_ROOTS,
+  LEGACY_REPO_SKILL_ROOT,
   LEGACY_SKILL_ROOT,
-  SKILL_ROOT,
 } from "#skill/engine/runtime/asset-loader.js";
 
 export function resolveBundledPackageRoot(startUrl = import.meta.url): string {
@@ -12,7 +13,7 @@ export function resolveBundledPackageRoot(startUrl = import.meta.url): string {
   while (true) {
     if (
       existsSync(join(dir, "package.json")) &&
-      existsSync(join(dir, SKILL_ROOT, "SKILL.md"))
+      existsSync(join(dir, BUNDLED_SKILL_ROOT, "SKILL.md"))
     ) {
       return dir;
     }
@@ -38,7 +39,7 @@ export function resolveCanonicalSkillRoot(sourceRoot: string): string {
     return directSkillRoot;
   }
 
-  const nestedSkillRoot = join(sourceRoot, SKILL_ROOT);
+  const nestedSkillRoot = join(sourceRoot, BUNDLED_SKILL_ROOT);
   if (
     existsSync(join(nestedSkillRoot, "SKILL.md")) &&
     existsSync(join(nestedSkillRoot, "assets", "framework", "VERSION"))
@@ -53,16 +54,21 @@ export function resolveCanonicalSkillRoot(sourceRoot: string): string {
 
 export function copyCanonicalSkill(sourceRoot: string, targetRoot: string): void {
   const src = resolveCanonicalSkillRoot(sourceRoot);
-  const dst = join(targetRoot, SKILL_ROOT);
-  const legacyDst = join(targetRoot, LEGACY_SKILL_ROOT);
-  if (existsSync(dst)) {
-    rmSync(dst, { recursive: true, force: true });
+  for (const relPath of [
+    ...INSTALLED_SKILL_ROOTS,
+    LEGACY_REPO_SKILL_ROOT,
+    LEGACY_SKILL_ROOT,
+  ]) {
+    const fullPath = join(targetRoot, relPath);
+    if (existsSync(fullPath)) {
+      rmSync(fullPath, { recursive: true, force: true });
+    }
   }
-  if (legacyDst !== dst && existsSync(legacyDst)) {
-    rmSync(legacyDst, { recursive: true, force: true });
+  for (const relPath of INSTALLED_SKILL_ROOTS) {
+    const dst = join(targetRoot, relPath);
+    mkdirSync(dirname(dst), { recursive: true });
+    cpSync(src, dst, { recursive: true });
   }
-  mkdirSync(dirname(dst), { recursive: true });
-  cpSync(src, dst, { recursive: true });
 }
 
 export function renderTemplateFile(

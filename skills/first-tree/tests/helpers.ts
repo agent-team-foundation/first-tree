@@ -5,10 +5,13 @@ import { afterEach } from "vitest";
 import {
   AGENT_INSTRUCTIONS_FILE,
   AGENT_INSTRUCTIONS_TEMPLATE,
+  CLAUDE_SKILL_ROOT,
   FRAMEWORK_VERSION,
   LEGACY_AGENT_INSTRUCTIONS_FILE,
+  LEGACY_REPO_SKILL_VERSION,
   LEGACY_SKILL_VERSION,
   LEGACY_VERSION,
+  SKILL_ROOT,
 } from "#skill/engine/runtime/asset-loader.js";
 
 interface TmpDir {
@@ -24,10 +27,20 @@ export function useTmpDir(): TmpDir {
 }
 
 export function makeFramework(root: string, version = "0.1.0"): void {
-  mkdirSync(join(root, "skills", "first-tree", "assets", "framework"), {
-    recursive: true,
-  });
+  for (const skillRoot of [SKILL_ROOT, CLAUDE_SKILL_ROOT]) {
+    mkdirSync(join(root, skillRoot, "assets", "framework"), {
+      recursive: true,
+    });
+    writeFileSync(
+      join(root, skillRoot, "SKILL.md"),
+      "---\nname: first-tree\ndescription: installed\n---\n",
+    );
+  }
   writeFileSync(join(root, FRAMEWORK_VERSION), `${version}\n`);
+  writeFileSync(
+    join(root, CLAUDE_SKILL_ROOT, "assets", "framework", "VERSION"),
+    `${version}\n`,
+  );
 }
 
 export function makeGitRepo(root: string): void {
@@ -48,6 +61,17 @@ export function makeLegacyFramework(root: string, version = "0.1.0"): void {
   const ct = join(root, ".context-tree");
   mkdirSync(ct, { recursive: true });
   writeFileSync(join(root, LEGACY_VERSION), `${version}\n`);
+}
+
+export function makeLegacyRepoFramework(root: string, version = "0.1.0"): void {
+  mkdirSync(join(root, "skills", "first-tree", "assets", "framework"), {
+    recursive: true,
+  });
+  writeFileSync(
+    join(root, "skills", "first-tree", "SKILL.md"),
+    "---\nname: first-tree\ndescription: legacy installed\n---\n",
+  );
+  writeFileSync(join(root, LEGACY_REPO_SKILL_VERSION), `${version}\n`);
 }
 
 export function makeLegacyNamedFramework(

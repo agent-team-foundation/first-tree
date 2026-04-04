@@ -39,7 +39,7 @@ function buildPrompt(diffPath: string): string {
     ["Root NODE.md", "NODE.md"],
     [
       "Review Instructions",
-      "skills/first-tree/assets/framework/prompts/pr-review.md",
+      ".agents/skills/first-tree/assets/framework/prompts/pr-review.md",
     ],
   ];
   for (const [heading, path] of files) {

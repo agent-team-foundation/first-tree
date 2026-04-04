@@ -14,6 +14,7 @@ import {
   makeFramework,
   makeSourceRepo,
   makeLegacyFramework,
+  makeLegacyRepoFramework,
   makeLegacyNamedFramework,
   makeSourceSkill,
   useTmpDir,
@@ -35,7 +36,7 @@ describe("runUpgrade", () => {
     expect(existsSync(join(repoDir.path, ".context-tree"))).toBe(false);
     expect(readFileSync(join(repoDir.path, FRAMEWORK_VERSION), "utf-8").trim()).toBe("0.2.0");
     expect(readFileSync(join(repoDir.path, INSTALLED_PROGRESS), "utf-8")).toContain(
-      "skills/first-tree/assets/framework/VERSION",
+      ".agents/skills/first-tree/assets/framework/VERSION",
     );
     expect(readFileSync(join(repoDir.path, INSTALLED_PROGRESS), "utf-8")).toContain(
       `Rename \`${LEGACY_AGENT_INSTRUCTIONS_FILE}\` to \`${AGENT_INSTRUCTIONS_FILE}\``,
@@ -76,6 +77,24 @@ describe("runUpgrade", () => {
     expect(readFileSync(join(repoDir.path, FRAMEWORK_VERSION), "utf-8").trim()).toBe("0.2.0");
     expect(readFileSync(join(repoDir.path, INSTALLED_PROGRESS), "utf-8")).toContain(
       "skills/first-tree-cli-framework/",
+    );
+  });
+
+  it("migrates repos that still use the previous workspace skill path", () => {
+    const repoDir = useTmpDir();
+    const sourceDir = useTmpDir();
+    makeLegacyRepoFramework(repoDir.path, "0.1.0");
+    makeSourceSkill(sourceDir.path, "0.2.0");
+
+    const result = runUpgrade(new Repo(repoDir.path), {
+      sourceRoot: sourceDir.path,
+    });
+
+    expect(result).toBe(0);
+    expect(existsSync(join(repoDir.path, "skills", "first-tree"))).toBe(false);
+    expect(readFileSync(join(repoDir.path, FRAMEWORK_VERSION), "utf-8").trim()).toBe("0.2.0");
+    expect(readFileSync(join(repoDir.path, INSTALLED_PROGRESS), "utf-8")).toContain(
+      "skills/first-tree/",
     );
   });
 

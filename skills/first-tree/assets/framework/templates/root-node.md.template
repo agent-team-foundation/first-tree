@@ -34,8 +34,8 @@ tree describes.
 
 See [AGENTS.md](AGENTS.md) for agent instructions — the before/during/after workflow, ownership model, and tree maintenance.
 
-See [about.md](skills/first-tree/references/about.md) for background — the problem, the idea, and who it's for.
+See [about.md](.agents/skills/first-tree/references/about.md) for background — the problem, the idea, and who it's for.
 
 See the installed framework documentation:
-- [principles.md](skills/first-tree/references/principles.md) — core principles with examples
-- [ownership-and-naming.md](skills/first-tree/references/ownership-and-naming.md) — node naming and ownership model
+- [principles.md](.agents/skills/first-tree/references/principles.md) — core principles with examples
+- [ownership-and-naming.md](.agents/skills/first-tree/references/ownership-and-naming.md) — node naming and ownership model

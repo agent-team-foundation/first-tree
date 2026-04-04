@@ -23,6 +23,7 @@ import {
   FRAMEWORK_VERSION,
   INSTALLED_PROGRESS,
   LEGACY_AGENT_INSTRUCTIONS_FILE,
+  installedSkillRootsDisplay,
 } from "#skill/engine/runtime/asset-loader.js";
 
 /**
@@ -67,7 +68,7 @@ interface TaskListContext {
 function installSkill(source: string, target: string): void {
   copyCanonicalSkill(source, target);
   console.log(
-    "  Installed skills/first-tree/ from the bundled first-tree package",
+    `  Installed ${installedSkillRootsDisplay()} from the bundled first-tree package`,
   );
 }
 
@@ -198,7 +199,7 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
     console.log();
   }
 
-  if (!r.hasFramework()) {
+  if (!r.hasCurrentInstalledSkill()) {
     try {
       const sourceRoot = options?.sourceRoot ?? resolveBundledPackageRoot();
       console.log(

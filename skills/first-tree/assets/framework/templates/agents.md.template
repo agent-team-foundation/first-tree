@@ -13,7 +13,7 @@ You are working in a **Context Tree** — the living source of truth for decisio
 
 4. **Git-native tree structure.** Each node is a file; each domain is a directory. Soft links allow cross-references without the complexity of a full graph. History, ownership, and review follow Git conventions.
 
-See `skills/first-tree/references/principles.md` for detailed explanations and examples.
+See `.agents/skills/first-tree/references/principles.md` for detailed explanations and examples.
 
 ## Before Every Task
 
@@ -41,7 +41,7 @@ Ask yourself: **Does the tree need updating?**
 
 ## Reference
 
-For ownership rules, tree structure, and key files, see [NODE.md](NODE.md) and `skills/first-tree/references/ownership-and-naming.md`.
+For ownership rules, tree structure, and key files, see [NODE.md](NODE.md) and `.agents/skills/first-tree/references/ownership-and-naming.md`.
 <!-- END CONTEXT-TREE FRAMEWORK -->
 
 # Project-Specific Instructions

@@ -52,9 +52,10 @@ git init
 context-tree init --here
 ```
 
-- `context-tree init` installs `skills/first-tree/`, creates `NODE.md`,
-  `AGENTS.md`, `members/NODE.md`, and writes a checklist to
-  `skills/first-tree/progress.md`.
+- `context-tree init` installs `.agents/skills/first-tree/` and
+  `.claude/skills/first-tree/`, creates `NODE.md`, `AGENTS.md`,
+  `members/NODE.md`, and writes a checklist to
+  `.agents/skills/first-tree/progress.md`.
 - `context-tree verify` checks both the progress checklist and deterministic
   tree validation. It is expected to fail until the required onboarding tasks
   are complete.
@@ -79,11 +80,17 @@ runtime.
 
 ## Package Name vs Command
 
-- npm package name: `first-tree`
-- installed CLI command: `context-tree`
-- installed skill directory inside a user tree: `skills/first-tree/`
-- when maintainer docs mention "the `first-tree` skill", they mean that
-  bundled skill directory, not the npm package name
+- The npm package is `first-tree`.
+- The installed CLI command is `context-tree`.
+- The installed skill directories inside a user tree are
+  `.agents/skills/first-tree/` and `.claude/skills/first-tree/`.
+- The published package keeps its bundled canonical source under
+  `skills/first-tree/`.
+- When maintainer docs say "the `first-tree` skill", they mean that bundled
+  skill directory, not the npm package name.
+- `npx first-tree init` is the quickest one-off entrypoint.
+- `npm install -g first-tree` adds `context-tree` to your PATH for repeated
+  use.
 
 ## Runtime And Maintainer Prerequisites
 
@@ -97,6 +104,8 @@ runtime.
   bundled skill.
 - `skills/first-tree/` is the canonical source for framework behavior, shipped
   templates, maintainer references, and validation logic.
+- `context-tree init` installs that bundled skill into `.agents/skills/first-tree/`
+  and `.claude/skills/first-tree/` inside user repos.
 - `evals/` is maintainer-only developer tooling for the source repo. It is
   intentionally not part of the published package.
 

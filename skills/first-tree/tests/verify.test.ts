@@ -43,7 +43,7 @@ describe("checkProgress", () => {
 
   it("returns empty when all checked", () => {
     const tmp = useTmpDir();
-    mkdirSync(join(tmp.path, "skills", "first-tree"), { recursive: true });
+    makeFramework(tmp.path);
     writeFileSync(
       join(tmp.path, INSTALLED_PROGRESS),
       "# Progress\n- [x] Task one\n- [x] Task two\n",
@@ -54,7 +54,7 @@ describe("checkProgress", () => {
 
   it("returns unchecked items", () => {
     const tmp = useTmpDir();
-    mkdirSync(join(tmp.path, "skills", "first-tree"), { recursive: true });
+    makeFramework(tmp.path);
     writeFileSync(
       join(tmp.path, INSTALLED_PROGRESS),
       "# Progress\n- [x] Done task\n- [ ] Pending task\n- [ ] Another pending\n",
@@ -65,7 +65,7 @@ describe("checkProgress", () => {
 
   it("returns empty for empty progress", () => {
     const tmp = useTmpDir();
-    mkdirSync(join(tmp.path, "skills", "first-tree"), { recursive: true });
+    makeFramework(tmp.path);
     writeFileSync(join(tmp.path, INSTALLED_PROGRESS), "");
     const repo = new Repo(tmp.path);
     expect(checkProgress(repo)).toEqual([]);

@@ -4,9 +4,12 @@ import { describe, expect, it } from "vitest";
 import { Repo } from "#skill/engine/repo.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
+  CLAUDE_INSTALLED_PROGRESS,
   FRAMEWORK_VERSION,
   INSTALLED_PROGRESS,
   LEGACY_AGENT_INSTRUCTIONS_FILE,
+  LEGACY_REPO_SKILL_PROGRESS,
+  LEGACY_REPO_SKILL_VERSION,
   LEGACY_SKILL_PROGRESS,
   LEGACY_SKILL_VERSION,
   LEGACY_PROGRESS,
@@ -17,6 +20,7 @@ import {
   makeFramework,
   makeGitRepo,
   makeLegacyFramework,
+  makeLegacyRepoFramework,
   makeLegacyNamedFramework,
   makeSourceRepo,
   makeSourceSkill,
@@ -182,6 +186,13 @@ describe("hasFramework", () => {
     expect(repo.hasFramework()).toBe(true);
   });
 
+  it("returns true with the previous workspace skill path", () => {
+    const tmp = useTmpDir();
+    makeLegacyRepoFramework(tmp.path);
+    const repo = new Repo(tmp.path);
+    expect(repo.hasFramework()).toBe(true);
+  });
+
   it("returns false without VERSION file", () => {
     const tmp = useTmpDir();
     const repo = new Repo(tmp.path);
@@ -211,6 +222,13 @@ describe("readVersion", () => {
     makeLegacyNamedFramework(tmp.path, "0.2.5");
     const repo = new Repo(tmp.path);
     expect(repo.readVersion()).toBe("0.2.5");
+  });
+
+  it("reads the previous workspace skill version", () => {
+    const tmp = useTmpDir();
+    makeLegacyRepoFramework(tmp.path, "0.2.4");
+    const repo = new Repo(tmp.path);
+    expect(repo.readVersion()).toBe("0.2.4");
   });
 
   it("returns null when missing", () => {
@@ -244,6 +262,14 @@ describe("path preferences", () => {
     const repo = new Repo(tmp.path);
     expect(repo.preferredProgressPath()).toBe(LEGACY_SKILL_PROGRESS);
     expect(repo.frameworkVersionPath()).toBe(LEGACY_SKILL_VERSION);
+  });
+
+  it("switches path preferences for repos using the previous workspace skill path", () => {
+    const tmp = useTmpDir();
+    makeLegacyRepoFramework(tmp.path);
+    const repo = new Repo(tmp.path);
+    expect(repo.preferredProgressPath()).toBe(LEGACY_REPO_SKILL_PROGRESS);
+    expect(repo.frameworkVersionPath()).toBe(LEGACY_REPO_SKILL_VERSION);
   });
 });
 

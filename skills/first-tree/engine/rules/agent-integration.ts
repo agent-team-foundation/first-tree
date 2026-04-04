@@ -1,13 +1,15 @@
 import type { Repo } from "#skill/engine/repo.js";
 import type { RuleResult } from "#skill/engine/rules/index.js";
+import { claudeCodeExampleCandidates } from "#skill/engine/runtime/adapters.js";
 import { FRAMEWORK_EXAMPLES_DIR } from "#skill/engine/runtime/asset-loader.js";
 
 export function evaluate(repo: Repo): RuleResult {
   const tasks: string[] = [];
+  const [claudeExamplePath] = claudeCodeExampleCandidates();
   if (repo.pathExists(".claude/settings.json")) {
     if (!repo.fileContains(".claude/settings.json", "inject-tree-context")) {
       tasks.push(
-        `Add SessionStart hook to \`.claude/settings.json\` (see \`${FRAMEWORK_EXAMPLES_DIR}/claude-code/\`)`,
+        `Add SessionStart hook to \`.claude/settings.json\` (see \`${claudeExamplePath}/\`)`,
       );
     }
   } else if (!repo.anyAgentConfig()) {

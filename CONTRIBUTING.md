@@ -9,8 +9,9 @@ Naming note:
 
 - `first-tree` is the npm package name.
 - `context-tree` is the installed CLI command.
-- `skills/first-tree/` is the bundled skill path inside this repo and inside
-  user trees after install.
+- `skills/first-tree/` is the bundled skill path inside this repo.
+- User trees install that payload into `.agents/skills/first-tree/` and
+  `.claude/skills/first-tree/`.
 
 Most changes should land in the canonical skill under `skills/first-tree/`,
 not in root-level prose or ad hoc helper files.

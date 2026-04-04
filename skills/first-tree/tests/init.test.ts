@@ -100,7 +100,7 @@ describe("writeProgress", () => {
 
   it("overwrites existing file", () => {
     const tmp = useTmpDir();
-    mkdirSync(join(tmp.path, "skills", "first-tree"), {
+    mkdirSync(join(tmp.path, ".agents", "skills", "first-tree"), {
       recursive: true,
     });
     writeFileSync(join(tmp.path, INSTALLED_PROGRESS), "old");
@@ -145,7 +145,10 @@ describe("runInit", () => {
 
     expect(ret).toBe(0);
     expect(
-      existsSync(join(repoDir.path, "skills", "first-tree", "SKILL.md")),
+      existsSync(join(repoDir.path, ".agents", "skills", "first-tree", "SKILL.md")),
+    ).toBe(true);
+    expect(
+      existsSync(join(repoDir.path, ".claude", "skills", "first-tree", "SKILL.md")),
     ).toBe(true);
     expect(readFileSync(join(repoDir.path, FRAMEWORK_VERSION), "utf-8").trim()).toBe("0.2.0");
     expect(existsSync(join(repoDir.path, "NODE.md"))).toBe(true);
@@ -202,7 +205,12 @@ describe("runInit", () => {
     );
 
     expect(ret).toBe(0);
-    expect(existsSync(join(treeRepo, "skills", "first-tree", "SKILL.md"))).toBe(true);
+    expect(
+      existsSync(join(treeRepo, ".agents", "skills", "first-tree", "SKILL.md")),
+    ).toBe(true);
+    expect(
+      existsSync(join(treeRepo, ".claude", "skills", "first-tree", "SKILL.md")),
+    ).toBe(true);
     expect(existsSync(join(treeRepo, "NODE.md"))).toBe(true);
     expect(existsSync(join(treeRepo, AGENT_INSTRUCTIONS_FILE))).toBe(true);
     expect(existsSync(join(treeRepo, "members", "NODE.md"))).toBe(true);

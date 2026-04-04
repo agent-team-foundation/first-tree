@@ -2,14 +2,19 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import {
   AGENT_INSTRUCTIONS_FILE,
+  CLAUDE_FRAMEWORK_VERSION,
+  CLAUDE_INSTALLED_PROGRESS,
   FRAMEWORK_VERSION,
-  LEGACY_SKILL_PROGRESS,
-  LEGACY_SKILL_VERSION,
+  INSTALLED_PROGRESS,
   LEGACY_AGENT_INSTRUCTIONS_FILE,
   LEGACY_PROGRESS,
+  LEGACY_REPO_SKILL_PROGRESS,
+  LEGACY_REPO_SKILL_VERSION,
+  LEGACY_SKILL_PROGRESS,
+  LEGACY_SKILL_VERSION,
   LEGACY_VERSION,
-  INSTALLED_PROGRESS,
   agentInstructionsFileCandidates,
+  installedSkillRoots,
   type FrameworkLayout,
   detectFrameworkLayout,
   frameworkVersionCandidates,
@@ -164,6 +169,22 @@ export class Repo {
     return knownConfigs.some((c) => this.pathExists(c));
   }
 
+  installedSkillRoots(): string[] {
+    return installedSkillRoots();
+  }
+
+  missingInstalledSkillRoots(): string[] {
+    return this.installedSkillRoots().filter(
+      (root) =>
+        !this.pathExists(join(root, "SKILL.md")) ||
+        !this.pathExists(join(root, "assets", "framework", "VERSION")),
+    );
+  }
+
+  hasCurrentInstalledSkill(): boolean {
+    return this.missingInstalledSkillRoots().length === 0;
+  }
+
   isGitRepo(): boolean {
     return hasGitMetadata(this.root);
   }
@@ -198,6 +219,12 @@ export class Repo {
     if (layout === "legacy-skill") {
       return LEGACY_SKILL_PROGRESS;
     }
+    if (layout === "legacy-repo-skill") {
+      return LEGACY_REPO_SKILL_PROGRESS;
+    }
+    if (layout === "claude-skill") {
+      return CLAUDE_INSTALLED_PROGRESS;
+    }
     return INSTALLED_PROGRESS;
   }
 
@@ -208,6 +235,12 @@ export class Repo {
     }
     if (layout === "legacy-skill") {
       return LEGACY_SKILL_VERSION;
+    }
+    if (layout === "legacy-repo-skill") {
+      return LEGACY_REPO_SKILL_VERSION;
+    }
+    if (layout === "claude-skill") {
+      return CLAUDE_FRAMEWORK_VERSION;
     }
     return FRAMEWORK_VERSION;
   }
