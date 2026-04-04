@@ -22,11 +22,11 @@
     "context-tree": "./dist/cli.js"
   },
   "imports": {
-    "#skill/*": "./skills/first-tree-cli-framework/*"
+    "#skill/*": "./skills/first-tree/*"
   },
   "files": [
     "dist",
-    "skills/first-tree-cli-framework"
+    "skills/first-tree"
   ],
   "scripts": {
     "build": "tsdown",
@@ -34,7 +34,7 @@
     "test": "vitest run",
     "eval": "vitest run --config vitest.eval.config.ts",
     "typecheck": "tsc --noEmit",
-    "validate:skill": "python3 ./skills/first-tree-cli-framework/scripts/quick_validate.py ./skills/first-tree-cli-framework && bash ./skills/first-tree-cli-framework/scripts/check-skill-sync.sh"
+    "validate:skill": "python3 ./skills/first-tree/scripts/quick_validate.py ./skills/first-tree && bash ./skills/first-tree/scripts/check-skill-sync.sh"
   },
   "packageManager": "pnpm@10.25.0",
   "license": "Apache-2.0",

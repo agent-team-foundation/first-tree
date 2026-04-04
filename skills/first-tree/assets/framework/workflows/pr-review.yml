@@ -1,0 +1,146 @@
+name: PR Review
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  issue_comment:
+    types: [created]
+
+jobs:
+  review:
+    if: >
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request &&
+       contains(github.event.comment.body, '@claude'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    env:
+      ANTHROPIC_BASE_URL: "https://openrouter.ai/api"
+      ANTHROPIC_AUTH_TOKEN: ${{ secrets.OPENROUTER_API_KEY }}
+      ANTHROPIC_API_KEY: ""
+      ANTHROPIC_DEFAULT_SONNET_MODEL: "anthropic/claude-sonnet-4.6"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Claude Code
+        run: curl -fsSL https://claude.ai/install.sh | bash
+
+      - name: Get PR info
+        id: pr
+        run: |
+          PR_NUMBER=${{ github.event.pull_request.number || github.event.issue.number }}
+          echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          gh pr diff "$PR_NUMBER" > /tmp/pr-diff.txt
+          gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid > /tmp/pr-head-sha.txt
+
+      - name: Run Claude review
+        run: npx tsx skills/first-tree/assets/framework/helpers/run-review.ts
+
+      - name: Parse and post review
+        run: |
+          PR_NUMBER=${{ steps.pr.outputs.number }}
+          HEAD_SHA=$(cat /tmp/pr-head-sha.txt)
+
+          # Extract fields
+          VERDICT=$(jq -r '.verdict // "COMMENT"' /tmp/review.json)
+          SUMMARY=$(jq -r '.summary // "Review completed."' /tmp/review.json)
+
+          case "$VERDICT" in
+            APPROVE) EVENT="APPROVE" ;;
+            REQUEST_CHANGES) EVENT="REQUEST_CHANGES" ;;
+            *) EVENT="COMMENT" ;;
+          esac
+
+          BODY="${SUMMARY}
+
+          ---
+          *Automated review by Claude Code via OpenRouter*"
+
+          # Check for inline comments
+          HAS_COMMENTS=$(jq 'has("inline_comments") and (.inline_comments | length > 0)' /tmp/review.json)
+
+          if [ "$HAS_COMMENTS" != "true" ]; then
+            gh api \
+              "repos/${{ github.repository }}/pulls/${PR_NUMBER}/reviews" \
+              -f body="$BODY" \
+              -f event="$EVENT" \
+              -f commit_id="$HEAD_SHA"
+          else
+            # Transform inline_comments to GitHub API format (file->path, comment->body)
+            jq '[.inline_comments[] | {path: .file, line: .line, body: .comment}]' \
+              /tmp/review.json > /tmp/comments.json
+
+            jq -n \
+              --arg body "$BODY" \
+              --arg event "$EVENT" \
+              --arg sha "$HEAD_SHA" \
+              --slurpfile comments /tmp/comments.json \
+              '{
+                body: $body,
+                event: $event,
+                commit_id: $sha,
+                comments: $comments[0]
+              }' > /tmp/review-payload.json
+
+            # Try inline review; fall back to summary-only if lines can't be resolved
+            if ! gh api \
+              "repos/${{ github.repository }}/pulls/${PR_NUMBER}/reviews" \
+              --input /tmp/review-payload.json 2>/tmp/review-api-error.txt; then
+              echo "Inline review failed, falling back to summary-only review"
+              cat /tmp/review-api-error.txt
+              INLINE_TEXT=$(jq -r '.[] | "**\(.path):\(.line)** — \(.body)"' /tmp/comments.json)
+              FALLBACK_BODY="${SUMMARY}
+
+          ### Inline Comments
+
+          ${INLINE_TEXT}
+
+          ---
+          *Automated review by Claude Code via OpenRouter*"
+              gh api \
+                "repos/${{ github.repository }}/pulls/${PR_NUMBER}/reviews" \
+                -f body="$FALLBACK_BODY" \
+                -f event="$EVENT" \
+                -f commit_id="$HEAD_SHA"
+            fi
+          fi
+
+      - name: Post full review output as comment
+        if: always()
+        run: |
+          PR_NUMBER=${{ steps.pr.outputs.number }}
+          {
+            echo "## Claude Code Review Output"
+            echo ""
+            if [ -f /tmp/review.json ] && jq empty /tmp/review.json 2>/dev/null; then
+              VERDICT=$(jq -r '.verdict // "N/A"' /tmp/review.json)
+              SUMMARY=$(jq -r '.summary // "N/A"' /tmp/review.json)
+              echo "**Verdict:** ${VERDICT}"
+              echo ""
+              echo "**Summary:** ${SUMMARY}"
+              HAS_COMMENTS=$(jq 'has("inline_comments") and (.inline_comments | length > 0)' /tmp/review.json)
+              if [ "$HAS_COMMENTS" = "true" ]; then
+                echo ""
+                echo "### Inline Comments"
+                echo ""
+                jq -r '.inline_comments[] | "#### \(.file):\(.line)\n\(.comment)\n"' /tmp/review.json
+              fi
+            else
+              echo "*No review output produced or failed to parse.*"
+            fi
+            echo ""
+            echo "---"
+            echo "*Automated review by Claude Code via OpenRouter*"
+          } > /tmp/comment-body.md
+          gh pr comment "$PR_NUMBER" --body-file /tmp/comment-body.md

@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "skillName": "first-tree",
+  "runtimeAssetRoot": "assets/framework",
+  "versionFile": "VERSION",
+  "templatesDir": "templates",
+  "workflowsDir": "workflows",
+  "promptsDir": "prompts",
+  "examplesDir": "examples",
+  "helpersDir": "helpers"
+}

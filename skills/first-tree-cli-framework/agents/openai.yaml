@@ -1,4 +1,0 @@
-interface:
-  display_name: "First Tree Framework"
-  short_description: "Maintain the skill and thin Context Tree CLI"
-  default_prompt: "Use $first-tree-cli-framework to maintain the first-tree framework skill, its thin context-tree CLI, or its build, packaging, test, eval, and CI wiring."

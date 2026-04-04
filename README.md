@@ -1,6 +1,6 @@
 # first-tree
 
-Thin distribution package for the canonical `first-tree-cli-framework` skill
+Thin distribution package for the canonical `first-tree` skill
 and the `context-tree` CLI.
 
 ## Package Name vs Command
@@ -13,7 +13,7 @@ and the `context-tree` CLI.
 ## What This Repo Ships
 
 - `src/` keeps the thin CLI shell that parses commands and dispatches to the bundled skill.
-- `skills/first-tree-cli-framework/` is the canonical source for framework behavior, shipped templates, maintainer references, and validation logic.
+- `skills/first-tree/` is the canonical source for framework behavior, shipped templates, maintainer references, and validation logic.
 - `evals/` is maintainer-only developer tooling for the source repo. It is intentionally not part of the published package.
 
 ## Quick Start
@@ -71,11 +71,11 @@ pnpm pack
 ## Canonical Documentation
 
 All framework documentation, maintainer guidance, and shipped runtime assets
-live in `skills/first-tree-cli-framework/`.
+live in `skills/first-tree/`.
 
-- User-facing overview: `skills/first-tree-cli-framework/references/about.md`
-- User onboarding: `skills/first-tree-cli-framework/references/onboarding.md`
-- Maintainer entrypoint: `skills/first-tree-cli-framework/references/source-map.md`
+- User-facing overview: `skills/first-tree/references/about.md`
+- User onboarding: `skills/first-tree/references/onboarding.md`
+- Maintainer entrypoint: `skills/first-tree/references/source-map.md`
 
 If you are maintaining this repo, start with the source map instead of relying
 on root-level prose.

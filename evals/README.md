@@ -2,7 +2,7 @@
 
 This directory holds maintainer-only eval tooling for the `first-tree` source
 repo. It is intentionally not part of the distributed
-`skills/first-tree-cli-framework` package.
+`skills/first-tree` package.
 
 ## What Lives Here
 

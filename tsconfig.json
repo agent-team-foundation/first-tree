@@ -11,6 +11,6 @@
     "declaration": true,
     "sourceMap": true
   },
-  "include": ["src", "skills/first-tree-cli-framework/engine"],
+  "include": ["src", "skills/first-tree/engine"],
   "exclude": ["node_modules", "dist", "tests"]
 }
