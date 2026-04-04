@@ -17,6 +17,7 @@ export interface EvalCase {
   repos: RepoRef[];  // one or more repos
   task: string;
   golden_pr?: string;
+  fix_commit_sha?: string;  // merge commit of the fix PR (for env validation)
   verification: string;
   difficulty: 'easy' | 'medium' | 'hard';
   timeout_ms?: number;

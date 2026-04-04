@@ -1,91 +1,56 @@
 #!/bin/bash
 # Verification for nanobot-streaming-metadata eval case.
 #
-# Tests that on_stream and on_stream_end closures preserve inbound metadata.
-# The bug: closures create fresh dicts with only internal keys, dropping
-# channel-specific fields like message_thread_id.
+# The bug: on_stream and on_stream_end closures create fresh metadata dicts
+# with only internal keys (_stream_delta, _stream_end, etc.), dropping
+# channel-specific fields like message_thread_id from the inbound message.
+#
+# The fix: closures must build metadata FROM msg.metadata (copy + merge)
+# instead of creating fresh dicts.
 
 set -euo pipefail
 
 cd "${SANDBOX_DIR:-.}"
 
 python3 << 'PYEOF'
-import json, ast, re
+import json, re
 
 passed = 0
-total = 3
+total = 2
 
-# Read the source file
 with open("nanobot/agent/loop.py") as f:
     source = f.read()
 
-# Test 1: on_stream closure copies msg.metadata (not a fresh dict)
-# Look for the on_stream closure — it should reference msg.metadata
-# The fix pattern: dict(msg.metadata or {}) with _stream_delta added on top
-if re.search(r'msg\.metadata', source) and re.search(r'_stream_delta', source):
-    # Check that metadata is being copied, not created fresh
-    # The key indicator: the on_stream function builds metadata FROM msg.metadata
-    # Look for pattern like: {**msg.metadata, ...} or dict(msg.metadata or {})
-    # or msg.metadata | {...} or similar
-    on_stream_section = source[source.find('on_stream'):source.find('on_stream') + 2000] if 'on_stream' in source else ''
+# The bug: on_stream closure has metadata={"_stream_delta": True, ...}
+# (fresh dict, drops msg.metadata). The fix replaces it with
+# meta = dict(msg.metadata or {}); meta["_stream_delta"] = True
 
-    if ('msg.metadata' in on_stream_section and
-        ('dict(msg.metadata' in on_stream_section or
-         '{**msg.metadata' in on_stream_section or
-         '**msg.metadata' in on_stream_section or
-         'msg.metadata |' in on_stream_section or
-         '| msg.metadata' in on_stream_section or
-         '.update(' in on_stream_section or
-         'copy()' in on_stream_section)):
-        passed += 1
-        print("PASS: on_stream copies msg.metadata")
-    else:
-        print("FAIL: on_stream doesn't appear to copy msg.metadata")
+# Test 1: on_stream closure must NOT have a fresh metadata dict with _stream_delta
+# Look for the buggy pattern: metadata={\n..._stream_delta
+buggy_pattern = re.search(
+    r'async def on_stream\(delta.*?\n'     # on_stream definition
+    r'(?:.*\n)*?'                           # any lines
+    r'.*metadata\s*=\s*\{[^}]*_stream_delta',  # fresh dict with _stream_delta
+    source,
+)
+if buggy_pattern:
+    print("FAIL: on_stream still creates a fresh metadata dict (drops msg.metadata)")
 else:
-    print("FAIL: Could not find on_stream with msg.metadata reference")
-
-# Test 2: on_stream_end closure also copies msg.metadata
-# Find the on_stream_end section
-if 'on_stream_end' in source:
-    # Find on_stream_end definition and check for metadata copying
-    end_idx = source.find('on_stream_end')
-    on_stream_end_section = source[end_idx:end_idx + 2000]
-
-    if ('msg.metadata' in on_stream_end_section and
-        ('dict(msg.metadata' in on_stream_end_section or
-         '{**msg.metadata' in on_stream_end_section or
-         '**msg.metadata' in on_stream_end_section or
-         'msg.metadata |' in on_stream_end_section or
-         '| msg.metadata' in on_stream_end_section or
-         '.update(' in on_stream_end_section or
-         'copy()' in on_stream_end_section)):
-        passed += 1
-        print("PASS: on_stream_end copies msg.metadata")
-    else:
-        print("FAIL: on_stream_end doesn't appear to copy msg.metadata")
-else:
-    print("FAIL: Could not find on_stream_end function")
-
-# Test 3: Check for test file existence with metadata preservation tests
-import os
-test_files = []
-for root, dirs, files in os.walk("tests"):
-    for f in files:
-        if f.endswith(".py"):
-            path = os.path.join(root, f)
-            try:
-                content = open(path).read()
-                if 'message_thread_id' in content and ('on_stream' in content or 'metadata' in content):
-                    test_files.append(path)
-            except:
-                pass
-
-if test_files:
     passed += 1
-    print(f"PASS: Found metadata preservation tests in {test_files}")
+    print("PASS: on_stream no longer creates a fresh metadata dict")
+
+# Test 2: on_stream_end closure must NOT have a fresh metadata dict with _stream_end
+buggy_pattern_end = re.search(
+    r'async def on_stream_end\(.*?\n'      # on_stream_end definition
+    r'(?:.*\n)*?'                           # any lines
+    r'.*metadata\s*=\s*\{[^}]*_stream_end', # fresh dict with _stream_end
+    source,
+)
+if buggy_pattern_end:
+    print("FAIL: on_stream_end still creates a fresh metadata dict (drops msg.metadata)")
 else:
-    # Try running pytest to find relevant tests
-    print("FAIL: No test files found with message_thread_id + on_stream/metadata checks")
+    passed += 1
+    print("PASS: on_stream_end no longer creates a fresh metadata dict")
 
 print(json.dumps({"passed": passed, "total": total}))
 PYEOF

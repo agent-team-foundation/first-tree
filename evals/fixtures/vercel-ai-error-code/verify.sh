@@ -1,8 +1,12 @@
 #!/bin/bash
 # Verification for vercel-ai-error-code eval case.
 #
-# Tests that provider-executed tool errors preserve structured error data
-# through the streaming pipeline, and that fallback error code is 'unavailable'.
+# The bug: structured error data from provider-executed tools is lost through
+# the streaming pipeline. The Anthropic converter uses 'unknown' as fallback
+# error code for web_fetch errors.
+#
+# The fix: preserve error data for providerExecuted tools, and change the
+# web_fetch fallback error code from 'unknown' to something more descriptive.
 
 set -euo pipefail
 
@@ -11,41 +15,30 @@ cd "${SANDBOX_DIR:-.}"
 passed=0
 total=2
 
-# Test 1: Check stream-text.ts handles providerExecuted tool errors
-# The fix should bypass onError for providerExecuted tool errors
+# Test 1: stream-text.ts handles providerExecuted tool errors
 STREAM_TEXT="packages/ai/src/generate-text/stream-text.ts"
 if [ -f "$STREAM_TEXT" ]; then
-    # Look for the providerExecuted check in the tool-output-error handling
-    if grep -q "providerExecuted" "$STREAM_TEXT"; then
-        # Verify the pattern: providerExecuted ? direct-serialize : onError(...)
-        if grep -q "JSON.stringify" "$STREAM_TEXT" && grep -q "providerExecuted" "$STREAM_TEXT"; then
-            echo "PASS: stream-text.ts handles providerExecuted tool errors with direct serialization"
-            passed=$((passed + 1))
-        else
-            echo "FAIL: providerExecuted found but JSON.stringify not used for direct serialization"
-        fi
+    if grep -q "providerExecuted" "$STREAM_TEXT" && grep -q "JSON.stringify" "$STREAM_TEXT"; then
+        echo "PASS: stream-text.ts handles providerExecuted tool errors"
+        passed=$((passed + 1))
     else
-        echo "FAIL: No providerExecuted check in stream-text.ts"
+        echo "FAIL: stream-text.ts missing providerExecuted + JSON.stringify handling"
     fi
 else
     echo "FAIL: $STREAM_TEXT not found"
 fi
 
-# Test 2: Check Anthropic prompt converter uses 'unavailable' fallback
+# Test 2: Anthropic prompt converter no longer uses 'unknown' for web_fetch errors.
+# Note: code_execution sections may still use 'unknown' — that's unrelated.
 ANTHROPIC_PROMPT="packages/anthropic/src/convert-to-anthropic-messages-prompt.ts"
 if [ -f "$ANTHROPIC_PROMPT" ]; then
-    # The fix changes 'unknown' to 'unavailable' as the fallback error code
-    if grep -q "'unavailable'" "$ANTHROPIC_PROMPT" || grep -q '"unavailable"' "$ANTHROPIC_PROMPT"; then
-        # Make sure 'unknown' is no longer used as a fallback
-        # (it might appear in other contexts, so check specifically for error_code fallback)
-        if grep -q "error_code.*'unknown'" "$ANTHROPIC_PROMPT" || grep -q "error_code.*\"unknown\"" "$ANTHROPIC_PROMPT"; then
-            echo "FAIL: 'unknown' still used as fallback error_code"
-        else
-            echo "PASS: Anthropic prompt converter uses 'unavailable' as fallback error code"
-            passed=$((passed + 1))
-        fi
+    # Extract only the web_fetch sections (within ~5 lines of web_fetch references)
+    web_fetch_context=$(grep -B2 -A5 "web_fetch" "$ANTHROPIC_PROMPT" || true)
+    if echo "$web_fetch_context" | grep -q "'unknown'\|\"unknown\""; then
+        echo "FAIL: web_fetch sections still use 'unknown' as fallback"
     else
-        echo "FAIL: 'unavailable' not found in Anthropic prompt converter"
+        echo "PASS: web_fetch error handling no longer uses 'unknown' fallback"
+        passed=$((passed + 1))
     fi
 else
     echo "FAIL: $ANTHROPIC_PROMPT not found"

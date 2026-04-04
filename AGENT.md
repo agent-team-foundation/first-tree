@@ -31,3 +31,17 @@ pnpm pack
 
 Maintainer-only eval tooling lives in `evals/`. See `evals/README.md` before
 running `EVALS=1 pnpm eval`.
+
+### Eval quick reference
+
+```bash
+# End-to-end: check envs → create trees → run evals → report
+npx tsx evals/scripts/run-eval.ts --tree-repo agent-team-foundation/eval-context-trees
+
+# Check runtime environments only (verify.sh validation)
+npx tsx evals/scripts/check-env.ts
+npx tsx evals/scripts/check-env.ts --cases nanobot-exectool-regex
+
+# Run evals with multiple trials
+npx tsx evals/scripts/run-eval.ts --trials 3 --cases pydantic-importstring-error
+```

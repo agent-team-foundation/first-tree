@@ -7,6 +7,7 @@ id: fastapi-optional-file-list
 source: custom
 repo: fastapi/fastapi
 commit_sha: "3c54a8f07b70cdd40e3d81ea319e9fcccd2481d2"
+fix_commit_sha: "0f613d9051ce8a84b19c3786647a6d0cfc7973f6"
 task: |
   Fix a bug where optional file upload parameters crash with a TypeError.
 
@@ -20,10 +21,6 @@ task: |
   type is wrapped in `Optional` or `Union[..., None]`.
 
   Find and fix the root cause. Add a test that verifies `Optional[List[bytes]]` and `Optional[List[UploadFile]]` parameters work without crashing.
-setup: |
-  uv venv .venv --quiet
-  uv pip install -e ".[all]" --quiet --python .venv/bin/python
-  uv pip install pytest httpx python-multipart --quiet --python .venv/bin/python
 verification: fixtures/fastapi-optional-file-list/verify.sh
 difficulty: medium
 timeout_ms: 600000

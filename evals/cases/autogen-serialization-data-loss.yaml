@@ -8,6 +8,7 @@ id: autogen-serialization-data-loss
 source: custom
 repo: microsoft/autogen
 commit_sha: "9cb067e6ab48b4cb29e6384cd229b9aa78b57b7b"
+fix_commit_sha: "ec5da1ef7bbef2117d8f38f6caa2fc17145b7368"
 task: |
   Fix a bug where structured logging loses message data during JSON
   serialization.
@@ -29,11 +30,6 @@ task: |
   lose subclass data during serialization.
 
   Find and fix the root cause across all affected model classes. Add tests that verify subclass fields (e.g. content, type) survive serialization in GroupChatMessage and GroupChatStart.
-setup: |
-  cd python/packages/autogen-agentchat
-  
-  uv venv .venv --quiet
-  uv pip install -e ".[dev]" --quiet --python .venv/bin/python 2>/dev/null || uv pip install -e "." --quiet --python .venv/bin/python
 context_tree_versions:
   - label: cli-v0.0.3
     tree_sha: "1ec771084bb17da2dd1979d059c052236d202d08"

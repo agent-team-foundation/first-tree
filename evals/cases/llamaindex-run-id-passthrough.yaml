@@ -7,6 +7,7 @@ id: llamaindex-run-id-passthrough
 source: custom
 repo: run-llama/llama_index
 commit_sha: "1ea49bf5f9e78336bf465107c168c82cd49f3312"
+fix_commit_sha: "dee5e09b53d26d4fa44f0d6f22b67791d4947083"
 task: |
   Fix a bug where the run ID is not correctly passed through agent
   workflow execution.
@@ -24,11 +25,6 @@ task: |
   The fix needs to ensure the run ID is correctly plumbed through all
   three modules in the agent workflow subsystem. Find all the places
   where the run ID should be passed but isn't, and fix them. Add a test to the existing workflow test file that verifies run_id passed to agent.run() reaches the underlying Workflow.run().
-setup: |
-  cd llama-index-core
-  uv venv .venv --quiet
-  uv pip install -e . --quiet --python .venv/bin/python
-  uv pip install pytest pytest-asyncio --quiet --python .venv/bin/python
 context_tree_versions:
   - label: cli-v0.0.3
     tree_sha: "f0d3777ea3efc7eb7ca3e608f7e73a148fd3aec3"

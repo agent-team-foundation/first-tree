@@ -8,6 +8,7 @@ id: langchain-merge-parallel-tools
 source: custom
 repo: langchain-ai/langchain
 commit_sha: "3686bcbd966ff1ef13e5fdbde28aa0e630ddd5c4"
+fix_commit_sha: "5053436dcfe531edd1619862f74c07c61fd57801"
 task: |
   Fix a bug where parallel tool calls get incorrectly merged during streaming.
 
@@ -24,10 +25,6 @@ task: |
   tool call) should still work correctly.
 
   Find and fix the root cause. Add a test that verifies parallel tool calls with different indices are not incorrectly merged.
-setup: |
-  cd libs/core
-  uv venv .venv --quiet
-  uv pip install -e ".[test]" --quiet --python .venv/bin/python
 verification: fixtures/langchain-merge-parallel-tools/verify.sh
 difficulty: medium
 timeout_ms: 600000

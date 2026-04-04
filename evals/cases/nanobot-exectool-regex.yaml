@@ -6,6 +6,7 @@ id: nanobot-exectool-regex
 source: custom
 repo: HKUDS/nanobot
 commit_sha: "ddc9fc4fd286025aebaab5fb3f2f032a18ed2478"
+fix_commit_sha: "485c75e065808aa3d27bb35805d782d3365a5794"
 task: |
   Fix a security bug in the shell tool's workspace safety guard.
 
@@ -15,9 +16,6 @@ task: |
   guard entirely, allowing access to files outside the workspace.
 
   Find and fix the root cause. Add a test case to the existing test file that verifies the guard blocks bare drive-root paths like `E:\`.
-setup: |
-  uv venv .venv --quiet
-  uv pip install -e ".[dev]" --quiet --python .venv/bin/python
 verification: fixtures/nanobot-exectool-regex/verify.sh
 difficulty: easy
 timeout_ms: 600000

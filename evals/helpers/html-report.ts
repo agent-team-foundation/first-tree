@@ -157,48 +157,87 @@ function extractTurns(transcript: any[]): Turn[] {
 
 // --- HTML generation ---
 
+/** Aggregate stats for a group of trials (same case + condition). */
+interface AggTrials {
+  trials: TrialResult[];
+  passCount: number;
+  total: number;
+  avgCost: number;
+  avgTime: number;
+  avgInput: number;
+  avgOutput: number;
+  avgCacheRead: number;
+  avgCacheCreate: number;
+  avgApiCalls: number;
+}
+
+function aggregateTrials(trials: TrialResult[]): AggTrials {
+  const n = trials.length;
+  return {
+    trials,
+    passCount: trials.filter(t => t.passed).length,
+    total: n,
+    avgCost: trials.reduce((s, t) => s + t.cost_usd, 0) / n,
+    avgTime: trials.reduce((s, t) => s + t.wall_clock_ms, 0) / n,
+    avgInput: Math.round(trials.reduce((s, t) => s + t.input_tokens, 0) / n),
+    avgOutput: Math.round(trials.reduce((s, t) => s + t.output_tokens, 0) / n),
+    avgCacheRead: Math.round(trials.reduce((s, t) => s + t.cache_read_tokens, 0) / n),
+    avgCacheCreate: Math.round(trials.reduce((s, t) => s + t.cache_creation_tokens, 0) / n),
+    avgApiCalls: Math.round(trials.reduce((s, t) => s + t.api_calls, 0) / n),
+  };
+}
+
 function renderSummaryTable(trials: TrialResult[]): string {
   const caseIds = [...new Set(trials.map(t => t.case_id))];
   const conditions = [...new Set(trials.map(t => t.condition))];
   const baselineLabel = conditions.includes('baseline') ? 'baseline' : conditions[0];
 
-  const lookup = new Map<string, TrialResult>();
-  for (const t of trials) {
-    lookup.set(`${t.case_id}/${t.condition}`, t);
+  // Group trials by (case, condition) and aggregate
+  const groups = new Map<string, AggTrials>();
+  for (const caseId of caseIds) {
+    for (const cond of conditions) {
+      const matching = trials.filter(t => t.case_id === caseId && t.condition === cond);
+      if (matching.length > 0) {
+        groups.set(`${caseId}/${cond}`, aggregateTrials(matching));
+      }
+    }
   }
 
   let html = `<table class="summary">
 <thead><tr>
-  <th>Case</th><th>Condition</th><th>Result</th><th>Pass/Total</th><th>Cost</th><th>Time</th>
-  <th>Input Tok</th><th>Output Tok</th><th>Cache Read</th><th>Cache Create</th>
-  <th>API Calls</th><th>Cost Delta</th><th>Time Delta</th><th>Failure Reason</th>
+  <th>Case</th><th>Condition</th><th>Pass Rate</th><th>Avg Cost</th><th>Avg Time</th>
+  <th>Avg Input</th><th>Avg Output</th><th>Avg Cache Rd</th><th>Avg Cache Wr</th>
+  <th>Avg Tools</th><th>Cost Delta</th><th>Time Delta</th><th>Failure Reason</th>
 </tr></thead><tbody>`;
 
   for (const caseId of caseIds) {
-    const bl = lookup.get(`${caseId}/${baselineLabel}`);
+    const bl = groups.get(`${caseId}/${baselineLabel}`);
     for (const cond of conditions) {
-      const t = lookup.get(`${caseId}/${cond}`);
-      if (!t) continue;
+      const agg = groups.get(`${caseId}/${cond}`);
+      if (!agg) continue;
       const isBaseline = cond === baselineLabel;
-      const costDelta = bl && !isBaseline ? pct(t.cost_usd, bl.cost_usd) : '—';
-      const timeDelta = bl && !isBaseline ? pct(t.wall_clock_ms, bl.wall_clock_ms) : '—';
-      const passClass = t.passed ? 'pass' : 'fail';
-      const timeDeltaClass = bl && !isBaseline && t.wall_clock_ms < bl.wall_clock_ms ? 'good' : (bl && !isBaseline && t.wall_clock_ms > bl.wall_clock_ms ? 'bad' : '');
+      const costDelta = bl && !isBaseline ? pct(agg.avgCost, bl.avgCost) : '—';
+      const timeDelta = bl && !isBaseline ? pct(agg.avgTime, bl.avgTime) : '—';
+      const allPassed = agg.passCount === agg.total;
+      const nonePassed = agg.passCount === 0;
+      const passClass = allPassed ? 'pass' : nonePassed ? 'fail' : 'partial';
+      const timeDeltaClass = bl && !isBaseline && agg.avgTime < bl.avgTime ? 'good' : (bl && !isBaseline && agg.avgTime > bl.avgTime ? 'bad' : '');
 
-      const failureReason = t.passed ? '' : formatFailureReason(t);
+      // Collect failure reasons from failed trials
+      const failedTrials = agg.trials.filter(t => !t.passed);
+      const failureReason = failedTrials.length === 0 ? '' : formatFailureReason(failedTrials[0]);
 
       html += `<tr class="${isBaseline ? 'baseline-row' : 'tree-row'}">
   <td>${isBaseline ? esc(caseId) : ''}</td>
   <td>${esc(cond)}</td>
-  <td class="${passClass}">${t.passed ? 'PASS' : 'FAIL'}</td>
-  <td>${t.tests_passed}/${t.tests_total}</td>
-  <td>$${t.cost_usd.toFixed(2)}</td>
-  <td>${Math.round(t.wall_clock_ms / 1000)}s</td>
-  <td class="num">${fmt(t.input_tokens)}</td>
-  <td class="num">${fmt(t.output_tokens)}</td>
-  <td class="num">${fmt(t.cache_read_tokens)}</td>
-  <td class="num">${fmt(t.cache_creation_tokens)}</td>
-  <td class="num">${t.api_calls}</td>
+  <td class="${passClass}">${agg.passCount}/${agg.total}</td>
+  <td>$${agg.avgCost.toFixed(2)}</td>
+  <td>${Math.round(agg.avgTime / 1000)}s</td>
+  <td class="num">${fmt(agg.avgInput)}</td>
+  <td class="num">${fmt(agg.avgOutput)}</td>
+  <td class="num">${fmt(agg.avgCacheRead)}</td>
+  <td class="num">${fmt(agg.avgCacheCreate)}</td>
+  <td class="num">${agg.avgApiCalls}</td>
   <td class="${timeDeltaClass}">${costDelta}</td>
   <td class="${timeDeltaClass}">${timeDelta}</td>
   <td class="failure-reason">${failureReason}</td>
@@ -360,6 +399,7 @@ export function generateHtmlReport(
   .num { text-align: right; font-variant-numeric: tabular-nums; }
   .pass { color: var(--green); font-weight: bold; }
   .fail { color: var(--red); font-weight: bold; }
+  .partial { color: var(--yellow); font-weight: bold; }
   .good { color: var(--green); }
   .bad { color: var(--red); }
   .baseline-row { background: #161b22; }

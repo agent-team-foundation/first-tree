@@ -56,6 +56,13 @@ function validateCase(data: any, filePath: string): EvalCase {
 
   const repos = parseRepos(data, filePath);
 
+  // Load setup.sh from fixtures if no inline setup on repos
+  const fixturesDir = path.resolve(path.dirname(filePath), '..', 'fixtures', data.id);
+  const setupShPath = path.join(fixturesDir, 'setup.sh');
+  if (repos.length === 1 && !repos[0].setup && fs.existsSync(setupShPath)) {
+    repos[0].setup = `bash ${JSON.stringify(setupShPath)}`;
+  }
+
   const context_tree_versions: TreeVersionRef[] | undefined =
     Array.isArray(data.context_tree_versions)
       ? data.context_tree_versions.map((v: any) => ({
@@ -70,6 +77,7 @@ function validateCase(data: any, filePath: string): EvalCase {
     repos,
     task: data.task,
     golden_pr: data.golden_pr,
+    fix_commit_sha: data.fix_commit_sha,
     verification: data.verification,
     difficulty: data.difficulty || 'medium',
     timeout_ms: data.timeout_ms,

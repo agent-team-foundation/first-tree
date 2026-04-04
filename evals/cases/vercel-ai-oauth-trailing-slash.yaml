@@ -8,6 +8,7 @@ id: vercel-ai-oauth-trailing-slash
 source: custom
 repo: vercel/ai
 commit_sha: "f51c95e962d0e73c9574db6dd6b6c89e2bfe8aeb"
+fix_commit_sha: "1e89d62577d4c4168daadcce4356de28ade0988c"
 task: |
   Fix a bug where MCP OAuth authentication fails because the resource
   parameter has a trailing slash appended.
@@ -24,8 +25,6 @@ task: |
   Find where the resource URL is processed in the MCP OAuth flow and
   fix it to strip the trailing slash when the pathname is just "/".
   Add a test that verifies the resource parameter for 'https://example.com' is sent without a trailing slash.
-setup: |
-  pnpm install
 context_tree_versions:
   - label: cli-v0.0.3
     tree_sha: "c1f4e7d5ea105da34a3fa14cf663d7aa31050c07"

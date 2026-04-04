@@ -8,6 +8,7 @@ id: pydantic-importstring-error
 source: custom
 repo: pydantic/pydantic
 commit_sha: "c42224acb31dd9f374124a74809332246e595194"
+fix_commit_sha: "a2934a1225a86933459bf249df47e1e8cc7ebed0"
 task: |
   Fix a bug in pydantic's `ImportString` type.
 
@@ -27,9 +28,6 @@ task: |
   and produces confusing errors.
 
   Find and fix the root cause. Add a test case that verifies broken internal imports surface the real error instead of 'No module named X'.
-setup: |
-  uv venv .venv --quiet
-  uv sync --frozen --all-groups --all-packages --all-extras --quiet --python .venv/bin/python 2>/dev/null || uv pip install -e ".[testing]" --quiet --python .venv/bin/python
 verification: fixtures/pydantic-importstring-error/verify.sh
 difficulty: medium
 timeout_ms: 600000

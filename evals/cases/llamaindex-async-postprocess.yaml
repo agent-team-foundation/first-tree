@@ -8,6 +8,7 @@ id: llamaindex-async-postprocess
 source: custom
 repo: run-llama/llama_index
 commit_sha: "a2b7c3c17afc65d63815551c82160763c5a51d12"
+fix_commit_sha: "3c418ea2800425ca09ad12ff91d5925e4d230a2f"
 task: |
   Fix a bug where async retrieval paths block the event loop by calling
   sync postprocessor methods instead of their async counterparts.
@@ -28,11 +29,6 @@ task: |
 
   Find all affected async code paths and fix them to use the async
   postprocessor methods. Add a test that verifies apostprocess_nodes (async) is called instead of postprocess_nodes in async retrieval paths.
-setup: |
-  cd llama-index-core
-  uv venv .venv --quiet
-  uv pip install -e . --quiet --python .venv/bin/python
-  uv pip install pytest pytest-asyncio --quiet --python .venv/bin/python
 context_tree_versions:
   - label: cli-v0.0.3
     tree_sha: "0349e5a548d8ec34aa3dda2e9b3f7ea1eac4bd5f"

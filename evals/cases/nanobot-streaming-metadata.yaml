@@ -7,6 +7,7 @@ id: nanobot-streaming-metadata
 source: custom
 repo: HKUDS/nanobot
 commit_sha: "80403d352bc7725dca2bdda97605cee352b8f26d"
+fix_commit_sha: "0d10c129e89f0ed0b7809622f21e4d5b2f8122ed"
 task: |
   Fix a bug where streaming responses drop channel-specific metadata.
 
@@ -21,9 +22,6 @@ task: |
   message no longer carry `message_thread_id`.
 
   Find and fix the root cause. Add a test case that verifies inbound message metadata (e.g. message_thread_id) is preserved in streaming responses.
-setup: |
-  uv venv .venv --quiet
-  uv pip install -e ".[dev]" --quiet --python .venv/bin/python
 verification: fixtures/nanobot-streaming-metadata/verify.sh
 difficulty: medium
 timeout_ms: 600000
