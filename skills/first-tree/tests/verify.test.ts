@@ -1,18 +1,19 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { check, checkProgress, runVerify } from "#skill/engine/verify.js";
 import { Repo } from "#skill/engine/repo.js";
 import {
+  AGENT_INSTRUCTIONS_FILE,
   INSTALLED_PROGRESS,
   LEGACY_PROGRESS,
 } from "#skill/engine/runtime/asset-loader.js";
 import {
   useTmpDir,
+  makeAgentsMd,
   makeFramework,
   makeLegacyFramework,
   makeNode,
-  makeAgentMd,
   makeMembers,
 } from "./helpers.js";
 
@@ -88,10 +89,7 @@ function buildFullRepo(root: string): void {
     join(root, "NODE.md"),
     "---\ntitle: My Org\nowners: [alice]\n---\n# Content\n",
   );
-  writeFileSync(
-    join(root, "AGENT.md"),
-    "<!-- BEGIN CONTEXT-TREE FRAMEWORK -->\nstuff\n<!-- END CONTEXT-TREE FRAMEWORK -->\n",
-  );
+  makeAgentsMd(root, { markers: true });
   makeMembers(root, 1);
 }
 
@@ -120,13 +118,35 @@ describe("runVerify failing", () => {
     expect(ret).toBe(1);
   });
 
-  it("fails when AGENT.md is missing", () => {
+  it("fails when AGENTS.md is missing", () => {
     const tmp = useTmpDir();
     makeFramework(tmp.path);
     writeFileSync(
       join(tmp.path, "NODE.md"),
       "---\ntitle: My Org\nowners: [alice]\n---\n",
     );
+    const repo = new Repo(tmp.path);
+    const ret = runVerify(repo, passValidator);
+    expect(ret).toBe(1);
+  });
+
+  it("fails when only legacy AGENT.md exists", () => {
+    const tmp = useTmpDir();
+    mkdirSync(join(tmp.path, ".git"));
+    makeFramework(tmp.path);
+    makeNode(tmp.path);
+    makeAgentsMd(tmp.path, { legacyName: true, markers: true, userContent: true });
+    makeMembers(tmp.path, 1);
+    const repo = new Repo(tmp.path);
+    const ret = runVerify(repo, passValidator);
+    expect(existsSync(join(tmp.path, AGENT_INSTRUCTIONS_FILE))).toBe(false);
+    expect(ret).toBe(1);
+  });
+
+  it("fails when legacy AGENT.md remains alongside AGENTS.md", () => {
+    const tmp = useTmpDir();
+    buildFullRepo(tmp.path);
+    makeAgentsMd(tmp.path, { legacyName: true, markers: true, userContent: true });
     const repo = new Repo(tmp.path);
     const ret = runVerify(repo, passValidator);
     expect(ret).toBe(1);

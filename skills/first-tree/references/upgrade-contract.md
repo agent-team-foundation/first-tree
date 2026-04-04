@@ -38,7 +38,7 @@ skills/
 The tree content still lives outside the skill:
 
 - `NODE.md`
-- `AGENT.md`
+- `AGENTS.md`
 - `members/`
 
 ## Command Intent
@@ -58,7 +58,7 @@ The tree content still lives outside the skill:
   - migrates repos that still use the previous
     `skills/first-tree-cli-framework/` path onto `skills/first-tree/`
   - migrates legacy `.context-tree/` repos onto the installed skill layout
-  - preserves user-authored sections such as the editable part of `AGENT.md`
+  - preserves user-authored sections such as the editable part of `AGENTS.md`
 
 ## Compatibility Rules For Legacy Trees
 
@@ -72,6 +72,9 @@ The tree content still lives outside the skill:
 - `context-tree upgrade` must migrate either legacy layout onto
   `skills/first-tree/` and remove the old directory afterward.
 - When both layouts are present, prefer the installed skill layout.
+- Existing repos may still have a legacy `AGENT.md`; `init` and `upgrade`
+  must not silently overwrite it, and follow-up tasks should direct users to
+  rename it to `AGENTS.md`.
 
 ## Invariants
 

@@ -3,7 +3,10 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach } from "vitest";
 import {
+  AGENT_INSTRUCTIONS_FILE,
+  AGENT_INSTRUCTIONS_TEMPLATE,
   FRAMEWORK_VERSION,
+  LEGACY_AGENT_INSTRUCTIONS_FILE,
   LEGACY_SKILL_VERSION,
   LEGACY_VERSION,
 } from "#skill/engine/runtime/asset-loader.js";
@@ -85,7 +88,7 @@ export function makeSourceSkill(root: string, version = "0.2.0"): void {
       "assets",
       "framework",
       "templates",
-      "agent.md.template",
+      AGENT_INSTRUCTIONS_TEMPLATE,
     ),
     "<!-- BEGIN CONTEXT-TREE FRAMEWORK -->\nframework text\n<!-- END CONTEXT-TREE FRAMEWORK -->\n",
   );
@@ -114,12 +117,15 @@ export function makeNode(
   );
 }
 
-export function makeAgentMd(
+export function makeAgentsMd(
   root: string,
-  opts?: { markers?: boolean; userContent?: boolean },
+  opts?: { markers?: boolean; userContent?: boolean; legacyName?: boolean },
 ): void {
   const markers = opts?.markers ?? true;
   const userContent = opts?.userContent ?? false;
+  const fileName = opts?.legacyName
+    ? LEGACY_AGENT_INSTRUCTIONS_FILE
+    : AGENT_INSTRUCTIONS_FILE;
   const parts: string[] = [];
   if (markers) {
     parts.push(
@@ -131,7 +137,7 @@ export function makeAgentMd(
   if (userContent) {
     parts.push("\n# Project-specific\nThis is real user content.\n");
   }
-  writeFileSync(join(root, "AGENT.md"), parts.join("\n"));
+  writeFileSync(join(root, fileName), parts.join("\n"));
 }
 
 export function makeMembers(root: string, count = 1): void {

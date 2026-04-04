@@ -1,20 +1,42 @@
 import { FRAMEWORK_END_MARKER } from "#skill/engine/repo.js";
 import type { Repo } from "#skill/engine/repo.js";
 import type { RuleResult } from "#skill/engine/rules/index.js";
-import { FRAMEWORK_TEMPLATES_DIR } from "#skill/engine/runtime/asset-loader.js";
+import {
+  AGENT_INSTRUCTIONS_FILE,
+  AGENT_INSTRUCTIONS_TEMPLATE,
+  FRAMEWORK_TEMPLATES_DIR,
+  LEGACY_AGENT_INSTRUCTIONS_FILE,
+} from "#skill/engine/runtime/asset-loader.js";
 
 export function evaluate(repo: Repo): RuleResult {
   const tasks: string[] = [];
-  if (!repo.pathExists("AGENT.md")) {
+  const hasCanonicalInstructions = repo.hasCanonicalAgentInstructionsFile();
+  const hasLegacyInstructions = repo.hasLegacyAgentInstructionsFile();
+
+  if (!hasCanonicalInstructions && !hasLegacyInstructions) {
     tasks.push(
-      `AGENT.md is missing — create from \`${FRAMEWORK_TEMPLATES_DIR}/agent.md.template\``,
+      `${AGENT_INSTRUCTIONS_FILE} is missing — create from \`${FRAMEWORK_TEMPLATES_DIR}/${AGENT_INSTRUCTIONS_TEMPLATE}\``,
     );
-  } else if (!repo.hasAgentMdMarkers()) {
+    return { group: "Agent Instructions", order: 3, tasks };
+  }
+
+  if (hasCanonicalInstructions && hasLegacyInstructions) {
     tasks.push(
-      "AGENT.md exists but is missing framework markers — add `<!-- BEGIN CONTEXT-TREE FRAMEWORK -->` and `<!-- END CONTEXT-TREE FRAMEWORK -->` sections",
+      `Merge any remaining user-authored content from \`${LEGACY_AGENT_INSTRUCTIONS_FILE}\` into \`${AGENT_INSTRUCTIONS_FILE}\`, then delete the legacy file`,
+    );
+  } else if (hasLegacyInstructions) {
+    tasks.push(
+      `Rename \`${LEGACY_AGENT_INSTRUCTIONS_FILE}\` to \`${AGENT_INSTRUCTIONS_FILE}\` to use the canonical agent instructions filename`,
+    );
+  }
+
+  const instructionsPath = repo.agentInstructionsPath() ?? AGENT_INSTRUCTIONS_FILE;
+  if (!repo.hasAgentInstructionsMarkers()) {
+    tasks.push(
+      `\`${instructionsPath}\` exists but is missing framework markers — add \`<!-- BEGIN CONTEXT-TREE FRAMEWORK -->\` and \`<!-- END CONTEXT-TREE FRAMEWORK -->\` sections`,
     );
   } else {
-    const text = repo.readFile("AGENT.md") ?? "";
+    const text = repo.readAgentInstructions() ?? "";
     const afterMarker = text.split(FRAMEWORK_END_MARKER);
     if (afterMarker.length > 1) {
       const userSection = afterMarker[1].trim();
@@ -28,7 +50,7 @@ export function evaluate(repo: Repo): RuleResult {
         );
       if (lines.length === 0) {
         tasks.push(
-          "Add your project-specific instructions below the framework markers in AGENT.md",
+          `Add your project-specific instructions below the framework markers in ${AGENT_INSTRUCTIONS_FILE}`,
         );
       }
     }

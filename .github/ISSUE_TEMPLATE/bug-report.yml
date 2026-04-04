@@ -31,7 +31,7 @@ body:
     id: expected
     attributes:
       label: Expected behavior
-      placeholder: The CLI should scaffold AGENT.md and write progress.md
+      placeholder: The CLI should scaffold AGENTS.md and write progress.md
     validations:
       required: true
   - type: textarea

@@ -33,7 +33,7 @@ that install the framework.
 - Treat `skills/first-tree/` as the only canonical source.
 - If a maintainer needs information to safely change behavior, move that
   information into `references/`; do not leave it only in root `README.md`,
-  `AGENT.md`, CI comments, or PR descriptions.
+  `AGENTS.md`, CI comments, or PR descriptions.
 - Keep runtime assets generic. They are copied into every user tree.
 - Keep the CLI thin. Command semantics, upgrade rules, layout contracts, and
   maintainer guidance should belong to the skill.

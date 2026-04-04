@@ -4,12 +4,15 @@ import { describe, expect, it } from "vitest";
 import { formatTaskList, writeProgress, runInit } from "#skill/engine/init.js";
 import { Repo } from "#skill/engine/repo.js";
 import {
+  AGENT_INSTRUCTIONS_FILE,
   FRAMEWORK_VERSION,
   INSTALLED_PROGRESS,
+  LEGACY_AGENT_INSTRUCTIONS_FILE,
   LEGACY_PROGRESS,
 } from "#skill/engine/runtime/asset-loader.js";
 import {
   useTmpDir,
+  makeAgentsMd,
   makeFramework,
   makeLegacyFramework,
   makeSourceSkill,
@@ -132,9 +135,26 @@ describe("runInit", () => {
     ).toBe(true);
     expect(readFileSync(join(repoDir.path, FRAMEWORK_VERSION), "utf-8").trim()).toBe("0.2.0");
     expect(existsSync(join(repoDir.path, "NODE.md"))).toBe(true);
-    expect(existsSync(join(repoDir.path, "AGENT.md"))).toBe(true);
+    expect(existsSync(join(repoDir.path, AGENT_INSTRUCTIONS_FILE))).toBe(true);
     expect(existsSync(join(repoDir.path, "members", "NODE.md"))).toBe(true);
     expect(existsSync(join(repoDir.path, INSTALLED_PROGRESS))).toBe(true);
+  });
+
+  it("does not scaffold AGENTS.md when legacy AGENT.md already exists", () => {
+    const repoDir = useTmpDir();
+    const sourceDir = useTmpDir();
+    mkdirSync(join(repoDir.path, ".git"));
+    makeAgentsMd(repoDir.path, { legacyName: true, markers: true, userContent: true });
+    makeSourceSkill(sourceDir.path, "0.2.0");
+
+    const ret = runInit(new Repo(repoDir.path), { sourceRoot: sourceDir.path });
+
+    expect(ret).toBe(0);
+    expect(existsSync(join(repoDir.path, LEGACY_AGENT_INSTRUCTIONS_FILE))).toBe(true);
+    expect(existsSync(join(repoDir.path, AGENT_INSTRUCTIONS_FILE))).toBe(false);
+    expect(readFileSync(join(repoDir.path, INSTALLED_PROGRESS), "utf-8")).toContain(
+      "Rename `AGENT.md` to `AGENTS.md`",
+    );
   });
 
   it("skips reinstall when framework exists", () => {

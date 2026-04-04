@@ -16,7 +16,7 @@ import {
   useTmpDir,
   makeFramework,
   makeNode,
-  makeAgentMd,
+  makeAgentsMd,
   makeMembers,
 } from "./helpers.js";
 
@@ -104,16 +104,35 @@ describe("rootNode rule", () => {
 // --- agent_instructions rule ---
 
 describe("agentInstructions rule", () => {
-  it("reports missing AGENT.md", () => {
+  it("reports missing AGENTS.md", () => {
     const tmp = useTmpDir();
     const repo = new Repo(tmp.path);
     const result = agentInstructions.evaluate(repo);
-    expect(result.tasks.some((t) => t.toLowerCase().includes("missing"))).toBe(true);
+    expect(result.tasks.some((t) => t.includes("AGENTS.md is missing"))).toBe(true);
+  });
+
+  it("reports legacy AGENT.md rename", () => {
+    const tmp = useTmpDir();
+    makeAgentsMd(tmp.path, { legacyName: true, markers: true, userContent: true });
+    const repo = new Repo(tmp.path);
+    const result = agentInstructions.evaluate(repo);
+    expect(result.tasks.some((t) => t.includes("Rename `AGENT.md` to `AGENTS.md`"))).toBe(
+      true,
+    );
+  });
+
+  it("reports duplicate cleanup when both filenames exist", () => {
+    const tmp = useTmpDir();
+    makeAgentsMd(tmp.path, { markers: true, userContent: true });
+    makeAgentsMd(tmp.path, { legacyName: true, markers: true, userContent: true });
+    const repo = new Repo(tmp.path);
+    const result = agentInstructions.evaluate(repo);
+    expect(result.tasks.some((t) => t.includes("delete the legacy file"))).toBe(true);
   });
 
   it("reports no markers", () => {
     const tmp = useTmpDir();
-    makeAgentMd(tmp.path, { markers: false });
+    makeAgentsMd(tmp.path, { markers: false });
     const repo = new Repo(tmp.path);
     const result = agentInstructions.evaluate(repo);
     expect(result.tasks.some((t) => t.toLowerCase().includes("markers"))).toBe(true);
@@ -121,7 +140,7 @@ describe("agentInstructions rule", () => {
 
   it("reports no user content", () => {
     const tmp = useTmpDir();
-    makeAgentMd(tmp.path, { markers: true, userContent: false });
+    makeAgentsMd(tmp.path, { markers: true, userContent: false });
     const repo = new Repo(tmp.path);
     const result = agentInstructions.evaluate(repo);
     expect(result.tasks.some((t) => t.toLowerCase().includes("project-specific"))).toBe(true);
@@ -129,7 +148,7 @@ describe("agentInstructions rule", () => {
 
   it("passes with markers and user content", () => {
     const tmp = useTmpDir();
-    makeAgentMd(tmp.path, { markers: true, userContent: true });
+    makeAgentsMd(tmp.path, { markers: true, userContent: true });
     const repo = new Repo(tmp.path);
     const result = agentInstructions.evaluate(repo);
     expect(result.tasks).toEqual([]);
@@ -365,7 +384,7 @@ describe("evaluateAll", () => {
     const tmp = useTmpDir();
     makeFramework(tmp.path);
     makeNode(tmp.path);
-    makeAgentMd(tmp.path, { markers: true, userContent: true });
+    makeAgentsMd(tmp.path, { markers: true, userContent: true });
     makeMembers(tmp.path, 1);
     mkdirSync(join(tmp.path, ".claude"));
     writeFileSync(
