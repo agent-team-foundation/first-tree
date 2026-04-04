@@ -1,27 +1,37 @@
 # first-tree
 
-Thin distribution package for the `context-tree` CLI and the bundled canonical
-`first-tree` skill.
+`first-tree` publishes the `context-tree` CLI and bundles the canonical
+`first-tree` skill used to bootstrap and maintain Context Tree repos.
 
-## Package Name vs Command
+## Install And Run
 
-- The npm package is `first-tree`.
-- The installed CLI command is `context-tree`.
-- The installed skill directory inside a user tree is `skills/first-tree/`.
-- When maintainer docs say "the `first-tree` skill", they mean that bundled
-  skill directory, not the npm package name.
-- `npx first-tree init` is the quickest one-off entrypoint.
-- `npm install -g first-tree` adds `context-tree` to your PATH for repeated
-  use.
+- One-off use without installing globally:
 
-## What This Repo Ships
+  ```bash
+  npx first-tree init
+  ```
 
-- `src/` keeps the thin CLI shell that parses commands and dispatches to the
-  bundled skill.
-- `skills/first-tree/` is the canonical source for framework behavior, shipped
-  templates, maintainer references, and validation logic.
-- `evals/` is maintainer-only developer tooling for the source repo. It is
-  intentionally not part of the published package.
+- Global install:
+
+  ```bash
+  npm install -g first-tree
+  context-tree init
+  ```
+
+- Show the installed CLI version:
+
+  ```bash
+  context-tree --version
+  ```
+
+- Show the command list:
+
+  ```bash
+  context-tree --help
+  ```
+
+Although the npm package is named `first-tree`, the installed CLI command is
+`context-tree`.
 
 ## Quick Start
 
@@ -39,9 +49,19 @@ If you already have the command on your PATH:
 context-tree init
 ```
 
-The `first-tree` npm package carries the bundled canonical skill, and
-`context-tree init` / `context-tree upgrade` install from that bundled copy
-instead of cloning this source repo at runtime.
+- `context-tree init` installs `skills/first-tree/`, creates `NODE.md`,
+  `AGENTS.md`, `members/NODE.md`, and writes a checklist to
+  `skills/first-tree/progress.md`.
+- `context-tree verify` checks both the progress checklist and deterministic
+  tree validation. It is expected to fail until the required onboarding tasks
+  are complete.
+- `context-tree upgrade` refreshes the installed skill from the currently
+  running `first-tree` npm package. To force the newest published package for a
+  one-off upgrade, run `npx first-tree@latest upgrade`.
+
+The package carries the bundled canonical skill, so `init` and `upgrade`
+install from the package payload instead of cloning this source repo at
+runtime.
 
 ## Commands
 
@@ -51,12 +71,31 @@ instead of cloning this source repo at runtime.
 | `context-tree verify` | Run verification checks against the current tree |
 | `context-tree upgrade` | Refresh the installed skill from the current `first-tree` npm package and write follow-up tasks |
 | `context-tree help onboarding` | Print the onboarding guide |
+| `context-tree --help` | Show the available commands |
+| `context-tree --version` | Print the installed CLI version |
+
+## Package Name vs Command
+
+- npm package name: `first-tree`
+- installed CLI command: `context-tree`
+- installed skill directory inside a user tree: `skills/first-tree/`
+- when maintainer docs mention "the `first-tree` skill", they mean that
+  bundled skill directory, not the npm package name
 
 ## Runtime And Maintainer Prerequisites
 
 - User trees: the onboarding guide targets Node.js 18+.
 - This source repo: use Node.js 22 and pnpm 10 to match CI and the checked-in
   package manager version.
+
+## What This Repo Ships
+
+- `src/` keeps the thin CLI shell that parses commands and dispatches to the
+  bundled skill.
+- `skills/first-tree/` is the canonical source for framework behavior, shipped
+  templates, maintainer references, and validation logic.
+- `evals/` is maintainer-only developer tooling for the source repo. It is
+  intentionally not part of the published package.
 
 ## Developing This Repo
 
