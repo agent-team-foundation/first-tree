@@ -3,6 +3,10 @@ import { join, relative, posix } from "node:path";
 import {
   AGENT_INSTRUCTIONS_FILE,
   LEGACY_AGENT_INSTRUCTIONS_FILE,
+  LEGACY_SKILL_NAME,
+  LEGACY_SKILL_ROOT,
+  SKILL_NAME,
+  SKILL_ROOT,
 } from "#skill/engine/runtime/asset-loader.js";
 
 const FRONTMATTER_RE = /^---\s*\n(.*?)\n---/s;
@@ -83,9 +87,42 @@ function rel(path: string): string {
   return relative(treeRoot, path);
 }
 
+function isInstalledSkillPath(relPath: string): boolean {
+  return (
+    relPath === SKILL_ROOT ||
+    relPath.startsWith(`${SKILL_ROOT}/`) ||
+    relPath === LEGACY_SKILL_ROOT ||
+    relPath.startsWith(`${LEGACY_SKILL_ROOT}/`)
+  );
+}
+
+function isFrameworkContainerDir(relPath: string, fullPath: string): boolean {
+  if (relPath !== "skills") {
+    return false;
+  }
+
+  try {
+    const entries = readdirSync(fullPath).filter((entry) => !entry.startsWith("."));
+    if (entries.length === 0) {
+      return false;
+    }
+    return entries.every(
+      (entry) => entry === SKILL_NAME || entry === LEGACY_SKILL_NAME,
+    );
+  } catch {
+    return false;
+  }
+}
+
 function shouldSkip(path: string): boolean {
-  const parts = relative(treeRoot, path).split("/");
-  return parts.some((part) => SKIP.has(part) || part.startsWith("."));
+  const relPath = relative(treeRoot, path);
+  const parts = relPath.split("/");
+
+  if (parts.some((part) => SKIP.has(part) || part.startsWith("."))) {
+    return true;
+  }
+
+  return isInstalledSkillPath(relPath) || isFrameworkContainerDir(relPath, path);
 }
 
 function readText(path: string): string | null {
