@@ -1,0 +1,31 @@
+name: Update CODEOWNERS
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          token: ${{ github.token }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - run: npx tsx skills/first-tree/assets/framework/helpers/generate-codeowners.ts
+
+      - name: Commit if changed
+        run: |
+          git add .github/CODEOWNERS
+          git diff --cached --quiet .github/CODEOWNERS && exit 0
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: update CODEOWNERS from tree ownership"
+          git push

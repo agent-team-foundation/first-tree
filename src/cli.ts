@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 
+import { pathToFileURL } from "node:url";
+
 const USAGE = `usage: context-tree <command>
 
   New to context-tree? Run \`context-tree help onboarding\` first.
 
 Commands:
-  init      Bootstrap a new context tree (clones first-tree, copies framework files)
+  init      Bootstrap a new context tree (installs the framework skill)
   verify    Run verification checks against the current tree
-  upgrade   Generate an upgrade task list from upstream changes
+  upgrade   Refresh the installed skill from the current first-tree npm package and generate follow-up tasks
   help      Show help for a topic (e.g. \`help onboarding\`)
 
 Options:
@@ -15,37 +17,18 @@ Options:
   --version    Show version number
 `;
 
-const HELP_USAGE = `usage: context-tree help <topic>
+type Output = (text: string) => void;
 
-Topics:
-  onboarding   How to set up a context tree from scratch
-`;
+export { USAGE };
 
-async function runHelp(args: string[]): Promise<number> {
-  const topic = args[0];
-
-  if (!topic || topic === "--help" || topic === "-h") {
-    console.log(HELP_USAGE);
-    return 0;
-  }
-
-  switch (topic) {
-    case "onboarding": {
-      const { runOnboarding } = await import("#src/onboarding.js");
-      return runOnboarding();
-    }
-    default:
-      console.log(`Unknown help topic: ${topic}`);
-      console.log(HELP_USAGE);
-      return 1;
-  }
-}
-
-async function main(): Promise<number> {
-  const args = process.argv.slice(2);
+export async function runCli(
+  args: string[],
+  output: Output = console.log,
+): Promise<number> {
+  const write = (text: string): void => output(text);
 
   if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
-    console.log(USAGE);
+    write(USAGE);
     return 0;
   }
 
@@ -53,7 +36,7 @@ async function main(): Promise<number> {
     const { createRequire } = await import("node:module");
     const require = createRequire(import.meta.url);
     const pkg = require("../package.json") as { version: string };
-    console.log(pkg.version);
+    write(pkg.version);
     return 0;
   }
 
@@ -61,24 +44,36 @@ async function main(): Promise<number> {
 
   switch (command) {
     case "init": {
-      const { runInit } = await import("#src/init.js");
+      const { runInit } = await import("#skill/engine/commands/init.js");
       return runInit();
     }
     case "verify": {
-      const { runVerify } = await import("#src/verify.js");
+      const { runVerify } = await import("#skill/engine/commands/verify.js");
       return runVerify();
     }
     case "upgrade": {
-      const { runUpgrade } = await import("#src/upgrade.js");
+      const { runUpgrade } = await import("#skill/engine/commands/upgrade.js");
       return runUpgrade();
     }
     case "help":
-      return runHelp(args.slice(1));
+      return (await import("#skill/engine/commands/help.js")).runHelp(
+        args.slice(1),
+        write,
+      );
     default:
-      console.log(`Unknown command: ${command}`);
-      console.log(USAGE);
+      write(`Unknown command: ${command}`);
+      write(USAGE);
       return 1;
   }
 }
 
-main().then((code) => process.exit(code));
+async function main(): Promise<number> {
+  return runCli(process.argv.slice(2));
+}
+
+if (
+  process.argv[1] !== undefined &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
+  main().then((code) => process.exit(code));
+}

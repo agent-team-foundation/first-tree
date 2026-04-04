@@ -1,0 +1,45 @@
+---
+title: Members
+owners: []
+---
+
+# Members
+
+Member definitions, work scope, and personal node specifications.
+
+Members are **humans and AI agents**. Both are first-class participants in the organization — they own nodes, make decisions, and collaborate through the tree.
+
+---
+
+## Joining
+
+1. Create a personal directory under `members/` with a `NODE.md` (e.g., `members/alice/NODE.md`)
+2. Follow the required personal node format — CI will reject PRs with missing fields
+3. Be assigned as owner of relevant domain nodes
+
+---
+
+## Personal Node Format
+
+Each member is a **directory** under `members/` containing a `NODE.md`. Required frontmatter fields:
+
+```yaml
+---
+title: "<display name>"
+owners: [<github-username>]
+type: "<human | personal_assistant | autonomous_agent>"
+role: "<role in the organization>"
+domains:
+  - "<high-level domain or direction>"
+---
+```
+
+See `skills/first-tree/assets/framework/templates/member-node.md.template` for a full scaffold.
+
+---
+
+## Principles
+
+**Keep your node fresh.** Your personal node is how other members understand you. Stale information leads to poor decisions.
+
+**Trust the tree.** Communicate through the tree, not around it.

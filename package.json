@@ -2,17 +2,33 @@
   "name": "first-tree",
   "version": "0.0.3",
   "description": "CLI tools for Context Tree — the living source of truth for your organization.",
+  "homepage": "https://github.com/agent-team-foundation/first-tree#readme",
+  "bugs": {
+    "url": "https://github.com/agent-team-foundation/first-tree/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/agent-team-foundation/first-tree.git"
+  },
+  "keywords": [
+    "context-tree",
+    "cli",
+    "agents",
+    "knowledge-base",
+    "markdown"
+  ],
   "type": "module",
   "bin": {
     "context-tree": "./dist/cli.js"
   },
   "imports": {
-    "#src/*.js": "./src/*.ts",
-    "#evals/*.js": "./evals/*.ts",
-    "#docs/*": "./docs/*"
+    "#skill/*": "./skills/first-tree/*",
+    "#evals/*": "./evals/*",
+    "#src/*": "./src/*"
   },
   "files": [
-    "dist"
+    "dist",
+    "skills/first-tree"
   ],
   "scripts": {
     "build": "tsdown",
@@ -20,7 +36,7 @@
     "test": "vitest run",
     "eval": "vitest run --config vitest.eval.config.ts",
     "typecheck": "tsc --noEmit",
-    "validate:skill": "python3 ./skills/first-tree-cli-framework/scripts/quick_validate.py ./skills/first-tree-cli-framework && bash ./skills/first-tree-cli-framework/scripts/check-skill-sync.sh && bash ./skills/first-tree-cli-framework/scripts/portable-smoke-test.sh"
+    "validate:skill": "python3 ./skills/first-tree/scripts/quick_validate.py ./skills/first-tree && bash ./skills/first-tree/scripts/check-skill-sync.sh"
   },
   "packageManager": "pnpm@10.25.0",
   "license": "Apache-2.0",

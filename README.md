@@ -1,67 +1,101 @@
 # first-tree
 
-Template source and CLI for [Context Tree](https://context-tree.ai) — the living source of truth for your organization.
+Thin distribution package for the `context-tree` CLI and the bundled canonical
+`first-tree` skill.
 
-## What is Context Tree?
+## Package Name vs Command
 
-A tree-structured knowledge base that agents and humans build and maintain together. Every node represents a domain, decision, or design. Every node has an owner. When things change, the tree updates. See [docs/about.md](docs/about.md) for the full story.
+- The npm package is `first-tree`.
+- The installed CLI command is `context-tree`.
+- The installed skill directory inside a user tree is `skills/first-tree/`.
+- When maintainer docs say "the `first-tree` skill", they mean that bundled
+  skill directory, not the npm package name.
+- `npx first-tree init` is the quickest one-off entrypoint.
+- `npm install -g first-tree` adds `context-tree` to your PATH for repeated
+  use.
+
+## What This Repo Ships
+
+- `src/` keeps the thin CLI shell that parses commands and dispatches to the
+  bundled skill.
+- `skills/first-tree/` is the canonical source for framework behavior, shipped
+  templates, maintainer references, and validation logic.
+- `evals/` is maintainer-only developer tooling for the source repo. It is
+  intentionally not part of the published package.
 
 ## Quick Start
 
+If you are starting a brand-new tree, create a git repo first:
+
 ```bash
+mkdir my-org-tree && cd my-org-tree
+git init
 npx first-tree init
 ```
 
-Run this inside a git repo. The npm package is `first-tree`; it installs the `context-tree` command. For a global install, run `npm install -g first-tree` and then use `context-tree init`.
+If you already have the command on your PATH:
+
+```bash
+context-tree init
+```
+
+The `first-tree` npm package carries the bundled canonical skill, and
+`context-tree init` / `context-tree upgrade` install from that bundled copy
+instead of cloning this source repo at runtime.
 
 ## Commands
 
 | Command | What it does |
-|---------|-------------|
+| --- | --- |
 | `context-tree init` | Bootstrap a new context tree in the current git repo |
-| `context-tree verify` | Run checks against the tree, report pass/fail |
-| `context-tree upgrade` | Compare local framework version to upstream, generate upgrade tasks |
+| `context-tree verify` | Run verification checks against the current tree |
+| `context-tree upgrade` | Refresh the installed skill from the current `first-tree` npm package and write follow-up tasks |
+| `context-tree help onboarding` | Print the onboarding guide |
 
-## What `init` creates
+## Runtime And Maintainer Prerequisites
 
-```
-your-tree/
-  .context-tree/           # framework (upgradable from first-tree)
-    VERSION
-    principles.md
-    ownership-and-naming.md
-    templates/
-    workflows/
-    examples/
-  NODE.md                  # root node — your domains (from template)
-  AGENT.md                 # agent instructions with framework markers (from template)
-  members/
-    NODE.md                # members domain (from template)
-```
+- User trees: the onboarding guide targets Node.js 18+.
+- This source repo: use Node.js 22 and pnpm 10 to match CI and the checked-in
+  package manager version.
 
-## Upgrades
+## Developing This Repo
 
-After init, first-tree is added as a git remote (`context-tree-upstream`). To upgrade the framework:
+Run these commands from the repo root:
 
 ```bash
-context-tree upgrade      # shows what changed and what to do
+pnpm install --frozen-lockfile
+pnpm validate:skill
+pnpm typecheck
+pnpm test
+pnpm build
 ```
 
-## Documentation
-
-- [docs/onboarding.md](docs/onboarding.md) — Onboarding guide for setting up a context tree (for agents)
-- [docs/about.md](docs/about.md) — What is Context Tree and who it's for
-- [.context-tree/principles.md](.context-tree/principles.md) — Core principles with examples
-- [.context-tree/ownership-and-naming.md](.context-tree/ownership-and-naming.md) — Node naming and ownership model
-
-## Development
+When package contents or install/upgrade behavior changes, also run:
 
 ```bash
-pnpm install
-pnpm test              # run tests
-pnpm typecheck         # type check
-pnpm build             # build CLI
+pnpm pack
 ```
+
+## Canonical Documentation
+
+All framework documentation, maintainer guidance, and shipped runtime assets
+live in `skills/first-tree/`.
+
+- User-facing overview: `skills/first-tree/references/about.md`
+- User onboarding: `skills/first-tree/references/onboarding.md`
+- Maintainer entrypoint: `skills/first-tree/references/source-map.md`
+
+If you are maintaining this repo, start with the source map instead of relying
+on root-level prose.
+
+## Contributing And Security
+
+- Use the GitHub issue forms for bug reports and feature requests so maintainers
+  get reproducible context up front.
+- See `CONTRIBUTING.md` for local setup, validation expectations, and where
+  changes should live.
+- See `CODE_OF_CONDUCT.md` for community expectations.
+- See `SECURITY.md` for vulnerability reporting guidance.
 
 ## License
 

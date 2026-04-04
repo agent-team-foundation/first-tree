@@ -1,0 +1,39 @@
+name: Feature request
+description: Propose an improvement to the CLI, framework payload, docs, or maintainer workflow.
+title: "[Feature]: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Start with the user or maintainer pain, not just the solution.
+      placeholder: New contributors do not know whether to run first-tree or context-tree after installing globally.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What should change?
+      placeholder: Add a global first-tree alias that points to the same CLI entrypoint.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Affected areas
+      description: Which part of the repo would likely change?
+      placeholder: README, package bin aliases, thin CLI shell, onboarding docs
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any smaller or less risky options?
+  - type: dropdown
+    id: contribution
+    attributes:
+      label: Are you interested in contributing a PR?
+      options:
+        - Yes
+        - Maybe
+        - No

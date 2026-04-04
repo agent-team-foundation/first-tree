@@ -1,0 +1,4 @@
+interface:
+  display_name: "First Tree"
+  short_description: "Maintain the First Tree skill and thin Context Tree CLI"
+  default_prompt: "Use $first-tree to maintain the canonical first-tree skill, its thin context-tree CLI, or its build, packaging, test, eval, and CI wiring."

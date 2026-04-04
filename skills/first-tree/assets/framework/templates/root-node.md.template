@@ -1,0 +1,38 @@
+---
+title: "<Your Organization>"
+owners: [<your-github-username>]
+---
+
+# <Your Organization>
+
+<!-- PLACEHOLDER: Replace this with a description of your organization and what this tree captures. -->
+
+The living source of truth for your organization. A structured knowledge base that agents and humans build and maintain together.
+
+---
+
+## Domains
+
+<!-- Add your domains here. Each domain is a top-level directory with a NODE.md.
+     Organize by concern — what an agent needs to know to act — not by repo or team.
+
+     Examples:
+     - **[engineering/](engineering/NODE.md)** — Backend, frontend, infrastructure decisions.
+     - **[product/](product/NODE.md)** — Product strategy, roadmap, user research.
+     - **[marketing/](marketing/NODE.md)** — Brand, positioning, campaigns.
+     - **[members/](members/NODE.md)** — Team member definitions and responsibilities.
+-->
+
+- **[members/](members/NODE.md)** — Team member definitions and responsibilities.
+
+---
+
+## Working with the Tree
+
+See [AGENT.md](AGENT.md) for agent instructions — the before/during/after workflow, ownership model, and tree maintenance.
+
+See [about.md](skills/first-tree/references/about.md) for background — the problem, the idea, and who it's for.
+
+See the installed framework documentation:
+- [principles.md](skills/first-tree/references/principles.md) — core principles with examples
+- [ownership-and-naming.md](skills/first-tree/references/ownership-and-naming.md) — node naming and ownership model

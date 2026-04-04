@@ -14,7 +14,7 @@ import {
   listRemoteBranches,
   listBranchCommits,
   treeBranch,
-} from './tree-manager.js';
+} from '#evals/scripts/tree-manager.js';
 
 export interface ListResult {
   branches: Array<{

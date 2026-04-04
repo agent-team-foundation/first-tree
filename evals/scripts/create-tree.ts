@@ -37,7 +37,7 @@ import {
   initBareTreeDir,
   type CreateTreeOptions,
   type TreeProvenance,
-} from './tree-manager.js';
+} from '#evals/scripts/tree-manager.js';
 import { runSession } from '#evals/helpers/session-runner.js';
 import type { AgentConfig } from '#evals/helpers/types.js';
 import { TIMEOUT_POPULATE } from '#evals/helpers/timeouts.js';
