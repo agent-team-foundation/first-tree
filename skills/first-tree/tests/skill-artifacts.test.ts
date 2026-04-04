@@ -200,6 +200,7 @@ describe("skill artifacts", () => {
     expect(read("README.md")).toContain("references/source-map.md");
     expect(read("README.md")).toContain("skills/first-tree/");
     expect(read("README.md")).toContain("bundled canonical");
+    expect(read("README.md")).toContain("dedicated tree repo");
     expect(read("README.md")).toContain("`first-tree` skill");
     expect(read("AGENTS.md")).toContain("references/source-map.md");
     expect(read("AGENTS.md")).toContain("bundled skill path");
@@ -211,6 +212,7 @@ describe("skill artifacts", () => {
     const onboarding = read("skills/first-tree/references/onboarding.md");
     expect(onboarding).toContain("npx first-tree init");
     expect(onboarding).toContain("npm install -g first-tree");
+    expect(onboarding).toContain("context-tree init --here");
     expect(onboarding).toContain("installed CLI command is");
     expect(onboarding).toContain("currently running `first-tree` npm package");
     expect(onboarding).toContain("npx first-tree@latest upgrade");

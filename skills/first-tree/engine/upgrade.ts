@@ -1,5 +1,5 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { Repo } from "#skill/engine/repo.js";
 import {
   FRAMEWORK_WORKFLOWS_DIR,
@@ -19,6 +19,13 @@ import {
   compareFrameworkVersions,
   readSourceVersion,
 } from "#skill/engine/runtime/upgrader.js";
+
+export const UPGRADE_USAGE = `usage: context-tree upgrade [--tree-path PATH]
+
+Options:
+  --tree-path PATH   Upgrade a tree repo from another working directory
+  --help             Show this help message
+`;
 
 function writeProgress(repo: Repo, content: string): void {
   const progressPath = join(repo.root, repo.preferredProgressPath());
@@ -88,6 +95,13 @@ export interface UpgradeOptions {
 
 export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
   const workingRepo = repo ?? new Repo();
+
+  if (workingRepo.isLikelySourceRepo() && !workingRepo.looksLikeTreeRepo()) {
+    console.error(
+      "Error: no installed framework skill found here. This looks like a source/workspace repo. Run `context-tree init` to create a dedicated tree repo, or pass `--tree-path` to upgrade an existing tree repo.",
+    );
+    return 1;
+  }
 
   if (!workingRepo.hasFramework()) {
     console.error(
@@ -173,4 +187,33 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
   writeProgress(workingRepo, output);
   console.log(`Progress file written to ${workingRepo.preferredProgressPath()}`);
   return 0;
+}
+
+export function runUpgradeCli(args: string[] = []): number {
+  if (args.includes("--help") || args.includes("-h")) {
+    console.log(UPGRADE_USAGE);
+    return 0;
+  }
+
+  let treePath: string | undefined;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--tree-path") {
+      const value = args[index + 1];
+      if (!value) {
+        console.error("Missing value for --tree-path");
+        console.log(UPGRADE_USAGE);
+        return 1;
+      }
+      treePath = value;
+      index += 1;
+      continue;
+    }
+
+    console.error(`Unknown upgrade option: ${arg}`);
+    console.log(UPGRADE_USAGE);
+    return 1;
+  }
+
+  return runUpgrade(treePath ? new Repo(resolve(process.cwd(), treePath)) : undefined);
 }

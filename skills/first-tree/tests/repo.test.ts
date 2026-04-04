@@ -13,8 +13,11 @@ import {
 import {
   useTmpDir,
   makeFramework,
+  makeGitRepo,
   makeLegacyFramework,
   makeLegacyNamedFramework,
+  makeSourceRepo,
+  makeSourceSkill,
 } from "./helpers.js";
 
 // --- pathExists ---
@@ -134,7 +137,14 @@ describe("anyAgentConfig", () => {
 describe("isGitRepo", () => {
   it("returns true with .git dir", () => {
     const tmp = useTmpDir();
-    mkdirSync(join(tmp.path, ".git"));
+    makeGitRepo(tmp.path);
+    const repo = new Repo(tmp.path);
+    expect(repo.isGitRepo()).toBe(true);
+  });
+
+  it("returns true with .git file", () => {
+    const tmp = useTmpDir();
+    writeFileSync(join(tmp.path, ".git"), "gitdir: /tmp/example\n");
     const repo = new Repo(tmp.path);
     expect(repo.isGitRepo()).toBe(true);
   });
@@ -358,5 +368,48 @@ describe("hasPlaceholderNode", () => {
     );
     const repo = new Repo(tmp.path);
     expect(repo.hasPlaceholderNode()).toBe(false);
+  });
+});
+
+// --- init heuristics ---
+
+describe("init heuristics", () => {
+  it("treats a code repo as a likely source repo", () => {
+    const tmp = useTmpDir();
+    makeSourceRepo(tmp.path);
+    const repo = new Repo(tmp.path);
+    expect(repo.isLikelySourceRepo()).toBe(true);
+    expect(repo.isLikelyEmptyRepo()).toBe(false);
+  });
+
+  it("treats a fresh tree repo as empty enough for in-place init", () => {
+    const tmp = useTmpDir();
+    makeGitRepo(tmp.path);
+    writeFileSync(join(tmp.path, "README.md"), "# My Org Context\n");
+    const repo = new Repo(tmp.path);
+    expect(repo.isLikelyEmptyRepo()).toBe(true);
+    expect(repo.isLikelySourceRepo()).toBe(false);
+  });
+
+  it("recognizes a populated tree repo", () => {
+    const tmp = useTmpDir();
+    makeFramework(tmp.path);
+    writeFileSync(
+      join(tmp.path, "NODE.md"),
+      "---\ntitle: My Tree\nowners: [alice]\n---\n# Tree\n",
+    );
+    const repo = new Repo(tmp.path);
+    expect(repo.looksLikeTreeRepo()).toBe(true);
+    expect(repo.isLikelySourceRepo()).toBe(false);
+  });
+
+  it("does not mistake the framework source repo for a user tree repo", () => {
+    const tmp = useTmpDir();
+    makeSourceRepo(tmp.path);
+    makeSourceSkill(tmp.path, "0.2.0");
+    writeFileSync(join(tmp.path, "src", "cli.ts"), "export {};\n");
+    const repo = new Repo(tmp.path);
+    expect(repo.looksLikeTreeRepo()).toBe(false);
+    expect(repo.isLikelySourceRepo()).toBe(true);
   });
 });

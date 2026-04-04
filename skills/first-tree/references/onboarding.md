@@ -53,7 +53,7 @@ Information an agent needs to **decide** on an approach — not to execute it.
 
 ### Prerequisites
 
-- A Git repository for your tree (separate from your code repos)
+- A source/workspace Git repository, or an already-created dedicated tree repo
 - Node.js 18+
 - The npm package is `first-tree`, the installed CLI command is
   `context-tree`, and the installed skill directory in the tree is
@@ -63,13 +63,30 @@ Information an agent needs to **decide** on an approach — not to execute it.
 
 ### Step 1: Initialize
 
+Recommended workflow: run `context-tree init` from your source or workspace repo.
+The CLI will create a sibling dedicated tree repo named `<repo>-context` by
+default and install the framework there.
+
 ```bash
-mkdir my-org-tree && cd my-org-tree
-git init
+cd my-org
 context-tree init
+cd ../my-org-context
 ```
 
-This installs the framework skill into `skills/first-tree/`, renders scaffolding (`NODE.md`, `AGENT.md`, `members/NODE.md`), and generates a task list in `skills/first-tree/progress.md`.
+If you already created a dedicated tree repo manually, initialize it in place:
+
+```bash
+mkdir my-org-context && cd my-org-context
+git init
+context-tree init --here
+```
+
+Either way, the framework installs into `skills/first-tree/`, renders
+scaffolding (`NODE.md`, `AGENT.md`, `members/NODE.md`), and generates a task
+list in `skills/first-tree/progress.md`.
+
+Publishing tip: keep the tree repo in the same GitHub organization as the
+source repo unless you have a reason not to.
 
 ### Step 2: Work Through the Task List
 
@@ -87,6 +104,12 @@ As you complete each task, check it off in `skills/first-tree/progress.md` by ch
 
 ```bash
 context-tree verify
+```
+
+Or, from your source/workspace repo:
+
+```bash
+context-tree verify --tree-path ../my-org-context
 ```
 
 This fails if any items in `skills/first-tree/progress.md` remain unchecked, and runs deterministic checks (valid frontmatter, node structure, member nodes exist).
@@ -126,9 +149,9 @@ The tree doesn't duplicate source code — it captures what connects things and 
 
 | Command | Description |
 |---------|-------------|
-| `context-tree init` | Bootstrap a new tree. Installs the framework skill, renders templates, generates a task list. |
-| `context-tree verify` | Check the installed progress file for unchecked items + run deterministic validation. |
-| `context-tree upgrade` | Refresh the installed framework skill from the currently running `first-tree` npm package and generate follow-up tasks. |
+| `context-tree init` | Create or refresh a dedicated tree repo. By default, running in a source/workspace repo creates a sibling `<repo>-context`; use `--here` to initialize the current repo in place. |
+| `context-tree verify` | Check the installed progress file for unchecked items + run deterministic validation. Use `--tree-path` when invoking from another working directory. |
+| `context-tree upgrade` | Refresh the installed framework skill from the currently running `first-tree` npm package and generate follow-up tasks. Use `--tree-path` when invoking from another working directory. |
 | `context-tree help onboarding` | Print this onboarding guide. |
 
 ---

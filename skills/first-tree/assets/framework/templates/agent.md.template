@@ -28,6 +28,7 @@ Do not skip this. The tree is already a compression of expensive knowledge — c
 
 - **Decide in the tree, execute in source systems.** If the task involves a decision (not just a bug fix), draft or update the relevant tree node before executing.
 - **The tree is not for execution details.** Function signatures, DB schemas, API endpoints, ad copy — those live in source systems. The tree captures the *why* and *how things connect*.
+- **Bring source repos in as additional working directories.** When you need to inspect or edit code, open the relevant source repositories alongside this tree instead of copying execution detail into the tree.
 - **Respect ownership.** Each node declares owners in its frontmatter. If your changes touch a domain you don't own, flag it — the owner needs to review.
 
 ## After Every Task

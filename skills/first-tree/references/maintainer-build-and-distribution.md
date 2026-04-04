@@ -50,6 +50,9 @@ another skill reference, not only in the files themselves.
   with the package rather than copying that information into root docs.
 - Normal `context-tree init` / `context-tree upgrade` flows must install from
   the skill bundled in the running package, not by cloning the source repo.
+- Default dedicated-tree-repo creation must stay local-only. It may create a
+  sibling git repo on disk, but it must not require remote repo creation or
+  source-repo cloning.
 - If you change anything that gets copied into user repos, bump
   `assets/framework/VERSION` and keep the upgrade task text in sync.
 - If packaging changes alter what gets installed into user repos, update

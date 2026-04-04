@@ -7,14 +7,20 @@ const USAGE = `usage: context-tree <command>
   New to context-tree? Run \`context-tree help onboarding\` first.
 
 Commands:
-  init      Bootstrap a new context tree (installs the framework skill)
-  verify    Run verification checks against the current tree
-  upgrade   Refresh the installed skill from the current first-tree npm package and generate follow-up tasks
+  init      Create or refresh a dedicated context tree repo
+  verify    Run verification checks against a tree repo
+  upgrade   Refresh the installed skill in a tree repo
   help      Show help for a topic (e.g. \`help onboarding\`)
 
 Options:
   --help       Show this help message
   --version    Show version number
+
+Common examples:
+  context-tree init
+  context-tree init --here
+  context-tree verify --tree-path ../my-org-context
+  context-tree upgrade --tree-path ../my-org-context
 `;
 
 type Output = (text: string) => void;
@@ -45,15 +51,15 @@ export async function runCli(
   switch (command) {
     case "init": {
       const { runInit } = await import("#skill/engine/commands/init.js");
-      return runInit();
+      return runInit(args.slice(1));
     }
     case "verify": {
       const { runVerify } = await import("#skill/engine/commands/verify.js");
-      return runVerify();
+      return runVerify(args.slice(1));
     }
     case "upgrade": {
       const { runUpgrade } = await import("#skill/engine/commands/upgrade.js");
-      return runUpgrade();
+      return runUpgrade(args.slice(1));
     }
     case "help":
       return (await import("#skill/engine/commands/help.js")).runHelp(

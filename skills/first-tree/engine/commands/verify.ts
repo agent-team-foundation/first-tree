@@ -1,1 +1,1 @@
-export * from "#skill/engine/verify.js";
+export { VERIFY_USAGE, runVerifyCli as runVerify } from "#skill/engine/verify.js";

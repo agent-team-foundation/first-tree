@@ -44,7 +44,9 @@ The tree content still lives outside the skill:
 ## Command Intent
 
 - `context-tree init`
-  - installs the skill into the target repo
+  - when run in a source/workspace repo, creates or reuses a sibling dedicated
+    tree repo by default
+  - installs the skill into the target tree repo
   - renders top-level tree scaffolding from the skill templates
   - writes progress state to `skills/first-tree/progress.md`
 - `context-tree verify`
@@ -62,8 +64,12 @@ The tree content still lives outside the skill:
 
 ## Compatibility Rules For Legacy Trees
 
-- `context-tree init` only installs the skill layout; it never creates a new
-  `.context-tree/`.
+- `context-tree init` never creates a new `.context-tree/`.
+- `context-tree init --here` preserves the explicit in-place bootstrap path for
+  already-created tree repos.
+- Default dedicated-tree-repo creation is local-only. The CLI may create a new
+  sibling git repo on disk, but it must not clone the source repo or depend on
+  network access.
 - Normal `context-tree init` and `context-tree upgrade` flows do not clone the
   source repo or require network access.
 - `context-tree verify` may still read a legacy

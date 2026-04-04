@@ -27,6 +27,20 @@ export function makeFramework(root: string, version = "0.1.0"): void {
   writeFileSync(join(root, FRAMEWORK_VERSION), `${version}\n`);
 }
 
+export function makeGitRepo(root: string): void {
+  mkdirSync(join(root, ".git"), { recursive: true });
+}
+
+export function makeSourceRepo(root: string): void {
+  makeGitRepo(root);
+  mkdirSync(join(root, "src"), { recursive: true });
+  writeFileSync(
+    join(root, "package.json"),
+    JSON.stringify({ name: "example-source-repo" }, null, 2),
+  );
+  writeFileSync(join(root, "src", "index.ts"), "export const ready = true;\n");
+}
+
 export function makeLegacyFramework(root: string, version = "0.1.0"): void {
   const ct = join(root, ".context-tree");
   mkdirSync(ct, { recursive: true });

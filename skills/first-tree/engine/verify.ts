@@ -1,8 +1,15 @@
+import { resolve } from "node:path";
 import { Repo } from "#skill/engine/repo.js";
 import { runValidateMembers } from "#skill/engine/validators/members.js";
 import { runValidateNodes } from "#skill/engine/validators/nodes.js";
 
 const UNCHECKED_RE = /^- \[ \] (.+)$/gm;
+export const VERIFY_USAGE = `usage: context-tree verify [--tree-path PATH]
+
+Options:
+  --tree-path PATH   Verify a tree repo from another working directory
+  --help             Show this help message
+`;
 
 export function check(label: string, passed: boolean): boolean {
   const icon = passed ? "\u2713" : "\u2717";
@@ -38,6 +45,14 @@ function defaultNodeValidator(root: string): ValidateNodesResult {
 export function runVerify(repo?: Repo, nodeValidator?: NodeValidator): number {
   const r = repo ?? new Repo();
   const validate = nodeValidator ?? defaultNodeValidator;
+
+  if (r.isLikelySourceRepo() && !r.looksLikeTreeRepo()) {
+    console.error(
+      "Error: no installed framework skill found here. This looks like a source/workspace repo. Run `context-tree init` to create a dedicated tree repo, or pass `--tree-path` to verify an existing tree repo.",
+    );
+    return 1;
+  }
+
   let allPassed = true;
   const progressPath = r.progressPath() ?? r.preferredProgressPath();
   const frameworkVersionPath = r.frameworkVersionPath();
@@ -94,4 +109,33 @@ export function runVerify(repo?: Repo, nodeValidator?: NodeValidator): number {
     console.log("Some checks failed. See above for details.");
   }
   return allPassed ? 0 : 1;
+}
+
+export function runVerifyCli(args: string[] = []): number {
+  if (args.includes("--help") || args.includes("-h")) {
+    console.log(VERIFY_USAGE);
+    return 0;
+  }
+
+  let treePath: string | undefined;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--tree-path") {
+      const value = args[index + 1];
+      if (!value) {
+        console.error("Missing value for --tree-path");
+        console.log(VERIFY_USAGE);
+        return 1;
+      }
+      treePath = value;
+      index += 1;
+      continue;
+    }
+
+    console.error(`Unknown verify option: ${arg}`);
+    console.log(VERIFY_USAGE);
+    return 1;
+  }
+
+  return runVerify(treePath ? new Repo(resolve(process.cwd(), treePath)) : undefined);
 }

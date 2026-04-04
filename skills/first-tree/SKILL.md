@@ -57,8 +57,11 @@ Use this skill when the task depends on the exact behavior of the
 
 ### Working In A User Tree Repo
 
-- `context-tree init` installs this skill into the user's repo and scaffolds
-  `NODE.md`, `AGENT.md`, and `members/NODE.md`.
+- `context-tree init` defaults to creating or reusing a sibling dedicated tree
+  repo when invoked from a source/workspace repo. Use `--here` to initialize
+  the current repo in place when you are already inside the tree repo.
+- `context-tree init` installs this skill into the target tree repo and
+  scaffolds `NODE.md`, `AGENT.md`, and `members/NODE.md`.
 - `context-tree upgrade` refreshes the installed skill from the copy bundled
   with the currently running `first-tree` package. To pick up a newer
   framework, run a newer package version first. It also migrates older repos
@@ -77,7 +80,8 @@ Use this skill when the task depends on the exact behavior of the
 - Keep the skill as the only canonical knowledge source. The root CLI/package
   shell must not become a second source of framework semantics.
 - Keep normal `init` / `upgrade` flows self-contained. They must work from the
-  skill bundled in the current package without cloning the source repo.
+  skill bundled in the current package without cloning the source repo or
+  relying on network access.
 - Make upgrade behavior explicit. If you change installed paths, update
   `references/upgrade-contract.md`, task text, and tests together.
 

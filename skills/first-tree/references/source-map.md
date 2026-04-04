@@ -43,7 +43,7 @@ These skill-owned files implement the framework behavior.
 | `engine/commands/` | Stable command entrypoints that the thin CLI imports |
 | `engine/init.ts` / `engine/verify.ts` / `engine/upgrade.ts` | Command implementations for install, verify, and upgrade |
 | `engine/onboarding.ts` | Canonical onboarding text loader |
-| `engine/repo.ts` | Repo inspection and layout helpers |
+| `engine/repo.ts` | Repo inspection, source-vs-tree heuristics, and worktree-aware git-root helpers |
 | `engine/rules/` | Situation-aware task generation after `init` |
 | `engine/validators/` | Deterministic tree and member validation |
 | `engine/runtime/asset-loader.ts` | Path constants plus legacy-layout detection |

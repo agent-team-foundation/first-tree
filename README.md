@@ -25,18 +25,21 @@ Thin distribution package for the `context-tree` CLI and the bundled canonical
 
 ## Quick Start
 
-If you are starting a brand-new tree, create a git repo first:
+Recommended workflow: start from your source or workspace repo and let
+`context-tree init` create a sibling dedicated tree repo.
 
 ```bash
-mkdir my-org-tree && cd my-org-tree
-git init
+cd my-app
 npx first-tree init
+cd ../my-app-context
 ```
 
-If you already have the command on your PATH:
+If you already created a dedicated tree repo yourself, initialize it in place:
 
 ```bash
-context-tree init
+mkdir my-org-context && cd my-org-context
+git init
+context-tree init --here
 ```
 
 The `first-tree` npm package carries the bundled canonical skill, and
@@ -47,7 +50,7 @@ instead of cloning this source repo at runtime.
 
 | Command | What it does |
 | --- | --- |
-| `context-tree init` | Bootstrap a new context tree in the current git repo |
+| `context-tree init` | Create or refresh a dedicated context tree repo; use `--here` to initialize the current repo in place |
 | `context-tree verify` | Run verification checks against the current tree |
 | `context-tree upgrade` | Refresh the installed skill from the current `first-tree` npm package and write follow-up tasks |
 | `context-tree help onboarding` | Print the onboarding guide |
