@@ -25,11 +25,20 @@ task: |
     - The JSON output is missing `content` and `type` entirely
     - This makes structured logs useless for debugging
 
-  The problem affects multiple model classes that hold message fields
-  typed as base classes but containing subclass instances. All of them
-  lose subclass data during serialization.
+  The root cause is Pydantic v2 serializing fields by their declared
+  base-class type rather than the runtime subclass type. Any model field
+  typed as `BaseChatMessage`, `BaseAgentEvent`, or a union of these will
+  lose subclass-specific data when serialized.
 
-  Find and fix the root cause across all affected model classes. Add tests that verify subclass fields (e.g. content, type) survive serialization in GroupChatMessage and GroupChatStart.
+  To find all affected locations, grep the codebase for model fields
+  typed as `BaseChatMessage` or `BaseAgentEvent` (including in unions
+  and lists). There are at least four affected fields across multiple
+  files — do not stop after fixing the obvious ones in `_events.py`.
+  Check `_task.py` as well.
+
+  Fix every affected field, then verify by running `model_dump_json()`
+  on each model and confirming that subclass fields like `content` and
+  `type` survive serialization.
 context_tree_versions:
   - label: cli-v0.0.3
     tree_sha: "1ec771084bb17da2dd1979d059c052236d202d08"
