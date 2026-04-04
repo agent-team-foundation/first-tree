@@ -1,12 +1,15 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import {
+  AGENT_INSTRUCTIONS_FILE,
   FRAMEWORK_VERSION,
   LEGACY_SKILL_PROGRESS,
   LEGACY_SKILL_VERSION,
+  LEGACY_AGENT_INSTRUCTIONS_FILE,
   LEGACY_PROGRESS,
   LEGACY_VERSION,
   INSTALLED_PROGRESS,
+  agentInstructionsFileCandidates,
   type FrameworkLayout,
   detectFrameworkLayout,
   frameworkVersionCandidates,
@@ -209,8 +212,30 @@ export class Repo {
     return FRAMEWORK_VERSION;
   }
 
-  hasAgentMdMarkers(): boolean {
-    const text = this.readFile("AGENT.md");
+  agentInstructionsPath(): string | null {
+    return resolveFirstExistingPath(this.root, agentInstructionsFileCandidates());
+  }
+
+  hasCanonicalAgentInstructionsFile(): boolean {
+    return this.pathExists(AGENT_INSTRUCTIONS_FILE);
+  }
+
+  hasLegacyAgentInstructionsFile(): boolean {
+    return this.pathExists(LEGACY_AGENT_INSTRUCTIONS_FILE);
+  }
+
+  hasDuplicateAgentInstructionsFiles(): boolean {
+    return this.hasCanonicalAgentInstructionsFile() && this.hasLegacyAgentInstructionsFile();
+  }
+
+  readAgentInstructions(): string | null {
+    const relPath = this.agentInstructionsPath();
+    if (relPath === null) return null;
+    return this.readFile(relPath);
+  }
+
+  hasAgentInstructionsMarkers(): boolean {
+    const text = this.readAgentInstructions();
     if (text === null) return false;
     return text.includes(FRAMEWORK_BEGIN_MARKER) && text.includes(FRAMEWORK_END_MARKER);
   }
@@ -274,7 +299,7 @@ export class Repo {
       && this.pathExists("skills/first-tree/SKILL.md")
       && this.progressPath() === null
       && this.frontmatter("NODE.md") === null
-      && !this.hasAgentMdMarkers()
+      && !this.hasAgentInstructionsMarkers()
       && !this.pathExists("members/NODE.md")
     ) {
       return false;
@@ -283,7 +308,7 @@ export class Repo {
     return (
       this.progressPath() !== null
       || this.hasFramework()
-      || this.hasAgentMdMarkers()
+      || this.hasAgentInstructionsMarkers()
       || this.pathExists("members/NODE.md")
       || this.frontmatter("NODE.md") !== null
     );

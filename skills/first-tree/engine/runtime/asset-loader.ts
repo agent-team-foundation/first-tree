@@ -14,6 +14,9 @@ export const FRAMEWORK_PROMPTS_DIR = join(FRAMEWORK_ASSET_ROOT, "prompts");
 export const FRAMEWORK_EXAMPLES_DIR = join(FRAMEWORK_ASSET_ROOT, "examples");
 export const FRAMEWORK_HELPERS_DIR = join(FRAMEWORK_ASSET_ROOT, "helpers");
 export const INSTALLED_PROGRESS = join(SKILL_ROOT, "progress.md");
+export const AGENT_INSTRUCTIONS_FILE = "AGENTS.md";
+export const LEGACY_AGENT_INSTRUCTIONS_FILE = "AGENT.md";
+export const AGENT_INSTRUCTIONS_TEMPLATE = "agents.md.template";
 
 export const LEGACY_SKILL_NAME = "first-tree-cli-framework";
 export const LEGACY_SKILL_ROOT = join("skills", LEGACY_SKILL_NAME);
@@ -66,6 +69,10 @@ export function frameworkVersionCandidates(): string[] {
 
 export function progressFileCandidates(): string[] {
   return [INSTALLED_PROGRESS, LEGACY_SKILL_PROGRESS, LEGACY_PROGRESS];
+}
+
+export function agentInstructionsFileCandidates(): string[] {
+  return [AGENT_INSTRUCTIONS_FILE, LEGACY_AGENT_INSTRUCTIONS_FILE];
 }
 
 export function frameworkTemplateDirCandidates(): string[] {

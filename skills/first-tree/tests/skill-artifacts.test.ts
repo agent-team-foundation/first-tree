@@ -22,6 +22,7 @@ describe("skill artifacts", () => {
     expect(existsSync(join(ROOT, "skills", "first-tree", "references", "onboarding.md"))).toBe(true);
     expect(existsSync(join(ROOT, "skills", "first-tree", "assets", "framework", "manifest.json"))).toBe(true);
     expect(existsSync(join(ROOT, "skills", "first-tree", "engine", "init.ts"))).toBe(true);
+    expect(existsSync(join(ROOT, "AGENTS.md"))).toBe(true);
     expect(existsSync(join(ROOT, "skills", "first-tree", "tests", "init.test.ts"))).toBe(
       true,
     );
@@ -114,6 +115,7 @@ describe("skill artifacts", () => {
     expect(isTrackedInGit(".agents")).toBe(false);
     expect(isTrackedInGit(".claude")).toBe(false);
     expect(isTrackedInGit(".context-tree")).toBe(false);
+    expect(existsSync(join(ROOT, "AGENT.md"))).toBe(false);
     expect(isTrackedInGit("skills/first-tree-cli-framework")).toBe(false);
     expect(isTrackedInGit("docs")).toBe(false);
     expect(isTrackedInGit("tests")).toBe(false);

@@ -2,10 +2,13 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { Repo } from "#skill/engine/repo.js";
 import {
+  AGENT_INSTRUCTIONS_FILE,
+  AGENT_INSTRUCTIONS_TEMPLATE,
   FRAMEWORK_WORKFLOWS_DIR,
   FRAMEWORK_TEMPLATES_DIR,
   FRAMEWORK_VERSION,
   INSTALLED_PROGRESS,
+  LEGACY_AGENT_INSTRUCTIONS_FILE,
   LEGACY_FRAMEWORK_ROOT,
   LEGACY_SKILL_ROOT,
   SKILL_ROOT,
@@ -48,26 +51,37 @@ function formatUpgradeTaskList(
     "",
   ];
 
+  const migrationTasks: string[] = [];
   if (layout === "legacy") {
-    lines.push(
-      "## Migration",
+    migrationTasks.push(
       "- [ ] Remove any stale `.context-tree/` references from repo-specific docs, scripts, or workflow files",
-      "",
     );
   }
 
   if (layout === "legacy-skill") {
-    lines.push(
-      "## Migration",
+    migrationTasks.push(
       `- [ ] Remove any stale \`${LEGACY_SKILL_ROOT}/\` references from repo-specific docs, scripts, workflow files, or agent config`,
-      "",
     );
   }
 
-  if (repo.hasAgentMdMarkers()) {
+  if (repo.hasCanonicalAgentInstructionsFile() && repo.hasLegacyAgentInstructionsFile()) {
+    migrationTasks.push(
+      `- [ ] Merge any remaining user-authored content from \`${LEGACY_AGENT_INSTRUCTIONS_FILE}\` into \`${AGENT_INSTRUCTIONS_FILE}\`, then delete the legacy file`,
+    );
+  } else if (repo.hasLegacyAgentInstructionsFile()) {
+    migrationTasks.push(
+      `- [ ] Rename \`${LEGACY_AGENT_INSTRUCTIONS_FILE}\` to \`${AGENT_INSTRUCTIONS_FILE}\` to use the canonical agent instructions filename`,
+    );
+  }
+
+  if (migrationTasks.length > 0) {
+    lines.push("## Migration", ...migrationTasks, "");
+  }
+
+  if (repo.hasAgentInstructionsMarkers()) {
     lines.push(
       "## Agent Instructions",
-      `- [ ] Compare the framework section in \`AGENT.md\` with \`${FRAMEWORK_TEMPLATES_DIR}/agent.md.template\` and update the content between the markers if needed`,
+      `- [ ] Compare the framework section in \`${AGENT_INSTRUCTIONS_FILE}\` with \`${FRAMEWORK_TEMPLATES_DIR}/${AGENT_INSTRUCTIONS_TEMPLATE}\` and update the content between the markers if needed`,
       "",
     );
   }

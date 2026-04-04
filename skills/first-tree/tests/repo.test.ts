@@ -3,8 +3,10 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { Repo } from "#skill/engine/repo.js";
 import {
+  AGENT_INSTRUCTIONS_FILE,
   FRAMEWORK_VERSION,
   INSTALLED_PROGRESS,
+  LEGACY_AGENT_INSTRUCTIONS_FILE,
   LEGACY_SKILL_PROGRESS,
   LEGACY_SKILL_VERSION,
   LEGACY_PROGRESS,
@@ -245,33 +247,56 @@ describe("path preferences", () => {
   });
 });
 
-// --- hasAgentMdMarkers ---
+// --- agent instructions helpers ---
 
-describe("hasAgentMdMarkers", () => {
-  it("returns true with markers", () => {
+describe("agent instructions helpers", () => {
+  it("prefers AGENTS.md when both filenames exist", () => {
     const tmp = useTmpDir();
     writeFileSync(
-      join(tmp.path, "AGENT.md"),
+      join(tmp.path, AGENT_INSTRUCTIONS_FILE),
+      "<!-- BEGIN CONTEXT-TREE FRAMEWORK -->\nstuff\n<!-- END CONTEXT-TREE FRAMEWORK -->\n",
+    );
+    writeFileSync(
+      join(tmp.path, LEGACY_AGENT_INSTRUCTIONS_FILE),
+      "# Legacy instructions\n",
+    );
+    const repo = new Repo(tmp.path);
+    expect(repo.agentInstructionsPath()).toBe(AGENT_INSTRUCTIONS_FILE);
+    expect(repo.hasCanonicalAgentInstructionsFile()).toBe(true);
+    expect(repo.hasLegacyAgentInstructionsFile()).toBe(true);
+    expect(repo.hasDuplicateAgentInstructionsFiles()).toBe(true);
+    expect(repo.hasAgentInstructionsMarkers()).toBe(true);
+  });
+
+  it("falls back to legacy AGENT.md while migrating", () => {
+    const tmp = useTmpDir();
+    writeFileSync(
+      join(tmp.path, LEGACY_AGENT_INSTRUCTIONS_FILE),
       "<!-- BEGIN CONTEXT-TREE FRAMEWORK -->\nstuff\n<!-- END CONTEXT-TREE FRAMEWORK -->\n",
     );
     const repo = new Repo(tmp.path);
-    expect(repo.hasAgentMdMarkers()).toBe(true);
+    expect(repo.agentInstructionsPath()).toBe(LEGACY_AGENT_INSTRUCTIONS_FILE);
+    expect(repo.hasCanonicalAgentInstructionsFile()).toBe(false);
+    expect(repo.hasLegacyAgentInstructionsFile()).toBe(true);
+    expect(repo.hasDuplicateAgentInstructionsFiles()).toBe(false);
+    expect(repo.hasAgentInstructionsMarkers()).toBe(true);
   });
 
   it("returns false without markers", () => {
     const tmp = useTmpDir();
     writeFileSync(
-      join(tmp.path, "AGENT.md"),
+      join(tmp.path, AGENT_INSTRUCTIONS_FILE),
       "# Agent instructions\nNo markers here.\n",
     );
     const repo = new Repo(tmp.path);
-    expect(repo.hasAgentMdMarkers()).toBe(false);
+    expect(repo.hasAgentInstructionsMarkers()).toBe(false);
   });
 
   it("returns false when file is missing", () => {
     const tmp = useTmpDir();
     const repo = new Repo(tmp.path);
-    expect(repo.hasAgentMdMarkers()).toBe(false);
+    expect(repo.agentInstructionsPath()).toBeNull();
+    expect(repo.hasAgentInstructionsMarkers()).toBe(false);
   });
 });
 

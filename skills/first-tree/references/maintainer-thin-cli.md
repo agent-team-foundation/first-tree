@@ -26,7 +26,7 @@ These root files are shell code, not canonical knowledge stores:
 - `vitest.config.ts`
 - `vitest.eval.config.ts` (repo-only maintainer eval entrypoint)
 - `.github/workflows/ci.yml`
-- root `README.md` and `AGENT.md`
+- root `README.md` and `AGENTS.md`
 
 ## Rules For Shell Changes
 

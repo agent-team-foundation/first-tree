@@ -8,7 +8,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -17,11 +17,25 @@ const MAX_ATTEMPTS = 3;
 // Per-invocation budget cap. Worst case is $1.50 total (3 × $0.50),
 // though retries are cheap in practice due to cached context via --continue.
 const MAX_BUDGET_USD = 0.5;
+const AGENT_INSTRUCTIONS_PATHS = ["AGENTS.md", "AGENT.md"] as const;
+
+function resolveAgentInstructionsPath(): string {
+  for (const candidate of AGENT_INSTRUCTIONS_PATHS) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  throw new Error(
+    "Missing AGENTS.md in repo root (legacy AGENT.md is also accepted during migration).",
+  );
+}
 
 function buildPrompt(diffPath: string): string {
   const parts: string[] = [];
+  const agentInstructionsPath = resolveAgentInstructionsPath();
   const files: [string, string][] = [
-    ["AGENT.md", "AGENT.md"],
+    [agentInstructionsPath, agentInstructionsPath],
     ["Root NODE.md", "NODE.md"],
     [
       "Review Instructions",

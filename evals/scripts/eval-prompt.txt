@@ -1,4 +1,4 @@
-You are working in the first-tree repo at /home/eval/first-tree. Read AGENT.md for context.
+You are working in the first-tree repo at /home/eval/first-tree. Read AGENTS.md for context.
 
 Your task: run ALL eval cases sequentially and fix any issues.
 

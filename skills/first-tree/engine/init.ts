@@ -17,9 +17,12 @@ import {
   resolveBundledPackageRoot,
 } from "#skill/engine/runtime/installer.js";
 import {
+  AGENT_INSTRUCTIONS_FILE,
+  AGENT_INSTRUCTIONS_TEMPLATE,
   FRAMEWORK_ASSET_ROOT,
   FRAMEWORK_VERSION,
   INSTALLED_PROGRESS,
+  LEGACY_AGENT_INSTRUCTIONS_FILE,
 } from "#skill/engine/runtime/asset-loader.js";
 
 /**
@@ -40,10 +43,20 @@ Options:
   --help             Show this help message
 `;
 
-const TEMPLATE_MAP: [string, string][] = [
-  ["root-node.md.template", "NODE.md"],
-  ["agent.md.template", "AGENT.md"],
-  ["members-domain.md.template", "members/NODE.md"],
+interface TemplateTarget {
+  templateName: string;
+  targetPath: string;
+  skipIfExists?: string[];
+}
+
+const TEMPLATE_MAP: TemplateTarget[] = [
+  { templateName: "root-node.md.template", targetPath: "NODE.md" },
+  {
+    templateName: AGENT_INSTRUCTIONS_TEMPLATE,
+    targetPath: AGENT_INSTRUCTIONS_FILE,
+    skipIfExists: [AGENT_INSTRUCTIONS_FILE, LEGACY_AGENT_INSTRUCTIONS_FILE],
+  },
+  { templateName: "members-domain.md.template", targetPath: "members/NODE.md" },
 ];
 
 interface TaskListContext {
@@ -60,9 +73,14 @@ function installSkill(source: string, target: string): void {
 
 function renderTemplates(target: string): void {
   const frameworkDir = join(target, FRAMEWORK_ASSET_ROOT);
-  for (const [templateName, targetPath] of TEMPLATE_MAP) {
-    if (existsSync(join(target, targetPath))) {
-      console.log(`  Skipped ${targetPath} (already exists)`);
+  for (const { templateName, targetPath, skipIfExists } of TEMPLATE_MAP) {
+    const existingPaths = skipIfExists ?? [targetPath];
+    const existingPath = existingPaths.find((candidate) =>
+      existsSync(join(target, candidate)),
+    );
+
+    if (existingPath !== undefined) {
+      console.log(`  Skipped ${targetPath} (found existing ${existingPath})`);
     } else if (renderTemplateFile(frameworkDir, templateName, target, targetPath)) {
       console.log(`  Created ${targetPath}`);
     }
@@ -117,7 +135,9 @@ export function formatTaskList(
   );
   lines.push(`- [ ] \`${FRAMEWORK_VERSION}\` exists`);
   lines.push("- [ ] Root NODE.md has valid frontmatter (title, owners)");
-  lines.push("- [ ] AGENT.md exists with framework markers");
+  lines.push(
+    `- [ ] \`${AGENT_INSTRUCTIONS_FILE}\` is the only agent instructions file and has framework markers`,
+  );
   lines.push("- [ ] `context-tree verify` passes with no errors");
   lines.push("- [ ] At least one member node exists");
   lines.push("");
