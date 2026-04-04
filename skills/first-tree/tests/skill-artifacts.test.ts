@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -6,6 +6,15 @@ import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
 const ROOT = process.cwd();
+
+/** Check if a path has any tracked files in git (handles dirs and files). */
+function isTrackedInGit(relativePath: string): boolean {
+  const result = spawnSync("git", ["ls-files", relativePath], {
+    cwd: ROOT,
+    stdio: "pipe",
+  });
+  return (result.stdout?.toString().trim().length ?? 0) > 0;
+}
 
 describe("skill artifacts", () => {
   it("keeps only the canonical skill in the source repo", () => {
@@ -101,12 +110,13 @@ describe("skill artifacts", () => {
         ),
       ),
     ).toBe(true);
-    expect(existsSync(join(ROOT, ".agents"))).toBe(false);
-    expect(existsSync(join(ROOT, ".claude"))).toBe(false);
-    expect(existsSync(join(ROOT, ".context-tree"))).toBe(false);
-    expect(existsSync(join(ROOT, "skills", "first-tree-cli-framework"))).toBe(false);
-    expect(existsSync(join(ROOT, "docs"))).toBe(false);
-    expect(existsSync(join(ROOT, "tests"))).toBe(false);
+    // Legacy artifacts must not be tracked in git (untracked local files are OK)
+    expect(isTrackedInGit(".agents")).toBe(false);
+    expect(isTrackedInGit(".claude")).toBe(false);
+    expect(isTrackedInGit(".context-tree")).toBe(false);
+    expect(isTrackedInGit("skills/first-tree-cli-framework")).toBe(false);
+    expect(isTrackedInGit("docs")).toBe(false);
+    expect(isTrackedInGit("tests")).toBe(false);
     expect(existsSync(join(ROOT, "evals"))).toBe(true);
     expect(existsSync(join(ROOT, "src", "commands"))).toBe(false);
     expect(existsSync(join(ROOT, "src", "runtime"))).toBe(false);

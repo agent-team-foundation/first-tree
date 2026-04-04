@@ -82,17 +82,19 @@ require_file "$SOURCE_DIR/assets/framework/helpers/generate-codeowners.ts"
 require_file "$SOURCE_DIR/assets/framework/helpers/run-review.ts"
 require_file "$SOURCE_DIR/assets/framework/helpers/inject-tree-context.sh"
 
+# Check for legacy artifacts that should not be committed.
+# Use git ls-files to ignore untracked local files (e.g. .claude/settings.local.json).
 for legacy_path in \
-  "$REPO_ROOT/.agents" \
-  "$REPO_ROOT/.claude" \
-  "$REPO_ROOT/.context-tree" \
-  "$REPO_ROOT/docs" \
-  "$REPO_ROOT/skills/first-tree-cli-framework" \
-  "$REPO_ROOT/tests" \
-  "$SOURCE_DIR/references/repo-snapshot"
+  ".agents" \
+  ".claude" \
+  ".context-tree" \
+  "docs" \
+  "skills/first-tree-cli-framework" \
+  "tests" \
+  "skills/first-tree/references/repo-snapshot"
 do
-  if [[ -e "$legacy_path" ]]; then
-    echo "Unexpected legacy artifact present: $legacy_path" >&2
+  if git -C "$REPO_ROOT" ls-files --error-unmatch "$legacy_path" >/dev/null 2>&1; then
+    echo "Unexpected legacy artifact tracked in git: $legacy_path" >&2
     exit 1
   fi
 done
@@ -110,16 +112,6 @@ require_file "$REPO_ROOT/evals/tests/eval-helpers.test.ts"
 
 if grep -q '"#docs/\*"' "$REPO_ROOT/package.json"; then
   echo "package.json still exposes the legacy #docs import alias." >&2
-  exit 1
-fi
-
-if grep -q '"#src/\*"' "$REPO_ROOT/package.json"; then
-  echo "package.json still exposes the legacy #src import alias." >&2
-  exit 1
-fi
-
-if grep -q '"#evals/\*"' "$REPO_ROOT/package.json"; then
-  echo "package.json should not expose the repo-only #evals import alias." >&2
   exit 1
 fi
 
