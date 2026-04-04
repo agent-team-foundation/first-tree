@@ -1,7 +1,8 @@
 # Upgrade Contract
 
 This file describes the current installed-layout contract and the compatibility
-rules we keep for legacy `.context-tree/` repos.
+rules we keep for legacy `skills/first-tree-cli-framework/` and
+`.context-tree/` repos.
 
 ## Canonical Source
 

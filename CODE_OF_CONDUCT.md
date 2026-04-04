@@ -3,7 +3,7 @@
 ## Our Standard
 
 This project is for people building with agents, CLI tools, and markdown-first
- systems. We want the repo to feel rigorous, welcoming, and calm.
+systems. We want the repo to feel rigorous, welcoming, and calm.
 
 When participating here, please:
 

@@ -1,20 +1,27 @@
 # first-tree
 
-Thin distribution package for the canonical `first-tree` skill
-and the `context-tree` CLI.
+Thin distribution package for the `context-tree` CLI and the bundled canonical
+`first-tree` skill.
 
 ## Package Name vs Command
 
 - The npm package is `first-tree`.
 - The installed CLI command is `context-tree`.
+- The installed skill directory inside a user tree is `skills/first-tree/`.
+- When maintainer docs say "the `first-tree` skill", they mean that bundled
+  skill directory, not the npm package name.
 - `npx first-tree init` is the quickest one-off entrypoint.
-- `npm install -g first-tree` adds `context-tree` to your PATH for repeated use.
+- `npm install -g first-tree` adds `context-tree` to your PATH for repeated
+  use.
 
 ## What This Repo Ships
 
-- `src/` keeps the thin CLI shell that parses commands and dispatches to the bundled skill.
-- `skills/first-tree/` is the canonical source for framework behavior, shipped templates, maintainer references, and validation logic.
-- `evals/` is maintainer-only developer tooling for the source repo. It is intentionally not part of the published package.
+- `src/` keeps the thin CLI shell that parses commands and dispatches to the
+  bundled skill.
+- `skills/first-tree/` is the canonical source for framework behavior, shipped
+  templates, maintainer references, and validation logic.
+- `evals/` is maintainer-only developer tooling for the source repo. It is
+  intentionally not part of the published package.
 
 ## Quick Start
 
@@ -32,7 +39,7 @@ If you already have the command on your PATH:
 context-tree init
 ```
 
-The installed package carries the canonical bundled skill, and
+The `first-tree` npm package carries the bundled canonical skill, and
 `context-tree init` / `context-tree upgrade` install from that bundled copy
 instead of cloning this source repo at runtime.
 
@@ -42,13 +49,14 @@ instead of cloning this source repo at runtime.
 | --- | --- |
 | `context-tree init` | Bootstrap a new context tree in the current git repo |
 | `context-tree verify` | Run verification checks against the current tree |
-| `context-tree upgrade` | Refresh the installed framework skill from the current `first-tree` package and write follow-up tasks |
+| `context-tree upgrade` | Refresh the installed skill from the current `first-tree` npm package and write follow-up tasks |
 | `context-tree help onboarding` | Print the onboarding guide |
 
 ## Runtime And Maintainer Prerequisites
 
 - User trees: the onboarding guide targets Node.js 18+.
-- This source repo: use Node.js 22 and pnpm 10 to match CI and the checked-in package manager version.
+- This source repo: use Node.js 22 and pnpm 10 to match CI and the checked-in
+  package manager version.
 
 ## Developing This Repo
 
@@ -82,8 +90,10 @@ on root-level prose.
 
 ## Contributing And Security
 
-- Use the GitHub issue forms for bug reports and feature requests so maintainers get reproducible context up front.
-- See `CONTRIBUTING.md` for local setup, validation expectations, and where changes should live.
+- Use the GitHub issue forms for bug reports and feature requests so maintainers
+  get reproducible context up front.
+- See `CONTRIBUTING.md` for local setup, validation expectations, and where
+  changes should live.
 - See `CODE_OF_CONDUCT.md` for community expectations.
 - See `SECURITY.md` for vulnerability reporting guidance.
 

@@ -13,6 +13,8 @@ This repo ships the canonical `first-tree` skill plus a thin
 
 - Treat `skills/first-tree/` as the only canonical source of
   framework knowledge.
+- Use `first-tree` for the npm package, `context-tree` for the CLI command, and
+  `skills/first-tree/` when you mean the bundled skill path.
 - Keep root CLI/package files thin. If a maintainer needs information to change
   behavior safely, move that information into the skill references.
 - Keep shipped runtime assets generic.

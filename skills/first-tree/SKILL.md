@@ -1,13 +1,13 @@
 ---
 name: first-tree
-description: Maintain the canonical `first-tree` skill and the thin `first-tree` / `context-tree` CLI that distributes it. Use when modifying `context-tree` commands (`init`, `verify`, `upgrade`, `help onboarding`), the installed skill payload under `assets/framework/`, maintainer references, or the build, packaging, test, and CI wiring that supports the framework.
+description: Maintain the canonical `first-tree` skill and the thin `context-tree` CLI distributed by the `first-tree` npm package. Use when modifying `context-tree` commands (`init`, `verify`, `upgrade`, `help onboarding`), the installed skill payload under `assets/framework/`, maintainer references, or the build, packaging, test, and CI wiring that supports the framework.
 ---
 
 # First Tree
 
-Use this skill when the task depends on the exact behavior of the `first-tree`
-CLI or the installed framework payload that `context-tree init` ships to user
-repos.
+Use this skill when the task depends on the exact behavior of the
+`context-tree` CLI or the installed `skills/first-tree/` payload that
+`context-tree init` ships to user repos.
 
 ## Source Of Truth
 
@@ -17,6 +17,9 @@ repos.
   repos.
 - `engine/` holds the canonical framework and CLI behavior.
 - `scripts/` holds maintenance helpers for validating and running the skill.
+- In maintainer docs, use `context-tree` for the CLI and `skills/first-tree/`
+  for the installed skill path so it is not confused with the `first-tree`
+  npm package.
 
 ## When To Read What
 

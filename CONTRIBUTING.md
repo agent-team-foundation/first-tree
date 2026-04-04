@@ -2,18 +2,27 @@
 
 Thanks for helping improve `first-tree`.
 
-This repository ships one canonical framework skill plus a thin CLI shell. Most
-changes should land in the canonical skill under
-`skills/first-tree-cli-framework/`, not in root-level prose or ad hoc helper
-files.
+This repository ships one canonical `first-tree` skill plus a thin
+`context-tree` CLI shell.
+
+Naming note:
+
+- `first-tree` is the npm package name.
+- `context-tree` is the installed CLI command.
+- `skills/first-tree/` is the bundled skill path inside this repo and inside
+  user trees after install.
+
+Most changes should land in the canonical skill under `skills/first-tree/`,
+not in root-level prose or ad hoc helper files.
 
 ## Before You Change Anything
 
 - If you are trying to use Context Tree in your own repo, start with `README.md`
-  and `skills/first-tree-cli-framework/references/onboarding.md` instead of this
-  maintainer guide.
+  and `skills/first-tree/references/onboarding.md` instead of this maintainer
+  guide.
 - If a change is large, cross-cutting, or changes the public contract, open an
-  issue or draft PR first so maintainers can align on scope before implementation.
+  issue or draft PR first so maintainers can align on scope before
+  implementation.
 - Keep root shell files thin. If a change needs framework-specific knowledge,
   move that knowledge into the skill references.
 
@@ -52,17 +61,17 @@ before running `EVALS=1 pnpm eval`.
 
 ## Change Discipline
 
-- Treat `skills/first-tree-cli-framework/` as the only canonical source of
-  framework knowledge.
+- Treat `skills/first-tree/` as the only canonical source of framework
+  knowledge.
 - If you change shipped payloads under `assets/framework/`, keep templates,
   task text, docs, and tests aligned.
 - If you change anything that gets copied into user repos, bump
-  `skills/first-tree-cli-framework/assets/framework/VERSION`.
+  `skills/first-tree/assets/framework/VERSION`.
 - If you change installed layout or upgrade semantics, update
-  `skills/first-tree-cli-framework/references/upgrade-contract.md` and the
-  related tests in the same PR.
+  `skills/first-tree/references/upgrade-contract.md` and the related tests in
+  the same PR.
 - If you change maintainer workflows or package shell behavior, update the
-  relevant references under `skills/first-tree-cli-framework/references/`.
+  relevant references under `skills/first-tree/references/`.
 
 ## Pull Requests
 
@@ -81,6 +90,5 @@ context every time.
 ## Where To Start Reading
 
 - `README.md` for the public entrypoint
-- `skills/first-tree-cli-framework/SKILL.md` for the maintainer workflow
-- `skills/first-tree-cli-framework/references/source-map.md` for the canonical
-  reading index
+- `skills/first-tree/SKILL.md` for the maintainer workflow
+- `skills/first-tree/references/source-map.md` for the canonical reading index

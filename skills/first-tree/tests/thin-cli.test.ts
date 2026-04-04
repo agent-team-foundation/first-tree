@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { runCli, USAGE } from "../../../src/cli.ts";
+import { USAGE, runCli } from "../../../src/cli.ts";
 
 const ROOT = process.cwd();
 

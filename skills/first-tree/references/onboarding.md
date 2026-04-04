@@ -55,7 +55,11 @@ Information an agent needs to **decide** on an approach — not to execute it.
 
 - A Git repository for your tree (separate from your code repos)
 - Node.js 18+
-- The npm package is `first-tree`. Use `npx first-tree init` for one-off runs, or `npm install -g first-tree` to add the `context-tree` command to your PATH
+- The npm package is `first-tree`, the installed CLI command is
+  `context-tree`, and the installed skill directory in the tree is
+  `skills/first-tree/`
+- Use `npx first-tree init` for one-off runs, or `npm install -g first-tree`
+  to add the `context-tree` command to your PATH
 
 ### Step 1: Initialize
 
@@ -124,7 +128,7 @@ The tree doesn't duplicate source code — it captures what connects things and 
 |---------|-------------|
 | `context-tree init` | Bootstrap a new tree. Installs the framework skill, renders templates, generates a task list. |
 | `context-tree verify` | Check the installed progress file for unchecked items + run deterministic validation. |
-| `context-tree upgrade` | Refresh the installed framework skill from the currently running `first-tree` package and generate follow-up tasks. |
+| `context-tree upgrade` | Refresh the installed framework skill from the currently running `first-tree` npm package and generate follow-up tasks. |
 | `context-tree help onboarding` | Print this onboarding guide. |
 
 ---
@@ -138,7 +142,7 @@ context-tree upgrade
 ```
 
 `context-tree upgrade` refreshes `skills/first-tree/` from the
-skill bundled with the currently running `first-tree` package, preserves your
+skill bundled with the currently running `first-tree` npm package, preserves your
 tree content, and generates follow-up tasks in
 `skills/first-tree/progress.md`.
 

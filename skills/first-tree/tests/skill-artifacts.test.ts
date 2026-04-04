@@ -185,10 +185,14 @@ describe("skill artifacts", () => {
 
     expect(read("README.md")).not.toContain("seed-tree");
     expect(read("AGENTS.md")).not.toContain("seed-tree");
+    expect(read("README.md")).toContain("Package Name vs Command");
     expect(read("README.md")).toContain("Canonical Documentation");
     expect(read("README.md")).toContain("references/source-map.md");
-    expect(read("README.md")).toContain("bundled skill");
+    expect(read("README.md")).toContain("skills/first-tree/");
+    expect(read("README.md")).toContain("bundled canonical");
+    expect(read("README.md")).toContain("`first-tree` skill");
     expect(read("AGENTS.md")).toContain("references/source-map.md");
+    expect(read("AGENTS.md")).toContain("bundled skill path");
     expect(read("AGENTS.md")).not.toContain("### Running evals");
     expect(read("AGENTS.md")).not.toContain("EVALS_TREE_REPO");
     expect(read("src/cli.ts")).not.toContain("from upstream");
@@ -197,7 +201,8 @@ describe("skill artifacts", () => {
     const onboarding = read("skills/first-tree/references/onboarding.md");
     expect(onboarding).toContain("npx first-tree init");
     expect(onboarding).toContain("npm install -g first-tree");
-    expect(onboarding).toContain("currently running `first-tree` package");
+    expect(onboarding).toContain("installed CLI command is");
+    expect(onboarding).toContain("currently running `first-tree` npm package");
     expect(onboarding).toContain("npx first-tree@latest upgrade");
     expect(onboarding).not.toContain("This clones the framework into `.context-tree/`");
     expect(onboarding).not.toContain("from upstream");
@@ -208,6 +213,7 @@ describe("skill artifacts", () => {
     expect(skillMd).toContain("maintainer-build-and-distribution.md");
     expect(skillMd).toContain("maintainer-testing.md");
     expect(skillMd).toContain("currently running `first-tree` package");
+    expect(skillMd).toContain("so it is not confused with the `first-tree`");
     expect(skillMd).not.toContain("canonical eval harness");
 
     const sourceMap = read("skills/first-tree/references/source-map.md");
@@ -220,6 +226,7 @@ describe("skill artifacts", () => {
     expect(sourceMap).toContain("engine/commands/");
     expect(sourceMap).toContain("engine/runtime/asset-loader.ts");
     expect(sourceMap).toContain("tests/init.test.ts");
+    expect(sourceMap).toContain("tests/thin-cli.test.ts");
     expect(sourceMap).not.toContain("evals/context-tree-eval.test.ts");
     expect(sourceMap).toContain("package.json");
     expect(sourceMap).not.toContain("vitest.eval.config.ts");

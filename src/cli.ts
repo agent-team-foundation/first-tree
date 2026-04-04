@@ -9,7 +9,7 @@ const USAGE = `usage: context-tree <command>
 Commands:
   init      Bootstrap a new context tree (installs the framework skill)
   verify    Run verification checks against the current tree
-  upgrade   Refresh the installed skill from the current first-tree package and generate follow-up tasks
+  upgrade   Refresh the installed skill from the current first-tree npm package and generate follow-up tasks
   help      Show help for a topic (e.g. \`help onboarding\`)
 
 Options:
@@ -56,7 +56,10 @@ export async function runCli(
       return runUpgrade();
     }
     case "help":
-      return (await import("#skill/engine/commands/help.js")).runHelp(args.slice(1), write);
+      return (await import("#skill/engine/commands/help.js")).runHelp(
+        args.slice(1),
+        write,
+      );
     default:
       write(`Unknown command: ${command}`);
       write(USAGE);

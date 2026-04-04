@@ -1,7 +1,7 @@
 blank_issues_enabled: true
 contact_links:
   - name: Usage question or onboarding help
-    url: https://github.com/agent-team-foundation/first-tree/blob/main/skills/first-tree-cli-framework/references/onboarding.md
+    url: https://github.com/agent-team-foundation/first-tree/blob/main/skills/first-tree/references/onboarding.md
     about: Start with the onboarding guide before opening a support issue.
   - name: Contribution guide
     url: https://github.com/agent-team-foundation/first-tree/blob/main/CONTRIBUTING.md

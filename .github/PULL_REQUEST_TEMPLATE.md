@@ -14,8 +14,8 @@
 ## Change Surface
 
 - [ ] Thin CLI shell (`src/`, package/build wiring)
-- [ ] Canonical skill behavior (`skills/first-tree-cli-framework/engine/`)
-- [ ] Shipped framework payload (`skills/first-tree-cli-framework/assets/framework/`)
+- [ ] Canonical skill behavior (`skills/first-tree/engine/`)
+- [ ] Shipped framework payload (`skills/first-tree/assets/framework/`)
 - [ ] Maintainer or user docs (`README.md`, `CONTRIBUTING.md`, `references/`)
 
 ## Notes
