@@ -16,6 +16,7 @@ import {
   renderTemplateFile,
   resolveBundledPackageRoot,
 } from "#skill/engine/runtime/installer.js";
+import { writeBootstrapState } from "#skill/engine/runtime/bootstrap.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
   AGENT_INSTRUCTIONS_TEMPLATE,
@@ -122,13 +123,10 @@ export function formatTaskList(
       );
       lines.push("## Source Workspace Workflow");
       lines.push(
-        `- [ ] Publish this dedicated tree repo to the same GitHub organization as \`${context.sourceRepoName}\``,
+        `- [ ] When this initial tree version is ready, run \`context-tree publish --open-pr\` from this dedicated tree repo. It will create or reuse the GitHub \`*-context\` repo, add it back to \`${context.sourceRepoName}\` as a git submodule, and open the source/workspace PR.`,
       );
       lines.push(
-        `- [ ] Add this tree repo back to \`${context.sourceRepoName}\` as a git submodule after the remote exists`,
-      );
-      lines.push(
-        `- [ ] Open a PR against the source/workspace repo's default branch with only the installed skill, the \`${SOURCE_INTEGRATION_MARKER}\` marker lines in \`${AGENT_INSTRUCTIONS_FILE}\` / \`${CLAUDE_INSTRUCTIONS_FILE}\`, and the new submodule pointer`,
+        `- [ ] After publish succeeds, treat the source/workspace repo's \`${context.sourceRepoName}\` submodule checkout as the canonical local working copy for this tree. The temporary sibling bootstrap repo can be deleted when you no longer need it.`,
       );
       lines.push("");
     }
@@ -297,6 +295,14 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
       console.error(`Error: ${message}`);
       return 1;
     }
+  }
+
+  if (initTarget.dedicatedTreeRepo) {
+    writeBootstrapState(r.root, {
+      sourceRepoName: sourceRepo.repoName(),
+      sourceRepoPath: relativePathFrom(r.root, sourceRepo.root),
+      treeRepoName: r.repoName(),
+    });
   }
 
   console.log(ONBOARDING_TEXT);

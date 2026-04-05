@@ -38,20 +38,20 @@ existing source or workspace repository.
 When an agent is asked to install first-tree for a source/workspace repo, the
 default workflow is:
 
-1. Install the bundled first-tree skill into the current repo.
-2. Upsert the `FIRST-TREE-SOURCE-INTEGRATION:` line in root `AGENTS.md` and
-   `CLAUDE.md`.
-3. Create a sibling dedicated tree repo named `<repo>-context`.
-4. Prefer creating and pushing that repo in the same GitHub organization as
-   the source repo, matching the source repo's default visibility unless the
-   user asks for something else.
-5. Add the dedicated tree repo back to the source/workspace repo as a `git submodule`.
-6. Run `context-tree init --here` inside the dedicated tree repo.
-7. Draft the first tree version from the real codebase, docs, and ownership
+1. Run `context-tree init` from the current source/workspace repo.
+2. Switch into the sibling dedicated tree repo named `<repo>-context`.
+3. Draft the first tree version from the real codebase, docs, and ownership
    signals.
-8. Open a PR against the source/workspace repo's default branch for the local
-   skill integration plus the new submodule pointer. Do not merge it
-   automatically.
+4. Run `context-tree publish --open-pr` from the dedicated tree repo. It will:
+   create or reuse the GitHub `*-context` repo in the same owner/org as the
+   source repo, push the tree, add it back to the source/workspace repo as a
+   `git submodule`, and open the source-repo PR.
+5. After publish succeeds, treat the source repo's submodule checkout as the
+   canonical local working copy for the tree. The temporary sibling bootstrap
+   checkout can be deleted when you no longer need it.
+
+If the dedicated tree repo was initialized manually with `context-tree init --here`
+and publish cannot infer the source repo, pass `--source-repo PATH`.
 
 ## Verification And Upgrade
 

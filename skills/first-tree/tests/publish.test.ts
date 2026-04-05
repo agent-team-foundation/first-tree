@@ -1,0 +1,248 @@
+import { join, relative } from "node:path";
+import { writeFileSync } from "node:fs";
+import { describe, expect, it } from "vitest";
+import { Repo } from "#skill/engine/repo.js";
+import {
+  PUBLISH_USAGE,
+  parsePublishArgs,
+  runPublish,
+  type CommandRunner,
+} from "#skill/engine/publish.js";
+import { writeBootstrapState } from "#skill/engine/runtime/bootstrap.js";
+import {
+  AGENT_INSTRUCTIONS_FILE,
+  CLAUDE_INSTRUCTIONS_FILE,
+  SOURCE_INTEGRATION_MARKER,
+} from "#skill/engine/runtime/asset-loader.js";
+import {
+  makeAgentsMd,
+  makeFramework,
+  makeGitRepo,
+  makeMembers,
+  makeNode,
+  makeSourceRepo,
+  useTmpDir,
+} from "./helpers.js";
+
+interface RecordedCommand {
+  args: string[];
+  command: string;
+  cwd: string;
+}
+
+function makeTreeRepo(root: string): void {
+  makeGitRepo(root);
+  makeFramework(root, "0.2.0");
+  makeNode(root);
+  makeAgentsMd(root, { markers: true });
+  makeMembers(root);
+}
+
+function makeSourceIntegration(root: string): void {
+  writeFileSync(
+    join(root, AGENT_INSTRUCTIONS_FILE),
+    `${SOURCE_INTEGRATION_MARKER} installed\n`,
+  );
+  writeFileSync(
+    join(root, CLAUDE_INSTRUCTIONS_FILE),
+    `${SOURCE_INTEGRATION_MARKER} installed\n`,
+  );
+}
+
+function createRunner(
+  sourceRoot: string,
+  treeRoot: string,
+): { calls: RecordedCommand[]; runner: CommandRunner } {
+  const calls: RecordedCommand[] = [];
+  let treeOriginExists = false;
+  const runner: CommandRunner = (command, args, options) => {
+    calls.push({ command, args, cwd: options.cwd });
+
+    if (command === "git" && args[0] === "remote" && args[1] === "get-url") {
+      if (options.cwd === sourceRoot) {
+        return "git@github.com:acme/ADHD.git";
+      }
+      if (!treeOriginExists) {
+        throw new Error("missing origin");
+      }
+      return "git@github.com:acme/ADHD-context.git";
+    }
+
+    if (command === "gh" && args[0] === "repo" && args[1] === "view") {
+      if (args[2] === "acme/ADHD") {
+        return JSON.stringify({
+          defaultBranchRef: { name: "main" },
+          nameWithOwner: "acme/ADHD",
+          visibility: "PRIVATE",
+        });
+      }
+      throw new Error("not found");
+    }
+
+    if (
+      command === "git"
+      && args[0] === "rev-parse"
+      && args[1] === "--verify"
+      && args[2] === "HEAD"
+      && options.cwd === treeRoot
+    ) {
+      throw new Error("missing HEAD");
+    }
+
+    if (
+      command === "git"
+      && args[0] === "diff"
+      && args[1] === "--cached"
+      && args[2] === "--quiet"
+    ) {
+      throw new Error("changes present");
+    }
+
+    if (command === "git" && args[0] === "branch" && args[1] === "--show-current") {
+      return "main";
+    }
+
+    if (
+      command === "git"
+      && args[0] === "rev-parse"
+      && args[1] === "--verify"
+      && args[2] === "refs/remotes/origin/main"
+    ) {
+      return "origin/main";
+    }
+
+    if (
+      command === "git"
+      && args[0] === "rev-parse"
+      && args[1] === "--verify"
+      && args[2].startsWith("refs/heads/")
+    ) {
+      throw new Error("missing local branch");
+    }
+
+    if (command === "git" && args[0] === "ls-files") {
+      return "";
+    }
+
+    if (command === "gh" && args[0] === "pr" && args[1] === "create") {
+      return "https://github.com/acme/ADHD/pull/123";
+    }
+
+    if (command === "gh" && args[0] === "repo" && args[1] === "create") {
+      treeOriginExists = true;
+      return "";
+    }
+
+    if (command === "git" && args[0] === "remote" && args[1] === "add") {
+      treeOriginExists = true;
+      return "";
+    }
+
+    return "";
+  };
+
+  return { calls, runner };
+}
+
+describe("parsePublishArgs", () => {
+  it("documents the publish command", () => {
+    expect(PUBLISH_USAGE).toContain("context-tree publish");
+    expect(PUBLISH_USAGE).toContain("--open-pr");
+    expect(PUBLISH_USAGE).toContain("--source-repo PATH");
+  });
+
+  it("parses supported publish flags", () => {
+    expect(
+      parsePublishArgs([
+        "--open-pr",
+        "--tree-path",
+        "../ADHD-context",
+        "--source-repo",
+        "../ADHD",
+        "--submodule-path",
+        "ADHD-context",
+        "--source-remote",
+        "origin",
+      ]),
+    ).toEqual({
+      openPr: true,
+      sourceRemote: "origin",
+      sourceRepoPath: "../ADHD",
+      submodulePath: "ADHD-context",
+      treePath: "../ADHD-context",
+    });
+  });
+});
+
+describe("runPublish", () => {
+  it("publishes the tree repo, adds the submodule, and opens the source PR", () => {
+    const rootDir = useTmpDir();
+    const sourceRoot = join(rootDir.path, "ADHD");
+    const treeRoot = join(rootDir.path, "ADHD-context");
+
+    makeSourceRepo(sourceRoot);
+    makeFramework(sourceRoot, "0.2.0");
+    makeSourceIntegration(sourceRoot);
+    makeTreeRepo(treeRoot);
+    writeBootstrapState(treeRoot, {
+      sourceRepoName: "ADHD",
+      sourceRepoPath: relative(treeRoot, sourceRoot),
+      treeRepoName: "ADHD-context",
+    });
+
+    const { calls, runner } = createRunner(sourceRoot, treeRoot);
+    const result = runPublish(new Repo(treeRoot), {
+      commandRunner: runner,
+      openPr: true,
+    });
+
+    expect(result).toBe(0);
+    expect(
+      calls.some(
+        (call) =>
+          call.command === "gh"
+          && call.args[0] === "repo"
+          && call.args[1] === "create"
+          && call.args[2] === "acme/ADHD-context",
+      ),
+    ).toBe(true);
+    expect(
+      calls.some(
+        (call) =>
+          call.command === "git"
+          && call.args[0] === "submodule"
+          && call.args[1] === "add"
+          && call.args[2] === "git@github.com:acme/ADHD-context.git"
+          && call.args[3] === "ADHD-context",
+      ),
+    ).toBe(true);
+    expect(
+      calls.some(
+        (call) =>
+          call.command === "git"
+          && call.args[0] === "switch"
+          && call.args[1] === "-c"
+          && call.args[2] === "chore/connect-adhd-context",
+      ),
+    ).toBe(true);
+    expect(
+      calls.some(
+        (call) =>
+          call.command === "gh"
+          && call.args[0] === "pr"
+          && call.args[1] === "create"
+          && call.args.includes("--repo")
+          && call.args.includes("acme/ADHD"),
+      ),
+    ).toBe(true);
+  });
+
+  it("errors when the source repo cannot be inferred", () => {
+    const treeRoot = useTmpDir();
+    makeTreeRepo(treeRoot.path);
+
+    const result = runPublish(new Repo(treeRoot.path));
+
+    expect(result).toBe(1);
+  });
+});

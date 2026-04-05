@@ -1,6 +1,6 @@
 ---
 name: first-tree
-description: Maintain the canonical `first-tree` skill and the thin `context-tree` CLI distributed by the `first-tree` npm package. Use when modifying `context-tree` commands (`init`, `verify`, `upgrade`, `help onboarding`), the installed skill payload under `assets/framework/`, maintainer references, or the build, packaging, test, and CI wiring that supports the framework.
+description: Maintain the canonical `first-tree` skill and the thin `context-tree` CLI distributed by the `first-tree` npm package. Use when modifying `context-tree` commands (`init`, `publish`, `verify`, `upgrade`, `help onboarding`), the installed skill payload under `assets/framework/`, maintainer references, or the build, packaging, test, and CI wiring that supports the framework.
 ---
 
 # First Tree
@@ -72,16 +72,25 @@ repos.
   into the source/workspace repo and scaffolds tree files only in the
   dedicated tree repo. Use `--here` to initialize the current repo in place
   when you are already inside the tree repo.
+- `context-tree publish --open-pr` is the default second-stage command after
+  `init` for source/workspace installs. Run it from the dedicated tree repo
+  once the initial tree version is ready to push.
 - Never run `context-tree init --here` in a source/workspace repo unless the
   user explicitly wants that repo itself to become the dedicated Context Tree.
   `--here` is for when you have already switched into the `*-context` repo.
 - `context-tree init` installs this skill into the target tree repo and
   scaffolds `.agents/skills/first-tree/`, `.claude/skills/first-tree/`,
   `NODE.md`, `AGENTS.md`, and `members/NODE.md`.
-- The default source/workspace workflow is: create or reuse `<repo>-context`,
-  prefer pushing it in the same GitHub organization as the source repo, add it
-  back to the source/workspace repo as a git submodule, and open a PR to the
-  source/workspace repo's default branch instead of merging automatically.
+- The default source/workspace workflow is: run `context-tree init` from the
+  source repo, draft the first tree version in `<repo>-context`, then run
+  `context-tree publish --open-pr` from that dedicated tree repo.
+- After `context-tree publish` succeeds, treat the source/workspace repo's
+  submodule checkout as the canonical local working copy for the tree. The
+  temporary sibling bootstrap checkout can be deleted when you no longer need
+  it.
+- If the dedicated tree repo was initialized manually with `context-tree init --here`
+  and does not have bootstrap metadata yet, pass `--source-repo PATH` to
+  `context-tree publish`.
 - If permissions, auth, or local filesystem constraints block the dedicated
   repo workflow, stop and report the blocker. Do not fall back to in-place tree
   bootstrap in the source/workspace repo.

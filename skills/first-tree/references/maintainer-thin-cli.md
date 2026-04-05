@@ -33,7 +33,7 @@ These root files are shell code, not canonical knowledge stores:
 - Keep root prose short. It should point to the skill, not duplicate the skill.
 - Keep command semantics, install layout rules, and maintainer guidance in the
   skill references.
-- If init/upgrade semantics change for source/workspace repos versus dedicated
+- If init/publish/upgrade semantics change for source/workspace repos versus dedicated
   tree repos, update `references/source-workspace-installation.md` and
   `references/upgrade-contract.md` instead of expanding root shell prose.
 - If the shell gains behavior that is not obviously mechanical, move that

@@ -43,6 +43,7 @@ sibling dedicated tree repo.
 cd my-app
 npx first-tree init
 cd ../my-app-context
+context-tree publish --open-pr
 ```
 
 If you already created a dedicated tree repo yourself, initialize it in place:
@@ -66,10 +67,13 @@ that repo itself to become the Context Tree.
 - Never create `NODE.md`, `members/`, or tree-scoped `AGENTS.md` in the
   source/workspace repo. Those files live only in the dedicated `*-context`
   repo.
-- After creating the dedicated tree repo, prefer pushing it to the same GitHub
-  organization as the source repo, add it back as a git submodule, and open a
-  PR to the source/workspace repo's default branch instead of merging
-  automatically.
+- After drafting the initial tree version, run `context-tree publish --open-pr`
+  from the dedicated tree repo. That command creates or reuses the GitHub
+  `*-context` repo, adds it back to the source/workspace repo as a git
+  submodule, and opens a PR instead of merging automatically.
+- After `context-tree publish` succeeds, treat the source repo's submodule
+  checkout as the canonical local working copy for the tree. The temporary
+  sibling bootstrap checkout can be deleted when you no longer need it.
 - `context-tree verify` checks both the progress checklist and deterministic
   tree validation. It is expected to fail until the required onboarding tasks
   are complete.
@@ -89,6 +93,7 @@ runtime.
 | Command | What it does |
 | --- | --- |
 | `context-tree init` | Install source/workspace integration locally and create or refresh a dedicated context tree repo; use `--here` only when you are already inside the dedicated tree repo |
+| `context-tree publish` | Publish a dedicated tree repo to GitHub, add it back to the source/workspace repo as a submodule, and optionally open the source-repo PR |
 | `context-tree verify` | Run verification checks against the current tree |
 | `context-tree upgrade` | Refresh the installed skill from the current `first-tree` npm package; in a source/workspace repo it updates only local integration, while tree repos also get follow-up tasks |
 | `context-tree help onboarding` | Print the onboarding guide |
@@ -112,6 +117,8 @@ runtime.
 ## Runtime And Maintainer Prerequisites
 
 - User trees: the onboarding guide targets Node.js 18+.
+- `context-tree publish` also expects GitHub CLI (`gh`) to be installed and
+  authenticated against GitHub.
 - This source repo: use Node.js 22 and pnpm 10 to match CI and the checked-in
   package manager version.
 

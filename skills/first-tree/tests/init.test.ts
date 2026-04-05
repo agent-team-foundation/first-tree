@@ -11,6 +11,7 @@ import {
 import { Repo } from "#skill/engine/repo.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
+  BOOTSTRAP_STATE,
   CLAUDE_INSTRUCTIONS_FILE,
   FRAMEWORK_VERSION,
   INSTALLED_PROGRESS,
@@ -79,6 +80,17 @@ describe("formatTaskList", () => {
     const output = formatTaskList([]);
     expect(output).toContain("# Context Tree Init");
     expect(output).toContain("## Verification");
+  });
+
+  it("documents the publish workflow for dedicated tree repos", () => {
+    const output = formatTaskList([], {
+      dedicatedTreeRepo: true,
+      sourceRepoName: "ADHD",
+      sourceRepoPath: "../ADHD",
+    });
+
+    expect(output).toContain("context-tree publish --open-pr");
+    expect(output).toContain("canonical local working copy");
   });
 });
 
@@ -234,6 +246,13 @@ describe("runInit", () => {
     expect(existsSync(join(treeRepo, AGENT_INSTRUCTIONS_FILE))).toBe(true);
     expect(existsSync(join(treeRepo, "members", "NODE.md"))).toBe(true);
     expect(existsSync(join(treeRepo, INSTALLED_PROGRESS))).toBe(true);
+    expect(
+      JSON.parse(readFileSync(join(treeRepo, BOOTSTRAP_STATE), "utf-8")),
+    ).toEqual({
+      sourceRepoName: basename(sourceRepoDir.path),
+      sourceRepoPath: `../${basename(sourceRepoDir.path)}`,
+      treeRepoName: basename(treeRepo),
+    });
     expect(existsSync(join(sourceRepoDir.path, "NODE.md"))).toBe(false);
     expect(existsSync(join(sourceRepoDir.path, "members", "NODE.md"))).toBe(false);
     expect(existsSync(join(sourceRepoDir.path, INSTALLED_PROGRESS))).toBe(false);

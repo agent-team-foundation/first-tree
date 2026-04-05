@@ -230,6 +230,8 @@ describe("skill artifacts", () => {
     expect(read("README.md")).toContain("dedicated tree repo");
     expect(read("README.md")).toContain("FIRST-TREE-SOURCE-INTEGRATION:");
     expect(read("README.md")).toContain("`first-tree` skill");
+    expect(read("README.md")).toContain("context-tree publish --open-pr");
+    expect(read("README.md")).toContain("canonical local working copy");
     expect(read("README.md")).toContain("Only use `--here` after you have already switched into the dedicated tree repo.");
     expect(read("AGENTS.md")).toContain("references/source-map.md");
     expect(read("AGENTS.md")).toContain("source-workspace-installation.md");
@@ -249,6 +251,7 @@ describe("skill artifacts", () => {
     expect(onboarding).toContain(".agents/skills/first-tree/");
     expect(onboarding).toContain(".claude/skills/first-tree/");
     expect(onboarding).toContain("FIRST-TREE-SOURCE-INTEGRATION:");
+    expect(onboarding).toContain("context-tree publish --open-pr");
     expect(onboarding).toContain("source/workspace repo");
     expect(onboarding).toContain("git submodule");
     expect(onboarding).toContain("Only use `--here` after you have already switched into the dedicated tree repo.");
@@ -266,6 +269,7 @@ describe("skill artifacts", () => {
     expect(skillMd).toContain(".claude/skills/first-tree/");
     expect(skillMd).toContain("source-workspace-installation.md");
     expect(skillMd).toContain("FIRST-TREE-SOURCE-INTEGRATION:");
+    expect(skillMd).toContain("context-tree publish --open-pr");
     expect(skillMd).toContain("Never run `context-tree init --here` in a source/workspace repo");
     expect(skillMd).not.toContain("canonical eval harness");
 
@@ -277,6 +281,8 @@ describe("skill artifacts", () => {
     expect(sourceMap).toContain("maintainer-thin-cli.md");
     expect(sourceMap).toContain("maintainer-build-and-distribution.md");
     expect(sourceMap).toContain("maintainer-testing.md");
+    expect(sourceMap).toContain("engine/publish.ts");
+    expect(sourceMap).toContain("tests/publish.test.ts");
     expect(sourceMap).toContain("engine/commands/");
     expect(sourceMap).toContain("engine/runtime/asset-loader.ts");
     expect(sourceMap).toContain("tests/init.test.ts");
@@ -291,6 +297,7 @@ describe("skill artifacts", () => {
     );
     expect(sourceWorkspaceInstall).toContain("FIRST-TREE-SOURCE-INTEGRATION:");
     expect(sourceWorkspaceInstall).toContain("git submodule");
+    expect(sourceWorkspaceInstall).toContain("context-tree publish --open-pr");
     expect(sourceWorkspaceInstall).toContain("Do not run `context-tree verify`");
     expect(sourceWorkspaceInstall).toContain("Do not run `context-tree init --here` in the source/workspace repo");
 
@@ -300,6 +307,11 @@ describe("skill artifacts", () => {
     expect(maintainerArchitecture).toContain("maintainer-only developer tooling");
     expect(maintainerArchitecture).toContain("`evals/`");
     expect(maintainerArchitecture).not.toContain("tests, and evals");
+
+    const buildAndDistribution = read(
+      "skills/first-tree/references/maintainer-build-and-distribution.md",
+    );
+    expect(buildAndDistribution).toContain("context-tree publish");
   });
 
   it("keeps public OSS entrypoints and package metadata in place", () => {

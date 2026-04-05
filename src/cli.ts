@@ -9,6 +9,7 @@ const USAGE = `usage: context-tree <command>
 
 Commands:
   init      Install source/workspace integration and create or refresh a dedicated context tree repo
+  publish   Publish a dedicated tree repo to GitHub and reconnect it to the source repo
   verify    Run verification checks against a tree repo
   upgrade   Refresh the installed skill in a tree repo
   help      Show help for a topic (e.g. \`help onboarding\`)
@@ -19,6 +20,7 @@ Options:
 
 Common examples:
   context-tree init
+  context-tree publish --open-pr
   mkdir my-org-context && cd my-org-context && git init && context-tree init --here
   context-tree verify --tree-path ../my-org-context
   context-tree upgrade --tree-path ../my-org-context
@@ -76,6 +78,10 @@ export async function runCli(
     case "verify": {
       const { runVerify } = await import("#skill/engine/commands/verify.js");
       return runVerify(args.slice(1));
+    }
+    case "publish": {
+      const { runPublish } = await import("#skill/engine/commands/publish.js");
+      return runPublish(args.slice(1));
     }
     case "upgrade": {
       const { runUpgrade } = await import("#skill/engine/commands/upgrade.js");

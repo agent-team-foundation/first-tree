@@ -42,12 +42,13 @@ These skill-owned files implement the framework behavior.
 | Path | Purpose |
 | --- | --- |
 | `engine/commands/` | Stable command entrypoints that the thin CLI imports |
-| `engine/init.ts` / `engine/verify.ts` / `engine/upgrade.ts` | Command implementations for install, verify, and upgrade |
+| `engine/init.ts` / `engine/publish.ts` / `engine/verify.ts` / `engine/upgrade.ts` | Command implementations for install, publish, verify, and upgrade |
 | `engine/onboarding.ts` | Canonical onboarding text loader |
 | `engine/repo.ts` | Repo inspection, source-vs-tree heuristics, and worktree-aware git-root helpers |
 | `engine/rules/` | Situation-aware task generation after `init` |
 | `engine/validators/` | Deterministic tree and member validation |
 | `engine/runtime/asset-loader.ts` | Path constants plus legacy-layout detection |
+| `engine/runtime/bootstrap.ts` | Dedicated-tree bootstrap metadata for the publish workflow |
 | `engine/runtime/installer.ts` | Bundled-package discovery, skill copy, and template-render helpers |
 | `engine/runtime/upgrader.ts` | Packaged-skill version comparison helpers |
 | `engine/runtime/adapters.ts` | Agent-integration path helpers |
@@ -74,6 +75,7 @@ not become the only place important maintainer knowledge lives.
 | Path | Coverage |
 | --- | --- |
 | `tests/init.test.ts` | Init scaffolding behavior |
+| `tests/publish.test.ts` | Publish workflow orchestration |
 | `tests/verify.test.ts` | Verification and progress gating |
 | `tests/rules.test.ts` | Task generation text |
 | `tests/asset-loader.test.ts` | Layout detection and path precedence |

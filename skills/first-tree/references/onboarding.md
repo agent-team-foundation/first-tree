@@ -55,6 +55,8 @@ Information an agent needs to **decide** on an approach — not to execute it.
 
 - A source/workspace Git repository, or an already-created dedicated tree repo
 - Node.js 18+
+- GitHub CLI (`gh`) if you want `context-tree publish` to create the remote
+  `*-context` repo and open the source-repo PR for you
 - The npm package is `first-tree`, the installed CLI command is
   `context-tree`.
 - `context-tree init` installs the framework skill into
@@ -74,6 +76,7 @@ files are scaffolded only in the dedicated tree repo.
 cd my-org
 context-tree init
 cd ../my-org-context
+context-tree publish --open-pr
 ```
 
 If you already created a dedicated tree repo manually, initialize it in place:
@@ -93,21 +96,20 @@ Either way, the framework installs into `.agents/skills/first-tree/` and
 `members/NODE.md`), and generates a task list in
 `.agents/skills/first-tree/progress.md`.
 
-Publishing tip: keep the tree repo in the same GitHub organization as the
-source repo unless you have a reason not to.
-
 Hard boundary: do **not** create `NODE.md`, `members/`, or tree-scoped
 `AGENTS.md` in the source/workspace repo. Those files belong only in the
 dedicated `*-context` repo.
 
 Default agent workflow after initialization:
 
-1. Create and push the dedicated `*-context` repo in the same GitHub
-   organization as the source repo.
-2. Add the dedicated tree repo back to the source/workspace repo as a `git submodule`.
-3. Open a PR against the source/workspace repo's default branch for the local
-   skill integration plus the new submodule pointer. Do not merge it
-   automatically.
+1. Draft the initial tree version in the dedicated `*-context` repo.
+2. Run `context-tree publish --open-pr` from that dedicated tree repo. It will
+   create or reuse the GitHub `*-context` repo in the same owner/org as the
+   source repo, add it back to the source/workspace repo as a `git submodule`,
+   and open the source-repo PR.
+3. After publish succeeds, treat the source repo's submodule checkout as the
+   canonical local working copy for the tree. The temporary sibling bootstrap
+   checkout can be deleted when you no longer need it.
 
 ### Step 2: Work Through the Task List
 
@@ -182,6 +184,7 @@ The tree doesn't duplicate source code — it captures what connects things and 
 | Command | Description |
 |---------|-------------|
 | `context-tree init` | Install local source/workspace integration and create or refresh a dedicated tree repo. By default, running in a source/workspace repo creates a sibling `<repo>-context`; use `--here` only when you are already inside the dedicated tree repo. |
+| `context-tree publish` | Publish a dedicated tree repo to GitHub, add it back to the source/workspace repo as a submodule, and optionally open the source-repo PR. |
 | `context-tree verify` | Check the installed progress file for unchecked items + run deterministic validation. Use `--tree-path` when invoking from another working directory. |
 | `context-tree upgrade` | Refresh the installed framework skill from the currently running `first-tree` npm package and generate follow-up tasks. Use `--tree-path` when invoking from another working directory. |
 | `context-tree help onboarding` | Print this onboarding guide. |

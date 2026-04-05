@@ -18,6 +18,7 @@ export const FRAMEWORK_PROMPTS_DIR = join(FRAMEWORK_ASSET_ROOT, "prompts");
 export const FRAMEWORK_EXAMPLES_DIR = join(FRAMEWORK_ASSET_ROOT, "examples");
 export const FRAMEWORK_HELPERS_DIR = join(FRAMEWORK_ASSET_ROOT, "helpers");
 export const INSTALLED_PROGRESS = join(SKILL_ROOT, "progress.md");
+export const BOOTSTRAP_STATE = join(SKILL_ROOT, "bootstrap.json");
 export const AGENT_INSTRUCTIONS_FILE = "AGENTS.md";
 export const LEGACY_AGENT_INSTRUCTIONS_FILE = "AGENT.md";
 export const AGENT_INSTRUCTIONS_TEMPLATE = "agents.md.template";

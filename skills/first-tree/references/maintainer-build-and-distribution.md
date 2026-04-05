@@ -53,6 +53,9 @@ another skill reference, not only in the files themselves.
 - Default dedicated-tree-repo creation must stay local-only. It may create a
   sibling git repo on disk, but it must not require remote repo creation or
   source-repo cloning.
+- `context-tree publish` is the explicit networked second-stage command for
+  GitHub repo creation, submodule add-back, and optional source-repo PR
+  opening. Keep that remote behavior there instead of expanding default `init`.
 - If you change anything that gets copied into user repos, bump
   `assets/framework/VERSION` and keep the upgrade task text in sync.
 - If packaging changes alter what gets installed into user repos, update

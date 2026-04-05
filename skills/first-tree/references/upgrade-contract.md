@@ -59,6 +59,9 @@ For a dedicated tree repo, the tree content still lives outside the skill:
 - `NODE.md`
 - `AGENTS.md`
 - `members/`
+- `.agents/skills/first-tree/bootstrap.json` when `context-tree init` was run
+  from a separate source/workspace repo and the publish workflow needs to
+  remember that source repo path
 
 The repo-owned `.agents/skills/first-tree/` path is the primary installed root
 for progress state, workflow references, and helper scripts. The matching
@@ -83,6 +86,14 @@ skill discovery and hooks.
   - validates root/frontmatter/agent markers
   - runs node and member validators
   - must reject source/workspace repos that carry only local integration
+- `context-tree publish`
+  - is the explicit second-stage command for publishing a dedicated tree repo
+    to GitHub after local bootstrap
+  - reads dedicated-tree bootstrap metadata from
+    `.agents/skills/first-tree/bootstrap.json` when available
+  - may create or reuse the GitHub `*-context` repo, push tree commits, add it
+    back to the source/workspace repo as a git submodule, and optionally open
+    the source-repo PR
 - `context-tree upgrade`
   - compares the installed skill payload version to the skill bundled with the
     currently running `first-tree` package
