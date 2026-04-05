@@ -53,7 +53,7 @@ describe('treeCommitMessage', () => {
 
   it('starts with summary line', () => {
     const msg = treeCommitMessage(provenance);
-    expect(msg.split('\n')[0]).toBe('Generate tree with context-tree CLI @ abc123d');
+    expect(msg.split('\n')[0]).toBe('Generate tree with first-tree CLI @ abc123d');
   });
 
   it('includes all provenance fields', () => {

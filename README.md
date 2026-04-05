@@ -1,6 +1,6 @@
 # first-tree
 
-`first-tree` publishes the `context-tree` CLI and bundles the canonical
+`first-tree` publishes the `first-tree` CLI and bundles the canonical
 `first-tree` skill used to bootstrap and maintain Context Tree repos.
 
 ## Install And Run
@@ -15,35 +15,34 @@
 
   ```bash
   npm install -g first-tree
-  context-tree init
+  first-tree init
   ```
 
 - Show the installed CLI version:
 
   ```bash
-  context-tree --version
+  first-tree --version
   ```
 
 - Show the command list:
 
   ```bash
-  context-tree --help
+  first-tree --help
   ```
 
-Although the npm package is named `first-tree`, the installed CLI command is
-`context-tree`.
+The npm package and installed CLI command are both `first-tree`.
 
 ## Quick Start
 
 Recommended workflow: start from your source or workspace repo and let
-`context-tree init` install local source/workspace integration and create a
+`first-tree init` installs local source/workspace integration and creates a
 sibling dedicated tree repo.
 
 ```bash
 cd my-app
 npx first-tree init
 cd ../my-app-context
-context-tree publish --open-pr
+first-tree publish --open-pr
 ```
 
 If you already created a dedicated tree repo yourself, initialize it in place:
@@ -51,14 +50,14 @@ If you already created a dedicated tree repo yourself, initialize it in place:
 ```bash
 mkdir my-org-context && cd my-org-context
 git init
-context-tree init --here
+first-tree init --here
 ```
 
 Only use `--here` after you have already switched into the dedicated tree repo.
 Do not use it inside the source/workspace repo unless you intentionally want
 that repo itself to become the Context Tree.
 
-- `context-tree init` installs `.agents/skills/first-tree/` and
+- `first-tree init` installs `.agents/skills/first-tree/` and
   `.claude/skills/first-tree/` in the current source/workspace repo, appends a
   single `FIRST-TREE-SOURCE-INTEGRATION:` line to root `AGENTS.md` and
   `CLAUDE.md`, then creates `NODE.md`, tree-scoped `AGENTS.md`,
@@ -67,17 +66,17 @@ that repo itself to become the Context Tree.
 - Never create `NODE.md`, `members/`, or tree-scoped `AGENTS.md` in the
   source/workspace repo. Those files live only in the dedicated `*-context`
   repo.
-- After drafting the initial tree version, run `context-tree publish --open-pr`
+- After drafting the initial tree version, run `first-tree publish --open-pr`
   from the dedicated tree repo. That command creates or reuses the GitHub
   `*-context` repo, adds it back to the source/workspace repo as a git
   submodule, and opens a PR instead of merging automatically.
-- After `context-tree publish` succeeds, treat the source repo's submodule
+- After `first-tree publish` succeeds, treat the source repo's submodule
   checkout as the canonical local working copy for the tree. The temporary
   sibling bootstrap checkout can be deleted when you no longer need it.
-- `context-tree verify` checks both the progress checklist and deterministic
+- `first-tree verify` checks both the progress checklist and deterministic
   tree validation. It is expected to fail until the required onboarding tasks
   are complete.
-- `context-tree upgrade` refreshes the installed skill from the currently
+- `first-tree upgrade` refreshes the installed skill from the currently
   running `first-tree` npm package. In a source/workspace repo it refreshes
   only the local installed skill plus the
   `FIRST-TREE-SOURCE-INTEGRATION:` line; use `--tree-path` to upgrade the
@@ -92,18 +91,18 @@ runtime.
 
 | Command | What it does |
 | --- | --- |
-| `context-tree init` | Install source/workspace integration locally and create or refresh a dedicated context tree repo; use `--here` only when you are already inside the dedicated tree repo |
-| `context-tree publish` | Publish a dedicated tree repo to GitHub, add it back to the source/workspace repo as a submodule, and optionally open the source-repo PR |
-| `context-tree verify` | Run verification checks against the current tree |
-| `context-tree upgrade` | Refresh the installed skill from the current `first-tree` npm package; in a source/workspace repo it updates only local integration, while tree repos also get follow-up tasks |
-| `context-tree help onboarding` | Print the onboarding guide |
-| `context-tree --help` | Show the available commands |
-| `context-tree --version` | Print the installed CLI version |
+| `first-tree init` | Install source/workspace integration locally and create or refresh a dedicated context tree repo; use `--here` only when you are already inside the dedicated tree repo |
+| `first-tree publish` | Publish a dedicated tree repo to GitHub, add it back to the source/workspace repo as a submodule, and optionally open the source-repo PR |
+| `first-tree verify` | Run verification checks against the current tree |
+| `first-tree upgrade` | Refresh the installed skill from the current `first-tree` npm package; in a source/workspace repo it updates only local integration, while tree repos also get follow-up tasks |
+| `first-tree help onboarding` | Print the onboarding guide |
+| `first-tree --help` | Show the available commands |
+| `first-tree --version` | Print the installed CLI version |
 
-## Package Name vs Command
+## Package And Command
 
 - The npm package is `first-tree`.
-- The installed CLI command is `context-tree`.
+- The installed CLI command is also `first-tree`.
 - The installed skill directories inside a user tree are
   `.agents/skills/first-tree/` and `.claude/skills/first-tree/`.
 - The published package keeps its bundled canonical source under
@@ -111,13 +110,13 @@ runtime.
 - When maintainer docs say "the `first-tree` skill", they mean that bundled
   skill directory, not the npm package name.
 - `npx first-tree init` is the quickest one-off entrypoint.
-- `npm install -g first-tree` adds `context-tree` to your PATH for repeated
+- `npm install -g first-tree` adds `first-tree` to your PATH for repeated
   use.
 
 ## Runtime And Maintainer Prerequisites
 
 - User trees: the onboarding guide targets Node.js 18+.
-- `context-tree publish` also expects GitHub CLI (`gh`) to be installed and
+- `first-tree publish` also expects GitHub CLI (`gh`) to be installed and
   authenticated against GitHub.
 - This source repo: use Node.js 22 and pnpm 10 to match CI and the checked-in
   package manager version.
@@ -128,7 +127,7 @@ runtime.
   bundled skill.
 - `skills/first-tree/` is the canonical source for framework behavior, shipped
   templates, maintainer references, and validation logic.
-- `context-tree init` installs that bundled skill into `.agents/skills/first-tree/`
+- `first-tree init` installs that bundled skill into `.agents/skills/first-tree/`
   and `.claude/skills/first-tree/` inside user repos.
 - `evals/` is maintainer-only developer tooling for the source repo. It is
   intentionally not part of the published package.

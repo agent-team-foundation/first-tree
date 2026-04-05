@@ -16,7 +16,7 @@ For each .yaml file in evals/cases/:
 3. If a test case FAILS, inspect the verify.sh script and the error output. If the verification script has bugs (wrong paths, incorrect assertions, missing dependencies), fix the verify.sh and re-run. Do NOT modify the eval harness code — only fix verify.sh scripts.
 
 4. After all cases are done, generate an aggregate HTML report:
-   npx tsx evals/scripts/aggregate-report.ts ~/.context-tree/evals/*.json
+   npx tsx evals/scripts/aggregate-report.ts ~/.first-tree/evals/*.json
 
 Process cases in this order (smaller/faster first):
 nanobot-exectool-regex, nanobot-streaming-metadata, pydantic-importstring-error, fastapi-optional-file-list, langchain-merge-parallel-tools, autogen-serialization-data-loss, autogen-provider-namespace-restriction, llamaindex-async-postprocess, llamaindex-run-id-passthrough, vercel-ai-oauth-trailing-slash, vercel-ai-error-code

@@ -1,13 +1,13 @@
 ---
 name: first-tree
-description: Maintain the canonical `first-tree` skill and the thin `context-tree` CLI distributed by the `first-tree` npm package. Use when modifying `context-tree` commands (`init`, `publish`, `verify`, `upgrade`, `help onboarding`), the installed skill payload under `assets/framework/`, maintainer references, or the build, packaging, test, and CI wiring that supports the framework.
+description: Maintain the canonical `first-tree` skill and CLI distributed by the `first-tree` npm package. Use when modifying `first-tree` commands (`init`, `publish`, `verify`, `upgrade`, `help onboarding`), the installed skill payload under `assets/framework/`, maintainer references, or the build, packaging, test, and CI wiring that supports the framework.
 ---
 
 # First Tree
 
 Use this skill when the task depends on the exact behavior of the
-`context-tree` CLI or the installed `.agents/skills/first-tree/` and
-`.claude/skills/first-tree/` payloads that `context-tree init` ships to user
+`first-tree` CLI or the installed `.agents/skills/first-tree/` and
+`.claude/skills/first-tree/` payloads that `first-tree init` ships to user
 repos.
 
 ## Source Of Truth
@@ -18,7 +18,7 @@ repos.
   repos.
 - `engine/` holds the canonical framework and CLI behavior.
 - `scripts/` holds maintenance helpers for validating and running the skill.
-- In maintainer docs, use `context-tree` for the CLI, `skills/first-tree/` for
+- In maintainer docs, use `first-tree` for the CLI, `skills/first-tree/` for
   the bundled source path, and `.agents/skills/first-tree/` /
   `.claude/skills/first-tree/` for installed user-repo paths.
 
@@ -67,34 +67,34 @@ repos.
   the current repo keeps only the installed skill plus a
   `FIRST-TREE-SOURCE-INTEGRATION:` line in `AGENTS.md` and `CLAUDE.md`. Do not
   create `NODE.md`, `members/`, or tree-scoped `AGENTS.md` there.
-- `context-tree init` defaults to creating or reusing a sibling dedicated tree
+- `first-tree init` defaults to creating or reusing a sibling dedicated tree
   repo when invoked from a source/workspace repo. It installs the bundled skill
   into the source/workspace repo and scaffolds tree files only in the
   dedicated tree repo. Use `--here` to initialize the current repo in place
   when you are already inside the tree repo.
-- `context-tree publish --open-pr` is the default second-stage command after
+- `first-tree publish --open-pr` is the default second-stage command after
   `init` for source/workspace installs. Run it from the dedicated tree repo
   once the initial tree version is ready to push.
-- Never run `context-tree init --here` in a source/workspace repo unless the
+- Never run `first-tree init --here` in a source/workspace repo unless the
   user explicitly wants that repo itself to become the dedicated Context Tree.
   `--here` is for when you have already switched into the `*-context` repo.
-- `context-tree init` installs this skill into the target tree repo and
+- `first-tree init` installs this skill into the target tree repo and
   scaffolds `.agents/skills/first-tree/`, `.claude/skills/first-tree/`,
   `NODE.md`, `AGENTS.md`, and `members/NODE.md`.
-- The default source/workspace workflow is: run `context-tree init` from the
+- The default source/workspace workflow is: run `first-tree init` from the
   source repo, draft the first tree version in `<repo>-context`, then run
-  `context-tree publish --open-pr` from that dedicated tree repo.
-- After `context-tree publish` succeeds, treat the source/workspace repo's
+  `first-tree publish --open-pr` from that dedicated tree repo.
+- After `first-tree publish` succeeds, treat the source/workspace repo's
   submodule checkout as the canonical local working copy for the tree. The
   temporary sibling bootstrap checkout can be deleted when you no longer need
   it.
-- If the dedicated tree repo was initialized manually with `context-tree init --here`
+- If the dedicated tree repo was initialized manually with `first-tree init --here`
   and does not have bootstrap metadata yet, pass `--source-repo PATH` to
-  `context-tree publish`.
+  `first-tree publish`.
 - If permissions, auth, or local filesystem constraints block the dedicated
   repo workflow, stop and report the blocker. Do not fall back to in-place tree
   bootstrap in the source/workspace repo.
-- `context-tree upgrade` refreshes the installed skill from the copy bundled
+- `first-tree upgrade` refreshes the installed skill from the copy bundled
   with the currently running `first-tree` package. In a source/workspace repo
   it refreshes only the local skill plus the
   `FIRST-TREE-SOURCE-INTEGRATION:` line; upgrade the dedicated tree repo
@@ -114,8 +114,8 @@ repos.
 - Keep decision knowledge in the tree and execution detail in source systems.
 - Keep the skill as the only canonical knowledge source. The root CLI/package
   shell must not become a second source of framework semantics.
-- Keep the CLI name written as `context-tree` in maintainer and user-facing
-  docs so it is not confused with the `first-tree` package that ships it.
+- Keep the CLI name written as `first-tree` in maintainer and user-facing
+  docs so command examples stay aligned with the published package.
 - Keep normal `init` / `upgrade` flows self-contained. They must work from the
   skill bundled in the current package without cloning the source repo or
   relying on network access.

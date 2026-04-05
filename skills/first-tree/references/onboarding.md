@@ -55,18 +55,17 @@ Information an agent needs to **decide** on an approach — not to execute it.
 
 - A source/workspace Git repository, or an already-created dedicated tree repo
 - Node.js 18+
-- GitHub CLI (`gh`) if you want `context-tree publish` to create the remote
+- GitHub CLI (`gh`) if you want `first-tree publish` to create the remote
   `*-context` repo and open the source-repo PR for you
-- The npm package is `first-tree`, the installed CLI command is
-  `context-tree`.
-- `context-tree init` installs the framework skill into
+- The npm package and installed CLI command are both `first-tree`.
+- `first-tree init` installs the framework skill into
   `.agents/skills/first-tree/` and `.claude/skills/first-tree/`.
 - Use `npx first-tree init` for one-off runs, or `npm install -g first-tree`
-  to add the `context-tree` command to your PATH
+  to add the `first-tree` command to your PATH
 
 ### Step 1: Initialize
 
-Recommended workflow: run `context-tree init` from your source or workspace repo.
+Recommended workflow: run `first-tree init` from your source or workspace repo.
 The CLI will install the bundled skill in the current repo, update root
 `AGENTS.md` and `CLAUDE.md` with a `FIRST-TREE-SOURCE-INTEGRATION:` line, and
 create a sibling dedicated tree repo named `<repo>-context` by default. Tree
@@ -74,9 +73,9 @@ files are scaffolded only in the dedicated tree repo.
 
 ```bash
 cd my-org
-context-tree init
+first-tree init
 cd ../my-org-context
-context-tree publish --open-pr
+first-tree publish --open-pr
 ```
 
 If you already created a dedicated tree repo manually, initialize it in place:
@@ -84,7 +83,7 @@ If you already created a dedicated tree repo manually, initialize it in place:
 ```bash
 mkdir my-org-context && cd my-org-context
 git init
-context-tree init --here
+first-tree init --here
 ```
 
 Only use `--here` after you have already switched into the dedicated tree repo.
@@ -103,7 +102,7 @@ dedicated `*-context` repo.
 Default agent workflow after initialization:
 
 1. Draft the initial tree version in the dedicated `*-context` repo.
-2. Run `context-tree publish --open-pr` from that dedicated tree repo. It will
+2. Run `first-tree publish --open-pr` from that dedicated tree repo. It will
    create or reuse the GitHub `*-context` repo in the same owner/org as the
    source repo, add it back to the source/workspace repo as a `git submodule`,
    and open the source-repo PR.
@@ -131,20 +130,20 @@ As you complete each task, check it off in
 ### Step 3: Verify
 
 ```bash
-context-tree verify
+first-tree verify
 ```
 
 Or, from your source/workspace repo:
 
 ```bash
-context-tree verify --tree-path ../my-org-context
+first-tree verify --tree-path ../my-org-context
 ```
 
 This fails if any items in `.agents/skills/first-tree/progress.md` remain
 unchecked, and runs deterministic checks (valid frontmatter, node structure,
 member nodes exist).
 
-Do not run `context-tree verify` in the source/workspace repo itself. That repo
+Do not run `first-tree verify` in the source/workspace repo itself. That repo
 only carries the installed skill plus the
 `FIRST-TREE-SOURCE-INTEGRATION:` line.
 
@@ -183,11 +182,11 @@ The tree doesn't duplicate source code — it captures what connects things and 
 
 | Command | Description |
 |---------|-------------|
-| `context-tree init` | Install local source/workspace integration and create or refresh a dedicated tree repo. By default, running in a source/workspace repo creates a sibling `<repo>-context`; use `--here` only when you are already inside the dedicated tree repo. |
-| `context-tree publish` | Publish a dedicated tree repo to GitHub, add it back to the source/workspace repo as a submodule, and optionally open the source-repo PR. |
-| `context-tree verify` | Check the installed progress file for unchecked items + run deterministic validation. Use `--tree-path` when invoking from another working directory. |
-| `context-tree upgrade` | Refresh the installed framework skill from the currently running `first-tree` npm package and generate follow-up tasks. Use `--tree-path` when invoking from another working directory. |
-| `context-tree help onboarding` | Print this onboarding guide. |
+| `first-tree init` | Install local source/workspace integration and create or refresh a dedicated tree repo. By default, running in a source/workspace repo creates a sibling `<repo>-context`; use `--here` only when you are already inside the dedicated tree repo. |
+| `first-tree publish` | Publish a dedicated tree repo to GitHub, add it back to the source/workspace repo as a submodule, and optionally open the source-repo PR. |
+| `first-tree verify` | Check the installed progress file for unchecked items + run deterministic validation. Use `--tree-path` when invoking from another working directory. |
+| `first-tree upgrade` | Refresh the installed framework skill from the currently running `first-tree` npm package and generate follow-up tasks. Use `--tree-path` when invoking from another working directory. |
+| `first-tree help onboarding` | Print this onboarding guide. |
 
 ---
 
@@ -196,25 +195,25 @@ The tree doesn't duplicate source code — it captures what connects things and 
 When the framework updates:
 
 ```bash
-context-tree upgrade
+first-tree upgrade
 ```
 
-`context-tree upgrade` refreshes `.agents/skills/first-tree/` and
+`first-tree upgrade` refreshes `.agents/skills/first-tree/` and
 `.claude/skills/first-tree/` from the skill bundled with the currently running
 `first-tree` npm package, preserves your tree content, and generates follow-up
 tasks in `.agents/skills/first-tree/progress.md`.
 
-If you run `context-tree upgrade` in the source/workspace repo, it refreshes
+If you run `first-tree upgrade` in the source/workspace repo, it refreshes
 only the local installed skill plus the `FIRST-TREE-SOURCE-INTEGRATION:` lines.
-Run `context-tree upgrade --tree-path ../my-org-context` to upgrade the
+Run `first-tree upgrade --tree-path ../my-org-context` to upgrade the
 dedicated tree repo itself.
 
 If your repo still uses the older `skills/first-tree/` or `.context-tree/` layouts,
-`context-tree upgrade` will migrate it to the current installed layout first.
+`first-tree upgrade` will migrate it to the current installed layout first.
 
 To pick up a newer framework release, first run a newer package version, for
 example `npx first-tree@latest upgrade`, or update your global `first-tree`
-install before running `context-tree upgrade`.
+install before running `first-tree upgrade`.
 
 ---
 

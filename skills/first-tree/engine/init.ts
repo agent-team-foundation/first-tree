@@ -36,9 +36,9 @@ import { upsertSourceIntegrationFiles } from "#skill/engine/runtime/source-integ
  * all generated task text at once.
  */
 export const INTERACTIVE_TOOL = "AskUserQuestion";
-export const INIT_USAGE = `usage: context-tree init [--here] [--tree-name NAME] [--tree-path PATH]
+export const INIT_USAGE = `usage: first-tree init [--here] [--tree-name NAME] [--tree-path PATH]
 
-By default, running \`context-tree init\` inside a source or workspace repo installs
+By default, running \`first-tree init\` inside a source or workspace repo installs
 the first-tree skill in the current repo, updates \`AGENTS.md\` and \`CLAUDE.md\`
 with a \`${SOURCE_INTEGRATION_MARKER}\` line, and creates a sibling dedicated tree
 repo named \`<repo>-context\`.
@@ -123,7 +123,7 @@ export function formatTaskList(
       );
       lines.push("## Source Workspace Workflow");
       lines.push(
-        `- [ ] When this initial tree version is ready, run \`context-tree publish --open-pr\` from this dedicated tree repo. It will create or reuse the GitHub \`*-context\` repo, add it back to \`${context.sourceRepoName}\` as a git submodule, and open the source/workspace PR.`,
+        `- [ ] When this initial tree version is ready, run \`first-tree publish --open-pr\` from this dedicated tree repo. It will create or reuse the GitHub \`*-context\` repo, add it back to \`${context.sourceRepoName}\` as a git submodule, and open the source/workspace PR.`,
       );
       lines.push(
         `- [ ] After publish succeeds, treat the source/workspace repo's \`${context.sourceRepoName}\` submodule checkout as the canonical local working copy for this tree. The temporary sibling bootstrap repo can be deleted when you no longer need it.`,
@@ -156,14 +156,14 @@ export function formatTaskList(
   }
   lines.push("## Verification");
   lines.push(
-    "After completing the tasks above, run `context-tree verify` to confirm:",
+    "After completing the tasks above, run `first-tree verify` to confirm:",
   );
   lines.push(`- [ ] \`${FRAMEWORK_VERSION}\` exists`);
   lines.push("- [ ] Root NODE.md has valid frontmatter (title, owners)");
   lines.push(
     `- [ ] \`${AGENT_INSTRUCTIONS_FILE}\` is the only agent instructions file and has framework markers`,
   );
-  lines.push("- [ ] `context-tree verify` passes with no errors");
+  lines.push("- [ ] `first-tree verify` passes with no errors");
   lines.push("- [ ] At least one member node exists");
   lines.push("");
   lines.push("---");
@@ -171,7 +171,7 @@ export function formatTaskList(
   lines.push(
     "**Important:** As you complete each task, check it off in" +
       ` \`${INSTALLED_PROGRESS}\` by changing \`- [ ]\` to \`- [x]\`.` +
-      " Run `context-tree verify` when done — it will fail if any" +
+      " Run `first-tree verify` when done — it will fail if any" +
       " items remain unchecked.",
   );
   lines.push("");
@@ -205,9 +205,9 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
   const r = initTarget.repo;
   if (options?.here && sourceRepo.isLikelySourceRepo() && !sourceRepo.looksLikeTreeRepo()) {
     console.log(
-      "Warning: `context-tree init --here` is initializing this source/workspace" +
+      "Warning: `first-tree init --here` is initializing this source/workspace" +
         " repo in place. This will create `NODE.md`, `members/`, and tree-scoped" +
-        ` ${AGENT_INSTRUCTIONS_FILE} here. Use plain \`context-tree init\` to create` +
+        ` ${AGENT_INSTRUCTIONS_FILE} here. Use plain \`first-tree init\` to create` +
         " a sibling dedicated tree repo instead.",
     );
     console.log();
@@ -415,7 +415,7 @@ function resolveInitTarget(
     return {
       ok: false,
       message:
-        "not a git repository. Run this from your source/workspace repo, or create a dedicated tree repo first:\n  git init\n  context-tree init --here",
+        "not a git repository. Run this from your source/workspace repo, or create a dedicated tree repo first:\n  git init\n  first-tree init --here",
     };
   }
 

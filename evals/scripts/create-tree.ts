@@ -3,10 +3,10 @@
  *
  * Workflow:
  * 1. Clone code repo at commit (read-only reference)
- * 2. Install context-tree CLI globally (pnpm build && npm link)
+ * 2. Install first-tree CLI globally (pnpm build && npm link)
  * 3. Clone tree repo, create orphan branch, init as git repo
  * 4. Spawn Claude Code IN the tree repo with a prompt that points
- *    to the source code path — agent runs context-tree init and
+ *    to the source code path — agent runs first-tree init and
  *    populates the full tree
  * 5. Commit and push
  *
@@ -50,16 +50,16 @@ The source code repository is cloned at: ${codeDir}
 Read the source code from that path to understand the project structure. Do NOT modify anything in that directory.
 
 ## Your working directory
-You are working in a context tree repository. This is where the context tree will live. \`context-tree\` is a CLI tool that is already installed and available on your PATH.
+You are working in a context tree repository. This is where the context tree will live. \`first-tree\` is a CLI tool that is already installed and available on your PATH.
 
 ## Step 1: Learn about context trees
-Run \`context-tree help onboarding\` to understand what a context tree is, how it is structured, and the full setup workflow.
+Run \`first-tree help onboarding\` to understand what a context tree is, how it is structured, and the full setup workflow.
 
 ## Step 2: Initialize
-Run \`context-tree init --here\` in this directory. This bootstraps the framework, creates template files, and generates a task list in skills/first-tree/progress.md.
+Run \`first-tree init --here\` in this directory. This bootstraps the framework, creates template files, and generates a task list in .agents/skills/first-tree/progress.md.
 
 ## Step 3: Complete the task list
-Read skills/first-tree/progress.md and complete every task. Check off each task as you finish it by changing \`- [ ]\` to \`- [x]\`.
+Read .agents/skills/first-tree/progress.md and complete every task. Check off each task as you finish it by changing \`- [ ]\` to \`- [x]\`.
 
 ## Step 4: Populate the full tree
 When the task list asks whether to populate the tree, choose **Yes**. Then:
@@ -75,7 +75,7 @@ When the task list asks whether to populate the tree, choose **Yes**. Then:
 ## Rules
 - Do not ask the user any questions — make reasonable decisions autonomously.
 - When the progress file asks you to use AskUserQuestion, skip that step and make a reasonable choice yourself.
-- Run \`context-tree verify\` when done to confirm the tree is valid.
+- Run \`first-tree verify\` when done to confirm the tree is valid.
 - Ensure every directory that has content gets a NODE.md.
 - All file writes go in THIS directory (the tree repo), never in the source code directory.
 `;
@@ -108,7 +108,7 @@ export async function createTree(options: CreateTreeOptions): Promise<{ branch: 
     const codeDir = cloneCodeRepo(repo, commit);
     tmpdirs.push(codeDir);
 
-    // 2. Install context-tree CLI globally via npm link
+    // 2. Install first-tree CLI globally via npm link
     const cliDir = installCliAtVersion(cliVersion);
     tmpdirs.push(cliDir);
     const cliVer = getCliVersion(cliDir);
@@ -155,7 +155,7 @@ export async function createTree(options: CreateTreeOptions): Promise<{ branch: 
     process.stderr.write(`\nDone! Tree created:\n`);
     process.stderr.write(`  Branch: ${branch}\n`);
     process.stderr.write(`  Commit: ${sha}\n`);
-    process.stderr.write(`  CLI:    context-tree v${cliVer} (${cliVersion.slice(0, 7)})\n`);
+    process.stderr.write(`  CLI:    first-tree v${cliVer} (${cliVersion.slice(0, 7)})\n`);
 
     return { branch, sha };
   } finally {

@@ -105,7 +105,7 @@ if [[ -e "$SOURCE_DIR/evals" ]]; then
   exit 1
 fi
 
-require_file "$REPO_ROOT/evals/context-tree-eval.test.ts"
+require_file "$REPO_ROOT/evals/first-tree-eval.test.ts"
 require_file "$REPO_ROOT/evals/README.md"
 require_file "$REPO_ROOT/evals/helpers/case-loader.ts"
 require_file "$REPO_ROOT/evals/scripts/tree-manager.ts"

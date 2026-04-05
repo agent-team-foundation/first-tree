@@ -10,9 +10,9 @@ import {
   SKILL_ROOT,
 } from "#skill/engine/runtime/asset-loader.js";
 
-export const PUBLISH_USAGE = `usage: context-tree publish [--open-pr] [--tree-path PATH] [--source-repo PATH] [--submodule-path PATH] [--source-remote NAME]
+export const PUBLISH_USAGE = `usage: first-tree publish [--open-pr] [--tree-path PATH] [--source-repo PATH] [--submodule-path PATH] [--source-remote NAME]
 
-Run this from the dedicated tree repo after \`context-tree init\`. The command
+Run this from the dedicated tree repo after \`first-tree init\`. The command
 creates or reuses the GitHub \`*-context\` repo, pushes the current tree
 commit, adds that repo back to the source/workspace repo as a git submodule,
 and prepares the source-repo branch.
@@ -609,14 +609,14 @@ export function runPublish(repo?: Repo, options?: PublishOptions): number {
 
   if (treeRepo.hasSourceWorkspaceIntegration() && !treeRepo.looksLikeTreeRepo()) {
     console.error(
-      `Error: this repo only has the first-tree source/workspace integration installed. Run \`context-tree publish --tree-path ../${treeRepo.repoName()}-context\` or switch into the dedicated tree repo first.`,
+      `Error: this repo only has the first-tree source/workspace integration installed. Run \`first-tree publish --tree-path ../${treeRepo.repoName()}-context\` or switch into the dedicated tree repo first.`,
     );
     return 1;
   }
 
   if (!treeRepo.hasFramework() || !treeRepo.looksLikeTreeRepo()) {
     console.error(
-      "Error: `context-tree publish` must run from a dedicated tree repo (or use `--tree-path` to point at one). Run `context-tree init` first.",
+      "Error: `first-tree publish` must run from a dedicated tree repo (or use `--tree-path` to point at one). Run `first-tree init` first.",
     );
     return 1;
   }
@@ -624,7 +624,7 @@ export function runPublish(repo?: Repo, options?: PublishOptions): number {
   const sourceRepoRoot = resolveSourceRepoRoot(treeRepo, options);
   if (sourceRepoRoot === null) {
     console.error(
-      "Error: could not determine the source/workspace repo for this tree. Re-run `context-tree init` from the source repo first, or pass `--source-repo PATH`.",
+      "Error: could not determine the source/workspace repo for this tree. Re-run `first-tree init` from the source repo first, or pass `--source-repo PATH`.",
     );
     return 1;
   }
@@ -639,14 +639,14 @@ export function runPublish(repo?: Repo, options?: PublishOptions): number {
 
   if (sourceRepo.root === treeRepo.root) {
     console.error(
-      "Error: the source/workspace repo and dedicated tree repo resolved to the same path. `context-tree publish` expects two separate repos.",
+      "Error: the source/workspace repo and dedicated tree repo resolved to the same path. `first-tree publish` expects two separate repos.",
     );
     return 1;
   }
 
   if (!sourceRepo.hasCurrentInstalledSkill() || !sourceRepo.hasSourceWorkspaceIntegration()) {
     console.error(
-      "Error: the source/workspace repo does not have the first-tree source integration installed. Run `context-tree init` from the source/workspace repo first.",
+      "Error: the source/workspace repo does not have the first-tree source integration installed. Run `first-tree init` from the source/workspace repo first.",
     );
     return 1;
   }

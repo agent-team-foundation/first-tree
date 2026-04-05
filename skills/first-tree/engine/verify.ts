@@ -8,7 +8,7 @@ import { runValidateMembers } from "#skill/engine/validators/members.js";
 import { runValidateNodes } from "#skill/engine/validators/nodes.js";
 
 const UNCHECKED_RE = /^- \[ \] (.+)$/gm;
-export const VERIFY_USAGE = `usage: context-tree verify [--tree-path PATH]
+export const VERIFY_USAGE = `usage: first-tree verify [--tree-path PATH]
 
 Options:
   --tree-path PATH   Verify a tree repo from another working directory
@@ -52,14 +52,14 @@ export function runVerify(repo?: Repo, nodeValidator?: NodeValidator): number {
 
   if (r.hasSourceWorkspaceIntegration() && !r.looksLikeTreeRepo()) {
     console.error(
-      `Error: this repo only has the first-tree source/workspace integration installed. Verify the dedicated tree repo instead, for example \`context-tree verify --tree-path ../${r.repoName()}-context\`.`,
+      `Error: this repo only has the first-tree source/workspace integration installed. Verify the dedicated tree repo instead, for example \`first-tree verify --tree-path ../${r.repoName()}-context\`.`,
     );
     return 1;
   }
 
   if (r.isLikelySourceRepo() && !r.looksLikeTreeRepo()) {
     console.error(
-      "Error: no installed framework skill found here. This looks like a source/workspace repo. Run `context-tree init` to create a dedicated tree repo, or pass `--tree-path` to verify an existing tree repo.",
+      "Error: no installed framework skill found here. This looks like a source/workspace repo. Run `first-tree init` to create a dedicated tree repo, or pass `--tree-path` to verify an existing tree repo.",
     );
     return 1;
   }

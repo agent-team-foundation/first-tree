@@ -28,7 +28,7 @@ export function evaluate(repo: Repo): RuleResult {
 
   tasks.push(
     "After all domains are populated, update the root NODE.md to list every top-level domain with a one-line " +
-      "description. Ensure all NODE.md files pass `context-tree verify` — valid frontmatter, no placeholders, " +
+      "description. Ensure all NODE.md files pass `first-tree verify` — valid frontmatter, no placeholders, " +
       "and soft_links that resolve correctly.",
   );
 

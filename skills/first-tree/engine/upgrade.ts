@@ -28,7 +28,7 @@ import {
   readSourceVersion,
 } from "#skill/engine/runtime/upgrader.js";
 
-export const UPGRADE_USAGE = `usage: context-tree upgrade [--tree-path PATH]
+export const UPGRADE_USAGE = `usage: first-tree upgrade [--tree-path PATH]
 
 Options:
   --tree-path PATH   Upgrade a tree repo from another working directory
@@ -54,6 +54,7 @@ function formatUpgradeTaskList(
     `- [ ] Re-copy any workflow updates you want from \`${FRAMEWORK_WORKFLOWS_DIR}/\` into \`.github/workflows/\``,
     `- [ ] Re-check any local agent setup that references \`${CLAUDE_SKILL_ROOT}/assets/framework/examples/\` or \`${CLAUDE_SKILL_ROOT}/assets/framework/helpers/\``,
     `- [ ] Re-check any repo scripts or workflow files that reference \`${SKILL_ROOT}/assets/framework/\``,
+    "- [ ] Replace any stale `context-tree` CLI command references in repo-specific docs, scripts, workflows, or agent config with `first-tree`",
     "",
   ];
 
@@ -97,13 +98,13 @@ function formatUpgradeTaskList(
   lines.push(
     "## Verification",
     `- [ ] \`${FRAMEWORK_VERSION}\` reads \`${packagedVersion}\``,
-    "- [ ] `context-tree verify` passes",
+    "- [ ] `first-tree verify` passes",
     "",
     "---",
     "",
     "**Important:** As you complete each task, check it off in" +
       ` \`${INSTALLED_PROGRESS}\` by changing \`- [ ]\` to \`- [x]\`.` +
-      " Run `context-tree verify` when done — it will fail if any" +
+      " Run `first-tree verify` when done — it will fail if any" +
       " items remain unchecked.",
     "",
   );
@@ -122,14 +123,14 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
 
   if (workingRepo.isLikelySourceRepo() && !workingRepo.looksLikeTreeRepo() && !workspaceOnlyIntegration) {
     console.error(
-      "Error: no installed framework skill found here. This looks like a source/workspace repo. Run `context-tree init` to create a dedicated tree repo, or pass `--tree-path` to upgrade an existing tree repo.",
+      "Error: no installed framework skill found here. This looks like a source/workspace repo. Run `first-tree init` to create a dedicated tree repo, or pass `--tree-path` to upgrade an existing tree repo.",
     );
     return 1;
   }
 
   if (!workingRepo.hasFramework()) {
     console.error(
-      "Error: no installed framework skill found. Run `context-tree init` first.",
+      "Error: no installed framework skill found. Run `first-tree init` first.",
     );
     return 1;
   }
@@ -137,7 +138,7 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
   const layout = workingRepo.frameworkLayout();
   if (layout === null) {
     console.error(
-      "Error: no installed framework skill found. Run `context-tree init` first.",
+      "Error: no installed framework skill found. Run `first-tree init` first.",
     );
     return 1;
   }
@@ -170,7 +171,7 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
     compareFrameworkVersions(localVersion, packagedVersion) > 0
   ) {
     console.log(
-      "The installed framework is newer than the skill bundled with this `first-tree` package. Install a newer package version before running `context-tree upgrade`.",
+      "The installed framework is newer than the skill bundled with this `first-tree` package. Install a newer package version before running `first-tree upgrade`.",
     );
     return 1;
   }
@@ -196,7 +197,7 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
           `Already up to date with the bundled skill (${FRAMEWORK_VERSION} = ${localVersion}).`,
         );
         console.log(
-          `This repo only carries source/workspace integration. Upgrade the dedicated tree repo separately with \`context-tree upgrade --tree-path ${sourceRepoTreePathHint}\`.`,
+          `This repo only carries source/workspace integration. Upgrade the dedicated tree repo separately with \`first-tree upgrade --tree-path ${sourceRepoTreePathHint}\`.`,
         );
         return 0;
       }
@@ -207,7 +208,7 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
         `Updated the ${SOURCE_INTEGRATION_MARKER} marker lines in ${changedFiles.map((file) => `\`${file}\``).join(" and ")}.`,
       );
       console.log(
-        `This repo only carries source/workspace integration. Upgrade the dedicated tree repo separately with \`context-tree upgrade --tree-path ${sourceRepoTreePathHint}\`.`,
+        `This repo only carries source/workspace integration. Upgrade the dedicated tree repo separately with \`first-tree upgrade --tree-path ${sourceRepoTreePathHint}\`.`,
       );
       return 0;
     }
@@ -233,7 +234,7 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
       );
     }
     console.log(
-      `This repo is not the Context Tree. Upgrade the dedicated tree repo separately with \`context-tree upgrade --tree-path ${sourceRepoTreePathHint}\`.`,
+      `This repo is not the Context Tree. Upgrade the dedicated tree repo separately with \`first-tree upgrade --tree-path ${sourceRepoTreePathHint}\`.`,
     );
     return 0;
   }

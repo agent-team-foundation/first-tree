@@ -3,12 +3,12 @@
 Thanks for helping improve `first-tree`.
 
 This repository ships one canonical `first-tree` skill plus a thin
-`context-tree` CLI shell.
+`first-tree` CLI shell.
 
 Naming note:
 
 - `first-tree` is the npm package name.
-- `context-tree` is the installed CLI command.
+- `first-tree` is also the installed CLI command.
 - `skills/first-tree/` is the bundled skill path inside this repo.
 - User trees install that payload into `.agents/skills/first-tree/` and
   `.claude/skills/first-tree/`.

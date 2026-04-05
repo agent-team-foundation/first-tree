@@ -26,7 +26,7 @@ existing source or workspace repository.
 - Treat "install and use first-tree" in a source/workspace repo as a two-repo
   workflow: local integration in the current repo plus tree bootstrap in a
   sibling `*-context` repo.
-- Do not run `context-tree init --here` in the source/workspace repo unless the
+- Do not run `first-tree init --here` in the source/workspace repo unless the
   user explicitly says that repo itself should become the Context Tree.
 - If you cannot create the sibling repo locally, cannot push it to GitHub, or
   cannot add the submodule yet, pause and report the blocker. Do not fall back
@@ -38,11 +38,11 @@ existing source or workspace repository.
 When an agent is asked to install first-tree for a source/workspace repo, the
 default workflow is:
 
-1. Run `context-tree init` from the current source/workspace repo.
+1. Run `first-tree init` from the current source/workspace repo.
 2. Switch into the sibling dedicated tree repo named `<repo>-context`.
 3. Draft the first tree version from the real codebase, docs, and ownership
    signals.
-4. Run `context-tree publish --open-pr` from the dedicated tree repo. It will:
+4. Run `first-tree publish --open-pr` from the dedicated tree repo. It will:
    create or reuse the GitHub `*-context` repo in the same owner/org as the
    source repo, push the tree, add it back to the source/workspace repo as a
    `git submodule`, and open the source-repo PR.
@@ -50,15 +50,15 @@ default workflow is:
    canonical local working copy for the tree. The temporary sibling bootstrap
    checkout can be deleted when you no longer need it.
 
-If the dedicated tree repo was initialized manually with `context-tree init --here`
+If the dedicated tree repo was initialized manually with `first-tree init --here`
 and publish cannot infer the source repo, pass `--source-repo PATH`.
 
 ## Verification And Upgrade
 
-- Do not run `context-tree verify` in the source/workspace repo. Verify the
+- Do not run `first-tree verify` in the source/workspace repo. Verify the
   dedicated tree repo instead, for example
-  `context-tree verify --tree-path ../my-repo-context`.
-- Running `context-tree upgrade` in the source/workspace repo refreshes only
+  `first-tree verify --tree-path ../my-repo-context`.
+- Running `first-tree upgrade` in the source/workspace repo refreshes only
   the local installed skill plus the `FIRST-TREE-SOURCE-INTEGRATION:` lines.
-- Run `context-tree upgrade --tree-path ../my-repo-context` to upgrade the
+- Run `first-tree upgrade --tree-path ../my-repo-context` to upgrade the
   dedicated tree repo itself.

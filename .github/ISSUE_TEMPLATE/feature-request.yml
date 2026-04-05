@@ -7,7 +7,7 @@ body:
     attributes:
       label: What problem are you trying to solve?
       description: Start with the user or maintainer pain, not just the solution.
-      placeholder: New contributors do not know whether to run first-tree or context-tree after installing globally.
+      placeholder: New contributors do not know whether `npx first-tree` and a globally installed `first-tree` share the same command surface.
     validations:
       required: true
   - type: textarea
@@ -15,7 +15,7 @@ body:
     attributes:
       label: Proposed solution
       description: What should change?
-      placeholder: Add a global first-tree alias that points to the same CLI entrypoint.
+      placeholder: Clarify the global-install workflow so every command example uses `first-tree`.
     validations:
       required: true
   - type: textarea

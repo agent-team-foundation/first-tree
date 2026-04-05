@@ -39,7 +39,7 @@ describe("skill artifacts", () => {
     );
     expect(
       existsSync(
-        join(ROOT, "evals", "context-tree-eval.test.ts"),
+        join(ROOT, "evals", "first-tree-eval.test.ts"),
       ),
     ).toBe(true);
     expect(
@@ -219,7 +219,7 @@ describe("skill artifacts", () => {
 
     expect(read("README.md")).not.toContain("seed-tree");
     expect(read("AGENTS.md")).not.toContain("seed-tree");
-    expect(read("README.md")).toContain("Package Name vs Command");
+    expect(read("README.md")).toContain("Package And Command");
     expect(read("README.md")).toContain("Canonical Documentation");
     expect(read("README.md")).toContain("references/source-map.md");
     expect(read("README.md")).toContain("source-workspace-installation.md");
@@ -230,7 +230,7 @@ describe("skill artifacts", () => {
     expect(read("README.md")).toContain("dedicated tree repo");
     expect(read("README.md")).toContain("FIRST-TREE-SOURCE-INTEGRATION:");
     expect(read("README.md")).toContain("`first-tree` skill");
-    expect(read("README.md")).toContain("context-tree publish --open-pr");
+    expect(read("README.md")).toContain("first-tree publish --open-pr");
     expect(read("README.md")).toContain("canonical local working copy");
     expect(read("README.md")).toContain("Only use `--here` after you have already switched into the dedicated tree repo.");
     expect(read("AGENTS.md")).toContain("references/source-map.md");
@@ -244,14 +244,14 @@ describe("skill artifacts", () => {
     const onboarding = read("skills/first-tree/references/onboarding.md");
     expect(onboarding).toContain("npx first-tree init");
     expect(onboarding).toContain("npm install -g first-tree");
-    expect(onboarding).toContain("context-tree init --here");
-    expect(onboarding).toContain("installed CLI command is");
+    expect(onboarding).toContain("first-tree init --here");
+    expect(onboarding).toContain("installed CLI command are both `first-tree`");
     expect(onboarding).toContain("currently running `first-tree` npm package");
     expect(onboarding).toContain("npx first-tree@latest upgrade");
     expect(onboarding).toContain(".agents/skills/first-tree/");
     expect(onboarding).toContain(".claude/skills/first-tree/");
     expect(onboarding).toContain("FIRST-TREE-SOURCE-INTEGRATION:");
-    expect(onboarding).toContain("context-tree publish --open-pr");
+    expect(onboarding).toContain("first-tree publish --open-pr");
     expect(onboarding).toContain("source/workspace repo");
     expect(onboarding).toContain("git submodule");
     expect(onboarding).toContain("Only use `--here` after you have already switched into the dedicated tree repo.");
@@ -264,13 +264,13 @@ describe("skill artifacts", () => {
     expect(skillMd).toContain("maintainer-build-and-distribution.md");
     expect(skillMd).toContain("maintainer-testing.md");
     expect(skillMd).toContain("currently running `first-tree` package");
-    expect(skillMd).toContain("so it is not confused with the `first-tree`");
+    expect(skillMd).toContain("command examples stay aligned with the published package");
     expect(skillMd).toContain(".agents/skills/first-tree/");
     expect(skillMd).toContain(".claude/skills/first-tree/");
     expect(skillMd).toContain("source-workspace-installation.md");
     expect(skillMd).toContain("FIRST-TREE-SOURCE-INTEGRATION:");
-    expect(skillMd).toContain("context-tree publish --open-pr");
-    expect(skillMd).toContain("Never run `context-tree init --here` in a source/workspace repo");
+    expect(skillMd).toContain("first-tree publish --open-pr");
+    expect(skillMd).toContain("Never run `first-tree init --here` in a source/workspace repo");
     expect(skillMd).not.toContain("canonical eval harness");
 
     const sourceMap = read("skills/first-tree/references/source-map.md");
@@ -287,7 +287,7 @@ describe("skill artifacts", () => {
     expect(sourceMap).toContain("engine/runtime/asset-loader.ts");
     expect(sourceMap).toContain("tests/init.test.ts");
     expect(sourceMap).toContain("tests/thin-cli.test.ts");
-    expect(sourceMap).not.toContain("evals/context-tree-eval.test.ts");
+    expect(sourceMap).not.toContain("evals/first-tree-eval.test.ts");
     expect(sourceMap).toContain("package.json");
     expect(sourceMap).not.toContain("vitest.eval.config.ts");
     expect(sourceMap).toContain(".github/workflows/ci.yml");
@@ -297,9 +297,9 @@ describe("skill artifacts", () => {
     );
     expect(sourceWorkspaceInstall).toContain("FIRST-TREE-SOURCE-INTEGRATION:");
     expect(sourceWorkspaceInstall).toContain("git submodule");
-    expect(sourceWorkspaceInstall).toContain("context-tree publish --open-pr");
-    expect(sourceWorkspaceInstall).toContain("Do not run `context-tree verify`");
-    expect(sourceWorkspaceInstall).toContain("Do not run `context-tree init --here` in the source/workspace repo");
+    expect(sourceWorkspaceInstall).toContain("first-tree publish --open-pr");
+    expect(sourceWorkspaceInstall).toContain("Do not run `first-tree verify`");
+    expect(sourceWorkspaceInstall).toContain("Do not run `first-tree init --here` in the source/workspace repo");
 
     const maintainerArchitecture = read(
       "skills/first-tree/references/maintainer-architecture.md",
@@ -311,7 +311,7 @@ describe("skill artifacts", () => {
     const buildAndDistribution = read(
       "skills/first-tree/references/maintainer-build-and-distribution.md",
     );
-    expect(buildAndDistribution).toContain("context-tree publish");
+    expect(buildAndDistribution).toContain("first-tree publish");
   });
 
   it("keeps public OSS entrypoints and package metadata in place", () => {
@@ -323,7 +323,7 @@ describe("skill artifacts", () => {
       keywords?: string[];
     };
 
-    expect(read("README.md")).toContain("Package Name vs Command");
+    expect(read("README.md")).toContain("Package And Command");
     expect(read("README.md")).toContain("CONTRIBUTING.md");
     expect(read("README.md")).toContain("CODE_OF_CONDUCT.md");
     expect(read("README.md")).toContain("SECURITY.md");
@@ -365,7 +365,7 @@ describe("skill artifacts", () => {
       url: "git+https://github.com/agent-team-foundation/first-tree.git",
     });
     expect(pkg.keywords).toEqual(
-      expect.arrayContaining(["context-tree", "cli", "agents"]),
+      expect.arrayContaining(["first-tree", "cli", "agents"]),
     );
   });
 });

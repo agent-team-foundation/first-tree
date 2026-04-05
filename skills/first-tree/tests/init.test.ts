@@ -73,7 +73,7 @@ describe("formatTaskList", () => {
     const groups = [{ group: "G", order: 1, tasks: ["t"] }];
     const output = formatTaskList(groups);
     expect(output).toContain("## Verification");
-    expect(output).toContain("context-tree verify");
+    expect(output).toContain("first-tree verify");
   });
 
   it("handles empty groups", () => {
@@ -89,7 +89,7 @@ describe("formatTaskList", () => {
       sourceRepoPath: "../ADHD",
     });
 
-    expect(output).toContain("context-tree publish --open-pr");
+    expect(output).toContain("first-tree publish --open-pr");
     expect(output).toContain("canonical local working copy");
   });
 });

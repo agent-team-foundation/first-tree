@@ -2,7 +2,7 @@
  * Eval result persistence.
  *
  * EvalCollector accumulates trial results, writes them to
- * ~/.context-tree/evals/{branch}-{timestamp}.json with crash-safe
+ * ~/.first-tree/evals/{branch}-{timestamp}.json with crash-safe
  * partial saves, and prints a summary table on finalize.
  *
  * Adapted from gstack's eval-store.ts.
@@ -18,7 +18,7 @@ import { getEnv } from '#evals/helpers/env.js';
 import { TIMEOUT_GIT_INFO } from '#evals/helpers/timeouts.js';
 
 const SCHEMA_VERSION = 1;
-const EVAL_DIR = getEnv('EVALS_STORE_DIR', '~/.context-tree/evals')!;
+const EVAL_DIR = getEnv('EVALS_STORE_DIR', '~/.first-tree/evals')!;
 
 function getGitInfo(): { branch: string; sha: string } {
   try {

@@ -40,15 +40,15 @@ afterEach(() => {
 
 describe("thin CLI shell", () => {
   it("documents the dedicated-repo meaning of --here", () => {
-    expect(USAGE).toContain("git init && context-tree init --here");
-    expect(USAGE).toContain("context-tree publish --open-pr");
+    expect(USAGE).toContain("git init && first-tree init --here");
+    expect(USAGE).toContain("first-tree publish --open-pr");
     expect(USAGE).toContain("`--here` is for when the current repo is already the dedicated tree repo.");
   });
 
   it("treats a symlinked npm bin path as direct execution", () => {
     const dir = makeTempDir();
     const target = join(dir, "cli.js");
-    const symlinkPath = join(dir, "context-tree");
+    const symlinkPath = join(dir, "first-tree");
 
     writeFileSync(target, "#!/usr/bin/env node\n");
     symlinkSync(target, symlinkPath);

@@ -28,7 +28,7 @@ let _cacheDir: string | undefined;
 /** Return the cache root directory, creating it if needed. */
 export function getRepoCacheDir(): string {
   if (!_cacheDir) {
-    _cacheDir = getEnv('EVALS_REPO_CACHE', '~/.context-tree/repo-cache')!;
+    _cacheDir = getEnv('EVALS_REPO_CACHE', '~/.first-tree/repo-cache')!;
     fs.mkdirSync(_cacheDir, { recursive: true });
   }
   return _cacheDir;

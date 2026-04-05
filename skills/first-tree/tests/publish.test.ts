@@ -146,7 +146,7 @@ function createRunner(
 
 describe("parsePublishArgs", () => {
   it("documents the publish command", () => {
-    expect(PUBLISH_USAGE).toContain("context-tree publish");
+    expect(PUBLISH_USAGE).toContain("first-tree publish");
     expect(PUBLISH_USAGE).toContain("--open-pr");
     expect(PUBLISH_USAGE).toContain("--source-repo PATH");
   });

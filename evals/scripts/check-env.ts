@@ -111,7 +111,7 @@ function checkCase(evalCase: EvalCase): CheckResult {
   }
 
   const ref = evalCase.repos[0];
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `ct-check-${evalCase.id}-`));
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `ft-check-${evalCase.id}-`));
 
   try {
     // --- Phase 1: Before fix (commit_sha) ---

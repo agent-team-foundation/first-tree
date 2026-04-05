@@ -11,6 +11,7 @@
     "url": "git+https://github.com/agent-team-foundation/first-tree.git"
   },
   "keywords": [
+    "first-tree",
     "context-tree",
     "cli",
     "agents",
@@ -19,7 +20,7 @@
   ],
   "type": "module",
   "bin": {
-    "context-tree": "./dist/cli.js"
+    "first-tree": "./dist/cli.js"
   },
   "imports": {
     "#skill/*": "./skills/first-tree/*",
