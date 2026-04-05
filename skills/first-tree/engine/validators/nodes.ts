@@ -3,8 +3,6 @@ import { join, relative, posix } from "node:path";
 import {
   AGENT_INSTRUCTIONS_FILE,
   LEGACY_AGENT_INSTRUCTIONS_FILE,
-  LEGACY_SKILL_NAME,
-  LEGACY_SKILL_ROOT,
   SKILL_NAME,
   SKILL_ROOT,
 } from "#skill/engine/runtime/asset-loader.js";
@@ -88,12 +86,7 @@ function rel(path: string): string {
 }
 
 function isInstalledSkillPath(relPath: string): boolean {
-  return (
-    relPath === SKILL_ROOT ||
-    relPath.startsWith(`${SKILL_ROOT}/`) ||
-    relPath === LEGACY_SKILL_ROOT ||
-    relPath.startsWith(`${LEGACY_SKILL_ROOT}/`)
-  );
+  return relPath === SKILL_ROOT || relPath.startsWith(`${SKILL_ROOT}/`);
 }
 
 function isFrameworkContainerDir(relPath: string, fullPath: string): boolean {
@@ -106,9 +99,7 @@ function isFrameworkContainerDir(relPath: string, fullPath: string): boolean {
     if (entries.length === 0) {
       return false;
     }
-    return entries.every(
-      (entry) => entry === SKILL_NAME || entry === LEGACY_SKILL_NAME,
-    );
+    return entries.every((entry) => entry === SKILL_NAME);
   } catch {
     return false;
   }

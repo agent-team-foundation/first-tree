@@ -10,8 +10,6 @@ import {
   LEGACY_PROGRESS,
   LEGACY_REPO_SKILL_PROGRESS,
   LEGACY_REPO_SKILL_VERSION,
-  LEGACY_SKILL_PROGRESS,
-  LEGACY_SKILL_VERSION,
   LEGACY_VERSION,
   agentInstructionsFileCandidates,
   installedSkillRoots,
@@ -220,9 +218,6 @@ export class Repo {
     if (layout === "legacy") {
       return LEGACY_PROGRESS;
     }
-    if (layout === "legacy-skill") {
-      return LEGACY_SKILL_PROGRESS;
-    }
     if (layout === "legacy-repo-skill") {
       return LEGACY_REPO_SKILL_PROGRESS;
     }
@@ -236,9 +231,6 @@ export class Repo {
     const layout = this.frameworkLayout();
     if (layout === "legacy") {
       return LEGACY_VERSION;
-    }
-    if (layout === "legacy-skill") {
-      return LEGACY_SKILL_VERSION;
     }
     if (layout === "legacy-repo-skill") {
       return LEGACY_REPO_SKILL_VERSION;

@@ -13,7 +13,6 @@ import {
   LEGACY_AGENT_INSTRUCTIONS_FILE,
   LEGACY_FRAMEWORK_ROOT,
   LEGACY_REPO_SKILL_ROOT,
-  LEGACY_SKILL_ROOT,
   SKILL_ROOT,
   SOURCE_INTEGRATION_MARKER,
   installedSkillRootsDisplay,
@@ -70,12 +69,6 @@ function formatUpgradeTaskList(
       "## Migration",
       `- [ ] Remove any stale \`${LEGACY_REPO_SKILL_ROOT}/\` references from repo-specific docs, scripts, workflow files, or agent config`,
       "",
-    );
-  }
-
-  if (layout === "legacy-skill") {
-    migrationTasks.push(
-      `- [ ] Remove any stale \`${LEGACY_SKILL_ROOT}/\` references from repo-specific docs, scripts, workflow files, or agent config`,
     );
   }
 
@@ -268,10 +261,6 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
   } else if (layout === "legacy-repo-skill") {
     console.log(
       `Migrated legacy ${LEGACY_REPO_SKILL_ROOT}/ layout to ${installedSkillRootsDisplay()}.`,
-    );
-  } else if (layout === "legacy-skill") {
-    console.log(
-      `Migrated ${LEGACY_SKILL_ROOT}/ to ${installedSkillRootsDisplay()}.`,
     );
   } else {
     if (missingInstalledRoots.length > 0) {

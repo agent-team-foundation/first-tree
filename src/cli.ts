@@ -19,9 +19,12 @@ Options:
 
 Common examples:
   context-tree init
-  context-tree init --here
+  mkdir my-org-context && cd my-org-context && git init && context-tree init --here
   context-tree verify --tree-path ../my-org-context
   context-tree upgrade --tree-path ../my-org-context
+
+Note:
+  \`--here\` is for when the current repo is already the dedicated tree repo.
 `;
 
 type Output = (text: string) => void;

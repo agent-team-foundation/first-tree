@@ -5,7 +5,6 @@ import {
   BUNDLED_SKILL_ROOT,
   INSTALLED_SKILL_ROOTS,
   LEGACY_REPO_SKILL_ROOT,
-  LEGACY_SKILL_ROOT,
 } from "#skill/engine/runtime/asset-loader.js";
 
 export function resolveBundledPackageRoot(startUrl = import.meta.url): string {
@@ -57,7 +56,6 @@ export function copyCanonicalSkill(sourceRoot: string, targetRoot: string): void
   for (const relPath of [
     ...INSTALLED_SKILL_ROOTS,
     LEGACY_REPO_SKILL_ROOT,
-    LEGACY_SKILL_ROOT,
   ]) {
     const fullPath = join(targetRoot, relPath);
     if (existsSync(fullPath)) {
