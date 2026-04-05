@@ -85,6 +85,7 @@ require_file "$SOURCE_DIR/assets/framework/examples/claude-code/README.md"
 require_file "$SOURCE_DIR/assets/framework/examples/claude-code/settings.json"
 require_file "$SOURCE_DIR/assets/framework/helpers/generate-codeowners.ts"
 require_file "$SOURCE_DIR/assets/framework/helpers/run-review.ts"
+require_file "$SOURCE_DIR/assets/framework/helpers/summarize-progress.js"
 require_file "$SOURCE_DIR/assets/framework/helpers/inject-tree-context.sh"
 
 # Check for legacy artifacts that should not be committed.

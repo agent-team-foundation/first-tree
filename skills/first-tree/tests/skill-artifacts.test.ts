@@ -214,6 +214,7 @@ describe("skill artifacts", () => {
       );
       expect(listing).toContain(
         "package/skills/first-tree/assets/framework/templates/claude.md.template",
+        "package/skills/first-tree/assets/framework/helpers/summarize-progress.js",
       );
       expect(listing).toContain(
         "package/skills/first-tree/tests/init.test.ts",
@@ -268,6 +269,8 @@ describe("skill artifacts", () => {
     expect(onboarding).toContain(".claude/skills/first-tree/");
     expect(onboarding).toContain("FIRST-TREE-SOURCE-INTEGRATION:");
     expect(onboarding).toContain("first-tree publish --open-pr");
+    expect(onboarding).toContain("baseline coverage");
+    expect(onboarding).toContain("summarize-progress.js");
     expect(onboarding).toContain("source/workspace repo");
     expect(onboarding).toContain("git submodule");
     expect(onboarding).toContain("Only use `--here` after you have already switched into the dedicated tree repo.");
@@ -284,6 +287,8 @@ describe("skill artifacts", () => {
     expect(skillMd).toContain(".agents/skills/first-tree/");
     expect(skillMd).toContain(".claude/skills/first-tree/");
     expect(skillMd).toContain("source-workspace-installation.md");
+    expect(skillMd).toContain("baseline coverage");
+    expect(skillMd).toContain("summarize-progress.js");
     expect(skillMd).toContain("FIRST-TREE-SOURCE-INTEGRATION:");
     expect(skillMd).toContain("first-tree publish --open-pr");
     expect(skillMd).toContain("Never run `first-tree init --here` in a source/workspace repo");
@@ -301,6 +306,7 @@ describe("skill artifacts", () => {
     expect(sourceMap).toContain("tests/publish.test.ts");
     expect(sourceMap).toContain("engine/commands/");
     expect(sourceMap).toContain("engine/runtime/asset-loader.ts");
+    expect(sourceMap).toContain("summarize-progress.js");
     expect(sourceMap).toContain("tests/init.test.ts");
     expect(sourceMap).toContain("tests/thin-cli.test.ts");
     expect(sourceMap).not.toContain("evals/first-tree-eval.test.ts");
@@ -312,10 +318,17 @@ describe("skill artifacts", () => {
       "skills/first-tree/references/source-workspace-installation.md",
     );
     expect(sourceWorkspaceInstall).toContain("FIRST-TREE-SOURCE-INTEGRATION:");
+    expect(sourceWorkspaceInstall).toContain("baseline coverage");
     expect(sourceWorkspaceInstall).toContain("git submodule");
+    expect(sourceWorkspaceInstall).toContain("top-level domain");
     expect(sourceWorkspaceInstall).toContain("first-tree publish --open-pr");
     expect(sourceWorkspaceInstall).toContain("Do not run `first-tree verify`");
     expect(sourceWorkspaceInstall).toContain("Do not run `first-tree init --here` in the source/workspace repo");
+
+    const openaiPrompt = read("skills/first-tree/agents/openai.yaml");
+    expect(openaiPrompt).toContain("baseline coverage");
+    expect(openaiPrompt).toContain("top-level domain");
+    expect(openaiPrompt).toContain("progress.md");
 
     const maintainerArchitecture = read(
       "skills/first-tree/references/maintainer-architecture.md",

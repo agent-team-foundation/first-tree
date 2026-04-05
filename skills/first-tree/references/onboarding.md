@@ -155,6 +155,25 @@ to the current state of the repo. Complete each task:
 As you complete each task, check it off in
 `.agents/skills/first-tree/progress.md` by changing `- [ ]` to `- [x]`.
 
+Treat `progress.md` as the source of truth for the post-onboarding checkpoint.
+Before you ask whether to keep building out the tree, report what is already
+done and what remains. Split that report into setup/integration progress and
+tree-content baseline coverage progress, and describe the remaining work
+categories instead of claiming the tree is "100% complete."
+
+If you want a quick checkpoint from the dedicated tree repo, run:
+
+```bash
+node .agents/skills/first-tree/assets/framework/helpers/summarize-progress.js
+```
+
+If the user wants to continue after that checkpoint, explain the scope first
+(for example: how many top-level domains you expect to cover, how many waves
+of parallel work you plan to run, and that you will reconcile the root node,
+cross-domain soft links, and `first-tree verify` at the end). Then use
+wave-based parallel sub-tasks or subagents, usually one per top-level domain,
+until each domain has a first-pass baseline `NODE.md`.
+
 ### Step 3: Verify
 
 ```bash

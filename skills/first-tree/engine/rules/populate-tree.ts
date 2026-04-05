@@ -6,10 +6,18 @@ export function evaluate(repo: Repo): RuleResult {
   const tasks: string[] = [];
 
   tasks.push(
-    `Ask the user whether they want to populate the full context tree now using the **${INTERACTIVE_TOOL}** tool. ` +
-      "Present two options: (1) **Yes — populate the full tree**: the agent will analyze source repositories, " +
-      "create sub-domains, and populate NODE.md files for each domain and sub-domain; " +
-      "(2) **No — I'll do it later**: skip deep population and finish init with just the top-level structure. " +
+    "Read `progress.md` (normally `.agents/skills/first-tree/progress.md`) as the source of truth for the onboarding checkpoint before you ask about deeper tree population. " +
+      "Tell the user what is already done and what remains, and split the report into at least two lanes: " +
+      "(1) setup / source-workspace integration progress and (2) tree-content baseline coverage progress. " +
+      "Highlight the remaining work categories, and prefer phrases like `baseline coverage` or `first pass` instead of claiming the tree is fully complete.",
+  );
+
+  tasks.push(
+    `Ask the user whether they want to continue building the first-pass full tree now using the **${INTERACTIVE_TOOL}** tool. ` +
+      "Present two options: (1) **Yes — continue baseline tree expansion**: explain the expected scope first, " +
+      "including how many top-level domains you plan to cover, how many waves of parallel work you expect, " +
+      "and that you will finish with root-node reconciliation plus `first-tree verify`; " +
+      "(2) **No — keep the initial scaffold only**: skip deep population and finish init with the current top-level structure. " +
       "If the user selects No, check off all remaining items in this section and move on.",
   );
 
@@ -21,14 +29,17 @@ export function evaluate(repo: Repo): RuleResult {
   );
 
   tasks.push(
-    "Use **sub-tasks** (TaskCreate) to parallelize the population work — create one sub-task per top-level domain " +
-      "so each domain can be populated concurrently. Each sub-task should: read the relevant source code, identify " +
+    "Use parallel **sub-tasks / subagents** (for example, TaskCreate where available) in waves, not as unbounded fan-out. " +
+      "The default split is one sub-task per top-level domain so each domain can be populated concurrently. " +
+      "Keep the main agent responsible for the root `NODE.md`, cross-domain `soft_links`, overlap cleanup between domains, " +
+      "and the final `first-tree verify` pass. Each domain sub-task should: read the relevant source code, identify " +
       "sub-domains, create NODE.md files, and establish soft_links between related domains.",
   );
 
   tasks.push(
-    "After all domains are populated, update the root NODE.md to list every top-level domain with a one-line " +
-      "description. Ensure all NODE.md files pass `first-tree verify` — valid frontmatter, no placeholders, " +
+    "Continue launching additional waves until every top-level domain has first-pass baseline coverage. " +
+      "After the domain waves finish, update the root NODE.md to list every top-level domain with a one-line " +
+      "description, reconcile any cross-domain soft_links, and ensure all NODE.md files pass `first-tree verify` — valid frontmatter, no placeholders, " +
       "and soft_links that resolve correctly.",
   );
 
