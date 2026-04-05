@@ -28,6 +28,7 @@ repos.
 2. Read the user-facing reference that matches the task:
    - `references/onboarding.md`
    - `references/about.md`
+   - `references/source-workspace-installation.md`
    - `references/principles.md`
    - `references/ownership-and-naming.md`
    - `references/upgrade-contract.md`
@@ -58,16 +59,29 @@ repos.
 
 ### Working In A User Tree Repo
 
+- When a user asks to install first-tree for an existing source/workspace repo,
+  the current repo keeps only the installed skill plus a
+  `FIRST-TREE-SOURCE-INTEGRATION:` line in `AGENTS.md` and `CLAUDE.md`. Do not
+  create `NODE.md`, `members/`, or tree-scoped `AGENTS.md` there.
 - `context-tree init` defaults to creating or reusing a sibling dedicated tree
-  repo when invoked from a source/workspace repo. Use `--here` to initialize
-  the current repo in place when you are already inside the tree repo.
+  repo when invoked from a source/workspace repo. It installs the bundled skill
+  into the source/workspace repo and scaffolds tree files only in the
+  dedicated tree repo. Use `--here` to initialize the current repo in place
+  when you are already inside the tree repo.
 - `context-tree init` installs this skill into the target tree repo and
   scaffolds `.agents/skills/first-tree/`, `.claude/skills/first-tree/`,
   `NODE.md`, `AGENTS.md`, and `members/NODE.md`.
+- The default source/workspace workflow is: create or reuse `<repo>-context`,
+  prefer pushing it in the same GitHub organization as the source repo, add it
+  back to the source/workspace repo as a git submodule, and open a PR to the
+  source/workspace repo's default branch instead of merging automatically.
 - `context-tree upgrade` refreshes the installed skill from the copy bundled
-  with the currently running `first-tree` package. To pick up a newer
-  framework, run a newer package version first. It also migrates older repos
-  that still use `skills/first-tree/` or `skills/first-tree-cli-framework/`.
+  with the currently running `first-tree` package. In a source/workspace repo
+  it refreshes only the local skill plus the
+  `FIRST-TREE-SOURCE-INTEGRATION:` line; upgrade the dedicated tree repo
+  separately with `--tree-path`. To pick up a newer framework, run a newer
+  package version first. It also migrates older repos that still use
+  `skills/first-tree/` or `skills/first-tree-cli-framework/`.
 - The user's tree content lives outside the skill; the skill only carries the
   reusable framework payload plus maintenance guidance.
 - The tree still stores decisions, constraints, and ownership; execution detail
@@ -108,6 +122,8 @@ repos.
 - `engine/`: canonical framework and CLI behavior
 - `tests/`: canonical unit and structure validation
 - `references/source-map.md`: canonical reading index
+- `references/source-workspace-installation.md`: source/workspace install
+  contract
 - `references/maintainer-architecture.md`: source-repo architecture and
   invariants
 - `references/maintainer-thin-cli.md`: root shell contract

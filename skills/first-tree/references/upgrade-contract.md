@@ -16,7 +16,8 @@ rules we keep for legacy `skills/first-tree/`,
 
 ## Installed Layout
 
-The current installed layout in a user repo is:
+The current installed layout in a source/workspace repo or dedicated tree repo
+is:
 
 ```text
 .agents/
@@ -50,7 +51,11 @@ The current installed layout in a user repo is:
           helpers/
 ```
 
-The tree content still lives outside the skill:
+For a source/workspace repo, the local integration stops there. It should also
+carry a single `FIRST-TREE-SOURCE-INTEGRATION:` line in root `AGENTS.md` and
+`CLAUDE.md`, but it must not contain tree content.
+
+For a dedicated tree repo, the tree content still lives outside the skill:
 
 - `NODE.md`
 - `AGENTS.md`
@@ -66,17 +71,25 @@ skill discovery and hooks.
 - `context-tree init`
   - when run in a source/workspace repo, creates or reuses a sibling dedicated
     tree repo by default
+  - installs the skill into the source/workspace repo without creating tree
+    files there
+  - upserts the `FIRST-TREE-SOURCE-INTEGRATION:` line in root `AGENTS.md` and
+    `CLAUDE.md`
   - installs the skill into the target tree repo
-  - renders top-level tree scaffolding from the skill templates
-  - writes progress state to `.agents/skills/first-tree/progress.md`
+  - renders top-level tree scaffolding only in the target tree repo
+  - writes progress state only to the dedicated tree repo at
+    `.agents/skills/first-tree/progress.md`
 - `context-tree verify`
   - checks progress state from the installed skill
   - validates root/frontmatter/agent markers
   - runs node and member validators
+  - must reject source/workspace repos that carry only local integration
 - `context-tree upgrade`
   - compares the installed skill payload version to the skill bundled with the
     currently running `first-tree` package
   - refreshes the installed skill payload without overwriting tree content
+  - when run in a source/workspace repo, refreshes only the local installed
+    skill plus the `FIRST-TREE-SOURCE-INTEGRATION:` lines
   - migrates repos that still use the previous `skills/first-tree/` path onto
     `.agents/skills/first-tree/` and `.claude/skills/first-tree/`
   - migrates repos that still use the previous
@@ -93,6 +106,8 @@ skill discovery and hooks.
 - Default dedicated-tree-repo creation is local-only. The CLI may create a new
   sibling git repo on disk, but it must not clone the source repo or depend on
   network access.
+- Source/workspace repos must never receive `NODE.md`, `members/`, or
+  tree-scoped `AGENTS.md` from default init flows.
 - Normal `context-tree init` and `context-tree upgrade` flows do not clone the
   source repo or require network access.
 - `context-tree verify` may still read a legacy

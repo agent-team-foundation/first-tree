@@ -11,6 +11,7 @@ information should be discoverable from this file.
 | `SKILL.md` | Trigger conditions, workflow, and validation contract |
 | `references/about.md` | Product framing for what Context Tree is and is not |
 | `references/onboarding.md` | The onboarding narrative that `help onboarding` and `init` surface |
+| `references/source-workspace-installation.md` | Contract for source/workspace installs vs dedicated tree repos |
 | `references/principles.md` | Decision-model reference |
 | `references/ownership-and-naming.md` | Ownership contract |
 | `references/upgrade-contract.md` | Installed layout and upgrade semantics |

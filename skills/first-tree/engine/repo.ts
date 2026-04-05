@@ -20,13 +20,17 @@ import {
   frameworkVersionCandidates,
   progressFileCandidates,
   resolveFirstExistingPath,
+  SOURCE_INTEGRATION_FILES,
+  SOURCE_INTEGRATION_MARKER,
 } from "#skill/engine/runtime/asset-loader.js";
 
 const FRONTMATTER_RE = /^---\s*\n(.*?)\n---/s;
 const OWNERS_RE = /^owners:\s*\[([^\]]*)\]/m;
 const TITLE_RE = /^title:\s*['"]?(.+?)['"]?\s*$/m;
 const EMPTY_REPO_ENTRY_ALLOWLIST = new Set([
+  ".agents",
   ".DS_Store",
+  ".claude",
   ".editorconfig",
   ".gitattributes",
   ".github",
@@ -273,6 +277,23 @@ export class Repo {
     return text.includes(FRAMEWORK_BEGIN_MARKER) && text.includes(FRAMEWORK_END_MARKER);
   }
 
+  hasSourceIntegrationFile(relPath: string): boolean {
+    return this.fileContains(relPath, SOURCE_INTEGRATION_MARKER);
+  }
+
+  hasSourceWorkspaceIntegration(): boolean {
+    return SOURCE_INTEGRATION_FILES.some((file) => this.hasSourceIntegrationFile(file));
+  }
+
+  hasTreeContent(): boolean {
+    return (
+      this.progressPath() !== null
+      || this.hasAgentInstructionsMarkers()
+      || this.pathExists("members/NODE.md")
+      || this.frontmatter("NODE.md") !== null
+    );
+  }
+
   hasMembers(): boolean {
     const membersDir = join(this.root, "members");
     try {
@@ -338,13 +359,19 @@ export class Repo {
       return false;
     }
 
-    return (
-      this.progressPath() !== null
-      || this.hasFramework()
-      || this.hasAgentInstructionsMarkers()
-      || this.pathExists("members/NODE.md")
-      || this.frontmatter("NODE.md") !== null
-    );
+    if (this.hasTreeContent()) {
+      return true;
+    }
+
+    if (this.hasFramework() && this.hasSourceWorkspaceIntegration()) {
+      return false;
+    }
+
+    if (this.hasFramework()) {
+      return !this.hasLikelySourceRepoSignals();
+    }
+
+    return false;
   }
 
   isLikelyEmptyRepo(): boolean {
@@ -359,6 +386,10 @@ export class Repo {
       return false;
     }
 
+    return this.hasLikelySourceRepoSignals();
+  }
+
+  private hasLikelySourceRepoSignals(): boolean {
     const entries = this.topLevelEntries().filter(
       (entry) => !EMPTY_REPO_ENTRY_ALLOWLIST.has(entry),
     );

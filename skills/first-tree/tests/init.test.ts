@@ -10,11 +10,13 @@ import {
 import { Repo } from "#skill/engine/repo.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
+  CLAUDE_INSTRUCTIONS_FILE,
   FRAMEWORK_VERSION,
   INSTALLED_PROGRESS,
   LEGACY_AGENT_INSTRUCTIONS_FILE,
   LEGACY_PROGRESS,
 } from "#skill/engine/runtime/asset-loader.js";
+import { buildSourceIntegrationLine } from "#skill/engine/runtime/source-integration.js";
 import {
   makeGitRepo,
   useTmpDir,
@@ -124,6 +126,10 @@ const fakeGitInitializer = (root: string): void => {
   makeGitRepo(root);
 };
 
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 describe("runInit", () => {
   it("errors when not a git repo", () => {
     const tmp = useTmpDir();
@@ -206,6 +212,18 @@ describe("runInit", () => {
 
     expect(ret).toBe(0);
     expect(
+      existsSync(join(sourceRepoDir.path, ".agents", "skills", "first-tree", "SKILL.md")),
+    ).toBe(true);
+    expect(
+      existsSync(join(sourceRepoDir.path, ".claude", "skills", "first-tree", "SKILL.md")),
+    ).toBe(true);
+    expect(
+      readFileSync(join(sourceRepoDir.path, AGENT_INSTRUCTIONS_FILE), "utf-8"),
+    ).toContain(buildSourceIntegrationLine(basename(treeRepo)));
+    expect(
+      readFileSync(join(sourceRepoDir.path, CLAUDE_INSTRUCTIONS_FILE), "utf-8"),
+    ).toContain(buildSourceIntegrationLine(basename(treeRepo)));
+    expect(
       existsSync(join(treeRepo, ".agents", "skills", "first-tree", "SKILL.md")),
     ).toBe(true);
     expect(
@@ -218,6 +236,49 @@ describe("runInit", () => {
     expect(existsSync(join(sourceRepoDir.path, "NODE.md"))).toBe(false);
     expect(existsSync(join(sourceRepoDir.path, "members", "NODE.md"))).toBe(false);
     expect(existsSync(join(sourceRepoDir.path, INSTALLED_PROGRESS))).toBe(false);
+  });
+
+  it("updates existing AGENTS.md and CLAUDE.md without duplicating the source integration line", () => {
+    const sourceRepoDir = useTmpDir();
+    const sourceSkillDir = useTmpDir();
+    makeSourceRepo(sourceRepoDir.path);
+    makeSourceSkill(sourceSkillDir.path, "0.2.0");
+    writeFileSync(join(sourceRepoDir.path, AGENT_INSTRUCTIONS_FILE), "# Repo Notes\n");
+    writeFileSync(join(sourceRepoDir.path, CLAUDE_INSTRUCTIONS_FILE), "# Claude Notes\n");
+
+    expect(
+      runInit(new Repo(sourceRepoDir.path), {
+        sourceRoot: sourceSkillDir.path,
+        gitInitializer: fakeGitInitializer,
+      }),
+    ).toBe(0);
+    expect(
+      runInit(new Repo(sourceRepoDir.path), {
+        sourceRoot: sourceSkillDir.path,
+        gitInitializer: fakeGitInitializer,
+      }),
+    ).toBe(0);
+
+    const treeRepo = join(
+      dirname(sourceRepoDir.path),
+      `${basename(sourceRepoDir.path)}-context`,
+    );
+    const expectedLine = buildSourceIntegrationLine(basename(treeRepo));
+    const agentText = readFileSync(
+      join(sourceRepoDir.path, AGENT_INSTRUCTIONS_FILE),
+      "utf-8",
+    );
+    const claudeText = readFileSync(
+      join(sourceRepoDir.path, CLAUDE_INSTRUCTIONS_FILE),
+      "utf-8",
+    );
+
+    expect(
+      agentText.match(new RegExp(escapeRegExp(expectedLine), "g")),
+    ).toHaveLength(1);
+    expect(
+      claudeText.match(new RegExp(escapeRegExp(expectedLine), "g")),
+    ).toHaveLength(1);
   });
 
   it("keeps supporting in-place init with --here", () => {

@@ -1,0 +1,52 @@
+---
+title: "Source/Workspace Installation Contract"
+owners: []
+---
+
+# Source/Workspace Installation Contract
+
+This reference defines what it means to "install and use first-tree" in an
+existing source or workspace repository.
+
+## Core Boundary
+
+- The current source/workspace repo is **not** the Context Tree.
+- The current source/workspace repo should carry only the installed
+  `.agents/skills/first-tree/` and `.claude/skills/first-tree/` skill roots
+  plus a single `FIRST-TREE-SOURCE-INTEGRATION:` line in root `AGENTS.md` and
+  `CLAUDE.md`.
+- `NODE.md`, `members/`, and tree-scoped `AGENTS.md` content belong only in a
+  dedicated `*-context` repo.
+- If a task changes decisions, rationale, ownership, or constraints, update
+  the dedicated tree repo rather than copying that material into the source
+  repo.
+
+## Default Agent Workflow
+
+When an agent is asked to install first-tree for a source/workspace repo, the
+default workflow is:
+
+1. Install the bundled first-tree skill into the current repo.
+2. Upsert the `FIRST-TREE-SOURCE-INTEGRATION:` line in root `AGENTS.md` and
+   `CLAUDE.md`.
+3. Create a sibling dedicated tree repo named `<repo>-context`.
+4. Prefer creating and pushing that repo in the same GitHub organization as
+   the source repo, matching the source repo's default visibility unless the
+   user asks for something else.
+5. Add the dedicated tree repo back to the source/workspace repo as a `git submodule`.
+6. Run `context-tree init --here` inside the dedicated tree repo.
+7. Draft the first tree version from the real codebase, docs, and ownership
+   signals.
+8. Open a PR against the source/workspace repo's default branch for the local
+   skill integration plus the new submodule pointer. Do not merge it
+   automatically.
+
+## Verification And Upgrade
+
+- Do not run `context-tree verify` in the source/workspace repo. Verify the
+  dedicated tree repo instead, for example
+  `context-tree verify --tree-path ../my-repo-context`.
+- Running `context-tree upgrade` in the source/workspace repo refreshes only
+  the local installed skill plus the `FIRST-TREE-SOURCE-INTEGRATION:` lines.
+- Run `context-tree upgrade --tree-path ../my-repo-context` to upgrade the
+  dedicated tree repo itself.

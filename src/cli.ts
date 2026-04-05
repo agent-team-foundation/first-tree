@@ -8,7 +8,7 @@ const USAGE = `usage: context-tree <command>
   New to context-tree? Run \`context-tree help onboarding\` first.
 
 Commands:
-  init      Create or refresh a dedicated context tree repo
+  init      Install source/workspace integration and create or refresh a dedicated context tree repo
   verify    Run verification checks against a tree repo
   upgrade   Refresh the installed skill in a tree repo
   help      Show help for a topic (e.g. \`help onboarding\`)

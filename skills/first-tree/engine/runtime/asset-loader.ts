@@ -21,6 +21,12 @@ export const INSTALLED_PROGRESS = join(SKILL_ROOT, "progress.md");
 export const AGENT_INSTRUCTIONS_FILE = "AGENTS.md";
 export const LEGACY_AGENT_INSTRUCTIONS_FILE = "AGENT.md";
 export const AGENT_INSTRUCTIONS_TEMPLATE = "agents.md.template";
+export const CLAUDE_INSTRUCTIONS_FILE = "CLAUDE.md";
+export const SOURCE_INTEGRATION_MARKER = "FIRST-TREE-SOURCE-INTEGRATION:";
+export const SOURCE_INTEGRATION_FILES = [
+  AGENT_INSTRUCTIONS_FILE,
+  CLAUDE_INSTRUCTIONS_FILE,
+] as const;
 
 export const CLAUDE_SKILL_AGENTS_DIR = join(CLAUDE_SKILL_ROOT, "agents");
 export const CLAUDE_SKILL_REFERENCES_DIR = join(CLAUDE_SKILL_ROOT, "references");
