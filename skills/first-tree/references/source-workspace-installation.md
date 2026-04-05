@@ -39,6 +39,9 @@ When an agent is asked to install first-tree for a source/workspace repo, the
 default workflow is:
 
 1. Run `context-tree init` from the current source/workspace repo.
+   You may add `--seed-members contributors` to draft initial
+   `members/*/NODE.md` files from repository contributor history during the
+   bootstrap.
 2. Switch into the sibling dedicated tree repo named `<repo>-context`.
 3. Draft the first tree version from the real codebase, docs, and ownership
    signals.

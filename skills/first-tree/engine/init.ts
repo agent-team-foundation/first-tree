@@ -16,6 +16,14 @@ import {
   renderTemplateFile,
   resolveBundledPackageRoot,
 } from "#skill/engine/runtime/installer.js";
+import {
+  collectContributorMembers,
+  seedMembersFromContributors,
+} from "#skill/engine/member-seeding.js";
+import type {
+  ContributorCollector,
+  SeedMembersResult,
+} from "#skill/engine/member-seeding.js";
 import { writeBootstrapState } from "#skill/engine/runtime/bootstrap.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
@@ -36,7 +44,7 @@ import { upsertSourceIntegrationFiles } from "#skill/engine/runtime/source-integ
  * all generated task text at once.
  */
 export const INTERACTIVE_TOOL = "AskUserQuestion";
-export const INIT_USAGE = `usage: context-tree init [--here] [--tree-name NAME] [--tree-path PATH]
+export const INIT_USAGE = `usage: context-tree init [--here] [--seed-members contributors] [--tree-name NAME] [--tree-path PATH]
 
 By default, running \`context-tree init\` inside a source or workspace repo installs
 the first-tree skill in the current repo, updates \`AGENTS.md\` and \`CLAUDE.md\`
@@ -48,6 +56,8 @@ that repo itself to become the Context Tree.
 
 Options:
   --here             Initialize the current repo in place after you are already in the dedicated tree repo
+  --seed-members contributors
+                     Seed initial member nodes from contributor history (GitHub when available, otherwise local git)
   --tree-name NAME   Name the dedicated sibling tree repo to create
   --tree-path PATH   Use an explicit tree repo path
   --help             Show this help message
@@ -178,6 +188,26 @@ export function formatTaskList(
   return lines.join("\n");
 }
 
+function addSeededMemberReviewGroup(
+  groups: RuleResult[],
+  seedMembersResult: SeedMembersResult | null,
+): RuleResult[] {
+  if (seedMembersResult === null || seedMembersResult.created === 0) {
+    return groups;
+  }
+
+  return [
+    ...groups,
+    {
+      group: "Seeded Members",
+      order: 4.1,
+      tasks: [
+        `Review the ${seedMembersResult.created} contributor-seeded member node(s) under \`members/\` and remove past contributors, bots, or placeholder ownership before you rely on them`,
+      ],
+    },
+  ].sort((a, b) => a.order - b.order);
+}
+
 export function writeProgress(repo: Repo, content: string): void {
   const progressPath = join(repo.root, repo.preferredProgressPath());
   mkdirSync(dirname(progressPath), { recursive: true });
@@ -185,8 +215,10 @@ export function writeProgress(repo: Repo, content: string): void {
 }
 
 export interface InitOptions {
+  contributorCollector?: ContributorCollector;
   sourceRoot?: string;
   here?: boolean;
+  seedMembers?: "contributors";
   treeName?: string;
   treePath?: string;
   currentCwd?: string;
@@ -297,6 +329,42 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
     }
   }
 
+  let seedMembersResult: SeedMembersResult | null = null;
+  if (options?.seedMembers === "contributors") {
+    try {
+      const contributorSourceRepo = initTarget.dedicatedTreeRepo ? sourceRepo : r;
+      console.log("Seeding member nodes from contributor history...");
+      seedMembersResult = seedMembersFromContributors(
+        contributorSourceRepo.root,
+        r.root,
+        options.contributorCollector ?? collectContributorMembers,
+      );
+      if (seedMembersResult.notice) {
+        console.log(`  ${seedMembersResult.notice}`);
+      }
+      if (seedMembersResult.source === "none") {
+        console.log("  No contributor records were available to seed member nodes.");
+      } else {
+        const sourceLabel = seedMembersResult.source === "github"
+          ? "GitHub contributors"
+          : "local git history";
+        console.log(
+          `  Created ${seedMembersResult.created} member node(s) from ${sourceLabel}.`,
+        );
+        if (seedMembersResult.skipped > 0) {
+          console.log(
+            `  Skipped ${seedMembersResult.skipped} contributor(s) because matching member directories already exist.`,
+          );
+        }
+      }
+      console.log();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "unknown error";
+      console.error(`Error: ${message}`);
+      return 1;
+    }
+  }
+
   if (initTarget.dedicatedTreeRepo) {
     writeBootstrapState(r.root, {
       sourceRepoName: sourceRepo.repoName(),
@@ -308,7 +376,10 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
   console.log(ONBOARDING_TEXT);
   console.log("---\n");
 
-  const groups = evaluateAll(r);
+  const groups = addSeededMemberReviewGroup(
+    evaluateAll(r),
+    seedMembersResult,
+  );
   if (groups.length === 0) {
     console.log("All checks passed. Your context tree is set up.");
     return 0;
@@ -328,6 +399,7 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
 
 export interface ParsedInitArgs {
   here?: boolean;
+  seedMembers?: "contributors";
   treeName?: string;
   treePath?: string;
 }
@@ -343,6 +415,18 @@ export function parseInitArgs(
       case "--here":
         parsed.here = true;
         break;
+      case "--seed-members": {
+        const value = args[index + 1];
+        if (!value) {
+          return { error: "Missing value for --seed-members" };
+        }
+        if (value !== "contributors") {
+          return { error: `Unsupported value for --seed-members: ${value}` };
+        }
+        parsed.seedMembers = value;
+        index += 1;
+        break;
+      }
       case "--tree-name": {
         const value = args[index + 1];
         if (!value) {

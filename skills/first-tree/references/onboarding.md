@@ -79,6 +79,13 @@ cd ../my-org-context
 context-tree publish --open-pr
 ```
 
+If you want the initial bootstrap to draft member nodes from repository
+contributors, opt in explicitly:
+
+```bash
+context-tree init --seed-members contributors
+```
+
 If you already created a dedicated tree repo manually, initialize it in place:
 
 ```bash
@@ -95,6 +102,9 @@ Either way, the framework installs into `.agents/skills/first-tree/` and
 `.claude/skills/first-tree/`, renders scaffolding (`NODE.md`, `AGENTS.md`,
 `members/NODE.md`), and generates a task list in
 `.agents/skills/first-tree/progress.md`.
+When `--seed-members contributors` is set, init also attempts to create
+`members/*/NODE.md` from GitHub contributor data and falls back to local git
+history if GitHub metadata is unavailable.
 
 Hard boundary: do **not** create `NODE.md`, `members/`, or tree-scoped
 `AGENTS.md` in the source/workspace repo. Those files belong only in the
@@ -183,7 +193,7 @@ The tree doesn't duplicate source code — it captures what connects things and 
 
 | Command | Description |
 |---------|-------------|
-| `context-tree init` | Install local source/workspace integration and create or refresh a dedicated tree repo. By default, running in a source/workspace repo creates a sibling `<repo>-context`; use `--here` only when you are already inside the dedicated tree repo. |
+| `context-tree init` | Install local source/workspace integration and create or refresh a dedicated tree repo. By default, running in a source/workspace repo creates a sibling `<repo>-context`; use `--here` only when you are already inside the dedicated tree repo, and `--seed-members contributors` to draft member nodes from contributor history. |
 | `context-tree publish` | Publish a dedicated tree repo to GitHub, add it back to the source/workspace repo as a submodule, and optionally open the source-repo PR. |
 | `context-tree verify` | Check the installed progress file for unchecked items + run deterministic validation. Use `--tree-path` when invoking from another working directory. |
 | `context-tree upgrade` | Refresh the installed framework skill from the currently running `first-tree` npm package and generate follow-up tasks. Use `--tree-path` when invoking from another working directory. |

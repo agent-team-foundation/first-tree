@@ -20,6 +20,7 @@ Options:
 
 Common examples:
   context-tree init
+  context-tree init --seed-members contributors
   context-tree publish --open-pr
   mkdir my-org-context && cd my-org-context && git init && context-tree init --here
   context-tree verify --tree-path ../my-org-context

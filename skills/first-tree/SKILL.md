@@ -81,6 +81,9 @@ repos.
 - `context-tree init` installs this skill into the target tree repo and
   scaffolds `.agents/skills/first-tree/`, `.claude/skills/first-tree/`,
   `NODE.md`, `AGENTS.md`, and `members/NODE.md`.
+- `context-tree init --seed-members contributors` is an explicit bootstrap aid:
+  it seeds `members/*/NODE.md` from GitHub contributors when available, and
+  falls back to local git history when GitHub metadata is unavailable.
 - The default source/workspace workflow is: run `context-tree init` from the
   source repo, draft the first tree version in `<repo>-context`, then run
   `context-tree publish --open-pr` from that dedicated tree repo.

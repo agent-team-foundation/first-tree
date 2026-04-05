@@ -43,6 +43,7 @@ These skill-owned files implement the framework behavior.
 | --- | --- |
 | `engine/commands/` | Stable command entrypoints that the thin CLI imports |
 | `engine/init.ts` / `engine/publish.ts` / `engine/verify.ts` / `engine/upgrade.ts` | Command implementations for install, publish, verify, and upgrade |
+| `engine/member-seeding.ts` | Contributor discovery plus optional member-node seeding during init |
 | `engine/onboarding.ts` | Canonical onboarding text loader |
 | `engine/repo.ts` | Repo inspection, source-vs-tree heuristics, and worktree-aware git-root helpers |
 | `engine/rules/` | Situation-aware task generation after `init` |
@@ -75,6 +76,7 @@ not become the only place important maintainer knowledge lives.
 | Path | Coverage |
 | --- | --- |
 | `tests/init.test.ts` | Init scaffolding behavior |
+| `tests/member-seeding.test.ts` | Contributor discovery and member seeding behavior |
 | `tests/publish.test.ts` | Publish workflow orchestration |
 | `tests/verify.test.ts` | Verification and progress gating |
 | `tests/rules.test.ts` | Task generation text |

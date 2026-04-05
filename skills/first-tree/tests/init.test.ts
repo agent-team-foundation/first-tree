@@ -319,6 +319,57 @@ describe("runInit", () => {
     expect(existsSync(join(sourceRepoDir.path, "members", "NODE.md"))).toBe(true);
     expect(existsSync(join(sourceRepoDir.path, INSTALLED_PROGRESS))).toBe(true);
   });
+
+  it("can seed member nodes from contributor history into the dedicated tree repo", () => {
+    const sourceRepoDir = useTmpDir();
+    const sourceSkillDir = useTmpDir();
+    makeSourceRepo(sourceRepoDir.path);
+    makeSourceSkill(sourceSkillDir.path, "0.2.0");
+
+    const ret = runInit(new Repo(sourceRepoDir.path), {
+      contributorCollector: () => ({
+        contributors: [
+          {
+            owner: "alice",
+            role: "Contributor",
+            slug: "alice",
+            source: "github",
+            title: "Alice Example",
+            type: "human",
+          },
+          {
+            owner: "renovate-bot",
+            role: "Automation Contributor",
+            slug: "renovate-bot",
+            source: "git",
+            title: "Renovate Bot",
+            type: "autonomous_agent",
+          },
+        ],
+        source: "github",
+      }),
+      seedMembers: "contributors",
+      sourceRoot: sourceSkillDir.path,
+      gitInitializer: fakeGitInitializer,
+    });
+
+    const treeRepo = join(
+      dirname(sourceRepoDir.path),
+      `${basename(sourceRepoDir.path)}-context`,
+    );
+
+    expect(ret).toBe(0);
+    expect(existsSync(join(treeRepo, "members", "alice", "NODE.md"))).toBe(true);
+    expect(existsSync(join(treeRepo, "members", "renovate-bot", "NODE.md"))).toBe(
+      true,
+    );
+    expect(readFileSync(join(treeRepo, INSTALLED_PROGRESS), "utf-8")).toContain(
+      "Review the 2 contributor-seeded member node(s) under `members/`",
+    );
+    expect(readFileSync(join(sourceRepoDir.path, AGENT_INSTRUCTIONS_FILE), "utf-8")).toContain(
+      "FIRST-TREE-SOURCE-INTEGRATION:",
+    );
+  });
 });
 
 describe("parseInitArgs", () => {
@@ -334,11 +385,17 @@ describe("parseInitArgs", () => {
     expect(parseInitArgs(["--tree-path", "../acme-context"])).toEqual({
       treePath: "../acme-context",
     });
+    expect(parseInitArgs(["--seed-members", "contributors"])).toEqual({
+      seedMembers: "contributors",
+    });
   });
 
   it("rejects incompatible init options", () => {
     expect(parseInitArgs(["--here", "--tree-name", "acme-context"])).toEqual({
       error: "Cannot combine --here with --tree-name",
+    });
+    expect(parseInitArgs(["--seed-members", "github"])).toEqual({
+      error: "Unsupported value for --seed-members: github",
     });
   });
 });

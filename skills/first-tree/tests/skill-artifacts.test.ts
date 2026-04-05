@@ -33,10 +33,16 @@ describe("skill artifacts", () => {
     ).toBe(true);
     expect(existsSync(join(ROOT, "skills", "first-tree", "assets", "framework", "manifest.json"))).toBe(true);
     expect(existsSync(join(ROOT, "skills", "first-tree", "engine", "init.ts"))).toBe(true);
+    expect(
+      existsSync(join(ROOT, "skills", "first-tree", "engine", "member-seeding.ts")),
+    ).toBe(true);
     expect(existsSync(join(ROOT, "AGENTS.md"))).toBe(true);
     expect(existsSync(join(ROOT, "skills", "first-tree", "tests", "init.test.ts"))).toBe(
       true,
     );
+    expect(
+      existsSync(join(ROOT, "skills", "first-tree", "tests", "member-seeding.test.ts")),
+    ).toBe(true);
     expect(
       existsSync(
         join(ROOT, "evals", "context-tree-eval.test.ts"),
@@ -203,7 +209,13 @@ describe("skill artifacts", () => {
         "package/skills/first-tree/engine/init.ts",
       );
       expect(listing).toContain(
+        "package/skills/first-tree/engine/member-seeding.ts",
+      );
+      expect(listing).toContain(
         "package/skills/first-tree/tests/init.test.ts",
+      );
+      expect(listing).toContain(
+        "package/skills/first-tree/tests/member-seeding.test.ts",
       );
       expect(listing).not.toContain("package/skills/first-tree/evals/");
       expect(listing).not.toContain("package/evals/");

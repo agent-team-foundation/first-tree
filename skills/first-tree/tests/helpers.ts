@@ -126,6 +126,36 @@ export function makeSourceSkill(root: string, version = "0.2.0"): void {
     ),
     "---\ntitle: Members\nowners: [alice]\n---\n# Members\n",
   );
+  writeFileSync(
+    join(
+      skillRoot,
+      "assets",
+      "framework",
+      "templates",
+      "member-node.md.template",
+    ),
+    [
+      "---",
+      'title: "<Display Name>"',
+      "owners: [<github-username>]",
+      'type: "<human | personal_assistant | autonomous_agent>"',
+      'role: "<role title>"',
+      "domains:",
+      '  - "<domain>"',
+      "---",
+      "",
+      "# <Display Name>",
+      "",
+      "## About",
+      "",
+      "<!-- Who you are and what you bring to the team. -->",
+      "",
+      "## Current Focus",
+      "",
+      "<!-- What you're actively working on. -->",
+      "",
+    ].join("\n"),
+  );
 }
 
 export function makeNode(
