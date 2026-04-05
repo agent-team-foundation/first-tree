@@ -19,12 +19,15 @@ import {
 import {
   AGENT_INSTRUCTIONS_FILE,
   AGENT_INSTRUCTIONS_TEMPLATE,
+  CLAUDE_INSTRUCTIONS_FILE,
   FRAMEWORK_ASSET_ROOT,
   FRAMEWORK_VERSION,
   INSTALLED_PROGRESS,
   LEGACY_AGENT_INSTRUCTIONS_FILE,
   installedSkillRootsDisplay,
+  SOURCE_INTEGRATION_MARKER,
 } from "#skill/engine/runtime/asset-loader.js";
+import { upsertSourceIntegrationFiles } from "#skill/engine/runtime/source-integration.js";
 
 /**
  * The interactive prompt tool the agent should use to present choices.
@@ -34,8 +37,10 @@ import {
 export const INTERACTIVE_TOOL = "AskUserQuestion";
 export const INIT_USAGE = `usage: context-tree init [--here] [--tree-name NAME] [--tree-path PATH]
 
-By default, running \`context-tree init\` inside a source or workspace repo creates
-a sibling dedicated tree repo named \`<repo>-context\`.
+By default, running \`context-tree init\` inside a source or workspace repo installs
+the first-tree skill in the current repo, updates \`AGENTS.md\` and \`CLAUDE.md\`
+with a \`${SOURCE_INTEGRATION_MARKER}\` line, and creates a sibling dedicated tree
+repo named \`<repo>-context\`.
 
 Options:
   --here             Initialize the current repo in place
@@ -62,6 +67,7 @@ const TEMPLATE_MAP: TemplateTarget[] = [
 
 interface TaskListContext {
   sourceRepoPath?: string;
+  sourceRepoName?: string;
   dedicatedTreeRepo?: boolean;
 }
 
@@ -105,6 +111,23 @@ export function formatTaskList(
     );
     if (context.sourceRepoPath) {
       lines.push(`**Bootstrap source repo:** \`${context.sourceRepoPath}\``, "");
+    }
+    if (context.sourceRepoName) {
+      lines.push(
+        `**Source/workspace contract:** Keep \`${context.sourceRepoName}\` limited to the installed skill plus the \`${SOURCE_INTEGRATION_MARKER}\` lines in \`${AGENT_INSTRUCTIONS_FILE}\` and \`${CLAUDE_INSTRUCTIONS_FILE}\`. Never add \`NODE.md\`, \`members/\`, or tree-scoped \`${AGENT_INSTRUCTIONS_FILE}\` there.`,
+        "",
+      );
+      lines.push("## Source Workspace Workflow");
+      lines.push(
+        `- [ ] Publish this dedicated tree repo to the same GitHub organization as \`${context.sourceRepoName}\``,
+      );
+      lines.push(
+        `- [ ] Add this tree repo back to \`${context.sourceRepoName}\` as a git submodule after the remote exists`,
+      );
+      lines.push(
+        `- [ ] Open a PR against the source/workspace repo's default branch with only the installed skill, the \`${SOURCE_INTEGRATION_MARKER}\` marker lines in \`${AGENT_INSTRUCTIONS_FILE}\` / \`${CLAUDE_INSTRUCTIONS_FILE}\`, and the new submodule pointer`,
+      );
+      lines.push("");
     }
     lines.push(
       "When you publish this tree repo, keep it in the same GitHub organization" +
@@ -182,9 +205,19 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
   const taskListContext = initTarget.dedicatedTreeRepo
     ? {
         dedicatedTreeRepo: true,
+        sourceRepoName: sourceRepo.repoName(),
         sourceRepoPath: relativePathFrom(r.root, sourceRepo.root),
       }
     : undefined;
+  let sourceRoot: string | null = null;
+
+  const resolveSourceRoot = (): string => {
+    if (sourceRoot !== null) {
+      return sourceRoot;
+    }
+    sourceRoot = options?.sourceRoot ?? resolveBundledPackageRoot();
+    return sourceRoot;
+  };
 
   if (initTarget.dedicatedTreeRepo) {
     console.log(
@@ -196,17 +229,55 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
     if (initTarget.createdGitRepo) {
       console.log("  Initialized a new git repo for the tree.");
     }
+    console.log(
+      "  The source/workspace repo should keep only the installed skill and the" +
+        ` ${SOURCE_INTEGRATION_MARKER} lines in ${AGENT_INSTRUCTIONS_FILE} and ${CLAUDE_INSTRUCTIONS_FILE}.`,
+    );
+    console.log(
+      `  Never add NODE.md, members/, or tree-scoped ${AGENT_INSTRUCTIONS_FILE} to the source/workspace repo.`,
+    );
     console.log();
+  }
+
+  if (initTarget.dedicatedTreeRepo) {
+    try {
+      const resolvedSourceRoot = resolveSourceRoot();
+      const hadSourceSkill = sourceRepo.hasCurrentInstalledSkill();
+      if (!hadSourceSkill) {
+        console.log(
+          "Installing the first-tree skill into the source/workspace repo...",
+        );
+        installSkill(resolvedSourceRoot, sourceRepo.root);
+      }
+      const updates = upsertSourceIntegrationFiles(sourceRepo.root, r.repoName());
+      const changedFiles = updates
+        .filter((update) => update.action !== "unchanged")
+        .map((update) => update.file);
+      if (changedFiles.length > 0) {
+        console.log(
+          `  Updated source/workspace instructions in ${changedFiles.map((file) => `\`${file}\``).join(" and ")}`,
+        );
+      } else {
+        console.log(
+          `  Source/workspace instructions already contain ${SOURCE_INTEGRATION_MARKER}`,
+        );
+      }
+      console.log();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "unknown error";
+      console.error(`Error: ${message}`);
+      return 1;
+    }
   }
 
   if (!r.hasCurrentInstalledSkill()) {
     try {
-      const sourceRoot = options?.sourceRoot ?? resolveBundledPackageRoot();
+      const resolvedSourceRoot = resolveSourceRoot();
       console.log(
         "Installing the framework skill bundled with this first-tree package...",
       );
       console.log("Installing skill and scaffolding...");
-      installSkill(sourceRoot, r.root);
+      installSkill(resolvedSourceRoot, r.root);
       renderTemplates(r.root);
       console.log();
     } catch (err) {

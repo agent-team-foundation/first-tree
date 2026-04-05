@@ -4,6 +4,7 @@ import { Repo } from "#skill/engine/repo.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
   AGENT_INSTRUCTIONS_TEMPLATE,
+  CLAUDE_INSTRUCTIONS_FILE,
   CLAUDE_SKILL_ROOT,
   FRAMEWORK_WORKFLOWS_DIR,
   FRAMEWORK_TEMPLATES_DIR,
@@ -14,6 +15,7 @@ import {
   LEGACY_REPO_SKILL_ROOT,
   LEGACY_SKILL_ROOT,
   SKILL_ROOT,
+  SOURCE_INTEGRATION_MARKER,
   installedSkillRootsDisplay,
   type FrameworkLayout,
 } from "#skill/engine/runtime/asset-loader.js";
@@ -21,6 +23,7 @@ import {
   copyCanonicalSkill,
   resolveBundledPackageRoot,
 } from "#skill/engine/runtime/installer.js";
+import { upsertSourceIntegrationFiles } from "#skill/engine/runtime/source-integration.js";
 import {
   compareFrameworkVersions,
   readSourceVersion,
@@ -121,8 +124,10 @@ export interface UpgradeOptions {
 
 export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
   const workingRepo = repo ?? new Repo();
+  const workspaceOnlyIntegration =
+    workingRepo.hasSourceWorkspaceIntegration() && !workingRepo.looksLikeTreeRepo();
 
-  if (workingRepo.isLikelySourceRepo() && !workingRepo.looksLikeTreeRepo()) {
+  if (workingRepo.isLikelySourceRepo() && !workingRepo.looksLikeTreeRepo() && !workspaceOnlyIntegration) {
     console.error(
       "Error: no installed framework skill found here. This looks like a source/workspace repo. Run `context-tree init` to create a dedicated tree repo, or pass `--tree-path` to upgrade an existing tree repo.",
     );
@@ -178,6 +183,68 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
   }
 
   const missingInstalledRoots = workingRepo.missingInstalledSkillRoots();
+  const sourceRepoTreePathHint = `../${workingRepo.repoName()}-context`;
+
+  if (workspaceOnlyIntegration) {
+    if (
+      layout === "skill" &&
+      missingInstalledRoots.length === 0 &&
+      packagedVersion === localVersion
+    ) {
+      const updates = upsertSourceIntegrationFiles(
+        workingRepo.root,
+        `${workingRepo.repoName()}-context`,
+      );
+      const changedFiles = updates
+        .filter((update) => update.action !== "unchanged")
+        .map((update) => update.file);
+      if (changedFiles.length === 0) {
+        console.log(
+          `Already up to date with the bundled skill (${FRAMEWORK_VERSION} = ${localVersion}).`,
+        );
+        console.log(
+          `This repo only carries source/workspace integration. Upgrade the dedicated tree repo separately with \`context-tree upgrade --tree-path ${sourceRepoTreePathHint}\`.`,
+        );
+        return 0;
+      }
+      console.log(
+        `Already up to date with the bundled skill (${FRAMEWORK_VERSION} = ${localVersion}).`,
+      );
+      console.log(
+        `Updated the ${SOURCE_INTEGRATION_MARKER} marker lines in ${changedFiles.map((file) => `\`${file}\``).join(" and ")}.`,
+      );
+      console.log(
+        `This repo only carries source/workspace integration. Upgrade the dedicated tree repo separately with \`context-tree upgrade --tree-path ${sourceRepoTreePathHint}\`.`,
+      );
+      return 0;
+    }
+
+    copyCanonicalSkill(sourceRoot, workingRepo.root);
+    const updates = upsertSourceIntegrationFiles(
+      workingRepo.root,
+      `${workingRepo.repoName()}-context`,
+    );
+    const changedFiles = updates
+      .filter((update) => update.action !== "unchanged")
+      .map((update) => update.file);
+    console.log(
+      `Refreshed ${installedSkillRootsDisplay()} in this source/workspace repo.`,
+    );
+    if (changedFiles.length > 0) {
+      console.log(
+        `Updated the ${SOURCE_INTEGRATION_MARKER} marker lines in ${changedFiles.map((file) => `\`${file}\``).join(" and ")}.`,
+      );
+    } else {
+      console.log(
+        `The ${SOURCE_INTEGRATION_MARKER} marker lines in ${AGENT_INSTRUCTIONS_FILE} and ${CLAUDE_INSTRUCTIONS_FILE} were already current.`,
+      );
+    }
+    console.log(
+      `This repo is not the Context Tree. Upgrade the dedicated tree repo separately with \`context-tree upgrade --tree-path ${sourceRepoTreePathHint}\`.`,
+    );
+    return 0;
+  }
+
   if (
     layout === "skill" &&
     missingInstalledRoots.length === 0 &&

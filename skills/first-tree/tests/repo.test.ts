@@ -5,6 +5,7 @@ import { Repo } from "#skill/engine/repo.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
   CLAUDE_INSTALLED_PROGRESS,
+  CLAUDE_INSTRUCTIONS_FILE,
   FRAMEWORK_VERSION,
   INSTALLED_PROGRESS,
   LEGACY_AGENT_INSTRUCTIONS_FILE,
@@ -14,6 +15,7 @@ import {
   LEGACY_SKILL_VERSION,
   LEGACY_PROGRESS,
   LEGACY_VERSION,
+  SOURCE_INTEGRATION_MARKER,
 } from "#skill/engine/runtime/asset-loader.js";
 import {
   useTmpDir,
@@ -452,6 +454,24 @@ describe("init heuristics", () => {
     const repo = new Repo(tmp.path);
     expect(repo.looksLikeTreeRepo()).toBe(true);
     expect(repo.isLikelySourceRepo()).toBe(false);
+  });
+
+  it("treats a source repo with installed skill and integration markers as a source repo", () => {
+    const tmp = useTmpDir();
+    makeSourceRepo(tmp.path);
+    makeFramework(tmp.path);
+    writeFileSync(
+      join(tmp.path, AGENT_INSTRUCTIONS_FILE),
+      `${SOURCE_INTEGRATION_MARKER} Use the installed \`first-tree\` skill here.\n`,
+    );
+    writeFileSync(
+      join(tmp.path, CLAUDE_INSTRUCTIONS_FILE),
+      `${SOURCE_INTEGRATION_MARKER} Use the installed \`first-tree\` skill here.\n`,
+    );
+    const repo = new Repo(tmp.path);
+    expect(repo.hasSourceWorkspaceIntegration()).toBe(true);
+    expect(repo.looksLikeTreeRepo()).toBe(false);
+    expect(repo.isLikelySourceRepo()).toBe(true);
   });
 
   it("does not mistake the framework source repo for a user tree repo", () => {

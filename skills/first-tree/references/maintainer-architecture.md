@@ -13,6 +13,10 @@ This reference explains how to maintain the `first-tree` source repo itself.
 This repo is not a user context tree. User decision content lives in the repos
 that install the framework.
 
+When a source/workspace repo installs first-tree, that repo should keep only
+the local skill integration and marker lines. Tree content still belongs only
+in a dedicated `*-context` repo.
+
 ## Canonical Layers
 
 1. `SKILL.md` defines when to use the skill and the maintainer workflow.

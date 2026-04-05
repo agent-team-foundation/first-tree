@@ -15,6 +15,9 @@ This repo ships the canonical `first-tree` skill plus a thin
   framework knowledge.
 - Use `first-tree` for the npm package, `context-tree` for the CLI command, and
   `skills/first-tree/` when you mean the bundled skill path.
+- Keep source/workspace installs limited to local skill integration; `NODE.md`,
+  `members/`, and tree-scoped `AGENTS.md` belong only in a dedicated
+  `*-context` repo. See `skills/first-tree/references/source-workspace-installation.md`.
 - Keep root CLI/package files thin. If a maintainer needs information to change
   behavior safely, move that information into the skill references.
 - Keep shipped runtime assets generic.

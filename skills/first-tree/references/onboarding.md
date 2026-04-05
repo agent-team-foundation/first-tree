@@ -65,8 +65,10 @@ Information an agent needs to **decide** on an approach — not to execute it.
 ### Step 1: Initialize
 
 Recommended workflow: run `context-tree init` from your source or workspace repo.
-The CLI will create a sibling dedicated tree repo named `<repo>-context` by
-default and install the framework there.
+The CLI will install the bundled skill in the current repo, update root
+`AGENTS.md` and `CLAUDE.md` with a `FIRST-TREE-SOURCE-INTEGRATION:` line, and
+create a sibling dedicated tree repo named `<repo>-context` by default. Tree
+files are scaffolded only in the dedicated tree repo.
 
 ```bash
 cd my-org
@@ -89,6 +91,19 @@ Either way, the framework installs into `.agents/skills/first-tree/` and
 
 Publishing tip: keep the tree repo in the same GitHub organization as the
 source repo unless you have a reason not to.
+
+Hard boundary: do **not** create `NODE.md`, `members/`, or tree-scoped
+`AGENTS.md` in the source/workspace repo. Those files belong only in the
+dedicated `*-context` repo.
+
+Default agent workflow after initialization:
+
+1. Create and push the dedicated `*-context` repo in the same GitHub
+   organization as the source repo.
+2. Add the dedicated tree repo back to the source/workspace repo as a `git submodule`.
+3. Open a PR against the source/workspace repo's default branch for the local
+   skill integration plus the new submodule pointer. Do not merge it
+   automatically.
 
 ### Step 2: Work Through the Task List
 
@@ -122,6 +137,10 @@ context-tree verify --tree-path ../my-org-context
 This fails if any items in `.agents/skills/first-tree/progress.md` remain
 unchecked, and runs deterministic checks (valid frontmatter, node structure,
 member nodes exist).
+
+Do not run `context-tree verify` in the source/workspace repo itself. That repo
+only carries the installed skill plus the
+`FIRST-TREE-SOURCE-INTEGRATION:` line.
 
 ### Step 4: Design Your Domains
 
@@ -158,7 +177,7 @@ The tree doesn't duplicate source code — it captures what connects things and 
 
 | Command | Description |
 |---------|-------------|
-| `context-tree init` | Create or refresh a dedicated tree repo. By default, running in a source/workspace repo creates a sibling `<repo>-context`; use `--here` to initialize the current repo in place. |
+| `context-tree init` | Install local source/workspace integration and create or refresh a dedicated tree repo. By default, running in a source/workspace repo creates a sibling `<repo>-context`; use `--here` to initialize the current repo in place. |
 | `context-tree verify` | Check the installed progress file for unchecked items + run deterministic validation. Use `--tree-path` when invoking from another working directory. |
 | `context-tree upgrade` | Refresh the installed framework skill from the currently running `first-tree` npm package and generate follow-up tasks. Use `--tree-path` when invoking from another working directory. |
 | `context-tree help onboarding` | Print this onboarding guide. |
@@ -178,6 +197,11 @@ context-tree upgrade
 `first-tree` npm package, preserves your tree content, and generates follow-up
 tasks in `.agents/skills/first-tree/progress.md`.
 
+If you run `context-tree upgrade` in the source/workspace repo, it refreshes
+only the local installed skill plus the `FIRST-TREE-SOURCE-INTEGRATION:` lines.
+Run `context-tree upgrade --tree-path ../my-org-context` to upgrade the
+dedicated tree repo itself.
+
 If your repo still uses the older `skills/first-tree/`,
 `skills/first-tree-cli-framework/`, or `.context-tree/` layouts,
 `context-tree upgrade` will migrate it to the current installed layout first.
@@ -191,5 +215,6 @@ install before running `context-tree upgrade`.
 ## Further Reading
 
 - `.agents/skills/first-tree/references/principles.md` — Core principles with detailed examples
+- `.agents/skills/first-tree/references/source-workspace-installation.md` — Source/workspace install contract
 - `.agents/skills/first-tree/references/ownership-and-naming.md` — How nodes are named and owned
 - `AGENTS.md` in your tree — The before/during/after workflow for every task

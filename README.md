@@ -36,7 +36,8 @@ Although the npm package is named `first-tree`, the installed CLI command is
 ## Quick Start
 
 Recommended workflow: start from your source or workspace repo and let
-`context-tree init` create a sibling dedicated tree repo.
+`context-tree init` install local source/workspace integration and create a
+sibling dedicated tree repo.
 
 ```bash
 cd my-app
@@ -53,15 +54,27 @@ context-tree init --here
 ```
 
 - `context-tree init` installs `.agents/skills/first-tree/` and
-  `.claude/skills/first-tree/`, creates `NODE.md`, `AGENTS.md`,
-  `members/NODE.md`, and writes a checklist to
+  `.claude/skills/first-tree/` in the current source/workspace repo, appends a
+  single `FIRST-TREE-SOURCE-INTEGRATION:` line to root `AGENTS.md` and
+  `CLAUDE.md`, then creates `NODE.md`, tree-scoped `AGENTS.md`,
+  `members/NODE.md`, and a checklist in the dedicated tree repo at
   `.agents/skills/first-tree/progress.md`.
+- Never create `NODE.md`, `members/`, or tree-scoped `AGENTS.md` in the
+  source/workspace repo. Those files live only in the dedicated `*-context`
+  repo.
+- After creating the dedicated tree repo, prefer pushing it to the same GitHub
+  organization as the source repo, add it back as a git submodule, and open a
+  PR to the source/workspace repo's default branch instead of merging
+  automatically.
 - `context-tree verify` checks both the progress checklist and deterministic
   tree validation. It is expected to fail until the required onboarding tasks
   are complete.
 - `context-tree upgrade` refreshes the installed skill from the currently
-  running `first-tree` npm package. To force the newest published package for a
-  one-off upgrade, run `npx first-tree@latest upgrade`.
+  running `first-tree` npm package. In a source/workspace repo it refreshes
+  only the local installed skill plus the
+  `FIRST-TREE-SOURCE-INTEGRATION:` line; use `--tree-path` to upgrade the
+  dedicated tree repo. To force the newest published package for a one-off
+  upgrade, run `npx first-tree@latest upgrade`.
 
 The package carries the bundled canonical skill, so `init` and `upgrade`
 install from the package payload instead of cloning this source repo at
@@ -71,9 +84,9 @@ runtime.
 
 | Command | What it does |
 | --- | --- |
-| `context-tree init` | Create or refresh a dedicated context tree repo; use `--here` to initialize the current repo in place |
+| `context-tree init` | Install source/workspace integration locally and create or refresh a dedicated context tree repo; use `--here` to initialize the current repo in place |
 | `context-tree verify` | Run verification checks against the current tree |
-| `context-tree upgrade` | Refresh the installed skill from the current `first-tree` npm package and write follow-up tasks |
+| `context-tree upgrade` | Refresh the installed skill from the current `first-tree` npm package; in a source/workspace repo it updates only local integration, while tree repos also get follow-up tasks |
 | `context-tree help onboarding` | Print the onboarding guide |
 | `context-tree --help` | Show the available commands |
 | `context-tree --version` | Print the installed CLI version |
@@ -134,6 +147,7 @@ live in `skills/first-tree/`.
 
 - User-facing overview: `skills/first-tree/references/about.md`
 - User onboarding: `skills/first-tree/references/onboarding.md`
+- Source/workspace install contract: `skills/first-tree/references/source-workspace-installation.md`
 - Maintainer entrypoint: `skills/first-tree/references/source-map.md`
 
 If you are maintaining this repo, start with the source map instead of relying

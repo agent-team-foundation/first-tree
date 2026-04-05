@@ -6,8 +6,10 @@ import { check, checkProgress, runVerify } from "#skill/engine/verify.js";
 import { Repo } from "#skill/engine/repo.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
+  CLAUDE_INSTRUCTIONS_FILE,
   INSTALLED_PROGRESS,
   LEGACY_PROGRESS,
+  SOURCE_INTEGRATION_MARKER,
 } from "#skill/engine/runtime/asset-loader.js";
 import {
   useTmpDir,
@@ -237,5 +239,21 @@ describe("runVerify failing", () => {
     const repo = new Repo(tmp.path);
     const ret = runVerify(repo, passValidator);
     expect(ret).toBe(1);
+  });
+
+  it("refuses to verify a source/workspace repo that only has local first-tree integration", () => {
+    const tmp = useTmpDir();
+    makeSourceRepo(tmp.path);
+    makeFramework(tmp.path);
+    writeFileSync(
+      join(tmp.path, AGENT_INSTRUCTIONS_FILE),
+      `${SOURCE_INTEGRATION_MARKER} Use the installed \`first-tree\` skill here.\n`,
+    );
+    writeFileSync(
+      join(tmp.path, CLAUDE_INSTRUCTIONS_FILE),
+      `${SOURCE_INTEGRATION_MARKER} Use the installed \`first-tree\` skill here.\n`,
+    );
+    const repo = new Repo(tmp.path);
+    expect(runVerify(repo, passValidator)).toBe(1);
   });
 });
