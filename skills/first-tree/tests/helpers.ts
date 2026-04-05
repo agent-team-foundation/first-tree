@@ -9,7 +9,6 @@ import {
   FRAMEWORK_VERSION,
   LEGACY_AGENT_INSTRUCTIONS_FILE,
   LEGACY_REPO_SKILL_VERSION,
-  LEGACY_SKILL_VERSION,
   LEGACY_VERSION,
   SKILL_ROOT,
 } from "#skill/engine/runtime/asset-loader.js";
@@ -72,19 +71,6 @@ export function makeLegacyRepoFramework(root: string, version = "0.1.0"): void {
     "---\nname: first-tree\ndescription: legacy installed\n---\n",
   );
   writeFileSync(join(root, LEGACY_REPO_SKILL_VERSION), `${version}\n`);
-}
-
-export function makeLegacyNamedFramework(
-  root: string,
-  version = "0.1.0",
-): void {
-  mkdirSync(
-    join(root, "skills", "first-tree-cli-framework", "assets", "framework"),
-    {
-      recursive: true,
-    },
-  );
-  writeFileSync(join(root, LEGACY_SKILL_VERSION), `${version}\n`);
 }
 
 export function makeSourceSkill(root: string, version = "0.2.0"): void {

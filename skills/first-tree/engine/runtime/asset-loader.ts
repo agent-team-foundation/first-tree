@@ -115,32 +115,6 @@ export const LEGACY_REPO_SKILL_PROGRESS = join(
   "progress.md",
 );
 
-export const LEGACY_SKILL_NAME = "first-tree-cli-framework";
-export const LEGACY_SKILL_ROOT = join("skills", LEGACY_SKILL_NAME);
-export const LEGACY_SKILL_ASSET_ROOT = join(
-  LEGACY_SKILL_ROOT,
-  "assets",
-  "framework",
-);
-export const LEGACY_SKILL_VERSION = join(LEGACY_SKILL_ASSET_ROOT, "VERSION");
-export const LEGACY_SKILL_TEMPLATES_DIR = join(
-  LEGACY_SKILL_ASSET_ROOT,
-  "templates",
-);
-export const LEGACY_SKILL_WORKFLOWS_DIR = join(
-  LEGACY_SKILL_ASSET_ROOT,
-  "workflows",
-);
-export const LEGACY_SKILL_PROMPTS_DIR = join(
-  LEGACY_SKILL_ASSET_ROOT,
-  "prompts",
-);
-export const LEGACY_SKILL_EXAMPLES_DIR = join(
-  LEGACY_SKILL_ASSET_ROOT,
-  "examples",
-);
-export const LEGACY_SKILL_PROGRESS = join(LEGACY_SKILL_ROOT, "progress.md");
-
 export const LEGACY_FRAMEWORK_ROOT = ".context-tree";
 export const LEGACY_VERSION = join(LEGACY_FRAMEWORK_ROOT, "VERSION");
 export const LEGACY_PROGRESS = join(LEGACY_FRAMEWORK_ROOT, "progress.md");
@@ -153,7 +127,6 @@ export type FrameworkLayout =
   | "skill"
   | "claude-skill"
   | "legacy-repo-skill"
-  | "legacy-skill"
   | "legacy";
 
 function pathExists(root: string, relPath: string): boolean {
@@ -180,7 +153,6 @@ export function frameworkVersionCandidates(): string[] {
     FRAMEWORK_VERSION,
     CLAUDE_FRAMEWORK_VERSION,
     LEGACY_REPO_SKILL_VERSION,
-    LEGACY_SKILL_VERSION,
     LEGACY_VERSION,
   ];
 }
@@ -190,7 +162,6 @@ export function progressFileCandidates(): string[] {
     INSTALLED_PROGRESS,
     CLAUDE_INSTALLED_PROGRESS,
     LEGACY_REPO_SKILL_PROGRESS,
-    LEGACY_SKILL_PROGRESS,
     LEGACY_PROGRESS,
   ];
 }
@@ -204,7 +175,6 @@ export function frameworkTemplateDirCandidates(): string[] {
     FRAMEWORK_TEMPLATES_DIR,
     CLAUDE_FRAMEWORK_TEMPLATES_DIR,
     LEGACY_REPO_SKILL_TEMPLATES_DIR,
-    LEGACY_SKILL_TEMPLATES_DIR,
     LEGACY_TEMPLATES_DIR,
   ];
 }
@@ -214,7 +184,6 @@ export function frameworkWorkflowDirCandidates(): string[] {
     FRAMEWORK_WORKFLOWS_DIR,
     CLAUDE_FRAMEWORK_WORKFLOWS_DIR,
     LEGACY_REPO_SKILL_WORKFLOWS_DIR,
-    LEGACY_SKILL_WORKFLOWS_DIR,
     LEGACY_WORKFLOWS_DIR,
   ];
 }
@@ -224,7 +193,6 @@ export function frameworkPromptDirCandidates(): string[] {
     FRAMEWORK_PROMPTS_DIR,
     CLAUDE_FRAMEWORK_PROMPTS_DIR,
     LEGACY_REPO_SKILL_PROMPTS_DIR,
-    LEGACY_SKILL_PROMPTS_DIR,
     LEGACY_PROMPTS_DIR,
   ];
 }
@@ -234,7 +202,6 @@ export function frameworkExampleDirCandidates(): string[] {
     FRAMEWORK_EXAMPLES_DIR,
     CLAUDE_FRAMEWORK_EXAMPLES_DIR,
     LEGACY_REPO_SKILL_EXAMPLES_DIR,
-    LEGACY_SKILL_EXAMPLES_DIR,
     LEGACY_EXAMPLES_DIR,
   ];
 }
@@ -260,9 +227,6 @@ export function detectFrameworkLayout(root: string): FrameworkLayout | null {
   }
   if (pathExists(root, LEGACY_REPO_SKILL_VERSION)) {
     return "legacy-repo-skill";
-  }
-  if (pathExists(root, LEGACY_SKILL_VERSION)) {
-    return "legacy-skill";
   }
   if (pathExists(root, LEGACY_VERSION)) {
     return "legacy";

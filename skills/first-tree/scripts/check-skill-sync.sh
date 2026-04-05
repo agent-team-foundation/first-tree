@@ -91,7 +91,6 @@ for legacy_path in \
   ".claude" \
   ".context-tree" \
   "docs" \
-  "skills/first-tree-cli-framework" \
   "tests" \
   "skills/first-tree/references/repo-snapshot"
 do

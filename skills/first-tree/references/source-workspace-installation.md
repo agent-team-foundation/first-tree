@@ -21,6 +21,18 @@ existing source or workspace repository.
   the dedicated tree repo rather than copying that material into the source
   repo.
 
+## Agent Decision Rule
+
+- Treat "install and use first-tree" in a source/workspace repo as a two-repo
+  workflow: local integration in the current repo plus tree bootstrap in a
+  sibling `*-context` repo.
+- Do not run `context-tree init --here` in the source/workspace repo unless the
+  user explicitly says that repo itself should become the Context Tree.
+- If you cannot create the sibling repo locally, cannot push it to GitHub, or
+  cannot add the submodule yet, pause and report the blocker. Do not fall back
+  to creating `NODE.md`, `members/`, or tree-scoped `AGENTS.md` in the
+  source/workspace repo.
+
 ## Default Agent Workflow
 
 When an agent is asked to install first-tree for a source/workspace repo, the

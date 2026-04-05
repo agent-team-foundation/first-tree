@@ -1,8 +1,7 @@
 # Upgrade Contract
 
 This file describes the current installed-layout contract and the compatibility
-rules we keep for legacy `skills/first-tree/`,
-`skills/first-tree-cli-framework/`, and `.context-tree/` repos.
+rules we keep for legacy `skills/first-tree/` and `.context-tree/` repos.
 
 ## Canonical Source
 
@@ -92,9 +91,6 @@ skill discovery and hooks.
     skill plus the `FIRST-TREE-SOURCE-INTEGRATION:` lines
   - migrates repos that still use the previous `skills/first-tree/` path onto
     `.agents/skills/first-tree/` and `.claude/skills/first-tree/`
-  - migrates repos that still use the previous
-    `skills/first-tree-cli-framework/` path onto `.agents/skills/first-tree/`
-    and `.claude/skills/first-tree/`
   - migrates legacy `.context-tree/` repos onto the installed skill layout
   - preserves user-authored sections such as the editable part of `AGENTS.md`
 
@@ -111,9 +107,9 @@ skill discovery and hooks.
 - Normal `context-tree init` and `context-tree upgrade` flows do not clone the
   source repo or require network access.
 - `context-tree verify` may still read a legacy
-  `.claude/skills/first-tree/...`, `skills/first-tree/...`,
-  `skills/first-tree-cli-framework/...`, or `.context-tree/...` layout in an
-  existing user repo so the repo can be repaired or upgraded in place.
+  `.claude/skills/first-tree/...`, `skills/first-tree/...`, or
+  `.context-tree/...` layout in an existing user repo so the repo can be
+  repaired or upgraded in place.
 - `context-tree upgrade` must migrate either legacy layout onto
   `.agents/skills/first-tree/` and `.claude/skills/first-tree/`, and remove
   old skill directories afterward.

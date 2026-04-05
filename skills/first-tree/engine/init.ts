@@ -42,8 +42,11 @@ the first-tree skill in the current repo, updates \`AGENTS.md\` and \`CLAUDE.md\
 with a \`${SOURCE_INTEGRATION_MARKER}\` line, and creates a sibling dedicated tree
 repo named \`<repo>-context\`.
 
+Do not use \`--here\` inside a source/workspace repo unless you explicitly want
+that repo itself to become the Context Tree.
+
 Options:
-  --here             Initialize the current repo in place
+  --here             Initialize the current repo in place after you are already in the dedicated tree repo
   --tree-name NAME   Name the dedicated sibling tree repo to create
   --tree-path PATH   Use an explicit tree repo path
   --help             Show this help message
@@ -202,6 +205,15 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
     return 1;
   }
   const r = initTarget.repo;
+  if (options?.here && sourceRepo.isLikelySourceRepo() && !sourceRepo.looksLikeTreeRepo()) {
+    console.log(
+      "Warning: `context-tree init --here` is initializing this source/workspace" +
+        " repo in place. This will create `NODE.md`, `members/`, and tree-scoped" +
+        ` ${AGENT_INSTRUCTIONS_FILE} here. Use plain \`context-tree init\` to create` +
+        " a sibling dedicated tree repo instead.",
+    );
+    console.log();
+  }
   const taskListContext = initTarget.dedicatedTreeRepo
     ? {
         dedicatedTreeRepo: true,

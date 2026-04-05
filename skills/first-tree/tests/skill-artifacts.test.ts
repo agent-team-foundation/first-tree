@@ -139,7 +139,6 @@ describe("skill artifacts", () => {
     expect(isTrackedInGit(".claude")).toBe(false);
     expect(isTrackedInGit(".context-tree")).toBe(false);
     expect(existsSync(join(ROOT, "AGENT.md"))).toBe(false);
-    expect(isTrackedInGit("skills/first-tree-cli-framework")).toBe(false);
     expect(isTrackedInGit("docs")).toBe(false);
     expect(isTrackedInGit("tests")).toBe(false);
     expect(existsSync(join(ROOT, "evals"))).toBe(true);
@@ -231,6 +230,7 @@ describe("skill artifacts", () => {
     expect(read("README.md")).toContain("dedicated tree repo");
     expect(read("README.md")).toContain("FIRST-TREE-SOURCE-INTEGRATION:");
     expect(read("README.md")).toContain("`first-tree` skill");
+    expect(read("README.md")).toContain("Only use `--here` after you have already switched into the dedicated tree repo.");
     expect(read("AGENTS.md")).toContain("references/source-map.md");
     expect(read("AGENTS.md")).toContain("source-workspace-installation.md");
     expect(read("AGENTS.md")).toContain("bundled skill path");
@@ -251,6 +251,7 @@ describe("skill artifacts", () => {
     expect(onboarding).toContain("FIRST-TREE-SOURCE-INTEGRATION:");
     expect(onboarding).toContain("source/workspace repo");
     expect(onboarding).toContain("git submodule");
+    expect(onboarding).toContain("Only use `--here` after you have already switched into the dedicated tree repo.");
     expect(onboarding).not.toContain("This clones the framework into `.context-tree/`");
     expect(onboarding).not.toContain("from upstream");
 
@@ -265,6 +266,7 @@ describe("skill artifacts", () => {
     expect(skillMd).toContain(".claude/skills/first-tree/");
     expect(skillMd).toContain("source-workspace-installation.md");
     expect(skillMd).toContain("FIRST-TREE-SOURCE-INTEGRATION:");
+    expect(skillMd).toContain("Never run `context-tree init --here` in a source/workspace repo");
     expect(skillMd).not.toContain("canonical eval harness");
 
     const sourceMap = read("skills/first-tree/references/source-map.md");
@@ -290,6 +292,7 @@ describe("skill artifacts", () => {
     expect(sourceWorkspaceInstall).toContain("FIRST-TREE-SOURCE-INTEGRATION:");
     expect(sourceWorkspaceInstall).toContain("git submodule");
     expect(sourceWorkspaceInstall).toContain("Do not run `context-tree verify`");
+    expect(sourceWorkspaceInstall).toContain("Do not run `context-tree init --here` in the source/workspace repo");
 
     const maintainerArchitecture = read(
       "skills/first-tree/references/maintainer-architecture.md",

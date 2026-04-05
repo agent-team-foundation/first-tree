@@ -18,7 +18,6 @@ import {
   makeSourceRepo,
   makeLegacyFramework,
   makeLegacyRepoFramework,
-  makeLegacyNamedFramework,
   makeSourceSkill,
   useTmpDir,
 } from "./helpers.js";
@@ -61,26 +60,6 @@ describe("runUpgrade", () => {
 
     expect(result).toBe(0);
     expect(existsSync(join(repoDir.path, INSTALLED_PROGRESS))).toBe(false);
-  });
-
-  it("migrates repos that still use the previous installed skill name", () => {
-    const repoDir = useTmpDir();
-    const sourceDir = useTmpDir();
-    makeLegacyNamedFramework(repoDir.path, "0.2.0");
-    makeSourceSkill(sourceDir.path, "0.2.0");
-
-    const result = runUpgrade(new Repo(repoDir.path), {
-      sourceRoot: sourceDir.path,
-    });
-
-    expect(result).toBe(0);
-    expect(existsSync(join(repoDir.path, "skills", "first-tree-cli-framework"))).toBe(
-      false,
-    );
-    expect(readFileSync(join(repoDir.path, FRAMEWORK_VERSION), "utf-8").trim()).toBe("0.2.0");
-    expect(readFileSync(join(repoDir.path, INSTALLED_PROGRESS), "utf-8")).toContain(
-      "skills/first-tree-cli-framework/",
-    );
   });
 
   it("migrates repos that still use the previous workspace skill path", () => {

@@ -3,6 +3,7 @@ import { basename, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   formatTaskList,
+  INIT_USAGE,
   parseInitArgs,
   writeProgress,
   runInit,
@@ -302,6 +303,11 @@ describe("runInit", () => {
 });
 
 describe("parseInitArgs", () => {
+  it("documents that --here is only for dedicated tree repos", () => {
+    expect(INIT_USAGE).toContain("Do not use `--here` inside a source/workspace repo");
+    expect(INIT_USAGE).toContain("already in the dedicated tree repo");
+  });
+
   it("parses dedicated repo options", () => {
     expect(parseInitArgs(["--tree-name", "acme-context"])).toEqual({
       treeName: "acme-context",

@@ -11,8 +11,6 @@ import {
   LEGACY_AGENT_INSTRUCTIONS_FILE,
   LEGACY_REPO_SKILL_PROGRESS,
   LEGACY_REPO_SKILL_VERSION,
-  LEGACY_SKILL_PROGRESS,
-  LEGACY_SKILL_VERSION,
   LEGACY_PROGRESS,
   LEGACY_VERSION,
   SOURCE_INTEGRATION_MARKER,
@@ -23,7 +21,6 @@ import {
   makeGitRepo,
   makeLegacyFramework,
   makeLegacyRepoFramework,
-  makeLegacyNamedFramework,
   makeSourceRepo,
   makeSourceSkill,
 } from "./helpers.js";
@@ -181,13 +178,6 @@ describe("hasFramework", () => {
     expect(repo.hasFramework()).toBe(true);
   });
 
-  it("returns true with the previous installed skill name", () => {
-    const tmp = useTmpDir();
-    makeLegacyNamedFramework(tmp.path);
-    const repo = new Repo(tmp.path);
-    expect(repo.hasFramework()).toBe(true);
-  });
-
   it("returns true with the previous workspace skill path", () => {
     const tmp = useTmpDir();
     makeLegacyRepoFramework(tmp.path);
@@ -217,13 +207,6 @@ describe("readVersion", () => {
     makeLegacyFramework(tmp.path, "0.3.0");
     const repo = new Repo(tmp.path);
     expect(repo.readVersion()).toBe("0.3.0");
-  });
-
-  it("reads the previous installed skill version", () => {
-    const tmp = useTmpDir();
-    makeLegacyNamedFramework(tmp.path, "0.2.5");
-    const repo = new Repo(tmp.path);
-    expect(repo.readVersion()).toBe("0.2.5");
   });
 
   it("reads the previous workspace skill version", () => {
@@ -256,14 +239,6 @@ describe("path preferences", () => {
     const repo = new Repo(tmp.path);
     expect(repo.preferredProgressPath()).toBe(LEGACY_PROGRESS);
     expect(repo.frameworkVersionPath()).toBe(LEGACY_VERSION);
-  });
-
-  it("switches path preferences for repos using the previous skill name", () => {
-    const tmp = useTmpDir();
-    makeLegacyNamedFramework(tmp.path);
-    const repo = new Repo(tmp.path);
-    expect(repo.preferredProgressPath()).toBe(LEGACY_SKILL_PROGRESS);
-    expect(repo.frameworkVersionPath()).toBe(LEGACY_SKILL_VERSION);
   });
 
   it("switches path preferences for repos using the previous workspace skill path", () => {

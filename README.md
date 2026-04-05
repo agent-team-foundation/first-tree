@@ -53,6 +53,10 @@ git init
 context-tree init --here
 ```
 
+Only use `--here` after you have already switched into the dedicated tree repo.
+Do not use it inside the source/workspace repo unless you intentionally want
+that repo itself to become the Context Tree.
+
 - `context-tree init` installs `.agents/skills/first-tree/` and
   `.claude/skills/first-tree/` in the current source/workspace repo, appends a
   single `FIRST-TREE-SOURCE-INTEGRATION:` line to root `AGENTS.md` and
@@ -84,7 +88,7 @@ runtime.
 
 | Command | What it does |
 | --- | --- |
-| `context-tree init` | Install source/workspace integration locally and create or refresh a dedicated context tree repo; use `--here` to initialize the current repo in place |
+| `context-tree init` | Install source/workspace integration locally and create or refresh a dedicated context tree repo; use `--here` only when you are already inside the dedicated tree repo |
 | `context-tree verify` | Run verification checks against the current tree |
 | `context-tree upgrade` | Refresh the installed skill from the current `first-tree` npm package; in a source/workspace repo it updates only local integration, while tree repos also get follow-up tasks |
 | `context-tree help onboarding` | Print the onboarding guide |

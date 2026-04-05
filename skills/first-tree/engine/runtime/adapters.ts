@@ -4,7 +4,6 @@ import {
   CLAUDE_FRAMEWORK_HELPERS_DIR,
   FRAMEWORK_EXAMPLES_DIR,
   LEGACY_REPO_SKILL_EXAMPLES_DIR,
-  LEGACY_SKILL_EXAMPLES_DIR,
   LEGACY_EXAMPLES_DIR,
 } from "#skill/engine/runtime/asset-loader.js";
 
@@ -16,7 +15,6 @@ export function claudeCodeExampleCandidates(): string[] {
     join(CLAUDE_FRAMEWORK_EXAMPLES_DIR, "claude-code"),
     join(FRAMEWORK_EXAMPLES_DIR, "claude-code"),
     join(LEGACY_REPO_SKILL_EXAMPLES_DIR, "claude-code"),
-    join(LEGACY_SKILL_EXAMPLES_DIR, "claude-code"),
     join(LEGACY_EXAMPLES_DIR, "claude-code"),
   ];
 }

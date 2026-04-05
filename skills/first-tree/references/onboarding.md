@@ -84,6 +84,10 @@ git init
 context-tree init --here
 ```
 
+Only use `--here` after you have already switched into the dedicated tree repo.
+Do not use it inside the source/workspace repo unless you intentionally want
+that repo itself to become the Context Tree.
+
 Either way, the framework installs into `.agents/skills/first-tree/` and
 `.claude/skills/first-tree/`, renders scaffolding (`NODE.md`, `AGENTS.md`,
 `members/NODE.md`), and generates a task list in
@@ -177,7 +181,7 @@ The tree doesn't duplicate source code — it captures what connects things and 
 
 | Command | Description |
 |---------|-------------|
-| `context-tree init` | Install local source/workspace integration and create or refresh a dedicated tree repo. By default, running in a source/workspace repo creates a sibling `<repo>-context`; use `--here` to initialize the current repo in place. |
+| `context-tree init` | Install local source/workspace integration and create or refresh a dedicated tree repo. By default, running in a source/workspace repo creates a sibling `<repo>-context`; use `--here` only when you are already inside the dedicated tree repo. |
 | `context-tree verify` | Check the installed progress file for unchecked items + run deterministic validation. Use `--tree-path` when invoking from another working directory. |
 | `context-tree upgrade` | Refresh the installed framework skill from the currently running `first-tree` npm package and generate follow-up tasks. Use `--tree-path` when invoking from another working directory. |
 | `context-tree help onboarding` | Print this onboarding guide. |
@@ -202,8 +206,7 @@ only the local installed skill plus the `FIRST-TREE-SOURCE-INTEGRATION:` lines.
 Run `context-tree upgrade --tree-path ../my-org-context` to upgrade the
 dedicated tree repo itself.
 
-If your repo still uses the older `skills/first-tree/`,
-`skills/first-tree-cli-framework/`, or `.context-tree/` layouts,
+If your repo still uses the older `skills/first-tree/` or `.context-tree/` layouts,
 `context-tree upgrade` will migrate it to the current installed layout first.
 
 To pick up a newer framework release, first run a newer package version, for
