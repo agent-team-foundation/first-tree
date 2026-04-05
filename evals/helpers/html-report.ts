@@ -26,7 +26,7 @@ function pct(a: number, b: number): string {
 }
 
 function shortenPath(p: string): string {
-  return p.replace(/\/tmp\/ct-eval-[^/]+\//, '');
+  return p.replace(/\/tmp\/ft-eval-[^/]+\//, '');
 }
 
 function formatFailureReason(t: TrialResult): string {

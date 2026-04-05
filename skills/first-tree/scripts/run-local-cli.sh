@@ -25,11 +25,11 @@ if [[ -n "${REPO_ROOT}" ]]; then
   exec node dist/cli.js "$@"
 fi
 
-if command -v context-tree >/dev/null 2>&1; then
-  exec context-tree "$@"
+if command -v first-tree >/dev/null 2>&1; then
+  exec first-tree "$@"
 fi
 
-echo "Could not find a live first-tree checkout or a 'context-tree' binary on PATH." >&2
+echo "Could not find a live first-tree checkout or a 'first-tree' binary on PATH." >&2
 echo "Install the npm package 'first-tree' if you want the portable runner to invoke the CLI outside the repo." >&2
 echo "Read the onboarding guide at: ${INSTALL_GUIDE}" >&2
 exit 1

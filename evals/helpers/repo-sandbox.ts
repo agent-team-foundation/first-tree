@@ -5,10 +5,10 @@
  * is a full independent copy — patches from eval tasks are confined
  * to the sandbox and destroyed on cleanup.
  *
- * Single-repo layout:   /tmp/ct-eval-xxx/  (repo cloned at root)
- * Multi-repo layout:    /tmp/ct-eval-xxx/backend/
- *                       /tmp/ct-eval-xxx/web/
- *                       /tmp/ct-eval-xxx/mobile/
+ * Single-repo layout:   /tmp/ft-eval-xxx/  (repo cloned at root)
+ * Multi-repo layout:    /tmp/ft-eval-xxx/backend/
+ *                       /tmp/ft-eval-xxx/web/
+ *                       /tmp/ft-eval-xxx/mobile/
  */
 
 import { execSync } from 'node:child_process';
@@ -65,7 +65,7 @@ export async function createSandbox(
   condition: EvalCondition,
   treeConfig?: ContextTreeConfig,
 ): Promise<Sandbox> {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `ct-eval-${evalCase.id}-`));
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `ft-eval-${evalCase.id}-`));
   const isMultiRepo = evalCase.repos.length > 1;
 
   try {
@@ -88,7 +88,7 @@ export async function createSandbox(
       const primaryRepo = evalCase.repos[0];
       const repoName = defaultPath(primaryRepo.repo);
       const branch = `${repoName}/${primaryRepo.commit_sha.slice(0, 8)}`;
-      const treeTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ct-eval-tree-'));
+      const treeTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-eval-tree-'));
 
       try {
         process.stderr.write(`  Cloning context tree @ ${condition.tree_sha.slice(0, 8)} (${condition.label})...\n`);

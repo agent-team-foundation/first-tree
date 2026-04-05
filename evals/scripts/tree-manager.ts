@@ -73,7 +73,7 @@ export function treeBranch(repo: string, commitSha: string): string {
  */
 export function treeCommitMessage(provenance: TreeProvenance): string {
   return [
-    `Generate tree with context-tree CLI @ ${provenance.cliCommit.slice(0, 7)}`,
+    `Generate tree with first-tree CLI @ ${provenance.cliCommit.slice(0, 7)}`,
     '',
     `repo: ${provenance.codeRepo}`,
     `code_commit: ${provenance.codeCommit}`,
@@ -146,7 +146,7 @@ export function preflight(treeRepo: string, codeRepo: string, codeSha: string): 
  * Returns the tmpdir path. Uses the repo cache to avoid redundant network clones.
  */
 export function cloneTreeRepo(treeRepo: string, branch?: string): string {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ct-tree-repo-'));
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-tree-repo-'));
 
   if (branch) {
     try {
@@ -158,7 +158,7 @@ export function cloneTreeRepo(treeRepo: string, branch?: string): string {
     }
   }
 
-  const tmp2 = fs.mkdtempSync(path.join(os.tmpdir(), 'ct-tree-repo-'));
+  const tmp2 = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-tree-repo-'));
   cloneFromCache(treeRepo, tmp2);
   return tmp2;
 }
@@ -168,7 +168,7 @@ export function cloneTreeRepo(treeRepo: string, branch?: string): string {
  * Uses the repo cache to avoid redundant network clones.
  */
 export function cloneCodeRepo(codeRepo: string, commitSha: string): string {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ct-code-repo-'));
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-code-repo-'));
 
   process.stderr.write(`Cloning ${codeRepo} @ ${commitSha.slice(0, 8)} (cached)...\n`);
   cloneFromCache(codeRepo, tmp, { commitSha });
@@ -176,15 +176,15 @@ export function cloneCodeRepo(codeRepo: string, commitSha: string): string {
 }
 
 /**
- * Install the context-tree CLI from a specific first-tree commit.
+ * Install the first-tree CLI from a specific first-tree commit.
  * Clones the first-tree repo at that commit, runs pnpm build && npm link
- * to make `context-tree` available globally.
+ * to make `first-tree` available globally.
  * Returns the path to the cloned first-tree directory.
  */
 export function installCliAtVersion(cliCommit: string): string {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ct-cli-'));
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-cli-'));
 
-  process.stderr.write(`Installing context-tree CLI @ ${cliCommit.slice(0, 7)}...\n`);
+  process.stderr.write(`Installing first-tree CLI @ ${cliCommit.slice(0, 7)}...\n`);
   cloneFromCache(FIRST_TREE_SLUG, tmp, { commitSha: cliCommit });
 
   process.stderr.write('  Installing dependencies...\n');
@@ -204,7 +204,7 @@ export function installCliAtVersion(cliCommit: string): string {
 
   // Read CLI version from package.json
   const pkg = JSON.parse(fs.readFileSync(path.join(tmp, 'package.json'), 'utf-8'));
-  process.stderr.write(`  Installed context-tree v${pkg.version} (globally linked)\n`);
+  process.stderr.write(`  Installed first-tree v${pkg.version} (globally linked)\n`);
 
   return tmp;
 }
@@ -218,7 +218,7 @@ export function getCliVersion(cliDir: string): string {
 }
 
 /**
- * Prepare a tree repo directory so `context-tree init` can run in it.
+ * Prepare a tree repo directory so `first-tree init` can run in it.
  * After createOrphanBranch, the dir is a git repo but may have no commits.
  * We create an initial empty commit so git operations work normally.
  */
@@ -226,7 +226,7 @@ export function initBareTreeDir(treeDir: string): void {
   execSync('git commit --allow-empty -m "init"', {
     cwd: treeDir,
     stdio: 'pipe',
-    env: { ...process.env, GIT_AUTHOR_NAME: 'context-tree-eval', GIT_AUTHOR_EMAIL: 'eval@context-tree', GIT_COMMITTER_NAME: 'context-tree-eval', GIT_COMMITTER_EMAIL: 'eval@context-tree' },
+    env: { ...process.env, GIT_AUTHOR_NAME: 'first-tree-eval', GIT_AUTHOR_EMAIL: 'eval@first-tree', GIT_COMMITTER_NAME: 'first-tree-eval', GIT_COMMITTER_EMAIL: 'eval@first-tree' },
   });
 }
 
@@ -248,7 +248,7 @@ export function commitTree(treeDir: string, provenance: TreeProvenance): string 
   execSync(`git commit -m ${JSON.stringify(message)}`, {
     cwd: treeDir,
     stdio: 'pipe',
-    env: { ...process.env, GIT_AUTHOR_NAME: 'context-tree-eval', GIT_AUTHOR_EMAIL: 'eval@context-tree', GIT_COMMITTER_NAME: 'context-tree-eval', GIT_COMMITTER_EMAIL: 'eval@context-tree' },
+    env: { ...process.env, GIT_AUTHOR_NAME: 'first-tree-eval', GIT_AUTHOR_EMAIL: 'eval@first-tree', GIT_COMMITTER_NAME: 'first-tree-eval', GIT_COMMITTER_EMAIL: 'eval@first-tree' },
   });
 
   const sha = execSync('git rev-parse HEAD', { cwd: treeDir, encoding: 'utf-8' }).trim();
@@ -327,7 +327,7 @@ export function listBranchCommits(
   treeRepo: string,
   branch: string,
 ): Array<{ sha: string; message: string }> {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ct-list-'));
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-list-'));
   try {
     cloneFromCache(treeRepo, tmp, { branch });
 

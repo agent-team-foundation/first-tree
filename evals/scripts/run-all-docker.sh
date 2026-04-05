@@ -5,18 +5,18 @@
 #   bash evals/scripts/run-all-docker.sh
 #
 # Prerequisites:
-#   - Docker image built: docker build -t ct-eval -f evals/Dockerfile .
+#   - Docker image built: docker build -t ft-eval -f evals/Dockerfile .
 #   - gh auth login (for GH_TOKEN)
 #   - Claude Max plan authenticated (~/.claude/.credentials.json)
 
 set -euo pipefail
 
-IMAGE="${CT_EVAL_IMAGE:-ct-eval}"
+IMAGE="${FT_EVAL_IMAGE:-${CT_EVAL_IMAGE:-ft-eval}}"
 
 # Verify prerequisites
 if ! docker image inspect "$IMAGE" &>/dev/null; then
   echo "Docker image '$IMAGE' not found. Build it first:"
-  echo "  docker build -t ct-eval -f evals/Dockerfile ."
+  echo "  docker build -t ft-eval -f evals/Dockerfile ."
   exit 1
 fi
 
@@ -40,13 +40,13 @@ if [ -z "$CLAUDE_TOKEN" ]; then
 fi
 
 # Ensure output directory exists
-mkdir -p "$HOME/.context-tree/evals"
+mkdir -p "$HOME/.first-tree/evals"
 
-LOG_FILE="$HOME/.context-tree/evals/_run-$(date +%Y%m%d-%H%M%S).log"
+LOG_FILE="$HOME/.first-tree/evals/_run-$(date +%Y%m%d-%H%M%S).log"
 
 echo "Starting eval run in Docker..."
 echo "  Image: $IMAGE"
-echo "  Results: ~/.context-tree/evals/"
+echo "  Results: ~/.first-tree/evals/"
 echo "  Log: $LOG_FILE"
 echo ""
 
@@ -57,7 +57,7 @@ CREDS_B64=$(echo "$CLAUDE_CREDS_JSON" | base64 -w0)
 # Named volume persists ~/.claude across container restarts
 # Fix ownership on first use (volume is created as root)
 docker run --rm --user root \
-  -v ct-eval-claude-config:/home/eval/.claude \
+  -v ft-eval-claude-config:/home/eval/.claude \
   --entrypoint chown \
   "$IMAGE" \
   -R eval:eval /home/eval/.claude
@@ -66,8 +66,8 @@ docker run --rm -it \
   -e CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_TOKEN" \
   -e GH_TOKEN="$(gh auth token)" \
   -e _CREDS_B64="$CREDS_B64" \
-  -v ct-eval-claude-config:/home/eval/.claude \
-  -v "$HOME/.context-tree/evals:/home/eval/.context-tree/evals" \
+  -v ft-eval-claude-config:/home/eval/.claude \
+  -v "$HOME/.first-tree/evals:/home/eval/.first-tree/evals" \
   --entrypoint sh \
   "$IMAGE" \
   -c '

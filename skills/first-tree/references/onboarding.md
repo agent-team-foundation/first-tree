@@ -55,35 +55,34 @@ Information an agent needs to **decide** on an approach — not to execute it.
 
 - A source/workspace Git repository, or an already-created dedicated tree repo
 - Node.js 18+
-- GitHub CLI (`gh`) if you want `context-tree publish` to create the remote
+- GitHub CLI (`gh`) if you want `first-tree publish` to create the remote
   `*-context` repo and open the source-repo PR for you
-- The npm package is `first-tree`, the installed CLI command is
-  `context-tree`.
-- `context-tree init` installs the framework skill into
+- The npm package and installed CLI command are both `first-tree`.
+- `first-tree init` installs the framework skill into
   `.agents/skills/first-tree/` and `.claude/skills/first-tree/`.
 - Use `npx first-tree init` for one-off runs, or `npm install -g first-tree`
-  to add the `context-tree` command to your PATH
+  to add the `first-tree` command to your PATH
 
 ### Step 1: Initialize
 
-Recommended workflow: run `context-tree init` from your source or workspace repo.
+Recommended workflow: run `first-tree init` from your source or workspace repo.
 The CLI will install the bundled skill in the current repo, update root
-`AGENTS.md` and `CLAUDE.md` with a `FIRST-TREE-SOURCE-INTEGRATION:` line, and
-create a sibling dedicated tree repo named `<repo>-context` by default. Tree
-files are scaffolded only in the dedicated tree repo.
+`AGENTS.md` and `CLAUDE.md` with a managed `FIRST-TREE-SOURCE-INTEGRATION:`
+section, and create a sibling dedicated tree repo named `<repo>-context` by
+default. Tree files are scaffolded only in the dedicated tree repo.
 
 ```bash
 cd my-org
-context-tree init
+first-tree init
 cd ../my-org-context
-context-tree publish --open-pr
+first-tree publish --open-pr
 ```
 
 If you want the initial bootstrap to draft member nodes from repository
 contributors, opt in explicitly:
 
 ```bash
-context-tree init --seed-members contributors
+first-tree init --seed-members contributors
 ```
 
 If you already created a dedicated tree repo manually, initialize it in place:
@@ -91,7 +90,7 @@ If you already created a dedicated tree repo manually, initialize it in place:
 ```bash
 mkdir my-org-context && cd my-org-context
 git init
-context-tree init --here
+first-tree init --here
 ```
 
 Only use `--here` after you have already switched into the dedicated tree repo.
@@ -100,26 +99,44 @@ that repo itself to become the Context Tree.
 
 Either way, the framework installs into `.agents/skills/first-tree/` and
 `.claude/skills/first-tree/`, renders scaffolding (`NODE.md`, `AGENTS.md`,
-`members/NODE.md`), and generates a task list in
+`CLAUDE.md`, `members/NODE.md`), and generates a task list in
 `.agents/skills/first-tree/progress.md`.
 When `--seed-members contributors` is set, init also attempts to create
 `members/*/NODE.md` from GitHub contributor data and falls back to local git
 history if GitHub metadata is unavailable.
 
 Hard boundary: do **not** create `NODE.md`, `members/`, or tree-scoped
-`AGENTS.md` in the source/workspace repo. Those files belong only in the
-dedicated `*-context` repo.
+`AGENTS.md` / `CLAUDE.md` in the source/workspace repo. Those files belong only
+in the dedicated `*-context` repo.
 
 Default agent workflow after initialization:
 
 1. Draft the initial tree version in the dedicated `*-context` repo.
-2. Run `context-tree publish --open-pr` from that dedicated tree repo. It will
+2. Run `first-tree publish --open-pr` from that dedicated tree repo. It will
    create or reuse the GitHub `*-context` repo in the same owner/org as the
    source repo, add it back to the source/workspace repo as a `git submodule`,
    and open the source-repo PR.
 3. After publish succeeds, treat the source repo's submodule checkout as the
    canonical local working copy for the tree. The temporary sibling bootstrap
    checkout can be deleted when you no longer need it.
+
+### Routine Work After Publish
+
+- Start routine work from the current source/workspace repo's tracked Context
+  Tree submodule checkout.
+- Before you read the tree, sync submodules to the commits recorded by the
+  current superproject.
+- If the tree submodule directory exists but is not initialized locally,
+  initialize only that submodule. Do not update every submodule in the
+  workspace by default.
+- Fall back to the sibling `*-context` bootstrap checkout only before the tree
+  has been published back to the source/workspace repo as a tracked submodule.
+- At task close-out, always ask whether the tree needs updating.
+- If the task changed decisions, constraints, rationale, or ownership, send
+  the tree PR first. Then update the source repo's submodule pointer and send
+  the source/workspace code PR.
+- If the task changed only implementation detail, skip the tree PR and send
+  only the source/workspace code PR.
 
 ### Step 2: Work Through the Task List
 
@@ -141,22 +158,22 @@ As you complete each task, check it off in
 ### Step 3: Verify
 
 ```bash
-context-tree verify
+first-tree verify
 ```
 
 Or, from your source/workspace repo:
 
 ```bash
-context-tree verify --tree-path ../my-org-context
+first-tree verify --tree-path ../my-org-context
 ```
 
 This fails if any items in `.agents/skills/first-tree/progress.md` remain
 unchecked, and runs deterministic checks (valid frontmatter, node structure,
 member nodes exist).
 
-Do not run `context-tree verify` in the source/workspace repo itself. That repo
+Do not run `first-tree verify` in the source/workspace repo itself. That repo
 only carries the installed skill plus the
-`FIRST-TREE-SOURCE-INTEGRATION:` line.
+`FIRST-TREE-SOURCE-INTEGRATION:` section.
 
 ### Step 4: Design Your Domains
 
@@ -193,11 +210,11 @@ The tree doesn't duplicate source code — it captures what connects things and 
 
 | Command | Description |
 |---------|-------------|
-| `context-tree init` | Install local source/workspace integration and create or refresh a dedicated tree repo. By default, running in a source/workspace repo creates a sibling `<repo>-context`; use `--here` only when you are already inside the dedicated tree repo, and `--seed-members contributors` to draft member nodes from contributor history. |
-| `context-tree publish` | Publish a dedicated tree repo to GitHub, add it back to the source/workspace repo as a submodule, and optionally open the source-repo PR. |
-| `context-tree verify` | Check the installed progress file for unchecked items + run deterministic validation. Use `--tree-path` when invoking from another working directory. |
-| `context-tree upgrade` | Refresh the installed framework skill from the currently running `first-tree` npm package and generate follow-up tasks. Use `--tree-path` when invoking from another working directory. |
-| `context-tree help onboarding` | Print this onboarding guide. |
+| `first-tree init` | Install local source/workspace integration and create or refresh a dedicated tree repo. By default, running in a source/workspace repo creates a sibling `<repo>-context`; use `--here` only when you are already inside the dedicated tree repo, and `--seed-members contributors` to draft member nodes from contributor history. |
+| `first-tree publish` | Publish a dedicated tree repo to GitHub, add it back to the source/workspace repo as a submodule, and optionally open the source-repo PR. |
+| `first-tree verify` | Check the installed progress file for unchecked items + run deterministic validation. Use `--tree-path` when invoking from another working directory. |
+| `first-tree upgrade` | Refresh the installed framework skill from the currently running `first-tree` npm package and generate follow-up tasks. Use `--tree-path` when invoking from another working directory. |
+| `first-tree help onboarding` | Print this onboarding guide. |
 
 ---
 
@@ -206,25 +223,26 @@ The tree doesn't duplicate source code — it captures what connects things and 
 When the framework updates:
 
 ```bash
-context-tree upgrade
+first-tree upgrade
 ```
 
-`context-tree upgrade` refreshes `.agents/skills/first-tree/` and
+`first-tree upgrade` refreshes `.agents/skills/first-tree/` and
 `.claude/skills/first-tree/` from the skill bundled with the currently running
 `first-tree` npm package, preserves your tree content, and generates follow-up
 tasks in `.agents/skills/first-tree/progress.md`.
 
-If you run `context-tree upgrade` in the source/workspace repo, it refreshes
-only the local installed skill plus the `FIRST-TREE-SOURCE-INTEGRATION:` lines.
-Run `context-tree upgrade --tree-path ../my-org-context` to upgrade the
+If you run `first-tree upgrade` in the source/workspace repo, it refreshes
+only the local installed skill plus the `FIRST-TREE-SOURCE-INTEGRATION:`
+section.
+Run `first-tree upgrade --tree-path ../my-org-context` to upgrade the
 dedicated tree repo itself.
 
 If your repo still uses the older `skills/first-tree/` or `.context-tree/` layouts,
-`context-tree upgrade` will migrate it to the current installed layout first.
+`first-tree upgrade` will migrate it to the current installed layout first.
 
 To pick up a newer framework release, first run a newer package version, for
 example `npx first-tree@latest upgrade`, or update your global `first-tree`
-install before running `context-tree upgrade`.
+install before running `first-tree upgrade`.
 
 ---
 
@@ -233,4 +251,4 @@ install before running `context-tree upgrade`.
 - `.agents/skills/first-tree/references/principles.md` — Core principles with detailed examples
 - `.agents/skills/first-tree/references/source-workspace-installation.md` — Source/workspace install contract
 - `.agents/skills/first-tree/references/ownership-and-naming.md` — How nodes are named and owned
-- `AGENTS.md` in your tree — The before/during/after workflow for every task
+- `AGENTS.md` and `CLAUDE.md` in your tree — The before/during/after workflow for every task

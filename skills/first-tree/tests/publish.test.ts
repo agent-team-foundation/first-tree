@@ -1,5 +1,5 @@
 import { join, relative } from "node:path";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { Repo } from "#skill/engine/repo.js";
 import {
@@ -12,10 +12,11 @@ import { writeBootstrapState } from "#skill/engine/runtime/bootstrap.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
   CLAUDE_INSTRUCTIONS_FILE,
-  SOURCE_INTEGRATION_MARKER,
 } from "#skill/engine/runtime/asset-loader.js";
+import { buildSourceIntegrationBlock } from "#skill/engine/runtime/source-integration.js";
 import {
   makeAgentsMd,
+  makeClaudeMd,
   makeFramework,
   makeGitRepo,
   makeMembers,
@@ -35,17 +36,18 @@ function makeTreeRepo(root: string): void {
   makeFramework(root, "0.2.0");
   makeNode(root);
   makeAgentsMd(root, { markers: true });
+  makeClaudeMd(root, { markers: true });
   makeMembers(root);
 }
 
 function makeSourceIntegration(root: string): void {
   writeFileSync(
     join(root, AGENT_INSTRUCTIONS_FILE),
-    `${SOURCE_INTEGRATION_MARKER} installed\n`,
+    buildSourceIntegrationBlock("ADHD-context"),
   );
   writeFileSync(
     join(root, CLAUDE_INSTRUCTIONS_FILE),
-    `${SOURCE_INTEGRATION_MARKER} installed\n`,
+    buildSourceIntegrationBlock("ADHD-context"),
   );
 }
 
@@ -146,7 +148,7 @@ function createRunner(
 
 describe("parsePublishArgs", () => {
   it("documents the publish command", () => {
-    expect(PUBLISH_USAGE).toContain("context-tree publish");
+    expect(PUBLISH_USAGE).toContain("first-tree publish");
     expect(PUBLISH_USAGE).toContain("--open-pr");
     expect(PUBLISH_USAGE).toContain("--source-repo PATH");
   });
@@ -235,6 +237,9 @@ describe("runPublish", () => {
           && call.args.includes("acme/ADHD"),
       ),
     ).toBe(true);
+    expect(readFileSync(join(sourceRoot, AGENT_INSTRUCTIONS_FILE), "utf-8")).toContain(
+      "preferred path: `ADHD-context/`",
+    );
   });
 
   it("errors when the source repo cannot be inferred", () => {

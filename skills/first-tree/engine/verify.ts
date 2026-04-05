@@ -2,13 +2,14 @@ import { resolve } from "node:path";
 import { Repo } from "#skill/engine/repo.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
+  CLAUDE_INSTRUCTIONS_FILE,
   LEGACY_AGENT_INSTRUCTIONS_FILE,
 } from "#skill/engine/runtime/asset-loader.js";
 import { runValidateMembers } from "#skill/engine/validators/members.js";
 import { runValidateNodes } from "#skill/engine/validators/nodes.js";
 
 const UNCHECKED_RE = /^- \[ \] (.+)$/gm;
-export const VERIFY_USAGE = `usage: context-tree verify [--tree-path PATH]
+export const VERIFY_USAGE = `usage: first-tree verify [--tree-path PATH]
 
 Options:
   --tree-path PATH   Verify a tree repo from another working directory
@@ -52,14 +53,14 @@ export function runVerify(repo?: Repo, nodeValidator?: NodeValidator): number {
 
   if (r.hasSourceWorkspaceIntegration() && !r.looksLikeTreeRepo()) {
     console.error(
-      `Error: this repo only has the first-tree source/workspace integration installed. Verify the dedicated tree repo instead, for example \`context-tree verify --tree-path ../${r.repoName()}-context\`.`,
+      `Error: this repo only has the first-tree source/workspace integration installed. Verify the dedicated tree repo instead, for example \`first-tree verify --tree-path ../${r.repoName()}-context\`.`,
     );
     return 1;
   }
 
   if (r.isLikelySourceRepo() && !r.looksLikeTreeRepo()) {
     console.error(
-      "Error: no installed framework skill found here. This looks like a source/workspace repo. Run `context-tree init` to create a dedicated tree repo, or pass `--tree-path` to verify an existing tree repo.",
+      "Error: no installed framework skill found here. This looks like a source/workspace repo. Run `first-tree init` to create a dedicated tree repo, or pass `--tree-path` to verify an existing tree repo.",
     );
     return 1;
   }
@@ -99,9 +100,10 @@ export function runVerify(repo?: Repo, nodeValidator?: NodeValidator): number {
     hasValidNode,
   ) && allPassed;
 
-  // 3. AGENTS.md is canonical and contains framework markers
+  // 3. AGENTS.md is canonical and both AGENTS.md / CLAUDE.md carry framework markers
   const hasCanonicalAgentInstructions = r.hasCanonicalAgentInstructionsFile();
   const hasLegacyAgentInstructions = r.hasLegacyAgentInstructionsFile();
+  const hasClaudeInstructions = r.hasClaudeInstructionsFile();
   if (hasLegacyAgentInstructions) {
     const followUp = hasCanonicalAgentInstructions
       ? `Remove legacy \`${LEGACY_AGENT_INSTRUCTIONS_FILE}\` after confirming its contents are in \`${AGENT_INSTRUCTIONS_FILE}\`.`
@@ -109,10 +111,12 @@ export function runVerify(repo?: Repo, nodeValidator?: NodeValidator): number {
     console.log(`  Legacy agent instructions detected. ${followUp}\n`);
   }
   allPassed = check(
-    `${AGENT_INSTRUCTIONS_FILE} is the only agent instructions file and has framework markers`,
+    `${AGENT_INSTRUCTIONS_FILE} is canonical and both ${AGENT_INSTRUCTIONS_FILE}/${CLAUDE_INSTRUCTIONS_FILE} have framework markers`,
     hasCanonicalAgentInstructions &&
       !hasLegacyAgentInstructions &&
-      r.hasAgentInstructionsMarkers(),
+      r.hasAgentInstructionsMarkers() &&
+      hasClaudeInstructions &&
+      r.hasClaudeInstructionsMarkers(),
   ) && allPassed;
 
   // 4. Node validation

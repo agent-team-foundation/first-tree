@@ -14,6 +14,7 @@ import {
 import {
   useTmpDir,
   makeAgentsMd,
+  makeClaudeMd,
   makeFramework,
   makeLegacyFramework,
   makeNode,
@@ -95,6 +96,7 @@ function buildFullRepo(root: string): void {
     "---\ntitle: My Org\nowners: [alice]\n---\n# Content\n",
   );
   makeAgentsMd(root, { markers: true });
+  makeClaudeMd(root, { markers: true });
   makeMembers(root, 1);
 }
 
@@ -143,6 +145,11 @@ describe("runVerify all passing", () => {
     writeFileSync(
       agentPath,
       `${readFileSync(agentPath, "utf-8").trim()}\n\nProject-specific verification instructions.\n`,
+    );
+    const claudePath = join(repoDir.path, CLAUDE_INSTRUCTIONS_FILE);
+    writeFileSync(
+      claudePath,
+      `${readFileSync(claudePath, "utf-8").trim()}\n\nProject-specific verification instructions.\n`,
     );
 
     mkdirSync(join(repoDir.path, "members", "alice"), { recursive: true });
@@ -198,9 +205,23 @@ describe("runVerify failing", () => {
       join(tmp.path, "NODE.md"),
       "---\ntitle: My Org\nowners: [alice]\n---\n",
     );
+    makeClaudeMd(tmp.path, { markers: true, userContent: true });
     const repo = new Repo(tmp.path);
     const ret = runVerify(repo, passValidator);
     expect(ret).toBe(1);
+  });
+
+  it("fails when CLAUDE.md is missing", () => {
+    const tmp = useTmpDir();
+    makeFramework(tmp.path);
+    writeFileSync(
+      join(tmp.path, "NODE.md"),
+      "---\ntitle: My Org\nowners: [alice]\n---\n",
+    );
+    makeAgentsMd(tmp.path, { markers: true, userContent: true });
+    makeMembers(tmp.path, 1);
+    const repo = new Repo(tmp.path);
+    expect(runVerify(repo, passValidator)).toBe(1);
   });
 
   it("fails when only legacy AGENT.md exists", () => {
@@ -209,6 +230,7 @@ describe("runVerify failing", () => {
     makeFramework(tmp.path);
     makeNode(tmp.path);
     makeAgentsMd(tmp.path, { legacyName: true, markers: true, userContent: true });
+    makeClaudeMd(tmp.path, { markers: true, userContent: true });
     makeMembers(tmp.path, 1);
     const repo = new Repo(tmp.path);
     const ret = runVerify(repo, passValidator);

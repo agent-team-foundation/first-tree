@@ -11,9 +11,10 @@ import {
   LEGACY_AGENT_INSTRUCTIONS_FILE,
   SOURCE_INTEGRATION_MARKER,
 } from "#skill/engine/runtime/asset-loader.js";
-import { buildSourceIntegrationLine } from "#skill/engine/runtime/source-integration.js";
+import { buildSourceIntegrationBlock } from "#skill/engine/runtime/source-integration.js";
 import {
   makeAgentsMd,
+  makeClaudeMd,
   makeFramework,
   makeSourceRepo,
   makeLegacyFramework,
@@ -28,6 +29,7 @@ describe("runUpgrade", () => {
     const sourceDir = useTmpDir();
     makeLegacyFramework(repoDir.path, "0.1.0");
     makeAgentsMd(repoDir.path, { legacyName: true, markers: true, userContent: true });
+    makeClaudeMd(repoDir.path, { markers: true, userContent: true });
     makeSourceSkill(sourceDir.path, "0.2.0");
 
     const result = runUpgrade(new Repo(repoDir.path), {
@@ -45,6 +47,9 @@ describe("runUpgrade", () => {
     );
     expect(readFileSync(join(repoDir.path, INSTALLED_PROGRESS), "utf-8")).toContain(
       "skills/first-tree/assets/framework/templates/agents.md.template",
+    );
+    expect(readFileSync(join(repoDir.path, INSTALLED_PROGRESS), "utf-8")).toContain(
+      "skills/first-tree/assets/framework/templates/claude.md.template",
     );
   });
 
@@ -121,16 +126,16 @@ describe("runUpgrade", () => {
       sourceRoot: sourceDir.path,
     });
 
-    const expectedLine = buildSourceIntegrationLine(
+    const expectedBlock = buildSourceIntegrationBlock(
       `${basename(repoDir.path)}-context`,
     );
     expect(result).toBe(0);
     expect(readFileSync(join(repoDir.path, FRAMEWORK_VERSION), "utf-8").trim()).toBe("0.2.0");
     expect(readFileSync(join(repoDir.path, AGENT_INSTRUCTIONS_FILE), "utf-8")).toContain(
-      expectedLine,
+      expectedBlock,
     );
     expect(readFileSync(join(repoDir.path, CLAUDE_INSTRUCTIONS_FILE), "utf-8")).toContain(
-      expectedLine,
+      expectedBlock,
     );
     expect(existsSync(join(repoDir.path, INSTALLED_PROGRESS))).toBe(false);
   });

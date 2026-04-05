@@ -12,7 +12,7 @@ repo. It is intentionally not part of the distributed
 - `scripts/`: developer utilities for creating, updating, listing, and
   aggregating eval runs
 - `tests/`: fast helper coverage
-- `context-tree-eval.test.ts`: the end-to-end eval entrypoint behind `pnpm eval`
+- `first-tree-eval.test.ts`: the end-to-end eval entrypoint behind `pnpm eval`
 
 ## Running Evals
 
@@ -35,5 +35,5 @@ for full end-to-end impact measurement.
 Aggregate reports with:
 
 ```bash
-npx tsx evals/scripts/aggregate-report.ts ~/.context-tree/evals/file1.json file2.json
+npx tsx evals/scripts/aggregate-report.ts ~/.first-tree/evals/file1.json file2.json
 ```

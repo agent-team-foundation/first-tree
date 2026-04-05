@@ -75,6 +75,7 @@ require_file "$SOURCE_DIR/assets/framework/VERSION"
 require_file "$SOURCE_DIR/assets/framework/prompts/pr-review.md"
 require_file "$SOURCE_DIR/assets/framework/templates/root-node.md.template"
 require_file "$SOURCE_DIR/assets/framework/templates/agents.md.template"
+require_file "$SOURCE_DIR/assets/framework/templates/claude.md.template"
 require_file "$SOURCE_DIR/assets/framework/templates/members-domain.md.template"
 require_file "$SOURCE_DIR/assets/framework/templates/member-node.md.template"
 require_file "$SOURCE_DIR/assets/framework/workflows/validate.yml"
@@ -107,7 +108,7 @@ if [[ -e "$SOURCE_DIR/evals" ]]; then
   exit 1
 fi
 
-require_file "$REPO_ROOT/evals/context-tree-eval.test.ts"
+require_file "$REPO_ROOT/evals/first-tree-eval.test.ts"
 require_file "$REPO_ROOT/evals/README.md"
 require_file "$REPO_ROOT/evals/helpers/case-loader.ts"
 require_file "$REPO_ROOT/evals/scripts/tree-manager.ts"

@@ -1,6 +1,8 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  SOURCE_INTEGRATION_BEGIN,
+  SOURCE_INTEGRATION_END,
   SOURCE_INTEGRATION_FILES,
   SOURCE_INTEGRATION_MARKER,
 } from "#skill/engine/runtime/asset-loader.js";
@@ -12,13 +14,33 @@ export interface SourceIntegrationUpdate {
   file: SourceIntegrationFile;
 }
 
-export function buildSourceIntegrationLine(treeRepoName: string): string {
-  return (
-    `${SOURCE_INTEGRATION_MARKER} Use the installed \`first-tree\` skill here;`
-    + ` keep all Context Tree files only in the sibling dedicated`
-    + ` \`${treeRepoName}\` repo/submodule and update that tree when decisions`
-    + " or constraints change."
-  );
+export interface SourceIntegrationOptions {
+  submodulePath?: string;
+}
+
+export function buildSourceIntegrationBlock(
+  treeRepoName: string,
+  options?: SourceIntegrationOptions,
+): string {
+  const submodulePath = options?.submodulePath ?? treeRepoName;
+
+  return [
+    SOURCE_INTEGRATION_BEGIN,
+    `${SOURCE_INTEGRATION_MARKER}`,
+    "",
+    `This repo is a source/workspace repo. Keep all Context Tree files only in the dedicated \`${treeRepoName}\` repo/submodule.`,
+    "",
+    "Before every task:",
+    `- If this workspace already tracks the Context Tree as a git submodule, sync submodules to the commits recorded by the current superproject and read the tracked tree first (preferred path: \`${submodulePath}/\`).`,
+    "- If that submodule directory exists but is not initialized locally, initialize only that submodule; do not update every submodule in the workspace.",
+    `- If the tree has not been published back to this workspace as a tracked submodule yet, work from the sibling dedicated \`${treeRepoName}\` bootstrap repo instead.`,
+    "",
+    "After every task:",
+    "- Always ask whether the tree needs updating.",
+    "- If the task changed decisions, constraints, rationale, or ownership, open a PR in the tree repo first. Then update this repo's Context Tree submodule pointer and open the source/workspace code PR.",
+    "- If the task changed only implementation details, skip the tree PR and open only the source/workspace code PR.",
+    SOURCE_INTEGRATION_END,
+  ].join("\n");
 }
 
 export function hasSourceIntegrationMarker(text: string | null): boolean {
@@ -34,9 +56,10 @@ export function hasSourceIntegrationMarker(text: string | null): boolean {
 export function upsertSourceIntegrationFiles(
   root: string,
   treeRepoName: string,
+  options?: SourceIntegrationOptions,
 ): SourceIntegrationUpdate[] {
   return SOURCE_INTEGRATION_FILES.map((file) =>
-    upsertSourceIntegrationFile(root, file, treeRepoName),
+    upsertSourceIntegrationFile(root, file, treeRepoName, options),
   );
 }
 
@@ -44,32 +67,44 @@ function upsertSourceIntegrationFile(
   root: string,
   file: SourceIntegrationFile,
   treeRepoName: string,
+  options?: SourceIntegrationOptions,
 ): SourceIntegrationUpdate {
   const fullPath = join(root, file);
   const exists = existsSync(fullPath);
-  const nextLine = buildSourceIntegrationLine(treeRepoName);
   const current = exists ? readFileSync(fullPath, "utf-8") : null;
   const normalized = current?.replaceAll("\r\n", "\n") ?? "";
+  const nextBlock = buildSourceIntegrationBlock(treeRepoName, {
+    submodulePath:
+      options?.submodulePath ?? detectExistingSubmodulePath(normalized) ?? treeRepoName,
+  });
+  const managedBlock = /<!-- BEGIN FIRST-TREE-SOURCE-INTEGRATION -->[\s\S]*?<!-- END FIRST-TREE-SOURCE-INTEGRATION -->\n?/;
   const lines = normalized === "" ? [] : normalized.split("\n");
-  const markerIndex = lines.findIndex((line) =>
-    line.startsWith(SOURCE_INTEGRATION_MARKER),
-  );
+  const markerIndex = lines.findIndex((line) => line.startsWith(SOURCE_INTEGRATION_MARKER));
 
-  if (markerIndex >= 0) {
-    if (lines[markerIndex] === nextLine) {
+  if (managedBlock.test(normalized)) {
+    const replaced = normalized.replace(managedBlock, `${nextBlock}\n`);
+    if (replaced === normalized) {
       return { action: "unchanged", file };
     }
-    lines[markerIndex] = nextLine;
+    writeFileSync(fullPath, ensureTrailingNewline(replaced));
+    return {
+      action: exists ? "updated" : "created",
+      file,
+    };
+  }
+
+  if (markerIndex >= 0) {
+    lines.splice(markerIndex, 1, nextBlock);
   } else {
     if (lines.length > 0 && lines.at(-1) !== "") {
       lines.push("");
     }
-    lines.push(nextLine);
+    lines.push(nextBlock);
   }
 
-  let nextText = lines.join("\n");
-  if (nextText !== "" && !nextText.endsWith("\n")) {
-    nextText += "\n";
+  const nextText = ensureTrailingNewline(lines.join("\n"));
+  if (nextText === normalized || nextText === `${normalized}\n`) {
+    return { action: "unchanged", file };
   }
   writeFileSync(fullPath, nextText);
 
@@ -77,4 +112,20 @@ function upsertSourceIntegrationFile(
     action: exists ? "updated" : "created",
     file,
   };
+}
+
+function ensureTrailingNewline(text: string): string {
+  if (text !== "" && !text.endsWith("\n")) {
+    return `${text}\n`;
+  }
+  return text;
+}
+
+function detectExistingSubmodulePath(text: string): string | null {
+  if (text === "") {
+    return null;
+  }
+
+  const match = text.match(/preferred path: `(.+?)\/`/);
+  return match?.[1] ?? null;
 }

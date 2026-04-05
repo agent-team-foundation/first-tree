@@ -37,7 +37,7 @@ const caseFilter = process.env.EVALS_CASES
 
 const describeEval = evalsEnabled ? describe : describe.skip;
 
-describeEval('context-tree eval', () => {
+describeEval('first-tree eval', () => {
   const collector = new EvalCollector({ model: agent.model, cli: agent.cli });
 
   let cases: ReturnType<typeof loadCases>;

@@ -7,7 +7,7 @@ body:
     attributes:
       label: What happened?
       description: Describe the bug and why it matters.
-      placeholder: context-tree verify rejects a valid tree after upgrading from 0.0.x
+      placeholder: first-tree verify rejects a valid tree after upgrading from 0.0.x
     validations:
       required: true
   - type: input
@@ -15,7 +15,7 @@ body:
     attributes:
       label: Command or surface area
       description: Which command, doc, or package surface is affected?
-      placeholder: context-tree init
+      placeholder: first-tree init
   - type: textarea
     id: reproduction
     attributes:

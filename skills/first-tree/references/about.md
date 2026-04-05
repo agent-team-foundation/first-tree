@@ -5,7 +5,7 @@ owners: []
 
 # About Context Tree
 
-**context-tree.ai** — The living source of truth for your organization.
+**first-tree** — The living source of truth for your organization.
 
 ---
 
