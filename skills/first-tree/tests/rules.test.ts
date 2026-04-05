@@ -368,19 +368,23 @@ describe("populateTree rule", () => {
     expect(result.tasks.length).toBeGreaterThanOrEqual(4);
   });
 
-  it("first task asks user whether to populate", () => {
+  it("starts with a progress checkpoint before asking whether to populate", () => {
     const tmp = useTmpDir();
     const repo = new Repo(tmp.path);
     const result = populateTree.evaluate(repo);
-    expect(result.tasks[0]).toContain("Yes");
-    expect(result.tasks[0]).toContain("No");
+    expect(result.tasks[0]).toContain("progress.md");
+    expect(result.tasks[0]).toContain("baseline coverage");
+    expect(result.tasks[1]).toContain("Yes");
+    expect(result.tasks[1]).toContain("No");
   });
 
-  it("includes sub-task parallelization instruction", () => {
+  it("includes wave-based sub-task parallelization instruction", () => {
     const tmp = useTmpDir();
     const repo = new Repo(tmp.path);
     const result = populateTree.evaluate(repo);
+    expect(result.tasks.some((t) => t.includes("wave"))).toBe(true);
     expect(result.tasks.some((t) => t.includes("sub-task") || t.includes("TaskCreate"))).toBe(true);
+    expect(result.tasks.some((t) => t.includes("root `NODE.md`"))).toBe(true);
   });
 });
 

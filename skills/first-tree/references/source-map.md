@@ -33,6 +33,7 @@ The installed skill payload lives under `assets/framework/`.
 | `assets/framework/prompts/` | Review prompt payload |
 | `assets/framework/examples/` | Agent integration examples |
 | `assets/framework/helpers/` | Shipped helper scripts and TypeScript utilities |
+| `assets/framework/helpers/summarize-progress.js` | Optional onboarding checkpoint helper that summarizes `progress.md` into setup-vs-tree progress lanes |
 | `progress.md` | Generated in user repos to track unfinished setup or upgrade tasks |
 
 ## Framework Engine Surface

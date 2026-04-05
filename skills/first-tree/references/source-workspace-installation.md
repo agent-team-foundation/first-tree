@@ -45,11 +45,19 @@ default workflow is:
 2. Switch into the sibling dedicated tree repo named `<repo>-context`.
 3. Draft the first tree version from the real codebase, docs, and ownership
    signals.
-4. Run `first-tree publish --open-pr` from the dedicated tree repo. It will:
+4. Read `.agents/skills/first-tree/progress.md` as the source of truth for the
+   onboarding checkpoint, report setup/integration progress separately from
+   tree-content baseline coverage, and ask whether to continue the first-pass
+   full-tree expansion.
+5. If the user confirms, expand the tree with wave-based parallel sub-tasks or
+   subagents, usually one per top-level domain, while the main agent keeps
+   ownership of the root `NODE.md`, cross-domain `soft_links`, and the final
+   `first-tree verify` pass.
+6. Run `first-tree publish --open-pr` from the dedicated tree repo. It will:
    create or reuse the GitHub `*-context` repo in the same owner/org as the
    source repo, push the tree, add it back to the source/workspace repo as a
    `git submodule`, and open the source-repo PR.
-5. After publish succeeds, treat the source repo's submodule checkout as the
+7. After publish succeeds, treat the source repo's submodule checkout as the
    canonical local working copy for the tree. The temporary sibling bootstrap
    checkout can be deleted when you no longer need it.
 

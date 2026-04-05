@@ -88,6 +88,11 @@ repos.
 - The default source/workspace workflow is: run `first-tree init` from the
   source repo, draft the first tree version in `<repo>-context`, then run
   `first-tree publish --open-pr` from that dedicated tree repo.
+- After the initial scaffold is in place, treat `progress.md` as the source of
+  truth for onboarding status. Before deep tree population, report
+  setup/integration progress separately from tree-content baseline coverage,
+  ask the user whether to continue, and if they confirm, expand the tree with
+  wave-based parallel sub-tasks or subagents by top-level domain.
 - After `first-tree publish` succeeds, treat the source/workspace repo's
   submodule checkout as the canonical local working copy for the tree. The
   temporary sibling bootstrap checkout can be deleted when you no longer need
@@ -152,6 +157,8 @@ repos.
 - `assets/framework/templates/`: generated scaffolds
 - `assets/framework/workflows/`: CI templates
 - `assets/framework/helpers/`: shipped helper scripts and review tooling
+- `assets/framework/helpers/summarize-progress.js`: optional onboarding
+  checkpoint helper for turning `progress.md` into a setup-vs-tree summary
 - `engine/`: canonical framework and CLI behavior
 - `tests/`: canonical unit and structure validation
 - `references/source-map.md`: canonical reading index
