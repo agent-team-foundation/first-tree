@@ -65,8 +65,9 @@ repos.
   end-to-end before improvising.
 - When a user asks to install first-tree for an existing source/workspace repo,
   the current repo keeps only the installed skill plus a
-  `FIRST-TREE-SOURCE-INTEGRATION:` line in `AGENTS.md` and `CLAUDE.md`. Do not
-  create `NODE.md`, `members/`, or tree-scoped `AGENTS.md` there.
+  managed `FIRST-TREE-SOURCE-INTEGRATION:` section in `AGENTS.md` and
+  `CLAUDE.md`. Do not create `NODE.md`, `members/`, or tree-scoped
+  `AGENTS.md` / `CLAUDE.md` there.
 - `context-tree init` defaults to creating or reusing a sibling dedicated tree
   repo when invoked from a source/workspace repo. It installs the bundled skill
   into the source/workspace repo and scaffolds tree files only in the
@@ -80,7 +81,7 @@ repos.
   `--here` is for when you have already switched into the `*-context` repo.
 - `context-tree init` installs this skill into the target tree repo and
   scaffolds `.agents/skills/first-tree/`, `.claude/skills/first-tree/`,
-  `NODE.md`, `AGENTS.md`, and `members/NODE.md`.
+  `NODE.md`, `AGENTS.md`, `CLAUDE.md`, and `members/NODE.md`.
 - The default source/workspace workflow is: run `context-tree init` from the
   source repo, draft the first tree version in `<repo>-context`, then run
   `context-tree publish --open-pr` from that dedicated tree repo.
@@ -88,6 +89,16 @@ repos.
   submodule checkout as the canonical local working copy for the tree. The
   temporary sibling bootstrap checkout can be deleted when you no longer need
   it.
+- For day-to-day tasks after publish, start from the tracked tree submodule in
+  the source/workspace repo. Sync submodules to the commits recorded by the
+  current superproject, initialize only that tree submodule if it is missing
+  locally, and fall back to the sibling bootstrap checkout only before publish
+  has connected the tree back as a submodule.
+- At task close-out, always ask whether the tree needs updating. If the task
+  changed decisions, constraints, rationale, or ownership, send the tree PR
+  first, then update the source repo's submodule pointer and send the
+  source/workspace code PR. If the task changed only implementation detail,
+  skip the tree PR and send only the source/workspace code PR.
 - If the dedicated tree repo was initialized manually with `context-tree init --here`
   and does not have bootstrap metadata yet, pass `--source-repo PATH` to
   `context-tree publish`.
@@ -97,7 +108,7 @@ repos.
 - `context-tree upgrade` refreshes the installed skill from the copy bundled
   with the currently running `first-tree` package. In a source/workspace repo
   it refreshes only the local skill plus the
-  `FIRST-TREE-SOURCE-INTEGRATION:` line; upgrade the dedicated tree repo
+  `FIRST-TREE-SOURCE-INTEGRATION:` section; upgrade the dedicated tree repo
   separately with `--tree-path`. To pick up a newer framework, run a newer
   package version first. It also migrates older repos that still use
   `skills/first-tree/`.

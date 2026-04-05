@@ -5,6 +5,8 @@ import { afterEach } from "vitest";
 import {
   AGENT_INSTRUCTIONS_FILE,
   AGENT_INSTRUCTIONS_TEMPLATE,
+  CLAUDE_INSTRUCTIONS_FILE,
+  CLAUDE_INSTRUCTIONS_TEMPLATE,
   CLAUDE_SKILL_ROOT,
   FRAMEWORK_VERSION,
   LEGACY_AGENT_INSTRUCTIONS_FILE,
@@ -122,6 +124,16 @@ export function makeSourceSkill(root: string, version = "0.2.0"): void {
       "assets",
       "framework",
       "templates",
+      CLAUDE_INSTRUCTIONS_TEMPLATE,
+    ),
+    "<!-- BEGIN CONTEXT-TREE FRAMEWORK -->\nframework text\n<!-- END CONTEXT-TREE FRAMEWORK -->\n",
+  );
+  writeFileSync(
+    join(
+      skillRoot,
+      "assets",
+      "framework",
+      "templates",
       "members-domain.md.template",
     ),
     "---\ntitle: Members\nowners: [alice]\n---\n# Members\n",
@@ -162,6 +174,26 @@ export function makeAgentsMd(
     parts.push("\n# Project-specific\nThis is real user content.\n");
   }
   writeFileSync(join(root, fileName), parts.join("\n"));
+}
+
+export function makeClaudeMd(
+  root: string,
+  opts?: { markers?: boolean; userContent?: boolean },
+): void {
+  const markers = opts?.markers ?? true;
+  const userContent = opts?.userContent ?? false;
+  const parts: string[] = [];
+  if (markers) {
+    parts.push(
+      "<!-- BEGIN CONTEXT-TREE FRAMEWORK -->\nframework stuff\n<!-- END CONTEXT-TREE FRAMEWORK -->",
+    );
+  } else {
+    parts.push("# Claude instructions\n");
+  }
+  if (userContent) {
+    parts.push("\n# Project-specific\nThis is real user content.\n");
+  }
+  writeFileSync(join(root, CLAUDE_INSTRUCTIONS_FILE), parts.join("\n"));
 }
 
 export function makeMembers(root: string, count = 1): void {

@@ -21,6 +21,7 @@ import {
   AGENT_INSTRUCTIONS_FILE,
   AGENT_INSTRUCTIONS_TEMPLATE,
   CLAUDE_INSTRUCTIONS_FILE,
+  CLAUDE_INSTRUCTIONS_TEMPLATE,
   FRAMEWORK_ASSET_ROOT,
   FRAMEWORK_VERSION,
   INSTALLED_PROGRESS,
@@ -65,6 +66,11 @@ const TEMPLATE_MAP: TemplateTarget[] = [
     templateName: AGENT_INSTRUCTIONS_TEMPLATE,
     targetPath: AGENT_INSTRUCTIONS_FILE,
     skipIfExists: [AGENT_INSTRUCTIONS_FILE, LEGACY_AGENT_INSTRUCTIONS_FILE],
+  },
+  {
+    templateName: CLAUDE_INSTRUCTIONS_TEMPLATE,
+    targetPath: CLAUDE_INSTRUCTIONS_FILE,
+    skipIfExists: [CLAUDE_INSTRUCTIONS_FILE],
   },
   { templateName: "members-domain.md.template", targetPath: "members/NODE.md" },
 ];
@@ -118,7 +124,7 @@ export function formatTaskList(
     }
     if (context.sourceRepoName) {
       lines.push(
-        `**Source/workspace contract:** Keep \`${context.sourceRepoName}\` limited to the installed skill plus the \`${SOURCE_INTEGRATION_MARKER}\` lines in \`${AGENT_INSTRUCTIONS_FILE}\` and \`${CLAUDE_INSTRUCTIONS_FILE}\`. Never add \`NODE.md\`, \`members/\`, or tree-scoped \`${AGENT_INSTRUCTIONS_FILE}\` there.`,
+        `**Source/workspace contract:** Keep \`${context.sourceRepoName}\` limited to the installed skill plus the managed \`${SOURCE_INTEGRATION_MARKER}\` section in \`${AGENT_INSTRUCTIONS_FILE}\` and \`${CLAUDE_INSTRUCTIONS_FILE}\`. Never add \`NODE.md\`, \`members/\`, or tree-scoped \`${AGENT_INSTRUCTIONS_FILE}\` / \`${CLAUDE_INSTRUCTIONS_FILE}\` there.`,
         "",
       );
       lines.push("## Source Workspace Workflow");
@@ -161,7 +167,7 @@ export function formatTaskList(
   lines.push(`- [ ] \`${FRAMEWORK_VERSION}\` exists`);
   lines.push("- [ ] Root NODE.md has valid frontmatter (title, owners)");
   lines.push(
-    `- [ ] \`${AGENT_INSTRUCTIONS_FILE}\` is the only agent instructions file and has framework markers`,
+    `- [ ] \`${AGENT_INSTRUCTIONS_FILE}\` has framework markers and \`${CLAUDE_INSTRUCTIONS_FILE}\` mirrors the same workflow guidance`,
   );
   lines.push("- [ ] `context-tree verify` passes with no errors");
   lines.push("- [ ] At least one member node exists");
@@ -207,7 +213,7 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
     console.log(
       "Warning: `context-tree init --here` is initializing this source/workspace" +
         " repo in place. This will create `NODE.md`, `members/`, and tree-scoped" +
-        ` ${AGENT_INSTRUCTIONS_FILE} here. Use plain \`context-tree init\` to create` +
+        ` ${AGENT_INSTRUCTIONS_FILE}/${CLAUDE_INSTRUCTIONS_FILE} here. Use plain \`context-tree init\` to create` +
         " a sibling dedicated tree repo instead.",
     );
     console.log();
@@ -241,10 +247,10 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
     }
     console.log(
       "  The source/workspace repo should keep only the installed skill and the" +
-        ` ${SOURCE_INTEGRATION_MARKER} lines in ${AGENT_INSTRUCTIONS_FILE} and ${CLAUDE_INSTRUCTIONS_FILE}.`,
+        ` ${SOURCE_INTEGRATION_MARKER} section in ${AGENT_INSTRUCTIONS_FILE} and ${CLAUDE_INSTRUCTIONS_FILE}.`,
     );
     console.log(
-      `  Never add NODE.md, members/, or tree-scoped ${AGENT_INSTRUCTIONS_FILE} to the source/workspace repo.`,
+      `  Never add NODE.md, members/, or tree-scoped ${AGENT_INSTRUCTIONS_FILE}/${CLAUDE_INSTRUCTIONS_FILE} to the source/workspace repo.`,
     );
     console.log();
   }

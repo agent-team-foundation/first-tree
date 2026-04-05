@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import {
   AGENT_INSTRUCTIONS_FILE,
+  CLAUDE_INSTRUCTIONS_FILE,
   CLAUDE_FRAMEWORK_VERSION,
   CLAUDE_INSTALLED_PROGRESS,
   FRAMEWORK_VERSION,
@@ -265,6 +266,24 @@ export class Repo {
 
   hasAgentInstructionsMarkers(): boolean {
     const text = this.readAgentInstructions();
+    if (text === null) return false;
+    return text.includes(FRAMEWORK_BEGIN_MARKER) && text.includes(FRAMEWORK_END_MARKER);
+  }
+
+  hasClaudeInstructionsFile(): boolean {
+    return this.pathExists(CLAUDE_INSTRUCTIONS_FILE);
+  }
+
+  readClaudeInstructions(): string | null {
+    return this.readFile(CLAUDE_INSTRUCTIONS_FILE);
+  }
+
+  hasClaudeInstructionsMarkers(): boolean {
+    return this.hasFrameworkMarkersInFile(CLAUDE_INSTRUCTIONS_FILE);
+  }
+
+  private hasFrameworkMarkersInFile(relPath: string): boolean {
+    const text = this.readFile(relPath);
     if (text === null) return false;
     return text.includes(FRAMEWORK_BEGIN_MARKER) && text.includes(FRAMEWORK_END_MARKER);
   }

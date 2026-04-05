@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
 import { Repo } from "#skill/engine/repo.js";
 import { readBootstrapState } from "#skill/engine/runtime/bootstrap.js";
+import { upsertSourceIntegrationFiles } from "#skill/engine/runtime/source-integration.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
   CLAUDE_INSTRUCTIONS_FILE,
@@ -729,6 +730,9 @@ export function runPublish(repo?: Repo, options?: PublishOptions): number {
         ? `  Added \`${submodulePath}\` as a git submodule.`
         : `  Updated the \`${submodulePath}\` submodule URL and checkout.`,
     );
+    upsertSourceIntegrationFiles(sourceRepo.root, treeRepo.repoName(), {
+      submodulePath,
+    });
 
     const committedSourceChanges = commitSourceIntegration(
       runner,

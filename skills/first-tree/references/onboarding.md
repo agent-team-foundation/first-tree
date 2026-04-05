@@ -68,9 +68,9 @@ Information an agent needs to **decide** on an approach — not to execute it.
 
 Recommended workflow: run `context-tree init` from your source or workspace repo.
 The CLI will install the bundled skill in the current repo, update root
-`AGENTS.md` and `CLAUDE.md` with a `FIRST-TREE-SOURCE-INTEGRATION:` line, and
-create a sibling dedicated tree repo named `<repo>-context` by default. Tree
-files are scaffolded only in the dedicated tree repo.
+`AGENTS.md` and `CLAUDE.md` with a managed `FIRST-TREE-SOURCE-INTEGRATION:`
+section, and create a sibling dedicated tree repo named `<repo>-context` by
+default. Tree files are scaffolded only in the dedicated tree repo.
 
 ```bash
 cd my-org
@@ -93,12 +93,12 @@ that repo itself to become the Context Tree.
 
 Either way, the framework installs into `.agents/skills/first-tree/` and
 `.claude/skills/first-tree/`, renders scaffolding (`NODE.md`, `AGENTS.md`,
-`members/NODE.md`), and generates a task list in
+`CLAUDE.md`, `members/NODE.md`), and generates a task list in
 `.agents/skills/first-tree/progress.md`.
 
 Hard boundary: do **not** create `NODE.md`, `members/`, or tree-scoped
-`AGENTS.md` in the source/workspace repo. Those files belong only in the
-dedicated `*-context` repo.
+`AGENTS.md` / `CLAUDE.md` in the source/workspace repo. Those files belong only
+in the dedicated `*-context` repo.
 
 Default agent workflow after initialization:
 
@@ -110,6 +110,24 @@ Default agent workflow after initialization:
 3. After publish succeeds, treat the source repo's submodule checkout as the
    canonical local working copy for the tree. The temporary sibling bootstrap
    checkout can be deleted when you no longer need it.
+
+### Routine Work After Publish
+
+- Start routine work from the current source/workspace repo's tracked Context
+  Tree submodule checkout.
+- Before you read the tree, sync submodules to the commits recorded by the
+  current superproject.
+- If the tree submodule directory exists but is not initialized locally,
+  initialize only that submodule. Do not update every submodule in the
+  workspace by default.
+- Fall back to the sibling `*-context` bootstrap checkout only before the tree
+  has been published back to the source/workspace repo as a tracked submodule.
+- At task close-out, always ask whether the tree needs updating.
+- If the task changed decisions, constraints, rationale, or ownership, send
+  the tree PR first. Then update the source repo's submodule pointer and send
+  the source/workspace code PR.
+- If the task changed only implementation detail, skip the tree PR and send
+  only the source/workspace code PR.
 
 ### Step 2: Work Through the Task List
 
@@ -146,7 +164,7 @@ member nodes exist).
 
 Do not run `context-tree verify` in the source/workspace repo itself. That repo
 only carries the installed skill plus the
-`FIRST-TREE-SOURCE-INTEGRATION:` line.
+`FIRST-TREE-SOURCE-INTEGRATION:` section.
 
 ### Step 4: Design Your Domains
 
@@ -205,7 +223,8 @@ context-tree upgrade
 tasks in `.agents/skills/first-tree/progress.md`.
 
 If you run `context-tree upgrade` in the source/workspace repo, it refreshes
-only the local installed skill plus the `FIRST-TREE-SOURCE-INTEGRATION:` lines.
+only the local installed skill plus the `FIRST-TREE-SOURCE-INTEGRATION:`
+section.
 Run `context-tree upgrade --tree-path ../my-org-context` to upgrade the
 dedicated tree repo itself.
 
@@ -223,4 +242,4 @@ install before running `context-tree upgrade`.
 - `.agents/skills/first-tree/references/principles.md` — Core principles with detailed examples
 - `.agents/skills/first-tree/references/source-workspace-installation.md` — Source/workspace install contract
 - `.agents/skills/first-tree/references/ownership-and-naming.md` — How nodes are named and owned
-- `AGENTS.md` in your tree — The before/during/after workflow for every task
+- `AGENTS.md` and `CLAUDE.md` in your tree — The before/during/after workflow for every task

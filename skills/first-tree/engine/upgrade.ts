@@ -5,6 +5,7 @@ import {
   AGENT_INSTRUCTIONS_FILE,
   AGENT_INSTRUCTIONS_TEMPLATE,
   CLAUDE_INSTRUCTIONS_FILE,
+  CLAUDE_INSTRUCTIONS_TEMPLATE,
   CLAUDE_SKILL_ROOT,
   FRAMEWORK_WORKFLOWS_DIR,
   FRAMEWORK_TEMPLATES_DIR,
@@ -90,6 +91,7 @@ function formatUpgradeTaskList(
     lines.push(
       "## Agent Instructions",
       `- [ ] Compare the framework section in \`${AGENT_INSTRUCTIONS_FILE}\` with \`${FRAMEWORK_TEMPLATES_DIR}/${AGENT_INSTRUCTIONS_TEMPLATE}\` and update the content between the markers if needed`,
+      `- [ ] Compare the framework section in \`${CLAUDE_INSTRUCTIONS_FILE}\` with \`${FRAMEWORK_TEMPLATES_DIR}/${CLAUDE_INSTRUCTIONS_TEMPLATE}\` and update the content between the markers if needed`,
       "",
     );
   }

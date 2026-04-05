@@ -18,11 +18,12 @@ import {
   LEGACY_AGENT_INSTRUCTIONS_FILE,
   LEGACY_PROGRESS,
 } from "#skill/engine/runtime/asset-loader.js";
-import { buildSourceIntegrationLine } from "#skill/engine/runtime/source-integration.js";
+import { buildSourceIntegrationBlock } from "#skill/engine/runtime/source-integration.js";
 import {
   makeGitRepo,
   useTmpDir,
   makeAgentsMd,
+  makeClaudeMd,
   makeFramework,
   makeLegacyFramework,
   makeSourceRepo,
@@ -172,6 +173,7 @@ describe("runInit", () => {
     expect(readFileSync(join(repoDir.path, FRAMEWORK_VERSION), "utf-8").trim()).toBe("0.2.0");
     expect(existsSync(join(repoDir.path, "NODE.md"))).toBe(true);
     expect(existsSync(join(repoDir.path, AGENT_INSTRUCTIONS_FILE))).toBe(true);
+    expect(existsSync(join(repoDir.path, CLAUDE_INSTRUCTIONS_FILE))).toBe(true);
     expect(existsSync(join(repoDir.path, "members", "NODE.md"))).toBe(true);
     expect(existsSync(join(repoDir.path, INSTALLED_PROGRESS))).toBe(true);
   });
@@ -181,6 +183,7 @@ describe("runInit", () => {
     const sourceDir = useTmpDir();
     mkdirSync(join(repoDir.path, ".git"));
     makeAgentsMd(repoDir.path, { legacyName: true, markers: true, userContent: true });
+    makeClaudeMd(repoDir.path, { markers: true, userContent: true });
     makeSourceSkill(sourceDir.path, "0.2.0");
 
     const ret = runInit(new Repo(repoDir.path), { sourceRoot: sourceDir.path });
@@ -232,10 +235,10 @@ describe("runInit", () => {
     ).toBe(true);
     expect(
       readFileSync(join(sourceRepoDir.path, AGENT_INSTRUCTIONS_FILE), "utf-8"),
-    ).toContain(buildSourceIntegrationLine(basename(treeRepo)));
+    ).toContain(buildSourceIntegrationBlock(basename(treeRepo)));
     expect(
       readFileSync(join(sourceRepoDir.path, CLAUDE_INSTRUCTIONS_FILE), "utf-8"),
-    ).toContain(buildSourceIntegrationLine(basename(treeRepo)));
+    ).toContain(buildSourceIntegrationBlock(basename(treeRepo)));
     expect(
       existsSync(join(treeRepo, ".agents", "skills", "first-tree", "SKILL.md")),
     ).toBe(true);
@@ -244,6 +247,7 @@ describe("runInit", () => {
     ).toBe(true);
     expect(existsSync(join(treeRepo, "NODE.md"))).toBe(true);
     expect(existsSync(join(treeRepo, AGENT_INSTRUCTIONS_FILE))).toBe(true);
+    expect(existsSync(join(treeRepo, CLAUDE_INSTRUCTIONS_FILE))).toBe(true);
     expect(existsSync(join(treeRepo, "members", "NODE.md"))).toBe(true);
     expect(existsSync(join(treeRepo, INSTALLED_PROGRESS))).toBe(true);
     expect(
@@ -258,7 +262,7 @@ describe("runInit", () => {
     expect(existsSync(join(sourceRepoDir.path, INSTALLED_PROGRESS))).toBe(false);
   });
 
-  it("updates existing AGENTS.md and CLAUDE.md without duplicating the source integration line", () => {
+  it("updates existing AGENTS.md and CLAUDE.md without duplicating the source integration block", () => {
     const sourceRepoDir = useTmpDir();
     const sourceSkillDir = useTmpDir();
     makeSourceRepo(sourceRepoDir.path);
@@ -283,7 +287,7 @@ describe("runInit", () => {
       dirname(sourceRepoDir.path),
       `${basename(sourceRepoDir.path)}-context`,
     );
-    const expectedLine = buildSourceIntegrationLine(basename(treeRepo));
+    const expectedBlock = buildSourceIntegrationBlock(basename(treeRepo));
     const agentText = readFileSync(
       join(sourceRepoDir.path, AGENT_INSTRUCTIONS_FILE),
       "utf-8",
@@ -294,10 +298,10 @@ describe("runInit", () => {
     );
 
     expect(
-      agentText.match(new RegExp(escapeRegExp(expectedLine), "g")),
+      agentText.match(new RegExp(escapeRegExp(expectedBlock), "g")),
     ).toHaveLength(1);
     expect(
-      claudeText.match(new RegExp(escapeRegExp(expectedLine), "g")),
+      claudeText.match(new RegExp(escapeRegExp(expectedBlock), "g")),
     ).toHaveLength(1);
   });
 
@@ -316,6 +320,7 @@ describe("runInit", () => {
     expect(ret).toBe(0);
     expect(existsSync(join(sourceRepoDir.path, "NODE.md"))).toBe(true);
     expect(existsSync(join(sourceRepoDir.path, AGENT_INSTRUCTIONS_FILE))).toBe(true);
+    expect(existsSync(join(sourceRepoDir.path, CLAUDE_INSTRUCTIONS_FILE))).toBe(true);
     expect(existsSync(join(sourceRepoDir.path, "members", "NODE.md"))).toBe(true);
     expect(existsSync(join(sourceRepoDir.path, INSTALLED_PROGRESS))).toBe(true);
   });

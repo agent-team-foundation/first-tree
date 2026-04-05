@@ -18,6 +18,7 @@ import {
 import {
   useTmpDir,
   makeFramework,
+  makeClaudeMd,
   makeGitRepo,
   makeLegacyFramework,
   makeLegacyRepoFramework,
@@ -263,12 +264,14 @@ describe("agent instructions helpers", () => {
       join(tmp.path, LEGACY_AGENT_INSTRUCTIONS_FILE),
       "# Legacy instructions\n",
     );
+    makeClaudeMd(tmp.path, { markers: true, userContent: true });
     const repo = new Repo(tmp.path);
     expect(repo.agentInstructionsPath()).toBe(AGENT_INSTRUCTIONS_FILE);
     expect(repo.hasCanonicalAgentInstructionsFile()).toBe(true);
     expect(repo.hasLegacyAgentInstructionsFile()).toBe(true);
     expect(repo.hasDuplicateAgentInstructionsFiles()).toBe(true);
     expect(repo.hasAgentInstructionsMarkers()).toBe(true);
+    expect(repo.hasClaudeInstructionsMarkers()).toBe(true);
   });
 
   it("falls back to legacy AGENT.md while migrating", () => {
@@ -293,6 +296,7 @@ describe("agent instructions helpers", () => {
     );
     const repo = new Repo(tmp.path);
     expect(repo.hasAgentInstructionsMarkers()).toBe(false);
+    expect(repo.hasClaudeInstructionsMarkers()).toBe(false);
   });
 
   it("returns false when file is missing", () => {

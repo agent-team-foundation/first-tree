@@ -1,5 +1,5 @@
 <!-- BEGIN CONTEXT-TREE FRAMEWORK — do not edit this section -->
-# Agent Instructions for Context Tree
+# Claude Instructions for Context Tree
 
 You are working in a **Context Tree** — the living source of truth for decisions across the organization. Read and follow this before doing anything.
 
