@@ -1,7 +1,7 @@
-# Dockerfile for running context-tree evals with claude --dangerously-skip-permissions
+# Dockerfile for running first-tree evals with claude --dangerously-skip-permissions
 #
 # Build:
-#   docker build -t ct-eval -f evals/Dockerfile .
+#   docker build -t ft-eval -f evals/Dockerfile .
 #
 # Run (single case):
 #   docker run --rm \
@@ -10,8 +10,8 @@
 #     -e EVALS=1 \
 #     -e EVALS_CASES=pydantic-importstring-error \
 #     -e EVALS_TREE_REPO=agent-team-foundation/eval-context-trees \
-#     -v ~/.context-tree/evals:/home/eval/.context-tree/evals \
-#     ct-eval
+#     -v ~/.first-tree/evals:/home/eval/.first-tree/evals \
+#     ft-eval
 #
 # Run (all cases):
 #   docker run --rm \
@@ -19,8 +19,8 @@
 #     -e GH_TOKEN="$(gh auth token)" \
 #     -e EVALS=1 \
 #     -e EVALS_TREE_REPO=agent-team-foundation/eval-context-trees \
-#     -v ~/.context-tree/evals:/home/eval/.context-tree/evals \
-#     ct-eval
+#     -v ~/.first-tree/evals:/home/eval/.first-tree/evals \
+#     ft-eval
 #
 # The -v mount persists eval results (JSON + HTML) to your host.
 
@@ -74,7 +74,7 @@ USER eval
 WORKDIR /home/eval/first-tree
 
 # Create eval results directory and set git safe.directory globally
-RUN mkdir -p /home/eval/.context-tree/evals \
+RUN mkdir -p /home/eval/.first-tree/evals \
     && git config --global --add safe.directory '*'
 
 # Ensure uv/pnpm caches are writable inside the container

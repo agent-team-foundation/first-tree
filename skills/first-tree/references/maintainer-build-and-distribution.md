@@ -48,12 +48,12 @@ another skill reference, not only in the files themselves.
   package unless it becomes part of the user-facing framework contract.
 - If the CLI needs bundled knowledge or payload files, ship the canonical skill
   with the package rather than copying that information into root docs.
-- Normal `context-tree init` / `context-tree upgrade` flows must install from
+- Normal `first-tree init` / `first-tree upgrade` flows must install from
   the skill bundled in the running package, not by cloning the source repo.
 - Default dedicated-tree-repo creation must stay local-only. It may create a
   sibling git repo on disk, but it must not require remote repo creation or
   source-repo cloning.
-- `context-tree publish` is the explicit networked second-stage command for
+- `first-tree publish` is the explicit networked second-stage command for
   GitHub repo creation, submodule add-back, and optional source-repo PR
   opening. Keep that remote behavior there instead of expanding default `init`.
 - If you change anything that gets copied into user repos, bump

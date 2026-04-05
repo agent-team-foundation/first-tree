@@ -1,7 +1,7 @@
 # Agent Instructions for first-tree
 
 This repo ships the canonical `first-tree` skill plus a thin
-`context-tree` CLI. It is not a user context tree.
+`first-tree` CLI. It is not a user context tree.
 
 ## Start Here
 
@@ -13,7 +13,7 @@ This repo ships the canonical `first-tree` skill plus a thin
 
 - Treat `skills/first-tree/` as the only canonical source of
   framework knowledge.
-- Use `first-tree` for the npm package, `context-tree` for the CLI command, and
+- Use `first-tree` for both the npm package and CLI command, and
   `skills/first-tree/` when you mean the bundled skill path.
 - Keep source/workspace installs limited to local skill integration; `NODE.md`,
   `members/`, and tree-scoped `AGENTS.md` belong only in a dedicated

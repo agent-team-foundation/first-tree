@@ -146,7 +146,7 @@ if (evalResult.status !== 0) {
 
 console.log('\n═══ Step 4: Generating aggregate report ═══\n');
 
-const evalDir = getEnv('EVALS_STORE_DIR', '~/.context-tree/evals')!;
+const evalDir = getEnv('EVALS_STORE_DIR', '~/.first-tree/evals')!;
 if (!fs.existsSync(evalDir)) {
   console.error(`No eval results found in ${evalDir}`);
   process.exit(1);

@@ -5,7 +5,7 @@ This reference explains how to maintain the `first-tree` source repo itself.
 ## What This Repo Ships
 
 - One canonical skill: `skills/first-tree/`
-- One thin CLI package: the `context-tree` command distributed by the `first-tree`
+- One thin CLI package: the `first-tree` command distributed by the `first-tree`
   npm package
 - The published package carries that canonical skill directly; normal install
   and upgrade flows should not depend on cloning this source repo

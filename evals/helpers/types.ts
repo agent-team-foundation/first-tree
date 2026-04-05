@@ -1,5 +1,5 @@
 /**
- * Core types for the context-tree eval harness.
+ * Core types for the first-tree eval harness.
  */
 
 /** A single repo to clone into the sandbox. */

@@ -1,4 +1,4 @@
 interface:
   display_name: "First Tree"
-  short_description: "Maintain the First Tree skill and thin Context Tree CLI"
-  default_prompt: "Use $first-tree to maintain the canonical first-tree skill, its thin context-tree CLI, or its build, packaging, test, eval, and CI wiring. When a source/workspace repo installs first-tree, read references/source-workspace-installation.md first, keep that repo limited to local skill integration plus the FIRST-TREE-SOURCE-INTEGRATION marker lines, and keep all NODE.md/tree content only in a dedicated sibling *-context repo. Never choose context-tree init --here in the source/workspace repo unless the user explicitly wants that repo itself to become the tree."
+  short_description: "Maintain the First Tree skill and thin first-tree CLI"
+  default_prompt: "Use $first-tree to maintain the canonical first-tree skill, its thin first-tree CLI, or its build, packaging, test, eval, and CI wiring. When a source/workspace repo installs first-tree, read references/source-workspace-installation.md first, keep that repo limited to local skill integration plus the FIRST-TREE-SOURCE-INTEGRATION marker lines, and keep all NODE.md/tree content only in a dedicated sibling *-context repo. Never choose first-tree init --here in the source/workspace repo unless the user explicitly wants that repo itself to become the tree."
