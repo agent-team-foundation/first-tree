@@ -97,7 +97,10 @@ describe("thin CLI shell", () => {
   it("routes help onboarding through the CLI entrypoint", async () => {
     const output = captureOutput();
 
-    const code = await runCli(["help", "onboarding"], output.write);
+    const code = await runCli(
+      ["--skip-version-check", "help", "onboarding"],
+      output.write,
+    );
 
     expect(code).toBe(0);
     expect(output.lines.join("\n")).toContain("# Context Tree Onboarding");
@@ -107,7 +110,10 @@ describe("thin CLI shell", () => {
   it("fails with usage for an unknown command", async () => {
     const output = captureOutput();
 
-    const code = await runCli(["wat"], output.write);
+    const code = await runCli(
+      ["--skip-version-check", "wat"],
+      output.write,
+    );
 
     expect(code).toBe(1);
     expect(output.lines[0]).toBe("Unknown command: wat");
@@ -145,14 +151,17 @@ describe("thin CLI shell", () => {
 
   it("routes inject-context command", async () => {
     const output = captureOutput();
-    const code = await runCli(["inject-context", "--help"], output.write);
+    const code = await runCli(
+      ["--skip-version-check", "inject-context", "--help"],
+      output.write,
+    );
     expect(code).toBe(0);
   });
 
   it("routes generate-codeowners command", async () => {
     const output = captureOutput();
     const code = await runCli(
-      ["generate-codeowners", "--help"],
+      ["--skip-version-check", "generate-codeowners", "--help"],
       output.write,
     );
     expect(code).toBe(0);
@@ -160,7 +169,10 @@ describe("thin CLI shell", () => {
 
   it("routes review command", async () => {
     const output = captureOutput();
-    const code = await runCli(["review", "--help"], output.write);
+    const code = await runCli(
+      ["--skip-version-check", "review", "--help"],
+      output.write,
+    );
     expect(code).toBe(0);
   });
 });

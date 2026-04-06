@@ -71,12 +71,40 @@ export function stripGlobalFlags(args: string[]): {
   return { rest, skipVersionCheck };
 }
 
+async function runAutoUpgradeCheck(): Promise<void> {
+  // Best-effort silent auto-upgrade. Any failure is swallowed so the user's
+  // command always runs.
+  try {
+    const {
+      checkAndAutoUpgrade,
+      defaultFetchLatestVersion,
+      defaultInstallLatestVersion,
+      defaultReadCache,
+      defaultWriteCache,
+    } = await import("#engine/runtime/auto-upgrade.js");
+    const { resolveBundledPackageRoot, readCanonicalFrameworkVersion } =
+      await import("#engine/runtime/installer.js");
+    const currentVersion = readCanonicalFrameworkVersion(
+      resolveBundledPackageRoot(),
+    );
+    await checkAndAutoUpgrade({
+      currentVersion,
+      fetchLatestVersion: defaultFetchLatestVersion,
+      installLatestVersion: defaultInstallLatestVersion,
+      readCache: defaultReadCache,
+      writeCache: defaultWriteCache,
+    });
+  } catch {
+    // Swallow — auto-upgrade is best-effort
+  }
+}
+
 export async function runCli(
   rawArgs: string[],
   output: Output = console.log,
 ): Promise<number> {
   const write = (text: string): void => output(text);
-  const { rest: args } = stripGlobalFlags(rawArgs);
+  const { rest: args, skipVersionCheck } = stripGlobalFlags(rawArgs);
 
   if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
     write(USAGE);
@@ -94,6 +122,10 @@ export async function runCli(
     const skillVersion = readSkillVersion(packageRoot);
     write(`${cliVersion} (skills: ${skillVersion})`);
     return 0;
+  }
+
+  if (!skipVersionCheck) {
+    await runAutoUpgradeCheck();
   }
 
   const command = args[0];
