@@ -1,6 +1,6 @@
 {
   "name": "first-tree",
-  "version": "0.1.0",
+  "version": "0.2.4",
   "description": "CLI tools for Context Tree — the living source of truth for your organization.",
   "homepage": "https://github.com/agent-team-foundation/first-tree#readme",
   "bugs": {
@@ -30,6 +30,8 @@
     "skills/first-tree"
   ],
   "scripts": {
+    "version:sync": "node scripts/sync-version.js",
+    "prebuild": "node scripts/sync-version.js",
     "build": "tsdown",
     "prepack": "pnpm build",
     "test": "vitest run",

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const USAGE = `usage: first-tree <command>
 
+  This CLI is designed for agents, not humans. Let your agent handle it.
   New to first-tree? Run \`first-tree help onboarding\` first.
 
 Commands:
@@ -62,10 +63,9 @@ export async function runCli(
   }
 
   if (args[0] === "--version" || args[0] === "-v") {
-    const { createRequire } = await import("node:module");
-    const require = createRequire(import.meta.url);
-    const pkg = require("../package.json") as { version: string };
-    write(pkg.version);
+    const { resolveBundledPackageRoot, readCanonicalFrameworkVersion } =
+      await import("#skill/engine/runtime/installer.js");
+    write(readCanonicalFrameworkVersion(resolveBundledPackageRoot()));
     return 0;
   }
 
