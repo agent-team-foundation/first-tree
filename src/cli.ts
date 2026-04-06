@@ -84,9 +84,15 @@ export async function runCli(
   }
 
   if (args[0] === "--version" || args[0] === "-v") {
-    const { resolveBundledPackageRoot, readCanonicalFrameworkVersion } =
-      await import("#engine/runtime/installer.js");
-    write(readCanonicalFrameworkVersion(resolveBundledPackageRoot()));
+    const {
+      resolveBundledPackageRoot,
+      readCanonicalFrameworkVersion,
+      readSkillVersion,
+    } = await import("#engine/runtime/installer.js");
+    const packageRoot = resolveBundledPackageRoot();
+    const cliVersion = readCanonicalFrameworkVersion(packageRoot);
+    const skillVersion = readSkillVersion(packageRoot);
+    write(`${cliVersion} (skills: ${skillVersion})`);
     return 0;
   }
 

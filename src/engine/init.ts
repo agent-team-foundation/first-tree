@@ -17,7 +17,7 @@ import { evaluateAll } from "#engine/rules/index.js";
 import type { RuleResult } from "#engine/rules/index.js";
 import {
   copyCanonicalSkill,
-  readCanonicalFrameworkVersion,
+  readSkillVersion,
   renderTemplateFile,
   resolveCanonicalFrameworkRoot,
   resolveBundledPackageRoot,
@@ -393,14 +393,14 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
   try {
     const resolvedSourceRoot = resolveSourceRoot();
     const frameworkDir = resolveCanonicalFrameworkRoot(resolvedSourceRoot);
-    const bundledVersion = readCanonicalFrameworkVersion(resolvedSourceRoot);
+    const bundledSkillVersion = readSkillVersion(resolvedSourceRoot);
     const layout = r.frameworkLayout();
 
     if (layout === null || layout === "tree") {
       console.log(
         "Bootstrapping dedicated tree metadata from the bundled first-tree package...",
       );
-      writeTreeRuntimeVersion(r.root, bundledVersion);
+      writeTreeRuntimeVersion(r.root, bundledSkillVersion);
     } else {
       console.log(
         "Reusing the existing tree framework layout and filling any missing scaffold files...",

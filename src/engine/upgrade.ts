@@ -40,8 +40,9 @@ import {
   upsertLocalTreeGitIgnore,
 } from "#engine/runtime/local-tree-config.js";
 import {
-  compareFrameworkVersions,
-  readSourceVersion,
+  compareSkillVersions,
+  extractMajorMinor,
+  readBundledSkillVersion,
 } from "#engine/runtime/upgrader.js";
 
 export const UPGRADE_USAGE = `usage: first-tree upgrade [--tree-path PATH]
@@ -229,20 +230,20 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
     return 1;
   }
 
-  const packagedVersion = readSourceVersion(sourceRoot);
+  const packagedVersion = readBundledSkillVersion(sourceRoot);
   if (packagedVersion === null) {
     console.log(
-      "Could not read the bundled framework version. Reinstall or update `first-tree` and try again.",
+      "Could not read the bundled skill version. Reinstall or update `first-tree` and try again.",
     );
     return 1;
   }
 
   if (
     localVersion !== "unknown" &&
-    compareFrameworkVersions(localVersion, packagedVersion) > 0
+    compareSkillVersions(localVersion, packagedVersion) > 0
   ) {
     console.log(
-      "The installed framework is newer than the skill bundled with this `first-tree` package. Install a newer package version before running `first-tree upgrade`.",
+      "The installed skill is newer than the skill bundled with this `first-tree` package. Install a newer package version before running `first-tree upgrade`.",
     );
     return 1;
   }
@@ -265,7 +266,7 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
     if (
       (layout === "skill" || layout === "lightweight-skill") &&
       missingInstalledRoots.length === 0 &&
-      packagedVersion === localVersion
+      compareSkillVersions(localVersion, packagedVersion) === 0
     ) {
       const localSourceWorkspaceState = syncLocalSourceWorkspaceState(
         workingRepo,
@@ -366,7 +367,7 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
   }
 
   if (layout === "tree") {
-    if (packagedVersion === localVersion) {
+    if (compareSkillVersions(localVersion, packagedVersion) === 0) {
       console.log(
         `Already up to date with the bundled tree metadata (${workingRepo.frameworkVersionPath()} = ${localVersion}).`,
       );
@@ -393,7 +394,7 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
   if (
     (layout === "skill" || layout === "lightweight-skill") &&
     missingInstalledRoots.length === 0 &&
-    packagedVersion === localVersion
+    compareSkillVersions(localVersion, packagedVersion) === 0
   ) {
     console.log(
       `Already up to date with the bundled skill (${workingRepo.frameworkVersionPath()} = ${localVersion}).`,

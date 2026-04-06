@@ -79,15 +79,19 @@ describe("thin CLI shell", () => {
     expect(output.lines).toEqual([USAGE]);
   });
 
-  it("prints the package version", async () => {
+  it("prints the CLI version with the bundled skill version", async () => {
     const output = captureOutput();
     const pkgPath = fileURLToPath(new URL("../package.json", import.meta.url));
     const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as { version: string };
+    const skillVersionPath = fileURLToPath(
+      new URL("../skills/first-tree/VERSION", import.meta.url),
+    );
+    const skillVersion = readFileSync(skillVersionPath, "utf-8").trim();
 
     const code = await runCli(["--version"], output.write);
 
     expect(code).toBe(0);
-    expect(output.lines).toEqual([pkg.version]);
+    expect(output.lines).toEqual([`${pkg.version} (skills: ${skillVersion})`]);
   });
 
   it("routes help onboarding through the CLI entrypoint", async () => {
