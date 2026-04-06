@@ -2,17 +2,21 @@ import {
   copyFileSync,
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   BUNDLED_SKILL_ROOT,
+  CLAUDE_SKILL_ROOT,
   INSTALLED_SKILL_ROOTS,
   LEGACY_REPO_SKILL_ROOT,
+  SKILL_ROOT,
   TREE_VERSION,
 } from "#skill/engine/runtime/asset-loader.js";
 
@@ -76,14 +80,27 @@ export function copyCanonicalSkill(sourceRoot: string, targetRoot: string): void
     LEGACY_REPO_SKILL_ROOT,
   ]) {
     const fullPath = join(targetRoot, relPath);
-    if (existsSync(fullPath)) {
+    if (existsSync(fullPath) || isSymlink(fullPath)) {
       rmSync(fullPath, { recursive: true, force: true });
     }
   }
-  for (const relPath of INSTALLED_SKILL_ROOTS) {
-    const dst = join(targetRoot, relPath);
-    mkdirSync(dirname(dst), { recursive: true });
-    cpSync(src, dst, { recursive: true });
+  // Copy to the canonical location (.agents/skills/first-tree)
+  const primaryDst = join(targetRoot, SKILL_ROOT);
+  mkdirSync(dirname(primaryDst), { recursive: true });
+  cpSync(src, primaryDst, { recursive: true });
+
+  // Symlink .claude/skills/first-tree → .agents/skills/first-tree
+  const symlinkDst = join(targetRoot, CLAUDE_SKILL_ROOT);
+  mkdirSync(dirname(symlinkDst), { recursive: true });
+  const relTarget = relative(dirname(symlinkDst), primaryDst);
+  symlinkSync(relTarget, symlinkDst);
+}
+
+function isSymlink(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch {
+    return false;
   }
 }
 
