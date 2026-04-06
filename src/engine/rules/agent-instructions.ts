@@ -5,7 +5,6 @@ import {
   AGENT_INSTRUCTIONS_FILE,
   AGENT_INSTRUCTIONS_TEMPLATE,
   CLAUDE_INSTRUCTIONS_FILE,
-  CLAUDE_INSTRUCTIONS_TEMPLATE,
   FRAMEWORK_TEMPLATES_DIR,
   LEGACY_AGENT_INSTRUCTIONS_FILE,
 } from "#engine/runtime/asset-loader.js";
@@ -23,7 +22,7 @@ export function evaluate(repo: Repo): RuleResult {
   }
   if (!hasClaudeInstructions) {
     tasks.push(
-      `${CLAUDE_INSTRUCTIONS_FILE} is missing — create from \`${FRAMEWORK_TEMPLATES_DIR}/${CLAUDE_INSTRUCTIONS_TEMPLATE}\``,
+      `${CLAUDE_INSTRUCTIONS_FILE} is missing — create as a symlink to \`${AGENT_INSTRUCTIONS_FILE}\` so the two files can never drift (\`ln -s ${AGENT_INSTRUCTIONS_FILE} ${CLAUDE_INSTRUCTIONS_FILE}\`)`,
     );
   }
   if (tasks.length > 0 && !hasCanonicalInstructions && !hasLegacyInstructions) {

@@ -6,7 +6,6 @@ import {
   AGENT_INSTRUCTIONS_FILE,
   AGENT_INSTRUCTIONS_TEMPLATE,
   CLAUDE_INSTRUCTIONS_FILE,
-  CLAUDE_INSTRUCTIONS_TEMPLATE,
   CLAUDE_SKILL_ROOT,
   LEGACY_AGENT_INSTRUCTIONS_FILE,
   LEGACY_REPO_SKILL_VERSION,
@@ -127,14 +126,6 @@ export function makeSourceSkill(root: string, version = "0.2.0"): void {
       frameworkRoot,
       "templates",
       AGENT_INSTRUCTIONS_TEMPLATE,
-    ),
-    "<!-- BEGIN CONTEXT-TREE FRAMEWORK -->\nframework text\n<!-- END CONTEXT-TREE FRAMEWORK -->\n",
-  );
-  writeFileSync(
-    join(
-      frameworkRoot,
-      "templates",
-      CLAUDE_INSTRUCTIONS_TEMPLATE,
     ),
     "<!-- BEGIN CONTEXT-TREE FRAMEWORK -->\nframework text\n<!-- END CONTEXT-TREE FRAMEWORK -->\n",
   );

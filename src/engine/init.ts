@@ -4,6 +4,7 @@ import {
   mkdirSync,
   readdirSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -36,7 +37,6 @@ import {
   AGENT_INSTRUCTIONS_FILE,
   AGENT_INSTRUCTIONS_TEMPLATE,
   CLAUDE_INSTRUCTIONS_FILE,
-  CLAUDE_INSTRUCTIONS_TEMPLATE,
   FRAMEWORK_VERSION,
   FIRST_TREE_INDEX_FILE,
   INSTALLED_PROGRESS,
@@ -114,11 +114,6 @@ const TEMPLATE_MAP: TemplateTarget[] = [
     targetPath: AGENT_INSTRUCTIONS_FILE,
     skipIfExists: [AGENT_INSTRUCTIONS_FILE, LEGACY_AGENT_INSTRUCTIONS_FILE],
   },
-  {
-    templateName: CLAUDE_INSTRUCTIONS_TEMPLATE,
-    targetPath: CLAUDE_INSTRUCTIONS_FILE,
-    skipIfExists: [CLAUDE_INSTRUCTIONS_FILE],
-  },
   { templateName: "members-domain.md.template", targetPath: "members/NODE.md" },
 ];
 
@@ -151,6 +146,15 @@ function renderTemplates(frameworkDir: string, target: string): void {
     if (renderTemplateFile(frameworkDir, templateName, target, targetPath)) {
       console.log(`  Created ${targetPath}`);
     }
+  }
+  // CLAUDE.md is a symlink to AGENTS.md so they can never drift. Only
+  // create the symlink if neither file exists; if a real CLAUDE.md is
+  // already present, leave it alone (the user may be migrating).
+  const claudePath = join(target, CLAUDE_INSTRUCTIONS_FILE);
+  const agentsPath = join(target, AGENT_INSTRUCTIONS_FILE);
+  if (!existsSync(claudePath) && existsSync(agentsPath)) {
+    symlinkSync(AGENT_INSTRUCTIONS_FILE, claudePath);
+    console.log(`  Linked ${CLAUDE_INSTRUCTIONS_FILE} -> ${AGENT_INSTRUCTIONS_FILE}`);
   }
 }
 

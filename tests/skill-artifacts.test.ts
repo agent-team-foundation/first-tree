@@ -43,7 +43,7 @@ describe("skill artifacts", () => {
       ),
     ).toBe(true);
     expect(existsSync(join(ROOT, "assets", "framework", "manifest.json"))).toBe(true);
-    expect(existsSync(join(ROOT, "assets", "framework", "templates", "claude.md.template"))).toBe(true);
+    expect(existsSync(join(ROOT, "assets", "framework", "templates", "agents.md.template"))).toBe(true);
     expect(existsSync(join(ROOT, "src", "engine", "init.ts"))).toBe(true);
     expect(
       existsSync(join(ROOT, "src", "engine", "member-seeding.ts")),
@@ -169,6 +169,9 @@ describe("skill artifacts", () => {
         "package/skills/first-tree/references/onboarding.md",
       );
       expect(listing).toContain(
+        "package/assets/framework/templates/agents.md.template",
+      );
+      expect(listing).not.toContain(
         "package/assets/framework/templates/claude.md.template",
       );
       expect(listing).toContain(
