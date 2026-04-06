@@ -129,15 +129,8 @@ export function runValidateMembers(treeRoot: string): {
     for (const child of readdirSync(dir).sort()) {
       const childPath = join(dir, child);
 
-      // Reject stray .md files
       try {
         const stat = statSync(childPath);
-        if (stat.isFile() && child.endsWith(".md") && child !== "NODE.md") {
-          allErrors.push(
-            `${rel(childPath, treeRoot)}: member must be a directory with NODE.md, not a standalone file — use ${rel(dir, treeRoot)}/${child.replace(/\.md$/, "")}/NODE.md instead`,
-          );
-          continue;
-        }
         if (!stat.isDirectory()) continue;
       } catch {
         continue;
