@@ -66,25 +66,25 @@ repos.
 - When a user asks to install first-tree for an existing source/workspace repo,
   the current repo keeps only the installed skill plus a
   managed `FIRST-TREE-SOURCE-INTEGRATION:` section in `AGENTS.md` and
-  `CLAUDE.md`. Do not create `NODE.md`, `members/`, or tree-scoped
-  `AGENTS.md` / `CLAUDE.md` there.
+  `CLAUDE.md`, plus `FIRST_TREE.md`. Do not create `NODE.md`, `members/`, or
+  tree-scoped `AGENTS.md` / `CLAUDE.md` there.
 - `first-tree init` defaults to creating or reusing a sibling dedicated tree
   repo when invoked from a source/workspace repo. It installs the bundled skill
-  into the source/workspace repo and scaffolds tree files only in the
-  dedicated tree repo. Use `--here` to initialize the current repo in place
-  when you are already inside the tree repo.
+  into the source/workspace repo, writes `FIRST_TREE.md` there, and scaffolds
+  tree files only in the dedicated tree repo. Use `--here` to initialize the
+  current repo in place when you are already inside the tree repo.
 - `first-tree publish --open-pr` is the default second-stage command after
   `init` for source/workspace installs. Run it from the dedicated tree repo
   once the initial tree version is ready to push.
 - Never run `first-tree init --here` in a source/workspace repo unless the
   user explicitly wants that repo itself to become the dedicated Context Tree.
   `--here` is for when you have already switched into the `*-context` repo.
-- `first-tree init` installs this skill into the target tree repo and
-  scaffolds `.agents/skills/first-tree/`, `.claude/skills/first-tree/`,
-  `NODE.md`, `AGENTS.md`, `CLAUDE.md`, and `members/NODE.md`.
 - `first-tree init --seed-members contributors` is an explicit bootstrap aid:
   it seeds `members/*/NODE.md` from GitHub contributors when available, and
   falls back to local git history when GitHub metadata is unavailable.
+- `first-tree init` does not install this skill into the target tree repo.
+  Dedicated tree repos keep `.first-tree/` metadata plus `NODE.md`,
+  `AGENTS.md`, `CLAUDE.md`, and `members/NODE.md`.
 - The default source/workspace workflow is: run `first-tree init` from the
   source repo, draft the first tree version in `<repo>-context`, then run
   `first-tree publish --open-pr` from that dedicated tree repo.
@@ -115,11 +115,11 @@ repos.
   bootstrap in the source/workspace repo.
 - `first-tree upgrade` refreshes the installed skill from the copy bundled
   with the currently running `first-tree` package. In a source/workspace repo
-  it refreshes only the local skill plus the
+  it refreshes only the local skill, `FIRST_TREE.md`, plus the
   `FIRST-TREE-SOURCE-INTEGRATION:` section; upgrade the dedicated tree repo
-  separately with `--tree-path`. To pick up a newer framework, run a newer
-  package version first. It also migrates older repos that still use
-  `skills/first-tree/`.
+  separately with `--tree-path`. Dedicated tree repos refresh only
+  `.first-tree/`. To pick up a newer framework, run a newer package version
+  first. It also migrates older repos that still use `skills/first-tree/`.
 - The user's tree content lives outside the skill; the skill only carries the
   reusable framework payload plus maintenance guidance.
 - The tree still stores decisions, constraints, and ownership; execution detail

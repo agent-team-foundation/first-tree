@@ -374,20 +374,23 @@ function escapeYamlDoubleQuoted(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
-function locateTemplatePath(treeRoot: string, templateName: string): string {
-  const relPath = resolveFirstExistingPath(
-    treeRoot,
-    frameworkTemplateDirCandidates().map((candidate) => join(candidate, templateName)),
-  );
-  if (relPath === null) {
-    throw new Error(
-      `Could not locate ${templateName} in the installed first-tree framework.`,
+function locateTemplatePath(roots: string[], templateName: string): string {
+  for (const root of roots) {
+    const relPath = resolveFirstExistingPath(
+      root,
+      frameworkTemplateDirCandidates().map((candidate) => join(candidate, templateName)),
     );
+    if (relPath !== null) {
+      return join(root, relPath);
+    }
   }
-  return join(treeRoot, relPath);
+
+  throw new Error(
+    `Could not locate ${templateName} in the installed first-tree framework.`,
+  );
 }
 
-function ensureMembersDomainNode(treeRoot: string): void {
+function ensureMembersDomainNode(sourceRepoRoot: string, treeRoot: string): void {
   const membersDir = join(treeRoot, "members");
   const membersNodePath = join(membersDir, "NODE.md");
   if (existsSync(membersNodePath)) {
@@ -396,14 +399,14 @@ function ensureMembersDomainNode(treeRoot: string): void {
 
   mkdirSync(membersDir, { recursive: true });
   copyFileSync(
-    locateTemplatePath(treeRoot, "members-domain.md.template"),
+    locateTemplatePath([treeRoot, sourceRepoRoot], "members-domain.md.template"),
     membersNodePath,
   );
 }
 
-function readMemberTemplate(treeRoot: string): string {
+function readMemberTemplate(sourceRepoRoot: string, treeRoot: string): string {
   return readFileSync(
-    locateTemplatePath(treeRoot, "member-node.md.template"),
+    locateTemplatePath([treeRoot, sourceRepoRoot], "member-node.md.template"),
     "utf-8",
   );
 }
@@ -495,8 +498,8 @@ export function seedMembersFromContributors(
     };
   }
 
-  ensureMembersDomainNode(treeRoot);
-  const template = readMemberTemplate(treeRoot);
+  ensureMembersDomainNode(sourceRepoRoot, treeRoot);
+  const template = readMemberTemplate(sourceRepoRoot, treeRoot);
   const membersDir = join(treeRoot, "members");
   const existingNames = collectExistingMemberNames(membersDir);
   let created = 0;

@@ -1,6 +1,8 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  FIRST_TREE_INDEX_FILE,
+  SKILL_REFERENCES_DIR,
   SOURCE_INTEGRATION_BEGIN,
   SOURCE_INTEGRATION_END,
   SOURCE_INTEGRATION_FILES,
@@ -8,10 +10,18 @@ import {
 } from "#skill/engine/runtime/asset-loader.js";
 
 export type SourceIntegrationFile = (typeof SOURCE_INTEGRATION_FILES)[number];
+const FIRST_TREE_INDEX_BEGIN = "<!-- BEGIN FIRST-TREE INDEX -->";
+const FIRST_TREE_INDEX_END = "<!-- END FIRST-TREE INDEX -->";
+const REFERENCE_ROOT = SKILL_REFERENCES_DIR.replaceAll("\\", "/");
 
 export interface SourceIntegrationUpdate {
   action: "created" | "updated" | "unchanged";
   file: SourceIntegrationFile;
+}
+
+export interface FirstTreeIndexUpdate {
+  action: "created" | "updated" | "unchanged" | "skipped";
+  file: typeof FIRST_TREE_INDEX_FILE;
 }
 
 export interface SourceIntegrationOptions {
@@ -51,6 +61,34 @@ export function hasSourceIntegrationMarker(text: string | null): boolean {
     .replaceAll("\r\n", "\n")
     .split("\n")
     .some((line) => line.startsWith(SOURCE_INTEGRATION_MARKER));
+}
+
+export function upsertFirstTreeIndexFile(
+  root: string,
+  treeRepoName?: string,
+): FirstTreeIndexUpdate {
+  const fullPath = join(root, FIRST_TREE_INDEX_FILE);
+  const exists = existsSync(fullPath);
+  const nextText = buildFirstTreeIndexFile(treeRepoName);
+  const current = exists ? readFileSync(fullPath, "utf-8") : null;
+
+  if (current === nextText) {
+    return { action: "unchanged", file: FIRST_TREE_INDEX_FILE };
+  }
+
+  if (
+    current !== null
+    && !current.includes(FIRST_TREE_INDEX_BEGIN)
+    && !current.includes(FIRST_TREE_INDEX_END)
+  ) {
+    return { action: "skipped", file: FIRST_TREE_INDEX_FILE };
+  }
+
+  writeFileSync(fullPath, nextText);
+  return {
+    action: exists ? "updated" : "created",
+    file: FIRST_TREE_INDEX_FILE,
+  };
 }
 
 export function upsertSourceIntegrationFiles(
@@ -128,4 +166,33 @@ function detectExistingSubmodulePath(text: string): string | null {
 
   const match = text.match(/preferred path: `(.+?)\/`/);
   return match?.[1] ?? null;
+}
+
+function buildFirstTreeIndexFile(treeRepoName?: string): string {
+  const lines = [
+    "# First Tree",
+    "",
+    FIRST_TREE_INDEX_BEGIN,
+    "Use this file as the local entrypoint for the installed `first-tree` workspace integration.",
+    "",
+    `- [About Context Tree](${REFERENCE_ROOT}/about.md)`,
+    `- [Onboarding](${REFERENCE_ROOT}/onboarding.md)`,
+    `- [Source/Workspace Installation Contract](${REFERENCE_ROOT}/source-workspace-installation.md)`,
+    "",
+  ];
+
+  if (treeRepoName) {
+    lines.push(
+      `The dedicated Context Tree for this workspace lives in the sibling \`${treeRepoName}\` repo/submodule. Keep durable decisions, rationale, and ownership there.`,
+      "",
+    );
+  }
+
+  lines.push(
+    "This file is managed by `first-tree init` and `first-tree upgrade`.",
+    FIRST_TREE_INDEX_END,
+    "",
+  );
+
+  return lines.join("\n");
 }

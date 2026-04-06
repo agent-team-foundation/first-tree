@@ -6,10 +6,13 @@ import { runUpgrade } from "#skill/engine/upgrade.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
   CLAUDE_INSTRUCTIONS_FILE,
+  FIRST_TREE_INDEX_FILE,
   FRAMEWORK_VERSION,
   INSTALLED_PROGRESS,
   LEGACY_AGENT_INSTRUCTIONS_FILE,
   SOURCE_INTEGRATION_MARKER,
+  TREE_PROGRESS,
+  TREE_VERSION,
 } from "#skill/engine/runtime/asset-loader.js";
 import { buildSourceIntegrationBlock } from "#skill/engine/runtime/source-integration.js";
 import {
@@ -20,6 +23,7 @@ import {
   makeLegacyFramework,
   makeLegacyRepoFramework,
   makeSourceSkill,
+  makeTreeMetadata,
   useTmpDir,
 } from "./helpers.js";
 
@@ -107,6 +111,25 @@ describe("runUpgrade", () => {
     expect(result).toBe(1);
   });
 
+  it("refreshes a dedicated tree repo without reinstalling the skill", () => {
+    const repoDir = useTmpDir();
+    const sourceDir = useTmpDir();
+    makeTreeMetadata(repoDir.path, "0.1.0");
+    makeAgentsMd(repoDir.path, { markers: true, userContent: true });
+    makeSourceSkill(sourceDir.path, "0.2.0");
+
+    const result = runUpgrade(new Repo(repoDir.path), {
+      sourceRoot: sourceDir.path,
+    });
+
+    expect(result).toBe(0);
+    expect(readFileSync(join(repoDir.path, TREE_VERSION), "utf-8").trim()).toBe("0.2.0");
+    expect(existsSync(join(repoDir.path, ".agents", "skills", "first-tree"))).toBe(false);
+    expect(readFileSync(join(repoDir.path, TREE_PROGRESS), "utf-8")).toContain(
+      ".first-tree/VERSION",
+    );
+  });
+
   it("refreshes source/workspace integration without writing tree progress", () => {
     const repoDir = useTmpDir();
     const sourceDir = useTmpDir();
@@ -136,6 +159,9 @@ describe("runUpgrade", () => {
     );
     expect(readFileSync(join(repoDir.path, CLAUDE_INSTRUCTIONS_FILE), "utf-8")).toContain(
       expectedBlock,
+    );
+    expect(readFileSync(join(repoDir.path, FIRST_TREE_INDEX_FILE), "utf-8")).toContain(
+      ".agents/skills/first-tree/references/about.md",
     );
     expect(existsSync(join(repoDir.path, INSTALLED_PROGRESS))).toBe(false);
   });

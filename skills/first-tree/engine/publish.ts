@@ -8,6 +8,7 @@ import {
   AGENT_INSTRUCTIONS_FILE,
   CLAUDE_INSTRUCTIONS_FILE,
   CLAUDE_SKILL_ROOT,
+  FIRST_TREE_INDEX_FILE,
   SKILL_ROOT,
 } from "#skill/engine/runtime/asset-loader.js";
 
@@ -449,6 +450,7 @@ function commitSourceIntegration(
     ...[
       SKILL_ROOT,
       CLAUDE_SKILL_ROOT,
+      FIRST_TREE_INDEX_FILE,
       AGENT_INSTRUCTIONS_FILE,
       CLAUDE_INSTRUCTIONS_FILE,
     ].filter((path) => existsSync(join(sourceRepo.root, path))),
@@ -542,7 +544,7 @@ function buildPrBody(
     `Connect the published \`${treeRepoName}\` Context Tree back into this source/workspace repo.`,
     "",
     `- add \`${submodulePath}\` as the tracked Context Tree submodule`,
-    "- keep the local first-tree skill + source integration marker lines in this repo",
+    "- keep the local first-tree skill, FIRST_TREE.md entrypoint, and source integration marker lines in this repo",
     `- use \`${treeSlug}\` as the GitHub home for tree content`,
   ].join("\n");
 }

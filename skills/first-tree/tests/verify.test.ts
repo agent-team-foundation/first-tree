@@ -10,6 +10,7 @@ import {
   INSTALLED_PROGRESS,
   LEGACY_PROGRESS,
   SOURCE_INTEGRATION_MARKER,
+  TREE_PROGRESS,
 } from "#skill/engine/runtime/asset-loader.js";
 import {
   useTmpDir,
@@ -21,6 +22,7 @@ import {
   makeSourceRepo,
   makeMembers,
   makeSourceSkill,
+  makeTreeMetadata,
 } from "./helpers.js";
 
 // --- check ---
@@ -84,13 +86,24 @@ describe("checkProgress", () => {
     const repo = new Repo(tmp.path);
     expect(checkProgress(repo)).toEqual(["Legacy task"]);
   });
+
+  it("reads the dedicated tree progress file", () => {
+    const tmp = useTmpDir();
+    makeTreeMetadata(tmp.path);
+    writeFileSync(
+      join(tmp.path, TREE_PROGRESS),
+      "# Progress\n- [ ] Tree task\n",
+    );
+    const repo = new Repo(tmp.path);
+    expect(checkProgress(repo)).toEqual(["Tree task"]);
+  });
 });
 
 // --- helpers for building a full repo ---
 
 function buildFullRepo(root: string): void {
   mkdirSync(join(root, ".git"));
-  makeFramework(root);
+  makeTreeMetadata(root);
   writeFileSync(
     join(root, "NODE.md"),
     "---\ntitle: My Org\nowners: [alice]\n---\n# Content\n",
@@ -178,7 +191,7 @@ describe("runVerify all passing", () => {
       ].join("\n"),
     );
 
-    const progressPath = join(repoDir.path, INSTALLED_PROGRESS);
+    const progressPath = join(repoDir.path, TREE_PROGRESS);
     writeFileSync(
       progressPath,
       readFileSync(progressPath, "utf-8").replace(/^- \[ \]/gm, "- [x]"),
@@ -200,7 +213,7 @@ describe("runVerify failing", () => {
 
   it("fails when AGENTS.md is missing", () => {
     const tmp = useTmpDir();
-    makeFramework(tmp.path);
+    makeTreeMetadata(tmp.path);
     writeFileSync(
       join(tmp.path, "NODE.md"),
       "---\ntitle: My Org\nowners: [alice]\n---\n",
@@ -227,7 +240,7 @@ describe("runVerify failing", () => {
   it("fails when only legacy AGENT.md exists", () => {
     const tmp = useTmpDir();
     mkdirSync(join(tmp.path, ".git"));
-    makeFramework(tmp.path);
+    makeTreeMetadata(tmp.path);
     makeNode(tmp.path);
     makeAgentsMd(tmp.path, { legacyName: true, markers: true, userContent: true });
     makeClaudeMd(tmp.path, { markers: true, userContent: true });

@@ -9,6 +9,8 @@ import {
   LEGACY_REPO_SKILL_VERSION,
   LEGACY_PROGRESS,
   LEGACY_VERSION,
+  TREE_PROGRESS,
+  TREE_VERSION,
   detectFrameworkLayout,
   frameworkVersionCandidates,
   progressFileCandidates,
@@ -40,6 +42,17 @@ describe("asset-loader", () => {
     expect(detectFrameworkLayout(tmp.path)).toBe("legacy");
   });
 
+  it("detects the dedicated tree metadata layout", () => {
+    const tmp = useTmpDir();
+    mkdirSync(join(tmp.path, ".first-tree"), { recursive: true });
+    writeFileSync(join(tmp.path, TREE_VERSION), "0.2.0\n");
+
+    expect(detectFrameworkLayout(tmp.path)).toBe("tree");
+    expect(
+      resolveFirstExistingPath(tmp.path, frameworkVersionCandidates()),
+    ).toBe(TREE_VERSION);
+  });
+
   it("detects the previous workspace skill path before older layouts", () => {
     const tmp = useTmpDir();
     mkdirSync(join(tmp.path, "skills", "first-tree", "assets", "framework"), {
@@ -59,9 +72,11 @@ describe("asset-loader", () => {
     const tmp = useTmpDir();
     mkdirSync(join(tmp.path, ".agents", "skills", "first-tree"), { recursive: true });
     mkdirSync(join(tmp.path, ".claude", "skills", "first-tree"), { recursive: true });
+    mkdirSync(join(tmp.path, ".first-tree"), { recursive: true });
     mkdirSync(join(tmp.path, "skills", "first-tree"), { recursive: true });
     mkdirSync(join(tmp.path, ".context-tree"), { recursive: true });
     writeFileSync(join(tmp.path, INSTALLED_PROGRESS), "new");
+    writeFileSync(join(tmp.path, TREE_PROGRESS), "tree");
     writeFileSync(join(tmp.path, CLAUDE_INSTALLED_PROGRESS), "claude");
     writeFileSync(join(tmp.path, LEGACY_REPO_SKILL_PROGRESS), "old-repo-skill");
     writeFileSync(join(tmp.path, LEGACY_PROGRESS), "old");

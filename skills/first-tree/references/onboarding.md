@@ -59,7 +59,8 @@ Information an agent needs to **decide** on an approach — not to execute it.
   `*-context` repo and open the source-repo PR for you
 - The npm package and installed CLI command are both `first-tree`.
 - `first-tree init` installs the framework skill into
-  `.agents/skills/first-tree/` and `.claude/skills/first-tree/`.
+  `.agents/skills/first-tree/` and `.claude/skills/first-tree/` in a
+  source/workspace repo.
 - Use `npx first-tree init` for one-off runs, or `npm install -g first-tree`
   to add the `first-tree` command to your PATH
 
@@ -67,9 +68,9 @@ Information an agent needs to **decide** on an approach — not to execute it.
 
 Recommended workflow: run `first-tree init` from your source or workspace repo.
 The CLI will install the bundled skill in the current repo, update root
-`AGENTS.md` and `CLAUDE.md` with a managed `FIRST-TREE-SOURCE-INTEGRATION:`
-section, and create a sibling dedicated tree repo named `<repo>-context` by
-default. Tree files are scaffolded only in the dedicated tree repo.
+`FIRST_TREE.md`, `AGENTS.md`, and `CLAUDE.md` with local integration guidance,
+and create a sibling dedicated tree repo named `<repo>-context` by default.
+Tree files are scaffolded only in the dedicated tree repo.
 
 ```bash
 cd my-org
@@ -97,11 +98,12 @@ Only use `--here` after you have already switched into the dedicated tree repo.
 Do not use it inside the source/workspace repo unless you intentionally want
 that repo itself to become the Context Tree.
 
-Either way, the framework installs into `.agents/skills/first-tree/` and
-`.claude/skills/first-tree/`, renders scaffolding (`NODE.md`, `AGENTS.md`,
-`CLAUDE.md`, `members/NODE.md`), and generates a task list in
-`.agents/skills/first-tree/progress.md`.
-When `--seed-members contributors` is set, init also attempts to create
+From a source/workspace repo, `init` installs `.agents/skills/first-tree/`,
+`.claude/skills/first-tree/`, and `FIRST_TREE.md` only in that source repo.
+The dedicated tree repo keeps its local metadata under `.first-tree/`, renders
+scaffolding (`NODE.md`, `AGENTS.md`, `CLAUDE.md`, `members/NODE.md`), and
+generates a task list in `.first-tree/progress.md`. When
+`--seed-members contributors` is set, init also attempts to create
 `members/*/NODE.md` from GitHub contributor data and falls back to local git
 history if GitHub metadata is unavailable.
 
@@ -140,20 +142,21 @@ Default agent workflow after initialization:
 
 ### Step 2: Work Through the Task List
 
-Read `.agents/skills/first-tree/progress.md`. It contains a checklist tailored
+Read `.first-tree/progress.md`. It contains a checklist tailored
 to the current state of the repo. Complete each task:
 
 - Fill in `NODE.md` with your organization name, owners, and domains
 - Add project-specific instructions to `AGENTS.md` below the framework markers
 - Create member nodes under `members/`
-- Optionally configure agent integration (for Claude Code, the installed hook
-  assets live under `.claude/skills/first-tree/`)
-- Copy validation workflows from
-  `.agents/skills/first-tree/assets/framework/workflows/` to
-  `.github/workflows/`
+- Optionally configure agent integration in the source/workspace repo (for
+  Claude Code, the installed hook assets live under
+  `.claude/skills/first-tree/`)
+- Copy any validation workflows you want from the source/workspace repo's
+  `.agents/skills/first-tree/assets/framework/workflows/` directory into the
+  tree repo's `.github/workflows/`
 
 As you complete each task, check it off in
-`.agents/skills/first-tree/progress.md` by changing `- [ ]` to `- [x]`.
+`.first-tree/progress.md` by changing `- [ ]` to `- [x]`.
 
 Treat `progress.md` as the source of truth for the post-onboarding checkpoint.
 Before you ask whether to keep building out the tree, report what is already
@@ -161,10 +164,12 @@ done and what remains. Split that report into setup/integration progress and
 tree-content baseline coverage progress, and describe the remaining work
 categories instead of claiming the tree is "100% complete."
 
-If you want a quick checkpoint from the dedicated tree repo, run:
+If you want a quick checkpoint while you are working in the dedicated tree
+repo, run the shipped helper from the source/workspace repo and point it at the
+tree repo's progress file:
 
 ```bash
-node .agents/skills/first-tree/assets/framework/helpers/summarize-progress.js
+node ../my-org/.agents/skills/first-tree/assets/framework/helpers/summarize-progress.js .first-tree/progress.md
 ```
 
 If the user wants to continue after that checkpoint, explain the scope first
@@ -186,12 +191,12 @@ Or, from your source/workspace repo:
 first-tree verify --tree-path ../my-org-context
 ```
 
-This fails if any items in `.agents/skills/first-tree/progress.md` remain
+This fails if any items in `.first-tree/progress.md` remain
 unchecked, and runs deterministic checks (valid frontmatter, node structure,
 member nodes exist).
 
 Do not run `first-tree verify` in the source/workspace repo itself. That repo
-only carries the installed skill plus the
+only carries the installed skill, `FIRST_TREE.md`, plus the
 `FIRST-TREE-SOURCE-INTEGRATION:` section.
 
 ### Step 4: Design Your Domains
@@ -232,7 +237,7 @@ The tree doesn't duplicate source code — it captures what connects things and 
 | `first-tree init` | Install local source/workspace integration and create or refresh a dedicated tree repo. By default, running in a source/workspace repo creates a sibling `<repo>-context`; use `--here` only when you are already inside the dedicated tree repo, and `--seed-members contributors` to draft member nodes from contributor history. |
 | `first-tree publish` | Publish a dedicated tree repo to GitHub, add it back to the source/workspace repo as a submodule, and optionally open the source-repo PR. |
 | `first-tree verify` | Check the installed progress file for unchecked items + run deterministic validation. Use `--tree-path` when invoking from another working directory. |
-| `first-tree upgrade` | Refresh the installed framework skill from the currently running `first-tree` npm package and generate follow-up tasks. Use `--tree-path` when invoking from another working directory. |
+| `first-tree upgrade` | Refresh local source/workspace integration or dedicated tree metadata from the currently running `first-tree` npm package and generate follow-up tasks. Use `--tree-path` when invoking from another working directory. |
 | `first-tree help onboarding` | Print this onboarding guide. |
 
 ---
@@ -245,16 +250,16 @@ When the framework updates:
 first-tree upgrade
 ```
 
-`first-tree upgrade` refreshes `.agents/skills/first-tree/` and
-`.claude/skills/first-tree/` from the skill bundled with the currently running
-`first-tree` npm package, preserves your tree content, and generates follow-up
-tasks in `.agents/skills/first-tree/progress.md`.
+`first-tree upgrade` refreshes the current install from the skill bundled with
+the currently running `first-tree` npm package, preserves your tree content,
+and generates follow-up tasks.
 
 If you run `first-tree upgrade` in the source/workspace repo, it refreshes
-only the local installed skill plus the `FIRST-TREE-SOURCE-INTEGRATION:`
-section.
+only the local installed skill, `FIRST_TREE.md`, plus the
+`FIRST-TREE-SOURCE-INTEGRATION:` section.
 Run `first-tree upgrade --tree-path ../my-org-context` to upgrade the
-dedicated tree repo itself.
+dedicated tree repo itself. Dedicated tree repos keep their progress checklist
+under `.first-tree/progress.md`.
 
 If your repo still uses the older `skills/first-tree/` or `.context-tree/` layouts,
 `first-tree upgrade` will migrate it to the current installed layout first.

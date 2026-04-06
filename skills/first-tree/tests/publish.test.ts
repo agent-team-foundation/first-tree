@@ -22,6 +22,7 @@ import {
   makeMembers,
   makeNode,
   makeSourceRepo,
+  makeTreeMetadata,
   useTmpDir,
 } from "./helpers.js";
 
@@ -33,7 +34,7 @@ interface RecordedCommand {
 
 function makeTreeRepo(root: string): void {
   makeGitRepo(root);
-  makeFramework(root, "0.2.0");
+  makeTreeMetadata(root, "0.2.0");
   makeNode(root);
   makeAgentsMd(root, { markers: true });
   makeClaudeMd(root, { markers: true });

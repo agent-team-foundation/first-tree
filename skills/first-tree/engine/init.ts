@@ -13,8 +13,11 @@ import { evaluateAll } from "#skill/engine/rules/index.js";
 import type { RuleResult } from "#skill/engine/rules/index.js";
 import {
   copyCanonicalSkill,
+  readCanonicalFrameworkVersion,
   renderTemplateFile,
+  resolveCanonicalFrameworkRoot,
   resolveBundledPackageRoot,
+  writeTreeRuntimeVersion,
 } from "#skill/engine/runtime/installer.js";
 import {
   collectContributorMembers,
@@ -30,14 +33,17 @@ import {
   AGENT_INSTRUCTIONS_TEMPLATE,
   CLAUDE_INSTRUCTIONS_FILE,
   CLAUDE_INSTRUCTIONS_TEMPLATE,
-  FRAMEWORK_ASSET_ROOT,
   FRAMEWORK_VERSION,
+  FIRST_TREE_INDEX_FILE,
   INSTALLED_PROGRESS,
   LEGACY_AGENT_INSTRUCTIONS_FILE,
   installedSkillRootsDisplay,
   SOURCE_INTEGRATION_MARKER,
 } from "#skill/engine/runtime/asset-loader.js";
-import { upsertSourceIntegrationFiles } from "#skill/engine/runtime/source-integration.js";
+import {
+  upsertFirstTreeIndexFile,
+  upsertSourceIntegrationFiles,
+} from "#skill/engine/runtime/source-integration.js";
 
 /**
  * The interactive prompt tool the agent should use to present choices.
@@ -48,9 +54,10 @@ export const INTERACTIVE_TOOL = "AskUserQuestion";
 export const INIT_USAGE = `usage: first-tree init [--here] [--seed-members contributors] [--tree-name NAME] [--tree-path PATH]
 
 By default, running \`first-tree init\` inside a source or workspace repo installs
-the first-tree skill in the current repo, updates \`AGENTS.md\` and \`CLAUDE.md\`
-with a \`${SOURCE_INTEGRATION_MARKER}\` line, and creates a sibling dedicated tree
-repo named \`<repo>-context\`.
+the first-tree skill in the current repo, writes \`FIRST_TREE.md\`, updates
+\`AGENTS.md\` and \`CLAUDE.md\` with a managed \`${SOURCE_INTEGRATION_MARKER}\`
+section,
+and creates a sibling dedicated tree repo named \`<repo>-context\`.
 
 Do not use \`--here\` inside a source/workspace repo unless you explicitly want
 that repo itself to become the Context Tree.
@@ -89,6 +96,8 @@ interface TaskListContext {
   sourceRepoPath?: string;
   sourceRepoName?: string;
   dedicatedTreeRepo?: boolean;
+  frameworkVersionPath?: string;
+  progressPath?: string;
 }
 
 function installSkill(source: string, target: string): void {
@@ -98,8 +107,7 @@ function installSkill(source: string, target: string): void {
   );
 }
 
-function renderTemplates(target: string): void {
-  const frameworkDir = join(target, FRAMEWORK_ASSET_ROOT);
+function renderTemplates(frameworkDir: string, target: string): void {
   for (const { templateName, targetPath, skipIfExists } of TEMPLATE_MAP) {
     const existingPaths = skipIfExists ?? [targetPath];
     const existingPath = existingPaths.find((candidate) =>
@@ -134,7 +142,7 @@ export function formatTaskList(
     }
     if (context.sourceRepoName) {
       lines.push(
-        `**Source/workspace contract:** Keep \`${context.sourceRepoName}\` limited to the installed skill plus the managed \`${SOURCE_INTEGRATION_MARKER}\` section in \`${AGENT_INSTRUCTIONS_FILE}\` and \`${CLAUDE_INSTRUCTIONS_FILE}\`. Never add \`NODE.md\`, \`members/\`, or tree-scoped \`${AGENT_INSTRUCTIONS_FILE}\` / \`${CLAUDE_INSTRUCTIONS_FILE}\` there.`,
+        `**Source/workspace contract:** Keep \`${context.sourceRepoName}\` limited to the installed skill, \`${FIRST_TREE_INDEX_FILE}\`, and the managed \`${SOURCE_INTEGRATION_MARKER}\` section in \`${AGENT_INSTRUCTIONS_FILE}\` and \`${CLAUDE_INSTRUCTIONS_FILE}\`. Never add \`NODE.md\`, \`members/\`, or tree-scoped \`${AGENT_INSTRUCTIONS_FILE}\` / \`${CLAUDE_INSTRUCTIONS_FILE}\` there.`,
         "",
       );
       lines.push("## Source Workspace Workflow");
@@ -174,7 +182,9 @@ export function formatTaskList(
   lines.push(
     "After completing the tasks above, run `first-tree verify` to confirm:",
   );
-  lines.push(`- [ ] \`${FRAMEWORK_VERSION}\` exists`);
+  lines.push(
+    `- [ ] \`${context?.frameworkVersionPath ?? FRAMEWORK_VERSION}\` exists`,
+  );
   lines.push("- [ ] Root NODE.md has valid frontmatter (title, owners)");
   lines.push(
     `- [ ] \`${AGENT_INSTRUCTIONS_FILE}\` has framework markers and \`${CLAUDE_INSTRUCTIONS_FILE}\` mirrors the same workflow guidance`,
@@ -186,7 +196,7 @@ export function formatTaskList(
   lines.push("");
   lines.push(
     "**Important:** As you complete each task, check it off in" +
-      ` \`${INSTALLED_PROGRESS}\` by changing \`- [ ]\` to \`- [x]\`.` +
+      ` \`${context?.progressPath ?? INSTALLED_PROGRESS}\` by changing \`- [ ]\` to \`- [x]\`.` +
       " Run `first-tree verify` when done — it will fail if any" +
       " items remain unchecked.",
   );
@@ -253,10 +263,15 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
   const taskListContext = initTarget.dedicatedTreeRepo
     ? {
         dedicatedTreeRepo: true,
+        frameworkVersionPath: r.frameworkVersionPath(),
+        progressPath: r.preferredProgressPath(),
         sourceRepoName: sourceRepo.repoName(),
         sourceRepoPath: relativePathFrom(r.root, sourceRepo.root),
       }
-    : undefined;
+    : {
+        frameworkVersionPath: r.frameworkVersionPath(),
+        progressPath: r.preferredProgressPath(),
+      };
   let sourceRoot: string | null = null;
 
   const resolveSourceRoot = (): string => {
@@ -278,8 +293,9 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
       console.log("  Initialized a new git repo for the tree.");
     }
     console.log(
-      "  The source/workspace repo should keep only the installed skill and the" +
-        ` ${SOURCE_INTEGRATION_MARKER} section in ${AGENT_INSTRUCTIONS_FILE} and ${CLAUDE_INSTRUCTIONS_FILE}.`,
+      "  The source/workspace repo should keep only the installed skill," +
+        ` ${FIRST_TREE_INDEX_FILE}, and the managed ${SOURCE_INTEGRATION_MARKER}` +
+        ` section in ${AGENT_INSTRUCTIONS_FILE} and ${CLAUDE_INSTRUCTIONS_FILE}.`,
     );
     console.log(
       `  Never add NODE.md, members/, or tree-scoped ${AGENT_INSTRUCTIONS_FILE}/${CLAUDE_INSTRUCTIONS_FILE} to the source/workspace repo.`,
@@ -297,10 +313,23 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
         );
         installSkill(resolvedSourceRoot, sourceRepo.root);
       }
+      const firstTreeIndex = upsertFirstTreeIndexFile(
+        sourceRepo.root,
+        r.repoName(),
+      );
       const updates = upsertSourceIntegrationFiles(sourceRepo.root, r.repoName());
       const changedFiles = updates
         .filter((update) => update.action !== "unchanged")
         .map((update) => update.file);
+      if (firstTreeIndex.action === "created") {
+        console.log(`  Created \`${FIRST_TREE_INDEX_FILE}\``);
+      } else if (firstTreeIndex.action === "updated") {
+        console.log(`  Updated \`${FIRST_TREE_INDEX_FILE}\``);
+      } else if (firstTreeIndex.action === "skipped") {
+        console.log(
+          `  Left \`${FIRST_TREE_INDEX_FILE}\` unchanged because it already contains unmanaged content`,
+        );
+      }
       if (changedFiles.length > 0) {
         console.log(
           `  Updated source/workspace instructions in ${changedFiles.map((file) => `\`${file}\``).join(" and ")}`,
@@ -318,21 +347,29 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
     }
   }
 
-  if (!r.hasCurrentInstalledSkill()) {
-    try {
-      const resolvedSourceRoot = resolveSourceRoot();
+  try {
+    const resolvedSourceRoot = resolveSourceRoot();
+    const frameworkDir = resolveCanonicalFrameworkRoot(resolvedSourceRoot);
+    const bundledVersion = readCanonicalFrameworkVersion(resolvedSourceRoot);
+    const layout = r.frameworkLayout();
+
+    if (layout === null || layout === "tree") {
       console.log(
-        "Installing the framework skill bundled with this first-tree package...",
+        "Bootstrapping dedicated tree metadata from the bundled first-tree package...",
       );
-      console.log("Installing skill and scaffolding...");
-      installSkill(resolvedSourceRoot, r.root);
-      renderTemplates(r.root);
-      console.log();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "unknown error";
-      console.error(`Error: ${message}`);
-      return 1;
+      writeTreeRuntimeVersion(r.root, bundledVersion);
+    } else {
+      console.log(
+        "Reusing the existing tree framework layout and filling any missing scaffold files...",
+      );
     }
+
+    renderTemplates(frameworkDir, r.root);
+    console.log();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "unknown error";
+    console.error(`Error: ${message}`);
+    return 1;
   }
 
   let seedMembersResult: SeedMembersResult | null = null;
@@ -391,7 +428,11 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
     return 0;
   }
 
-  const output = formatTaskList(groups, taskListContext);
+  const output = formatTaskList(groups, {
+    ...taskListContext,
+    frameworkVersionPath: r.frameworkVersionPath(),
+    progressPath: r.preferredProgressPath(),
+  });
   console.log(output);
   writeProgress(r, output);
   console.log(`Progress file written to ${r.preferredProgressPath()}`);

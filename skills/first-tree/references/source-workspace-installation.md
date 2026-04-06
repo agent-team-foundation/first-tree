@@ -13,10 +13,12 @@ existing source or workspace repository.
 - The current source/workspace repo is **not** the Context Tree.
 - The current source/workspace repo should carry only the installed
   `.agents/skills/first-tree/` and `.claude/skills/first-tree/` skill roots
-  plus a managed `FIRST-TREE-SOURCE-INTEGRATION:` section in root `AGENTS.md`
-  and `CLAUDE.md`.
+  plus `FIRST_TREE.md` and a managed `FIRST-TREE-SOURCE-INTEGRATION:` section
+  in root `AGENTS.md` and `CLAUDE.md`.
 - `NODE.md`, `members/`, and tree-scoped `AGENTS.md` / `CLAUDE.md` content
   belong only in a dedicated `*-context` repo.
+- The dedicated tree repo keeps its local CLI metadata under `.first-tree/`
+  instead of installing another copy of the `first-tree` skill.
 - If a task changes decisions, rationale, ownership, or constraints, update
   the dedicated tree repo rather than copying that material into the source
   repo.
@@ -45,7 +47,7 @@ default workflow is:
 2. Switch into the sibling dedicated tree repo named `<repo>-context`.
 3. Draft the first tree version from the real codebase, docs, and ownership
    signals.
-4. Read `.agents/skills/first-tree/progress.md` as the source of truth for the
+4. Read `.first-tree/progress.md` as the source of truth for the
    onboarding checkpoint, report setup/integration progress separately from
    tree-content baseline coverage, and ask whether to continue the first-pass
    full-tree expansion.
@@ -88,6 +90,8 @@ and publish cannot infer the source repo, pass `--source-repo PATH`.
   dedicated tree repo instead, for example
   `first-tree verify --tree-path ../my-repo-context`.
 - Running `first-tree upgrade` in the source/workspace repo refreshes only
-  the local installed skill plus the `FIRST-TREE-SOURCE-INTEGRATION:` section.
+  the local installed skill, `FIRST_TREE.md`, and the
+  `FIRST-TREE-SOURCE-INTEGRATION:` section.
 - Run `first-tree upgrade --tree-path ../my-repo-context` to upgrade the
-  dedicated tree repo itself.
+  dedicated tree repo itself. That repo keeps its progress and version markers
+  under `.first-tree/`.

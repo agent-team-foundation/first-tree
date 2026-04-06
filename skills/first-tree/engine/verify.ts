@@ -60,7 +60,7 @@ export function runVerify(repo?: Repo, nodeValidator?: NodeValidator): number {
 
   if (r.isLikelySourceRepo() && !r.looksLikeTreeRepo()) {
     console.error(
-      "Error: no installed framework skill found here. This looks like a source/workspace repo. Run `first-tree init` to create a dedicated tree repo, or pass `--tree-path` to verify an existing tree repo.",
+      "Error: no first-tree framework metadata found here. This looks like a source/workspace repo. Run `first-tree init` to create a dedicated tree repo, or pass `--tree-path` to verify an existing tree repo.",
     );
     return 1;
   }

@@ -247,9 +247,8 @@ describe("ciValidation rule", () => {
     const result = ciValidation.evaluate(repo);
     expect(result.tasks).toHaveLength(4);
     expect(result.tasks[0]).toContain("validation workflow");
-    expect(result.tasks[0]).toContain(
-      ".agents/skills/first-tree/assets/framework/workflows/validate.yml",
-    );
+    expect(result.tasks[0]).toContain("validate.yml");
+    expect(result.tasks[0]).toContain("bundled first-tree workflow templates");
     expect(result.tasks[1]).toContain("PR reviews");
     expect(result.tasks[2]).toContain("API secret");
     expect(result.tasks[3]).toContain("CODEOWNERS");

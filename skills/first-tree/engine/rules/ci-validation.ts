@@ -3,7 +3,8 @@ import { join } from "node:path";
 import { INTERACTIVE_TOOL } from "#skill/engine/init.js";
 import type { Repo } from "#skill/engine/repo.js";
 import type { RuleResult } from "#skill/engine/rules/index.js";
-import { FRAMEWORK_WORKFLOWS_DIR } from "#skill/engine/runtime/asset-loader.js";
+
+const BUNDLED_WORKFLOW_SOURCE = "the bundled first-tree workflow templates";
 
 export function evaluate(repo: Repo): RuleResult {
   const tasks: string[] = [];
@@ -41,7 +42,7 @@ export function evaluate(repo: Repo): RuleResult {
   }
   if (!hasValidation) {
     tasks.push(
-      `No validation workflow found — copy \`${FRAMEWORK_WORKFLOWS_DIR}/validate.yml\` to \`.github/workflows/validate.yml\``,
+      `No validation workflow found — copy \`validate.yml\` from ${BUNDLED_WORKFLOW_SOURCE} to \`.github/workflows/validate.yml\``,
     );
   }
   if (!hasPrReview) {
@@ -50,7 +51,7 @@ export function evaluate(repo: Repo): RuleResult {
       "  1. **OpenRouter** — use an OpenRouter API key\n" +
       "  2. **Claude API** — use a Claude API key directly\n" +
       "  3. **Skip** — do not set up PR reviews\n" +
-      `If (1): copy \`${FRAMEWORK_WORKFLOWS_DIR}/pr-review.yml\` to \`.github/workflows/pr-review.yml\` as-is; the repo secret name is \`OPENROUTER_API_KEY\`. ` +
+      "If (1): copy `pr-review.yml` from the bundled first-tree workflow templates to `.github/workflows/pr-review.yml` as-is; the repo secret name is `OPENROUTER_API_KEY`. " +
       "If (2): copy the workflow and replace the `env` block with `ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}`, remove the `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, and `ANTHROPIC_DEFAULT_SONNET_MODEL` lines; the repo secret name is `ANTHROPIC_API_KEY`. " +
       "If (3): skip this and the next task.",
     );
@@ -65,7 +66,7 @@ export function evaluate(repo: Repo): RuleResult {
   }
   if (!hasCodeowners) {
     tasks.push(
-      `No CODEOWNERS workflow found — copy \`${FRAMEWORK_WORKFLOWS_DIR}/codeowners.yml\` to \`.github/workflows/codeowners.yml\` to auto-generate CODEOWNERS from tree ownership on every PR.`,
+      "No CODEOWNERS workflow found — copy `codeowners.yml` from the bundled first-tree workflow templates to `.github/workflows/codeowners.yml` to auto-generate CODEOWNERS from tree ownership on every PR.",
     );
   }
   return { group: "CI / Validation", order: 6, tasks };

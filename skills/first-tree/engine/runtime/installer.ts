@@ -1,10 +1,19 @@
-import { copyFileSync, cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import {
+  copyFileSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   BUNDLED_SKILL_ROOT,
   INSTALLED_SKILL_ROOTS,
   LEGACY_REPO_SKILL_ROOT,
+  TREE_VERSION,
 } from "#skill/engine/runtime/asset-loader.js";
 
 export function resolveBundledPackageRoot(startUrl = import.meta.url): string {
@@ -51,6 +60,15 @@ export function resolveCanonicalSkillRoot(sourceRoot: string): string {
   );
 }
 
+export function resolveCanonicalFrameworkRoot(sourceRoot: string): string {
+  return join(resolveCanonicalSkillRoot(sourceRoot), "assets", "framework");
+}
+
+export function readCanonicalFrameworkVersion(sourceRoot: string): string {
+  const versionPath = join(resolveCanonicalFrameworkRoot(sourceRoot), "VERSION");
+  return readFileSync(versionPath, "utf-8").trim();
+}
+
 export function copyCanonicalSkill(sourceRoot: string, targetRoot: string): void {
   const src = resolveCanonicalSkillRoot(sourceRoot);
   for (const relPath of [
@@ -67,6 +85,12 @@ export function copyCanonicalSkill(sourceRoot: string, targetRoot: string): void
     mkdirSync(dirname(dst), { recursive: true });
     cpSync(src, dst, { recursive: true });
   }
+}
+
+export function writeTreeRuntimeVersion(targetRoot: string, version: string): void {
+  const dst = join(targetRoot, TREE_VERSION);
+  mkdirSync(dirname(dst), { recursive: true });
+  writeFileSync(dst, `${version.trim()}\n`);
 }
 
 export function renderTemplateFile(

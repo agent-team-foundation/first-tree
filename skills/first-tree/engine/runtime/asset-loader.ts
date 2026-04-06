@@ -6,6 +6,11 @@ export const BUNDLED_SKILL_ROOT = join("skills", SKILL_NAME);
 export const SKILL_ROOT = join(".agents", "skills", SKILL_NAME);
 export const CLAUDE_SKILL_ROOT = join(".claude", "skills", SKILL_NAME);
 export const INSTALLED_SKILL_ROOTS = [SKILL_ROOT, CLAUDE_SKILL_ROOT] as const;
+export const FIRST_TREE_INDEX_FILE = "FIRST_TREE.md";
+export const TREE_RUNTIME_ROOT = ".first-tree";
+export const TREE_VERSION = join(TREE_RUNTIME_ROOT, "VERSION");
+export const TREE_PROGRESS = join(TREE_RUNTIME_ROOT, "progress.md");
+export const TREE_BOOTSTRAP_STATE = join(TREE_RUNTIME_ROOT, "bootstrap.json");
 
 export const SKILL_AGENTS_DIR = join(SKILL_ROOT, "agents");
 export const SKILL_REFERENCES_DIR = join(SKILL_ROOT, "references");
@@ -18,7 +23,7 @@ export const FRAMEWORK_PROMPTS_DIR = join(FRAMEWORK_ASSET_ROOT, "prompts");
 export const FRAMEWORK_EXAMPLES_DIR = join(FRAMEWORK_ASSET_ROOT, "examples");
 export const FRAMEWORK_HELPERS_DIR = join(FRAMEWORK_ASSET_ROOT, "helpers");
 export const INSTALLED_PROGRESS = join(SKILL_ROOT, "progress.md");
-export const BOOTSTRAP_STATE = join(SKILL_ROOT, "bootstrap.json");
+export const BOOTSTRAP_STATE = TREE_BOOTSTRAP_STATE;
 export const AGENT_INSTRUCTIONS_FILE = "AGENTS.md";
 export const LEGACY_AGENT_INSTRUCTIONS_FILE = "AGENT.md";
 export const AGENT_INSTRUCTIONS_TEMPLATE = "agents.md.template";
@@ -71,6 +76,7 @@ export const CLAUDE_INSTALLED_PROGRESS = join(
   CLAUDE_SKILL_ROOT,
   "progress.md",
 );
+export const LEGACY_BOOTSTRAP_STATE = join(SKILL_ROOT, "bootstrap.json");
 
 export const LEGACY_REPO_SKILL_ROOT = join("skills", SKILL_NAME);
 export const LEGACY_REPO_SKILL_AGENTS_DIR = join(
@@ -129,6 +135,7 @@ export const LEGACY_EXAMPLES_DIR = join(LEGACY_FRAMEWORK_ROOT, "examples");
 
 export type FrameworkLayout =
   | "skill"
+  | "tree"
   | "claude-skill"
   | "legacy-repo-skill"
   | "legacy";
@@ -155,6 +162,7 @@ export function installedSkillRootsDisplay(): string {
 export function frameworkVersionCandidates(): string[] {
   return [
     FRAMEWORK_VERSION,
+    TREE_VERSION,
     CLAUDE_FRAMEWORK_VERSION,
     LEGACY_REPO_SKILL_VERSION,
     LEGACY_VERSION,
@@ -164,6 +172,7 @@ export function frameworkVersionCandidates(): string[] {
 export function progressFileCandidates(): string[] {
   return [
     INSTALLED_PROGRESS,
+    TREE_PROGRESS,
     CLAUDE_INSTALLED_PROGRESS,
     LEGACY_REPO_SKILL_PROGRESS,
     LEGACY_PROGRESS,
@@ -225,6 +234,9 @@ export function resolveFirstExistingPath(
 export function detectFrameworkLayout(root: string): FrameworkLayout | null {
   if (pathExists(root, FRAMEWORK_VERSION)) {
     return "skill";
+  }
+  if (pathExists(root, TREE_VERSION)) {
+    return "tree";
   }
   if (pathExists(root, CLAUDE_FRAMEWORK_VERSION)) {
     return "claude-skill";

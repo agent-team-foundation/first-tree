@@ -6,12 +6,15 @@ import {
   CLAUDE_FRAMEWORK_VERSION,
   CLAUDE_INSTALLED_PROGRESS,
   FRAMEWORK_VERSION,
+  FIRST_TREE_INDEX_FILE,
   INSTALLED_PROGRESS,
   LEGACY_AGENT_INSTRUCTIONS_FILE,
   LEGACY_PROGRESS,
   LEGACY_REPO_SKILL_PROGRESS,
   LEGACY_REPO_SKILL_VERSION,
   LEGACY_VERSION,
+  TREE_PROGRESS,
+  TREE_VERSION,
   agentInstructionsFileCandidates,
   installedSkillRoots,
   type FrameworkLayout,
@@ -37,6 +40,7 @@ const EMPTY_REPO_ENTRY_ALLOWLIST = new Set([
   "AGENT.md",
   "AGENTS.md",
   "CLAUDE.md",
+  FIRST_TREE_INDEX_FILE,
   "LICENSE",
   "LICENSE.md",
   "LICENSE.txt",
@@ -225,6 +229,9 @@ export class Repo {
     if (layout === "claude-skill") {
       return CLAUDE_INSTALLED_PROGRESS;
     }
+    if (layout === "tree") {
+      return TREE_PROGRESS;
+    }
     return INSTALLED_PROGRESS;
   }
 
@@ -238,6 +245,9 @@ export class Repo {
     }
     if (layout === "claude-skill") {
       return CLAUDE_FRAMEWORK_VERSION;
+    }
+    if (layout === "tree") {
+      return TREE_VERSION;
     }
     return FRAMEWORK_VERSION;
   }

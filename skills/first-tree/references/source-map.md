@@ -34,7 +34,7 @@ The installed skill payload lives under `assets/framework/`.
 | `assets/framework/examples/` | Agent integration examples |
 | `assets/framework/helpers/` | Shipped helper scripts and TypeScript utilities |
 | `assets/framework/helpers/summarize-progress.js` | Optional onboarding checkpoint helper that summarizes `progress.md` into setup-vs-tree progress lanes |
-| `progress.md` | Generated in user repos to track unfinished setup or upgrade tasks |
+| `progress.md` | Generated in source/workspace skill installs; dedicated tree repos keep their task lists under `.first-tree/progress.md` |
 
 ## Framework Engine Surface
 

@@ -1,12 +1,15 @@
 import type { Repo } from "#skill/engine/repo.js";
 import type { RuleResult } from "#skill/engine/rules/index.js";
-import { installedSkillRootsDisplay } from "#skill/engine/runtime/asset-loader.js";
+import {
+  FIRST_TREE_INDEX_FILE,
+  installedSkillRootsDisplay,
+} from "#skill/engine/runtime/asset-loader.js";
 
 export function evaluate(repo: Repo): RuleResult {
   const tasks: string[] = [];
   if (!repo.hasFramework()) {
     tasks.push(
-      `${installedSkillRootsDisplay()} not found — run \`first-tree init\` to install the framework skill bundled with the current \`first-tree\` package`,
+      `Framework metadata not found — run \`first-tree init\` to install ${installedSkillRootsDisplay()} plus \`${FIRST_TREE_INDEX_FILE}\` in a source/workspace repo, or bootstrap a dedicated tree repo with \`.first-tree/\` metadata`,
     );
   }
   return { group: "Framework", order: 1, tasks };

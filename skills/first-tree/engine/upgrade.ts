@@ -10,7 +10,7 @@ import {
   FRAMEWORK_WORKFLOWS_DIR,
   FRAMEWORK_TEMPLATES_DIR,
   FRAMEWORK_VERSION,
-  INSTALLED_PROGRESS,
+  FIRST_TREE_INDEX_FILE,
   LEGACY_AGENT_INSTRUCTIONS_FILE,
   LEGACY_FRAMEWORK_ROOT,
   LEGACY_REPO_SKILL_ROOT,
@@ -22,8 +22,12 @@ import {
 import {
   copyCanonicalSkill,
   resolveBundledPackageRoot,
+  writeTreeRuntimeVersion,
 } from "#skill/engine/runtime/installer.js";
-import { upsertSourceIntegrationFiles } from "#skill/engine/runtime/source-integration.js";
+import {
+  upsertFirstTreeIndexFile,
+  upsertSourceIntegrationFiles,
+} from "#skill/engine/runtime/source-integration.js";
 import {
   compareFrameworkVersions,
   readSourceVersion,
@@ -48,16 +52,26 @@ function formatUpgradeTaskList(
   packagedVersion: string,
   layout: FrameworkLayout,
 ): string {
-  const lines: string[] = [
-    `# Context Tree Upgrade — v${localVersion} -> v${packagedVersion}\n`,
-    "## Installed Skill",
-    `- [ ] Review local customizations under ${installedSkillRootsDisplay()} and reapply them if needed`,
-    `- [ ] Re-copy any workflow updates you want from \`${FRAMEWORK_WORKFLOWS_DIR}/\` into \`.github/workflows/\``,
-    `- [ ] Re-check any local agent setup that references \`${CLAUDE_SKILL_ROOT}/assets/framework/examples/\` or \`${CLAUDE_SKILL_ROOT}/assets/framework/helpers/\``,
-    `- [ ] Re-check any repo scripts or workflow files that reference \`${SKILL_ROOT}/assets/framework/\``,
-    "- [ ] Replace any stale `context-tree` CLI command references in repo-specific docs, scripts, workflows, or agent config with `first-tree`",
-    "",
-  ];
+  const lines: string[] = [`# Context Tree Upgrade — v${localVersion} -> v${packagedVersion}\n`];
+
+  if (layout === "tree") {
+    lines.push(
+      "## Tree Metadata",
+      "- [ ] Review any repo docs, hooks, or automation that still assume the dedicated tree repo keeps local `.agents/skills/first-tree/` or `.claude/skills/first-tree/` copies",
+      "- [ ] Replace any stale `context-tree` CLI command references in repo-specific docs, scripts, workflows, or agent config with `first-tree`",
+      "",
+    );
+  } else {
+    lines.push(
+      "## Installed Skill",
+      `- [ ] Review local customizations under ${installedSkillRootsDisplay()} and reapply them if needed`,
+      `- [ ] Re-copy any workflow updates you want from \`${FRAMEWORK_WORKFLOWS_DIR}/\` into \`.github/workflows/\``,
+      `- [ ] Re-check any local agent setup that references \`${CLAUDE_SKILL_ROOT}/assets/framework/examples/\` or \`${CLAUDE_SKILL_ROOT}/assets/framework/helpers/\``,
+      `- [ ] Re-check any repo scripts or workflow files that reference \`${SKILL_ROOT}/assets/framework/\``,
+      "- [ ] Replace any stale `context-tree` CLI command references in repo-specific docs, scripts, workflows, or agent config with `first-tree`",
+      "",
+    );
+  }
 
   const migrationTasks: string[] = [];
   if (layout === "legacy") {
@@ -91,21 +105,25 @@ function formatUpgradeTaskList(
   if (repo.hasAgentInstructionsMarkers()) {
     lines.push(
       "## Agent Instructions",
-      `- [ ] Compare the framework section in \`${AGENT_INSTRUCTIONS_FILE}\` with \`${FRAMEWORK_TEMPLATES_DIR}/${AGENT_INSTRUCTIONS_TEMPLATE}\` and update the content between the markers if needed`,
-      `- [ ] Compare the framework section in \`${CLAUDE_INSTRUCTIONS_FILE}\` with \`${FRAMEWORK_TEMPLATES_DIR}/${CLAUDE_INSTRUCTIONS_TEMPLATE}\` and update the content between the markers if needed`,
+      layout === "tree"
+        ? `- [ ] Compare the framework section in \`${AGENT_INSTRUCTIONS_FILE}\` with the bundled \`${AGENT_INSTRUCTIONS_TEMPLATE}\` template and update the text between the markers if needed`
+        : `- [ ] Compare the framework section in \`${AGENT_INSTRUCTIONS_FILE}\` with \`${FRAMEWORK_TEMPLATES_DIR}/${AGENT_INSTRUCTIONS_TEMPLATE}\` and update the content between the markers if needed`,
+      layout === "tree"
+        ? `- [ ] Compare the framework section in \`${CLAUDE_INSTRUCTIONS_FILE}\` with the bundled \`${CLAUDE_INSTRUCTIONS_TEMPLATE}\` template and update the text between the markers if needed`
+        : `- [ ] Compare the framework section in \`${CLAUDE_INSTRUCTIONS_FILE}\` with \`${FRAMEWORK_TEMPLATES_DIR}/${CLAUDE_INSTRUCTIONS_TEMPLATE}\` and update the content between the markers if needed`,
       "",
     );
   }
 
   lines.push(
     "## Verification",
-    `- [ ] \`${FRAMEWORK_VERSION}\` reads \`${packagedVersion}\``,
+    `- [ ] \`${repo.frameworkVersionPath()}\` reads \`${packagedVersion}\``,
     "- [ ] `first-tree verify` passes",
     "",
     "---",
     "",
     "**Important:** As you complete each task, check it off in" +
-      ` \`${INSTALLED_PROGRESS}\` by changing \`- [ ]\` to \`- [x]\`.` +
+      ` \`${repo.preferredProgressPath()}\` by changing \`- [ ]\` to \`- [x]\`.` +
       " Run `first-tree verify` when done — it will fail if any" +
       " items remain unchecked.",
     "",
@@ -132,7 +150,7 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
 
   if (!workingRepo.hasFramework()) {
     console.error(
-      "Error: no installed framework skill found. Run `first-tree init` first.",
+      "Error: no first-tree framework metadata found. Run `first-tree init` first.",
     );
     return 1;
   }
@@ -140,7 +158,7 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
   const layout = workingRepo.frameworkLayout();
   if (layout === null) {
     console.error(
-      "Error: no installed framework skill found. Run `first-tree init` first.",
+      "Error: no first-tree framework metadata found. Run `first-tree init` first.",
     );
     return 1;
   }
@@ -182,6 +200,10 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
   const sourceRepoTreePathHint = `../${workingRepo.repoName()}-context`;
 
   if (workspaceOnlyIntegration) {
+    const firstTreeIndex = upsertFirstTreeIndexFile(
+      workingRepo.root,
+      `${workingRepo.repoName()}-context`,
+    );
     if (
       layout === "skill" &&
       missingInstalledRoots.length === 0 &&
@@ -194,7 +216,14 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
       const changedFiles = updates
         .filter((update) => update.action !== "unchanged")
         .map((update) => update.file);
-      if (changedFiles.length === 0) {
+      const indexChanged =
+        firstTreeIndex.action === "created" || firstTreeIndex.action === "updated";
+      if (changedFiles.length === 0 && !indexChanged) {
+        if (firstTreeIndex.action === "skipped") {
+          console.log(
+            `Left \`${FIRST_TREE_INDEX_FILE}\` unchanged because it already contains unmanaged content.`,
+          );
+        }
         console.log(
           `Already up to date with the bundled skill (${FRAMEWORK_VERSION} = ${localVersion}).`,
         );
@@ -206,9 +235,24 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
       console.log(
         `Already up to date with the bundled skill (${FRAMEWORK_VERSION} = ${localVersion}).`,
       );
-      console.log(
-        `Updated the ${SOURCE_INTEGRATION_MARKER} marker lines in ${changedFiles.map((file) => `\`${file}\``).join(" and ")}.`,
-      );
+      if (firstTreeIndex.action === "created") {
+        console.log(`Created \`${FIRST_TREE_INDEX_FILE}\`.`);
+      } else if (firstTreeIndex.action === "updated") {
+        console.log(`Updated \`${FIRST_TREE_INDEX_FILE}\`.`);
+      } else if (firstTreeIndex.action === "skipped") {
+        console.log(
+          `Left \`${FIRST_TREE_INDEX_FILE}\` unchanged because it already contains unmanaged content.`,
+        );
+      }
+      if (changedFiles.length > 0) {
+        console.log(
+          `Updated the ${SOURCE_INTEGRATION_MARKER} marker lines in ${changedFiles.map((file) => `\`${file}\``).join(" and ")}.`,
+        );
+      } else {
+        console.log(
+          `The ${SOURCE_INTEGRATION_MARKER} marker lines in ${AGENT_INSTRUCTIONS_FILE} and ${CLAUDE_INSTRUCTIONS_FILE} were already current.`,
+        );
+      }
       console.log(
         `This repo only carries source/workspace integration. Upgrade the dedicated tree repo separately with \`first-tree upgrade --tree-path ${sourceRepoTreePathHint}\`.`,
       );
@@ -226,6 +270,15 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
     console.log(
       `Refreshed ${installedSkillRootsDisplay()} in this source/workspace repo.`,
     );
+    if (firstTreeIndex.action === "created") {
+      console.log(`Created \`${FIRST_TREE_INDEX_FILE}\`.`);
+    } else if (firstTreeIndex.action === "updated") {
+      console.log(`Updated \`${FIRST_TREE_INDEX_FILE}\`.`);
+    } else if (firstTreeIndex.action === "skipped") {
+      console.log(
+        `Left \`${FIRST_TREE_INDEX_FILE}\` unchanged because it already contains unmanaged content.`,
+      );
+    }
     if (changedFiles.length > 0) {
       console.log(
         `Updated the ${SOURCE_INTEGRATION_MARKER} marker lines in ${changedFiles.map((file) => `\`${file}\``).join(" and ")}.`,
@@ -238,6 +291,31 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
     console.log(
       `This repo is not the Context Tree. Upgrade the dedicated tree repo separately with \`first-tree upgrade --tree-path ${sourceRepoTreePathHint}\`.`,
     );
+    return 0;
+  }
+
+  if (layout === "tree") {
+    if (packagedVersion === localVersion) {
+      console.log(
+        `Already up to date with the bundled tree metadata (${workingRepo.frameworkVersionPath()} = ${localVersion}).`,
+      );
+      return 0;
+    }
+
+    writeTreeRuntimeVersion(workingRepo.root, packagedVersion);
+    console.log(
+      `Refreshed dedicated tree metadata at \`${workingRepo.frameworkVersionPath()}\`.`,
+    );
+
+    const output = formatUpgradeTaskList(
+      workingRepo,
+      localVersion,
+      packagedVersion,
+      layout,
+    );
+    console.log(`\n${output}`);
+    writeProgress(workingRepo, output);
+    console.log(`Progress file written to ${workingRepo.preferredProgressPath()}`);
     return 0;
   }
 

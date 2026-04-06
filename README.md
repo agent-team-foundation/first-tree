@@ -35,7 +35,7 @@ The npm package and installed CLI command are both `first-tree`.
 ## Quick Start
 
 Recommended workflow: start from your source or workspace repo and let
-`first-tree init` installs local source/workspace integration and creates a
+`first-tree init` install local source/workspace integration and create a
 sibling dedicated tree repo.
 
 ```bash
@@ -65,15 +65,16 @@ Do not use it inside the source/workspace repo unless you intentionally want
 that repo itself to become the Context Tree.
 
 - `first-tree init` installs `.agents/skills/first-tree/` and
-  `.claude/skills/first-tree/` in the current source/workspace repo, appends a
-  single `FIRST-TREE-SOURCE-INTEGRATION:` line to root `AGENTS.md` and
-  `CLAUDE.md`, then creates `NODE.md`, tree-scoped `AGENTS.md`,
-  tree-scoped `CLAUDE.md`, `members/NODE.md`, and a checklist in the dedicated tree repo at
-  `.agents/skills/first-tree/progress.md`.
+  `.claude/skills/first-tree/` plus `FIRST_TREE.md` in the current
+  source/workspace repo, appends a managed
+  `FIRST-TREE-SOURCE-INTEGRATION:` section to root `AGENTS.md` and `CLAUDE.md`,
+  then creates `NODE.md`, tree-scoped `AGENTS.md`, tree-scoped `CLAUDE.md`,
+  `members/NODE.md`, and a checklist in the dedicated tree repo at
+  `.first-tree/progress.md`.
 - `first-tree init --seed-members contributors` also seeds
   `members/*/NODE.md` in the target tree repo from GitHub contributors when
   available, and falls back to local git history otherwise.
-- Never create `NODE.md`, `members/`, or tree-scoped `AGENTS.md` in the
+- Never create `NODE.md`, `members/`, or tree-scoped `AGENTS.md` / `CLAUDE.md` in the
   source/workspace repo. Those files live only in the dedicated `*-context`
   repo.
 - After drafting the initial tree version, run `first-tree publish --open-pr`
@@ -88,10 +89,10 @@ that repo itself to become the Context Tree.
   are complete.
 - `first-tree upgrade` refreshes the installed skill from the currently
   running `first-tree` npm package. In a source/workspace repo it refreshes
-  only the local installed skill plus the
-  `FIRST-TREE-SOURCE-INTEGRATION:` line; use `--tree-path` to upgrade the
-  dedicated tree repo. To force the newest published package for a one-off
-  upgrade, run `npx first-tree@latest upgrade`.
+  only the local installed skill, `FIRST_TREE.md`, plus the
+  `FIRST-TREE-SOURCE-INTEGRATION:` section; use `--tree-path` to upgrade the
+  dedicated tree repo's `.first-tree/` metadata. To force the newest published
+  package for a one-off upgrade, run `npx first-tree@latest upgrade`.
 
 The package carries the bundled canonical skill, so `init` and `upgrade`
 install from the package payload instead of cloning this source repo at
@@ -114,7 +115,9 @@ runtime.
 - The npm package is `first-tree`.
 - The installed CLI command is also `first-tree`.
 - The installed skill directories inside a user tree are
-  `.agents/skills/first-tree/` and `.claude/skills/first-tree/`.
+  `.agents/skills/first-tree/` and `.claude/skills/first-tree/` in a
+  source/workspace repo.
+- Dedicated tree repos keep their local CLI metadata under `.first-tree/`.
 - The published package keeps its bundled canonical source under
   `skills/first-tree/`.
 - When maintainer docs say "the `first-tree` skill", they mean that bundled
@@ -138,7 +141,8 @@ runtime.
 - `skills/first-tree/` is the canonical source for framework behavior, shipped
   templates, maintainer references, and validation logic.
 - `first-tree init` installs that bundled skill into `.agents/skills/first-tree/`
-  and `.claude/skills/first-tree/` inside user repos.
+  and `.claude/skills/first-tree/` inside source/workspace repos, and writes
+  `.first-tree/` metadata only inside dedicated tree repos.
 - `evals/` is maintainer-only developer tooling for the source repo. It is
   intentionally not part of the published package.
 

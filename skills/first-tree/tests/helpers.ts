@@ -13,6 +13,7 @@ import {
   LEGACY_REPO_SKILL_VERSION,
   LEGACY_VERSION,
   SKILL_ROOT,
+  TREE_VERSION,
 } from "#skill/engine/runtime/asset-loader.js";
 
 interface TmpDir {
@@ -42,6 +43,11 @@ export function makeFramework(root: string, version = "0.1.0"): void {
     join(root, CLAUDE_SKILL_ROOT, "assets", "framework", "VERSION"),
     `${version}\n`,
   );
+}
+
+export function makeTreeMetadata(root: string, version = "0.1.0"): void {
+  mkdirSync(join(root, ".first-tree"), { recursive: true });
+  writeFileSync(join(root, TREE_VERSION), `${version}\n`);
 }
 
 export function makeGitRepo(root: string): void {

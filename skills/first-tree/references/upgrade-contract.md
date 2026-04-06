@@ -15,8 +15,7 @@ rules we keep for legacy `skills/first-tree/` and `.context-tree/` repos.
 
 ## Installed Layout
 
-The current installed layout in a source/workspace repo or dedicated tree repo
-is:
+The current installed layout in a source/workspace repo is:
 
 ```text
 .agents/
@@ -48,26 +47,36 @@ is:
           prompts/
           examples/
           helpers/
+FIRST_TREE.md
 ```
 
 For a source/workspace repo, the local integration stops there. It should also
 carry a managed `FIRST-TREE-SOURCE-INTEGRATION:` section in root `AGENTS.md`
 and `CLAUDE.md`, but it must not contain tree content.
 
-For a dedicated tree repo, the tree content still lives outside the skill:
+The current dedicated tree repo layout is:
+
+```text
+.first-tree/
+  VERSION
+  progress.md
+  bootstrap.json
+NODE.md
+AGENTS.md
+members/
+```
+
+The dedicated tree repo does **not** need local `.agents/skills/first-tree/`
+or `.claude/skills/first-tree/` copies. Tree content still lives outside the
+metadata directory:
 
 - `NODE.md`
 - `AGENTS.md`
 - `CLAUDE.md`
 - `members/`
-- `.agents/skills/first-tree/bootstrap.json` when `first-tree init` was run
-  from a separate source/workspace repo and the publish workflow needs to
-  remember that source repo path
-
-The repo-owned `.agents/skills/first-tree/` path is the primary installed root
-for progress state, workflow references, and helper scripts. The matching
-`.claude/skills/first-tree/` path mirrors the same payload for Claude-facing
-skill discovery and hooks.
+- `.first-tree/bootstrap.json` when `first-tree init` was run from a separate
+  source/workspace repo and the publish workflow needs to remember that source
+  repo path
 
 ## Command Intent
 
@@ -76,17 +85,19 @@ skill discovery and hooks.
     tree repo by default
   - installs the skill into the source/workspace repo without creating tree
     files there
+  - writes `FIRST_TREE.md` in the source/workspace repo as an easy entrypoint
+    to the installed references
   - upserts the managed `FIRST-TREE-SOURCE-INTEGRATION:` section in root
     `AGENTS.md` and `CLAUDE.md`
-  - installs the skill into the target tree repo
+  - does **not** install the skill into the target tree repo
   - renders top-level tree scaffolding only in the target tree repo
+  - renders both `AGENTS.md` and `CLAUDE.md` in the target tree repo
   - may optionally seed `members/*/NODE.md` from repository contributor history
     when `--seed-members contributors` is set
-  - renders both `AGENTS.md` and `CLAUDE.md` in the target tree repo
-  - writes progress state only to the dedicated tree repo at
-    `.agents/skills/first-tree/progress.md`
+  - writes dedicated-tree metadata to `.first-tree/`, including
+    `.first-tree/progress.md`
 - `first-tree verify`
-  - checks progress state from the installed skill
+  - checks progress state from the installed tree metadata
   - validates root/frontmatter/agent markers
   - runs node and member validators
   - must reject source/workspace repos that carry only local integration
@@ -94,16 +105,17 @@ skill discovery and hooks.
   - is the explicit second-stage command for publishing a dedicated tree repo
     to GitHub after local bootstrap
   - reads dedicated-tree bootstrap metadata from
-    `.agents/skills/first-tree/bootstrap.json` when available
+    `.first-tree/bootstrap.json` when available
   - may create or reuse the GitHub `*-context` repo, push tree commits, add it
     back to the source/workspace repo as a git submodule, and optionally open
     the source-repo PR
 - `first-tree upgrade`
   - compares the installed skill payload version to the skill bundled with the
     currently running `first-tree` package
-  - refreshes the installed skill payload without overwriting tree content
+  - refreshes the current install metadata without overwriting tree content
   - when run in a source/workspace repo, refreshes only the local installed
-    skill plus the `FIRST-TREE-SOURCE-INTEGRATION:` section
+    skill, `FIRST_TREE.md`, plus the `FIRST-TREE-SOURCE-INTEGRATION:` section
+  - when run in a dedicated tree repo, refreshes only `.first-tree/`
   - migrates repos that still use the previous `skills/first-tree/` path onto
     `.agents/skills/first-tree/` and `.claude/skills/first-tree/`
   - migrates legacy `.context-tree/` repos onto the installed skill layout
@@ -120,11 +132,10 @@ skill discovery and hooks.
 - Source/workspace repos must never receive `NODE.md`, `members/`, or
   tree-scoped `AGENTS.md` / `CLAUDE.md` from default init flows.
 - Normal `first-tree init` and `first-tree upgrade` flows do not clone the
-  tree-scoped `AGENTS.md` / `CLAUDE.md` from default init flows.
-- Normal `first-tree init` and `first-tree upgrade` flows do not clone the
   source repo or require network access.
 - `first-tree verify` may still read a legacy
-  `.claude/skills/first-tree/...`, `skills/first-tree/...`, or
+  `.claude/skills/first-tree/...`, `.agents/skills/first-tree/...`,
+  `skills/first-tree/...`, or
   `.context-tree/...` layout in an existing user repo so the repo can be
   repaired or upgraded in place.
 - `first-tree upgrade` must migrate either legacy layout onto

@@ -6,7 +6,7 @@ export function evaluate(repo: Repo): RuleResult {
   const tasks: string[] = [];
 
   tasks.push(
-    "Read `progress.md` (normally `.agents/skills/first-tree/progress.md`) as the source of truth for the onboarding checkpoint before you ask about deeper tree population. " +
+    "Read `progress.md` (normally `.first-tree/progress.md` in a dedicated tree repo) as the source of truth for the onboarding checkpoint before you ask about deeper tree population. " +
       "Tell the user what is already done and what remains, and split the report into at least two lanes: " +
       "(1) setup / source-workspace integration progress and (2) tree-content baseline coverage progress. " +
       "Highlight the remaining work categories, and prefer phrases like `baseline coverage` or `first pass` instead of claiming the tree is fully complete.",

@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 export const DEFAULT_PROGRESS_PATHS = [
+  ".first-tree/progress.md",
   ".agents/skills/first-tree/progress.md",
   "skills/first-tree/progress.md",
   ".context-tree/progress.md",

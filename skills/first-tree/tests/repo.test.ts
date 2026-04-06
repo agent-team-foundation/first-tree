@@ -14,6 +14,8 @@ import {
   LEGACY_PROGRESS,
   LEGACY_VERSION,
   SOURCE_INTEGRATION_MARKER,
+  TREE_PROGRESS,
+  TREE_VERSION,
 } from "#skill/engine/runtime/asset-loader.js";
 import {
   useTmpDir,
@@ -24,6 +26,7 @@ import {
   makeLegacyRepoFramework,
   makeSourceRepo,
   makeSourceSkill,
+  makeTreeMetadata,
 } from "./helpers.js";
 
 // --- pathExists ---
@@ -179,6 +182,13 @@ describe("hasFramework", () => {
     expect(repo.hasFramework()).toBe(true);
   });
 
+  it("returns true with dedicated tree metadata", () => {
+    const tmp = useTmpDir();
+    makeTreeMetadata(tmp.path);
+    const repo = new Repo(tmp.path);
+    expect(repo.hasFramework()).toBe(true);
+  });
+
   it("returns true with the previous workspace skill path", () => {
     const tmp = useTmpDir();
     makeLegacyRepoFramework(tmp.path);
@@ -208,6 +218,13 @@ describe("readVersion", () => {
     makeLegacyFramework(tmp.path, "0.3.0");
     const repo = new Repo(tmp.path);
     expect(repo.readVersion()).toBe("0.3.0");
+  });
+
+  it("reads the dedicated tree metadata version", () => {
+    const tmp = useTmpDir();
+    makeTreeMetadata(tmp.path, "0.2.5");
+    const repo = new Repo(tmp.path);
+    expect(repo.readVersion()).toBe("0.2.5");
   });
 
   it("reads the previous workspace skill version", () => {
@@ -240,6 +257,14 @@ describe("path preferences", () => {
     const repo = new Repo(tmp.path);
     expect(repo.preferredProgressPath()).toBe(LEGACY_PROGRESS);
     expect(repo.frameworkVersionPath()).toBe(LEGACY_VERSION);
+  });
+
+  it("switches path preferences for dedicated tree metadata", () => {
+    const tmp = useTmpDir();
+    makeTreeMetadata(tmp.path);
+    const repo = new Repo(tmp.path);
+    expect(repo.preferredProgressPath()).toBe(TREE_PROGRESS);
+    expect(repo.frameworkVersionPath()).toBe(TREE_VERSION);
   });
 
   it("switches path preferences for repos using the previous workspace skill path", () => {
@@ -425,7 +450,7 @@ describe("init heuristics", () => {
 
   it("recognizes a populated tree repo", () => {
     const tmp = useTmpDir();
-    makeFramework(tmp.path);
+    makeTreeMetadata(tmp.path);
     writeFileSync(
       join(tmp.path, "NODE.md"),
       "---\ntitle: My Tree\nowners: [alice]\n---\n# Tree\n",
