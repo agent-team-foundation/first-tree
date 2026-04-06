@@ -212,10 +212,7 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
   );
 
   if (workspaceOnlyIntegration) {
-    const firstTreeIndex = upsertFirstTreeIndexFile(
-      workingRepo.root,
-      treeRepoName,
-    );
+    const firstTreeIndex = upsertFirstTreeIndexFile(workingRepo.root);
     if (
       layout === "skill" &&
       missingInstalledRoots.length === 0 &&

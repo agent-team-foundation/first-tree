@@ -70,9 +70,10 @@ repos.
   tree-scoped `AGENTS.md` / `CLAUDE.md` there.
 - `first-tree init` defaults to creating or reusing a sibling dedicated tree
   repo when invoked from a source/workspace repo. It installs the bundled skill
-  into the source/workspace repo, writes `FIRST_TREE.md` there, and scaffolds
-  tree files only in the dedicated tree repo. Use `--here` to initialize the
-  current repo in place when you are already inside the tree repo.
+  into the source/workspace repo, links `FIRST_TREE.md` to
+  `.agents/skills/first-tree/references/about.md` there, and scaffolds tree
+  files only in the dedicated tree repo. Use `--here` to initialize the current
+  repo in place when you are already inside the tree repo.
 - `first-tree publish --open-pr` is the default second-stage command after
   `init` for source/workspace installs. Run it from the dedicated tree repo
   once the initial tree version is ready to push.
@@ -118,7 +119,7 @@ repos.
   bootstrap in the source/workspace repo.
 - `first-tree upgrade` refreshes the installed skill from the copy bundled
   with the currently running `first-tree` package. In a source/workspace repo
-  it refreshes only the local skill, `FIRST_TREE.md`, plus the
+  it refreshes only the local skill, the `FIRST_TREE.md` symlink, plus the
   `FIRST-TREE-SOURCE-INTEGRATION:` section; upgrade the dedicated tree repo
   separately with `--tree-path`. Dedicated tree repos refresh only
   `.first-tree/`. To pick up a newer framework, run a newer package version

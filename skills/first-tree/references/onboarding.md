@@ -67,8 +67,9 @@ Information an agent needs to **decide** on an approach — not to execute it.
 ### Step 1: Initialize
 
 Recommended workflow: run `first-tree init` from your source or workspace repo.
-The CLI will install the bundled skill in the current repo, update root
-`FIRST_TREE.md`, `AGENTS.md`, and `CLAUDE.md` with a managed
+The CLI will install the bundled skill in the current repo, create a root
+`FIRST_TREE.md` symlink to `.agents/skills/first-tree/references/about.md`,
+update `AGENTS.md` and `CLAUDE.md` with a managed
 `FIRST-TREE-SOURCE-INTEGRATION:` section, and create a sibling dedicated tree
 repo named `<repo>-tree` by default. If a sibling or bound `<repo>-context`
 already exists, `init` reuses it instead of renaming it. Tree files are
@@ -101,11 +102,11 @@ Do not use it inside the source/workspace repo unless you intentionally want
 that repo itself to become the Context Tree.
 
 From a source/workspace repo, `init` installs `.agents/skills/first-tree/`,
-`.claude/skills/first-tree/`, and `FIRST_TREE.md` only in that source repo.
-The dedicated tree repo keeps its local metadata under `.first-tree/`, renders
-scaffolding (`NODE.md`, `AGENTS.md`, `CLAUDE.md`, `members/NODE.md`), and
-generates a task list in `.first-tree/progress.md`. When
-`--seed-members contributors` is set, init also attempts to create
+`.claude/skills/first-tree/`, and the `FIRST_TREE.md` symlink only in that
+source repo. The dedicated tree repo keeps its local metadata under
+`.first-tree/`, renders scaffolding (`NODE.md`, `AGENTS.md`, `CLAUDE.md`,
+`members/NODE.md`), and generates a task list in `.first-tree/progress.md`.
+When `--seed-members contributors` is set, init also attempts to create
 `members/*/NODE.md` from GitHub contributor data and falls back to local git
 history if GitHub metadata is unavailable.
 
@@ -203,7 +204,7 @@ unchecked, and runs deterministic checks (valid frontmatter, node structure,
 member nodes exist).
 
 Do not run `first-tree verify` in the source/workspace repo itself. That repo
-only carries the installed skill, `FIRST_TREE.md`, plus the
+only carries the installed skill, the `FIRST_TREE.md` symlink, plus the
 `FIRST-TREE-SOURCE-INTEGRATION:` section.
 
 ### Step 4: Design Your Domains
@@ -262,7 +263,7 @@ the currently running `first-tree` npm package, preserves your tree content,
 and generates follow-up tasks.
 
 If you run `first-tree upgrade` in the source/workspace repo, it refreshes
-only the local installed skill, `FIRST_TREE.md`, plus the
+only the local installed skill, the `FIRST_TREE.md` symlink, plus the
 `FIRST-TREE-SOURCE-INTEGRATION:` section.
 Run `first-tree upgrade --tree-path ../my-org-tree` to upgrade the
 dedicated tree repo itself. If your source/workspace repo is already bound to

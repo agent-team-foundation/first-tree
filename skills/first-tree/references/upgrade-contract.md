@@ -85,8 +85,8 @@ metadata directory:
     tree repo by default
   - installs the skill into the source/workspace repo without creating tree
     files there
-  - writes `FIRST_TREE.md` in the source/workspace repo as an easy entrypoint
-    to the installed references
+  - creates `FIRST_TREE.md` in the source/workspace repo as a symlink to the
+    installed `references/about.md` entrypoint
   - upserts the managed `FIRST-TREE-SOURCE-INTEGRATION:` section in root
     `AGENTS.md` and `CLAUDE.md`
   - does **not** install the skill into the target tree repo
@@ -114,7 +114,8 @@ metadata directory:
     currently running `first-tree` package
   - refreshes the current install metadata without overwriting tree content
   - when run in a source/workspace repo, refreshes only the local installed
-    skill, `FIRST_TREE.md`, plus the `FIRST-TREE-SOURCE-INTEGRATION:` section
+    skill, the `FIRST_TREE.md` symlink, plus the
+    `FIRST-TREE-SOURCE-INTEGRATION:` section
   - when run in a dedicated tree repo, refreshes only `.first-tree/`
   - migrates repos that still use the previous `skills/first-tree/` path onto
     `.agents/skills/first-tree/` and `.claude/skills/first-tree/`

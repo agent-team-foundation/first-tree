@@ -1,5 +1,12 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
@@ -38,6 +45,13 @@ describe("skill artifacts", () => {
       existsSync(join(ROOT, "skills", "first-tree", "engine", "member-seeding.ts")),
     ).toBe(true);
     expect(existsSync(join(ROOT, "AGENTS.md"))).toBe(true);
+    expect(existsSync(join(ROOT, "FIRST_TREE.md"))).toBe(true);
+    expect(lstatSync(join(ROOT, "CLAUDE.md")).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(join(ROOT, "CLAUDE.md"))).toBe("AGENTS.md");
+    expect(lstatSync(join(ROOT, "FIRST_TREE.md")).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(join(ROOT, "FIRST_TREE.md"))).toBe(
+      "skills/first-tree/references/about.md",
+    );
     expect(existsSync(join(ROOT, "skills", "first-tree", "tests", "init.test.ts"))).toBe(
       true,
     );

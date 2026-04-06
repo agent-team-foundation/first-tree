@@ -1,5 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -189,6 +196,14 @@ function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function expectFirstTreeIndexSymlink(root: string): void {
+  const path = join(root, FIRST_TREE_INDEX_FILE);
+  expect(lstatSync(path).isSymbolicLink()).toBe(true);
+  expect(readlinkSync(path)).toBe(
+    join(".agents", "skills", "first-tree", "references", "about.md"),
+  );
+}
+
 describe("runInit", () => {
   it("errors when not a git repo", () => {
     const tmp = useTmpDir();
@@ -284,9 +299,7 @@ describe("runInit", () => {
     expect(
       readFileSync(join(sourceRepoDir.path, CLAUDE_INSTRUCTIONS_FILE), "utf-8"),
     ).toContain(buildSourceIntegrationBlock(basename(treeRepo)));
-    expect(
-      readFileSync(join(sourceRepoDir.path, FIRST_TREE_INDEX_FILE), "utf-8"),
-    ).toContain(".agents/skills/first-tree/references/about.md");
+    expectFirstTreeIndexSymlink(sourceRepoDir.path);
     expect(
       existsSync(join(treeRepo, ".agents", "skills", "first-tree", "SKILL.md")),
     ).toBe(false);
@@ -371,6 +384,33 @@ describe("runInit", () => {
     expect(
       readFileSync(join(sourceRepoDir.path, FIRST_TREE_INDEX_FILE), "utf-8"),
     ).toBe("# Custom entrypoint\n");
+  });
+
+  it("migrates a previously managed FIRST_TREE.md to a symlink", () => {
+    const sourceRepoDir = useTmpDir();
+    const sourceSkillDir = useTmpDir();
+    makeSourceRepo(sourceRepoDir.path);
+    makeSourceSkill(sourceSkillDir.path, "0.2.0");
+    writeFileSync(
+      join(sourceRepoDir.path, FIRST_TREE_INDEX_FILE),
+      [
+        "# First Tree",
+        "",
+        "<!-- BEGIN FIRST-TREE INDEX -->",
+        "legacy managed entrypoint",
+        "<!-- END FIRST-TREE INDEX -->",
+        "",
+      ].join("\n"),
+    );
+
+    expect(
+      runInit(new Repo(sourceRepoDir.path), {
+        sourceRoot: sourceSkillDir.path,
+        gitInitializer: fakeGitInitializer,
+      }),
+    ).toBe(0);
+
+    expectFirstTreeIndexSymlink(sourceRepoDir.path);
   });
 
   it("keeps supporting in-place init with --here", () => {

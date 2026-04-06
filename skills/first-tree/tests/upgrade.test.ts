@@ -1,4 +1,10 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  readFileSync,
+  readlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { basename, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { Repo } from "#skill/engine/repo.js";
@@ -26,6 +32,14 @@ import {
   makeTreeMetadata,
   useTmpDir,
 } from "./helpers.js";
+
+function expectFirstTreeIndexSymlink(root: string): void {
+  const path = join(root, FIRST_TREE_INDEX_FILE);
+  expect(lstatSync(path).isSymbolicLink()).toBe(true);
+  expect(readlinkSync(path)).toBe(
+    join(".agents", "skills", "first-tree", "references", "about.md"),
+  );
+}
 
 describe("runUpgrade", () => {
   it("migrates a legacy repo to the installed skill layout", () => {
@@ -160,9 +174,42 @@ describe("runUpgrade", () => {
     expect(readFileSync(join(repoDir.path, CLAUDE_INSTRUCTIONS_FILE), "utf-8")).toContain(
       expectedBlock,
     );
-    expect(readFileSync(join(repoDir.path, FIRST_TREE_INDEX_FILE), "utf-8")).toContain(
-      ".agents/skills/first-tree/references/about.md",
+    expectFirstTreeIndexSymlink(repoDir.path);
+    expect(existsSync(join(repoDir.path, INSTALLED_PROGRESS))).toBe(false);
+  });
+
+  it("migrates a managed FIRST_TREE.md to a symlink even when the installed skill is already current", () => {
+    const repoDir = useTmpDir();
+    const sourceDir = useTmpDir();
+    makeSourceRepo(repoDir.path);
+    makeFramework(repoDir.path, "0.2.0");
+    writeFileSync(
+      join(repoDir.path, AGENT_INSTRUCTIONS_FILE),
+      `${SOURCE_INTEGRATION_MARKER} old text\n`,
     );
+    writeFileSync(
+      join(repoDir.path, CLAUDE_INSTRUCTIONS_FILE),
+      `${SOURCE_INTEGRATION_MARKER} old text\n`,
+    );
+    writeFileSync(
+      join(repoDir.path, FIRST_TREE_INDEX_FILE),
+      [
+        "# First Tree",
+        "",
+        "<!-- BEGIN FIRST-TREE INDEX -->",
+        "legacy managed entrypoint",
+        "<!-- END FIRST-TREE INDEX -->",
+        "",
+      ].join("\n"),
+    );
+    makeSourceSkill(sourceDir.path, "0.2.0");
+
+    const result = runUpgrade(new Repo(repoDir.path), {
+      sourceRoot: sourceDir.path,
+    });
+
+    expect(result).toBe(0);
+    expectFirstTreeIndexSymlink(repoDir.path);
     expect(existsSync(join(repoDir.path, INSTALLED_PROGRESS))).toBe(false);
   });
 

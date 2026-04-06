@@ -13,8 +13,9 @@ existing source or workspace repository.
 - The current source/workspace repo is **not** the Context Tree.
 - The current source/workspace repo should carry only the installed
   `.agents/skills/first-tree/` and `.claude/skills/first-tree/` skill roots
-  plus `FIRST_TREE.md` and a managed `FIRST-TREE-SOURCE-INTEGRATION:` section
-  in root `AGENTS.md` and `CLAUDE.md`.
+  plus a `FIRST_TREE.md` symlink to
+  `.agents/skills/first-tree/references/about.md` and a managed
+  `FIRST-TREE-SOURCE-INTEGRATION:` section in root `AGENTS.md` and `CLAUDE.md`.
 - `NODE.md`, `members/`, and tree-scoped `AGENTS.md` / `CLAUDE.md` content
   belong only in a dedicated `*-tree` repo. Existing bound `*-context` repos
   are still supported and should be reused.
@@ -97,7 +98,7 @@ and publish cannot infer the source repo, pass `--source-repo PATH`.
   dedicated tree repo instead, for example
   `first-tree verify --tree-path ../my-repo-tree`.
 - Running `first-tree upgrade` in the source/workspace repo refreshes only
-  the local installed skill, `FIRST_TREE.md`, and the
+  the local installed skill, the `FIRST_TREE.md` symlink, and the
   `FIRST-TREE-SOURCE-INTEGRATION:` section.
 - Run `first-tree upgrade --tree-path ../my-repo-tree` to upgrade the
   dedicated tree repo itself. If the source/workspace repo is still bound to

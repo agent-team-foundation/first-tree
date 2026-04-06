@@ -59,7 +59,8 @@ export const INTERACTIVE_TOOL = "AskUserQuestion";
 export const INIT_USAGE = `usage: first-tree init [--here] [--seed-members contributors] [--tree-name NAME] [--tree-path PATH]
 
 By default, running \`first-tree init\` inside a source or workspace repo installs
-the first-tree skill in the current repo, writes \`FIRST_TREE.md\`, updates
+the first-tree skill in the current repo, links \`FIRST_TREE.md\` to the local
+\`about.md\` reference, updates
 \`AGENTS.md\` and \`CLAUDE.md\` with a managed \`${SOURCE_INTEGRATION_MARKER}\`
 section, and creates a sibling dedicated tree repo named \`<repo>-tree\`.
 Existing sibling \`*-context\` repos and existing local tree checkouts are
@@ -323,10 +324,7 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
         );
         installSkill(resolvedSourceRoot, sourceRepo.root);
       }
-      const firstTreeIndex = upsertFirstTreeIndexFile(
-        sourceRepo.root,
-        initTarget.treeRepoName,
-      );
+      const firstTreeIndex = upsertFirstTreeIndexFile(sourceRepo.root);
       const updates = upsertSourceIntegrationFiles(
         sourceRepo.root,
         initTarget.treeRepoName,

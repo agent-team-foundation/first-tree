@@ -66,7 +66,8 @@ Do not use it inside the source/workspace repo unless you intentionally want
 that repo itself to become the Context Tree.
 
 - `first-tree init` installs `.agents/skills/first-tree/` and
-  `.claude/skills/first-tree/` plus `FIRST_TREE.md` in the current
+  `.claude/skills/first-tree/` plus a `FIRST_TREE.md` symlink to
+  `.agents/skills/first-tree/references/about.md` in the current
   source/workspace repo, appends a managed
   `FIRST-TREE-SOURCE-INTEGRATION:` section to root `AGENTS.md` and `CLAUDE.md`,
   then creates `NODE.md`, tree-scoped `AGENTS.md`, tree-scoped `CLAUDE.md`,
@@ -91,7 +92,7 @@ that repo itself to become the Context Tree.
   are complete.
 - `first-tree upgrade` refreshes the installed skill from the currently
   running `first-tree` npm package. In a source/workspace repo it refreshes
-  only the local installed skill, `FIRST_TREE.md`, plus the
+  only the local installed skill, the `FIRST_TREE.md` symlink, plus the
   `FIRST-TREE-SOURCE-INTEGRATION:` section; use `--tree-path` to upgrade the
   dedicated tree repo's `.first-tree/` metadata. To force the newest published
   package for a one-off upgrade, run `npx first-tree@latest upgrade`.

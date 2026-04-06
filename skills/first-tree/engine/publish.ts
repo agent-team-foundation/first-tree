@@ -552,7 +552,7 @@ function buildPrBody(
     `Connect the published \`${treeRepoName}\` Context Tree back into this source/workspace repo.`,
     "",
     `- add \`${submodulePath}\` as the tracked Context Tree submodule`,
-    "- keep the local first-tree skill, FIRST_TREE.md entrypoint, and source integration marker lines in this repo",
+    "- keep the local first-tree skill, the FIRST_TREE.md symlink, and source integration marker lines in this repo",
     `- use \`${treeSlug}\` as the GitHub home for tree content`,
   ].join("\n");
 }

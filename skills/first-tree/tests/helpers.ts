@@ -33,9 +33,14 @@ export function makeFramework(root: string, version = "0.1.0"): void {
     mkdirSync(join(root, skillRoot, "assets", "framework"), {
       recursive: true,
     });
+    mkdirSync(join(root, skillRoot, "references"), { recursive: true });
     writeFileSync(
       join(root, skillRoot, "SKILL.md"),
       "---\nname: first-tree\ndescription: installed\n---\n",
+    );
+    writeFileSync(
+      join(root, skillRoot, "references", "about.md"),
+      "# About Context Tree\n",
     );
   }
   writeFileSync(join(root, FRAMEWORK_VERSION), `${version}\n`);
@@ -87,6 +92,7 @@ export function makeSourceSkill(root: string, version = "0.2.0"): void {
   mkdirSync(join(skillRoot, "assets", "framework", "templates"), {
     recursive: true,
   });
+  mkdirSync(join(skillRoot, "references"), { recursive: true });
 
   writeFileSync(
     join(skillRoot, "SKILL.md"),
@@ -99,6 +105,10 @@ export function makeSourceSkill(root: string, version = "0.2.0"): void {
   writeFileSync(
     join(skillRoot, "assets", "framework", "manifest.json"),
     "{}\n",
+  );
+  writeFileSync(
+    join(skillRoot, "references", "about.md"),
+    "# About Context Tree\n",
   );
   writeFileSync(
     join(skillRoot, "assets", "framework", "VERSION"),

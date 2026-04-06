@@ -1,4 +1,12 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import {
   FIRST_TREE_INDEX_FILE,
@@ -12,7 +20,10 @@ import {
 export type SourceIntegrationFile = (typeof SOURCE_INTEGRATION_FILES)[number];
 const FIRST_TREE_INDEX_BEGIN = "<!-- BEGIN FIRST-TREE INDEX -->";
 const FIRST_TREE_INDEX_END = "<!-- END FIRST-TREE INDEX -->";
-const REFERENCE_ROOT = SKILL_REFERENCES_DIR.replaceAll("\\", "/");
+export const FIRST_TREE_INDEX_SYMLINK_TARGET = join(
+  SKILL_REFERENCES_DIR,
+  "about.md",
+);
 
 export interface SourceIntegrationUpdate {
   action: "created" | "updated" | "unchanged";
@@ -65,30 +76,35 @@ export function hasSourceIntegrationMarker(text: string | null): boolean {
 
 export function upsertFirstTreeIndexFile(
   root: string,
-  treeRepoName?: string,
 ): FirstTreeIndexUpdate {
   const fullPath = join(root, FIRST_TREE_INDEX_FILE);
-  const exists = existsSync(fullPath);
-  const nextText = buildFirstTreeIndexFile(treeRepoName);
-  const current = exists ? readFileSync(fullPath, "utf-8") : null;
+  const existingType = detectFirstTreeIndexEntry(fullPath);
 
-  if (current === nextText) {
-    return { action: "unchanged", file: FIRST_TREE_INDEX_FILE };
+  if (existingType === "symlink") {
+    if (readlinkSync(fullPath) === FIRST_TREE_INDEX_SYMLINK_TARGET) {
+      return { action: "unchanged", file: FIRST_TREE_INDEX_FILE };
+    }
+    rmSync(fullPath, { force: true });
+    symlinkSync(FIRST_TREE_INDEX_SYMLINK_TARGET, fullPath);
+    return { action: "updated", file: FIRST_TREE_INDEX_FILE };
   }
 
-  if (
-    current !== null
-    && !current.includes(FIRST_TREE_INDEX_BEGIN)
-    && !current.includes(FIRST_TREE_INDEX_END)
-  ) {
+  if (existingType === "file") {
+    const current = readFileSync(fullPath, "utf-8");
+    if (!isManagedFirstTreeIndexFile(current)) {
+      return { action: "skipped", file: FIRST_TREE_INDEX_FILE };
+    }
+    rmSync(fullPath, { force: true });
+    symlinkSync(FIRST_TREE_INDEX_SYMLINK_TARGET, fullPath);
+    return { action: "updated", file: FIRST_TREE_INDEX_FILE };
+  }
+
+  if (existingType === "other") {
     return { action: "skipped", file: FIRST_TREE_INDEX_FILE };
   }
 
-  writeFileSync(fullPath, nextText);
-  return {
-    action: exists ? "updated" : "created",
-    file: FIRST_TREE_INDEX_FILE,
-  };
+  symlinkSync(FIRST_TREE_INDEX_SYMLINK_TARGET, fullPath);
+  return { action: "created", file: FIRST_TREE_INDEX_FILE };
 }
 
 export function upsertSourceIntegrationFiles(
@@ -168,31 +184,23 @@ function detectExistingSubmodulePath(text: string): string | null {
   return match?.[1] ?? null;
 }
 
-function buildFirstTreeIndexFile(treeRepoName?: string): string {
-  const lines = [
-    "# First Tree",
-    "",
-    FIRST_TREE_INDEX_BEGIN,
-    "Use this file as the local entrypoint for the installed `first-tree` workspace integration.",
-    "",
-    `- [About Context Tree](${REFERENCE_ROOT}/about.md)`,
-    `- [Onboarding](${REFERENCE_ROOT}/onboarding.md)`,
-    `- [Source/Workspace Installation Contract](${REFERENCE_ROOT}/source-workspace-installation.md)`,
-    "",
-  ];
-
-  if (treeRepoName) {
-    lines.push(
-      `The dedicated Context Tree for this workspace lives in the sibling \`${treeRepoName}\` repo/submodule. Keep durable decisions, rationale, and ownership there.`,
-      "",
-    );
+function detectFirstTreeIndexEntry(
+  fullPath: string,
+): "missing" | "file" | "symlink" | "other" {
+  try {
+    const stat = lstatSync(fullPath);
+    if (stat.isSymbolicLink()) {
+      return "symlink";
+    }
+    if (stat.isFile()) {
+      return "file";
+    }
+    return "other";
+  } catch {
+    return "missing";
   }
+}
 
-  lines.push(
-    "This file is managed by `first-tree init` and `first-tree upgrade`.",
-    FIRST_TREE_INDEX_END,
-    "",
-  );
-
-  return lines.join("\n");
+function isManagedFirstTreeIndexFile(text: string): boolean {
+  return text.includes(FIRST_TREE_INDEX_BEGIN) && text.includes(FIRST_TREE_INDEX_END);
 }
