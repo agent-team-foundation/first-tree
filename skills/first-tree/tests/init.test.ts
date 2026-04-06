@@ -34,6 +34,7 @@ import {
   makeNode,
   makeSourceRepo,
   makeSourceSkill,
+  makeTreeMetadata,
 } from "./helpers.js";
 
 // --- formatTaskList ---
@@ -499,9 +500,10 @@ describe("runInit", () => {
     commitAll(sourceRoot, "chore: bootstrap source");
 
     initRealGitRepo(treeRoot);
-    makeFramework(treeRoot, "0.2.0");
+    makeTreeMetadata(treeRoot, "0.2.0");
     makeNode(treeRoot);
     makeAgentsMd(treeRoot, { markers: true });
+    makeClaudeMd(treeRoot, { markers: true });
     makeMembers(treeRoot);
     git(["remote", "add", "origin", "git@github.com:acme/ADHD-context.git"], treeRoot);
     commitAll(treeRoot, "chore: bootstrap tree");
