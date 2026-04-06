@@ -1,13 +1,21 @@
-import type { Repo } from "#skill/engine/repo.js";
-import type { RuleResult } from "#skill/engine/rules/index.js";
-import { claudeCodeExampleCandidates } from "#skill/engine/runtime/adapters.js";
-import { FRAMEWORK_EXAMPLES_DIR } from "#skill/engine/runtime/asset-loader.js";
+import type { Repo } from "#engine/repo.js";
+import type { RuleResult } from "#engine/rules/index.js";
+import { claudeCodeExampleCandidates } from "#engine/runtime/adapters.js";
+import { FRAMEWORK_EXAMPLES_DIR } from "#engine/runtime/asset-loader.js";
 
 export function evaluate(repo: Repo): RuleResult {
   const tasks: string[] = [];
   const [claudeExamplePath] = claudeCodeExampleCandidates();
   if (repo.pathExists(".claude/settings.json")) {
-    if (!repo.fileContains(".claude/settings.json", "inject-tree-context")) {
+    const hasNewHook = repo.fileContains(
+      ".claude/settings.json",
+      "first-tree inject-context",
+    );
+    const hasLegacyHook = repo.fileContains(
+      ".claude/settings.json",
+      "inject-tree-context",
+    );
+    if (!hasNewHook && !hasLegacyHook) {
       tasks.push(
         `Add SessionStart hook to \`.claude/settings.json\` (see \`${claudeExamplePath}/\`)`,
       );

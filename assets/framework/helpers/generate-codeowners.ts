@@ -205,7 +205,7 @@ export function generate(
       return 0;
     }
     console.log(
-      "CODEOWNERS is out-of-date. Run: npx tsx .agents/skills/first-tree/assets/framework/helpers/generate-codeowners.ts",
+      "CODEOWNERS is out-of-date. Run: npx first-tree generate-codeowners",
     );
     return 1;
   }
@@ -214,11 +214,4 @@ export function generate(
   writeFileSync(codeownersFile, content);
   console.log(`Wrote ${relative(treeRoot, codeownersFile)}`);
   return 0;
-}
-
-const isDirectRun =
-  process.argv[1]?.endsWith("generate-codeowners.ts") ||
-  process.argv[1]?.endsWith("generate-codeowners.js");
-if (isDirectRun) {
-  process.exit(generate(process.cwd()));
 }

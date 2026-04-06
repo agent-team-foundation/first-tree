@@ -9,15 +9,19 @@ const USAGE = `usage: first-tree <command>
   New to first-tree? Run \`first-tree help onboarding\` first.
 
 Commands:
-  init      Install source/workspace integration and create or refresh a dedicated context tree repo
-  publish   Publish a dedicated tree repo to GitHub and record it back in the source repo
-  verify    Run verification checks against a tree repo
-  upgrade   Refresh the installed skill in a tree repo
-  help      Show help for a topic (e.g. \`help onboarding\`)
+  init                  Install source/workspace integration and create or refresh a dedicated context tree repo
+  publish               Publish a dedicated tree repo to GitHub and record it back in the source repo
+  verify                Run verification checks against a tree repo
+  upgrade               Refresh the installed skill in a tree repo
+  review                Run Claude Code PR review (CI helper)
+  generate-codeowners   Generate .github/CODEOWNERS from tree ownership
+  inject-context        Output Claude Code SessionStart hook payload from NODE.md
+  help                  Show help for a topic (e.g. \`help onboarding\`)
 
 Options:
-  --help       Show this help message
-  --version    Show version number
+  --help                Show this help message
+  --version             Show version number
+  --skip-version-check  Skip the auto-upgrade check (for latency-sensitive callers)
 
 Common examples:
   first-tree init
@@ -51,11 +55,28 @@ export function isDirectExecution(
   }
 }
 
+export function stripGlobalFlags(args: string[]): {
+  rest: string[];
+  skipVersionCheck: boolean;
+} {
+  const rest: string[] = [];
+  let skipVersionCheck = false;
+  for (const arg of args) {
+    if (arg === "--skip-version-check") {
+      skipVersionCheck = true;
+      continue;
+    }
+    rest.push(arg);
+  }
+  return { rest, skipVersionCheck };
+}
+
 export async function runCli(
-  args: string[],
+  rawArgs: string[],
   output: Output = console.log,
 ): Promise<number> {
   const write = (text: string): void => output(text);
+  const { rest: args } = stripGlobalFlags(rawArgs);
 
   if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
     write(USAGE);
@@ -87,6 +108,22 @@ export async function runCli(
     case "upgrade": {
       const { runUpgrade } = await import("#engine/commands/upgrade.js");
       return runUpgrade(args.slice(1));
+    }
+    case "review": {
+      const { runReview } = await import("#engine/commands/review.js");
+      return runReview(args.slice(1));
+    }
+    case "generate-codeowners": {
+      const { runGenerateCodeowners } = await import(
+        "#engine/commands/generate-codeowners.js"
+      );
+      return runGenerateCodeowners(args.slice(1));
+    }
+    case "inject-context": {
+      const { runInjectContext } = await import(
+        "#engine/commands/inject-context.js"
+      );
+      return runInjectContext(args.slice(1));
     }
     case "help":
       return (await import("#engine/commands/help.js")).runHelp(

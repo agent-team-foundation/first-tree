@@ -31,16 +31,16 @@ function resolveAgentInstructionsPath(): string {
   );
 }
 
-function buildPrompt(diffPath: string): string {
+export function buildPrompt(
+  diffPath: string,
+  reviewPromptPath: string,
+): string {
   const parts: string[] = [];
   const agentInstructionsPath = resolveAgentInstructionsPath();
   const files: [string, string][] = [
     [agentInstructionsPath, agentInstructionsPath],
     ["Root NODE.md", "NODE.md"],
-    [
-      "Review Instructions",
-      ".agents/skills/first-tree/assets/framework/prompts/pr-review.md",
-    ],
+    ["Review Instructions", reviewPromptPath],
   ];
   for (const [heading, path] of files) {
     const content = readFileSync(path, "utf-8");
@@ -134,8 +134,16 @@ export function extractReviewJson(text: string): Review | null {
   return obj as unknown as Review;
 }
 
-function main(): void {
-  const prompt = buildPrompt("/tmp/pr-diff.txt");
+export interface RunReviewOptions {
+  diffPath?: string;
+  reviewPromptPath: string;
+  outputPath?: string;
+}
+
+export function runReview(options: RunReviewOptions): number {
+  const diffPath = options.diffPath ?? "/tmp/pr-diff.txt";
+  const outputPath = options.outputPath ?? "/tmp/review.json";
+  const prompt = buildPrompt(diffPath, options.reviewPromptPath);
   console.log(`=== Prompt size: ${Buffer.byteLength(prompt)} bytes ===`);
 
   let text = runClaude({ prompt });
@@ -154,15 +162,15 @@ function main(): void {
       console.log(
         `Valid JSON with verdict='${review.verdict}' extracted on attempt ${attempt}`,
       );
-      writeFileSync("/tmp/review.json", JSON.stringify(review));
-      return;
+      writeFileSync(outputPath, JSON.stringify(review));
+      return 0;
     }
 
     if (attempt === MAX_ATTEMPTS) {
       console.error(
         `::error::Failed to extract valid review JSON after ${MAX_ATTEMPTS} attempts`,
       );
-      process.exit(1);
+      return 1;
     }
 
     let retryMsg: string;
@@ -183,11 +191,6 @@ function main(): void {
     console.log(`::warning::Attempt ${attempt} failed, asking Claude to retry...`);
     text = runClaude({ prompt: retryMsg, continueSession: true });
   }
-}
 
-const isDirectRun =
-  process.argv[1]?.endsWith("run-review.ts") ||
-  process.argv[1]?.endsWith("run-review.js");
-if (isDirectRun) {
-  main();
+  return 1;
 }

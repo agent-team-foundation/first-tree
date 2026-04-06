@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { USAGE, isDirectExecution, runCli } from "../../../src/cli.ts";
+import { USAGE, isDirectExecution, runCli, stripGlobalFlags } from "../src/cli.js";
 
 const TEMP_DIRS: string[] = [];
 
@@ -81,7 +81,7 @@ describe("thin CLI shell", () => {
 
   it("prints the package version", async () => {
     const output = captureOutput();
-    const pkgPath = fileURLToPath(new URL("../../../package.json", import.meta.url));
+    const pkgPath = fileURLToPath(new URL("../package.json", import.meta.url));
     const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as { version: string };
 
     const code = await runCli(["--version"], output.write);
@@ -108,5 +108,55 @@ describe("thin CLI shell", () => {
     expect(code).toBe(1);
     expect(output.lines[0]).toBe("Unknown command: wat");
     expect(output.lines[1]).toBe(USAGE);
+  });
+
+  it("documents the new helper subcommands and global flag", () => {
+    expect(USAGE).toContain("review");
+    expect(USAGE).toContain("generate-codeowners");
+    expect(USAGE).toContain("inject-context");
+    expect(USAGE).toContain("--skip-version-check");
+  });
+
+  it("strips --skip-version-check from args before dispatch", () => {
+    const result = stripGlobalFlags([
+      "--skip-version-check",
+      "init",
+      "--here",
+    ]);
+    expect(result.skipVersionCheck).toBe(true);
+    expect(result.rest).toEqual(["init", "--here"]);
+  });
+
+  it("strips --skip-version-check from positional position", () => {
+    const result = stripGlobalFlags(["init", "--skip-version-check", "--here"]);
+    expect(result.skipVersionCheck).toBe(true);
+    expect(result.rest).toEqual(["init", "--here"]);
+  });
+
+  it("returns false when --skip-version-check is absent", () => {
+    const result = stripGlobalFlags(["init", "--here"]);
+    expect(result.skipVersionCheck).toBe(false);
+    expect(result.rest).toEqual(["init", "--here"]);
+  });
+
+  it("routes inject-context command", async () => {
+    const output = captureOutput();
+    const code = await runCli(["inject-context", "--help"], output.write);
+    expect(code).toBe(0);
+  });
+
+  it("routes generate-codeowners command", async () => {
+    const output = captureOutput();
+    const code = await runCli(
+      ["generate-codeowners", "--help"],
+      output.write,
+    );
+    expect(code).toBe(0);
+  });
+
+  it("routes review command", async () => {
+    const output = captureOutput();
+    const code = await runCli(["review", "--help"], output.write);
+    expect(code).toBe(0);
   });
 });
