@@ -121,6 +121,9 @@ runtime.
 - The installed skill directories inside a user tree are
   `.agents/skills/first-tree/` and `.claude/skills/first-tree/` in a
   source/workspace repo.
+- In this source repo, those same two paths are tracked symlink aliases back
+  to `skills/first-tree/` so local agents can resolve the latest bundled skill
+  without a copied mirror.
 - Dedicated tree repos keep their local CLI metadata under `.first-tree/`.
 - The published package keeps its bundled canonical source under
   `skills/first-tree/`.
@@ -144,6 +147,8 @@ runtime.
   bundled skill.
 - `skills/first-tree/` is the canonical source for framework behavior, shipped
   templates, maintainer references, and validation logic.
+- `.agents/skills/first-tree/` and `.claude/skills/first-tree/` in this repo
+  are local symlink entrypoints to that canonical source for agent tooling.
 - `first-tree init` installs that bundled skill into `.agents/skills/first-tree/`
   and `.claude/skills/first-tree/` inside source/workspace repos, and writes
   `.first-tree/` metadata only inside dedicated tree repos.

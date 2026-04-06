@@ -14,17 +14,20 @@ import { parse } from "yaml";
 
 const ROOT = process.cwd();
 
-/** Check if a path has any tracked files in git (handles dirs and files). */
-function isTrackedInGit(relativePath: string): boolean {
-  const result = spawnSync("git", ["ls-files", relativePath], {
+function trackedEntriesInGit(...relativePaths: string[]): string[] {
+  const result = spawnSync("git", ["ls-files", ...relativePaths], {
     cwd: ROOT,
     stdio: "pipe",
   });
-  return (result.stdout?.toString().trim().length ?? 0) > 0;
+  return result.stdout
+    ?.toString()
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean) ?? [];
 }
 
 describe("skill artifacts", () => {
-  it("keeps only the canonical skill in the source repo", () => {
+  it("keeps one canonical skill plus local alias entrypoints in the source repo", () => {
     expect(existsSync(join(ROOT, "skills", "first-tree", "SKILL.md"))).toBe(true);
     expect(existsSync(join(ROOT, "skills", "first-tree", "references", "onboarding.md"))).toBe(true);
     expect(
@@ -46,11 +49,21 @@ describe("skill artifacts", () => {
     ).toBe(true);
     expect(existsSync(join(ROOT, "AGENTS.md"))).toBe(true);
     expect(existsSync(join(ROOT, "FIRST_TREE.md"))).toBe(true);
+    expect(existsSync(join(ROOT, ".agents", "skills", "first-tree", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(ROOT, ".claude", "skills", "first-tree", "SKILL.md"))).toBe(true);
     expect(lstatSync(join(ROOT, "CLAUDE.md")).isSymbolicLink()).toBe(true);
     expect(readlinkSync(join(ROOT, "CLAUDE.md"))).toBe("AGENTS.md");
     expect(lstatSync(join(ROOT, "FIRST_TREE.md")).isSymbolicLink()).toBe(true);
     expect(readlinkSync(join(ROOT, "FIRST_TREE.md"))).toBe(
       "skills/first-tree/references/about.md",
+    );
+    expect(lstatSync(join(ROOT, ".agents", "skills", "first-tree")).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(join(ROOT, ".agents", "skills", "first-tree"))).toBe(
+      "../../skills/first-tree",
+    );
+    expect(lstatSync(join(ROOT, ".claude", "skills", "first-tree")).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(join(ROOT, ".claude", "skills", "first-tree"))).toBe(
+      "../../.agents/skills/first-tree",
     );
     expect(existsSync(join(ROOT, "skills", "first-tree", "tests", "init.test.ts"))).toBe(
       true,
@@ -155,13 +168,17 @@ describe("skill artifacts", () => {
         ),
       ),
     ).toBe(true);
-    // Legacy artifacts must not be tracked in git (untracked local files are OK)
-    expect(isTrackedInGit(".agents")).toBe(false);
-    expect(isTrackedInGit(".claude")).toBe(false);
-    expect(isTrackedInGit(".context-tree")).toBe(false);
+    expect(
+      trackedEntriesInGit(".agents", ".claude").filter(
+        (entry) =>
+          entry !== ".agents/skills/first-tree"
+          && entry !== ".claude/skills/first-tree",
+      ),
+    ).toEqual([]);
+    expect(trackedEntriesInGit(".context-tree")).toEqual([]);
     expect(existsSync(join(ROOT, "AGENT.md"))).toBe(false);
-    expect(isTrackedInGit("docs")).toBe(false);
-    expect(isTrackedInGit("tests")).toBe(false);
+    expect(trackedEntriesInGit("docs")).toEqual([]);
+    expect(trackedEntriesInGit("tests")).toEqual([]);
     expect(existsSync(join(ROOT, "evals"))).toBe(true);
     expect(existsSync(join(ROOT, "src", "commands"))).toBe(false);
     expect(existsSync(join(ROOT, "src", "runtime"))).toBe(false);

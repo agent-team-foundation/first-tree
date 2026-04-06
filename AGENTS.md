@@ -13,6 +13,9 @@ This repo ships the canonical `first-tree` skill plus a thin
 
 - Treat `skills/first-tree/` as the only canonical source of
   framework knowledge.
+- The tracked `.agents/skills/first-tree` and `.claude/skills/first-tree`
+  entries in this repo are local alias symlinks for agent discovery; edit
+  `skills/first-tree/`, not the aliases.
 - Use `first-tree` for both the npm package and CLI command, and
   `skills/first-tree/` when you mean the bundled skill path.
 - Keep source/workspace installs limited to local skill integration; `NODE.md`,

@@ -5,6 +5,9 @@ This reference explains how to maintain the `first-tree` source repo itself.
 ## What This Repo Ships
 
 - One canonical skill: `skills/first-tree/`
+- One pair of tracked local alias entrypoints:
+  `.agents/skills/first-tree/` and `.claude/skills/first-tree/`, both
+  symlinked back to `skills/first-tree/` in this repo
 - One thin CLI package: the `first-tree` command distributed by the `first-tree`
   npm package
 - The published package carries that canonical skill directly; normal install
@@ -37,6 +40,8 @@ and should be preserved.
 ## Non-Negotiables
 
 - Treat `skills/first-tree/` as the only canonical source.
+- Keep `.agents/skills/first-tree/` and `.claude/skills/first-tree/` as
+  symlink aliases only; do not turn them into copied mirrors in this repo.
 - If a maintainer needs information to safely change behavior, move that
   information into `references/`; do not leave it only in root `README.md`,
   `AGENTS.md`, CI comments, or PR descriptions.

@@ -9,7 +9,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   BUNDLED_SKILL_ROOT,
@@ -75,21 +75,26 @@ export function readCanonicalFrameworkVersion(sourceRoot: string): string {
 
 export function copyCanonicalSkill(sourceRoot: string, targetRoot: string): void {
   const src = resolveCanonicalSkillRoot(sourceRoot);
+  const sourceRepoSkillRoot = join(targetRoot, BUNDLED_SKILL_ROOT);
+  const useSourceRepoAliases = resolve(sourceRepoSkillRoot) === resolve(src);
   for (const relPath of [
     ...INSTALLED_SKILL_ROOTS,
-    LEGACY_REPO_SKILL_ROOT,
+    ...(useSourceRepoAliases ? [] : [LEGACY_REPO_SKILL_ROOT]),
   ]) {
     const fullPath = join(targetRoot, relPath);
     if (existsSync(fullPath) || isSymlink(fullPath)) {
       rmSync(fullPath, { recursive: true, force: true });
     }
   }
-  // Copy to the canonical location (.agents/skills/first-tree)
   const primaryDst = join(targetRoot, SKILL_ROOT);
   mkdirSync(dirname(primaryDst), { recursive: true });
-  cpSync(src, primaryDst, { recursive: true });
+  if (useSourceRepoAliases) {
+    const relTarget = relative(dirname(primaryDst), src);
+    symlinkSync(relTarget, primaryDst);
+  } else {
+    cpSync(src, primaryDst, { recursive: true });
+  }
 
-  // Symlink .claude/skills/first-tree → .agents/skills/first-tree
   const symlinkDst = join(targetRoot, CLAUDE_SKILL_ROOT);
   mkdirSync(dirname(symlinkDst), { recursive: true });
   const relTarget = relative(dirname(symlinkDst), primaryDst);

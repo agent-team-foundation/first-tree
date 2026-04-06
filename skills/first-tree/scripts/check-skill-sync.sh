@@ -24,6 +24,22 @@ require_file() {
   fi
 }
 
+require_symlink_target() {
+  local path="$1"
+  local expected="$2"
+  if [[ ! -L "$path" ]]; then
+    echo "Missing symlink: $path" >&2
+    exit 1
+  fi
+
+  local actual
+  actual="$(readlink "$path")"
+  if [[ "$actual" != "$expected" ]]; then
+    echo "Unexpected symlink target for $path: expected $expected, got $actual" >&2
+    exit 1
+  fi
+}
+
 REPO_ROOT="$(find_repo_root || true)"
 SOURCE_DIR=""
 if [[ -n "$REPO_ROOT" ]]; then
@@ -88,11 +104,22 @@ require_file "$SOURCE_DIR/assets/framework/helpers/run-review.ts"
 require_file "$SOURCE_DIR/assets/framework/helpers/summarize-progress.js"
 require_file "$SOURCE_DIR/assets/framework/helpers/inject-tree-context.sh"
 
+if [[ -e "$SOURCE_DIR/evals" ]]; then
+  echo "Skill should not contain repo-only eval tooling." >&2
+  exit 1
+fi
+
+require_file "$REPO_ROOT/evals/first-tree-eval.test.ts"
+require_file "$REPO_ROOT/evals/README.md"
+require_file "$REPO_ROOT/evals/helpers/case-loader.ts"
+require_file "$REPO_ROOT/evals/scripts/tree-manager.ts"
+require_file "$REPO_ROOT/evals/tests/eval-helpers.test.ts"
+require_symlink_target "$REPO_ROOT/.agents/skills/first-tree" "../../skills/first-tree"
+require_symlink_target "$REPO_ROOT/.claude/skills/first-tree" "../../.agents/skills/first-tree"
+
 # Check for legacy artifacts that should not be committed.
 # Use git ls-files to ignore untracked local files (e.g. .claude/settings.local.json).
 for legacy_path in \
-  ".agents" \
-  ".claude" \
   ".context-tree" \
   "docs" \
   "tests" \
@@ -104,16 +131,13 @@ do
   fi
 done
 
-if [[ -e "$SOURCE_DIR/evals" ]]; then
-  echo "Skill should not contain repo-only eval tooling." >&2
+tracked_aliases="$(git -C "$REPO_ROOT" ls-files .agents .claude)"
+expected_aliases=$'.agents/skills/first-tree\n.claude/skills/first-tree'
+if [[ -n "$tracked_aliases" && "$tracked_aliases" != "$expected_aliases" ]]; then
+  echo "Tracked .agents/.claude entries are out of sync with the expected local skill aliases." >&2
+  printf 'Expected:\n%s\nGot:\n%s\n' "$expected_aliases" "$tracked_aliases" >&2
   exit 1
 fi
-
-require_file "$REPO_ROOT/evals/first-tree-eval.test.ts"
-require_file "$REPO_ROOT/evals/README.md"
-require_file "$REPO_ROOT/evals/helpers/case-loader.ts"
-require_file "$REPO_ROOT/evals/scripts/tree-manager.ts"
-require_file "$REPO_ROOT/evals/tests/eval-helpers.test.ts"
 
 if grep -q '"#docs/\*"' "$REPO_ROOT/package.json"; then
   echo "package.json still exposes the legacy #docs import alias." >&2

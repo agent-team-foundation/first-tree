@@ -9,6 +9,7 @@ import { basename, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { Repo } from "#skill/engine/repo.js";
 import { runUpgrade } from "#skill/engine/upgrade.js";
+import { copyCanonicalSkill } from "#skill/engine/runtime/installer.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
   CLAUDE_INSTRUCTIONS_FILE,
@@ -124,6 +125,29 @@ describe("runUpgrade", () => {
     makeSourceRepo(repoDir.path);
     const result = runUpgrade(new Repo(repoDir.path));
     expect(result).toBe(1);
+  });
+
+  it("keeps source-repo aliases pointed at the canonical skill when installing locally", () => {
+    const repoDir = useTmpDir();
+    makeSourceRepo(repoDir.path);
+    makeSourceSkill(repoDir.path, "0.2.0");
+
+    copyCanonicalSkill(repoDir.path, repoDir.path);
+
+    expect(existsSync(join(repoDir.path, "skills", "first-tree", "SKILL.md"))).toBe(true);
+    expect(lstatSync(join(repoDir.path, ".agents", "skills", "first-tree")).isSymbolicLink()).toBe(
+      true,
+    );
+    expect(readlinkSync(join(repoDir.path, ".agents", "skills", "first-tree"))).toBe(
+      "../../skills/first-tree",
+    );
+    expect(lstatSync(join(repoDir.path, ".claude", "skills", "first-tree")).isSymbolicLink()).toBe(
+      true,
+    );
+    expect(readlinkSync(join(repoDir.path, ".claude", "skills", "first-tree"))).toBe(
+      "../../.agents/skills/first-tree",
+    );
+    expect(readFileSync(join(repoDir.path, FRAMEWORK_VERSION), "utf-8").trim()).toBe("0.2.0");
   });
 
   it("refreshes a dedicated tree repo without reinstalling the skill", () => {

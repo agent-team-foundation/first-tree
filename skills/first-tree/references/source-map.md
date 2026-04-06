@@ -91,7 +91,9 @@ not become the only place important maintainer knowledge lives.
 ## Compatibility Notes
 
 - The source repo intentionally contains no root `.context-tree/`, `docs/`,
-  mirror skills, or bundled repo snapshot.
+  copied mirror skills, or bundled repo snapshot. The only allowed alias
+  entrypoints are the tracked symlinks at `.agents/skills/first-tree/` and
+  `.claude/skills/first-tree/`.
 - Legacy `.context-tree/...` paths still matter only for migrating existing
   user repos; the compatibility logic lives in
   `engine/runtime/asset-loader.ts` and `engine/upgrade.ts`.

@@ -10,8 +10,11 @@ rules we keep for legacy `skills/first-tree/` and `.context-tree/` repos.
 - `assets/framework/` contains the shipped runtime payload.
 - The distributable `first-tree` package must carry the canonical skill inside
   the package itself.
-- The source repo does not keep a root `.context-tree/`, `docs/`, mirror skill
-  directories, or a bundled repo snapshot.
+- The source repo does not keep a root `.context-tree/`, `docs/`, copied
+  mirror skill directories, or a bundled repo snapshot.
+- The only source-repo aliases allowed outside `skills/first-tree/` are the
+  tracked symlinks at `.agents/skills/first-tree/` and
+  `.claude/skills/first-tree/`, both pointing back to the canonical source.
 
 ## Installed Layout
 
@@ -49,6 +52,12 @@ The current installed layout in a source/workspace repo is:
           helpers/
 FIRST_TREE.md
 ```
+
+Inside the `first-tree` source repo itself, `.agents/skills/first-tree/` and
+`.claude/skills/first-tree/` are tracked symlink aliases back to
+`skills/first-tree/` for local agent discovery. User repos still receive the
+installed layout above as local integration, with the canonical payload rooted
+under `.agents/skills/first-tree/`.
 
 For a source/workspace repo, the local integration stops there. It should also
 carry a managed `FIRST-TREE-SOURCE-INTEGRATION:` section in root `AGENTS.md`

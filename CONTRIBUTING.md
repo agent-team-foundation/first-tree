@@ -10,11 +10,14 @@ Naming note:
 - `first-tree` is the npm package name.
 - `first-tree` is also the installed CLI command.
 - `skills/first-tree/` is the bundled skill path inside this repo.
+- This source repo also tracks `.agents/skills/first-tree/` and
+  `.claude/skills/first-tree/` as symlink aliases back to
+  `skills/first-tree/` for local agent discovery.
 - User trees install that payload into `.agents/skills/first-tree/` and
   `.claude/skills/first-tree/`.
 
 Most changes should land in the canonical skill under `skills/first-tree/`,
-not in root-level prose or ad hoc helper files.
+not in the local alias paths, root-level prose, or ad hoc helper files.
 
 ## Before You Change Anything
 

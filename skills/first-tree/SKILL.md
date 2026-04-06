@@ -13,6 +13,9 @@ repos.
 ## Source Of Truth
 
 - `skills/first-tree/` is the only canonical copy.
+- In this source repo, `.agents/skills/first-tree/` and
+  `.claude/skills/first-tree/` are tracked symlink aliases back to that
+  canonical copy for local agent discovery.
 - `references/` holds the explanatory docs the skill should load on demand.
 - `assets/framework/` holds the runtime payload that gets installed into user
   repos.
