@@ -197,7 +197,7 @@ describe("skill artifacts", () => {
     expect(read("AGENTS.md")).not.toContain("seed-tree");
     expect(read("README.md")).toContain("Package And Command");
     expect(read("README.md")).toContain("Canonical Documentation");
-    expect(read("README.md")).toContain("references/source-map.md");
+    expect(read("README.md")).toContain("docs/source-map.md");
     expect(read("README.md")).toContain("source-workspace-installation.md");
     expect(read("README.md")).toContain("skills/first-tree/");
     expect(read("README.md")).toContain(".agents/skills/first-tree/");
@@ -212,9 +212,9 @@ describe("skill artifacts", () => {
     expect(read("README.md")).toContain("<repo>-tree");
     expect(read("README.md")).toContain("*-context` repos are still reused");
     expect(read("README.md")).toContain("Only use `--here` after you have already switched into the dedicated tree repo.");
-    expect(read("AGENTS.md")).toContain("references/source-map.md");
+    expect(read("AGENTS.md")).toContain("docs/source-map.md");
     expect(read("AGENTS.md")).toContain("source-workspace-installation.md");
-    expect(read("AGENTS.md")).toContain("bundled skill path");
+    expect(read("AGENTS.md")).toContain("bundled skill payload path");
     expect(read("AGENTS.md")).not.toContain("### Running evals");
     expect(read("AGENTS.md")).not.toContain("EVALS_TREE_REPO");
     expect(read("src/cli.ts")).not.toContain("from upstream");
@@ -244,24 +244,31 @@ describe("skill artifacts", () => {
     expect(onboarding).not.toContain("from upstream");
 
     const skillMd = read("skills/first-tree/SKILL.md");
+    // SKILL.md is user-facing: shipped to user repos via copyCanonicalSkill.
+    // It must NOT mention engine/, assets/, tests/, scripts/, maintainer-* docs,
+    // or anything that doesn't exist in the lightweight installed payload.
     expect(skillMd).not.toContain("sync-skill-artifacts.sh");
     expect(skillMd).not.toContain("portable-smoke-test.sh");
-    expect(skillMd).toContain("maintainer-build-and-distribution.md");
-    expect(skillMd).toContain("maintainer-testing.md");
-    expect(skillMd).toContain("currently running `first-tree` package");
-    expect(skillMd).toContain("command examples stay aligned with the published package");
-    expect(skillMd).toContain(".agents/skills/first-tree/");
-    expect(skillMd).toContain(".claude/skills/first-tree/");
-    expect(skillMd).toContain("source-workspace-installation.md");
-    expect(skillMd).toContain("baseline coverage");
-    expect(skillMd).toContain("summarize-progress.js");
-    expect(skillMd).toContain("FIRST-TREE-SOURCE-INTEGRATION:");
-    expect(skillMd).toContain(".first-tree/local-tree.json");
-    expect(skillMd).toContain("first-tree publish --open-pr");
-    expect(skillMd).toContain("<repo>-tree");
-    expect(skillMd).toContain("older dedicated `*-context` repo");
-    expect(skillMd).toContain("Never run `first-tree init --here` in a source/workspace repo");
+    expect(skillMd).not.toContain("maintainer-build-and-distribution.md");
+    expect(skillMd).not.toContain("maintainer-testing.md");
+    expect(skillMd).not.toContain("maintainer-architecture.md");
+    expect(skillMd).not.toContain("source-map.md");
     expect(skillMd).not.toContain("canonical eval harness");
+    expect(skillMd).not.toContain("`engine/`");
+    expect(skillMd).not.toContain("`tests/`");
+    expect(skillMd).not.toContain("`scripts/`");
+    // It SHOULD describe what the skill is, when to use it, and the CLI.
+    expect(skillMd).toContain("Context Tree");
+    expect(skillMd).toContain("first-tree init");
+    expect(skillMd).toContain("first-tree verify");
+    expect(skillMd).toContain("first-tree upgrade");
+    expect(skillMd).toContain("first-tree publish");
+    expect(skillMd).toContain("references/principles.md");
+    expect(skillMd).toContain("references/ownership-and-naming.md");
+    expect(skillMd).toContain("Before Every Task");
+    expect(skillMd).toContain("After Every Task");
+    expect(skillMd).toContain("npx -p first-tree first-tree");
+    expect(skillMd).toContain("--skip-version-check");
 
     const sourceMap = read("docs/source-map.md");
     expect(sourceMap).not.toContain("repo-snapshot");

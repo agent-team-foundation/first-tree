@@ -47,6 +47,25 @@ import {
 
 export const UPGRADE_USAGE = `usage: first-tree upgrade [--tree-path PATH]
 
+Refresh the installed skill payload from the bundled \`first-tree\` package.
+
+The CLI compares the installed skill version (major.minor) against the
+bundled skill version. If they match, upgrade is a no-op. If the bundled
+version is newer, the installed payload is replaced and a task list is
+emitted for any manual follow-ups (e.g., reapplying customizations).
+
+In a source/workspace repo: refreshes only the local installed skill, the
+\`FIRST_TREE.md\` symlink, and the managed \`FIRST-TREE-SOURCE-INTEGRATION:\`
+section in AGENTS.md/CLAUDE.md. The dedicated tree repo must be upgraded
+separately with \`--tree-path\`.
+
+In a dedicated tree repo: refreshes \`.first-tree/VERSION\` and emits a task
+list for the maintainer.
+
+Migrates legacy layouts (\`.context-tree/\`, \`skills/first-tree/\`) onto the
+modern \`.agents/skills/first-tree/\` path. To pick up a newer skill version,
+install a newer \`first-tree\` package first (or rely on auto-upgrade).
+
 Options:
   --tree-path PATH   Upgrade a tree repo from another working directory
   --help             Show this help message

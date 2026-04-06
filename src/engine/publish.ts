@@ -24,16 +24,31 @@ import {
 
 export const PUBLISH_USAGE = `usage: first-tree publish [--open-pr] [--tree-path PATH] [--source-repo PATH] [--source-remote NAME]
 
-Run this from the dedicated tree repo after \`first-tree init\`. The command
-creates or reuses the GitHub \`*-tree\` repo, continues supporting older
-\`*-context\` repos, pushes the current tree
-commit, records the published tree repo URL back in the source/workspace repo,
-refreshes the local tree checkout config, and prepares the source-repo branch.
+Publish a dedicated Context Tree repo to GitHub and link it back to its
+source/workspace repo. This is the second-stage command after \`first-tree
+init\`, run from the dedicated tree repo (or pointed at one with --tree-path).
+
+What it does:
+  1. Resolves the GitHub destination from \`.first-tree/bootstrap.json\`
+     (written by \`init\`) or from --source-repo / --source-remote flags
+  2. Creates the GitHub \`<repo>-tree\` repo if it doesn't exist (reuses an
+     existing \`*-tree\` or \`*-context\` repo when already bound)
+  3. Pushes the local tree commits via the \`gh\` CLI
+  4. Records the published tree URL in the source repo's
+     \`FIRST-TREE-SOURCE-INTEGRATION:\` block and \`.first-tree/local-tree.json\`
+  5. Optionally opens a PR in the source repo
+
+Requires the \`gh\` CLI installed and authenticated. Requires the source repo
+to be discoverable (sibling directory or --source-repo PATH).
+
+After publish succeeds, the canonical local working copy of the tree is the
+checkout recorded in \`.first-tree/local-tree.json\` inside the source repo.
+The temporary sibling bootstrap checkout can be deleted.
 
 Options:
   --open-pr               Open a PR in the source/workspace repo after pushing the branch
   --tree-path PATH        Publish a tree repo from another working directory
-  --source-repo PATH      Explicit source/workspace repo path when it cannot be inferred
+  --source-repo PATH      Explicit source/workspace repo path when it cannot be inferred from a sibling layout
   --source-remote NAME    Source/workspace repo remote to mirror on GitHub (default: origin)
   --help                  Show this help message
 `;

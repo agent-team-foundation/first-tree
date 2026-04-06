@@ -63,23 +63,41 @@ import {
 export const INTERACTIVE_TOOL = "AskUserQuestion";
 export const INIT_USAGE = `usage: first-tree init [--here] [--seed-members contributors] [--tree-name NAME] [--tree-path PATH]
 
-By default, running \`first-tree init\` inside a source or workspace repo installs
-the first-tree skill in the current repo, links \`FIRST_TREE.md\` to the local
-\`about.md\` reference, updates
-\`AGENTS.md\` and \`CLAUDE.md\` with a managed \`${SOURCE_INTEGRATION_MARKER}\`
-section, and creates a sibling dedicated tree repo named \`<repo>-tree\`.
-Existing sibling \`*-context\` repos and existing local tree checkouts are
-still reused when already bound.
+Bootstrap a Context Tree. The default behavior depends on where you run it:
 
-Do not use \`--here\` inside a source/workspace repo unless you explicitly want
-that repo itself to become the Context Tree.
+  Inside a source/workspace repo (the default case):
+    1. Installs the first-tree skill into \`.agents/skills/first-tree/\`
+    2. Symlinks \`.claude/skills/first-tree/\` to the same location
+    3. Creates \`FIRST_TREE.md\` -> \`references/about.md\`
+    4. Adds a managed \`${SOURCE_INTEGRATION_MARKER}\` block to AGENTS.md/CLAUDE.md
+    5. Creates a sibling \`<repo>-tree\` directory and bootstraps the dedicated
+       tree repo there with NODE.md, AGENTS.md, CLAUDE.md, members/NODE.md,
+       and \`.first-tree/\` metadata
+    6. Reuses an existing \`<repo>-context\` sibling if one is already bound
+
+  Inside an empty/dedicated tree repo (with --here):
+    1. Treats the current repo as the Context Tree
+    2. Scaffolds NODE.md, AGENTS.md, CLAUDE.md, members/NODE.md
+    3. Writes \`.first-tree/\` metadata
+    4. Does NOT create a sibling repo
+
+After init completes, the agent should follow the printed task list to fill
+in NODE.md frontmatter, configure the agent integration, and run
+\`first-tree verify\` when done.
+
+Do not use \`--here\` inside a source/workspace repo unless you explicitly
+want that repo itself to become the Context Tree (rare).
+
+After publishing the dedicated tree repo with \`first-tree publish\`, treat
+that submodule as the canonical local working copy. The bootstrap sibling
+checkout can be deleted.
 
 Options:
-  --here             Initialize the current repo in place after you are already in the dedicated tree repo
+  --here             Initialize the current repo in place — use only when you have already switched into the dedicated tree repo
   --seed-members contributors
-                     Seed initial member nodes from contributor history (GitHub when available, otherwise local git)
-  --tree-name NAME   Name the dedicated sibling tree repo to create
-  --tree-path PATH   Use an explicit tree repo path
+                     Seed initial \`members/*/NODE.md\` files from contributor history (GitHub API when available, falls back to local git log)
+  --tree-name NAME   Override the default sibling repo name (\`<repo>-tree\`)
+  --tree-path PATH   Use an explicit tree repo path instead of a sibling
   --help             Show this help message
 `;
 

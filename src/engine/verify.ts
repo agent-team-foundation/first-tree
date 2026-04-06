@@ -12,6 +12,25 @@ import { runValidateNodes } from "#engine/validators/nodes.js";
 const UNCHECKED_RE = /^- \[ \] (.+)$/gm;
 export const VERIFY_USAGE = `usage: first-tree verify [--tree-path PATH]
 
+Run validation checks against a Context Tree repo. Reads the tree from the
+current working directory unless \`--tree-path\` is provided.
+
+Checks performed:
+  - Installed skill version file exists
+  - Root NODE.md has valid frontmatter (title, owners)
+  - AGENTS.md and CLAUDE.md exist with framework markers
+  - Node validation: frontmatter, owners syntax, soft_links resolve,
+    directory listing consistency, no empty nodes, no title mismatches
+  - Member validation: at least one member, required fields present
+  - Progress checklist has no unchecked items
+
+Exits 0 on success, 1 if any check fails. Failures print descriptive
+messages so you can fix them and re-run.
+
+When run inside a source/workspace repo (no tree content, only the source
+integration), verify exits with an error and points you to the dedicated
+tree repo. Pass \`--tree-path\` to verify the dedicated tree from elsewhere.
+
 Options:
   --tree-path PATH   Verify a tree repo from another working directory
   --help             Show this help message

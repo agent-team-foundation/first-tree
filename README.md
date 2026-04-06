@@ -175,16 +175,17 @@ pnpm pack
 
 ## Canonical Documentation
 
-All framework documentation, maintainer guidance, and shipped runtime assets
-live in `skills/first-tree/`.
+User-facing references ship in `skills/first-tree/references/` and get
+copied verbatim to user repos via `first-tree init`. Maintainer-only
+references live in `docs/` and never ship.
 
 - User-facing overview: `skills/first-tree/references/about.md`
 - User onboarding: `skills/first-tree/references/onboarding.md`
 - Source/workspace install contract: `skills/first-tree/references/source-workspace-installation.md`
-- Maintainer entrypoint: `skills/first-tree/references/source-map.md`
+- Maintainer entrypoint: `docs/source-map.md` (also referenced as `references/source-map.md` for legacy continuity)
 
-If you are maintaining this repo, start with the source map instead of relying
-on root-level prose.
+If you are maintaining this repo, start with `docs/source-map.md` instead of
+relying on root-level prose.
 
 ## Contributing And Security
 
