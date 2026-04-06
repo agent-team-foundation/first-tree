@@ -67,10 +67,10 @@ describe("runUpgrade", () => {
       `Rename \`${LEGACY_AGENT_INSTRUCTIONS_FILE}\` to \`${AGENT_INSTRUCTIONS_FILE}\``,
     );
     expect(readFileSync(join(repoDir.path, INSTALLED_PROGRESS), "utf-8")).toContain(
-      "skills/first-tree/assets/framework/templates/agents.md.template",
+      `framework section in \`${AGENT_INSTRUCTIONS_FILE}\``,
     );
     expect(readFileSync(join(repoDir.path, INSTALLED_PROGRESS), "utf-8")).toContain(
-      "skills/first-tree/assets/framework/templates/claude.md.template",
+      `framework section in \`${CLAUDE_INSTRUCTIONS_FILE}\``,
     );
   });
 

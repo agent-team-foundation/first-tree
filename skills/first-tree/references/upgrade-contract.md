@@ -1,174 +1,169 @@
 # Upgrade Contract
 
-This file describes the current installed-layout contract and the compatibility
-rules we keep for legacy `skills/first-tree/` and `.context-tree/` repos.
+This file describes the installed-skill layout in user repos and how
+`first-tree upgrade` refreshes it.
 
-## Canonical Source
+## Two Distribution Channels
 
-- `skills/first-tree/` is the only source of truth.
-- `references/` contains explanatory material.
-- `assets/framework/` contains the shipped runtime payload.
-- The distributable `first-tree` package must carry the canonical skill inside
-  the package itself.
-- The source repo does not keep a root `.context-tree/`, `docs/`, copied
-  mirror skill directories, or a bundled repo snapshot.
-- The only source-repo aliases allowed outside `skills/first-tree/` are the
-  tracked symlinks at `.agents/skills/first-tree/` and
-  `.claude/skills/first-tree/`, both pointing back to the canonical source.
+The `first-tree` npm package ships two things:
+
+1. **CLI tools** — engine, runtime, validators, helpers, templates, workflows.
+   Bundled into `dist/cli.js` plus the `assets/framework/` runtime payload.
+   Updated with every published version. Users invoke them via
+   `npx -p first-tree first-tree <command>`. Auto-upgrades silently on every
+   invocation unless `--skip-version-check` is passed.
+
+2. **Skill payload** — `SKILL.md`, `references/`, and a `VERSION` file.
+   Copied verbatim into user repos at `.agents/skills/first-tree/` by
+   `first-tree init`. Updated only when the major or minor version of
+   `first-tree` bumps (i.e., when the bundled skill changes). The user
+   refreshes it explicitly by running `first-tree upgrade`.
+
+The skill payload contains no executable code. It's pure knowledge: what
+Context Tree is, the four core principles, the ownership model, the
+onboarding narrative, and the install/upgrade contract you're reading now.
+Everything else lives in the npm package and is invoked via the CLI.
+
+## Versioning
+
+Three-level: `major.minor.patch`.
+
+- **major** — company-wide milestones; bumped only at major events
+- **minor** — skill payload changes (this directory); a minor bump means
+  `first-tree upgrade` will refresh the installed skill
+- **patch** — CLI behavior changes (engine, helpers, templates); transparent
+  via npm; no repo update needed
+
+The installed skill's `VERSION` file tracks `major.minor` only (e.g., `0.2`).
+The CLI's full version (`major.minor.patch`, e.g., `0.2.5`) lives in the
+npm package's `package.json` and is shown by `first-tree --version` as
+`0.2.5 (skills: 0.2)`.
+
+`first-tree upgrade` is a no-op when the installed `major.minor` matches the
+bundled CLI's `major.minor`. Patch differences never trigger a refresh.
 
 ## Installed Layout
 
-The current installed layout in a source/workspace repo is:
+In a source/workspace repo, `first-tree init` produces:
 
 ```text
 .agents/
   skills/
     first-tree/
       SKILL.md
-      progress.md
+      VERSION                          # major.minor (e.g. "0.2")
       references/
-      assets/
-        framework/
-          manifest.json
-          VERSION
-          templates/
-          workflows/
-          prompts/
-          examples/
-          helpers/
+        about.md
+        principles.md                  # also symlinked at repo root
+        ownership-and-naming.md        # also symlinked at repo root
+        onboarding.md
+        source-workspace-installation.md
+        upgrade-contract.md            # this file
 .claude/
   skills/
-    first-tree/
-      SKILL.md
-      references/
-      assets/
-        framework/
-          manifest.json
-          VERSION
-          templates/
-          workflows/
-          prompts/
-          examples/
-          helpers/
-FIRST_TREE.md
+    first-tree -> ../../.agents/skills/first-tree
+FIRST_TREE.md                          # symlink to references/about.md
 ```
 
-Inside the `first-tree` source repo itself, `.agents/skills/first-tree/` and
-`.claude/skills/first-tree/` are tracked symlink aliases back to
-`skills/first-tree/` for local agent discovery. User repos still receive the
-installed layout above as local integration, with the canonical payload rooted
-under `.agents/skills/first-tree/`.
+The source/workspace repo also gets a managed
+`FIRST-TREE-SOURCE-INTEGRATION:` block in root `AGENTS.md` and `CLAUDE.md`
+plus a `.first-tree/local-tree.json` config that records the dedicated tree
+repo location. It must NOT contain `NODE.md`, `members/`, or tree-scoped
+`AGENTS.md` / `CLAUDE.md`.
 
-For a source/workspace repo, the local integration stops there. It should also
-carry a managed `FIRST-TREE-SOURCE-INTEGRATION:` section in root `AGENTS.md`
-and `CLAUDE.md`, but it must not contain tree content.
-
-The current dedicated tree repo layout is:
+In a dedicated tree repo, `first-tree init` produces:
 
 ```text
 .first-tree/
-  VERSION
+  VERSION                              # major.minor
   progress.md
-  bootstrap.json
-NODE.md
+  bootstrap.json                       # source repo metadata for publish
+NODE.md                                # root tree node
 AGENTS.md
+CLAUDE.md
 members/
+  NODE.md
 ```
 
-The dedicated tree repo does **not** need local `.agents/skills/first-tree/`
-or `.claude/skills/first-tree/` copies. Tree content still lives outside the
-metadata directory:
+The dedicated tree repo does **not** carry an installed skill — only the
+`.first-tree/` metadata. Tree content lives outside that directory.
 
-- `NODE.md`
-- `AGENTS.md`
-- `CLAUDE.md`
-- `members/`
-- `.first-tree/bootstrap.json` when `first-tree init` was run from a separate
-  source/workspace repo and the publish workflow needs to remember that source
-  repo path
+## Wipe-And-Replace Upgrade
+
+`first-tree upgrade` is a wipe-and-replace operation. There is no
+preservation, no migration logic, no merging — the installed skill payload
+contains no user customization, so refreshing it is safe and simple.
+
+When you run `first-tree upgrade` in a source/workspace repo:
+
+1. Every known installed-skill location is removed:
+   - `.agents/skills/first-tree/`
+   - `.claude/skills/first-tree/` (the symlink)
+   - `skills/first-tree/` (legacy in-repo location)
+   - `.context-tree/` (oldest legacy location)
+2. The lightweight skill payload from the bundled package is copied to
+   `.agents/skills/first-tree/` and the `.claude/skills/first-tree/` symlink
+   is recreated.
+3. `.claude/settings.json` is checked: if its SessionStart hook still
+   references one of the legacy `inject-tree-context.sh` paths, the command
+   is rewritten to `npx -p first-tree first-tree inject-context --skip-version-check`.
+4. Any `.github/workflows/{validate,pr-review,codeowners}.yml` files that
+   exist are overwritten with the bundled templates so they pick up
+   command-name and option changes.
+5. The `FIRST_TREE.md` symlink and `FIRST-TREE-SOURCE-INTEGRATION:` block in
+   `AGENTS.md` / `CLAUDE.md` are refreshed.
+6. A short upgrade task list is written to `progress.md` describing what
+   changed and what (if anything) the user needs to verify by hand.
+
+The user's tree content (`NODE.md`, `members/`, leaf nodes) is **never**
+touched. The user-authored portions of `AGENTS.md` / `CLAUDE.md` outside the
+managed framework markers are preserved.
+
+When you run `first-tree upgrade` in a dedicated tree repo, only the
+`.first-tree/VERSION` file is refreshed.
+
+## What Gets Preserved
+
+- All tree content: `NODE.md`, `members/`, leaf nodes, soft links
+- User content in `AGENTS.md` / `CLAUDE.md` outside the framework markers
+- Root symlinks like `principles.md`, `ownership-and-naming.md`,
+  `FIRST_TREE.md` — these still resolve because the targets in
+  `references/` are recreated by the wipe-and-replace
+- The `.first-tree/local-tree.json` checkout config in source/workspace repos
+- User-authored CI workflows that don't match the shipped names
 
 ## Command Intent
 
 - `first-tree init`
-  - when run in a source/workspace repo, creates or reuses a sibling dedicated
-    tree repo by default
-  - installs the skill into the source/workspace repo without creating tree
-    files there
-  - creates `FIRST_TREE.md` in the source/workspace repo as a symlink to the
-    installed `references/about.md` entrypoint
-  - upserts the managed `FIRST-TREE-SOURCE-INTEGRATION:` section in root
-    `AGENTS.md` and `CLAUDE.md`
-  - does **not** install the skill into the target tree repo
-  - renders top-level tree scaffolding only in the target tree repo
-  - renders both `AGENTS.md` and `CLAUDE.md` in the target tree repo
-  - may optionally seed `members/*/NODE.md` from repository contributor history
-    when `--seed-members contributors` is set
-  - writes dedicated-tree metadata to `.first-tree/`, including
-    `.first-tree/progress.md`
+  - in a source/workspace repo: installs the lightweight skill, creates a
+    sibling dedicated tree repo, links `FIRST_TREE.md`, adds the source
+    integration markers
+  - in a dedicated tree repo (`--here`): scaffolds NODE.md, AGENTS.md,
+    CLAUDE.md, members/NODE.md, and `.first-tree/` metadata
+  - never installs the skill into a dedicated tree repo
+  - reuses existing `*-tree` and `*-context` sibling repos when already bound
 - `first-tree verify`
-  - checks progress state from the installed tree metadata
-  - validates root/frontmatter/agent markers
-  - runs node and member validators
-  - must reject source/workspace repos that carry only local integration
+  - reads from the current directory (or `--tree-path`)
+  - rejects source/workspace repos that have only the local skill — those
+    must be verified via the dedicated tree repo
 - `first-tree publish`
-  - is the explicit second-stage command for publishing a dedicated tree repo
-    to GitHub after local bootstrap
-  - reads dedicated-tree bootstrap metadata from
-    `.first-tree/bootstrap.json` when available
-  - may create or reuse the GitHub `*-tree` repo, continue supporting older
-  `*-context` repos, push tree commits, record the published tree repo URL back
-  in the source/workspace repo, refresh the ignored local checkout config, and
-  optionally open the source-repo PR
+  - is the second-stage command after `init` for source/workspace installs
+  - creates or reuses the GitHub `*-tree` repo and pushes the local commits
+  - records the published tree URL in the source repo
 - `first-tree upgrade`
-  - compares the installed skill payload version to the skill bundled with the
-    currently running `first-tree` package
-  - refreshes the current install metadata without overwriting tree content
-  - when run in a source/workspace repo, refreshes only the local installed
-    skill, the `FIRST_TREE.md` symlink, plus the
-    `FIRST-TREE-SOURCE-INTEGRATION:` section
-  - when run in a dedicated tree repo, refreshes only `.first-tree/`
-  - migrates repos that still use the previous `skills/first-tree/` path onto
-    `.agents/skills/first-tree/` and `.claude/skills/first-tree/`
-  - migrates legacy `.context-tree/` repos onto the installed skill layout
-  - preserves user-authored sections such as the editable part of `AGENTS.md`
-
-## Compatibility Rules For Legacy Trees
-
-- `first-tree init` never creates a new `.context-tree/`.
-- Default dedicated-tree repo naming uses `*-tree`, but existing bound
-  `*-context` repos remain supported and should be reused.
-- `first-tree init --here` preserves the explicit in-place bootstrap path for
-  already-created tree repos.
-- Default dedicated-tree-repo creation is local-only. The CLI may create a new
-  sibling git repo on disk, but it must not clone the source repo or depend on
-  network access.
-- Source/workspace repos must never receive `NODE.md`, `members/`, or
-  tree-scoped `AGENTS.md` / `CLAUDE.md` from default init flows.
-- Normal `first-tree init` and `first-tree upgrade` flows do not clone the
-  source repo or require network access.
-- `first-tree verify` may still read a legacy
-  `.claude/skills/first-tree/...`, `.agents/skills/first-tree/...`,
-  `skills/first-tree/...`, or
-  `.context-tree/...` layout in an existing user repo so the repo can be
-  repaired or upgraded in place.
-- `first-tree upgrade` must migrate either legacy layout onto
-  `.agents/skills/first-tree/` and `.claude/skills/first-tree/`, and remove
-  old skill directories afterward.
-- When both current and legacy layouts are present, prefer the
-  `.agents/skills/first-tree/` layout.
-- Existing repos may still have a legacy `AGENT.md`; `init` and `upgrade`
-  must not silently overwrite it, and follow-up tasks should direct users to
-  rename or merge it into `AGENTS.md`.
-- Existing repos that predate the mirrored `CLAUDE.md` template should receive
-  follow-up tasks directing users to add or update `CLAUDE.md`.
+  - wipes and replaces the installed skill payload (see above)
+  - no-op when installed `major.minor` matches CLI's `major.minor`
+  - migrates legacy layouts (`.context-tree/`, `skills/first-tree/`) by
+    deleting them as part of the wipe
 
 ## Invariants
 
-- Templates, workflows, prompts, helper scripts, and explanatory references
-  must stay aligned.
-- If a change affects installed payload contents, bump
-  `assets/framework/VERSION` so packaged upgrades can detect it.
-- Ownership behavior must stay identical across layout changes.
+- The installed skill is read-only knowledge for users. Local edits will be
+  silently overwritten on the next `upgrade`. If you need to customize
+  something, fork the upstream package or open an issue.
+- A patch bump (`0.2.4` → `0.2.5`) never modifies a user repo — patch
+  changes are CLI-only.
+- A minor bump (`0.2.x` → `0.3.0`) means the next `first-tree upgrade` will
+  rewrite the installed skill. It will also refresh shipped CI workflows and
+  the SessionStart hook command if those still use legacy paths.
 - The tree remains decision-focused; execution detail stays in source systems.
-- A path migration is incomplete if task text, docs, tests, and runtime assets
-  disagree about where the framework lives.

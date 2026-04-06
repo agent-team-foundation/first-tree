@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import {
   buildDefaultTreeRepoName,
@@ -9,25 +9,23 @@ import {
 import { Repo } from "#engine/repo.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
-  AGENT_INSTRUCTIONS_TEMPLATE,
   CLAUDE_INSTRUCTIONS_FILE,
-  CLAUDE_INSTRUCTIONS_TEMPLATE,
-  CLAUDE_SKILL_ROOT,
-  FRAMEWORK_WORKFLOWS_DIR,
-  FRAMEWORK_TEMPLATES_DIR,
-  FRAMEWORK_VERSION,
   FIRST_TREE_INDEX_FILE,
   LEGACY_AGENT_INSTRUCTIONS_FILE,
-  LEGACY_FRAMEWORK_ROOT,
   LEGACY_REPO_SKILL_ROOT,
-  SKILL_ROOT,
   SOURCE_INTEGRATION_MARKER,
   installedSkillRootsDisplay,
   type FrameworkLayout,
 } from "#engine/runtime/asset-loader.js";
 import {
+  refreshInjectContextHook,
+  refreshShippedWorkflows,
+} from "#engine/runtime/adapters.js";
+import {
   copyCanonicalSkill,
+  resolveBundledAssetRoot,
   resolveBundledPackageRoot,
+  wipeInstalledSkill,
   writeTreeRuntimeVersion,
 } from "#engine/runtime/installer.js";
 import {
@@ -123,23 +121,21 @@ function formatUpgradeTaskList(
   packagedVersion: string,
   layout: FrameworkLayout,
 ): string {
-  const lines: string[] = [`# Context Tree Upgrade — v${localVersion} -> v${packagedVersion}\n`];
+  const lines: string[] = [
+    `# Context Tree Upgrade — v${localVersion} -> v${packagedVersion}\n`,
+  ];
 
   if (layout === "tree") {
     lines.push(
       "## Tree Metadata",
-      "- [ ] Review any repo docs, hooks, or automation that still assume the dedicated tree repo keeps local `.agents/skills/first-tree/` or `.claude/skills/first-tree/` copies",
       "- [ ] Replace any stale `context-tree` CLI command references in repo-specific docs, scripts, workflows, or agent config with `first-tree`",
       "",
     );
   } else {
     lines.push(
       "## Installed Skill",
-      `- [ ] Review local customizations under ${installedSkillRootsDisplay()} and reapply them if needed`,
-      `- [ ] Re-copy any workflow updates you want from \`${FRAMEWORK_WORKFLOWS_DIR}/\` into \`.github/workflows/\``,
-      `- [ ] Re-check any local agent setup that references \`${CLAUDE_SKILL_ROOT}/assets/framework/examples/\` or \`${CLAUDE_SKILL_ROOT}/assets/framework/helpers/\``,
-      `- [ ] Re-check any repo scripts or workflow files that reference \`${SKILL_ROOT}/assets/framework/\``,
-      "- [ ] Replace any stale `context-tree` CLI command references in repo-specific docs, scripts, workflows, or agent config with `first-tree`",
+      `- [ ] The skill payload at ${installedSkillRootsDisplay()} was wiped and replaced with the lightweight \`SKILL.md\` + \`references/\` + \`VERSION\` layout. Verify root symlinks (\`principles.md\`, \`ownership-and-naming.md\`, \`FIRST_TREE.md\`) still resolve.`,
+      "- [ ] If any local automation or docs still reference paths like `.agents/skills/first-tree/engine/`, `.agents/skills/first-tree/assets/`, or `.agents/skills/first-tree/helpers/`, update them to invoke the CLI instead (e.g. `npx -p first-tree first-tree <command>`).",
       "",
     );
   }
@@ -159,7 +155,10 @@ function formatUpgradeTaskList(
     );
   }
 
-  if (repo.hasCanonicalAgentInstructionsFile() && repo.hasLegacyAgentInstructionsFile()) {
+  if (
+    repo.hasCanonicalAgentInstructionsFile() &&
+    repo.hasLegacyAgentInstructionsFile()
+  ) {
     migrationTasks.push(
       `- [ ] Merge any remaining user-authored content from \`${LEGACY_AGENT_INSTRUCTIONS_FILE}\` into \`${AGENT_INSTRUCTIONS_FILE}\`, then delete the legacy file`,
     );
@@ -176,12 +175,8 @@ function formatUpgradeTaskList(
   if (repo.hasAgentInstructionsMarkers()) {
     lines.push(
       "## Agent Instructions",
-      layout === "tree"
-        ? `- [ ] Compare the framework section in \`${AGENT_INSTRUCTIONS_FILE}\` with the bundled \`${AGENT_INSTRUCTIONS_TEMPLATE}\` template and update the text between the markers if needed`
-        : `- [ ] Compare the framework section in \`${AGENT_INSTRUCTIONS_FILE}\` with \`${FRAMEWORK_TEMPLATES_DIR}/${AGENT_INSTRUCTIONS_TEMPLATE}\` and update the content between the markers if needed`,
-      layout === "tree"
-        ? `- [ ] Compare the framework section in \`${CLAUDE_INSTRUCTIONS_FILE}\` with the bundled \`${CLAUDE_INSTRUCTIONS_TEMPLATE}\` template and update the text between the markers if needed`
-        : `- [ ] Compare the framework section in \`${CLAUDE_INSTRUCTIONS_FILE}\` with \`${FRAMEWORK_TEMPLATES_DIR}/${CLAUDE_INSTRUCTIONS_TEMPLATE}\` and update the content between the markers if needed`,
+      `- [ ] Compare the framework section in \`${AGENT_INSTRUCTIONS_FILE}\` with the bundled template (run \`first-tree init --help\` to see what templates ship) and update the text between the markers if needed`,
+      `- [ ] Compare the framework section in \`${CLAUDE_INSTRUCTIONS_FILE}\` with the bundled template and update the text between the markers if needed`,
       "",
     );
   }
@@ -308,7 +303,7 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
           );
         }
         console.log(
-          `Already up to date with the bundled skill (${FRAMEWORK_VERSION} = ${localVersion}).`,
+          `Already up to date with the bundled skill (${workingRepo.frameworkVersionPath()} = ${localVersion}).`,
         );
         logLocalSourceWorkspaceState(localSourceWorkspaceState);
         console.log(
@@ -317,7 +312,7 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
         return 0;
       }
       console.log(
-        `Already up to date with the bundled skill (${FRAMEWORK_VERSION} = ${localVersion}).`,
+        `Already up to date with the bundled skill (${workingRepo.frameworkVersionPath()} = ${localVersion}).`,
       );
       if (firstTreeIndex.action === "created") {
         console.log(`Created \`${FIRST_TREE_INDEX_FILE}\`.`);
@@ -344,7 +339,13 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
       return 0;
     }
 
+    const wipedPaths = wipeInstalledSkill(workingRepo.root);
     copyCanonicalSkill(sourceRoot, workingRepo.root);
+    const hookRefresh = refreshInjectContextHook(workingRepo.root);
+    const refreshedWorkflows = refreshShippedWorkflows(
+      workingRepo.root,
+      join(resolveBundledAssetRoot(sourceRoot), "workflows"),
+    );
     const localSourceWorkspaceState = syncLocalSourceWorkspaceState(
       workingRepo,
       treeRepoName,
@@ -357,9 +358,24 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
     const changedFiles = updates
       .filter((update) => update.action !== "unchanged")
       .map((update) => update.file);
+    if (wipedPaths.length > 0) {
+      console.log(
+        `Wiped previous skill installation: ${wipedPaths.map((p) => `\`${p}/\``).join(", ")}.`,
+      );
+    }
     console.log(
       `Refreshed ${installedSkillRootsDisplay()} in this source/workspace repo.`,
     );
+    if (hookRefresh === "updated") {
+      console.log(
+        "Updated `.claude/settings.json` SessionStart hook to use `npx -p first-tree first-tree inject-context --skip-version-check`.",
+      );
+    }
+    if (refreshedWorkflows.length > 0) {
+      console.log(
+        `Overwrote shipped workflow files: ${refreshedWorkflows.map((f) => `\`.github/workflows/${f}\``).join(", ")}.`,
+      );
+    }
     if (firstTreeIndex.action === "created") {
       console.log(`Created \`${FIRST_TREE_INDEX_FILE}\`.`);
     } else if (firstTreeIndex.action === "updated") {
@@ -421,29 +437,30 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
     return 0;
   }
 
+  const wipedPaths = wipeInstalledSkill(workingRepo.root);
   copyCanonicalSkill(sourceRoot, workingRepo.root);
-  if (layout === "legacy") {
-    rmSync(join(workingRepo.root, LEGACY_FRAMEWORK_ROOT), {
-      recursive: true,
-      force: true,
-    });
+  const hookRefresh = refreshInjectContextHook(workingRepo.root);
+  const refreshedWorkflows = refreshShippedWorkflows(
+    workingRepo.root,
+    join(resolveBundledAssetRoot(sourceRoot), "workflows"),
+  );
+  if (wipedPaths.length > 0) {
     console.log(
-      `Migrated legacy .context-tree/ layout to ${installedSkillRootsDisplay()}.`,
+      `Wiped previous skill installation: ${wipedPaths.map((p) => `\`${p}/\``).join(", ")}.`,
     );
-  } else if (layout === "legacy-repo-skill") {
+  }
+  console.log(
+    `Installed lightweight skill payload at ${installedSkillRootsDisplay()}.`,
+  );
+  if (hookRefresh === "updated") {
     console.log(
-      `Migrated legacy ${LEGACY_REPO_SKILL_ROOT}/ layout to ${installedSkillRootsDisplay()}.`,
+      "Updated `.claude/settings.json` SessionStart hook to use `npx -p first-tree first-tree inject-context --skip-version-check`.",
     );
-  } else {
-    if (missingInstalledRoots.length > 0) {
-      console.log(
-        `Repaired missing installed skill roots (${missingInstalledRoots.map((root) => `${root}/`).join(", ")}) and refreshed ${installedSkillRootsDisplay()} from the bundled first-tree package.`,
-      );
-    } else {
-      console.log(
-        `Refreshed ${installedSkillRootsDisplay()} from the bundled first-tree package.`,
-      );
-    }
+  }
+  if (refreshedWorkflows.length > 0) {
+    console.log(
+      `Overwrote shipped workflow files: ${refreshedWorkflows.map((f) => `\`.github/workflows/${f}\``).join(", ")}.`,
+    );
   }
 
   const output = formatUpgradeTaskList(

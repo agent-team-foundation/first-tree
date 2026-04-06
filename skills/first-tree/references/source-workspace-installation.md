@@ -11,25 +11,76 @@ existing source or workspace repository.
 ## Core Boundary
 
 - The current source/workspace repo is **not** the Context Tree.
-- The current source/workspace repo should carry only the installed
-  `.agents/skills/first-tree/` and `.claude/skills/first-tree/` skill roots
-  plus a `FIRST_TREE.md` symlink to
-  `.agents/skills/first-tree/references/about.md` and a managed
-  `FIRST-TREE-SOURCE-INTEGRATION:` section in root `AGENTS.md` and `CLAUDE.md`.
+- The current source/workspace repo carries only:
+  - `.agents/skills/first-tree/` and `.claude/skills/first-tree/` — the
+    lightweight installed skill payload (SKILL.md, VERSION, references/).
+    No engine, no assets, no helpers, no scripts.
+  - `FIRST_TREE.md` — symlink to `.agents/skills/first-tree/references/about.md`
+  - A managed `FIRST-TREE-SOURCE-INTEGRATION:` block in `AGENTS.md` and
+    `CLAUDE.md`
+  - `.first-tree/local-tree.json` — local-only config recording where the
+    dedicated tree repo lives on disk
 - `NODE.md`, `members/`, and tree-scoped `AGENTS.md` / `CLAUDE.md` content
   belong only in a dedicated `*-tree` repo. Existing bound `*-context` repos
   are still supported and should be reused.
-- The dedicated tree repo keeps its local CLI metadata under `.first-tree/`
-  instead of installing another copy of the `first-tree` skill.
+- The dedicated tree repo keeps its CLI metadata under `.first-tree/`. It does
+  NOT install a copy of the `first-tree` skill — it holds tree content only.
 - If a task changes decisions, rationale, ownership, or constraints, update
   the dedicated tree repo rather than copying that material into the source
   repo.
 
+## What Lives Where After Install
+
+```text
+<source-repo>/                         # source/workspace repo
+  .agents/skills/first-tree/           # lightweight skill (read-only)
+    SKILL.md
+    VERSION                            # major.minor (e.g. "0.2")
+    references/                        # principles, ownership, onboarding, etc.
+  .claude/skills/first-tree            # symlink to .agents/skills/first-tree
+  FIRST_TREE.md                        # symlink to references/about.md
+  AGENTS.md                            # has FIRST-TREE-SOURCE-INTEGRATION block
+  CLAUDE.md                            # has FIRST-TREE-SOURCE-INTEGRATION block
+  .first-tree/local-tree.json          # local-only, gitignored
+  ... your normal source code ...
+
+<source-repo>-tree/                    # sibling dedicated tree repo
+  .first-tree/
+    VERSION                            # major.minor
+    progress.md
+    bootstrap.json                     # source repo path for publish
+  NODE.md                              # root tree node
+  AGENTS.md
+  CLAUDE.md
+  members/
+    NODE.md
+    <member-id>/
+      NODE.md
+  ... your domains ...
+```
+
+## Helper Invocation
+
+User repos do NOT contain helper scripts anymore. The CLI provides
+subcommands that wrap each helper. Workflows and hook commands invoke them
+via npx:
+
+| Helper | CLI command |
+|---|---|
+| Inject session context (Claude Code SessionStart hook) | `npx -p first-tree first-tree inject-context --skip-version-check` |
+| Generate `.github/CODEOWNERS` from tree ownership | `npx -p first-tree first-tree generate-codeowners` |
+| Run Claude Code PR review (CI) | `npx -p first-tree first-tree review` |
+| Verify the tree | `npx -p first-tree first-tree verify` |
+
+The `--skip-version-check` flag suppresses the silent auto-upgrade check
+on every invocation. Use it for latency-sensitive callers like the
+SessionStart hook (which runs at the start of every Claude Code session).
+
 ## Agent Decision Rule
 
 - Treat "install and use first-tree" in a source/workspace repo as a two-repo
-  workflow: local integration in the current repo plus tree bootstrap in a
-  sibling `*-tree` repo.
+  workflow: local skill integration in the current repo plus tree bootstrap
+  in a sibling `*-tree` repo.
 - If the source/workspace repo is already bound to a legacy `*-context` repo,
   keep reusing that repo name instead of silently switching it to `*-tree`.
 - Do not run `first-tree init --here` in the source/workspace repo unless the
@@ -64,8 +115,8 @@ default workflow is:
 6. Run `first-tree publish --open-pr` from the dedicated tree repo. It will:
    create or reuse the GitHub `*-tree` repo in the same owner/org as the
    source repo, continue supporting older `*-context` repos, push the tree,
-   record the published tree URL back in the source/workspace repo, refresh the
-   ignored local tree checkout config, and open the source-repo PR.
+   record the published tree URL back in the source/workspace repo, refresh
+   the ignored local tree checkout config, and open the source-repo PR.
 7. After publish succeeds, treat the checkout recorded in
    `.first-tree/local-tree.json` as the canonical local working copy for the
    tree. The bootstrap checkout can be deleted when you no longer need it.
@@ -96,10 +147,18 @@ and publish cannot infer the source repo, pass `--source-repo PATH`.
 - Do not run `first-tree verify` in the source/workspace repo. Verify the
   dedicated tree repo instead, for example
   `first-tree verify --tree-path ../my-repo-tree`.
-- Running `first-tree upgrade` in the source/workspace repo refreshes only
-  the local installed skill, the `FIRST_TREE.md` symlink, and the
-  `FIRST-TREE-SOURCE-INTEGRATION:` section.
+- Running `first-tree upgrade` in the source/workspace repo wipes the
+  installed skill payload and reinstalls the lightweight version from the
+  bundled package, refreshes the `FIRST_TREE.md` symlink and the
+  `FIRST-TREE-SOURCE-INTEGRATION:` block, updates `.claude/settings.json`'s
+  SessionStart hook command if it still references a legacy
+  `inject-tree-context.sh` path, and overwrites any
+  `.github/workflows/{validate,pr-review,codeowners}.yml` files that match
+  shipped templates.
 - Run `first-tree upgrade --tree-path ../my-repo-tree` to upgrade the
   dedicated tree repo itself. If the source/workspace repo is still bound to
   `../my-repo-context`, use that actual legacy path instead. Dedicated tree
   repos keep their progress and version markers under `.first-tree/`.
+- The upgrade command is a no-op when the installed major.minor matches the
+  bundled CLI's major.minor. CLI patch updates (e.g. `0.2.4` → `0.2.5`) ship
+  via npm and never require touching user repos.

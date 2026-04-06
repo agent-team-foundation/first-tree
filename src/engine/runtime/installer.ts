@@ -82,6 +82,32 @@ export function readSkillVersion(sourceRoot: string): string {
   return readFileSync(join(skillRoot, "VERSION"), "utf-8").trim();
 }
 
+/**
+ * Remove every known installed-skill location from `targetRoot`. Used by
+ * the wipe-and-replace upgrade flow before installing a fresh lightweight
+ * skill payload. Safe to call when nothing is installed.
+ *
+ * Returns the list of paths that were actually removed (relative to
+ * targetRoot) so callers can report what changed.
+ */
+export function wipeInstalledSkill(targetRoot: string): string[] {
+  const removed: string[] = [];
+  const candidates = [
+    SKILL_ROOT, // .agents/skills/first-tree/
+    CLAUDE_SKILL_ROOT, // .claude/skills/first-tree/
+    LEGACY_REPO_SKILL_ROOT, // skills/first-tree/ (legacy)
+    ".context-tree", // oldest legacy layout
+  ];
+  for (const relPath of candidates) {
+    const fullPath = join(targetRoot, relPath);
+    if (existsSync(fullPath) || isSymlink(fullPath)) {
+      rmSync(fullPath, { recursive: true, force: true });
+      removed.push(relPath);
+    }
+  }
+  return removed;
+}
+
 export function copyCanonicalSkill(sourceRoot: string, targetRoot: string): void {
   const src = resolveCanonicalSkillRoot(sourceRoot);
   const sourceRepoSkillRoot = join(targetRoot, BUNDLED_SKILL_ROOT);
