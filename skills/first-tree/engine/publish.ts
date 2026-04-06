@@ -1,6 +1,10 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
+import {
+  formatDedicatedTreePathExample,
+  inferSourceRepoNameFromTreeRepoName,
+} from "#skill/engine/dedicated-tree.js";
 import { Repo } from "#skill/engine/repo.js";
 import { readBootstrapState } from "#skill/engine/runtime/bootstrap.js";
 import { upsertSourceIntegrationFiles } from "#skill/engine/runtime/source-integration.js";
@@ -15,7 +19,8 @@ import {
 export const PUBLISH_USAGE = `usage: first-tree publish [--open-pr] [--tree-path PATH] [--source-repo PATH] [--submodule-path PATH] [--source-remote NAME]
 
 Run this from the dedicated tree repo after \`first-tree init\`. The command
-creates or reuses the GitHub \`*-context\` repo, pushes the current tree
+creates or reuses the GitHub \`*-tree\` repo, continues supporting older
+\`*-context\` repos, pushes the current tree
 commit, adds that repo back to the source/workspace repo as a git submodule,
 and prepares the source-repo branch.
 
@@ -269,10 +274,13 @@ function resolveSourceRepoRoot(
     return resolve(treeRepo.root, bootstrap.sourceRepoPath);
   }
 
-  if (treeRepo.repoName().endsWith("-context")) {
+  const inferredSourceRepoName = inferSourceRepoNameFromTreeRepoName(
+    treeRepo.repoName(),
+  );
+  if (inferredSourceRepoName !== null) {
     return join(
       dirname(treeRepo.root),
-      treeRepo.repoName().slice(0, -"-context".length),
+      inferredSourceRepoName,
     );
   }
 
@@ -612,7 +620,7 @@ export function runPublish(repo?: Repo, options?: PublishOptions): number {
 
   if (treeRepo.hasSourceWorkspaceIntegration() && !treeRepo.looksLikeTreeRepo()) {
     console.error(
-      `Error: this repo only has the first-tree source/workspace integration installed. Run \`first-tree publish --tree-path ../${treeRepo.repoName()}-context\` or switch into the dedicated tree repo first.`,
+      `Error: this repo only has the first-tree source/workspace integration installed. Run ${formatDedicatedTreePathExample("first-tree publish", treeRepo)} or switch into the dedicated tree repo first.`,
     );
     return 1;
   }

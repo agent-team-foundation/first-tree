@@ -14,8 +14,10 @@ This repo is not a user context tree. User decision content lives in the repos
 that install the framework.
 
 When a source/workspace repo installs first-tree, that repo should keep only
-the local skill integration and marker lines. Tree content still belongs only
-in a dedicated `*-context` repo.
+the local skill integration plus the managed
+`FIRST-TREE-SOURCE-INTEGRATION:` section. Tree content still belongs only in a
+dedicated `*-tree` repo. Existing bound `*-context` repos are still supported
+and should be preserved.
 
 ## Canonical Layers
 

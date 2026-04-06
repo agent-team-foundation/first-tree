@@ -6,7 +6,11 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import {
+  relativeRepoPath,
+  resolveDedicatedTreeRepoForSource,
+} from "#skill/engine/dedicated-tree.js";
 import { Repo } from "#skill/engine/repo.js";
 import { ONBOARDING_TEXT } from "#skill/engine/onboarding.js";
 import { evaluateAll } from "#skill/engine/rules/index.js";
@@ -31,6 +35,7 @@ import { writeBootstrapState } from "#skill/engine/runtime/bootstrap.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
   AGENT_INSTRUCTIONS_TEMPLATE,
+  BOOTSTRAP_STATE,
   CLAUDE_INSTRUCTIONS_FILE,
   CLAUDE_INSTRUCTIONS_TEMPLATE,
   FRAMEWORK_VERSION,
@@ -56,8 +61,9 @@ export const INIT_USAGE = `usage: first-tree init [--here] [--seed-members contr
 By default, running \`first-tree init\` inside a source or workspace repo installs
 the first-tree skill in the current repo, writes \`FIRST_TREE.md\`, updates
 \`AGENTS.md\` and \`CLAUDE.md\` with a managed \`${SOURCE_INTEGRATION_MARKER}\`
-section,
-and creates a sibling dedicated tree repo named \`<repo>-context\`.
+section, and creates a sibling dedicated tree repo named \`<repo>-tree\`.
+Existing sibling \`*-context\` repos and existing local tree checkouts are
+still reused when already bound.
 
 Do not use \`--here\` inside a source/workspace repo unless you explicitly want
 that repo itself to become the Context Tree.
@@ -95,6 +101,7 @@ const TEMPLATE_MAP: TemplateTarget[] = [
 interface TaskListContext {
   sourceRepoPath?: string;
   sourceRepoName?: string;
+  treeRepoName?: string;
   dedicatedTreeRepo?: boolean;
   frameworkVersionPath?: string;
   progressPath?: string;
@@ -115,8 +122,9 @@ function renderTemplates(frameworkDir: string, target: string): void {
     );
 
     if (existingPath !== undefined) {
-      console.log(`  Skipped ${targetPath} (found existing ${existingPath})`);
-    } else if (renderTemplateFile(frameworkDir, templateName, target, targetPath)) {
+      continue;
+    }
+    if (renderTemplateFile(frameworkDir, templateName, target, targetPath)) {
       console.log(`  Created ${targetPath}`);
     }
   }
@@ -147,10 +155,11 @@ export function formatTaskList(
       );
       lines.push("## Source Workspace Workflow");
       lines.push(
-        `- [ ] When this initial tree version is ready, run \`first-tree publish --open-pr\` from this dedicated tree repo. It will create or reuse the GitHub \`*-context\` repo, add it back to \`${context.sourceRepoName}\` as a git submodule, and open the source/workspace PR.`,
+        `- [ ] When this initial tree version is ready, run \`first-tree publish --open-pr\` from this dedicated tree repo. It will create or reuse the GitHub \`*-tree\` repo, continue supporting older \`*-context\` repos, add the published tree back to \`${context.sourceRepoName}\` as a git submodule, and open the source/workspace PR.`,
       );
+      const localCheckoutName = context.treeRepoName ?? "dedicated tree";
       lines.push(
-        `- [ ] After publish succeeds, treat the source/workspace repo's \`${context.sourceRepoName}\` submodule checkout as the canonical local working copy for this tree. The temporary sibling bootstrap repo can be deleted when you no longer need it.`,
+        `- [ ] After publish succeeds, treat the source/workspace repo's \`${localCheckoutName}\` submodule checkout as the canonical local working copy for this tree. The temporary sibling bootstrap repo can be deleted when you no longer need it.`,
       );
       lines.push("");
     }
@@ -266,7 +275,8 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
         frameworkVersionPath: r.frameworkVersionPath(),
         progressPath: r.preferredProgressPath(),
         sourceRepoName: sourceRepo.repoName(),
-        sourceRepoPath: relativePathFrom(r.root, sourceRepo.root),
+        sourceRepoPath: relativeRepoPath(r.root, sourceRepo.root),
+        treeRepoName: initTarget.treeRepoName,
       }
     : {
         frameworkVersionPath: r.frameworkVersionPath(),
@@ -315,9 +325,12 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
       }
       const firstTreeIndex = upsertFirstTreeIndexFile(
         sourceRepo.root,
-        r.repoName(),
+        initTarget.treeRepoName,
       );
-      const updates = upsertSourceIntegrationFiles(sourceRepo.root, r.repoName());
+      const updates = upsertSourceIntegrationFiles(
+        sourceRepo.root,
+        initTarget.treeRepoName,
+      );
       const changedFiles = updates
         .filter((update) => update.action !== "unchanged")
         .map((update) => update.file);
@@ -411,9 +424,23 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
   if (initTarget.dedicatedTreeRepo) {
     writeBootstrapState(r.root, {
       sourceRepoName: sourceRepo.repoName(),
-      sourceRepoPath: relativePathFrom(r.root, sourceRepo.root),
-      treeRepoName: r.repoName(),
+      sourceRepoPath: relativeRepoPath(r.root, sourceRepo.root),
+      treeRepoName: initTarget.treeRepoName,
     });
+  }
+
+  if (initTarget.dedicatedTreeRepo) {
+    const repairedSubmodule = repairSourceSubmoduleIfSafe(
+      sourceRepo,
+      r,
+      initTarget.treeRepoName,
+    );
+    if (repairedSubmodule) {
+      console.log(
+        `  Added missing \`${initTarget.treeRepoName}\` submodule checkout to the source/workspace repo.`,
+      );
+      console.log();
+    }
   }
 
   console.log(ONBOARDING_TEXT);
@@ -438,7 +465,7 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
   console.log(`Progress file written to ${r.preferredProgressPath()}`);
   if (initTarget.dedicatedTreeRepo) {
     console.log(
-      `Continue in ${relativePathFrom(sourceRepo.root, r.root)} and keep your source repos available as additional working directories when you populate the tree.`,
+      `Continue in ${relativeRepoPath(sourceRepo.root, r.root)} and keep your source repos available as additional working directories when you populate the tree.`,
     );
   }
   return 0;
@@ -531,6 +558,7 @@ interface ResolvedInitTarget {
   createdGitRepo: boolean;
   dedicatedTreeRepo: boolean;
   repo: Repo;
+  treeRepoName: string;
 }
 
 interface FailedInitTarget {
@@ -550,7 +578,19 @@ function resolveInitTarget(
     };
   }
 
-  const targetRoot = determineTargetRoot(sourceRepo, options);
+  let targetRoot: string;
+  let treeRepoName: string;
+  try {
+    const resolvedTarget = determineTargetRoot(sourceRepo, options);
+    targetRoot = resolvedTarget.root;
+    treeRepoName = resolvedTarget.treeRepoName;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "unknown error";
+    return {
+      ok: false,
+      message,
+    };
+  }
   const dedicatedTreeRepo = targetRoot !== sourceRepo.root;
   let createdGitRepo = false;
   try {
@@ -568,20 +608,28 @@ function resolveInitTarget(
     createdGitRepo,
     dedicatedTreeRepo,
     repo: new Repo(targetRoot),
+    treeRepoName,
   };
 }
 
-function determineTargetRoot(sourceRepo: Repo, options?: InitOptions): string {
+function determineTargetRoot(
+  sourceRepo: Repo,
+  options?: InitOptions,
+): { root: string; treeRepoName: string } {
   if (options?.treePath) {
-    return resolve(options.currentCwd ?? process.cwd(), options.treePath);
+    const root = resolve(options.currentCwd ?? process.cwd(), options.treePath);
+    return { root, treeRepoName: new Repo(root).repoName() };
   }
 
   if (options?.here) {
-    return sourceRepo.root;
+    return { root: sourceRepo.root, treeRepoName: sourceRepo.repoName() };
   }
 
   if (options?.treeName) {
-    return join(dirname(sourceRepo.root), options.treeName);
+    return {
+      root: join(dirname(sourceRepo.root), options.treeName),
+      treeRepoName: options.treeName,
+    };
   }
 
   if (
@@ -589,10 +637,17 @@ function determineTargetRoot(sourceRepo: Repo, options?: InitOptions): string {
     || sourceRepo.isLikelyEmptyRepo()
     || !sourceRepo.isLikelySourceRepo()
   ) {
-    return sourceRepo.root;
+    return { root: sourceRepo.root, treeRepoName: sourceRepo.repoName() };
   }
 
-  return join(dirname(sourceRepo.root), `${sourceRepo.repoName()}-context`);
+  const resolved = resolveDedicatedTreeRepoForSource(sourceRepo);
+  if (resolved.ok) {
+    return {
+      root: resolved.value.root,
+      treeRepoName: resolved.value.treeRepoName,
+    };
+  }
+  throw new Error(resolved.message);
 }
 
 function ensureGitRepo(
@@ -626,10 +681,147 @@ function defaultGitInitializer(root: string): void {
   });
 }
 
-function relativePathFrom(from: string, to: string): string {
-  const rel = relative(from, to);
-  if (rel === "") {
-    return ".";
+function repairSourceSubmoduleIfSafe(
+  sourceRepo: Repo,
+  treeRepo: Repo,
+  treeRepoName: string,
+): boolean {
+  if (
+    !canRunGitCommands(sourceRepo.root)
+    || !canRunGitCommands(treeRepo.root)
+    || treeRepo.root === sourceRepo.root
+    || dirname(treeRepo.root) !== dirname(sourceRepo.root)
+  ) {
+    return false;
   }
-  return rel.startsWith("..") ? rel : `./${rel}`;
+
+  if (isTrackedSubmodule(sourceRepo.root, treeRepoName)) {
+    return false;
+  }
+
+  const submoduleRoot = join(sourceRepo.root, treeRepoName);
+  if (existsSync(submoduleRoot)) {
+    return false;
+  }
+
+  const remoteUrl = readGitRemoteUrl(treeRepo.root, "origin");
+  if (remoteUrl === null || isLocalGitRemote(remoteUrl)) {
+    return false;
+  }
+
+  if (
+    !hasGitHead(treeRepo.root)
+    || !hasOnlyAllowedWorkingTreeChanges(treeRepo.root, [BOOTSTRAP_STATE])
+  ) {
+    return false;
+  }
+
+  const localClonePath = relativeRepoPath(sourceRepo.root, treeRepo.root);
+  try {
+    execFileSync(
+      "git",
+      ["-c", "protocol.file.allow=always", "submodule", "add", localClonePath, treeRepoName],
+      { cwd: sourceRepo.root, stdio: "ignore" },
+    );
+    execFileSync(
+      "git",
+      ["submodule", "set-url", "--", treeRepoName, remoteUrl],
+      { cwd: sourceRepo.root, stdio: "ignore" },
+    );
+    execFileSync(
+      "git",
+      ["submodule", "sync", "--", treeRepoName],
+      { cwd: sourceRepo.root, stdio: "ignore" },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function canRunGitCommands(root: string): boolean {
+  try {
+    execFileSync("git", ["rev-parse", "--git-dir"], {
+      cwd: root,
+      stdio: "ignore",
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function hasGitHead(root: string): boolean {
+  try {
+    execFileSync("git", ["rev-parse", "--verify", "HEAD"], {
+      cwd: root,
+      stdio: "ignore",
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function hasOnlyAllowedWorkingTreeChanges(
+  root: string,
+  allowedPaths: string[] = [],
+): boolean {
+  try {
+    const output = execFileSync("git", ["status", "--porcelain"], {
+      cwd: root,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const lines = output
+      .split(/\r?\n/)
+      .map((line) => line.trimEnd())
+      .filter(Boolean);
+    if (lines.length === 0) {
+      return true;
+    }
+    if (allowedPaths.length === 0) {
+      return false;
+    }
+    return lines.every((line) => {
+      const rawPath = line.slice(3);
+      const finalPath = rawPath.includes(" -> ")
+        ? rawPath.split(" -> ").at(-1) ?? rawPath
+        : rawPath;
+      return allowedPaths.includes(finalPath.trim());
+    });
+  } catch {
+    return false;
+  }
+}
+
+function readGitRemoteUrl(root: string, remote: string): string | null {
+  try {
+    return execFileSync("git", ["remote", "get-url", remote], {
+      cwd: root,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
+function isTrackedSubmodule(root: string, submodulePath: string): boolean {
+  try {
+    const output = execFileSync("git", ["ls-files", "--stage", "--", submodulePath], {
+      cwd: root,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return output
+      .split(/\r?\n/)
+      .some((line) => line.startsWith("160000 "));
+  } catch {
+    return false;
+  }
+}
+
+function isLocalGitRemote(remoteUrl: string): boolean {
+  return !(remoteUrl.includes("://") || remoteUrl.startsWith("git@"));
 }

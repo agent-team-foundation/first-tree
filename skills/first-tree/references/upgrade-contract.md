@@ -106,9 +106,9 @@ metadata directory:
     to GitHub after local bootstrap
   - reads dedicated-tree bootstrap metadata from
     `.first-tree/bootstrap.json` when available
-  - may create or reuse the GitHub `*-context` repo, push tree commits, add it
-    back to the source/workspace repo as a git submodule, and optionally open
-    the source-repo PR
+  - may create or reuse the GitHub `*-tree` repo, continue supporting older
+  `*-context` repos, push tree commits, add it back to the source/workspace
+  repo as a git submodule, and optionally open the source-repo PR
 - `first-tree upgrade`
   - compares the installed skill payload version to the skill bundled with the
     currently running `first-tree` package
@@ -124,6 +124,8 @@ metadata directory:
 ## Compatibility Rules For Legacy Trees
 
 - `first-tree init` never creates a new `.context-tree/`.
+- Default dedicated-tree repo naming uses `*-tree`, but existing bound
+  `*-context` repos remain supported and should be reused.
 - `first-tree init --here` preserves the explicit in-place bootstrap path for
   already-created tree repos.
 - Default dedicated-tree-repo creation is local-only. The CLI may create a new

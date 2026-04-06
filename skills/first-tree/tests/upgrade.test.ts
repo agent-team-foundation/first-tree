@@ -150,7 +150,7 @@ describe("runUpgrade", () => {
     });
 
     const expectedBlock = buildSourceIntegrationBlock(
-      `${basename(repoDir.path)}-context`,
+      `${basename(repoDir.path)}-tree`,
     );
     expect(result).toBe(0);
     expect(readFileSync(join(repoDir.path, FRAMEWORK_VERSION), "utf-8").trim()).toBe("0.2.0");
@@ -164,5 +164,34 @@ describe("runUpgrade", () => {
       ".agents/skills/first-tree/references/about.md",
     );
     expect(existsSync(join(repoDir.path, INSTALLED_PROGRESS))).toBe(false);
+  });
+
+  it("preserves an existing legacy context binding in source/workspace integration", () => {
+    const repoDir = useTmpDir();
+    const sourceDir = useTmpDir();
+    makeSourceRepo(repoDir.path);
+    makeFramework(repoDir.path, "0.1.0");
+    const legacyTreeRepoName = `${basename(repoDir.path)}-context`;
+    writeFileSync(
+      join(repoDir.path, AGENT_INSTRUCTIONS_FILE),
+      `${buildSourceIntegrationBlock(legacyTreeRepoName)}\n`,
+    );
+    writeFileSync(
+      join(repoDir.path, CLAUDE_INSTRUCTIONS_FILE),
+      `${buildSourceIntegrationBlock(legacyTreeRepoName)}\n`,
+    );
+    makeSourceSkill(sourceDir.path, "0.2.0");
+
+    const result = runUpgrade(new Repo(repoDir.path), {
+      sourceRoot: sourceDir.path,
+    });
+
+    expect(result).toBe(0);
+    expect(readFileSync(join(repoDir.path, AGENT_INSTRUCTIONS_FILE), "utf-8")).toContain(
+      buildSourceIntegrationBlock(legacyTreeRepoName),
+    );
+    expect(readFileSync(join(repoDir.path, CLAUDE_INSTRUCTIONS_FILE), "utf-8")).toContain(
+      buildSourceIntegrationBlock(legacyTreeRepoName),
+    );
   });
 });

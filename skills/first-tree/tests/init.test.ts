@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -29,6 +30,8 @@ import {
   makeClaudeMd,
   makeFramework,
   makeLegacyFramework,
+  makeMembers,
+  makeNode,
   makeSourceRepo,
   makeSourceSkill,
 } from "./helpers.js";
@@ -152,6 +155,35 @@ const fakeGitInitializer = (root: string): void => {
   makeGitRepo(root);
 };
 
+function git(
+  args: string[],
+  cwd: string,
+): string {
+  return execFileSync("git", args, {
+    cwd,
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: "Test User",
+      GIT_AUTHOR_EMAIL: "test@example.com",
+      GIT_COMMITTER_NAME: "Test User",
+      GIT_COMMITTER_EMAIL: "test@example.com",
+    },
+  }).trim();
+}
+
+function initRealGitRepo(root: string): void {
+  mkdirSync(root, { recursive: true });
+  git(["init"], root);
+  git(["config", "user.name", "Test User"], root);
+  git(["config", "user.email", "test@example.com"], root);
+}
+
+function commitAll(root: string, message: string): void {
+  git(["add", "-A"], root);
+  git(["commit", "-m", message], root);
+}
+
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -235,7 +267,7 @@ describe("runInit", () => {
 
     const treeRepo = join(
       dirname(sourceRepoDir.path),
-      `${basename(sourceRepoDir.path)}-context`,
+      `${basename(sourceRepoDir.path)}-tree`,
     );
 
     expect(ret).toBe(0);
@@ -301,7 +333,7 @@ describe("runInit", () => {
 
     const treeRepo = join(
       dirname(sourceRepoDir.path),
-      `${basename(sourceRepoDir.path)}-context`,
+      `${basename(sourceRepoDir.path)}-tree`,
     );
     const expectedBlock = buildSourceIntegrationBlock(basename(treeRepo));
     const agentText = readFileSync(
@@ -398,7 +430,7 @@ describe("runInit", () => {
 
     const treeRepo = join(
       dirname(sourceRepoDir.path),
-      `${basename(sourceRepoDir.path)}-context`,
+      `${basename(sourceRepoDir.path)}-tree`,
     );
 
     expect(ret).toBe(0);
@@ -410,8 +442,87 @@ describe("runInit", () => {
       "Review the 2 contributor-seeded member node(s) under `members/`",
     );
     expect(readFileSync(join(sourceRepoDir.path, AGENT_INSTRUCTIONS_FILE), "utf-8")).toContain(
-      "FIRST-TREE-SOURCE-INTEGRATION:",
+      buildSourceIntegrationBlock(basename(treeRepo)),
     );
+  });
+
+  it("reuses an existing sibling legacy context repo instead of creating a new tree repo", () => {
+    const sourceRepoDir = useTmpDir();
+    const sourceSkillDir = useTmpDir();
+    makeSourceRepo(sourceRepoDir.path);
+    makeSourceSkill(sourceSkillDir.path, "0.2.0");
+
+    const legacyTreeRepo = join(
+      dirname(sourceRepoDir.path),
+      `${basename(sourceRepoDir.path)}-context`,
+    );
+    mkdirSync(legacyTreeRepo, { recursive: true });
+    makeGitRepo(legacyTreeRepo);
+    makeFramework(legacyTreeRepo, "0.1.0");
+
+    const ret = runInit(new Repo(sourceRepoDir.path), {
+      sourceRoot: sourceSkillDir.path,
+      gitInitializer: fakeGitInitializer,
+    });
+
+    expect(ret).toBe(0);
+    expect(readFileSync(join(sourceRepoDir.path, AGENT_INSTRUCTIONS_FILE), "utf-8")).toContain(
+      buildSourceIntegrationBlock(basename(legacyTreeRepo)),
+    );
+    expect(
+      JSON.parse(readFileSync(join(legacyTreeRepo, BOOTSTRAP_STATE), "utf-8")),
+    ).toEqual({
+      sourceRepoName: basename(sourceRepoDir.path),
+      sourceRepoPath: `../${basename(sourceRepoDir.path)}`,
+      treeRepoName: basename(legacyTreeRepo),
+    });
+    expect(
+      existsSync(
+        join(dirname(sourceRepoDir.path), `${basename(sourceRepoDir.path)}-tree`),
+      ),
+    ).toBe(false);
+  });
+
+  it("repairs a missing source submodule when reusing a published legacy context repo", () => {
+    const rootDir = useTmpDir();
+    const sourceRoot = join(rootDir.path, "ADHD");
+    const treeRoot = join(rootDir.path, "ADHD-context");
+    const skillRoot = useTmpDir();
+
+    mkdirSync(join(sourceRoot, "src"), { recursive: true });
+    writeFileSync(
+      join(sourceRoot, "package.json"),
+      JSON.stringify({ name: "ADHD" }, null, 2),
+    );
+    writeFileSync(join(sourceRoot, "src", "index.ts"), "export const ready = true;\n");
+    initRealGitRepo(sourceRoot);
+    commitAll(sourceRoot, "chore: bootstrap source");
+
+    initRealGitRepo(treeRoot);
+    makeFramework(treeRoot, "0.2.0");
+    makeNode(treeRoot);
+    makeAgentsMd(treeRoot, { markers: true });
+    makeMembers(treeRoot);
+    git(["remote", "add", "origin", "git@github.com:acme/ADHD-context.git"], treeRoot);
+    commitAll(treeRoot, "chore: bootstrap tree");
+
+    makeSourceSkill(skillRoot.path, "0.2.0");
+
+    const ret = runInit(new Repo(sourceRoot), {
+      sourceRoot: skillRoot.path,
+    });
+
+    expect(ret).toBe(0);
+    expect(readFileSync(join(sourceRoot, ".gitmodules"), "utf-8")).toContain(
+      "path = ADHD-context",
+    );
+    expect(readFileSync(join(sourceRoot, ".gitmodules"), "utf-8")).toContain(
+      "url = git@github.com:acme/ADHD-context.git",
+    );
+    expect(git(["ls-files", "--stage", "--", "ADHD-context"], sourceRoot)).toContain(
+      "160000",
+    );
+    expect(existsSync(join(sourceRoot, "ADHD-context", "NODE.md"))).toBe(true);
   });
 });
 
@@ -422,11 +533,11 @@ describe("parseInitArgs", () => {
   });
 
   it("parses dedicated repo options", () => {
-    expect(parseInitArgs(["--tree-name", "acme-context"])).toEqual({
-      treeName: "acme-context",
+    expect(parseInitArgs(["--tree-name", "acme-tree"])).toEqual({
+      treeName: "acme-tree",
     });
-    expect(parseInitArgs(["--tree-path", "../acme-context"])).toEqual({
-      treePath: "../acme-context",
+    expect(parseInitArgs(["--tree-path", "../acme-tree"])).toEqual({
+      treePath: "../acme-tree",
     });
     expect(parseInitArgs(["--seed-members", "contributors"])).toEqual({
       seedMembers: "contributors",
@@ -434,7 +545,7 @@ describe("parseInitArgs", () => {
   });
 
   it("rejects incompatible init options", () => {
-    expect(parseInitArgs(["--here", "--tree-name", "acme-context"])).toEqual({
+    expect(parseInitArgs(["--here", "--tree-name", "acme-tree"])).toEqual({
       error: "Cannot combine --here with --tree-name",
     });
     expect(parseInitArgs(["--seed-members", "github"])).toEqual({

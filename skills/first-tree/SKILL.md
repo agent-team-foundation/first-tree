@@ -78,7 +78,8 @@ repos.
   once the initial tree version is ready to push.
 - Never run `first-tree init --here` in a source/workspace repo unless the
   user explicitly wants that repo itself to become the dedicated Context Tree.
-  `--here` is for when you have already switched into the `*-context` repo.
+  `--here` is for when you have already switched into the `*-tree` repo (or an
+  older dedicated `*-context` repo).
 - `first-tree init --seed-members contributors` is an explicit bootstrap aid:
   it seeds `members/*/NODE.md` from GitHub contributors when available, and
   falls back to local git history when GitHub metadata is unavailable.
@@ -86,8 +87,10 @@ repos.
   Dedicated tree repos keep `.first-tree/` metadata plus `NODE.md`,
   `AGENTS.md`, `CLAUDE.md`, and `members/NODE.md`.
 - The default source/workspace workflow is: run `first-tree init` from the
-  source repo, draft the first tree version in `<repo>-context`, then run
-  `first-tree publish --open-pr` from that dedicated tree repo.
+  source repo, draft the first tree version in `<repo>-tree`, then run
+  `first-tree publish --open-pr` from that dedicated tree repo. If the source
+  repo is already bound to a legacy `<repo>-context`, keep reusing that repo
+  name instead of renaming it.
 - After the initial scaffold is in place, treat `progress.md` as the source of
   truth for onboarding status. Before deep tree population, report
   setup/integration progress separately from tree-content baseline coverage,

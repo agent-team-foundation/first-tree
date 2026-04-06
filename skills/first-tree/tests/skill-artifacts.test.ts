@@ -249,6 +249,8 @@ describe("skill artifacts", () => {
     expect(read("README.md")).toContain("`first-tree` skill");
     expect(read("README.md")).toContain("first-tree publish --open-pr");
     expect(read("README.md")).toContain("canonical local working copy");
+    expect(read("README.md")).toContain("<repo>-tree");
+    expect(read("README.md")).toContain("*-context` repos are still reused");
     expect(read("README.md")).toContain("Only use `--here` after you have already switched into the dedicated tree repo.");
     expect(read("AGENTS.md")).toContain("references/source-map.md");
     expect(read("AGENTS.md")).toContain("source-workspace-installation.md");
@@ -273,6 +275,9 @@ describe("skill artifacts", () => {
     expect(onboarding).toContain("summarize-progress.js");
     expect(onboarding).toContain("source/workspace repo");
     expect(onboarding).toContain("git submodule");
+    expect(onboarding).toContain("<repo>-tree");
+    expect(onboarding).toContain("dedicated `*-context`");
+    expect(onboarding).toContain("supported and reused when already bound");
     expect(onboarding).toContain("Only use `--here` after you have already switched into the dedicated tree repo.");
     expect(onboarding).not.toContain("This clones the framework into `.context-tree/`");
     expect(onboarding).not.toContain("from upstream");
@@ -291,6 +296,8 @@ describe("skill artifacts", () => {
     expect(skillMd).toContain("summarize-progress.js");
     expect(skillMd).toContain("FIRST-TREE-SOURCE-INTEGRATION:");
     expect(skillMd).toContain("first-tree publish --open-pr");
+    expect(skillMd).toContain("<repo>-tree");
+    expect(skillMd).toContain("older dedicated `*-context` repo");
     expect(skillMd).toContain("Never run `first-tree init --here` in a source/workspace repo");
     expect(skillMd).not.toContain("canonical eval harness");
 
@@ -322,6 +329,8 @@ describe("skill artifacts", () => {
     expect(sourceWorkspaceInstall).toContain("git submodule");
     expect(sourceWorkspaceInstall).toContain("top-level domain");
     expect(sourceWorkspaceInstall).toContain("first-tree publish --open-pr");
+    expect(sourceWorkspaceInstall).toContain("<repo>-tree");
+    expect(sourceWorkspaceInstall).toContain("legacy `*-context` repo");
     expect(sourceWorkspaceInstall).toContain("Do not run `first-tree verify`");
     expect(sourceWorkspaceInstall).toContain("Do not run `first-tree init --here` in the source/workspace repo");
 

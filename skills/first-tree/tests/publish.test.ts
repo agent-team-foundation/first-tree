@@ -55,6 +55,7 @@ function makeSourceIntegration(root: string): void {
 function createRunner(
   sourceRoot: string,
   treeRoot: string,
+  treeRepoName: string,
 ): { calls: RecordedCommand[]; runner: CommandRunner } {
   const calls: RecordedCommand[] = [];
   let treeOriginExists = false;
@@ -68,7 +69,7 @@ function createRunner(
       if (!treeOriginExists) {
         throw new Error("missing origin");
       }
-      return "git@github.com:acme/ADHD-context.git";
+      return `git@github.com:acme/${treeRepoName}.git`;
     }
 
     if (command === "gh" && args[0] === "repo" && args[1] === "view") {
@@ -159,11 +160,11 @@ describe("parsePublishArgs", () => {
       parsePublishArgs([
         "--open-pr",
         "--tree-path",
-        "../ADHD-context",
+        "../ADHD-tree",
         "--source-repo",
         "../ADHD",
         "--submodule-path",
-        "ADHD-context",
+        "ADHD-tree",
         "--source-remote",
         "origin",
       ]),
@@ -171,8 +172,8 @@ describe("parsePublishArgs", () => {
       openPr: true,
       sourceRemote: "origin",
       sourceRepoPath: "../ADHD",
-      submodulePath: "ADHD-context",
-      treePath: "../ADHD-context",
+      submodulePath: "ADHD-tree",
+      treePath: "../ADHD-tree",
     });
   });
 });
@@ -181,7 +182,7 @@ describe("runPublish", () => {
   it("publishes the tree repo, adds the submodule, and opens the source PR", () => {
     const rootDir = useTmpDir();
     const sourceRoot = join(rootDir.path, "ADHD");
-    const treeRoot = join(rootDir.path, "ADHD-context");
+    const treeRoot = join(rootDir.path, "ADHD-tree");
 
     makeSourceRepo(sourceRoot);
     makeFramework(sourceRoot, "0.2.0");
@@ -190,10 +191,10 @@ describe("runPublish", () => {
     writeBootstrapState(treeRoot, {
       sourceRepoName: "ADHD",
       sourceRepoPath: relative(treeRoot, sourceRoot),
-      treeRepoName: "ADHD-context",
+      treeRepoName: "ADHD-tree",
     });
 
-    const { calls, runner } = createRunner(sourceRoot, treeRoot);
+    const { calls, runner } = createRunner(sourceRoot, treeRoot, "ADHD-tree");
     const result = runPublish(new Repo(treeRoot), {
       commandRunner: runner,
       openPr: true,
@@ -206,7 +207,7 @@ describe("runPublish", () => {
           call.command === "gh"
           && call.args[0] === "repo"
           && call.args[1] === "create"
-          && call.args[2] === "acme/ADHD-context",
+          && call.args[2] === "acme/ADHD-tree",
       ),
     ).toBe(true);
     expect(
@@ -215,8 +216,8 @@ describe("runPublish", () => {
           call.command === "git"
           && call.args[0] === "submodule"
           && call.args[1] === "add"
-          && call.args[2] === "git@github.com:acme/ADHD-context.git"
-          && call.args[3] === "ADHD-context",
+          && call.args[2] === "git@github.com:acme/ADHD-tree.git"
+          && call.args[3] === "ADHD-tree",
       ),
     ).toBe(true);
     expect(
@@ -225,7 +226,7 @@ describe("runPublish", () => {
           call.command === "git"
           && call.args[0] === "switch"
           && call.args[1] === "-c"
-          && call.args[2] === "chore/connect-adhd-context",
+          && call.args[2] === "chore/connect-adhd-tree",
       ),
     ).toBe(true);
     expect(
@@ -239,8 +240,35 @@ describe("runPublish", () => {
       ),
     ).toBe(true);
     expect(readFileSync(join(sourceRoot, AGENT_INSTRUCTIONS_FILE), "utf-8")).toContain(
-      "preferred path: `ADHD-context/`",
+      "preferred path: `ADHD-tree/`",
     );
+  });
+
+  it("still infers the source repo from a legacy context repo name", () => {
+    const rootDir = useTmpDir();
+    const sourceRoot = join(rootDir.path, "ADHD");
+    const treeRoot = join(rootDir.path, "ADHD-context");
+
+    makeSourceRepo(sourceRoot);
+    makeFramework(sourceRoot, "0.2.0");
+    makeSourceIntegration(sourceRoot);
+    makeTreeRepo(treeRoot);
+
+    const { calls, runner } = createRunner(sourceRoot, treeRoot, "ADHD-context");
+    const result = runPublish(new Repo(treeRoot), {
+      commandRunner: runner,
+    });
+
+    expect(result).toBe(0);
+    expect(
+      calls.some(
+        (call) =>
+          call.command === "gh"
+          && call.args[0] === "repo"
+          && call.args[1] === "create"
+          && call.args[2] === "acme/ADHD-context",
+      ),
+    ).toBe(true);
   });
 
   it("errors when the source repo cannot be inferred", () => {

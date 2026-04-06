@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { formatDedicatedTreePathExample } from "#skill/engine/dedicated-tree.js";
 import { Repo } from "#skill/engine/repo.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
@@ -53,7 +54,7 @@ export function runVerify(repo?: Repo, nodeValidator?: NodeValidator): number {
 
   if (r.hasSourceWorkspaceIntegration() && !r.looksLikeTreeRepo()) {
     console.error(
-      `Error: this repo only has the first-tree source/workspace integration installed. Verify the dedicated tree repo instead, for example \`first-tree verify --tree-path ../${r.repoName()}-context\`.`,
+      `Error: this repo only has the first-tree source/workspace integration installed. Verify the dedicated tree repo instead, for example ${formatDedicatedTreePathExample("first-tree verify", r)}.`,
     );
     return 1;
   }

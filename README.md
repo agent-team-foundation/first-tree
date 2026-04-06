@@ -36,12 +36,13 @@ The npm package and installed CLI command are both `first-tree`.
 
 Recommended workflow: start from your source or workspace repo and let
 `first-tree init` install local source/workspace integration and create a
-sibling dedicated tree repo.
+sibling dedicated tree repo. By default that repo is named `<repo>-tree`;
+existing bound `*-context` repos are still reused.
 
 ```bash
 cd my-app
 npx first-tree init
-cd ../my-app-context
+cd ../my-app-tree
 first-tree publish --open-pr
 ```
 
@@ -55,7 +56,7 @@ npx first-tree init --seed-members contributors
 If you already created a dedicated tree repo yourself, initialize it in place:
 
 ```bash
-mkdir my-org-context && cd my-org-context
+mkdir my-org-tree && cd my-org-tree
 git init
 first-tree init --here
 ```
@@ -74,13 +75,14 @@ that repo itself to become the Context Tree.
 - `first-tree init --seed-members contributors` also seeds
   `members/*/NODE.md` in the target tree repo from GitHub contributors when
   available, and falls back to local git history otherwise.
-- Never create `NODE.md`, `members/`, or tree-scoped `AGENTS.md` / `CLAUDE.md` in the
-  source/workspace repo. Those files live only in the dedicated `*-context`
-  repo.
+- Never create `NODE.md`, `members/`, or tree-scoped `AGENTS.md` /
+  `CLAUDE.md` in the source/workspace repo. Those files live only in the
+  dedicated `*-tree` repo; existing `*-context` repos are still supported.
 - After drafting the initial tree version, run `first-tree publish --open-pr`
   from the dedicated tree repo. That command creates or reuses the GitHub
-  `*-context` repo, adds it back to the source/workspace repo as a git
-  submodule, and opens a PR instead of merging automatically.
+  `*-tree` repo, keeps working with older `*-context` repos, adds it back to
+  the source/workspace repo as a git submodule, and opens a PR instead of
+  merging automatically.
 - After `first-tree publish` succeeds, treat the source repo's submodule
   checkout as the canonical local working copy for the tree. The temporary
   sibling bootstrap checkout can be deleted when you no longer need it.
@@ -102,7 +104,7 @@ runtime.
 
 | Command | What it does |
 | --- | --- |
-| `first-tree init` | Install source/workspace integration locally and create or refresh a dedicated context tree repo; use `--here` only when you are already inside the dedicated tree repo, and `--seed-members contributors` to draft member nodes from contributor history |
+| `first-tree init` | Install source/workspace integration locally and create or refresh a dedicated tree repo; by default source/workspace repos use `<repo>-tree`, while existing bound `*-context` repos are still reused; use `--here` only when you are already inside the dedicated tree repo, and `--seed-members contributors` to draft member nodes from contributor history |
 | `first-tree publish` | Publish a dedicated tree repo to GitHub, add it back to the source/workspace repo as a submodule, and optionally open the source-repo PR |
 | `first-tree verify` | Run verification checks against the current tree |
 | `first-tree upgrade` | Refresh the installed skill from the current `first-tree` npm package; in a source/workspace repo it updates only local integration, while tree repos also get follow-up tasks |

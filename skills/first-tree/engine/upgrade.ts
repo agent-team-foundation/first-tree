@@ -1,5 +1,10 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import {
+  buildDefaultTreeRepoName,
+  formatDedicatedTreePathExample,
+  resolveDedicatedTreeRepoForSource,
+} from "#skill/engine/dedicated-tree.js";
 import { Repo } from "#skill/engine/repo.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
@@ -197,12 +202,19 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
   }
 
   const missingInstalledRoots = workingRepo.missingInstalledSkillRoots();
-  const sourceRepoTreePathHint = `../${workingRepo.repoName()}-context`;
+  const treeResolution = resolveDedicatedTreeRepoForSource(workingRepo);
+  const treeRepoName = treeResolution.ok
+    ? treeResolution.value.treeRepoName
+    : buildDefaultTreeRepoName(workingRepo.repoName());
+  const sourceRepoTreePathHint = formatDedicatedTreePathExample(
+    "first-tree upgrade",
+    workingRepo,
+  );
 
   if (workspaceOnlyIntegration) {
     const firstTreeIndex = upsertFirstTreeIndexFile(
       workingRepo.root,
-      `${workingRepo.repoName()}-context`,
+      treeRepoName,
     );
     if (
       layout === "skill" &&
@@ -211,7 +223,7 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
     ) {
       const updates = upsertSourceIntegrationFiles(
         workingRepo.root,
-        `${workingRepo.repoName()}-context`,
+        treeRepoName,
       );
       const changedFiles = updates
         .filter((update) => update.action !== "unchanged")
@@ -228,7 +240,7 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
           `Already up to date with the bundled skill (${FRAMEWORK_VERSION} = ${localVersion}).`,
         );
         console.log(
-          `This repo only carries source/workspace integration. Upgrade the dedicated tree repo separately with \`first-tree upgrade --tree-path ${sourceRepoTreePathHint}\`.`,
+          `This repo only carries source/workspace integration. Upgrade the dedicated tree repo separately with ${sourceRepoTreePathHint}.`,
         );
         return 0;
       }
@@ -254,7 +266,7 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
         );
       }
       console.log(
-        `This repo only carries source/workspace integration. Upgrade the dedicated tree repo separately with \`first-tree upgrade --tree-path ${sourceRepoTreePathHint}\`.`,
+        `This repo only carries source/workspace integration. Upgrade the dedicated tree repo separately with ${sourceRepoTreePathHint}.`,
       );
       return 0;
     }
@@ -262,7 +274,7 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
     copyCanonicalSkill(sourceRoot, workingRepo.root);
     const updates = upsertSourceIntegrationFiles(
       workingRepo.root,
-      `${workingRepo.repoName()}-context`,
+      treeRepoName,
     );
     const changedFiles = updates
       .filter((update) => update.action !== "unchanged")
@@ -289,7 +301,7 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
       );
     }
     console.log(
-      `This repo is not the Context Tree. Upgrade the dedicated tree repo separately with \`first-tree upgrade --tree-path ${sourceRepoTreePathHint}\`.`,
+      `This repo is not the Context Tree. Upgrade the dedicated tree repo separately with ${sourceRepoTreePathHint}.`,
     );
     return 0;
   }

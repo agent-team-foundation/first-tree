@@ -22,9 +22,9 @@ Common examples:
   first-tree init
   first-tree init --seed-members contributors
   first-tree publish --open-pr
-  mkdir my-org-context && cd my-org-context && git init && first-tree init --here
-  first-tree verify --tree-path ../my-org-context
-  first-tree upgrade --tree-path ../my-org-context
+  mkdir my-org-tree && cd my-org-tree && git init && first-tree init --here
+  first-tree verify --tree-path ../my-org-tree
+  first-tree upgrade --tree-path ../my-org-tree
 
 Note:
   \`--here\` is for when the current repo is already the dedicated tree repo.

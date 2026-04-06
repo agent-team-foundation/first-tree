@@ -56,7 +56,7 @@ Information an agent needs to **decide** on an approach — not to execute it.
 - A source/workspace Git repository, or an already-created dedicated tree repo
 - Node.js 18+
 - GitHub CLI (`gh`) if you want `first-tree publish` to create the remote
-  `*-context` repo and open the source-repo PR for you
+  `*-tree` repo and open the source-repo PR for you
 - The npm package and installed CLI command are both `first-tree`.
 - `first-tree init` installs the framework skill into
   `.agents/skills/first-tree/` and `.claude/skills/first-tree/` in a
@@ -68,14 +68,16 @@ Information an agent needs to **decide** on an approach — not to execute it.
 
 Recommended workflow: run `first-tree init` from your source or workspace repo.
 The CLI will install the bundled skill in the current repo, update root
-`FIRST_TREE.md`, `AGENTS.md`, and `CLAUDE.md` with local integration guidance,
-and create a sibling dedicated tree repo named `<repo>-context` by default.
-Tree files are scaffolded only in the dedicated tree repo.
+`FIRST_TREE.md`, `AGENTS.md`, and `CLAUDE.md` with a managed
+`FIRST-TREE-SOURCE-INTEGRATION:` section, and create a sibling dedicated tree
+repo named `<repo>-tree` by default. If a sibling or bound `<repo>-context`
+already exists, `init` reuses it instead of renaming it. Tree files are
+scaffolded only in the dedicated tree repo.
 
 ```bash
 cd my-org
 first-tree init
-cd ../my-org-context
+cd ../my-org-tree
 first-tree publish --open-pr
 ```
 
@@ -89,7 +91,7 @@ first-tree init --seed-members contributors
 If you already created a dedicated tree repo manually, initialize it in place:
 
 ```bash
-mkdir my-org-context && cd my-org-context
+mkdir my-org-tree && cd my-org-tree
 git init
 first-tree init --here
 ```
@@ -108,16 +110,19 @@ generates a task list in `.first-tree/progress.md`. When
 history if GitHub metadata is unavailable.
 
 Hard boundary: do **not** create `NODE.md`, `members/`, or tree-scoped
-`AGENTS.md` / `CLAUDE.md` in the source/workspace repo. Those files belong only
-in the dedicated `*-context` repo.
+`AGENTS.md` / `CLAUDE.md` in the source/workspace repo. Those tree files
+belong only in the dedicated `*-tree` repo. Existing dedicated `*-context`
+repos are still supported and reused when already bound.
 
 Default agent workflow after initialization:
 
-1. Draft the initial tree version in the dedicated `*-context` repo.
+1. Draft the initial tree version in the dedicated `*-tree` repo (or in the
+   existing dedicated `*-context` repo if that is what the source repo already
+   uses).
 2. Run `first-tree publish --open-pr` from that dedicated tree repo. It will
-   create or reuse the GitHub `*-context` repo in the same owner/org as the
-   source repo, add it back to the source/workspace repo as a `git submodule`,
-   and open the source-repo PR.
+   create or reuse the GitHub `*-tree` repo in the same owner/org as the
+   source repo, continue supporting older `*-context` repos, add it back to
+   the source/workspace repo as a `git submodule`, and open the source-repo PR.
 3. After publish succeeds, treat the source repo's submodule checkout as the
    canonical local working copy for the tree. The temporary sibling bootstrap
    checkout can be deleted when you no longer need it.
@@ -131,8 +136,9 @@ Default agent workflow after initialization:
 - If the tree submodule directory exists but is not initialized locally,
   initialize only that submodule. Do not update every submodule in the
   workspace by default.
-- Fall back to the sibling `*-context` bootstrap checkout only before the tree
-  has been published back to the source/workspace repo as a tracked submodule.
+- Fall back to the sibling bootstrap checkout (`*-tree` by default, or legacy
+  `*-context`) only before the tree has been published back to the
+  source/workspace repo as a tracked submodule.
 - At task close-out, always ask whether the tree needs updating.
 - If the task changed decisions, constraints, rationale, or ownership, send
   the tree PR first. Then update the source repo's submodule pointer and send
@@ -189,6 +195,7 @@ Or, from your source/workspace repo:
 
 ```bash
 first-tree verify --tree-path ../my-org-context
+first-tree verify --tree-path ../my-org-tree
 ```
 
 This fails if any items in `.first-tree/progress.md` remain
@@ -234,7 +241,7 @@ The tree doesn't duplicate source code — it captures what connects things and 
 
 | Command | Description |
 |---------|-------------|
-| `first-tree init` | Install local source/workspace integration and create or refresh a dedicated tree repo. By default, running in a source/workspace repo creates a sibling `<repo>-context`; use `--here` only when you are already inside the dedicated tree repo, and `--seed-members contributors` to draft member nodes from contributor history. |
+| `first-tree init` | Install local source/workspace integration and create or refresh a dedicated tree repo. By default, running in a source/workspace repo creates a sibling `<repo>-tree`; existing bound `<repo>-context` repos are still reused. Use `--here` only when you are already inside the dedicated tree repo, and `--seed-members contributors` to draft member nodes from contributor history. |
 | `first-tree publish` | Publish a dedicated tree repo to GitHub, add it back to the source/workspace repo as a submodule, and optionally open the source-repo PR. |
 | `first-tree verify` | Check the installed progress file for unchecked items + run deterministic validation. Use `--tree-path` when invoking from another working directory. |
 | `first-tree upgrade` | Refresh local source/workspace integration or dedicated tree metadata from the currently running `first-tree` npm package and generate follow-up tasks. Use `--tree-path` when invoking from another working directory. |
@@ -257,9 +264,10 @@ and generates follow-up tasks.
 If you run `first-tree upgrade` in the source/workspace repo, it refreshes
 only the local installed skill, `FIRST_TREE.md`, plus the
 `FIRST-TREE-SOURCE-INTEGRATION:` section.
-Run `first-tree upgrade --tree-path ../my-org-context` to upgrade the
-dedicated tree repo itself. Dedicated tree repos keep their progress checklist
-under `.first-tree/progress.md`.
+Run `first-tree upgrade --tree-path ../my-org-tree` to upgrade the
+dedicated tree repo itself. If your source/workspace repo is already bound to
+`../my-org-context`, use that actual legacy path instead. Dedicated tree repos
+keep their progress checklist under `.first-tree/progress.md`.
 
 If your repo still uses the older `skills/first-tree/` or `.context-tree/` layouts,
 `first-tree upgrade` will migrate it to the current installed layout first.
