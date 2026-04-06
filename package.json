@@ -30,9 +30,7 @@
     "skills/first-tree"
   ],
   "scripts": {
-    "version:sync": "node scripts/sync-version.js",
-    "version:check": "node scripts/sync-version.js --check",
-    "prebuild": "node scripts/sync-version.js",
+    "version:check": "node scripts/sync-version.js",
     "build": "tsdown",
     "prepack": "pnpm build",
     "test": "vitest run",
