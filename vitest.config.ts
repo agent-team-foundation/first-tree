@@ -15,7 +15,7 @@ export default defineConfig({
   ],
   test: {
     include: [
-      "skills/first-tree/tests/**/*.test.ts",
+      "tests/**/*.test.ts",
       "evals/tests/**/*.test.ts",
     ],
   },

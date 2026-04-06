@@ -64,7 +64,7 @@ export async function runCli(
 
   if (args[0] === "--version" || args[0] === "-v") {
     const { resolveBundledPackageRoot, readCanonicalFrameworkVersion } =
-      await import("#skill/engine/runtime/installer.js");
+      await import("#engine/runtime/installer.js");
     write(readCanonicalFrameworkVersion(resolveBundledPackageRoot()));
     return 0;
   }
@@ -73,23 +73,23 @@ export async function runCli(
 
   switch (command) {
     case "init": {
-      const { runInit } = await import("#skill/engine/commands/init.js");
+      const { runInit } = await import("#engine/commands/init.js");
       return runInit(args.slice(1));
     }
     case "verify": {
-      const { runVerify } = await import("#skill/engine/commands/verify.js");
+      const { runVerify } = await import("#engine/commands/verify.js");
       return runVerify(args.slice(1));
     }
     case "publish": {
-      const { runPublish } = await import("#skill/engine/commands/publish.js");
+      const { runPublish } = await import("#engine/commands/publish.js");
       return runPublish(args.slice(1));
     }
     case "upgrade": {
-      const { runUpgrade } = await import("#skill/engine/commands/upgrade.js");
+      const { runUpgrade } = await import("#engine/commands/upgrade.js");
       return runUpgrade(args.slice(1));
     }
     case "help":
-      return (await import("#skill/engine/commands/help.js")).runHelp(
+      return (await import("#engine/commands/help.js")).runHelp(
         args.slice(1),
         write,
       );
