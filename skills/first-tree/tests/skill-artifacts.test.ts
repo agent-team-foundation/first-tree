@@ -260,6 +260,7 @@ describe("skill artifacts", () => {
     expect(read("README.md")).toContain("bundled canonical");
     expect(read("README.md")).toContain("dedicated tree repo");
     expect(read("README.md")).toContain("FIRST-TREE-SOURCE-INTEGRATION:");
+    expect(read("README.md")).toContain(".first-tree/local-tree.json");
     expect(read("README.md")).toContain("`first-tree` skill");
     expect(read("README.md")).toContain("first-tree publish --open-pr");
     expect(read("README.md")).toContain("canonical local working copy");
@@ -288,7 +289,8 @@ describe("skill artifacts", () => {
     expect(onboarding).toContain("baseline coverage");
     expect(onboarding).toContain("summarize-progress.js");
     expect(onboarding).toContain("source/workspace repo");
-    expect(onboarding).toContain("git submodule");
+    expect(onboarding).toContain(".first-tree/local-tree.json");
+    expect(onboarding).toContain(".first-tree/tmp/");
     expect(onboarding).toContain("<repo>-tree");
     expect(onboarding).toContain("dedicated `*-context`");
     expect(onboarding).toContain("supported and reused when already bound");
@@ -309,6 +311,7 @@ describe("skill artifacts", () => {
     expect(skillMd).toContain("baseline coverage");
     expect(skillMd).toContain("summarize-progress.js");
     expect(skillMd).toContain("FIRST-TREE-SOURCE-INTEGRATION:");
+    expect(skillMd).toContain(".first-tree/local-tree.json");
     expect(skillMd).toContain("first-tree publish --open-pr");
     expect(skillMd).toContain("<repo>-tree");
     expect(skillMd).toContain("older dedicated `*-context` repo");
@@ -340,7 +343,8 @@ describe("skill artifacts", () => {
     );
     expect(sourceWorkspaceInstall).toContain("FIRST-TREE-SOURCE-INTEGRATION:");
     expect(sourceWorkspaceInstall).toContain("baseline coverage");
-    expect(sourceWorkspaceInstall).toContain("git submodule");
+    expect(sourceWorkspaceInstall).toContain(".first-tree/local-tree.json");
+    expect(sourceWorkspaceInstall).toContain(".first-tree/tmp/");
     expect(sourceWorkspaceInstall).toContain("top-level domain");
     expect(sourceWorkspaceInstall).toContain("first-tree publish --open-pr");
     expect(sourceWorkspaceInstall).toContain("<repo>-tree");
@@ -352,6 +356,7 @@ describe("skill artifacts", () => {
     expect(openaiPrompt).toContain("baseline coverage");
     expect(openaiPrompt).toContain("top-level domain");
     expect(openaiPrompt).toContain("progress.md");
+    expect(openaiPrompt).toContain(".first-tree/local-tree.json");
 
     const maintainerArchitecture = read(
       "skills/first-tree/references/maintainer-architecture.md",

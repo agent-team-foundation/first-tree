@@ -122,28 +122,28 @@ Default agent workflow after initialization:
    uses).
 2. Run `first-tree publish --open-pr` from that dedicated tree repo. It will
    create or reuse the GitHub `*-tree` repo in the same owner/org as the
-   source repo, continue supporting older `*-context` repos, add it back to
-   the source/workspace repo as a `git submodule`, and open the source-repo PR.
-3. After publish succeeds, treat the source repo's submodule checkout as the
-   canonical local working copy for the tree. The temporary sibling bootstrap
-   checkout can be deleted when you no longer need it.
+   source repo, continue supporting older `*-context` repos, record the
+   published tree URL back in the source/workspace repo, refresh the ignored
+   local tree checkout config, and open the source-repo PR.
+3. After publish succeeds, treat the checkout recorded in
+   `.first-tree/local-tree.json` as the canonical local working copy for the
+   tree. The bootstrap checkout can be deleted when you no longer need it.
 
 ### Routine Work After Publish
 
-- Start routine work from the current source/workspace repo's tracked Context
-  Tree submodule checkout.
-- Before you read the tree, sync submodules to the commits recorded by the
-  current superproject.
-- If the tree submodule directory exists but is not initialized locally,
-  initialize only that submodule. Do not update every submodule in the
-  workspace by default.
+- Start routine work by reading the source/workspace repo's
+  `.first-tree/local-tree.json` file and resolving the recorded `localPath`.
+- If that recorded checkout exists locally, update it before you read the
+  tree.
+- If the recorded checkout is missing but the tree has already been published,
+  create a temporary clone inside `.first-tree/tmp/` in the current
+  source/workspace repo, use it for the task, and delete it before finishing.
 - Fall back to the sibling bootstrap checkout (`*-tree` by default, or legacy
-  `*-context`) only before the tree has been published back to the
-  source/workspace repo as a tracked submodule.
+  `*-context`) only before publish has recorded the GitHub URL and local tree
+  config.
 - At task close-out, always ask whether the tree needs updating.
 - If the task changed decisions, constraints, rationale, or ownership, send
-  the tree PR first. Then update the source repo's submodule pointer and send
-  the source/workspace code PR.
+  the tree PR first. Then send the source/workspace code PR.
 - If the task changed only implementation detail, skip the tree PR and send
   only the source/workspace code PR.
 
@@ -243,7 +243,7 @@ The tree doesn't duplicate source code — it captures what connects things and 
 | Command | Description |
 |---------|-------------|
 | `first-tree init` | Install local source/workspace integration and create or refresh a dedicated tree repo. By default, running in a source/workspace repo creates a sibling `<repo>-tree`; existing bound `<repo>-context` repos are still reused. Use `--here` only when you are already inside the dedicated tree repo, and `--seed-members contributors` to draft member nodes from contributor history. |
-| `first-tree publish` | Publish a dedicated tree repo to GitHub, add it back to the source/workspace repo as a submodule, and optionally open the source-repo PR. |
+| `first-tree publish` | Publish a dedicated tree repo to GitHub, record its URL plus local checkout guidance back in the source/workspace repo, and optionally open the source-repo PR. |
 | `first-tree verify` | Check the installed progress file for unchecked items + run deterministic validation. Use `--tree-path` when invoking from another working directory. |
 | `first-tree upgrade` | Refresh local source/workspace integration or dedicated tree metadata from the currently running `first-tree` npm package and generate follow-up tasks. Use `--tree-path` when invoking from another working directory. |
 | `first-tree help onboarding` | Print this onboarding guide. |

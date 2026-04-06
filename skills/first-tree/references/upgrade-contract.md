@@ -107,8 +107,9 @@ metadata directory:
   - reads dedicated-tree bootstrap metadata from
     `.first-tree/bootstrap.json` when available
   - may create or reuse the GitHub `*-tree` repo, continue supporting older
-  `*-context` repos, push tree commits, add it back to the source/workspace
-  repo as a git submodule, and optionally open the source-repo PR
+  `*-context` repos, push tree commits, record the published tree repo URL back
+  in the source/workspace repo, refresh the ignored local checkout config, and
+  optionally open the source-repo PR
 - `first-tree upgrade`
   - compares the installed skill payload version to the skill bundled with the
     currently running `first-tree` package

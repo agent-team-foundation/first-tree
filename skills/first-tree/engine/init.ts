@@ -35,16 +35,21 @@ import { writeBootstrapState } from "#skill/engine/runtime/bootstrap.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
   AGENT_INSTRUCTIONS_TEMPLATE,
-  BOOTSTRAP_STATE,
   CLAUDE_INSTRUCTIONS_FILE,
   CLAUDE_INSTRUCTIONS_TEMPLATE,
   FRAMEWORK_VERSION,
   FIRST_TREE_INDEX_FILE,
   INSTALLED_PROGRESS,
   LEGACY_AGENT_INSTRUCTIONS_FILE,
+  LOCAL_TREE_CONFIG,
   installedSkillRootsDisplay,
   SOURCE_INTEGRATION_MARKER,
 } from "#skill/engine/runtime/asset-loader.js";
+import {
+  readLocalTreeConfig,
+  upsertLocalTreeConfig,
+  upsertLocalTreeGitIgnore,
+} from "#skill/engine/runtime/local-tree-config.js";
 import {
   upsertFirstTreeIndexFile,
   upsertSourceIntegrationFiles,
@@ -156,11 +161,10 @@ export function formatTaskList(
       );
       lines.push("## Source Workspace Workflow");
       lines.push(
-        `- [ ] When this initial tree version is ready, run \`first-tree publish --open-pr\` from this dedicated tree repo. It will create or reuse the GitHub \`*-tree\` repo, continue supporting older \`*-context\` repos, add the published tree back to \`${context.sourceRepoName}\` as a git submodule, and open the source/workspace PR.`,
+        `- [ ] When this initial tree version is ready, run \`first-tree publish --open-pr\` from this dedicated tree repo. It will create or reuse the GitHub \`*-tree\` repo, continue supporting older \`*-context\` repos, record the published tree GitHub URL back in \`${context.sourceRepoName}\`, refresh the local tree checkout config, and open the source/workspace PR.`,
       );
-      const localCheckoutName = context.treeRepoName ?? "dedicated tree";
       lines.push(
-        `- [ ] After publish succeeds, treat the source/workspace repo's \`${localCheckoutName}\` submodule checkout as the canonical local working copy for this tree. The temporary sibling bootstrap repo can be deleted when you no longer need it.`,
+        `- [ ] After publish succeeds, treat the checkout recorded in \`${LOCAL_TREE_CONFIG}\` as the canonical local working copy for this tree. The bootstrap repo can be deleted when you no longer need it.`,
       );
       lines.push("");
     }
@@ -305,8 +309,8 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
     }
     console.log(
       "  The source/workspace repo should keep only the installed skill," +
-        ` ${FIRST_TREE_INDEX_FILE}, and the managed ${SOURCE_INTEGRATION_MARKER}` +
-        ` section in ${AGENT_INSTRUCTIONS_FILE} and ${CLAUDE_INSTRUCTIONS_FILE}.`,
+        ` ${FIRST_TREE_INDEX_FILE}, the managed ${SOURCE_INTEGRATION_MARKER}` +
+        ` section in ${AGENT_INSTRUCTIONS_FILE} and ${CLAUDE_INSTRUCTIONS_FILE}, and local-only tree checkout state under \`${LOCAL_TREE_CONFIG}\`.`,
     );
     console.log(
       `  Never add NODE.md, members/, or tree-scoped ${AGENT_INSTRUCTIONS_FILE}/${CLAUDE_INSTRUCTIONS_FILE} to the source/workspace repo.`,
@@ -329,6 +333,16 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
         sourceRepo.root,
         initTarget.treeRepoName,
       );
+      const gitIgnore = upsertLocalTreeGitIgnore(sourceRepo.root);
+      const existingLocalTreeConfig = readLocalTreeConfig(sourceRepo.root);
+      const localTreeConfig = upsertLocalTreeConfig(sourceRepo.root, {
+        localPath: relativeRepoPath(sourceRepo.root, r.root),
+        treeRepoName: initTarget.treeRepoName,
+        ...(existingLocalTreeConfig?.treeRepoName === initTarget.treeRepoName
+          && existingLocalTreeConfig.treeRepoUrl
+          ? { treeRepoUrl: existingLocalTreeConfig.treeRepoUrl }
+          : {}),
+      });
       const changedFiles = updates
         .filter((update) => update.action !== "unchanged")
         .map((update) => update.file);
@@ -348,6 +362,24 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
       } else {
         console.log(
           `  Source/workspace instructions already contain ${SOURCE_INTEGRATION_MARKER}`,
+        );
+      }
+      if (gitIgnore.action === "created") {
+        console.log("  Created `.gitignore` entries for local tree checkout state");
+      } else if (gitIgnore.action === "updated") {
+        console.log("  Updated `.gitignore` for local tree checkout state");
+      }
+      if (localTreeConfig.action === "created") {
+        console.log(
+          `  Created \`${LOCAL_TREE_CONFIG}\` with the local tree checkout path`,
+        );
+      } else if (localTreeConfig.action === "updated") {
+        console.log(
+          `  Updated \`${LOCAL_TREE_CONFIG}\` with the local tree checkout path`,
+        );
+      } else {
+        console.log(
+          `  Reused the existing \`${LOCAL_TREE_CONFIG}\` local tree checkout path`,
         );
       }
       console.log();
@@ -425,20 +457,6 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
       sourceRepoPath: relativeRepoPath(r.root, sourceRepo.root),
       treeRepoName: initTarget.treeRepoName,
     });
-  }
-
-  if (initTarget.dedicatedTreeRepo) {
-    const repairedSubmodule = repairSourceSubmoduleIfSafe(
-      sourceRepo,
-      r,
-      initTarget.treeRepoName,
-    );
-    if (repairedSubmodule) {
-      console.log(
-        `  Added missing \`${initTarget.treeRepoName}\` submodule checkout to the source/workspace repo.`,
-      );
-      console.log();
-    }
   }
 
   console.log(ONBOARDING_TEXT);
@@ -677,149 +695,4 @@ function defaultGitInitializer(root: string): void {
     cwd: root,
     stdio: "ignore",
   });
-}
-
-function repairSourceSubmoduleIfSafe(
-  sourceRepo: Repo,
-  treeRepo: Repo,
-  treeRepoName: string,
-): boolean {
-  if (
-    !canRunGitCommands(sourceRepo.root)
-    || !canRunGitCommands(treeRepo.root)
-    || treeRepo.root === sourceRepo.root
-    || dirname(treeRepo.root) !== dirname(sourceRepo.root)
-  ) {
-    return false;
-  }
-
-  if (isTrackedSubmodule(sourceRepo.root, treeRepoName)) {
-    return false;
-  }
-
-  const submoduleRoot = join(sourceRepo.root, treeRepoName);
-  if (existsSync(submoduleRoot)) {
-    return false;
-  }
-
-  const remoteUrl = readGitRemoteUrl(treeRepo.root, "origin");
-  if (remoteUrl === null || isLocalGitRemote(remoteUrl)) {
-    return false;
-  }
-
-  if (
-    !hasGitHead(treeRepo.root)
-    || !hasOnlyAllowedWorkingTreeChanges(treeRepo.root, [BOOTSTRAP_STATE])
-  ) {
-    return false;
-  }
-
-  const localClonePath = relativeRepoPath(sourceRepo.root, treeRepo.root);
-  try {
-    execFileSync(
-      "git",
-      ["-c", "protocol.file.allow=always", "submodule", "add", localClonePath, treeRepoName],
-      { cwd: sourceRepo.root, stdio: "ignore" },
-    );
-    execFileSync(
-      "git",
-      ["submodule", "set-url", "--", treeRepoName, remoteUrl],
-      { cwd: sourceRepo.root, stdio: "ignore" },
-    );
-    execFileSync(
-      "git",
-      ["submodule", "sync", "--", treeRepoName],
-      { cwd: sourceRepo.root, stdio: "ignore" },
-    );
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function canRunGitCommands(root: string): boolean {
-  try {
-    execFileSync("git", ["rev-parse", "--git-dir"], {
-      cwd: root,
-      stdio: "ignore",
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function hasGitHead(root: string): boolean {
-  try {
-    execFileSync("git", ["rev-parse", "--verify", "HEAD"], {
-      cwd: root,
-      stdio: "ignore",
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function hasOnlyAllowedWorkingTreeChanges(
-  root: string,
-  allowedPaths: string[] = [],
-): boolean {
-  try {
-    const output = execFileSync("git", ["status", "--porcelain"], {
-      cwd: root,
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    const lines = output
-      .split(/\r?\n/)
-      .map((line) => line.trimEnd())
-      .filter(Boolean);
-    if (lines.length === 0) {
-      return true;
-    }
-    if (allowedPaths.length === 0) {
-      return false;
-    }
-    return lines.every((line) => {
-      const rawPath = line.slice(3);
-      const finalPath = rawPath.includes(" -> ")
-        ? rawPath.split(" -> ").at(-1) ?? rawPath
-        : rawPath;
-      return allowedPaths.includes(finalPath.trim());
-    });
-  } catch {
-    return false;
-  }
-}
-
-function readGitRemoteUrl(root: string, remote: string): string | null {
-  try {
-    return execFileSync("git", ["remote", "get-url", remote], {
-      cwd: root,
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-  } catch {
-    return null;
-  }
-}
-
-function isTrackedSubmodule(root: string, submodulePath: string): boolean {
-  try {
-    const output = execFileSync("git", ["ls-files", "--stage", "--", submodulePath], {
-      cwd: root,
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    return output
-      .split(/\r?\n/)
-      .some((line) => line.startsWith("160000 "));
-  } catch {
-    return false;
-  }
-}
-
-function isLocalGitRemote(remoteUrl: string): boolean {
-  return !(remoteUrl.includes("://") || remoteUrl.startsWith("git@"));
 }

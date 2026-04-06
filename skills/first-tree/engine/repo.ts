@@ -31,6 +31,7 @@ const OWNERS_RE = /^owners:\s*\[([^\]]*)\]/m;
 const TITLE_RE = /^title:\s*['"]?(.+?)['"]?\s*$/m;
 const EMPTY_REPO_ENTRY_ALLOWLIST = new Set([
   ".agents",
+  ".first-tree",
   ".DS_Store",
   ".claude",
   ".editorconfig",

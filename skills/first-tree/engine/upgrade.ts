@@ -3,6 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import {
   buildDefaultTreeRepoName,
   formatDedicatedTreePathExample,
+  relativeRepoPath,
   resolveDedicatedTreeRepoForSource,
 } from "#skill/engine/dedicated-tree.js";
 import { Repo } from "#skill/engine/repo.js";
@@ -34,6 +35,11 @@ import {
   upsertSourceIntegrationFiles,
 } from "#skill/engine/runtime/source-integration.js";
 import {
+  readLocalTreeConfig,
+  upsertLocalTreeConfig,
+  upsertLocalTreeGitIgnore,
+} from "#skill/engine/runtime/local-tree-config.js";
+import {
   compareFrameworkVersions,
   readSourceVersion,
 } from "#skill/engine/runtime/upgrader.js";
@@ -49,6 +55,46 @@ function writeProgress(repo: Repo, content: string): void {
   const progressPath = join(repo.root, repo.preferredProgressPath());
   mkdirSync(dirname(progressPath), { recursive: true });
   writeFileSync(progressPath, content);
+}
+
+function syncLocalSourceWorkspaceState(
+  sourceRepo: Repo,
+  treeRepoName: string,
+  treeRoot: string,
+): {
+  gitIgnoreAction: "created" | "updated" | "unchanged";
+  localTreeConfigAction: "created" | "updated" | "unchanged";
+} {
+  const gitIgnore = upsertLocalTreeGitIgnore(sourceRepo.root);
+  const existingLocalTreeConfig = readLocalTreeConfig(sourceRepo.root);
+  const localTreeConfig = upsertLocalTreeConfig(sourceRepo.root, {
+    localPath: relativeRepoPath(sourceRepo.root, treeRoot),
+    treeRepoName,
+    ...(existingLocalTreeConfig?.treeRepoName === treeRepoName
+      && existingLocalTreeConfig.treeRepoUrl
+      ? { treeRepoUrl: existingLocalTreeConfig.treeRepoUrl }
+      : {}),
+  });
+  return {
+    gitIgnoreAction: gitIgnore.action,
+    localTreeConfigAction: localTreeConfig.action,
+  };
+}
+
+function logLocalSourceWorkspaceState(
+  state: ReturnType<typeof syncLocalSourceWorkspaceState>,
+): void {
+  if (state.gitIgnoreAction === "created") {
+    console.log("Created `.gitignore` entries for local tree checkout state.");
+  } else if (state.gitIgnoreAction === "updated") {
+    console.log("Updated `.gitignore` for local tree checkout state.");
+  }
+
+  if (state.localTreeConfigAction === "created") {
+    console.log("Created `.first-tree/local-tree.json` for the local tree checkout.");
+  } else if (state.localTreeConfigAction === "updated") {
+    console.log("Updated `.first-tree/local-tree.json` for the local tree checkout.");
+  }
 }
 
 function formatUpgradeTaskList(
@@ -206,6 +252,9 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
   const treeRepoName = treeResolution.ok
     ? treeResolution.value.treeRepoName
     : buildDefaultTreeRepoName(workingRepo.repoName());
+  const sourceRepoTreeRoot = treeResolution.ok
+    ? treeResolution.value.root
+    : join(dirname(workingRepo.root), treeRepoName);
   const sourceRepoTreePathHint = formatDedicatedTreePathExample(
     "first-tree upgrade",
     workingRepo,
@@ -218,6 +267,11 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
       missingInstalledRoots.length === 0 &&
       packagedVersion === localVersion
     ) {
+      const localSourceWorkspaceState = syncLocalSourceWorkspaceState(
+        workingRepo,
+        treeRepoName,
+        sourceRepoTreeRoot,
+      );
       const updates = upsertSourceIntegrationFiles(
         workingRepo.root,
         treeRepoName,
@@ -236,6 +290,7 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
         console.log(
           `Already up to date with the bundled skill (${FRAMEWORK_VERSION} = ${localVersion}).`,
         );
+        logLocalSourceWorkspaceState(localSourceWorkspaceState);
         console.log(
           `This repo only carries source/workspace integration. Upgrade the dedicated tree repo separately with ${sourceRepoTreePathHint}.`,
         );
@@ -262,6 +317,7 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
           `The ${SOURCE_INTEGRATION_MARKER} marker lines in ${AGENT_INSTRUCTIONS_FILE} and ${CLAUDE_INSTRUCTIONS_FILE} were already current.`,
         );
       }
+      logLocalSourceWorkspaceState(localSourceWorkspaceState);
       console.log(
         `This repo only carries source/workspace integration. Upgrade the dedicated tree repo separately with ${sourceRepoTreePathHint}.`,
       );
@@ -269,6 +325,11 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
     }
 
     copyCanonicalSkill(sourceRoot, workingRepo.root);
+    const localSourceWorkspaceState = syncLocalSourceWorkspaceState(
+      workingRepo,
+      treeRepoName,
+      sourceRepoTreeRoot,
+    );
     const updates = upsertSourceIntegrationFiles(
       workingRepo.root,
       treeRepoName,
@@ -297,6 +358,7 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
         `The ${SOURCE_INTEGRATION_MARKER} marker lines in ${AGENT_INSTRUCTIONS_FILE} and ${CLAUDE_INSTRUCTIONS_FILE} were already current.`,
       );
     }
+    logLocalSourceWorkspaceState(localSourceWorkspaceState);
     console.log(
       `This repo is not the Context Tree. Upgrade the dedicated tree repo separately with ${sourceRepoTreePathHint}.`,
     );

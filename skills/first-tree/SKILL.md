@@ -97,20 +97,22 @@ repos.
   setup/integration progress separately from tree-content baseline coverage,
   ask the user whether to continue, and if they confirm, expand the tree with
   wave-based parallel sub-tasks or subagents by top-level domain.
-- After `first-tree publish` succeeds, treat the source/workspace repo's
-  submodule checkout as the canonical local working copy for the tree. The
-  temporary sibling bootstrap checkout can be deleted when you no longer need
-  it.
-- For day-to-day tasks after publish, start from the tracked tree submodule in
-  the source/workspace repo. Sync submodules to the commits recorded by the
-  current superproject, initialize only that tree submodule if it is missing
-  locally, and fall back to the sibling bootstrap checkout only before publish
-  has connected the tree back as a submodule.
+- After `first-tree publish` succeeds, treat the checkout recorded in the
+  source/workspace repo's `.first-tree/local-tree.json` file as the canonical
+  local working copy for the tree. The bootstrap checkout can be deleted when
+  you no longer need it.
+- For day-to-day tasks after publish, read `.first-tree/local-tree.json`
+  first, update the recorded checkout, and use that copy for routine work. If
+  the recorded checkout is missing, use the published tree repo URL from the
+  managed `FIRST-TREE-SOURCE-INTEGRATION:` section to create a temporary clone
+  under `.first-tree/tmp/` inside the active source/workspace repo, then
+  delete that temporary clone before finishing the task. Fall back to the
+  sibling bootstrap checkout only before publish has recorded the GitHub URL.
 - At task close-out, always ask whether the tree needs updating. If the task
   changed decisions, constraints, rationale, or ownership, send the tree PR
-  first, then update the source repo's submodule pointer and send the
-  source/workspace code PR. If the task changed only implementation detail,
-  skip the tree PR and send only the source/workspace code PR.
+  first and then send the source/workspace code PR. If the task changed only
+  implementation detail, skip the tree PR and send only the source/workspace
+  code PR.
 - If the dedicated tree repo was initialized manually with `first-tree init --here`
   and does not have bootstrap metadata yet, pass `--source-repo PATH` to
   `first-tree publish`.

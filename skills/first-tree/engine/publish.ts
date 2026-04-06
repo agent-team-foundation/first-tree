@@ -1,34 +1,39 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import {
   formatDedicatedTreePathExample,
   inferSourceRepoNameFromTreeRepoName,
+  relativeRepoPath,
 } from "#skill/engine/dedicated-tree.js";
 import { Repo } from "#skill/engine/repo.js";
 import { readBootstrapState } from "#skill/engine/runtime/bootstrap.js";
+import {
+  upsertLocalTreeConfig,
+  upsertLocalTreeGitIgnore,
+} from "#skill/engine/runtime/local-tree-config.js";
 import { upsertSourceIntegrationFiles } from "#skill/engine/runtime/source-integration.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
   CLAUDE_INSTRUCTIONS_FILE,
   CLAUDE_SKILL_ROOT,
   FIRST_TREE_INDEX_FILE,
+  LOCAL_TREE_CONFIG,
   SKILL_ROOT,
 } from "#skill/engine/runtime/asset-loader.js";
 
-export const PUBLISH_USAGE = `usage: first-tree publish [--open-pr] [--tree-path PATH] [--source-repo PATH] [--submodule-path PATH] [--source-remote NAME]
+export const PUBLISH_USAGE = `usage: first-tree publish [--open-pr] [--tree-path PATH] [--source-repo PATH] [--source-remote NAME]
 
 Run this from the dedicated tree repo after \`first-tree init\`. The command
 creates or reuses the GitHub \`*-tree\` repo, continues supporting older
 \`*-context\` repos, pushes the current tree
-commit, adds that repo back to the source/workspace repo as a git submodule,
-and prepares the source-repo branch.
+commit, records the published tree repo URL back in the source/workspace repo,
+refreshes the local tree checkout config, and prepares the source-repo branch.
 
 Options:
   --open-pr               Open a PR in the source/workspace repo after pushing the branch
   --tree-path PATH        Publish a tree repo from another working directory
   --source-repo PATH      Explicit source/workspace repo path when it cannot be inferred
-  --submodule-path PATH   Path to use inside the source/workspace repo (default: tree repo name)
   --source-remote NAME    Source/workspace repo remote to mirror on GitHub (default: origin)
   --help                  Show this help message
 `;
@@ -47,7 +52,6 @@ export interface ParsedPublishArgs {
   openPr?: boolean;
   sourceRemote?: string;
   sourceRepoPath?: string;
-  submodulePath?: string;
   treePath?: string;
 }
 
@@ -287,25 +291,6 @@ function resolveSourceRepoRoot(
   return null;
 }
 
-function normalizeSubmodulePath(input: string): string | null {
-  if (input.trim() === "") {
-    return null;
-  }
-  if (isAbsolute(input)) {
-    return null;
-  }
-  const normalized = normalize(input).replaceAll("\\", "/");
-  if (
-    normalized === "."
-    || normalized === ""
-    || normalized.startsWith("../")
-    || normalized.includes("/../")
-  ) {
-    return null;
-  }
-  return normalized;
-}
-
 function getGitRemoteUrl(
   runner: CommandRunner,
   root: string,
@@ -389,69 +374,81 @@ function ensureSourceBranch(
   return branch;
 }
 
-function isTrackedSubmodule(
-  runner: CommandRunner,
-  sourceRoot: string,
-  submodulePath: string,
-): boolean {
-  try {
-    const output = runner(
-      "git",
-      ["ls-files", "--stage", "--", submodulePath],
-      { cwd: sourceRoot },
-    );
-    return output
-      .split(/\r?\n/)
-      .some((line) => line.startsWith("160000 "));
-  } catch {
-    return false;
-  }
+function defaultLocalTreeRoot(
+  sourceRepo: Repo,
+  treeRepoName: string,
+): string {
+  return join(dirname(sourceRepo.root), treeRepoName);
 }
 
-function ensureSubmodule(
+function ensureLocalTreeCheckout(
   runner: CommandRunner,
   sourceRepo: Repo,
-  submodulePath: string,
+  treeRepo: Repo,
   remoteUrl: string,
-): "added" | "updated" {
-  if (isTrackedSubmodule(runner, sourceRepo.root, submodulePath)) {
-    runner(
-      "git",
-      ["submodule", "set-url", "--", submodulePath, remoteUrl],
-      { cwd: sourceRepo.root },
-    );
-    runner(
-      "git",
-      ["submodule", "sync", "--", submodulePath],
-      { cwd: sourceRepo.root },
-    );
-    runner(
-      "git",
-      ["submodule", "update", "--init", "--", submodulePath],
-      { cwd: sourceRepo.root },
-    );
-    return "updated";
+): string {
+  const localTreeRoot = defaultLocalTreeRoot(sourceRepo, treeRepo.repoName());
+  if (localTreeRoot === treeRepo.root) {
+    return localTreeRoot;
   }
 
-  const submoduleRoot = join(sourceRepo.root, submodulePath);
-  if (existsSync(submoduleRoot)) {
+  if (!existsSync(localTreeRoot)) {
+    runner("git", ["clone", remoteUrl, localTreeRoot], {
+      cwd: dirname(sourceRepo.root),
+    });
+    return localTreeRoot;
+  }
+
+  const localTreeRepo = new Repo(localTreeRoot);
+  if (!localTreeRepo.isGitRepo()) {
     throw new Error(
-      `Cannot add the submodule at ${submodulePath} because that path already exists in the source/workspace repo.`,
+      `Cannot use ${localTreeRoot} as the local tree checkout because that path already exists and is not a git repository.`,
     );
   }
 
-  runner(
-    "git",
-    ["submodule", "add", remoteUrl, submodulePath],
-    { cwd: sourceRepo.root },
-  );
-  return "added";
+  const localOrigin = getGitRemoteUrl(runner, localTreeRoot, "origin");
+  if (localOrigin === null) {
+    throw new Error(
+      `Cannot reuse ${localTreeRoot} as the local tree checkout because it does not have an \`origin\` remote.`,
+    );
+  }
+  if (localOrigin !== remoteUrl) {
+    throw new Error(
+      `Cannot reuse ${localTreeRoot} as the local tree checkout because its \`origin\` remote does not match ${remoteUrl}.`,
+    );
+  }
+
+  runner("git", ["fetch", "origin"], { cwd: localTreeRoot });
+  return localTreeRoot;
+}
+
+function updateSourceWorkspaceIntegration(
+  sourceRepo: Repo,
+  treeRepo: Repo,
+  treeRepoUrl: string,
+  localTreeRoot: string,
+): {
+  gitIgnoreAction: "created" | "updated" | "unchanged";
+  localTreeConfigAction: "created" | "updated" | "unchanged";
+} {
+  const gitIgnore = upsertLocalTreeGitIgnore(sourceRepo.root);
+  const localTreeConfig = upsertLocalTreeConfig(sourceRepo.root, {
+    localPath: relativeRepoPath(sourceRepo.root, localTreeRoot),
+    treeRepoName: treeRepo.repoName(),
+    treeRepoUrl,
+  });
+  upsertSourceIntegrationFiles(sourceRepo.root, treeRepo.repoName(), {
+    treeRepoUrl,
+  });
+  return {
+    gitIgnoreAction: gitIgnore.action,
+    localTreeConfigAction: localTreeConfig.action,
+  };
 }
 
 function commitSourceIntegration(
   runner: CommandRunner,
   sourceRepo: Repo,
-  submodulePath: string,
   treeRepoName: string,
 ): boolean {
   const managedPaths = [
@@ -461,9 +458,8 @@ function commitSourceIntegration(
       FIRST_TREE_INDEX_FILE,
       AGENT_INSTRUCTIONS_FILE,
       CLAUDE_INSTRUCTIONS_FILE,
+      ".gitignore",
     ].filter((path) => existsSync(join(sourceRepo.root, path))),
-    ".gitmodules",
-    submodulePath,
   ].filter((path, index, items) => items.indexOf(path) === index);
 
   runner("git", ["add", "--", ...managedPaths], { cwd: sourceRepo.root });
@@ -546,14 +542,13 @@ function ensureTreeRemotePublished(
 function buildPrBody(
   treeRepoName: string,
   treeSlug: string,
-  submodulePath: string,
 ): string {
   return [
     `Connect the published \`${treeRepoName}\` Context Tree back into this source/workspace repo.`,
     "",
-    `- add \`${submodulePath}\` as the tracked Context Tree submodule`,
-    "- keep the local first-tree skill, the FIRST_TREE.md symlink, and source integration marker lines in this repo",
-    `- use \`${treeSlug}\` as the GitHub home for tree content`,
+    `- record \`${treeSlug}\` as the published GitHub home for the tree`,
+    `- refresh the managed source/workspace instructions with the tree repo URL and local checkout guidance`,
+    `- keep the local checkout state only in ignored \`${LOCAL_TREE_CONFIG}\``,
   ].join("\n");
 }
 
@@ -583,15 +578,6 @@ export function parsePublishArgs(
           return { error: "Missing value for --source-repo" };
         }
         parsed.sourceRepoPath = value;
-        index += 1;
-        break;
-      }
-      case "--submodule-path": {
-        const value = args[index + 1];
-        if (!value) {
-          return { error: "Missing value for --submodule-path" };
-        }
-        parsed.submodulePath = value;
         index += 1;
         break;
       }
@@ -662,16 +648,6 @@ export function runPublish(repo?: Repo, options?: PublishOptions): number {
     return 1;
   }
 
-  const submodulePath = normalizeSubmodulePath(
-    options?.submodulePath ?? treeRepo.repoName(),
-  );
-  if (submodulePath === null) {
-    console.error(
-      "Error: `--submodule-path` must be a relative path inside the source/workspace repo.",
-    );
-    return 1;
-  }
-
   const sourceRemoteName = options?.sourceRemote ?? "origin";
 
   try {
@@ -729,25 +705,37 @@ export function runPublish(repo?: Repo, options?: PublishOptions): number {
     );
     console.log(`  Working on source/workspace branch \`${sourceBranch}\`.`);
 
-    const submoduleAction = ensureSubmodule(
+    const localTreeRoot = ensureLocalTreeCheckout(
       runner,
       sourceRepo,
-      submodulePath,
+      treeRepo,
       treeRemote.remoteUrl,
     );
-    console.log(
-      submoduleAction === "added"
-        ? `  Added \`${submodulePath}\` as a git submodule.`
-        : `  Updated the \`${submodulePath}\` submodule URL and checkout.`,
+    const sourceIntegrationState = updateSourceWorkspaceIntegration(
+      sourceRepo,
+      treeRepo,
+      treeRemote.remoteUrl,
+      localTreeRoot,
     );
-    upsertSourceIntegrationFiles(sourceRepo.root, treeRepo.repoName(), {
-      submodulePath,
-    });
+    console.log(
+      `  Recorded \`${treeRemote.remoteUrl}\` in the source/workspace instructions.`,
+    );
+    if (sourceIntegrationState.gitIgnoreAction === "created") {
+      console.log("  Created `.gitignore` entries for local tree checkout state.");
+    } else if (sourceIntegrationState.gitIgnoreAction === "updated") {
+      console.log("  Updated `.gitignore` for local tree checkout state.");
+    }
+    console.log(
+      sourceIntegrationState.localTreeConfigAction === "created"
+        ? `  Created \`${LOCAL_TREE_CONFIG}\` for \`${relativeRepoPath(sourceRepo.root, localTreeRoot)}\`.`
+        : sourceIntegrationState.localTreeConfigAction === "updated"
+        ? `  Updated \`${LOCAL_TREE_CONFIG}\` for \`${relativeRepoPath(sourceRepo.root, localTreeRoot)}\`.`
+        : `  Reused the existing \`${LOCAL_TREE_CONFIG}\` entry for \`${relativeRepoPath(sourceRepo.root, localTreeRoot)}\`.`,
+    );
 
     const committedSourceChanges = commitSourceIntegration(
       runner,
       sourceRepo,
-      submodulePath,
       treeRepo.repoName(),
     );
     if (committedSourceChanges) {
@@ -782,7 +770,7 @@ export function runPublish(repo?: Repo, options?: PublishOptions): number {
           "--title",
           `chore: connect ${treeRepo.repoName()} context tree`,
           "--body",
-          buildPrBody(treeRepo.repoName(), treeSlug, submodulePath),
+          buildPrBody(treeRepo.repoName(), treeSlug),
         ],
         { cwd: sourceRepo.root },
       );
@@ -791,10 +779,12 @@ export function runPublish(repo?: Repo, options?: PublishOptions): number {
 
     console.log();
     console.log(
-      `The source/workspace repo's \`${submodulePath}\` checkout is now the canonical local working copy for this tree.`,
+      `The source/workspace repo's local tree config now points to \`${LOCAL_TREE_CONFIG}\` and the canonical checkout at \`${relativeRepoPath(sourceRepo.root, localTreeRoot)}\`.`,
     );
     console.log(
-      `You can delete the temporary bootstrap checkout at ${treeRepo.root} once you no longer need it.`,
+      treeRepo.root === localTreeRoot
+        ? `This sibling checkout is already the canonical local working copy for the tree.`
+        : `You can delete the bootstrap checkout at ${treeRepo.root} once you no longer need it.`,
     );
     return 0;
   } catch (err) {

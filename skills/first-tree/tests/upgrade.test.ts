@@ -16,6 +16,7 @@ import {
   FRAMEWORK_VERSION,
   INSTALLED_PROGRESS,
   LEGACY_AGENT_INSTRUCTIONS_FILE,
+  LOCAL_TREE_CONFIG,
   SOURCE_INTEGRATION_MARKER,
   TREE_PROGRESS,
   TREE_VERSION,
@@ -174,6 +175,15 @@ describe("runUpgrade", () => {
     expect(readFileSync(join(repoDir.path, CLAUDE_INSTRUCTIONS_FILE), "utf-8")).toContain(
       expectedBlock,
     );
+    expect(readFileSync(join(repoDir.path, ".gitignore"), "utf-8")).toContain(
+      ".first-tree/local-tree.json",
+    );
+    expect(
+      JSON.parse(readFileSync(join(repoDir.path, LOCAL_TREE_CONFIG), "utf-8")),
+    ).toEqual({
+      localPath: `../${basename(repoDir.path)}-tree`,
+      treeRepoName: `${basename(repoDir.path)}-tree`,
+    });
     expectFirstTreeIndexSymlink(repoDir.path);
     expect(existsSync(join(repoDir.path, INSTALLED_PROGRESS))).toBe(false);
   });
@@ -240,5 +250,11 @@ describe("runUpgrade", () => {
     expect(readFileSync(join(repoDir.path, CLAUDE_INSTRUCTIONS_FILE), "utf-8")).toContain(
       buildSourceIntegrationBlock(legacyTreeRepoName),
     );
+    expect(
+      JSON.parse(readFileSync(join(repoDir.path, LOCAL_TREE_CONFIG), "utf-8")),
+    ).toEqual({
+      localPath: `../${legacyTreeRepoName}`,
+      treeRepoName: legacyTreeRepoName,
+    });
   });
 });

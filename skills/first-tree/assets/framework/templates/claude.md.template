@@ -17,9 +17,9 @@ See `.agents/skills/first-tree/references/principles.md` for detailed explanatio
 
 ## Before Every Task
 
-1. **Prefer the tracked submodule checkout for day-to-day work.** If this tree is already checked out inside a source/workspace repo as a tracked git submodule, start there and sync submodules to the commits recorded by the current superproject before you read anything else.
-2. **If that tracked submodule directory exists but is not initialized locally, initialize only that tree submodule.** Do not update every submodule in the workspace unless the user explicitly asks for that.
-3. **Use the sibling bootstrap checkout only before publish.** If this tree has not been published back to the source/workspace repo as a tracked submodule yet, it is okay to work from the sibling `*-context` bootstrap repo until publish connects it.
+1. **Prefer the local checkout recorded by the source/workspace repo.** If this tree is associated with a source/workspace repo, read that repo's managed `FIRST-TREE-SOURCE-INTEGRATION:` section and `.first-tree/local-tree.json` first. If the recorded checkout exists locally, update it and use that copy for routine work.
+2. **Use a temporary workspace clone only when the recorded checkout is missing.** If the tree has already been published but the recorded checkout is gone, clone a temporary copy into `.first-tree/tmp/<tree-repo-name>/` inside the active source/workspace repo, use it for the current task, and delete it before you finish.
+3. **Use the sibling bootstrap checkout only before publish.** If this tree has not been published yet, it is okay to work from the sibling `*-tree` or legacy `*-context` bootstrap repo until publish records the GitHub URL and local checkout config.
 4. **Read the root NODE.md** to understand the domain map.
 5. **Read the NODE.md of every domain relevant to your task.** If unsure which domains are relevant, start from root and follow the structure — it's organized by concern, not by repo.
 6. **Follow soft_links.** If a node declares `soft_links` in its frontmatter, read those linked nodes too. They exist because the domains are related.
@@ -41,7 +41,7 @@ Ask yourself: **Does the tree need updating?**
 - Did you discover something the tree didn't capture? (A cross-domain dependency, a new constraint, a decision that future agents would need.)
 - Did you find the tree was wrong or outdated? That's a tree bug — fix it.
 - Not every task changes the tree, but the question must always be asked.
-- If the task changed decisions, constraints, rationale, or ownership, open the tree PR first. Then update the source/workspace repo's submodule pointer and open the source/workspace code PR.
+- If the task changed decisions, constraints, rationale, or ownership, open the tree PR first. Then open the source/workspace code PR.
 - If the task changed only implementation details, skip the tree PR and open only the source/workspace code PR.
 
 ## Reference

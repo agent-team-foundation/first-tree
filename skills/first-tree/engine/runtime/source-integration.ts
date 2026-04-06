@@ -10,11 +10,15 @@ import {
 import { join } from "node:path";
 import {
   FIRST_TREE_INDEX_FILE,
+  LOCAL_TREE_CONFIG,
+  LOCAL_TREE_CONFIG_MARKER,
+  LOCAL_TREE_TEMP_ROOT,
   SKILL_REFERENCES_DIR,
   SOURCE_INTEGRATION_BEGIN,
   SOURCE_INTEGRATION_END,
   SOURCE_INTEGRATION_FILES,
   SOURCE_INTEGRATION_MARKER,
+  TREE_REPO_URL_MARKER,
 } from "#skill/engine/runtime/asset-loader.js";
 
 export type SourceIntegrationFile = (typeof SOURCE_INTEGRATION_FILES)[number];
@@ -36,29 +40,37 @@ export interface FirstTreeIndexUpdate {
 }
 
 export interface SourceIntegrationOptions {
-  submodulePath?: string;
+  localConfigPath?: string;
+  treeRepoUrl?: string;
 }
 
 export function buildSourceIntegrationBlock(
   treeRepoName: string,
   options?: SourceIntegrationOptions,
 ): string {
-  const submodulePath = options?.submodulePath ?? treeRepoName;
+  const localConfigPath = options?.localConfigPath ?? LOCAL_TREE_CONFIG;
+  const treeRepoUrl = options?.treeRepoUrl?.trim() || null;
+  const temporaryCheckoutPath = join(LOCAL_TREE_TEMP_ROOT, treeRepoName);
 
   return [
     SOURCE_INTEGRATION_BEGIN,
-    `${SOURCE_INTEGRATION_MARKER}`,
+    `${SOURCE_INTEGRATION_MARKER} dedicated tree repo \`${treeRepoName}\``,
+    `${TREE_REPO_URL_MARKER} ${treeRepoUrl === null ? "pending publish" : `\`${treeRepoUrl}\``}`,
+    `${LOCAL_TREE_CONFIG_MARKER} \`${localConfigPath}\``,
     "",
-    `This repo is a source/workspace repo. Keep all Context Tree files only in the dedicated \`${treeRepoName}\` repo/submodule.`,
+    `This repo is a source/workspace repo. Keep all Context Tree files only in the dedicated \`${treeRepoName}\` repo.`,
     "",
     "Before every task:",
-    `- If this workspace already tracks the Context Tree as a git submodule, sync submodules to the commits recorded by the current superproject and read the tracked tree first (preferred path: \`${submodulePath}/\`).`,
-    "- If that submodule directory exists but is not initialized locally, initialize only that submodule; do not update every submodule in the workspace.",
-    `- If the tree has not been published back to this workspace as a tracked submodule yet, work from the sibling dedicated \`${treeRepoName}\` bootstrap repo instead.`,
+    `- Read \`${localConfigPath}\` first. If it exists, resolve its \`localPath\` value from this repo root and treat that checkout as the canonical local tree repo.`,
+    "- If that configured checkout exists locally, update it before you read anything else.",
+    treeRepoUrl === null
+      ? `- If the tree has not been published yet, work from the sibling dedicated \`${treeRepoName}\` bootstrap repo until \`first-tree publish\` records the GitHub repo URL and refreshes the local config.`
+      : `- If the configured checkout is missing, clone a temporary working copy from \`${treeRepoUrl}\` into \`${temporaryCheckoutPath}/\`, use it for the current task, and delete it before you finish.`,
+    `- Never commit \`${localConfigPath}\` or anything under \`${LOCAL_TREE_TEMP_ROOT}/\` to this repo. They are local-only workspace state.`,
     "",
     "After every task:",
     "- Always ask whether the tree needs updating.",
-    "- If the task changed decisions, constraints, rationale, or ownership, open a PR in the tree repo first. Then update this repo's Context Tree submodule pointer and open the source/workspace code PR.",
+    "- If the task changed decisions, constraints, rationale, or ownership, open a PR in the tree repo first. Then open the source/workspace code PR.",
     "- If the task changed only implementation details, skip the tree PR and open only the source/workspace code PR.",
     SOURCE_INTEGRATION_END,
   ].join("\n");
@@ -128,8 +140,10 @@ function upsertSourceIntegrationFile(
   const current = exists ? readFileSync(fullPath, "utf-8") : null;
   const normalized = current?.replaceAll("\r\n", "\n") ?? "";
   const nextBlock = buildSourceIntegrationBlock(treeRepoName, {
-    submodulePath:
-      options?.submodulePath ?? detectExistingSubmodulePath(normalized) ?? treeRepoName,
+    localConfigPath:
+      options?.localConfigPath ?? detectExistingLocalConfigPath(normalized) ?? LOCAL_TREE_CONFIG,
+    treeRepoUrl:
+      options?.treeRepoUrl ?? detectExistingTreeRepoUrl(normalized) ?? undefined,
   });
   const managedBlock = /<!-- BEGIN FIRST-TREE-SOURCE-INTEGRATION -->[\s\S]*?<!-- END FIRST-TREE-SOURCE-INTEGRATION -->\n?/;
   const lines = normalized === "" ? [] : normalized.split("\n");
@@ -175,12 +189,25 @@ function ensureTrailingNewline(text: string): string {
   return text;
 }
 
-function detectExistingSubmodulePath(text: string): string | null {
+function detectExistingTreeRepoUrl(text: string): string | null {
   if (text === "") {
     return null;
   }
 
-  const match = text.match(/preferred path: `(.+?)\/`/);
+  const match = text.match(
+    /^FIRST-TREE-TREE-REPO-URL:\s+`(.+?)`\s*$/m,
+  );
+  return match?.[1] ?? null;
+}
+
+function detectExistingLocalConfigPath(text: string): string | null {
+  if (text === "") {
+    return null;
+  }
+
+  const match = text.match(
+    /^FIRST-TREE-LOCAL-TREE-CONFIG:\s+`(.+?)`\s*$/m,
+  );
   return match?.[1] ?? null;
 }
 

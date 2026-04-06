@@ -1,7 +1,8 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { Repo } from "#skill/engine/repo.js";
 import { readBootstrapState } from "#skill/engine/runtime/bootstrap.js";
+import { resolveConfiguredLocalTreePath } from "#skill/engine/runtime/local-tree-config.js";
 import {
   SOURCE_INTEGRATION_BEGIN,
   SOURCE_INTEGRATION_END,
@@ -42,10 +43,12 @@ interface FailedResolution {
   ok: false;
 }
 
+const SOURCE_INTEGRATION_TREE_RE =
+  /FIRST-TREE-SOURCE-INTEGRATION:\s+dedicated tree repo `([^`]+)`/;
 const LEGACY_SOURCE_INTEGRATION_TREE_RE =
-  /FIRST-TREE-SOURCE-INTEGRATION:.*?`([^`]+)` repo\/submodule/;
+  /FIRST-TREE-SOURCE-INTEGRATION:.*?`([^`]+)` repo(?:\/submodule)?/;
 const MANAGED_SOURCE_INTEGRATION_TREE_RE =
-  /Keep all Context Tree files only in the dedicated `([^`]+)` repo\/submodule\./;
+  /Keep all Context Tree files only in the dedicated `([^`]+)` repo(?:\/submodule)?\./;
 
 export function buildDefaultTreeRepoName(sourceRepoName: string): string {
   return `${sourceRepoName}${DEFAULT_TREE_REPO_SUFFIX}`;
@@ -84,6 +87,11 @@ export function parseTreeRepoNameFromSourceIntegration(
   const candidateSections = extractSourceIntegrationSections(normalized);
 
   for (const section of candidateSections) {
+    const directMatch = section.match(SOURCE_INTEGRATION_TREE_RE);
+    if (directMatch?.[1]) {
+      return directMatch[1];
+    }
+
     const legacyMatch = section.match(LEGACY_SOURCE_INTEGRATION_TREE_RE);
     if (legacyMatch?.[1]) {
       return legacyMatch[1];
@@ -251,43 +259,19 @@ export function resolveDedicatedTreeRepoForSource(
   };
 }
 
-export function readTrackedSubmodulePaths(root: string): string[] {
-  const gitmodulesPath = join(root, ".gitmodules");
-  if (!existsSync(gitmodulesPath)) {
-    return [];
-  }
-
-  let text: string;
-  try {
-    text = readFileSync(gitmodulesPath, "utf-8");
-  } catch {
-    return [];
-  }
-
-  const matches = text.matchAll(/^\s*path\s*=\s*(.+?)\s*$/gm);
-  const paths = new Set<string>();
-  for (const match of matches) {
-    const value = match[1]?.trim();
-    if (value) {
-      paths.add(value);
-    }
-  }
-  return [...paths];
-}
-
 function localCandidatePaths(sourceRepo: Repo, extraNames: string[] = []): string[] {
   const paths = new Set<string>();
+  const configuredLocalPath = resolveConfiguredLocalTreePath(sourceRepo.root);
+  if (configuredLocalPath !== null && isGitRepoPath(configuredLocalPath)) {
+    paths.add(configuredLocalPath);
+  }
   for (const treeRepoName of [
-    ...supportedDedicatedTreeRepoNames(sourceRepo.repoName()),
     ...extraNames,
   ]) {
     const path = join(sourceRepo.root, treeRepoName);
     if (isGitRepoPath(path)) {
       paths.add(path);
     }
-  }
-  for (const submodulePath of readTrackedSubmodulePaths(sourceRepo.root)) {
-    paths.add(join(sourceRepo.root, submodulePath));
   }
   return [...paths];
 }

@@ -81,12 +81,13 @@ that repo itself to become the Context Tree.
   dedicated `*-tree` repo; existing `*-context` repos are still supported.
 - After drafting the initial tree version, run `first-tree publish --open-pr`
   from the dedicated tree repo. That command creates or reuses the GitHub
-  `*-tree` repo, keeps working with older `*-context` repos, adds it back to
-  the source/workspace repo as a git submodule, and opens a PR instead of
-  merging automatically.
-- After `first-tree publish` succeeds, treat the source repo's submodule
-  checkout as the canonical local working copy for the tree. The temporary
-  sibling bootstrap checkout can be deleted when you no longer need it.
+  `*-tree` repo, keeps working with older `*-context` repos, records the
+  published tree GitHub URL back in the source/workspace repo, refreshes the
+  ignored local tree checkout config, and opens a PR instead of merging
+  automatically.
+- After `first-tree publish` succeeds, treat the checkout recorded in
+  `.first-tree/local-tree.json` as the canonical local working copy for the
+  tree. The bootstrap checkout can be deleted when you no longer need it.
 - `first-tree verify` checks both the progress checklist and deterministic
   tree validation. It is expected to fail until the required onboarding tasks
   are complete.
@@ -106,7 +107,7 @@ runtime.
 | Command | What it does |
 | --- | --- |
 | `first-tree init` | Install source/workspace integration locally and create or refresh a dedicated tree repo; by default source/workspace repos use `<repo>-tree`, while existing bound `*-context` repos are still reused; use `--here` only when you are already inside the dedicated tree repo, and `--seed-members contributors` to draft member nodes from contributor history |
-| `first-tree publish` | Publish a dedicated tree repo to GitHub, add it back to the source/workspace repo as a submodule, and optionally open the source-repo PR |
+| `first-tree publish` | Publish a dedicated tree repo to GitHub, record its URL and local checkout guidance back in the source/workspace repo, and optionally open the source-repo PR |
 | `first-tree verify` | Run verification checks against the current tree |
 | `first-tree upgrade` | Refresh the installed skill from the current `first-tree` npm package; in a source/workspace repo it updates only local integration, while tree repos also get follow-up tasks |
 | `first-tree help onboarding` | Print the onboarding guide |

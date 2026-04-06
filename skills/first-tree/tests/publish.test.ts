@@ -12,6 +12,7 @@ import { writeBootstrapState } from "#skill/engine/runtime/bootstrap.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
   CLAUDE_INSTRUCTIONS_FILE,
+  LOCAL_TREE_CONFIG,
 } from "#skill/engine/runtime/asset-loader.js";
 import { buildSourceIntegrationBlock } from "#skill/engine/runtime/source-integration.js";
 import {
@@ -124,10 +125,6 @@ function createRunner(
       throw new Error("missing local branch");
     }
 
-    if (command === "git" && args[0] === "ls-files") {
-      return "";
-    }
-
     if (command === "gh" && args[0] === "pr" && args[1] === "create") {
       return "https://github.com/acme/ADHD/pull/123";
     }
@@ -163,8 +160,6 @@ describe("parsePublishArgs", () => {
         "../ADHD-tree",
         "--source-repo",
         "../ADHD",
-        "--submodule-path",
-        "ADHD-tree",
         "--source-remote",
         "origin",
       ]),
@@ -172,14 +167,13 @@ describe("parsePublishArgs", () => {
       openPr: true,
       sourceRemote: "origin",
       sourceRepoPath: "../ADHD",
-      submodulePath: "ADHD-tree",
       treePath: "../ADHD-tree",
     });
   });
 });
 
 describe("runPublish", () => {
-  it("publishes the tree repo, adds the submodule, and opens the source PR", () => {
+  it("publishes the tree repo, records the GitHub URL, and opens the source PR", () => {
     const rootDir = useTmpDir();
     const sourceRoot = join(rootDir.path, "ADHD");
     const treeRoot = join(rootDir.path, "ADHD-tree");
@@ -214,16 +208,6 @@ describe("runPublish", () => {
       calls.some(
         (call) =>
           call.command === "git"
-          && call.args[0] === "submodule"
-          && call.args[1] === "add"
-          && call.args[2] === "git@github.com:acme/ADHD-tree.git"
-          && call.args[3] === "ADHD-tree",
-      ),
-    ).toBe(true);
-    expect(
-      calls.some(
-        (call) =>
-          call.command === "git"
           && call.args[0] === "switch"
           && call.args[1] === "-c"
           && call.args[2] === "chore/connect-adhd-tree",
@@ -239,9 +223,58 @@ describe("runPublish", () => {
           && call.args.includes("acme/ADHD"),
       ),
     ).toBe(true);
-    expect(readFileSync(join(sourceRoot, AGENT_INSTRUCTIONS_FILE), "utf-8")).toContain(
-      "preferred path: `ADHD-tree/`",
+    expect(
+      readFileSync(join(sourceRoot, AGENT_INSTRUCTIONS_FILE), "utf-8"),
+    ).toContain("FIRST-TREE-TREE-REPO-URL: `git@github.com:acme/ADHD-tree.git`");
+    expect(
+      JSON.parse(readFileSync(join(sourceRoot, LOCAL_TREE_CONFIG), "utf-8")),
+    ).toEqual({
+      localPath: "../ADHD-tree",
+      treeRepoName: "ADHD-tree",
+      treeRepoUrl: "git@github.com:acme/ADHD-tree.git",
+    });
+    expect(readFileSync(join(sourceRoot, ".gitignore"), "utf-8")).toContain(
+      ".first-tree/local-tree.json",
     );
+  });
+
+  it("creates a sibling local checkout when the published tree repo is elsewhere", () => {
+    const rootDir = useTmpDir();
+    const sourceRoot = join(rootDir.path, "ADHD");
+    const bootstrapRoot = join(rootDir.path, "bootstrap", "ADHD-tree");
+
+    makeSourceRepo(sourceRoot);
+    makeFramework(sourceRoot, "0.2.0");
+    makeSourceIntegration(sourceRoot);
+    makeTreeRepo(bootstrapRoot);
+    writeBootstrapState(bootstrapRoot, {
+      sourceRepoName: "ADHD",
+      sourceRepoPath: relative(bootstrapRoot, sourceRoot),
+      treeRepoName: "ADHD-tree",
+    });
+
+    const { calls, runner } = createRunner(sourceRoot, bootstrapRoot, "ADHD-tree");
+    const result = runPublish(new Repo(bootstrapRoot), {
+      commandRunner: runner,
+    });
+
+    expect(result).toBe(0);
+    expect(
+      calls.some(
+        (call) =>
+          call.command === "git"
+          && call.args[0] === "clone"
+          && call.args[1] === "git@github.com:acme/ADHD-tree.git"
+          && call.args[2] === join(rootDir.path, "ADHD-tree"),
+      ),
+    ).toBe(true);
+    expect(
+      JSON.parse(readFileSync(join(sourceRoot, LOCAL_TREE_CONFIG), "utf-8")),
+    ).toEqual({
+      localPath: "../ADHD-tree",
+      treeRepoName: "ADHD-tree",
+      treeRepoUrl: "git@github.com:acme/ADHD-tree.git",
+    });
   });
 
   it("still infers the source repo from a legacy context repo name", () => {

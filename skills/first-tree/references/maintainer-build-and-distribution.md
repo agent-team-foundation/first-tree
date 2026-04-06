@@ -54,8 +54,9 @@ another skill reference, not only in the files themselves.
   sibling git repo on disk, but it must not require remote repo creation or
   source-repo cloning.
 - `first-tree publish` is the explicit networked second-stage command for
-  GitHub repo creation, submodule add-back, and optional source-repo PR
-  opening. Keep that remote behavior there instead of expanding default `init`.
+  GitHub repo creation, source/workspace URL refresh, local checkout-config
+  refresh, and optional source-repo PR opening. Keep that remote behavior
+  there instead of expanding default `init`.
 - If you change anything that gets copied into user repos, bump
   `assets/framework/VERSION` and keep the upgrade task text in sync.
 - If packaging changes alter what gets installed into user repos, update

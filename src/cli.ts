@@ -10,7 +10,7 @@ const USAGE = `usage: first-tree <command>
 
 Commands:
   init      Install source/workspace integration and create or refresh a dedicated context tree repo
-  publish   Publish a dedicated tree repo to GitHub and reconnect it to the source repo
+  publish   Publish a dedicated tree repo to GitHub and record it back in the source repo
   verify    Run verification checks against a tree repo
   upgrade   Refresh the installed skill in a tree repo
   help      Show help for a topic (e.g. \`help onboarding\`)

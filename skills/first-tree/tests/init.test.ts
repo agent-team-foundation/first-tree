@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import {
   existsSync,
   lstatSync,
@@ -19,15 +18,16 @@ import {
 import { Repo } from "#skill/engine/repo.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
-  BOOTSTRAP_STATE,
   CLAUDE_INSTRUCTIONS_FILE,
   FIRST_TREE_INDEX_FILE,
   FRAMEWORK_VERSION,
   INSTALLED_PROGRESS,
   LEGACY_AGENT_INSTRUCTIONS_FILE,
   LEGACY_PROGRESS,
+  LOCAL_TREE_CONFIG,
   TREE_PROGRESS,
   TREE_VERSION,
+  BOOTSTRAP_STATE,
 } from "#skill/engine/runtime/asset-loader.js";
 import { buildSourceIntegrationBlock } from "#skill/engine/runtime/source-integration.js";
 import {
@@ -37,11 +37,8 @@ import {
   makeClaudeMd,
   makeFramework,
   makeLegacyFramework,
-  makeMembers,
-  makeNode,
   makeSourceRepo,
   makeSourceSkill,
-  makeTreeMetadata,
 } from "./helpers.js";
 
 // --- formatTaskList ---
@@ -163,35 +160,6 @@ const fakeGitInitializer = (root: string): void => {
   makeGitRepo(root);
 };
 
-function git(
-  args: string[],
-  cwd: string,
-): string {
-  return execFileSync("git", args, {
-    cwd,
-    encoding: "utf-8",
-    env: {
-      ...process.env,
-      GIT_AUTHOR_NAME: "Test User",
-      GIT_AUTHOR_EMAIL: "test@example.com",
-      GIT_COMMITTER_NAME: "Test User",
-      GIT_COMMITTER_EMAIL: "test@example.com",
-    },
-  }).trim();
-}
-
-function initRealGitRepo(root: string): void {
-  mkdirSync(root, { recursive: true });
-  git(["init"], root);
-  git(["config", "user.name", "Test User"], root);
-  git(["config", "user.email", "test@example.com"], root);
-}
-
-function commitAll(root: string, message: string): void {
-  git(["add", "-A"], root);
-  git(["commit", "-m", message], root);
-}
-
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -300,6 +268,18 @@ describe("runInit", () => {
       readFileSync(join(sourceRepoDir.path, CLAUDE_INSTRUCTIONS_FILE), "utf-8"),
     ).toContain(buildSourceIntegrationBlock(basename(treeRepo)));
     expectFirstTreeIndexSymlink(sourceRepoDir.path);
+    expect(readFileSync(join(sourceRepoDir.path, ".gitignore"), "utf-8")).toContain(
+      ".first-tree/local-tree.json",
+    );
+    expect(readFileSync(join(sourceRepoDir.path, ".gitignore"), "utf-8")).toContain(
+      ".first-tree/tmp/",
+    );
+    expect(
+      JSON.parse(readFileSync(join(sourceRepoDir.path, LOCAL_TREE_CONFIG), "utf-8")),
+    ).toEqual({
+      localPath: `../${basename(treeRepo)}`,
+      treeRepoName: basename(treeRepo),
+    });
     expect(
       existsSync(join(treeRepo, ".agents", "skills", "first-tree", "SKILL.md")),
     ).toBe(false);
@@ -384,6 +364,45 @@ describe("runInit", () => {
     expect(
       readFileSync(join(sourceRepoDir.path, FIRST_TREE_INDEX_FILE), "utf-8"),
     ).toBe("# Custom entrypoint\n");
+  });
+
+  it("preserves an existing tree repo URL when refreshing local tree config", () => {
+    const sourceRepoDir = useTmpDir();
+    const sourceSkillDir = useTmpDir();
+    makeSourceRepo(sourceRepoDir.path);
+    makeSourceSkill(sourceSkillDir.path, "0.2.0");
+    mkdirSync(join(sourceRepoDir.path, ".first-tree"), { recursive: true });
+    writeFileSync(
+      join(sourceRepoDir.path, LOCAL_TREE_CONFIG),
+      JSON.stringify(
+        {
+          localPath: "../custom-tree",
+          treeRepoName: `${basename(sourceRepoDir.path)}-tree`,
+          treeRepoUrl: "git@github.com:acme/example-source-repo-tree.git",
+        },
+        null,
+        2,
+      ),
+    );
+
+    expect(
+      runInit(new Repo(sourceRepoDir.path), {
+        sourceRoot: sourceSkillDir.path,
+        gitInitializer: fakeGitInitializer,
+      }),
+    ).toBe(0);
+
+    const treeRepo = join(
+      dirname(sourceRepoDir.path),
+      `${basename(sourceRepoDir.path)}-tree`,
+    );
+    expect(
+      JSON.parse(readFileSync(join(sourceRepoDir.path, LOCAL_TREE_CONFIG), "utf-8")),
+    ).toEqual({
+      localPath: `../${basename(treeRepo)}`,
+      treeRepoName: basename(treeRepo),
+      treeRepoUrl: "git@github.com:acme/example-source-repo-tree.git",
+    });
   });
 
   it("migrates a previously managed FIRST_TREE.md to a symlink", () => {
@@ -518,53 +537,16 @@ describe("runInit", () => {
       treeRepoName: basename(legacyTreeRepo),
     });
     expect(
+      JSON.parse(readFileSync(join(sourceRepoDir.path, LOCAL_TREE_CONFIG), "utf-8")),
+    ).toEqual({
+      localPath: `../${basename(legacyTreeRepo)}`,
+      treeRepoName: basename(legacyTreeRepo),
+    });
+    expect(
       existsSync(
         join(dirname(sourceRepoDir.path), `${basename(sourceRepoDir.path)}-tree`),
       ),
     ).toBe(false);
-  });
-
-  it("repairs a missing source submodule when reusing a published legacy context repo", () => {
-    const rootDir = useTmpDir();
-    const sourceRoot = join(rootDir.path, "ADHD");
-    const treeRoot = join(rootDir.path, "ADHD-context");
-    const skillRoot = useTmpDir();
-
-    mkdirSync(join(sourceRoot, "src"), { recursive: true });
-    writeFileSync(
-      join(sourceRoot, "package.json"),
-      JSON.stringify({ name: "ADHD" }, null, 2),
-    );
-    writeFileSync(join(sourceRoot, "src", "index.ts"), "export const ready = true;\n");
-    initRealGitRepo(sourceRoot);
-    commitAll(sourceRoot, "chore: bootstrap source");
-
-    initRealGitRepo(treeRoot);
-    makeTreeMetadata(treeRoot, "0.2.0");
-    makeNode(treeRoot);
-    makeAgentsMd(treeRoot, { markers: true });
-    makeClaudeMd(treeRoot, { markers: true });
-    makeMembers(treeRoot);
-    git(["remote", "add", "origin", "git@github.com:acme/ADHD-context.git"], treeRoot);
-    commitAll(treeRoot, "chore: bootstrap tree");
-
-    makeSourceSkill(skillRoot.path, "0.2.0");
-
-    const ret = runInit(new Repo(sourceRoot), {
-      sourceRoot: skillRoot.path,
-    });
-
-    expect(ret).toBe(0);
-    expect(readFileSync(join(sourceRoot, ".gitmodules"), "utf-8")).toContain(
-      "path = ADHD-context",
-    );
-    expect(readFileSync(join(sourceRoot, ".gitmodules"), "utf-8")).toContain(
-      "url = git@github.com:acme/ADHD-context.git",
-    );
-    expect(git(["ls-files", "--stage", "--", "ADHD-context"], sourceRoot)).toContain(
-      "160000",
-    );
-    expect(existsSync(join(sourceRoot, "ADHD-context", "NODE.md"))).toBe(true);
   });
 });
 

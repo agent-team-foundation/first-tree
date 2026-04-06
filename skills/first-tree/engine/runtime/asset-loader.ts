@@ -11,6 +11,8 @@ export const TREE_RUNTIME_ROOT = ".first-tree";
 export const TREE_VERSION = join(TREE_RUNTIME_ROOT, "VERSION");
 export const TREE_PROGRESS = join(TREE_RUNTIME_ROOT, "progress.md");
 export const TREE_BOOTSTRAP_STATE = join(TREE_RUNTIME_ROOT, "bootstrap.json");
+export const LOCAL_TREE_CONFIG = join(TREE_RUNTIME_ROOT, "local-tree.json");
+export const LOCAL_TREE_TEMP_ROOT = join(TREE_RUNTIME_ROOT, "tmp");
 
 export const SKILL_AGENTS_DIR = join(SKILL_ROOT, "agents");
 export const SKILL_REFERENCES_DIR = join(SKILL_ROOT, "references");
@@ -30,6 +32,8 @@ export const AGENT_INSTRUCTIONS_TEMPLATE = "agents.md.template";
 export const CLAUDE_INSTRUCTIONS_FILE = "CLAUDE.md";
 export const CLAUDE_INSTRUCTIONS_TEMPLATE = "claude.md.template";
 export const SOURCE_INTEGRATION_MARKER = "FIRST-TREE-SOURCE-INTEGRATION:";
+export const TREE_REPO_URL_MARKER = "FIRST-TREE-TREE-REPO-URL:";
+export const LOCAL_TREE_CONFIG_MARKER = "FIRST-TREE-LOCAL-TREE-CONFIG:";
 export const SOURCE_INTEGRATION_BEGIN = "<!-- BEGIN FIRST-TREE-SOURCE-INTEGRATION -->";
 export const SOURCE_INTEGRATION_END = "<!-- END FIRST-TREE-SOURCE-INTEGRATION -->";
 export const SOURCE_INTEGRATION_FILES = [
