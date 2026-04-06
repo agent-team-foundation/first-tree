@@ -50,6 +50,12 @@ another skill reference, not only in the files themselves.
   with the package rather than copying that information into root docs.
 - Normal `first-tree init` / `first-tree upgrade` flows must install from
   the skill bundled in the running package, not by cloning the source repo.
+- In the `first-tree-all` superproject, refreshing the root mirror skill is a
+  separate maintainer sync step: update the `first-tree` submodule from
+  `https://github.com/agent-team-foundation/first-tree` and repoint the root
+  `.agents/skills/first-tree` / `.claude/skills/first-tree` symlinks there;
+  prefer `bash scripts/sync-first-tree-skill.sh --remote` instead of changing
+  the runtime install/upgrade contract.
 - Default dedicated-tree-repo creation must stay local-only. It may create a
   sibling git repo on disk, but it must not require remote repo creation or
   source-repo cloning.

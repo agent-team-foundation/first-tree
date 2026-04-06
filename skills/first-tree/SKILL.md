@@ -53,6 +53,12 @@ repos.
   thin CLI shell, not as a tree repo.
 - Keep command behavior, validator behavior, shipped assets, maintainer
   references, and package shell aligned.
+- If the task is to refresh the `first-tree-all` workspace mirror skill, treat
+  that as a maintainer sync step, not as normal `first-tree upgrade` behavior.
+  From the `first-tree-all` superproject, update the `first-tree` submodule
+  from `https://github.com/agent-team-foundation/first-tree` and repoint the
+  root `.agents/skills/first-tree` and `.claude/skills/first-tree` mirrors;
+  prefer `bash scripts/sync-first-tree-skill.sh --remote`.
 - If root README/AGENTS/CI text explains something non-obvious, migrate that
   information into `references/` and trim the root file back down.
 - If you change runtime assets or skill references, run `pnpm validate:skill`.
@@ -142,6 +148,10 @@ repos.
 - Keep normal `init` / `upgrade` flows self-contained. They must work from the
   skill bundled in the current package without cloning the source repo or
   relying on network access.
+- Keep workspace-level mirror sync separate from runtime install/upgrade
+  behavior. A `first-tree-all` maintainer may explicitly update the
+  `first-tree` submodule from GitHub and repoint root mirror symlinks, but that
+  is not a requirement for routine skill use in source/workspace repos.
 - Make upgrade behavior explicit. If you change installed paths, update
   `references/upgrade-contract.md`, task text, and tests together.
 
