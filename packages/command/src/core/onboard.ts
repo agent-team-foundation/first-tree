@@ -131,110 +131,48 @@ export function formatCheckReport(items: CheckItem[]): string {
   return lines.join("\n");
 }
 
-// ── Create agent via Admin API ──────────────────────────────────────
+// ── Create agent via bootstrap endpoint ─────────────────────────────
 
 export async function onboardCreate(args: OnboardArgs): Promise<void> {
   const serverUrl = resolveServerUrl(args.server).replace(/\/+$/, "");
-  const ghUsername = getGitHubUsername();
+  getGitHubUsername(); // verify gh is authenticated (throws if not)
 
-  // 1. Create agent via Admin API
-  process.stderr.write(`Creating agent "${args.id}"...\n`);
-
-  // Build metadata
-  const metadata: Record<string, unknown> = {
-    owners: [ghUsername],
-  };
-  if (args.role) metadata.role = args.role;
-  if (args.domains) metadata.domains = args.domains.split(",").map((d) => d.trim());
-
-  // Authenticate as admin to create agent
-  // First try admin JWT, fall back to prompt
-  const adminToken = await getAdminToken(serverUrl);
-
-  const agentBody: Record<string, unknown> = {
-    id: args.id,
-    type: args.type,
-    displayName: args.displayName ?? args.id,
-    metadata,
-  };
-  if (args.delegateMention || args.assistant) {
-    agentBody.delegateMention = args.assistant ?? args.delegateMention;
-  }
-  if (args.profile) {
-    agentBody.profile = args.profile;
-  }
-
-  const createRes = await fetch(`${serverUrl}/api/v1/admin/agents`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${adminToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(agentBody),
-  });
-
-  if (!createRes.ok) {
-    const body = (await createRes.json().catch(() => ({}))) as { error?: string };
-    throw new Error(`Failed to create agent "${args.id}": ${body.error ?? `HTTP ${createRes.status}`}`);
-  }
-
-  process.stderr.write(`Agent "${args.id}" created.\n`);
-
-  // 2. Create assistant if requested
-  if (args.assistant) {
-    process.stderr.write(`Creating assistant "${args.assistant}"...\n`);
-    const assistantBody = {
-      id: args.assistant,
-      type: "personal_assistant",
-      displayName: args.assistant,
-      delegateMention: null,
-      metadata: {
-        owners: [ghUsername],
-        role: `Personal Assistant to ${args.id}`,
-        domains: ["message triage", "task coordination"],
-      },
-    };
-
-    const assistantRes = await fetch(`${serverUrl}/api/v1/admin/agents`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${adminToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(assistantBody),
-    });
-
-    if (!assistantRes.ok) {
-      const body = (await assistantRes.json().catch(() => ({}))) as { error?: string };
-      process.stderr.write(
-        `Warning: Failed to create assistant "${args.assistant}": ${body.error ?? `HTTP ${assistantRes.status}`}\n`,
-      );
-    } else {
-      process.stderr.write(`Assistant "${args.assistant}" created.\n`);
-    }
-  }
-
-  // 3. Bootstrap token for the agent that will run as client
-  const agentToBootstrap = args.assistant ?? args.id;
-  process.stderr.write(`Bootstrapping token for "${agentToBootstrap}"...\n`);
+  // 1. Bootstrap token for the main agent (auto-creates if not exists)
+  process.stderr.write(`Bootstrapping agent "${args.id}"...\n`);
 
   let token: string;
   try {
-    const result = await bootstrapToken(serverUrl, agentToBootstrap, { saveTo: "agent" });
+    const result = await bootstrapToken(serverUrl, args.id, { saveTo: "agent" });
     token = result.token;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (msg.includes("already has") || msg.includes("409")) {
       throw new Error(
-        `Agent "${agentToBootstrap}" already has an active token.\n` +
+        `Agent "${args.id}" already has an active token.\n` +
           "Ask an admin to revoke the existing token in the Web UI, then re-run onboard.",
       );
     }
     throw err;
   }
+  process.stderr.write(`Agent "${args.id}" ready.\n`);
+
+  // 2. Bootstrap assistant if requested (auto-creates if not exists)
+  if (args.assistant) {
+    process.stderr.write(`Bootstrapping assistant "${args.assistant}"...\n`);
+    try {
+      const assistantResult = await bootstrapToken(serverUrl, args.assistant, { saveTo: "agent" });
+      token = assistantResult.token; // use assistant token for Feishu binding
+      process.stderr.write(`Assistant "${args.assistant}" ready.\n`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`Warning: Failed to bootstrap assistant "${args.assistant}": ${msg}\n`);
+    }
+  }
+
+  const agentToBootstrap = args.assistant ?? args.id;
   process.stderr.write(`Token saved to ${DEFAULT_HOME_DIR}/config/agents/${agentToBootstrap}/agent.yaml\n`);
 
-  // 4. Bind Feishu bot (if requested)
+  // 3. Bind Feishu bot (if requested)
   if (args.feishuBotAppId && args.feishuBotAppSecret) {
     const { bindFeishuBot } = await import("./feishu.js");
     process.stderr.write("Binding Feishu bot...\n");
@@ -242,7 +180,7 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
     process.stderr.write("Feishu bot bound.\n");
   }
 
-  // 5. Auto-configure client config
+  // 4. Auto-configure client config
   const clientConfigPath = join(DEFAULT_CONFIG_DIR, "client.yaml");
   setConfigValue(clientConfigPath, "server.url", serverUrl);
 
@@ -277,41 +215,4 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
   process.stderr.write("\n  Start the agent:\n");
   process.stderr.write("    first-tree-hub client start\n");
   process.stderr.write("\n");
-}
-
-// ── Helpers ──────────────────────────────────────────────────────────
-
-/**
- * Get admin JWT token for API calls.
- * Tries env var first, then prompts for credentials.
- */
-async function getAdminToken(serverUrl: string): Promise<string> {
-  // Check env var
-  const envToken = process.env.FIRST_TREE_HUB_ADMIN_TOKEN;
-  if (envToken) return envToken;
-
-  // Login with credentials from env
-  const username = process.env.FIRST_TREE_HUB_ADMIN_USERNAME;
-  const password = process.env.FIRST_TREE_HUB_ADMIN_PASSWORD;
-
-  if (!username || !password) {
-    throw new Error(
-      "Admin credentials required to create agents.\n" +
-        "  Set FIRST_TREE_HUB_ADMIN_TOKEN, or\n" +
-        "  Set FIRST_TREE_HUB_ADMIN_USERNAME and FIRST_TREE_HUB_ADMIN_PASSWORD",
-    );
-  }
-
-  const res = await fetch(`${serverUrl}/api/v1/admin/auth/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, password }),
-  });
-
-  if (!res.ok) {
-    throw new Error(`Admin login failed: HTTP ${res.status}`);
-  }
-
-  const data = (await res.json()) as { token: string };
-  return data.token;
 }

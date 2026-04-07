@@ -101,7 +101,7 @@ first-tree-hub client start
 ```
 
 - Prefer `onboard --check` before asking follow-up questions or creating the agent.
-- Ensure admin credentials are available (`FIRST_TREE_HUB_ADMIN_TOKEN` or `FIRST_TREE_HUB_ADMIN_USERNAME` + `FIRST_TREE_HUB_ADMIN_PASSWORD`).
+- Ensure `gh` is authenticated (`gh auth login`).
 
 ### Modify Code Safely
 

@@ -5,16 +5,15 @@ Use this file when an external agent receives an onboarding task such as "instal
 ## Core Rule
 
 - Use `first-tree-hub onboard` for the workflow.
-- Ensure admin credentials are available before running (`FIRST_TREE_HUB_ADMIN_TOKEN` or `FIRST_TREE_HUB_ADMIN_USERNAME` + `FIRST_TREE_HUB_ADMIN_PASSWORD`).
+- Ensure `gh` is installed and authenticated (`gh auth login`).
 
 ## When the Prompt Starts From Scratch
 
 If the task only gives you a package name, a docs URL, and a server URL, normalize it into this sequence:
 
 1. Confirm tooling:
-   - `gh` is installed and authenticated (used for agent token bootstrap).
+   - `gh` is installed and authenticated (used for agent registration and token bootstrap).
    - Node is new enough to run the published CLI.
-   - Admin credentials are available as environment variables.
 2. Install the CLI:
    - Preferred: `npm install -g @agent-team-foundation/first-tree-hub`
    - If the caller installed locally with `npm i @agent-team-foundation/first-tree-hub`, use `npx first-tree-hub ...`

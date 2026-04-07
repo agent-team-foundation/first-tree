@@ -98,11 +98,10 @@
 - `onboard --check`
   - Shows readiness and missing inputs without making changes.
 - `onboard`
-  - Creates agent via Admin API.
-  - Bootstraps the token using GitHub identity.
+  - Auto-creates the agent and bootstraps a token using GitHub identity.
   - Optionally binds a Feishu bot.
   - Writes `client.yaml` so `client start` works without extra setup.
-  - Requires admin credentials (`FIRST_TREE_HUB_ADMIN_TOKEN` or `FIRST_TREE_HUB_ADMIN_USERNAME` + `FIRST_TREE_HUB_ADMIN_PASSWORD`).
+  - Only requires `gh` authentication — no admin credentials needed.
 
 ## Config and Environment Model
 

@@ -216,11 +216,27 @@ export async function deleteAgent(db: Database, id: string) {
 
 /**
  * Bootstrap a token for an agent using GitHub identity.
+ * If the agent does not exist, it is auto-created with the GitHub user as owner.
  * Only works when the agent has no active (non-revoked, non-expired) tokens.
  */
 export async function bootstrapToken(db: Database, agentId: string, githubUsername: string, tokenName?: string) {
-  // 1. Get agent — must exist and not be deleted
-  const agent = await getAgent(db, agentId);
+  // 1. Get or create agent
+  let agent: { id: string; metadata: Record<string, unknown> | null };
+  try {
+    agent = await getAgent(db, agentId);
+  } catch (err) {
+    if (err instanceof NotFoundError) {
+      // Auto-create agent with the GitHub user as owner
+      agent = await createAgent(db, {
+        id: agentId,
+        type: "autonomous_agent",
+        displayName: agentId,
+        metadata: { owners: [githubUsername] },
+      });
+    } else {
+      throw err;
+    }
+  }
 
   // 2. Check agent has owners in metadata
   const owners: string[] = Array.isArray(agent.metadata?.owners) ? (agent.metadata.owners as string[]) : [];
@@ -242,6 +258,21 @@ export async function bootstrapToken(db: Database, agentId: string, githubUserna
 
   // 4. Create token
   return createToken(db, agentId, { name: tokenName ?? "bootstrap" });
+}
+
+/**
+ * Check if a GitHub user belongs to a specific organization.
+ */
+export async function checkGitHubOrgMembership(githubToken: string, org: string): Promise<boolean> {
+  const res = await fetch(`https://api.github.com/user/orgs`, {
+    headers: {
+      Authorization: `Bearer ${githubToken}`,
+      Accept: "application/vnd.github+json",
+    },
+  });
+  if (!res.ok) return false;
+  const orgs = (await res.json()) as Array<{ login: string }>;
+  return orgs.some((o) => o.login.toLowerCase() === org.toLowerCase());
 }
 
 export async function createToken(db: Database, agentId: string, data: CreateAgentToken) {

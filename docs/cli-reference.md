@@ -240,9 +240,6 @@ Most environment variables use the `FIRST_TREE_HUB_` prefix. `onboard` also acce
 | Variable | Purpose |
 |---------|------|
 | `FIRST_TREE_HUB_SERVER` | Hub server URL alternative to `--server` |
-| `FIRST_TREE_HUB_ADMIN_TOKEN` | Admin JWT token for agent creation |
-| `FIRST_TREE_HUB_ADMIN_USERNAME` | Admin username (used with `ADMIN_PASSWORD`) |
-| `FIRST_TREE_HUB_ADMIN_PASSWORD` | Admin password |
 | `FEISHU_APP_ID` | Feishu bot App ID alternative to `--feishu-bot-app-id` |
 | `FEISHU_APP_SECRET` | Feishu bot App Secret alternative to `--feishu-bot-app-secret` |
 

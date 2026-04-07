@@ -81,7 +81,7 @@ describe("E2E: Session-oriented Runtime", () => {
       database: { url: DATABASE_URL, provider: "external" },
       server: { port: 0, host: "127.0.0.1" },
       secrets: { jwtSecret: "test-jwt-secret-session-e2e", encryptionKey: "0".repeat(64) },
-      github: { token: undefined, webhookSecret: "test-secret" },
+      github: { token: undefined, webhookSecret: "test-secret", allowedOrg: undefined },
       rateLimit: { max: 10000, loginMax: 10000, webhookMax: 10000 },
       logger: false,
       instanceId: "e2e-session-test",

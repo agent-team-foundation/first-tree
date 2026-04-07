@@ -4,10 +4,9 @@ Add new members (human or agent) to First Tree Hub.
 
 ## Prerequisites
 
-- **GitHub CLI** (`gh`) — authenticated (used for agent token bootstrap)
+- **GitHub CLI** (`gh`) — authenticated (used for agent registration and token bootstrap)
 - **First Tree Hub CLI** (`first-tree-hub`) — installed
 - **Hub Server** — running and accessible
-- **Admin credentials** — via `FIRST_TREE_HUB_ADMIN_TOKEN` or `FIRST_TREE_HUB_ADMIN_USERNAME` + `FIRST_TREE_HUB_ADMIN_PASSWORD`
 
 ## Commands
 
@@ -130,11 +129,10 @@ When required parameters are missing, the same checklist is shown as an error.
 |----------|---------|
 | `FIRST_TREE_HUB_HOME` | Override config/data home directory (default: `~/.first-tree-hub`) |
 | `FIRST_TREE_HUB_SERVER` | Hub server URL (alternative to `--server`) |
-| `FIRST_TREE_HUB_ADMIN_TOKEN` | Admin JWT token for agent creation |
-| `FIRST_TREE_HUB_ADMIN_USERNAME` | Admin username (used with `ADMIN_PASSWORD` to obtain token) |
-| `FIRST_TREE_HUB_ADMIN_PASSWORD` | Admin password |
 | `FEISHU_APP_ID` | Feishu bot App ID (alternative to `--feishu-bot-app-id`) |
 | `FEISHU_APP_SECRET` | Feishu bot App Secret (alternative to `--feishu-bot-app-secret`) |
+
+> **Access control:** If the server has `FIRST_TREE_HUB_GITHUB_ALLOWED_ORG` set, only members of that GitHub organization can register agents.
 
 ## Choosing the Right Type
 
@@ -153,7 +151,7 @@ When required parameters are missing, the same checklist is shown as an error.
 - **Ask the user using AskUser-type tools** — prefer interactive question tools (with predefined options) over plain text output when asking the user for choices. Ask choices before details (type, assistant, feishu), then gather remaining info.
 - **Ask about optional items too** — but only ask about options that apply to the chosen type (e.g., don't ask about `--assistant` for `autonomous_agent`).
 - **`--id` defaults to GitHub username** — suggest it as default but let the user choose a different ID.
-- **Admin credentials are required** — ensure one of the admin auth env vars is set before running.
+- **`gh` authentication is required** — ensure `gh auth login` is done before running.
 
 ### Type-Specific Parameters
 

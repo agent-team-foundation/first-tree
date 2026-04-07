@@ -98,8 +98,8 @@ When a handler starts, the client runtime bootstraps a per-chat workspace and wr
 
 `onboard` is intentionally higher-level than the rest of the CLI.
 
-- It creates the agent via Admin API and bootstraps the token in a single step.
-- Admin credentials are required (`FIRST_TREE_HUB_ADMIN_TOKEN` or `FIRST_TREE_HUB_ADMIN_USERNAME` + `FIRST_TREE_HUB_ADMIN_PASSWORD`).
+- It auto-creates the agent and bootstraps the token in a single step via GitHub identity.
+- Only `gh` authentication is required — no admin credentials needed.
 - This is the supported path for creating new members.
 
 Do not replace this with ad hoc API calls unless the user explicitly wants to bypass the normal flow for development or debugging.

@@ -51,6 +51,9 @@ export const serverConfigSchema = defineConfig({
       env: "FIRST_TREE_HUB_GITHUB_WEBHOOK_SECRET",
       secret: true,
     }),
+    allowedOrg: field(z.string().optional(), {
+      env: "FIRST_TREE_HUB_GITHUB_ALLOWED_ORG",
+    }),
   },
   cors: optional({
     origin: field(z.string(), { env: "FIRST_TREE_HUB_CORS_ORIGIN" }),

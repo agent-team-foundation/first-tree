@@ -31,14 +31,15 @@ These must be set for Docker / CI / `--no-interactive` deployments. Interactive 
 |----------|-------------|
 | `FIRST_TREE_HUB_DATABASE_URL` | PostgreSQL connection URL (Docker Compose provides this automatically) |
 | `FIRST_TREE_HUB_HOST` | Bind address — **must be `0.0.0.0` for Docker** (default: `127.0.0.1`) |
-| `FIRST_TREE_HUB_CONTEXT_TREE_REPO` | Context Tree GitHub repo (URL or `owner/repo`) |
-| `FIRST_TREE_HUB_GITHUB_TOKEN` | GitHub personal access token (repo scope) |
 
 ### Server — Optional
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `FIRST_TREE_HUB_CONTEXT_TREE_REPO` | — | Context Tree repo URL (optional, for organizational context) |
+| `FIRST_TREE_HUB_GITHUB_TOKEN` | — | GitHub token (optional, for webhooks) |
 | `FIRST_TREE_HUB_GITHUB_WEBHOOK_SECRET` | — | GitHub webhook secret (only needed if using github webhooks) |
+| `FIRST_TREE_HUB_GITHUB_ALLOWED_ORG` | — | GitHub org for agent registration access control (optional) |
 | `FIRST_TREE_HUB_PORT` | `8000` | Server port |
 | `FIRST_TREE_HUB_JWT_SECRET` | auto-generated | JWT signing secret |
 | `FIRST_TREE_HUB_ENCRYPTION_KEY` | auto-generated | Adapter credential encryption key |
@@ -94,10 +95,7 @@ The default [Caddyfile](../deploy/Caddyfile) is minimal. To add custom headers, 
 
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/template?referralCode=first-tree-hub)
 
-Railway auto-detects the Dockerfile, provisions PostgreSQL, and exposes the service with HTTPS. Set these environment variables in Railway's dashboard:
-
-- `FIRST_TREE_HUB_CONTEXT_TREE_REPO`
-- `FIRST_TREE_HUB_GITHUB_TOKEN`
+Railway auto-detects the Dockerfile, provisions PostgreSQL, and exposes the service with HTTPS. Optionally set `FIRST_TREE_HUB_GITHUB_ALLOWED_ORG` to restrict agent registration to a specific GitHub organization.
 
 ### Render
 
@@ -175,6 +173,6 @@ first-tree-hub server doctor
 first-tree-hub client doctor
 ```
 
-`server doctor` checks: Node.js version, Docker, configuration, database connectivity, GitHub token, Context Tree access, server health.
+`server doctor` checks: Node.js version, Docker, configuration, database connectivity, server health.
 
 `client doctor` checks: Node.js version, configuration, server reachability, agent configs, token validity, WebSocket connectivity.
