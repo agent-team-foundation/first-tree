@@ -69,7 +69,7 @@ not become the only place important maintainer knowledge lives.
 | `tsdown.config.ts` | Build entry and asset handling |
 | `vitest.config.ts` | Unit-test entrypoints |
 | `.github/workflows/ci.yml` | Thin CI shell |
-| `README.md` | Thin distribution overview |
+| `README.md` | Distribution overview and onboarding quickstart |
 | `AGENTS.md` | Thin maintainer pointer for agent sessions |
 
 ## Validation
@@ -97,6 +97,7 @@ not become the only place important maintainer knowledge lives.
 - Legacy `.context-tree/...` paths still matter only for migrating existing
   user repos; the compatibility logic lives in
   `engine/runtime/asset-loader.ts` and `engine/upgrade.ts`.
-- Root `README.md` and `AGENTS.md` are intentionally brief. Important
-  information must live in the skill references instead.
+- Root `README.md` and `AGENTS.md` should stay distribution-focused and
+  concise. Important behavior and contracts must still live in the skill
+  references.
 - If you change `references/` or `assets/framework/`, run `pnpm validate:skill`.
