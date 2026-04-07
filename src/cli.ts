@@ -9,15 +9,19 @@ const USAGE = `usage: first-tree <command>
   New to first-tree? Run \`first-tree help onboarding\` first.
 
 Commands:
-  init      Install source/workspace integration and create or refresh a dedicated context tree repo
-  publish   Publish a dedicated tree repo to GitHub and record it back in the source repo
-  verify    Run verification checks against a tree repo
-  upgrade   Refresh the installed skill in a tree repo
-  help      Show help for a topic (e.g. \`help onboarding\`)
+  init                  Install source/workspace integration and create or refresh a dedicated context tree repo
+  publish               Publish a dedicated tree repo to GitHub and record it back in the source repo
+  verify                Run verification checks against a tree repo
+  upgrade               Refresh the installed skill in a tree repo
+  review                Run Claude Code PR review (CI helper)
+  generate-codeowners   Generate .github/CODEOWNERS from tree ownership
+  inject-context        Output Claude Code SessionStart hook payload from NODE.md
+  help                  Show help for a topic (e.g. \`help onboarding\`)
 
 Options:
-  --help       Show this help message
-  --version    Show version number
+  --help                Show this help message
+  --version             Show version number
+  --skip-version-check  Skip the auto-upgrade check (for latency-sensitive callers)
 
 Common examples:
   first-tree init
@@ -51,11 +55,56 @@ export function isDirectExecution(
   }
 }
 
+export function stripGlobalFlags(args: string[]): {
+  rest: string[];
+  skipVersionCheck: boolean;
+} {
+  const rest: string[] = [];
+  let skipVersionCheck = false;
+  for (const arg of args) {
+    if (arg === "--skip-version-check") {
+      skipVersionCheck = true;
+      continue;
+    }
+    rest.push(arg);
+  }
+  return { rest, skipVersionCheck };
+}
+
+async function runAutoUpgradeCheck(): Promise<void> {
+  // Best-effort silent auto-upgrade. Any failure is swallowed so the user's
+  // command always runs.
+  try {
+    const {
+      checkAndAutoUpgrade,
+      defaultFetchLatestVersion,
+      defaultInstallLatestVersion,
+      defaultReadCache,
+      defaultWriteCache,
+    } = await import("#engine/runtime/auto-upgrade.js");
+    const { resolveBundledPackageRoot, readCanonicalFrameworkVersion } =
+      await import("#engine/runtime/installer.js");
+    const currentVersion = readCanonicalFrameworkVersion(
+      resolveBundledPackageRoot(),
+    );
+    await checkAndAutoUpgrade({
+      currentVersion,
+      fetchLatestVersion: defaultFetchLatestVersion,
+      installLatestVersion: defaultInstallLatestVersion,
+      readCache: defaultReadCache,
+      writeCache: defaultWriteCache,
+    });
+  } catch {
+    // Swallow — auto-upgrade is best-effort
+  }
+}
+
 export async function runCli(
-  args: string[],
+  rawArgs: string[],
   output: Output = console.log,
 ): Promise<number> {
   const write = (text: string): void => output(text);
+  const { rest: args, skipVersionCheck } = stripGlobalFlags(rawArgs);
 
   if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
     write(USAGE);
@@ -63,33 +112,59 @@ export async function runCli(
   }
 
   if (args[0] === "--version" || args[0] === "-v") {
-    const { resolveBundledPackageRoot, readCanonicalFrameworkVersion } =
-      await import("#skill/engine/runtime/installer.js");
-    write(readCanonicalFrameworkVersion(resolveBundledPackageRoot()));
+    const {
+      resolveBundledPackageRoot,
+      readCanonicalFrameworkVersion,
+      readSkillVersion,
+    } = await import("#engine/runtime/installer.js");
+    const packageRoot = resolveBundledPackageRoot();
+    const cliVersion = readCanonicalFrameworkVersion(packageRoot);
+    const skillVersion = readSkillVersion(packageRoot);
+    write(`${cliVersion} (skills: ${skillVersion})`);
     return 0;
+  }
+
+  if (!skipVersionCheck) {
+    await runAutoUpgradeCheck();
   }
 
   const command = args[0];
 
   switch (command) {
     case "init": {
-      const { runInit } = await import("#skill/engine/commands/init.js");
+      const { runInit } = await import("#engine/commands/init.js");
       return runInit(args.slice(1));
     }
     case "verify": {
-      const { runVerify } = await import("#skill/engine/commands/verify.js");
+      const { runVerify } = await import("#engine/commands/verify.js");
       return runVerify(args.slice(1));
     }
     case "publish": {
-      const { runPublish } = await import("#skill/engine/commands/publish.js");
+      const { runPublish } = await import("#engine/commands/publish.js");
       return runPublish(args.slice(1));
     }
     case "upgrade": {
-      const { runUpgrade } = await import("#skill/engine/commands/upgrade.js");
+      const { runUpgrade } = await import("#engine/commands/upgrade.js");
       return runUpgrade(args.slice(1));
     }
+    case "review": {
+      const { runReview } = await import("#engine/commands/review.js");
+      return runReview(args.slice(1));
+    }
+    case "generate-codeowners": {
+      const { runGenerateCodeowners } = await import(
+        "#engine/commands/generate-codeowners.js"
+      );
+      return runGenerateCodeowners(args.slice(1));
+    }
+    case "inject-context": {
+      const { runInjectContext } = await import(
+        "#engine/commands/inject-context.js"
+      );
+      return runInjectContext(args.slice(1));
+    }
     case "help":
-      return (await import("#skill/engine/commands/help.js")).runHelp(
+      return (await import("#engine/commands/help.js")).runHelp(
         args.slice(1),
         write,
       );

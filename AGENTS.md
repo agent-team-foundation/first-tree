@@ -1,28 +1,40 @@
 # Agent Instructions for first-tree
 
-This repo ships the canonical `first-tree` skill plus a thin
-`first-tree` CLI. It is not a user context tree.
+This repo distributes the `first-tree` npm package: a thin CLI plus a
+lightweight skill payload. It is not a user context tree. Maintaining this
+repo is different from using it — see the user-facing `skills/first-tree/SKILL.md`
+for what gets shipped.
 
 ## Start Here
 
-1. `skills/first-tree/SKILL.md`
-2. `skills/first-tree/references/source-map.md`
+1. `docs/source-map.md` — index of every maintainer-facing file
+2. `skills/first-tree/SKILL.md` — the user-facing skill payload (read this so
+   you understand what ships to user repos)
 3. The specific maintainer reference linked from the source map
+4. `skills/first-tree/references/source-workspace-installation.md` for the
+   user-facing install contract (also shipped to user repos)
 
 ## Rules
 
-- Treat `skills/first-tree/` as the only canonical source of
-  framework knowledge.
+- Treat the source repo as a TypeScript project, not a tree repo:
+  - `src/engine/` is the canonical CLI behavior (bundled into dist)
+  - `assets/framework/` is the runtime asset payload (templates, workflows,
+    prompts, helpers, examples) read by the CLI at runtime
+  - `skills/first-tree/` is the lightweight skill payload that gets copied
+    verbatim to user repos via `copyCanonicalSkill`. It contains only
+    `SKILL.md`, `VERSION`, and `references/` (user-facing references only).
+  - `docs/` holds maintainer-only references (source-map, maintainer-*)
+  - `tests/` holds the test suite
 - The tracked `.agents/skills/first-tree` and `.claude/skills/first-tree`
   entries in this repo are local alias symlinks for agent discovery; edit
   `skills/first-tree/`, not the aliases.
 - Use `first-tree` for both the npm package and CLI command, and
-  `skills/first-tree/` when you mean the bundled skill path.
+  `skills/first-tree/` when you mean the bundled skill payload path.
+- Never put engine code, test code, helpers, or maintainer docs inside
+  `skills/first-tree/` — that directory ships to user repos as-is.
 - Keep source/workspace installs limited to local skill integration; `NODE.md`,
   `members/`, and tree-scoped `AGENTS.md` belong only in a dedicated
   `*-context` repo. See `skills/first-tree/references/source-workspace-installation.md`.
-- Keep root CLI/package files thin. If a maintainer needs information to change
-  behavior safely, move that information into the skill references.
 - Keep shipped runtime assets generic.
 
 ## Validation
