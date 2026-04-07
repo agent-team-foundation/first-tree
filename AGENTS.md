@@ -63,7 +63,7 @@ pnpm --filter @first-tree-hub/server db:studio      # Drizzle Studio
 ## Repo-Local Skill
 
 - Use `skills/first-tree-hub-cli/SKILL.md` as the source-of-truth skill when the task is about the unified CLI, onboarding, config flows, runtime boundaries, or other behavior spanning `packages/command`, `packages/client`, `packages/server`, and `packages/shared`.
-- `.agents/skills/first-tree-hub-cli/` and `.claude/skills/first-tree-hub-cli/` are generated mirrors for agent discovery. Do not edit those mirrors directly; refresh them from the source skill with `bash skills/first-tree-hub-cli/scripts/sync-skill-artifacts.sh`.
+- `.agents/skills/first-tree-hub-cli/` and `.claude/skills/first-tree-hub-cli/` are symlinks to `skills/first-tree-hub-cli/`. No sync step is needed.
 
 ## Monorepo Structure
 
