@@ -1,4 +1,9 @@
-import { createAgentTokenSchema, paginationQuerySchema } from "@first-tree-hub/shared";
+import {
+  createAgentSchema,
+  createAgentTokenSchema,
+  paginationQuerySchema,
+  updateAgentSchema,
+} from "@first-tree-hub/shared";
 import { and, eq, gt, ne } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { agents } from "../../db/schema/agents.js";
@@ -29,8 +34,25 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
     };
   });
 
-  // POST / (create) removed — agents are created by Context Tree sync
-  // PATCH /:agentId (update) removed — status is managed by sync, admin controls via token revocation
+  app.post("/", async (request, reply) => {
+    const body = createAgentSchema.parse(request.body);
+    const agent = await agentService.createAgent(app.db, body);
+    return reply.status(201).send({
+      ...agent,
+      createdAt: agent.createdAt.toISOString(),
+      updatedAt: agent.updatedAt.toISOString(),
+    });
+  });
+
+  app.patch<{ Params: { agentId: string } }>("/:agentId", async (request) => {
+    const body = updateAgentSchema.parse(request.body);
+    const agent = await agentService.updateAgent(app.db, request.params.agentId, body);
+    return {
+      ...agent,
+      createdAt: agent.createdAt.toISOString(),
+      updatedAt: agent.updatedAt.toISOString(),
+    };
+  });
 
   app.get<{ Params: { agentId: string } }>("/:agentId", async (request) => {
     const agent = await agentService.getAgent(app.db, request.params.agentId);
@@ -81,7 +103,25 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
     return reply.status(200).send({ disconnected: wasConnected });
   });
 
-  // DELETE agent — only allowed for suspended agents (removed from tree)
+  app.post<{ Params: { agentId: string } }>("/:agentId/suspend", async (request) => {
+    const agent = await agentService.suspendAgent(app.db, request.params.agentId);
+    return {
+      ...agent,
+      createdAt: agent.createdAt.toISOString(),
+      updatedAt: agent.updatedAt.toISOString(),
+    };
+  });
+
+  app.post<{ Params: { agentId: string } }>("/:agentId/reactivate", async (request) => {
+    const agent = await agentService.reactivateAgent(app.db, request.params.agentId);
+    return {
+      ...agent,
+      createdAt: agent.createdAt.toISOString(),
+      updatedAt: agent.updatedAt.toISOString(),
+    };
+  });
+
+  // DELETE agent — only allowed for suspended agents
   app.delete<{ Params: { agentId: string } }>("/:agentId", async (request, reply) => {
     await agentService.deleteAgent(app.db, request.params.agentId);
     return reply.status(204).send();

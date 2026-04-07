@@ -6,7 +6,14 @@ import { useNavigate, useParams } from "react-router";
 import { createAdapterMapping, deleteAdapterMapping, listAdapterMappings } from "../api/adapter-mappings.js";
 import { getAdapterStatuses } from "../api/adapter-status.js";
 import { createAdapter, deleteAdapter, listAdapters, updateAdapter } from "../api/adapters.js";
-import { deleteAgent, getAgent, type TestResult, testAgentConnection } from "../api/agents.js";
+import {
+  deleteAgent,
+  getAgent,
+  reactivateAgent,
+  suspendAgent,
+  type TestResult,
+  testAgentConnection,
+} from "../api/agents.js";
 import { createToken, listTokens, revokeToken } from "../api/tokens.js";
 import { Badge } from "../components/ui/badge.js";
 import { Button } from "../components/ui/button.js";
@@ -73,7 +80,17 @@ export function AgentDetailPage() {
   });
   const [bindingCredError, setBindingCredError] = useState("");
 
-  // Mutations — agent
+  // Mutations — agent lifecycle
+  const suspendMutation = useMutation({
+    mutationFn: () => suspendAgent(agentId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["agent", agentId] }),
+  });
+
+  const reactivateMutation = useMutation({
+    mutationFn: () => reactivateAgent(agentId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["agent", agentId] }),
+  });
+
   const deleteMutation = useMutation({
     mutationFn: () => deleteAgent(agentId),
     onSuccess: () => navigate("/agents"),
@@ -311,11 +328,35 @@ export function AgentDetailPage() {
             {testMutation.isPending ? "Testing..." : "Test Connection"}
           </Button>
         )}
-        {agent.status === "suspended" && (
-          <Button variant="destructive" size="sm" onClick={handleDelete}>
-            <Trash2 className="h-4 w-4 mr-2" />
-            Delete
+        {agent.status === "active" && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              if (window.confirm("Suspend this agent? All tokens will be revoked.")) {
+                suspendMutation.mutate();
+              }
+            }}
+            disabled={suspendMutation.isPending}
+          >
+            {suspendMutation.isPending ? "Suspending..." : "Suspend"}
           </Button>
+        )}
+        {agent.status === "suspended" && (
+          <>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => reactivateMutation.mutate()}
+              disabled={reactivateMutation.isPending}
+            >
+              {reactivateMutation.isPending ? "Reactivating..." : "Reactivate"}
+            </Button>
+            <Button variant="destructive" size="sm" onClick={handleDelete}>
+              <Trash2 className="h-4 w-4 mr-2" />
+              Delete
+            </Button>
+          </>
         )}
       </div>
 
@@ -327,11 +368,10 @@ export function AgentDetailPage() {
         />
       )}
 
-      {/* Agent Info — read-only, managed by Context Tree */}
+      {/* Agent Info */}
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
+        <CardHeader>
           <CardTitle>Agent Info</CardTitle>
-          <span className="text-xs text-muted-foreground">Managed by Context Tree</span>
         </CardHeader>
         <CardContent>
           <dl className="grid grid-cols-2 gap-4 text-sm">

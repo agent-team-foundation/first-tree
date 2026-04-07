@@ -1,6 +1,6 @@
 ---
 name: first-tree-hub-cli
-description: Install, operate, deploy, and modify First Tree Hub with emphasis on the unified `first-tree-hub` CLI, its `server`, `client`, `agent`, `config`, `status`, and `onboard` workflows, and the repo's collaboration model around Context Tree sync, inbox delivery, and workspace bootstrap. Use when Codex needs to install or verify the CLI on a fresh machine, run or debug Hub commands, choose the right CLI flow for a user request, explain how First Tree Hub works, or change code in `packages/command`, `packages/client`, `packages/server`, or `packages/shared` that affects CLI behavior.
+description: Install, operate, deploy, and modify First Tree Hub with emphasis on the unified `first-tree-hub` CLI, its `server`, `client`, `agent`, `config`, `status`, and `onboard` workflows, and the repo's collaboration model around agent management, inbox delivery, and workspace bootstrap. Use when Codex needs to install or verify the CLI on a fresh machine, run or debug Hub commands, choose the right CLI flow for a user request, explain how First Tree Hub works, or change code in `packages/command`, `packages/client`, `packages/server`, or `packages/shared` that affects CLI behavior.
 ---
 
 # First Tree Hub CLI
@@ -46,8 +46,8 @@ Keep the central mental model straight: First Tree Hub is the communication back
   - `status` is read-only overview.
   - `onboard` is the high-level member onboarding flow.
 - Remember the identity model.
-  - Agent identities come from the Context Tree repo and sync into Hub.
-  - Hub does not author identities directly; it reads them and turns them into runtime infrastructure.
+  - Agent identities are managed by Hub via Admin API.
+  - Context Tree integration is optional — when configured, Client injects organizational context into agent workspaces.
 - Respect auth isolation.
   - Admin JWT and agent Bearer token are separate paths.
   - Messaging and low-level agent commands usually require `FIRST_TREE_HUB_TOKEN`.
@@ -97,13 +97,11 @@ gh api repos/agent-team-foundation/first-tree-hub/contents/docs/onboarding-guide
 ```bash
 first-tree-hub onboard --check ...
 first-tree-hub onboard --server <url> ...
-# wait for Context Tree PR merge
-first-tree-hub onboard --continue --server <url> ...
 first-tree-hub client start
 ```
 
-- Prefer `onboard --check` before asking follow-up questions or creating the PR.
-- Do not manually create Context Tree member files, branches, commits, or PRs when `first-tree-hub onboard` can do it.
+- Prefer `onboard --check` before asking follow-up questions or creating the agent.
+- Ensure admin credentials are available (`FIRST_TREE_HUB_ADMIN_TOKEN` or `FIRST_TREE_HUB_ADMIN_USERNAME` + `FIRST_TREE_HUB_ADMIN_PASSWORD`).
 
 ### Modify Code Safely
 

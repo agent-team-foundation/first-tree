@@ -47,7 +47,7 @@ export class AgentRuntime {
       contextTreePath = await syncContextTree(this.config.server, firstToken, log);
     }
     if (!contextTreePath) {
-      log("WARNING: Context Tree sync failed — agents will start without organizational context");
+      log("Context Tree not configured or sync skipped — agents will start without organizational context");
     }
 
     log(`Starting ${this.slots.length} agent(s)...`);

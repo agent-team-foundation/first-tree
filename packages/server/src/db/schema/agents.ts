@@ -11,8 +11,8 @@ export const agents = pgTable(
     displayName: text("display_name"),
     /** Agent ID to forward @mentions to (e.g. personal assistant) */
     delegateMention: text("delegate_mention"),
-    /** Materialized path within members/ tree, e.g. "engineering/agent-a" */
-    treePath: text("tree_path"),
+    /** Agent self-description and instructions (markdown) */
+    profile: text("profile"),
     /** Delivery address, auto-generated as inbox_{id} */
     inboxId: text("inbox_id").unique().notNull(),
     /** "active" | "suspended". Suspended agents have all API requests rejected. */

@@ -5,15 +5,16 @@ Use this file when an external agent receives an onboarding task such as "instal
 ## Core Rule
 
 - Use `first-tree-hub onboard` for the workflow.
-- Do not manually edit the Context Tree, create git branches, or open PRs by hand unless the CLI flow is broken and the user explicitly wants a manual fallback.
+- Ensure admin credentials are available before running (`FIRST_TREE_HUB_ADMIN_TOKEN` or `FIRST_TREE_HUB_ADMIN_USERNAME` + `FIRST_TREE_HUB_ADMIN_PASSWORD`).
 
 ## When the Prompt Starts From Scratch
 
 If the task only gives you a package name, a docs URL, and a server URL, normalize it into this sequence:
 
 1. Confirm tooling:
-   - `gh` is installed and authenticated with write access to the Context Tree repository.
+   - `gh` is installed and authenticated (used for agent token bootstrap).
    - Node is new enough to run the published CLI.
+   - Admin credentials are available as environment variables.
 2. Install the CLI:
    - Preferred: `npm install -g @agent-team-foundation/first-tree-hub`
    - If the caller installed locally with `npm i @agent-team-foundation/first-tree-hub`, use `npx first-tree-hub ...`
@@ -29,19 +30,13 @@ gh api repos/agent-team-foundation/first-tree-hub/contents/docs/onboarding-guide
 first-tree-hub onboard --check --server <url> ...
 ```
 
-5. Run Phase 1 to create the Context Tree PR:
+5. Execute onboarding (creates agent via Admin API + bootstraps token):
 
 ```bash
 first-tree-hub onboard --server <url> ...
 ```
 
-6. After the PR is merged, run Phase 2:
-
-```bash
-first-tree-hub onboard --continue --server <url> ...
-```
-
-7. Start the runtime when this machine should host the configured agent:
+6. Start the runtime when this machine should host the configured agent:
 
 ```bash
 first-tree-hub client start
@@ -62,7 +57,7 @@ interpret it as:
 - Install or invoke the published CLI.
 - Fetch the guide with `gh` rather than relying on a browser-only read.
 - Use `https://first-tree.staging.unispark.dev/` as the Hub server URL in the onboarding commands.
-- Execute the supported `onboard` flow instead of hand-editing member files.
+- Execute the supported `onboard` flow instead of manually calling APIs.
 
 ## Minimal Inputs to Collect
 
@@ -74,6 +69,7 @@ interpret it as:
   - `server` URL when it is not already configured
 - Optional:
   - `display-name`
+  - `profile` (agent self-description in markdown)
   - `assistant` only for `human`
   - Feishu bot credentials only when a bot binding should be created
 

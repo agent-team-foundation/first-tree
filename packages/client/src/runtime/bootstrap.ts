@@ -32,8 +32,12 @@ export async function syncContextTree(
   try {
     const sdk = new FirstTreeHubSDK({ serverUrl, token });
     const config = await sdk.getContextTreeConfig();
+    if (!config.repo) {
+      log("Context Tree sync skipped: not configured on server");
+      return null;
+    }
     repo = config.repo;
-    branch = config.branch;
+    branch = config.branch ?? "main";
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log(`Context Tree sync skipped: failed to fetch config from server (${msg})`);
@@ -150,14 +154,13 @@ export function bootstrapWorkspace(options: BootstrapOptions): void {
   };
   writeFileSync(join(agentDir, "identity.json"), JSON.stringify(identityData, null, 2), "utf-8");
 
-  // 2. Copy context files from Context Tree
-  if (contextTreePath) {
-    // Member profile (self NODE.md)
-    const selfNodePath = join(contextTreePath, "members", identity.agentId, "NODE.md");
-    if (existsSync(selfNodePath)) {
-      copyFileSync(selfNodePath, join(contextDir, "self.md"));
-    }
+  // 2. Write agent profile from Hub identity (if available)
+  if (identity.profile) {
+    writeFileSync(join(contextDir, "self.md"), identity.profile, "utf-8");
+  }
 
+  // 3. Copy organizational context from Context Tree (if available)
+  if (contextTreePath) {
     // Agent operating instructions (AGENT.md)
     const agentMdPath = join(contextTreePath, "AGENT.md");
     if (existsSync(agentMdPath)) {
@@ -169,17 +172,9 @@ export function bootstrapWorkspace(options: BootstrapOptions): void {
     if (existsSync(rootNodePath)) {
       copyFileSync(rootNodePath, join(contextDir, "domain-map.md"));
     }
-  } else {
-    // Mark degraded mode so CLAUDE.md generator can warn
-    writeFileSync(
-      join(contextDir, "degraded.md"),
-      "Context Tree is not available for this session.\n" +
-        "Organizational context, domain structure, and ownership information are not loaded.\n",
-      "utf-8",
-    );
   }
 
-  // 3. Write tools.md (static SDK reference)
+  // 4. Write tools.md (static SDK reference)
   writeFileSync(join(agentDir, "tools.md"), generateToolsDoc(), "utf-8");
 }
 

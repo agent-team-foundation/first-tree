@@ -101,6 +101,7 @@ describe("CLAUDE.md generation", () => {
       displayName: "yuezengwu-assistant",
       type: "personal_assistant",
       delegateMention: null, // null — should still detect as personal_assistant
+      profile: null,
       metadata: {},
     };
 
@@ -118,6 +119,7 @@ describe("CLAUDE.md generation", () => {
       displayName: "Code Reviewer",
       type: "autonomous_agent",
       delegateMention: null,
+      profile: null,
       metadata: {},
     };
 
@@ -139,6 +141,7 @@ describe("CLAUDE.md generation", () => {
       displayName: "yuezengwu-assistant",
       type: "personal_assistant",
       delegateMention: null,
+      profile: null,
       metadata: {},
     };
 
@@ -156,6 +159,7 @@ describe("CLAUDE.md generation", () => {
       displayName: "Test",
       type: "autonomous_agent",
       delegateMention: null,
+      profile: null,
       metadata: {},
     };
 
@@ -176,6 +180,7 @@ describe("CLAUDE.md generation", () => {
       displayName: "Test",
       type: "autonomous_agent",
       delegateMention: null,
+      profile: null,
       metadata: {},
     };
 
@@ -194,6 +199,7 @@ describe("CLAUDE.md generation", () => {
       displayName: "Test",
       type: "autonomous_agent",
       delegateMention: null,
+      profile: null,
       metadata: {},
     };
 
@@ -214,6 +220,7 @@ describe("CLAUDE.md generation", () => {
       displayName: "Test",
       type: "autonomous_agent",
       delegateMention: null,
+      profile: null,
       metadata: {},
     };
 
@@ -231,6 +238,7 @@ describe("CLAUDE.md generation", () => {
       displayName: "Test",
       type: "autonomous_agent",
       delegateMention: null,
+      profile: null,
       metadata: {},
     };
 
@@ -253,6 +261,7 @@ describe("CLAUDE.md generation", () => {
       displayName: "Test",
       type: "autonomous_agent",
       delegateMention: null,
+      profile: null,
       metadata: {},
     };
 
@@ -272,6 +281,7 @@ describe("CLAUDE.md generation", () => {
       displayName: "Test",
       type: "autonomous_agent",
       delegateMention: null,
+      profile: null,
       metadata: {},
     };
 
@@ -289,6 +299,7 @@ describe("CLAUDE.md generation", () => {
       displayName: null,
       type: "autonomous_agent",
       delegateMention: null,
+      profile: null,
       metadata: {},
     };
 

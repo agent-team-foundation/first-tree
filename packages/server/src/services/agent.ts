@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import type { CreateAgent, CreateAgentToken } from "@first-tree-hub/shared";
+import type { CreateAgent, CreateAgentToken, UpdateAgent } from "@first-tree-hub/shared";
 import { AGENT_STATUSES } from "@first-tree-hub/shared";
 import { and, desc, eq, isNull, lt, ne } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
@@ -35,6 +35,8 @@ export async function createAgent(db: Database, data: CreateAgent) {
         organizationId: data.organizationId ?? "default",
         type: data.type,
         displayName: data.displayName ?? null,
+        delegateMention: data.delegateMention ?? null,
+        profile: data.profile ?? null,
         status: "active",
         metadata: data.metadata ?? {},
         updatedAt: new Date(),
@@ -52,6 +54,8 @@ export async function createAgent(db: Database, data: CreateAgent) {
       organizationId: data.organizationId ?? "default",
       type: data.type,
       displayName: data.displayName ?? null,
+      delegateMention: data.delegateMention ?? null,
+      profile: data.profile ?? null,
       inboxId,
       metadata: data.metadata ?? {},
     })
@@ -85,7 +89,7 @@ export async function listAgents(db: Database, limit: number, cursor?: string) {
       type: agents.type,
       displayName: agents.displayName,
       delegateMention: agents.delegateMention,
-      treePath: agents.treePath,
+      profile: agents.profile,
       inboxId: agents.inboxId,
       status: agents.status,
       metadata: agents.metadata,
@@ -107,9 +111,50 @@ export async function listAgents(db: Database, limit: number, cursor?: string) {
   return { items, nextCursor };
 }
 
+export async function updateAgent(db: Database, id: string, data: UpdateAgent) {
+  const agent = await getAgent(db, id);
+
+  const updates: Record<string, unknown> = { updatedAt: new Date() };
+  if (data.type !== undefined) updates.type = data.type;
+  if (data.displayName !== undefined) updates.displayName = data.displayName;
+  if (data.delegateMention !== undefined) updates.delegateMention = data.delegateMention;
+  if (data.profile !== undefined) updates.profile = data.profile;
+  if (data.metadata !== undefined) updates.metadata = data.metadata;
+
+  const [updated] = await db.update(agents).set(updates).where(eq(agents.id, agent.id)).returning();
+
+  if (!updated) throw new Error("Unexpected: UPDATE RETURNING produced no row");
+  return updated;
+}
+
 /**
- * Suspend an agent (called by sync when member is removed from tree).
- * Revokes all active tokens so the agent can no longer authenticate.
+ * Reactivate a suspended agent.
+ */
+export async function reactivateAgent(db: Database, id: string) {
+  const [existing] = await db
+    .select({ id: agents.id, status: agents.status })
+    .from(agents)
+    .where(eq(agents.id, id))
+    .limit(1);
+  if (!existing || existing.status === AGENT_STATUSES.DELETED) {
+    throw new NotFoundError(`Agent "${id}" not found`);
+  }
+  if (existing.status !== AGENT_STATUSES.SUSPENDED) {
+    throw new BadRequestError("Only suspended agents can be reactivated.");
+  }
+
+  const [agent] = await db
+    .update(agents)
+    .set({ status: AGENT_STATUSES.ACTIVE, updatedAt: new Date() })
+    .where(eq(agents.id, id))
+    .returning();
+
+  if (!agent) throw new Error("Unexpected: UPDATE RETURNING produced no row");
+  return agent;
+}
+
+/**
+ * Suspend an agent. Revokes all active tokens so the agent can no longer authenticate.
  */
 export async function suspendAgent(db: Database, id: string) {
   const [agent] = await db
@@ -132,7 +177,8 @@ export async function suspendAgent(db: Database, id: string) {
 }
 
 /**
- * Delete an agent. Only allowed when status is "suspended" (removed from tree).
+ * Delete an agent. Only allowed when status is "suspended".
+ * Suspend the agent first to revoke tokens, then delete.
  */
 export async function deleteAgent(db: Database, id: string) {
   const [existing] = await db
@@ -144,7 +190,7 @@ export async function deleteAgent(db: Database, id: string) {
     throw new NotFoundError(`Agent "${id}" not found`);
   }
   if (existing.status !== AGENT_STATUSES.SUSPENDED) {
-    throw new BadRequestError("Only suspended agents can be deleted. Active agents are managed by Context Tree.");
+    throw new BadRequestError("Only suspended agents can be deleted. Suspend the agent first.");
   }
 
   // 1. Set status to deleted
@@ -176,7 +222,7 @@ export async function bootstrapToken(db: Database, agentId: string, githubUserna
   // 1. Get agent — must exist and not be deleted
   const agent = await getAgent(db, agentId);
 
-  // 2. Check agent has owners metadata from Context Tree sync
+  // 2. Check agent has owners in metadata
   const owners: string[] = Array.isArray(agent.metadata?.owners) ? (agent.metadata.owners as string[]) : [];
   if (!owners.includes(githubUsername)) {
     throw new ForbiddenError(`GitHub user "${githubUsername}" is not in the owners list for agent "${agentId}"`);

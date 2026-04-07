@@ -50,6 +50,13 @@
       "when": 1775073600000,
       "tag": "0006_agent_tree_path",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1775692800000,
+      "tag": "0007_decouple_context_tree",
+      "breakpoints": true
     }
   ]
 }

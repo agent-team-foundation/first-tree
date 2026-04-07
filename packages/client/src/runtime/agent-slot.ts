@@ -57,6 +57,7 @@ export class AgentSlot {
         displayName: agent.displayName,
         type: agent.type,
         delegateMention: agent.delegateMention,
+        profile: agent.profile,
         metadata: agent.metadata,
       },
       sdk: this.connection.sdk,

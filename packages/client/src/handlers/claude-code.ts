@@ -277,16 +277,15 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
 /**
  * Generate a CLAUDE.md file from .agent/ bootstrap data.
  *
- * Layered Bootstrap:
- *   Layer 1 (always): Agent identity + member profile + AGENT.md operating instructions
- *   Layer 2 (if available): Organization domain map from root NODE.md
- *   Layer 3 (on-demand): Agent reads specific domain nodes via contextTreePath
+ * Layer 1 (always): Agent identity + profile (from Hub)
+ * Layer 2 (if Context Tree configured): Operating instructions + domain map
+ * Layer 3 (if Context Tree configured): Context Tree location for on-demand reading
  */
 function generateClaudeMd(workspacePath: string, identity: AgentIdentity, contextTreePath: string | null): void {
   const sections: string[] = [];
   const contextDir = join(workspacePath, ".agent", "context");
 
-  // --- Identity (1 sentence based on type) ---
+  // --- Identity ---
   const name = identity.displayName ?? identity.agentId;
   if (identity.type === "personal_assistant") {
     sections.push(`# Agent Identity\n\nYou are ${name}, a personal assistant agent.\n`);
@@ -294,48 +293,32 @@ function generateClaudeMd(workspacePath: string, identity: AgentIdentity, contex
     sections.push(`# Agent Identity\n\nYou are ${name}, an autonomous agent.\n`);
   }
 
-  // --- Layer 1: Member profile from Context Tree (self.md = member NODE.md) ---
+  // --- Agent profile (from Hub) ---
   const selfMdPath = join(contextDir, "self.md");
   if (existsSync(selfMdPath)) {
     const selfContent = readFileSync(selfMdPath, "utf-8");
     sections.push(`## Your Profile\n\n${selfContent}\n`);
-  } else {
-    sections.push(
-      "## Your Profile\n\nNo member profile available. Your responsibilities are not loaded from the Context Tree.\n",
-    );
   }
 
-  // --- Layer 1: Context Tree operating instructions (AGENT.md) ---
+  // --- Context Tree operating instructions (AGENT.md) ---
   const agentInstructionsPath = join(contextDir, "agent-instructions.md");
   if (existsSync(agentInstructionsPath)) {
     const instructions = readFileSync(agentInstructionsPath, "utf-8");
-    sections.push(`## Context Tree Operating Instructions\n\n${instructions}\n`);
-  } else {
-    sections.push(
-      "## Context Tree Operating Instructions\n\nContext Tree instructions unavailable. Organizational context is not loaded for this session.\n",
-    );
+    sections.push(`## Operating Instructions\n\n${instructions}\n`);
   }
 
-  // --- Layer 2: Organization domain map (root NODE.md) ---
+  // --- Organization domain map (root NODE.md) ---
   const domainMapPath = join(contextDir, "domain-map.md");
   if (existsSync(domainMapPath)) {
     const domainMap = readFileSync(domainMapPath, "utf-8");
     sections.push(`## Organization Domain Map\n\n${domainMap}\n`);
   }
 
-  // --- Layer 3: Context Tree location for on-demand reading ---
+  // --- Context Tree location for on-demand reading ---
   if (contextTreePath) {
     sections.push(
       `## Context Tree Location\n\nThe full Context Tree is available at: \`${contextTreePath}\`\n\nRead specific domain nodes as needed following the operating instructions above.\n`,
     );
-  } else {
-    const degradedPath = join(contextDir, "degraded.md");
-    if (existsSync(degradedPath)) {
-      const degradedMsg = readFileSync(degradedPath, "utf-8");
-      sections.push(
-        `## Context Tree Location\n\nWARNING: ${degradedMsg}\nYou can still use the SDK tools below, but you lack organizational context for decisions.\n`,
-      );
-    }
   }
 
   // --- SDK tools reference ---

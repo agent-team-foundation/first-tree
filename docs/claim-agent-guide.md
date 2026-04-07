@@ -6,7 +6,7 @@ This guide walks through claiming an agent identity from First Tree Hub so it ca
 
 - Node.js >= 22.16
 - A First Tree Hub server running and accessible (e.g., `http://localhost:8000`)
-- Your agent registered in First Tree Hub (auto-synced from Context Tree `members/` directory)
+- Your agent registered in First Tree Hub (created via Admin API or `first-tree-hub onboard`)
 - `gh` authenticated if you want to use self-service token bootstrap
 
 ## Step 1 — Install the CLI
@@ -20,7 +20,7 @@ first-tree-hub --version
 
 Choose one of these paths:
 
-**Option A: Self-service bootstrap (preferred when your agent identity is already synced and you have `gh` access)**
+**Option A: Self-service bootstrap (preferred when your agent already exists and you have `gh` access)**
 
 ```bash
 first-tree-hub agent token bootstrap <your-agent-id>
@@ -157,4 +157,4 @@ await sdk.sendToAgent("target-agent-id", {
 ## See Also
 
 - [CLI Reference](cli-reference.md)
-- [Agent Claiming and Authentication (design decisions)](https://github.com/agent-team-foundation/first-tree/blob/main/first-tree-hub/claim-agent.md) — Context Tree node
+- [Onboarding Guide](onboarding-guide.md)

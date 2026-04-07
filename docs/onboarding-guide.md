@@ -1,28 +1,29 @@
 # Onboarding Guide
 
-Add new members (human or agent) to First Tree Hub. No admin account required.
+Add new members (human or agent) to First Tree Hub.
 
 ## Prerequisites
 
-- **GitHub CLI** (`gh`) — authenticated with write access to the Context Tree repository
+- **GitHub CLI** (`gh`) — authenticated (used for agent token bootstrap)
 - **First Tree Hub CLI** (`first-tree-hub`) — installed
 - **Hub Server** — running and accessible
+- **Admin credentials** — via `FIRST_TREE_HUB_ADMIN_TOKEN` or `FIRST_TREE_HUB_ADMIN_USERNAME` + `FIRST_TREE_HUB_ADMIN_PASSWORD`
 
 ## Commands
 
 ```
 first-tree-hub onboard                         # End-to-end onboarding
-  --id <id>                                    #   Member ID (defaults to GitHub username)
+  --id <id>                                    #   Agent ID (defaults to GitHub username)
   --type <type>                                #   human | personal_assistant | autonomous_agent
   --display-name <name>                        #   Display name (optional, defaults to id)
   --role <role>                                #   Role description
   --domains <d1,d2>                            #   Comma-separated domains
+  --profile <text>                             #   Agent profile (markdown)
   --assistant <id>                             #   Also create a personal_assistant
   --server <url>                               #   Hub server URL
   --feishu-bot-app-id <id>                     #   Feishu bot App ID (optional)
   --feishu-bot-app-secret <s>                  #   Feishu bot App Secret (optional)
   --check                                      #   Dry-run: show readiness checklist
-  --continue                                   #   Resume after PR merge
 
 first-tree-hub agent token bootstrap <agent-id>      # GitHub identity → Agent token
 first-tree-hub agent bind bot --platform feishu ...   # Self-service Feishu bot binding
@@ -32,8 +33,6 @@ first-tree-hub client start                           # Start all configured age
 
 ## Onboard a New Human + Assistant
 
-### Phase 1: Create PR
-
 ```bash
 first-tree-hub onboard \
   --id alice \
@@ -41,35 +40,34 @@ first-tree-hub onboard \
   --role "Engineer" \
   --domains "backend,infrastructure" \
   --assistant alice-assistant \
-  --server http://localhost:8000
-```
-
-The command creates the member entries, validates, and opens a PR.
-
-### Phase 2: After PR Merge
-
-```bash
-first-tree-hub onboard --continue \
+  --server http://localhost:8000 \
   --feishu-bot-app-id cli_abcdef \
   --feishu-bot-app-secret "$FEISHU_APP_SECRET"
 ```
 
-Syncs agents, bootstraps token, binds Feishu bot, configures client.
+The command creates the agent via Admin API, bootstraps a token, binds the Feishu bot, and configures the client — all in one step.
 
-### Phase 3: Start the Agent
+Expected output:
+
+```
+✅ Onboard complete!
+
+  Human:     alice
+  Assistant: alice-assistant
+  Token:     ~/.first-tree-hub/config/agents/alice-assistant/agent.yaml
+  Feishu:    bot bound (cli_abcdef)
+
+  Next step — bind your Feishu account:
+    Send this message to the bot in Feishu:  /bind alice
+
+  Start the agent:
+    first-tree-hub client start
+```
+
+Then start the agent:
 
 ```bash
 first-tree-hub client start
-```
-
-The agent connects to the server and begins processing messages. All configuration was set up automatically in Phase 2.
-
-### Feishu User Binding
-
-After onboarding, the human user binds their own Feishu account by sending this message to the bot in Feishu:
-
-```
-/bind alice
 ```
 
 ## Onboard a Standalone Agent (autonomous_agent)
@@ -82,12 +80,10 @@ Use this type for bots that perform a specific function (code review, monitoring
 | | Human | Autonomous Agent |
 |---|---|---|
 | `--assistant` | Optional (creates a personal_assistant) | Not applicable |
-| `github` field in NODE.md | Auto-filled from `gh` user | Not set |
 | `delegate_mention` | Points to assistant | Not set |
 | Feishu bot binding | Not applicable (human binds as user) | Optional |
-| NODE.md template | About + Current Focus | About + Capabilities + Current Focus |
 
-### Phase 1: Create PR
+### Example
 
 ```bash
 first-tree-hub onboard \
@@ -96,14 +92,6 @@ first-tree-hub onboard \
   --role "Code Review" \
   --domains "code-review" \
   --server http://localhost:8000
-```
-
-The command creates a NODE.md with a `## Capabilities` section, validates, and opens a PR.
-
-### Phase 2: After PR Merge
-
-```bash
-first-tree-hub onboard --continue
 ```
 
 Expected output:
@@ -118,28 +106,6 @@ Expected output:
     first-tree-hub client start
 ```
 
-### Phase 3: Start the Agent
-
-```bash
-first-tree-hub client start
-```
-
-### With Feishu Bot
-
-```bash
-first-tree-hub onboard \
-  --id code-reviewer \
-  --type autonomous_agent \
-  --role "Code Review" \
-  --domains "code-review" \
-  --server http://localhost:8000
-
-# After PR merge
-first-tree-hub onboard --continue \
-  --feishu-bot-app-id cli_abcdef \
-  --feishu-bot-app-secret "$FEISHU_APP_SECRET"
-```
-
 ## The `--check` Flag
 
 Use `--check` to see what's ready and what's missing before executing:
@@ -151,9 +117,9 @@ first-tree-hub onboard --check --id alice --type human --role Engineer
 ```
   ✅ Server URL         http://localhost:8000
   ✅ GitHub CLI          authenticated as alice
-  ✅ Context Tree repo   ready
+  ✅ Agent ID            alice
+  ✅ Agent type          human
   ❌ domains             (required)
-  ⬜ assistant           (optional)
 ```
 
 When required parameters are missing, the same checklist is shown as an error.
@@ -164,6 +130,9 @@ When required parameters are missing, the same checklist is shown as an error.
 |----------|---------|
 | `FIRST_TREE_HUB_HOME` | Override config/data home directory (default: `~/.first-tree-hub`) |
 | `FIRST_TREE_HUB_SERVER` | Hub server URL (alternative to `--server`) |
+| `FIRST_TREE_HUB_ADMIN_TOKEN` | Admin JWT token for agent creation |
+| `FIRST_TREE_HUB_ADMIN_USERNAME` | Admin username (used with `ADMIN_PASSWORD` to obtain token) |
+| `FIRST_TREE_HUB_ADMIN_PASSWORD` | Admin password |
 | `FEISHU_APP_ID` | Feishu bot App ID (alternative to `--feishu-bot-app-id`) |
 | `FEISHU_APP_SECRET` | Feishu bot App Secret (alternative to `--feishu-bot-app-secret`) |
 
@@ -179,12 +148,12 @@ When required parameters are missing, the same checklist is shown as an error.
 
 ### Rules
 
-- **Use `onboard` command for everything** — do not manually clone repos, create files, or run git commands.
+- **Use `onboard` command for everything** — do not manually create agents via API calls.
 - **Use `--check` to discover what's needed** — don't guess required fields.
 - **Ask the user using AskUser-type tools** — prefer interactive question tools (with predefined options) over plain text output when asking the user for choices. Ask choices before details (type, assistant, feishu), then gather remaining info.
 - **Ask about optional items too** — but only ask about options that apply to the chosen type (e.g., don't ask about `--assistant` for `autonomous_agent`).
 - **`--id` defaults to GitHub username** — suggest it as default but let the user choose a different ID.
-- **`--owner` and repo are auto-handled** — do not ask the user for these.
+- **Admin credentials are required** — ensure one of the admin auth env vars is set before running.
 
 ### Type-Specific Parameters
 
@@ -194,7 +163,7 @@ When required parameters are missing, the same checklist is shown as an error.
 | `--feishu-bot-app-id` | ❌ not applicable | ✅ optional | ✅ optional |
 | `--feishu-bot-app-secret` | ❌ not applicable | ✅ optional | ✅ optional |
 | `--delegate-mention` | auto (from `--assistant`) | ❌ not applicable | ❌ not applicable |
-| Feishu `/bind` hint (Phase 2) | ✅ show to user | ❌ skip | ❌ skip |
+| Feishu `/bind` hint | ✅ show to user | ❌ skip | ❌ skip |
 
 Do **not** ask the user about parameters marked ❌ for their chosen type.
 
@@ -206,21 +175,13 @@ Do **not** ask the user about parameters marked ❌ for their chosen type.
 # 2. Check readiness (repeat with more params until all ✅)
 first-tree-hub onboard --check [params...]
 
-# 3. Execute Phase 1 (creates PR)
+# 3. Execute (creates agent + bootstraps token + bindings + client config)
 first-tree-hub onboard [params...]
 
-# 4. User reviews and merges PR
-
-# 5. Execute Phase 2 (sync + token + bindings + client config)
-#    human:            first-tree-hub onboard --continue [--feishu-bot-app-id ... --feishu-bot-app-secret ...]
-#    autonomous_agent: first-tree-hub onboard --continue [--feishu-bot-app-id ... --feishu-bot-app-secret ...]
-#    personal_assistant (standalone): first-tree-hub onboard --continue
-first-tree-hub onboard --continue
-
-# 6. Start the agent
+# 4. Start the agent
 first-tree-hub client start
 
-# 7. Post-onboard hints (type-specific):
+# 5. Post-onboard hints (type-specific):
 #    human + feishu bot: tell user to send "/bind <id>" to bot in Feishu
 #    autonomous_agent:   no additional steps
 #    personal_assistant: no additional steps

@@ -39,7 +39,6 @@ export {
   isDockerAvailable,
   isInteractive,
   onboardCheck,
-  onboardContinue,
   onboardCreate,
   printResults,
   promptAddAgent,

@@ -1,4 +1,4 @@
-import type { Agent, SyncReport } from "@first-tree-hub/shared";
+import type { Agent } from "@first-tree-hub/shared";
 import { api } from "./client.js";
 
 type PaginatedAgents = {
@@ -22,6 +22,14 @@ export function deleteAgent(agentId: string): Promise<void> {
   return api.delete<void>(`/admin/agents/${encodeURIComponent(agentId)}`);
 }
 
+export function suspendAgent(agentId: string): Promise<Agent> {
+  return api.post<Agent>(`/admin/agents/${encodeURIComponent(agentId)}/suspend`, {});
+}
+
+export function reactivateAgent(agentId: string): Promise<Agent> {
+  return api.post<Agent>(`/admin/agents/${encodeURIComponent(agentId)}/reactivate`, {});
+}
+
 // -- Test Connection --
 
 export type TestResult = {
@@ -34,18 +42,4 @@ export type TestResult = {
 
 export function testAgentConnection(agentId: string): Promise<TestResult> {
   return api.post<TestResult>(`/admin/agents/${encodeURIComponent(agentId)}/test`, {});
-}
-
-// -- Sync API --
-
-export function triggerSync(): Promise<SyncReport> {
-  return api.post<SyncReport>("/admin/agents/sync", {});
-}
-
-type SyncStatus = {
-  lastSync: SyncReport | null;
-};
-
-export function getSyncStatus(): Promise<SyncStatus> {
-  return api.get<SyncStatus>("/admin/agents/sync/status");
 }

@@ -10,7 +10,7 @@ import { ZodError } from "zod";
 import { adminAdapterMappingRoutes } from "./api/admin/adapter-mappings.js";
 import { adminAdapterStatusRoutes } from "./api/admin/adapter-status.js";
 import { adminAdapterRoutes } from "./api/admin/adapters.js";
-import { adminAgentSyncRoutes } from "./api/admin/agent-sync.js";
+
 import { adminAgentRoutes } from "./api/admin/agents.js";
 import { adminAuthRoutes } from "./api/admin/auth.js";
 import { adminChatRoutes } from "./api/admin/chats.js";
@@ -18,7 +18,7 @@ import { adminOverviewRoutes } from "./api/admin/overview.js";
 import { adminSystemConfigRoutes } from "./api/admin/system-config.js";
 import { adminUserRoutes } from "./api/admin/users.js";
 import { agentChatRoutes } from "./api/agent/chats.js";
-import { agentContextTreeRoutes } from "./api/agent/context-tree.js";
+
 import { agentFeishuBotRoutes } from "./api/agent/feishu-bot.js";
 import { agentFeishuUserRoutes } from "./api/agent/feishu-user.js";
 import { agentInboxRoutes } from "./api/agent/inbox.js";
@@ -38,7 +38,7 @@ import { agentAuthHook } from "./middleware/agent-auth.js";
 import { githubAuthHook } from "./middleware/github-auth.js";
 import { type AdapterManager, createAdapterManager } from "./services/adapter-manager.js";
 import { type BackgroundTasks, createBackgroundTasks } from "./services/background-tasks.js";
-import { syncFromGitHub } from "./services/context-tree-graphql.js";
+
 import { createKaelRuntime, type KaelRuntime } from "./services/kael-runtime.js";
 import { createNotifier, type Notifier } from "./services/notifier.js";
 
@@ -131,14 +131,6 @@ export async function buildApp(config: Config) {
       await api.register(
         async (adminApp) => {
           adminApp.addHook("onRequest", adminAuth);
-          await adminApp.register(adminAgentSyncRoutes);
-        },
-        { prefix: "/admin/agents/sync" },
-      );
-
-      await api.register(
-        async (adminApp) => {
-          adminApp.addHook("onRequest", adminAuth);
           await adminApp.register(adminSystemConfigRoutes);
         },
         { prefix: "/admin/system/config" },
@@ -201,7 +193,7 @@ export async function buildApp(config: Config) {
           await agentApp.register(agentMessageRoutes, { prefix: "/chats" });
           await agentApp.register(agentSendToAgentRoutes, { prefix: "/agents" });
           await agentApp.register(agentInboxRoutes, { prefix: "/inbox" });
-          await agentApp.register(agentContextTreeRoutes, { prefix: "/context-tree" });
+
           await agentApp.register(agentFeishuBotRoutes);
           await agentApp.register(agentFeishuUserRoutes, { prefix: "/delegated" });
           await agentApp.register(agentWsRoutes(notifier, config.instanceId), { prefix: "/ws" });
@@ -264,27 +256,6 @@ export async function buildApp(config: Config) {
     backgroundTasks.start();
     await adapterManager.reload();
     await kaelRuntime?.reload();
-
-    // Context Tree sync via GitHub GraphQL
-    const { repo: ctRepo, branch: ctBranch, syncInterval } = config.contextTree;
-    const { token: ghToken } = config.github;
-    try {
-      const report = await syncFromGitHub(db, ctRepo, ctBranch, ghToken);
-      app.log.info(
-        `Context Tree sync: created=${report.created} updated=${report.updated} unchanged=${report.unchanged} errors=${report.errors}`,
-      );
-    } catch (err) {
-      app.log.error(err, "Initial Context Tree sync failed");
-    }
-
-    // Periodic sync
-    const intervalMs = syncInterval * 1000;
-    const timer = setInterval(() => {
-      syncFromGitHub(db, ctRepo, ctBranch, ghToken).catch((err) =>
-        app.log.error(err, "Periodic Context Tree sync failed"),
-      );
-    }, intervalMs);
-    app.addHook("onClose", async () => clearInterval(timer));
   });
 
   // Cleanup on close

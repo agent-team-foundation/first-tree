@@ -17,13 +17,8 @@ export async function createTestApp(): Promise<FastifyInstance> {
       jwtSecret: process.env.JWT_SECRET ?? "test-jwt-secret-key-for-vitest",
       encryptionKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     },
-    contextTree: {
-      repo: "test/context-tree",
-      branch: "main",
-      syncInterval: 3600,
-    },
     github: {
-      token: "test-github-token",
+      token: undefined,
       webhookSecret: "test-webhook-secret",
     },
     rateLimit: { max: 10000, loginMax: 10000, webhookMax: 10000 },

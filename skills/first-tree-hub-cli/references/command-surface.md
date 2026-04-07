@@ -98,18 +98,11 @@
 - `onboard --check`
   - Shows readiness and missing inputs without making changes.
 - `onboard`
-  - Phase 1 workflow.
-  - Resolves or clones the Context Tree repo using server configuration.
-  - Creates or updates member `NODE.md` entries in the Context Tree.
-  - Verifies the tree with `first-tree verify`.
-  - Creates a branch, commit, push, and PR in the Context Tree repo.
-- `onboard --continue`
-  - Phase 2 workflow after the Context Tree PR is merged.
-  - Waits for the server to sync the new agent.
-  - Bootstraps the token.
+  - Creates agent via Admin API.
+  - Bootstraps the token using GitHub identity.
   - Optionally binds a Feishu bot.
   - Writes `client.yaml` so `client start` works without extra setup.
-  - Persists resume state under `$FIRST_TREE_HUB_HOME/.onboard-state.json`.
+  - Requires admin credentials (`FIRST_TREE_HUB_ADMIN_TOKEN` or `FIRST_TREE_HUB_ADMIN_USERNAME` + `FIRST_TREE_HUB_ADMIN_PASSWORD`).
 
 ## Config and Environment Model
 
