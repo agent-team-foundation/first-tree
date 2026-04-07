@@ -34,7 +34,7 @@ Keep the central mental model straight: First Tree Hub is the communication back
    - Install with `npm install -g @agent-team-foundation/first-tree-hub`
    - Verify with `first-tree-hub --version`
    - If using `onboard` or `agent token bootstrap`, make sure `gh` is installed and authenticated
-6. If you are maintaining the skill inside the live repo and you change the framework, references, or source-of-truth skill files, refresh everything with `bash ./scripts/sync-skill-artifacts.sh`.
+6. If you are maintaining the skill inside the live repo, `.agents/skills/` and `.claude/skills/` are symlinks to `skills/` — no sync step is needed.
 
 ## Operating Rules
 
@@ -136,4 +136,3 @@ pnpm --filter @agent-team-foundation/first-tree-hub test
 - `references/onboarding-operator.md` for automation-friendly onboarding instructions that start from a prompt instead of a local repo checkout
 - `references/core-concepts.md` for product boundaries, architecture invariants, and runtime mental models
 - `references/developer-map.md` for package ownership, source-file entry points, and change workflows
-- `references/repo-snapshot/` for the bundled portable snapshot of the repo materials this skill depends on
