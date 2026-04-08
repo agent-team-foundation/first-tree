@@ -245,26 +245,24 @@ describe("ciValidation rule", () => {
     const tmp = useTmpDir();
     const repo = new Repo(tmp.path);
     const result = ciValidation.evaluate(repo);
-    expect(result.tasks).toHaveLength(4);
+    expect(result.tasks).toHaveLength(2);
     expect(result.tasks[0]).toContain("validation workflow");
     expect(result.tasks[0]).toContain("validate.yml");
     expect(result.tasks[0]).toContain("bundled first-tree workflow templates");
-    expect(result.tasks[1]).toContain("PR reviews");
-    expect(result.tasks[2]).toContain("API secret");
-    expect(result.tasks[3]).toContain("CODEOWNERS");
+    expect(result.tasks[1]).toContain("CODEOWNERS");
   });
 
-  it("reports workflow without validate or pr-review", () => {
+  it("reports workflow without validate or codeowners", () => {
     const tmp = useTmpDir();
     const wfDir = join(tmp.path, ".github", "workflows");
     mkdirSync(wfDir, { recursive: true });
     writeFileSync(join(wfDir, "ci.yml"), "name: CI\non: push\njobs: {}\n");
     const repo = new Repo(tmp.path);
     const result = ciValidation.evaluate(repo);
-    expect(result.tasks).toHaveLength(4);
+    expect(result.tasks).toHaveLength(2);
   });
 
-  it("passes validation but reports missing pr-review and codeowners", () => {
+  it("passes validation but reports missing codeowners", () => {
     const tmp = useTmpDir();
     const wfDir = join(tmp.path, ".github", "workflows");
     mkdirSync(wfDir, { recursive: true });
@@ -274,13 +272,11 @@ describe("ciValidation rule", () => {
     );
     const repo = new Repo(tmp.path);
     const result = ciValidation.evaluate(repo);
-    expect(result.tasks).toHaveLength(3);
-    expect(result.tasks[0]).toContain("PR reviews");
-    expect(result.tasks[1]).toContain("API secret");
-    expect(result.tasks[2]).toContain("CODEOWNERS");
+    expect(result.tasks).toHaveLength(1);
+    expect(result.tasks[0]).toContain("CODEOWNERS");
   });
 
-  it("passes pr-review but reports missing validation and codeowners", () => {
+  it("ignores pr-review workflow for core onboarding", () => {
     const tmp = useTmpDir();
     const wfDir = join(tmp.path, ".github", "workflows");
     mkdirSync(wfDir, { recursive: true });
@@ -295,7 +291,7 @@ describe("ciValidation rule", () => {
     expect(result.tasks[1]).toContain("CODEOWNERS");
   });
 
-  it("passes with validate and pr-review but reports missing codeowners", () => {
+  it("passes with validate and pr-review but still only reports missing codeowners", () => {
     const tmp = useTmpDir();
     const wfDir = join(tmp.path, ".github", "workflows");
     mkdirSync(wfDir, { recursive: true });
@@ -334,24 +330,15 @@ describe("ciValidation rule", () => {
     expect(result.tasks).toEqual([]);
   });
 
-  it("pr-review task presents numbered options", () => {
+  it("does not ask init users to configure PR reviews or API secrets", () => {
     const tmp = useTmpDir();
     const repo = new Repo(tmp.path);
     const result = ciValidation.evaluate(repo);
-    const prTask = result.tasks.find((t) => t.includes("PR review"));
-    expect(prTask).toContain("OpenRouter");
-    expect(prTask).toContain("Claude API");
-    expect(prTask).toContain("Skip");
-  });
-
-  it("secret task presents options for gh CLI or manual setup", () => {
-    const tmp = useTmpDir();
-    const repo = new Repo(tmp.path);
-    const result = ciValidation.evaluate(repo);
-    const secretTask = result.tasks.find((t) => t.includes("API secret"));
-    expect(secretTask).toContain("Set it now");
-    expect(secretTask).toContain("I'll do it myself");
-    expect(secretTask).toContain("gh secret set");
+    expect(result.tasks.join("\n")).not.toContain("PR review");
+    expect(result.tasks.join("\n")).not.toContain("API secret");
+    expect(result.tasks.join("\n")).not.toContain("OpenRouter");
+    expect(result.tasks.join("\n")).not.toContain("Claude API");
+    expect(result.tasks.join("\n")).not.toContain("gh secret set");
   });
 });
 

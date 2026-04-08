@@ -158,9 +158,14 @@ to the current state of the repo. Complete each task:
 - Optionally configure agent integration in the source/workspace repo (for
   Claude Code, the installed hook assets live under
   `.claude/skills/first-tree/`)
-- Copy any validation workflows you want from the source/workspace repo's
+- Copy any deterministic validation workflows you want from the
+  source/workspace repo's
   `.agents/skills/first-tree/assets/framework/workflows/` directory into the
   tree repo's `.github/workflows/`
+
+Core onboarding should stay credential-free. Do not ask the user for model API
+keys during `first-tree init`; treat any model-backed PR review automation as a
+separate manual follow-up after the tree scaffold is in place.
 
 As you complete each task, check it off in
 `.first-tree/progress.md` by changing `- [ ]` to `- [x]`.
