@@ -1,8 +1,10 @@
 import { AGENT_TYPES } from "@first-tree-hub/shared";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Plus } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router";
-import { listAgents } from "../api/agents.js";
+import { createAgent, listAgents } from "../api/agents.js";
+import { type AgentFormData, AgentFormDialog } from "../components/agent-form-dialog.js";
 import { Badge } from "../components/ui/badge.js";
 import { Button } from "../components/ui/button.js";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.js";
@@ -12,12 +14,29 @@ const agentTypeValues = Object.values(AGENT_TYPES);
 
 export function AgentsPage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [cursor, setCursor] = useState<string | undefined>();
   const [typeFilter, setTypeFilter] = useState<string>("");
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["agents", cursor],
     queryFn: () => listAgents({ limit: 20, cursor }),
+  });
+
+  const createMutation = useMutation({
+    mutationFn: (formData: AgentFormData) =>
+      createAgent({
+        id: formData.id || undefined,
+        type: formData.type,
+        displayName: formData.displayName || undefined,
+        delegateMention: formData.delegateMention || undefined,
+      }),
+    onSuccess: (agent) => {
+      setCreateDialogOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["agents"] });
+      navigate(`/agents/${agent.id}`);
+    },
   });
 
   return (
@@ -41,6 +60,10 @@ export function AgentsPage() {
             ))}
           </select>
         </div>
+        <Button size="sm" onClick={() => setCreateDialogOpen(true)}>
+          <Plus className="h-4 w-4 mr-2" />
+          New Agent
+        </Button>
       </div>
 
       <div className="border rounded-lg">
@@ -119,6 +142,15 @@ export function AgentsPage() {
           </Button>
         </div>
       )}
+
+      <AgentFormDialog
+        mode="create"
+        open={createDialogOpen}
+        onOpenChange={setCreateDialogOpen}
+        onSubmit={(formData) => createMutation.mutate(formData)}
+        isPending={createMutation.isPending}
+        error={createMutation.error instanceof Error ? createMutation.error : null}
+      />
     </div>
   );
 }
