@@ -64,6 +64,7 @@ export async function bootstrapToken(
     saveTo?: string;
     type?: string;
     displayName?: string;
+    delegateMention?: string;
     profile?: string;
     metadata?: Record<string, unknown>;
   } = {},
@@ -73,6 +74,7 @@ export async function bootstrapToken(
   const body: Record<string, unknown> = { name: "bootstrap" };
   if (options.type) body.type = options.type;
   if (options.displayName) body.displayName = options.displayName;
+  if (options.delegateMention) body.delegateMention = options.delegateMention;
   if (options.profile) body.profile = options.profile;
   if (options.metadata) body.metadata = options.metadata;
 

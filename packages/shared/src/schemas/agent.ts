@@ -67,6 +67,7 @@ export const bootstrapTokenRequestSchema = z.object({
   /** Optional fields used when the bootstrap endpoint auto-creates the agent. */
   type: agentTypeSchema.optional(),
   displayName: z.string().max(200).optional(),
+  delegateMention: z.string().max(100).optional(),
   profile: z.string().optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
 });

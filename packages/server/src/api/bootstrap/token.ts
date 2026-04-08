@@ -37,6 +37,7 @@ export async function bootstrapRoutes(app: FastifyInstance): Promise<void> {
       tokenName: body.name,
       type: body.type,
       displayName: body.displayName,
+      delegateMention: body.delegateMention,
       profile: body.profile,
       metadata: body.metadata,
     });

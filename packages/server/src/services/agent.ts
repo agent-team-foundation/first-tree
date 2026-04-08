@@ -223,6 +223,7 @@ export type BootstrapOptions = {
   tokenName?: string;
   type?: string;
   displayName?: string;
+  delegateMention?: string;
   profile?: string;
   metadata?: Record<string, unknown>;
 };
@@ -245,6 +246,7 @@ export async function bootstrapToken(
         id: agentId,
         type: (options?.type as "human" | "personal_assistant" | "autonomous_agent") ?? "autonomous_agent",
         displayName: options?.displayName ?? agentId,
+        delegateMention: options?.delegateMention,
         profile: options?.profile,
         metadata,
       });

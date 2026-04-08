@@ -152,6 +152,7 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
       type: args.type,
       displayName: args.displayName ?? args.id,
       profile: args.profile,
+      delegateMention: args.assistant ?? args.delegateMention,
       metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
     });
     token = result.token;
@@ -171,7 +172,12 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
   if (args.assistant) {
     process.stderr.write(`Bootstrapping assistant "${args.assistant}"...\n`);
     try {
-      const assistantResult = await bootstrapToken(serverUrl, args.assistant, { saveTo: "agent" });
+      const assistantResult = await bootstrapToken(serverUrl, args.assistant, {
+        saveTo: "agent",
+        type: "personal_assistant",
+        displayName: args.assistant,
+        metadata: { role: `Personal Assistant to ${args.id}`, domains: ["message triage", "task coordination"] },
+      });
       token = assistantResult.token; // use assistant token for Feishu binding
       process.stderr.write(`Assistant "${args.assistant}" ready.\n`);
     } catch (err) {
