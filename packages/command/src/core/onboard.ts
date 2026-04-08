@@ -140,9 +140,20 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
   // 1. Bootstrap token for the main agent (auto-creates if not exists)
   process.stderr.write(`Bootstrapping agent "${args.id}"...\n`);
 
+  // Build metadata from role/domains if provided
+  const metadata: Record<string, unknown> = {};
+  if (args.role) metadata.role = args.role;
+  if (args.domains) metadata.domains = args.domains.split(",").map((d) => d.trim());
+
   let token: string;
   try {
-    const result = await bootstrapToken(serverUrl, args.id, { saveTo: "agent" });
+    const result = await bootstrapToken(serverUrl, args.id, {
+      saveTo: "agent",
+      type: args.type,
+      displayName: args.displayName ?? args.id,
+      profile: args.profile,
+      metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+    });
     token = result.token;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

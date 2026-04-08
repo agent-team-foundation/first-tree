@@ -64,6 +64,11 @@ export type Agent = z.infer<typeof agentSchema>;
 
 export const bootstrapTokenRequestSchema = z.object({
   name: z.string().max(100).optional(),
+  /** Optional fields used when the bootstrap endpoint auto-creates the agent. */
+  type: agentTypeSchema.optional(),
+  displayName: z.string().max(200).optional(),
+  profile: z.string().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 export type BootstrapTokenRequest = z.infer<typeof bootstrapTokenRequestSchema>;
 

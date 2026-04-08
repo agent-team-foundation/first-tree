@@ -20,7 +20,10 @@ export async function bootstrapRoutes(app: FastifyInstance): Promise<void> {
     // Check GitHub org membership if configured
     const allowedOrg = app.config.github.allowedOrg;
     if (allowedOrg) {
-      const githubToken = request.headers["x-github-token"] as string;
+      const githubToken = request.headers["x-github-token"];
+      if (!githubToken || typeof githubToken !== "string") {
+        throw new ForbiddenError("Missing GitHub token for org membership check");
+      }
       const isMember = await agentService.checkGitHubOrgMembership(githubToken, allowedOrg);
       if (!isMember) {
         throw new ForbiddenError(
@@ -30,7 +33,13 @@ export async function bootstrapRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const body = bootstrapTokenRequestSchema.parse(request.body ?? {});
-    const result = await agentService.bootstrapToken(app.db, agentId, githubUser.username, body.name);
+    const result = await agentService.bootstrapToken(app.db, agentId, githubUser.username, {
+      tokenName: body.name,
+      type: body.type,
+      displayName: body.displayName,
+      profile: body.profile,
+      metadata: body.metadata,
+    });
 
     return reply.status(201).send({
       id: result.id,

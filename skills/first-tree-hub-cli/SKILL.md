@@ -12,8 +12,7 @@ Keep the central mental model straight: First Tree Hub is the communication back
 
 ## Start Here
 
-1. Read `references/portable-quickstart.md`.
-2. Classify the task before acting.
+1. Classify the task before acting.
    - Install or sanity-check the CLI on a fresh machine: read `references/command-surface.md` first, then `README.md` or `docs/claim-agent-guide.md`
    - Operate or diagnose a Hub deployment: read `references/command-surface.md`
    - Map a natural-language request to an end-to-end CLI flow: read `references/scenario-playbooks.md`
@@ -128,7 +127,6 @@ pnpm --filter @agent-team-foundation/first-tree-hub test
 
 ## References
 
-- `references/portable-quickstart.md` for installation and usage guidance when the skill is copied elsewhere
 - `references/command-surface.md` for command selection, command semantics, env vars, and common workflows
 - `references/scenario-playbooks.md` for request-to-command playbooks and end-to-end operator flows
 - `references/onboarding-operator.md` for automation-friendly onboarding instructions that start from a prompt instead of a local repo checkout

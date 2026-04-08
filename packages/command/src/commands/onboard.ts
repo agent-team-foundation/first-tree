@@ -35,13 +35,19 @@ async function promptMissing(args: Record<string, unknown>): Promise<void> {
   }
 
   if (!args.role) {
-    args.role = await input({ message: "Role:" });
-    saveOnboardState(args);
+    const role = await input({ message: "Role (optional, Enter to skip):" });
+    if (role) {
+      args.role = role;
+      saveOnboardState(args);
+    }
   }
 
   if (!args.domains) {
-    args.domains = await input({ message: "Domains (comma-separated):" });
-    saveOnboardState(args);
+    const domains = await input({ message: "Domains (comma-separated, optional, Enter to skip):" });
+    if (domains) {
+      args.domains = domains;
+      saveOnboardState(args);
+    }
   }
 
   if (!args.displayName) {

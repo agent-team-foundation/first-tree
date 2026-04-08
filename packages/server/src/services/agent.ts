@@ -219,7 +219,20 @@ export async function deleteAgent(db: Database, id: string) {
  * If the agent does not exist, it is auto-created with the GitHub user as owner.
  * Only works when the agent has no active (non-revoked, non-expired) tokens.
  */
-export async function bootstrapToken(db: Database, agentId: string, githubUsername: string, tokenName?: string) {
+export type BootstrapOptions = {
+  tokenName?: string;
+  type?: string;
+  displayName?: string;
+  profile?: string;
+  metadata?: Record<string, unknown>;
+};
+
+export async function bootstrapToken(
+  db: Database,
+  agentId: string,
+  githubUsername: string,
+  options?: BootstrapOptions,
+) {
   // 1. Get or create agent
   let agent: { id: string; metadata: Record<string, unknown> | null };
   try {
@@ -227,11 +240,13 @@ export async function bootstrapToken(db: Database, agentId: string, githubUserna
   } catch (err) {
     if (err instanceof NotFoundError) {
       // Auto-create agent with the GitHub user as owner
+      const metadata = { ...options?.metadata, owners: [githubUsername] };
       agent = await createAgent(db, {
         id: agentId,
-        type: "autonomous_agent",
-        displayName: agentId,
-        metadata: { owners: [githubUsername] },
+        type: (options?.type as "human" | "personal_assistant" | "autonomous_agent") ?? "autonomous_agent",
+        displayName: options?.displayName ?? agentId,
+        profile: options?.profile,
+        metadata,
       });
     } else {
       throw err;
@@ -257,7 +272,7 @@ export async function bootstrapToken(db: Database, agentId: string, githubUserna
   }
 
   // 4. Create token
-  return createToken(db, agentId, { name: tokenName ?? "bootstrap" });
+  return createToken(db, agentId, { name: options?.tokenName ?? "bootstrap" });
 }
 
 /**

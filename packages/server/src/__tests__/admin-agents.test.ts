@@ -56,6 +56,70 @@ describe("Admin Agents API", () => {
     expect(agent.presenceStatus).toBe("offline");
   });
 
+  it("creates an agent via POST", async () => {
+    const app = await appPromise;
+    const req = await authedRequest(app);
+
+    const res = await req("POST", "/api/v1/admin/agents", {
+      id: "api-created",
+      type: "autonomous_agent",
+      displayName: "API Bot",
+      profile: "I am a test bot.",
+      metadata: { role: "testing" },
+    });
+    expect(res.statusCode).toBe(201);
+    const body = res.json();
+    expect(body.id).toBe("api-created");
+    expect(body.displayName).toBe("API Bot");
+    expect(body.profile).toBe("I am a test bot.");
+    expect(body.metadata.role).toBe("testing");
+  });
+
+  it("updates an agent via PATCH", async () => {
+    const app = await appPromise;
+    const req = await authedRequest(app);
+    await createAgent(app.db, { id: "patch-target", type: "human", displayName: "Old Name" });
+
+    const res = await req("PATCH", "/api/v1/admin/agents/patch-target", {
+      displayName: "New Name",
+      profile: "Updated profile.",
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().displayName).toBe("New Name");
+    expect(res.json().profile).toBe("Updated profile.");
+  });
+
+  it("suspends and reactivates an agent", async () => {
+    const app = await appPromise;
+    const req = await authedRequest(app);
+    await createAgent(app.db, { id: "lifecycle-agent", type: "autonomous_agent" });
+
+    // Suspend
+    const suspendRes = await req("POST", "/api/v1/admin/agents/lifecycle-agent/suspend");
+    expect(suspendRes.statusCode).toBe(200);
+    expect(suspendRes.json().status).toBe("suspended");
+
+    // Reactivate
+    const reactivateRes = await req("POST", "/api/v1/admin/agents/lifecycle-agent/reactivate");
+    expect(reactivateRes.statusCode).toBe(200);
+    expect(reactivateRes.json().status).toBe("active");
+  });
+
+  it("deletes only suspended agents", async () => {
+    const app = await appPromise;
+    const req = await authedRequest(app);
+    await createAgent(app.db, { id: "delete-test", type: "autonomous_agent" });
+
+    // Cannot delete active agent
+    const failRes = await req("DELETE", "/api/v1/admin/agents/delete-test");
+    expect(failRes.statusCode).toBe(400);
+
+    // Suspend first, then delete
+    await req("POST", "/api/v1/admin/agents/delete-test/suspend");
+    const okRes = await req("DELETE", "/api/v1/admin/agents/delete-test");
+    expect(okRes.statusCode).toBe(204);
+  });
+
   it("rejects unauthenticated requests", async () => {
     const app = await appPromise;
     const res = await app.inject({ method: "GET", url: "/api/v1/admin/agents" });
