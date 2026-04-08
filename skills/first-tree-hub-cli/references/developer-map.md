@@ -35,7 +35,7 @@
 - `packages/command/src/core/server.ts`
   - orchestration for `server start`, including config prompts, Docker PostgreSQL, migrations, admin creation, and web dist resolution
 - `packages/command/src/core/onboard.ts`
-  - Context Tree checkout, member file generation, verification, PR creation, and post-merge continuation flow
+  - agent creation via Admin API, token bootstrap, and Feishu binding
 - `packages/command/src/core/bootstrap.ts`
   - token bootstrap helpers and server URL resolution
 - `packages/command/src/core/doctor.ts`
@@ -67,15 +67,13 @@ If a flag, env var, or config key changes, inspect these files and update docs a
 - `packages/client/src/runtime/runtime.ts`
   - runtime orchestration for configured agents
 - `packages/client/src/runtime/bootstrap.ts`
-  - Context Tree clone sync and `.agent/` workspace bootstrap
+  - optional Context Tree clone sync and `.agent/` workspace bootstrap
 - `packages/client/src/runtime/session-manager.ts`
   - session lifecycle and dedup-sensitive message dispatch
 - `packages/server/src/app.ts`
-  - server wiring, route registration, background jobs, Context Tree sync start
+  - server wiring, route registration, background jobs
 - `packages/server/src/services/inbox.ts`
   - inbox poll/ack/renew behavior
-- `packages/server/src/services/context-tree-graphql.ts`
-  - Context Tree member fetch and sync behavior
 
 ## Change Patterns
 

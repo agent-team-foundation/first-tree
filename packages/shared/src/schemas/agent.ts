@@ -28,34 +28,21 @@ export const createAgentSchema = z.object({
     .optional(),
   type: agentTypeSchema,
   displayName: z.string().max(200).optional(),
+  delegateMention: z.string().max(100).optional(),
+  profile: z.string().optional(),
   organizationId: z.string().max(100).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
 export type CreateAgent = z.infer<typeof createAgentSchema>;
 
-// -- Context Tree sync schemas --
-
-export const syncReportSchema = z.object({
-  syncedAt: z.string(),
-  treePath: z.string(),
-  summary: z.object({
-    created: z.number(),
-    updated: z.number(),
-    suspended: z.number(),
-    unchanged: z.number(),
-    errors: z.number(),
-  }),
-  created: z.array(z.string()),
-  updated: z.array(z.string()),
-  suspended: z.array(z.string()),
-  errors: z.array(
-    z.object({
-      memberId: z.string(),
-      error: z.string(),
-    }),
-  ),
+export const updateAgentSchema = z.object({
+  type: agentTypeSchema.optional(),
+  displayName: z.string().max(200).nullable().optional(),
+  delegateMention: z.string().max(100).nullable().optional(),
+  profile: z.string().nullable().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
-export type SyncReport = z.infer<typeof syncReportSchema>;
+export type UpdateAgent = z.infer<typeof updateAgentSchema>;
 
 export const agentSchema = z.object({
   id: z.string(),
@@ -63,7 +50,7 @@ export const agentSchema = z.object({
   type: agentTypeSchema,
   displayName: z.string().nullable(),
   delegateMention: z.string().nullable(),
-  treePath: z.string().nullable(),
+  profile: z.string().nullable(),
   inboxId: z.string(),
   status: z.string(),
   metadata: z.record(z.string(), z.unknown()),
@@ -77,6 +64,12 @@ export type Agent = z.infer<typeof agentSchema>;
 
 export const bootstrapTokenRequestSchema = z.object({
   name: z.string().max(100).optional(),
+  /** Optional fields used when the bootstrap endpoint auto-creates the agent. */
+  type: agentTypeSchema.optional(),
+  displayName: z.string().max(200).optional(),
+  delegateMention: z.string().max(100).optional(),
+  profile: z.string().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 export type BootstrapTokenRequest = z.infer<typeof bootstrapTokenRequestSchema>;
 
@@ -87,8 +80,7 @@ export const bootstrapStatusSchema = z.object({
 export type BootstrapStatus = z.infer<typeof bootstrapStatusSchema>;
 
 export const contextTreeInfoSchema = z.object({
-  repo: z.string(),
-  branch: z.string(),
-  lastSync: z.string().nullable(),
+  repo: z.string().nullable(),
+  branch: z.string().nullable(),
 });
 export type ContextTreeInfo = z.infer<typeof contextTreeInfoSchema>;

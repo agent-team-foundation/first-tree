@@ -60,9 +60,23 @@ export function resolveServerUrl(flagValue?: string): string {
 export async function bootstrapToken(
   serverUrl: string,
   agentId: string,
-  options: { saveTo?: string } = {},
+  options: {
+    saveTo?: string;
+    type?: string;
+    displayName?: string;
+    delegateMention?: string;
+    profile?: string;
+    metadata?: Record<string, unknown>;
+  } = {},
 ): Promise<{ token: string; agentId: string }> {
   const githubToken = getGitHubToken();
+
+  const body: Record<string, unknown> = { name: "bootstrap" };
+  if (options.type) body.type = options.type;
+  if (options.displayName) body.displayName = options.displayName;
+  if (options.delegateMention) body.delegateMention = options.delegateMention;
+  if (options.profile) body.profile = options.profile;
+  if (options.metadata) body.metadata = options.metadata;
 
   const res = await fetch(`${serverUrl}/api/v1/bootstrap/${encodeURIComponent(agentId)}/token`, {
     method: "POST",
@@ -70,7 +84,7 @@ export async function bootstrapToken(
       "X-GitHub-Token": githubToken,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ name: "bootstrap" }),
+    body: JSON.stringify(body),
   });
 
   if (!res.ok) {

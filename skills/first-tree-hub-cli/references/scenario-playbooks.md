@@ -127,19 +127,13 @@ Use this when the user wants to add a real person to the team through the suppor
 first-tree-hub onboard --check --server <url> --id <id> --type human --role "<role>" --domains "<d1,d2>"
 ```
 
-3. Create the Context Tree PR:
+3. Create the agent:
 
 ```bash
 first-tree-hub onboard --server <url> --id <id> --type human --role "<role>" --domains "<d1,d2>"
 ```
 
-4. After the PR is merged, continue:
-
-```bash
-first-tree-hub onboard --continue --server <url>
-```
-
-5. Start the local runtime if this machine should run the assistant:
+4. Start the local runtime if this machine should run the assistant:
 
 ```bash
 first-tree-hub client start
@@ -147,7 +141,8 @@ first-tree-hub client start
 
 ### What to remember
 
-- `onboard` creates a PR in the Context Tree repo, not in `first-tree-hub`.
+- `onboard` creates the agent via Admin API and bootstraps the token in one step.
+- Admin credentials are required (`FIRST_TREE_HUB_ADMIN_TOKEN` or `FIRST_TREE_HUB_ADMIN_USERNAME` + `FIRST_TREE_HUB_ADMIN_PASSWORD`).
 - For humans, a personal assistant is optional and may be created with `--assistant <id>`.
 - When a server URL is provided in the user prompt or automation payload, thread it through the onboarding commands instead of assuming local defaults.
 - If a Feishu bot is configured for the assistant path, the human usually still needs to send `/bind <id>` in Feishu afterwards.
@@ -169,16 +164,15 @@ Use this when the new member is a bot with no human owner.
 first-tree-hub onboard --check --server <url> --id <id> --type autonomous_agent --role "<role>" --domains "<d1,d2>"
 ```
 
-3. Create the Context Tree PR:
+3. Create the agent:
 
 ```bash
 first-tree-hub onboard --server <url> --id <id> --type autonomous_agent --role "<role>" --domains "<d1,d2>"
 ```
 
-4. After merge:
+4. Start:
 
 ```bash
-first-tree-hub onboard --continue --server <url>
 first-tree-hub client start
 ```
 

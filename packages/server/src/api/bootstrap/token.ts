@@ -7,6 +7,7 @@ export async function bootstrapRoutes(app: FastifyInstance): Promise<void> {
   /**
    * POST /bootstrap/:agentId/token
    * GitHub identity → Agent token.
+   * Auto-creates the agent if it does not exist.
    * Only works when the agent has no active tokens.
    */
   app.post<{ Params: { agentId: string } }>("/:agentId/token", async (request, reply) => {
@@ -16,8 +17,29 @@ export async function bootstrapRoutes(app: FastifyInstance): Promise<void> {
       throw new ForbiddenError("GitHub authentication required");
     }
 
+    // Check GitHub org membership — required for agent creation
+    const allowedOrg = app.config.github.allowedOrg;
+    if (!allowedOrg) {
+      throw new ForbiddenError("FIRST_TREE_HUB_GITHUB_ALLOWED_ORG is not configured. Agent registration is disabled.");
+    }
+    const githubToken = request.headers["x-github-token"];
+    if (!githubToken || typeof githubToken !== "string") {
+      throw new ForbiddenError("Missing GitHub token for org membership check");
+    }
+    const isMember = await agentService.checkGitHubOrgMembership(githubToken, allowedOrg);
+    if (!isMember) {
+      throw new ForbiddenError(`GitHub user "${githubUser.username}" is not a member of organization "${allowedOrg}"`);
+    }
+
     const body = bootstrapTokenRequestSchema.parse(request.body ?? {});
-    const result = await agentService.bootstrapToken(app.db, agentId, githubUser.username, body.name);
+    const result = await agentService.bootstrapToken(app.db, agentId, githubUser.username, {
+      tokenName: body.name,
+      type: body.type,
+      displayName: body.displayName,
+      delegateMention: body.delegateMention,
+      profile: body.profile,
+      metadata: body.metadata,
+    });
 
     return reply.status(201).send({
       id: result.id,
@@ -31,7 +53,7 @@ export async function bootstrapRoutes(app: FastifyInstance): Promise<void> {
 
   /**
    * GET /bootstrap/:agentId/status
-   * Check if an agent exists and its status (for polling after PR merge + sync).
+   * Check if an agent exists and its status (for polling).
    */
   app.get<{ Params: { agentId: string } }>("/:agentId/status", async (request) => {
     const { agentId } = request.params;

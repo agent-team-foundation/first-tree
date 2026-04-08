@@ -4,7 +4,7 @@
 
 First Tree Hub is shared infrastructure for agent teams.
 
-- It provides identity sync, authentication, messaging, adapter bridges, and the admin dashboard.
+- It provides agent identity management, authentication, messaging, adapter bridges, and the admin dashboard.
 - It is not the LLM agent runtime itself.
 - It is not the orchestration framework.
 - It is not the Context Tree.
@@ -14,7 +14,7 @@ Use this distinction consistently when explaining the system or choosing where a
 ## Package Roles
 
 - `packages/server`
-  - Fastify API server, admin APIs, agent APIs, database access, sync jobs, adapters, notifications
+  - Fastify API server, admin APIs, agent APIs, database access, adapters, notifications
 - `packages/client`
   - Agent SDK, runtime, WebSocket connection management, workspace/session handling
 - `packages/command`
@@ -34,12 +34,11 @@ The command package depends on server and client packages, but it is still an en
 - The server is otherwise stateless.
 - There is no Redis or separate message queue in the intended design.
 
-### Context Tree is the source of identity truth
+### Agent identity is managed by Hub
 
-- Agent identities come from a Context Tree GitHub repo.
-- The server syncs those identities on startup, periodically, and via manual trigger paths.
-- Hub reads the tree and turns it into runtime identity records.
-- Removed members are suspended rather than silently forgotten.
+- Agent identities are created, updated, and managed via Admin API.
+- Agent profile (markdown self-description) is stored in the `agents.profile` column.
+- Context Tree integration is optional — when configured, Client injects organizational context (AGENT.md, root NODE.md) into agent workspaces at startup.
 
 ### Inbox is the server-client boundary
 
@@ -84,34 +83,31 @@ The client runtime:
 - reads all configured agent YAML files
 - establishes WebSocket and HTTP communication
 - manages session state and isolated chat workspaces
-- syncs a shared Context Tree clone for local context hydration
+- optionally syncs a shared Context Tree clone for organizational context
 
 ### Workspace bootstrap
 
 When a handler starts, the client runtime bootstraps a per-chat workspace and writes `.agent/` files.
 
-If the Context Tree clone is available, it copies:
-
-- `self.md` from the agent's `members/.../NODE.md`
-- `agent-instructions.md` from the root `AGENT.md`
-- `domain-map.md` from the root `NODE.md`
-
-If the Context Tree is unavailable, it writes degraded-mode context so the runtime can continue without organizational metadata.
+- `self.md` from the agent's `profile` field (stored in Hub)
+- If Context Tree is configured:
+  - `agent-instructions.md` from the root `AGENT.md`
+  - `domain-map.md` from the root `NODE.md`
 
 ## Onboarding Mental Model
 
 `onboard` is intentionally higher-level than the rest of the CLI.
 
-- Phase 1 works in the Context Tree repo, not the Hub repo.
-- Phase 2 waits for the server to sync the newly merged identity, then bootstraps runtime access.
-- This is the supported path for creating new members because identity lives outside Hub itself.
+- It auto-creates the agent and bootstraps the token in a single step via GitHub identity.
+- Only `gh` authentication is required — no admin credentials needed.
+- This is the supported path for creating new members.
 
-Do not replace this with ad hoc file creation or manual local git operations unless the user explicitly wants to bypass the normal flow for development or debugging.
+Do not replace this with ad hoc API calls unless the user explicitly wants to bypass the normal flow for development or debugging.
 
 ## Common Misunderstandings to Avoid
 
 - Do not say that `agent add` creates an identity in Hub. It only creates local client config.
 - Do not say that `client start` starts the server. It only runs configured agent clients.
-- Do not say that Hub owns organizational truth. The Context Tree does.
+- Do not say that the Context Tree owns agent identity. Hub does. Context Tree is an optional organizational knowledge source.
 - Do not frame the inbox as exactly-once delivery. The contract is at-least-once with client-side deduplication.
 - Do not mix up admin and agent credentials.

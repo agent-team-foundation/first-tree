@@ -103,7 +103,7 @@ first-tree-hub/
 
 **Inbox is the Server/Client boundary:** Server writes to Inbox (fan-out on write), Client pulls / receives WebSocket notifications. At-least-once delivery; Client is responsible for deduplication.
 
-**Context Tree is the single source of agent identity:** Server syncs agent identities from the Context Tree GitHub repo via GraphQL API (on startup + periodic + manual trigger). Server reads only, never writes back; agents are suspended (not deleted) when removed from the tree; token management remains manual. PG advisory lock ensures single-instance sync.
+**Agent identity is managed by Hub:** Agents are created, updated, suspended, and deleted via Admin API. Agent profile (markdown self-description) is stored in the `agents.profile` column. Context Tree integration is optional — when configured, Client injects organizational context (AGENT.md, root NODE.md) into agent workspaces at startup.
 
 **Adapter 1:1 identity binding:** External IM users (Feishu/Slack) map to human agents. Adapter credentials are AES-256-GCM encrypted at the application layer. PG NOTIFY triggers adapter config hot-reload.
 

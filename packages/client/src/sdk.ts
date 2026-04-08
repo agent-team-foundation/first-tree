@@ -12,12 +12,13 @@ export type RegisterResult = {
   displayName: string | null;
   type: string;
   delegateMention: string | null;
+  profile: string | null;
   metadata: Record<string, unknown>;
 };
 
 export type ContextTreeConfig = {
-  repo: string;
-  branch: string;
+  repo: string | null;
+  branch: string | null;
 };
 
 export type PullResult = {
@@ -61,13 +62,14 @@ export class FirstTreeHubSDK {
       displayName: agent.displayName,
       type: agent.type,
       delegateMention: agent.delegateMention ?? null,
+      profile: agent.profile ?? null,
       metadata: (agent.metadata as Record<string, unknown>) ?? {},
     };
   }
 
-  /** Fetch Context Tree configuration from the server. */
+  /** Fetch Context Tree configuration from the server (public endpoint). */
   async getContextTreeConfig(): Promise<ContextTreeConfig> {
-    return this.requestJson<ContextTreeConfig>("/api/v1/agent/context-tree");
+    return this.requestJson<ContextTreeConfig>("/api/v1/context-tree/info");
   }
 
   /** Fetch pending inbox entries. */

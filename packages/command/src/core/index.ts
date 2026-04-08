@@ -41,7 +41,6 @@ export {
   formatCheckReport,
   loadOnboardState,
   onboardCheck,
-  onboardContinue,
   onboardCreate,
   saveOnboardState,
 } from "./onboard.js";

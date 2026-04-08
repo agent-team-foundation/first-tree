@@ -23,7 +23,11 @@ afterEach(() => {
 
 /**
  * Mirror of generateClaudeMd from claude-code.ts.
- * Layered Bootstrap: identity + profile + instructions + domain map + tree location + SDK.
+ * Must stay in sync with the real implementation.
+ *
+ * Layer 1 (always): Agent identity + profile (from Hub)
+ * Layer 2 (if Context Tree configured): Operating instructions + domain map
+ * Layer 3 (if Context Tree configured): Context Tree location for on-demand reading
  */
 function generateClaudeMd(workspacePath: string, identity: AgentIdentity, contextTreePath: string | null): string {
   const sections: string[] = [];
@@ -37,48 +41,32 @@ function generateClaudeMd(workspacePath: string, identity: AgentIdentity, contex
     sections.push(`# Agent Identity\n\nYou are ${name}, an autonomous agent.\n`);
   }
 
-  // Layer 1: Member profile
+  // Agent profile (from Hub)
   const selfMdPath = join(contextDir, "self.md");
   if (existsSync(selfMdPath)) {
     const selfContent = readFileSync(selfMdPath, "utf-8");
     sections.push(`## Your Profile\n\n${selfContent}\n`);
-  } else {
-    sections.push(
-      "## Your Profile\n\nNo member profile available. Your responsibilities are not loaded from the Context Tree.\n",
-    );
   }
 
-  // Layer 1: AGENT.md operating instructions
+  // Context Tree operating instructions (AGENT.md)
   const agentInstructionsPath = join(contextDir, "agent-instructions.md");
   if (existsSync(agentInstructionsPath)) {
     const instructions = readFileSync(agentInstructionsPath, "utf-8");
-    sections.push(`## Context Tree Operating Instructions\n\n${instructions}\n`);
-  } else {
-    sections.push(
-      "## Context Tree Operating Instructions\n\nContext Tree instructions unavailable. Organizational context is not loaded for this session.\n",
-    );
+    sections.push(`## Operating Instructions\n\n${instructions}\n`);
   }
 
-  // Layer 2: Domain map
+  // Organization domain map (root NODE.md)
   const domainMapPath = join(contextDir, "domain-map.md");
   if (existsSync(domainMapPath)) {
     const domainMap = readFileSync(domainMapPath, "utf-8");
     sections.push(`## Organization Domain Map\n\n${domainMap}\n`);
   }
 
-  // Layer 3: Context Tree location
+  // Context Tree location for on-demand reading
   if (contextTreePath) {
     sections.push(
       `## Context Tree Location\n\nThe full Context Tree is available at: \`${contextTreePath}\`\n\nRead specific domain nodes as needed following the operating instructions above.\n`,
     );
-  } else {
-    const degradedPath = join(contextDir, "degraded.md");
-    if (existsSync(degradedPath)) {
-      const degradedMsg = readFileSync(degradedPath, "utf-8");
-      sections.push(
-        `## Context Tree Location\n\nWARNING: ${degradedMsg}\nYou can still use the SDK tools below, but you lack organizational context for decisions.\n`,
-      );
-    }
   }
 
   // SDK tools
@@ -101,6 +89,7 @@ describe("CLAUDE.md generation", () => {
       displayName: "yuezengwu-assistant",
       type: "personal_assistant",
       delegateMention: null, // null — should still detect as personal_assistant
+      profile: null,
       metadata: {},
     };
 
@@ -118,6 +107,7 @@ describe("CLAUDE.md generation", () => {
       displayName: "Code Reviewer",
       type: "autonomous_agent",
       delegateMention: null,
+      profile: null,
       metadata: {},
     };
 
@@ -139,6 +129,7 @@ describe("CLAUDE.md generation", () => {
       displayName: "yuezengwu-assistant",
       type: "personal_assistant",
       delegateMention: null,
+      profile: null,
       metadata: {},
     };
 
@@ -147,7 +138,7 @@ describe("CLAUDE.md generation", () => {
     expect(md).toContain("I help yuezengwu with tasks.");
   });
 
-  it("shows fallback when no self.md exists", () => {
+  it("omits profile section when no self.md exists", () => {
     const workspace = join(tmpBase, "ws-no-self");
     mkdirSync(join(workspace, ".agent", "context"), { recursive: true });
 
@@ -156,11 +147,12 @@ describe("CLAUDE.md generation", () => {
       displayName: "Test",
       type: "autonomous_agent",
       delegateMention: null,
+      profile: null,
       metadata: {},
     };
 
     const md = generateClaudeMd(workspace, identity, null);
-    expect(md).toContain("No member profile available");
+    expect(md).not.toContain("Your Profile");
   });
 
   it("includes AGENT.md operating instructions", () => {
@@ -176,16 +168,17 @@ describe("CLAUDE.md generation", () => {
       displayName: "Test",
       type: "autonomous_agent",
       delegateMention: null,
+      profile: null,
       metadata: {},
     };
 
     const md = generateClaudeMd(workspace, identity, null);
-    expect(md).toContain("Context Tree Operating Instructions");
+    expect(md).toContain("Operating Instructions");
     expect(md).toContain("Before Every Task");
     expect(md).toContain("Read the root NODE.md");
   });
 
-  it("shows fallback when no agent-instructions.md exists", () => {
+  it("omits instructions section when no agent-instructions.md exists", () => {
     const workspace = join(tmpBase, "ws-no-instructions");
     mkdirSync(join(workspace, ".agent", "context"), { recursive: true });
 
@@ -194,11 +187,12 @@ describe("CLAUDE.md generation", () => {
       displayName: "Test",
       type: "autonomous_agent",
       delegateMention: null,
+      profile: null,
       metadata: {},
     };
 
     const md = generateClaudeMd(workspace, identity, null);
-    expect(md).toContain("Context Tree instructions unavailable");
+    expect(md).not.toContain("Operating Instructions");
   });
 
   it("includes domain map when present", () => {
@@ -214,6 +208,7 @@ describe("CLAUDE.md generation", () => {
       displayName: "Test",
       type: "autonomous_agent",
       delegateMention: null,
+      profile: null,
       metadata: {},
     };
 
@@ -231,6 +226,7 @@ describe("CLAUDE.md generation", () => {
       displayName: "Test",
       type: "autonomous_agent",
       delegateMention: null,
+      profile: null,
       metadata: {},
     };
 
@@ -240,26 +236,21 @@ describe("CLAUDE.md generation", () => {
     expect(md).toContain("Read specific domain nodes as needed");
   });
 
-  it("shows degraded warning when context tree unavailable", () => {
-    const workspace = join(tmpBase, "ws-degraded");
+  it("omits context tree section when path is null (normal mode)", () => {
+    const workspace = join(tmpBase, "ws-no-tree");
     mkdirSync(join(workspace, ".agent", "context"), { recursive: true });
-    writeFileSync(
-      join(workspace, ".agent", "context", "degraded.md"),
-      "Context Tree is not available for this session.\nOrganizational context is not loaded.\n",
-    );
 
     const identity: AgentIdentity = {
       agentId: "test",
       displayName: "Test",
       type: "autonomous_agent",
       delegateMention: null,
+      profile: null,
       metadata: {},
     };
 
     const md = generateClaudeMd(workspace, identity, null);
-    expect(md).toContain("WARNING:");
-    expect(md).toContain("Context Tree is not available");
-    expect(md).toContain("you lack organizational context");
+    expect(md).not.toContain("Context Tree Location");
   });
 
   it("includes tools.md content", () => {
@@ -272,6 +263,7 @@ describe("CLAUDE.md generation", () => {
       displayName: "Test",
       type: "autonomous_agent",
       delegateMention: null,
+      profile: null,
       metadata: {},
     };
 
@@ -289,6 +281,7 @@ describe("CLAUDE.md generation", () => {
       displayName: null,
       type: "autonomous_agent",
       delegateMention: null,
+      profile: null,
       metadata: {},
     };
 

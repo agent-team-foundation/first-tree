@@ -67,8 +67,8 @@ export {
   type CreateAgent,
   contextTreeInfoSchema,
   createAgentSchema,
-  type SyncReport,
-  syncReportSchema,
+  type UpdateAgent,
+  updateAgentSchema,
 } from "./schemas/agent.js";
 export {
   type AgentToken,

@@ -188,14 +188,11 @@ Self-service onboarding for new members (human or agent).
 # Check readiness
 first-tree-hub onboard --check --id alice --type human --role Engineer
 
-# Phase 1: Create Context Tree PR
+# Create agent + bootstrap token
 first-tree-hub onboard --id alice --type human --role Engineer --domains backend,infra
-first-tree-hub onboard --id alice --type human --role Engineer --domains backend,infra --delegate-mention alice-assistant
+first-tree-hub onboard --id alice --type human --role Engineer --domains backend,infra --assistant alice-assistant
 
-# Phase 2: After PR merge — sync + token + bindings + client config
-first-tree-hub onboard --continue
-
-# Phase 3: Start the agent
+# Start the agent
 first-tree-hub client start
 ```
 
@@ -220,8 +217,8 @@ Most environment variables use the `FIRST_TREE_HUB_` prefix. `onboard` also acce
 | `FIRST_TREE_HUB_HOST` | Bind address | `127.0.0.1` |
 | `FIRST_TREE_HUB_JWT_SECRET` | JWT signing key | auto: random generated |
 | `FIRST_TREE_HUB_ENCRYPTION_KEY` | Adapter credential encryption key | auto: random generated |
-| `FIRST_TREE_HUB_CONTEXT_TREE_REPO` | Context Tree repository (URL or owner/repo) | interactive prompt |
-| `FIRST_TREE_HUB_GITHUB_TOKEN` | GitHub API token | interactive prompt |
+| `FIRST_TREE_HUB_CONTEXT_TREE_REPO` | Context Tree repository URL (optional) | — |
+| `FIRST_TREE_HUB_GITHUB_TOKEN` | GitHub API token (optional, for webhooks) | — |
 | `FIRST_TREE_HUB_WEB_DIST_PATH` | Web static files path | auto-discovered |
 
 ### Client
@@ -250,8 +247,8 @@ Most environment variables use the `FIRST_TREE_HUB_` prefix. `onboard` also acce
 
 ```
 ~/.first-tree-hub/
-├── .onboard-state.json           # Saved args for `onboard --continue`
-├── context-tree/                 # Auto-managed clone used by onboarding
+├── .onboard-state.json           # Saved args for onboard resume
+├── context-tree/                 # Auto-managed clone (optional, for organizational context)
 ├── config/                      # Configuration (human-edited)
 │   ├── server.yaml
 │   ├── client.yaml

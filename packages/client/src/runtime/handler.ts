@@ -6,6 +6,7 @@ export type AgentIdentity = {
   displayName: string | null;
   type: string;
   delegateMention: string | null;
+  profile: string | null;
   metadata: Record<string, unknown>;
 };
 

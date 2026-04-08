@@ -35,26 +35,24 @@ export const serverConfigSchema = defineConfig({
       secret: true,
     }),
   },
-  contextTree: {
+  contextTree: optional({
     repo: field(z.string(), {
       env: "FIRST_TREE_HUB_CONTEXT_TREE_REPO",
       prompt: { message: "Context Tree repo URL (e.g. https://github.com/org/first-tree):" },
     }),
     branch: field(z.string().default("main")),
-    syncInterval: field(z.number().default(60)),
-  },
+  }),
   github: {
-    token: field(z.string(), {
+    token: field(z.string().optional(), {
       env: "FIRST_TREE_HUB_GITHUB_TOKEN",
       secret: true,
-      prompt: {
-        message: "GitHub token (create at https://github.com/settings/tokens → repo scope):",
-        type: "password",
-      },
     }),
     webhookSecret: field(z.string().optional(), {
       env: "FIRST_TREE_HUB_GITHUB_WEBHOOK_SECRET",
       secret: true,
+    }),
+    allowedOrg: field(z.string().optional(), {
+      env: "FIRST_TREE_HUB_GITHUB_ALLOWED_ORG",
     }),
   },
   cors: optional({

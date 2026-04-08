@@ -1,9 +1,8 @@
 import { AGENT_TYPES } from "@first-tree-hub/shared";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { RefreshCw } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useNavigate } from "react-router";
-import { getSyncStatus, listAgents, triggerSync } from "../api/agents.js";
+import { listAgents } from "../api/agents.js";
 import { Badge } from "../components/ui/badge.js";
 import { Button } from "../components/ui/button.js";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.js";
@@ -13,27 +12,12 @@ const agentTypeValues = Object.values(AGENT_TYPES);
 
 export function AgentsPage() {
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const [cursor, setCursor] = useState<string | undefined>();
   const [typeFilter, setTypeFilter] = useState<string>("");
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["agents", cursor],
     queryFn: () => listAgents({ limit: 20, cursor }),
-  });
-
-  const { data: syncStatus } = useQuery({
-    queryKey: ["sync-status"],
-    queryFn: getSyncStatus,
-    refetchInterval: 30_000,
-  });
-
-  const syncMutation = useMutation({
-    mutationFn: triggerSync,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["agents"] });
-      queryClient.invalidateQueries({ queryKey: ["sync-status"] });
-    },
   });
 
   return (
@@ -57,47 +41,7 @@ export function AgentsPage() {
             ))}
           </select>
         </div>
-        <div className="flex items-center gap-3">
-          {syncStatus?.lastSync && (
-            <span className="text-xs text-muted-foreground">Last sync: {formatDate(syncStatus.lastSync.syncedAt)}</span>
-          )}
-          <Button variant="outline" size="sm" onClick={() => syncMutation.mutate()} disabled={syncMutation.isPending}>
-            <RefreshCw className={cn("h-4 w-4 mr-2", syncMutation.isPending && "animate-spin")} />
-            {syncMutation.isPending ? "Syncing..." : "Sync Now"}
-          </Button>
-        </div>
       </div>
-
-      {/* Sync result banner */}
-      {syncMutation.data && (
-        <div className="mb-4 rounded-md border bg-muted/50 p-3 text-sm">
-          <span className="font-medium">Sync complete: </span>
-          {syncMutation.data.summary.created > 0 && (
-            <Badge variant="default" className="mr-1">
-              +{syncMutation.data.summary.created} created
-            </Badge>
-          )}
-          {syncMutation.data.summary.updated > 0 && (
-            <Badge variant="secondary" className="mr-1">
-              {syncMutation.data.summary.updated} updated
-            </Badge>
-          )}
-          {syncMutation.data.summary.suspended > 0 && (
-            <Badge variant="destructive" className="mr-1">
-              {syncMutation.data.summary.suspended} suspended
-            </Badge>
-          )}
-          {syncMutation.data.summary.unchanged > 0 && (
-            <span className="text-muted-foreground mr-1">{syncMutation.data.summary.unchanged} unchanged</span>
-          )}
-          {syncMutation.data.summary.errors > 0 && (
-            <Badge variant="destructive">{syncMutation.data.summary.errors} errors</Badge>
-          )}
-        </div>
-      )}
-      {syncMutation.error instanceof Error && (
-        <div className="mb-4 text-sm text-destructive">{syncMutation.error.message}</div>
-      )}
 
       <div className="border rounded-lg">
         <Table>
@@ -132,9 +76,7 @@ export function AgentsPage() {
                   return (
                     <TableRow>
                       <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
-                        {typeFilter
-                          ? `No ${typeFilter} agents`
-                          : "No agents yet — click Sync Now to import from Context Tree"}
+                        {typeFilter ? `No ${typeFilter} agents` : "No agents yet"}
                       </TableCell>
                     </TableRow>
                   );
@@ -142,12 +84,12 @@ export function AgentsPage() {
                 return filtered.map((agent) => (
                   <TableRow key={agent.id} className="cursor-pointer" onClick={() => navigate(`/agents/${agent.id}`)}>
                     <TableCell className="font-mono text-sm">{agent.id}</TableCell>
-                    <TableCell>{agent.displayName ?? "—"}</TableCell>
+                    <TableCell>{agent.displayName ?? "\u2014"}</TableCell>
                     <TableCell>
                       <Badge variant="secondary">{agent.type}</Badge>
                     </TableCell>
                     <TableCell className="font-mono text-sm text-muted-foreground">
-                      {agent.delegateMention ?? "—"}
+                      {agent.delegateMention ?? "\u2014"}
                     </TableCell>
                     <TableCell>
                       <span

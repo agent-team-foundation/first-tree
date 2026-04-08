@@ -26,6 +26,7 @@ function makeIdentity(overrides?: Partial<AgentIdentity>): AgentIdentity {
     displayName: "Test Agent",
     type: "autonomous_agent",
     delegateMention: null,
+    profile: null,
     metadata: {},
     ...overrides,
   };
@@ -79,24 +80,21 @@ describe("bootstrapWorkspace", () => {
     expect(content).toContain("Use your judgment about when to respond");
   });
 
-  it("copies self.md from context tree when available", () => {
-    const workspace = join(tmpBase, "ws-context");
-    const ctxTree = join(tmpBase, "context-tree");
+  it("writes self.md from identity.profile when available", () => {
+    const workspace = join(tmpBase, "ws-profile");
     mkdirSync(workspace, { recursive: true });
-    mkdirSync(join(ctxTree, "members", "my-agent"), { recursive: true });
-    writeFileSync(join(ctxTree, "members", "my-agent", "NODE.md"), "---\ntype: autonomous_agent\n---\nI am an agent.");
 
     bootstrapWorkspace({
       workspacePath: workspace,
-      identity: makeIdentity({ agentId: "my-agent" }),
-      contextTreePath: ctxTree,
+      identity: makeIdentity({ agentId: "my-agent", profile: "I am an agent with a profile." }),
+      contextTreePath: null,
       serverUrl: "http://localhost:8000",
       chatId: "chat-1",
     });
 
     const selfPath = join(workspace, ".agent", "context", "self.md");
     expect(existsSync(selfPath)).toBe(true);
-    expect(readFileSync(selfPath, "utf-8")).toContain("I am an agent.");
+    expect(readFileSync(selfPath, "utf-8")).toContain("I am an agent with a profile.");
   });
 
   it("skips context when contextTreePath is null", () => {
@@ -175,8 +173,8 @@ describe("bootstrapWorkspace", () => {
     expect(readFileSync(domainMapPath, "utf-8")).toContain("kael/");
   });
 
-  it("writes degraded.md when contextTreePath is null", () => {
-    const workspace = join(tmpBase, "ws-degraded");
+  it("does not write degraded.md when contextTreePath is null (no Context Tree is normal)", () => {
+    const workspace = join(tmpBase, "ws-no-tree");
     mkdirSync(workspace, { recursive: true });
 
     bootstrapWorkspace({
@@ -188,8 +186,7 @@ describe("bootstrapWorkspace", () => {
     });
 
     const degradedPath = join(workspace, ".agent", "context", "degraded.md");
-    expect(existsSync(degradedPath)).toBe(true);
-    expect(readFileSync(degradedPath, "utf-8")).toContain("Context Tree is not available");
+    expect(existsSync(degradedPath)).toBe(false);
   });
 
   it("overwrites existing files on re-bootstrap", () => {

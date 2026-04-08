@@ -12,6 +12,7 @@ concurrency:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   check-branch-name:
@@ -28,8 +29,33 @@ jobs:
             exit 1
           fi
 
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+      skills: ${{ steps.filter.outputs.skills }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            code:
+              - 'packages/**'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'tsconfig.json'
+              - 'biome.json'
+              - 'turbo.json'
+              - '.github/**'
+            skills:
+              - 'skills/**'
+
   validate-skill:
     name: Validate Skill
+    needs: changes
+    if: needs.changes.outputs.skills == 'true' || github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -43,7 +69,8 @@ jobs:
 
   lint:
     name: Lint & Type Check
-    if: ${{ !startsWith(github.head_ref || github.ref_name, 'docs/') }}
+    needs: changes
+    if: needs.changes.outputs.code == 'true' || github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -59,7 +86,8 @@ jobs:
 
   test:
     name: Test
-    if: ${{ !startsWith(github.head_ref || github.ref_name, 'docs/') }}
+    needs: changes
+    if: needs.changes.outputs.code == 'true' || github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
