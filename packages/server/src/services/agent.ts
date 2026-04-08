@@ -78,9 +78,11 @@ export async function getAgent(db: Database, id: string) {
   return agent;
 }
 
-export async function listAgents(db: Database, limit: number, cursor?: string) {
-  const notDeleted = ne(agents.status, AGENT_STATUSES.DELETED);
-  const where = cursor ? and(notDeleted, lt(agents.createdAt, new Date(cursor))) : notDeleted;
+export async function listAgents(db: Database, limit: number, cursor?: string, type?: string) {
+  const conditions = [ne(agents.status, AGENT_STATUSES.DELETED)];
+  if (cursor) conditions.push(lt(agents.createdAt, new Date(cursor)));
+  if (type) conditions.push(eq(agents.type, type));
+  const where = and(...conditions);
 
   const rows = await db
     .select({

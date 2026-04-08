@@ -1,4 +1,5 @@
 import {
+  agentTypeSchema,
   createAgentSchema,
   createAgentTokenSchema,
   paginationQuerySchema,
@@ -6,6 +7,7 @@ import {
 } from "@first-tree-hub/shared";
 import { and, eq, gt, ne } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
+import { z } from "zod";
 import { agents } from "../../db/schema/agents.js";
 import { messages } from "../../db/schema/messages.js";
 import * as agentService from "../../services/agent.js";
@@ -20,9 +22,12 @@ function serializeDate(d: Date | null): string | null {
 }
 
 export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
+  const listAgentsFilterSchema = z.object({ type: agentTypeSchema.optional() });
+
   app.get("/", async (request) => {
     const query = paginationQuerySchema.parse(request.query);
-    const result = await agentService.listAgents(app.db, query.limit, query.cursor);
+    const { type } = listAgentsFilterSchema.parse(request.query);
+    const result = await agentService.listAgents(app.db, query.limit, query.cursor, type);
     return {
       items: result.items.map((a) => ({
         ...a,

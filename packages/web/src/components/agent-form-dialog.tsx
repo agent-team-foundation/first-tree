@@ -20,8 +20,8 @@ type AgentFormProps = {
 export type AgentFormData = {
   id?: string;
   type: AgentType;
-  displayName: string;
-  delegateMention: string;
+  displayName: string | null;
+  delegateMention: string | null;
 };
 
 export function AgentFormDialog(props: AgentFormProps) {
@@ -33,15 +33,15 @@ export function AgentFormDialog(props: AgentFormProps) {
   const [formDisplayName, setFormDisplayName] = useState("");
   const [formDelegateMention, setFormDelegateMention] = useState("");
 
-  // Fetch active personal_assistant agents for delegate mention dropdown
+  // Fetch active personal_assistant agents for delegate mention dropdown (human agents only)
+  const showDelegate = formType === "human";
   const assistantsQuery = useQuery({
     queryKey: ["agents-for-delegate"],
     queryFn: async () => {
-      // Fetch a large page — delegate candidates are typically few
       const result = await listAgents({ limit: 100 });
       return result.items.filter((a) => a.type === "personal_assistant" && a.status === "active");
     },
-    enabled: open,
+    enabled: open && showDelegate,
   });
 
   // Reset form when dialog opens or agent changes
@@ -66,8 +66,8 @@ export function AgentFormDialog(props: AgentFormProps) {
     onSubmit({
       id: mode === "create" && formId ? formId : undefined,
       type: formType,
-      displayName: formDisplayName,
-      delegateMention: formDelegateMention,
+      displayName: formDisplayName || null,
+      delegateMention: formDelegateMention || null,
     });
   };
 
@@ -104,7 +104,11 @@ export function AgentFormDialog(props: AgentFormProps) {
             <select
               id="agent-type"
               value={formType}
-              onChange={(e) => setFormType(e.target.value as AgentType)}
+              onChange={(e) => {
+                const newType = e.target.value as AgentType;
+                setFormType(newType);
+                if (newType !== "human") setFormDelegateMention("");
+              }}
               disabled={isEdit}
               className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
             >
@@ -128,24 +132,26 @@ export function AgentFormDialog(props: AgentFormProps) {
             />
           </div>
 
-          {/* Delegate Mention */}
-          <div className="space-y-2">
-            <Label htmlFor="agent-delegate">Delegate Mention</Label>
-            <select
-              id="agent-delegate"
-              value={formDelegateMention}
-              onChange={(e) => setFormDelegateMention(e.target.value)}
-              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            >
-              <option value="">None</option>
-              {assistantsQuery.data?.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.displayName ? `${a.displayName} (${a.id})` : a.id}
-                </option>
-              ))}
-            </select>
-            <p className="text-xs text-muted-foreground">The personal assistant that acts on behalf of this agent</p>
-          </div>
+          {/* Delegate Mention — only for human agents */}
+          {showDelegate && (
+            <div className="space-y-2">
+              <Label htmlFor="agent-delegate">Delegate Mention</Label>
+              <select
+                id="agent-delegate"
+                value={formDelegateMention}
+                onChange={(e) => setFormDelegateMention(e.target.value)}
+                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                <option value="">None</option>
+                {assistantsQuery.data?.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.displayName ? `${a.displayName} (${a.id})` : a.id}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-muted-foreground">The personal assistant that acts on behalf of this agent</p>
+            </div>
+          )}
 
           {error && <div className="text-sm text-destructive">{error.message}</div>}
 

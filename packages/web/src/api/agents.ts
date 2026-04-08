@@ -6,10 +6,11 @@ type PaginatedAgents = {
   nextCursor: string | null;
 };
 
-export function listAgents(params?: { limit?: number; cursor?: string }): Promise<PaginatedAgents> {
+export function listAgents(params?: { limit?: number; cursor?: string; type?: string }): Promise<PaginatedAgents> {
   const qs = new URLSearchParams();
   if (params?.limit) qs.set("limit", String(params.limit));
   if (params?.cursor) qs.set("cursor", params.cursor);
+  if (params?.type) qs.set("type", params.type);
   const query = qs.toString();
   return api.get<PaginatedAgents>(`/admin/agents${query ? `?${query}` : ""}`);
 }

@@ -185,8 +185,8 @@ export function AgentDetailPage() {
   const updateMutation = useMutation({
     mutationFn: (formData: AgentFormData) =>
       updateAgent(agentId, {
-        displayName: formData.displayName || null,
-        delegateMention: formData.delegateMention || null,
+        displayName: formData.displayName,
+        delegateMention: formData.delegateMention,
       }),
     onSuccess: () => {
       setEditDialogOpen(false);
