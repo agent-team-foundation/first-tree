@@ -1,8 +1,10 @@
 import { AGENT_TYPES } from "@first-tree-hub/shared";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Plus } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router";
-import { listAgents } from "../api/agents.js";
+import { createAgent, listAgents } from "../api/agents.js";
+import { type AgentFormData, AgentFormDialog } from "../components/agent-form-dialog.js";
 import { Badge } from "../components/ui/badge.js";
 import { Button } from "../components/ui/button.js";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.js";
@@ -12,12 +14,29 @@ const agentTypeValues = Object.values(AGENT_TYPES);
 
 export function AgentsPage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [cursor, setCursor] = useState<string | undefined>();
   const [typeFilter, setTypeFilter] = useState<string>("");
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["agents", cursor],
-    queryFn: () => listAgents({ limit: 20, cursor }),
+    queryKey: ["agents", cursor, typeFilter],
+    queryFn: () => listAgents({ limit: 20, cursor, type: typeFilter || undefined }),
+  });
+
+  const createMutation = useMutation({
+    mutationFn: (formData: AgentFormData) =>
+      createAgent({
+        id: formData.id,
+        type: formData.type,
+        displayName: formData.displayName ?? undefined,
+        delegateMention: formData.delegateMention ?? undefined,
+      }),
+    onSuccess: (agent) => {
+      setCreateDialogOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["agents"] });
+      navigate(`/agents/${agent.id}`);
+    },
   });
 
   return (
@@ -41,6 +60,10 @@ export function AgentsPage() {
             ))}
           </select>
         </div>
+        <Button size="sm" onClick={() => setCreateDialogOpen(true)}>
+          <Plus className="h-4 w-4 mr-2" />
+          New Agent
+        </Button>
       </div>
 
       <div className="border rounded-lg">
@@ -69,44 +92,38 @@ export function AgentsPage() {
                   Failed to load agents: {error instanceof Error ? error.message : "Unknown error"}
                 </TableCell>
               </TableRow>
+            ) : !data?.items.length ? (
+              <TableRow>
+                <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                  {typeFilter ? `No ${typeFilter} agents` : "No agents yet"}
+                </TableCell>
+              </TableRow>
             ) : (
-              (() => {
-                const filtered = typeFilter ? data?.items.filter((a) => a.type === typeFilter) : data?.items;
-                if (!filtered || filtered.length === 0) {
-                  return (
-                    <TableRow>
-                      <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
-                        {typeFilter ? `No ${typeFilter} agents` : "No agents yet"}
-                      </TableCell>
-                    </TableRow>
-                  );
-                }
-                return filtered.map((agent) => (
-                  <TableRow key={agent.id} className="cursor-pointer" onClick={() => navigate(`/agents/${agent.id}`)}>
-                    <TableCell className="font-mono text-sm">{agent.id}</TableCell>
-                    <TableCell>{agent.displayName ?? "\u2014"}</TableCell>
-                    <TableCell>
-                      <Badge variant="secondary">{agent.type}</Badge>
-                    </TableCell>
-                    <TableCell className="font-mono text-sm text-muted-foreground">
-                      {agent.delegateMention ?? "\u2014"}
-                    </TableCell>
-                    <TableCell>
-                      <span
-                        className={cn(
-                          "inline-block h-2 w-2 rounded-full",
-                          agent.presenceStatus === "online" ? "bg-green-500" : "bg-gray-300",
-                        )}
-                        title={agent.presenceStatus ?? "offline"}
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={agent.status === "active" ? "default" : "destructive"}>{agent.status}</Badge>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">{formatDate(agent.createdAt)}</TableCell>
-                  </TableRow>
-                ));
-              })()
+              data.items.map((agent) => (
+                <TableRow key={agent.id} className="cursor-pointer" onClick={() => navigate(`/agents/${agent.id}`)}>
+                  <TableCell className="font-mono text-sm">{agent.id}</TableCell>
+                  <TableCell>{agent.displayName ?? "\u2014"}</TableCell>
+                  <TableCell>
+                    <Badge variant="secondary">{agent.type}</Badge>
+                  </TableCell>
+                  <TableCell className="font-mono text-sm text-muted-foreground">
+                    {agent.delegateMention ?? "\u2014"}
+                  </TableCell>
+                  <TableCell>
+                    <span
+                      className={cn(
+                        "inline-block h-2 w-2 rounded-full",
+                        agent.presenceStatus === "online" ? "bg-green-500" : "bg-gray-300",
+                      )}
+                      title={agent.presenceStatus ?? "offline"}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant={agent.status === "active" ? "default" : "destructive"}>{agent.status}</Badge>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">{formatDate(agent.createdAt)}</TableCell>
+                </TableRow>
+              ))
             )}
           </TableBody>
         </Table>
@@ -119,6 +136,15 @@ export function AgentsPage() {
           </Button>
         </div>
       )}
+
+      <AgentFormDialog
+        mode="create"
+        open={createDialogOpen}
+        onOpenChange={setCreateDialogOpen}
+        onSubmit={(formData) => createMutation.mutate(formData)}
+        isPending={createMutation.isPending}
+        error={createMutation.error instanceof Error ? createMutation.error : null}
+      />
     </div>
   );
 }

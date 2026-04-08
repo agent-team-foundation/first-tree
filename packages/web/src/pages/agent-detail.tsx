@@ -2,6 +2,7 @@ import { ADAPTER_PLATFORMS } from "@first-tree-hub/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Cable, Copy, Key, Link2, Pencil, Play, Plus, Trash2 } from "lucide-react";
 import { type FormEvent, useState } from "react";
+import Markdown from "react-markdown";
 import { useNavigate, useParams } from "react-router";
 import { createAdapterMapping, deleteAdapterMapping, listAdapterMappings } from "../api/adapter-mappings.js";
 import { getAdapterStatuses } from "../api/adapter-status.js";
@@ -13,8 +14,10 @@ import {
   suspendAgent,
   type TestResult,
   testAgentConnection,
+  updateAgent,
 } from "../api/agents.js";
 import { createToken, listTokens, revokeToken } from "../api/tokens.js";
+import { type AgentFormData, AgentFormDialog } from "../components/agent-form-dialog.js";
 import { Badge } from "../components/ui/badge.js";
 import { Button } from "../components/ui/button.js";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card.js";
@@ -177,9 +180,35 @@ export function AgentDetailPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["adapter-mappings"] }),
   });
 
+  // Edit agent
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const updateMutation = useMutation({
+    mutationFn: (formData: AgentFormData) =>
+      updateAgent(agentId, {
+        displayName: formData.displayName,
+        delegateMention: formData.delegateMention,
+      }),
+    onSuccess: () => {
+      setEditDialogOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["agent", agentId] });
+      queryClient.invalidateQueries({ queryKey: ["agents"] });
+    },
+  });
+
   // Test connection
   const testMutation = useMutation({
     mutationFn: () => testAgentConnection(agentId),
+  });
+
+  // Profile editing
+  const [profileDialogOpen, setProfileDialogOpen] = useState(false);
+  const [profileDraft, setProfileDraft] = useState("");
+  const profileMutation = useMutation({
+    mutationFn: (profile: string) => updateAgent(agentId, { profile: profile || null }),
+    onSuccess: () => {
+      setProfileDialogOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["agent", agentId] });
+    },
   });
 
   const agent = agentQuery.data;
@@ -314,6 +343,12 @@ export function AgentDetailPage() {
           <h1 className="text-2xl font-semibold">{agent.displayName ?? agent.id}</h1>
           <p className="text-sm text-muted-foreground font-mono">{agent.id}</p>
         </div>
+        {agent.status === "active" && (
+          <Button variant="outline" size="sm" onClick={() => setEditDialogOpen(true)}>
+            <Pencil className="h-4 w-4 mr-2" />
+            Edit
+          </Button>
+        )}
         {!isHuman && agent.status === "active" && (
           <Button
             variant="outline"
@@ -430,6 +465,71 @@ export function AgentDetailPage() {
           </dl>
         </CardContent>
       </Card>
+
+      {/* Profile */}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle>Profile</CardTitle>
+          {agent.status === "active" && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setProfileDraft(agent.profile ?? "");
+                setProfileDialogOpen(true);
+              }}
+            >
+              <Pencil className="h-4 w-4 mr-2" />
+              Edit
+            </Button>
+          )}
+        </CardHeader>
+        <CardContent>
+          {agent.profile ? (
+            <div className="prose prose-sm dark:prose-invert max-w-none max-h-64 overflow-auto bg-muted rounded p-4">
+              <Markdown>{agent.profile}</Markdown>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">No profile</p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Profile Edit Dialog */}
+      <Dialog open={profileDialogOpen} onOpenChange={setProfileDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Profile</DialogTitle>
+          </DialogHeader>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              profileMutation.mutate(profileDraft);
+            }}
+            className="space-y-4"
+          >
+            <div className="space-y-2">
+              <Label htmlFor="profile-editor">Markdown</Label>
+              <textarea
+                id="profile-editor"
+                value={profileDraft}
+                onChange={(e) => setProfileDraft(e.target.value)}
+                rows={12}
+                className="flex w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm font-mono transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                placeholder="Agent self-description in markdown..."
+              />
+            </div>
+            {profileMutation.error instanceof Error && (
+              <div className="text-sm text-destructive">{profileMutation.error.message}</div>
+            )}
+            <DialogFooter>
+              <Button type="submit" disabled={profileMutation.isPending}>
+                {profileMutation.isPending ? "Saving..." : "Save"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       {/* Platform Bindings */}
       <Card>
@@ -799,6 +899,19 @@ export function AgentDetailPage() {
           </form>
         </DialogContent>
       </Dialog>
+
+      {/* Edit Agent Dialog */}
+      {agent.status === "active" && (
+        <AgentFormDialog
+          mode="edit"
+          agent={agent}
+          open={editDialogOpen}
+          onOpenChange={setEditDialogOpen}
+          onSubmit={(formData) => updateMutation.mutate(formData)}
+          isPending={updateMutation.isPending}
+          error={updateMutation.error instanceof Error ? updateMutation.error : null}
+        />
+      )}
 
       {/* Create Token Dialog */}
       {!isHuman && (
