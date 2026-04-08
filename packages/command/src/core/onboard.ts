@@ -78,6 +78,28 @@ export async function onboardCheck(args: OnboardArgs): Promise<CheckItem[]> {
         status: res.ok ? "ok" : "error",
         value: res.ok ? "healthy" : `HTTP ${res.status}`,
       });
+
+      // Check bootstrap config (allowedOrg)
+      if (res.ok) {
+        try {
+          const configRes = await fetch(`${serverUrl}/api/v1/bootstrap/config`);
+          if (configRes.ok) {
+            const config = (await configRes.json()) as { allowedOrg: string | null };
+            if (config.allowedOrg) {
+              items.push({ key: "allowed_org", label: "GitHub org", status: "ok", value: config.allowedOrg });
+            } else {
+              items.push({
+                key: "allowed_org",
+                label: "GitHub org",
+                status: "error",
+                hint: "FIRST_TREE_HUB_GITHUB_ALLOWED_ORG not configured on server",
+              });
+            }
+          }
+        } catch {
+          // Non-critical — older servers may not have this endpoint
+        }
+      }
     } catch {
       items.push({
         key: "server_reachable",

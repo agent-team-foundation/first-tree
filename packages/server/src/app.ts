@@ -25,6 +25,7 @@ import { agentInboxRoutes } from "./api/agent/inbox.js";
 import { agentMeRoutes } from "./api/agent/me.js";
 import { agentMessageRoutes, agentSendToAgentRoutes } from "./api/agent/messages.js";
 import { agentWsRoutes } from "./api/agent/ws.js";
+import { bootstrapConfigRoutes } from "./api/bootstrap/config.js";
 import { bootstrapRoutes } from "./api/bootstrap/token.js";
 import { contextTreeInfoRoutes } from "./api/context-tree-info.js";
 import { healthRoutes } from "./api/health.js";
@@ -109,6 +110,7 @@ export async function buildApp(config: Config) {
       await api.register(githubWebhookRoutes, { prefix: "/webhooks" });
       await api.register(adminAuthRoutes, { prefix: "/admin/auth" });
       await api.register(contextTreeInfoRoutes, { prefix: "/context-tree" });
+      await api.register(bootstrapConfigRoutes, { prefix: "/bootstrap" });
 
       // Bootstrap routes (GitHub token protected)
       await api.register(

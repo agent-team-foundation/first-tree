@@ -5,7 +5,37 @@ import { formatCheckReport, loadOnboardState, onboardCheck, onboardCreate, saveO
 import { isInteractive } from "../core/prompt.js";
 
 async function promptMissing(args: Record<string, unknown>): Promise<void> {
-  // Get GitHub username for defaults
+  // 1. Server URL first — everything depends on it
+  if (!args.server) {
+    try {
+      const { resolveServerUrl } = await import("../core/bootstrap.js");
+      resolveServerUrl();
+    } catch {
+      args.server = await input({ message: "Hub server URL:" });
+      saveOnboardState(args);
+    }
+  }
+
+  // 2. Check server bootstrap config — fail fast if allowedOrg is not set
+  const { resolveServerUrl } = await import("../core/bootstrap.js");
+  const serverUrl = resolveServerUrl(args.server as string | undefined).replace(/\/+$/, "");
+  try {
+    const res = await fetch(`${serverUrl}/api/v1/bootstrap/config`);
+    if (res.ok) {
+      const config = (await res.json()) as { allowedOrg: string | null };
+      if (!config.allowedOrg) {
+        throw new Error(
+          "Server does not have FIRST_TREE_HUB_GITHUB_ALLOWED_ORG configured.\n" +
+            "  Ask the server admin to set this before onboarding.",
+        );
+      }
+    }
+  } catch (err) {
+    if (err instanceof Error && err.message.includes("FIRST_TREE_HUB_GITHUB_ALLOWED_ORG")) throw err;
+    // Network error — will be caught later by onboardCheck
+  }
+
+  // 3. GitHub CLI
   let ghUsername: string | null = null;
   try {
     const { getGitHubUsername } = await import("../core/bootstrap.js");
@@ -14,6 +44,7 @@ async function promptMissing(args: Record<string, unknown>): Promise<void> {
     // gh not available, no defaults
   }
 
+  // 4. Collect agent parameters
   if (!args.id) {
     args.id = await input({
       message: "Agent ID:",
@@ -66,16 +97,6 @@ async function promptMissing(args: Record<string, unknown>): Promise<void> {
         message: "Assistant ID:",
         default: `${args.id as string}-assistant`,
       });
-      saveOnboardState(args);
-    }
-  }
-
-  if (!args.server) {
-    try {
-      const { resolveServerUrl } = await import("../core/bootstrap.js");
-      resolveServerUrl();
-    } catch {
-      args.server = await input({ message: "Hub server URL:" });
       saveOnboardState(args);
     }
   }
