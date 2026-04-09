@@ -264,6 +264,12 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       const agentId = msg.agentId as string;
       this.boundAgents.delete(agentId);
       this.emit("agent:unbound", agentId);
+    } else if (type === "agent:force_disconnect") {
+      const agentId = msg.agentId as string;
+      if (agentId && this.boundAgents.has(agentId)) {
+        this.boundAgents.delete(agentId);
+        this.emit("agent:unbound", agentId);
+      }
     } else if (type === "new_message") {
       // Route to the correct agent
       const inboxId = msg.inboxId as string | undefined;

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import {
   bindAgentToClient,
+  forceDisconnect,
   forceDisconnectClient,
   getAgentClientId,
   getClientAgentIds,
@@ -20,7 +21,7 @@ import {
 
 /** Create a minimal mock WebSocket (only readyState matters here). */
 function mockWs(readyState = WebSocket.OPEN): WebSocket {
-  return { readyState, close: () => {} } as unknown as WebSocket;
+  return { readyState, close: () => {}, send: () => {} } as unknown as WebSocket;
 }
 
 // connection-manager uses module-level Maps, so we need to clean up
@@ -133,5 +134,93 @@ describe("connection-manager: forceDisconnectClient", () => {
     const removed = forceDisconnectClient(clientA);
     expect(removed).toEqual([agent1]);
     expect(getAgentClientId(agent1)).toBeUndefined();
+  });
+});
+
+describe("connection-manager: setClientConnection takeover protection", () => {
+  it("closes existing active connection when new WS registers with same clientId", () => {
+    const clientId = "client-takeover";
+    const agent1 = "agent-takeover-1";
+    let closeCalled = false;
+    const ws1 = {
+      readyState: WebSocket.OPEN,
+      close: () => {
+        closeCalled = true;
+      },
+      send: () => {},
+    } as unknown as WebSocket;
+    const ws2 = mockWs();
+
+    setClientConnection(clientId, ws1);
+    bindAgentToClient(clientId, agent1);
+
+    // New connection with same clientId should close the old one
+    setClientConnection(clientId, ws2);
+
+    expect(closeCalled).toBe(true);
+    // Old agent bindings should be cleaned up
+    expect(getAgentClientId(agent1)).toBeUndefined();
+
+    // Cleanup
+    forceDisconnectClient(clientId);
+  });
+
+  it("does not close if same WS instance re-registers", () => {
+    const clientId = "client-same-ws";
+    let closeCalled = false;
+    const ws = {
+      readyState: WebSocket.OPEN,
+      close: () => {
+        closeCalled = true;
+      },
+      send: () => {},
+    } as unknown as WebSocket;
+
+    setClientConnection(clientId, ws);
+    setClientConnection(clientId, ws);
+
+    expect(closeCalled).toBe(false);
+
+    forceDisconnectClient(clientId);
+  });
+});
+
+describe("connection-manager: forceDisconnect M1 mode", () => {
+  it("unbinds single agent without closing the shared client WS", () => {
+    const clientId = "client-m1-force";
+    const agent1 = "agent-m1-1";
+    const agent2 = "agent-m1-2";
+    let closeCalled = false;
+    const sentMessages: string[] = [];
+    const ws = {
+      readyState: WebSocket.OPEN,
+      close: () => {
+        closeCalled = true;
+      },
+      send: (data: string) => {
+        sentMessages.push(data);
+      },
+    } as unknown as WebSocket;
+
+    setClientConnection(clientId, ws);
+    bindAgentToClient(clientId, agent1);
+    bindAgentToClient(clientId, agent2);
+
+    // Force disconnect only agent1
+    const result = forceDisconnect(agent1);
+
+    expect(result).toBe(true);
+    // WS should NOT be closed
+    expect(closeCalled).toBe(false);
+    // Should have sent force_disconnect message
+    expect(sentMessages).toHaveLength(1);
+    expect(JSON.parse(sentMessages[0] as string)).toEqual({ type: "agent:force_disconnect", agentId: agent1 });
+    // agent1 unbound, agent2 still bound
+    expect(getAgentClientId(agent1)).toBeUndefined();
+    expect(getAgentClientId(agent2)).toBe(clientId);
+    expect(getClientAgentIds(clientId)).toEqual([agent2]);
+
+    // Cleanup
+    forceDisconnectClient(clientId);
   });
 });

@@ -28,6 +28,18 @@ export function removeConnection(agentId: string, ws: WebSocket): boolean {
 
 /** Force-disconnect an agent's active WS connection. Returns true if a connection was closed. */
 export function forceDisconnect(agentId: string): boolean {
+  const clientId = agentToClient.get(agentId);
+  if (clientId) {
+    // M1 mode: unbind the single agent without closing the shared client WS
+    const entry = clientConnections.get(clientId);
+    if (entry && entry.ws.readyState <= 1) {
+      entry.ws.send(JSON.stringify({ type: "agent:force_disconnect", agentId }));
+    }
+    unbindAgentFromClient(agentId);
+    return true;
+  }
+
+  // Legacy mode: close the per-agent WS
   const ws = activeConnections.get(agentId);
   if (!ws) return false;
   ws.close(WS_CLOSE_ALREADY_CONNECTED, "Disconnected by admin");
@@ -46,6 +58,16 @@ const clientConnections = new Map<string, ClientEntry>();
 const agentToClient = new Map<string, string>();
 
 export function setClientConnection(clientId: string, ws: WebSocket): void {
+  const existing = clientConnections.get(clientId);
+  if (existing && existing.ws !== ws && existing.ws.readyState <= 1) {
+    // Close the previous connection to prevent clientId takeover
+    existing.ws.close(WS_CLOSE_ALREADY_CONNECTED, "Replaced by new connection");
+    // Clean up agent bindings from the old connection
+    for (const agentId of existing.agentIds) {
+      agentToClient.delete(agentId);
+      activeConnections.delete(agentId);
+    }
+  }
   clientConnections.set(clientId, { ws, agentIds: new Set() });
 }
 
