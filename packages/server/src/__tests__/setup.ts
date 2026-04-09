@@ -15,4 +15,8 @@ beforeEach(async () => {
       END LOOP;
     END $$
   `);
+  // Re-insert default organization (required by agents/chats FK constraints)
+  await db.execute(
+    sql`INSERT INTO organizations (id, display_name) VALUES ('default', 'Default Organization') ON CONFLICT DO NOTHING`,
+  );
 });

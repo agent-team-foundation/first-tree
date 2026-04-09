@@ -1,5 +1,5 @@
 import { Client, EventDispatcher, LoggerLevel, WSClient } from "@larksuiteoapi/node-sdk";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import type { FastifyBaseLogger } from "fastify";
 import type { Database } from "../db/connection.js";
 import { adapterConfigs } from "../db/schema/adapter-configs.js";
@@ -451,7 +451,7 @@ async function handleBindCommand(
   db: Database,
   bot: ManagedBot,
   event: InboundEvent,
-  agentId: string,
+  agentName: string,
   log: FastifyBaseLogger,
 ): Promise<void> {
   const reply = async (text: string) => {
@@ -478,56 +478,59 @@ async function handleBindCommand(
     return;
   }
 
-  // 2. Check if target agent exists
+  // 2. Check if target agent exists (lookup by name)
   const [agent] = await db
     .select({ id: agents.uuid, type: agents.type, status: agents.status })
     .from(agents)
-    .where(eq(agents.uuid, agentId))
+    .where(and(eq(agents.name, agentName), ne(agents.status, "deleted")))
     .limit(1);
 
   if (!agent) {
-    await reply(`Agent "${agentId}" not found. Check the ID and try again.`);
+    await reply(`Agent "${agentName}" not found. Check the name and try again.`);
     return;
   }
 
   if (agent.status !== "active") {
-    await reply(`Agent "${agentId}" is ${agent.status}. Only active agents can be bound.`);
+    await reply(`Agent "${agentName}" is ${agent.status}. Only active agents can be bound.`);
     return;
   }
 
   if (agent.type !== "human") {
     await reply(
-      `Agent "${agentId}" is not a human agent (type: ${agent.type}). Only human agents can bind Feishu users.`,
+      `Agent "${agentName}" is not a human agent (type: ${agent.type}). Only human agents can bind Feishu users.`,
     );
     return;
   }
 
-  // 3. Check if this agent already has a Feishu binding
-  const existingAgentBinding = await mappingService.findExternalUserByAgent(db, "feishu", agentId);
+  // 3. Check if this agent already has a Feishu binding (use resolved UUID)
+  const existingAgentBinding = await mappingService.findExternalUserByAgent(db, "feishu", agent.id);
   if (existingAgentBinding) {
     await reply(
-      `Agent "${agentId}" is already bound to Feishu user ${existingAgentBinding.externalUserId}. Unbind first if you want to rebind.`,
+      `Agent "${agentName}" is already bound to Feishu user ${existingAgentBinding.externalUserId}. Unbind first if you want to rebind.`,
     );
     return;
   }
 
-  // 4. Create binding
+  // 4. Create binding (use resolved UUID, not the input name)
   try {
     await mappingService.createAgentMapping(db, {
       platform: "feishu",
       externalUserId: event.senderId,
-      agentId,
+      agentId: agent.id,
       boundVia: "command",
       displayName: undefined,
     });
   } catch (err) {
-    log.error({ err, agentId, senderId: event.senderId }, "/bind: failed to create mapping");
+    log.error({ err, agentName, agentUuid: agent.id, senderId: event.senderId }, "/bind: failed to create mapping");
     await reply("Binding failed due to an internal error. Please try again or contact your admin.");
     return;
   }
 
-  await reply(`Binding successful! Your Feishu account is now linked to "${agentId}".`);
-  log.info({ agentId, senderId: event.senderId, appId: bot.appId }, "/bind: Feishu user bound via command");
+  await reply(`Binding successful! Your Feishu account is now linked to "${agentName}".`);
+  log.info(
+    { agentName, agentUuid: agent.id, senderId: event.senderId, appId: bot.appId },
+    "/bind: Feishu user bound via command",
+  );
 }
 
 // ── Outbound helpers ────────────────────────────────────────────────

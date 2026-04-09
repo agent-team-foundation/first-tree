@@ -1,10 +1,14 @@
 import { index, jsonb, pgTable, primaryKey, text, timestamp } from "drizzle-orm/pg-core";
 import { agents } from "./agents.js";
+import { organizations } from "./organizations.js";
 
 /** Communication container. All messages between agents flow within a Chat. */
 export const chats = pgTable("chats", {
   id: text("id").primaryKey(),
-  organizationId: text("organization_id").notNull().default("default"),
+  organizationId: text("organization_id")
+    .notNull()
+    .default("default")
+    .references(() => organizations.id),
   /** "direct" | "group" | "thread" */
   type: text("type").notNull().default("direct"),
   topic: text("topic"),

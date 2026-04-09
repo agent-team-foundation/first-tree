@@ -46,7 +46,7 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
 
   app.post("/", async (request, reply) => {
     const body = createAgentSchema.parse(request.body);
-    const agent = await agentService.createAgent(app.db, body);
+    const agent = await agentService.createAgent(app.db, { ...body, source: body.source ?? "admin-api" });
     return reply.status(201).send({
       ...agent,
       createdAt: agent.createdAt.toISOString(),
