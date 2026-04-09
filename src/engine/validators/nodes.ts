@@ -248,10 +248,19 @@ export function validateOwners(
   const raw = m[1].trim();
   if (!raw) return; // owners: [] is valid (inheritance)
 
-  const owners = raw
-    .split(",")
-    .map((o) => o.trim())
-    .filter(Boolean);
+  const ownerParts = raw.split(",").map((o) => o.trim());
+  // Allow a single trailing comma (last entry empty) but reject middle empty entries
+  const hasTrailingComma =
+    ownerParts.length > 0 && ownerParts[ownerParts.length - 1] === "";
+  const partsToCheck = hasTrailingComma ? ownerParts.slice(0, -1) : ownerParts;
+  const emptyCount = partsToCheck.filter((o) => !o).length;
+  if (emptyCount > 0) {
+    findings.error(
+      `${rel(path)}: owners list contains ${emptyCount} empty ${emptyCount === 1 ? "entry" : "entries"} between commas`,
+    );
+    return;
+  }
+  const owners = partsToCheck;
   if (owners.length === 0) {
     findings.error(`${rel(path)}: owners list contains only whitespace entries`);
     return;

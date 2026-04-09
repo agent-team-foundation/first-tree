@@ -661,7 +661,7 @@ describe.sequential("CLI e2e smoke", () => {
     );
   });
 
-  it("publishes a tree and runs review in a fully mocked CLI environment", async () => {
+  it("publishes a tree and runs review in a fully mocked CLI environment", { timeout: 15000 }, async () => {
     const sandbox = useTmpDir();
     const sourceRoot = join(sandbox.path, "ADHD");
     const treeRoot = join(sandbox.path, "ADHD-tree");

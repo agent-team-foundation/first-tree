@@ -126,6 +126,37 @@ describe("validateOwners", () => {
     expect(f.errors).toHaveLength(1);
     expect(f.errors[0]).toContain("wildcard");
   });
+
+  it("rejects empty entries between commas", () => {
+    const tmp = useTmpDir();
+    const root = setup(tmp);
+    const p = write(root, "NODE.md", "---\nowners: [alice, , bob]\n---\n");
+    const fm = parseFrontmatter(p)!;
+    const f = new Findings();
+    validateOwners(fm, p, f);
+    expect(f.errors).toHaveLength(1);
+    expect(f.errors[0]).toContain("empty entry");
+  });
+
+  it("accepts trailing comma", () => {
+    const tmp = useTmpDir();
+    const root = setup(tmp);
+    const p = write(root, "NODE.md", "---\nowners: [alice,]\n---\n");
+    const fm = parseFrontmatter(p)!;
+    const f = new Findings();
+    validateOwners(fm, p, f);
+    expect(f.errors).toEqual([]);
+  });
+
+  it("accepts trailing comma with space", () => {
+    const tmp = useTmpDir();
+    const root = setup(tmp);
+    const p = write(root, "NODE.md", "---\nowners: [alice, bob, ]\n---\n");
+    const fm = parseFrontmatter(p)!;
+    const f = new Findings();
+    validateOwners(fm, p, f);
+    expect(f.errors).toEqual([]);
+  });
 });
 
 // --- validateFolders ---
