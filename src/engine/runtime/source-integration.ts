@@ -8,7 +8,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import type {
+  SourceBindingMode,
+  TreeMode,
+} from "#engine/runtime/binding-state.js";
 import {
+  BINDING_MODE_MARKER,
+  ENTRYPOINT_MARKER,
   FIRST_TREE_INDEX_FILE,
   LOCAL_TREE_CONFIG,
   LOCAL_TREE_CONFIG_MARKER,
@@ -18,7 +24,10 @@ import {
   SOURCE_INTEGRATION_END,
   SOURCE_INTEGRATION_FILES,
   SOURCE_INTEGRATION_MARKER,
+  TREE_MODE_MARKER,
+  TREE_REPO_MARKER,
   TREE_REPO_URL_MARKER,
+  WORKSPACE_ID_MARKER,
 } from "#engine/runtime/asset-loader.js";
 
 export type SourceIntegrationFile = (typeof SOURCE_INTEGRATION_FILES)[number];
@@ -40,37 +49,54 @@ export interface FirstTreeIndexUpdate {
 }
 
 export interface SourceIntegrationOptions {
+  bindingMode?: SourceBindingMode;
+  entrypoint?: string;
   localConfigPath?: string;
+  treeMode?: TreeMode;
+  treeRepoName?: string;
   treeRepoUrl?: string;
+  workspaceId?: string;
 }
 
 export function buildSourceIntegrationBlock(
   treeRepoName: string,
   options?: SourceIntegrationOptions,
 ): string {
+  const bindingMode = options?.bindingMode ?? "standalone-source";
+  const treeMode = options?.treeMode ?? "dedicated";
+  const entrypoint = options?.entrypoint ?? defaultEntrypoint(bindingMode);
   const localConfigPath = options?.localConfigPath ?? LOCAL_TREE_CONFIG;
   const treeRepoUrl = options?.treeRepoUrl?.trim() || null;
   const temporaryCheckoutPath = join(LOCAL_TREE_TEMP_ROOT, treeRepoName);
+  const workspaceId = options?.workspaceId?.trim() || null;
+  const description = describeBinding(bindingMode, treeMode, treeRepoName);
+  const scopeText = describeScope(bindingMode, treeMode, treeRepoName, workspaceId);
+  const fallbackInstruction = treeRepoUrl === null
+    ? `- If the tree has not been published yet, work from the local checkout recorded in \`${localConfigPath}\` or the tree path you just bound until \`first-tree publish\` records the GitHub repo URL.`
+    : `- If the configured checkout is missing, clone a temporary working copy from \`${treeRepoUrl}\` into \`${temporaryCheckoutPath}/\`, use it for the current task, and delete it before you finish.`;
 
   return [
     SOURCE_INTEGRATION_BEGIN,
-    `${SOURCE_INTEGRATION_MARKER} dedicated tree repo \`${treeRepoName}\``,
+    `${SOURCE_INTEGRATION_MARKER} ${description}`,
+    `${TREE_REPO_MARKER} \`${options?.treeRepoName ?? treeRepoName}\``,
+    `${TREE_MODE_MARKER} \`${treeMode}\``,
+    `${BINDING_MODE_MARKER} \`${bindingMode}\``,
     `${TREE_REPO_URL_MARKER} ${treeRepoUrl === null ? "pending publish" : `\`${treeRepoUrl}\``}`,
+    `${ENTRYPOINT_MARKER} \`${entrypoint}\``,
+    ...(workspaceId === null ? [] : [`${WORKSPACE_ID_MARKER} \`${workspaceId}\``]),
     `${LOCAL_TREE_CONFIG_MARKER} \`${localConfigPath}\``,
     "",
-    `This repo is a source/workspace repo. Keep all Context Tree files only in the dedicated \`${treeRepoName}\` repo.`,
+    scopeText,
     "",
     "Before every task:",
     `- Read \`${localConfigPath}\` first. If it exists, resolve its \`localPath\` value from this repo root and treat that checkout as the canonical local tree repo.`,
     "- If that configured checkout exists locally, update it before you read anything else.",
-    treeRepoUrl === null
-      ? `- If the tree has not been published yet, work from the sibling dedicated \`${treeRepoName}\` bootstrap repo until \`first-tree publish\` records the GitHub repo URL and refreshes the local config.`
-      : `- If the configured checkout is missing, clone a temporary working copy from \`${treeRepoUrl}\` into \`${temporaryCheckoutPath}/\`, use it for the current task, and delete it before you finish.`,
+    fallbackInstruction,
     `- Never commit \`${localConfigPath}\` or anything under \`${LOCAL_TREE_TEMP_ROOT}/\` to this repo. They are local-only workspace state.`,
     "",
     "After every task:",
     "- Always ask whether the tree needs updating.",
-    "- If the task changed decisions, constraints, rationale, or ownership, open a PR in the tree repo first. Then open the source/workspace code PR.",
+    "- If the task changed decisions, constraints, rationale, ownership, or shared workspace relationships, open a PR in the tree repo first. Then open the source/workspace code PR.",
     "- If the task changed only implementation details, skip the tree PR and open only the source/workspace code PR.",
     SOURCE_INTEGRATION_END,
   ].join("\n");
@@ -139,11 +165,22 @@ function upsertSourceIntegrationFile(
   const exists = existsSync(fullPath);
   const current = exists ? readFileSync(fullPath, "utf-8") : null;
   const normalized = current?.replaceAll("\r\n", "\n") ?? "";
+  const treeRepoNameFromCurrent = detectExistingTreeRepoName(normalized) ?? treeRepoName;
   const nextBlock = buildSourceIntegrationBlock(treeRepoName, {
+    bindingMode:
+      options?.bindingMode ?? detectExistingBindingMode(normalized) ?? undefined,
+    entrypoint:
+      options?.entrypoint ?? detectExistingEntrypoint(normalized) ?? undefined,
     localConfigPath:
       options?.localConfigPath ?? detectExistingLocalConfigPath(normalized) ?? LOCAL_TREE_CONFIG,
+    treeMode:
+      options?.treeMode ?? detectExistingTreeMode(normalized) ?? undefined,
+    treeRepoName:
+      options?.treeRepoName ?? treeRepoNameFromCurrent,
     treeRepoUrl:
       options?.treeRepoUrl ?? detectExistingTreeRepoUrl(normalized) ?? undefined,
+    workspaceId:
+      options?.workspaceId ?? detectExistingWorkspaceId(normalized) ?? undefined,
   });
   const managedBlock = /<!-- BEGIN FIRST-TREE-SOURCE-INTEGRATION -->[\s\S]*?<!-- END FIRST-TREE-SOURCE-INTEGRATION -->\n?/;
   const lines = normalized === "" ? [] : normalized.split("\n");
@@ -200,6 +237,50 @@ function detectExistingTreeRepoUrl(text: string): string | null {
   return match?.[1] ?? null;
 }
 
+function detectExistingTreeRepoName(text: string): string | null {
+  if (text === "") {
+    return null;
+  }
+  const explicit = text.match(/^FIRST-TREE-TREE-REPO:\s+`(.+?)`\s*$/m);
+  if (explicit?.[1]) {
+    return explicit[1];
+  }
+  const legacy = text.match(
+    /^FIRST-TREE-SOURCE-INTEGRATION:\s+.*?\b(?:repo|tree)\s+`(.+?)`\s*$/m,
+  );
+  return legacy?.[1] ?? null;
+}
+
+function detectExistingTreeMode(text: string): TreeMode | null {
+  const match = text.match(/^FIRST-TREE-TREE-MODE:\s+`(.+?)`\s*$/m);
+  return match?.[1] === "dedicated" || match?.[1] === "shared"
+    ? match[1]
+    : null;
+}
+
+function detectExistingBindingMode(text: string): SourceBindingMode | null {
+  const match = text.match(/^FIRST-TREE-BINDING-MODE:\s+`(.+?)`\s*$/m);
+  switch (match?.[1]) {
+    case "standalone-source":
+    case "shared-source":
+    case "workspace-root":
+    case "workspace-member":
+      return match[1];
+    default:
+      return null;
+  }
+}
+
+function detectExistingEntrypoint(text: string): string | null {
+  const match = text.match(/^FIRST-TREE-ENTRYPOINT:\s+`(.+?)`\s*$/m);
+  return match?.[1] ?? null;
+}
+
+function detectExistingWorkspaceId(text: string): string | null {
+  const match = text.match(/^FIRST-TREE-WORKSPACE-ID:\s+`(.+?)`\s*$/m);
+  return match?.[1] ?? null;
+}
+
 function detectExistingLocalConfigPath(text: string): string | null {
   if (text === "") {
     return null;
@@ -209,6 +290,58 @@ function detectExistingLocalConfigPath(text: string): string | null {
     /^FIRST-TREE-LOCAL-TREE-CONFIG:\s+`(.+?)`\s*$/m,
   );
   return match?.[1] ?? null;
+}
+
+function describeBinding(
+  bindingMode: SourceBindingMode,
+  treeMode: TreeMode,
+  treeRepoName: string,
+): string {
+  switch (bindingMode) {
+    case "workspace-root":
+      return `workspace root bound to shared tree repo \`${treeRepoName}\``;
+    case "workspace-member":
+      return `workspace member bound to shared tree repo \`${treeRepoName}\``;
+    case "shared-source":
+      return `source repo bound to shared tree repo \`${treeRepoName}\``;
+    default:
+      return treeMode === "shared"
+        ? `source repo bound to shared tree repo \`${treeRepoName}\``
+        : `source repo bound to dedicated tree repo \`${treeRepoName}\``;
+  }
+}
+
+function describeScope(
+  bindingMode: SourceBindingMode,
+  treeMode: TreeMode,
+  treeRepoName: string,
+  workspaceId: string | null,
+): string {
+  switch (bindingMode) {
+    case "workspace-root":
+      return `This folder is a workspace root. Install first-tree locally here, keep all Context Tree files only in the shared \`${treeRepoName}\` repo, and keep child repos bound to the same tree${workspaceId === null ? "" : ` for workspace \`${workspaceId}\``}.`;
+    case "workspace-member":
+      return `This repo is a workspace member. Keep all Context Tree files only in the shared \`${treeRepoName}\` repo and follow the workspace root's binding for shared context updates${workspaceId === null ? "" : ` in workspace \`${workspaceId}\``}.`;
+    case "shared-source":
+      return `This repo is bound to an existing shared Context Tree. Keep all Context Tree files only in the shared \`${treeRepoName}\` repo.`;
+    default:
+      return treeMode === "shared"
+        ? `This repo is bound to a shared Context Tree. Keep all Context Tree files only in the shared \`${treeRepoName}\` repo.`
+        : `This repo is a source/workspace repo. Keep all Context Tree files only in the dedicated \`${treeRepoName}\` repo.`;
+  }
+}
+
+function defaultEntrypoint(bindingMode: SourceBindingMode): string {
+  if (bindingMode === "workspace-root") {
+    return "/workspaces/current";
+  }
+  if (bindingMode === "workspace-member") {
+    return "/workspaces/current/repos/current";
+  }
+  if (bindingMode === "shared-source") {
+    return "/repos/current";
+  }
+  return "/";
 }
 
 function detectFirstTreeIndexEntry(

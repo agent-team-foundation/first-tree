@@ -207,14 +207,19 @@ describe("skill artifacts", () => {
     expect(read("README.md")).toContain(".claude/skills/first-tree/");
     expect(read("README.md")).toContain("bundled canonical");
     expect(read("README.md")).toContain("dedicated tree repo");
-    expect(read("README.md")).toContain("FIRST-TREE-SOURCE-INTEGRATION:");
+    expect(read("README.md")).toContain("first-tree inspect");
+    expect(read("README.md")).toContain("first-tree bind");
+    expect(read("README.md")).toContain("first-tree workspace sync");
     expect(read("README.md")).toContain(".first-tree/local-tree.json");
+    expect(read("README.md")).toContain(".first-tree/source.json");
+    expect(read("README.md")).toContain(".first-tree/workspace.json");
+    expect(read("README.md")).toContain(".first-tree/tree.json");
+    expect(read("README.md")).toContain(".first-tree/bindings/");
     expect(read("README.md")).toContain("`first-tree` skill");
-    expect(read("README.md")).toContain("first-tree publish --open-pr");
-    expect(read("README.md")).toContain("canonical local working copy");
+    expect(read("README.md")).toContain("first-tree publish");
     expect(read("README.md")).toContain("<repo>-tree");
-    expect(read("README.md")).toContain("*-context` repos are still reused");
-    expect(read("README.md")).toContain("Only use `--here` after you have already switched into the dedicated tree repo.");
+    expect(read("README.md")).toContain("shared tree");
+    expect(read("README.md")).toContain("first-tree init tree --here");
     expect(read("AGENTS.md")).toContain("docs/source-map.md");
     expect(read("AGENTS.md")).toContain("source-workspace-installation.md");
     expect(read("AGENTS.md")).toContain("bundled skill payload path");
@@ -224,25 +229,21 @@ describe("skill artifacts", () => {
     // Note: #evals/* import alias is in package.json but evals/ is excluded from "files" so it won't ship to npm
 
     const onboarding = read("skills/first-tree/references/onboarding.md");
-    expect(onboarding).toContain("npx first-tree init");
-    expect(onboarding).toContain("npm install -g first-tree");
-    expect(onboarding).toContain("first-tree init --here");
-    expect(onboarding).toContain("installed CLI command are both `first-tree`");
-    expect(onboarding).toContain("currently running `first-tree` npm package");
-    expect(onboarding).toContain("npx first-tree@latest upgrade");
-    expect(onboarding).toContain(".agents/skills/first-tree/");
-    expect(onboarding).toContain(".claude/skills/first-tree/");
-    expect(onboarding).toContain("FIRST-TREE-SOURCE-INTEGRATION:");
-    expect(onboarding).toContain("first-tree publish --open-pr");
+    expect(onboarding).toContain("Node.js 18+");
+    expect(onboarding).toContain("first-tree inspect --json");
+    expect(onboarding).toContain("first-tree bind");
+    expect(onboarding).toContain("first-tree workspace sync");
     expect(onboarding).toContain("baseline coverage");
-    expect(onboarding).toContain("summarize-progress.js");
-    expect(onboarding).toContain("source/workspace repo");
+    expect(onboarding).toContain("source/workspace root");
     expect(onboarding).toContain(".first-tree/local-tree.json");
     expect(onboarding).toContain(".first-tree/tmp/");
+    expect(onboarding).toContain(".first-tree/source.json");
+    expect(onboarding).toContain(".first-tree/workspace.json");
+    expect(onboarding).toContain(".first-tree/tree.json");
+    expect(onboarding).toContain(".first-tree/bindings/");
     expect(onboarding).toContain("<repo>-tree");
-    expect(onboarding).toContain("dedicated `*-context`");
-    expect(onboarding).toContain("supported and reused when already bound");
-    expect(onboarding).toContain("Only use `--here` after you have already switched into the dedicated tree repo.");
+    expect(onboarding).toContain("first-tree init tree --here");
+    expect(onboarding).toContain("shared tree");
     expect(onboarding).not.toContain("This clones the framework into `.context-tree/`");
     expect(onboarding).not.toContain("from upstream");
 
@@ -262,7 +263,10 @@ describe("skill artifacts", () => {
     expect(skillMd).not.toContain("`scripts/`");
     // It SHOULD describe what the skill is, when to use it, and the CLI.
     expect(skillMd).toContain("Context Tree");
+    expect(skillMd).toContain("first-tree inspect");
     expect(skillMd).toContain("first-tree init");
+    expect(skillMd).toContain("first-tree bind");
+    expect(skillMd).toContain("first-tree workspace sync");
     expect(skillMd).toContain("first-tree verify");
     expect(skillMd).toContain("first-tree upgrade");
     expect(skillMd).toContain("first-tree publish");
@@ -281,44 +285,48 @@ describe("skill artifacts", () => {
     expect(sourceMap).toContain("maintainer-thin-cli.md");
     expect(sourceMap).toContain("maintainer-build-and-distribution.md");
     expect(sourceMap).toContain("maintainer-testing.md");
-    expect(sourceMap).toContain("engine/publish.ts");
+    expect(sourceMap).toContain("src/engine/publish.ts");
+    expect(sourceMap).toContain("src/engine/inspect.ts");
+    expect(sourceMap).toContain("src/engine/bind.ts");
+    expect(sourceMap).toContain("src/engine/workspace-sync.ts");
     expect(sourceMap).toContain("tests/publish.test.ts");
-    expect(sourceMap).toContain("engine/commands/");
-    expect(sourceMap).toContain("engine/runtime/asset-loader.ts");
-    expect(sourceMap).toContain("summarize-progress.js");
+    expect(sourceMap).toContain("src/engine/runtime/binding-state.ts");
+    expect(sourceMap).toContain("src/engine/runtime/local-tree-config.ts");
     expect(sourceMap).toContain("tests/init.test.ts");
     expect(sourceMap).toContain("tests/thin-cli.test.ts");
     expect(sourceMap).not.toContain("evals/first-tree-eval.test.ts");
-    expect(sourceMap).toContain("package.json");
-    expect(sourceMap).not.toContain("vitest.eval.config.ts");
-    expect(sourceMap).toContain(".github/workflows/ci.yml");
 
     const sourceWorkspaceInstall = read(
       "skills/first-tree/references/source-workspace-installation.md",
     );
     expect(sourceWorkspaceInstall).toContain("FIRST-TREE-SOURCE-INTEGRATION:");
-    expect(sourceWorkspaceInstall).toContain("baseline coverage");
     expect(sourceWorkspaceInstall).toContain(".first-tree/local-tree.json");
-    expect(sourceWorkspaceInstall).toContain(".first-tree/tmp/");
-    expect(sourceWorkspaceInstall).toContain("top-level domain");
-    expect(sourceWorkspaceInstall).toContain("first-tree publish --open-pr");
+    expect(sourceWorkspaceInstall).toContain(".first-tree/source.json");
+    expect(sourceWorkspaceInstall).toContain(".first-tree/workspace.json");
+    expect(sourceWorkspaceInstall).toContain(".first-tree/tree.json");
+    expect(sourceWorkspaceInstall).toContain(".first-tree/bindings/");
+    expect(sourceWorkspaceInstall).toContain("workspace-member");
+    expect(sourceWorkspaceInstall).toContain("first-tree workspace sync");
+    expect(sourceWorkspaceInstall).toContain("first-tree publish");
     expect(sourceWorkspaceInstall).toContain("<repo>-tree");
-    expect(sourceWorkspaceInstall).toContain("legacy `*-context` repo");
-    expect(sourceWorkspaceInstall).toContain("Do not run `first-tree verify`");
-    expect(sourceWorkspaceInstall).toContain("Do not run `first-tree init --here` in the source/workspace repo");
+    expect(sourceWorkspaceInstall).toContain("Do not recreate a new sibling tree repo");
 
     const openaiPrompt = read("agents/openai.yaml");
+    expect(openaiPrompt).toContain("first-tree inspect --json");
+    expect(openaiPrompt).toContain("first-tree bind");
+    expect(openaiPrompt).toContain("first-tree workspace sync");
     expect(openaiPrompt).toContain("baseline coverage");
-    expect(openaiPrompt).toContain("top-level domain");
     expect(openaiPrompt).toContain("progress.md");
     expect(openaiPrompt).toContain(".first-tree/local-tree.json");
+    expect(openaiPrompt).toContain(".first-tree/source.json");
 
     const maintainerArchitecture = read(
       "docs/maintainer-architecture.md",
     );
-    expect(maintainerArchitecture).toContain("maintainer-only developer tooling");
-    expect(maintainerArchitecture).toContain("`evals/`");
-    expect(maintainerArchitecture).not.toContain("tests, and evals");
+    expect(maintainerArchitecture).toContain("source/workspace root");
+    expect(maintainerArchitecture).toContain("tree repo");
+    expect(maintainerArchitecture).toContain("binding");
+    expect(maintainerArchitecture).toContain(".first-tree/bindings/");
 
     const buildAndDistribution = read(
       "docs/maintainer-build-and-distribution.md",

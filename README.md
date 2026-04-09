@@ -9,29 +9,28 @@ cross-domain relationships that agents and humans keep current together.
 
 ## Quick Start For Agents
 
-Paste this into your agent from the root of your source or workspace repo:
+Paste one of these into your agent from the root you want to onboard:
 
 ```text
-Install and use the latest `first-tree` CLI in this source/workspace repo.
-Run `first-tree init`, follow the dedicated tree repo workflow it creates,
-read the onboarding guide and `.first-tree/progress.md`, draft the initial
-Context Tree from the codebase, run `first-tree verify` in the dedicated tree
-repo, and tell me what still needs to be filled in before publish.
+Use the latest `first-tree` CLI to inspect this repo, ask whether we already
+have a Context Tree, and then onboard it. If there is no existing tree, create
+the default dedicated `<repo>-tree` checkout. If there is an existing tree,
+bind this repo to it instead of creating a new one. Finish by telling me what
+still needs to be filled in before publish.
 ```
 
-The agent will:
+```text
+Use the latest `first-tree` CLI to onboard this workspace root. The workspace
+contains multiple child repos that should all share one Context Tree. Inspect
+the workspace first, bind or create one shared tree, then sync every child repo
+to that same tree.
+```
 
-- install `.agents/skills/first-tree/` and `.claude/skills/first-tree/`
-- add `FIRST_TREE.md` plus the managed `FIRST-TREE-SOURCE-INTEGRATION:`
-  section to `AGENTS.md` and `CLAUDE.md`
-- create or reuse a sibling dedicated tree repo, usually `<repo>-tree`
-- read the onboarding guide and checklist
-- draft initial domains and members from the real codebase
-- run `first-tree verify` in the dedicated tree repo when the checklist is
-  complete
-
-If you also want the agent to publish the tree repo and open the source-repo
-PR, append: `Then run first-tree publish --open-pr.`
+```text
+Use the latest `first-tree` CLI to bind the current repo to the existing
+Context Tree at `../org-context`. Do not create a new sibling tree repo. Update
+AGENTS.md, install the skill, and refresh the local first-tree metadata.
+```
 
 ## Install And Run
 
@@ -40,7 +39,8 @@ The npm package and installed CLI command are both `first-tree`.
 - One-off use without installing globally:
 
   ```bash
-  npx first-tree init
+  npx -p first-tree first-tree inspect --json
+  npx -p first-tree first-tree init
   ```
 
 - Global install:
@@ -62,166 +62,137 @@ The npm package and installed CLI command are both `first-tree`.
   first-tree --help
   ```
 
-Recommended manual path from your source or workspace repo:
+## Onboarding Modes
+
+`first-tree` now models onboarding with three explicit concepts:
+
+- `source/workspace root` — the repo or folder where local agent integration is installed
+- `tree repo` — the Git repo that stores `NODE.md`, domains, members, and decisions
+- `binding` — the metadata that connects a source/workspace root to a tree repo
+
+That model supports three first-class onboarding paths.
+
+### Single Repo + Dedicated Tree
+
+This remains the default for a normal Git repo:
 
 ```bash
-cd my-app
-npx first-tree init
-cd ../my-app-tree
-first-tree help onboarding
+first-tree init
 ```
 
-When the onboarding checklist is complete:
+The CLI:
+
+- installs `.agents/skills/first-tree/` and `.claude/skills/first-tree/`
+- adds `FIRST_TREE.md`
+- updates `AGENTS.md` / `CLAUDE.md`
+- creates or reuses a sibling `<repo>-tree` checkout
+- scaffolds the dedicated tree repo there
+- writes binding metadata locally and in the tree repo
+
+### Existing Shared Tree
+
+If the user already has a shared Context Tree, bind to it instead of creating a
+new sibling:
 
 ```bash
-first-tree verify
-first-tree publish --open-pr
+first-tree bind --tree-path ../org-context --tree-mode shared
 ```
 
-If you want the initial bootstrap to draft `members/*/NODE.md` from the
-repository's contributor history, opt in explicitly:
+Or let `init` do the same thing as a high-level wrapper:
 
 ```bash
-npx first-tree init --seed-members contributors
+first-tree init --tree-path ../org-context --tree-mode shared
 ```
 
-If you already created a dedicated tree repo yourself, initialize it in place:
+If the tree is remote-only, pass `--tree-url`; `bind` / `init` will clone a
+local checkout and then write the binding metadata.
+
+### Workspace Root + Shared Tree
+
+When the current root is a parent folder or root repo that contains child repos
+or submodules, use one shared tree for all of them:
 
 ```bash
-mkdir my-org-tree && cd my-org-tree
-git init
-first-tree init --here
+first-tree init --scope workspace --tree-path ../org-context --tree-mode shared --sync-members
 ```
 
-Only use `--here` after you have already switched into the dedicated tree repo.
-Do not use it inside the source/workspace repo unless you intentionally want
-that repo itself to become the Context Tree.
+Or create a new shared tree automatically:
 
-## How first-tree Works Today
+```bash
+first-tree init --scope workspace --sync-members
+```
 
-`first-tree` uses a two-repo workflow by default.
+The workspace root gets its own local skill integration plus
+`.first-tree/workspace.json`. Each discovered child repo is then bound as a
+`workspace-member` to the same tree via `first-tree workspace sync`.
 
-- The current source/workspace repo is not the Context Tree. It carries only
-  local skill integration, the `FIRST_TREE.md` index, the managed
-  `FIRST-TREE-SOURCE-INTEGRATION:` section, and local checkout state in
-  `.first-tree/local-tree.json`.
-- The actual tree content lives in a sibling dedicated tree repo, normally
-  named `<repo>-tree`. Existing bound `*-context` repos are still reused.
-- Never create `NODE.md`, `members/`, or tree-scoped `AGENTS.md` /
-  `CLAUDE.md` in the source/workspace repo. Those files belong only in the
-  dedicated tree repo.
+### Explicit Tree Bootstrap
 
-After `first-tree publish` succeeds, treat the checkout recorded in
-`.first-tree/local-tree.json` as the canonical local working copy for the
-tree. The bootstrap checkout can be deleted when you no longer need it.
+If you are already inside the tree repo itself, use:
+
+```bash
+first-tree init tree --here
+```
+
+## Inspect First
+
+`first-tree inspect --json` is the agent-friendly way to classify the current
+folder before modifying anything. It reports:
+
+- whether the root is a tree repo, source repo, workspace repo, or workspace folder
+- discovered child repos / submodules
+- existing `source.json`, `workspace.json`, `tree.json`, and local checkout state
+
+## What Lives Where
 
 ```text
-<source-repo>/                         # source/workspace repo
-  .agents/skills/first-tree/           # lightweight installed skill
-  .claude/skills/first-tree/           # symlink to .agents/skills/first-tree
-  FIRST_TREE.md                        # symlink to references/about.md
-  AGENTS.md                            # has FIRST-TREE-SOURCE-INTEGRATION block
-  CLAUDE.md                            # has FIRST-TREE-SOURCE-INTEGRATION block
-  .first-tree/local-tree.json          # local-only checkout guidance
-  ... your normal source code ...
+<source-repo-or-workspace>/
+  .agents/skills/first-tree/
+  .claude/skills/first-tree
+  FIRST_TREE.md
+  AGENTS.md
+  CLAUDE.md
+  .first-tree/
+    local-tree.json          # .first-tree/local-tree.json
+    source.json              # .first-tree/source.json
+    workspace.json           # .first-tree/workspace.json (workspace roots only)
+  ... source code or workspace folders ...
 
-<source-repo>-tree/                    # dedicated tree repo
+<tree-repo>/
   .first-tree/
     VERSION
     progress.md
-    bootstrap.json
+    tree.json                # .first-tree/tree.json
+    bindings/                # .first-tree/bindings/
+      <source-id>.json
+    bootstrap.json           # legacy compatibility for older publish flows
   NODE.md
   AGENTS.md
   CLAUDE.md
   members/
     NODE.md
-    <member-id>/
-      NODE.md
-  ... your domains ...
+  ... your tree domains ...
 ```
 
-The package carries the bundled canonical skill, so `init` and `upgrade`
-install from the package payload instead of cloning this source repo at
-runtime.
-
-## What Is A Context Tree
-
-A Context Tree is a Git repository where every directory is a domain and every
-file is a node. Each node captures decisions, designs, and cross-domain
-relationships: the knowledge that would otherwise scatter across PRs, docs,
-issues, chats, and people's heads.
-
-Key properties:
-
-- Nodes are markdown files. Each directory has a `NODE.md` that describes the
-  domain. Leaf `.md` files capture specific decisions or designs.
-- Every node has an owner. Owners are declared in YAML frontmatter and approve
-  changes to their nodes.
-- The tree is organized by concern, not by repo or team. An agent working on
-  "add SSO" should find auth context in one place.
-- The tree is never a snapshot. When decisions change, the tree updates.
-  Stale nodes are bugs.
-
-## What Belongs In The Tree
-
-The tree should hold information an agent needs to decide on an approach, not
-to execute it.
-
-- Yes: "Auth spans four repos: backend issues JWTs, frontend uses Better Auth,
-  extension uses OAuth popup, desktop uses localhost callback."
-- No: the function signature of `auth_service.verify()` or the exact body of
-  a migration. That belongs in code.
-
-The rule of thumb is simple: keep the what, why, ownership, and cross-domain
-connections in the tree. Keep execution detail in source systems.
-
-## Tree Structure
-
-```text
-my-org-tree/
-  NODE.md              # root - lists all domains
-  engineering/
-    NODE.md            # architecture, infra, tooling
-  product/
-    NODE.md            # strategy, roadmap, research
-  marketing/
-    NODE.md            # positioning, campaigns
-  members/
-    NODE.md            # people and agents
-    alice/
-      NODE.md          # individual member node
-```
-
-Every node has frontmatter:
-
-```yaml
----
-title: "Auth Architecture"
-owners: [alice, bob]
-soft_links: [/infrastructure/deployments]
----
-```
-
-- `title`: display name for the node
-- `owners`: who can approve changes; `owners: []` inherits from the parent and
-  `owners: [*]` means anyone
-- `soft_links`: cross-references to related nodes in other domains
-- member nodes also require `type`, `role`, and `domains`
+The source/workspace root is not the tree. It should never contain `NODE.md`,
+`members/`, or tree-scoped `AGENTS.md` / `CLAUDE.md`.
 
 ## Commands
 
 | Command | What it does |
 | --- | --- |
-| `first-tree init` | Install source/workspace integration locally and create or refresh a dedicated tree repo; by default source/workspace repos use `<repo>-tree`, while existing bound `*-context` repos are still reused; use `--here` only when you are already inside the dedicated tree repo, and `--seed-members contributors` to draft member nodes from contributor history |
-| `first-tree publish` | Publish a dedicated tree repo to GitHub, record its URL and local checkout guidance back in the source/workspace repo, and optionally open the source-repo PR |
-| `first-tree verify` | Run verification checks against the current tree; it fails if onboarding checklist items remain unchecked |
-| `first-tree upgrade` | Refresh the installed skill from the current `first-tree` npm package; in a source/workspace repo it updates only local integration, while tree repos also get follow-up tasks |
+| `first-tree inspect` | Classify the current folder and report existing bindings / child repos |
+| `first-tree init` | High-level onboarding wrapper for single repos, shared trees, and workspace roots |
+| `first-tree init tree` | Low-level tree bootstrap for an explicit tree checkout |
+| `first-tree bind` | Bind the current repo/workspace root to an existing tree repo |
+| `first-tree workspace sync` | Bind discovered child repos to the same shared tree |
+| `first-tree publish` | Publish a tree repo to GitHub and refresh locally bound source/workspace repos with the published URL |
+| `first-tree verify` | Run verification checks against a tree repo |
+| `first-tree upgrade` | Refresh installed source/workspace integration or tree metadata from the current package |
 | `first-tree generate-codeowners` | Generate `.github/CODEOWNERS` from tree ownership frontmatter |
 | `first-tree review` | Run the Claude Code PR review helper for a tree repo in CI |
 | `first-tree inject-context` | Output a Claude Code SessionStart hook payload from the root `NODE.md` |
 | `first-tree help onboarding` | Print the full onboarding guide |
-| `first-tree --help` | Show the available commands |
-| `first-tree --version` | Print the installed CLI version plus bundled skill version |
 
 ## Package And Command
 
@@ -233,53 +204,21 @@ soft_links: [/infrastructure/deployments]
   `.claude/skills/first-tree/` are tracked symlink aliases back to
   `skills/first-tree/` so local agents resolve the same `first-tree` skill
   that ships in the package.
-- Dedicated tree repos keep their local CLI metadata under `.first-tree/`.
-- `npx first-tree init` is the quickest one-off entrypoint.
-- `npm install -g first-tree` adds `first-tree` to your PATH for repeated
-  use.
-
-## Runtime And Maintainer Prerequisites
-
-- User trees: the onboarding guide targets Node.js 18+.
-- `first-tree publish` expects GitHub CLI (`gh`) to be installed and
-  authenticated.
-- This source repo uses Node.js 22 and pnpm 10 to match CI and the checked-in
-  package manager version.
-
-## What This Repo Ships
-
-This repo is the open-source CLI/package source for `first-tree`, not a sample
-user tree.
-
-- `src/` keeps the thin CLI shell that parses commands and dispatches to the
-  bundled behavior.
-- `skills/first-tree/` is the canonical source for the shipped skill,
-  references, and user-facing framework knowledge.
-- `assets/framework/` contains templates, helpers, workflows, and prompts that
-  are packaged with the CLI.
-- `.agents/skills/first-tree/` and `.claude/skills/first-tree/` in this repo
-  are local symlink entrypoints to that canonical source for agent tooling.
-- `evals/` is maintainer-only developer tooling for the source repo and is
-  intentionally not part of the published package.
+- `npx -p first-tree first-tree <command>` is the recommended one-off entrypoint.
 
 ## Canonical Documentation
 
 User-facing references ship in `skills/first-tree/references/` and are copied
-to user repos via `first-tree init`. Maintainer-only references live in
-`docs/` and never ship.
+to user repos via `first-tree init` / `first-tree bind`. Maintainer-only
+references live in `docs/` and never ship.
 
 - User-facing overview: `skills/first-tree/references/about.md`
 - User onboarding: `skills/first-tree/references/onboarding.md`
 - Source/workspace install contract:
   `skills/first-tree/references/source-workspace-installation.md`
-- Ownership model:
-  `skills/first-tree/references/ownership-and-naming.md`
-- Upgrade layout contract:
+- Upgrade and layout contract:
   `skills/first-tree/references/upgrade-contract.md`
 - Maintainer entrypoint: `docs/source-map.md`
-
-If you are maintaining this repo, start with `docs/source-map.md` instead of
-relying on root-level prose.
 
 ## Developing This Repo
 
@@ -301,10 +240,8 @@ pnpm pack
 
 ## Contributing And Security
 
-- Use the GitHub issue forms for bug reports and feature requests so maintainers
-  get reproducible context up front.
-- See `CONTRIBUTING.md` for local setup, validation expectations, and where
-  changes should live.
+- Use the GitHub issue forms for bug reports and feature requests.
+- See `CONTRIBUTING.md` for local setup and validation expectations.
 - See `CODE_OF_CONDUCT.md` for community expectations.
 - See `SECURITY.md` for vulnerability reporting guidance.
 

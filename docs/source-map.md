@@ -1,103 +1,62 @@
 # Context Tree Source Map
 
-This is the canonical reading index for the single-skill architecture. If a
-maintainer needs information to safely change the framework or thin CLI, that
-information should be discoverable from this file.
+This is the maintainer reading index for the current `first-tree` architecture.
 
 ## Read First
 
 | Path | Why it matters |
 | --- | --- |
-| `SKILL.md` | Trigger conditions, workflow, and validation contract |
-| `references/about.md` | Product framing for what Context Tree is and is not |
-| `references/onboarding.md` | The onboarding narrative that `help onboarding` and `init` surface |
-| `references/source-workspace-installation.md` | Contract for source/workspace installs vs dedicated tree repos |
-| `references/principles.md` | Decision-model reference |
-| `references/ownership-and-naming.md` | Ownership contract |
-| `references/upgrade-contract.md` | Installed layout and upgrade semantics |
-| `references/maintainer-architecture.md` | Source-repo architecture and invariants |
-| `references/maintainer-thin-cli.md` | Root shell contract and anti-duplication rules |
-| `references/maintainer-build-and-distribution.md` | Build, pack, and distribution contract |
-| `references/maintainer-testing.md` | Test workflow and maintainer validation expectations |
+| `skills/first-tree/SKILL.md` | User-facing skill workflow |
+| `skills/first-tree/references/onboarding.md` | Repo, shared-tree, and workspace onboarding model |
+| `skills/first-tree/references/source-workspace-installation.md` | Binding model and source/workspace contract |
+| `skills/first-tree/references/upgrade-contract.md` | Installed layout and upgrade invariants |
+| `docs/maintainer-architecture.md` | High-level maintainer model |
+| `docs/maintainer-thin-cli.md` | Thin CLI shell responsibilities |
+| `docs/maintainer-build-and-distribution.md` | Build, pack, and publish contract |
+| `docs/maintainer-testing.md` | Validation workflow |
 
 ## Runtime Payload
-
-The installed skill payload lives under `assets/framework/`.
 
 | Path | Purpose |
 | --- | --- |
 | `assets/framework/manifest.json` | Runtime asset contract |
-| `assets/framework/VERSION` | Version marker for installed payloads |
-| `assets/framework/templates/` | Generated scaffolds |
+| `assets/framework/VERSION` | Version marker for tree installs |
+| `assets/framework/templates/` | Generated tree scaffolds |
 | `assets/framework/workflows/` | CI templates |
 | `assets/framework/prompts/` | Review prompt payload |
 | `assets/framework/examples/` | Agent integration examples |
-| `assets/framework/helpers/` | Shipped helper scripts and TypeScript utilities |
-| `assets/framework/helpers/summarize-progress.js` | Optional onboarding checkpoint helper that summarizes `progress.md` into setup-vs-tree progress lanes |
-| `progress.md` | Generated in source/workspace skill installs; dedicated tree repos keep their task lists under `.first-tree/progress.md` |
+| `assets/framework/helpers/` | Shipped helper scripts and TS utilities |
 
-## Framework Engine Surface
-
-These skill-owned files implement the framework behavior.
-
-| Path | Purpose |
-| --- | --- |
-| `engine/commands/` | Stable command entrypoints that the thin CLI imports |
-| `engine/init.ts` / `engine/publish.ts` / `engine/verify.ts` / `engine/upgrade.ts` | Command implementations for install, publish, verify, and upgrade |
-| `engine/member-seeding.ts` | Contributor discovery plus optional member-node seeding during init |
-| `engine/onboarding.ts` | Canonical onboarding text loader |
-| `engine/repo.ts` | Repo inspection, source-vs-tree heuristics, and worktree-aware git-root helpers |
-| `engine/rules/` | Situation-aware task generation after `init` |
-| `engine/validators/` | Deterministic tree and member validation |
-| `engine/runtime/asset-loader.ts` | Path constants plus legacy-layout detection |
-| `engine/runtime/bootstrap.ts` | Dedicated-tree bootstrap metadata for the publish workflow |
-| `engine/runtime/installer.ts` | Bundled-package discovery, skill copy, and template-render helpers |
-| `engine/runtime/upgrader.ts` | Packaged-skill version comparison helpers |
-| `engine/runtime/adapters.ts` | Agent-integration path helpers |
-
-## Thin CLI Shell Surface
-
-These root files are distribution shell code. They should stay thin and should
-not become the only place important maintainer knowledge lives.
+## Engine Surface
 
 | Path | Purpose |
 | --- | --- |
 | `src/cli.ts` | Thin command parser and dispatcher |
-| `src/md.d.ts` | Build-time markdown module typing |
-| `package.json` | Package metadata, import aliases, and scripts |
-| `tsconfig.json` | TypeScript compile boundaries |
-| `tsdown.config.ts` | Build entry and asset handling |
-| `vitest.config.ts` | Unit-test entrypoints |
-| `.github/workflows/ci.yml` | Thin CI shell |
-| `README.md` | Distribution overview and onboarding quickstart |
-| `AGENTS.md` | Thin maintainer pointer for agent sessions |
+| `src/engine/init.ts` | High-level onboarding wrapper plus low-level tree bootstrap |
+| `src/engine/inspect.ts` | Root classification before onboarding |
+| `src/engine/bind.ts` | Binding a source/workspace root to an existing tree |
+| `src/engine/workspace-sync.ts` | Binding child repos to a shared tree |
+| `src/engine/publish.ts` | Tree publish flow and local source refresh |
+| `src/engine/upgrade.ts` | Installed-skill / tree upgrade behavior |
+| `src/engine/verify.ts` | Tree verification |
+| `src/engine/runtime/binding-state.ts` | `source.json`, `workspace.json`, `tree.json`, and `bindings/` schema |
+| `src/engine/runtime/local-tree-config.ts` | `.first-tree/local-tree.json` contract |
+| `src/engine/runtime/source-integration.ts` | Managed `AGENTS.md` / `CLAUDE.md` source integration block |
+| `src/engine/workspace.ts` | Child repo / submodule discovery |
 
 ## Validation
 
 | Path | Coverage |
 | --- | --- |
-| `tests/init.test.ts` | Init scaffolding behavior |
-| `tests/member-seeding.test.ts` | Contributor discovery and member seeding behavior |
-| `tests/publish.test.ts` | Publish workflow orchestration |
-| `tests/verify.test.ts` | Verification and progress gating |
-| `tests/rules.test.ts` | Task generation text |
-| `tests/asset-loader.test.ts` | Layout detection and path precedence |
-| `tests/generate-codeowners.test.ts` | Ownership helper behavior |
-| `tests/run-review.test.ts` | Review helper behavior |
-| `tests/skill-artifacts.test.ts` | Skill export and documentation integrity |
-| `tests/thin-cli.test.ts` | Thin CLI entrypoint smoke coverage |
-| `tests/upgrade.test.ts` | Installed-skill upgrade behavior |
+| `tests/init.test.ts` | Tree bootstrap and init wrapper behavior |
+| `tests/publish.test.ts` | Publish orchestration |
+| `tests/thin-cli.test.ts` | Thin CLI smoke coverage |
+| `tests/skill-artifacts.test.ts` | Skill export and doc integrity |
+| `tests/upgrade.test.ts` | Upgrade behavior |
+| `tests/verify.test.ts` | Verification behavior |
 
-## Compatibility Notes
+## Notes
 
-- The source repo intentionally contains no root `.context-tree/`, `docs/`,
-  copied mirror skills, or bundled repo snapshot. The only allowed alias
-  entrypoints are the tracked symlinks at `.agents/skills/first-tree/` and
-  `.claude/skills/first-tree/`.
-- Legacy `.context-tree/...` paths still matter only for migrating existing
-  user repos; the compatibility logic lives in
-  `engine/runtime/asset-loader.ts` and `engine/upgrade.ts`.
-- Root `README.md` and `AGENTS.md` should stay distribution-focused and
-  concise. Important behavior and contracts must still live in the skill
-  references.
-- If you change `references/` or `assets/framework/`, run `pnpm validate:skill`.
+- Keep root `README.md` and `AGENTS.md` short and distribution-focused.
+- Keep shipped user knowledge in `skills/first-tree/references/`.
+- Keep runtime metadata changes synchronized across docs, tests, and code.

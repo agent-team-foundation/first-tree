@@ -7,8 +7,16 @@ import {
   relativeRepoPath,
 } from "#engine/dedicated-tree.js";
 import { Repo } from "#engine/repo.js";
+import {
+  buildTreeId,
+  listTreeBindings,
+  readSourceState,
+  readTreeState,
+  writeTreeState,
+} from "#engine/runtime/binding-state.js";
 import { readBootstrapState } from "#engine/runtime/bootstrap.js";
 import {
+  readLocalTreeConfig,
   upsertLocalTreeConfig,
   upsertLocalTreeGitIgnore,
 } from "#engine/runtime/local-tree-config.js";
@@ -24,22 +32,25 @@ import {
 
 export const PUBLISH_USAGE = `usage: first-tree publish [--open-pr] [--tree-path PATH] [--source-repo PATH] [--source-remote NAME]
 
-Publish a dedicated Context Tree repo to GitHub and link it back to its
-source/workspace repo. This is the second-stage command after \`first-tree
-init\`, run from the dedicated tree repo (or pointed at one with --tree-path).
+Publish a Context Tree repo to GitHub and refresh any bound source/workspace
+repos with the published tree URL. This is the networked second-stage command
+after \`first-tree init\` / \`first-tree bind\`, run from the tree repo (or
+pointed at one with --tree-path).
 
 What it does:
-  1. Resolves the GitHub destination from \`.first-tree/bootstrap.json\`
-     (written by \`init\`) or from --source-repo / --source-remote flags
-  2. Creates the GitHub \`<repo>-tree\` repo if it doesn't exist (reuses an
-     existing \`*-tree\` or \`*-context\` repo when already bound)
+  1. Resolves the GitHub destination from bound source repos, tree bindings,
+     legacy bootstrap metadata, or from --source-repo / --source-remote flags
+  2. Creates the GitHub tree repo if it doesn't exist (reuses an existing
+     remote when already bound)
   3. Pushes the local tree commits via the \`gh\` CLI
-  4. Records the published tree URL in the source repo's
+  4. Refreshes each bound source/workspace repo's
      \`FIRST-TREE-SOURCE-INTEGRATION:\` block and \`.first-tree/local-tree.json\`
-  5. Optionally opens a PR in the source repo
+     when that source/workspace repo is available locally
+  5. Optionally opens a PR in the source repo when exactly one source repo is
+     being refreshed
 
 Requires the \`gh\` CLI installed and authenticated. Requires the source repo
-to be discoverable (sibling directory or --source-repo PATH).
+to be discoverable (bound locally, sibling directory, or --source-repo PATH).
 
 After publish succeeds, the canonical local working copy of the tree is the
 checkout recorded in \`.first-tree/local-tree.json\` inside the source repo.
@@ -278,32 +289,47 @@ function commitTreeState(
   return true;
 }
 
-function resolveSourceRepoRoot(
+function resolveBoundSourceRepoRoots(
   treeRepo: Repo,
   options?: PublishOptions,
-): string | null {
+): string[] {
   const cwd = options?.currentCwd ?? process.cwd();
 
   if (options?.sourceRepoPath) {
-    return resolve(cwd, options.sourceRepoPath);
+    return [resolve(cwd, options.sourceRepoPath)];
+  }
+
+  const bindings = listTreeBindings(treeRepo.root);
+  if (bindings.length > 0) {
+    return [...new Set(bindings.map((binding) =>
+      resolve(treeRepo.root, binding.sourceRootPath)
+    ))];
   }
 
   const bootstrap = readBootstrapState(treeRepo.root);
   if (bootstrap !== null) {
-    return resolve(treeRepo.root, bootstrap.sourceRepoPath);
+    return [resolve(treeRepo.root, bootstrap.sourceRepoPath)];
   }
 
   const inferredSourceRepoName = inferSourceRepoNameFromTreeRepoName(
     treeRepo.repoName(),
   );
   if (inferredSourceRepoName !== null) {
-    return join(
+    return [join(
       dirname(treeRepo.root),
       inferredSourceRepoName,
-    );
+    )];
   }
 
-  return null;
+  return [];
+}
+
+function resolvePrimarySourceRepoRoot(
+  treeRepo: Repo,
+  options?: PublishOptions,
+): string | null {
+  const resolvedRoots = resolveBoundSourceRepoRoots(treeRepo, options);
+  return resolvedRoots[0] ?? null;
 }
 
 function getGitRemoteUrl(
@@ -447,13 +473,24 @@ function updateSourceWorkspaceIntegration(
   localTreeConfigAction: "created" | "updated" | "unchanged";
 } {
   const gitIgnore = upsertLocalTreeGitIgnore(sourceRepo.root);
+  const sourceState = readSourceState(sourceRepo.root);
+  const existingLocalTreeConfig = readLocalTreeConfig(sourceRepo.root);
   const localTreeConfig = upsertLocalTreeConfig(sourceRepo.root, {
+    bindingMode: sourceState?.bindingMode ?? existingLocalTreeConfig?.bindingMode,
+    entrypoint: sourceState?.tree.entrypoint ?? existingLocalTreeConfig?.entrypoint,
     localPath: relativeRepoPath(sourceRepo.root, localTreeRoot),
+    sourceId: sourceState?.sourceId ?? existingLocalTreeConfig?.sourceId,
+    treeMode: sourceState?.tree.treeMode ?? existingLocalTreeConfig?.treeMode,
     treeRepoName: treeRepo.repoName(),
     treeRepoUrl,
+    workspaceId: sourceState?.workspaceId ?? existingLocalTreeConfig?.workspaceId,
   });
   upsertSourceIntegrationFiles(sourceRepo.root, treeRepo.repoName(), {
+    bindingMode: sourceState?.bindingMode ?? existingLocalTreeConfig?.bindingMode,
+    entrypoint: sourceState?.tree.entrypoint ?? existingLocalTreeConfig?.entrypoint,
+    treeMode: sourceState?.tree.treeMode ?? existingLocalTreeConfig?.treeMode,
     treeRepoUrl,
+    workspaceId: sourceState?.workspaceId ?? existingLocalTreeConfig?.workspaceId,
   });
   return {
     gitIgnoreAction: gitIgnore.action,
@@ -633,18 +670,26 @@ export function runPublish(repo?: Repo, options?: PublishOptions): number {
     return 1;
   }
 
-  const sourceRepoRoot = resolveSourceRepoRoot(treeRepo, options);
-  if (sourceRepoRoot === null) {
+  const sourceRepoRoots = resolveBoundSourceRepoRoots(treeRepo, options);
+  if (sourceRepoRoots.length === 0) {
     console.error(
-      "Error: could not determine the source/workspace repo for this tree. Re-run `first-tree init` from the source repo first, or pass `--source-repo PATH`.",
+      "Error: could not determine any bound source/workspace repo for this tree. Re-run `first-tree bind` or `first-tree init` first, or pass `--source-repo PATH`.",
     );
     return 1;
   }
 
-  const sourceRepo = new Repo(sourceRepoRoot);
+  const primarySourceRepoRoot = resolvePrimarySourceRepoRoot(treeRepo, options);
+  if (primarySourceRepoRoot === null) {
+    console.error(
+      "Error: could not resolve a primary source/workspace repo for publishing.",
+    );
+    return 1;
+  }
+
+  const sourceRepo = new Repo(primarySourceRepoRoot);
   if (!sourceRepo.isGitRepo()) {
     console.error(
-      `Error: the resolved source/workspace repo is not a git repository: ${sourceRepoRoot}`,
+      `Error: the resolved primary source/workspace repo is not a git repository: ${primarySourceRepoRoot}`,
     );
     return 1;
   }
@@ -668,7 +713,8 @@ export function runPublish(repo?: Repo, options?: PublishOptions): number {
   try {
     console.log("Context Tree Publish\n");
     console.log(`  Tree repo:   ${treeRepo.root}`);
-    console.log(`  Source repo: ${sourceRepo.root}\n`);
+    console.log(`  Primary source repo: ${sourceRepo.root}`);
+    console.log(`  Bound source roots:  ${sourceRepoRoots.length}\n`);
 
     const sourceRemoteUrl = getGitRemoteUrl(runner, sourceRepo.root, sourceRemoteName);
     if (sourceRemoteUrl === null) {
@@ -711,96 +757,122 @@ export function runPublish(repo?: Repo, options?: PublishOptions): number {
       console.log(`  Pushed the tree repo to ${treeRemote.remoteUrl}.`);
     }
 
-    const sourceBranch = ensureSourceBranch(
-      runner,
-      sourceRepo,
-      sourceRemoteName,
-      sourceMetadata.defaultBranch,
-      treeRepo.repoName(),
-    );
-    console.log(`  Working on source/workspace branch \`${sourceBranch}\`.`);
+    const boundSourceRepos = sourceRepoRoots.map((root) => new Repo(root));
+    for (const boundSourceRepo of boundSourceRepos) {
+      if (
+        !boundSourceRepo.hasCurrentInstalledSkill()
+        || !boundSourceRepo.hasSourceWorkspaceIntegration()
+      ) {
+        console.log(
+          `  Skipped ${boundSourceRepo.root} because first-tree source integration is not installed there yet.`,
+        );
+        continue;
+      }
 
-    const localTreeRoot = ensureLocalTreeCheckout(
-      runner,
-      sourceRepo,
-      treeRepo,
-      treeRemote.remoteUrl,
-    );
-    const sourceIntegrationState = updateSourceWorkspaceIntegration(
-      sourceRepo,
-      treeRepo,
-      treeRemote.remoteUrl,
-      localTreeRoot,
-    );
-    console.log(
-      `  Recorded \`${treeRemote.remoteUrl}\` in the source/workspace instructions.`,
-    );
-    if (sourceIntegrationState.gitIgnoreAction === "created") {
-      console.log("  Created `.gitignore` entries for local tree checkout state.");
-    } else if (sourceIntegrationState.gitIgnoreAction === "updated") {
-      console.log("  Updated `.gitignore` for local tree checkout state.");
-    }
-    console.log(
-      sourceIntegrationState.localTreeConfigAction === "created"
-        ? `  Created \`${LOCAL_TREE_CONFIG}\` for \`${relativeRepoPath(sourceRepo.root, localTreeRoot)}\`.`
-        : sourceIntegrationState.localTreeConfigAction === "updated"
-        ? `  Updated \`${LOCAL_TREE_CONFIG}\` for \`${relativeRepoPath(sourceRepo.root, localTreeRoot)}\`.`
-        : `  Reused the existing \`${LOCAL_TREE_CONFIG}\` entry for \`${relativeRepoPath(sourceRepo.root, localTreeRoot)}\`.`,
-    );
-
-    const committedSourceChanges = commitSourceIntegration(
-      runner,
-      sourceRepo,
-      treeRepo.repoName(),
-    );
-    if (committedSourceChanges) {
-      console.log("  Committed the source/workspace integration branch.");
-    } else {
+      const localTreeRoot = ensureLocalTreeCheckout(
+        runner,
+        boundSourceRepo,
+        treeRepo,
+        treeRemote.remoteUrl,
+      );
+      const sourceIntegrationState = updateSourceWorkspaceIntegration(
+        boundSourceRepo,
+        treeRepo,
+        treeRemote.remoteUrl,
+        localTreeRoot,
+      );
       console.log(
-        "  Source/workspace integration was already up to date; no new commit was needed.",
+        `  Recorded \`${treeRemote.remoteUrl}\` for ${boundSourceRepo.root}.`,
+      );
+      if (sourceIntegrationState.gitIgnoreAction === "created") {
+        console.log("    Created `.gitignore` entries for local tree checkout state.");
+      } else if (sourceIntegrationState.gitIgnoreAction === "updated") {
+        console.log("    Updated `.gitignore` for local tree checkout state.");
+      }
+      console.log(
+        sourceIntegrationState.localTreeConfigAction === "created"
+          ? `    Created \`${LOCAL_TREE_CONFIG}\` for \`${relativeRepoPath(boundSourceRepo.root, localTreeRoot)}\`.`
+          : sourceIntegrationState.localTreeConfigAction === "updated"
+          ? `    Updated \`${LOCAL_TREE_CONFIG}\` for \`${relativeRepoPath(boundSourceRepo.root, localTreeRoot)}\`.`
+          : `    Reused the existing \`${LOCAL_TREE_CONFIG}\` entry for \`${relativeRepoPath(boundSourceRepo.root, localTreeRoot)}\`.`,
       );
     }
 
-    if (committedSourceChanges || options?.openPr) {
-      runner(
-        "git",
-        ["push", "-u", sourceRemoteName, sourceBranch],
-        { cwd: sourceRepo.root },
+    if (sourceRepoRoots.length === 1) {
+      const sourceBranch = ensureSourceBranch(
+        runner,
+        sourceRepo,
+        sourceRemoteName,
+        sourceMetadata.defaultBranch,
+        treeRepo.repoName(),
       );
-      console.log(`  Pushed \`${sourceBranch}\` to \`${sourceRemoteName}\`.`);
+      console.log(`  Working on source/workspace branch \`${sourceBranch}\`.`);
+
+      const committedSourceChanges = commitSourceIntegration(
+        runner,
+        sourceRepo,
+        treeRepo.repoName(),
+      );
+      if (committedSourceChanges) {
+        console.log("  Committed the source/workspace integration branch.");
+      } else {
+        console.log(
+          "  Source/workspace integration was already up to date; no new commit was needed.",
+        );
+      }
+
+      if (committedSourceChanges || options?.openPr) {
+        runner(
+          "git",
+          ["push", "-u", sourceRemoteName, sourceBranch],
+          { cwd: sourceRepo.root },
+        );
+        console.log(`  Pushed \`${sourceBranch}\` to \`${sourceRemoteName}\`.`);
+      }
+
+      if (options?.openPr) {
+        const prUrl = runner(
+          "gh",
+          [
+            "pr",
+            "create",
+            "--repo",
+            sourceMetadata.nameWithOwner,
+            "--base",
+            sourceMetadata.defaultBranch,
+            "--head",
+            sourceBranch,
+            "--title",
+            `chore: connect ${treeRepo.repoName()} context tree`,
+            "--body",
+            buildPrBody(treeRepo.repoName(), treeSlug),
+          ],
+          { cwd: sourceRepo.root },
+        );
+        console.log(`  Opened PR: ${prUrl}`);
+      }
+    } else if (options?.openPr) {
+      console.log(
+        "  Skipped `--open-pr` because this shared tree is bound to multiple source/workspace roots.",
+      );
     }
 
-    if (options?.openPr) {
-      const prUrl = runner(
-        "gh",
-        [
-          "pr",
-          "create",
-          "--repo",
-          sourceMetadata.nameWithOwner,
-          "--base",
-          sourceMetadata.defaultBranch,
-          "--head",
-          sourceBranch,
-          "--title",
-          `chore: connect ${treeRepo.repoName()} context tree`,
-          "--body",
-          buildPrBody(treeRepo.repoName(), treeSlug),
-        ],
-        { cwd: sourceRepo.root },
-      );
-      console.log(`  Opened PR: ${prUrl}`);
-    }
+    writeTreeState(treeRepo.root, {
+      published: { remoteUrl: treeRemote.remoteUrl },
+      treeId: readTreeState(treeRepo.root)?.treeId ?? buildTreeId(treeRepo.repoName()),
+      treeMode: readTreeState(treeRepo.root)?.treeMode ?? "shared",
+      treeRepoName: treeRepo.repoName(),
+    });
 
     console.log();
     console.log(
-      `The source/workspace repo's local tree config now points to \`${LOCAL_TREE_CONFIG}\` and the canonical checkout at \`${relativeRepoPath(sourceRepo.root, localTreeRoot)}\`.`,
+      `Bound source/workspace repos now reference \`${LOCAL_TREE_CONFIG}\` and the published tree remote \`${treeRemote.remoteUrl}\`.`,
     );
-    console.log(
-      treeRepo.root === localTreeRoot
-        ? `This sibling checkout is already the canonical local working copy for the tree.`
-        : `You can delete the bootstrap checkout at ${treeRepo.root} once you no longer need it.`,
-    );
+    if (sourceRepoRoots.length > 1) {
+      console.log(
+        "Review and commit any updated source/workspace repos locally if you want those URL refreshes under version control.",
+      );
+    }
     return 0;
   } catch (err) {
     const message = err instanceof Error ? err.message : "unknown error";

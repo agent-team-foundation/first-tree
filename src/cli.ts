@@ -9,8 +9,11 @@ const USAGE = `usage: first-tree <command>
   New to first-tree? Run \`first-tree help onboarding\` first.
 
 Commands:
-  init                  Install source/workspace integration and create or refresh a dedicated context tree repo
-  publish               Publish a dedicated tree repo to GitHub and record it back in the source repo
+  inspect               Classify the current folder before onboarding
+  init                  High-level onboarding wrapper for repo/workspace roots
+  bind                  Bind the current repo/workspace root to an existing tree repo
+  workspace             Workspace helpers (currently: sync child repos to a shared tree)
+  publish               Publish a tree repo to GitHub
   verify                Run verification checks against a tree repo
   upgrade               Refresh the installed skill in a tree repo
   review                Run Claude Code PR review (CI helper)
@@ -24,15 +27,18 @@ Options:
   --skip-version-check  Skip the auto-upgrade check (for latency-sensitive callers)
 
 Common examples:
+  first-tree inspect --json
   first-tree init
-  first-tree init --seed-members contributors
-  first-tree publish --open-pr
-  mkdir my-org-tree && cd my-org-tree && git init && first-tree init --here
+  first-tree init --tree-path ../org-context --tree-mode shared
+  first-tree init --scope workspace --tree-path ../org-context --tree-mode shared --sync-members
+  first-tree bind --tree-path ../org-context --tree-mode shared
+  first-tree publish --tree-path ../org-context
+  mkdir my-org-tree && cd my-org-tree && git init && first-tree init tree --here
   first-tree verify --tree-path ../my-org-tree
   first-tree upgrade --tree-path ../my-org-tree
 
 Note:
-  \`--here\` is for when the current repo is already the dedicated tree repo.
+  \`first-tree init tree --here\` is for when the current repo is already the tree repo.
 `;
 
 type Output = (text: string) => void;
@@ -134,6 +140,18 @@ export async function runCli(
     case "init": {
       const { runInit } = await import("#engine/commands/init.js");
       return runInit(args.slice(1));
+    }
+    case "inspect": {
+      const { runInspect } = await import("#engine/commands/inspect.js");
+      return runInspect(args.slice(1));
+    }
+    case "bind": {
+      const { runBind } = await import("#engine/commands/bind.js");
+      return runBind(args.slice(1));
+    }
+    case "workspace": {
+      const { runWorkspace } = await import("#engine/commands/workspace.js");
+      return runWorkspace(args.slice(1));
     }
     case "verify": {
       const { runVerify } = await import("#engine/commands/verify.js");

@@ -552,8 +552,8 @@ describe("runInit", () => {
 
 describe("parseInitArgs", () => {
   it("documents that --here is only for dedicated tree repos", () => {
-    expect(INIT_USAGE).toContain("Do not use `--here` inside a source/workspace repo");
-    expect(INIT_USAGE).toContain("already switched into the dedicated tree repo");
+    expect(INIT_USAGE).toContain("first-tree init tree --here");
+    expect(INIT_USAGE).toContain("Initialize the current repo in place as a tree repo");
   });
 
   it("parses dedicated repo options", () => {
