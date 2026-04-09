@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { createAgent, deleteAgent, getAgent, getAgentByName, listAgents, suspendAgent } from "../services/agent.js";
+import { createOrganization } from "../services/organization.js";
 import { createTestAdmin, createTestApp } from "./helpers.js";
 
 describe("Agent Identity (UUID + Name)", () => {
@@ -92,6 +93,8 @@ describe("Agent Identity (UUID + Name)", () => {
     it("returns 404 when name exists in a different org", async () => {
       const app = await appPromise;
 
+      await createOrganization(app.db, { id: "org-alpha", displayName: "Alpha" });
+      await createOrganization(app.db, { id: "org-beta", displayName: "Beta" });
       await createAgent(app.db, {
         name: "org-scoped",
         type: "autonomous_agent",
@@ -113,6 +116,8 @@ describe("Agent Identity (UUID + Name)", () => {
     it("only returns agents in the requested org", async () => {
       const app = await appPromise;
 
+      await createOrganization(app.db, { id: "org-list-test", displayName: "List Test" });
+      await createOrganization(app.db, { id: "org-other", displayName: "Other" });
       const a1 = await createAgent(app.db, {
         name: "list-org-a",
         type: "human",
@@ -172,6 +177,8 @@ describe("Agent Identity (UUID + Name)", () => {
     it("allows same name in different orgs", async () => {
       const app = await appPromise;
 
+      await createOrganization(app.db, { id: "org-x", displayName: "Org X" });
+      await createOrganization(app.db, { id: "org-y", displayName: "Org Y" });
       const a1 = await createAgent(app.db, {
         name: "cross-org-name",
         type: "human",

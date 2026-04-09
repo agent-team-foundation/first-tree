@@ -51,12 +51,15 @@ export {
   updateAdminUserSchema,
 } from "./schemas/admin-user.js";
 export {
+  AGENT_SOURCES,
   AGENT_STATUSES,
   AGENT_TYPES,
   type Agent,
+  type AgentSource,
   type AgentStatus,
   type AgentType,
   agentSchema,
+  agentSourceSchema,
   agentStatusSchema,
   agentTypeSchema,
   type BootstrapStatus,
@@ -132,6 +135,15 @@ export {
   sendToAgentSchema,
 } from "./schemas/message.js";
 export {
+  type CreateOrganization,
+  type CreateOrganizationInput,
+  createOrganizationSchema,
+  type Organization,
+  organizationSchema,
+  type UpdateOrganization,
+  updateOrganizationSchema,
+} from "./schemas/organization.js";
+export {
   type ActivityOverview,
   type AgentActivity,
   type AgentBind,
@@ -149,6 +161,12 @@ export {
   type SessionInfo,
   sessionInfoSchema,
 } from "./schemas/presence.js";
+export {
+  type OrgStats,
+  orgStatsSchema,
+  type Stats,
+  statsSchema,
+} from "./schemas/stats.js";
 export {
   SYSTEM_CONFIG_DEFAULTS,
   SYSTEM_CONFIG_KEYS,

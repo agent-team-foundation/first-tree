@@ -71,6 +71,13 @@
       "when": 1776019200000,
       "tag": "0009_agent_runtime_m1",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1776124800000,
+      "tag": "0010_cloud_multi_tenancy",
+      "breakpoints": true
     }
   ]
 }

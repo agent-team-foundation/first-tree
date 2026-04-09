@@ -1,13 +1,14 @@
 import { randomBytes } from "node:crypto";
 import type { CreateAgent, CreateAgentToken, UpdateAgent } from "@first-tree-hub/shared";
 import { AGENT_STATUSES } from "@first-tree-hub/shared";
-import { and, desc, eq, isNull, lt, ne } from "drizzle-orm";
+import { and, count, desc, eq, isNull, lt, ne } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { adapterAgentMappings } from "../db/schema/adapter-agent-mappings.js";
 import { adapterConfigs } from "../db/schema/adapter-configs.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
 import { agentTokens } from "../db/schema/agent-tokens.js";
 import { agents } from "../db/schema/agents.js";
+import { organizations } from "../db/schema/organizations.js";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 import { hashToken } from "../utils.js";
 import { uuidv7 } from "../uuid.js";
@@ -17,6 +18,27 @@ export async function createAgent(db: Database, data: CreateAgent) {
   const name = data.name ?? null;
   const inboxId = `inbox_${uuid}`;
   const orgId = data.organizationId ?? "default";
+
+  // Check organization-level agent quota.
+  // NOTE: TOCTOU race — concurrent requests may both pass the check. Acceptable for Phase 1;
+  // enforce with a DB-level CHECK constraint or SELECT ... FOR UPDATE in Phase 2 if needed.
+  const [org] = await db
+    .select({ maxAgents: organizations.maxAgents })
+    .from(organizations)
+    .where(eq(organizations.id, orgId))
+    .limit(1);
+  if (org && org.maxAgents > 0) {
+    const rows = await db
+      .select({ value: count() })
+      .from(agents)
+      .where(and(eq(agents.organizationId, orgId), ne(agents.status, AGENT_STATUSES.DELETED)));
+    const activeCount = rows[0]?.value ?? 0;
+    if (activeCount >= org.maxAgents) {
+      throw new ForbiddenError(
+        `Organization "${orgId}" has reached its agent limit (${org.maxAgents}). Upgrade your plan or delete unused agents.`,
+      );
+    }
+  }
 
   try {
     const [agent] = await db
@@ -30,6 +52,8 @@ export async function createAgent(db: Database, data: CreateAgent) {
         delegateMention: data.delegateMention ?? null,
         profile: data.profile ?? null,
         inboxId,
+        source: data.source ?? null,
+        public: data.public ?? false,
         metadata: data.metadata ?? {},
       })
       .returning();
@@ -87,6 +111,8 @@ export async function listAgents(db: Database, orgId: string, limit: number, cur
       profile: agents.profile,
       inboxId: agents.inboxId,
       status: agents.status,
+      cloudUserId: agents.cloudUserId,
+      public: agents.public,
       metadata: agents.metadata,
       createdAt: agents.createdAt,
       updatedAt: agents.updatedAt,
@@ -116,7 +142,7 @@ export async function listAgents(db: Database, orgId: string, limit: number, cur
 export async function updateAgent(db: Database, uuid: string, data: UpdateAgent) {
   const agent = await getAgent(db, uuid);
 
-  const updates: Record<string, unknown> = { updatedAt: new Date() };
+  const updates: Partial<typeof agents.$inferInsert> = { updatedAt: new Date() };
   if (data.type !== undefined) updates.type = data.type;
   if (data.displayName !== undefined) updates.displayName = data.displayName;
   if (data.delegateMention !== undefined) updates.delegateMention = data.delegateMention;
@@ -253,6 +279,7 @@ export async function bootstrapToken(
         delegateMention: options?.delegateMention,
         profile: options?.profile,
         organizationId: orgId,
+        source: "bootstrap",
         metadata,
       });
     } else {

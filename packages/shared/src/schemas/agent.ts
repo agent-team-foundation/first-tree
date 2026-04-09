@@ -16,6 +16,15 @@ export const AGENT_STATUSES = {
   DELETED: "deleted",
 } as const;
 
+export const AGENT_SOURCES = {
+  ADMIN_API: "admin-api",
+  BOOTSTRAP: "bootstrap",
+  PORTAL: "portal",
+} as const;
+
+export const agentSourceSchema = z.enum(["admin-api", "bootstrap", "portal"]);
+export type AgentSource = z.infer<typeof agentSourceSchema>;
+
 export const agentStatusSchema = z.enum(["active", "suspended"]);
 export type AgentStatus = z.infer<typeof agentStatusSchema>;
 
@@ -31,6 +40,10 @@ export const createAgentSchema = z.object({
   delegateMention: z.string().max(100).optional(),
   profile: z.string().optional(),
   organizationId: z.string().max(100).optional(),
+  /** How this agent was created */
+  source: agentSourceSchema.optional(),
+  /** Whether this agent is publicly discoverable */
+  public: z.boolean().default(false).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
 export type CreateAgent = z.infer<typeof createAgentSchema>;
@@ -54,6 +67,12 @@ export const agentSchema = z.object({
   profile: z.string().nullable(),
   inboxId: z.string(),
   status: z.string(),
+  /** How this agent was created */
+  source: z.string().nullable().optional(),
+  /** Control-plane user association (nullable, cloud-only) */
+  cloudUserId: z.string().nullable().optional(),
+  /** Whether this agent is publicly discoverable */
+  public: z.boolean().optional(),
   metadata: z.record(z.string(), z.unknown()),
   presenceStatus: presenceStatusSchema.optional(),
   createdAt: z.string(),

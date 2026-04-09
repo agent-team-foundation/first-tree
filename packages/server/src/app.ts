@@ -15,7 +15,9 @@ import { adminAgentRoutes } from "./api/admin/agents.js";
 import { adminAuthRoutes } from "./api/admin/auth.js";
 import { adminChatRoutes } from "./api/admin/chats.js";
 import { adminActivityRoutes, adminClientRoutes } from "./api/admin/clients.js";
+import { adminOrganizationRoutes } from "./api/admin/organizations.js";
 import { adminOverviewRoutes } from "./api/admin/overview.js";
+import { adminStatsRoutes } from "./api/admin/stats.js";
 import { adminSystemConfigRoutes } from "./api/admin/system-config.js";
 import { adminUserRoutes } from "./api/admin/users.js";
 import { agentChatRoutes } from "./api/agent/chats.js";
@@ -32,6 +34,7 @@ import { bootstrapRoutes } from "./api/bootstrap/token.js";
 import { contextTreeInfoRoutes } from "./api/context-tree-info.js";
 import { healthRoutes } from "./api/health.js";
 import { healthzRoutes } from "./api/healthz.js";
+import { publicAgentRoutes } from "./api/public/agents.js";
 import { githubWebhookRoutes } from "./api/webhooks/github.js";
 import type { Config } from "./config.js";
 import { connectDatabase } from "./db/connection.js";
@@ -41,9 +44,9 @@ import { agentAuthHook } from "./middleware/agent-auth.js";
 import { githubAuthHook } from "./middleware/github-auth.js";
 import { type AdapterManager, createAdapterManager } from "./services/adapter-manager.js";
 import { type BackgroundTasks, createBackgroundTasks } from "./services/background-tasks.js";
-
 import { createKaelRuntime, type KaelRuntime } from "./services/kael-runtime.js";
 import { createNotifier, type Notifier } from "./services/notifier.js";
+import { ensureDefaultOrganization } from "./services/organization.js";
 
 // Fastify type augmentation
 import "./types.js";
@@ -206,6 +209,25 @@ export async function buildApp(config: Config) {
         { prefix: "/admin/agents/activity" },
       );
 
+      await api.register(
+        async (adminApp) => {
+          adminApp.addHook("onRequest", adminAuth);
+          await adminApp.register(adminOrganizationRoutes);
+        },
+        { prefix: "/admin/organizations" },
+      );
+
+      await api.register(
+        async (adminApp) => {
+          adminApp.addHook("onRequest", adminAuth);
+          await adminApp.register(adminStatsRoutes);
+        },
+        { prefix: "/admin/stats" },
+      );
+
+      // Public routes (no auth)
+      await api.register(publicAgentRoutes, { prefix: "/public/agents" });
+
       // Agent routes (Bearer token protected)
       await api.register(
         async (agentApp) => {
@@ -277,6 +299,8 @@ export async function buildApp(config: Config) {
 
   // Start notifier and background tasks on server start
   app.addHook("onReady", async () => {
+    // Ensure the default organization exists (idempotent)
+    await ensureDefaultOrganization(db);
     await notifier.start();
     backgroundTasks.start();
     await adapterManager.reload();

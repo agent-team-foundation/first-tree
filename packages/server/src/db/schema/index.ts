@@ -10,5 +10,6 @@ export { chatParticipants, chats } from "./chats.js";
 export { clients } from "./clients.js";
 export { inboxEntries } from "./inbox-entries.js";
 export { messages } from "./messages.js";
+export { organizations } from "./organizations.js";
 export { serverInstances } from "./server-instances.js";
 export { systemConfigs } from "./system-configs.js";
