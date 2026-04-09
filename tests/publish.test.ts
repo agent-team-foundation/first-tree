@@ -12,9 +12,15 @@ import { writeBootstrapState } from "#engine/runtime/bootstrap.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
   CLAUDE_INSTRUCTIONS_FILE,
+  CLAUDE_SKILL_ROOT,
+  FIRST_TREE_INDEX_FILE,
   LOCAL_TREE_CONFIG,
+  SKILL_ROOT,
 } from "#engine/runtime/asset-loader.js";
-import { buildSourceIntegrationBlock } from "#engine/runtime/source-integration.js";
+import {
+  buildSourceIntegrationBlock,
+  upsertFirstTreeIndexFile,
+} from "#engine/runtime/source-integration.js";
 import {
   makeAgentsMd,
   makeClaudeMd,
@@ -57,9 +63,11 @@ function createRunner(
   sourceRoot: string,
   treeRoot: string,
   treeRepoName: string,
+  options?: { ignoredPaths?: string[] },
 ): { calls: RecordedCommand[]; runner: CommandRunner } {
   const calls: RecordedCommand[] = [];
   let treeOriginExists = false;
+  const ignoredPaths = new Set(options?.ignoredPaths ?? []);
   const runner: CommandRunner = (command, args, options) => {
     calls.push({ command, args, cwd: options.cwd });
 
@@ -101,6 +109,18 @@ function createRunner(
       && args[2] === "--quiet"
     ) {
       throw new Error("changes present");
+    }
+
+    if (
+      command === "git"
+      && args[0] === "check-ignore"
+      && args[1] === "-q"
+    ) {
+      const relPath = args.at(-1);
+      if (relPath && ignoredPaths.has(relPath)) {
+        return "";
+      }
+      throw new Error("not ignored");
     }
 
     if (command === "git" && args[0] === "branch" && args[1] === "--show-current") {
@@ -275,6 +295,45 @@ describe("runPublish", () => {
       treeRepoName: "ADHD-tree",
       treeRepoUrl: "git@github.com:acme/ADHD-tree.git",
     });
+  });
+
+  it("skips source skill artifacts when the source repo ignores /.agents/", () => {
+    const rootDir = useTmpDir();
+    const sourceRoot = join(rootDir.path, "ADHD");
+    const treeRoot = join(rootDir.path, "ADHD-tree");
+
+    makeSourceRepo(sourceRoot);
+    makeFramework(sourceRoot, "0.2.0");
+    makeSourceIntegration(sourceRoot);
+    upsertFirstTreeIndexFile(sourceRoot);
+    makeTreeRepo(treeRoot);
+    writeBootstrapState(treeRoot, {
+      sourceRepoName: "ADHD",
+      sourceRepoPath: relative(treeRoot, sourceRoot),
+      treeRepoName: "ADHD-tree",
+    });
+
+    const { calls, runner } = createRunner(sourceRoot, treeRoot, "ADHD-tree", {
+      ignoredPaths: [SKILL_ROOT],
+    });
+    const result = runPublish(new Repo(treeRoot), {
+      commandRunner: runner,
+    });
+
+    expect(result).toBe(0);
+    const sourceGitAdd = calls.find(
+      (call) =>
+        call.command === "git"
+        && call.cwd === sourceRoot
+        && call.args[0] === "add",
+    );
+    expect(sourceGitAdd).toBeDefined();
+    expect(sourceGitAdd?.args).not.toContain(SKILL_ROOT);
+    expect(sourceGitAdd?.args).not.toContain(CLAUDE_SKILL_ROOT);
+    expect(sourceGitAdd?.args).not.toContain(FIRST_TREE_INDEX_FILE);
+    expect(sourceGitAdd?.args).toContain(AGENT_INSTRUCTIONS_FILE);
+    expect(sourceGitAdd?.args).toContain(CLAUDE_INSTRUCTIONS_FILE);
+    expect(sourceGitAdd?.args).toContain(".gitignore");
   });
 
   it("still infers the source repo from a legacy context repo name", () => {

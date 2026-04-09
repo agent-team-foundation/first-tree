@@ -513,9 +513,24 @@ function commitSourceIntegration(
       ".gitignore",
     ].filter((path) => existsSync(join(sourceRepo.root, path))),
   ].filter((path, index, items) => items.indexOf(path) === index);
+  const stageablePaths = resolveStageableManagedPaths(
+    runner,
+    sourceRepo,
+    managedPaths,
+  );
 
-  runner("git", ["add", "--", ...managedPaths], { cwd: sourceRepo.root });
-  if (!hasIndexedChanges(runner, sourceRepo.root, managedPaths)) {
+  if (stageablePaths.skippedPaths.length > 0) {
+    console.log(
+      `  Skipped gitignored source skill artifacts: ${stageablePaths.skippedPaths.map((path) => `\`${path}\``).join(", ")}.`,
+    );
+  }
+
+  if (stageablePaths.paths.length === 0) {
+    return false;
+  }
+
+  runner("git", ["add", "--", ...stageablePaths.paths], { cwd: sourceRepo.root });
+  if (!hasIndexedChanges(runner, sourceRepo.root, stageablePaths.paths)) {
     return false;
   }
   runner(
@@ -525,11 +540,63 @@ function commitSourceIntegration(
       "-m",
       `chore: connect ${treeRepoName} context tree`,
       "--",
-      ...managedPaths,
+      ...stageablePaths.paths,
     ],
     { cwd: sourceRepo.root },
   );
   return true;
+}
+
+function resolveStageableManagedPaths(
+  runner: CommandRunner,
+  sourceRepo: Repo,
+  managedPaths: string[],
+): { paths: string[]; skippedPaths: string[] } {
+  const skippedPaths = new Set<string>();
+  const skillBundlePaths = [
+    SKILL_ROOT,
+    CLAUDE_SKILL_ROOT,
+    FIRST_TREE_INDEX_FILE,
+  ].filter((path) => managedPaths.includes(path));
+
+  // FIRST_TREE.md and .claude/skills/first-tree are symlink views into the
+  // canonical .agents/skills/first-tree bundle, so stage them only when the
+  // canonical skill root itself can be added to git.
+  if (
+    skillBundlePaths.includes(SKILL_ROOT)
+    && pathIsGitIgnored(runner, sourceRepo.root, SKILL_ROOT)
+  ) {
+    for (const path of skillBundlePaths) {
+      skippedPaths.add(path);
+    }
+  }
+
+  for (const path of managedPaths) {
+    if (skippedPaths.has(path)) {
+      continue;
+    }
+    if (pathIsGitIgnored(runner, sourceRepo.root, path)) {
+      skippedPaths.add(path);
+    }
+  }
+
+  return {
+    paths: managedPaths.filter((path) => !skippedPaths.has(path)),
+    skippedPaths: managedPaths.filter((path) => skippedPaths.has(path)),
+  };
+}
+
+function pathIsGitIgnored(
+  runner: CommandRunner,
+  root: string,
+  relPath: string,
+): boolean {
+  return commandSucceeds(
+    runner,
+    "git",
+    ["check-ignore", "-q", "--", relPath],
+    root,
+  );
 }
 
 function ensureTreeRemotePublished(
