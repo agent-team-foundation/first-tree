@@ -32,7 +32,7 @@ export function App() {
               <Route element={<Layout />}>
                 <Route index element={<OverviewPage />} />
                 <Route path="agents" element={<AgentsPage />} />
-                <Route path="agents/:agentId" element={<AgentDetailPage />} />
+                <Route path="agents/:uuid" element={<AgentDetailPage />} />
                 <Route path="bindings" element={<BindingsPage />} />
                 <Route path="chats" element={<ChatsPage />} />
                 <Route path="admin-users" element={<AdminUsersPage />} />

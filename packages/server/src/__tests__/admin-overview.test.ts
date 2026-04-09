@@ -8,15 +8,15 @@ describe("Admin Overview API", () => {
   it("returns system overview", async () => {
     const app = await appPromise;
     const admin = await createTestAdmin(app);
-    const { token: t1 } = await createTestAgent(app, { id: "overview-a1" });
-    const { agent: a2 } = await createTestAgent(app, { id: "overview-a2" });
+    const { token: t1 } = await createTestAgent(app, { name: "overview-a1" });
+    const { agent: a2 } = await createTestAgent(app, { name: "overview-a2" });
 
     // Create a chat
     await app.inject({
       method: "POST",
       url: "/api/v1/agent/chats",
       headers: { authorization: `Bearer ${t1}` },
-      payload: { type: "direct", participantIds: [a2.id] },
+      payload: { type: "direct", participantIds: [a2.uuid] },
     });
 
     const res = await app.inject({

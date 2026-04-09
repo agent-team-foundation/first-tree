@@ -7,8 +7,8 @@ describe("Agent Chats API", () => {
 
   it("creates a chat and retrieves it", async () => {
     const app = await appPromise;
-    const { agent: a1, token: t1 } = await createTestAgent(app, { id: "chat-a1" });
-    const { agent: a2 } = await createTestAgent(app, { id: "chat-a2" });
+    const { agent: a1, token: t1 } = await createTestAgent(app, { name: "chat-a1" });
+    const { agent: a2 } = await createTestAgent(app, { name: "chat-a2" });
 
     const createRes = await app.inject({
       method: "POST",
@@ -16,7 +16,7 @@ describe("Agent Chats API", () => {
       headers: { authorization: `Bearer ${t1}` },
       payload: {
         type: "direct",
-        participantIds: [a2.id],
+        participantIds: [a2.uuid],
         topic: "Test chat",
       },
     });
@@ -24,7 +24,7 @@ describe("Agent Chats API", () => {
     const chat = createRes.json();
     expect(chat.type).toBe("direct");
     expect(chat.participants).toHaveLength(2);
-    expect(chat.participants.map((p: { agentId: string }) => p.agentId).sort()).toEqual([a1.id, a2.id].sort());
+    expect(chat.participants.map((p: { agentId: string }) => p.agentId).sort()).toEqual([a1.uuid, a2.uuid].sort());
 
     const getRes = await app.inject({
       method: "GET",
@@ -37,14 +37,14 @@ describe("Agent Chats API", () => {
 
   it("lists chats for an agent", async () => {
     const app = await appPromise;
-    const { token: t1 } = await createTestAgent(app, { id: "list-a1" });
-    const { agent: a2 } = await createTestAgent(app, { id: "list-a2" });
+    const { token: t1 } = await createTestAgent(app, { name: "list-a1" });
+    const { agent: a2 } = await createTestAgent(app, { name: "list-a2" });
 
     await app.inject({
       method: "POST",
       url: "/api/v1/agent/chats",
       headers: { authorization: `Bearer ${t1}` },
-      payload: { type: "direct", participantIds: [a2.id] },
+      payload: { type: "direct", participantIds: [a2.uuid] },
     });
 
     const res = await app.inject({
@@ -58,7 +58,7 @@ describe("Agent Chats API", () => {
 
   it("rejects chat creation with non-existent participant", async () => {
     const app = await appPromise;
-    const { token: t1 } = await createTestAgent(app, { id: "bad-a1" });
+    const { token: t1 } = await createTestAgent(app, { name: "bad-a1" });
 
     const res = await app.inject({
       method: "POST",
@@ -71,15 +71,15 @@ describe("Agent Chats API", () => {
 
   it("rejects access to non-participant chat", async () => {
     const app = await appPromise;
-    const { token: t1 } = await createTestAgent(app, { id: "deny-a1" });
-    const { token: t2 } = await createTestAgent(app, { id: "deny-a2" });
-    const { agent: a3 } = await createTestAgent(app, { id: "deny-a3" });
+    const { token: t1 } = await createTestAgent(app, { name: "deny-a1" });
+    const { token: t2 } = await createTestAgent(app, { name: "deny-a2" });
+    const { agent: a3 } = await createTestAgent(app, { name: "deny-a3" });
 
     const createRes = await app.inject({
       method: "POST",
       url: "/api/v1/agent/chats",
       headers: { authorization: `Bearer ${t2}` },
-      payload: { type: "direct", participantIds: [a3.id] },
+      payload: { type: "direct", participantIds: [a3.uuid] },
     });
     const chatId = createRes.json().id;
 

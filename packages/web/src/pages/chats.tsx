@@ -6,6 +6,7 @@ import { Badge } from "../components/ui/badge.js";
 import { Button } from "../components/ui/button.js";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card.js";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.js";
+import { useAgentNameMap } from "../lib/use-agent-name-map.js";
 import { formatDate } from "../lib/utils.js";
 
 export function ChatsPage() {
@@ -104,6 +105,7 @@ function ChatListView({
 
 function ChatDetailView({ chatId, onBack }: { chatId: string; onBack: () => void }) {
   const [msgCursor, setMsgCursor] = useState<string | undefined>();
+  const resolveAgentName = useAgentNameMap();
 
   const chatQuery = useQuery({
     queryKey: ["chat", chatId],
@@ -139,7 +141,7 @@ function ChatDetailView({ chatId, onBack }: { chatId: string; onBack: () => void
             <div className="flex flex-wrap gap-2">
               {chat.participants.map((p) => (
                 <Badge key={p.agentId} variant="outline">
-                  {p.agentId} ({p.role})
+                  {resolveAgentName(p.agentId)} ({p.role})
                 </Badge>
               ))}
             </div>
@@ -164,7 +166,7 @@ function ChatDetailView({ chatId, onBack }: { chatId: string; onBack: () => void
               {messagesData?.items.map((msg) => (
                 <div key={msg.id} className="border rounded-md p-3">
                   <div className="flex items-center justify-between mb-1">
-                    <span className="font-mono text-sm font-medium">{msg.senderId}</span>
+                    <span className="font-mono text-sm font-medium">{resolveAgentName(msg.senderId)}</span>
                     <span className="text-xs text-muted-foreground">{formatDate(msg.createdAt)}</span>
                   </div>
                   <div className="text-sm">

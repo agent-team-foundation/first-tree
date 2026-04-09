@@ -15,28 +15,28 @@ export function listAgents(params?: { limit?: number; cursor?: string; type?: st
   return api.get<PaginatedAgents>(`/admin/agents${query ? `?${query}` : ""}`);
 }
 
-export function getAgent(agentId: string): Promise<Agent> {
-  return api.get<Agent>(`/admin/agents/${encodeURIComponent(agentId)}`);
+export function getAgent(uuid: string): Promise<Agent> {
+  return api.get<Agent>(`/admin/agents/${encodeURIComponent(uuid)}`);
 }
 
 export function createAgent(data: CreateAgent): Promise<Agent> {
   return api.post<Agent>("/admin/agents", data);
 }
 
-export function updateAgent(agentId: string, data: UpdateAgent): Promise<Agent> {
-  return api.patch<Agent>(`/admin/agents/${encodeURIComponent(agentId)}`, data);
+export function updateAgent(uuid: string, data: UpdateAgent): Promise<Agent> {
+  return api.patch<Agent>(`/admin/agents/${encodeURIComponent(uuid)}`, data);
 }
 
-export function deleteAgent(agentId: string): Promise<void> {
-  return api.delete<void>(`/admin/agents/${encodeURIComponent(agentId)}`);
+export function deleteAgent(uuid: string): Promise<void> {
+  return api.delete<void>(`/admin/agents/${encodeURIComponent(uuid)}`);
 }
 
-export function suspendAgent(agentId: string): Promise<Agent> {
-  return api.post<Agent>(`/admin/agents/${encodeURIComponent(agentId)}/suspend`, {});
+export function suspendAgent(uuid: string): Promise<Agent> {
+  return api.post<Agent>(`/admin/agents/${encodeURIComponent(uuid)}/suspend`, {});
 }
 
-export function reactivateAgent(agentId: string): Promise<Agent> {
-  return api.post<Agent>(`/admin/agents/${encodeURIComponent(agentId)}/reactivate`, {});
+export function reactivateAgent(uuid: string): Promise<Agent> {
+  return api.post<Agent>(`/admin/agents/${encodeURIComponent(uuid)}/reactivate`, {});
 }
 
 // -- Test Connection --
@@ -49,6 +49,6 @@ export type TestResult = {
   responseTime?: number;
 };
 
-export function testAgentConnection(agentId: string): Promise<TestResult> {
-  return api.post<TestResult>(`/admin/agents/${encodeURIComponent(agentId)}/test`, {});
+export function testAgentConnection(uuid: string): Promise<TestResult> {
+  return api.post<TestResult>(`/admin/agents/${encodeURIComponent(uuid)}/test`, {});
 }

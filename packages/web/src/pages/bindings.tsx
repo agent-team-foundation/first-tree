@@ -6,10 +6,12 @@ import { listAdapters } from "../api/adapters.js";
 import { Badge } from "../components/ui/badge.js";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card.js";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.js";
+import { useAgentNameMap } from "../lib/use-agent-name-map.js";
 import { cn, formatDate } from "../lib/utils.js";
 
 export function BindingsPage() {
   const navigate = useNavigate();
+  const resolveAgentName = useAgentNameMap();
 
   const { data: adapters, isLoading: loadingAdapters } = useQuery({
     queryKey: ["adapters"],
@@ -72,7 +74,7 @@ export function BindingsPage() {
                   const status = botStatuses?.find((s) => s.configId === a.id);
                   return (
                     <TableRow key={a.id} className="cursor-pointer" onClick={() => navigate(`/agents/${a.agentId}`)}>
-                      <TableCell className="font-mono text-sm">{a.agentId}</TableCell>
+                      <TableCell className="font-mono text-sm">{resolveAgentName(a.agentId)}</TableCell>
                       <TableCell>
                         <Badge variant="secondary">{a.platform}</Badge>
                       </TableCell>
@@ -135,7 +137,7 @@ export function BindingsPage() {
               ) : (
                 mappings.map((m) => (
                   <TableRow key={m.id} className="cursor-pointer" onClick={() => navigate(`/agents/${m.agentId}`)}>
-                    <TableCell className="font-mono text-sm">{m.agentId}</TableCell>
+                    <TableCell className="font-mono text-sm">{resolveAgentName(m.agentId)}</TableCell>
                     <TableCell>
                       <Badge variant="secondary">{m.platform}</Badge>
                     </TableCell>

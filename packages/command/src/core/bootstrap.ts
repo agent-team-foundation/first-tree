@@ -59,7 +59,7 @@ export function resolveServerUrl(flagValue?: string): string {
  */
 export async function bootstrapToken(
   serverUrl: string,
-  agentId: string,
+  agentName: string,
   options: {
     saveTo?: string;
     type?: string;
@@ -78,7 +78,7 @@ export async function bootstrapToken(
   if (options.profile) body.profile = options.profile;
   if (options.metadata) body.metadata = options.metadata;
 
-  const res = await fetch(`${serverUrl}/api/v1/bootstrap/${encodeURIComponent(agentId)}/token`, {
+  const res = await fetch(`${serverUrl}/api/v1/bootstrap/${encodeURIComponent(agentName)}/token`, {
     method: "POST",
     headers: {
       "X-GitHub-Token": githubToken,
@@ -90,14 +90,14 @@ export async function bootstrapToken(
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { error?: string };
     const msg = body.error ?? `HTTP ${res.status}`;
-    throw new Error(`Bootstrap failed for "${agentId}": ${msg}`);
+    throw new Error(`Bootstrap failed for "${agentName}": ${msg}`);
   }
 
   const data = (await res.json()) as { token: string; agentId: string };
 
   // Save token to agent config if requested
   if (options.saveTo === "agent" || !options.saveTo) {
-    const configDir = join(DEFAULT_CONFIG_DIR, "agents", agentId);
+    const configDir = join(DEFAULT_CONFIG_DIR, "agents", agentName);
     const configPath = `${configDir}/agent.yaml`;
     mkdirSync(configDir, { recursive: true, mode: 0o700 });
     writeFileSync(configPath, `token: "${data.token}"\ntype: claude-code\n`, { mode: 0o600 });
@@ -127,11 +127,11 @@ export function resolveAgentToken(): string {
  */
 export async function checkBootstrapStatus(
   serverUrl: string,
-  agentId: string,
+  agentName: string,
 ): Promise<{ exists: boolean; status: string | null }> {
   const githubToken = getGitHubToken();
 
-  const res = await fetch(`${serverUrl}/api/v1/bootstrap/${encodeURIComponent(agentId)}/status`, {
+  const res = await fetch(`${serverUrl}/api/v1/bootstrap/${encodeURIComponent(agentName)}/status`, {
     headers: { "X-GitHub-Token": githubToken },
   });
 

@@ -14,12 +14,12 @@ const editMessageSchema = z.object({
 export async function agentMessageRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { chatId: string } }>("/:chatId/messages", async (request, reply) => {
     const identity = requireAgent(request);
-    await chatService.assertParticipant(app.db, request.params.chatId, identity.id);
+    await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
     const body = sendMessageSchema.parse(request.body);
     const { message: msg, recipients } = await messageService.sendMessage(
       app.db,
       request.params.chatId,
-      identity.id,
+      identity.uuid,
       body,
     );
 
@@ -33,13 +33,13 @@ export async function agentMessageRoutes(app: FastifyInstance): Promise<void> {
 
   app.patch<{ Params: { chatId: string; messageId: string } }>("/:chatId/messages/:messageId", async (request) => {
     const identity = requireAgent(request);
-    await chatService.assertParticipant(app.db, request.params.chatId, identity.id);
+    await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
     const body = editMessageSchema.parse(request.body);
     const msg = await messageService.editMessage(
       app.db,
       request.params.chatId,
       request.params.messageId,
-      identity.id,
+      identity.uuid,
       body,
     );
 
@@ -55,7 +55,7 @@ export async function agentMessageRoutes(app: FastifyInstance): Promise<void> {
 
   app.get<{ Params: { chatId: string } }>("/:chatId/messages", async (request) => {
     const identity = requireAgent(request);
-    await chatService.assertParticipant(app.db, request.params.chatId, identity.id);
+    await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
     const query = paginationQuerySchema.parse(request.query);
     const result = await messageService.listMessages(app.db, request.params.chatId, query.limit, query.cursor);
     return {
@@ -69,13 +69,13 @@ export async function agentMessageRoutes(app: FastifyInstance): Promise<void> {
 }
 
 export async function agentSendToAgentRoutes(app: FastifyInstance): Promise<void> {
-  app.post<{ Params: { agentId: string } }>("/:agentId/messages", async (request, reply) => {
+  app.post<{ Params: { name: string } }>("/:name/messages", async (request, reply) => {
     const identity = requireAgent(request);
     const body = sendToAgentSchema.parse(request.body);
     const { message: msg, recipients } = await messageService.sendToAgent(
       app.db,
-      identity.id,
-      request.params.agentId,
+      identity.uuid,
+      request.params.name,
       body,
     );
 

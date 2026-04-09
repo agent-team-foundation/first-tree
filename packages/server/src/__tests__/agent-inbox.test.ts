@@ -7,15 +7,15 @@ describe("Agent Inbox API", () => {
 
   it("polls inbox and acks entry", async () => {
     const app = await appPromise;
-    const { token: t1 } = await createTestAgent(app, { id: "inbox-a1" });
-    const { agent: a2, token: t2 } = await createTestAgent(app, { id: "inbox-a2" });
+    const { token: t1 } = await createTestAgent(app, { name: "inbox-a1" });
+    const { agent: a2, token: t2 } = await createTestAgent(app, { name: "inbox-a2" });
 
     // Create chat and send message
     const chatRes = await app.inject({
       method: "POST",
       url: "/api/v1/agent/chats",
       headers: { authorization: `Bearer ${t1}` },
-      payload: { type: "direct", participantIds: [a2.id] },
+      payload: { type: "direct", participantIds: [a2.uuid] },
     });
     const chatId = chatRes.json().id;
 

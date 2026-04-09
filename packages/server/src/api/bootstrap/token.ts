@@ -5,13 +5,13 @@ import * as agentService from "../../services/agent.js";
 
 export async function bootstrapRoutes(app: FastifyInstance): Promise<void> {
   /**
-   * POST /bootstrap/:agentId/token
+   * POST /bootstrap/:name/token
    * GitHub identity → Agent token.
    * Auto-creates the agent if it does not exist.
    * Only works when the agent has no active tokens.
    */
-  app.post<{ Params: { agentId: string } }>("/:agentId/token", async (request, reply) => {
-    const { agentId } = request.params;
+  app.post<{ Params: { name: string } }>("/:name/token", async (request, reply) => {
+    const { name } = request.params;
     const githubUser = request.githubUser;
     if (!githubUser) {
       throw new ForbiddenError("GitHub authentication required");
@@ -32,7 +32,7 @@ export async function bootstrapRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const body = bootstrapTokenRequestSchema.parse(request.body ?? {});
-    const result = await agentService.bootstrapToken(app.db, agentId, githubUser.username, {
+    const result = await agentService.bootstrapToken(app.db, name, "default", githubUser.username, {
       tokenName: body.name,
       type: body.type,
       displayName: body.displayName,
@@ -52,25 +52,23 @@ export async function bootstrapRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /**
-   * GET /bootstrap/:agentId/status
+   * GET /bootstrap/:name/status
    * Check if an agent exists and its status (for polling).
    */
-  app.get<{ Params: { agentId: string } }>("/:agentId/status", async (request) => {
-    const { agentId } = request.params;
+  app.get<{ Params: { name: string } }>("/:name/status", async (request) => {
+    const { name } = request.params;
     const githubUser = request.githubUser;
     if (!githubUser) {
       throw new ForbiddenError("GitHub authentication required");
     }
 
     try {
-      const agent = await agentService.getAgent(app.db, agentId);
+      const agent = await agentService.getAgentByName(app.db, "default", name);
 
       // Verify caller is in owners
       const owners: string[] = Array.isArray(agent.metadata?.owners) ? (agent.metadata.owners as string[]) : [];
       if (!owners.includes(githubUser.username)) {
-        throw new ForbiddenError(
-          `GitHub user "${githubUser.username}" is not in the owners list for agent "${agentId}"`,
-        );
+        throw new ForbiddenError(`GitHub user "${githubUser.username}" is not in the owners list for agent "${name}"`);
       }
 
       return {

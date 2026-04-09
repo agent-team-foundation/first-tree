@@ -34,15 +34,15 @@ export async function createTestApp(): Promise<FastifyInstance> {
 /** Create an agent via direct DB insert and return its bearer token. */
 export async function createTestAgent(
   app: FastifyInstance,
-  opts: { id?: string; type?: AgentType; displayName?: string } = {},
+  opts: { name?: string; type?: AgentType; displayName?: string } = {},
 ) {
   const { createAgent, createToken } = await import("../services/agent.js");
   const agent = await createAgent(app.db, {
-    id: opts.id ?? `test-agent-${crypto.randomUUID().slice(0, 8)}`,
+    name: opts.name ?? `test-agent-${crypto.randomUUID().slice(0, 8)}`,
     type: opts.type ?? "autonomous_agent",
     displayName: opts.displayName ?? "Test Agent",
   });
-  const token = await createToken(app.db, agent.id, { name: "test" });
+  const token = await createToken(app.db, agent.uuid, { name: "test" });
   return { agent, token: token.token };
 }
 

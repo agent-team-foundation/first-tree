@@ -9,15 +9,15 @@ describe("sendMessage returns recipients", () => {
 
   it("returns recipient inboxIds excluding sender", async () => {
     const app = await appPromise;
-    const { agent: a1 } = await createTestAgent(app, { id: `recip-a1-${crypto.randomUUID().slice(0, 6)}` });
-    const { agent: a2 } = await createTestAgent(app, { id: `recip-a2-${crypto.randomUUID().slice(0, 6)}` });
+    const { agent: a1 } = await createTestAgent(app, { name: `recip-a1-${crypto.randomUUID().slice(0, 6)}` });
+    const { agent: a2 } = await createTestAgent(app, { name: `recip-a2-${crypto.randomUUID().slice(0, 6)}` });
 
-    const chat = await createChat(app.db, a1.id, {
+    const chat = await createChat(app.db, a1.uuid, {
       type: "direct",
-      participantIds: [a2.id],
+      participantIds: [a2.uuid],
     });
 
-    const result = await sendMessage(app.db, chat.id, a1.id, {
+    const result = await sendMessage(app.db, chat.id, a1.uuid, {
       format: "text",
       content: "hello",
     });
@@ -30,14 +30,14 @@ describe("sendMessage returns recipients", () => {
 
   it("returns empty recipients when no other participants", async () => {
     const app = await appPromise;
-    const { agent: a1 } = await createTestAgent(app, { id: `recip-solo-${crypto.randomUUID().slice(0, 6)}` });
+    const { agent: a1 } = await createTestAgent(app, { name: `recip-solo-${crypto.randomUUID().slice(0, 6)}` });
 
-    const chat = await createChat(app.db, a1.id, {
+    const chat = await createChat(app.db, a1.uuid, {
       type: "group",
       participantIds: [],
     });
 
-    const result = await sendMessage(app.db, chat.id, a1.id, {
+    const result = await sendMessage(app.db, chat.id, a1.uuid, {
       format: "text",
       content: "talking to myself",
     });
@@ -47,16 +47,16 @@ describe("sendMessage returns recipients", () => {
 
   it("returns multiple recipients in group chat", async () => {
     const app = await appPromise;
-    const { agent: a1 } = await createTestAgent(app, { id: `recip-g1-${crypto.randomUUID().slice(0, 6)}` });
-    const { agent: a2 } = await createTestAgent(app, { id: `recip-g2-${crypto.randomUUID().slice(0, 6)}` });
-    const { agent: a3 } = await createTestAgent(app, { id: `recip-g3-${crypto.randomUUID().slice(0, 6)}` });
+    const { agent: a1 } = await createTestAgent(app, { name: `recip-g1-${crypto.randomUUID().slice(0, 6)}` });
+    const { agent: a2 } = await createTestAgent(app, { name: `recip-g2-${crypto.randomUUID().slice(0, 6)}` });
+    const { agent: a3 } = await createTestAgent(app, { name: `recip-g3-${crypto.randomUUID().slice(0, 6)}` });
 
-    const chat = await createChat(app.db, a1.id, {
+    const chat = await createChat(app.db, a1.uuid, {
       type: "group",
-      participantIds: [a2.id, a3.id],
+      participantIds: [a2.uuid, a3.uuid],
     });
 
-    const result = await sendMessage(app.db, chat.id, a1.id, {
+    const result = await sendMessage(app.db, chat.id, a1.uuid, {
       format: "text",
       content: "group msg",
     });
@@ -70,17 +70,17 @@ describe("sendMessage returns recipients", () => {
 
   it("includes replyTo recipient in recipients", async () => {
     const app = await appPromise;
-    const { agent: a1 } = await createTestAgent(app, { id: `recip-rt1-${crypto.randomUUID().slice(0, 6)}` });
-    const { agent: a2 } = await createTestAgent(app, { id: `recip-rt2-${crypto.randomUUID().slice(0, 6)}` });
-    const { agent: a3 } = await createTestAgent(app, { id: `recip-rt3-${crypto.randomUUID().slice(0, 6)}` });
+    const { agent: a1 } = await createTestAgent(app, { name: `recip-rt1-${crypto.randomUUID().slice(0, 6)}` });
+    const { agent: a2 } = await createTestAgent(app, { name: `recip-rt2-${crypto.randomUUID().slice(0, 6)}` });
+    const { agent: a3 } = await createTestAgent(app, { name: `recip-rt3-${crypto.randomUUID().slice(0, 6)}` });
 
-    const chat = await createChat(app.db, a1.id, {
+    const chat = await createChat(app.db, a1.uuid, {
       type: "group",
-      participantIds: [a2.id],
+      participantIds: [a2.uuid],
     });
 
     // a1 sends a message with replyTo pointing to a3
-    const original = await sendMessage(app.db, chat.id, a1.id, {
+    const original = await sendMessage(app.db, chat.id, a1.uuid, {
       format: "text",
       content: "original message",
       replyToInbox: a3.inboxId,
@@ -88,7 +88,7 @@ describe("sendMessage returns recipients", () => {
     });
 
     // a2 replies to the original message
-    const reply = await sendMessage(app.db, chat.id, a2.id, {
+    const reply = await sendMessage(app.db, chat.id, a2.uuid, {
       format: "text",
       content: "reply",
       inReplyTo: original.message.id,
@@ -101,10 +101,11 @@ describe("sendMessage returns recipients", () => {
 
   it("sendToAgent returns recipients", async () => {
     const app = await appPromise;
-    const { agent: a1 } = await createTestAgent(app, { id: `recip-dm1-${crypto.randomUUID().slice(0, 6)}` });
-    const { agent: a2 } = await createTestAgent(app, { id: `recip-dm2-${crypto.randomUUID().slice(0, 6)}` });
+    const { agent: a1 } = await createTestAgent(app, { name: `recip-dm1-${crypto.randomUUID().slice(0, 6)}` });
+    const { agent: a2 } = await createTestAgent(app, { name: `recip-dm2-${crypto.randomUUID().slice(0, 6)}` });
+    if (!a2.name) throw new Error("Expected a2.name to be set");
 
-    const result = await sendToAgent(app.db, a1.id, a2.id, {
+    const result = await sendToAgent(app.db, a1.uuid, a2.name, {
       format: "text",
       content: "direct message",
     });

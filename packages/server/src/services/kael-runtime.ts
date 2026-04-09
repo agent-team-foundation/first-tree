@@ -64,14 +64,14 @@ export function createKaelRuntime(
       const configAgentIds = configs.filter((c) => c.credentials).map((c) => c.agentId);
       const agentRows =
         configAgentIds.length > 0
-          ? await db.execute<{ id: string; inbox_id: string }>(
-              sql`SELECT id, inbox_id FROM agents WHERE id IN (${sql.join(
+          ? await db.execute<{ uuid: string; inbox_id: string }>(
+              sql`SELECT uuid, inbox_id FROM agents WHERE uuid IN (${sql.join(
                 configAgentIds.map((id) => sql`${id}`),
                 sql`, `,
               )}) AND status = 'active'`,
             )
           : [];
-      const agentInboxMap = new Map(agentRows.map((a) => [a.id, a.inbox_id]));
+      const agentInboxMap = new Map(agentRows.map((a) => [a.uuid, a.inbox_id]));
 
       const seen = new Set<string>();
 
@@ -141,10 +141,10 @@ export function createKaelRuntime(
           WHERE id IN (
             SELECT ie.id FROM inbox_entries ie
             JOIN agents a ON ie.inbox_id = a.inbox_id
-            JOIN adapter_configs ac ON a.id = ac.agent_id
+            JOIN adapter_configs ac ON a.uuid = ac.agent_id
             WHERE ac.platform = 'kael' AND ac.status = 'active'
               AND ie.status = 'pending'
-              AND a.id IN (${sql.join(
+              AND a.uuid IN (${sql.join(
                 agentIds.map((id) => sql`${id}`),
                 sql`, `,
               )})

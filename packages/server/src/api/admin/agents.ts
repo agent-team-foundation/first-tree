@@ -27,7 +27,8 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
   app.get("/", async (request) => {
     const query = paginationQuerySchema.parse(request.query);
     const { type } = listAgentsFilterSchema.parse(request.query);
-    const result = await agentService.listAgents(app.db, query.limit, query.cursor, type);
+    const org = (request.query as Record<string, string>).org ?? "default";
+    const result = await agentService.listAgents(app.db, org, query.limit, query.cursor, type);
     return {
       items: result.items.map((a) => ({
         ...a,
@@ -49,9 +50,9 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
-  app.patch<{ Params: { agentId: string } }>("/:agentId", async (request) => {
+  app.patch<{ Params: { uuid: string } }>("/:uuid", async (request) => {
     const body = updateAgentSchema.parse(request.body);
-    const agent = await agentService.updateAgent(app.db, request.params.agentId, body);
+    const agent = await agentService.updateAgent(app.db, request.params.uuid, body);
     return {
       ...agent,
       createdAt: agent.createdAt.toISOString(),
@@ -59,8 +60,8 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
     };
   });
 
-  app.get<{ Params: { agentId: string } }>("/:agentId", async (request) => {
-    const agent = await agentService.getAgent(app.db, request.params.agentId);
+  app.get<{ Params: { uuid: string } }>("/:uuid", async (request) => {
+    const agent = await agentService.getAgent(app.db, request.params.uuid);
     return {
       ...agent,
       createdAt: agent.createdAt.toISOString(),
@@ -69,9 +70,9 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // Token management
-  app.post<{ Params: { agentId: string } }>("/:agentId/tokens", async (request, reply) => {
+  app.post<{ Params: { uuid: string } }>("/:uuid/tokens", async (request, reply) => {
     const body = createAgentTokenSchema.parse(request.body);
-    const result = await agentService.createToken(app.db, request.params.agentId, body);
+    const result = await agentService.createToken(app.db, request.params.uuid, body);
     return reply.status(201).send({
       ...result,
       expiresAt: serializeDate(result.expiresAt),
@@ -81,8 +82,8 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
-  app.get<{ Params: { agentId: string } }>("/:agentId/tokens", async (request) => {
-    const tokens = await agentService.listTokens(app.db, request.params.agentId);
+  app.get<{ Params: { uuid: string } }>("/:uuid/tokens", async (request) => {
+    const tokens = await agentService.listTokens(app.db, request.params.uuid);
     return tokens.map((t) => ({
       ...t,
       expiresAt: serializeDate(t.expiresAt),
@@ -92,24 +93,24 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
     }));
   });
 
-  app.delete<{ Params: { agentId: string; tokenId: string } }>("/:agentId/tokens/:tokenId", async (request, reply) => {
-    await agentService.revokeToken(app.db, request.params.agentId, request.params.tokenId);
+  app.delete<{ Params: { uuid: string; tokenId: string } }>("/:uuid/tokens/:tokenId", async (request, reply) => {
+    await agentService.revokeToken(app.db, request.params.uuid, request.params.tokenId);
     return reply.status(204).send();
   });
 
   // Force-disconnect an agent's WebSocket connection
-  app.post<{ Params: { agentId: string } }>("/:agentId/disconnect", async (request, reply) => {
-    const { agentId } = request.params;
+  app.post<{ Params: { uuid: string } }>("/:uuid/disconnect", async (request, reply) => {
+    const { uuid } = request.params;
     // Verify agent exists
-    await agentService.getAgent(app.db, agentId);
+    await agentService.getAgent(app.db, uuid);
     // Close WebSocket and set presence offline
-    const wasConnected = forceDisconnect(agentId);
-    await presenceService.setOffline(app.db, agentId);
+    const wasConnected = forceDisconnect(uuid);
+    await presenceService.setOffline(app.db, uuid);
     return reply.status(200).send({ disconnected: wasConnected });
   });
 
-  app.post<{ Params: { agentId: string } }>("/:agentId/suspend", async (request) => {
-    const agent = await agentService.suspendAgent(app.db, request.params.agentId);
+  app.post<{ Params: { uuid: string } }>("/:uuid/suspend", async (request) => {
+    const agent = await agentService.suspendAgent(app.db, request.params.uuid);
     return {
       ...agent,
       createdAt: agent.createdAt.toISOString(),
@@ -117,8 +118,8 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
     };
   });
 
-  app.post<{ Params: { agentId: string } }>("/:agentId/reactivate", async (request) => {
-    const agent = await agentService.reactivateAgent(app.db, request.params.agentId);
+  app.post<{ Params: { uuid: string } }>("/:uuid/reactivate", async (request) => {
+    const agent = await agentService.reactivateAgent(app.db, request.params.uuid);
     return {
       ...agent,
       createdAt: agent.createdAt.toISOString(),
@@ -127,17 +128,17 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // DELETE agent — only allowed for suspended agents
-  app.delete<{ Params: { agentId: string } }>("/:agentId", async (request, reply) => {
-    await agentService.deleteAgent(app.db, request.params.agentId);
+  app.delete<{ Params: { uuid: string } }>("/:uuid", async (request, reply) => {
+    await agentService.deleteAgent(app.db, request.params.uuid);
     return reply.status(204).send();
   });
 
-  app.post<{ Params: { agentId: string } }>("/:agentId/test", async (request, reply) => {
-    const { agentId } = request.params;
+  app.post<{ Params: { uuid: string } }>("/:uuid/test", async (request, reply) => {
+    const { uuid } = request.params;
 
     const [, presence] = await Promise.all([
-      agentService.getAgent(app.db, agentId),
-      presenceService.getPresence(app.db, agentId),
+      agentService.getAgent(app.db, uuid),
+      presenceService.getPresence(app.db, uuid),
     ]);
 
     if (!presence || presence.status !== "online") {
@@ -149,19 +150,19 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
 
     // Find sender: look for human owner (whose delegateMention points to this agent), then fall back to any other active agent
     const [owner] = await app.db
-      .select({ id: agents.id })
+      .select({ uuid: agents.uuid })
       .from(agents)
-      .where(and(eq(agents.delegateMention, agentId), eq(agents.status, "active")))
+      .where(and(eq(agents.delegateMention, uuid), eq(agents.status, "active")))
       .limit(1);
 
-    let senderId = owner?.id ?? null;
+    let senderId = owner?.uuid ?? null;
     if (!senderId) {
       const [other] = await app.db
-        .select({ id: agents.id })
+        .select({ uuid: agents.uuid })
         .from(agents)
-        .where(and(ne(agents.id, agentId), eq(agents.status, "active")))
+        .where(and(ne(agents.uuid, uuid), eq(agents.status, "active")))
         .limit(1);
-      senderId = other?.id ?? null;
+      senderId = other?.uuid ?? null;
     }
 
     if (!senderId) {
@@ -171,7 +172,7 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
       });
     }
 
-    const chat = await findOrCreateDirectChat(app.db, senderId, agentId);
+    const chat = await findOrCreateDirectChat(app.db, senderId, uuid);
 
     const testContent = `[System Test] Verify your connection. Respond with your identity and role. Time: ${new Date().toISOString()}`;
     const result = await sendMessage(app.db, chat.id, senderId, {
@@ -192,7 +193,7 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
       const [response] = await app.db
         .select()
         .from(messages)
-        .where(and(eq(messages.chatId, chat.id), eq(messages.senderId, agentId), gt(messages.createdAt, threshold)))
+        .where(and(eq(messages.chatId, chat.id), eq(messages.senderId, uuid), gt(messages.createdAt, threshold)))
         .limit(1);
 
       if (response) {

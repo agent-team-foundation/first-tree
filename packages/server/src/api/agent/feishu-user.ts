@@ -24,10 +24,10 @@ export async function agentFeishuUserRoutes(app: FastifyInstance): Promise<void>
     }
 
     // 2. Check delegate_mention authorization
-    if (humanAgent.delegateMention !== identity.id) {
+    if (humanAgent.delegateMention !== identity.uuid) {
       throw new ForbiddenError(
-        `Agent "${identity.id}" is not the delegate of "${humanAgentId}". ` +
-          `Expected delegate_mention="${identity.id}" but found "${humanAgent.delegateMention ?? "(none)"}".`,
+        `Agent "${identity.uuid}" is not the delegate of "${humanAgentId}". ` +
+          `Expected delegate_mention="${identity.uuid}" but found "${humanAgent.delegateMention ?? "(none)"}".`,
       );
     }
 
@@ -63,8 +63,8 @@ export async function agentFeishuUserRoutes(app: FastifyInstance): Promise<void>
     const humanAgent = await agentService.getAgent(app.db, humanAgentId);
 
     // 2. Check delegate_mention authorization
-    if (humanAgent.delegateMention !== identity.id) {
-      throw new ForbiddenError(`Agent "${identity.id}" is not the delegate of "${humanAgentId}"`);
+    if (humanAgent.delegateMention !== identity.uuid) {
+      throw new ForbiddenError(`Agent "${identity.uuid}" is not the delegate of "${humanAgentId}"`);
     }
 
     // 3. Delete mapping

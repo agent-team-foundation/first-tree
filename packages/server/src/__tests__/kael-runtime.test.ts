@@ -145,8 +145,8 @@ describe("KaelRuntime", () => {
 
   describe("reload()", () => {
     it("loads active kael adapter configs from DB", async () => {
-      const { agent } = await createTestAgent(app, { id: "kael-reload-1" });
-      await insertKaelConfig(agent.id);
+      const { agent } = await createTestAgent(app, { name: "kael-reload-1" });
+      await insertKaelConfig(agent.uuid);
 
       const log = createMockLogger();
       const runtime = createKaelRuntime(app.db, ENCRYPTION_KEY, KAEL_ENDPOINT, KAEL_API_KEY, SERVER_URL, log);
@@ -156,7 +156,7 @@ describe("KaelRuntime", () => {
       expect(log.info).toHaveBeenCalled();
       const infoMock = log.info as unknown as { mock: { calls: unknown[][] } };
       const infoArgs = infoMock.mock.calls.map((c) => (c[0] as Record<string, unknown>)?.agentId);
-      expect(infoArgs).toContain(agent.id);
+      expect(infoArgs).toContain(agent.uuid);
 
       // Verify config was loaded by sending a message through processOutbound
       const chatId = `chat-reload-1-${Date.now()}`;
@@ -176,8 +176,8 @@ describe("KaelRuntime", () => {
     });
 
     it("ignores non-kael configs", async () => {
-      const { agent } = await createTestAgent(app, { id: "kael-ignore-feishu" });
-      await insertFeishuConfig(agent.id);
+      const { agent } = await createTestAgent(app, { name: "kael-ignore-feishu" });
+      await insertFeishuConfig(agent.uuid);
 
       const runtime = createKaelRuntime(
         app.db,
@@ -196,8 +196,8 @@ describe("KaelRuntime", () => {
     });
 
     it("ignores inactive configs", async () => {
-      const { agent } = await createTestAgent(app, { id: "kael-inactive" });
-      await insertKaelConfig(agent.id, { status: "inactive" });
+      const { agent } = await createTestAgent(app, { name: "kael-inactive" });
+      await insertKaelConfig(agent.uuid, { status: "inactive" });
 
       const runtime = createKaelRuntime(
         app.db,
@@ -215,8 +215,8 @@ describe("KaelRuntime", () => {
     });
 
     it("clears configs when KAEL_ENDPOINT is not set", async () => {
-      const { agent } = await createTestAgent(app, { id: "kael-no-endpoint" });
-      await insertKaelConfig(agent.id);
+      const { agent } = await createTestAgent(app, { name: "kael-no-endpoint" });
+      await insertKaelConfig(agent.uuid);
 
       // First load with endpoint
       const runtime = createKaelRuntime(
@@ -246,9 +246,9 @@ describe("KaelRuntime", () => {
     });
 
     it("handles decryption failures gracefully (logs error, skips config)", async () => {
-      const { agent } = await createTestAgent(app, { id: "kael-bad-creds" });
+      const { agent } = await createTestAgent(app, { name: "kael-bad-creds" });
       // Insert with invalid (non-encrypted) credentials
-      await insertKaelConfig(agent.id, { credentials: "not-valid-encrypted-data" });
+      await insertKaelConfig(agent.uuid, { credentials: "not-valid-encrypted-data" });
 
       const log = createMockLogger();
       const runtime = createKaelRuntime(app.db, ENCRYPTION_KEY, KAEL_ENDPOINT, KAEL_API_KEY, SERVER_URL, log);
@@ -282,8 +282,8 @@ describe("KaelRuntime", () => {
     });
 
     it("claims pending inbox entries for kael-bound agents", async () => {
-      const { agent } = await createTestAgent(app, { id: "kael-claim" });
-      await insertKaelConfig(agent.id);
+      const { agent } = await createTestAgent(app, { name: "kael-claim" });
+      await insertKaelConfig(agent.uuid);
 
       const runtime = createKaelRuntime(
         app.db,
@@ -317,9 +317,9 @@ describe("KaelRuntime", () => {
     });
 
     it("POSTs correct payload to Kael API (verify URL, headers, body shape)", async () => {
-      const { agent } = await createTestAgent(app, { id: "kael-payload" });
+      const { agent } = await createTestAgent(app, { name: "kael-payload" });
       const kaelCreds = { kaelUserId: "u-123", kaelProjectId: "p-456", agentToken: "tok-789" };
-      await insertKaelConfig(agent.id, {
+      await insertKaelConfig(agent.uuid, {
         credentials: encryptCredentials(kaelCreds, ENCRYPTION_KEY),
       });
 
@@ -359,7 +359,7 @@ describe("KaelRuntime", () => {
       // Verify body shape
       const body = JSON.parse(init.body as string) as Record<string, unknown>;
       expect(body.hub_chat_id).toBe(chatId);
-      expect(body.hub_agent_id).toBe(agent.id);
+      expect(body.hub_agent_id).toBe(agent.uuid);
       expect(body.hub_server_url).toBe(SERVER_URL);
       expect(body.hub_agent_token).toBe(kaelCreds.agentToken);
       expect(body.user_id).toBe(kaelCreds.kaelUserId);
@@ -372,8 +372,8 @@ describe("KaelRuntime", () => {
     });
 
     it("ACKs entry on successful POST", async () => {
-      const { agent } = await createTestAgent(app, { id: "kael-ack-ok" });
-      await insertKaelConfig(agent.id);
+      const { agent } = await createTestAgent(app, { name: "kael-ack-ok" });
+      await insertKaelConfig(agent.uuid);
 
       const runtime = createKaelRuntime(
         app.db,
@@ -406,8 +406,8 @@ describe("KaelRuntime", () => {
     });
 
     it("NACKs entry on HTTP error (4xx, 5xx)", async () => {
-      const { agent } = await createTestAgent(app, { id: "kael-nack-http" });
-      await insertKaelConfig(agent.id);
+      const { agent } = await createTestAgent(app, { name: "kael-nack-http" });
+      await insertKaelConfig(agent.uuid);
 
       const runtime = createKaelRuntime(
         app.db,
@@ -449,8 +449,8 @@ describe("KaelRuntime", () => {
     });
 
     it("NACKs entry on network error", async () => {
-      const { agent } = await createTestAgent(app, { id: "kael-nack-net" });
-      await insertKaelConfig(agent.id);
+      const { agent } = await createTestAgent(app, { name: "kael-nack-net" });
+      await insertKaelConfig(agent.uuid);
 
       const runtime = createKaelRuntime(
         app.db,
@@ -484,8 +484,8 @@ describe("KaelRuntime", () => {
     });
 
     it("marks entry as failed after MAX_RETRY_COUNT (3) retries", async () => {
-      const { agent } = await createTestAgent(app, { id: "kael-max-retry" });
-      await insertKaelConfig(agent.id);
+      const { agent } = await createTestAgent(app, { name: "kael-max-retry" });
+      await insertKaelConfig(agent.uuid);
 
       const runtime = createKaelRuntime(
         app.db,
@@ -531,12 +531,12 @@ describe("KaelRuntime", () => {
 
     it("does not claim entries for non-kael agents", async () => {
       // Create agent with feishu adapter only (no kael)
-      const { agent } = await createTestAgent(app, { id: "kael-non-kael-agent" });
-      await insertFeishuConfig(agent.id);
+      const { agent } = await createTestAgent(app, { name: "kael-non-kael-agent" });
+      await insertFeishuConfig(agent.uuid);
 
       // Create a kael-bound agent to load configs
-      const { agent: kaelAgent } = await createTestAgent(app, { id: "kael-actual-agent" });
-      await insertKaelConfig(kaelAgent.id);
+      const { agent: kaelAgent } = await createTestAgent(app, { name: "kael-actual-agent" });
+      await insertKaelConfig(kaelAgent.uuid);
 
       const runtime = createKaelRuntime(
         app.db,
@@ -571,8 +571,8 @@ describe("KaelRuntime", () => {
     });
 
     it("uses X-Internal-API-Key header (not Authorization: Bearer)", async () => {
-      const { agent } = await createTestAgent(app, { id: "kael-header-check" });
-      await insertKaelConfig(agent.id);
+      const { agent } = await createTestAgent(app, { name: "kael-header-check" });
+      await insertKaelConfig(agent.uuid);
 
       const runtime = createKaelRuntime(
         app.db,
@@ -612,8 +612,8 @@ describe("KaelRuntime", () => {
 
   describe("shutdown()", () => {
     it("clears agent configs", async () => {
-      const { agent } = await createTestAgent(app, { id: "kael-shutdown-clear" });
-      await insertKaelConfig(agent.id);
+      const { agent } = await createTestAgent(app, { name: "kael-shutdown-clear" });
+      await insertKaelConfig(agent.uuid);
 
       const runtime = createKaelRuntime(
         app.db,
@@ -633,8 +633,8 @@ describe("KaelRuntime", () => {
     });
 
     it("processOutbound returns immediately after shutdown", async () => {
-      const { agent } = await createTestAgent(app, { id: "kael-shutdown-noop" });
-      await insertKaelConfig(agent.id);
+      const { agent } = await createTestAgent(app, { name: "kael-shutdown-noop" });
+      await insertKaelConfig(agent.uuid);
 
       const runtime = createKaelRuntime(
         app.db,

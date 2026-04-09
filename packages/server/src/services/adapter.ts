@@ -23,9 +23,9 @@ function requireEncryptionKey(key: string | undefined): string {
 
 async function validateAgentId(db: Database, agentId: string): Promise<void> {
   const [agent] = await db
-    .select({ id: agents.id, type: agents.type })
+    .select({ id: agents.uuid, type: agents.type })
     .from(agents)
-    .where(and(eq(agents.id, agentId), ne(agents.status, "deleted")))
+    .where(and(eq(agents.uuid, agentId), ne(agents.status, "deleted")))
     .limit(1);
   if (!agent) {
     throw new NotFoundError(`Agent "${agentId}" not found`);

@@ -22,8 +22,8 @@ describe("Admin DELETE Agent API", () => {
     const req = await authedRequest(app);
 
     // Create agent with token, then suspend (simulating sync removing it from tree)
-    const { agent, token } = await createTestAgent(app, { id: "del-agent" });
-    await suspendAgent(app.db, agent.id);
+    const { agent, token } = await createTestAgent(app, { name: "del-agent" });
+    await suspendAgent(app.db, agent.uuid);
 
     // Verify token no longer works (revoked by suspend)
     const meRes = await app.inject({
@@ -34,11 +34,11 @@ describe("Admin DELETE Agent API", () => {
     expect(meRes.statusCode).toBe(401);
 
     // Delete suspended agent
-    const delRes = await req("DELETE", `/api/v1/admin/agents/${agent.id}`);
+    const delRes = await req("DELETE", `/api/v1/admin/agents/${agent.uuid}`);
     expect(delRes.statusCode).toBe(204);
 
     // Deleted agent is no longer visible
-    const getRes = await req("GET", `/api/v1/admin/agents/${agent.id}`);
+    const getRes = await req("GET", `/api/v1/admin/agents/${agent.uuid}`);
     expect(getRes.statusCode).toBe(404);
   });
 
@@ -46,9 +46,9 @@ describe("Admin DELETE Agent API", () => {
     const app = await appPromise;
     const req = await authedRequest(app);
 
-    await createAgent(app.db, { id: "active-no-del", type: "autonomous_agent" });
+    const agent = await createAgent(app.db, { name: "active-no-del", type: "autonomous_agent" });
 
-    const res = await req("DELETE", "/api/v1/admin/agents/active-no-del");
+    const res = await req("DELETE", `/api/v1/admin/agents/${agent.uuid}`);
     expect(res.statusCode).toBe(400);
   });
 
@@ -57,14 +57,18 @@ describe("Admin DELETE Agent API", () => {
     const req = await authedRequest(app);
 
     // Create, suspend, then delete
-    await createAgent(app.db, { id: "recreate-agent", type: "autonomous_agent", displayName: "Original" });
-    await suspendAgent(app.db, "recreate-agent");
-    const delRes = await req("DELETE", "/api/v1/admin/agents/recreate-agent");
+    const agent = await createAgent(app.db, {
+      name: "recreate-agent",
+      type: "autonomous_agent",
+      displayName: "Original",
+    });
+    await suspendAgent(app.db, agent.uuid);
+    const delRes = await req("DELETE", `/api/v1/admin/agents/${agent.uuid}`);
     expect(delRes.statusCode).toBe(204);
 
-    // Recreate with same ID (as sync would do)
+    // Recreate with same name (as sync would do)
     const recreated = await createAgent(app.db, {
-      id: "recreate-agent",
+      name: "recreate-agent",
       type: "personal_assistant",
       displayName: "Recreated",
     });
@@ -76,24 +80,24 @@ describe("Admin DELETE Agent API", () => {
   it("deletes agent's adapter bindings", async () => {
     const app = await appPromise;
     const req = await authedRequest(app);
-    const { agent } = await createTestAgent(app, { id: "del-adapter-agent" });
+    const { agent } = await createTestAgent(app, { name: "del-adapter-agent" });
 
     // Create an adapter config bound to this agent
     await req("POST", "/api/v1/admin/adapters", {
       platform: "feishu",
-      agentId: agent.id,
+      agentId: agent.uuid,
       credentials: { app_id: "cli_del_test", app_secret: "secret" },
     });
 
     // Suspend then delete
-    await suspendAgent(app.db, agent.id);
-    const delRes = await req("DELETE", `/api/v1/admin/agents/${agent.id}`);
+    await suspendAgent(app.db, agent.uuid);
+    const delRes = await req("DELETE", `/api/v1/admin/agents/${agent.uuid}`);
     expect(delRes.statusCode).toBe(204);
 
     // Adapter config should be cleaned up
     const listRes = await req("GET", "/api/v1/admin/adapters");
     const configs = listRes.json();
-    const found = configs.find((c: { agentId: string }) => c.agentId === agent.id);
+    const found = configs.find((c: { agentId: string }) => c.agentId === agent.uuid);
     expect(found).toBeUndefined();
   });
 
@@ -109,11 +113,11 @@ describe("Admin DELETE Agent API", () => {
     const app = await appPromise;
     const req = await authedRequest(app);
 
-    await createAgent(app.db, { id: "double-del", type: "human" });
-    await suspendAgent(app.db, "double-del");
-    await req("DELETE", "/api/v1/admin/agents/double-del");
+    const agent = await createAgent(app.db, { name: "double-del", type: "human" });
+    await suspendAgent(app.db, agent.uuid);
+    await req("DELETE", `/api/v1/admin/agents/${agent.uuid}`);
 
-    const res = await req("DELETE", "/api/v1/admin/agents/double-del");
+    const res = await req("DELETE", `/api/v1/admin/agents/${agent.uuid}`);
     expect(res.statusCode).toBe(404);
   });
 });

@@ -15,14 +15,14 @@ export async function agentFeishuBotRoutes(app: FastifyInstance): Promise<void> 
     const body = selfServiceFeishuBotSchema.parse(request.body);
 
     // Verify agent is not human
-    const agent = await agentService.getAgent(app.db, identity.id);
+    const agent = await agentService.getAgent(app.db, identity.uuid);
     if (agent.type === "human") {
       throw new BadRequestError("Human agents cannot bind Feishu bots. Use bind-user instead.");
     }
 
     // Try update existing, otherwise create
     const existing = await adapterService.listAdapterConfigs(app.db);
-    const current = existing.find((c) => c.agentId === identity.id && c.platform === "feishu");
+    const current = existing.find((c) => c.agentId === identity.uuid && c.platform === "feishu");
 
     let config: Awaited<ReturnType<typeof adapterService.updateAdapterConfig>>;
     if (current) {
@@ -37,7 +37,7 @@ export async function agentFeishuBotRoutes(app: FastifyInstance): Promise<void> 
         app.db,
         {
           platform: "feishu",
-          agentId: identity.id,
+          agentId: identity.uuid,
           credentials: { app_id: body.appId, app_secret: body.appSecret },
           status: "active",
         },
@@ -64,7 +64,7 @@ export async function agentFeishuBotRoutes(app: FastifyInstance): Promise<void> 
     const identity = requireAgent(request);
 
     const existing = await adapterService.listAdapterConfigs(app.db);
-    const current = existing.find((c) => c.agentId === identity.id && c.platform === "feishu");
+    const current = existing.find((c) => c.agentId === identity.uuid && c.platform === "feishu");
 
     if (!current) {
       return reply.status(204).send();

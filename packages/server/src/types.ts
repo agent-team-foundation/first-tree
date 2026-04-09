@@ -3,7 +3,8 @@ import type { AdapterManager } from "./services/adapter-manager.js";
 import type { Notifier } from "./services/notifier.js";
 
 export type AgentIdentity = {
-  id: string;
+  uuid: string;
+  name: string | null;
   organizationId: string;
   inboxId: string;
 };

@@ -5,7 +5,7 @@ import { agents } from "./agents.js";
 export const agentPresence = pgTable("agent_presence", {
   agentId: text("agent_id")
     .primaryKey()
-    .references(() => agents.id, { onDelete: "cascade" }),
+    .references(() => agents.uuid, { onDelete: "cascade" }),
   /** "online" | "offline" */
   status: text("status").notNull().default("offline"),
   /** Server instance ID that holds this agent's WebSocket connection */

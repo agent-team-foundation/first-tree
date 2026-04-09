@@ -9,7 +9,10 @@ export async function adminChatRoutes(app: FastifyInstance): Promise<void> {
   /** List chats with participant count */
   app.get("/", async (request) => {
     const query = paginationQuerySchema.parse(request.query);
-    const where = query.cursor ? lt(chats.createdAt, new Date(query.cursor)) : undefined;
+    const org = (request.query as Record<string, string>).org ?? "default";
+    const conditions = [eq(chats.organizationId, org)];
+    if (query.cursor) conditions.push(lt(chats.createdAt, new Date(query.cursor)));
+    const where = and(...conditions);
 
     const rows = await app.db
       .select({

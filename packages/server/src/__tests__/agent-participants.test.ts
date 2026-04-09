@@ -7,15 +7,15 @@ describe("Agent Participants API", () => {
 
   async function setupChat(app: Awaited<ReturnType<typeof createTestApp>>) {
     const uid = crypto.randomUUID().slice(0, 6);
-    const { agent: a1, token: t1 } = await createTestAgent(app, { id: `part-a1-${uid}` });
-    const { agent: a2, token: t2 } = await createTestAgent(app, { id: `part-a2-${uid}` });
-    const { agent: a3, token: t3 } = await createTestAgent(app, { id: `part-a3-${uid}` });
+    const { agent: a1, token: t1 } = await createTestAgent(app, { name: `part-a1-${uid}` });
+    const { agent: a2, token: t2 } = await createTestAgent(app, { name: `part-a2-${uid}` });
+    const { agent: a3, token: t3 } = await createTestAgent(app, { name: `part-a3-${uid}` });
 
     const res = await app.inject({
       method: "POST",
       url: "/api/v1/agent/chats",
       headers: { authorization: `Bearer ${t1}` },
-      payload: { type: "group", participantIds: [a2.id] },
+      payload: { type: "group", participantIds: [a2.uuid] },
     });
     const chat = res.json();
     return { a1, a2, a3, t1, t2, t3, chatId: chat.id };
@@ -29,12 +29,12 @@ describe("Agent Participants API", () => {
       method: "POST",
       url: `/api/v1/agent/chats/${chatId}/participants`,
       headers: { authorization: `Bearer ${t1}` },
-      payload: { agentId: a3.id },
+      payload: { agentId: a3.uuid },
     });
     expect(res.statusCode).toBe(201);
     const participants = res.json();
     expect(participants).toHaveLength(3);
-    expect(participants.map((p: { agentId: string }) => p.agentId)).toContain(a3.id);
+    expect(participants.map((p: { agentId: string }) => p.agentId)).toContain(a3.uuid);
   });
 
   it("rejects adding duplicate participant", async () => {
@@ -45,7 +45,7 @@ describe("Agent Participants API", () => {
       method: "POST",
       url: `/api/v1/agent/chats/${chatId}/participants`,
       headers: { authorization: `Bearer ${t1}` },
-      payload: { agentId: a2.id },
+      payload: { agentId: a2.uuid },
     });
     expect(res.statusCode).toBe(409);
   });
@@ -69,7 +69,7 @@ describe("Agent Participants API", () => {
 
     const res = await app.inject({
       method: "DELETE",
-      url: `/api/v1/agent/chats/${chatId}/participants/${a2.id}`,
+      url: `/api/v1/agent/chats/${chatId}/participants/${a2.uuid}`,
       headers: { authorization: `Bearer ${t1}` },
     });
     expect(res.statusCode).toBe(204);
@@ -82,7 +82,7 @@ describe("Agent Participants API", () => {
     });
     const participants = detail.json().participants;
     expect(participants).toHaveLength(1);
-    expect(participants[0].agentId).toBe((await setupChat(app)).a1.id.slice(0, 0) || participants[0].agentId);
+    expect(participants[0].agentId).toBe((await setupChat(app)).a1.uuid.slice(0, 0) || participants[0].agentId);
   });
 
   it("rejects removing non-participant agent", async () => {
@@ -91,7 +91,7 @@ describe("Agent Participants API", () => {
 
     const res = await app.inject({
       method: "DELETE",
-      url: `/api/v1/agent/chats/${chatId}/participants/${a3.id}`,
+      url: `/api/v1/agent/chats/${chatId}/participants/${a3.uuid}`,
       headers: { authorization: `Bearer ${t1}` },
     });
     expect(res.statusCode).toBe(404);
@@ -103,7 +103,7 @@ describe("Agent Participants API", () => {
 
     const res = await app.inject({
       method: "DELETE",
-      url: `/api/v1/agent/chats/${chatId}/participants/${a1.id}`,
+      url: `/api/v1/agent/chats/${chatId}/participants/${a1.uuid}`,
       headers: { authorization: `Bearer ${t1}` },
     });
     expect(res.statusCode).toBe(400);
@@ -117,7 +117,7 @@ describe("Agent Participants API", () => {
       method: "POST",
       url: `/api/v1/agent/chats/${chatId}/participants`,
       headers: { authorization: `Bearer ${t3}` },
-      payload: { agentId: a3.id },
+      payload: { agentId: a3.uuid },
     });
     expect(res.statusCode).toBe(403);
   });

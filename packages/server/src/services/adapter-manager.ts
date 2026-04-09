@@ -480,9 +480,9 @@ async function handleBindCommand(
 
   // 2. Check if target agent exists
   const [agent] = await db
-    .select({ id: agents.id, type: agents.type, status: agents.status })
+    .select({ id: agents.uuid, type: agents.type, status: agents.status })
     .from(agents)
-    .where(eq(agents.id, agentId))
+    .where(eq(agents.uuid, agentId))
     .limit(1);
 
   if (!agent) {
@@ -557,7 +557,7 @@ async function processFeishuOutbound(
     WHERE id IN (
       SELECT ie.id FROM inbox_entries ie
       JOIN agents a ON ie.inbox_id = a.inbox_id
-      JOIN adapter_agent_mappings aam ON a.id = aam.agent_id
+      JOIN adapter_agent_mappings aam ON a.uuid = aam.agent_id
       WHERE aam.platform = 'feishu' AND ie.status = 'pending'
       ORDER BY ie.created_at
       LIMIT ${OUTBOUND_BATCH_SIZE}

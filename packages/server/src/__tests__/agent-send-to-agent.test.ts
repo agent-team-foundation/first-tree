@@ -7,12 +7,12 @@ describe("Agent Send-to-Agent API", () => {
 
   it("sends a message to another agent (auto-creates direct chat)", async () => {
     const app = await appPromise;
-    const { token: t1 } = await createTestAgent(app, { id: "sta-a1" });
-    const { agent: a2, token: t2 } = await createTestAgent(app, { id: "sta-a2" });
+    const { token: t1 } = await createTestAgent(app, { name: "sta-a1" });
+    const { agent: a2, token: t2 } = await createTestAgent(app, { name: "sta-a2" });
 
     const res = await app.inject({
       method: "POST",
-      url: `/api/v1/agent/agents/${a2.id}/messages`,
+      url: `/api/v1/agent/agents/${a2.name}/messages`,
       headers: { authorization: `Bearer ${t1}` },
       payload: { format: "text", content: "Hello agent!" },
     });
@@ -35,12 +35,12 @@ describe("Agent Send-to-Agent API", () => {
 
   it("reuses existing direct chat for same pair", async () => {
     const app = await appPromise;
-    const { token: t1 } = await createTestAgent(app, { id: "reuse-a1" });
-    const { agent: a2 } = await createTestAgent(app, { id: "reuse-a2" });
+    const { token: t1 } = await createTestAgent(app, { name: "reuse-a1" });
+    const { agent: a2 } = await createTestAgent(app, { name: "reuse-a2" });
 
     const res1 = await app.inject({
       method: "POST",
-      url: `/api/v1/agent/agents/${a2.id}/messages`,
+      url: `/api/v1/agent/agents/${a2.name}/messages`,
       headers: { authorization: `Bearer ${t1}` },
       payload: { format: "text", content: "First message" },
     });
@@ -48,7 +48,7 @@ describe("Agent Send-to-Agent API", () => {
 
     const res2 = await app.inject({
       method: "POST",
-      url: `/api/v1/agent/agents/${a2.id}/messages`,
+      url: `/api/v1/agent/agents/${a2.name}/messages`,
       headers: { authorization: `Bearer ${t1}` },
       payload: { format: "text", content: "Second message" },
     });
@@ -59,7 +59,7 @@ describe("Agent Send-to-Agent API", () => {
 
   it("rejects sending to non-existent agent", async () => {
     const app = await appPromise;
-    const { token: t1 } = await createTestAgent(app, { id: "noagent-a1" });
+    const { token: t1 } = await createTestAgent(app, { name: "noagent-a1" });
 
     const res = await app.inject({
       method: "POST",
@@ -72,12 +72,12 @@ describe("Agent Send-to-Agent API", () => {
 
   it("sends with replyTo fields", async () => {
     const app = await appPromise;
-    const { agent: a1, token: t1 } = await createTestAgent(app, { id: "reply-a1" });
-    const { agent: a2 } = await createTestAgent(app, { id: "reply-a2" });
+    const { agent: a1, token: t1 } = await createTestAgent(app, { name: "reply-a1" });
+    const { agent: a2 } = await createTestAgent(app, { name: "reply-a2" });
 
     const res = await app.inject({
       method: "POST",
-      url: `/api/v1/agent/agents/${a2.id}/messages`,
+      url: `/api/v1/agent/agents/${a2.name}/messages`,
       headers: { authorization: `Bearer ${t1}` },
       payload: {
         format: "text",

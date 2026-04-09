@@ -25,28 +25,30 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Input } from "../components/ui/input.js";
 import { Label } from "../components/ui/label.js";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.js";
+import { useAgentNameMap } from "../lib/use-agent-name-map.js";
 import { cn, formatDate } from "../lib/utils.js";
 
 const platformValues = Object.values(ADAPTER_PLATFORMS);
 
 export function AgentDetailPage() {
-  const params = useParams<{ agentId: string }>();
-  const agentId = params.agentId ?? "";
+  const params = useParams<{ uuid: string }>();
+  const uuid = params.uuid ?? "";
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const resolveAgentName = useAgentNameMap();
 
   // Agent data
   const agentQuery = useQuery({
-    queryKey: ["agent", agentId],
-    queryFn: () => getAgent(agentId),
-    enabled: !!agentId,
+    queryKey: ["agent", uuid],
+    queryFn: () => getAgent(uuid),
+    enabled: !!uuid,
   });
 
   // Tokens data (only for non-human agents)
   const tokensQuery = useQuery({
-    queryKey: ["tokens", agentId],
-    queryFn: () => listTokens(agentId),
-    enabled: !!agentId && agentQuery.isSuccess && agentQuery.data?.type !== "human",
+    queryKey: ["tokens", uuid],
+    queryFn: () => listTokens(uuid),
+    enabled: !!uuid && agentQuery.isSuccess && agentQuery.data?.type !== "human",
   });
 
   // Adapter bindings for this agent
@@ -58,8 +60,8 @@ export function AgentDetailPage() {
     refetchInterval: 15_000,
   });
 
-  const agentAdapters = adaptersQuery.data?.filter((a) => a.agentId === agentId) ?? [];
-  const agentMappings = mappingsQuery.data?.filter((m) => m.agentId === agentId) ?? [];
+  const agentAdapters = adaptersQuery.data?.filter((a) => a.agentId === uuid) ?? [];
+  const agentMappings = mappingsQuery.data?.filter((m) => m.agentId === uuid) ?? [];
 
   // Token dialog
   const [tokenDialogOpen, setTokenDialogOpen] = useState(false);
@@ -85,33 +87,33 @@ export function AgentDetailPage() {
 
   // Mutations — agent lifecycle
   const suspendMutation = useMutation({
-    mutationFn: () => suspendAgent(agentId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["agent", agentId] }),
+    mutationFn: () => suspendAgent(uuid),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["agent", uuid] }),
   });
 
   const reactivateMutation = useMutation({
-    mutationFn: () => reactivateAgent(agentId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["agent", agentId] }),
+    mutationFn: () => reactivateAgent(uuid),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["agent", uuid] }),
   });
 
   const deleteMutation = useMutation({
-    mutationFn: () => deleteAgent(agentId),
+    mutationFn: () => deleteAgent(uuid),
     onSuccess: () => navigate("/agents"),
   });
 
   // Mutations — tokens
   const createTokenMutation = useMutation({
-    mutationFn: (name: string) => createToken(agentId, { name: name || undefined }),
+    mutationFn: (name: string) => createToken(uuid, { name: name || undefined }),
     onSuccess: (data) => {
       setCreatedToken(data.token);
       setTokenName("");
-      queryClient.invalidateQueries({ queryKey: ["tokens", agentId] });
+      queryClient.invalidateQueries({ queryKey: ["tokens", uuid] });
     },
   });
 
   const revokeTokenMutation = useMutation({
-    mutationFn: (tokenId: string) => revokeToken(agentId, tokenId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["tokens", agentId] }),
+    mutationFn: (tokenId: string) => revokeToken(uuid, tokenId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["tokens", uuid] }),
   });
 
   // Mutations — bot binding (non-human agents)
@@ -122,20 +124,20 @@ export function AgentDetailPage() {
 
       // For Kael: auto-create a dedicated agent token
       if (bindingForm.platform === "kael" && !creds.agentToken) {
-        const tokenResult = await createToken(agentId, { name: "kael-hub-binding" });
+        const tokenResult = await createToken(uuid, { name: "kael-hub-binding" });
         creds = { ...creds, agentToken: tokenResult.token };
       }
 
       return createAdapter({
         platform: bindingForm.platform as "feishu" | "slack" | "kael",
-        agentId,
+        agentId: uuid,
         credentials: creds,
         status: bindingForm.status as "active" | "inactive",
       });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["adapters"] });
-      queryClient.invalidateQueries({ queryKey: ["tokens", agentId] });
+      queryClient.invalidateQueries({ queryKey: ["tokens", uuid] });
       closeBindingDialog();
     },
   });
@@ -165,7 +167,7 @@ export function AgentDetailPage() {
       createAdapterMapping({
         platform: bindingForm.platform as "feishu" | "slack" | "kael",
         externalUserId: bindingForm.externalUserId,
-        agentId,
+        agentId: uuid,
         boundVia: "manual",
         displayName: bindingForm.displayName || undefined,
       }),
@@ -184,30 +186,30 @@ export function AgentDetailPage() {
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const updateMutation = useMutation({
     mutationFn: (formData: AgentFormData) =>
-      updateAgent(agentId, {
+      updateAgent(uuid, {
         displayName: formData.displayName,
         delegateMention: formData.delegateMention,
       }),
     onSuccess: () => {
       setEditDialogOpen(false);
-      queryClient.invalidateQueries({ queryKey: ["agent", agentId] });
+      queryClient.invalidateQueries({ queryKey: ["agent", uuid] });
       queryClient.invalidateQueries({ queryKey: ["agents"] });
     },
   });
 
   // Test connection
   const testMutation = useMutation({
-    mutationFn: () => testAgentConnection(agentId),
+    mutationFn: () => testAgentConnection(uuid),
   });
 
   // Profile editing
   const [profileDialogOpen, setProfileDialogOpen] = useState(false);
   const [profileDraft, setProfileDraft] = useState("");
   const profileMutation = useMutation({
-    mutationFn: (profile: string) => updateAgent(agentId, { profile: profile || null }),
+    mutationFn: (profile: string) => updateAgent(uuid, { profile: profile || null }),
     onSuccess: () => {
       setProfileDialogOpen(false);
-      queryClient.invalidateQueries({ queryKey: ["agent", agentId] });
+      queryClient.invalidateQueries({ queryKey: ["agent", uuid] });
     },
   });
 
@@ -340,8 +342,8 @@ export function AgentDetailPage() {
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <div className="flex-1">
-          <h1 className="text-2xl font-semibold">{agent.displayName ?? agent.id}</h1>
-          <p className="text-sm text-muted-foreground font-mono">{agent.id}</p>
+          <h1 className="text-2xl font-semibold">{agent.displayName ?? agent.name}</h1>
+          <p className="text-sm text-muted-foreground font-mono">{agent.name}</p>
         </div>
         {agent.status === "active" && (
           <Button variant="outline" size="sm" onClick={() => setEditDialogOpen(true)}>
@@ -433,7 +435,7 @@ export function AgentDetailPage() {
             {agent.delegateMention && (
               <div>
                 <dt className="text-muted-foreground mb-1">Delegate Mention</dt>
-                <dd className="font-mono">{agent.delegateMention}</dd>
+                <dd className="font-mono">{resolveAgentName(agent.delegateMention)}</dd>
               </div>
             )}
             {role && (

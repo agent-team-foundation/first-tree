@@ -20,7 +20,7 @@ export const agentStatusSchema = z.enum(["active", "suspended"]);
 export type AgentStatus = z.infer<typeof agentStatusSchema>;
 
 export const createAgentSchema = z.object({
-  id: z
+  name: z
     .string()
     .min(1)
     .max(100)
@@ -45,7 +45,8 @@ export const updateAgentSchema = z.object({
 export type UpdateAgent = z.infer<typeof updateAgentSchema>;
 
 export const agentSchema = z.object({
-  id: z.string(),
+  uuid: z.string(),
+  name: z.string().nullable(),
   organizationId: z.string(),
   type: agentTypeSchema,
   displayName: z.string().nullable(),

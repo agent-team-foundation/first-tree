@@ -23,25 +23,25 @@ describe("Admin Agent Disconnect API", () => {
     const req = await authedRequest(app);
 
     const agent = await createAgent(app.db, {
-      id: `disc-a1-${crypto.randomUUID().slice(0, 6)}`,
+      name: `disc-a1-${crypto.randomUUID().slice(0, 6)}`,
       type: "autonomous_agent",
       displayName: "Disc Agent",
     });
 
     // Simulate agent being online
-    await presenceService.setOnline(app.db, agent.id, "test-instance");
-    let presence = await presenceService.getPresence(app.db, agent.id);
+    await presenceService.setOnline(app.db, agent.uuid, "test-instance");
+    let presence = await presenceService.getPresence(app.db, agent.uuid);
     expect(presence?.status).toBe("online");
 
     // Call disconnect endpoint
-    const res = await req("POST", `/api/v1/admin/agents/${agent.id}/disconnect`);
+    const res = await req("POST", `/api/v1/admin/agents/${agent.uuid}/disconnect`);
     expect(res.statusCode).toBe(200);
     const body = res.json();
     // No actual WS connection in test, so wasConnected is false (forceDisconnect returns false)
     expect(body).toHaveProperty("disconnected");
 
     // Presence should now be offline
-    presence = await presenceService.getPresence(app.db, agent.id);
+    presence = await presenceService.getPresence(app.db, agent.uuid);
     expect(presence?.status).toBe("offline");
   });
 
@@ -50,11 +50,11 @@ describe("Admin Agent Disconnect API", () => {
     const req = await authedRequest(app);
 
     const agent = await createAgent(app.db, {
-      id: `disc-a2-${crypto.randomUUID().slice(0, 6)}`,
+      name: `disc-a2-${crypto.randomUUID().slice(0, 6)}`,
       type: "autonomous_agent",
     });
 
-    const res = await req("POST", `/api/v1/admin/agents/${agent.id}/disconnect`);
+    const res = await req("POST", `/api/v1/admin/agents/${agent.uuid}/disconnect`);
     expect(res.statusCode).toBe(200);
     expect(res.json().disconnected).toBe(false);
   });
