@@ -1,10 +1,11 @@
-import { Bot, Cable, LayoutDashboard, LogOut, MessageSquare, Settings, Shield } from "lucide-react";
+import { Activity, Bot, Cable, LayoutDashboard, LogOut, MessageSquare, Settings, Shield } from "lucide-react";
 import { NavLink, Outlet } from "react-router";
 import { useAuth } from "../auth/auth-context.js";
 import { cn } from "../lib/utils.js";
 
 const navItems = [
   { to: "/", icon: LayoutDashboard, label: "Overview" },
+  { to: "/activity", icon: Activity, label: "Activity" },
   { to: "/agents", icon: Bot, label: "Agents" },
   { to: "/bindings", icon: Cable, label: "Bindings" },
   { to: "/chats", icon: MessageSquare, label: "Chats" },

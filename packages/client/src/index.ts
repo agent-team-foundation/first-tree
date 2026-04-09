@@ -1,3 +1,5 @@
+export type { BoundAgent, ClientConnectionConfig } from "./client-connection.js";
+export { ClientConnection } from "./client-connection.js";
 export type { AgentConnectionConfig, ConnectionState, MessageHandler } from "./connection.js";
 export { AgentConnection } from "./connection.js";
 // Handlers

@@ -8,6 +8,7 @@ export {
   checkBootstrapStatus,
   getGitHubToken,
   getGitHubUsername,
+  resolveAdminToken,
   resolveAgentToken,
   resolveServerUrl,
 } from "./bootstrap.js";

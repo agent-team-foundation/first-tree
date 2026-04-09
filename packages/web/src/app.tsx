@@ -3,6 +3,7 @@ import { BrowserRouter, Route, Routes } from "react-router";
 import { AuthProvider } from "./auth/auth-context.js";
 import { RequireAuth } from "./auth/require-auth.js";
 import { Layout } from "./components/layout.js";
+import { ActivityPage } from "./pages/activity.js";
 import { AdminUsersPage } from "./pages/admin-users.js";
 import { AgentDetailPage } from "./pages/agent-detail.js";
 import { AgentsPage } from "./pages/agents.js";
@@ -31,6 +32,7 @@ export function App() {
             <Route element={<RequireAuth />}>
               <Route element={<Layout />}>
                 <Route index element={<OverviewPage />} />
+                <Route path="activity" element={<ActivityPage />} />
                 <Route path="agents" element={<AgentsPage />} />
                 <Route path="agents/:uuid" element={<AgentDetailPage />} />
                 <Route path="bindings" element={<BindingsPage />} />

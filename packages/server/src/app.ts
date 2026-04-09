@@ -14,6 +14,7 @@ import { adminAdapterRoutes } from "./api/admin/adapters.js";
 import { adminAgentRoutes } from "./api/admin/agents.js";
 import { adminAuthRoutes } from "./api/admin/auth.js";
 import { adminChatRoutes } from "./api/admin/chats.js";
+import { adminActivityRoutes, adminClientRoutes } from "./api/admin/clients.js";
 import { adminOverviewRoutes } from "./api/admin/overview.js";
 import { adminSystemConfigRoutes } from "./api/admin/system-config.js";
 import { adminUserRoutes } from "./api/admin/users.js";
@@ -25,6 +26,7 @@ import { agentInboxRoutes } from "./api/agent/inbox.js";
 import { agentMeRoutes } from "./api/agent/me.js";
 import { agentMessageRoutes, agentSendToAgentRoutes } from "./api/agent/messages.js";
 import { agentWsRoutes } from "./api/agent/ws.js";
+import { clientWsRoutes } from "./api/agent/ws-client.js";
 import { bootstrapConfigRoutes } from "./api/bootstrap/config.js";
 import { bootstrapRoutes } from "./api/bootstrap/token.js";
 import { contextTreeInfoRoutes } from "./api/context-tree-info.js";
@@ -186,6 +188,24 @@ export async function buildApp(config: Config) {
         { prefix: "/admin/chats" },
       );
 
+      // M1: Client management routes
+      await api.register(
+        async (adminApp) => {
+          adminApp.addHook("onRequest", adminAuth);
+          await adminApp.register(adminClientRoutes);
+        },
+        { prefix: "/admin/clients" },
+      );
+
+      // M1: Agent activity routes
+      await api.register(
+        async (adminApp) => {
+          adminApp.addHook("onRequest", adminAuth);
+          await adminApp.register(adminActivityRoutes);
+        },
+        { prefix: "/admin/agents/activity" },
+      );
+
       // Agent routes (Bearer token protected)
       await api.register(
         async (agentApp) => {
@@ -202,6 +222,9 @@ export async function buildApp(config: Config) {
         },
         { prefix: "/agent" },
       );
+
+      // M1: Client WebSocket (no auth at WS level — auth via agent:bind message)
+      await api.register(clientWsRoutes(notifier, config.instanceId), { prefix: "/agent/ws" });
     },
     { prefix: "/api/v1" },
   );

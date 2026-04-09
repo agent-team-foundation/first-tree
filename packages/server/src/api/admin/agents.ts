@@ -16,10 +16,7 @@ import { forceDisconnect } from "../../services/connection-manager.js";
 import { sendMessage } from "../../services/message.js";
 import { notifyRecipients } from "../../services/notifier.js";
 import * as presenceService from "../../services/presence.js";
-
-function serializeDate(d: Date | null): string | null {
-  return d ? d.toISOString() : null;
-}
+import { serializeDate } from "../../utils.js";
 
 export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
   const listAgentsFilterSchema = z.object({ type: agentTypeSchema.optional() });
@@ -35,6 +32,13 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
         presenceStatus: a.presenceStatus ?? "offline",
         createdAt: a.createdAt.toISOString(),
         updatedAt: a.updatedAt.toISOString(),
+        // M1: runtime fields
+        clientId: a.clientId ?? null,
+        runtimeType: a.runtimeType ?? null,
+        runtimeState: a.runtimeState ?? null,
+        runtimeDescription: a.runtimeDescription ?? null,
+        activeSessions: a.activeSessions ?? null,
+        errorMessage: a.errorMessage ?? null,
       })),
       nextCursor: result.nextCursor,
     };

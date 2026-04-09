@@ -96,6 +96,15 @@ export {
   removeParticipantSchema,
 } from "./schemas/chat.js";
 export {
+  CLIENT_STATUSES,
+  type Client,
+  type ClientRegister,
+  type ClientStatus,
+  clientRegisterSchema,
+  clientSchema,
+  clientStatusSchema,
+} from "./schemas/client.js";
+export {
   type PaginationQuery,
   paginatedResponse,
   paginationQuerySchema,
@@ -123,11 +132,22 @@ export {
   sendToAgentSchema,
 } from "./schemas/message.js";
 export {
+  type ActivityOverview,
+  type AgentActivity,
+  type AgentBind,
   type AgentPresence,
+  activityOverviewSchema,
+  agentActivitySchema,
+  agentBindSchema,
   agentPresenceSchema,
   PRESENCE_STATUSES,
   type PresenceStatus,
   presenceStatusSchema,
+  RUNTIME_STATES,
+  type RuntimeState,
+  runtimeStateSchema,
+  type SessionInfo,
+  sessionInfoSchema,
 } from "./schemas/presence.js";
 export {
   SYSTEM_CONFIG_DEFAULTS,

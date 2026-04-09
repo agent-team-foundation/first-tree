@@ -123,6 +123,18 @@ export function resolveAgentToken(): string {
 }
 
 /**
+ * Resolve admin JWT token from FIRST_TREE_HUB_ADMIN_TOKEN env var.
+ * Throws if not set.
+ */
+export function resolveAdminToken(): string {
+  const token = process.env.FIRST_TREE_HUB_ADMIN_TOKEN;
+  if (!token) {
+    throw new Error("FIRST_TREE_HUB_ADMIN_TOKEN environment variable is required.");
+  }
+  return token;
+}
+
+/**
  * Check if an agent exists and is synced.
  */
 export async function checkBootstrapStatus(

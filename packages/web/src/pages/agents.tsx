@@ -76,7 +76,7 @@ export function AgentsPage() {
               <TableHead>Display Name</TableHead>
               <TableHead>Type</TableHead>
               <TableHead>Delegate</TableHead>
-              <TableHead>Online</TableHead>
+              <TableHead>Runtime</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Created</TableHead>
             </TableRow>
@@ -112,13 +112,24 @@ export function AgentsPage() {
                     {agent.delegateMention ? resolveAgentName(agent.delegateMention) : "\u2014"}
                   </TableCell>
                   <TableCell>
-                    <span
-                      className={cn(
-                        "inline-block h-2 w-2 rounded-full",
-                        agent.presenceStatus === "online" ? "bg-green-500" : "bg-gray-300",
-                      )}
-                      title={agent.presenceStatus ?? "offline"}
-                    />
+                    {(() => {
+                      const a = agent as Record<string, unknown>;
+                      const state = a.runtimeState as string | null;
+                      if (!state) {
+                        return <span className="inline-block h-2 w-2 rounded-full bg-gray-300" title="not running" />;
+                      }
+                      const colors: Record<string, string> = {
+                        idle: "bg-green-500",
+                        working: "bg-blue-500",
+                        error: "bg-red-500",
+                      };
+                      return (
+                        <span className="flex items-center gap-1.5">
+                          <span className={cn("inline-block h-2 w-2 rounded-full", colors[state] ?? "bg-gray-300")} />
+                          <span className="text-xs text-muted-foreground">{state}</span>
+                        </span>
+                      );
+                    })()}
                   </TableCell>
                   <TableCell>
                     <Badge variant={agent.status === "active" ? "default" : "destructive"}>{agent.status}</Badge>
