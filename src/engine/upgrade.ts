@@ -7,6 +7,7 @@ import {
   resolveDedicatedTreeRepoForSource,
 } from "#engine/dedicated-tree.js";
 import { Repo } from "#engine/repo.js";
+import { readSourceState } from "#engine/runtime/binding-state.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
   CLAUDE_INSTRUCTIONS_FILE,
@@ -86,16 +87,43 @@ function syncLocalSourceWorkspaceState(
   const gitIgnore = upsertLocalTreeGitIgnore(sourceRepo.root);
   const existingLocalTreeConfig = readLocalTreeConfig(sourceRepo.root);
   const localTreeConfig = upsertLocalTreeConfig(sourceRepo.root, {
+    bindingMode: existingLocalTreeConfig?.bindingMode,
+    entrypoint: existingLocalTreeConfig?.entrypoint,
     localPath: relativeRepoPath(sourceRepo.root, treeRoot),
+    sourceId: existingLocalTreeConfig?.sourceId,
+    treeMode: existingLocalTreeConfig?.treeMode,
     treeRepoName,
     ...(existingLocalTreeConfig?.treeRepoName === treeRepoName
       && existingLocalTreeConfig.treeRepoUrl
       ? { treeRepoUrl: existingLocalTreeConfig.treeRepoUrl }
       : {}),
+    workspaceId: existingLocalTreeConfig?.workspaceId,
   });
   return {
     gitIgnoreAction: gitIgnore.action,
     localTreeConfigAction: localTreeConfig.action,
+  };
+}
+
+function sourceIntegrationOptionsForUpgrade(sourceRepo: Repo): {
+  bindingMode?:
+    | "shared-source"
+    | "standalone-source"
+    | "workspace-member"
+    | "workspace-root";
+  entrypoint?: string;
+  treeMode?: "dedicated" | "shared";
+  treeRepoUrl?: string;
+  workspaceId?: string;
+} {
+  const sourceState = readSourceState(sourceRepo.root);
+  const localTreeConfig = readLocalTreeConfig(sourceRepo.root);
+  return {
+    bindingMode: sourceState?.bindingMode ?? localTreeConfig?.bindingMode,
+    entrypoint: sourceState?.tree.entrypoint ?? localTreeConfig?.entrypoint,
+    treeMode: sourceState?.tree.treeMode ?? localTreeConfig?.treeMode,
+    treeRepoUrl: sourceState?.tree.remoteUrl ?? localTreeConfig?.treeRepoUrl,
+    workspaceId: sourceState?.workspaceId ?? localTreeConfig?.workspaceId,
   };
 }
 
@@ -287,9 +315,13 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
         treeRepoName,
         sourceRepoTreeRoot,
       );
+      const sourceIntegrationOptions = sourceIntegrationOptionsForUpgrade(
+        workingRepo,
+      );
       const updates = upsertSourceIntegrationFiles(
         workingRepo.root,
         treeRepoName,
+        sourceIntegrationOptions,
       );
       const changedFiles = updates
         .filter((update) => update.action !== "unchanged")
@@ -351,9 +383,13 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
       treeRepoName,
       sourceRepoTreeRoot,
     );
+    const sourceIntegrationOptions = sourceIntegrationOptionsForUpgrade(
+      workingRepo,
+    );
     const updates = upsertSourceIntegrationFiles(
       workingRepo.root,
       treeRepoName,
+      sourceIntegrationOptions,
     );
     const changedFiles = updates
       .filter((update) => update.action !== "unchanged")

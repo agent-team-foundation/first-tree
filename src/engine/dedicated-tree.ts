@@ -2,12 +2,17 @@ import { statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { Repo } from "#engine/repo.js";
 import { readBootstrapState } from "#engine/runtime/bootstrap.js";
-import { resolveConfiguredLocalTreePath } from "#engine/runtime/local-tree-config.js";
+import { readSourceState } from "#engine/runtime/binding-state.js";
+import {
+  readLocalTreeConfig,
+  resolveConfiguredLocalTreePath,
+} from "#engine/runtime/local-tree-config.js";
 import {
   SOURCE_INTEGRATION_BEGIN,
   SOURCE_INTEGRATION_END,
   SOURCE_INTEGRATION_FILES,
   SOURCE_INTEGRATION_MARKER,
+  TREE_REPO_MARKER,
 } from "#engine/runtime/asset-loader.js";
 
 export const DEFAULT_TREE_REPO_SUFFIX = "-tree";
@@ -44,7 +49,7 @@ interface FailedResolution {
 }
 
 const SOURCE_INTEGRATION_TREE_RE =
-  /FIRST-TREE-SOURCE-INTEGRATION:\s+dedicated tree repo `([^`]+)`/;
+  /FIRST-TREE-TREE-REPO:\s+`([^`]+)`/;
 const LEGACY_SOURCE_INTEGRATION_TREE_RE =
   /FIRST-TREE-SOURCE-INTEGRATION:.*?`([^`]+)` repo(?:\/submodule)?/;
 const MANAGED_SOURCE_INTEGRATION_TREE_RE =
@@ -107,6 +112,16 @@ export function parseTreeRepoNameFromSourceIntegration(
 }
 
 export function readBoundTreeRepoNameFromSourceRepo(repo: Repo): string | null {
+  const sourceState = readSourceState(repo.root);
+  if (sourceState !== null) {
+    return sourceState.tree.treeRepoName;
+  }
+
+  const localTreeConfig = readLocalTreeConfig(repo.root);
+  if (localTreeConfig !== null) {
+    return localTreeConfig.treeRepoName;
+  }
+
   for (const file of SOURCE_INTEGRATION_FILES) {
     const treeRepoName = parseTreeRepoNameFromSourceIntegration(repo.readFile(file));
     if (treeRepoName !== null) {

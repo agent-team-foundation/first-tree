@@ -5,15 +5,24 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import type {
+  SourceBindingMode,
+  TreeMode,
+} from "#engine/runtime/binding-state.js";
 import {
   LOCAL_TREE_CONFIG,
   LOCAL_TREE_TEMP_ROOT,
 } from "#engine/runtime/asset-loader.js";
 
 export interface LocalTreeConfig {
+  bindingMode?: SourceBindingMode;
+  entrypoint?: string;
   localPath: string;
+  sourceId?: string;
+  treeMode?: TreeMode;
   treeRepoName: string;
   treeRepoUrl?: string;
+  workspaceId?: string;
 }
 
 export interface GitIgnoreUpdate {
@@ -48,13 +57,33 @@ export function readLocalTreeConfig(root: string): LocalTreeConfig | null {
       typeof parsed.localPath !== "string"
       || typeof parsed.treeRepoName !== "string"
       || (parsed.treeRepoUrl !== undefined && typeof parsed.treeRepoUrl !== "string")
+      || (
+        parsed.treeMode !== undefined
+        && parsed.treeMode !== "dedicated"
+        && parsed.treeMode !== "shared"
+      )
+      || (
+        parsed.bindingMode !== undefined
+        && parsed.bindingMode !== "standalone-source"
+        && parsed.bindingMode !== "shared-source"
+        && parsed.bindingMode !== "workspace-root"
+        && parsed.bindingMode !== "workspace-member"
+      )
+      || (parsed.entrypoint !== undefined && typeof parsed.entrypoint !== "string")
+      || (parsed.workspaceId !== undefined && typeof parsed.workspaceId !== "string")
+      || (parsed.sourceId !== undefined && typeof parsed.sourceId !== "string")
     ) {
       return null;
     }
     return {
+      bindingMode: parsed.bindingMode,
+      entrypoint: parsed.entrypoint,
       localPath: parsed.localPath,
+      sourceId: parsed.sourceId,
+      treeMode: parsed.treeMode,
       treeRepoName: parsed.treeRepoName,
       treeRepoUrl: parsed.treeRepoUrl,
+      workspaceId: parsed.workspaceId,
     };
   } catch {
     return null;
@@ -86,9 +115,14 @@ export function upsertLocalTreeConfig(
   const exists = existsSync(fullPath);
   const current = readLocalTreeConfig(root);
   if (
-    current?.localPath === config.localPath
-    && current.treeRepoName === config.treeRepoName
-    && current.treeRepoUrl === config.treeRepoUrl
+    current?.bindingMode === config.bindingMode
+    && current?.entrypoint === config.entrypoint
+    && current?.localPath === config.localPath
+    && current?.sourceId === config.sourceId
+    && current?.treeMode === config.treeMode
+    && current?.treeRepoName === config.treeRepoName
+    && current?.treeRepoUrl === config.treeRepoUrl
+    && current?.workspaceId === config.workspaceId
   ) {
     return { action: "unchanged", file: LOCAL_TREE_CONFIG };
   }

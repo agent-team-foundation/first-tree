@@ -8,10 +8,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { runBind } from "#engine/bind.js";
 import {
   relativeRepoPath,
   resolveDedicatedTreeRepoForSource,
 } from "#engine/dedicated-tree.js";
+import { inspectRepo } from "#engine/inspect.js";
 import { Repo } from "#engine/repo.js";
 import { ONBOARDING_TEXT } from "#engine/onboarding.js";
 import { evaluateAll } from "#engine/rules/index.js";
@@ -54,6 +56,7 @@ import {
   upsertFirstTreeIndexFile,
   upsertSourceIntegrationFiles,
 } from "#engine/runtime/source-integration.js";
+import { runWorkspaceSync } from "#engine/workspace-sync.js";
 
 /**
  * The interactive prompt tool the agent should use to present choices.
@@ -61,44 +64,46 @@ import {
  * all generated task text at once.
  */
 export const INTERACTIVE_TOOL = "AskUserQuestion";
-export const INIT_USAGE = `usage: first-tree init [--here] [--seed-members contributors] [--tree-name NAME] [--tree-path PATH]
+export const INIT_USAGE = `usage: first-tree init [--tree-path PATH | --tree-url URL] [--tree-mode dedicated|shared] [--scope repo|workspace] [--workspace-id ID] [--sync-members] [--seed-members contributors]
+       first-tree init tree [--here] [--tree-path PATH] [--seed-members contributors]
 
-Bootstrap a Context Tree. The default behavior depends on where you run it:
+High-level onboarding wrapper for source repos, workspace roots, and shared trees.
 
-  Inside a source/workspace repo (the default case):
-    1. Installs the first-tree skill into \`.agents/skills/first-tree/\`
-    2. Symlinks \`.claude/skills/first-tree/\` to the same location
-    3. Creates \`FIRST_TREE.md\` -> \`references/about.md\`
-    4. Adds a managed \`${SOURCE_INTEGRATION_MARKER}\` block to AGENTS.md/CLAUDE.md
-    5. Creates a sibling \`<repo>-tree\` directory and bootstraps the dedicated
-       tree repo there with NODE.md, AGENTS.md, CLAUDE.md, members/NODE.md,
-       and \`.first-tree/\` metadata
-    6. Reuses an existing \`<repo>-context\` sibling if one is already bound
+Default behavior:
+  - Single git repo: installs local skill integration, creates or reuses a
+    dedicated \`<repo>-tree\` checkout, scaffolds the tree there, then binds the
+    repo to it.
+  - Workspace root (git repo with child repos or a plain folder containing
+    child repos): installs local skill integration at the workspace root,
+    creates or reuses one shared tree checkout, then binds discovered child
+    repos to that same tree.
+  - Existing tree checkout or URL: binds the current repo/workspace root to
+    the provided tree instead of creating a new sibling tree repo.
 
-  Inside an empty/dedicated tree repo (with --here):
-    1. Treats the current repo as the Context Tree
-    2. Scaffolds NODE.md, AGENTS.md, CLAUDE.md, members/NODE.md
-    3. Writes \`.first-tree/\` metadata
-    4. Does NOT create a sibling repo
+Low-level tree bootstrap:
+  - \`first-tree init tree --here\` initializes the current repo in place as a
+    tree repo.
+  - \`first-tree init tree --tree-path ../my-tree\` creates or refreshes a tree
+    checkout at an explicit path.
 
-After init completes, the agent should follow the printed task list to fill
-in NODE.md frontmatter, configure the agent integration, and run
-\`first-tree verify\` when done.
-
-Do not use \`--here\` inside a source/workspace repo unless you explicitly
-want that repo itself to become the Context Tree (rare).
-
-After publishing the dedicated tree repo with \`first-tree publish\`, treat
-that submodule as the canonical local working copy. The bootstrap sibling
-checkout can be deleted.
+Recommended examples:
+  first-tree init
+  first-tree init --tree-path ../org-context --tree-mode shared
+  first-tree init --scope workspace --tree-path ../org-context --tree-mode shared --sync-members
+  mkdir my-org-tree && cd my-org-tree && git init && first-tree init tree --here
 
 Options:
-  --here             Initialize the current repo in place — use only when you have already switched into the dedicated tree repo
+  --here                     Initialize the current repo in place as a tree repo
   --seed-members contributors
-                     Seed initial \`members/*/NODE.md\` files from contributor history (GitHub API when available, falls back to local git log)
-  --tree-name NAME   Override the default sibling repo name (\`<repo>-tree\`)
-  --tree-path PATH   Use an explicit tree repo path instead of a sibling
-  --help             Show this help message
+                             Seed initial \`members/*/NODE.md\` files from contributor history
+  --tree-name NAME           Override the default sibling repo name (\`<repo>-tree\`)
+  --tree-path PATH           Use an explicit local tree repo path
+  --tree-url URL             Bind to or clone an existing remote tree repo
+  --tree-mode MODE           dedicated or shared
+  --scope MODE               repo or workspace
+  --workspace-id ID          Workspace identifier for shared workspace onboarding
+  --sync-members             After binding a workspace root, bind all discovered child repos too
+  --help                     Show this help message
 `;
 
 interface TemplateTarget {
@@ -269,6 +274,7 @@ export function writeProgress(repo: Repo, content: string): void {
 export interface InitOptions {
   contributorCollector?: ContributorCollector;
   sourceRoot?: string;
+  seedSourceRoot?: string;
   here?: boolean;
   seedMembers?: "contributors";
   treeName?: string;
@@ -440,7 +446,11 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
   let seedMembersResult: SeedMembersResult | null = null;
   if (options?.seedMembers === "contributors") {
     try {
-      const contributorSourceRepo = initTarget.dedicatedTreeRepo ? sourceRepo : r;
+      const contributorSourceRepo = options?.seedSourceRoot
+        ? new Repo(resolve(options.seedSourceRoot))
+        : initTarget.dedicatedTreeRepo
+        ? sourceRepo
+        : r;
       console.log("Seeding member nodes from contributor history...");
       seedMembersResult = seedMembersFromContributors(
         contributorSourceRepo.root,
@@ -517,6 +527,15 @@ export interface ParsedInitArgs {
   treePath?: string;
 }
 
+export interface ParsedInitCliArgs extends ParsedInitArgs {
+  scope?: "repo" | "workspace";
+  subcommand?: "tree";
+  syncMembers?: boolean;
+  treeMode?: "dedicated" | "shared";
+  treeUrl?: string;
+  workspaceId?: string;
+}
+
 export function parseInitArgs(
   args: string[],
 ): ParsedInitArgs | { error: string } {
@@ -582,14 +601,267 @@ export function runInitCli(args: string[] = []): number {
     return 0;
   }
 
-  const parsed = parseInitArgs(args);
+  const parsed = parseInitCliArgs(args);
   if ("error" in parsed) {
     console.error(parsed.error);
     console.log(INIT_USAGE);
     return 1;
   }
 
-  return runInit(undefined, parsed);
+  return runInitWorkflow(parsed);
+}
+
+export function parseInitCliArgs(
+  args: string[],
+): ParsedInitCliArgs | { error: string } {
+  const parsed: ParsedInitCliArgs = {};
+  let index = 0;
+
+  if (args[0] === "tree") {
+    parsed.subcommand = "tree";
+    index = 1;
+  }
+
+  for (; index < args.length; index += 1) {
+    const arg = args[index];
+    switch (arg) {
+      case "--here":
+        parsed.here = true;
+        break;
+      case "--seed-members": {
+        const value = args[index + 1];
+        if (!value) {
+          return { error: "Missing value for --seed-members" };
+        }
+        if (value !== "contributors") {
+          return { error: `Unsupported value for --seed-members: ${value}` };
+        }
+        parsed.seedMembers = value;
+        index += 1;
+        break;
+      }
+      case "--tree-name": {
+        const value = args[index + 1];
+        if (!value) {
+          return { error: "Missing value for --tree-name" };
+        }
+        parsed.treeName = value;
+        index += 1;
+        break;
+      }
+      case "--tree-path": {
+        const value = args[index + 1];
+        if (!value) {
+          return { error: "Missing value for --tree-path" };
+        }
+        parsed.treePath = value;
+        index += 1;
+        break;
+      }
+      case "--tree-url": {
+        const value = args[index + 1];
+        if (!value) {
+          return { error: "Missing value for --tree-url" };
+        }
+        parsed.treeUrl = value;
+        index += 1;
+        break;
+      }
+      case "--tree-mode": {
+        const value = args[index + 1];
+        if (!value) {
+          return { error: "Missing value for --tree-mode" };
+        }
+        if (value !== "dedicated" && value !== "shared") {
+          return { error: `Unsupported value for --tree-mode: ${value}` };
+        }
+        parsed.treeMode = value;
+        index += 1;
+        break;
+      }
+      case "--scope": {
+        const value = args[index + 1];
+        if (!value) {
+          return { error: "Missing value for --scope" };
+        }
+        if (value !== "repo" && value !== "workspace") {
+          return { error: `Unsupported value for --scope: ${value}` };
+        }
+        parsed.scope = value;
+        index += 1;
+        break;
+      }
+      case "--workspace-id": {
+        const value = args[index + 1];
+        if (!value) {
+          return { error: "Missing value for --workspace-id" };
+        }
+        parsed.workspaceId = value;
+        index += 1;
+        break;
+      }
+      case "--sync-members":
+        parsed.syncMembers = true;
+        break;
+      default:
+        return { error: `Unknown init option: ${arg}` };
+    }
+  }
+
+  if (parsed.here && parsed.treeUrl) {
+    return { error: "Cannot combine --here with --tree-url" };
+  }
+  if (parsed.here && parsed.treeName) {
+    return { error: "Cannot combine --here with --tree-name" };
+  }
+  if (parsed.here && parsed.treePath && parsed.subcommand !== "tree") {
+    return { error: "Cannot combine --here with --tree-path" };
+  }
+  if (parsed.treeName && parsed.treePath) {
+    return { error: "Cannot combine --tree-name with --tree-path" };
+  }
+
+  return parsed;
+}
+
+function resolveInitScope(parsed: ParsedInitCliArgs): "repo" | "workspace" {
+  if (parsed.scope !== undefined) {
+    return parsed.scope;
+  }
+  const inspection = inspectRepo();
+  return inspection.childRepos.length > 0 ? "workspace" : "repo";
+}
+
+function resolveTreeModeForWorkflow(
+  repo: Repo,
+  scope: "repo" | "workspace",
+  parsed: ParsedInitCliArgs,
+): "dedicated" | "shared" {
+  if (parsed.treeMode !== undefined) {
+    return parsed.treeMode;
+  }
+  if (scope === "workspace") {
+    return "shared";
+  }
+  if (parsed.treeUrl !== undefined) {
+    return "shared";
+  }
+  if (parsed.treePath !== undefined) {
+    const treeRepoName = new Repo(resolve(process.cwd(), parsed.treePath)).repoName();
+    return treeRepoName === `${repo.repoName()}-tree`
+      || treeRepoName === `${repo.repoName()}-context`
+      ? "dedicated"
+      : "shared";
+  }
+  return "dedicated";
+}
+
+function resolveDefaultTreeRoot(
+  sourceRepo: Repo,
+  parsed: ParsedInitCliArgs,
+): string {
+  if (parsed.treePath !== undefined) {
+    return resolve(process.cwd(), parsed.treePath);
+  }
+  if (parsed.treeName !== undefined) {
+    return join(dirname(sourceRepo.root), parsed.treeName);
+  }
+  if (sourceRepo.isGitRepo()) {
+    const existingBinding = resolveDedicatedTreeRepoForSource(sourceRepo);
+    if (existingBinding.ok) {
+      return existingBinding.value.root;
+    }
+  }
+  return join(dirname(sourceRepo.root), `${sourceRepo.repoName()}-tree`);
+}
+
+function initTreeCheckout(
+  treeRoot: string,
+  sourceRepo: Repo | null,
+  parsed: ParsedInitCliArgs,
+): number {
+  try {
+    ensureGitRepo(treeRoot);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "unknown error";
+    console.error(`Error: ${message}`);
+    return 1;
+  }
+  return runInit(new Repo(treeRoot), {
+    here: true,
+    seedMembers: parsed.seedMembers,
+    seedSourceRoot: sourceRepo?.root,
+  });
+}
+
+function runExplicitTreeInit(parsed: ParsedInitCliArgs): number {
+  const treeRoot = parsed.here
+    ? new Repo().root
+    : parsed.treePath
+    ? resolve(process.cwd(), parsed.treePath)
+    : process.cwd();
+  return initTreeCheckout(treeRoot, null, parsed);
+}
+
+function runInitWorkflow(parsed: ParsedInitCliArgs): number {
+  if (parsed.subcommand === "tree" || parsed.here) {
+    return runExplicitTreeInit(parsed);
+  }
+
+  const sourceRepo = new Repo();
+  const scope = resolveInitScope(parsed);
+  const treeMode = resolveTreeModeForWorkflow(sourceRepo, scope, parsed);
+  const bindMode = scope === "workspace"
+    ? "workspace-root"
+    : treeMode === "shared"
+    ? "shared-source"
+    : "standalone-source";
+
+  if (parsed.treePath !== undefined || parsed.treeUrl !== undefined) {
+    const bindCode = runBind(undefined, {
+      mode: bindMode,
+      treeMode,
+      treePath: parsed.treePath,
+      treeUrl: parsed.treeUrl,
+      workspaceId: parsed.workspaceId,
+    });
+    if (bindCode !== 0) {
+      return bindCode;
+    }
+    if (scope === "workspace" && (parsed.syncMembers ?? true)) {
+      return runWorkspaceSync(undefined, {
+        treePath: parsed.treePath,
+        treeUrl: parsed.treeUrl,
+        workspaceId: parsed.workspaceId,
+      });
+    }
+    return 0;
+  }
+
+  const treeRoot = resolveDefaultTreeRoot(sourceRepo, parsed);
+  const initCode = initTreeCheckout(treeRoot, sourceRepo, parsed);
+  if (initCode !== 0) {
+    return initCode;
+  }
+
+  const bindCode = runBind(undefined, {
+    mode: bindMode,
+    treeMode,
+    treePath: relativeRepoPath(sourceRepo.root, treeRoot),
+    workspaceId: parsed.workspaceId,
+  });
+  if (bindCode !== 0) {
+    return bindCode;
+  }
+
+  if (scope === "workspace" && (parsed.syncMembers ?? true)) {
+    return runWorkspaceSync(undefined, {
+      treePath: relativeRepoPath(sourceRepo.root, treeRoot),
+      workspaceId: parsed.workspaceId,
+    });
+  }
+
+  return 0;
 }
 
 interface ResolvedInitTarget {
