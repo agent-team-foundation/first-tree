@@ -1,35 +1,34 @@
 # first-tree
 
-Shared context for agent teams.
+first-tree - The living source of truth for your team. Give your agent superpowers with just a skill.
 
 `first-tree` publishes the `first-tree` CLI and bundles the canonical
 `first-tree` skill used to bootstrap and maintain Context Tree repos. A
-Context Tree is a Git-native knowledge layer for decisions, ownership, and
+Context Tree is a **Git-native knowledge layer** for decisions, ownership, and
 cross-domain relationships that agents and humans keep current together.
 
 ## Quick Start For Agents
 
-Paste one of these into your agent from the root you want to onboard:
+Paste one of these into your agent (Claude Code, Codex, or any agents that you are using) from the root you want to onboard:
 
+If you are working on a single codebase without context tree setup:
 ```text
-Use the latest `first-tree` CLI to inspect this repo, ask whether we already
-have a Context Tree, and then onboard it. If there is no existing tree, create
-the default dedicated `<repo>-tree` checkout. If there is an existing tree,
-bind this repo to it instead of creating a new one. Finish by telling me what
-still needs to be filled in before publish.
+Use the latest first-tree CLI (https://github.com/agent-team-foundation/first-tree) to install the skill in the current repository and complete the onboarding process.
 ```
 
+If you are working on a single codebase and want to connect it to an existing context tree repo:
 ```text
-Use the latest `first-tree` CLI to onboard this workspace root. The workspace
-contains multiple child repos that should all share one Context Tree. Inspect
-the workspace first, bind or create one shared tree, then sync every child repo
-to that same tree.
+Use the latest first-tree CLI (https://github.com/agent-team-foundation/first-tree) to install the skill in the current repository and complete the onboarding process by using `https://github.com/<your-organization>/<your-tree-repo-name>` as shared context tree.
 ```
 
+If you are working on a workspace with multiple repos without context tree setup:
 ```text
-Use the latest `first-tree` CLI to bind the current repo to the existing
-Context Tree at `../org-context`. Do not create a new sibling tree repo. Update
-AGENTS.md, install the skill, and refresh the local first-tree metadata.
+Use the latest first-tree CLI (https://github.com/agent-team-foundation/first-tree) to install the skill in the current folder, build a shared context tree repo and onboard all the repos in the current folder to that shared context tree.
+```
+
+If you are working on a workspace with multiple repos and want to connect them to an existing context tree repo:
+```text
+Use the latest first-tree CLI (https://github.com/agent-team-foundation/first-tree) to install the skill in the current folder, and complete the onboarding process for all the repos in the current folder by using `https://github.com/<your-organization>/<your-tree-repo-name>` as shared context tree.
 ```
 
 ## Install And Run
