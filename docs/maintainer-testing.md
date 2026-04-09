@@ -8,6 +8,7 @@ surface.
 ```bash
 pnpm validate:skill
 pnpm typecheck
+pnpm test:e2e
 pnpm test
 pnpm build
 ```
@@ -16,6 +17,9 @@ pnpm build
 
 - `pnpm validate:skill` verifies the canonical skill structure and sync rules.
 - `pnpm typecheck` catches TypeScript boundary and import issues.
+- `pnpm test:e2e` runs maintainer smoke tests that execute real CLI workflows in
+  temporary repos and workspaces, including shared-tree binding plus mocked
+  publish/review flows.
 - `pnpm test` runs unit tests plus repo-local helper tests that support
   maintainer tooling.
 - `pnpm build` checks the thin CLI bundle.
@@ -25,6 +29,7 @@ pnpm build
 Examples:
 
 ```bash
+pnpm test:e2e
 pnpm test -- skills/first-tree/tests/rules.test.ts
 pnpm test -- skills/first-tree/tests/verify.test.ts
 pnpm test -- skills/first-tree/tests/skill-artifacts.test.ts
