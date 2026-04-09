@@ -49,6 +49,7 @@ This is the maintainer reading index for the current `first-tree` architecture.
 | Path | Coverage |
 | --- | --- |
 | `tests/init.test.ts` | Tree bootstrap and init wrapper behavior |
+| `tests/cli-e2e.test.ts` | End-to-end CLI smoke coverage across repo, workspace, publish, and review workflows |
 | `tests/publish.test.ts` | Publish orchestration |
 | `tests/thin-cli.test.ts` | Thin CLI smoke coverage |
 | `tests/skill-artifacts.test.ts` | Skill export and doc integrity |
