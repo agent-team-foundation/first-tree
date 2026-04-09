@@ -19,7 +19,9 @@
     "markdown"
   ],
   "type": "module",
-  "bin": "dist/cli.js",
+  "bin": {
+    "first-tree": "dist/cli.js"
+  },
   "imports": {
     "#engine/*": "./src/engine/*",
     "#skill/*": "./skills/first-tree/*",
