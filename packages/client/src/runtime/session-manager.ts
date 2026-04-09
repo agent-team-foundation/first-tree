@@ -1,4 +1,4 @@
-import type { InboxEntryWithMessage } from "@first-tree-hub/shared";
+import type { InboxEntryWithMessage, RuntimeState } from "@first-tree-hub/shared";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import type { SessionConfig } from "./config.js";
 import { Deduplicator } from "./deduplicator.js";
@@ -38,6 +38,8 @@ type SessionManagerConfig = {
   sdk: FirstTreeHubSDK;
   log: (msg: string) => void;
   registryPath?: string;
+  /** M1: callback when runtime state should change */
+  onStateChange?: (state: RuntimeState, description?: string) => void;
 };
 
 /**
@@ -62,6 +64,7 @@ export class SessionManager {
   private readonly pendingQueue: PendingMessage[] = [];
   private idleTimer: ReturnType<typeof setInterval> | null = null;
   private _activeCount = 0;
+  private _lastReportedState: RuntimeState | null = null;
 
   constructor(config: SessionManagerConfig) {
     this.config = config;
@@ -190,12 +193,14 @@ export class SessionManager {
         this.config.log(`Session ${chatId}: created (${sessionId})`);
       }
       this.persistRegistry();
+      this.notifyStateChange();
     } catch (err) {
       this.config.log(
         `Session ${chatId}: ${evicted ? "resume" : "start"} failed: ${err instanceof Error ? err.message : String(err)}`,
       );
       this.sessions.delete(chatId);
       this._activeCount--;
+      this.notifyStateChange();
     }
   }
 
@@ -217,10 +222,12 @@ export class SessionManager {
       await entry.handler.resume(message, entry.claudeSessionId, ctx);
       this.config.log(`Session ${entry.chatId}: resumed (${entry.claudeSessionId})`);
       this.persistRegistry();
+      this.notifyStateChange();
     } catch (err) {
       this.config.log(`Session ${entry.chatId}: resume failed: ${err instanceof Error ? err.message : String(err)}`);
       entry.status = "suspended";
       this._activeCount--;
+      this.notifyStateChange();
     }
   }
 
@@ -268,6 +275,7 @@ export class SessionManager {
         entry.suspending = null;
       });
     this.persistRegistry();
+    this.notifyStateChange();
 
     // Drain pending queue
     this.drainPendingQueue();
@@ -343,6 +351,14 @@ export class SessionManager {
       const oldest = this.evictedMappings.keys().next().value;
       if (oldest !== undefined) this.evictedMappings.delete(oldest);
     }
+  }
+
+  private notifyStateChange(): void {
+    if (!this.config.onStateChange) return;
+    const state: RuntimeState = this._activeCount > 0 ? "working" : "idle";
+    if (state === this._lastReportedState) return;
+    this._lastReportedState = state;
+    this.config.onStateChange(state);
   }
 
   private buildSessionContext(chatId: string): SessionContext {

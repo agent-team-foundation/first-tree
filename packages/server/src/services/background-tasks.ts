@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { AdapterManager } from "./adapter-manager.js";
+import * as clientService from "./client.js";
 import * as inboxService from "./inbox.js";
 import type { KaelRuntime } from "./kael-runtime.js";
 import * as presenceService from "./presence.js";
@@ -42,6 +43,7 @@ export function createBackgroundTasks(
           const configs = await systemConfigService.getAllConfigs(app.db);
           const staleSeconds = (configs.presence_cleanup_seconds as number) ?? 60;
           await presenceService.cleanupStalePresence(app.db, staleSeconds);
+          await clientService.cleanupStaleClients(app.db, staleSeconds);
         } catch (err) {
           app.log.error(err, "Failed to heartbeat / cleanup presence");
         }

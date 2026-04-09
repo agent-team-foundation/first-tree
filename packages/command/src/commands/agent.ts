@@ -12,7 +12,7 @@ import {
 } from "@first-tree-hub/shared/config";
 import type { Command } from "commander";
 import { fail, success } from "../cli/output.js";
-import { bootstrapToken, resolveAgentToken, resolveServerUrl } from "../core/bootstrap.js";
+import { bootstrapToken, resolveAdminToken, resolveAgentToken, resolveServerUrl } from "../core/bootstrap.js";
 import { bindFeishuBot, bindFeishuUser } from "../core/feishu.js";
 import { promptAddAgent } from "../core/index.js";
 
@@ -373,6 +373,124 @@ export function registerAgentCommands(program: Command): void {
         success(result);
       } catch (error) {
         handleSdkError(error);
+      }
+    });
+
+  // ── M1: Runtime status & management ─────────────────────────────────
+
+  agent
+    .command("status [name]")
+    .description("Show agent runtime status from Hub server")
+    .option("--server <url>", "Hub server URL")
+    .action(async (name?: string, options?: { server?: string }) => {
+      try {
+        const serverUrl = resolveServerUrl(options?.server);
+        const response = await fetch(`${serverUrl}/api/v1/admin/agents/activity`, {
+          headers: { Authorization: `Bearer ${resolveAdminToken()}` },
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!response.ok) {
+          fail("FETCH_ERROR", `Server returned ${response.status}`, 1);
+        }
+        const data = (await response.json()) as {
+          total: number;
+          running: number;
+          byState: { idle: number; working: number; error: number };
+          clients: number;
+          agents: Array<{
+            agentId: string;
+            clientId: string | null;
+            runtimeType: string | null;
+            runtimeState: string | null;
+            runtimeDescription: string | null;
+            activeSessions: number | null;
+            totalSessions: number | null;
+            errorMessage: string | null;
+          }>;
+        };
+
+        if (name) {
+          const agent = data.agents.find((a) => a.agentId === name);
+          if (!agent) {
+            process.stderr.write(`\n  Agent "${name}" is not running.\n\n`);
+            return;
+          }
+          process.stderr.write(`\n  Agent: ${agent.agentId}\n`);
+          process.stderr.write(`  Runtime: ${agent.runtimeType ?? "—"}\n`);
+          process.stderr.write(`  State: ${agent.runtimeState ?? "—"}\n`);
+          if (agent.runtimeDescription) {
+            process.stderr.write(`  Description: ${agent.runtimeDescription}\n`);
+          }
+          if (agent.activeSessions !== null) {
+            process.stderr.write(`  Sessions: ${agent.activeSessions} active / ${agent.totalSessions ?? 0} total\n`);
+          }
+          if (agent.errorMessage) {
+            process.stderr.write(`  Error: ${agent.errorMessage}\n`);
+          }
+          if (agent.clientId) {
+            process.stderr.write(`  Client: ${agent.clientId}\n`);
+          }
+          process.stderr.write("\n");
+          return;
+        }
+
+        process.stderr.write(`\n  Hub: ${serverUrl}\n\n`);
+        process.stderr.write(`  Clients: ${data.clients} connected\n`);
+        process.stderr.write(`  Agents: ${data.running} running / ${data.total} total\n`);
+        process.stderr.write(
+          `  Errors: ${data.byState.error} | Working: ${data.byState.working} | Idle: ${data.byState.idle}\n\n`,
+        );
+
+        if (data.agents.length > 0) {
+          const header = `  ${"AGENT".padEnd(18)} ${"RUNTIME".padEnd(14)} ${"STATE".padEnd(10)} ${"SESSIONS".padEnd(10)} DESCRIPTION`;
+          process.stderr.write(`${header}\n`);
+          process.stderr.write(`  ${"─".repeat(header.length - 2)}\n`);
+          for (const a of data.agents) {
+            const sessions = a.activeSessions !== null ? `${a.activeSessions}/${a.totalSessions ?? 0}` : "—";
+            const desc = a.runtimeDescription ?? (a.errorMessage ? `Error: ${a.errorMessage.slice(0, 40)}` : "—");
+            process.stderr.write(
+              `  ${(a.agentId ?? "").padEnd(18)} ${(a.runtimeType ?? "—").padEnd(14)} ${(a.runtimeState ?? "—").padEnd(10)} ${sessions.padEnd(10)} ${desc}\n`,
+            );
+          }
+          process.stderr.write("\n");
+        }
+      } catch (error) {
+        if (error instanceof Error && error.message.includes("ADMIN_TOKEN")) {
+          try {
+            const sdk = createSdk();
+            const me = await sdk.register();
+            process.stderr.write(`\n  Agent: ${me.agentId} (${me.displayName ?? "no name"})\n`);
+            process.stderr.write(`  Type: ${me.type}\n`);
+            process.stderr.write(`  Status: ${me.status}\n\n`);
+          } catch (sdkError) {
+            handleSdkError(sdkError);
+          }
+          return;
+        }
+        const msg = error instanceof Error ? error.message : String(error);
+        fail("STATUS_ERROR", msg);
+      }
+    });
+
+  agent
+    .command("reset <name>")
+    .description("Reset agent error state to idle")
+    .option("--server <url>", "Hub server URL")
+    .action(async (name: string, options: { server?: string }) => {
+      try {
+        const serverUrl = resolveServerUrl(options.server);
+        const response = await fetch(`${serverUrl}/api/v1/admin/agents/activity/${name}/reset-activity`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${resolveAdminToken()}` },
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!response.ok) {
+          fail("RESET_ERROR", `Server returned ${response.status}`, 1);
+        }
+        process.stderr.write(`  Agent "${name}" reset to idle.\n`);
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        fail("RESET_ERROR", msg);
       }
     });
 

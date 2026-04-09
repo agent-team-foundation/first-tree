@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import type { CreateAgent, CreateAgentToken, UpdateAgent } from "@first-tree-hub/shared";
 import { AGENT_STATUSES } from "@first-tree-hub/shared";
 import { and, desc, eq, isNull, lt, ne } from "drizzle-orm";
@@ -9,11 +9,8 @@ import { agentPresence } from "../db/schema/agent-presence.js";
 import { agentTokens } from "../db/schema/agent-tokens.js";
 import { agents } from "../db/schema/agents.js";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
+import { hashToken } from "../utils.js";
 import { uuidv7 } from "../uuid.js";
-
-function hashToken(raw: string): string {
-  return createHash("sha256").update(raw).digest("hex");
-}
 
 export async function createAgent(db: Database, data: CreateAgent) {
   const uuid = uuidv7();
@@ -94,6 +91,13 @@ export async function listAgents(db: Database, orgId: string, limit: number, cur
       createdAt: agents.createdAt,
       updatedAt: agents.updatedAt,
       presenceStatus: agentPresence.status,
+      // M1: runtime fields
+      clientId: agentPresence.clientId,
+      runtimeType: agentPresence.runtimeType,
+      runtimeState: agentPresence.runtimeState,
+      runtimeDescription: agentPresence.runtimeDescription,
+      activeSessions: agentPresence.activeSessions,
+      errorMessage: agentPresence.errorMessage,
     })
     .from(agents)
     .leftJoin(agentPresence, eq(agents.uuid, agentPresence.agentId))

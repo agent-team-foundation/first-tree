@@ -468,6 +468,67 @@ export function AgentDetailPage() {
         </CardContent>
       </Card>
 
+      {/* M1: Runtime Info */}
+      {(() => {
+        const ext = agent as Record<string, unknown>;
+        const rState = ext.runtimeState as string | null;
+        const rType = ext.runtimeType as string | null;
+        const rDesc = ext.runtimeDescription as string | null;
+        const rSessions = ext.activeSessions as number | null;
+        const rClientId = ext.clientId as string | null;
+        const rError = ext.errorMessage as string | null;
+        if (!rState) return null;
+        return (
+          <Card>
+            <CardHeader>
+              <CardTitle>Runtime</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <dl className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <dt className="text-muted-foreground mb-1">Runtime Type</dt>
+                  <dd>{rType ?? "—"}</dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground mb-1">State</dt>
+                  <dd>
+                    <Badge
+                      variant={rState === "error" ? "destructive" : rState === "working" ? "default" : "secondary"}
+                    >
+                      {rState}
+                    </Badge>
+                  </dd>
+                </div>
+                {rDesc && (
+                  <div className="col-span-2">
+                    <dt className="text-muted-foreground mb-1">Current Work</dt>
+                    <dd>{rDesc}</dd>
+                  </div>
+                )}
+                {rSessions !== null && (
+                  <div>
+                    <dt className="text-muted-foreground mb-1">Sessions</dt>
+                    <dd>{rSessions} active</dd>
+                  </div>
+                )}
+                {rClientId && (
+                  <div>
+                    <dt className="text-muted-foreground mb-1">Client</dt>
+                    <dd className="font-mono text-xs">{rClientId}</dd>
+                  </div>
+                )}
+                {rError && (
+                  <div className="col-span-2">
+                    <dt className="text-muted-foreground mb-1">Error</dt>
+                    <dd className="text-destructive">{rError}</dd>
+                  </div>
+                )}
+              </dl>
+            </CardContent>
+          </Card>
+        );
+      })()}
+
       {/* Profile */}
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">

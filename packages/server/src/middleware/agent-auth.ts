@@ -1,14 +1,10 @@
-import { createHash } from "node:crypto";
 import { and, eq, isNull } from "drizzle-orm";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { Database } from "../db/connection.js";
 import { agentTokens } from "../db/schema/agent-tokens.js";
 import { agents } from "../db/schema/agents.js";
 import { UnauthorizedError } from "../errors.js";
-
-function hashToken(raw: string): string {
-  return createHash("sha256").update(raw).digest("hex");
-}
+import { hashToken } from "../utils.js";
 
 export function agentAuthHook(db: Database) {
   return async (request: FastifyRequest, _reply: FastifyReply): Promise<void> => {

@@ -64,6 +64,13 @@
       "when": 1775952000000,
       "tag": "0008_uuid_identity",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1776019200000,
+      "tag": "0009_agent_runtime_m1",
+      "breakpoints": true
     }
   ]
 }
