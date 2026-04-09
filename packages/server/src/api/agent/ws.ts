@@ -12,25 +12,25 @@ export function agentWsRoutes(notifier: Notifier, instanceId: string) {
         return;
       }
 
-      if (connectionManager.hasActiveConnection(agent.id)) {
+      if (connectionManager.hasActiveConnection(agent.uuid)) {
         socket.close(connectionManager.WS_CLOSE_ALREADY_CONNECTED, "Agent already connected");
         return;
       }
 
       const inboxId = agent.inboxId;
 
-      await presenceService.setOnline(app.db, agent.id, instanceId);
-      connectionManager.setConnection(agent.id, socket);
+      await presenceService.setOnline(app.db, agent.uuid, instanceId);
+      connectionManager.setConnection(agent.uuid, socket);
       notifier.subscribe(inboxId, socket);
 
       socket.on("close", async () => {
         notifier.unsubscribe(inboxId, socket);
-        const wasActive = connectionManager.removeConnection(agent.id, socket);
+        const wasActive = connectionManager.removeConnection(agent.uuid, socket);
         // Only set offline if this socket was still the active connection.
         // A newer socket may have replaced it — avoid overwriting its online status.
         if (wasActive) {
           try {
-            await presenceService.setOffline(app.db, agent.id);
+            await presenceService.setOffline(app.db, agent.uuid);
           } catch {
             // best-effort
           }

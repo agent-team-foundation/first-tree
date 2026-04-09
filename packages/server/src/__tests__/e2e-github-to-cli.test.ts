@@ -31,7 +31,7 @@ async function sdkRequest<T>(baseUrl: string, token: string, path: string, init?
 }
 
 function sdkRegister(baseUrl: string, token: string) {
-  return sdkRequest<{ id: string; inboxId: string; status: string }>(baseUrl, token, "/api/v1/agent/me");
+  return sdkRequest<{ uuid: string; inboxId: string; status: string }>(baseUrl, token, "/api/v1/agent/me");
 }
 
 function sdkPull(baseUrl: string, token: string, limit = 10) {
@@ -47,13 +47,16 @@ function sdkAck(baseUrl: string, token: string, entryId: number) {
 }
 
 // Helper: create agent + token directly via admin-like DB operations
-async function createTestAgent(app: Awaited<ReturnType<typeof buildApp>>, opts: { id: string; displayName?: string }) {
+async function createTestAgent(
+  app: Awaited<ReturnType<typeof buildApp>>,
+  opts: { name: string; displayName?: string },
+) {
   const agent = await createAgent(app.db, {
-    id: opts.id,
+    name: opts.name,
     type: "autonomous_agent",
     displayName: opts.displayName ?? "Test Agent",
   });
-  const tokenResult = await createToken(app.db, agent.id, { name: "test" });
+  const tokenResult = await createToken(app.db, agent.uuid, { name: "test" });
   return { agent, token: tokenResult.token };
 }
 
@@ -97,14 +100,14 @@ describe("E2E: GitHub issue → Server → CLI pull", () => {
   it("full flow: webhook → inbox → pull → ack", async () => {
     // 1. Create target agent with github.repos metadata
     const { agent, token } = await createTestAgent(app, {
-      id: "issue-handler",
+      name: "issue-handler",
       displayName: "Issue Handler",
     });
 
     await app.db
       .update(agents)
       .set({ metadata: { github: { repos: ["acme/my-repo"] } } })
-      .where(eq(agents.id, agent.id));
+      .where(eq(agents.uuid, agent.uuid));
 
     // 2. Send GitHub issue webhook
     const issuePayload = JSON.stringify({
@@ -137,8 +140,8 @@ describe("E2E: GitHub issue → Server → CLI pull", () => {
 
     // 3. Register — verify agent identity
     const identity = await sdkRegister(address, token);
-    expect(identity.id).toBe("issue-handler");
-    expect(identity.inboxId).toBe("inbox_issue-handler");
+    expect(identity.uuid).toBe(agent.uuid);
+    expect(identity.inboxId).toBe(agent.inboxId);
 
     // 4. Pull — should have the GitHub issue message
     const entries = await sdkPull(address, token, 10);
@@ -148,7 +151,8 @@ describe("E2E: GitHub issue → Server → CLI pull", () => {
     if (!entry) throw new Error("Expected entry");
 
     expect(entry.message.format).toBe("card");
-    expect(entry.message.senderId).toBe("github-adapter");
+    // senderId is the github-adapter agent's UUID (auto-generated)
+    expect(entry.message.senderId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-/);
 
     const content = entry.message.content as Record<string, unknown>;
     expect(content.type).toBe("github_issue");
@@ -233,11 +237,11 @@ describe("E2E: GitHub issue → Server → CLI pull", () => {
   });
 
   it("issue_comment event", async () => {
-    const { agent, token } = await createTestAgent(app, { id: "comment-handler" });
+    const { agent, token } = await createTestAgent(app, { name: "comment-handler" });
     await app.db
       .update(agents)
       .set({ metadata: { github: { repos: ["acme/repo"] } } })
-      .where(eq(agents.id, agent.id));
+      .where(eq(agents.uuid, agent.uuid));
 
     const commentPayload = JSON.stringify({
       action: "created",

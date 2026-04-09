@@ -60,13 +60,16 @@ function createTestHandler(events: LifecycleEvent[]): AgentHandler {
 
 // -- Helpers -----------------------------------------------------------------
 
-async function createTestAgent(app: Awaited<ReturnType<typeof buildApp>>, opts: { id: string; displayName?: string }) {
+async function createTestAgent(
+  app: Awaited<ReturnType<typeof buildApp>>,
+  opts: { name: string; displayName?: string },
+) {
   const agent = await createAgent(app.db, {
-    id: opts.id,
+    name: opts.name,
     type: "autonomous_agent",
     displayName: opts.displayName ?? "Test Agent",
   });
-  const tokenResult = await createToken(app.db, agent.id, { name: "test" });
+  const tokenResult = await createToken(app.db, agent.uuid, { name: "test" });
   return { agent, token: tokenResult.token };
 }
 
@@ -104,8 +107,8 @@ describe("E2E: Session-oriented Runtime", () => {
 
   it("full session lifecycle: start → inject → shutdown", async () => {
     // 1. Create sender and receiver agents
-    const sender = await createTestAgent(app, { id: "sender-agent", displayName: "Sender" });
-    const receiver = await createTestAgent(app, { id: "receiver-agent", displayName: "Receiver" });
+    const sender = await createTestAgent(app, { name: "sender-agent", displayName: "Sender" });
+    const receiver = await createTestAgent(app, { name: "receiver-agent", displayName: "Receiver" });
 
     const senderSdk = new FirstTreeHubSDK({ serverUrl: address, token: sender.token });
     const receiverSdk = new FirstTreeHubSDK({ serverUrl: address, token: receiver.token });
@@ -113,8 +116,8 @@ describe("E2E: Session-oriented Runtime", () => {
     // Verify both agents are registered
     const senderIdentity = await senderSdk.register();
     const receiverIdentity = await receiverSdk.register();
-    expect(senderIdentity.agentId).toBe("sender-agent");
-    expect(receiverIdentity.agentId).toBe("receiver-agent");
+    expect(senderIdentity.agentId).toBe(sender.agent.uuid);
+    expect(receiverIdentity.agentId).toBe(receiver.agent.uuid);
 
     // 2. Send first message from sender → receiver (creates chat via sendToAgent)
     const msg1 = await senderSdk.sendToAgent("receiver-agent", {
@@ -204,9 +207,9 @@ describe("E2E: Session-oriented Runtime", () => {
   });
 
   it("separate sessions for different chats", async () => {
-    const sender = await createTestAgent(app, { id: "sender-2", displayName: "Sender" });
-    const receiver = await createTestAgent(app, { id: "receiver-2", displayName: "Receiver" });
-    const otherAgent = await createTestAgent(app, { id: "other-agent", displayName: "Other" });
+    const sender = await createTestAgent(app, { name: "sender-2", displayName: "Sender" });
+    const receiver = await createTestAgent(app, { name: "receiver-2", displayName: "Receiver" });
+    const otherAgent = await createTestAgent(app, { name: "other-agent", displayName: "Other" });
 
     const senderSdk = new FirstTreeHubSDK({ serverUrl: address, token: sender.token });
     const otherSdk = new FirstTreeHubSDK({ serverUrl: address, token: otherAgent.token });
@@ -254,7 +257,7 @@ describe("E2E: Session-oriented Runtime", () => {
       handlerFactory: factory,
       handlerConfig: { workspaceRoot: "/tmp/e2e-test" },
       agentIdentity: {
-        agentId: "receiver-2",
+        agentId: receiver.agent.uuid,
         displayName: "Receiver",
         type: "autonomous_agent",
         delegateMention: null,
@@ -289,8 +292,8 @@ describe("E2E: Session-oriented Runtime", () => {
   });
 
   it("deduplicates redelivered messages", async () => {
-    const sender = await createTestAgent(app, { id: "sender-3" });
-    const receiver = await createTestAgent(app, { id: "receiver-3" });
+    const sender = await createTestAgent(app, { name: "sender-3" });
+    const receiver = await createTestAgent(app, { name: "receiver-3" });
 
     const senderSdk = new FirstTreeHubSDK({ serverUrl: address, token: sender.token });
     const receiverSdk = new FirstTreeHubSDK({ serverUrl: address, token: receiver.token });
@@ -304,7 +307,7 @@ describe("E2E: Session-oriented Runtime", () => {
       handlerFactory: factory,
       handlerConfig: { workspaceRoot: "/tmp/e2e-test" },
       agentIdentity: {
-        agentId: "receiver-3",
+        agentId: receiver.agent.uuid,
         displayName: null,
         type: "autonomous_agent",
         delegateMention: null,
@@ -332,8 +335,8 @@ describe("E2E: Session-oriented Runtime", () => {
   });
 
   it("immediate ACK ensures message is consumed from inbox", async () => {
-    const sender = await createTestAgent(app, { id: "sender-4" });
-    const receiver = await createTestAgent(app, { id: "receiver-4" });
+    const sender = await createTestAgent(app, { name: "sender-4" });
+    const receiver = await createTestAgent(app, { name: "receiver-4" });
 
     const senderSdk = new FirstTreeHubSDK({ serverUrl: address, token: sender.token });
     const receiverSdk = new FirstTreeHubSDK({ serverUrl: address, token: receiver.token });
@@ -347,7 +350,7 @@ describe("E2E: Session-oriented Runtime", () => {
       handlerFactory: factory,
       handlerConfig: { workspaceRoot: "/tmp/e2e-test" },
       agentIdentity: {
-        agentId: "receiver-4",
+        agentId: receiver.agent.uuid,
         displayName: null,
         type: "autonomous_agent",
         delegateMention: null,
@@ -383,8 +386,8 @@ describe("E2E: Session-oriented Runtime", () => {
   });
 
   it("idle suspend → resume preserves session identity", async () => {
-    const sender = await createTestAgent(app, { id: "sender-6" });
-    const receiver = await createTestAgent(app, { id: "receiver-6" });
+    const sender = await createTestAgent(app, { name: "sender-6" });
+    const receiver = await createTestAgent(app, { name: "receiver-6" });
 
     const senderSdk = new FirstTreeHubSDK({ serverUrl: address, token: sender.token });
     const receiverSdk = new FirstTreeHubSDK({ serverUrl: address, token: receiver.token });
@@ -400,7 +403,7 @@ describe("E2E: Session-oriented Runtime", () => {
       handlerFactory: factory,
       handlerConfig: { workspaceRoot: "/tmp/e2e-test" },
       agentIdentity: {
-        agentId: "receiver-6",
+        agentId: receiver.agent.uuid,
         displayName: null,
         type: "autonomous_agent",
         delegateMention: null,
@@ -450,10 +453,10 @@ describe("E2E: Session-oriented Runtime", () => {
   }, 20_000);
 
   it("concurrency limit suspends oldest idle and drains pending queue", async () => {
-    const sender = await createTestAgent(app, { id: "sender-7" });
-    const receiver = await createTestAgent(app, { id: "receiver-7" });
-    const other1 = await createTestAgent(app, { id: "other-7a" });
-    const other2 = await createTestAgent(app, { id: "other-7b" });
+    const sender = await createTestAgent(app, { name: "sender-7" });
+    const receiver = await createTestAgent(app, { name: "receiver-7" });
+    const other1 = await createTestAgent(app, { name: "other-7a" });
+    const other2 = await createTestAgent(app, { name: "other-7b" });
 
     const senderSdk = new FirstTreeHubSDK({ serverUrl: address, token: sender.token });
     const other1Sdk = new FirstTreeHubSDK({ serverUrl: address, token: other1.token });
@@ -500,7 +503,7 @@ describe("E2E: Session-oriented Runtime", () => {
       handlerFactory: factory,
       handlerConfig: { workspaceRoot: "/tmp/e2e-test" },
       agentIdentity: {
-        agentId: "receiver-7",
+        agentId: receiver.agent.uuid,
         displayName: null,
         type: "autonomous_agent",
         delegateMention: null,
@@ -539,10 +542,10 @@ describe("E2E: Session-oriented Runtime", () => {
   });
 
   it("evicted session resumes (not starts) when new message arrives", async () => {
-    const sender = await createTestAgent(app, { id: "sender-8" });
-    const receiver = await createTestAgent(app, { id: "receiver-8" });
-    const other1 = await createTestAgent(app, { id: "other-8a" });
-    const other2 = await createTestAgent(app, { id: "other-8b" });
+    const sender = await createTestAgent(app, { name: "sender-8" });
+    const receiver = await createTestAgent(app, { name: "receiver-8" });
+    const other1 = await createTestAgent(app, { name: "other-8a" });
+    const other2 = await createTestAgent(app, { name: "other-8b" });
 
     const senderSdk = new FirstTreeHubSDK({ serverUrl: address, token: sender.token });
     const other1Sdk = new FirstTreeHubSDK({ serverUrl: address, token: other1.token });
@@ -579,7 +582,7 @@ describe("E2E: Session-oriented Runtime", () => {
       handlerFactory: factory,
       handlerConfig: { workspaceRoot: "/tmp/e2e-test" },
       agentIdentity: {
-        agentId: "receiver-8",
+        agentId: receiver.agent.uuid,
         displayName: null,
         type: "autonomous_agent",
         delegateMention: null,
@@ -632,8 +635,8 @@ describe("E2E: Session-oriented Runtime", () => {
   });
 
   it("handler receives SessionContext with correct fields", async () => {
-    const sender = await createTestAgent(app, { id: "sender-5" });
-    const receiver = await createTestAgent(app, { id: "receiver-5" });
+    const sender = await createTestAgent(app, { name: "sender-5" });
+    const receiver = await createTestAgent(app, { name: "receiver-5" });
 
     const senderSdk = new FirstTreeHubSDK({ serverUrl: address, token: sender.token });
     const receiverSdk = new FirstTreeHubSDK({ serverUrl: address, token: receiver.token });
@@ -663,7 +666,7 @@ describe("E2E: Session-oriented Runtime", () => {
       handlerFactory: factory,
       handlerConfig: { workspaceRoot: "/tmp/e2e-test" },
       agentIdentity: {
-        agentId: "receiver-5",
+        agentId: receiver.agent.uuid,
         displayName: "Receiver Five",
         type: "autonomous_agent",
         delegateMention: null,
@@ -682,7 +685,7 @@ describe("E2E: Session-oriented Runtime", () => {
     // Verify SessionContext
     const ctx = captured.ctx;
     expect(ctx).not.toBeNull();
-    expect(ctx?.agent.agentId).toBe("receiver-5");
+    expect(ctx?.agent.agentId).toBe(receiver.agent.uuid);
     expect(ctx?.agent.displayName).toBe("Receiver Five");
     expect(ctx?.chatId).toBeDefined();
     expect(typeof ctx?.touch).toBe("function");
@@ -694,7 +697,7 @@ describe("E2E: Session-oriented Runtime", () => {
     expect(msg).not.toBeNull();
     expect(msg?.content).toBe("context test");
     expect(msg?.format).toBe("text");
-    expect(msg?.senderId).toBe("sender-5");
+    expect(msg?.senderId).toBe(sender.agent.uuid);
     expect(msg?.chatId).toBeDefined();
     expect(msg?.id).toBeDefined();
 

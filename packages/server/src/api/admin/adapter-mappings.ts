@@ -33,9 +33,9 @@ export async function adminAdapterMappingRoutes(app: FastifyInstance): Promise<v
 
     // Validate agent exists and is human type
     const [agent] = await app.db
-      .select({ id: agents.id, type: agents.type, status: agents.status })
+      .select({ id: agents.uuid, type: agents.type, status: agents.status })
       .from(agents)
-      .where(eq(agents.id, body.agentId))
+      .where(eq(agents.uuid, body.agentId))
       .limit(1);
     if (!agent || agent.status === "deleted") {
       throw new NotFoundError(`Agent "${body.agentId}" not found`);

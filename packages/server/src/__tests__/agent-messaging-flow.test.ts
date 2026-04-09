@@ -7,19 +7,19 @@ describe("Agent Messaging Flow (send → chats → history)", () => {
 
   it("full flow: send to agent, list chats, view history", async () => {
     const app = await appPromise;
-    const { agent: sender, token: senderToken } = await createTestAgent(app, { id: "flow-sender" });
-    const { agent: receiver, token: receiverToken } = await createTestAgent(app, { id: "flow-receiver" });
+    const { agent: sender, token: senderToken } = await createTestAgent(app, { name: "flow-sender" });
+    const { agent: receiver, token: receiverToken } = await createTestAgent(app, { name: "flow-receiver" });
 
     // 1. Send a direct message to another agent
     const sendRes = await app.inject({
       method: "POST",
-      url: `/api/v1/agent/agents/${receiver.id}/messages`,
+      url: `/api/v1/agent/agents/${receiver.name}/messages`,
       headers: { authorization: `Bearer ${senderToken}` },
       payload: { format: "text", content: "Hello from sender" },
     });
     expect(sendRes.statusCode).toBe(201);
     const sentMessage = sendRes.json();
-    expect(sentMessage.senderId).toBe(sender.id);
+    expect(sentMessage.senderId).toBe(sender.uuid);
     expect(sentMessage.content).toBe("Hello from sender");
     expect(sentMessage.chatId).toBeDefined();
 
@@ -55,7 +55,7 @@ describe("Agent Messaging Flow (send → chats → history)", () => {
     const history = historyRes.json();
     expect(history.items).toHaveLength(1);
     expect(history.items[0].content).toBe("Hello from sender");
-    expect(history.items[0].senderId).toBe(sender.id);
+    expect(history.items[0].senderId).toBe(sender.uuid);
 
     // 5. Receiver replies in the same chat
     const replyRes = await app.inject({
@@ -65,7 +65,7 @@ describe("Agent Messaging Flow (send → chats → history)", () => {
       payload: { format: "text", content: "Hello back!" },
     });
     expect(replyRes.statusCode).toBe(201);
-    expect(replyRes.json().senderId).toBe(receiver.id);
+    expect(replyRes.json().senderId).toBe(receiver.uuid);
 
     // 6. History now has 2 messages
     const historyRes2 = await app.inject({
@@ -79,18 +79,18 @@ describe("Agent Messaging Flow (send → chats → history)", () => {
 
   it("chats list respects pagination", async () => {
     const app = await appPromise;
-    const { token: t1 } = await createTestAgent(app, { id: "page-a1" });
-    const { agent: a2 } = await createTestAgent(app, { id: "page-a2" });
-    const { agent: a3 } = await createTestAgent(app, { id: "page-a3" });
-    const { agent: a4 } = await createTestAgent(app, { id: "page-a4" });
+    const { token: t1 } = await createTestAgent(app, { name: "page-a1" });
+    const { agent: a2 } = await createTestAgent(app, { name: "page-a2" });
+    const { agent: a3 } = await createTestAgent(app, { name: "page-a3" });
+    const { agent: a4 } = await createTestAgent(app, { name: "page-a4" });
 
     // Create 3 chats
     for (const target of [a2, a3, a4]) {
       await app.inject({
         method: "POST",
-        url: `/api/v1/agent/agents/${target.id}/messages`,
+        url: `/api/v1/agent/agents/${target.name}/messages`,
         headers: { authorization: `Bearer ${t1}` },
-        payload: { format: "text", content: `hi ${target.id}` },
+        payload: { format: "text", content: `hi ${target.name}` },
       });
     }
 
@@ -118,13 +118,13 @@ describe("Agent Messaging Flow (send → chats → history)", () => {
 
   it("message history respects pagination", async () => {
     const app = await appPromise;
-    const { token: t1 } = await createTestAgent(app, { id: "msghist-a1" });
-    const { agent: a2 } = await createTestAgent(app, { id: "msghist-a2" });
+    const { token: t1 } = await createTestAgent(app, { name: "msghist-a1" });
+    const { agent: a2 } = await createTestAgent(app, { name: "msghist-a2" });
 
     // Send first message to create chat
     const firstMsg = await app.inject({
       method: "POST",
-      url: `/api/v1/agent/agents/${a2.id}/messages`,
+      url: `/api/v1/agent/agents/${a2.name}/messages`,
       headers: { authorization: `Bearer ${t1}` },
       payload: { format: "text", content: "msg-1" },
     });
@@ -163,14 +163,14 @@ describe("Agent Messaging Flow (send → chats → history)", () => {
 
   it("non-participant cannot view history", async () => {
     const app = await appPromise;
-    const { token: t1 } = await createTestAgent(app, { id: "noaccess-a1" });
-    const { agent: a2 } = await createTestAgent(app, { id: "noaccess-a2" });
-    const { token: t3 } = await createTestAgent(app, { id: "noaccess-a3" });
+    const { token: t1 } = await createTestAgent(app, { name: "noaccess-a1" });
+    const { agent: a2 } = await createTestAgent(app, { name: "noaccess-a2" });
+    const { token: t3 } = await createTestAgent(app, { name: "noaccess-a3" });
 
     // a1 sends to a2 → creates direct chat
     const sendRes = await app.inject({
       method: "POST",
-      url: `/api/v1/agent/agents/${a2.id}/messages`,
+      url: `/api/v1/agent/agents/${a2.name}/messages`,
       headers: { authorization: `Bearer ${t1}` },
       payload: { format: "text", content: "private" },
     });
@@ -187,12 +187,12 @@ describe("Agent Messaging Flow (send → chats → history)", () => {
 
   it("send with markdown format", async () => {
     const app = await appPromise;
-    const { token: t1 } = await createTestAgent(app, { id: "md-sender" });
-    const { agent: a2 } = await createTestAgent(app, { id: "md-receiver" });
+    const { token: t1 } = await createTestAgent(app, { name: "md-sender" });
+    const { agent: a2 } = await createTestAgent(app, { name: "md-receiver" });
 
     const res = await app.inject({
       method: "POST",
-      url: `/api/v1/agent/agents/${a2.id}/messages`,
+      url: `/api/v1/agent/agents/${a2.name}/messages`,
       headers: { authorization: `Bearer ${t1}` },
       payload: { format: "markdown", content: "## Hello\n\nThis is **bold**" },
     });
@@ -203,12 +203,12 @@ describe("Agent Messaging Flow (send → chats → history)", () => {
 
   it("send with metadata", async () => {
     const app = await appPromise;
-    const { token: t1 } = await createTestAgent(app, { id: "meta-sender" });
-    const { agent: a2 } = await createTestAgent(app, { id: "meta-receiver" });
+    const { token: t1 } = await createTestAgent(app, { name: "meta-sender" });
+    const { agent: a2 } = await createTestAgent(app, { name: "meta-receiver" });
 
     const res = await app.inject({
       method: "POST",
-      url: `/api/v1/agent/agents/${a2.id}/messages`,
+      url: `/api/v1/agent/agents/${a2.name}/messages`,
       headers: { authorization: `Bearer ${t1}` },
       payload: {
         format: "text",

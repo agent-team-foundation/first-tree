@@ -8,7 +8,7 @@ export const agentTokens = pgTable(
     id: text("id").primaryKey(),
     agentId: text("agent_id")
       .notNull()
-      .references(() => agents.id, { onDelete: "cascade" }),
+      .references(() => agents.uuid, { onDelete: "cascade" }),
     /** SHA-256 hash; plaintext is returned only once at creation */
     tokenHash: text("token_hash").notNull(),
     /** Optional label, e.g. "production", "dev" */

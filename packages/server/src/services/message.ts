@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { SendMessage, SendToAgent } from "@first-tree-hub/shared";
-import { and, desc, eq, lt } from "drizzle-orm";
+import { and, desc, eq, lt, ne } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatParticipants, chats } from "../db/schema/chats.js";
@@ -46,7 +46,7 @@ export async function sendMessage(
         inboxId: agents.inboxId,
       })
       .from(chatParticipants)
-      .innerJoin(agents, eq(chatParticipants.agentId, agents.id))
+      .innerJoin(agents, eq(chatParticipants.agentId, agents.uuid))
       .where(eq(chatParticipants.chatId, chatId));
 
     // 3. Fan-out: create inbox entries for all participants (except sender)
@@ -104,32 +104,35 @@ export async function sendMessage(
 
 export async function sendToAgent(
   db: Database,
-  senderId: string,
-  targetAgentId: string,
+  senderUuid: string,
+  targetName: string,
   data: SendToAgent,
 ): Promise<SendMessageResult> {
-  // Verify target agent exists and is in the same org
+  // Verify sender exists
   const [sender] = await db
-    .select({ id: agents.id, organizationId: agents.organizationId })
+    .select({ uuid: agents.uuid, organizationId: agents.organizationId })
     .from(agents)
-    .where(eq(agents.id, senderId))
+    .where(eq(agents.uuid, senderUuid))
     .limit(1);
 
-  if (!sender) throw new NotFoundError(`Agent "${senderId}" not found`);
+  if (!sender) throw new NotFoundError(`Agent "${senderUuid}" not found`);
 
+  // Resolve target by name within sender's org (natural cross-org isolation)
   const [target] = await db
-    .select({ id: agents.id, organizationId: agents.organizationId })
+    .select({ uuid: agents.uuid })
     .from(agents)
-    .where(eq(agents.id, targetAgentId))
+    .where(
+      and(eq(agents.organizationId, sender.organizationId), eq(agents.name, targetName), ne(agents.status, "deleted")),
+    )
     .limit(1);
 
-  if (!target) throw new NotFoundError(`Agent "${targetAgentId}" not found`);
+  if (!target) throw new NotFoundError(`Agent "${targetName}" not found`);
 
   // Find or create direct chat
-  const chat = await findOrCreateDirectChat(db, senderId, targetAgentId);
+  const chat = await findOrCreateDirectChat(db, senderUuid, target.uuid);
 
   // Send message via existing sendMessage
-  return sendMessage(db, chat.id, senderId, {
+  return sendMessage(db, chat.id, senderUuid, {
     format: data.format,
     content: data.content,
     metadata: data.metadata,

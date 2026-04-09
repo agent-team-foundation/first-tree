@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type { CreateAgent, CreateAgentToken, UpdateAgent } from "@first-tree-hub/shared";
 import { AGENT_STATUSES } from "@first-tree-hub/shared";
 import { and, desc, eq, isNull, lt, ne } from "drizzle-orm";
@@ -9,84 +9,80 @@ import { agentPresence } from "../db/schema/agent-presence.js";
 import { agentTokens } from "../db/schema/agent-tokens.js";
 import { agents } from "../db/schema/agents.js";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
+import { uuidv7 } from "../uuid.js";
 
 function hashToken(raw: string): string {
   return createHash("sha256").update(raw).digest("hex");
 }
 
 export async function createAgent(db: Database, data: CreateAgent) {
-  const id = data.id ?? randomUUID();
-  const inboxId = `inbox_${id}`;
+  const uuid = uuidv7();
+  const name = data.name ?? null;
+  const inboxId = `inbox_${uuid}`;
+  const orgId = data.organizationId ?? "default";
 
-  const [existing] = await db
-    .select({ id: agents.id, status: agents.status })
-    .from(agents)
-    .where(eq(agents.id, id))
-    .limit(1);
-
-  if (existing) {
-    if (existing.status !== AGENT_STATUSES.DELETED) {
-      throw new ConflictError(`Agent "${id}" already exists`);
-    }
-    // Overwrite deleted agent — reuse the row
+  try {
     const [agent] = await db
-      .update(agents)
-      .set({
-        organizationId: data.organizationId ?? "default",
+      .insert(agents)
+      .values({
+        uuid,
+        name,
+        organizationId: orgId,
         type: data.type,
         displayName: data.displayName ?? null,
         delegateMention: data.delegateMention ?? null,
         profile: data.profile ?? null,
-        status: "active",
+        inboxId,
         metadata: data.metadata ?? {},
-        updatedAt: new Date(),
       })
-      .where(eq(agents.id, id))
       .returning();
-    if (!agent) throw new Error("Unexpected: UPDATE RETURNING produced no row");
+
+    if (!agent) throw new Error("Unexpected: INSERT RETURNING produced no row");
     return agent;
+  } catch (err) {
+    // PostgreSQL unique_violation (23505) on UNIQUE(organization_id, name)
+    const pgCode = (err as { code?: string })?.code ?? (err as { cause?: { code?: string } })?.cause?.code ?? "";
+    if (pgCode === "23505" && name) {
+      throw new ConflictError(`Agent name "${name}" already exists in organization "${orgId}"`);
+    }
+    throw err;
   }
-
-  const [agent] = await db
-    .insert(agents)
-    .values({
-      id,
-      organizationId: data.organizationId ?? "default",
-      type: data.type,
-      displayName: data.displayName ?? null,
-      delegateMention: data.delegateMention ?? null,
-      profile: data.profile ?? null,
-      inboxId,
-      metadata: data.metadata ?? {},
-    })
-    .returning();
-
-  // INSERT ... RETURNING always returns a row
-  if (!agent) throw new Error("Unexpected: INSERT RETURNING produced no row");
-  return agent;
 }
 
-export async function getAgent(db: Database, id: string) {
+export async function getAgent(db: Database, uuid: string) {
   const [agent] = await db
     .select()
     .from(agents)
-    .where(and(eq(agents.id, id), ne(agents.status, AGENT_STATUSES.DELETED)))
+    .where(and(eq(agents.uuid, uuid), ne(agents.status, AGENT_STATUSES.DELETED)))
     .limit(1);
   if (!agent) {
-    throw new NotFoundError(`Agent "${id}" not found`);
+    throw new NotFoundError(`Agent "${uuid}" not found`);
   }
   return agent;
 }
 
-export async function listAgents(db: Database, limit: number, cursor?: string, type?: string) {
-  const conditions = [ne(agents.status, AGENT_STATUSES.DELETED)];
+export async function getAgentByName(db: Database, orgId: string, name: string) {
+  const [agent] = await db
+    .select()
+    .from(agents)
+    .where(and(eq(agents.organizationId, orgId), eq(agents.name, name), ne(agents.status, AGENT_STATUSES.DELETED)))
+    .limit(1);
+  if (!agent) {
+    throw new NotFoundError(`Agent "${name}" not found in organization "${orgId}"`);
+  }
+  return agent;
+}
+
+export async function listAgents(db: Database, orgId: string, limit: number, cursor?: string, type?: string) {
+  const conditions = [ne(agents.status, AGENT_STATUSES.DELETED), eq(agents.organizationId, orgId)];
   if (cursor) conditions.push(lt(agents.createdAt, new Date(cursor)));
   if (type) conditions.push(eq(agents.type, type));
   const where = and(...conditions);
 
   const rows = await db
     .select({
-      id: agents.id,
+      uuid: agents.uuid,
+      name: agents.name,
       organizationId: agents.organizationId,
       type: agents.type,
       displayName: agents.displayName,
@@ -100,7 +96,7 @@ export async function listAgents(db: Database, limit: number, cursor?: string, t
       presenceStatus: agentPresence.status,
     })
     .from(agents)
-    .leftJoin(agentPresence, eq(agents.id, agentPresence.agentId))
+    .leftJoin(agentPresence, eq(agents.uuid, agentPresence.agentId))
     .where(where)
     .orderBy(desc(agents.createdAt))
     .limit(limit + 1);
@@ -113,8 +109,8 @@ export async function listAgents(db: Database, limit: number, cursor?: string, t
   return { items, nextCursor };
 }
 
-export async function updateAgent(db: Database, id: string, data: UpdateAgent) {
-  const agent = await getAgent(db, id);
+export async function updateAgent(db: Database, uuid: string, data: UpdateAgent) {
+  const agent = await getAgent(db, uuid);
 
   const updates: Record<string, unknown> = { updatedAt: new Date() };
   if (data.type !== undefined) updates.type = data.type;
@@ -123,7 +119,7 @@ export async function updateAgent(db: Database, id: string, data: UpdateAgent) {
   if (data.profile !== undefined) updates.profile = data.profile;
   if (data.metadata !== undefined) updates.metadata = data.metadata;
 
-  const [updated] = await db.update(agents).set(updates).where(eq(agents.id, agent.id)).returning();
+  const [updated] = await db.update(agents).set(updates).where(eq(agents.uuid, agent.uuid)).returning();
 
   if (!updated) throw new Error("Unexpected: UPDATE RETURNING produced no row");
   return updated;
@@ -132,14 +128,14 @@ export async function updateAgent(db: Database, id: string, data: UpdateAgent) {
 /**
  * Reactivate a suspended agent.
  */
-export async function reactivateAgent(db: Database, id: string) {
+export async function reactivateAgent(db: Database, uuid: string) {
   const [existing] = await db
-    .select({ id: agents.id, status: agents.status })
+    .select({ uuid: agents.uuid, status: agents.status })
     .from(agents)
-    .where(eq(agents.id, id))
+    .where(eq(agents.uuid, uuid))
     .limit(1);
   if (!existing || existing.status === AGENT_STATUSES.DELETED) {
-    throw new NotFoundError(`Agent "${id}" not found`);
+    throw new NotFoundError(`Agent "${uuid}" not found`);
   }
   if (existing.status !== AGENT_STATUSES.SUSPENDED) {
     throw new BadRequestError("Only suspended agents can be reactivated.");
@@ -148,7 +144,7 @@ export async function reactivateAgent(db: Database, id: string) {
   const [agent] = await db
     .update(agents)
     .set({ status: AGENT_STATUSES.ACTIVE, updatedAt: new Date() })
-    .where(eq(agents.id, id))
+    .where(eq(agents.uuid, uuid))
     .returning();
 
   if (!agent) throw new Error("Unexpected: UPDATE RETURNING produced no row");
@@ -158,22 +154,22 @@ export async function reactivateAgent(db: Database, id: string) {
 /**
  * Suspend an agent. Revokes all active tokens so the agent can no longer authenticate.
  */
-export async function suspendAgent(db: Database, id: string) {
+export async function suspendAgent(db: Database, uuid: string) {
   const [agent] = await db
     .update(agents)
     .set({ status: AGENT_STATUSES.SUSPENDED, updatedAt: new Date() })
-    .where(and(eq(agents.id, id), ne(agents.status, AGENT_STATUSES.DELETED)))
+    .where(and(eq(agents.uuid, uuid), ne(agents.status, AGENT_STATUSES.DELETED)))
     .returning();
 
   if (!agent) {
-    throw new NotFoundError(`Agent "${id}" not found`);
+    throw new NotFoundError(`Agent "${uuid}" not found`);
   }
 
   // Revoke all active tokens
   await db
     .update(agentTokens)
     .set({ revokedAt: new Date() })
-    .where(and(eq(agentTokens.agentId, id), isNull(agentTokens.revokedAt)));
+    .where(and(eq(agentTokens.agentId, uuid), isNull(agentTokens.revokedAt)));
 
   return agent;
 }
@@ -181,36 +177,37 @@ export async function suspendAgent(db: Database, id: string) {
 /**
  * Delete an agent. Only allowed when status is "suspended".
  * Suspend the agent first to revoke tokens, then delete.
+ * Sets name to NULL to release the name for reuse.
  */
-export async function deleteAgent(db: Database, id: string) {
+export async function deleteAgent(db: Database, uuid: string) {
   const [existing] = await db
-    .select({ id: agents.id, status: agents.status })
+    .select({ uuid: agents.uuid, status: agents.status })
     .from(agents)
-    .where(eq(agents.id, id))
+    .where(eq(agents.uuid, uuid))
     .limit(1);
   if (!existing || existing.status === AGENT_STATUSES.DELETED) {
-    throw new NotFoundError(`Agent "${id}" not found`);
+    throw new NotFoundError(`Agent "${uuid}" not found`);
   }
   if (existing.status !== AGENT_STATUSES.SUSPENDED) {
     throw new BadRequestError("Only suspended agents can be deleted. Suspend the agent first.");
   }
 
-  // 1. Set status to deleted
+  // 1. Set status to deleted, release name
   const [agent] = await db
     .update(agents)
-    .set({ status: AGENT_STATUSES.DELETED, updatedAt: new Date() })
-    .where(eq(agents.id, id))
+    .set({ status: AGENT_STATUSES.DELETED, name: null, updatedAt: new Date() })
+    .where(eq(agents.uuid, uuid))
     .returning();
 
   // 2. Revoke all active tokens (may already be revoked by suspend, but be safe)
   await db
     .update(agentTokens)
     .set({ revokedAt: new Date() })
-    .where(and(eq(agentTokens.agentId, id), isNull(agentTokens.revokedAt)));
+    .where(and(eq(agentTokens.agentId, uuid), isNull(agentTokens.revokedAt)));
 
   // 3. Clean up adapter bindings (bot credentials + user mappings)
-  await db.delete(adapterConfigs).where(eq(adapterConfigs.agentId, id));
-  await db.delete(adapterAgentMappings).where(eq(adapterAgentMappings.agentId, id));
+  await db.delete(adapterConfigs).where(eq(adapterConfigs.agentId, uuid));
+  await db.delete(adapterAgentMappings).where(eq(adapterAgentMappings.agentId, uuid));
 
   if (!agent) throw new Error("Unexpected: UPDATE RETURNING produced no row");
   return agent;
@@ -232,24 +229,26 @@ export type BootstrapOptions = {
 
 export async function bootstrapToken(
   db: Database,
-  agentId: string,
+  agentName: string,
+  orgId: string,
   githubUsername: string,
   options?: BootstrapOptions,
 ) {
   // 1. Get or create agent
-  let agent: { id: string; metadata: Record<string, unknown> | null };
+  let agent: { uuid: string; metadata: Record<string, unknown> | null };
   try {
-    agent = await getAgent(db, agentId);
+    agent = await getAgentByName(db, orgId, agentName);
   } catch (err) {
     if (err instanceof NotFoundError) {
       // Auto-create agent with the GitHub user as owner
       const metadata = { ...options?.metadata, owners: [githubUsername] };
       agent = await createAgent(db, {
-        id: agentId,
+        name: agentName,
         type: (options?.type as "human" | "personal_assistant" | "autonomous_agent") ?? "autonomous_agent",
-        displayName: options?.displayName ?? agentId,
+        displayName: options?.displayName ?? agentName,
         delegateMention: options?.delegateMention,
         profile: options?.profile,
+        organizationId: orgId,
         metadata,
       });
     } else {
@@ -260,23 +259,23 @@ export async function bootstrapToken(
   // 2. Check agent has owners in metadata
   const owners: string[] = Array.isArray(agent.metadata?.owners) ? (agent.metadata.owners as string[]) : [];
   if (!owners.includes(githubUsername)) {
-    throw new ForbiddenError(`GitHub user "${githubUsername}" is not in the owners list for agent "${agentId}"`);
+    throw new ForbiddenError(`GitHub user "${githubUsername}" is not in the owners list for agent "${agentName}"`);
   }
 
   // 3. Check no active tokens exist (non-revoked = active for bootstrap purposes)
   const activeTokens = await db
     .select({ id: agentTokens.id })
     .from(agentTokens)
-    .where(and(eq(agentTokens.agentId, agentId), isNull(agentTokens.revokedAt)));
+    .where(and(eq(agentTokens.agentId, agent.uuid), isNull(agentTokens.revokedAt)));
 
   if (activeTokens.length > 0) {
     throw new ConflictError(
-      `Agent "${agentId}" already has ${activeTokens.length} active token(s). Revoke all tokens first to re-bootstrap.`,
+      `Agent "${agentName}" already has ${activeTokens.length} active token(s). Revoke all tokens first to re-bootstrap.`,
     );
   }
 
   // 4. Create token
-  return createToken(db, agentId, { name: options?.tokenName ?? "bootstrap" });
+  return createToken(db, agent.uuid, { name: options?.tokenName ?? "bootstrap" });
 }
 
 /**
@@ -294,19 +293,19 @@ export async function checkGitHubOrgMembership(githubToken: string, org: string)
   return orgs.some((o) => o.login.toLowerCase() === org.toLowerCase());
 }
 
-export async function createToken(db: Database, agentId: string, data: CreateAgentToken) {
+export async function createToken(db: Database, agentUuid: string, data: CreateAgentToken) {
   // Verify agent exists
-  await getAgent(db, agentId);
+  await getAgent(db, agentUuid);
 
   const raw = `aghub_${randomBytes(32).toString("hex")}`;
   const tokenHash = hashToken(raw);
-  const tokenId = randomUUID();
+  const tokenId = uuidv7();
 
   const [token] = await db
     .insert(agentTokens)
     .values({
       id: tokenId,
-      agentId,
+      agentId: agentUuid,
       tokenHash,
       name: data.name ?? null,
       expiresAt: data.expiresAt ? new Date(data.expiresAt) : null,
@@ -326,7 +325,7 @@ export async function createToken(db: Database, agentId: string, data: CreateAge
   };
 }
 
-export async function listTokens(db: Database, agentId: string) {
+export async function listTokens(db: Database, agentUuid: string) {
   return db
     .select({
       id: agentTokens.id,
@@ -338,15 +337,15 @@ export async function listTokens(db: Database, agentId: string) {
       lastUsedAt: agentTokens.lastUsedAt,
     })
     .from(agentTokens)
-    .where(eq(agentTokens.agentId, agentId))
+    .where(eq(agentTokens.agentId, agentUuid))
     .orderBy(desc(agentTokens.createdAt));
 }
 
-export async function revokeToken(db: Database, agentId: string, tokenId: string) {
+export async function revokeToken(db: Database, agentUuid: string, tokenId: string) {
   const [token] = await db
     .update(agentTokens)
     .set({ revokedAt: new Date() })
-    .where(and(eq(agentTokens.id, tokenId), eq(agentTokens.agentId, agentId), isNull(agentTokens.revokedAt)))
+    .where(and(eq(agentTokens.id, tokenId), eq(agentTokens.agentId, agentUuid), isNull(agentTokens.revokedAt)))
     .returning();
 
   if (!token) {

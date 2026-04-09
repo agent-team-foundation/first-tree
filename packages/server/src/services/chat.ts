@@ -14,9 +14,9 @@ export async function createChat(db: Database, creatorId: string, data: CreateCh
 
   // Verify all participants exist and belong to the same organization
   const existingAgents = await db
-    .select({ id: agents.id, organizationId: agents.organizationId })
+    .select({ id: agents.uuid, organizationId: agents.organizationId })
     .from(agents)
-    .where(inArray(agents.id, [...allParticipantIds]));
+    .where(inArray(agents.uuid, [...allParticipantIds]));
 
   if (existingAgents.length !== allParticipantIds.size) {
     const found = new Set(existingAgents.map((a) => a.id));
@@ -128,9 +128,9 @@ export async function addParticipant(db: Database, chatId: string, requesterId: 
 
   // Verify target agent exists and is in the same org
   const [targetAgent] = await db
-    .select({ id: agents.id, organizationId: agents.organizationId })
+    .select({ id: agents.uuid, organizationId: agents.organizationId })
     .from(agents)
-    .where(eq(agents.id, data.agentId))
+    .where(eq(agents.uuid, data.agentId))
     .limit(1);
 
   if (!targetAgent) {
@@ -213,7 +213,7 @@ export async function findOrCreateDirectChat(db: Database, agentAId: string, age
   const [agentA] = await db
     .select({ organizationId: agents.organizationId })
     .from(agents)
-    .where(eq(agents.id, agentAId))
+    .where(eq(agents.uuid, agentAId))
     .limit(1);
 
   if (!agentA) throw new NotFoundError(`Agent "${agentAId}" not found`);

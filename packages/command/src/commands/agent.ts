@@ -208,17 +208,17 @@ export function registerAgentCommands(program: Command): void {
   const token = agent.command("token").description("Agent token management");
 
   token
-    .command("bootstrap <agentId>")
+    .command("bootstrap <agentName>")
     .description("Bootstrap a token using GitHub identity (requires gh CLI)")
     .option("--save-to <target>", 'Save token to: "agent" (default) or a file path', "agent")
     .option("--server <url>", "Hub server URL")
-    .action(async (agentId: string, options: { saveTo: string; server?: string }) => {
+    .action(async (agentName: string, options: { saveTo: string; server?: string }) => {
       try {
         const serverUrl = resolveServerUrl(options.server);
-        const result = await bootstrapToken(serverUrl, agentId, { saveTo: options.saveTo });
+        const result = await bootstrapToken(serverUrl, agentName, { saveTo: options.saveTo });
 
         if (options.saveTo === "agent") {
-          process.stderr.write(`Token saved to ${DEFAULT_HOME_DIR}/config/agents/${agentId}/agent.yaml\n`);
+          process.stderr.write(`Token saved to ${DEFAULT_HOME_DIR}/config/agents/${agentName}/agent.yaml\n`);
         } else {
           process.stderr.write(`Token saved to ${options.saveTo}\n`);
         }

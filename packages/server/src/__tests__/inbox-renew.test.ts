@@ -7,15 +7,15 @@ describe("Inbox Renew & Timeout API", () => {
 
   async function setupInboxEntry(app: Awaited<ReturnType<typeof createTestApp>>) {
     const uid = crypto.randomUUID().slice(0, 6);
-    const { token: t1 } = await createTestAgent(app, { id: `renew-a1-${uid}` });
-    const { agent: a2, token: t2 } = await createTestAgent(app, { id: `renew-a2-${uid}` });
+    const { token: t1 } = await createTestAgent(app, { name: `renew-a1-${uid}` });
+    const { agent: a2, token: t2 } = await createTestAgent(app, { name: `renew-a2-${uid}` });
 
     // Create chat and send message
     const chatRes = await app.inject({
       method: "POST",
       url: "/api/v1/agent/chats",
       headers: { authorization: `Bearer ${t1}` },
-      payload: { type: "direct", participantIds: [a2.id] },
+      payload: { type: "direct", participantIds: [a2.uuid] },
     });
     const chatId = chatRes.json().id;
 

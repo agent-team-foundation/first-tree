@@ -10,7 +10,7 @@ export const adapterConfigs = pgTable(
     platform: text("platform").notNull(),
     agentId: text("agent_id")
       .notNull()
-      .references(() => agents.id),
+      .references(() => agents.uuid),
     /** Encrypted JSONB — application-layer AES-256-GCM */
     credentials: jsonb("credentials").$type<unknown>().notNull(),
     /** "active" | "inactive" */

@@ -16,10 +16,10 @@ describe("WebSocket notification on message send", () => {
   it("recipient receives WS notification when message is sent via API", async () => {
     const app = await appPromise;
     const { token: t1 } = await createTestAgent(app, {
-      id: `ntf-a1-${crypto.randomUUID().slice(0, 6)}`,
+      name: `ntf-a1-${crypto.randomUUID().slice(0, 6)}`,
     });
     const { agent: a2, token: t2 } = await createTestAgent(app, {
-      id: `ntf-a2-${crypto.randomUUID().slice(0, 6)}`,
+      name: `ntf-a2-${crypto.randomUUID().slice(0, 6)}`,
     });
 
     // Create a chat
@@ -27,7 +27,7 @@ describe("WebSocket notification on message send", () => {
       method: "POST",
       url: "/api/v1/agent/chats",
       headers: { authorization: `Bearer ${t1}` },
-      payload: { type: "direct", participantIds: [a2.id] },
+      payload: { type: "direct", participantIds: [a2.uuid] },
     });
     const chatId = chatRes.json().id;
 
@@ -86,10 +86,10 @@ describe("WebSocket notification on message send", () => {
   it("recipient receives WS notification on sendToAgent", async () => {
     const app = await appPromise;
     const { token: t1 } = await createTestAgent(app, {
-      id: `ntf-dm1-${crypto.randomUUID().slice(0, 6)}`,
+      name: `ntf-dm1-${crypto.randomUUID().slice(0, 6)}`,
     });
     const { agent: a2, token: t2 } = await createTestAgent(app, {
-      id: `ntf-dm2-${crypto.randomUUID().slice(0, 6)}`,
+      name: `ntf-dm2-${crypto.randomUUID().slice(0, 6)}`,
     });
 
     // Connect a2 via WS
@@ -115,7 +115,7 @@ describe("WebSocket notification on message send", () => {
     // Send via sendToAgent API
     const sendRes = await app.inject({
       method: "POST",
-      url: `/api/v1/agent/agents/${a2.id}/messages`,
+      url: `/api/v1/agent/agents/${a2.name}/messages`,
       headers: { authorization: `Bearer ${t1}` },
       payload: { format: "text", content: "DM via WS!" },
     });

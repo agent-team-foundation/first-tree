@@ -56,7 +56,7 @@ export class FirstTreeHubSDK {
   async register(): Promise<RegisterResult> {
     const agent = await this.requestJson<Agent>("/api/v1/agent/me");
     return {
-      agentId: agent.id,
+      agentId: agent.uuid,
       inboxId: agent.inboxId,
       status: agent.status,
       displayName: agent.displayName,
@@ -97,8 +97,8 @@ export class FirstTreeHubSDK {
   }
 
   /** Send a direct message to another agent. */
-  async sendToAgent(agentId: string, data: SendToAgent): Promise<Message> {
-    return this.requestJson<Message>(`/api/v1/agent/agents/${agentId}/messages`, {
+  async sendToAgent(agentName: string, data: SendToAgent): Promise<Message> {
+    return this.requestJson<Message>(`/api/v1/agent/agents/${agentName}/messages`, {
       method: "POST",
       body: JSON.stringify(data),
     });

@@ -25,7 +25,7 @@ export const chatParticipants = pgTable(
       .references(() => chats.id, { onDelete: "cascade" }),
     agentId: text("agent_id")
       .notNull()
-      .references(() => agents.id),
+      .references(() => agents.uuid),
     /** "owner" | "member" */
     role: text("role").notNull().default("member"),
     /** "full" = receive all messages; "mention_only" = consumer-side behavior, does not affect fan-out */

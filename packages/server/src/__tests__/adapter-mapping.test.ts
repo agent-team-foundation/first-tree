@@ -32,18 +32,18 @@ describe("Adapter mapping service", () => {
   describe("agent mapping", () => {
     it("creates and finds agent mapping", async () => {
       const app = await appPromise;
-      const { agent } = await createTestAgent(app, { id: "mapping-test-agent" });
+      const { agent } = await createTestAgent(app, { name: "mapping-test-agent" });
 
       await mappingService.createAgentMapping(app.db, {
         platform: "feishu",
         externalUserId: "ou_mapping_user_1",
-        agentId: agent.id,
+        agentId: agent.uuid,
         boundVia: "manual",
       });
 
       const found = await mappingService.findAgentByExternalUser(app.db, "feishu", "ou_mapping_user_1");
       expect(found).not.toBeNull();
-      expect(found?.agentId).toBe(agent.id);
+      expect(found?.agentId).toBe(agent.uuid);
     });
 
     it("returns null for unmapped user", async () => {
@@ -54,32 +54,32 @@ describe("Adapter mapping service", () => {
 
     it("finds external user by agent", async () => {
       const app = await appPromise;
-      const { agent } = await createTestAgent(app, { id: "reverse-mapping-agent" });
+      const { agent } = await createTestAgent(app, { name: "reverse-mapping-agent" });
 
       await mappingService.createAgentMapping(app.db, {
         platform: "feishu",
         externalUserId: "ou_reverse_1",
-        agentId: agent.id,
+        agentId: agent.uuid,
       });
 
-      const found = await mappingService.findExternalUserByAgent(app.db, "feishu", agent.id);
+      const found = await mappingService.findExternalUserByAgent(app.db, "feishu", agent.uuid);
       expect(found).not.toBeNull();
       expect(found?.externalUserId).toBe("ou_reverse_1");
     });
 
     it("handles duplicate mapping gracefully", async () => {
       const app = await appPromise;
-      const { agent } = await createTestAgent(app, { id: "dup-mapping-agent" });
+      const { agent } = await createTestAgent(app, { name: "dup-mapping-agent" });
 
       const r1 = await mappingService.createAgentMapping(app.db, {
         platform: "feishu",
         externalUserId: "ou_dup_user",
-        agentId: agent.id,
+        agentId: agent.uuid,
       });
       const r2 = await mappingService.createAgentMapping(app.db, {
         platform: "feishu",
         externalUserId: "ou_dup_user",
-        agentId: agent.id,
+        agentId: agent.uuid,
       });
       expect(r1.agentId).toBe(r2.agentId);
     });
@@ -88,15 +88,15 @@ describe("Adapter mapping service", () => {
   describe("chat mapping", () => {
     it("creates chat for new external channel", async () => {
       const app = await appPromise;
-      const { agent: botAgent } = await createTestAgent(app, { id: "chat-map-bot-agent" });
-      const { agent: sender } = await createTestAgent(app, { id: "chat-map-sender" });
+      const { agent: botAgent } = await createTestAgent(app, { name: "chat-map-bot-agent" });
+      const { agent: sender } = await createTestAgent(app, { name: "chat-map-sender" });
 
       const chatId = await mappingService.findOrCreateChatForChannel(app.db, {
         platform: "feishu",
         externalChannelId: "oc_new_channel_1",
         chatType: "group",
-        botAgentId: botAgent.id,
-        senderAgentId: sender.id,
+        botAgentId: botAgent.uuid,
+        senderAgentId: sender.uuid,
       });
 
       expect(chatId).toBeTruthy();
@@ -106,31 +106,31 @@ describe("Adapter mapping service", () => {
         platform: "feishu",
         externalChannelId: "oc_new_channel_1",
         chatType: "group",
-        botAgentId: botAgent.id,
-        senderAgentId: sender.id,
+        botAgentId: botAgent.uuid,
+        senderAgentId: sender.uuid,
       });
       expect(chatId2).toBe(chatId);
     });
 
     it("creates separate chats for different external channels", async () => {
       const app = await appPromise;
-      const { agent: botAgent } = await createTestAgent(app, { id: "multi-ch-bot-agent" });
-      const { agent: sender } = await createTestAgent(app, { id: "multi-ch-sender" });
+      const { agent: botAgent } = await createTestAgent(app, { name: "multi-ch-bot-agent" });
+      const { agent: sender } = await createTestAgent(app, { name: "multi-ch-sender" });
 
       const chatId1 = await mappingService.findOrCreateChatForChannel(app.db, {
         platform: "feishu",
         externalChannelId: "oc_multi_1",
         chatType: "group",
-        botAgentId: botAgent.id,
-        senderAgentId: sender.id,
+        botAgentId: botAgent.uuid,
+        senderAgentId: sender.uuid,
       });
 
       const chatId2 = await mappingService.findOrCreateChatForChannel(app.db, {
         platform: "feishu",
         externalChannelId: "oc_multi_2",
         chatType: "p2p",
-        botAgentId: botAgent.id,
-        senderAgentId: sender.id,
+        botAgentId: botAgent.uuid,
+        senderAgentId: sender.uuid,
       });
 
       expect(chatId1).not.toBe(chatId2);
@@ -138,15 +138,15 @@ describe("Adapter mapping service", () => {
 
     it("finds external channel by chat", async () => {
       const app = await appPromise;
-      const { agent: botAgent } = await createTestAgent(app, { id: "reverse-ch-bot-agent" });
-      const { agent: sender } = await createTestAgent(app, { id: "reverse-ch-sender" });
+      const { agent: botAgent } = await createTestAgent(app, { name: "reverse-ch-bot-agent" });
+      const { agent: sender } = await createTestAgent(app, { name: "reverse-ch-sender" });
 
       const chatId = await mappingService.findOrCreateChatForChannel(app.db, {
         platform: "feishu",
         externalChannelId: "oc_reverse_1",
         chatType: "group",
-        botAgentId: botAgent.id,
-        senderAgentId: sender.id,
+        botAgentId: botAgent.uuid,
+        senderAgentId: sender.uuid,
       });
 
       const found = await mappingService.findExternalChannelByChat(app.db, "feishu", chatId);
@@ -156,14 +156,14 @@ describe("Adapter mapping service", () => {
 
     it("handles same agent as both bot and sender (p2p self-chat)", async () => {
       const app = await appPromise;
-      const { agent } = await createTestAgent(app, { id: "self-chat-agent" });
+      const { agent } = await createTestAgent(app, { name: "self-chat-agent" });
 
       const chatId = await mappingService.findOrCreateChatForChannel(app.db, {
         platform: "feishu",
         externalChannelId: "oc_self_chat",
         chatType: "p2p",
-        botAgentId: agent.id,
-        senderAgentId: agent.id,
+        botAgentId: agent.uuid,
+        senderAgentId: agent.uuid,
       });
 
       expect(chatId).toBeTruthy();
@@ -174,15 +174,15 @@ describe("Adapter mapping service", () => {
     it("creates and finds message reference", async () => {
       const app = await appPromise;
       // First create a real message for FK constraint
-      const { agent } = await createTestAgent(app, { id: "msg-ref-agent" });
+      const { agent } = await createTestAgent(app, { name: "msg-ref-agent" });
       const { createChat } = await import("../services/chat.js");
       const { sendMessage } = await import("../services/message.js");
 
-      const chat = await createChat(app.db, agent.id, {
+      const chat = await createChat(app.db, agent.uuid, {
         type: "direct",
-        participantIds: [agent.id],
+        participantIds: [agent.uuid],
       });
-      const { message: msg } = await sendMessage(app.db, chat.id, agent.id, {
+      const { message: msg } = await sendMessage(app.db, chat.id, agent.uuid, {
         format: "text",
         content: "test message for ref",
       });

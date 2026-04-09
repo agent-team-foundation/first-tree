@@ -5,7 +5,8 @@ import type { Database } from "../../db/connection.js";
 import { agents } from "../../db/schema/agents.js";
 import { BadRequestError, ConflictError, UnauthorizedError } from "../../errors.js";
 import { createAgent } from "../../services/agent.js";
-import { sendToAgent } from "../../services/message.js";
+import { findOrCreateDirectChat } from "../../services/chat.js";
+import { sendMessage } from "../../services/message.js";
 import { notifyRecipients } from "../../services/notifier.js";
 
 // ── GitHub payload types ────────────────────────────────────────────
@@ -63,29 +64,33 @@ function verifySignature(secret: string, rawBody: Buffer, signatureHeader: strin
 }
 
 async function ensureGitHubAdapterAgent(db: Database): Promise<string> {
-  const [existing] = await db.select({ id: agents.id }).from(agents).where(eq(agents.id, GITHUB_ADAPTER_ID)).limit(1);
+  const [existing] = await db
+    .select({ uuid: agents.uuid })
+    .from(agents)
+    .where(and(eq(agents.organizationId, "default"), eq(agents.name, GITHUB_ADAPTER_ID)))
+    .limit(1);
 
   if (existing) {
-    return existing.id;
+    return existing.uuid;
   }
 
   try {
     const agent = await createAgent(db, {
-      id: GITHUB_ADAPTER_ID,
+      name: GITHUB_ADAPTER_ID,
       type: "autonomous_agent",
       displayName: "GitHub Adapter",
       metadata: { source: "github", managed: true },
     });
-    return agent.id;
+    return agent.uuid;
   } catch (err) {
     if (err instanceof ConflictError) {
       // Another concurrent request created it first
       const [created] = await db
-        .select({ id: agents.id })
+        .select({ uuid: agents.uuid })
         .from(agents)
-        .where(eq(agents.id, GITHUB_ADAPTER_ID))
+        .where(and(eq(agents.organizationId, "default"), eq(agents.name, GITHUB_ADAPTER_ID)))
         .limit(1);
-      if (created) return created.id;
+      if (created) return created.uuid;
     }
     throw err;
   }
@@ -94,12 +99,12 @@ async function ensureGitHubAdapterAgent(db: Database): Promise<string> {
 async function findTargetAgent(db: Database, repoFullName: string): Promise<string | null> {
   // First: look for an agent whose metadata has github.repos containing the repo full_name
   const allAgents = await db
-    .select({ id: agents.id, metadata: agents.metadata, type: agents.type })
+    .select({ id: agents.uuid, name: agents.name, metadata: agents.metadata, type: agents.type })
     .from(agents)
     .where(eq(agents.status, "active"));
 
   for (const agent of allAgents) {
-    if (agent.id === GITHUB_ADAPTER_ID) continue;
+    if (agent.name === GITHUB_ADAPTER_ID) continue;
     const meta = agent.metadata;
     if (meta && typeof meta === "object" && "github" in meta) {
       const github = meta.github;
@@ -155,38 +160,40 @@ async function routeMentionDelegations(
 ): Promise<number> {
   if (mentionedNames.length === 0) return 0;
 
-  // Batch lookup: find agents with delegate_mention set
+  // Batch lookup: find agents with delegate_mention set (match by name)
   const delegates = await app.db
     .select({
-      id: agents.id,
+      id: agents.uuid,
+      name: agents.name,
       delegateMention: agents.delegateMention,
       status: agents.status,
     })
     .from(agents)
-    .where(and(inArray(agents.id, mentionedNames), isNotNull(agents.delegateMention)));
+    .where(and(inArray(agents.name, mentionedNames), isNotNull(agents.delegateMention)));
 
   let routed = 0;
   for (const agent of delegates) {
     if (agent.status !== "active" || !agent.delegateMention) continue;
 
-    // Verify delegate target exists and is active
+    // Verify delegate target exists and is active (delegateMention stores a UUID)
     const [target] = await app.db
-      .select({ id: agents.id, status: agents.status })
+      .select({ id: agents.uuid, status: agents.status })
       .from(agents)
-      .where(eq(agents.id, agent.delegateMention))
+      .where(eq(agents.uuid, agent.delegateMention))
       .limit(1);
 
     if (!target || target.status !== "active") {
-      app.log.warn(`delegate_mention target "${agent.delegateMention}" for "${agent.id}" is not active, skipping`);
+      app.log.warn(`delegate_mention target "${agent.delegateMention}" for "${agent.name}" is not active, skipping`);
       continue;
     }
 
     try {
-      const { message: msg, recipients } = await sendToAgent(app.db, agent.id, agent.delegateMention, {
+      const chat = await findOrCreateDirectChat(app.db, agent.id, agent.delegateMention);
+      const { message: msg, recipients } = await sendMessage(app.db, chat.id, agent.id, {
         format: "card",
         content: {
           type: "github_mention",
-          mentionedUser: agent.id,
+          mentionedUser: agent.name,
           event: ctx.event,
           repository: ctx.repository,
           sender: ctx.sender,
@@ -197,13 +204,13 @@ async function routeMentionDelegations(
         metadata: {
           source: "github",
           event: "mention_delegation",
-          mentionedUser: agent.id,
+          mentionedUser: agent.name,
         },
       });
       notifyRecipients(app.notifier, recipients, msg.id);
       routed++;
     } catch (err) {
-      app.log.error(err, `Failed to route mention delegation from "${agent.id}" to "${agent.delegateMention}"`);
+      app.log.error(err, `Failed to route mention delegation from "${agent.name}" to "${agent.delegateMention}"`);
     }
   }
 
@@ -561,7 +568,8 @@ async function handleIssuesEvent(
     action: data.action,
   };
 
-  const { message: msg, recipients } = await sendToAgent(app.db, senderId, targetAgentId, {
+  const chat = await findOrCreateDirectChat(app.db, senderId, targetAgentId);
+  const { message: msg, recipients } = await sendMessage(app.db, chat.id, senderId, {
     format: "card",
     content,
     metadata,
@@ -625,7 +633,8 @@ async function handleIssueCommentEvent(
     action: data.action,
   };
 
-  const { message: msg, recipients } = await sendToAgent(app.db, senderId, targetAgentId, {
+  const chat = await findOrCreateDirectChat(app.db, senderId, targetAgentId);
+  const { message: msg, recipients } = await sendMessage(app.db, chat.id, senderId, {
     format: "card",
     content,
     metadata,

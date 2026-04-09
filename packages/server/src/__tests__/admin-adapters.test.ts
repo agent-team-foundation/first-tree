@@ -19,17 +19,17 @@ describe("Admin Adapters API", () => {
   it("creates and lists adapter configs (agentId required)", async () => {
     const app = await appPromise;
     const req = await authedRequest(app);
-    const { agent } = await createTestAgent(app, { id: "adapter-create-agent" });
+    const { agent } = await createTestAgent(app, { name: "adapter-create-agent" });
 
     const createRes = await req("POST", "/api/v1/admin/adapters", {
       platform: "feishu",
-      agentId: agent.id,
+      agentId: agent.uuid,
       credentials: { app_id: "cli_test", app_secret: "secret" },
     });
     expect(createRes.statusCode).toBe(201);
     const config = createRes.json();
     expect(config.platform).toBe("feishu");
-    expect(config.agentId).toBe(agent.id);
+    expect(config.agentId).toBe(agent.uuid);
     expect(config.hasCredentials).toBe(true);
     // Credentials must NOT be returned in the response
     expect(config.credentials).toBeUndefined();
@@ -44,11 +44,11 @@ describe("Admin Adapters API", () => {
   it("gets a single adapter config", async () => {
     const app = await appPromise;
     const req = await authedRequest(app);
-    const { agent } = await createTestAgent(app, { id: "adapter-get-agent" });
+    const { agent } = await createTestAgent(app, { name: "adapter-get-agent" });
 
     const createRes = await req("POST", "/api/v1/admin/adapters", {
       platform: "slack",
-      agentId: agent.id,
+      agentId: agent.uuid,
       credentials: { bot_token: "xoxb-test" },
     });
     const created = createRes.json();
@@ -56,17 +56,17 @@ describe("Admin Adapters API", () => {
     const getRes = await req("GET", `/api/v1/admin/adapters/${created.id}`);
     expect(getRes.statusCode).toBe(200);
     expect(getRes.json().platform).toBe("slack");
-    expect(getRes.json().agentId).toBe(agent.id);
+    expect(getRes.json().agentId).toBe(agent.uuid);
   });
 
   it("updates adapter config", async () => {
     const app = await appPromise;
     const req = await authedRequest(app);
-    const { agent } = await createTestAgent(app, { id: "adapter-upd-agent" });
+    const { agent } = await createTestAgent(app, { name: "adapter-upd-agent" });
 
     const createRes = await req("POST", "/api/v1/admin/adapters", {
       platform: "feishu",
-      agentId: agent.id,
+      agentId: agent.uuid,
       credentials: { app_id: "cli_upd", app_secret: "secret" },
     });
     const created = createRes.json();
@@ -81,31 +81,31 @@ describe("Admin Adapters API", () => {
   it("updates agentId to another valid agent", async () => {
     const app = await appPromise;
     const req = await authedRequest(app);
-    const { agent: agent1 } = await createTestAgent(app, { id: "adapter-switch-1" });
-    const { agent: agent2 } = await createTestAgent(app, { id: "adapter-switch-2" });
+    const { agent: agent1 } = await createTestAgent(app, { name: "adapter-switch-1" });
+    const { agent: agent2 } = await createTestAgent(app, { name: "adapter-switch-2" });
 
     const createRes = await req("POST", "/api/v1/admin/adapters", {
       platform: "feishu",
-      agentId: agent1.id,
+      agentId: agent1.uuid,
       credentials: { app_id: "cli_switch", app_secret: "secret" },
     });
     const created = createRes.json();
 
     const updateRes = await req("PATCH", `/api/v1/admin/adapters/${created.id}`, {
-      agentId: agent2.id,
+      agentId: agent2.uuid,
     });
     expect(updateRes.statusCode).toBe(200);
-    expect(updateRes.json().agentId).toBe(agent2.id);
+    expect(updateRes.json().agentId).toBe(agent2.uuid);
   });
 
   it("deletes adapter config", async () => {
     const app = await appPromise;
     const req = await authedRequest(app);
-    const { agent } = await createTestAgent(app, { id: "adapter-del-agent" });
+    const { agent } = await createTestAgent(app, { name: "adapter-del-agent" });
 
     const createRes = await req("POST", "/api/v1/admin/adapters", {
       platform: "feishu",
-      agentId: agent.id,
+      agentId: agent.uuid,
       credentials: { app_id: "cli_del", app_secret: "secret" },
     });
     const created = createRes.json();
@@ -168,11 +168,11 @@ describe("Admin Adapters API", () => {
   it("updates credentials (re-encrypts)", async () => {
     const app = await appPromise;
     const req = await authedRequest(app);
-    const { agent } = await createTestAgent(app, { id: "adapter-reencrypt-agent" });
+    const { agent } = await createTestAgent(app, { name: "adapter-reencrypt-agent" });
 
     const createRes = await req("POST", "/api/v1/admin/adapters", {
       platform: "feishu",
-      agentId: agent.id,
+      agentId: agent.uuid,
       credentials: { app_id: "old_id", app_secret: "old_secret" },
     });
     const created = createRes.json();
@@ -201,11 +201,11 @@ describe("Admin Adapters API", () => {
   it("rejects human agent for adapter config", async () => {
     const app = await appPromise;
     const req = await authedRequest(app);
-    const { agent } = await createTestAgent(app, { id: "human-adapter-reject", type: "human" });
+    const { agent } = await createTestAgent(app, { name: "human-adapter-reject", type: "human" });
 
     const res = await req("POST", "/api/v1/admin/adapters", {
       platform: "feishu",
-      agentId: agent.id,
+      agentId: agent.uuid,
       credentials: { app_id: "cli_human", app_secret: "s" },
     });
     expect(res.statusCode).toBe(400);
@@ -234,11 +234,11 @@ describe("Admin Adapters API", () => {
   it("enforces unique agent+platform constraint", async () => {
     const app = await appPromise;
     const req = await authedRequest(app);
-    const { agent } = await createTestAgent(app, { id: "adapter-unique-agent" });
+    const { agent } = await createTestAgent(app, { name: "adapter-unique-agent" });
 
     const res1 = await req("POST", "/api/v1/admin/adapters", {
       platform: "feishu",
-      agentId: agent.id,
+      agentId: agent.uuid,
       credentials: { app_id: "cli_u1", app_secret: "s1" },
     });
     expect(res1.statusCode).toBe(201);
@@ -246,7 +246,7 @@ describe("Admin Adapters API", () => {
     // Same agent + same platform should fail with 409
     const res2 = await req("POST", "/api/v1/admin/adapters", {
       platform: "feishu",
-      agentId: agent.id,
+      agentId: agent.uuid,
       credentials: { app_id: "cli_u2", app_secret: "s2" },
     });
     expect(res2.statusCode).toBe(409);
@@ -255,18 +255,18 @@ describe("Admin Adapters API", () => {
   it("allows same agent on different platforms", async () => {
     const app = await appPromise;
     const req = await authedRequest(app);
-    const { agent } = await createTestAgent(app, { id: "adapter-cross-plat-agent" });
+    const { agent } = await createTestAgent(app, { name: "adapter-cross-plat-agent" });
 
     const res1 = await req("POST", "/api/v1/admin/adapters", {
       platform: "feishu",
-      agentId: agent.id,
+      agentId: agent.uuid,
       credentials: { app_id: "cli_cross", app_secret: "s1" },
     });
     expect(res1.statusCode).toBe(201);
 
     const res2 = await req("POST", "/api/v1/admin/adapters", {
       platform: "slack",
-      agentId: agent.id,
+      agentId: agent.uuid,
       credentials: { bot_token: "xoxb-cross" },
     });
     expect(res2.statusCode).toBe(201);

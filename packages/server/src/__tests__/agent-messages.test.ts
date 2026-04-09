@@ -6,14 +6,14 @@ describe("Agent Messages API", () => {
   afterAll(async () => (await appPromise).close());
 
   async function setupChat(app: Awaited<ReturnType<typeof createTestApp>>) {
-    const { agent: a1, token: t1 } = await createTestAgent(app, { id: `msg-a1-${crypto.randomUUID().slice(0, 6)}` });
-    const { agent: a2, token: t2 } = await createTestAgent(app, { id: `msg-a2-${crypto.randomUUID().slice(0, 6)}` });
+    const { agent: a1, token: t1 } = await createTestAgent(app, { name: `msg-a1-${crypto.randomUUID().slice(0, 6)}` });
+    const { agent: a2, token: t2 } = await createTestAgent(app, { name: `msg-a2-${crypto.randomUUID().slice(0, 6)}` });
 
     const res = await app.inject({
       method: "POST",
       url: "/api/v1/agent/chats",
       headers: { authorization: `Bearer ${t1}` },
-      payload: { type: "direct", participantIds: [a2.id] },
+      payload: { type: "direct", participantIds: [a2.uuid] },
     });
     const chat = res.json();
     return { a1, a2, t1, t2, chatId: chat.id };
@@ -88,7 +88,7 @@ describe("Agent Messages API", () => {
   it("rejects message from non-participant", async () => {
     const app = await appPromise;
     const { chatId } = await setupChat(app);
-    const { token: outsider } = await createTestAgent(app, { id: "outsider" });
+    const { token: outsider } = await createTestAgent(app, { name: "outsider" });
 
     const res = await app.inject({
       method: "POST",

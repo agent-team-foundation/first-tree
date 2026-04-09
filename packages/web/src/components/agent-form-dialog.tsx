@@ -18,7 +18,7 @@ type AgentFormProps = {
 } & ({ mode: "create"; agent?: undefined } | { mode: "edit"; agent: Agent });
 
 export type AgentFormData = {
-  id?: string;
+  name?: string;
   type: AgentType;
   displayName: string | null;
   delegateMention: string | null;
@@ -28,7 +28,7 @@ export function AgentFormDialog(props: AgentFormProps) {
   const { open, onOpenChange, onSubmit, isPending, error, mode } = props;
   const agent = mode === "edit" ? props.agent : undefined;
 
-  const [formId, setFormId] = useState("");
+  const [formName, setFormName] = useState("");
   const [formType, setFormType] = useState<AgentType>("personal_assistant");
   const [formDisplayName, setFormDisplayName] = useState("");
   const [formDelegateMention, setFormDelegateMention] = useState("");
@@ -48,12 +48,12 @@ export function AgentFormDialog(props: AgentFormProps) {
   useEffect(() => {
     if (open) {
       if (agent) {
-        setFormId(agent.id);
+        setFormName(agent.name ?? "");
         setFormType(agent.type);
         setFormDisplayName(agent.displayName ?? "");
         setFormDelegateMention(agent.delegateMention ?? "");
       } else {
-        setFormId("");
+        setFormName("");
         setFormType("personal_assistant");
         setFormDisplayName("");
         setFormDelegateMention("");
@@ -64,7 +64,7 @@ export function AgentFormDialog(props: AgentFormProps) {
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
     onSubmit({
-      id: mode === "create" && formId ? formId : undefined,
+      name: mode === "create" && formName ? formName : undefined,
       type: formType,
       displayName: formDisplayName || null,
       delegateMention: formDelegateMention || null,
@@ -80,16 +80,16 @@ export function AgentFormDialog(props: AgentFormProps) {
           <DialogTitle>{isEdit ? "Edit Agent" : "New Agent"}</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* ID */}
+          {/* Name */}
           <div className="space-y-2">
-            <Label htmlFor="agent-id">ID</Label>
+            <Label htmlFor="agent-name">Name</Label>
             {isEdit ? (
-              <Input id="agent-id" value={formId} disabled className="font-mono" />
+              <Input id="agent-name" value={formName} disabled className="font-mono" />
             ) : (
               <Input
-                id="agent-id"
-                value={formId}
-                onChange={(e) => setFormId(e.target.value)}
+                id="agent-name"
+                value={formName}
+                onChange={(e) => setFormName(e.target.value)}
                 placeholder="Leave empty to auto-generate"
                 pattern="^[a-z0-9_-]*$"
                 title="Only lowercase alphanumeric, hyphens, and underscores"
@@ -144,8 +144,8 @@ export function AgentFormDialog(props: AgentFormProps) {
               >
                 <option value="">None</option>
                 {assistantsQuery.data?.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.displayName ? `${a.displayName} (${a.id})` : a.id}
+                  <option key={a.uuid} value={a.uuid}>
+                    {a.displayName ? `${a.displayName} (${a.name ?? a.uuid})` : (a.name ?? a.uuid)}
                   </option>
                 ))}
               </select>

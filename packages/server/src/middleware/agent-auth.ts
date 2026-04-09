@@ -48,12 +48,13 @@ export function agentAuthHook(db: Database) {
 
     const [agent] = await db
       .select({
-        id: agents.id,
+        uuid: agents.uuid,
+        name: agents.name,
         organizationId: agents.organizationId,
         inboxId: agents.inboxId,
       })
       .from(agents)
-      .where(and(eq(agents.id, tokenRow.agentId), eq(agents.status, "active")))
+      .where(and(eq(agents.uuid, tokenRow.agentId), eq(agents.status, "active")))
       .limit(1);
 
     if (!agent) {

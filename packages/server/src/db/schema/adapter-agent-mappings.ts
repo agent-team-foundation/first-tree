@@ -10,7 +10,7 @@ export const adapterAgentMappings = pgTable(
     externalUserId: text("external_user_id").notNull(),
     agentId: text("agent_id")
       .notNull()
-      .references(() => agents.id),
+      .references(() => agents.uuid),
     /** "code" | "reverse_token" | "oauth" | "manual" */
     boundVia: text("bound_via"),
     displayName: text("display_name"),

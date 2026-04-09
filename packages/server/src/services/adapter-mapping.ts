@@ -182,7 +182,7 @@ export async function findOrCreateChatForChannel(
     const [botAgent] = await tx
       .select({ organizationId: agents.organizationId })
       .from(agents)
-      .where(eq(agents.id, data.botAgentId))
+      .where(eq(agents.uuid, data.botAgentId))
       .limit(1);
 
     const orgId = botAgent?.organizationId ?? "default";

@@ -34,7 +34,7 @@ describe("WebSocket single-connection constraint", () => {
 
   it("allows first WebSocket connection", async () => {
     const app = await appPromise;
-    const { token } = await createTestAgent(app, { id: `ws-a1-${crypto.randomUUID().slice(0, 6)}` });
+    const { token } = await createTestAgent(app, { name: `ws-a1-${crypto.randomUUID().slice(0, 6)}` });
     const ws = await connectWs(token);
     expect(ws.readyState).toBe(WebSocket.OPEN);
     ws.close();
@@ -43,7 +43,7 @@ describe("WebSocket single-connection constraint", () => {
 
   it("rejects second WebSocket connection with 4009", async () => {
     const app = await appPromise;
-    const { token } = await createTestAgent(app, { id: `ws-a2-${crypto.randomUUID().slice(0, 6)}` });
+    const { token } = await createTestAgent(app, { name: `ws-a2-${crypto.randomUUID().slice(0, 6)}` });
 
     // First connection
     const first = await connectWs(token);
@@ -61,7 +61,7 @@ describe("WebSocket single-connection constraint", () => {
 
   it("allows reconnection after first WS is closed", async () => {
     const app = await appPromise;
-    const { token } = await createTestAgent(app, { id: `ws-a3-${crypto.randomUUID().slice(0, 6)}` });
+    const { token } = await createTestAgent(app, { name: `ws-a3-${crypto.randomUUID().slice(0, 6)}` });
 
     // First connection
     const first = await connectWs(token);

@@ -9,15 +9,15 @@ describe("Inbox Timeout Reset", () => {
 
   it("resets timed-out delivered entries to pending", async () => {
     const app = await appPromise;
-    const { token: t1 } = await createTestAgent(app, { id: "timeout-a1" });
-    const { agent: a2, token: t2 } = await createTestAgent(app, { id: "timeout-a2" });
+    const { token: t1 } = await createTestAgent(app, { name: "timeout-a1" });
+    const { agent: a2, token: t2 } = await createTestAgent(app, { name: "timeout-a2" });
 
     // Create chat and send message
     const chatRes = await app.inject({
       method: "POST",
       url: "/api/v1/agent/chats",
       headers: { authorization: `Bearer ${t1}` },
-      payload: { type: "direct", participantIds: [a2.id] },
+      payload: { type: "direct", participantIds: [a2.uuid] },
     });
     const chatId = chatRes.json().id;
 
@@ -60,14 +60,14 @@ describe("Inbox Timeout Reset", () => {
 
   it("marks entries as failed after max retries", async () => {
     const app = await appPromise;
-    const { token: t1 } = await createTestAgent(app, { id: "maxretry-a1" });
-    const { agent: a2, token: t2 } = await createTestAgent(app, { id: "maxretry-a2" });
+    const { token: t1 } = await createTestAgent(app, { name: "maxretry-a1" });
+    const { agent: a2, token: t2 } = await createTestAgent(app, { name: "maxretry-a2" });
 
     const chatRes = await app.inject({
       method: "POST",
       url: "/api/v1/agent/chats",
       headers: { authorization: `Bearer ${t1}` },
-      payload: { type: "direct", participantIds: [a2.id] },
+      payload: { type: "direct", participantIds: [a2.uuid] },
     });
     const chatId = chatRes.json().id;
 

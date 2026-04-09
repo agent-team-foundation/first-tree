@@ -8,6 +8,7 @@ import { type AgentFormData, AgentFormDialog } from "../components/agent-form-di
 import { Badge } from "../components/ui/badge.js";
 import { Button } from "../components/ui/button.js";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.js";
+import { useAgentNameMap } from "../lib/use-agent-name-map.js";
 import { cn, formatDate } from "../lib/utils.js";
 
 const agentTypeValues = Object.values(AGENT_TYPES);
@@ -18,6 +19,7 @@ export function AgentsPage() {
   const [cursor, setCursor] = useState<string | undefined>();
   const [typeFilter, setTypeFilter] = useState<string>("");
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const resolveAgentName = useAgentNameMap();
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["agents", cursor, typeFilter],
@@ -27,7 +29,7 @@ export function AgentsPage() {
   const createMutation = useMutation({
     mutationFn: (formData: AgentFormData) =>
       createAgent({
-        id: formData.id,
+        name: formData.name,
         type: formData.type,
         displayName: formData.displayName ?? undefined,
         delegateMention: formData.delegateMention ?? undefined,
@@ -35,7 +37,7 @@ export function AgentsPage() {
     onSuccess: (agent) => {
       setCreateDialogOpen(false);
       queryClient.invalidateQueries({ queryKey: ["agents"] });
-      navigate(`/agents/${agent.id}`);
+      navigate(`/agents/${agent.uuid}`);
     },
   });
 
@@ -70,7 +72,7 @@ export function AgentsPage() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>ID</TableHead>
+              <TableHead>Name</TableHead>
               <TableHead>Display Name</TableHead>
               <TableHead>Type</TableHead>
               <TableHead>Delegate</TableHead>
@@ -100,14 +102,14 @@ export function AgentsPage() {
               </TableRow>
             ) : (
               data.items.map((agent) => (
-                <TableRow key={agent.id} className="cursor-pointer" onClick={() => navigate(`/agents/${agent.id}`)}>
-                  <TableCell className="font-mono text-sm">{agent.id}</TableCell>
+                <TableRow key={agent.uuid} className="cursor-pointer" onClick={() => navigate(`/agents/${agent.uuid}`)}>
+                  <TableCell className="font-mono text-sm">{agent.name}</TableCell>
                   <TableCell>{agent.displayName ?? "\u2014"}</TableCell>
                   <TableCell>
                     <Badge variant="secondary">{agent.type}</Badge>
                   </TableCell>
                   <TableCell className="font-mono text-sm text-muted-foreground">
-                    {agent.delegateMention ?? "\u2014"}
+                    {agent.delegateMention ? resolveAgentName(agent.delegateMention) : "\u2014"}
                   </TableCell>
                   <TableCell>
                     <span
