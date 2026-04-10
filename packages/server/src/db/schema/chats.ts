@@ -7,7 +7,6 @@ export const chats = pgTable("chats", {
   id: text("id").primaryKey(),
   organizationId: text("organization_id")
     .notNull()
-    .default("default")
     .references(() => organizations.id),
   /** "direct" | "group" | "thread" */
   type: text("type").notNull().default("direct"),

@@ -2,15 +2,20 @@ import { paginationQuerySchema } from "@agent-team-foundation/first-tree-hub-sha
 import { and, desc, eq, lt } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { agents } from "../../db/schema/agents.js";
+import { resolveOrganization } from "../../services/organization.js";
 
 /** Public agent discovery — returns only agents with public=true. No auth required. */
 export async function publicAgentRoutes(app: FastifyInstance): Promise<void> {
   app.get("/", async (request) => {
     const query = paginationQuerySchema.parse(request.query);
-    const org = (request.query as Record<string, string>).org;
+    const orgParam = (request.query as Record<string, string>).org;
 
     const conditions = [eq(agents.public, true), eq(agents.status, "active")];
-    if (org) conditions.push(eq(agents.organizationId, org));
+    if (orgParam) {
+      // Resolve org by UUID or name
+      const resolved = await resolveOrganization(app.db, orgParam);
+      conditions.push(eq(agents.organizationId, resolved.id));
+    }
     if (query.cursor) conditions.push(lt(agents.createdAt, new Date(query.cursor)));
     const where = and(...conditions);
 

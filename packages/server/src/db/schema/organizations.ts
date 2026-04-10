@@ -2,7 +2,10 @@ import { integer, jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 
 /** Organization entity. Agents and chats belong to exactly one organization. */
 export const organizations = pgTable("organizations", {
+  /** UUID v7 primary key, system-generated */
   id: text("id").primaryKey(),
+  /** URL-friendly slug, unique across all organizations (e.g. "acme-corp") */
+  name: text("name").unique().notNull(),
   displayName: text("display_name").notNull(),
   /** 0 = unlimited (self-hosted default) */
   maxAgents: integer("max_agents").notNull().default(0),

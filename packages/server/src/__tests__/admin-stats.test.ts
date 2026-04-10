@@ -42,14 +42,15 @@ describe("Admin Stats API", () => {
     const app = await appPromise;
     const req = await authedRequest(app);
 
-    await createOrganization(app.db, { id: "stats-org", displayName: "Stats Org" });
-    await createAgent(app.db, { name: "stats-org-agent", type: "human", organizationId: "stats-org" });
+    const org = await createOrganization(app.db, { name: "stats-org", displayName: "Stats Org" });
+    await createAgent(app.db, { name: "stats-org-agent", type: "human", organizationId: org.id });
 
-    const res = await req("GET", "/api/v1/admin/stats?org=stats-org");
+    // Filter by org name (resolveOrganization accepts both UUID and name)
+    const res = await req("GET", `/api/v1/admin/stats?org=${org.id}`);
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.byOrganization).toHaveLength(1);
-    expect(body.byOrganization[0].organizationId).toBe("stats-org");
+    expect(body.byOrganization[0].organizationId).toBe(org.id);
     expect(body.byOrganization[0].agentCount).toBe(1);
   });
 });

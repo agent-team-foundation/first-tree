@@ -10,6 +10,7 @@ import { messages } from "../db/schema/messages.js";
 import { encryptCredentials } from "../services/crypto.js";
 import { createKaelRuntime } from "../services/kael-runtime.js";
 import { createTestAgent, createTestApp } from "./helpers.js";
+import { DEFAULT_ORG_ID } from "./setup.js";
 
 /** Test helper: assert value is defined and return narrowed type */
 function defined<T>(value: T | undefined, msg = "Expected value to be defined"): T {
@@ -141,7 +142,7 @@ describe("KaelRuntime", () => {
   }
 
   async function createChat(id: string) {
-    await app.db.insert(chats).values({ id, type: "direct" });
+    await app.db.insert(chats).values({ id, type: "direct", organizationId: DEFAULT_ORG_ID });
   }
 
   // ---- reload() ----

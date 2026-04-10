@@ -78,6 +78,13 @@
       "when": 1776124800000,
       "tag": "0010_cloud_multi_tenancy",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1776211200000,
+      "tag": "0011_org_uuid_pk",
+      "breakpoints": true
     }
   ]
 }

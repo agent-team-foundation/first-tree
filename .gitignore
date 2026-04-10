@@ -1,6 +1,9 @@
 # Dependencies
 node_modules/
 
+# Local run scripts (may contain secrets)
+run_*.sh
+
 # Build outputs
 dist/
 *.tsbuildinfo
@@ -36,3 +39,6 @@ drizzle/meta/
 .claude/skills/*
 !.claude/skills/first-tree-hub-cli
 .gstack/
+
+# Playwright MCP
+.playwright-mcp/

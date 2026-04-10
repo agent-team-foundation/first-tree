@@ -8,6 +8,7 @@ import { createAgent } from "../../services/agent.js";
 import { findOrCreateDirectChat } from "../../services/chat.js";
 import { sendMessage } from "../../services/message.js";
 import { notifyRecipients } from "../../services/notifier.js";
+import { resolveDefaultOrgId } from "../../services/organization.js";
 
 // ── GitHub payload types ────────────────────────────────────────────
 
@@ -64,10 +65,11 @@ function verifySignature(secret: string, rawBody: Buffer, signatureHeader: strin
 }
 
 async function ensureGitHubAdapterAgent(db: Database): Promise<string> {
+  const defaultOrgId = await resolveDefaultOrgId(db);
   const [existing] = await db
     .select({ uuid: agents.uuid })
     .from(agents)
-    .where(and(eq(agents.organizationId, "default"), eq(agents.name, GITHUB_ADAPTER_ID)))
+    .where(and(eq(agents.organizationId, defaultOrgId), eq(agents.name, GITHUB_ADAPTER_ID)))
     .limit(1);
 
   if (existing) {
@@ -79,6 +81,7 @@ async function ensureGitHubAdapterAgent(db: Database): Promise<string> {
       name: GITHUB_ADAPTER_ID,
       type: "autonomous_agent",
       displayName: "GitHub Adapter",
+      organizationId: defaultOrgId,
       metadata: { source: "github", managed: true },
     });
     return agent.uuid;
@@ -88,7 +91,7 @@ async function ensureGitHubAdapterAgent(db: Database): Promise<string> {
       const [created] = await db
         .select({ uuid: agents.uuid })
         .from(agents)
-        .where(and(eq(agents.organizationId, "default"), eq(agents.name, GITHUB_ADAPTER_ID)))
+        .where(and(eq(agents.organizationId, defaultOrgId), eq(agents.name, GITHUB_ADAPTER_ID)))
         .limit(1);
       if (created) return created.uuid;
     }

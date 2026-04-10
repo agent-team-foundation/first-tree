@@ -1,10 +1,8 @@
 import { initConfig, serverConfigSchema } from "@agent-team-foundation/first-tree-hub-shared/config";
 import type { Command } from "commander";
 import {
-  checkContextTreeRepo,
   checkDatabase,
   checkDocker,
-  checkGitHubToken,
   checkNodeVersion,
   checkServerConfig,
   checkServerHealth,
@@ -63,8 +61,6 @@ export function registerServerCommands(program: Command): void {
         checkDocker(),
         checkServerConfig(),
         await checkDatabase(),
-        await checkGitHubToken(),
-        await checkContextTreeRepo(),
         await checkServerHealth(),
       ];
       printResults(results);

@@ -56,13 +56,13 @@ describe("Public Agents API", () => {
     const app = await appPromise;
     const { createOrganization } = await import("../services/organization.js");
 
-    await createOrganization(app.db, { id: "cross-org", displayName: "Cross Org" });
+    const crossOrg = await createOrganization(app.db, { name: "cross-org", displayName: "Cross Org" });
     await createAgent(app.db, { name: "default-pub", type: "autonomous_agent", public: true });
     await createAgent(app.db, {
       name: "cross-org-pub",
       type: "autonomous_agent",
       public: true,
-      organizationId: "cross-org",
+      organizationId: crossOrg.id,
     });
 
     const res = await app.inject({ method: "GET", url: "/api/v1/public/agents" });
@@ -72,19 +72,20 @@ describe("Public Agents API", () => {
     expect(orgs.size).toBeGreaterThanOrEqual(2);
   });
 
-  it("filters by org query param", async () => {
+  it("filters by org query param (using name)", async () => {
     const app = await appPromise;
     const { createOrganization } = await import("../services/organization.js");
 
-    await createOrganization(app.db, { id: "pub-org", displayName: "Public Org" });
+    const pubOrg = await createOrganization(app.db, { name: "pub-org", displayName: "Public Org" });
     await createAgent(app.db, {
       name: "pub-org-bot",
       type: "autonomous_agent",
       public: true,
-      organizationId: "pub-org",
+      organizationId: pubOrg.id,
     });
     await createAgent(app.db, { name: "default-pub-bot", type: "autonomous_agent", public: true });
 
+    // Use the org name in the query param — resolveOrganization handles both UUID and name
     const res = await app.inject({
       method: "GET",
       url: "/api/v1/public/agents?org=pub-org",
@@ -93,7 +94,7 @@ describe("Public Agents API", () => {
     const body = res.json<{ items: Array<{ name: string; organizationId: string }> }>();
 
     for (const item of body.items) {
-      expect(item.organizationId).toBe("pub-org");
+      expect(item.organizationId).toBe(pubOrg.id);
     }
   });
 

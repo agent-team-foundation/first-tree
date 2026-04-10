@@ -10,7 +10,6 @@ export const agents = pgTable(
     name: text("name"),
     organizationId: text("organization_id")
       .notNull()
-      .default("default")
       .references(() => organizations.id),
     /** "human" | "personal_assistant" | "autonomous_agent" */
     type: text("type").notNull(),

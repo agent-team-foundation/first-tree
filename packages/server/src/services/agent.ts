@@ -12,12 +12,13 @@ import { organizations } from "../db/schema/organizations.js";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 import { hashToken } from "../utils.js";
 import { uuidv7 } from "../uuid.js";
+import { resolveDefaultOrgId } from "./organization.js";
 
 export async function createAgent(db: Database, data: CreateAgent) {
   const uuid = uuidv7();
   const name = data.name ?? null;
   const inboxId = `inbox_${uuid}`;
-  const orgId = data.organizationId ?? "default";
+  const orgId = data.organizationId ?? (await resolveDefaultOrgId(db));
 
   // Check organization-level agent quota.
   // NOTE: TOCTOU race — concurrent requests may both pass the check. Acceptable for Phase 1;
