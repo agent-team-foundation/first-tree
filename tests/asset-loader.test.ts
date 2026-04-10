@@ -53,6 +53,20 @@ describe("asset-loader", () => {
     ).toBe(TREE_VERSION);
   });
 
+  it("still prefers the dedicated tree layout when the tree repo also has an installed skill", () => {
+    const tmp = useTmpDir();
+    mkdirSync(join(tmp.path, ".agents", "skills", "first-tree"), {
+      recursive: true,
+    });
+    mkdirSync(join(tmp.path, ".first-tree"), { recursive: true });
+    writeFileSync(join(tmp.path, INSTALLED_PROGRESS), "installed");
+    writeFileSync(join(tmp.path, TREE_VERSION), "0.2.0\n");
+    writeFileSync(join(tmp.path, ".agents", "skills", "first-tree", "SKILL.md"), "skill\n");
+    writeFileSync(join(tmp.path, ".agents", "skills", "first-tree", "VERSION"), "0.2.0\n");
+
+    expect(detectFrameworkLayout(tmp.path)).toBe("tree");
+  });
+
   it("detects the previous workspace skill path before older layouts", () => {
     const tmp = useTmpDir();
     mkdirSync(join(tmp.path, "skills", "first-tree", "assets", "framework"), {

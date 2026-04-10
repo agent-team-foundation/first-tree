@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { Repo } from "#engine/repo.js";
+import { TREE_SUBMODULES_DIR } from "#engine/runtime/asset-loader.js";
 
 export type WorkspaceRepoKind = "git-submodule" | "nested-git-repo";
 
@@ -36,7 +37,10 @@ function parseGitmodules(root: string): string[] {
     const text = readFileSync(join(root, ".gitmodules"), "utf-8");
     return [...text.matchAll(/^\s*path\s*=\s*(.+?)\s*$/gm)]
       .map((match) => match[1]?.trim())
-      .filter((value): value is string => Boolean(value));
+      .filter(
+        (value): value is string =>
+          Boolean(value) && !value.startsWith(`${TREE_SUBMODULES_DIR}/`),
+      );
   } catch {
     return [];
   }

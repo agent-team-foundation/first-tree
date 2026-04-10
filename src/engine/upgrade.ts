@@ -12,6 +12,7 @@ import {
   AGENT_INSTRUCTIONS_FILE,
   CLAUDE_INSTRUCTIONS_FILE,
   FIRST_TREE_INDEX_FILE,
+  INSTALLED_SKILL_VERSION,
   LEGACY_AGENT_INSTRUCTIONS_FILE,
   LEGACY_REPO_SKILL_ROOT,
   SOURCE_INTEGRATION_MARKER,
@@ -40,7 +41,6 @@ import {
 } from "#engine/runtime/local-tree-config.js";
 import {
   compareSkillVersions,
-  extractMajorMinor,
   readBundledSkillVersion,
 } from "#engine/runtime/upgrader.js";
 
@@ -58,8 +58,9 @@ In a source/workspace repo: refreshes only the local installed skill, the
 section in AGENTS.md/CLAUDE.md. The dedicated tree repo must be upgraded
 separately with \`--tree-path\`.
 
-In a dedicated tree repo: refreshes \`.first-tree/VERSION\` and emits a task
-list for the maintainer.
+In a dedicated tree repo: refreshes \`.first-tree/VERSION\`, refreshes the
+installed tree-repo skill when present, and emits a task list for the
+maintainer.
 
 Migrates legacy layouts (\`.context-tree/\`, \`skills/first-tree/\`) onto the
 modern \`.agents/skills/first-tree/\` path. To pick up a newer skill version,
@@ -156,6 +157,7 @@ function formatUpgradeTaskList(
   if (layout === "tree") {
     lines.push(
       "## Tree Metadata",
+      `- [ ] Confirm the tree-repo skill at ${installedSkillRootsDisplay()} still resolves correctly after the refresh`,
       "- [ ] Replace any stale `context-tree` CLI command references in repo-specific docs, scripts, workflows, or agent config with `first-tree`",
       "",
     );
@@ -438,17 +440,50 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
   }
 
   if (layout === "tree") {
-    if (compareSkillVersions(localVersion, packagedVersion) === 0) {
+    const installedTreeSkillVersion =
+      workingRepo.readFile(INSTALLED_SKILL_VERSION)?.trim() ?? null;
+    if (
+      installedTreeSkillVersion !== null
+      && compareSkillVersions(installedTreeSkillVersion, packagedVersion) > 0
+    ) {
       console.log(
-        `Already up to date with the bundled tree metadata (${workingRepo.frameworkVersionPath()} = ${localVersion}).`,
+        "The installed tree-repo skill is newer than the skill bundled with this `first-tree` package. Install a newer package version before running `first-tree upgrade`.",
+      );
+      return 1;
+    }
+
+    const treeMetadataUpToDate =
+      compareSkillVersions(localVersion, packagedVersion) === 0;
+    const treeSkillUpToDate =
+      installedTreeSkillVersion !== null
+      && missingInstalledRoots.length === 0
+      && compareSkillVersions(installedTreeSkillVersion, packagedVersion) === 0;
+
+    if (treeMetadataUpToDate && treeSkillUpToDate) {
+      console.log(
+        `Already up to date with the bundled tree metadata and installed tree skill (${workingRepo.frameworkVersionPath()} = ${localVersion}).`,
       );
       return 0;
     }
 
-    writeTreeRuntimeVersion(workingRepo.root, packagedVersion);
-    console.log(
-      `Refreshed dedicated tree metadata at \`${workingRepo.frameworkVersionPath()}\`.`,
-    );
+    if (!treeMetadataUpToDate) {
+      writeTreeRuntimeVersion(workingRepo.root, packagedVersion);
+      console.log(
+        `Refreshed dedicated tree metadata at \`${workingRepo.frameworkVersionPath()}\`.`,
+      );
+    }
+    if (!treeSkillUpToDate) {
+      const wipedPaths = wipeInstalledSkill(workingRepo.root);
+      copyCanonicalSkill(sourceRoot, workingRepo.root);
+      if (wipedPaths.length > 0) {
+        console.log(
+          `Wiped previous tree skill installation: ${wipedPaths.map((p) => `\`${p}/\``).join(", ")}.`,
+        );
+      }
+      console.log(
+        `Refreshed tree-repo skill payload at ${installedSkillRootsDisplay()}.`,
+      );
+    }
 
     const output = formatUpgradeTaskList(
       workingRepo,

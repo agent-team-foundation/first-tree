@@ -71,12 +71,14 @@ first-tree init
 
 The CLI:
 
-- installs `.agents/skills/first-tree/` and `.claude/skills/first-tree/`
+- installs `.agents/skills/first-tree/` and `.claude/skills/first-tree/` in the source/workspace root
 - adds `FIRST_TREE.md`
 - updates `AGENTS.md` / `CLAUDE.md`
 - creates or reuses a sibling `<repo>-tree` checkout
+- installs the bundled `first-tree` skill in that tree repo if it is missing
 - scaffolds the dedicated tree repo there
 - writes binding metadata locally and in the tree repo
+- syncs the bound codebase repo into the tree repo under `.first-tree/submodules/`
 
 ### Existing Shared Tree
 
@@ -94,7 +96,8 @@ first-tree init --tree-path ../org-context --tree-mode shared
 ```
 
 If the tree is remote-only, pass `--tree-url`; `bind` / `init` will clone a
-local checkout and then write the binding metadata.
+local checkout, ensure the tree repo has the bundled skill installed, and then
+write the binding metadata plus the hidden tree-side codebase submodule.
 
 ### Workspace Root + Shared Tree
 
@@ -113,7 +116,8 @@ first-tree init --scope workspace --sync-members
 
 The workspace root gets its own local skill integration plus
 `.first-tree/workspace.json`. Each discovered child repo is then bound as a
-`workspace-member` to the same tree via `first-tree workspace sync`.
+`workspace-member` to the same tree via `first-tree workspace sync`, and the
+tree repo keeps each bound child repo under `.first-tree/submodules/`.
 
 ### Explicit Tree Bootstrap
 
@@ -148,12 +152,15 @@ folder before modifying anything. It reports:
   ... source code or workspace folders ...
 
 <tree-repo>/
+  .agents/skills/first-tree/
+  .claude/skills/first-tree
   .first-tree/
     VERSION
     progress.md
     tree.json                # .first-tree/tree.json
     bindings/                # .first-tree/bindings/
       <source-id>.json
+    submodules/              # hidden codebase-repo mirrors tracked as git submodules
     bootstrap.json           # legacy compatibility for older publish flows
   NODE.md
   AGENTS.md
@@ -165,6 +172,9 @@ folder before modifying anything. It reports:
 
 The source/workspace root is not the tree. It should never contain `NODE.md`,
 `members/`, or tree-scoped `AGENTS.md` / `CLAUDE.md`.
+
+The tree repo keeps any bound codebase repos under `.first-tree/submodules/`
+so they do not become visible tree domains during validation.
 
 ## Commands
 

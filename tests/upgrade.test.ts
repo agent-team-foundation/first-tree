@@ -151,7 +151,7 @@ describe("runUpgrade", () => {
     expect(readFileSync(join(repoDir.path, INSTALLED_SKILL_VERSION), "utf-8").trim()).toBe("0.2.0");
   });
 
-  it("refreshes a dedicated tree repo without reinstalling the skill", () => {
+  it("refreshes a dedicated tree repo and installs the tree-repo skill", () => {
     const repoDir = useTmpDir();
     const sourceDir = useTmpDir();
     makeTreeMetadata(repoDir.path, "0.1.0");
@@ -164,7 +164,12 @@ describe("runUpgrade", () => {
 
     expect(result).toBe(0);
     expect(readFileSync(join(repoDir.path, TREE_VERSION), "utf-8").trim()).toBe("0.2.0");
-    expect(existsSync(join(repoDir.path, ".agents", "skills", "first-tree"))).toBe(false);
+    expect(existsSync(join(repoDir.path, ".agents", "skills", "first-tree", "SKILL.md"))).toBe(
+      true,
+    );
+    expect(existsSync(join(repoDir.path, ".claude", "skills", "first-tree", "SKILL.md"))).toBe(
+      true,
+    );
     expect(readFileSync(join(repoDir.path, TREE_PROGRESS), "utf-8")).toContain(
       ".first-tree/VERSION",
     );

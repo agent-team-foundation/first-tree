@@ -13,6 +13,7 @@ export const TREE_PROGRESS = join(TREE_RUNTIME_ROOT, "progress.md");
 export const TREE_BOOTSTRAP_STATE = join(TREE_RUNTIME_ROOT, "bootstrap.json");
 export const TREE_STATE = join(TREE_RUNTIME_ROOT, "tree.json");
 export const TREE_BINDINGS_DIR = join(TREE_RUNTIME_ROOT, "bindings");
+export const TREE_SUBMODULES_DIR = join(TREE_RUNTIME_ROOT, "submodules");
 export const LOCAL_TREE_CONFIG = join(TREE_RUNTIME_ROOT, "local-tree.json");
 export const LOCAL_TREE_TEMP_ROOT = join(TREE_RUNTIME_ROOT, "tmp");
 export const SOURCE_STATE = join(TREE_RUNTIME_ROOT, "source.json");
@@ -247,6 +248,9 @@ export function resolveFirstExistingPath(
 }
 
 export function detectFrameworkLayout(root: string): FrameworkLayout | null {
+  if (pathExists(root, TREE_VERSION)) {
+    return "tree";
+  }
   if (
     pathExists(root, join(SKILL_ROOT, "SKILL.md")) &&
     pathExists(root, INSTALLED_SKILL_VERSION) &&
@@ -256,9 +260,6 @@ export function detectFrameworkLayout(root: string): FrameworkLayout | null {
   }
   if (pathExists(root, FRAMEWORK_VERSION)) {
     return "skill";
-  }
-  if (pathExists(root, TREE_VERSION)) {
-    return "tree";
   }
   if (pathExists(root, CLAUDE_FRAMEWORK_VERSION)) {
     return "claude-skill";

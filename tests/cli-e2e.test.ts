@@ -497,9 +497,13 @@ describe.sequential("CLI e2e smoke", () => {
     expect(initResult.code).toBe(0);
 
     const treeRoot = join(sandbox.path, "product-repo-tree");
-    expect(readSourceState(sourceRoot)?.bindingMode).toBe("standalone-source");
+    const sourceState = readSourceState(sourceRoot);
+    expect(sourceState?.bindingMode).toBe("standalone-source");
     expect(readLocalTreeConfig(sourceRoot)?.treeRepoName).toBe("product-repo-tree");
     expect(readTreeState(treeRoot)?.treeRepoName).toBe("product-repo-tree");
+    expect(readTreeBinding(treeRoot, sourceState!.sourceId)?.submodulePath).toBe(
+      ".first-tree/submodules/repos/product-repo",
+    );
     expect(readFileSync(join(sourceRoot, AGENT_INSTRUCTIONS_FILE), "utf-8")).toContain(
       "FIRST-TREE-SOURCE-INTEGRATION",
     );
@@ -508,6 +512,15 @@ describe.sequential("CLI e2e smoke", () => {
     );
     expect(readFileSync(join(sourceRoot, FIRST_TREE_INDEX_FILE), "utf-8")).toContain(
       "About Context Tree",
+    );
+    expect(readFileSync(join(treeRoot, ".gitmodules"), "utf-8")).toContain(
+      ".first-tree/submodules/repos/product-repo",
+    );
+    expect(readFileSync(join(treeRoot, ".gitmodules"), "utf-8")).toContain(
+      "url = ../product-repo",
+    );
+    expect(readFileSync(join(treeRoot, ".agents", "skills", "first-tree", "SKILL.md"), "utf-8")).toContain(
+      "name: first-tree",
     );
 
     const inspectAfter = await runCliCaptured(treeRoot, [
@@ -622,6 +635,9 @@ describe.sequential("CLI e2e smoke", () => {
     expect(workspaceState?.members).toHaveLength(2);
     expect(workspaceSourceState?.rootKind).toBe("folder");
     expect(readLocalTreeConfig(workspaceRoot)?.treeMode).toBe("shared");
+    expect(readFileSync(join(treeRoot, ".agents", "skills", "first-tree", "SKILL.md"), "utf-8")).toContain(
+      "name: first-tree",
+    );
 
     for (const childRoot of [childOne, childTwo]) {
       const childSourceState = readSourceState(childRoot);
@@ -632,6 +648,12 @@ describe.sequential("CLI e2e smoke", () => {
         "FIRST-TREE-SOURCE-INTEGRATION",
       );
     }
+    expect(readFileSync(join(treeRoot, ".gitmodules"), "utf-8")).toContain(
+      ".first-tree/submodules/workspaces/workspace-root/apps/app-one",
+    );
+    expect(readFileSync(join(treeRoot, ".gitmodules"), "utf-8")).toContain(
+      ".first-tree/submodules/workspaces/workspace-root/services/service-two",
+    );
 
     makeSourceRepo(childThree);
     const workspaceSync = await runCliCaptured(workspaceRoot, [
@@ -778,5 +800,11 @@ describe.sequential("CLI e2e smoke", () => {
     expect(readSourceState(workspaceRoot)?.rootKind).toBe("git-repo");
     expect(readSourceState(childRepo)?.bindingMode).toBe("workspace-member");
     expect(readTreeBinding(treeRoot, readSourceState(childRepo)!.sourceId)).not.toBeNull();
+    expect(readFileSync(join(treeRoot, ".gitmodules"), "utf-8")).toContain(
+      ".first-tree/submodules/workspaces/git-workspace/__workspace_root__",
+    );
+    expect(readFileSync(join(treeRoot, ".gitmodules"), "utf-8")).toContain(
+      ".first-tree/submodules/workspaces/git-workspace/packages/feature-repo",
+    );
   });
 });
