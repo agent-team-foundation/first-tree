@@ -1,4 +1,4 @@
-import { paginationQuerySchema } from "@first-tree-hub/shared";
+import { paginationQuerySchema } from "@agent-team-foundation/first-tree-hub-shared";
 import { and, desc, eq, lt } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { agents } from "../../db/schema/agents.js";

@@ -1,4 +1,8 @@
-import { agentActivitySchema, agentBindSchema, clientRegisterSchema } from "@first-tree-hub/shared";
+import {
+  agentActivitySchema,
+  agentBindSchema,
+  clientRegisterSchema,
+} from "@agent-team-foundation/first-tree-hub-shared";
 import { and, eq, isNull } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";

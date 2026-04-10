@@ -1,4 +1,4 @@
-import type { AgentType } from "@first-tree-hub/shared";
+import type { AgentType } from "@agent-team-foundation/first-tree-hub-shared";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../app.js";
 import type { Config } from "../config.js";

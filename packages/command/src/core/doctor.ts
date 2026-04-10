@@ -8,7 +8,7 @@ import {
   loadAgents,
   resolveConfigReadonly,
   serverConfigSchema,
-} from "@first-tree-hub/shared/config";
+} from "@agent-team-foundation/first-tree-hub-shared/config";
 import { blank } from "./output.js";
 
 export type CheckResult = {

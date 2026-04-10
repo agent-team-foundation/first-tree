@@ -7,7 +7,7 @@ import {
   loadAgents,
   resetConfig,
   resetConfigMeta,
-} from "@first-tree-hub/shared/config";
+} from "@agent-team-foundation/first-tree-hub-shared/config";
 import type { Command } from "commander";
 import { fail } from "../cli/output.js";
 import {

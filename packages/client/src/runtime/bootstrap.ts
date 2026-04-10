@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_DATA_DIR } from "@first-tree-hub/shared/config";
+import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
 import { FirstTreeHubSDK } from "../sdk.js";
 import type { AgentIdentity } from "./handler.js";
 

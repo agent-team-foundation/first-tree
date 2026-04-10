@@ -33,7 +33,7 @@ importers:
         specifier: ^4.0.0
         version: 4.3.6
     devDependencies:
-      '@first-tree-hub/shared':
+      '@agent-team-foundation/first-tree-hub-shared':
         specifier: workspace:*
         version: link:../shared
       '@types/node':
@@ -103,15 +103,15 @@ importers:
         specifier: ^4.0.0
         version: 4.3.6
     devDependencies:
+      '@agent-team-foundation/first-tree-hub-shared':
+        specifier: workspace:*
+        version: link:../shared
       '@first-tree-hub/client':
         specifier: workspace:*
         version: link:../client
       '@first-tree-hub/server':
         specifier: workspace:*
         version: link:../server
-      '@first-tree-hub/shared':
-        specifier: workspace:*
-        version: link:../shared
       '@first-tree-hub/web':
         specifier: workspace:*
         version: link:../web
@@ -130,6 +130,9 @@ importers:
 
   packages/server:
     dependencies:
+      '@agent-team-foundation/first-tree-hub-shared':
+        specifier: workspace:*
+        version: link:../shared
       '@fastify/cors':
         specifier: ^11.2.0
         version: 11.2.0
@@ -142,9 +145,6 @@ importers:
       '@fastify/websocket':
         specifier: ^11.2.0
         version: 11.2.0
-      '@first-tree-hub/shared':
-        specifier: workspace:*
-        version: link:../shared
       '@larksuiteoapi/node-sdk':
         specifier: ^1.59.0
         version: 1.59.0
@@ -225,7 +225,7 @@ importers:
 
   packages/web:
     dependencies:
-      '@first-tree-hub/shared':
+      '@agent-team-foundation/first-tree-hub-shared':
         specifier: workspace:*
         version: link:../shared
       '@radix-ui/react-dialog':

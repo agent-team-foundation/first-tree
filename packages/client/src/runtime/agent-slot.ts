@@ -1,6 +1,6 @@
 import { join } from "node:path";
-import type { InboxEntryWithMessage, RuntimeState } from "@first-tree-hub/shared";
-import { DEFAULT_DATA_DIR } from "@first-tree-hub/shared/config";
+import type { InboxEntryWithMessage, RuntimeState } from "@agent-team-foundation/first-tree-hub-shared";
+import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
 import type { ClientConnection } from "../client-connection.js";
 import { AgentConnection } from "../connection.js";
 import type { RegisterResult } from "../sdk.js";

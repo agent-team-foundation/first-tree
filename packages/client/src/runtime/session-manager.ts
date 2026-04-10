@@ -1,4 +1,4 @@
-import type { InboxEntryWithMessage, RuntimeState } from "@first-tree-hub/shared";
+import type { InboxEntryWithMessage, RuntimeState } from "@agent-team-foundation/first-tree-hub-shared";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import type { SessionConfig } from "./config.js";
 import { Deduplicator } from "./deduplicator.js";

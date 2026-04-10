@@ -1,4 +1,8 @@
-import { createOrganizationSchema, paginationQuerySchema, updateOrganizationSchema } from "@first-tree-hub/shared";
+import {
+  createOrganizationSchema,
+  paginationQuerySchema,
+  updateOrganizationSchema,
+} from "@agent-team-foundation/first-tree-hub-shared";
 import type { FastifyInstance } from "fastify";
 import * as orgService from "../../services/organization.js";
 

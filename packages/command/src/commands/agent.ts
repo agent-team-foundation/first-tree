@@ -1,7 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { cleanWorkspaces, FirstTreeHubSDK, SdkError, SessionRegistry } from "@first-tree-hub/client";
-import type { MessageFormat } from "@first-tree-hub/shared";
+import type { MessageFormat } from "@agent-team-foundation/first-tree-hub-shared";
 import {
   agentConfigSchema,
   DEFAULT_CONFIG_DIR,
@@ -9,7 +8,8 @@ import {
   DEFAULT_HOME_DIR,
   loadAgents,
   setConfigValue,
-} from "@first-tree-hub/shared/config";
+} from "@agent-team-foundation/first-tree-hub-shared/config";
+import { cleanWorkspaces, FirstTreeHubSDK, SdkError, SessionRegistry } from "@first-tree-hub/client";
 import type { Command } from "commander";
 import { fail, success } from "../cli/output.js";
 import { bootstrapToken, resolveAdminToken, resolveAgentToken, resolveServerUrl } from "../core/bootstrap.js";

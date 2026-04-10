@@ -38,17 +38,17 @@ function createMockLogger() {
 // ---------------------------------------------------------------------------
 describe("Platform enum validation", () => {
   it("adapterPlatformSchema.parse('kael') succeeds", async () => {
-    const { adapterPlatformSchema } = await import("@first-tree-hub/shared");
+    const { adapterPlatformSchema } = await import("@agent-team-foundation/first-tree-hub-shared");
     expect(adapterPlatformSchema.parse("kael")).toBe("kael");
   });
 
   it("adapterPlatformSchema.parse('invalid') throws", async () => {
-    const { adapterPlatformSchema } = await import("@first-tree-hub/shared");
+    const { adapterPlatformSchema } = await import("@agent-team-foundation/first-tree-hub-shared");
     expect(() => adapterPlatformSchema.parse("invalid")).toThrow();
   });
 
   it("ADAPTER_PLATFORMS.KAEL equals 'kael'", async () => {
-    const { ADAPTER_PLATFORMS } = await import("@first-tree-hub/shared");
+    const { ADAPTER_PLATFORMS } = await import("@agent-team-foundation/first-tree-hub-shared");
     expect(ADAPTER_PLATFORMS.KAEL).toBe("kael");
   });
 });

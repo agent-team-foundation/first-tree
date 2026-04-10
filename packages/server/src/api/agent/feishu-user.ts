@@ -1,4 +1,4 @@
-import { delegateFeishuUserSchema } from "@first-tree-hub/shared";
+import { delegateFeishuUserSchema } from "@agent-team-foundation/first-tree-hub-shared";
 import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { adapterAgentMappings } from "../../db/schema/adapter-agent-mappings.js";

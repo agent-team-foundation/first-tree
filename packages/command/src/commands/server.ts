@@ -1,4 +1,4 @@
-import { initConfig, serverConfigSchema } from "@first-tree-hub/shared/config";
+import { initConfig, serverConfigSchema } from "@agent-team-foundation/first-tree-hub-shared/config";
 import type { Command } from "commander";
 import {
   checkContextTreeRepo,

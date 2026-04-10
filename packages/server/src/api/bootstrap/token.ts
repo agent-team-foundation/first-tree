@@ -1,4 +1,4 @@
-import { bootstrapTokenRequestSchema } from "@first-tree-hub/shared";
+import { bootstrapTokenRequestSchema } from "@agent-team-foundation/first-tree-hub-shared";
 import type { FastifyInstance } from "fastify";
 import { ForbiddenError, NotFoundError } from "../../errors.js";
 import * as agentService from "../../services/agent.js";

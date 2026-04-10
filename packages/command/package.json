@@ -55,7 +55,7 @@
   "devDependencies": {
     "@first-tree-hub/client": "workspace:*",
     "@first-tree-hub/server": "workspace:*",
-    "@first-tree-hub/shared": "workspace:*",
+    "@agent-team-foundation/first-tree-hub-shared": "workspace:*",
     "@first-tree-hub/web": "workspace:*",
     "@types/bcrypt": "^5.0.0",
     "@types/node": "^22.16.0",

@@ -1,4 +1,11 @@
-import type { Agent, Chat, InboxEntryWithMessage, Message, SendMessage, SendToAgent } from "@first-tree-hub/shared";
+import type {
+  Agent,
+  Chat,
+  InboxEntryWithMessage,
+  Message,
+  SendMessage,
+  SendToAgent,
+} from "@agent-team-foundation/first-tree-hub-shared";
 
 export type SdkConfig = {
   serverUrl: string;

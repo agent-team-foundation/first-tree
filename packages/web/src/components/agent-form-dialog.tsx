@@ -1,4 +1,4 @@
-import { AGENT_TYPES, type Agent, type AgentType } from "@first-tree-hub/shared";
+import { AGENT_TYPES, type Agent, type AgentType } from "@agent-team-foundation/first-tree-hub-shared";
 import { useQuery } from "@tanstack/react-query";
 import { type FormEvent, useEffect, useState } from "react";
 import { listAgents } from "../api/agents.js";
