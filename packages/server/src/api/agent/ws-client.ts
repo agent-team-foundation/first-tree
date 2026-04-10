@@ -1,7 +1,7 @@
 import {
-  agentActivitySchema,
   agentBindSchema,
   clientRegisterSchema,
+  sessionStateMessageSchema,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { and, eq, isNull } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
@@ -28,7 +28,7 @@ const wsMessageSchema = z.object({
  *   1. Client connects (no auth required at WS level)
  *   2. client:register — register client with env info
  *   3. agent:bind — bind agent to this client (authenticates via token)
- *   4. agent:activity — report runtime state changes
+ *   4. session:state — report per-session state changes
  *   5. heartbeat — client-level heartbeat
  *   6. agent:unbind — unbind agent
  */
@@ -155,15 +155,15 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
             boundAgents.delete(agentId);
 
             socket.send(JSON.stringify({ type: "agent:unbound", agentId }));
-          } else if (type === "agent:activity") {
+          } else if (type === "session:state") {
             const agentId = parsed.data.agentId;
             if (!agentId || !boundAgents.has(agentId)) {
               socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
               return;
             }
 
-            const activityPayload = agentActivitySchema.parse(msg);
-            await activityService.updateActivity(app.db, agentId, activityPayload);
+            const payload = sessionStateMessageSchema.parse(msg);
+            await activityService.upsertSessionState(app.db, agentId, payload.chatId, payload.state);
           } else if (type === "heartbeat") {
             if (clientId) {
               await clientService.heartbeatClient(app.db, clientId);

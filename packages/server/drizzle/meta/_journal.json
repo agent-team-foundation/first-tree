@@ -85,6 +85,13 @@
       "when": 1776211200000,
       "tag": "0011_org_uuid_pk",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1776297600000,
+      "tag": "0012_session_level_state",
+      "breakpoints": true
     }
   ]
 }

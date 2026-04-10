@@ -66,11 +66,8 @@ export async function adminActivityRoutes(app: FastifyInstance): Promise<void> {
         clientId: a.clientId,
         runtimeType: a.runtimeType,
         runtimeState: a.runtimeState,
-        runtimeDescription: a.runtimeDescription,
         activeSessions: a.activeSessions,
         totalSessions: a.totalSessions,
-        errorMessage: a.errorMessage,
-        taskRef: a.taskRef,
         runtimeUpdatedAt: a.runtimeUpdatedAt?.toISOString() ?? null,
       })),
     };

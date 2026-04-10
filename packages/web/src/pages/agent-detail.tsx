@@ -469,10 +469,8 @@ export function AgentDetailPage() {
         const ext = agent as Record<string, unknown>;
         const rState = ext.runtimeState as string | null;
         const rType = ext.runtimeType as string | null;
-        const rDesc = ext.runtimeDescription as string | null;
         const rSessions = ext.activeSessions as number | null;
         const rClientId = ext.clientId as string | null;
-        const rError = ext.errorMessage as string | null;
         if (!rState) return null;
         return (
           <Card>
@@ -495,12 +493,6 @@ export function AgentDetailPage() {
                     </Badge>
                   </dd>
                 </div>
-                {rDesc && (
-                  <div className="col-span-2">
-                    <dt className="text-muted-foreground mb-1">Current Work</dt>
-                    <dd>{rDesc}</dd>
-                  </div>
-                )}
                 {rSessions !== null && (
                   <div>
                     <dt className="text-muted-foreground mb-1">Sessions</dt>
@@ -511,12 +503,6 @@ export function AgentDetailPage() {
                   <div>
                     <dt className="text-muted-foreground mb-1">Client</dt>
                     <dd className="font-mono text-xs">{rClientId}</dd>
-                  </div>
-                )}
-                {rError && (
-                  <div className="col-span-2">
-                    <dt className="text-muted-foreground mb-1">Error</dt>
-                    <dd className="text-destructive">{rError}</dd>
                   </div>
                 )}
               </dl>

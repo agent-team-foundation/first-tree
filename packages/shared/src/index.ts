@@ -145,11 +145,9 @@ export {
 } from "./schemas/organization.js";
 export {
   type ActivityOverview,
-  type AgentActivity,
   type AgentBind,
   type AgentPresence,
   activityOverviewSchema,
-  agentActivitySchema,
   agentBindSchema,
   agentPresenceSchema,
   PRESENCE_STATUSES,
@@ -158,8 +156,11 @@ export {
   RUNTIME_STATES,
   type RuntimeState,
   runtimeStateSchema,
-  type SessionInfo,
-  sessionInfoSchema,
+  SESSION_STATES,
+  type SessionState,
+  type SessionStateMessage,
+  sessionStateMessageSchema,
+  sessionStateSchema,
 } from "./schemas/presence.js";
 export {
   type OrgStats,

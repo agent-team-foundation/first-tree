@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { hostname as getHostname, platform } from "node:os";
-import type { AgentActivity } from "@agent-team-foundation/first-tree-hub-shared";
+import type { SessionState } from "@agent-team-foundation/first-tree-hub-shared";
 import WebSocket from "ws";
 import { FirstTreeHubSDK } from "./sdk.js";
 
@@ -42,7 +42,7 @@ const HEARTBEAT_INTERVAL_MS = 30_000;
  *   1. connect() → WS to /api/v1/agent/ws/client
  *   2. client:register → register with env info
  *   3. bindAgent(token, runtimeType) → agent:bind per agent (with ref for correlation)
- *   4. reportActivity(agentId, activity) → agent:activity
+ *   4. reportSessionState(agentId, chatId, state) → session:state
  *   5. heartbeat → client-level keepalive
  */
 export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
@@ -121,14 +121,15 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     this.boundAgents.delete(agentId);
   }
 
-  /** Report runtime state for a bound agent. */
-  reportActivity(agentId: string, activity: AgentActivity): void {
+  /** Report a per-session state change for a bound agent. */
+  reportSessionState(agentId: string, chatId: string, state: SessionState): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     this.ws.send(
       JSON.stringify({
-        type: "agent:activity",
+        type: "session:state",
         agentId,
-        ...activity,
+        chatId,
+        state,
       }),
     );
   }

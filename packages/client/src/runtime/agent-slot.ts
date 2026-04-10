@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import type { InboxEntryWithMessage, RuntimeState } from "@agent-team-foundation/first-tree-hub-shared";
+import type { InboxEntryWithMessage, SessionState } from "@agent-team-foundation/first-tree-hub-shared";
 import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
 import type { ClientConnection } from "../client-connection.js";
 import { AgentConnection } from "../connection.js";
@@ -76,6 +76,12 @@ export class AgentSlot {
       this.clientConnection.on("agent:message", () => {
         this.pullAndDispatch();
       });
+
+      this.clientConnection.on("agent:bound", (boundAgent) => {
+        if (boundAgent.agentId === this.agentId) {
+          this.fullStateSync();
+        }
+      });
     } else {
       const conn = this.legacyConnection as AgentConnection;
       agent = await conn.connect();
@@ -106,14 +112,11 @@ export class AgentSlot {
       sdk,
       log: this.logFn,
       registryPath,
-      onStateChange: this.clientConnection
-        ? (state, description) => this.reportActivity(state, description)
-        : undefined,
+      onStateChange: this.clientConnection ? (chatId, state) => this.reportSessionState(chatId, state) : undefined,
     });
 
     if (this.clientConnection) {
       this.startPolling();
-      this.reportActivity("idle");
     } else {
       const conn = this.legacyConnection as AgentConnection;
       conn.onMessage(async (entry: InboxEntryWithMessage) => {
@@ -130,7 +133,6 @@ export class AgentSlot {
       this.pollingTimer = null;
     }
     if (this.clientConnection && this.agentId) {
-      this.reportActivity("idle");
       await this.clientConnection.unbindAgent(this.agentId);
     }
     await this.sessionManager?.shutdown();
@@ -140,14 +142,16 @@ export class AgentSlot {
     this.logFn("Stopped");
   }
 
-  private reportActivity(state: RuntimeState, description?: string): void {
+  private reportSessionState(chatId: string, state: SessionState): void {
     if (!this.clientConnection || !this.agentId) return;
-    this.clientConnection.reportActivity(this.agentId, {
-      state,
-      description,
-      activeSessions: this.sessionManager?.activeCount ?? 0,
-      totalSessions: this.sessionManager?.totalCount ?? 0,
-    });
+    this.clientConnection.reportSessionState(this.agentId, chatId, state);
+  }
+
+  private fullStateSync(): void {
+    if (!this.sessionManager || !this.clientConnection || !this.agentId) return;
+    for (const { chatId, state } of this.sessionManager.getSessionStates()) {
+      this.clientConnection.reportSessionState(this.agentId, chatId, state);
+    }
   }
 
   private startPolling(): void {

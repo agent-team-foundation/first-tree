@@ -7,11 +7,8 @@ import { serverInstances } from "../db/schema/server-instances.js";
 export function runtimeFieldsReset(now: Date) {
   return {
     runtimeState: null,
-    runtimeDescription: null,
     activeSessions: null,
     totalSessions: null,
-    errorMessage: null,
-    taskRef: null,
     runtimeUpdatedAt: now,
     lastSeenAt: now,
   } as const;
@@ -102,11 +99,8 @@ export async function bindAgent(
         runtimeType: data.runtimeType,
         runtimeVersion: data.runtimeVersion ?? null,
         runtimeState: "idle",
-        runtimeDescription: null,
         activeSessions: null,
         totalSessions: null,
-        errorMessage: null,
-        taskRef: null,
         connectedAt: now,
         lastSeenAt: now,
         runtimeUpdatedAt: now,
@@ -141,9 +135,8 @@ export async function heartbeatInstance(db: Database, instanceId: string) {
 export async function cleanupStalePresence(db: Database, staleSeconds = 60): Promise<number> {
   const result = await db.execute<{ agent_id: string }>(sql`
     UPDATE agent_presence SET status = 'offline', instance_id = NULL,
-      runtime_state = NULL, runtime_description = NULL,
+      runtime_state = NULL,
       active_sessions = NULL, total_sessions = NULL,
-      error_message = NULL, task_ref = NULL,
       runtime_updated_at = NOW()
     WHERE instance_id IN (
       SELECT instance_id FROM server_instances

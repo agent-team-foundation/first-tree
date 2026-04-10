@@ -5,11 +5,8 @@ export type RuntimeAgent = {
   clientId: string | null;
   runtimeType: string | null;
   runtimeState: string | null;
-  runtimeDescription: string | null;
   activeSessions: number | null;
   totalSessions: number | null;
-  errorMessage: string | null;
-  taskRef: string | null;
   runtimeUpdatedAt: string | null;
 };
 

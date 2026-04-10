@@ -122,9 +122,7 @@ export async function listAgents(db: Database, orgId: string, limit: number, cur
       clientId: agentPresence.clientId,
       runtimeType: agentPresence.runtimeType,
       runtimeState: agentPresence.runtimeState,
-      runtimeDescription: agentPresence.runtimeDescription,
       activeSessions: agentPresence.activeSessions,
-      errorMessage: agentPresence.errorMessage,
     })
     .from(agents)
     .leftJoin(agentPresence, eq(agents.uuid, agentPresence.agentId))
