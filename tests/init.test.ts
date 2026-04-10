@@ -194,10 +194,10 @@ describe("runInit", () => {
     expect(ret).toBe(0);
     expect(
       existsSync(join(repoDir.path, ".agents", "skills", "first-tree", "SKILL.md")),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       existsSync(join(repoDir.path, ".claude", "skills", "first-tree", "SKILL.md")),
-    ).toBe(false);
+    ).toBe(true);
     expect(readFileSync(join(repoDir.path, TREE_VERSION), "utf-8").trim()).toBe("0.2.0");
     expect(existsSync(join(repoDir.path, "NODE.md"))).toBe(true);
     expect(existsSync(join(repoDir.path, AGENT_INSTRUCTIONS_FILE))).toBe(true);
@@ -282,10 +282,10 @@ describe("runInit", () => {
     });
     expect(
       existsSync(join(treeRepo, ".agents", "skills", "first-tree", "SKILL.md")),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       existsSync(join(treeRepo, ".claude", "skills", "first-tree", "SKILL.md")),
-    ).toBe(false);
+    ).toBe(true);
     expect(existsSync(join(treeRepo, "NODE.md"))).toBe(true);
     expect(existsSync(join(treeRepo, AGENT_INSTRUCTIONS_FILE))).toBe(true);
     expect(existsSync(join(treeRepo, CLAUDE_INSTRUCTIONS_FILE))).toBe(true);
@@ -451,7 +451,7 @@ describe("runInit", () => {
     expect(existsSync(join(sourceRepoDir.path, "members", "NODE.md"))).toBe(true);
     expect(existsSync(join(sourceRepoDir.path, TREE_PROGRESS))).toBe(true);
     expect(existsSync(join(sourceRepoDir.path, ".agents", "skills", "first-tree", "SKILL.md"))).toBe(
-      false,
+      true,
     );
   });
 

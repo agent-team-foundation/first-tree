@@ -43,12 +43,17 @@ CLAUDE.md
 In a tree repo, `first-tree init tree` produces:
 
 ```text
+.agents/skills/first-tree/
+.claude/skills/first-tree
 .first-tree/
   VERSION
   progress.md
   tree.json
   bindings/
     <source-id>.json
+  submodules/
+    repos/
+    workspaces/
   bootstrap.json          # legacy compatibility
 NODE.md
 AGENTS.md
@@ -69,8 +74,8 @@ members/
 6. preserves `.first-tree/local-tree.json`, `.first-tree/source.json`, and
    `.first-tree/workspace.json`
 
-`first-tree upgrade --tree-path ...` in a tree repo refreshes only tree-side
-metadata such as `.first-tree/VERSION`.
+`first-tree upgrade --tree-path ...` in a tree repo refreshes tree-side
+metadata such as `.first-tree/VERSION` plus the installed tree-repo skill.
 
 ## What Gets Preserved
 
@@ -78,6 +83,7 @@ metadata such as `.first-tree/VERSION`.
 - user-authored content outside the managed framework markers
 - source/workspace binding metadata
 - local checkout guidance in `.first-tree/local-tree.json`
+- hidden tree-side codebase submodule paths in `.first-tree/submodules/`
 
 ## Command Intent
 
@@ -108,3 +114,5 @@ metadata such as `.first-tree/VERSION`.
 - workspace child repos should share one tree, not create many parallel trees
 - shared tree bindings should live in `.first-tree/bindings/`, not in a single
   overwrite-prone bootstrap file
+- tree-side codebase submodules should live under `.first-tree/submodules/` so
+  validators do not treat them as visible tree domains

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -50,7 +51,34 @@ export function makeTreeMetadata(root: string, version = "0.1.0"): void {
 }
 
 export function makeGitRepo(root: string): void {
-  mkdirSync(join(root, ".git"), { recursive: true });
+  mkdirSync(root, { recursive: true });
+  execFileSync("git", ["init"], {
+    cwd: root,
+    stdio: "ignore",
+  });
+}
+
+function commitWorkingTree(root: string, message: string): void {
+  execFileSync("git", ["add", "-A"], {
+    cwd: root,
+    stdio: "ignore",
+  });
+  execFileSync(
+    "git",
+    [
+      "-c",
+      "user.email=first-tree-tests@example.com",
+      "-c",
+      "user.name=First Tree Tests",
+      "commit",
+      "-m",
+      message,
+    ],
+    {
+      cwd: root,
+      stdio: "ignore",
+    },
+  );
 }
 
 export function makeSourceRepo(root: string): void {
@@ -61,6 +89,7 @@ export function makeSourceRepo(root: string): void {
     JSON.stringify({ name: "example-source-repo" }, null, 2),
   );
   writeFileSync(join(root, "src", "index.ts"), "export const ready = true;\n");
+  commitWorkingTree(root, "Initial source repo");
 }
 
 export function makeLegacyFramework(root: string, version = "0.1.0"): void {

@@ -215,6 +215,7 @@ describe("skill artifacts", () => {
     expect(read("README.md")).toContain(".first-tree/workspace.json");
     expect(read("README.md")).toContain(".first-tree/tree.json");
     expect(read("README.md")).toContain(".first-tree/bindings/");
+    expect(read("README.md")).toContain(".first-tree/submodules/");
     expect(read("README.md")).toContain("`first-tree` skill");
     expect(read("README.md")).toContain("first-tree publish");
     expect(read("README.md")).toContain("<repo>-tree");
@@ -305,6 +306,7 @@ describe("skill artifacts", () => {
     expect(sourceWorkspaceInstall).toContain(".first-tree/workspace.json");
     expect(sourceWorkspaceInstall).toContain(".first-tree/tree.json");
     expect(sourceWorkspaceInstall).toContain(".first-tree/bindings/");
+    expect(sourceWorkspaceInstall).toContain(".first-tree/submodules/");
     expect(sourceWorkspaceInstall).toContain("workspace-member");
     expect(sourceWorkspaceInstall).toContain("first-tree workspace sync");
     expect(sourceWorkspaceInstall).toContain("first-tree publish");
@@ -327,6 +329,7 @@ describe("skill artifacts", () => {
     expect(maintainerArchitecture).toContain("tree repo");
     expect(maintainerArchitecture).toContain("binding");
     expect(maintainerArchitecture).toContain(".first-tree/bindings/");
+    expect(maintainerArchitecture).toContain(".first-tree/submodules/");
 
     const buildAndDistribution = read(
       "docs/maintainer-build-and-distribution.md",

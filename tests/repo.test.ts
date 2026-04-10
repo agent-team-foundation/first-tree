@@ -267,6 +267,16 @@ describe("path preferences", () => {
     expect(repo.frameworkVersionPath()).toBe(TREE_VERSION);
   });
 
+  it("keeps preferring dedicated tree metadata even when the tree repo also has an installed skill", () => {
+    const tmp = useTmpDir();
+    makeTreeMetadata(tmp.path);
+    makeFramework(tmp.path);
+    const repo = new Repo(tmp.path);
+    expect(repo.frameworkLayout()).toBe("tree");
+    expect(repo.preferredProgressPath()).toBe(TREE_PROGRESS);
+    expect(repo.frameworkVersionPath()).toBe(TREE_VERSION);
+  });
+
   it("switches path preferences for repos using the previous workspace skill path", () => {
     const tmp = useTmpDir();
     makeLegacyRepoFramework(tmp.path);

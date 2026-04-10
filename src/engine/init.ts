@@ -46,6 +46,7 @@ import {
   LOCAL_TREE_CONFIG,
   installedSkillRootsDisplay,
   SOURCE_INTEGRATION_MARKER,
+  TREE_VERSION,
 } from "#engine/runtime/asset-loader.js";
 import {
   readLocalTreeConfig,
@@ -420,20 +421,35 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
 
   try {
     const resolvedSourceRoot = resolveSourceRoot();
+    if (!r.hasCurrentInstalledSkill()) {
+      console.log("Installing the first-tree skill into the tree repo...");
+      installSkill(resolvedSourceRoot, r.root);
+    } else {
+      console.log("Reusing the existing first-tree skill in the tree repo.");
+    }
+    console.log();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "unknown error";
+    console.error(`Error: ${message}`);
+    return 1;
+  }
+
+  try {
+    const resolvedSourceRoot = resolveSourceRoot();
     const frameworkDir = resolveCanonicalFrameworkRoot(resolvedSourceRoot);
     const bundledSkillVersion = readSkillVersion(resolvedSourceRoot);
-    const layout = r.frameworkLayout();
+    const hadTreeMetadata = r.pathExists(TREE_VERSION);
 
-    if (layout === null || layout === "tree") {
+    if (!hadTreeMetadata) {
       console.log(
         "Bootstrapping dedicated tree metadata from the bundled first-tree package...",
       );
-      writeTreeRuntimeVersion(r.root, bundledSkillVersion);
     } else {
       console.log(
         "Reusing the existing tree framework layout and filling any missing scaffold files...",
       );
     }
+    writeTreeRuntimeVersion(r.root, bundledSkillVersion);
 
     renderTemplates(frameworkDir, r.root);
     console.log();

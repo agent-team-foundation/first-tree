@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { Repo } from "#engine/repo.js";
 import {
   buildStableSourceId,
@@ -8,6 +8,7 @@ import {
   deriveDefaultEntrypoint,
   readTreeState,
   readWorkspaceState,
+  slugifyToken,
   type BoundTreeReference,
   type RootKind,
   type SourceBindingMode,
@@ -24,14 +25,14 @@ import {
   resolveBundledPackageRoot,
 } from "#engine/runtime/installer.js";
 import {
+  TREE_SUBMODULES_DIR,
+} from "#engine/runtime/asset-loader.js";
+import {
   readLocalTreeConfig,
   upsertLocalTreeConfig,
   upsertLocalTreeGitIgnore,
 } from "#engine/runtime/local-tree-config.js";
-import {
-  upsertFirstTreeIndexFile,
-  upsertSourceIntegrationFiles,
-} from "#engine/runtime/source-integration.js";
+import { upsertFirstTreeIndexFile, upsertSourceIntegrationFiles } from "#engine/runtime/source-integration.js";
 import { relativeRepoPath } from "#engine/dedicated-tree.js";
 
 export const BIND_USAGE = `usage: first-tree bind [--tree-path PATH | --tree-url URL] [--tree-mode dedicated|shared] [--mode standalone-source|shared-source|workspace-root|workspace-member] [--workspace-id ID] [--workspace-root PATH] [--entrypoint PATH]
@@ -44,6 +45,8 @@ What it does:
   3. Writes .first-tree/source.json and refreshes .first-tree/local-tree.json
   4. Writes .first-tree/tree.json and .first-tree/bindings/<source-id>.json
      in the target tree repo when a local tree checkout is available
+  5. Ensures the target tree repo also has the first-tree skill installed
+  6. Syncs the bound codebase repo into the tree repo under .first-tree/submodules/
 
 Typical examples:
   first-tree bind --tree-path ../org-context --tree-mode shared
@@ -63,6 +66,12 @@ Options:
 
 interface CommandRunOptions {
   cwd: string;
+}
+
+interface TreeSubmoduleSyncResult {
+  action: "created" | "skipped" | "unchanged" | "updated";
+  path?: string;
+  reason?: string;
 }
 
 type CommandRunner = (
@@ -256,14 +265,182 @@ function ensureTreeCheckout(
 }
 
 function installSkillIfNeeded(
-  sourceRepo: Repo,
+  targetRepo: Repo,
   sourceRoot: string,
-): void {
-  if (!sourceRepo.hasCurrentInstalledSkill()) {
-    copyCanonicalSkill(sourceRoot, sourceRepo.root);
-    console.log("  Installed the bundled first-tree skill locally.");
-  } else {
-    console.log("  Reused the existing installed first-tree skill.");
+): "installed" | "reused" {
+  if (!targetRepo.hasCurrentInstalledSkill()) {
+    copyCanonicalSkill(sourceRoot, targetRepo.root);
+    return "installed";
+  }
+  return "reused";
+}
+
+function readGitmodules(root: string): Map<string, string | null> {
+  const entries = new Map<string, string | null>();
+  let currentPath: string | null = null;
+
+  try {
+    const text = readFileSync(join(root, ".gitmodules"), "utf-8");
+    for (const line of text.split(/\r?\n/u)) {
+      const pathMatch = line.match(/^\s*path\s*=\s*(.+?)\s*$/u);
+      if (pathMatch?.[1]) {
+        currentPath = pathMatch[1].trim();
+        entries.set(currentPath, null);
+        continue;
+      }
+
+      const urlMatch = line.match(/^\s*url\s*=\s*(.+?)\s*$/u);
+      if (currentPath !== null && urlMatch?.[1]) {
+        entries.set(currentPath, urlMatch[1].trim());
+      }
+    }
+  } catch {
+    return entries;
+  }
+
+  return entries;
+}
+
+function buildTreeSubmodulePath(
+  sourceRepo: Repo,
+  bindingMode: SourceBindingMode,
+  workspaceId?: string,
+  workspaceRootPath?: string,
+): string {
+  if (bindingMode === "workspace-member" && workspaceId && workspaceRootPath) {
+    const relativePath = relative(workspaceRootPath, sourceRepo.root);
+    const segments = relativePath
+      .split(/[\\/]+/u)
+      .filter(Boolean)
+      .map((segment) => slugifyToken(segment));
+    return join(
+      TREE_SUBMODULES_DIR,
+      "workspaces",
+      slugifyToken(workspaceId),
+      ...segments,
+    );
+  }
+
+  if (bindingMode === "workspace-root" && workspaceId) {
+    return join(
+      TREE_SUBMODULES_DIR,
+      "workspaces",
+      slugifyToken(workspaceId),
+      "__workspace_root__",
+    );
+  }
+
+  return join(TREE_SUBMODULES_DIR, "repos", slugifyToken(sourceRepo.repoName()));
+}
+
+function resolveTreeSubmoduleUrl(
+  runner: CommandRunner,
+  sourceRepo: Repo,
+  treeRepo: Repo,
+): { requiresFileProtocol: boolean; url: string } | null {
+  const remoteUrl = readGitRemoteUrl(runner, sourceRepo.root);
+  if (remoteUrl !== null) {
+    return {
+      requiresFileProtocol: false,
+      url: remoteUrl,
+    };
+  }
+
+  if (commandOutput(runner, sourceRepo.root, ["rev-parse", "--verify", "HEAD"]) === null) {
+    return null;
+  }
+
+  return {
+    requiresFileProtocol: true,
+    url: relativeRepoPath(treeRepo.root, sourceRepo.root),
+  };
+}
+
+function syncTreeSubmodule(
+  runner: CommandRunner,
+  sourceRepo: Repo,
+  treeRepo: Repo,
+  bindingMode: SourceBindingMode,
+  workspaceId?: string,
+  workspaceRootPath?: string,
+): TreeSubmoduleSyncResult {
+  if (!sourceRepo.isGitRepo()) {
+    return {
+      action: "skipped",
+      reason: "the bound source/workspace root is not a git repository",
+    };
+  }
+
+  const submodulePath = buildTreeSubmodulePath(
+    sourceRepo,
+    bindingMode,
+    workspaceId,
+    workspaceRootPath,
+  );
+  const desiredUrl = resolveTreeSubmoduleUrl(runner, sourceRepo, treeRepo);
+  if (desiredUrl === null) {
+    return {
+      action: "skipped",
+      path: submodulePath,
+      reason:
+        "the bound source repo does not have a commit or remote yet, so git cannot add it as a submodule",
+    };
+  }
+
+  const existingUrl = readGitmodules(treeRepo.root).get(submodulePath);
+  const gitPrefix = desiredUrl.requiresFileProtocol
+    ? ["-c", "protocol.file.allow=always"]
+    : [];
+
+  try {
+    if (existingUrl === desiredUrl.url) {
+      return {
+        action: "unchanged",
+        path: submodulePath,
+      };
+    }
+
+    if (existingUrl === undefined) {
+      runner(
+        "git",
+        [
+          ...gitPrefix,
+          "submodule",
+          "add",
+          "--force",
+          desiredUrl.url,
+          submodulePath,
+        ],
+        { cwd: treeRepo.root },
+      );
+      return {
+        action: "created",
+        path: submodulePath,
+      };
+    }
+
+    runner(
+      "git",
+      [
+        ...gitPrefix,
+        "submodule",
+        "set-url",
+        "--",
+        submodulePath,
+        desiredUrl.url,
+      ],
+      { cwd: treeRepo.root },
+    );
+    return {
+      action: "updated",
+      path: submodulePath,
+    };
+  } catch (err) {
+    return {
+      action: "skipped",
+      path: submodulePath,
+      reason: err instanceof Error ? err.message : "unknown git error",
+    };
   }
 }
 
@@ -405,7 +582,19 @@ export function runBind(repo?: Repo, options?: BindOptions): number {
     console.log(`  Binding mode:          ${bindingMode}`);
     console.log(`  Tree mode:             ${treeMode}\n`);
 
-    installSkillIfNeeded(sourceRepo, sourceRoot);
+    const sourceSkillAction = installSkillIfNeeded(sourceRepo, sourceRoot);
+    const treeSkillAction = installSkillIfNeeded(
+      treeResolution.treeRepo,
+      sourceRoot,
+    );
+    const submoduleSync = syncTreeSubmodule(
+      runner,
+      sourceRepo,
+      treeResolution.treeRepo,
+      bindingMode,
+      workspaceId,
+      workspaceRootPath,
+    );
 
     const firstTreeIndex = upsertFirstTreeIndexFile(sourceRepo.root);
     const gitIgnore = upsertLocalTreeGitIgnore(sourceRepo.root);
@@ -462,6 +651,7 @@ export function runBind(repo?: Repo, options?: BindOptions): number {
       sourceId,
       sourceName: sourceRepo.repoName(),
       sourceRootPath: relativeRepoPath(treeResolution.treeRepo.root, sourceRepo.root),
+      submodulePath: submoduleSync.path,
       treeMode,
       treeRepoName: treeResolution.treeRepoName,
       workspaceId,
@@ -503,6 +693,16 @@ export function runBind(repo?: Repo, options?: BindOptions): number {
     } else if (firstTreeIndex.action === "updated") {
       console.log("  Updated FIRST_TREE.md.");
     }
+    if (sourceSkillAction === "installed") {
+      console.log("  Installed the bundled first-tree skill locally.");
+    } else {
+      console.log("  Reused the existing installed first-tree skill locally.");
+    }
+    if (treeSkillAction === "installed") {
+      console.log("  Installed the bundled first-tree skill in the tree repo.");
+    } else {
+      console.log("  Reused the existing first-tree skill in the tree repo.");
+    }
     if (gitIgnore.action === "created") {
       console.log("  Created .gitignore entries for first-tree local state.");
     } else if (gitIgnore.action === "updated") {
@@ -520,6 +720,25 @@ export function runBind(repo?: Repo, options?: BindOptions): number {
       console.log(`  Updated ${changedFiles.join(" and ")}.`);
     } else {
       console.log("  Source integration instructions were already current.");
+    }
+    if (submoduleSync.action === "created") {
+      console.log(
+        `  Added tree submodule \`${submoduleSync.path}\` for this codebase repo.`,
+      );
+    } else if (submoduleSync.action === "updated") {
+      console.log(
+        `  Updated tree submodule \`${submoduleSync.path}\` for this codebase repo.`,
+      );
+    } else if (submoduleSync.action === "unchanged") {
+      console.log(
+        `  Reused existing tree submodule \`${submoduleSync.path}\` for this codebase repo.`,
+      );
+    } else if (submoduleSync.path) {
+      console.log(
+        `  Skipped tree submodule sync for \`${submoduleSync.path}\`: ${submoduleSync.reason}.`,
+      );
+    } else {
+      console.log(`  Skipped tree submodule sync: ${submoduleSync.reason}.`);
     }
     console.log("  Wrote source and tree binding metadata.");
     return 0;
