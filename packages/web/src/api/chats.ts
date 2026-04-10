@@ -1,4 +1,4 @@
-import type { Chat, ChatDetail, Message } from "@first-tree-hub/shared";
+import type { Chat, ChatDetail, Message } from "@agent-team-foundation/first-tree-hub-shared";
 import { api } from "./client.js";
 
 type PaginatedChats = {

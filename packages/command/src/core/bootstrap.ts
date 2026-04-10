@@ -1,7 +1,7 @@
 import { execSync } from "node:child_process";
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { DEFAULT_CONFIG_DIR, getClientConfig } from "@first-tree-hub/shared/config";
+import { DEFAULT_CONFIG_DIR, getClientConfig } from "@agent-team-foundation/first-tree-hub-shared/config";
 
 /**
  * Get the current GitHub username from `gh auth status`.

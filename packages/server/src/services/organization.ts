@@ -1,4 +1,4 @@
-import type { CreateOrganizationInput, UpdateOrganization } from "@first-tree-hub/shared";
+import type { CreateOrganizationInput, UpdateOrganization } from "@agent-team-foundation/first-tree-hub-shared";
 import { and, desc, eq, lt, ne } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";

@@ -1,4 +1,4 @@
-import { agentActivitySchema } from "@first-tree-hub/shared";
+import { agentActivitySchema } from "@agent-team-foundation/first-tree-hub-shared";
 import type { FastifyInstance } from "fastify";
 import { requireAgent } from "../../middleware/require-identity.js";
 import * as activityService from "../../services/activity.js";

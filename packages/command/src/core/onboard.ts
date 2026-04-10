@@ -1,6 +1,10 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_CONFIG_DIR, DEFAULT_HOME_DIR, setConfigValue } from "@first-tree-hub/shared/config";
+import {
+  DEFAULT_CONFIG_DIR,
+  DEFAULT_HOME_DIR,
+  setConfigValue,
+} from "@agent-team-foundation/first-tree-hub-shared/config";
 import { bootstrapToken, getGitHubUsername, resolveServerUrl } from "./bootstrap.js";
 
 // ── Types ────────────────────────────────────────────────────────────

@@ -4,7 +4,7 @@ import {
   createAgentTokenSchema,
   paginationQuerySchema,
   updateAgentSchema,
-} from "@first-tree-hub/shared";
+} from "@agent-team-foundation/first-tree-hub-shared";
 import { and, eq, gt, ne } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";

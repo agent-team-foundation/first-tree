@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import type { InboxEntryWithMessage } from "@first-tree-hub/shared";
+import type { InboxEntryWithMessage } from "@agent-team-foundation/first-tree-hub-shared";
 import WebSocket from "ws";
 import { FirstTreeHubSDK, type RegisterResult } from "./sdk.js";
 

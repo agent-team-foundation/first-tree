@@ -1,4 +1,4 @@
-import type { AgentActivity } from "@first-tree-hub/shared";
+import type { AgentActivity } from "@agent-team-foundation/first-tree-hub-shared";
 import { eq, isNotNull, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentPresence } from "../db/schema/agent-presence.js";

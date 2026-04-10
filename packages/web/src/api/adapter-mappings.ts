@@ -1,4 +1,4 @@
-import type { AdapterMapping, CreateAdapterMapping } from "@first-tree-hub/shared";
+import type { AdapterMapping, CreateAdapterMapping } from "@agent-team-foundation/first-tree-hub-shared";
 import { api } from "./client.js";
 
 export function listAdapterMappings(): Promise<AdapterMapping[]> {

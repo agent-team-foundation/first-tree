@@ -1,11 +1,11 @@
 import { join } from "node:path";
-import type { PromptDef } from "@first-tree-hub/shared/config";
+import type { PromptDef } from "@agent-team-foundation/first-tree-hub-shared/config";
 import {
   collectMissingPrompts,
   DEFAULT_CONFIG_DIR,
   DEFAULT_HOME_DIR,
   setConfigValue,
-} from "@first-tree-hub/shared/config";
+} from "@agent-team-foundation/first-tree-hub-shared/config";
 import { input, password, select } from "@inquirer/prompts";
 
 /**

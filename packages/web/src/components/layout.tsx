@@ -5,8 +5,8 @@ import { cn } from "../lib/utils.js";
 
 const navItems = [
   { to: "/", icon: LayoutDashboard, label: "Overview" },
-  { to: "/activity", icon: Activity, label: "Activity" },
   { to: "/agents", icon: Bot, label: "Agents" },
+  { to: "/activity", icon: Activity, label: "Activity" },
   { to: "/bindings", icon: Cable, label: "Bindings" },
   { to: "/chats", icon: MessageSquare, label: "Chats" },
   { to: "/admin-users", icon: Shield, label: "Admin Users" },

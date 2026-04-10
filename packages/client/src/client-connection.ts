@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { hostname as getHostname, platform } from "node:os";
-import type { AgentActivity } from "@first-tree-hub/shared";
+import type { AgentActivity } from "@agent-team-foundation/first-tree-hub-shared";
 import WebSocket from "ws";
 import { FirstTreeHubSDK } from "./sdk.js";
 

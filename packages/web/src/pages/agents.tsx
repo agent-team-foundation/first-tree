@@ -1,4 +1,4 @@
-import { AGENT_TYPES } from "@first-tree-hub/shared";
+import { AGENT_TYPES } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { useState } from "react";

@@ -81,7 +81,7 @@ first-tree-hub/
 │   └── claim-agent-guide.md      # Claim Agent setup guide
 │
 ├── packages/
-│   ├── shared/                # @first-tree-hub/shared — Shared Zod schemas + types + config system
+│   ├── shared/                # @agent-team-foundation/first-tree-hub-shared — Shared Zod schemas + types + config system
 │   ├── server/                # @first-tree-hub/server — Fastify API server
 │   ├── client/                # @first-tree-hub/client — Agent SDK + Runtime
 │   ├── command/               # @agent-team-foundation/first-tree-hub — Unified CLI (published package)
@@ -90,7 +90,7 @@ first-tree-hub/
 
 ## Architecture Rules
 
-**Five independent packages, Shared in common:** Server, Client, Command, Web are independently packaged and deployed, sharing types, Zod schemas, and config system via `@first-tree-hub/shared`. Command is the unified CLI entry point, depending on Server and Client.
+**Five independent packages, Shared in common:** Server, Client, Command, Web are independently packaged and deployed, sharing types, Zod schemas, and config system via `@agent-team-foundation/first-tree-hub-shared`. Command is the unified CLI entry point, depending on Server and Client.
 
 **Stateless Server:** All persistent data lives in PostgreSQL. Server holds no business state.
 

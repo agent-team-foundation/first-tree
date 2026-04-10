@@ -1,4 +1,4 @@
-import type { InboxEntryWithMessage } from "@first-tree-hub/shared";
+import type { InboxEntryWithMessage } from "@agent-team-foundation/first-tree-hub-shared";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentHandler, HandlerFactory, SessionContext } from "../runtime/handler.js";
 import { SessionManager } from "../runtime/session-manager.js";

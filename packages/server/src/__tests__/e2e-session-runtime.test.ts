@@ -1,6 +1,6 @@
+import type { InboxEntryWithMessage } from "@agent-team-foundation/first-tree-hub-shared";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "@first-tree-hub/client";
 import { FirstTreeHubSDK, SessionManager } from "@first-tree-hub/client";
-import type { InboxEntryWithMessage } from "@first-tree-hub/shared";
 import { sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../app.js";

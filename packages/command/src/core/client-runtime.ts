@@ -1,5 +1,5 @@
+import type { AgentConfig } from "@agent-team-foundation/first-tree-hub-shared/config";
 import { AgentSlot, getHandlerFactory, registerBuiltinHandlers } from "@first-tree-hub/client";
-import type { AgentConfig } from "@first-tree-hub/shared/config";
 
 type AgentEntry = {
   name: string;

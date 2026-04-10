@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
-import type { CreateAgent, CreateAgentToken, UpdateAgent } from "@first-tree-hub/shared";
-import { AGENT_STATUSES } from "@first-tree-hub/shared";
+import type { CreateAgent, CreateAgentToken, UpdateAgent } from "@agent-team-foundation/first-tree-hub-shared";
+import { AGENT_STATUSES } from "@agent-team-foundation/first-tree-hub-shared";
 import { and, count, desc, eq, isNull, lt, ne } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { adapterAgentMappings } from "../db/schema/adapter-agent-mappings.js";

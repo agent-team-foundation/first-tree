@@ -1,4 +1,4 @@
-import type { Agent, CreateAgent, UpdateAgent } from "@first-tree-hub/shared";
+import type { Agent, CreateAgent, UpdateAgent } from "@agent-team-foundation/first-tree-hub-shared";
 import { api } from "./client.js";
 
 type PaginatedAgents = {
