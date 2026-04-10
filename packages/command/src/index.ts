@@ -18,10 +18,8 @@ export {
   checkAgentTokens,
   checkBootstrapStatus,
   checkClientConfig,
-  checkContextTreeRepo,
   checkDatabase,
   checkDocker,
-  checkGitHubToken,
   // Diagnostics (doctor)
   checkNodeVersion,
   checkServerConfig,

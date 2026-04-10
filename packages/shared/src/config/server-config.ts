@@ -43,10 +43,6 @@ export const serverConfigSchema = defineConfig({
     branch: field(z.string().default("main")),
   }),
   github: {
-    token: field(z.string().optional(), {
-      env: "FIRST_TREE_HUB_GITHUB_TOKEN",
-      secret: true,
-    }),
     webhookSecret: field(z.string().optional(), {
       env: "FIRST_TREE_HUB_GITHUB_WEBHOOK_SECRET",
       secret: true,

@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export const createOrganizationSchema = z.object({
   /** URL-friendly slug (e.g. "acme-corp"). Must be lowercase alphanumeric with hyphens. */
   name: z
@@ -9,7 +11,8 @@ export const createOrganizationSchema = z.object({
     .regex(
       /^[a-z0-9][a-z0-9-]*$/,
       "Must start with a letter or digit and contain only lowercase alphanumeric and hyphens",
-    ),
+    )
+    .refine((v) => !UUID_PATTERN.test(v), "Name must not be a UUID format"),
   displayName: z.string().min(1).max(200),
   /** 0 = unlimited (self-hosted default) */
   maxAgents: z.number().int().min(0).default(0),
@@ -30,6 +33,7 @@ export const updateOrganizationSchema = z.object({
       /^[a-z0-9][a-z0-9-]*$/,
       "Must start with a letter or digit and contain only lowercase alphanumeric and hyphens",
     )
+    .refine((v) => !UUID_PATTERN.test(v), "Name must not be a UUID format")
     .optional(),
   displayName: z.string().min(1).max(200).optional(),
   maxAgents: z.number().int().min(0).optional(),

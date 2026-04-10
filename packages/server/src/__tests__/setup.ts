@@ -3,6 +3,7 @@ import { beforeEach } from "vitest";
 import { connectDatabase } from "../db/connection.js";
 
 /** Fixed UUID for the default organization used across all tests. */
+// Fixed test fixture UUID — not a real org, recreated before each test
 export const DEFAULT_ORG_ID = "01961234-0000-7000-8000-000000000000";
 
 beforeEach(async () => {

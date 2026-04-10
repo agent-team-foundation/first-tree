@@ -70,11 +70,7 @@ export function checkDocker(): CheckResult {
 export function checkServerConfig(): CheckResult {
   const hasFile = existsSync(join(DEFAULT_CONFIG_DIR, "server.yaml"));
   // Check if key required env vars are set
-  const hasEnv = !!(
-    process.env.FIRST_TREE_HUB_DATABASE_URL ||
-    process.env.FIRST_TREE_HUB_CONTEXT_TREE_REPO ||
-    process.env.FIRST_TREE_HUB_GITHUB_TOKEN
-  );
+  const hasEnv = !!process.env.FIRST_TREE_HUB_DATABASE_URL;
 
   if (hasFile && hasEnv) return { label: "Config", ok: true, detail: "config file + env vars" };
   if (hasFile) return { label: "Config", ok: true, detail: join(DEFAULT_CONFIG_DIR, "server.yaml") };
@@ -101,60 +97,6 @@ export async function checkDatabase(): Promise<CheckResult> {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return { label: "Database", ok: false, detail: `unreachable — ${msg.slice(0, 80)}` };
-  }
-}
-
-export async function checkGitHubToken(): Promise<CheckResult> {
-  const config = getServerConfig();
-  const token = get(config, "github.token");
-  if (typeof token !== "string" || !token) {
-    return { label: "GitHub Token", ok: false, detail: "not configured (FIRST_TREE_HUB_GITHUB_TOKEN or config file)" };
-  }
-
-  try {
-    const res = await fetch("https://api.github.com/user", {
-      headers: { Authorization: `token ${token}`, Accept: "application/vnd.github+json" },
-      signal: AbortSignal.timeout(5000),
-    });
-    if (res.ok) {
-      const data = (await res.json()) as { login?: string };
-      return { label: "GitHub Token", ok: true, detail: `valid (${data.login})` };
-    }
-    return { label: "GitHub Token", ok: false, detail: `invalid (HTTP ${res.status})` };
-  } catch {
-    return { label: "GitHub Token", ok: false, detail: "could not reach api.github.com" };
-  }
-}
-
-export async function checkContextTreeRepo(): Promise<CheckResult> {
-  const config = getServerConfig();
-  const repo = get(config, "contextTree.repo");
-  const token = get(config, "github.token");
-
-  if (typeof repo !== "string" || !repo) {
-    return {
-      label: "Context Tree",
-      ok: false,
-      detail: "not configured (FIRST_TREE_HUB_CONTEXT_TREE_REPO or config file)",
-    };
-  }
-  if (typeof token !== "string" || !token) {
-    return { label: "Context Tree", ok: false, detail: "cannot check (no GitHub token)" };
-  }
-
-  const ownerRepo = repo.replace(/^https?:\/\/github\.com\//, "").replace(/\.git$/, "");
-
-  try {
-    const res = await fetch(`https://api.github.com/repos/${ownerRepo}`, {
-      headers: { Authorization: `token ${token}`, Accept: "application/vnd.github+json" },
-      signal: AbortSignal.timeout(5000),
-    });
-    if (res.ok) {
-      return { label: "Context Tree", ok: true, detail: ownerRepo };
-    }
-    return { label: "Context Tree", ok: false, detail: `inaccessible (HTTP ${res.status})` };
-  } catch {
-    return { label: "Context Tree", ok: false, detail: "could not reach api.github.com" };
   }
 }
 

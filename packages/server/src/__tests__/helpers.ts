@@ -18,7 +18,6 @@ export async function createTestApp(): Promise<FastifyInstance> {
       encryptionKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     },
     github: {
-      token: undefined,
       webhookSecret: "test-webhook-secret",
       allowedOrg: "test-org",
     },
