@@ -1,11 +1,15 @@
 import { z } from "zod";
 
 export const createOrganizationSchema = z.object({
-  id: z
+  /** URL-friendly slug (e.g. "acme-corp"). Must be lowercase alphanumeric with hyphens. */
+  name: z
     .string()
-    .min(1)
-    .max(100)
-    .regex(/^[a-z0-9_-]+$/, "Only lowercase alphanumeric, hyphens, and underscores"),
+    .min(2)
+    .max(50)
+    .regex(
+      /^[a-z0-9][a-z0-9-]*$/,
+      "Must start with a letter or digit and contain only lowercase alphanumeric and hyphens",
+    ),
   displayName: z.string().min(1).max(200),
   /** 0 = unlimited (self-hosted default) */
   maxAgents: z.number().int().min(0).default(0),
@@ -18,6 +22,15 @@ export type CreateOrganization = z.infer<typeof createOrganizationSchema>;
 export type CreateOrganizationInput = z.input<typeof createOrganizationSchema>;
 
 export const updateOrganizationSchema = z.object({
+  name: z
+    .string()
+    .min(2)
+    .max(50)
+    .regex(
+      /^[a-z0-9][a-z0-9-]*$/,
+      "Must start with a letter or digit and contain only lowercase alphanumeric and hyphens",
+    )
+    .optional(),
   displayName: z.string().min(1).max(200).optional(),
   maxAgents: z.number().int().min(0).optional(),
   maxMessagesPerMinute: z.number().int().min(0).optional(),
@@ -27,6 +40,7 @@ export type UpdateOrganization = z.infer<typeof updateOrganizationSchema>;
 
 export const organizationSchema = z.object({
   id: z.string(),
+  name: z.string(),
   displayName: z.string(),
   maxAgents: z.number(),
   maxMessagesPerMinute: z.number(),

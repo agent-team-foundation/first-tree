@@ -2,6 +2,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { createAgent, deleteAgent, getAgent, getAgentByName, listAgents, suspendAgent } from "../services/agent.js";
 import { createOrganization } from "../services/organization.js";
 import { createTestAdmin, createTestApp } from "./helpers.js";
+import { DEFAULT_ORG_ID } from "./setup.js";
 
 describe("Agent Identity (UUID + Name)", () => {
   const appPromise = createTestApp();
@@ -68,7 +69,7 @@ describe("Agent Identity (UUID + Name)", () => {
       const app = await appPromise;
 
       const created = await createAgent(app.db, { name: "find-by-name", type: "autonomous_agent" });
-      const found = await getAgentByName(app.db, "default", "find-by-name");
+      const found = await getAgentByName(app.db, DEFAULT_ORG_ID, "find-by-name");
 
       expect(found.uuid).toBe(created.uuid);
       expect(found.name).toBe("find-by-name");
@@ -77,7 +78,7 @@ describe("Agent Identity (UUID + Name)", () => {
     it("returns 404 for non-existent name", async () => {
       const app = await appPromise;
 
-      await expect(getAgentByName(app.db, "default", "no-such-agent")).rejects.toThrow(/not found/i);
+      await expect(getAgentByName(app.db, DEFAULT_ORG_ID, "no-such-agent")).rejects.toThrow(/not found/i);
     });
 
     it("returns 404 for deleted agent name", async () => {
@@ -87,25 +88,25 @@ describe("Agent Identity (UUID + Name)", () => {
       await suspendAgent(app.db, agent.uuid);
       await deleteAgent(app.db, agent.uuid);
 
-      await expect(getAgentByName(app.db, "default", "deleted-lookup")).rejects.toThrow(/not found/i);
+      await expect(getAgentByName(app.db, DEFAULT_ORG_ID, "deleted-lookup")).rejects.toThrow(/not found/i);
     });
 
     it("returns 404 when name exists in a different org", async () => {
       const app = await appPromise;
 
-      await createOrganization(app.db, { id: "org-alpha", displayName: "Alpha" });
-      await createOrganization(app.db, { id: "org-beta", displayName: "Beta" });
+      const orgAlpha = await createOrganization(app.db, { name: "org-alpha", displayName: "Alpha" });
+      const orgBeta = await createOrganization(app.db, { name: "org-beta", displayName: "Beta" });
       await createAgent(app.db, {
         name: "org-scoped",
         type: "autonomous_agent",
-        organizationId: "org-alpha",
+        organizationId: orgAlpha.id,
       });
 
       // Same name, different org → not found
-      await expect(getAgentByName(app.db, "org-beta", "org-scoped")).rejects.toThrow(/not found/i);
+      await expect(getAgentByName(app.db, orgBeta.id, "org-scoped")).rejects.toThrow(/not found/i);
 
       // Correct org → found
-      const found = await getAgentByName(app.db, "org-alpha", "org-scoped");
+      const found = await getAgentByName(app.db, orgAlpha.id, "org-scoped");
       expect(found.name).toBe("org-scoped");
     });
   });
@@ -116,26 +117,26 @@ describe("Agent Identity (UUID + Name)", () => {
     it("only returns agents in the requested org", async () => {
       const app = await appPromise;
 
-      await createOrganization(app.db, { id: "org-list-test", displayName: "List Test" });
-      await createOrganization(app.db, { id: "org-other", displayName: "Other" });
+      const orgList = await createOrganization(app.db, { name: "org-list-test", displayName: "List Test" });
+      const orgOther = await createOrganization(app.db, { name: "org-other", displayName: "Other" });
       const a1 = await createAgent(app.db, {
         name: "list-org-a",
         type: "human",
-        organizationId: "org-list-test",
+        organizationId: orgList.id,
       });
       await createAgent(app.db, {
         name: "list-org-b",
         type: "human",
-        organizationId: "org-other",
+        organizationId: orgOther.id,
       });
 
-      const result = await listAgents(app.db, "org-list-test", 50);
+      const result = await listAgents(app.db, orgList.id, 50);
       const uuids = result.items.map((a) => a.uuid);
 
       expect(uuids).toContain(a1.uuid);
       // Should not contain agents from "org-other" or "default"
       for (const item of result.items) {
-        expect(item.organizationId).toBe("org-list-test");
+        expect(item.organizationId).toBe(orgList.id);
       }
     });
   });
@@ -177,23 +178,23 @@ describe("Agent Identity (UUID + Name)", () => {
     it("allows same name in different orgs", async () => {
       const app = await appPromise;
 
-      await createOrganization(app.db, { id: "org-x", displayName: "Org X" });
-      await createOrganization(app.db, { id: "org-y", displayName: "Org Y" });
+      const orgX = await createOrganization(app.db, { name: "org-x", displayName: "Org X" });
+      const orgY = await createOrganization(app.db, { name: "org-y", displayName: "Org Y" });
       const a1 = await createAgent(app.db, {
         name: "cross-org-name",
         type: "human",
-        organizationId: "org-x",
+        organizationId: orgX.id,
       });
       const a2 = await createAgent(app.db, {
         name: "cross-org-name",
         type: "human",
-        organizationId: "org-y",
+        organizationId: orgY.id,
       });
 
       expect(a1.uuid).not.toBe(a2.uuid);
       expect(a1.name).toBe(a2.name);
-      expect(a1.organizationId).toBe("org-x");
-      expect(a2.organizationId).toBe("org-y");
+      expect(a1.organizationId).toBe(orgX.id);
+      expect(a2.organizationId).toBe(orgY.id);
     });
 
     it("allows creating an agent without a name", async () => {

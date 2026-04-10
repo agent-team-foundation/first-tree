@@ -457,10 +457,6 @@ export function AgentDetailPage() {
               </div>
             )}
             <div>
-              <dt className="text-muted-foreground mb-1">Organization</dt>
-              <dd className="font-mono">{agent.organizationId}</dd>
-            </div>
-            <div>
               <dt className="text-muted-foreground mb-1">Created</dt>
               <dd>{formatDate(agent.createdAt)}</dd>
             </div>

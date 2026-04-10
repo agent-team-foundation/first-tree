@@ -6,6 +6,7 @@ import { adapterChatMappings } from "../db/schema/adapter-chat-mappings.js";
 import { adapterMessageReferences } from "../db/schema/adapter-message-references.js";
 import { agents } from "../db/schema/agents.js";
 import { chatParticipants, chats } from "../db/schema/chats.js";
+import { resolveDefaultOrgId } from "./organization.js";
 
 // ── Event deduplication ─────────────────────────────────────────────
 
@@ -185,7 +186,7 @@ export async function findOrCreateChatForChannel(
       .where(eq(agents.uuid, data.botAgentId))
       .limit(1);
 
-    const orgId = botAgent?.organizationId ?? "default";
+    const orgId = botAgent?.organizationId ?? (await resolveDefaultOrgId(db));
 
     await tx.insert(chats).values({
       id: chatId,

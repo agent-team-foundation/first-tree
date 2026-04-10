@@ -2,6 +2,7 @@ import { bootstrapTokenRequestSchema } from "@agent-team-foundation/first-tree-h
 import type { FastifyInstance } from "fastify";
 import { ForbiddenError, NotFoundError } from "../../errors.js";
 import * as agentService from "../../services/agent.js";
+import { resolveDefaultOrgId } from "../../services/organization.js";
 
 export async function bootstrapRoutes(app: FastifyInstance): Promise<void> {
   /**
@@ -31,8 +32,9 @@ export async function bootstrapRoutes(app: FastifyInstance): Promise<void> {
       throw new ForbiddenError(`GitHub user "${githubUser.username}" is not a member of organization "${allowedOrg}"`);
     }
 
+    const defaultOrgId = await resolveDefaultOrgId(app.db);
     const body = bootstrapTokenRequestSchema.parse(request.body ?? {});
-    const result = await agentService.bootstrapToken(app.db, name, "default", githubUser.username, {
+    const result = await agentService.bootstrapToken(app.db, name, defaultOrgId, githubUser.username, {
       tokenName: body.name,
       type: body.type,
       displayName: body.displayName,
@@ -62,8 +64,9 @@ export async function bootstrapRoutes(app: FastifyInstance): Promise<void> {
       throw new ForbiddenError("GitHub authentication required");
     }
 
+    const statusOrgId = await resolveDefaultOrgId(app.db);
     try {
-      const agent = await agentService.getAgentByName(app.db, "default", name);
+      const agent = await agentService.getAgentByName(app.db, statusOrgId, name);
 
       // Verify caller is in owners
       const owners: string[] = Array.isArray(agent.metadata?.owners) ? (agent.metadata.owners as string[]) : [];

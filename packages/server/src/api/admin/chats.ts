@@ -4,13 +4,21 @@ import type { FastifyInstance } from "fastify";
 import { chatParticipants, chats } from "../../db/schema/chats.js";
 import { messages } from "../../db/schema/messages.js";
 import { BadRequestError } from "../../errors.js";
+import { resolveDefaultOrgId, resolveOrganization } from "../../services/organization.js";
 
 export async function adminChatRoutes(app: FastifyInstance): Promise<void> {
   /** List chats with participant count */
   app.get("/", async (request) => {
     const query = paginationQuerySchema.parse(request.query);
-    const org = (request.query as Record<string, string>).org ?? "default";
-    const conditions = [eq(chats.organizationId, org)];
+    const orgParam = (request.query as Record<string, string>).org;
+    let orgId: string;
+    if (orgParam) {
+      const resolved = await resolveOrganization(app.db, orgParam);
+      orgId = resolved.id;
+    } else {
+      orgId = await resolveDefaultOrgId(app.db);
+    }
+    const conditions = [eq(chats.organizationId, orgId)];
     if (query.cursor) conditions.push(lt(chats.createdAt, new Date(query.cursor)));
     const where = and(...conditions);
 

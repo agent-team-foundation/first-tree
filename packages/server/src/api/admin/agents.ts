@@ -15,6 +15,7 @@ import { findOrCreateDirectChat } from "../../services/chat.js";
 import { forceDisconnect } from "../../services/connection-manager.js";
 import { sendMessage } from "../../services/message.js";
 import { notifyRecipients } from "../../services/notifier.js";
+import { resolveDefaultOrgId, resolveOrganization } from "../../services/organization.js";
 import * as presenceService from "../../services/presence.js";
 import { serializeDate } from "../../utils.js";
 
@@ -24,7 +25,14 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
   app.get("/", async (request) => {
     const query = paginationQuerySchema.parse(request.query);
     const { type } = listAgentsFilterSchema.parse(request.query);
-    const org = (request.query as Record<string, string>).org ?? "default";
+    const orgParam = (request.query as Record<string, string>).org;
+    let org: string;
+    if (orgParam) {
+      const resolved = await resolveOrganization(app.db, orgParam);
+      org = resolved.id;
+    } else {
+      org = await resolveDefaultOrgId(app.db);
+    }
     const result = await agentService.listAgents(app.db, org, query.limit, query.cursor, type);
     return {
       items: result.items.map((a) => ({

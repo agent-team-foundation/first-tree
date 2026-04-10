@@ -1,6 +1,6 @@
 {
   "name": "@agent-team-foundation/first-tree-hub-shared",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "First Tree Hub shared schemas, types, and configuration",
   "license": "MIT",

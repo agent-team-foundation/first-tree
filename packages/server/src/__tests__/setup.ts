@@ -2,6 +2,9 @@ import { sql } from "drizzle-orm";
 import { beforeEach } from "vitest";
 import { connectDatabase } from "../db/connection.js";
 
+/** Fixed UUID for the default organization used across all tests. */
+export const DEFAULT_ORG_ID = "01961234-0000-7000-8000-000000000000";
+
 beforeEach(async () => {
   const db = connectDatabase(process.env.DATABASE_URL ?? "");
   await db.execute(sql`
@@ -15,8 +18,8 @@ beforeEach(async () => {
       END LOOP;
     END $$
   `);
-  // Re-insert default organization (required by agents/chats FK constraints)
+  // Re-insert default organization with UUID PK (required by agents/chats FK constraints)
   await db.execute(
-    sql`INSERT INTO organizations (id, display_name) VALUES ('default', 'Default Organization') ON CONFLICT DO NOTHING`,
+    sql`INSERT INTO organizations (id, name, display_name) VALUES (${DEFAULT_ORG_ID}, 'default', 'Default Organization') ON CONFLICT DO NOTHING`,
   );
 });

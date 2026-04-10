@@ -20,13 +20,13 @@ describe("Agent Quota Enforcement", () => {
   it("enforces agent limit when maxAgents > 0", async () => {
     const app = await appPromise;
 
-    await createOrganization(app.db, { id: "limited-org", displayName: "Limited", maxAgents: 2 });
+    const org = await createOrganization(app.db, { name: "limited-org", displayName: "Limited", maxAgents: 2 });
 
-    await createAgent(app.db, { name: "slot-1", type: "human", organizationId: "limited-org" });
-    await createAgent(app.db, { name: "slot-2", type: "human", organizationId: "limited-org" });
+    await createAgent(app.db, { name: "slot-1", type: "human", organizationId: org.id });
+    await createAgent(app.db, { name: "slot-2", type: "human", organizationId: org.id });
 
     // Third agent should fail
-    await expect(createAgent(app.db, { name: "slot-3", type: "human", organizationId: "limited-org" })).rejects.toThrow(
+    await expect(createAgent(app.db, { name: "slot-3", type: "human", organizationId: org.id })).rejects.toThrow(
       /agent limit/i,
     );
   });
@@ -35,14 +35,14 @@ describe("Agent Quota Enforcement", () => {
     const app = await appPromise;
     const { suspendAgent, deleteAgent } = await import("../services/agent.js");
 
-    await createOrganization(app.db, { id: "quota-del-org", displayName: "Quota Del", maxAgents: 1 });
+    const org = await createOrganization(app.db, { name: "quota-del-org", displayName: "Quota Del", maxAgents: 1 });
 
-    const agent = await createAgent(app.db, { name: "temp", type: "human", organizationId: "quota-del-org" });
+    const agent = await createAgent(app.db, { name: "temp", type: "human", organizationId: org.id });
     await suspendAgent(app.db, agent.uuid);
     await deleteAgent(app.db, agent.uuid);
 
     // Slot freed — can create again
-    const newAgent = await createAgent(app.db, { name: "replacement", type: "human", organizationId: "quota-del-org" });
+    const newAgent = await createAgent(app.db, { name: "replacement", type: "human", organizationId: org.id });
     expect(newAgent.name).toBe("replacement");
   });
 });

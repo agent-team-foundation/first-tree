@@ -31,7 +31,7 @@ export async function adminOrganizationRoutes(app: FastifyInstance): Promise<voi
   });
 
   app.get<{ Params: { id: string } }>("/:id", async (request) => {
-    const org = await orgService.getOrganization(app.db, request.params.id);
+    const org = await orgService.resolveOrganization(app.db, request.params.id);
     return {
       ...org,
       createdAt: org.createdAt.toISOString(),
@@ -40,8 +40,9 @@ export async function adminOrganizationRoutes(app: FastifyInstance): Promise<voi
   });
 
   app.patch<{ Params: { id: string } }>("/:id", async (request) => {
+    const resolved = await orgService.resolveOrganization(app.db, request.params.id);
     const body = updateOrganizationSchema.parse(request.body);
-    const org = await orgService.updateOrganization(app.db, request.params.id, body);
+    const org = await orgService.updateOrganization(app.db, resolved.id, body);
     return {
       ...org,
       createdAt: org.createdAt.toISOString(),
@@ -50,7 +51,8 @@ export async function adminOrganizationRoutes(app: FastifyInstance): Promise<voi
   });
 
   app.delete<{ Params: { id: string } }>("/:id", async (request, reply) => {
-    await orgService.deleteOrganization(app.db, request.params.id);
+    const resolved = await orgService.resolveOrganization(app.db, request.params.id);
+    await orgService.deleteOrganization(app.db, resolved.id);
     return reply.status(204).send();
   });
 }
