@@ -53,7 +53,7 @@ export async function createTestAdmin(app: FastifyInstance, opts: { username?: s
 
   const username = opts.username ?? "admin";
   const password = opts.password ?? "testpassword123";
-  const passwordHash = await bcrypt.hash(password, 10);
+  const passwordHash = await bcrypt.hash(password, 1);
 
   await app.db.insert(adminUsers).values({
     id: randomUUID(),
