@@ -1,18 +1,17 @@
-import { afterAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createAgent, deleteAgent, getAgent, getAgentByName, listAgents, suspendAgent } from "../services/agent.js";
 import { createOrganization } from "../services/organization.js";
-import { createTestAdmin, createTestApp } from "./helpers.js";
+import { createTestAdmin, useTestApp } from "./helpers.js";
 import { DEFAULT_ORG_ID } from "./setup.js";
 
 describe("Agent Identity (UUID + Name)", () => {
-  const appPromise = createTestApp();
-  afterAll(async () => (await appPromise).close());
+  const getApp = useTestApp();
 
   // ── Name recycling ──────────────────────────────────────────────
 
   describe("name recycling", () => {
     it("reusing a deleted name creates a new agent with a different uuid", async () => {
-      const app = await appPromise;
+      const app = getApp();
 
       // Create → suspend → delete
       const original = await createAgent(app.db, { name: "recycle-me", type: "human" });
@@ -29,7 +28,7 @@ describe("Agent Identity (UUID + Name)", () => {
     });
 
     it("deleted agent retains uuid but loses name", async () => {
-      const app = await appPromise;
+      const app = getApp();
 
       const agent = await createAgent(app.db, { name: "will-delete", type: "human" });
       const savedUuid = agent.uuid;
@@ -43,7 +42,7 @@ describe("Agent Identity (UUID + Name)", () => {
     });
 
     it("multiple deleted agents can have name=NULL in the same org", async () => {
-      const app = await appPromise;
+      const app = getApp();
 
       const a1 = await createAgent(app.db, { name: "multi-del-1", type: "human" });
       const a2 = await createAgent(app.db, { name: "multi-del-2", type: "human" });
@@ -66,7 +65,7 @@ describe("Agent Identity (UUID + Name)", () => {
 
   describe("getAgentByName", () => {
     it("resolves an active agent by org + name", async () => {
-      const app = await appPromise;
+      const app = getApp();
 
       const created = await createAgent(app.db, { name: "find-by-name", type: "autonomous_agent" });
       const found = await getAgentByName(app.db, DEFAULT_ORG_ID, "find-by-name");
@@ -76,13 +75,13 @@ describe("Agent Identity (UUID + Name)", () => {
     });
 
     it("returns 404 for non-existent name", async () => {
-      const app = await appPromise;
+      const app = getApp();
 
       await expect(getAgentByName(app.db, DEFAULT_ORG_ID, "no-such-agent")).rejects.toThrow(/not found/i);
     });
 
     it("returns 404 for deleted agent name", async () => {
-      const app = await appPromise;
+      const app = getApp();
 
       const agent = await createAgent(app.db, { name: "deleted-lookup", type: "human" });
       await suspendAgent(app.db, agent.uuid);
@@ -92,7 +91,7 @@ describe("Agent Identity (UUID + Name)", () => {
     });
 
     it("returns 404 when name exists in a different org", async () => {
-      const app = await appPromise;
+      const app = getApp();
 
       const orgAlpha = await createOrganization(app.db, { name: "org-alpha", displayName: "Alpha" });
       const orgBeta = await createOrganization(app.db, { name: "org-beta", displayName: "Beta" });
@@ -115,7 +114,7 @@ describe("Agent Identity (UUID + Name)", () => {
 
   describe("listAgents org filtering", () => {
     it("only returns agents in the requested org", async () => {
-      const app = await appPromise;
+      const app = getApp();
 
       const orgList = await createOrganization(app.db, { name: "org-list-test", displayName: "List Test" });
       const orgOther = await createOrganization(app.db, { name: "org-other", displayName: "Other" });
@@ -145,7 +144,7 @@ describe("Agent Identity (UUID + Name)", () => {
 
   describe("uuid generation", () => {
     it("auto-generates uuid when creating an agent", async () => {
-      const app = await appPromise;
+      const app = getApp();
 
       const agent = await createAgent(app.db, { name: "auto-uuid", type: "autonomous_agent" });
 
@@ -154,7 +153,7 @@ describe("Agent Identity (UUID + Name)", () => {
     });
 
     it("generates inbox_id from uuid", async () => {
-      const app = await appPromise;
+      const app = getApp();
 
       const agent = await createAgent(app.db, { name: "inbox-uuid", type: "autonomous_agent" });
 
@@ -166,7 +165,7 @@ describe("Agent Identity (UUID + Name)", () => {
 
   describe("name uniqueness", () => {
     it("rejects duplicate name within the same org", async () => {
-      const app = await appPromise;
+      const app = getApp();
 
       await createAgent(app.db, { name: "unique-name", type: "human" });
 
@@ -176,7 +175,7 @@ describe("Agent Identity (UUID + Name)", () => {
     });
 
     it("allows same name in different orgs", async () => {
-      const app = await appPromise;
+      const app = getApp();
 
       const orgX = await createOrganization(app.db, { name: "org-x", displayName: "Org X" });
       const orgY = await createOrganization(app.db, { name: "org-y", displayName: "Org Y" });
@@ -198,7 +197,7 @@ describe("Agent Identity (UUID + Name)", () => {
     });
 
     it("allows creating an agent without a name", async () => {
-      const app = await appPromise;
+      const app = getApp();
 
       const agent = await createAgent(app.db, { type: "autonomous_agent" });
 
@@ -211,7 +210,7 @@ describe("Agent Identity (UUID + Name)", () => {
 
   describe("admin API uuid routing", () => {
     it("GET /admin/agents returns uuid + name fields", async () => {
-      const app = await appPromise;
+      const app = getApp();
       const admin = await createTestAdmin(app, { username: `id-admin-${Date.now()}` });
 
       await createAgent(app.db, { name: "api-check", type: "human" });
@@ -230,7 +229,7 @@ describe("Agent Identity (UUID + Name)", () => {
     });
 
     it("GET /admin/agents/:uuid fetches by uuid", async () => {
-      const app = await appPromise;
+      const app = getApp();
       const admin = await createTestAdmin(app, { username: `id-admin2-${Date.now()}` });
 
       const agent = await createAgent(app.db, { name: "get-by-uuid", type: "autonomous_agent" });

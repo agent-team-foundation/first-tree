@@ -1,20 +1,18 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import WebSocket from "ws";
-import { createTestAgent, createTestApp } from "./helpers.js";
+import { createTestAgent, useTestApp } from "./helpers.js";
 
 describe("WebSocket notification on message send", () => {
-  const appPromise = createTestApp();
+  const getApp = useTestApp();
   let addr: string;
 
   beforeAll(async () => {
-    const app = await appPromise;
+    const app = getApp();
     addr = await app.listen({ port: 0, host: "127.0.0.1" });
   });
 
-  afterAll(async () => (await appPromise).close());
-
   it("recipient receives WS notification when message is sent via API", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { token: t1 } = await createTestAgent(app, {
       name: `ntf-a1-${crypto.randomUUID().slice(0, 6)}`,
     });
@@ -84,7 +82,7 @@ describe("WebSocket notification on message send", () => {
   });
 
   it("recipient receives WS notification on sendToAgent", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { token: t1 } = await createTestAgent(app, {
       name: `ntf-dm1-${crypto.randomUUID().slice(0, 6)}`,
     });

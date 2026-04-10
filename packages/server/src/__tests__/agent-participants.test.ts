@@ -1,11 +1,11 @@
-import { afterAll, describe, expect, it } from "vitest";
-import { createTestAgent, createTestApp } from "./helpers.js";
+import type { FastifyInstance } from "fastify";
+import { describe, expect, it } from "vitest";
+import { createTestAgent, useTestApp } from "./helpers.js";
 
 describe("Agent Participants API", () => {
-  const appPromise = createTestApp();
-  afterAll(async () => (await appPromise).close());
+  const getApp = useTestApp();
 
-  async function setupChat(app: Awaited<ReturnType<typeof createTestApp>>) {
+  async function setupChat(app: FastifyInstance) {
     const uid = crypto.randomUUID().slice(0, 6);
     const { agent: a1, token: t1 } = await createTestAgent(app, { name: `part-a1-${uid}` });
     const { agent: a2, token: t2 } = await createTestAgent(app, { name: `part-a2-${uid}` });
@@ -22,7 +22,7 @@ describe("Agent Participants API", () => {
   }
 
   it("adds a participant to a chat", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { t1, a3, chatId } = await setupChat(app);
 
     const res = await app.inject({
@@ -38,7 +38,7 @@ describe("Agent Participants API", () => {
   });
 
   it("rejects adding duplicate participant", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { t1, a2, chatId } = await setupChat(app);
 
     const res = await app.inject({
@@ -51,7 +51,7 @@ describe("Agent Participants API", () => {
   });
 
   it("rejects adding non-existent agent", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { t1, chatId } = await setupChat(app);
 
     const res = await app.inject({
@@ -64,7 +64,7 @@ describe("Agent Participants API", () => {
   });
 
   it("removes a participant from a chat", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { t1, a2, chatId } = await setupChat(app);
 
     const res = await app.inject({
@@ -86,7 +86,7 @@ describe("Agent Participants API", () => {
   });
 
   it("rejects removing non-participant agent", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { t1, a3, chatId } = await setupChat(app);
 
     const res = await app.inject({
@@ -98,7 +98,7 @@ describe("Agent Participants API", () => {
   });
 
   it("rejects removing yourself", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { t1, a1, chatId } = await setupChat(app);
 
     const res = await app.inject({
@@ -110,7 +110,7 @@ describe("Agent Participants API", () => {
   });
 
   it("rejects non-participant adding someone", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { t3, a3, chatId } = await setupChat(app);
 
     const res = await app.inject({

@@ -1,12 +1,12 @@
-import { afterAll, describe, expect, it } from "vitest";
+import type { FastifyInstance } from "fastify";
+import { describe, expect, it } from "vitest";
 import { createAgent } from "../services/agent.js";
-import { createTestAdmin, createTestApp } from "./helpers.js";
+import { createTestAdmin, useTestApp } from "./helpers.js";
 
 describe("Admin Agents API", () => {
-  const appPromise = createTestApp();
-  afterAll(async () => (await appPromise).close());
+  const getApp = useTestApp();
 
-  async function authedRequest(app: Awaited<ReturnType<typeof createTestApp>>) {
+  async function authedRequest(app: FastifyInstance) {
     const admin = await createTestAdmin(app);
     return (method: string, url: string, payload?: unknown) =>
       app.inject({
@@ -18,7 +18,7 @@ describe("Admin Agents API", () => {
   }
 
   it("retrieves an agent created via service", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
 
     const agent = await createAgent(app.db, { name: "agent-1", type: "autonomous_agent", displayName: "Bot One" });
@@ -30,7 +30,7 @@ describe("Admin Agents API", () => {
   });
 
   it("lists agents with pagination", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
     await createAgent(app.db, { name: "a1", type: "human" });
     await createAgent(app.db, { name: "a2", type: "human" });
@@ -43,7 +43,7 @@ describe("Admin Agents API", () => {
   });
 
   it("lists agents with presenceStatus field", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
     const created = await createAgent(app.db, { name: "presence-test", type: "autonomous_agent" });
 
@@ -57,7 +57,7 @@ describe("Admin Agents API", () => {
   });
 
   it("creates an agent via POST", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
 
     const res = await req("POST", "/api/v1/admin/agents", {
@@ -76,7 +76,7 @@ describe("Admin Agents API", () => {
   });
 
   it("updates an agent via PATCH", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
     const agent = await createAgent(app.db, { name: "patch-target", type: "human", displayName: "Old Name" });
 
@@ -90,7 +90,7 @@ describe("Admin Agents API", () => {
   });
 
   it("suspends and reactivates an agent", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
     const agent = await createAgent(app.db, { name: "lifecycle-agent", type: "autonomous_agent" });
 
@@ -106,7 +106,7 @@ describe("Admin Agents API", () => {
   });
 
   it("deletes only suspended agents", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
     const agent = await createAgent(app.db, { name: "delete-test", type: "autonomous_agent" });
 
@@ -121,14 +121,14 @@ describe("Admin Agents API", () => {
   });
 
   it("rejects unauthenticated requests", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const res = await app.inject({ method: "GET", url: "/api/v1/admin/agents" });
     expect(res.statusCode).toBe(401);
   });
 
   describe("Token management", () => {
     it("creates, lists, and revokes tokens", async () => {
-      const app = await appPromise;
+      const app = getApp();
       const req = await authedRequest(app);
       const agent = await createAgent(app.db, { name: "tok-agent", type: "autonomous_agent" });
 

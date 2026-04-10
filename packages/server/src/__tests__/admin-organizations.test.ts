@@ -1,12 +1,12 @@
-import { afterAll, describe, expect, it } from "vitest";
+import type { FastifyInstance } from "fastify";
+import { describe, expect, it } from "vitest";
 import { createAgent } from "../services/agent.js";
-import { createTestAdmin, createTestApp } from "./helpers.js";
+import { createTestAdmin, useTestApp } from "./helpers.js";
 
 describe("Admin Organizations API", () => {
-  const appPromise = createTestApp();
-  afterAll(async () => (await appPromise).close());
+  const getApp = useTestApp();
 
-  async function authedRequest(app: Awaited<ReturnType<typeof createTestApp>>) {
+  async function authedRequest(app: FastifyInstance) {
     const admin = await createTestAdmin(app, { username: `org-admin-${Date.now()}` });
     return (method: string, url: string, payload?: unknown) =>
       app.inject({
@@ -18,7 +18,7 @@ describe("Admin Organizations API", () => {
   }
 
   it("lists organizations (default org exists)", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
 
     const res = await req("GET", "/api/v1/admin/organizations");
@@ -28,7 +28,7 @@ describe("Admin Organizations API", () => {
   });
 
   it("creates a new organization", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
 
     const res = await req("POST", "/api/v1/admin/organizations", {
@@ -47,7 +47,7 @@ describe("Admin Organizations API", () => {
   });
 
   it("rejects duplicate organization name", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
 
     await req("POST", "/api/v1/admin/organizations", {
@@ -62,7 +62,7 @@ describe("Admin Organizations API", () => {
   });
 
   it("gets organization by name", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
 
     await req("POST", "/api/v1/admin/organizations", {
@@ -76,7 +76,7 @@ describe("Admin Organizations API", () => {
   });
 
   it("gets organization by UUID", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
 
     const createRes = await req("POST", "/api/v1/admin/organizations", {
@@ -91,7 +91,7 @@ describe("Admin Organizations API", () => {
   });
 
   it("returns 404 for non-existent organization", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
 
     const res = await req("GET", "/api/v1/admin/organizations/no-such-org");
@@ -99,7 +99,7 @@ describe("Admin Organizations API", () => {
   });
 
   it("updates an organization", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
 
     const createRes = await req("POST", "/api/v1/admin/organizations", {
@@ -118,7 +118,7 @@ describe("Admin Organizations API", () => {
   });
 
   it("updates an organization by name", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
 
     await req("POST", "/api/v1/admin/organizations", {
@@ -134,7 +134,7 @@ describe("Admin Organizations API", () => {
   });
 
   it("deletes an empty organization", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
 
     const createRes = await req("POST", "/api/v1/admin/organizations", {
@@ -151,7 +151,7 @@ describe("Admin Organizations API", () => {
   });
 
   it("deletes an organization by name", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
 
     await req("POST", "/api/v1/admin/organizations", {
@@ -164,7 +164,7 @@ describe("Admin Organizations API", () => {
   });
 
   it("cannot delete organization with active agents", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
 
     const createRes = await req("POST", "/api/v1/admin/organizations", {
@@ -185,7 +185,7 @@ describe("Admin Organizations API", () => {
   });
 
   it("cannot delete the default organization", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
 
     const res = await req("DELETE", "/api/v1/admin/organizations/default");
@@ -193,7 +193,7 @@ describe("Admin Organizations API", () => {
   });
 
   it("rejects unauthenticated requests", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const res = await app.inject({ method: "GET", url: "/api/v1/admin/organizations" });
     expect(res.statusCode).toBe(401);
   });

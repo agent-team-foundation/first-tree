@@ -4,7 +4,8 @@ import * as schema from "./schema/index.js";
 
 export function connectDatabase(url: string) {
   const client = postgres(url);
-  return drizzle(client, { schema });
+  const db = drizzle(client, { schema });
+  return Object.assign(db, { end: () => client.end() });
 }
 
 export type Database = ReturnType<typeof connectDatabase>;

@@ -1,27 +1,26 @@
-import { afterAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import * as mappingService from "../services/adapter-mapping.js";
-import { createTestAgent, createTestApp } from "./helpers.js";
+import { createTestAgent, useTestApp } from "./helpers.js";
 
 describe("Adapter mapping service", () => {
-  const appPromise = createTestApp();
-  afterAll(async () => (await appPromise).close());
+  const getApp = useTestApp();
 
   describe("event deduplication", () => {
     it("claims an event the first time", async () => {
-      const app = await appPromise;
+      const app = getApp();
       const claimed = await mappingService.claimEvent(app.db, "evt_unique_1", "feishu");
       expect(claimed).toBe(true);
     });
 
     it("rejects a duplicate event", async () => {
-      const app = await appPromise;
+      const app = getApp();
       await mappingService.claimEvent(app.db, "evt_dup_1", "feishu");
       const duplicate = await mappingService.claimEvent(app.db, "evt_dup_1", "feishu");
       expect(duplicate).toBe(false);
     });
 
     it("allows same event_id on different platforms", async () => {
-      const app = await appPromise;
+      const app = getApp();
       const r1 = await mappingService.claimEvent(app.db, "evt_cross_1", "feishu");
       const r2 = await mappingService.claimEvent(app.db, "evt_cross_1", "slack");
       expect(r1).toBe(true);
@@ -31,7 +30,7 @@ describe("Adapter mapping service", () => {
 
   describe("agent mapping", () => {
     it("creates and finds agent mapping", async () => {
-      const app = await appPromise;
+      const app = getApp();
       const { agent } = await createTestAgent(app, { name: "mapping-test-agent" });
 
       await mappingService.createAgentMapping(app.db, {
@@ -47,13 +46,13 @@ describe("Adapter mapping service", () => {
     });
 
     it("returns null for unmapped user", async () => {
-      const app = await appPromise;
+      const app = getApp();
       const found = await mappingService.findAgentByExternalUser(app.db, "feishu", "ou_nonexistent");
       expect(found).toBeNull();
     });
 
     it("finds external user by agent", async () => {
-      const app = await appPromise;
+      const app = getApp();
       const { agent } = await createTestAgent(app, { name: "reverse-mapping-agent" });
 
       await mappingService.createAgentMapping(app.db, {
@@ -68,7 +67,7 @@ describe("Adapter mapping service", () => {
     });
 
     it("handles duplicate mapping gracefully", async () => {
-      const app = await appPromise;
+      const app = getApp();
       const { agent } = await createTestAgent(app, { name: "dup-mapping-agent" });
 
       const r1 = await mappingService.createAgentMapping(app.db, {
@@ -87,7 +86,7 @@ describe("Adapter mapping service", () => {
 
   describe("chat mapping", () => {
     it("creates chat for new external channel", async () => {
-      const app = await appPromise;
+      const app = getApp();
       const { agent: botAgent } = await createTestAgent(app, { name: "chat-map-bot-agent" });
       const { agent: sender } = await createTestAgent(app, { name: "chat-map-sender" });
 
@@ -113,7 +112,7 @@ describe("Adapter mapping service", () => {
     });
 
     it("creates separate chats for different external channels", async () => {
-      const app = await appPromise;
+      const app = getApp();
       const { agent: botAgent } = await createTestAgent(app, { name: "multi-ch-bot-agent" });
       const { agent: sender } = await createTestAgent(app, { name: "multi-ch-sender" });
 
@@ -137,7 +136,7 @@ describe("Adapter mapping service", () => {
     });
 
     it("finds external channel by chat", async () => {
-      const app = await appPromise;
+      const app = getApp();
       const { agent: botAgent } = await createTestAgent(app, { name: "reverse-ch-bot-agent" });
       const { agent: sender } = await createTestAgent(app, { name: "reverse-ch-sender" });
 
@@ -155,7 +154,7 @@ describe("Adapter mapping service", () => {
     });
 
     it("handles same agent as both bot and sender (p2p self-chat)", async () => {
-      const app = await appPromise;
+      const app = getApp();
       const { agent } = await createTestAgent(app, { name: "self-chat-agent" });
 
       const chatId = await mappingService.findOrCreateChatForChannel(app.db, {
@@ -172,7 +171,7 @@ describe("Adapter mapping service", () => {
 
   describe("message references", () => {
     it("creates and finds message reference", async () => {
-      const app = await appPromise;
+      const app = getApp();
       // First create a real message for FK constraint
       const { agent } = await createTestAgent(app, { name: "msg-ref-agent" });
       const { createChat } = await import("../services/chat.js");
@@ -202,7 +201,7 @@ describe("Adapter mapping service", () => {
     });
 
     it("returns null for unmapped messages", async () => {
-      const app = await appPromise;
+      const app = getApp();
       const result = await mappingService.findMessageByExternalId(app.db, "feishu", "om_nonexistent");
       expect(result).toBeNull();
     });

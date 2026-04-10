@@ -1,12 +1,11 @@
-import { afterAll, describe, expect, it } from "vitest";
-import { createTestAgent, createTestApp } from "./helpers.js";
+import { describe, expect, it } from "vitest";
+import { createTestAgent, useTestApp } from "./helpers.js";
 
 describe("Agent Send-to-Agent API", () => {
-  const appPromise = createTestApp();
-  afterAll(async () => (await appPromise).close());
+  const getApp = useTestApp();
 
   it("sends a message to another agent (auto-creates direct chat)", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { token: t1 } = await createTestAgent(app, { name: "sta-a1" });
     const { agent: a2, token: t2 } = await createTestAgent(app, { name: "sta-a2" });
 
@@ -34,7 +33,7 @@ describe("Agent Send-to-Agent API", () => {
   });
 
   it("reuses existing direct chat for same pair", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { token: t1 } = await createTestAgent(app, { name: "reuse-a1" });
     const { agent: a2 } = await createTestAgent(app, { name: "reuse-a2" });
 
@@ -58,7 +57,7 @@ describe("Agent Send-to-Agent API", () => {
   });
 
   it("rejects sending to non-existent agent", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { token: t1 } = await createTestAgent(app, { name: "noagent-a1" });
 
     const res = await app.inject({
@@ -71,7 +70,7 @@ describe("Agent Send-to-Agent API", () => {
   });
 
   it("sends with replyTo fields", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { agent: a1, token: t1 } = await createTestAgent(app, { name: "reply-a1" });
     const { agent: a2 } = await createTestAgent(app, { name: "reply-a2" });
 

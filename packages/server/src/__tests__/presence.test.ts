@@ -1,13 +1,12 @@
-import { afterAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import * as presenceService from "../services/presence.js";
-import { createTestAgent, createTestApp } from "./helpers.js";
+import { createTestAgent, useTestApp } from "./helpers.js";
 
 describe("Presence Service", () => {
-  const appPromise = createTestApp();
-  afterAll(async () => (await appPromise).close());
+  const getApp = useTestApp();
 
   it("sets agent online and offline", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { agent } = await createTestAgent(app, { name: "pres-a1" });
 
     // Set online
@@ -25,7 +24,7 @@ describe("Presence Service", () => {
   });
 
   it("counts online agents", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { agent: a1 } = await createTestAgent(app, { name: "count-a1" });
     const { agent: a2 } = await createTestAgent(app, { name: "count-a2" });
 
@@ -41,7 +40,7 @@ describe("Presence Service", () => {
   });
 
   it("upserts presence on repeated setOnline", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { agent } = await createTestAgent(app, { name: "upsert-a1" });
 
     await presenceService.setOnline(app.db, agent.uuid, "inst-1");
@@ -52,7 +51,7 @@ describe("Presence Service", () => {
   });
 
   it("returns null for agent without presence record", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { agent } = await createTestAgent(app, { name: "nopres-a1" });
 
     const presence = await presenceService.getPresence(app.db, agent.uuid);
@@ -60,7 +59,7 @@ describe("Presence Service", () => {
   });
 
   it("heartbeats server instance", async () => {
-    const app = await appPromise;
+    const app = getApp();
 
     // Should not throw
     await presenceService.heartbeatInstance(app.db, "test-heartbeat-instance");
@@ -68,7 +67,7 @@ describe("Presence Service", () => {
   });
 
   it("cleans up stale presence", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { agent } = await createTestAgent(app, { name: "stale-a1" });
 
     // Set online with a stale instance

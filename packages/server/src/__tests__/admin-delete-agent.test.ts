@@ -1,12 +1,12 @@
-import { afterAll, describe, expect, it } from "vitest";
+import type { FastifyInstance } from "fastify";
+import { describe, expect, it } from "vitest";
 import { createAgent, suspendAgent } from "../services/agent.js";
-import { createTestAdmin, createTestAgent, createTestApp } from "./helpers.js";
+import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
 
 describe("Admin DELETE Agent API", () => {
-  const appPromise = createTestApp();
-  afterAll(async () => (await appPromise).close());
+  const getApp = useTestApp();
 
-  async function authedRequest(app: Awaited<ReturnType<typeof createTestApp>>) {
+  async function authedRequest(app: FastifyInstance) {
     const admin = await createTestAdmin(app);
     return (method: string, url: string, payload?: unknown) =>
       app.inject({
@@ -18,7 +18,7 @@ describe("Admin DELETE Agent API", () => {
   }
 
   it("deletes a suspended agent and revokes all tokens", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
 
     // Create agent with token, then suspend (simulating sync removing it from tree)
@@ -43,7 +43,7 @@ describe("Admin DELETE Agent API", () => {
   });
 
   it("rejects deleting an active agent", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
 
     const agent = await createAgent(app.db, { name: "active-no-del", type: "autonomous_agent" });
@@ -53,7 +53,7 @@ describe("Admin DELETE Agent API", () => {
   });
 
   it("can recreate a deleted agent via service", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
 
     // Create, suspend, then delete
@@ -78,7 +78,7 @@ describe("Admin DELETE Agent API", () => {
   });
 
   it("deletes agent's adapter bindings", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
     const { agent } = await createTestAgent(app, { name: "del-adapter-agent" });
 
@@ -102,7 +102,7 @@ describe("Admin DELETE Agent API", () => {
   });
 
   it("returns 404 for non-existent agent", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
 
     const res = await req("DELETE", "/api/v1/admin/agents/non-existent");
@@ -110,7 +110,7 @@ describe("Admin DELETE Agent API", () => {
   });
 
   it("returns 404 for already deleted agent", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
 
     const agent = await createAgent(app.db, { name: "double-del", type: "human" });

@@ -1,9 +1,9 @@
 import { eq } from "drizzle-orm";
-import { afterAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { agentPresence } from "../db/schema/agent-presence.js";
 import * as clientService from "../services/client.js";
 import * as presenceService from "../services/presence.js";
-import { createTestAgent, createTestApp } from "./helpers.js";
+import { createTestAgent, useTestApp } from "./helpers.js";
 
 /**
  * Unit tests for client.ts service layer — DB-backed.
@@ -13,11 +13,10 @@ import { createTestAgent, createTestApp } from "./helpers.js";
  */
 
 describe("client service: disconnectClient", () => {
-  const appPromise = createTestApp();
-  afterAll(async () => (await appPromise).close());
+  const getApp = useTestApp();
 
   it("sets agents with matching clientId to offline", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { agent } = await createTestAgent(app, { name: `cs-dc-1-${crypto.randomUUID().slice(0, 6)}` });
 
     const clientId = `client-dc-1-${Date.now()}`;
@@ -37,7 +36,7 @@ describe("client service: disconnectClient", () => {
   });
 
   it("does not affect agents re-bound to a different client", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { agent } = await createTestAgent(app, { name: `cs-dc-2-${crypto.randomUUID().slice(0, 6)}` });
 
     const oldClient = `client-dc-old-${Date.now()}`;
@@ -69,7 +68,7 @@ describe("client service: disconnectClient", () => {
   });
 
   it("only affects agents of the disconnected client, not others", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { agent: agentA } = await createTestAgent(app, { name: `cs-dc-3a-${crypto.randomUUID().slice(0, 6)}` });
     const { agent: agentB } = await createTestAgent(app, { name: `cs-dc-3b-${crypto.randomUUID().slice(0, 6)}` });
 

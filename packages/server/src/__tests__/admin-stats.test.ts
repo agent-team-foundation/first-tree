@@ -1,15 +1,15 @@
-import { afterAll, describe, expect, it } from "vitest";
+import type { FastifyInstance } from "fastify";
+import { describe, expect, it } from "vitest";
 import { createAgent } from "../services/agent.js";
 import { findOrCreateDirectChat } from "../services/chat.js";
 import { sendMessage } from "../services/message.js";
 import { createOrganization } from "../services/organization.js";
-import { createTestAdmin, createTestApp } from "./helpers.js";
+import { createTestAdmin, useTestApp } from "./helpers.js";
 
 describe("Admin Stats API", () => {
-  const appPromise = createTestApp();
-  afterAll(async () => (await appPromise).close());
+  const getApp = useTestApp();
 
-  async function authedRequest(app: Awaited<ReturnType<typeof createTestApp>>) {
+  async function authedRequest(app: FastifyInstance) {
     const admin = await createTestAdmin(app, { username: `stats-admin-${Date.now()}` });
     return (method: string, url: string) =>
       app.inject({
@@ -20,7 +20,7 @@ describe("Admin Stats API", () => {
   }
 
   it("returns global stats", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
 
     // Create some data
@@ -39,7 +39,7 @@ describe("Admin Stats API", () => {
   });
 
   it("returns stats filtered by org", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
 
     const org = await createOrganization(app.db, { name: "stats-org", displayName: "Stats Org" });

@@ -1,12 +1,11 @@
-import { afterAll, describe, expect, it } from "vitest";
-import { createTestAgent, createTestApp } from "./helpers.js";
+import { describe, expect, it } from "vitest";
+import { createTestAgent, useTestApp } from "./helpers.js";
 
 describe("Agent Messaging Flow (send → chats → history)", () => {
-  const appPromise = createTestApp();
-  afterAll(async () => (await appPromise).close());
+  const getApp = useTestApp();
 
   it("full flow: send to agent, list chats, view history", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { agent: sender, token: senderToken } = await createTestAgent(app, { name: "flow-sender" });
     const { agent: receiver, token: receiverToken } = await createTestAgent(app, { name: "flow-receiver" });
 
@@ -78,7 +77,7 @@ describe("Agent Messaging Flow (send → chats → history)", () => {
   });
 
   it("chats list respects pagination", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { token: t1 } = await createTestAgent(app, { name: "page-a1" });
     const { agent: a2 } = await createTestAgent(app, { name: "page-a2" });
     const { agent: a3 } = await createTestAgent(app, { name: "page-a3" });
@@ -117,7 +116,7 @@ describe("Agent Messaging Flow (send → chats → history)", () => {
   });
 
   it("message history respects pagination", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { token: t1 } = await createTestAgent(app, { name: "msghist-a1" });
     const { agent: a2 } = await createTestAgent(app, { name: "msghist-a2" });
 
@@ -162,7 +161,7 @@ describe("Agent Messaging Flow (send → chats → history)", () => {
   });
 
   it("non-participant cannot view history", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { token: t1 } = await createTestAgent(app, { name: "noaccess-a1" });
     const { agent: a2 } = await createTestAgent(app, { name: "noaccess-a2" });
     const { token: t3 } = await createTestAgent(app, { name: "noaccess-a3" });
@@ -186,7 +185,7 @@ describe("Agent Messaging Flow (send → chats → history)", () => {
   });
 
   it("send with markdown format", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { token: t1 } = await createTestAgent(app, { name: "md-sender" });
     const { agent: a2 } = await createTestAgent(app, { name: "md-receiver" });
 
@@ -202,7 +201,7 @@ describe("Agent Messaging Flow (send → chats → history)", () => {
   });
 
   it("send with metadata", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { token: t1 } = await createTestAgent(app, { name: "meta-sender" });
     const { agent: a2 } = await createTestAgent(app, { name: "meta-receiver" });
 

@@ -1,13 +1,13 @@
-import { afterAll, describe, expect, it } from "vitest";
+import type { FastifyInstance } from "fastify";
+import { describe, expect, it } from "vitest";
 import { createAgent } from "../services/agent.js";
 import * as presenceService from "../services/presence.js";
-import { createTestAdmin, createTestApp } from "./helpers.js";
+import { createTestAdmin, useTestApp } from "./helpers.js";
 
 describe("Admin Agent Disconnect API", () => {
-  const appPromise = createTestApp();
-  afterAll(async () => (await appPromise).close());
+  const getApp = useTestApp();
 
-  async function authedRequest(app: Awaited<ReturnType<typeof createTestApp>>) {
+  async function authedRequest(app: FastifyInstance) {
     const admin = await createTestAdmin(app);
     return (method: string, url: string, payload?: unknown) =>
       app.inject({
@@ -19,7 +19,7 @@ describe("Admin Agent Disconnect API", () => {
   }
 
   it("disconnects an online agent and sets presence to offline", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
 
     const agent = await createAgent(app.db, {
@@ -46,7 +46,7 @@ describe("Admin Agent Disconnect API", () => {
   });
 
   it("returns 200 even when agent is already offline", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
 
     const agent = await createAgent(app.db, {
@@ -60,7 +60,7 @@ describe("Admin Agent Disconnect API", () => {
   });
 
   it("returns 404 for non-existent agent", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
 
     const res = await req("POST", "/api/v1/admin/agents/nonexistent/disconnect");
@@ -68,7 +68,7 @@ describe("Admin Agent Disconnect API", () => {
   });
 
   it("rejects unauthenticated requests", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const res = await app.inject({
       method: "POST",
       url: "/api/v1/admin/agents/any-agent/disconnect",

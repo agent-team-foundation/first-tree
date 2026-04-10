@@ -1,11 +1,11 @@
-import { afterAll, describe, expect, it } from "vitest";
-import { createTestAgent, createTestApp } from "./helpers.js";
+import type { FastifyInstance } from "fastify";
+import { describe, expect, it } from "vitest";
+import { createTestAgent, useTestApp } from "./helpers.js";
 
 describe("Inbox Renew & Timeout API", () => {
-  const appPromise = createTestApp();
-  afterAll(async () => (await appPromise).close());
+  const getApp = useTestApp();
 
-  async function setupInboxEntry(app: Awaited<ReturnType<typeof createTestApp>>) {
+  async function setupInboxEntry(app: FastifyInstance) {
     const uid = crypto.randomUUID().slice(0, 6);
     const { token: t1 } = await createTestAgent(app, { name: `renew-a1-${uid}` });
     const { agent: a2, token: t2 } = await createTestAgent(app, { name: `renew-a2-${uid}` });
@@ -37,7 +37,7 @@ describe("Inbox Renew & Timeout API", () => {
   }
 
   it("renews a delivered inbox entry", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { t2, entryId } = await setupInboxEntry(app);
 
     const res = await app.inject({
@@ -49,7 +49,7 @@ describe("Inbox Renew & Timeout API", () => {
   });
 
   it("rejects renewing a non-existent entry", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { t2 } = await setupInboxEntry(app);
 
     const res = await app.inject({
@@ -61,7 +61,7 @@ describe("Inbox Renew & Timeout API", () => {
   });
 
   it("rejects renewing an already acked entry", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { t2, entryId } = await setupInboxEntry(app);
 
     // ACK first

@@ -1,5 +1,6 @@
 import type { AgentType } from "@agent-team-foundation/first-tree-hub-shared";
 import type { FastifyInstance } from "fastify";
+import { afterAll, beforeAll } from "vitest";
 import { buildApp } from "../app.js";
 import type { Config } from "../config.js";
 
@@ -30,6 +31,18 @@ export async function createTestApp(): Promise<FastifyInstance> {
   return app;
 }
 
+/** Lazy test app lifecycle — creates in beforeAll, closes in afterAll. */
+export function useTestApp() {
+  let app: FastifyInstance;
+  beforeAll(async () => {
+    app = await createTestApp();
+  });
+  afterAll(async () => {
+    await app?.close();
+  });
+  return () => app;
+}
+
 /** Create an agent via direct DB insert and return its bearer token. */
 export async function createTestAgent(
   app: FastifyInstance,
@@ -53,7 +66,7 @@ export async function createTestAdmin(app: FastifyInstance, opts: { username?: s
 
   const username = opts.username ?? "admin";
   const password = opts.password ?? "testpassword123";
-  const passwordHash = await bcrypt.hash(password, 10);
+  const passwordHash = await bcrypt.hash(password, 1);
 
   await app.db.insert(adminUsers).values({
     id: randomUUID(),

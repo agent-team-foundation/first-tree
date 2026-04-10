@@ -1,11 +1,11 @@
-import { afterAll, describe, expect, it } from "vitest";
-import { createTestAdmin, createTestAgent, createTestApp } from "./helpers.js";
+import type { FastifyInstance } from "fastify";
+import { describe, expect, it } from "vitest";
+import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
 
 describe("Feishu Adapter (WebSocket mode)", () => {
-  const appPromise = createTestApp();
-  afterAll(async () => (await appPromise).close());
+  const getApp = useTestApp();
 
-  async function authedRequest(app: Awaited<ReturnType<typeof createTestApp>>) {
+  async function authedRequest(app: FastifyInstance) {
     const admin = await createTestAdmin(app);
     return (method: string, url: string, payload?: unknown) =>
       app.inject({
@@ -17,7 +17,7 @@ describe("Feishu Adapter (WebSocket mode)", () => {
   }
 
   it("creates adapter config with feishu credentials (agentId required)", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
     const { agent } = await createTestAgent(app, { name: "feishu-ws-agent" });
 
@@ -33,7 +33,7 @@ describe("Feishu Adapter (WebSocket mode)", () => {
   });
 
   it("adapter manager reload picks up new config", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
     const { agent } = await createTestAgent(app, { name: "feishu-reload-agent" });
 
@@ -55,7 +55,7 @@ describe("Feishu Adapter (WebSocket mode)", () => {
   });
 
   it("adapter manager reloads on config update", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
     const { agent } = await createTestAgent(app, { name: "feishu-upd-reload-agent" });
 
@@ -74,7 +74,7 @@ describe("Feishu Adapter (WebSocket mode)", () => {
   });
 
   it("adapter manager reloads on config delete", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
     const { agent } = await createTestAgent(app, { name: "feishu-del-reload-agent" });
 
@@ -90,7 +90,7 @@ describe("Feishu Adapter (WebSocket mode)", () => {
   });
 
   it("no feishu webhook route exists (replaced by WebSocket)", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const res = await app.inject({
       method: "POST",
       url: "/api/v1/webhooks/feishu/cli_test",
@@ -101,7 +101,7 @@ describe("Feishu Adapter (WebSocket mode)", () => {
   });
 
   it("rejects adapter config without agentId", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
 
     const res = await req("POST", "/api/v1/admin/adapters", {

@@ -1,14 +1,13 @@
-import { afterAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createAgent } from "../services/agent.js";
 import { createOrganization } from "../services/organization.js";
-import { createTestApp } from "./helpers.js";
+import { useTestApp } from "./helpers.js";
 
 describe("Agent Quota Enforcement", () => {
-  const appPromise = createTestApp();
-  afterAll(async () => (await appPromise).close());
+  const getApp = useTestApp();
 
   it("allows unlimited agents when maxAgents=0", async () => {
-    const app = await appPromise;
+    const app = getApp();
 
     // Default org has maxAgents=0 (unlimited)
     for (let i = 0; i < 5; i++) {
@@ -18,7 +17,7 @@ describe("Agent Quota Enforcement", () => {
   });
 
   it("enforces agent limit when maxAgents > 0", async () => {
-    const app = await appPromise;
+    const app = getApp();
 
     const org = await createOrganization(app.db, { name: "limited-org", displayName: "Limited", maxAgents: 2 });
 
@@ -32,7 +31,7 @@ describe("Agent Quota Enforcement", () => {
   });
 
   it("does not count deleted agents toward quota", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { suspendAgent, deleteAgent } = await import("../services/agent.js");
 
     const org = await createOrganization(app.db, { name: "quota-del-org", displayName: "Quota Del", maxAgents: 1 });

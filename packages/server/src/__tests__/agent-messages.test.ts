@@ -1,11 +1,11 @@
-import { afterAll, describe, expect, it } from "vitest";
-import { createTestAgent, createTestApp } from "./helpers.js";
+import type { FastifyInstance } from "fastify";
+import { describe, expect, it } from "vitest";
+import { createTestAgent, useTestApp } from "./helpers.js";
 
 describe("Agent Messages API", () => {
-  const appPromise = createTestApp();
-  afterAll(async () => (await appPromise).close());
+  const getApp = useTestApp();
 
-  async function setupChat(app: Awaited<ReturnType<typeof createTestApp>>) {
+  async function setupChat(app: FastifyInstance) {
     const { agent: a1, token: t1 } = await createTestAgent(app, { name: `msg-a1-${crypto.randomUUID().slice(0, 6)}` });
     const { agent: a2, token: t2 } = await createTestAgent(app, { name: `msg-a2-${crypto.randomUUID().slice(0, 6)}` });
 
@@ -20,7 +20,7 @@ describe("Agent Messages API", () => {
   }
 
   it("sends and retrieves messages", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { t1, chatId } = await setupChat(app);
 
     const sendRes = await app.inject({
@@ -42,7 +42,7 @@ describe("Agent Messages API", () => {
   });
 
   it("sends message with replyTo fields", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { t1, a1, chatId } = await setupChat(app);
 
     const sendRes = await app.inject({
@@ -63,7 +63,7 @@ describe("Agent Messages API", () => {
   });
 
   it("creates inbox entries for recipient (fan-out)", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { t1, t2, chatId } = await setupChat(app);
 
     await app.inject({
@@ -86,7 +86,7 @@ describe("Agent Messages API", () => {
   });
 
   it("rejects message from non-participant", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { chatId } = await setupChat(app);
     const { token: outsider } = await createTestAgent(app, { name: "outsider" });
 
