@@ -1,14 +1,13 @@
-import { afterAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createChat } from "../services/chat.js";
 import { sendMessage, sendToAgent } from "../services/message.js";
-import { createTestAgent, createTestApp } from "./helpers.js";
+import { createTestAgent, useTestApp } from "./helpers.js";
 
 describe("sendMessage returns recipients", () => {
-  const appPromise = createTestApp();
-  afterAll(async () => (await appPromise).close());
+  const getApp = useTestApp();
 
   it("returns recipient inboxIds excluding sender", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { agent: a1 } = await createTestAgent(app, { name: `recip-a1-${crypto.randomUUID().slice(0, 6)}` });
     const { agent: a2 } = await createTestAgent(app, { name: `recip-a2-${crypto.randomUUID().slice(0, 6)}` });
 
@@ -29,7 +28,7 @@ describe("sendMessage returns recipients", () => {
   });
 
   it("returns empty recipients when no other participants", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { agent: a1 } = await createTestAgent(app, { name: `recip-solo-${crypto.randomUUID().slice(0, 6)}` });
 
     const chat = await createChat(app.db, a1.uuid, {
@@ -46,7 +45,7 @@ describe("sendMessage returns recipients", () => {
   });
 
   it("returns multiple recipients in group chat", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { agent: a1 } = await createTestAgent(app, { name: `recip-g1-${crypto.randomUUID().slice(0, 6)}` });
     const { agent: a2 } = await createTestAgent(app, { name: `recip-g2-${crypto.randomUUID().slice(0, 6)}` });
     const { agent: a3 } = await createTestAgent(app, { name: `recip-g3-${crypto.randomUUID().slice(0, 6)}` });
@@ -69,7 +68,7 @@ describe("sendMessage returns recipients", () => {
   });
 
   it("includes replyTo recipient in recipients", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { agent: a1 } = await createTestAgent(app, { name: `recip-rt1-${crypto.randomUUID().slice(0, 6)}` });
     const { agent: a2 } = await createTestAgent(app, { name: `recip-rt2-${crypto.randomUUID().slice(0, 6)}` });
     const { agent: a3 } = await createTestAgent(app, { name: `recip-rt3-${crypto.randomUUID().slice(0, 6)}` });
@@ -100,7 +99,7 @@ describe("sendMessage returns recipients", () => {
   });
 
   it("sendToAgent returns recipients", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { agent: a1 } = await createTestAgent(app, { name: `recip-dm1-${crypto.randomUUID().slice(0, 6)}` });
     const { agent: a2 } = await createTestAgent(app, { name: `recip-dm2-${crypto.randomUUID().slice(0, 6)}` });
     if (!a2.name) throw new Error("Expected a2.name to be set");

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { beforeEach } from "vitest";
+import { afterAll, beforeEach } from "vitest";
 import { connectDatabase } from "../db/connection.js";
 
 /** Fixed UUID for the default organization used across all tests. */
@@ -42,4 +42,9 @@ beforeEach(async () => {
   await db.execute(
     sql`INSERT INTO organizations (id, name, display_name) VALUES (${DEFAULT_ORG_ID}, 'default', 'Default Organization') ON CONFLICT DO NOTHING`,
   );
+});
+
+afterAll(async () => {
+  await cachedDb?.end();
+  cachedDb = undefined;
 });

@@ -1,14 +1,13 @@
 import { sql } from "drizzle-orm";
-import { afterAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import * as inboxService from "../services/inbox.js";
-import { createTestAgent, createTestApp } from "./helpers.js";
+import { createTestAgent, useTestApp } from "./helpers.js";
 
 describe("Inbox Timeout Reset", () => {
-  const appPromise = createTestApp();
-  afterAll(async () => (await appPromise).close());
+  const getApp = useTestApp();
 
   it("resets timed-out delivered entries to pending", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { token: t1 } = await createTestAgent(app, { name: "timeout-a1" });
     const { agent: a2, token: t2 } = await createTestAgent(app, { name: "timeout-a2" });
 
@@ -59,7 +58,7 @@ describe("Inbox Timeout Reset", () => {
   });
 
   it("marks entries as failed after max retries", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { token: t1 } = await createTestAgent(app, { name: "maxretry-a1" });
     const { agent: a2, token: t2 } = await createTestAgent(app, { name: "maxretry-a2" });
 

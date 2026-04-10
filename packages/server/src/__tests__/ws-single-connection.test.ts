@@ -1,17 +1,15 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import WebSocket from "ws";
-import { createTestAgent, createTestApp } from "./helpers.js";
+import { createTestAgent, useTestApp } from "./helpers.js";
 
 describe("WebSocket single-connection constraint", () => {
-  const appPromise = createTestApp();
+  const getApp = useTestApp();
   let addr: string;
 
   beforeAll(async () => {
-    const app = await appPromise;
+    const app = getApp();
     addr = await app.listen({ port: 0, host: "127.0.0.1" });
   });
-
-  afterAll(async () => (await appPromise).close());
 
   /** Open a WS and return it once open. */
   function connectWs(token: string): Promise<WebSocket> {
@@ -33,7 +31,7 @@ describe("WebSocket single-connection constraint", () => {
   }
 
   it("allows first WebSocket connection", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { token } = await createTestAgent(app, { name: `ws-a1-${crypto.randomUUID().slice(0, 6)}` });
     const ws = await connectWs(token);
     expect(ws.readyState).toBe(WebSocket.OPEN);
@@ -42,7 +40,7 @@ describe("WebSocket single-connection constraint", () => {
   });
 
   it("rejects second WebSocket connection with 4009", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { token } = await createTestAgent(app, { name: `ws-a2-${crypto.randomUUID().slice(0, 6)}` });
 
     // First connection
@@ -60,7 +58,7 @@ describe("WebSocket single-connection constraint", () => {
   });
 
   it("allows reconnection after first WS is closed", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { token } = await createTestAgent(app, { name: `ws-a3-${crypto.randomUUID().slice(0, 6)}` });
 
     // First connection

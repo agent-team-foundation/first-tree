@@ -1,5 +1,6 @@
 import type { AgentType } from "@agent-team-foundation/first-tree-hub-shared";
 import type { FastifyInstance } from "fastify";
+import { afterAll, beforeAll } from "vitest";
 import { buildApp } from "../app.js";
 import type { Config } from "../config.js";
 
@@ -28,6 +29,18 @@ export async function createTestApp(): Promise<FastifyInstance> {
   const app = await buildApp(config);
   await app.ready();
   return app;
+}
+
+/** Lazy test app lifecycle — creates in beforeAll, closes in afterAll. */
+export function useTestApp() {
+  let app: FastifyInstance;
+  beforeAll(async () => {
+    app = await createTestApp();
+  });
+  afterAll(async () => {
+    await app?.close();
+  });
+  return () => app;
 }
 
 /** Create an agent via direct DB insert and return its bearer token. */

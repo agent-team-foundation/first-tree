@@ -1,11 +1,11 @@
-import { afterAll, describe, expect, it } from "vitest";
-import { createTestAdmin, createTestApp } from "./helpers.js";
+import type { FastifyInstance } from "fastify";
+import { describe, expect, it } from "vitest";
+import { createTestAdmin, useTestApp } from "./helpers.js";
 
 describe("Admin System Config API", () => {
-  const appPromise = createTestApp();
-  afterAll(async () => (await appPromise).close());
+  const getApp = useTestApp();
 
-  async function authedRequest(app: Awaited<ReturnType<typeof createTestApp>>) {
+  async function authedRequest(app: FastifyInstance) {
     const admin = await createTestAdmin(app);
     return (method: string, url: string, payload?: unknown) =>
       app.inject({
@@ -17,7 +17,7 @@ describe("Admin System Config API", () => {
   }
 
   it("returns default config values", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
 
     const res = await req("GET", "/api/v1/admin/system/config");
@@ -30,7 +30,7 @@ describe("Admin System Config API", () => {
   });
 
   it("updates config values", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
 
     const res = await req("PATCH", "/api/v1/admin/system/config", {
@@ -46,7 +46,7 @@ describe("Admin System Config API", () => {
   });
 
   it("overwrites previously set values", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
 
     await req("PATCH", "/api/v1/admin/system/config", { inbox_timeout_seconds: 100 });
@@ -56,7 +56,7 @@ describe("Admin System Config API", () => {
   });
 
   it("rejects unauthenticated requests", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const res = await app.inject({ method: "GET", url: "/api/v1/admin/system/config" });
     expect(res.statusCode).toBe(401);
   });

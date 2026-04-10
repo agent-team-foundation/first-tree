@@ -1,13 +1,12 @@
-import { afterAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createAgent } from "../services/agent.js";
-import { createTestApp } from "./helpers.js";
+import { useTestApp } from "./helpers.js";
 
 describe("Public Agents API", () => {
-  const appPromise = createTestApp();
-  afterAll(async () => (await appPromise).close());
+  const getApp = useTestApp();
 
   it("returns only public agents (no auth required)", async () => {
-    const app = await appPromise;
+    const app = getApp();
 
     // Create one public and one private agent
     await createAgent(app.db, { name: "public-bot", type: "autonomous_agent", public: true });
@@ -26,7 +25,7 @@ describe("Public Agents API", () => {
   });
 
   it("does not expose sensitive fields", async () => {
-    const app = await appPromise;
+    const app = getApp();
 
     await createAgent(app.db, { name: "pub-fields", type: "autonomous_agent", public: true });
 
@@ -53,7 +52,7 @@ describe("Public Agents API", () => {
   });
 
   it("returns public agents across all orgs when no org param", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { createOrganization } = await import("../services/organization.js");
 
     const crossOrg = await createOrganization(app.db, { name: "cross-org", displayName: "Cross Org" });
@@ -73,7 +72,7 @@ describe("Public Agents API", () => {
   });
 
   it("filters by org query param (using name)", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { createOrganization } = await import("../services/organization.js");
 
     const pubOrg = await createOrganization(app.db, { name: "pub-org", displayName: "Public Org" });
@@ -99,7 +98,7 @@ describe("Public Agents API", () => {
   });
 
   it("supports pagination", async () => {
-    const app = await appPromise;
+    const app = getApp();
 
     for (let i = 0; i < 3; i++) {
       await createAgent(app.db, { name: `page-bot-${i}`, type: "autonomous_agent", public: true });

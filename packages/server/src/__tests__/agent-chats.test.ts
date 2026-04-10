@@ -1,12 +1,11 @@
-import { afterAll, describe, expect, it } from "vitest";
-import { createTestAgent, createTestApp } from "./helpers.js";
+import { describe, expect, it } from "vitest";
+import { createTestAgent, useTestApp } from "./helpers.js";
 
 describe("Agent Chats API", () => {
-  const appPromise = createTestApp();
-  afterAll(async () => (await appPromise).close());
+  const getApp = useTestApp();
 
   it("creates a chat and retrieves it", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { agent: a1, token: t1 } = await createTestAgent(app, { name: "chat-a1" });
     const { agent: a2 } = await createTestAgent(app, { name: "chat-a2" });
 
@@ -36,7 +35,7 @@ describe("Agent Chats API", () => {
   });
 
   it("lists chats for an agent", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { token: t1 } = await createTestAgent(app, { name: "list-a1" });
     const { agent: a2 } = await createTestAgent(app, { name: "list-a2" });
 
@@ -57,7 +56,7 @@ describe("Agent Chats API", () => {
   });
 
   it("rejects chat creation with non-existent participant", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { token: t1 } = await createTestAgent(app, { name: "bad-a1" });
 
     const res = await app.inject({
@@ -70,7 +69,7 @@ describe("Agent Chats API", () => {
   });
 
   it("rejects access to non-participant chat", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { token: t1 } = await createTestAgent(app, { name: "deny-a1" });
     const { token: t2 } = await createTestAgent(app, { name: "deny-a2" });
     const { agent: a3 } = await createTestAgent(app, { name: "deny-a3" });

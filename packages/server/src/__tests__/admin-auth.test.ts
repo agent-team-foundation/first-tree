@@ -1,20 +1,19 @@
-import { afterAll, describe, expect, it } from "vitest";
-import { createTestAdmin, createTestApp } from "./helpers.js";
+import { describe, expect, it } from "vitest";
+import { createTestAdmin, useTestApp } from "./helpers.js";
 
 describe("Admin Auth", () => {
-  const appPromise = createTestApp();
-  afterAll(async () => (await appPromise).close());
+  const getApp = useTestApp();
 
   describe("POST /api/v1/admin/auth/login", () => {
     it("returns tokens on valid credentials", async () => {
-      const app = await appPromise;
+      const app = getApp();
       const admin = await createTestAdmin(app);
       expect(admin.accessToken).toBeDefined();
       expect(admin.refreshToken).toBeDefined();
     });
 
     it("rejects invalid password", async () => {
-      const app = await appPromise;
+      const app = getApp();
       await createTestAdmin(app);
       const res = await app.inject({
         method: "POST",
@@ -25,7 +24,7 @@ describe("Admin Auth", () => {
     });
 
     it("rejects non-existent user", async () => {
-      const app = await appPromise;
+      const app = getApp();
       const res = await app.inject({
         method: "POST",
         url: "/api/v1/admin/auth/login",
@@ -37,7 +36,7 @@ describe("Admin Auth", () => {
 
   describe("POST /api/v1/admin/auth/refresh", () => {
     it("returns new access token", async () => {
-      const app = await appPromise;
+      const app = getApp();
       const admin = await createTestAdmin(app);
       const res = await app.inject({
         method: "POST",
@@ -49,7 +48,7 @@ describe("Admin Auth", () => {
     });
 
     it("rejects invalid refresh token", async () => {
-      const app = await appPromise;
+      const app = getApp();
       const res = await app.inject({
         method: "POST",
         url: "/api/v1/admin/auth/refresh",

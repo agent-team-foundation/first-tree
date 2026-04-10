@@ -317,6 +317,7 @@ export async function buildApp(config: Config) {
     kaelRuntime?.shutdown();
     await notifier.stop();
     await listenClient.end();
+    await db.end();
   });
 
   return app;

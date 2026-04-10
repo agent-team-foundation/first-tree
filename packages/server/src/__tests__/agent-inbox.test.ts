@@ -1,12 +1,11 @@
-import { afterAll, describe, expect, it } from "vitest";
-import { createTestAgent, createTestApp } from "./helpers.js";
+import { describe, expect, it } from "vitest";
+import { createTestAgent, useTestApp } from "./helpers.js";
 
 describe("Agent Inbox API", () => {
-  const appPromise = createTestApp();
-  afterAll(async () => (await appPromise).close());
+  const getApp = useTestApp();
 
   it("polls inbox and acks entry", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const { token: t1 } = await createTestAgent(app, { name: "inbox-a1" });
     const { agent: a2, token: t2 } = await createTestAgent(app, { name: "inbox-a2" });
 
@@ -55,7 +54,7 @@ describe("Agent Inbox API", () => {
   });
 
   it("rejects unauthenticated inbox access", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const res = await app.inject({ method: "GET", url: "/api/v1/agent/inbox" });
     expect(res.statusCode).toBe(401);
   });

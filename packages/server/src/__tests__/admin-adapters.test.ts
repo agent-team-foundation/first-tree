@@ -1,11 +1,11 @@
-import { afterAll, describe, expect, it } from "vitest";
-import { createTestAdmin, createTestAgent, createTestApp } from "./helpers.js";
+import type { FastifyInstance } from "fastify";
+import { describe, expect, it } from "vitest";
+import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
 
 describe("Admin Adapters API", () => {
-  const appPromise = createTestApp();
-  afterAll(async () => (await appPromise).close());
+  const getApp = useTestApp();
 
-  async function authedRequest(app: Awaited<ReturnType<typeof createTestApp>>) {
+  async function authedRequest(app: FastifyInstance) {
     const admin = await createTestAdmin(app);
     return (method: string, url: string, payload?: unknown) =>
       app.inject({
@@ -17,7 +17,7 @@ describe("Admin Adapters API", () => {
   }
 
   it("creates and lists adapter configs (agentId required)", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
     const { agent } = await createTestAgent(app, { name: "adapter-create-agent" });
 
@@ -42,7 +42,7 @@ describe("Admin Adapters API", () => {
   });
 
   it("gets a single adapter config", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
     const { agent } = await createTestAgent(app, { name: "adapter-get-agent" });
 
@@ -60,7 +60,7 @@ describe("Admin Adapters API", () => {
   });
 
   it("updates adapter config", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
     const { agent } = await createTestAgent(app, { name: "adapter-upd-agent" });
 
@@ -79,7 +79,7 @@ describe("Admin Adapters API", () => {
   });
 
   it("updates agentId to another valid agent", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
     const { agent: agent1 } = await createTestAgent(app, { name: "adapter-switch-1" });
     const { agent: agent2 } = await createTestAgent(app, { name: "adapter-switch-2" });
@@ -99,7 +99,7 @@ describe("Admin Adapters API", () => {
   });
 
   it("deletes adapter config", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
     const { agent } = await createTestAgent(app, { name: "adapter-del-agent" });
 
@@ -118,7 +118,7 @@ describe("Admin Adapters API", () => {
   });
 
   it("returns 404 for non-existent adapter", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
 
     const getRes = await req("GET", "/api/v1/admin/adapters/99999");
@@ -132,7 +132,7 @@ describe("Admin Adapters API", () => {
   });
 
   it("rejects invalid platform", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
 
     const res = await req("POST", "/api/v1/admin/adapters", {
@@ -144,7 +144,7 @@ describe("Admin Adapters API", () => {
   });
 
   it("rejects missing credentials", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
 
     const res = await req("POST", "/api/v1/admin/adapters", {
@@ -155,7 +155,7 @@ describe("Admin Adapters API", () => {
   });
 
   it("rejects missing agentId", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
 
     const res = await req("POST", "/api/v1/admin/adapters", {
@@ -166,7 +166,7 @@ describe("Admin Adapters API", () => {
   });
 
   it("updates credentials (re-encrypts)", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
     const { agent } = await createTestAgent(app, { name: "adapter-reencrypt-agent" });
 
@@ -187,7 +187,7 @@ describe("Admin Adapters API", () => {
   });
 
   it("rejects non-existent agentId", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
 
     const res = await req("POST", "/api/v1/admin/adapters", {
@@ -199,7 +199,7 @@ describe("Admin Adapters API", () => {
   });
 
   it("rejects human agent for adapter config", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
     const { agent } = await createTestAgent(app, { name: "human-adapter-reject", type: "human" });
 
@@ -212,7 +212,7 @@ describe("Admin Adapters API", () => {
   });
 
   it("rejects non-numeric adapter ID", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
 
     const getRes = await req("GET", "/api/v1/admin/adapters/abc");
@@ -226,13 +226,13 @@ describe("Admin Adapters API", () => {
   });
 
   it("rejects unauthenticated requests", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const res = await app.inject({ method: "GET", url: "/api/v1/admin/adapters" });
     expect(res.statusCode).toBe(401);
   });
 
   it("enforces unique agent+platform constraint", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
     const { agent } = await createTestAgent(app, { name: "adapter-unique-agent" });
 
@@ -253,7 +253,7 @@ describe("Admin Adapters API", () => {
   });
 
   it("allows same agent on different platforms", async () => {
-    const app = await appPromise;
+    const app = getApp();
     const req = await authedRequest(app);
     const { agent } = await createTestAgent(app, { name: "adapter-cross-plat-agent" });
 
