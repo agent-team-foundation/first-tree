@@ -42,3 +42,5 @@ drizzle/meta/
 
 # Playwright MCP
 .playwright-mcp/
+.first-tree/local-tree.json
+.first-tree/tmp/

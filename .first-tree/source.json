@@ -1,0 +1,18 @@
+{
+  "bindingMode": "workspace-member",
+  "rootKind": "git-repo",
+  "scope": "workspace",
+  "sourceId": "first-tree-hub-5fb86a1c",
+  "sourceName": "first-tree-hub",
+  "tree": {
+    "entrypoint": "/workspaces/first-tree-all/repos/first-tree-hub",
+    "localPath": "../first-tree-context",
+    "remoteUrl": "https://github.com/agent-team-foundation/first-tree-context",
+    "treeId": "first-tree-context",
+    "treeMode": "shared",
+    "treeRepoName": "first-tree-context"
+  },
+  "workspaceId": "first-tree-all",
+  "workspaceRootPath": "..",
+  "schemaVersion": 1
+}
