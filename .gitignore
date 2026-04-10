@@ -1,6 +1,9 @@
 # Dependencies
 node_modules/
 
+# Local run scripts (may contain secrets)
+run_*.sh
+
 # Build outputs
 dist/
 *.tsbuildinfo
