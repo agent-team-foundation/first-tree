@@ -168,3 +168,27 @@ External CLI projects (e.g. context-tree) can `import { startServer, checkDataba
 - **Commit messages**: Conventional Commits — `feat: xxx`, `fix: xxx`, `refactor: xxx`, `test: xxx`, `docs: xxx`
 - **Releases**: tag + GitHub Release
 - Do not auto-commit; wait for user to test and confirm before committing
+
+<!-- BEGIN FIRST-TREE-SOURCE-INTEGRATION -->
+FIRST-TREE-SOURCE-INTEGRATION: workspace member bound to shared tree repo `first-tree-context`
+FIRST-TREE-TREE-REPO: `first-tree-context`
+FIRST-TREE-TREE-MODE: `shared`
+FIRST-TREE-BINDING-MODE: `workspace-member`
+FIRST-TREE-TREE-REPO-URL: `https://github.com/agent-team-foundation/first-tree-context`
+FIRST-TREE-ENTRYPOINT: `/workspaces/first-tree-all/repos/first-tree-hub`
+FIRST-TREE-WORKSPACE-ID: `first-tree-all`
+FIRST-TREE-LOCAL-TREE-CONFIG: `.first-tree/local-tree.json`
+
+This repo is a workspace member. Keep all Context Tree files only in the shared `first-tree-context` repo and follow the workspace root's binding for shared context updates in workspace `first-tree-all`.
+
+Before every task:
+- Read `.first-tree/local-tree.json` first. If it exists, resolve its `localPath` value from this repo root and treat that checkout as the canonical local tree repo.
+- If that configured checkout exists locally, update it before you read anything else.
+- If the configured checkout is missing, clone a temporary working copy from `https://github.com/agent-team-foundation/first-tree-context` into `.first-tree/tmp/first-tree-context/`, use it for the current task, and delete it before you finish.
+- Never commit `.first-tree/local-tree.json` or anything under `.first-tree/tmp/` to this repo. They are local-only workspace state.
+
+After every task:
+- Always ask whether the tree needs updating.
+- If the task changed decisions, constraints, rationale, ownership, or shared workspace relationships, open a PR in the tree repo first. Then open the source/workspace code PR.
+- If the task changed only implementation details, skip the tree PR and open only the source/workspace code PR.
+<!-- END FIRST-TREE-SOURCE-INTEGRATION -->
