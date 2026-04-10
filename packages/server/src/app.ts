@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
+import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
@@ -275,6 +276,7 @@ export async function buildApp(config: Config) {
   app.decorate("adapterManager", adapterManager);
 
   // Kael runtime — server-embedded forwarding to Kael API
+  const contextTreeDir = join(DEFAULT_DATA_DIR, "context-tree");
   const kaelRuntime = config.kael?.endpoint
     ? createKaelRuntime(
         db,
@@ -283,6 +285,7 @@ export async function buildApp(config: Config) {
         config.kael.apiKey,
         config.kael.hubPublicUrl,
         app.log,
+        contextTreeDir,
       )
     : undefined;
 

@@ -1,3 +1,6 @@
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { adapterConfigs } from "../db/schema/adapter-configs.js";
@@ -632,7 +635,7 @@ describe("KaelRuntime", () => {
       expect(result).toEqual({ sent: 0, errors: 0 });
     });
 
-    it("processOutbound returns immediately after shutdown", async () => {
+    it("processOutbound returns immediately after shutdown (no fetch calls)", async () => {
       const { agent } = await createTestAgent(app, { name: "kael-shutdown-noop" });
       await insertKaelConfig(agent.uuid);
 
@@ -671,6 +674,291 @@ describe("KaelRuntime", () => {
       expect(defined(unchanged).status).toBe("pending");
 
       vi.unstubAllGlobals();
+    });
+  });
+
+  // ---- Context Tree AGENT.md injection ----
+
+  describe("Context Tree AGENT.md injection", () => {
+    let tmpDir: string;
+
+    beforeAll(() => {
+      tmpDir = mkdtempSync(join(tmpdir(), "kael-ctx-"));
+    });
+
+    afterAll(() => {
+      rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it("reload() reads AGENT.md and processOutbound() includes agents_md in payload", async () => {
+      const agentMdContent = "# Team Instructions\nAlways respond in English.";
+      writeFileSync(join(tmpDir, "AGENT.md"), agentMdContent, "utf-8");
+
+      const { agent } = await createTestAgent(app, { name: "kael-ctx-inject" });
+      await insertKaelConfig(agent.uuid);
+
+      const log = createMockLogger();
+      const runtime = createKaelRuntime(app.db, ENCRYPTION_KEY, KAEL_ENDPOINT, KAEL_API_KEY, SERVER_URL, log, tmpDir);
+      await runtime.reload();
+
+      // Verify AGENT.md was loaded (logged)
+      const infoMock = log.info as unknown as { mock: { calls: unknown[][] } };
+      const loadedLog = infoMock.mock.calls.some((c) => typeof c[0] === "string" && c[0].includes("Loaded AGENT.md"));
+      expect(loadedLog).toBe(true);
+
+      // Send a message and verify payload includes agents_md
+      const chatId = `chat-ctx-inject-${Date.now()}`;
+      const msgId = `msg-ctx-inject-${Date.now()}`;
+      await createChat(chatId);
+      await insertMessage({ id: msgId, chatId, senderId: "s", content: "ctx test" });
+      await insertInboxEntry({ inboxId: agent.inboxId, messageId: msgId, chatId });
+
+      const mockFetch = vi.fn().mockResolvedValue({ ok: true, text: () => Promise.resolve("") });
+      vi.stubGlobal("fetch", mockFetch);
+
+      await runtime.processOutbound();
+
+      expect(mockFetch).toHaveBeenCalledOnce();
+      const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+      const body = JSON.parse(init.body as string) as Record<string, unknown>;
+      expect(body.agents_md).toBe(agentMdContent);
+
+      vi.unstubAllGlobals();
+    });
+
+    it("payload omits agents_md when AGENT.md does not exist", async () => {
+      const emptyDir = mkdtempSync(join(tmpdir(), "kael-ctx-empty-"));
+
+      const { agent } = await createTestAgent(app, { name: "kael-ctx-no-file" });
+      await insertKaelConfig(agent.uuid);
+
+      const runtime = createKaelRuntime(
+        app.db,
+        ENCRYPTION_KEY,
+        KAEL_ENDPOINT,
+        KAEL_API_KEY,
+        SERVER_URL,
+        createMockLogger(),
+        emptyDir,
+      );
+      await runtime.reload();
+
+      const chatId = `chat-ctx-nofile-${Date.now()}`;
+      const msgId = `msg-ctx-nofile-${Date.now()}`;
+      await createChat(chatId);
+      await insertMessage({ id: msgId, chatId, senderId: "s", content: "no ctx" });
+      await insertInboxEntry({ inboxId: agent.inboxId, messageId: msgId, chatId });
+
+      const mockFetch = vi.fn().mockResolvedValue({ ok: true, text: () => Promise.resolve("") });
+      vi.stubGlobal("fetch", mockFetch);
+
+      await runtime.processOutbound();
+
+      expect(mockFetch).toHaveBeenCalledOnce();
+      const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+      const body = JSON.parse(init.body as string) as Record<string, unknown>;
+      expect(body.agents_md).toBeUndefined();
+
+      vi.unstubAllGlobals();
+      rmSync(emptyDir, { recursive: true, force: true });
+    });
+
+    it("payload omits agents_md when contextTreeDir is not provided", async () => {
+      const { agent } = await createTestAgent(app, { name: "kael-ctx-no-dir" });
+      await insertKaelConfig(agent.uuid);
+
+      const runtime = createKaelRuntime(
+        app.db,
+        ENCRYPTION_KEY,
+        KAEL_ENDPOINT,
+        KAEL_API_KEY,
+        SERVER_URL,
+        createMockLogger(),
+      );
+      await runtime.reload();
+
+      const chatId = `chat-ctx-nodir-${Date.now()}`;
+      const msgId = `msg-ctx-nodir-${Date.now()}`;
+      await createChat(chatId);
+      await insertMessage({ id: msgId, chatId, senderId: "s", content: "no dir" });
+      await insertInboxEntry({ inboxId: agent.inboxId, messageId: msgId, chatId });
+
+      const mockFetch = vi.fn().mockResolvedValue({ ok: true, text: () => Promise.resolve("") });
+      vi.stubGlobal("fetch", mockFetch);
+
+      await runtime.processOutbound();
+
+      expect(mockFetch).toHaveBeenCalledOnce();
+      const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+      const body = JSON.parse(init.body as string) as Record<string, unknown>;
+      expect(body.agents_md).toBeUndefined();
+
+      vi.unstubAllGlobals();
+    });
+
+    it("reload() refreshes agents_md when AGENT.md content changes", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "kael-ctx-refresh-"));
+      writeFileSync(join(dir, "AGENT.md"), "# Version 1", "utf-8");
+
+      const { agent } = await createTestAgent(app, { name: "kael-ctx-refresh" });
+      await insertKaelConfig(agent.uuid);
+
+      const runtime = createKaelRuntime(
+        app.db,
+        ENCRYPTION_KEY,
+        KAEL_ENDPOINT,
+        KAEL_API_KEY,
+        SERVER_URL,
+        createMockLogger(),
+        dir,
+      );
+      await runtime.reload();
+
+      // Update AGENT.md content
+      writeFileSync(join(dir, "AGENT.md"), "# Version 2 — updated instructions", "utf-8");
+      await runtime.reload();
+
+      const chatId = `chat-ctx-refresh-${Date.now()}`;
+      const msgId = `msg-ctx-refresh-${Date.now()}`;
+      await createChat(chatId);
+      await insertMessage({ id: msgId, chatId, senderId: "s", content: "refresh" });
+      await insertInboxEntry({ inboxId: agent.inboxId, messageId: msgId, chatId });
+
+      const mockFetch = vi.fn().mockResolvedValue({ ok: true, text: () => Promise.resolve("") });
+      vi.stubGlobal("fetch", mockFetch);
+
+      await runtime.processOutbound();
+
+      const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+      const body = JSON.parse(init.body as string) as Record<string, unknown>;
+      expect(body.agents_md).toBe("# Version 2 — updated instructions");
+
+      vi.unstubAllGlobals();
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    it("reload() clears agents_md when AGENT.md is deleted between reloads", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "kael-ctx-delete-"));
+      const agentMdPath = join(dir, "AGENT.md");
+      writeFileSync(agentMdPath, "# Will be deleted", "utf-8");
+
+      const { agent } = await createTestAgent(app, { name: "kael-ctx-delete" });
+      await insertKaelConfig(agent.uuid);
+
+      const runtime = createKaelRuntime(
+        app.db,
+        ENCRYPTION_KEY,
+        KAEL_ENDPOINT,
+        KAEL_API_KEY,
+        SERVER_URL,
+        createMockLogger(),
+        dir,
+      );
+      await runtime.reload();
+
+      // Delete AGENT.md and reload
+      rmSync(agentMdPath);
+      await runtime.reload();
+
+      const chatId = `chat-ctx-delete-${Date.now()}`;
+      const msgId = `msg-ctx-delete-${Date.now()}`;
+      await createChat(chatId);
+      await insertMessage({ id: msgId, chatId, senderId: "s", content: "deleted" });
+      await insertInboxEntry({ inboxId: agent.inboxId, messageId: msgId, chatId });
+
+      const mockFetch = vi.fn().mockResolvedValue({ ok: true, text: () => Promise.resolve("") });
+      vi.stubGlobal("fetch", mockFetch);
+
+      await runtime.processOutbound();
+
+      const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+      const body = JSON.parse(init.body as string) as Record<string, unknown>;
+      expect(body.agents_md).toBeUndefined();
+
+      vi.unstubAllGlobals();
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    it("reload() handles readFileSync error gracefully (logs warning, clears agentsMd)", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "kael-ctx-readerr-"));
+      const agentMdPath = join(dir, "AGENT.md");
+      writeFileSync(agentMdPath, "# Readable initially", "utf-8");
+
+      const { agent } = await createTestAgent(app, { name: "kael-ctx-readerr" });
+      await insertKaelConfig(agent.uuid);
+
+      const log = createMockLogger();
+      const runtime = createKaelRuntime(app.db, ENCRYPTION_KEY, KAEL_ENDPOINT, KAEL_API_KEY, SERVER_URL, log, dir);
+
+      // First reload succeeds
+      await runtime.reload();
+
+      // Make file unreadable and reload — should catch error, clear agentsMd
+      chmodSync(agentMdPath, 0o000);
+      await runtime.reload();
+
+      expect(log.warn).toHaveBeenCalled();
+
+      // Payload should not include agents_md
+      const chatId = `chat-ctx-readerr-${Date.now()}`;
+      const msgId = `msg-ctx-readerr-${Date.now()}`;
+      await createChat(chatId);
+      await insertMessage({ id: msgId, chatId, senderId: "s", content: "err" });
+      await insertInboxEntry({ inboxId: agent.inboxId, messageId: msgId, chatId });
+
+      const mockFetch = vi.fn().mockResolvedValue({ ok: true, text: () => Promise.resolve("") });
+      vi.stubGlobal("fetch", mockFetch);
+
+      await runtime.processOutbound();
+
+      expect(mockFetch).toHaveBeenCalledOnce();
+      const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+      const body = JSON.parse(init.body as string) as Record<string, unknown>;
+      expect(body.agents_md).toBeUndefined();
+
+      vi.unstubAllGlobals();
+      // Restore permission before cleanup
+      chmodSync(agentMdPath, 0o644);
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    it("payload omits agents_md when AGENT.md is empty (falsy check)", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "kael-ctx-empty-file-"));
+      writeFileSync(join(dir, "AGENT.md"), "", "utf-8");
+
+      const { agent } = await createTestAgent(app, { name: "kael-ctx-empty-file" });
+      await insertKaelConfig(agent.uuid);
+
+      const runtime = createKaelRuntime(
+        app.db,
+        ENCRYPTION_KEY,
+        KAEL_ENDPOINT,
+        KAEL_API_KEY,
+        SERVER_URL,
+        createMockLogger(),
+        dir,
+      );
+      await runtime.reload();
+
+      const chatId = `chat-ctx-emptyfile-${Date.now()}`;
+      const msgId = `msg-ctx-emptyfile-${Date.now()}`;
+      await createChat(chatId);
+      await insertMessage({ id: msgId, chatId, senderId: "s", content: "empty file" });
+      await insertInboxEntry({ inboxId: agent.inboxId, messageId: msgId, chatId });
+
+      const mockFetch = vi.fn().mockResolvedValue({ ok: true, text: () => Promise.resolve("") });
+      vi.stubGlobal("fetch", mockFetch);
+
+      await runtime.processOutbound();
+
+      expect(mockFetch).toHaveBeenCalledOnce();
+      const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+      const body = JSON.parse(init.body as string) as Record<string, unknown>;
+      // Empty string is falsy, so agents_md should not be included
+      expect(body.agents_md).toBeUndefined();
+
+      vi.unstubAllGlobals();
+      rmSync(dir, { recursive: true, force: true });
     });
   });
 });

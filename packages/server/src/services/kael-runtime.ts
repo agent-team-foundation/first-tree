@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { and, eq, sql } from "drizzle-orm";
 import type { FastifyBaseLogger } from "fastify";
 import type { Database } from "../db/connection.js";
@@ -36,10 +38,12 @@ export function createKaelRuntime(
   kaelApiKey: string | undefined,
   serverUrl: string,
   log: FastifyBaseLogger,
+  contextTreeDir?: string,
 ): KaelRuntime {
   const agentConfigs = new Map<string, KaelAgentConfig>();
   const inboxToConfig = new Map<string, KaelAgentConfig>();
   let aborted = false;
+  let agentsMd: string | null = null;
 
   return {
     async reload(): Promise<void> {
@@ -117,6 +121,22 @@ export function createKaelRuntime(
           log.info({ agentId }, "Removed inactive Kael adapter config");
         }
       }
+
+      // Read AGENT.md from Context Tree clone (shared with client syncContextTree)
+      if (contextTreeDir) {
+        const agentMdPath = join(contextTreeDir, "AGENT.md");
+        if (existsSync(agentMdPath)) {
+          try {
+            agentsMd = readFileSync(agentMdPath, "utf-8");
+            log.info("Loaded AGENT.md from Context Tree (%d chars)", agentsMd.length);
+          } catch (err) {
+            log.warn({ err }, "Failed to read AGENT.md from Context Tree");
+            agentsMd = null;
+          }
+        } else {
+          agentsMd = null;
+        }
+      }
     },
 
     async processOutbound(): Promise<{ sent: number; errors: number }> {
@@ -174,7 +194,7 @@ export function createKaelRuntime(
             // Resolve message content to string
             const messageContent = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
 
-            const payload = {
+            const payload: Record<string, unknown> = {
               hub_chat_id: entry.chat_id ?? msg.chatId,
               hub_agent_id: config.agentId,
               hub_server_url: serverUrl,
@@ -185,6 +205,9 @@ export function createKaelRuntime(
               sender_id: msg.senderId,
               format: msg.format,
             };
+            if (agentsMd) {
+              payload.agents_md = agentsMd;
+            }
 
             const response = await fetch(`${kaelEndpoint}/api/v1/hub/messages`, {
               method: "POST",
