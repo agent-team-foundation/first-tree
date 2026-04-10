@@ -3,6 +3,7 @@ export { adapterChatMappings } from "./adapter-chat-mappings.js";
 export { adapterConfigs } from "./adapter-configs.js";
 export { adapterMessageReferences } from "./adapter-message-references.js";
 export { adminUsers } from "./admin-users.js";
+export { agentChatSessions } from "./agent-chat-sessions.js";
 export { agentPresence } from "./agent-presence.js";
 export { agentTokens } from "./agent-tokens.js";
 export { agents } from "./agents.js";

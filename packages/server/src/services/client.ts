@@ -99,9 +99,8 @@ export async function cleanupStaleClients(db: Database, staleSeconds = 60): Prom
     await db.execute(sql`
       UPDATE agent_presence SET
         status = 'offline',
-        runtime_state = NULL, runtime_description = NULL,
+        runtime_state = NULL,
         active_sessions = NULL, total_sessions = NULL,
-        error_message = NULL, task_ref = NULL,
         runtime_updated_at = NOW()
       WHERE client_id = ANY(${staleIds})
     `);

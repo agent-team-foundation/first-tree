@@ -24,16 +24,10 @@ export const agentPresence = pgTable("agent_presence", {
   runtimeVersion: text("runtime_version"),
   /** idle | working | error. NULL = agent not running. THE authority for whether agent is running. */
   runtimeState: text("runtime_state"),
-  /** Human-readable description of current work */
-  runtimeDescription: text("runtime_description"),
-  /** Number of active sessions */
+  /** Number of active sessions (materialized from agent_chat_sessions) */
   activeSessions: integer("active_sessions"),
-  /** Total sessions (including suspended/evicted) */
+  /** Total sessions including suspended/evicted (materialized from agent_chat_sessions) */
   totalSessions: integer("total_sessions"),
-  /** Error summary when runtime_state = "error" */
-  errorMessage: text("error_message"),
-  /** External task reference (e.g. GitHub Issue URL) */
-  taskRef: text("task_ref"),
   /** When runtime_state was last updated */
   runtimeUpdatedAt: timestamp("runtime_updated_at", { withTimezone: true }),
 });

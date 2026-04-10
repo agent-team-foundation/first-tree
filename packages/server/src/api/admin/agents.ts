@@ -44,9 +44,7 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
         clientId: a.clientId ?? null,
         runtimeType: a.runtimeType ?? null,
         runtimeState: a.runtimeState ?? null,
-        runtimeDescription: a.runtimeDescription ?? null,
         activeSessions: a.activeSessions ?? null,
-        errorMessage: a.errorMessage ?? null,
       })),
       nextCursor: result.nextCursor,
     };

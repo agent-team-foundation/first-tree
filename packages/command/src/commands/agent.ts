@@ -402,10 +402,8 @@ export function registerAgentCommands(program: Command): void {
             clientId: string | null;
             runtimeType: string | null;
             runtimeState: string | null;
-            runtimeDescription: string | null;
             activeSessions: number | null;
             totalSessions: number | null;
-            errorMessage: string | null;
           }>;
         };
 
@@ -418,14 +416,8 @@ export function registerAgentCommands(program: Command): void {
           process.stderr.write(`\n  Agent: ${agent.agentId}\n`);
           process.stderr.write(`  Runtime: ${agent.runtimeType ?? "—"}\n`);
           process.stderr.write(`  State: ${agent.runtimeState ?? "—"}\n`);
-          if (agent.runtimeDescription) {
-            process.stderr.write(`  Description: ${agent.runtimeDescription}\n`);
-          }
           if (agent.activeSessions !== null) {
             process.stderr.write(`  Sessions: ${agent.activeSessions} active / ${agent.totalSessions ?? 0} total\n`);
-          }
-          if (agent.errorMessage) {
-            process.stderr.write(`  Error: ${agent.errorMessage}\n`);
           }
           if (agent.clientId) {
             process.stderr.write(`  Client: ${agent.clientId}\n`);
@@ -442,14 +434,13 @@ export function registerAgentCommands(program: Command): void {
         );
 
         if (data.agents.length > 0) {
-          const header = `  ${"AGENT".padEnd(18)} ${"RUNTIME".padEnd(14)} ${"STATE".padEnd(10)} ${"SESSIONS".padEnd(10)} DESCRIPTION`;
+          const header = `  ${"AGENT".padEnd(18)} ${"RUNTIME".padEnd(14)} ${"STATE".padEnd(10)} SESSIONS`;
           process.stderr.write(`${header}\n`);
           process.stderr.write(`  ${"─".repeat(header.length - 2)}\n`);
           for (const a of data.agents) {
             const sessions = a.activeSessions !== null ? `${a.activeSessions}/${a.totalSessions ?? 0}` : "—";
-            const desc = a.runtimeDescription ?? (a.errorMessage ? `Error: ${a.errorMessage.slice(0, 40)}` : "—");
             process.stderr.write(
-              `  ${(a.agentId ?? "").padEnd(18)} ${(a.runtimeType ?? "—").padEnd(14)} ${(a.runtimeState ?? "—").padEnd(10)} ${sessions.padEnd(10)} ${desc}\n`,
+              `  ${(a.agentId ?? "").padEnd(18)} ${(a.runtimeType ?? "—").padEnd(14)} ${(a.runtimeState ?? "—").padEnd(10)} ${sessions}\n`,
             );
           }
           process.stderr.write("\n");

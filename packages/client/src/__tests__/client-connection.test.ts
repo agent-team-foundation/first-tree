@@ -294,6 +294,49 @@ describe("ClientConnection: reconnect triggers rebind", () => {
   });
 });
 
+describe("ClientConnection: reportSessionState", () => {
+  it("sends correctly formatted session:state WS message", async () => {
+    const conn = createConn();
+    const ws = await connectAndRegister(conn);
+
+    // Bind an agent first
+    const bindPromise = conn.bindAgent("aghub_state", "claude-code");
+    await vi.waitFor(() => {
+      expect(ws.sent.length).toBeGreaterThanOrEqual(2);
+    });
+    const bindMsg = parseSent(ws, 1);
+    ws.receiveMessage({
+      type: "agent:bound",
+      ref: bindMsg.ref,
+      agentId: "agent-state-1",
+      agentType: "claude-code",
+    });
+    await bindPromise;
+
+    // Report session state
+    conn.reportSessionState("agent-state-1", "chat-123", "active");
+
+    await vi.waitFor(() => {
+      expect(ws.sent.length).toBeGreaterThanOrEqual(3);
+    });
+
+    const stateMsg = parseSent(ws, 2);
+    expect(stateMsg.type).toBe("session:state");
+    expect(stateMsg.agentId).toBe("agent-state-1");
+    expect(stateMsg.chatId).toBe("chat-123");
+    expect(stateMsg.state).toBe("active");
+
+    await conn.disconnect();
+  });
+
+  it("silently drops message when WS is not open", async () => {
+    const conn = createConn();
+    // Don't connect — WS is null
+    // Should not throw
+    conn.reportSessionState("agent-1", "chat-1", "active");
+  });
+});
+
 describe("ClientConnection: connect() fast-fail", () => {
   it("rejects if WS closes before registration", async () => {
     const conn = createConn();

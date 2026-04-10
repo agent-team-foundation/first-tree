@@ -1,4 +1,4 @@
-import type { InboxEntryWithMessage, RuntimeState } from "@agent-team-foundation/first-tree-hub-shared";
+import type { InboxEntryWithMessage, SessionState } from "@agent-team-foundation/first-tree-hub-shared";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import type { SessionConfig } from "./config.js";
 import { Deduplicator } from "./deduplicator.js";
@@ -12,13 +12,11 @@ import type {
 } from "./handler.js";
 import { SessionRegistry } from "./session-registry.js";
 
-type SessionStatus = "active" | "suspended" | "evicted";
-
 type SessionEntry = {
   chatId: string;
   claudeSessionId: string;
   handler: AgentHandler;
-  status: SessionStatus;
+  status: SessionState;
   lastActivity: number;
   /** In-flight suspend promise; awaited before resume to avoid race conditions. */
   suspending: Promise<void> | null;
@@ -38,8 +36,8 @@ type SessionManagerConfig = {
   sdk: FirstTreeHubSDK;
   log: (msg: string) => void;
   registryPath?: string;
-  /** M1: callback when runtime state should change */
-  onStateChange?: (state: RuntimeState, description?: string) => void;
+  /** M1: callback when a session state changes (per-session granularity) */
+  onStateChange?: (chatId: string, state: SessionState) => void;
 };
 
 /**
@@ -62,9 +60,9 @@ export class SessionManager {
   private readonly deduplicator = new Deduplicator(1000);
   private readonly registry: SessionRegistry | null;
   private readonly pendingQueue: PendingMessage[] = [];
+  private readonly lastReportedStates = new Map<string, SessionState>();
   private idleTimer: ReturnType<typeof setInterval> | null = null;
   private _activeCount = 0;
-  private _lastReportedState: RuntimeState | null = null;
 
   constructor(config: SessionManagerConfig) {
     this.config = config;
@@ -113,12 +111,20 @@ export class SessionManager {
     );
     await Promise.allSettled(shutdowns);
 
+    // Report active sessions as suspended before clearing
+    for (const [chatId, session] of this.sessions) {
+      if (session.status === "active") {
+        this.notifySessionState(chatId, "suspended");
+      }
+    }
+
     // Persist final state
     this.persistRegistry();
     this.registry?.dispose();
 
     this.sessions.clear();
     this.evictedMappings.clear();
+    this.lastReportedStates.clear();
     this._activeCount = 0;
   }
 
@@ -128,6 +134,14 @@ export class SessionManager {
 
   get totalCount(): number {
     return this.sessions.size;
+  }
+
+  /** Return all current session states for full state sync after reconnect. */
+  getSessionStates(): Array<{ chatId: string; state: SessionState }> {
+    return [...this.sessions.entries()].map(([chatId, entry]) => ({
+      chatId,
+      state: entry.status,
+    }));
   }
 
   // ---- Internal -----------------------------------------------------------
@@ -193,14 +207,13 @@ export class SessionManager {
         this.config.log(`Session ${chatId}: created (${sessionId})`);
       }
       this.persistRegistry();
-      this.notifyStateChange();
+      this.notifySessionState(chatId, "active");
     } catch (err) {
       this.config.log(
         `Session ${chatId}: ${evicted ? "resume" : "start"} failed: ${err instanceof Error ? err.message : String(err)}`,
       );
       this.sessions.delete(chatId);
       this._activeCount--;
-      this.notifyStateChange();
     }
   }
 
@@ -222,12 +235,11 @@ export class SessionManager {
       await entry.handler.resume(message, entry.claudeSessionId, ctx);
       this.config.log(`Session ${entry.chatId}: resumed (${entry.claudeSessionId})`);
       this.persistRegistry();
-      this.notifyStateChange();
+      this.notifySessionState(entry.chatId, "active");
     } catch (err) {
       this.config.log(`Session ${entry.chatId}: resume failed: ${err instanceof Error ? err.message : String(err)}`);
       entry.status = "suspended";
       this._activeCount--;
-      this.notifyStateChange();
     }
   }
 
@@ -275,7 +287,7 @@ export class SessionManager {
         entry.suspending = null;
       });
     this.persistRegistry();
-    this.notifyStateChange();
+    this.notifySessionState(entry.chatId, "suspended");
 
     // Drain pending queue
     this.drainPendingQueue();
@@ -326,6 +338,7 @@ export class SessionManager {
         candidate.session.handler.shutdown().catch(() => {});
       }
       candidate.session.status = "evicted";
+      this.notifySessionState(candidate.key, "evicted");
       this.sessions.delete(candidate.key);
       this.persistRegistry();
     }
@@ -353,12 +366,12 @@ export class SessionManager {
     }
   }
 
-  private notifyStateChange(): void {
+  /** Notify per-session state change to the server via callback. Deduplicates redundant reports. */
+  private notifySessionState(chatId: string, state: SessionState): void {
     if (!this.config.onStateChange) return;
-    const state: RuntimeState = this._activeCount > 0 ? "working" : "idle";
-    if (state === this._lastReportedState) return;
-    this._lastReportedState = state;
-    this.config.onStateChange(state);
+    if (this.lastReportedStates.get(chatId) === state) return;
+    this.lastReportedStates.set(chatId, state);
+    this.config.onStateChange(chatId, state);
   }
 
   private buildSessionContext(chatId: string): SessionContext {

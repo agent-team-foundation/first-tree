@@ -111,14 +111,13 @@ export function ActivityPage() {
                   <TableHead>Runtime</TableHead>
                   <TableHead>State</TableHead>
                   <TableHead>Sessions</TableHead>
-                  <TableHead>Description</TableHead>
                   <TableHead />
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {(!activity?.agents || activity.agents.length === 0) && (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+                    <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
                       No running agents
                     </TableCell>
                   </TableRow>
@@ -132,9 +131,6 @@ export function ActivityPage() {
                     </TableCell>
                     <TableCell>
                       {agent.activeSessions !== null ? `${agent.activeSessions}/${agent.totalSessions ?? 0}` : "—"}
-                    </TableCell>
-                    <TableCell className="max-w-[200px] truncate">
-                      {agent.runtimeDescription ?? agent.errorMessage ?? "—"}
                     </TableCell>
                     <TableCell>
                       {agent.runtimeState === "error" && (
@@ -175,7 +171,7 @@ export function ActivityPage() {
               <TableBody>
                 {(!clients || clients.length === 0) && (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+                    <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
                       No connected clients
                     </TableCell>
                   </TableRow>
