@@ -14,8 +14,6 @@ Bindings are stored in:
 
 - source/workspace roots: `.first-tree/source.json` and `.first-tree/workspace.json`
 - tree repos: `.first-tree/tree.json` and `.first-tree/bindings/<source-id>.json`
-- tree repos also keep hidden git-backed codebase mirrors under
-  `.first-tree/submodules/`
 
 That replaces the old one-source-at-a-time mental model that depended too
 heavily on one mutable bootstrap file.
@@ -33,8 +31,8 @@ heavily on one mutable bootstrap file.
 - keep `.agents/skills/first-tree/` and `.claude/skills/first-tree/` as alias
   symlinks in this source repo
 - keep source/workspace roots free of tree content
-- keep tree-side codebase mirrors hidden under `.first-tree/submodules/` so
-  validators never treat them as visible tree domains
+- keep tree-side metadata limited to `.first-tree/tree.json` and
+  `.first-tree/bindings/`
 - keep shared-tree behavior expressed through bindings, not heuristics alone
 - update docs, code, and tests together whenever the binding schema changes
 

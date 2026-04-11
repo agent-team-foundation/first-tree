@@ -21,8 +21,8 @@ workspace repo, or non-git workspace folder.
 - `NODE.md`, `members/`, and tree-scoped `AGENTS.md` / `CLAUDE.md` belong only
   in the tree repo.
 - The tree repo keeps its own installed skill under `.agents/skills/first-tree/`
-  and `.claude/skills/first-tree`, plus tree metadata under `.first-tree/tree.json`,
-  `.first-tree/bindings/`, and hidden codebase mirrors under `.first-tree/submodules/`.
+  and `.claude/skills/first-tree`, plus tree metadata under `.first-tree/tree.json`
+  and `.first-tree/bindings/`.
 
 ## Binding Modes
 
@@ -56,9 +56,6 @@ workspace repo, or non-git workspace folder.
     tree.json
     bindings/
       <source-id>.json
-    submodules/
-      repos/
-      workspaces/
     bootstrap.json          # legacy compatibility
   NODE.md
   AGENTS.md
@@ -80,9 +77,9 @@ When an agent is asked to install `first-tree`:
 Do not recreate a new sibling tree repo when the user already has a shared tree
 they want to keep using.
 
-Whenever a git-backed source repo is bound, also keep its checkout mirrored in
-the tree repo under `.first-tree/submodules/`. These hidden submodules are for
-tree-side code/context access and should not become visible Context Tree domains.
+Whenever a git-backed source/workspace root is bound, keep the binding metadata
+pointing at the tree checkout and published tree URL. Do not create hidden
+codebase mirrors in the tree repo by default.
 
 ## Workspace Rule
 

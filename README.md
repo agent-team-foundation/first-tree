@@ -78,7 +78,6 @@ The CLI:
 - installs the bundled `first-tree` skill in that tree repo if it is missing
 - scaffolds the dedicated tree repo there
 - writes binding metadata locally and in the tree repo
-- syncs the bound codebase repo into the tree repo under `.first-tree/submodules/`
 
 ### Existing Shared Tree
 
@@ -97,7 +96,7 @@ first-tree init --tree-path ../org-context --tree-mode shared
 
 If the tree is remote-only, pass `--tree-url`; `bind` / `init` will clone a
 local checkout, ensure the tree repo has the bundled skill installed, and then
-write the binding metadata plus the hidden tree-side codebase submodule.
+write the binding metadata in both locations.
 
 ### Workspace Root + Shared Tree
 
@@ -116,8 +115,7 @@ first-tree init --scope workspace --sync-members
 
 The workspace root gets its own local skill integration plus
 `.first-tree/workspace.json`. Each discovered child repo is then bound as a
-`workspace-member` to the same tree via `first-tree workspace sync`, and the
-tree repo keeps each bound child repo under `.first-tree/submodules/`.
+`workspace-member` to the same tree via `first-tree workspace sync`.
 
 ### Explicit Tree Bootstrap
 
@@ -160,7 +158,6 @@ folder before modifying anything. It reports:
     tree.json                # .first-tree/tree.json
     bindings/                # .first-tree/bindings/
       <source-id>.json
-    submodules/              # hidden codebase-repo mirrors tracked as git submodules
     bootstrap.json           # legacy compatibility for older publish flows
   NODE.md
   AGENTS.md
@@ -173,8 +170,9 @@ folder before modifying anything. It reports:
 The source/workspace root is not the tree. It should never contain `NODE.md`,
 `members/`, or tree-scoped `AGENTS.md` / `CLAUDE.md`.
 
-The tree repo keeps any bound codebase repos under `.first-tree/submodules/`
-so they do not become visible tree domains during validation.
+The tree repo stores binding metadata in `.first-tree/bindings/`, while
+source/workspace roots keep local checkout guidance in `.first-tree/local-tree.json`
+plus their own source/workspace binding state.
 
 ## Commands
 

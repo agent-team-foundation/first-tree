@@ -7,11 +7,12 @@ import {
   readSourceState,
   readTreeBinding,
   readTreeState,
+  treeBindingPath,
 } from "#engine/runtime/binding-state.js";
 import { makeGitRepo, makeSourceRepo, makeSourceSkill, makeTreeMetadata, useTmpDir } from "./helpers.js";
 
 describe("runBind", () => {
-  it("installs the tree-repo skill and adds a codebase submodule when binding", () => {
+  it("installs the tree-repo skill without creating a codebase submodule", () => {
     const sandbox = useTmpDir();
     const sourceBundle = useTmpDir();
     const sourceRoot = join(sandbox.path, "product-repo");
@@ -30,6 +31,7 @@ describe("runBind", () => {
     });
 
     const sourceState = readSourceState(sourceRoot);
+    const treeBinding = readTreeBinding(treeRoot, sourceState!.sourceId);
     expect(result).toBe(0);
     expect(sourceState?.bindingMode).toBe("shared-source");
     expect(readTreeState(treeRoot)?.treeRepoName).toBe("org-context");
@@ -39,14 +41,12 @@ describe("runBind", () => {
     expect(existsSync(join(treeRoot, ".claude", "skills", "first-tree", "SKILL.md"))).toBe(
       true,
     );
-    expect(readTreeBinding(treeRoot, sourceState!.sourceId)?.submodulePath).toBe(
-      ".first-tree/submodules/repos/product-repo",
-    );
-    expect(readFileSync(join(treeRoot, ".gitmodules"), "utf-8")).toContain(
-      ".first-tree/submodules/repos/product-repo",
-    );
-    expect(readFileSync(join(treeRoot, ".gitmodules"), "utf-8")).toContain(
-      "url = ../product-repo",
-    );
+    expect(treeBinding?.sourceName).toBe("product-repo");
+    expect(existsSync(join(treeRoot, ".gitmodules"))).toBe(false);
+    expect(
+      JSON.parse(
+        readFileSync(treeBindingPath(treeRoot, sourceState!.sourceId), "utf-8"),
+      ),
+    ).not.toHaveProperty("submodulePath");
   });
 });

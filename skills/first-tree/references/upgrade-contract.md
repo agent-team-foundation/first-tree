@@ -51,9 +51,6 @@ In a tree repo, `first-tree init tree` produces:
   tree.json
   bindings/
     <source-id>.json
-  submodules/
-    repos/
-    workspaces/
   bootstrap.json          # legacy compatibility
 NODE.md
 AGENTS.md
@@ -83,7 +80,6 @@ metadata such as `.first-tree/VERSION` plus the installed tree-repo skill.
 - user-authored content outside the managed framework markers
 - source/workspace binding metadata
 - local checkout guidance in `.first-tree/local-tree.json`
-- hidden tree-side codebase submodule paths in `.first-tree/submodules/`
 
 ## Command Intent
 
@@ -114,5 +110,5 @@ metadata such as `.first-tree/VERSION` plus the installed tree-repo skill.
 - workspace child repos should share one tree, not create many parallel trees
 - shared tree bindings should live in `.first-tree/bindings/`, not in a single
   overwrite-prone bootstrap file
-- tree-side codebase submodules should live under `.first-tree/submodules/` so
-  validators do not treat them as visible tree domains
+- source/workspace roots should keep referencing the tree through binding
+  metadata and `.first-tree/local-tree.json`

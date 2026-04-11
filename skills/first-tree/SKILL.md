@@ -76,8 +76,7 @@ Default onboarding workflow:
    child repos bind to the same shared tree.
 
 During `bind` / `init`, the CLI also ensures the tree repo has the bundled
-`first-tree` skill installed and mirrors each git-backed bound codebase under
-`.first-tree/submodules/` in the tree repo.
+`first-tree` skill installed and refreshes binding metadata in both locations.
 
 ## CLI Commands
 

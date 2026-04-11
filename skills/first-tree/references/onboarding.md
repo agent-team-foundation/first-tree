@@ -72,7 +72,6 @@ The CLI will:
 - install the bundled `first-tree` skill in that tree repo if it is missing
 - scaffold the tree repo there
 - write binding metadata in both the source repo and the tree repo
-- sync the bound codebase repo into the tree repo under `.first-tree/submodules/`
 
 ### Case B: Single Repo + Existing Shared Tree
 
@@ -102,7 +101,6 @@ first-tree bind --tree-url git@github.com:acme/org-context.git --tree-mode share
 - write `.first-tree/source.json`
 - refresh `.first-tree/local-tree.json`
 - write `.first-tree/tree.json` and `.first-tree/bindings/<source-id>.json`
-- sync the bound codebase repo into the tree repo under `.first-tree/submodules/`
 
 ### Case C: Workspace Root + Shared Tree
 
@@ -121,8 +119,7 @@ first-tree init --scope workspace --tree-path ../org-context --tree-mode shared 
 
 The workspace root gets local integration plus `.first-tree/workspace.json`.
 Then `first-tree workspace sync` binds every discovered child repo as a
-`workspace-member` to that same shared tree and syncs each bound child repo
-into the tree repo under `.first-tree/submodules/`.
+`workspace-member` to that same shared tree.
 
 ### Case D: Explicit Tree Bootstrap
 

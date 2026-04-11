@@ -81,7 +81,6 @@ export interface TreeBindingState {
   sourceId: string;
   sourceName: string;
   sourceRootPath: string;
-  submodulePath?: string;
   treeMode: TreeMode;
   treeRepoName: string;
   workspaceId?: string;
@@ -347,9 +346,6 @@ export function readTreeBinding(
   if (parsed.remoteUrl !== undefined && typeof parsed.remoteUrl !== "string") {
     return null;
   }
-  if (parsed.submodulePath !== undefined && typeof parsed.submodulePath !== "string") {
-    return null;
-  }
   if (parsed.workspaceId !== undefined && typeof parsed.workspaceId !== "string") {
     return null;
   }
@@ -370,7 +366,6 @@ export function readTreeBinding(
     sourceId: parsed.sourceId,
     sourceName: parsed.sourceName,
     sourceRootPath: parsed.sourceRootPath,
-    submodulePath: parsed.submodulePath,
     treeMode: parsed.treeMode,
     treeRepoName: parsed.treeRepoName,
     workspaceId: parsed.workspaceId,
