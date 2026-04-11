@@ -1713,9 +1713,15 @@
           "method": "btree",
           "with": {}
         },
-        "idx_tasks_created_at": {
-          "name": "idx_tasks_created_at",
+        "idx_tasks_org_created_at": {
+          "name": "idx_tasks_org_created_at",
           "columns": [
+            {
+              "expression": "organization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
             {
               "expression": "created_at",
               "isExpression": false,

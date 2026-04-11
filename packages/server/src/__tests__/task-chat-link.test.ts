@@ -42,7 +42,11 @@ describe("Task ↔ Chat linking", () => {
     expect(afterRelink).toHaveLength(1);
 
     // Unlink
-    await taskService.unlinkChatFromTask(app.db, task.id, chat.id);
+    await taskService.unlinkChatFromTask(app.db, task.id, chat.id, {
+      type: "agent",
+      agentId: a.uuid,
+      organizationId: a.organizationId,
+    });
     const afterUnlink = await app.db.select().from(taskChats).where(eq(taskChats.taskId, task.id));
     expect(afterUnlink).toHaveLength(0);
   });
@@ -92,6 +96,58 @@ describe("Task ↔ Chat linking", () => {
       { type: "agent", agentId: a.uuid, organizationId: a.organizationId },
       { title: "No link", organizationId: a.organizationId, assigneeAgentId: a.uuid },
     );
-    await expect(taskService.unlinkChatFromTask(app.db, task.id, "nonexistent")).rejects.toThrow(/not linked/i);
+    await expect(
+      taskService.unlinkChatFromTask(app.db, task.id, "nonexistent", {
+        type: "agent",
+        agentId: a.uuid,
+        organizationId: a.organizationId,
+      }),
+    ).rejects.toThrow(/not linked/i);
+  });
+
+  it("rejects link from an agent who is neither creator, assignee, nor chat participant", async () => {
+    const app = getApp();
+    const { agent: creator } = await createTestAgent(app, { name: "auth-creator" });
+    const { agent: assignee } = await createTestAgent(app, { name: "auth-assignee" });
+    const { agent: stranger } = await createTestAgent(app, { name: "auth-stranger" });
+
+    const chat = await findOrCreateDirectChat(app.db, creator.uuid, assignee.uuid);
+    const { task } = await taskService.createTask(
+      app.db,
+      { type: "agent", agentId: creator.uuid, organizationId: creator.organizationId },
+      { title: "Locked", organizationId: creator.organizationId, assigneeAgentId: assignee.uuid },
+    );
+
+    await expect(
+      taskService.linkChatToTask(app.db, task.id, chat.id, {
+        type: "agent",
+        agentId: stranger.uuid,
+        organizationId: stranger.organizationId,
+      }),
+    ).rejects.toThrow(/creator or assignee/i);
+  });
+
+  it("rejects link when the agent is creator/assignee but not a chat participant", async () => {
+    const app = getApp();
+    const { agent: creator } = await createTestAgent(app, { name: "np-creator" });
+    const { agent: assignee } = await createTestAgent(app, { name: "np-assignee" });
+    const { agent: other1 } = await createTestAgent(app, { name: "np-other1" });
+    const { agent: other2 } = await createTestAgent(app, { name: "np-other2" });
+
+    // Chat exists between other1/other2 — creator/assignee are not participants
+    const foreignChat = await findOrCreateDirectChat(app.db, other1.uuid, other2.uuid);
+    const { task } = await taskService.createTask(
+      app.db,
+      { type: "agent", agentId: creator.uuid, organizationId: creator.organizationId },
+      { title: "NP", organizationId: creator.organizationId, assigneeAgentId: assignee.uuid },
+    );
+
+    await expect(
+      taskService.linkChatToTask(app.db, task.id, foreignChat.id, {
+        type: "agent",
+        agentId: creator.uuid,
+        organizationId: creator.organizationId,
+      }),
+    ).rejects.toThrow(/participant/i);
   });
 });

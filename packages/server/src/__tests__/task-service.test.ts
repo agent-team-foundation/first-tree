@@ -71,7 +71,7 @@ describe("Task service", () => {
     expect(notification?.recipients.length ?? 0).toBeGreaterThan(0);
 
     // System-tasks agent was provisioned for this org
-    const [systemAgent] = await app.db.select().from(agents).where(eq(agents.name, "system-tasks")).limit(1);
+    const [systemAgent] = await app.db.select().from(agents).where(eq(agents.name, "__hub_system_tasks")).limit(1);
     expect(systemAgent).toBeDefined();
     expect(systemAgent?.organizationId).toBe(creator.organizationId);
 
@@ -287,6 +287,22 @@ describe("Task service", () => {
     expect(notification).toBeDefined();
   });
 
+  it("blocks admin from setting status=assigned without an assignee", async () => {
+    const app = getApp();
+    const { creator } = await seedTwoAgents(app);
+    const { task } = await taskService.createTask(
+      app.db,
+      { type: "agent", agentId: creator.uuid, organizationId: creator.organizationId },
+      { title: "Unassigned", organizationId: creator.organizationId },
+    );
+    expect(task.status).toBe(TASK_STATUSES.PENDING);
+    expect(task.assigneeAgentId).toBeNull();
+
+    await expect(
+      taskService.adminUpdateTask(app.db, task.id, { type: "admin", adminId: "admin-1" }, { status: "assigned" }),
+    ).rejects.toThrow(/without an assignee/i);
+  });
+
   it("blocks admin from reassigning a non-pending task", async () => {
     const app = getApp();
     const { creator, assignee } = await seedTwoAgents(app);
@@ -316,7 +332,7 @@ describe("Task service", () => {
     const id1 = await taskService.ensureSystemTasksAgent(app.db, creator.organizationId);
     const id2 = await taskService.ensureSystemTasksAgent(app.db, creator.organizationId);
     expect(id1).toBe(id2);
-    const all = await app.db.select().from(agents).where(eq(agents.name, "system-tasks"));
+    const all = await app.db.select().from(agents).where(eq(agents.name, "__hub_system_tasks"));
     expect(all).toHaveLength(1);
     expect(all[0]?.organizationId).toBe(creator.organizationId);
   });

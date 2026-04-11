@@ -34,5 +34,5 @@ ALTER TABLE "task_chats" ADD CONSTRAINT "task_chats_linked_by_agent_id_agents_uu
 CREATE INDEX "idx_tasks_org_status" ON "tasks" USING btree ("organization_id","status");--> statement-breakpoint
 CREATE INDEX "idx_tasks_assignee_status" ON "tasks" USING btree ("assignee_agent_id","status");--> statement-breakpoint
 CREATE INDEX "idx_tasks_origin_ref" ON "tasks" USING btree ("origin_ref");--> statement-breakpoint
-CREATE INDEX "idx_tasks_created_at" ON "tasks" USING btree ("created_at");--> statement-breakpoint
+CREATE INDEX "idx_tasks_org_created_at" ON "tasks" USING btree ("organization_id","created_at");--> statement-breakpoint
 CREATE INDEX "idx_task_chats_chat" ON "task_chats" USING btree ("chat_id");

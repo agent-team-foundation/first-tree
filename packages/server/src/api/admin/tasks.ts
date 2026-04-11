@@ -5,12 +5,18 @@ import {
 } from "@agent-team-foundation/first-tree-hub-shared";
 import type { FastifyInstance } from "fastify";
 import { requireAdmin } from "../../middleware/require-identity.js";
-import { notifyRecipients } from "../../services/notifier.js";
+import type { SendMessageResult } from "../../services/message.js";
+import { type Notifier, notifyRecipients } from "../../services/notifier.js";
 import { resolveDefaultOrgId, resolveOrganization } from "../../services/organization.js";
 import * as taskService from "../../services/task.js";
 
+function dispatch(notifier: Notifier, result: SendMessageResult | undefined): void {
+  if (!result) return;
+  notifyRecipients(notifier, result.recipients, result.message.id);
+}
+
 export async function adminTaskRoutes(app: FastifyInstance): Promise<void> {
-  /** Resolve the organization to operate against from the `org` query param (uuid or name), fallback to default. */
+  /** Resolve the target organization from the `org` query param (uuid or name), fallback to default. */
   async function resolveOrgId(orgParam: string | undefined): Promise<string> {
     if (orgParam) {
       const resolved = await resolveOrganization(app.db, orgParam);
@@ -19,7 +25,6 @@ export async function adminTaskRoutes(app: FastifyInstance): Promise<void> {
     return resolveDefaultOrgId(app.db);
   }
 
-  /** List tasks with filters. */
   app.get("/", async (request) => {
     const query = taskListQuerySchema.parse(request.query);
     const orgParam = (request.query as Record<string, string>).org;
@@ -31,7 +36,6 @@ export async function adminTaskRoutes(app: FastifyInstance): Promise<void> {
     };
   });
 
-  /** Task detail with linked chats. */
   app.get<{ Params: { taskId: string } }>("/:taskId", async (request) => {
     const detail = await taskService.getTaskDetail(app.db, request.params.taskId);
     return {
@@ -40,7 +44,6 @@ export async function adminTaskRoutes(app: FastifyInstance): Promise<void> {
     };
   });
 
-  /** Admin-created task. May target any organization. */
   app.post("/", async (request, reply) => {
     const admin = requireAdmin(request);
     const body = adminCreateTaskSchema.parse(request.body);
@@ -57,13 +60,10 @@ export async function adminTaskRoutes(app: FastifyInstance): Promise<void> {
         organizationId,
       },
     );
-    if (notification) {
-      notifyRecipients(app.notifier, notification.recipients, notification.message.id);
-    }
+    dispatch(app.notifier, notification);
     return reply.status(201).send(taskService.serializeTask(task));
   });
 
-  /** Admin update: re-assign, force status, write result. */
   app.patch<{ Params: { taskId: string } }>("/:taskId", async (request) => {
     const admin = requireAdmin(request);
     const body = adminUpdateTaskSchema.parse(request.body);
@@ -73,26 +73,20 @@ export async function adminTaskRoutes(app: FastifyInstance): Promise<void> {
       { type: "admin", adminId: admin.id },
       body,
     );
-    if (notification) {
-      notifyRecipients(app.notifier, notification.recipients, notification.message.id);
-    }
+    dispatch(app.notifier, notification);
     return taskService.serializeTask(task);
   });
 
-  /** Cancel a task. */
   app.post<{ Params: { taskId: string } }>("/:taskId/cancel", async (request) => {
     const admin = requireAdmin(request);
     const { task, notification } = await taskService.cancelTask(app.db, request.params.taskId, {
       type: "admin",
       adminId: admin.id,
     });
-    if (notification) {
-      notifyRecipients(app.notifier, notification.recipients, notification.message.id);
-    }
+    dispatch(app.notifier, notification);
     return taskService.serializeTask(task);
   });
 
-  /** Task health signal. */
   app.get<{ Params: { taskId: string } }>("/:taskId/health", async (request) => {
     return taskService.getTaskHealth(app.db, request.params.taskId);
   });

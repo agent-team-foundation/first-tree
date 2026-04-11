@@ -1,3 +1,4 @@
+import type { TaskCreatorType, TaskStatus } from "@agent-team-foundation/first-tree-hub-shared";
 import { index, jsonb, pgTable, primaryKey, text, timestamp } from "drizzle-orm/pg-core";
 import { agents } from "./agents.js";
 import { chats } from "./chats.js";
@@ -17,12 +18,10 @@ export const tasks = pgTable(
       .references(() => organizations.id),
     title: text("title").notNull(),
     body: text("body").notNull().default(""),
-    /** "pending" | "assigned" | "working" | "completed" | "failed" | "cancelled" */
-    status: text("status").notNull(),
+    status: text("status").$type<TaskStatus>().notNull(),
     /** Assignee agent UUID; null when pending awaiting assignment. No FK so soft-deleted agents don't orphan tasks. */
     assigneeAgentId: text("assignee_agent_id"),
-    /** Creator type: "agent" | "admin". Determines which ID space created_by_id lives in. */
-    createdByType: text("created_by_type").notNull(),
+    createdByType: text("created_by_type").$type<TaskCreatorType>().notNull(),
     createdById: text("created_by_id").notNull(),
     /** Optional external reference (e.g. "owner/repo#123"). Pure record, not actionable. */
     originRef: text("origin_ref"),
@@ -32,14 +31,14 @@ export const tasks = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
     cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
-    cancelledByType: text("cancelled_by_type"),
+    cancelledByType: text("cancelled_by_type").$type<TaskCreatorType>(),
     cancelledById: text("cancelled_by_id"),
   },
   (table) => [
     index("idx_tasks_org_status").on(table.organizationId, table.status),
     index("idx_tasks_assignee_status").on(table.assigneeAgentId, table.status),
     index("idx_tasks_origin_ref").on(table.originRef),
-    index("idx_tasks_created_at").on(table.createdAt),
+    index("idx_tasks_org_created_at").on(table.organizationId, table.createdAt),
   ],
 );
 
