@@ -17,6 +17,13 @@ describe("Admin Agents API", () => {
       });
   }
 
+  it("rejects creating an agent with a reserved `__` name prefix", async () => {
+    const app = getApp();
+    await expect(createAgent(app.db, { name: "__hub_system_tasks", type: "autonomous_agent" })).rejects.toThrow(
+      /reserved/i,
+    );
+  });
+
   it("retrieves an agent created via service", async () => {
     const app = getApp();
     const req = await authedRequest(app);

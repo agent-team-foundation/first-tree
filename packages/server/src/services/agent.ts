@@ -14,9 +14,22 @@ import { hashToken } from "../utils.js";
 import { uuidv7 } from "../uuid.js";
 import { resolveDefaultOrgId } from "./organization.js";
 
+/**
+ * Names beginning with `__` are reserved for Hub-internal pseudo agents
+ * (e.g. the task notifier). User-facing creation must not be able to
+ * squat on them, otherwise internal traffic could be routed through a
+ * real account.
+ */
+const RESERVED_AGENT_NAME_PREFIX = "__";
+
 export async function createAgent(db: Database, data: CreateAgent) {
   const uuid = uuidv7();
   const name = data.name ?? null;
+  if (name?.startsWith(RESERVED_AGENT_NAME_PREFIX)) {
+    throw new BadRequestError(
+      `Agent name "${name}" is reserved — names starting with "${RESERVED_AGENT_NAME_PREFIX}" are Hub-internal`,
+    );
+  }
   const inboxId = `inbox_${uuid}`;
   const orgId = data.organizationId ?? (await resolveDefaultOrgId(db));
 

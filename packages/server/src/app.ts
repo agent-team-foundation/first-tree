@@ -20,6 +20,7 @@ import { adminOrganizationRoutes } from "./api/admin/organizations.js";
 import { adminOverviewRoutes } from "./api/admin/overview.js";
 import { adminStatsRoutes } from "./api/admin/stats.js";
 import { adminSystemConfigRoutes } from "./api/admin/system-config.js";
+import { adminTaskRoutes } from "./api/admin/tasks.js";
 import { adminUserRoutes } from "./api/admin/users.js";
 import { agentChatRoutes } from "./api/agent/chats.js";
 
@@ -28,6 +29,7 @@ import { agentFeishuUserRoutes } from "./api/agent/feishu-user.js";
 import { agentInboxRoutes } from "./api/agent/inbox.js";
 import { agentMeRoutes } from "./api/agent/me.js";
 import { agentMessageRoutes, agentSendToAgentRoutes } from "./api/agent/messages.js";
+import { agentTaskRoutes } from "./api/agent/tasks.js";
 import { agentWsRoutes } from "./api/agent/ws.js";
 import { clientWsRoutes } from "./api/agent/ws-client.js";
 import { bootstrapConfigRoutes } from "./api/bootstrap/config.js";
@@ -226,6 +228,14 @@ export async function buildApp(config: Config) {
         { prefix: "/admin/stats" },
       );
 
+      await api.register(
+        async (adminApp) => {
+          adminApp.addHook("onRequest", adminAuth);
+          await adminApp.register(adminTaskRoutes);
+        },
+        { prefix: "/admin/tasks" },
+      );
+
       // Public routes (no auth)
       await api.register(publicAgentRoutes, { prefix: "/public/agents" });
 
@@ -238,6 +248,7 @@ export async function buildApp(config: Config) {
           await agentApp.register(agentMessageRoutes, { prefix: "/chats" });
           await agentApp.register(agentSendToAgentRoutes, { prefix: "/agents" });
           await agentApp.register(agentInboxRoutes, { prefix: "/inbox" });
+          await agentApp.register(agentTaskRoutes, { prefix: "/tasks" });
 
           await agentApp.register(agentFeishuBotRoutes);
           await agentApp.register(agentFeishuUserRoutes, { prefix: "/delegated" });
