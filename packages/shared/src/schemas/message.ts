@@ -6,9 +6,11 @@ export const MESSAGE_FORMATS = {
   CARD: "card",
   REFERENCE: "reference",
   FILE: "file",
+  /** System-generated task notification. Content shape: TaskMessageContent (see schemas/task.ts). */
+  TASK: "task",
 } as const;
 
-export const messageFormatSchema = z.enum(["text", "markdown", "card", "reference", "file"]);
+export const messageFormatSchema = z.enum(["text", "markdown", "card", "reference", "file", "task"]);
 export type MessageFormat = z.infer<typeof messageFormatSchema>;
 
 export const sendMessageSchema = z.object({

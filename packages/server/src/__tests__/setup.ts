@@ -19,6 +19,8 @@ beforeEach(async () => {
   const db = getDb();
   await db.execute(sql`
     TRUNCATE TABLE
+      task_chats,
+      tasks,
       adapter_message_references,
       adapter_chat_mappings,
       adapter_agent_mappings,

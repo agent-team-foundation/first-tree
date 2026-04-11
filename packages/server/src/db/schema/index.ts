@@ -14,3 +14,4 @@ export { messages } from "./messages.js";
 export { organizations } from "./organizations.js";
 export { serverInstances } from "./server-instances.js";
 export { systemConfigs } from "./system-configs.js";
+export { taskChats, tasks } from "./tasks.js";
