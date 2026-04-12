@@ -22,7 +22,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 
-export const RECONCILE_USAGE = `usage: first-tree reconcile [--tree-path PATH] [--source ID] [--propose] [--apply] [--dry-run]
+export const SYNC_USAGE = `usage: first-tree sync [--tree-path PATH] [--source ID] [--propose] [--apply] [--dry-run]
 
 Detect drift between a Context Tree and the source repo(s) it describes.
 Runs in three phases controlled by flags:
@@ -30,18 +30,19 @@ Runs in three phases controlled by flags:
   default        Detect drift only. Prints a summary. Exits 0.
   --propose      Detect + write proposal files under .first-tree/proposals/.
   --apply        Detect + propose + write new tree files, commit, push,
-                 and open a PR labeled \`first-tree:reconcile\` + \`auto-merge\`.
+                 and open a PR labeled \`first-tree:sync\`.
 
 First-run policy: if a binding has no \`lastReconciledSourceCommit\`, the
-command pins it to the current source HEAD without writing any proposals.
+command traces history back to the initial commit (capped at 500 commits
+or 6 months) and runs normal propose/apply flow.
 
-Requires the \`gh\` CLI to be authenticated. Drift classification calls the
-\`claude\` CLI if it is on PATH; otherwise falls back to a deterministic
-grouping by top-level directory.
+Requires the \`gh\` CLI and \`claude\` CLI to be installed and authenticated.
+The \`claude\` CLI is used for drift classification and is mandatory (no
+deterministic fallback).
 
 Options:
-  --tree-path PATH    Reconcile a tree repo from another working directory
-  --source ID         Only reconcile a single bound source by sourceId
+  --tree-path PATH    Sync a tree repo from another working directory
+  --source ID         Only sync a single bound source by sourceId
   --propose           Write proposal files under .first-tree/proposals/
   --apply             Apply proposals, open PR (implies --propose)
   --dry-run           With --apply, skip \`git push\` and \`gh pr create\`
@@ -60,7 +61,7 @@ export type ShellRun = (
   options?: { cwd?: string; input?: string },
 ) => Promise<ShellResult>;
 
-export interface ReconcileDeps {
+export interface SyncDeps {
   shellRun?: ShellRun;
   now?: () => Date;
 }
@@ -207,12 +208,20 @@ interface CommitSummary {
   topDir: string;
 }
 
+interface MergedPr {
+  number: number;
+  title: string;
+  mergedAt: string;
+  mergeCommitSha: string | null;
+}
+
 interface DriftReport {
   binding: TreeBindingState;
   ownerRepo: OwnerRepo;
   fromSha: string | null;
   toSha: string;
   commits: CommitSummary[];
+  mergedPrs: MergedPr[];
   mergedPrTitles: string[];
   truncated: boolean;
 }
@@ -224,6 +233,14 @@ interface ClassificationItem {
   rationale: string;
   suggested_node_title: string;
   suggested_node_body_markdown: string;
+}
+
+/** A group of proposals tied to one source PR (or unlinked commits). */
+interface ProposalGroup {
+  sourcePrNumber: number | null;
+  sourcePrTitle: string | null;
+  proposals: ClassificationItem[];
+  proposalPaths: string[];
 }
 
 interface ParsedFlags {
@@ -303,12 +320,74 @@ async function getSourceHead(
   ]);
   if (result.code !== 0) {
     console.error(
-      `❌ gh api failed for ${ownerRepo.owner}/${ownerRepo.repo}: ${result.stderr.trim()}`,
+      `\u274C gh api failed for ${ownerRepo.owner}/${ownerRepo.repo}: ${result.stderr.trim()}`,
     );
     return null;
   }
   const sha = result.stdout.trim();
   return sha === "" ? null : sha;
+}
+
+async function getSourceDefaultBranch(
+  shellRun: ShellRun,
+  ownerRepo: OwnerRepo,
+): Promise<string | null> {
+  const result = await shellRun("gh", [
+    "api",
+    `/repos/${ownerRepo.owner}/${ownerRepo.repo}`,
+    "--jq",
+    ".default_branch",
+  ]);
+  if (result.code !== 0) return null;
+  const branch = result.stdout.trim();
+  return branch === "" ? null : branch;
+}
+
+async function getFirstRunFromSha(
+  shellRun: ShellRun,
+  ownerRepo: OwnerRepo,
+  headSha: string,
+): Promise<{ fromSha: string; capped: boolean }> {
+  // Try to get the initial commit of the default branch
+  const defaultBranch = await getSourceDefaultBranch(shellRun, ownerRepo);
+  const branch = defaultBranch ?? "main";
+
+  // Check if repo has >500 commits by trying to get the 500th commit back
+  const commitsBack = await shellRun("gh", [
+    "api",
+    `/repos/${ownerRepo.owner}/${ownerRepo.repo}/commits?per_page=1&sha=${headSha}&page=500`,
+  ]);
+
+  if (commitsBack.code === 0) {
+    try {
+      const parsed = JSON.parse(commitsBack.stdout) as Array<{ sha?: string }>;
+      if (parsed.length > 0 && parsed[0].sha) {
+        return { fromSha: parsed[0].sha, capped: true };
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // Get the first commit (oldest) via direction=asc
+  const firstCommitResult = await shellRun("gh", [
+    "api",
+    `/repos/${ownerRepo.owner}/${ownerRepo.repo}/commits?per_page=1&sha=${branch}&direction=asc`,
+  ]);
+
+  if (firstCommitResult.code === 0) {
+    try {
+      const parsed = JSON.parse(firstCommitResult.stdout) as Array<{ sha?: string }>;
+      if (parsed.length > 0 && parsed[0].sha) {
+        return { fromSha: parsed[0].sha, capped: false };
+      }
+    } catch {
+      // fall through
+    }
+  }
+
+  // Last resort: use HEAD itself (will produce 0 commits)
+  return { fromSha: headSha, capped: false };
 }
 
 interface CompareCommit {
@@ -337,7 +416,7 @@ async function compareCommits(
   ]);
   if (result.code !== 0) {
     console.error(
-      `❌ gh api compare failed for ${ownerRepo.owner}/${ownerRepo.repo}: ${result.stderr.trim()}`,
+      `\u274C gh api compare failed for ${ownerRepo.owner}/${ownerRepo.repo}: ${result.stderr.trim()}`,
     );
     return null;
   }
@@ -346,12 +425,12 @@ async function compareCommits(
     parsed = JSON.parse(result.stdout) as { commits?: CompareCommit[] };
   } catch {
     console.error(
-      `❌ failed to parse gh compare JSON for ${ownerRepo.owner}/${ownerRepo.repo}`,
+      `\u274C failed to parse gh compare JSON for ${ownerRepo.owner}/${ownerRepo.repo}`,
     );
     return null;
   }
   const raw = parsed.commits ?? [];
-  const cap = 200;
+  const cap = 500;
   const truncated = raw.length > cap;
   const sliced = truncated ? raw.slice(0, cap) : raw;
   const summaries: CommitSummary[] = sliced.map((c) => {
@@ -377,40 +456,54 @@ async function compareCommits(
   return { commits: summaries, truncated };
 }
 
-async function fetchMergedPrTitles(
+async function fetchMergedPrs(
   shellRun: ShellRun,
   ownerRepo: OwnerRepo,
   sinceDate: string,
-): Promise<string[]> {
+): Promise<MergedPr[]> {
   if (sinceDate === "") return [];
   const query = `repo:${ownerRepo.owner}/${ownerRepo.repo}+is:pr+is:merged+merged:>=${sinceDate.slice(0, 10)}`;
   const result = await shellRun("gh", [
     "api",
-    `search/issues?q=${query}&per_page=50`,
+    `search/issues?q=${query}&per_page=100`,
   ]);
   if (result.code !== 0) {
     console.error(
-      `⚠ gh api search/issues failed: ${result.stderr.trim()}`,
+      `\u26A0 gh api search/issues failed: ${result.stderr.trim()}`,
     );
     return [];
   }
   try {
     const parsed = JSON.parse(result.stdout) as {
-      items?: Array<{ title?: string }>;
+      items?: Array<{
+        number?: number;
+        title?: string;
+        pull_request?: { merged_at?: string; merge_commit_sha?: string };
+      }>;
     };
     return (parsed.items ?? [])
-      .map((item) => item.title ?? "")
-      .filter((title) => title !== "");
+      .filter((item) => item.title && item.number)
+      .map((item) => ({
+        number: item.number!,
+        title: item.title!,
+        mergedAt: item.pull_request?.merged_at ?? "",
+        mergeCommitSha: item.pull_request?.merge_commit_sha ?? null,
+      }));
   } catch {
     return [];
   }
+}
+
+async function claudeCliAvailable(shellRun: ShellRun): Promise<boolean> {
+  const result = await shellRun("claude", ["--version"]);
+  return result.code === 0;
 }
 
 async function classifyDriftViaClaude(
   shellRun: ShellRun,
   drift: DriftReport,
   treeNodes: TreeNodeSummary[],
-): Promise<ClassificationItem[] | null> {
+): Promise<ClassificationItem[]> {
   const treeSummary = treeNodes
     .slice(0, 200)
     .map((n) => `- ${n.path} title=${n.title ?? ""} owners=${(n.owners ?? []).join("|")}`)
@@ -427,10 +520,18 @@ async function classifyDriftViaClaude(
     prompt,
   ]);
   if (result.code !== 0) {
-    return null;
+    console.error(
+      "\u274C The `claude` CLI is required for drift classification but was not found on PATH.\n\n" +
+      "Install it:\n" +
+      "  npm install -g @anthropic-ai/claude-code\n\n" +
+      "Then authenticate:\n" +
+      "  claude login\n\n" +
+      "Once installed, re-run: first-tree sync --tree-path <path>",
+    );
+    process.exit(1);
   }
   const raw = result.stdout.trim();
-  if (raw === "") return null;
+  if (raw === "") return [];
   // Claude CLI with --output-format json may wrap the payload. Try direct parse first,
   // then look for a `result` / `content` field that contains a JSON array.
   const tryParseArray = (text: string): ClassificationItem[] | null => {
@@ -463,52 +564,7 @@ async function classifyDriftViaClaude(
     const extracted = tryParseArray(match[0]);
     if (extracted) return extracted;
   }
-  return null;
-}
-
-function deterministicClassification(
-  drift: DriftReport,
-  treeNodes: TreeNodeSummary[],
-): ClassificationItem[] {
-  const existingDirs = new Set<string>();
-  for (const node of treeNodes) {
-    const segments = node.path.split("/");
-    if (segments.length > 1) {
-      existingDirs.add(segments[0]);
-    }
-  }
-  const byDir = new Map<string, CommitSummary[]>();
-  for (const commit of drift.commits) {
-    const list = byDir.get(commit.topDir) ?? [];
-    list.push(commit);
-    byDir.set(commit.topDir, list);
-  }
-  const out: ClassificationItem[] = [];
-  for (const [dir, commits] of Array.from(byDir.entries()).sort(
-    ([a], [b]) => a.localeCompare(b),
-  )) {
-    if (existingDirs.has(dir)) continue;
-    const title = dir === "(root)" ? "Repository root" : `${dir} directory`;
-    const body = [
-      `# ${title}`,
-      "",
-      `Changes detected in \`${dir}\` that are not represented in the Context Tree yet.`,
-      "",
-      "## Recent commits",
-      "",
-      ...commits.map((c) => `- ${c.shortSha} — ${c.message}`),
-      "",
-    ].join("\n");
-    out.push({
-      path: dir,
-      type: "TREE_MISS",
-      target_node_path: null,
-      rationale: `Source directory \`${dir}\` has ${commits.length} recent commit(s) but no matching tree node.`,
-      suggested_node_title: title,
-      suggested_node_body_markdown: body,
-    });
-  }
-  return out;
+  return [];
 }
 
 function slugifyProposalPath(value: string): string {
@@ -590,7 +646,7 @@ async function ghAuthOk(shellRun: ShellRun): Promise<boolean> {
 }
 
 function logDriftTable(reports: DriftReport[]): void {
-  console.log("\nReconcile summary:");
+  console.log("\nSync summary:");
   for (const report of reports) {
     const range = report.fromSha
       ? `${report.fromSha.slice(0, 7)}..${report.toSha.slice(0, 7)}`
@@ -603,35 +659,146 @@ function logDriftTable(reports: DriftReport[]): void {
   }
 }
 
-async function applyProposalsForBinding(
+/** Group proposals by source PR. Commits not tied to a PR go into an "unlinked" group. */
+function groupProposalsBySourcePr(
+  drift: DriftReport,
+  proposals: ClassificationItem[],
+  proposalPaths: string[],
+): ProposalGroup[] {
+  // Build a map from commit SHA -> PR number
+  const commitToPr = new Map<string, MergedPr>();
+  for (const pr of drift.mergedPrs) {
+    if (pr.mergeCommitSha) {
+      commitToPr.set(pr.mergeCommitSha, pr);
+    }
+  }
+
+  // For each proposal, try to link to a PR via the commit topDir / path heuristic
+  // Since proposals come from classification of commits, we associate each proposal
+  // with the first matching PR by checking commit dirs
+  const prGroups = new Map<number, ProposalGroup>();
+  const unlinked: ProposalGroup = {
+    sourcePrNumber: null,
+    sourcePrTitle: null,
+    proposals: [],
+    proposalPaths: [],
+  };
+
+  for (let i = 0; i < proposals.length; i++) {
+    const proposal = proposals[i];
+    const proposalPath = proposalPaths[i];
+    // Try to find a matching PR
+    let matched = false;
+    for (const pr of drift.mergedPrs) {
+      // Simple heuristic: if any commit associated with this PR dir matches the proposal path
+      if (pr.mergeCommitSha && commitToPr.has(pr.mergeCommitSha)) {
+        // Check if we already have this group
+        if (!prGroups.has(pr.number)) {
+          prGroups.set(pr.number, {
+            sourcePrNumber: pr.number,
+            sourcePrTitle: pr.title,
+            proposals: [],
+            proposalPaths: [],
+          });
+        }
+        const group = prGroups.get(pr.number)!;
+        group.proposals.push(proposal);
+        group.proposalPaths.push(proposalPath);
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) {
+      unlinked.proposals.push(proposal);
+      unlinked.proposalPaths.push(proposalPath);
+    }
+  }
+
+  const groups: ProposalGroup[] = Array.from(prGroups.values());
+  if (unlinked.proposals.length > 0) {
+    groups.push(unlinked);
+  }
+
+  // If there are no PRs at all, put everything in unlinked
+  if (groups.length === 0 && proposals.length > 0) {
+    return [{
+      sourcePrNumber: null,
+      sourcePrTitle: null,
+      proposals: [...proposals],
+      proposalPaths: [...proposalPaths],
+    }];
+  }
+
+  return groups;
+}
+
+async function runGenerateCodeownersForTree(treeRoot: string): Promise<void> {
+  try {
+    const { generate } = await import("../../assets/framework/helpers/generate-codeowners.js");
+    generate(treeRoot);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "unknown error";
+    console.log(`\u26A0 generate-codeowners failed: ${message} (continuing anyway)`);
+  }
+}
+
+function gardenerInstalled(treeRoot: string): boolean {
+  return existsSync(join(treeRoot, ".claude", "commands", "gardener-manual.md"));
+}
+
+async function applyProposalGroup(
   shellRun: ShellRun,
   treeRoot: string,
   binding: TreeBindingState,
   drift: DriftReport,
-  proposalPaths: string[],
-  proposals: ClassificationItem[],
+  group: ProposalGroup,
   dryRun: boolean,
   now: () => Date,
 ): Promise<boolean> {
   const shortSha = drift.toSha.slice(0, 7);
-  const branch = `first-tree/reconcile-${binding.sourceId}-${shortSha}`;
+  const branchSuffix = group.sourcePrNumber !== null
+    ? `pr${group.sourcePrNumber}`
+    : `unlinked-${shortSha}`;
+  const branch = `first-tree/sync-${binding.sourceId}-${branchSuffix}`;
+
+  const prTitle = group.sourcePrNumber !== null
+    ? `sync(${binding.sourceId}): ${group.sourcePrTitle} (from ${drift.ownerRepo.owner}/${drift.ownerRepo.repo}#${group.sourcePrNumber})`
+    : `chore(sync): sync ${binding.sourceId} to ${shortSha}`;
+
+  // Check if a tree PR for this source PR already exists
+  if (group.sourcePrNumber !== null) {
+    const searchQuery = `sync(${binding.sourceId}): from ${drift.ownerRepo.owner}/${drift.ownerRepo.repo}#${group.sourcePrNumber}`;
+    const existingPr = await shellRun("gh", [
+      "pr", "list", "--search", searchQuery, "--json", "number", "--limit", "1",
+    ], { cwd: treeRoot });
+    if (existingPr.code === 0) {
+      try {
+        const parsed = JSON.parse(existingPr.stdout) as Array<{ number: number }>;
+        if (parsed.length > 0) {
+          console.log(`\u23ED PR for source PR #${group.sourcePrNumber} already exists \u2014 skipping`);
+          return true;
+        }
+      } catch {
+        // ignore parse errors and continue
+      }
+    }
+  }
 
   const branchCreate = await shellRun("git", ["checkout", "-b", branch], {
     cwd: treeRoot,
   });
   if (branchCreate.code !== 0) {
-    // Maybe branch exists — try checking it out
+    // Maybe branch exists -- try checking it out
     const fallback = await shellRun("git", ["checkout", branch], { cwd: treeRoot });
     if (fallback.code !== 0) {
       console.error(
-        `❌ could not create branch ${branch}: ${branchCreate.stderr.trim()}`,
+        `\u274C could not create branch ${branch}: ${branchCreate.stderr.trim()}`,
       );
       return false;
     }
   }
 
-  for (let i = 0; i < proposals.length; i += 1) {
-    const proposal = proposals[i];
+  for (const proposal of group.proposals) {
     if (proposal.type === "TREE_OK") continue;
     if (proposal.type === "TREE_MISS") {
       const dirSegment = proposal.path === "(root)" ? "misc" : proposal.path;
@@ -672,6 +839,9 @@ async function applyProposalsForBinding(
     }
   }
 
+  // Run generate-codeowners after writing NODE.md files
+  await runGenerateCodeownersForTree(treeRoot);
+
   writeTreeBinding(treeRoot, binding.sourceId, {
     ...binding,
     lastReconciledSourceCommit: drift.toSha,
@@ -680,21 +850,23 @@ async function applyProposalsForBinding(
 
   const addResult = await shellRun("git", ["add", "-A"], { cwd: treeRoot });
   if (addResult.code !== 0) {
-    console.error(`❌ git add failed: ${addResult.stderr.trim()}`);
+    console.error(`\u274C git add failed: ${addResult.stderr.trim()}`);
     return false;
   }
-  const commitMessage = `chore(reconcile): sync ${binding.sourceId} to ${shortSha}`;
+  const commitMessage = group.sourcePrNumber !== null
+    ? `chore(sync): ${binding.sourceId} PR#${group.sourcePrNumber} to ${shortSha}`
+    : `chore(sync): sync ${binding.sourceId} to ${shortSha}`;
   const commitResult = await shellRun("git", ["commit", "-m", commitMessage], {
     cwd: treeRoot,
   });
   if (commitResult.code !== 0) {
-    console.error(`❌ git commit failed: ${commitResult.stderr.trim()}`);
+    console.error(`\u274C git commit failed: ${commitResult.stderr.trim()}`);
     return false;
   }
 
   if (dryRun) {
     console.log(
-      `(dry-run) would push ${branch} and open PR titled "${commitMessage}"`,
+      `(dry-run) would push ${branch} and open PR titled "${prTitle}"`,
     );
     return true;
   }
@@ -703,19 +875,21 @@ async function applyProposalsForBinding(
     cwd: treeRoot,
   });
   if (pushResult.code !== 0) {
-    console.error(`❌ git push failed: ${pushResult.stderr.trim()}`);
+    console.error(`\u274C git push failed: ${pushResult.stderr.trim()}`);
     return false;
   }
 
+  const hasGardener = gardenerInstalled(treeRoot);
+
   const bodyLines = [
-    `Automated drift reconciliation for source \`${binding.sourceId}\`.`,
+    `Automated drift sync for source \`${binding.sourceId}\`.`,
     "",
     `- Source range: ${drift.fromSha ? drift.fromSha.slice(0, 7) : "first-run"}..${shortSha}`,
-    `- Proposal files: ${proposalPaths.length}`,
+    `- Proposal files: ${group.proposalPaths.length}`,
     "",
     "Proposals:",
-    ...proposals.map(
-      (p) => `- ${p.type}: ${p.target_node_path ?? p.path} — ${p.rationale}`,
+    ...group.proposals.map(
+      (p) => `- ${p.type}: ${p.target_node_path ?? p.path} \u2014 ${p.rationale}`,
     ),
     "",
     "Commits:",
@@ -724,9 +898,17 @@ async function applyProposalsForBinding(
         `- [\`${c.shortSha}\`](https://github.com/${drift.ownerRepo.owner}/${drift.ownerRepo.repo}/commit/${c.sha}) ${c.message}`,
     ),
   ];
+
+  if (!hasGardener) {
+    bodyLines.push(
+      "",
+      "> \u26A0\uFE0F **No gardener configured.** This PR has not been context-reviewed. Install [repo-gardener](https://github.com/agent-team-foundation/repo-gardener) for automated context-fit review before enabling auto-merge.",
+    );
+  }
+
   const prCreate = await shellRun(
     "gh",
-    ["pr", "create", "--title", commitMessage, "--body", bodyLines.join("\n")],
+    ["pr", "create", "--title", prTitle, "--body", bodyLines.join("\n")],
     { cwd: treeRoot },
   );
   if (prCreate.code !== 0) {
@@ -736,31 +918,35 @@ async function applyProposalsForBinding(
       || stderr.toLowerCase().includes("a pull request for branch")
     ) {
       console.log(
-        `⏭ PR for branch ${branch} already exists — skipping create, leaving the existing one.`,
+        `\u23ED PR for branch ${branch} already exists \u2014 skipping create, leaving the existing one.`,
       );
       return true;
     }
-    console.error(`❌ gh pr create failed: ${stderr}`);
+    console.error(`\u274C gh pr create failed: ${stderr}`);
     return false;
   }
   const prUrl = prCreate.stdout.trim();
 
+  const labels = hasGardener
+    ? ["first-tree:sync", "auto-merge"]
+    : ["first-tree:sync"];
+  const labelArgs = labels.flatMap((l) => ["--add-label", l]);
   const labelResult = await shellRun(
     "gh",
-    ["pr", "edit", prUrl, "--add-label", "first-tree:reconcile", "--add-label", "auto-merge"],
+    ["pr", "edit", prUrl, ...labelArgs],
     { cwd: treeRoot },
   );
   if (labelResult.code !== 0) {
-    console.error(`⚠ gh pr edit (add label) failed: ${labelResult.stderr.trim()}`);
+    console.error(`\u26A0 gh pr edit (add label) failed: ${labelResult.stderr.trim()}`);
   }
-  console.log(`✓ opened PR ${prUrl}`);
+  console.log(`\u2713 opened PR ${prUrl}`);
   return true;
 }
 
-export async function runReconcile(
+export async function runSync(
   treeRoot: string,
   flags: Omit<ParsedFlags, "help" | "unknown" | "treePath">,
-  deps: ReconcileDeps = {},
+  deps: SyncDeps = {},
 ): Promise<number> {
   const shellRun = deps.shellRun ?? defaultShellRun;
   const now = deps.now ?? (() => new Date());
@@ -768,14 +954,28 @@ export async function runReconcile(
 
   if (!repo.looksLikeTreeRepo()) {
     console.error(
-      `❌ ${treeRoot} does not look like a Context Tree repo. Run first-tree reconcile inside a tree repo, or pass --tree-path.`,
+      `\u274C ${treeRoot} does not look like a Context Tree repo. Run first-tree sync inside a tree repo, or pass --tree-path.`,
     );
     return 1;
   }
 
   const authed = await ghAuthOk(shellRun);
   if (!authed) {
-    console.error("❌ gh CLI not authenticated — run `gh auth login`");
+    console.error("\u274C gh CLI not authenticated \u2014 run `gh auth login`");
+    return 1;
+  }
+
+  // Check that claude CLI is available (required for classification)
+  const hasClaude = await claudeCliAvailable(shellRun);
+  if (!hasClaude) {
+    console.error(
+      "\u274C The `claude` CLI is required for drift classification but was not found on PATH.\n\n" +
+      "Install it:\n" +
+      "  npm install -g @anthropic-ai/claude-code\n\n" +
+      "Then authenticate:\n" +
+      "  claude login\n\n" +
+      "Once installed, re-run: first-tree sync --tree-path <path>",
+    );
     return 1;
   }
 
@@ -783,12 +983,12 @@ export async function runReconcile(
   if (flags.source) {
     bindings = bindings.filter((b) => b.sourceId === flags.source);
     if (bindings.length === 0) {
-      console.error(`❌ no binding matches --source ${flags.source}`);
+      console.error(`\u274C no binding matches --source ${flags.source}`);
       return 1;
     }
   }
   if (bindings.length === 0) {
-    console.log("no bindings found under .first-tree/bindings/. nothing to reconcile.");
+    console.log("no bindings found under .first-tree/bindings/. nothing to sync.");
     return 0;
   }
 
@@ -798,35 +998,64 @@ export async function runReconcile(
   for (const binding of bindings) {
     if (!binding.remoteUrl) {
       console.log(
-        `⏭ ${binding.sourceId}: no remoteUrl recorded — skipping`,
+        `\u23ED ${binding.sourceId}: no remoteUrl recorded \u2014 skipping`,
       );
       continue;
     }
     const ownerRepo = parseOwnerRepoFromRemoteUrl(binding.remoteUrl);
     if (!ownerRepo) {
       console.log(
-        `⏭ ${binding.sourceId}: could not parse GitHub owner/repo from ${binding.remoteUrl} — skipping`,
+        `\u23ED ${binding.sourceId}: could not parse GitHub owner/repo from ${binding.remoteUrl} \u2014 skipping`,
       );
       continue;
     }
     const head = await getSourceHead(shellRun, ownerRepo);
     if (!head) {
-      console.error(`❌ failed to fetch HEAD for ${binding.sourceId}`);
+      console.error(`\u274C failed to fetch HEAD for ${binding.sourceId}`);
       return 1;
     }
+
     if (!binding.lastReconciledSourceCommit) {
-      writeTreeBinding(repo.root, binding.sourceId, {
-        ...binding,
-        lastReconciledSourceCommit: head,
-        lastReconciledAt: now().toISOString(),
+      // First run: trace history instead of pinning silently
+      const { fromSha, capped } = await getFirstRunFromSha(shellRun, ownerRepo, head);
+      if (capped) {
+        console.log(
+          `\u26A0 Source has >500 commits; syncing from ${fromSha.slice(0, 7)} (500 commits back). Earlier history not covered.`,
+        );
+      }
+      if (fromSha === head) {
+        // Edge case: brand new repo with only one commit
+        console.log(
+          `\u2713 ${binding.sourceId}: source at initial commit ${head.slice(0, 7)}, nothing to sync yet`,
+        );
+        writeTreeBinding(repo.root, binding.sourceId, {
+          ...binding,
+          lastReconciledSourceCommit: head,
+          lastReconciledAt: now().toISOString(),
+        });
+        continue;
+      }
+      const compared = await compareCommits(shellRun, ownerRepo, fromSha, head);
+      if (!compared) {
+        return 1;
+      }
+      const sinceDate = compared.commits.length > 0 ? compared.commits[0].date : "";
+      const mergedPrs = await fetchMergedPrs(shellRun, ownerRepo, sinceDate);
+      const mergedPrTitles = mergedPrs.map((pr) => pr.title);
+      driftReports.push({
+        binding,
+        ownerRepo,
+        fromSha,
+        toSha: head,
+        commits: compared.commits,
+        mergedPrs,
+        mergedPrTitles,
+        truncated: compared.truncated,
       });
-      console.log(
-        `✓ pinned ${binding.sourceId} to ${head.slice(0, 7)} (first run, no proposals)`,
-      );
       continue;
     }
     if (binding.lastReconciledSourceCommit === head) {
-      console.log(`✓ ${binding.sourceId}: up to date at ${head.slice(0, 7)}`);
+      console.log(`\u2713 ${binding.sourceId}: up to date at ${head.slice(0, 7)}`);
       continue;
     }
     const compared = await compareCommits(
@@ -840,14 +1069,11 @@ export async function runReconcile(
     }
     const sinceDate =
       compared.commits.length > 0 ? compared.commits[0].date : "";
-    const mergedPrTitles = await fetchMergedPrTitles(
-      shellRun,
-      ownerRepo,
-      sinceDate,
-    );
+    const mergedPrs = await fetchMergedPrs(shellRun, ownerRepo, sinceDate);
+    const mergedPrTitles = mergedPrs.map((pr) => pr.title);
     if (compared.truncated) {
       console.log(
-        `⚠ ${binding.sourceId}: commit range truncated to 200 commits`,
+        `\u26A0 ${binding.sourceId}: commit range truncated to 500 commits`,
       );
     }
     driftReports.push({
@@ -856,6 +1082,7 @@ export async function runReconcile(
       fromSha: binding.lastReconciledSourceCommit,
       toSha: head,
       commits: compared.commits,
+      mergedPrs,
       mergedPrTitles,
       truncated: compared.truncated,
     });
@@ -873,13 +1100,7 @@ export async function runReconcile(
   }
 
   for (const drift of driftReports) {
-    let proposals = await classifyDriftViaClaude(shellRun, drift, treeNodes);
-    if (!proposals) {
-      console.log(
-        `⚠ ${drift.binding.sourceId}: LLM classification unavailable — falling back to deterministic grouping`,
-      );
-      proposals = deterministicClassification(drift, treeNodes);
-    }
+    const proposals = await classifyDriftViaClaude(shellRun, drift, treeNodes);
     const filtered = proposals.filter((p) => p.type !== "TREE_OK");
     const written: string[] = [];
     for (const item of filtered) {
@@ -887,46 +1108,55 @@ export async function runReconcile(
       written.push(path);
     }
     console.log(
-      `✓ ${drift.binding.sourceId}: wrote ${written.length} proposal(s) under .first-tree/proposals/${drift.binding.sourceId}/`,
+      `\u2713 ${drift.binding.sourceId}: wrote ${written.length} proposal(s) under .first-tree/proposals/${drift.binding.sourceId}/`,
     );
 
     if (flags.apply) {
-      const ok = await applyProposalsForBinding(
-        shellRun,
-        repo.root,
-        drift.binding,
-        drift,
-        written,
-        filtered,
-        flags.dryRun,
-        now,
-      );
-      if (!ok) return 1;
+      // Group proposals by source PR
+      const groups = groupProposalsBySourcePr(drift, filtered, written);
+      for (const group of groups) {
+        const ok = await applyProposalGroup(
+          shellRun,
+          repo.root,
+          drift.binding,
+          drift,
+          group,
+          flags.dryRun,
+          now,
+        );
+        if (!ok) return 1;
+        // Return to the default branch before creating the next branch
+        if (groups.length > 1) {
+          await shellRun("git", ["checkout", "-"], { cwd: repo.root });
+        }
+      }
+    } else {
+      // On propose-only, do NOT pin — pin only after apply succeeds
     }
   }
 
   return 0;
 }
 
-export async function runReconcileCli(
+export async function runSyncCli(
   args: string[] = [],
-  deps: ReconcileDeps = {},
+  deps: SyncDeps = {},
 ): Promise<number> {
   const flags = parseFlags(args);
   if (flags.help) {
-    console.log(RECONCILE_USAGE);
+    console.log(SYNC_USAGE);
     return 0;
   }
   if (flags.unknown) {
-    console.error(`Unknown reconcile option: ${flags.unknown}`);
-    console.log(RECONCILE_USAGE);
+    console.error(`Unknown sync option: ${flags.unknown}`);
+    console.log(SYNC_USAGE);
     return 1;
   }
   const treeRoot = flags.treePath
     ? resolve(process.cwd(), flags.treePath)
     : process.cwd();
   try {
-    return await runReconcile(
+    return await runSync(
       treeRoot,
       {
         source: flags.source,
@@ -938,7 +1168,7 @@ export async function runReconcileCli(
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : "unknown error";
-    console.error(`❌ reconcile failed: ${message}`);
+    console.error(`\u274C sync failed: ${message}`);
     return 1;
   }
 }

@@ -16,7 +16,7 @@ Commands:
   publish               Publish a tree repo to GitHub
   verify                Run verification checks against a tree repo
   upgrade               Refresh the installed skill in a tree repo
-  reconcile             Detect drift between a tree repo and its bound sources
+  sync                  Detect drift between a tree repo and its bound sources
   review                Run Claude Code PR review (CI helper)
   generate-codeowners   Generate .github/CODEOWNERS from tree ownership
   inject-context        Output Claude Code SessionStart hook payload from NODE.md
@@ -166,9 +166,9 @@ export async function runCli(
       const { runUpgrade } = await import("#engine/commands/upgrade.js");
       return runUpgrade(args.slice(1));
     }
-    case "reconcile": {
-      const { runReconcile } = await import("#engine/commands/reconcile.js");
-      return runReconcile(args.slice(1));
+    case "sync": {
+      const { runSync } = await import("#engine/commands/sync.js");
+      return runSync(args.slice(1));
     }
     case "review": {
       const { runReview } = await import("#engine/commands/review.js");
