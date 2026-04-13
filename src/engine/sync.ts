@@ -559,10 +559,25 @@ Return a JSON array only, no prose.`;
     process.exit(1);
   }
   const raw = result.stdout.trim();
+  if (process.env.FIRST_TREE_DEBUG) {
+    console.error(`[DEBUG] claude exit code: ${result.code}`);
+    console.error(`[DEBUG] claude stdout (first 2000 chars): ${raw.slice(0, 2000)}`);
+    console.error(`[DEBUG] claude stderr (first 500 chars): ${(result.stderr ?? "").slice(0, 500)}`);
+  }
   if (raw === "") return [];
   // Claude CLI with --output-format json may wrap the payload. Try direct parse first,
   // then look for a `result` / `content` field that contains a JSON array.
+  const extractJsonArray = (text: string): string | null => {
+    // Try extracting from ```json ... ``` fences (may appear anywhere in text)
+    const fenced = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+    if (fenced) return fenced[1].trim();
+    // Try extracting a bare [...] block
+    const bare = text.match(/\[[\s\S]*\]/);
+    if (bare) return bare[0];
+    return null;
+  };
   const tryParseArray = (text: string): ClassificationItem[] | null => {
+    // First try direct JSON.parse
     try {
       const parsed = JSON.parse(text) as unknown;
       if (Array.isArray(parsed)) {
@@ -573,13 +588,25 @@ Return a JSON array only, no prose.`;
         for (const key of ["result", "content", "output", "response"]) {
           const value = obj[key];
           if (typeof value === "string") {
-            const inner = tryParseArray(value);
-            if (inner) return inner;
+            // Try extracting JSON array from the string value (may have prose + code fences)
+            const extracted = extractJsonArray(value);
+            if (extracted) {
+              const inner = tryParseArray(extracted);
+              if (inner) return inner;
+            }
           }
           if (Array.isArray(value)) return value as ClassificationItem[];
         }
       }
     } catch {
+      // Not valid JSON — try extracting array from raw text
+      const extracted = extractJsonArray(text);
+      if (extracted && extracted !== text) {
+        try {
+          const parsed = JSON.parse(extracted) as unknown;
+          if (Array.isArray(parsed)) return parsed as ClassificationItem[];
+        } catch { /* fall through */ }
+      }
       return null;
     }
     return null;
