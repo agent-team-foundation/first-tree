@@ -125,6 +125,7 @@ export interface TreeNodeSummary {
   path: string;
   title: string | undefined;
   owners: string[] | undefined;
+  body: string | undefined;
 }
 
 const SCAN_SKIP_DIRS = new Set([
@@ -185,10 +186,14 @@ export function scanTreeNodes(root: string): TreeNodeSummary[] {
         try {
           const text = readFileSync(full, "utf-8");
           const { title, owners } = parseNodeFrontmatter(text);
+          // Extract body (everything after frontmatter)
+          const bodyMatch = text.match(/^---\s*\n.*?\n---\s*\n?([\s\S]*)/s);
+          const body = bodyMatch ? bodyMatch[1].trim() : undefined;
           results.push({
             path: relative(root, full).split("\\").join("/"),
             title,
             owners,
+            body: body && body.length > 0 ? body : undefined,
           });
         } catch {
           // ignore unreadable files
@@ -505,27 +510,58 @@ async function classifyDriftViaClaude(
   drift: DriftReport,
   treeNodes: TreeNodeSummary[],
 ): Promise<ClassificationItem[]> {
-  const treeSummary = treeNodes
-    .slice(0, 200)
-    .map((n) => `- ${n.path} title=${n.title ?? ""} owners=${(n.owners ?? []).join("|")}`)
-    .join("\n");
+  // Build keywords from the PR for relevance matching
+  const driftText = [
+    ...drift.commits.map((c) => c.message),
+    ...drift.mergedPrTitles,
+  ].join(" ").toLowerCase();
+
+  // Find related nodes by keyword overlap (path segments, title words)
+  const relatedNodes = treeNodes.filter((n) => {
+    const nodeText = [
+      n.path.replace(/\//g, " ").replace(/NODE\.md/g, ""),
+      n.title ?? "",
+    ].join(" ").toLowerCase();
+    const nodeWords = nodeText.split(/\s+/).filter((w) => w.length > 2);
+    return nodeWords.some((word) => driftText.includes(word));
+  });
+
+  // Build tree summary: all nodes get path+title, related nodes also get body
+  const treeLines: string[] = [];
+  for (const n of treeNodes.slice(0, 200)) {
+    const isRelated = relatedNodes.includes(n);
+    const line = `- ${n.path} title="${n.title ?? ""}" owners=${(n.owners ?? []).join("|")}`;
+    if (isRelated && n.body) {
+      // Include body for related nodes (cap at 500 chars to keep prompt reasonable)
+      const bodyPreview = n.body.length > 500 ? n.body.slice(0, 500) + "..." : n.body;
+      treeLines.push(`${line}\n  CONTENT: ${bodyPreview.replace(/\n/g, " ")}`);
+    } else {
+      treeLines.push(line);
+    }
+  }
+  const treeSummary = treeLines.join("\n");
+
   const driftSummary = [
     ...drift.commits.map((c) => `commit ${c.shortSha} [${c.topDir}] ${c.message}`),
     ...drift.mergedPrTitles.map((title) => `pr ${title}`),
   ].join("\n");
+
+  const relatedCount = relatedNodes.length;
   const prompt = `You are a Context Tree maintenance agent. A Context Tree is a structured knowledge base (markdown NODE.md files) that captures product decisions, architecture, conventions, and domain knowledge for a codebase.
 
 Your job: given the tree's current nodes and a recently merged PR, determine whether the tree is MISSING knowledge that this PR introduced.
 
 Context: this PR has already been reviewed and approved (including context-fit review by gardener). It does not conflict with the tree. The only question is: did it introduce NEW knowledge that the tree doesn't yet capture?
 
+IMPORTANT: For nodes marked with CONTENT below, read the content carefully. A node might exist for an area but NOT cover the specific feature this PR added. For example, if an "Authentication" node only mentions JWT but the PR adds OAuth support, that is a TREE_MISS — the tree needs a new node (or the existing node needs supplementing, which counts as TREE_MISS for sync purposes).
+
 Ask yourself:
-- Did this PR add a new feature, module, convention, or architectural pattern that the tree has no node for? → TREE_MISS
-- Is the tree already adequate — the existing nodes cover this area? → TREE_OK
+- Did this PR add a new feature, module, convention, or architectural pattern that NO existing node covers in its content? → TREE_MISS
+- Do the existing nodes (including their content) already adequately describe what this PR introduced? → TREE_OK
 
-Bias toward TREE_MISS. A Context Tree that is too sparse is worse than one that is too detailed. If in doubt, classify as TREE_MISS.
+Bias toward TREE_MISS. If in doubt, classify as TREE_MISS.
 
-## Current tree nodes
+## Current tree nodes (${treeNodes.length} total, ${relatedCount} with content shown)
 ${treeSummary}
 
 ## Merged PR
