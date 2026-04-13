@@ -3,6 +3,7 @@ import { basename, join, relative } from "node:path";
 
 const FRONTMATTER_RE = /^---\s*\n(.*?)\n---/s;
 const VALID_TYPES = new Set(["human", "personal_assistant", "autonomous_agent"]);
+const VALID_STATUSES = new Set(["invited"]);
 
 function rel(path: string, root: string): string {
   return relative(root, path);
@@ -85,6 +86,14 @@ export function validateMember(
     );
   }
 
+  // status (optional)
+  const status = extractScalar(fm, "status");
+  if (status !== null && !VALID_STATUSES.has(status)) {
+    errors.push(
+      `${loc}: invalid status '${status}' — must be one of: ${[...VALID_STATUSES].sort().join(", ")}`,
+    );
+  }
+
   // role
   const role = extractScalar(fm, "role");
   if (!role) errors.push(`${loc}: missing or empty 'role' field`);
@@ -105,6 +114,7 @@ type MemberInfo = {
   name: string;
   relPath: string;
   type: string | null;
+  status: string | null;
   delegateMention: string | null;
 };
 
@@ -159,6 +169,7 @@ export function runValidateMembers(treeRoot: string): {
           name: child,
           relPath,
           type: extractScalar(fm, "type"),
+          status: extractScalar(fm, "status"),
           delegateMention: extractScalar(fm, "delegate_mention"),
         });
       }
@@ -192,6 +203,15 @@ export function runValidateMembers(treeRoot: string): {
       allErrors.push(
         `members/${member.relPath}/NODE.md: delegate_mention '${member.delegateMention}' must reference a member with type 'personal_assistant', but '${target.name}' has type '${target.type}'`,
       );
+    }
+  }
+
+  // Report pending invites (informational, not an error)
+  const pendingInvites = members.filter((m) => m.status === "invited");
+  if (pendingInvites.length > 0) {
+    console.log(`\n  Pending invites (${pendingInvites.length}):`);
+    for (const m of pendingInvites) {
+      console.log(`    - members/${m.relPath}/NODE.md`);
     }
   }
 

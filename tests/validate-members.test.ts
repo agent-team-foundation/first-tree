@@ -187,6 +187,31 @@ describe("runValidateMembers delegate_mention", () => {
   });
 });
 
+// --- status field ---
+
+describe("validateMember status field", () => {
+  it("accepts member with status: invited", () => {
+    const tmp = useTmpDir();
+    const content = "---\ntitle: Alice\nowners: [alice]\ntype: human\nstatus: invited\nrole: Eng\ndomains: [eng]\n---\n";
+    const p = write(tmp.path, "members/alice/NODE.md", content);
+    expect(validateMember(p, tmp.path)).toEqual([]);
+  });
+
+  it("accepts member without status field", () => {
+    const tmp = useTmpDir();
+    const p = write(tmp.path, "members/alice/NODE.md", VALID_MEMBER);
+    expect(validateMember(p, tmp.path)).toEqual([]);
+  });
+
+  it("rejects invalid status value", () => {
+    const tmp = useTmpDir();
+    const content = "---\ntitle: Alice\nowners: [alice]\ntype: human\nstatus: pending\nrole: Eng\ndomains: [eng]\n---\n";
+    const p = write(tmp.path, "members/alice/NODE.md", content);
+    const errors = validateMember(p, tmp.path);
+    expect(errors.some((e) => e.includes("invalid status"))).toBe(true);
+  });
+});
+
 // --- extractScalar ---
 
 describe("extractScalar", () => {

@@ -370,7 +370,7 @@ export function collectContributorMembers(
   return git;
 }
 
-function escapeYamlDoubleQuoted(value: string): string {
+export function escapeYamlDoubleQuoted(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
@@ -400,7 +400,7 @@ function locateTemplatePath(
   );
 }
 
-function ensureMembersDomainNode(
+export function ensureMembersDomainNode(
   sourceRepoRoot: string,
   treeRoot: string,
   frameworkRoot?: string,
@@ -418,7 +418,7 @@ function ensureMembersDomainNode(
   );
 }
 
-function readMemberTemplate(
+export function readMemberTemplate(
   sourceRepoRoot: string,
   treeRoot: string,
   frameworkRoot?: string,
@@ -473,6 +473,53 @@ function renderMemberNode(
       "<!-- What you're actively working on. -->",
       focusText,
     );
+}
+
+export type MemberType = "human" | "personal_assistant" | "autonomous_agent";
+
+export interface InviteMemberInput {
+  githubId: string;
+  title: string;
+  type: MemberType;
+  role: string;
+  domains: string[];
+  delegateMention?: string;
+}
+
+export function renderInviteMemberNode(
+  template: string,
+  input: InviteMemberInput,
+): string {
+  const domainsYaml = input.domains
+    .map((d) => `  - "${escapeYamlDoubleQuoted(d)}"`)
+    .join("\n");
+
+  const delegateLine = input.delegateMention
+    ? `\ndelegate_mention: "${escapeYamlDoubleQuoted(input.delegateMention)}"`
+    : "";
+
+  return template
+    .replace(
+      'title: "<Display Name>"',
+      `title: "${escapeYamlDoubleQuoted(input.title)}"`,
+    )
+    .replace(
+      "owners: [<github-username>]",
+      `owners: [${input.githubId}]`,
+    )
+    .replace(
+      'type: "<human | personal_assistant | autonomous_agent>"',
+      `type: "${input.type}"\nstatus: "invited"${delegateLine}`,
+    )
+    .replace(
+      'role: "<role title>"',
+      `role: "${escapeYamlDoubleQuoted(input.role)}"`,
+    )
+    .replace(
+      '  - "<domain>"',
+      domainsYaml,
+    )
+    .replace('# <Display Name>', `# ${input.title}`);
 }
 
 function collectExistingMemberNames(root: string): Set<string> {

@@ -19,6 +19,8 @@ Commands:
   sync                  Detect drift between a tree repo and its bound sources
   review                Run Claude Code PR review (CI helper)
   generate-codeowners   Generate .github/CODEOWNERS from tree ownership
+  invite                Invite a new member to the Context Tree
+  join                  Accept an invite and join a Context Tree
   inject-context        Output Claude Code SessionStart hook payload from NODE.md
   help                  Show help for a topic (e.g. \`help onboarding\`)
 
@@ -185,6 +187,14 @@ export async function runCli(
         "#engine/commands/inject-context.js"
       );
       return runInjectContext(args.slice(1));
+    }
+    case "invite": {
+      const { runInvite } = await import("#engine/commands/invite.js");
+      return runInvite(args.slice(1));
+    }
+    case "join": {
+      const { runJoin } = await import("#engine/commands/join.js");
+      return runJoin(args.slice(1));
     }
     case "help":
       return (await import("#engine/commands/help.js")).runHelp(
