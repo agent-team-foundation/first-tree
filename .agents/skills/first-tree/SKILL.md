@@ -75,6 +75,9 @@ Default onboarding workflow:
 5. If the current root is a workspace, run `first-tree workspace sync` so all
    child repos bind to the same shared tree.
 
+During `bind` / `init`, the CLI also ensures the tree repo has the bundled
+`first-tree` skill installed and refreshes binding metadata in both locations.
+
 ## CLI Commands
 
 | Command | Purpose |
