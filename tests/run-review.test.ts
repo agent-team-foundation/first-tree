@@ -1,7 +1,13 @@
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  buildPrompt,
   extractStreamText,
   extractReviewJson,
+  prepareReviewWorkspace,
+  splitDiffByFile,
 } from "../assets/framework/helpers/run-review.js";
 
 // --- extractStreamText ---
@@ -151,5 +157,128 @@ describe("extractReviewJson", () => {
     expect(
       extractReviewJson('{"verdict": "", "summary": "Empty"}'),
     ).toBeNull();
+  });
+});
+
+// --- splitDiffByFile ---
+
+describe("splitDiffByFile", () => {
+  it("splits a multi-file diff into per-file sections", () => {
+    const diff = [
+      "diff --git a/foo.md b/foo.md",
+      "index 1111111..2222222 100644",
+      "--- a/foo.md",
+      "+++ b/foo.md",
+      "@@ -1 +1 @@",
+      "-old",
+      "+new",
+      "diff --git a/bar/NODE.md b/bar/NODE.md",
+      "index 3333333..4444444 100644",
+      "--- a/bar/NODE.md",
+      "+++ b/bar/NODE.md",
+      "@@ -1 +1 @@",
+      "-old node",
+      "+new node",
+    ].join("\n");
+
+    const sections = splitDiffByFile(diff);
+    expect(sections).toHaveLength(2);
+    expect(sections[0].path).toBe("foo.md");
+    expect(sections[0].patch).toContain("+new");
+    expect(sections[1].path).toBe("bar/NODE.md");
+    expect(sections[1].patch).toContain("+new node");
+  });
+});
+
+// --- prepareReviewWorkspace / buildPrompt ---
+
+describe("review workspace preparation", () => {
+  it("writes manifest and per-file patches for on-demand inspection", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "first-tree-review-test-"));
+    const diffPath = join(tempDir, "pr.diff");
+    const metadataPath = join(tempDir, "pr-metadata.json");
+    const workspaceRoot = join(tempDir, "workspace");
+
+    writeFileSync(
+      diffPath,
+      [
+        "diff --git a/foo.md b/foo.md",
+        "index 1111111..2222222 100644",
+        "--- a/foo.md",
+        "+++ b/foo.md",
+        "@@ -1 +1 @@",
+        "-old",
+        "+new",
+      ].join("\n"),
+    );
+    writeFileSync(
+      metadataPath,
+      JSON.stringify({
+        url: "https://github.com/example/repo/pull/1",
+        title: "Review me",
+        files: [{ path: "foo.md", additions: 1, deletions: 1 }],
+      }),
+    );
+
+    const workspace = prepareReviewWorkspace(diffPath, {
+      prMetadataPath: metadataPath,
+      workspaceRoot,
+    });
+
+    expect(workspace.files).toHaveLength(1);
+    expect(workspace.files[0].patchPath).toBeDefined();
+    expect(readFileSync(workspace.manifestPath, "utf-8")).toContain(
+      "https://github.com/example/repo/pull/1",
+    );
+    expect(readFileSync(workspace.files[0].patchPath!, "utf-8")).toContain(
+      "diff --git a/foo.md b/foo.md",
+    );
+  });
+
+  it("keeps the raw diff out of the initial prompt", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "first-tree-review-prompt-"));
+    const diffPath = join(tempDir, "pr.diff");
+    const metadataPath = join(tempDir, "pr-metadata.json");
+    const reviewPromptPath = join(tempDir, "review.md");
+    const workspaceRoot = join(tempDir, "workspace");
+    const uniqueDiffMarker = "UNIQUE_DIFF_MARKER_FOR_PROMPT";
+    const originalCwd = process.cwd();
+
+    writeFileSync(join(tempDir, "AGENTS.md"), "# Instructions\n\nFollow the tree rules.");
+    writeFileSync(join(tempDir, "NODE.md"), "---\ntitle: Root\nowners: [*]\n---\n\n# Root");
+    writeFileSync(reviewPromptPath, "Return ONLY JSON.");
+    writeFileSync(
+      diffPath,
+      [
+        "diff --git a/foo.md b/foo.md",
+        "index 1111111..2222222 100644",
+        "--- a/foo.md",
+        "+++ b/foo.md",
+        "@@ -1 +1 @@",
+        `+${uniqueDiffMarker}`,
+      ].join("\n"),
+    );
+    writeFileSync(
+      metadataPath,
+      JSON.stringify({
+        url: "https://github.com/example/repo/pull/1",
+        title: "Prompt check",
+        files: [{ path: "foo.md", additions: 1, deletions: 0 }],
+      }),
+    );
+
+    process.chdir(tempDir);
+    try {
+      const prompt = buildPrompt(diffPath, reviewPromptPath, {
+        prMetadataPath: metadataPath,
+        workspaceRoot,
+      });
+
+      expect(prompt).toContain("https://github.com/example/repo/pull/1");
+      expect(prompt).toContain("Structured manifest JSON");
+      expect(prompt).not.toContain(uniqueDiffMarker);
+    } finally {
+      process.chdir(originalCwd);
+    }
   });
 });

@@ -42,6 +42,7 @@ jobs:
           PR_NUMBER=${{ github.event.pull_request.number || github.event.issue.number }}
           echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
           gh pr diff "$PR_NUMBER" > /tmp/pr-diff.txt
+          gh pr view "$PR_NUMBER" --json url,title,body,files > /tmp/pr-metadata.json
           gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid > /tmp/pr-head-sha.txt
 
       - name: Run Claude review
