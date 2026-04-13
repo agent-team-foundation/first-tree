@@ -20,8 +20,9 @@ workspace repo, or non-git workspace folder.
   - `.first-tree/workspace.json` when the root is a workspace
 - `NODE.md`, `members/`, and tree-scoped `AGENTS.md` / `CLAUDE.md` belong only
   in the tree repo.
-- The tree repo keeps its own metadata under `.first-tree/tree.json` and
-  `.first-tree/bindings/`.
+- The tree repo keeps its own installed skill under `.agents/skills/first-tree/`
+  and `.claude/skills/first-tree`, plus tree metadata under `.first-tree/tree.json`
+  and `.first-tree/bindings/`.
 
 ## Binding Modes
 
@@ -47,6 +48,8 @@ workspace repo, or non-git workspace folder.
     workspace.json          # workspace roots only
 
 <tree-repo>/
+  .agents/skills/first-tree/
+  .claude/skills/first-tree
   .first-tree/
     VERSION
     progress.md
@@ -74,6 +77,10 @@ When an agent is asked to install `first-tree`:
 Do not recreate a new sibling tree repo when the user already has a shared tree
 they want to keep using.
 
+Whenever a git-backed source/workspace root is bound, keep the binding metadata
+pointing at the tree checkout and published tree URL. Do not create hidden
+codebase mirrors in the tree repo by default.
+
 ## Workspace Rule
 
 If the current root contains many child repos or submodules:
@@ -90,7 +97,8 @@ package folders that are not repos do not get repo-level binding metadata.
 - Verify the tree repo with `first-tree verify`.
 - Use `first-tree upgrade` in a source/workspace root to refresh local
   integration.
-- Use `first-tree upgrade --tree-path ...` to refresh the tree repo metadata.
+- Use `first-tree upgrade --tree-path ...` to refresh the tree repo metadata
+  plus its installed tree-repo skill.
 
 ## Publish Rule
 
