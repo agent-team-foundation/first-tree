@@ -71,53 +71,33 @@ Options:
   --help             Show this help message
 `;
 
-const SYNC_RUNBOOK_REL_PATH = join(".claude", "commands", "first-tree-sync.md");
-const SYNC_RUNBOOK_ASSET_REL_PATH = join(
-  "assets",
-  "framework",
-  "claude-commands",
-  "first-tree-sync.md",
-);
-const SYNC_SCHEDULE_RUNBOOK_REL_PATH = join(".claude", "commands", "first-tree-sync-schedule.md");
-const SYNC_SCHEDULE_RUNBOOK_ASSET_REL_PATH = join(
-  "assets",
-  "framework",
-  "claude-commands",
-  "first-tree-sync-schedule.md",
-);
+const SYNC_RUNBOOKS = [
+  { rel: "first-tree-sync.md", label: "sync runbook" },
+  { rel: "first-tree-sync-schedule.md", label: "sync schedule runbook" },
+  { rel: "first-tree-sync-start.md", label: "sync start command" },
+  { rel: "first-tree-sync-stop.md", label: "sync stop command" },
+  { rel: "first-tree-sync-loop.md", label: "sync loop command" },
+];
 
 export function ensureSyncRunbook(
   treeRoot: string,
   sourceRoot: string,
 ): "created" | "unchanged" | "missing-source" {
-  const targetPath = join(treeRoot, SYNC_RUNBOOK_REL_PATH);
   let result: "created" | "unchanged" | "missing-source" = "unchanged";
 
-  if (!existsSync(targetPath)) {
-    const sourcePath = join(sourceRoot, SYNC_RUNBOOK_ASSET_REL_PATH);
+  for (const { rel, label } of SYNC_RUNBOOKS) {
+    const targetPath = join(treeRoot, ".claude", "commands", rel);
+    if (existsSync(targetPath)) continue;
+
+    const sourcePath = join(sourceRoot, "assets", "framework", "claude-commands", rel);
     if (!existsSync(sourcePath)) {
-      return "missing-source";
+      if (result === "unchanged") result = "missing-source";
+      continue;
     }
     mkdirSync(dirname(targetPath), { recursive: true });
     copyFileSync(sourcePath, targetPath);
-    console.log(
-      `Installed sync runbook at \`${SYNC_RUNBOOK_REL_PATH}\`.`,
-    );
+    console.log(`Installed ${label} at \`.claude/commands/${rel}\`.`);
     result = "created";
-  }
-
-  // Also install the schedule runbook
-  const scheduleTargetPath = join(treeRoot, SYNC_SCHEDULE_RUNBOOK_REL_PATH);
-  if (!existsSync(scheduleTargetPath)) {
-    const scheduleSourcePath = join(sourceRoot, SYNC_SCHEDULE_RUNBOOK_ASSET_REL_PATH);
-    if (existsSync(scheduleSourcePath)) {
-      mkdirSync(dirname(scheduleTargetPath), { recursive: true });
-      copyFileSync(scheduleSourcePath, scheduleTargetPath);
-      console.log(
-        `Installed sync schedule runbook at \`${SYNC_SCHEDULE_RUNBOOK_REL_PATH}\`.`,
-      );
-      if (result === "unchanged") result = "created";
-    }
   }
 
   // Check for gardener
