@@ -14,6 +14,7 @@ export const TREE_BOOTSTRAP_STATE = join(TREE_RUNTIME_ROOT, "bootstrap.json");
 export const TREE_STATE = join(TREE_RUNTIME_ROOT, "tree.json");
 export const TREE_BINDINGS_DIR = join(TREE_RUNTIME_ROOT, "bindings");
 export const TREE_SUBMODULES_DIR = join(TREE_RUNTIME_ROOT, "submodules");
+export const TREE_SOURCE_REPOS_FILE = "source-repos.md";
 export const LOCAL_TREE_CONFIG = join(TREE_RUNTIME_ROOT, "local-tree.json");
 export const LOCAL_TREE_TEMP_ROOT = join(TREE_RUNTIME_ROOT, "tmp");
 export const SOURCE_STATE = join(TREE_RUNTIME_ROOT, "source.json");

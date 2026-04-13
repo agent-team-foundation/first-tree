@@ -22,7 +22,8 @@ workspace repo, or non-git workspace folder.
   in the tree repo.
 - The tree repo keeps its own installed skill under `.agents/skills/first-tree/`
   and `.claude/skills/first-tree`, plus tree metadata under `.first-tree/tree.json`
-  and `.first-tree/bindings/`.
+  and `.first-tree/bindings/`, plus a generated `source-repos.md` index at the
+  tree root.
 
 ## Binding Modes
 
@@ -57,6 +58,7 @@ workspace repo, or non-git workspace folder.
     bindings/
       <source-id>.json
     bootstrap.json          # legacy compatibility
+  source-repos.md
   NODE.md
   AGENTS.md
   CLAUDE.md
@@ -78,8 +80,11 @@ Do not recreate a new sibling tree repo when the user already has a shared tree
 they want to keep using.
 
 Whenever a git-backed source/workspace root is bound, keep the binding metadata
-pointing at the tree checkout and published tree URL. Do not create hidden
-codebase mirrors in the tree repo by default.
+pointing at the tree checkout and published tree URL. The tree repo may also
+refresh `source-repos.md` plus lightweight root guidance derived from those
+bindings, but `.first-tree/bindings/` remains the canonical machine-readable
+source of truth. Do not create hidden codebase mirrors in the tree repo by
+default.
 
 ## Workspace Rule
 

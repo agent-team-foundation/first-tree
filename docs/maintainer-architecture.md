@@ -15,6 +15,10 @@ Bindings are stored in:
 - source/workspace roots: `.first-tree/source.json` and `.first-tree/workspace.json`
 - tree repos: `.first-tree/tree.json` and `.first-tree/bindings/<source-id>.json`
 
+The tree repo may also generate a human/agent-facing `source-repos.md` index
+from those bindings, but the JSON files remain the canonical machine-readable
+source of truth.
+
 That replaces the old one-source-at-a-time mental model that depended too
 heavily on one mutable bootstrap file.
 
@@ -31,8 +35,9 @@ heavily on one mutable bootstrap file.
 - keep `.agents/skills/first-tree/` and `.claude/skills/first-tree/` as alias
   symlinks in this source repo
 - keep source/workspace roots free of tree content
-- keep tree-side metadata limited to `.first-tree/tree.json` and
-  `.first-tree/bindings/`
+- keep canonical tree-side metadata limited to `.first-tree/tree.json` and
+  `.first-tree/bindings/`; any root-level repo index must be derived from those
+  files instead of becoming a second source of truth
 - keep shared-tree behavior expressed through bindings, not heuristics alone
 - update docs, code, and tests together whenever the binding schema changes
 

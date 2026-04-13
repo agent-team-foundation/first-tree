@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import { Repo } from "#engine/repo.js";
 import { runUpgrade } from "#engine/upgrade.js";
 import { copyCanonicalSkill } from "#engine/runtime/installer.js";
+import { writeTreeBinding } from "#engine/runtime/binding-state.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
   CLAUDE_INSTRUCTIONS_FILE,
@@ -156,6 +157,36 @@ describe("runUpgrade", () => {
     const sourceDir = useTmpDir();
     makeTreeMetadata(repoDir.path, "0.1.0");
     makeAgentsMd(repoDir.path, { markers: true, userContent: true });
+    writeFileSync(
+      join(repoDir.path, "NODE.md"),
+      [
+        "---",
+        "title: Example Tree",
+        "owners: [alice]",
+        "---",
+        "",
+        "# Example Tree",
+        "",
+        "Context for the organization.",
+        "",
+        "## Domains",
+        "",
+        "- **[members/](members/NODE.md)** — Members.",
+        "",
+      ].join("\n"),
+    );
+    writeTreeBinding(repoDir.path, "alpha-11111111", {
+      bindingMode: "shared-source",
+      entrypoint: "/repos/alpha",
+      remoteUrl: "git@github.com:acme/alpha.git",
+      rootKind: "git-repo",
+      scope: "repo",
+      sourceId: "alpha-11111111",
+      sourceName: "alpha",
+      sourceRootPath: "../alpha",
+      treeMode: "shared",
+      treeRepoName: "org-context",
+    });
     makeSourceSkill(sourceDir.path, "0.2.0");
 
     const result = runUpgrade(new Repo(repoDir.path), {
@@ -172,6 +203,15 @@ describe("runUpgrade", () => {
     );
     expect(readFileSync(join(repoDir.path, TREE_PROGRESS), "utf-8")).toContain(
       ".first-tree/VERSION",
+    );
+    expect(readFileSync(join(repoDir.path, "source-repos.md"), "utf-8")).toContain(
+      "[acme/alpha](https://github.com/acme/alpha)",
+    );
+    expect(readFileSync(join(repoDir.path, "NODE.md"), "utf-8")).toContain(
+      "[Source Repos](source-repos.md)",
+    );
+    expect(readFileSync(join(repoDir.path, "AGENTS.md"), "utf-8")).toContain(
+      "## Source Repo Index",
     );
   });
 
