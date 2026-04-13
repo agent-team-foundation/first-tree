@@ -58,7 +58,7 @@ export interface ShellResult {
 export type ShellRun = (
   command: string,
   args: string[],
-  options?: { cwd?: string; input?: string },
+  options?: { cwd?: string; input?: string; timeout?: number },
 ) => Promise<ShellResult>;
 
 export interface SyncDeps {
@@ -69,13 +69,14 @@ export interface SyncDeps {
 async function defaultShellRun(
   command: string,
   args: string[],
-  options: { cwd?: string; input?: string } = {},
+  options: { cwd?: string; input?: string; timeout?: number } = {},
 ): Promise<ShellResult> {
   try {
     const { stdout, stderr } = await execFileAsync(command, args, {
       cwd: options.cwd,
       encoding: "utf-8",
       maxBuffer: 32 * 1024 * 1024,
+      timeout: options.timeout,
     });
     return { stdout: String(stdout), stderr: String(stderr), code: 0 };
   } catch (err) {
@@ -544,13 +545,21 @@ Return a JSON array. Each element represents one area that needs a NEW tree node
 For TREE_OK items, only path, type, and rationale are required (other fields can be empty strings).
 
 Return a JSON array only, no prose.`;
+  const CLAUDE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes per classification
   const result = await shellRun("claude", [
     "-p",
     "--output-format",
     "json",
     prompt,
-  ]);
+  ], { timeout: CLAUDE_TIMEOUT_MS });
   if (result.code !== 0) {
+    const timedOut = result.stderr.includes("ETIMEDOUT") || result.stderr.includes("killed");
+    if (timedOut) {
+      console.error(
+        `\u26A0 Claude CLI timed out after 5 minutes. Skipping this PR.`,
+      );
+      return [];
+    }
     console.error(
       "\u274C The `claude` CLI is required for drift classification but was not found on PATH.\n\n" +
       "Install it:\n" +
@@ -839,8 +848,8 @@ async function applyProposalGroup(
     }
   }
 
-  // Run generate-codeowners after writing NODE.md files
-  await runGenerateCodeownersForTree(treeRoot);
+  // NOTE: CODEOWNERS is NOT generated per-PR to avoid merge conflicts.
+  // A single housekeeping PR regenerates it after all sync PRs merge.
 
   writeTreeBinding(treeRoot, binding.sourceId, {
     ...binding,
@@ -1225,6 +1234,37 @@ export async function runSync(
         );
         if (!ok) return 1;
         await shellRun("git", ["checkout", "-"], { cwd: repo.root });
+      }
+
+      // Open a housekeeping PR to regenerate CODEOWNERS after all sync PRs merge
+      if (!flags.dryRun && applyCount > 0) {
+        console.log("\nOpening housekeeping PR to regenerate CODEOWNERS...");
+        const hkBranch = `first-tree/sync-${drift.binding.sourceId}-codeowners`;
+        await shellRun("git", ["checkout", "-B", hkBranch], { cwd: repo.root });
+        await runGenerateCodeownersForTree(repo.root);
+        const hkAdd = await shellRun("git", ["add", ".github/CODEOWNERS"], { cwd: repo.root });
+        if (hkAdd.code === 0) {
+          const hkDiff = await shellRun("git", ["diff", "--cached", "--quiet"], { cwd: repo.root });
+          if (hkDiff.code !== 0) {
+            // There are staged changes
+            await shellRun("git", ["commit", "-m", "chore(sync): regenerate CODEOWNERS after sync"], { cwd: repo.root });
+            await shellRun("git", ["push", "origin", "HEAD"], { cwd: repo.root });
+            const hkPr = await shellRun("gh", [
+              "pr", "create",
+              "--title", `chore(sync): regenerate CODEOWNERS for ${drift.binding.sourceId}`,
+              "--body", "Housekeeping PR — regenerates CODEOWNERS after sync PRs have been merged.\n\nMerge this AFTER all sync PRs are merged.",
+            ], { cwd: repo.root });
+            if (hkPr.code === 0) {
+              console.log(`\u2713 Housekeeping PR opened: ${hkPr.stdout.trim()}`);
+              console.log("  Merge this AFTER all sync PRs are merged.");
+            }
+          } else {
+            console.log("  CODEOWNERS unchanged — no housekeeping PR needed.");
+          }
+        }
+        await shellRun("git", ["checkout", "-"], { cwd: repo.root });
+      } else if (flags.dryRun && applyCount > 0) {
+        console.log("\n(dry-run) would open a housekeeping PR to regenerate CODEOWNERS after all sync PRs merge");
       }
     }
   }
