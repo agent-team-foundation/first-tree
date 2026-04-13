@@ -59,13 +59,14 @@ A shared tree can bind multiple source repos. Each source gets its own `lastReco
 
 ## Classification logic
 
-For each merged source PR, the AI returns one of three verdicts:
+For each merged source PR, the AI returns one of two verdicts:
 
 | Verdict | Meaning | Action |
 |---|---|---|
-| **TREE_OK** | The tree already covers this change adequately | No tree PR opened |
+| **TREE_OK** | The tree already covers this change | No tree PR opened |
 | **TREE_MISS** | The tree has no coverage for this area | New node proposed |
-| **TREE_STALE** | The tree has a related node but it is outdated | Node update proposed |
+
+There is intentionally no TREE_STALE verdict. Since gardener is required on the source repo, every merged PR has already passed context-fit review before merge. A merged PR cannot contradict the tree — if it did, gardener would have flagged it pre-merge. The only question sync asks is: "did this PR introduce new knowledge the tree hasn't captured yet?"
 
 The classification prompt biases toward TREE_MISS. A sparse tree (missing context) is more dangerous than a detailed one (extra context), because downstream consumers make worse decisions with gaps than with redundancy.
 
@@ -120,7 +121,6 @@ When sync is installed in a tree repo, these files are added:
 When `--apply` runs, it produces the following artifacts in the tree repo:
 
 - **TREE_MISS proposals** create a new `NODE.md` under `drift/<sourceId>/<path>/`.
-- **TREE_STALE proposals** create a `NODE.superseded-<sha>.json` file next to the original node. The JSON extension ensures `verify` ignores it.
 - Intermediate directories receive auto-generated `NODE.md` files.
 - The `drift/` directory is added to the root `NODE.md` domain listing.
 - `generate-codeowners` runs after writing nodes to keep ownership in sync.

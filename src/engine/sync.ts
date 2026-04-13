@@ -228,7 +228,7 @@ interface DriftReport {
 
 interface ClassificationItem {
   path: string;
-  type: "TREE_MISS" | "TREE_STALE" | "TREE_OK";
+  type: "TREE_MISS" | "TREE_OK";
   target_node_path: string | null;
   rationale: string;
   suggested_node_title: string;
@@ -514,31 +514,34 @@ async function classifyDriftViaClaude(
   ].join("\n");
   const prompt = `You are a Context Tree maintenance agent. A Context Tree is a structured knowledge base (markdown NODE.md files) that captures product decisions, architecture, conventions, and domain knowledge for a codebase.
 
-Your job: given the tree's current nodes and a batch of recent source-repo changes, determine what the tree is MISSING or what is STALE.
+Your job: given the tree's current nodes and a recently merged PR, determine whether the tree is MISSING knowledge that this PR introduced.
 
-IMPORTANT: Do NOT classify individual commits. Instead, look at the OVERALL picture of what changed in the source and compare it against what the tree currently covers. Ask yourself:
-- Are there new features, modules, or architectural patterns that the tree has no node for? → TREE_MISS
-- Are there changes that contradict or supersede an existing tree node's content? → TREE_STALE
-- Is the tree already adequate for this area? → TREE_OK
+Context: this PR has already been reviewed and approved (including context-fit review by gardener). It does not conflict with the tree. The only question is: did it introduce NEW knowledge that the tree doesn't yet capture?
+
+Ask yourself:
+- Did this PR add a new feature, module, convention, or architectural pattern that the tree has no node for? → TREE_MISS
+- Is the tree already adequate — the existing nodes cover this area? → TREE_OK
 
 Bias toward TREE_MISS. A Context Tree that is too sparse is worse than one that is too detailed. If in doubt, classify as TREE_MISS.
 
 ## Current tree nodes
 ${treeSummary}
 
-## Recent source changes (commits and merged PRs)
+## Merged PR
 ${driftSummary}
 
 ## Output format
-Return a JSON array. Each element represents one area that needs a tree update (NOT one per commit — group related changes):
+Return a JSON array. Each element represents one area that needs a NEW tree node (NOT one per commit — group related changes):
 {
   "path": "suggested/node/path",
-  "type": "TREE_MISS" | "TREE_STALE" | "TREE_OK",
-  "target_node_path": "existing/node/path or null for TREE_MISS",
-  "rationale": "one sentence explaining why",
+  "type": "TREE_MISS" | "TREE_OK",
+  "target_node_path": null,
+  "rationale": "one sentence explaining why the tree needs this node",
   "suggested_node_title": "Human-readable title for the node",
   "suggested_node_body_markdown": "Draft NODE.md body content (2-5 paragraphs)"
 }
+
+For TREE_OK items, only path, type, and rationale are required (other fields can be empty strings).
 
 Return a JSON array only, no prose.`;
   const result = await shellRun("claude", [
@@ -633,24 +636,17 @@ function writeProposalFile(
   item: ClassificationItem,
 ): string {
   const slug = slugifyProposalPath(
-    `${item.type === "TREE_MISS" ? "new" : "update"}-${item.target_node_path ?? item.path ?? item.suggested_node_title}`,
+    `new-${item.path ?? item.suggested_node_title}`,
   );
   const dir = join(treeRoot, TREE_RUNTIME_ROOT, "proposals", sourceId);
   mkdirSync(dir, { recursive: true });
   const filePath = join(dir, `${slug}.md`);
-  const supersedes = item.type === "TREE_STALE" && item.target_node_path
-    ? item.target_node_path
-    : "null";
-  const target = item.type === "TREE_MISS"
-    ? "new"
-    : item.target_node_path ?? "new";
   const frontmatter = [
     "---",
     `type: ${item.type}`,
     `source_id: ${sourceId}`,
     `source_commit_range: ${drift.fromSha ?? "(first-run)"}..${drift.toSha}`,
-    `target_node: ${target}`,
-    `supersedes: ${supersedes}`,
+    `target_node: new`,
     `rationale: ${item.rationale.replace(/\n/g, " ")}`,
     "---",
     "",
@@ -695,23 +691,6 @@ function extractOwnersFromCodeowners(
   return [];
 }
 
-function readNodeOwners(treeRoot: string, nodePath: string): string[] {
-  const absPath = join(treeRoot, nodePath);
-  try {
-    const text = readFileSync(absPath, "utf-8");
-    const fmMatch = text.match(/^---\s*\n(.*?)\n---/s);
-    if (!fmMatch) return [];
-    const ownersMatch = fmMatch[1].match(/^owners:\s*\[([^\]]*)\]/m);
-    if (!ownersMatch) return [];
-    return ownersMatch[1]
-      .split(",")
-      .map((o) => o.trim())
-      .filter(Boolean);
-  } catch {
-    return [];
-  }
-}
-
 async function ghAuthOk(shellRun: ShellRun): Promise<boolean> {
   const result = await shellRun("gh", ["auth", "status"]);
   return result.code === 0;
@@ -729,79 +708,6 @@ function logDriftTable(reports: DriftReport[]): void {
       }`,
     );
   }
-}
-
-/** Group proposals by source PR. Commits not tied to a PR go into an "unlinked" group. */
-function groupProposalsBySourcePr(
-  drift: DriftReport,
-  proposals: ClassificationItem[],
-  proposalPaths: string[],
-): ProposalGroup[] {
-  // Build a map from commit SHA -> PR number
-  const commitToPr = new Map<string, MergedPr>();
-  for (const pr of drift.mergedPrs) {
-    if (pr.mergeCommitSha) {
-      commitToPr.set(pr.mergeCommitSha, pr);
-    }
-  }
-
-  // For each proposal, try to link to a PR via the commit topDir / path heuristic
-  // Since proposals come from classification of commits, we associate each proposal
-  // with the first matching PR by checking commit dirs
-  const prGroups = new Map<number, ProposalGroup>();
-  const unlinked: ProposalGroup = {
-    sourcePrNumber: null,
-    sourcePrTitle: null,
-    proposals: [],
-    proposalPaths: [],
-  };
-
-  for (let i = 0; i < proposals.length; i++) {
-    const proposal = proposals[i];
-    const proposalPath = proposalPaths[i];
-    // Try to find a matching PR
-    let matched = false;
-    for (const pr of drift.mergedPrs) {
-      // Simple heuristic: if any commit associated with this PR dir matches the proposal path
-      if (pr.mergeCommitSha && commitToPr.has(pr.mergeCommitSha)) {
-        // Check if we already have this group
-        if (!prGroups.has(pr.number)) {
-          prGroups.set(pr.number, {
-            sourcePrNumber: pr.number,
-            sourcePrTitle: pr.title,
-            proposals: [],
-            proposalPaths: [],
-          });
-        }
-        const group = prGroups.get(pr.number)!;
-        group.proposals.push(proposal);
-        group.proposalPaths.push(proposalPath);
-        matched = true;
-        break;
-      }
-    }
-    if (!matched) {
-      unlinked.proposals.push(proposal);
-      unlinked.proposalPaths.push(proposalPath);
-    }
-  }
-
-  const groups: ProposalGroup[] = Array.from(prGroups.values());
-  if (unlinked.proposals.length > 0) {
-    groups.push(unlinked);
-  }
-
-  // If there are no PRs at all, put everything in unlinked
-  if (groups.length === 0 && proposals.length > 0) {
-    return [{
-      sourcePrNumber: null,
-      sourcePrTitle: null,
-      proposals: [...proposals],
-      proposalPaths: [...proposalPaths],
-    }];
-  }
-
-  return groups;
 }
 
 async function runGenerateCodeownersForTree(treeRoot: string): Promise<void> {
@@ -894,31 +800,6 @@ async function applyProposalGroup(
         "",
       ].join("\n");
       writeFileSync(join(absDir, "NODE.md"), content);
-    } else if (proposal.type === "TREE_STALE" && proposal.target_node_path) {
-      // Write superseded content as a .superseded.json file (not .md) so
-      // verify does not treat it as a tree node. The reviewer sees the
-      // proposed update in the PR diff and manually edits the real NODE.md.
-      const target = proposal.target_node_path;
-      const targetAbs = join(treeRoot, target);
-      const originalOwners = readNodeOwners(treeRoot, target);
-      const supersededPath = join(
-        dirname(targetAbs),
-        `NODE.superseded-${shortSha}.json`,
-      );
-      mkdirSync(dirname(supersededPath), { recursive: true });
-      writeFileSync(
-        supersededPath,
-        JSON.stringify(
-          {
-            supersedes: target,
-            source_commit: drift.toSha,
-            owners: originalOwners,
-            suggested_body: proposal.suggested_node_body_markdown,
-          },
-          null,
-          2,
-        ) + "\n",
-      );
     }
   }
 
