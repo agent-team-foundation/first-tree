@@ -1,6 +1,10 @@
 import { resolve } from "node:path";
 import { formatDedicatedTreePathExample } from "#engine/dedicated-tree.js";
-import { Repo } from "#engine/repo.js";
+import {
+  countProjectSpecificPlaceholderBlocks,
+  PROJECT_SPECIFIC_INSTRUCTIONS_HEADER,
+  Repo,
+} from "#engine/repo.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
   CLAUDE_INSTRUCTIONS_FILE,
@@ -124,11 +128,33 @@ export function runVerify(repo?: Repo, nodeValidator?: NodeValidator): number {
   const hasCanonicalAgentInstructions = r.hasCanonicalAgentInstructionsFile();
   const hasLegacyAgentInstructions = r.hasLegacyAgentInstructionsFile();
   const hasClaudeInstructions = r.hasClaudeInstructionsFile();
+  const duplicatePlaceholderFiles: string[] = [];
+  const agentInstructionsText = r.readAgentInstructions();
+  if (
+    hasCanonicalAgentInstructions
+    && agentInstructionsText !== null
+    && countProjectSpecificPlaceholderBlocks(agentInstructionsText) > 1
+  ) {
+    duplicatePlaceholderFiles.push(AGENT_INSTRUCTIONS_FILE);
+  }
+  const claudeInstructionsText = r.readClaudeInstructions();
+  if (
+    hasClaudeInstructions
+    && claudeInstructionsText !== null
+    && countProjectSpecificPlaceholderBlocks(claudeInstructionsText) > 1
+  ) {
+    duplicatePlaceholderFiles.push(CLAUDE_INSTRUCTIONS_FILE);
+  }
   if (hasLegacyAgentInstructions) {
     const followUp = hasCanonicalAgentInstructions
       ? `Remove legacy \`${LEGACY_AGENT_INSTRUCTIONS_FILE}\` after confirming its contents are in \`${AGENT_INSTRUCTIONS_FILE}\`.`
       : `Rename \`${LEGACY_AGENT_INSTRUCTIONS_FILE}\` to \`${AGENT_INSTRUCTIONS_FILE}\`.`;
     console.log(`  Legacy agent instructions detected. ${followUp}\n`);
+  }
+  if (duplicatePlaceholderFiles.length > 0) {
+    console.log(
+      `  Duplicate \`${PROJECT_SPECIFIC_INSTRUCTIONS_HEADER}\` placeholder blocks detected in ${duplicatePlaceholderFiles.map((file) => `\`${file}\``).join(" and ")}. Keep only one copy of the template section in each file.\n`,
+    );
   }
   allPassed = check(
     `${AGENT_INSTRUCTIONS_FILE} is canonical and both ${AGENT_INSTRUCTIONS_FILE}/${CLAUDE_INSTRUCTIONS_FILE} have framework markers`,
@@ -136,7 +162,8 @@ export function runVerify(repo?: Repo, nodeValidator?: NodeValidator): number {
       !hasLegacyAgentInstructions &&
       r.hasAgentInstructionsMarkers() &&
       hasClaudeInstructions &&
-      r.hasClaudeInstructionsMarkers(),
+      r.hasClaudeInstructionsMarkers() &&
+      duplicatePlaceholderFiles.length === 0,
   ) && allPassed;
 
   // 4. Node validation

@@ -75,6 +75,8 @@ describe("syncTreeSourceRepoIndex", () => {
     const agents = readFileSync(join(treeDir.path, "AGENTS.md"), "utf-8");
 
     expect(result.indexAction).toBe("created");
+    expect(sourceRepos).toContain('title: "Source Repos"');
+    expect(sourceRepos).toContain("owners: []");
     expect(sourceRepos).toContain("[acme/alpha](https://github.com/acme/alpha)");
     expect(sourceRepos).toContain(
       "[acme/platform-workspace](https://github.com/acme/platform-workspace)",

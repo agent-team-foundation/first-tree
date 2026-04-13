@@ -1,4 +1,8 @@
-import { FRAMEWORK_END_MARKER } from "#engine/repo.js";
+import {
+  countProjectSpecificPlaceholderBlocks,
+  FRAMEWORK_END_MARKER,
+  PROJECT_SPECIFIC_INSTRUCTIONS_HEADER,
+} from "#engine/repo.js";
 import type { Repo } from "#engine/repo.js";
 import type { RuleResult } from "#engine/rules/index.js";
 import {
@@ -46,6 +50,11 @@ export function evaluate(repo: Repo): RuleResult {
     );
   } else {
     const text = repo.readAgentInstructions() ?? "";
+    if (countProjectSpecificPlaceholderBlocks(text) > 1) {
+      tasks.push(
+        `Remove duplicate \`${PROJECT_SPECIFIC_INSTRUCTIONS_HEADER}\` placeholder blocks from ${AGENT_INSTRUCTIONS_FILE}; keep only one copy of the template section`,
+      );
+    }
     const afterMarker = text.split(FRAMEWORK_END_MARKER);
     if (afterMarker.length > 1) {
       const userSection = afterMarker[1].trim();
@@ -72,6 +81,11 @@ export function evaluate(repo: Repo): RuleResult {
         `\`${CLAUDE_INSTRUCTIONS_FILE}\` exists but is missing framework markers — add \`<!-- BEGIN CONTEXT-TREE FRAMEWORK -->\` and \`<!-- END CONTEXT-TREE FRAMEWORK -->\` sections`,
       );
     } else {
+      if (countProjectSpecificPlaceholderBlocks(claudeText) > 1) {
+        tasks.push(
+          `Remove duplicate \`${PROJECT_SPECIFIC_INSTRUCTIONS_HEADER}\` placeholder blocks from ${CLAUDE_INSTRUCTIONS_FILE}; keep only one copy of the template section`,
+        );
+      }
       const afterMarker = claudeText.split(FRAMEWORK_END_MARKER);
       if (afterMarker.length > 1) {
         const userSection = afterMarker[1].trim();

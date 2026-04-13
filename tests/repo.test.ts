@@ -1,7 +1,10 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { Repo } from "#engine/repo.js";
+import {
+  countProjectSpecificPlaceholderBlocks,
+  Repo,
+} from "#engine/repo.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
   CLAUDE_INSTALLED_PROGRESS,
@@ -120,6 +123,48 @@ describe("frontmatter", () => {
     const tmp = useTmpDir();
     const repo = new Repo(tmp.path);
     expect(repo.frontmatter("NODE.md")).toBeNull();
+  });
+});
+
+// --- project-specific placeholder detection ---
+
+describe("countProjectSpecificPlaceholderBlocks", () => {
+  it("counts duplicate placeholder blocks after the framework marker", () => {
+    const text = [
+      "<!-- BEGIN CONTEXT-TREE FRAMEWORK -->",
+      "framework stuff",
+      "<!-- END CONTEXT-TREE FRAMEWORK -->",
+      "",
+      "# Project-Specific Instructions",
+      "",
+      "<!-- Add your project-specific agent instructions below this line. -->",
+      "",
+      "# Project-Specific Instructions",
+      "",
+      "<!-- Add your project-specific agent instructions below this line. -->",
+      "",
+    ].join("\n");
+
+    expect(countProjectSpecificPlaceholderBlocks(text)).toBe(2);
+  });
+
+  it("ignores placeholder text before the framework marker", () => {
+    const text = [
+      "# Project-Specific Instructions",
+      "",
+      "<!-- Add your project-specific agent instructions below this line. -->",
+      "",
+      "<!-- BEGIN CONTEXT-TREE FRAMEWORK -->",
+      "framework stuff",
+      "<!-- END CONTEXT-TREE FRAMEWORK -->",
+      "",
+      "# Project-Specific Instructions",
+      "",
+      "<!-- Add your project-specific agent instructions below this line. -->",
+      "",
+    ].join("\n");
+
+    expect(countProjectSpecificPlaceholderBlocks(text)).toBe(1);
   });
 });
 

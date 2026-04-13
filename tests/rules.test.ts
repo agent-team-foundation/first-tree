@@ -151,6 +151,60 @@ describe("agentInstructions rule", () => {
     expect(result.tasks.some((t) => t.toLowerCase().includes("project-specific"))).toBe(true);
   });
 
+  it("reports duplicate placeholder blocks in AGENTS.md", () => {
+    const tmp = useTmpDir();
+    writeFileSync(
+      join(tmp.path, "AGENTS.md"),
+      [
+        "<!-- BEGIN CONTEXT-TREE FRAMEWORK -->",
+        "framework stuff",
+        "<!-- END CONTEXT-TREE FRAMEWORK -->",
+        "",
+        "# Project-Specific Instructions",
+        "",
+        "<!-- Add your project-specific agent instructions below this line. -->",
+        "",
+        "# Project-Specific Instructions",
+        "",
+        "<!-- Add your project-specific agent instructions below this line. -->",
+        "",
+      ].join("\n"),
+    );
+    makeClaudeMd(tmp.path, { markers: true, userContent: true });
+    const repo = new Repo(tmp.path);
+    const result = agentInstructions.evaluate(repo);
+    expect(result.tasks.some((t) => t.includes("duplicate") && t.includes("AGENTS.md"))).toBe(
+      true,
+    );
+  });
+
+  it("reports duplicate placeholder blocks in CLAUDE.md", () => {
+    const tmp = useTmpDir();
+    makeAgentsMd(tmp.path, { markers: true, userContent: true });
+    writeFileSync(
+      join(tmp.path, "CLAUDE.md"),
+      [
+        "<!-- BEGIN CONTEXT-TREE FRAMEWORK -->",
+        "framework stuff",
+        "<!-- END CONTEXT-TREE FRAMEWORK -->",
+        "",
+        "# Project-Specific Instructions",
+        "",
+        "<!-- Add your project-specific agent instructions below this line. -->",
+        "",
+        "# Project-Specific Instructions",
+        "",
+        "<!-- Add your project-specific agent instructions below this line. -->",
+        "",
+      ].join("\n"),
+    );
+    const repo = new Repo(tmp.path);
+    const result = agentInstructions.evaluate(repo);
+    expect(result.tasks.some((t) => t.includes("duplicate") && t.includes("CLAUDE.md"))).toBe(
+      true,
+    );
+  });
+
   it("reports missing CLAUDE.md", () => {
     const tmp = useTmpDir();
     makeAgentsMd(tmp.path, { markers: true, userContent: true });

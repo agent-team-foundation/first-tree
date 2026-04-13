@@ -251,6 +251,30 @@ describe("runVerify failing", () => {
     expect(ret).toBe(1);
   });
 
+  it("fails when AGENTS.md contains duplicate placeholder blocks", () => {
+    const tmp = useTmpDir();
+    buildFullRepo(tmp.path);
+    writeFileSync(
+      join(tmp.path, AGENT_INSTRUCTIONS_FILE),
+      [
+        "<!-- BEGIN CONTEXT-TREE FRAMEWORK -->",
+        "framework stuff",
+        "<!-- END CONTEXT-TREE FRAMEWORK -->",
+        "",
+        "# Project-Specific Instructions",
+        "",
+        "<!-- Add your project-specific agent instructions below this line. -->",
+        "",
+        "# Project-Specific Instructions",
+        "",
+        "<!-- Add your project-specific agent instructions below this line. -->",
+        "",
+      ].join("\n"),
+    );
+    const repo = new Repo(tmp.path);
+    expect(runVerify(repo, passValidator)).toBe(1);
+  });
+
   it("fails when legacy AGENT.md remains alongside AGENTS.md", () => {
     const tmp = useTmpDir();
     buildFullRepo(tmp.path);

@@ -90,6 +90,22 @@ const SOURCE_DIR_HINTS = new Set([
 
 export const FRAMEWORK_BEGIN_MARKER = "<!-- BEGIN CONTEXT-TREE FRAMEWORK";
 export const FRAMEWORK_END_MARKER = "<!-- END CONTEXT-TREE FRAMEWORK -->";
+export const PROJECT_SPECIFIC_INSTRUCTIONS_HEADER =
+  "# Project-Specific Instructions";
+export const PROJECT_SPECIFIC_INSTRUCTIONS_PLACEHOLDER =
+  "<!-- Add your project-specific agent instructions below this line. -->";
+const PROJECT_SPECIFIC_PLACEHOLDER_RE =
+  /# Project-Specific Instructions\s*\n(?:\s*\n)*<!-- Add your project-specific agent instructions below this line\. -->/g;
+
+export function countProjectSpecificPlaceholderBlocks(text: string): number {
+  const normalized = text.replaceAll("\r\n", "\n");
+  const markerIndex = normalized.indexOf(FRAMEWORK_END_MARKER);
+  const searchText =
+    markerIndex >= 0
+      ? normalized.slice(markerIndex + FRAMEWORK_END_MARKER.length)
+      : normalized;
+  return searchText.match(PROJECT_SPECIFIC_PLACEHOLDER_RE)?.length ?? 0;
+}
 
 export interface Frontmatter {
   title?: string;
