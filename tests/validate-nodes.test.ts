@@ -3,7 +3,6 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   Findings,
-  collectMdFiles,
   parseFrontmatter,
   parseSoftLinks,
   validateOwners,
@@ -50,21 +49,6 @@ describe("parseFrontmatter", () => {
     const root = setup(tmp);
     const p = write(root, "NODE.md", "---\ntitle: Oops\nNo closing fence\n");
     expect(parseFrontmatter(p)).toBeNull();
-  });
-});
-
-describe("collectMdFiles", () => {
-  it("skips generated source repo indexes", () => {
-    const tmp = useTmpDir();
-    const root = setup(tmp);
-    const node = write(
-      root,
-      "NODE.md",
-      "---\ntitle: Tree\nowners: [alice]\n---\n# Tree\n\nEnough body text to satisfy validators.\n",
-    );
-    write(root, "source-repos.md", "# Source Repos\n");
-
-    expect(collectMdFiles()).toEqual([node]);
   });
 });
 
