@@ -35,6 +35,23 @@ describe("parseJoinArgs", () => {
     });
   });
 
+  it("parses optional --branch", () => {
+    const result = parseJoinArgs([
+      "--tree-url",
+      "https://github.com/org/tree.git",
+      "--invite",
+      "alice",
+      "--branch",
+      "invite/alice",
+    ]);
+    expect(result).toEqual({
+      skipInstall: false,
+      treeUrl: "https://github.com/org/tree.git",
+      invite: "alice",
+      branch: "invite/alice",
+    });
+  });
+
   it("parses --skip-install flag", () => {
     const result = parseJoinArgs([
       "--tree-url",

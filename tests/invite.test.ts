@@ -3,6 +3,7 @@ import {
   parseInviteArgs,
   composeMagicWord,
   readTreeContext,
+  sanitizeInviteTreeUrl,
   type TreeContext,
 } from "#engine/invite.js";
 import {
@@ -220,6 +221,7 @@ describe("composeMagicWord", () => {
       ctx,
       "https://github.com/org/my-org-context.git",
       "bob",
+      "invite/bob",
     );
 
     expect(result).toContain("--- First Tree Invite ---");
@@ -231,7 +233,7 @@ describe("composeMagicWord", () => {
     expect(result).toContain("- frontend-app");
     expect(result).toContain("- infra");
     expect(result).toContain(
-      "npx first-tree join --tree-url https://github.com/org/my-org-context.git --invite bob",
+      "npx first-tree join --tree-url https://github.com/org/my-org-context.git --invite bob --branch invite/bob",
     );
   });
 
@@ -242,10 +244,29 @@ describe("composeMagicWord", () => {
       repositories: [],
       inviterDisplay: "A team member",
     };
-    const result = composeMagicWord(ctx, "https://example.com/tree.git", "charlie");
+    const result = composeMagicWord(
+      ctx,
+      "https://example.com/tree.git",
+      "charlie",
+      "main",
+    );
 
     expect(result).not.toContain("## What repositories does it cover?");
     expect(result).toContain("npx first-tree join");
+  });
+});
+
+describe("sanitizeInviteTreeUrl", () => {
+  it("strips embedded credentials from https remotes", () => {
+    expect(
+      sanitizeInviteTreeUrl("https://token:x-oauth-basic@github.com/org/tree.git"),
+    ).toBe("https://github.com/org/tree.git");
+  });
+
+  it("converts ssh remotes into shareable https urls", () => {
+    expect(sanitizeInviteTreeUrl("git@github.com:org/tree.git")).toBe(
+      "https://github.com/org/tree.git",
+    );
   });
 });
 

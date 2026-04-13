@@ -3,14 +3,14 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
 export const JOIN_USAGE = `usage: first-tree join --tree-url <url> --invite <github-id>
-       [--tree-path <path>] [--skip-install]
+       [--branch <name>] [--tree-path <path>] [--skip-install]
 
 Accept a pending invite to a Context Tree.
 
 What it does:
   1. Installs the first-tree CLI globally (if not already installed)
   2. Clones the tree repo
-  3. Accepts the invite (removes status: invited)
+  3. Checks out the branch containing the invite and accepts it
   4. Pushes the acceptance
 
 After this command completes, the tree is available locally and the
@@ -20,6 +20,7 @@ installation, etc.) based on your preferences.
 Options:
   --tree-url <url>       Remote URL of the tree repo (required)
   --invite <github-id>   GitHub username of the invitee (required)
+  --branch <name>        Branch containing the invite (default: invite/<github-id>)
   --tree-path <path>     Local path for the tree repo (default: sibling directory)
   --skip-install         Skip global CLI installation
   --help                 Show this help message
@@ -28,6 +29,7 @@ Options:
 export interface ParsedJoinArgs {
   treeUrl?: string;
   invite?: string;
+  branch?: string;
   treePath?: string;
   skipInstall: boolean;
 }
@@ -50,6 +52,12 @@ export function parseJoinArgs(
         const val = args[++i];
         if (!val) return { error: "Missing value for --invite" };
         parsed.invite = val;
+        break;
+      }
+      case "--branch": {
+        const val = args[++i];
+        if (!val) return { error: "Missing value for --branch" };
+        parsed.branch = val;
         break;
       }
       case "--tree-path": {
@@ -120,13 +128,14 @@ const STATUS_INVITED_RE = /^status:\s*"?invited"?\s*$/m;
 export interface JoinOptions {
   treeUrl: string;
   invite: string;
+  branch?: string;
   treePath?: string;
   skipInstall: boolean;
 }
 
 export function runJoin(options: JoinOptions): number {
   const { treeUrl, invite, skipInstall } = options;
-  const branchName = `invite/${invite}`;
+  const branchName = options.branch?.trim() || `invite/${invite}`;
 
   console.log("\nJoining Context Tree...\n");
 
@@ -259,6 +268,7 @@ export function runJoinCli(args: string[] = []): number {
   return runJoin({
     treeUrl: parsed.treeUrl!,
     invite: parsed.invite!,
+    branch: parsed.branch,
     treePath,
     skipInstall: parsed.skipInstall,
   });

@@ -22,9 +22,10 @@ their agent.
 
 What it does:
   1. Creates members/<github-id>/NODE.md with status: invited
-  2. Optionally creates an invite/<github-id> branch and GitHub PR
-  3. Reads tree metadata to generate a context-rich invite block
-  4. Prints the invite block — send it to the invitee
+  2. Publishes the invite on a branch the invitee can fetch
+  3. Optionally opens a GitHub PR for that branch
+  4. Reads tree metadata to generate a context-rich invite block
+  5. Prints the invite block — send it to the invitee
 
 Options:
   --github-id <id>       GitHub username (required; becomes slug and owners value)
@@ -35,8 +36,8 @@ Options:
   --delegate-mention <id> Personal assistant ID
   --tree-path <path>     Path to tree repo (default: current directory)
   --branch               Create invite/<github-id> branch (default)
-  --no-branch            Commit on current branch
-  --pr                   Open a GitHub PR after pushing
+  --no-branch            Commit on the current branch and share that branch
+  --pr                   Open a GitHub PR after publishing the invite
   --help                 Show this help message
 `;
 
@@ -171,6 +172,45 @@ function getInviterGithub(treeRoot: string): string | null {
   }
 }
 
+function getCurrentBranch(treeRoot: string): string | null {
+  try {
+    const branch = git(["rev-parse", "--abbrev-ref", "HEAD"], treeRoot);
+    return branch === "" || branch === "HEAD" ? null : branch;
+  } catch {
+    return null;
+  }
+}
+
+export function sanitizeInviteTreeUrl(treeUrl: string): string {
+  const trimmed = treeUrl.trim();
+  if (trimmed.length === 0) {
+    return treeUrl;
+  }
+
+  const scpMatch = trimmed.match(
+    /^(?:ssh:\/\/)?git@(?<host>[^/:]+)[:/](?<owner>[^/]+)\/(?<repo>[^/]+?)(?:\.git)?$/u,
+  );
+  if (scpMatch?.groups) {
+    return `https://${scpMatch.groups.host}/${scpMatch.groups.owner}/${scpMatch.groups.repo}.git`;
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    const parts = parsed.pathname
+      .replace(/^\/+/, "")
+      .replace(/\.git$/, "")
+      .split("/");
+    if (parts.length === 2 && parts.every((part) => part.trim().length > 0)) {
+      return `https://${parsed.hostname}/${parts[0]}/${parts[1]}.git`;
+    }
+    parsed.username = "";
+    parsed.password = "";
+    return parsed.toString();
+  } catch {
+    return treeUrl;
+  }
+}
+
 // --- Tree metadata extraction ---
 
 const FRONTMATTER_RE = /^---\s*\n(.*?)\n---/s;
@@ -241,6 +281,7 @@ export function composeMagicWord(
   ctx: TreeContext,
   treeUrl: string,
   githubId: string,
+  branchName: string,
 ): string {
   const lines: string[] = [];
 
@@ -269,7 +310,7 @@ export function composeMagicWord(
   );
   lines.push("");
   lines.push(
-    `  npx first-tree join --tree-url ${treeUrl} --invite ${githubId}`,
+    `  npx first-tree join --tree-url ${treeUrl} --invite ${githubId} --branch ${branchName}`,
   );
   lines.push("");
   lines.push("--- End Invite ---");
@@ -306,6 +347,15 @@ export function runInvite(options: InviteOptions): number {
 
   const memberDir = join(treePath, "members", githubId);
   const memberNodePath = join(memberDir, "NODE.md");
+  const branchName = `invite/${githubId}`;
+  const shareBranch = branch ? branchName : getCurrentBranch(treePath);
+
+  if (shareBranch === null) {
+    console.error(
+      "Error: could not determine the current branch. Check out a branch first or omit --no-branch.",
+    );
+    return 1;
+  }
 
   // Validate member does not already exist
   if (existsSync(memberDir)) {
@@ -316,7 +366,6 @@ export function runInvite(options: InviteOptions): number {
   }
 
   // Validate branch does not already exist
-  const branchName = `invite/${githubId}`;
   if (branch) {
     try {
       git(["rev-parse", "--verify", branchName], treePath);
@@ -363,10 +412,19 @@ export function runInvite(options: InviteOptions): number {
 
   console.log(`\nInvite created for ${githubId}`);
 
+  try {
+    git(["push", "-u", "origin", shareBranch], treePath);
+    console.log(`  Published invite on origin/${shareBranch}`);
+  } catch (err) {
+    console.error(
+      `Error: could not publish branch '${shareBranch}'. Push it manually before sharing the invite.\n${err instanceof Error ? err.message : String(err)}`,
+    );
+    return 1;
+  }
+
   // PR
   if (pr) {
     try {
-      git(["push", "-u", "origin", branchName], treePath);
       execFileSync(
         "gh",
         [
@@ -395,7 +453,12 @@ export function runInvite(options: InviteOptions): number {
   const remoteUrl = getRemoteUrl(treePath);
   if (remoteUrl) {
     const ctx = readTreeContext(treePath);
-    const magicWord = composeMagicWord(ctx, remoteUrl, githubId);
+    const magicWord = composeMagicWord(
+      ctx,
+      sanitizeInviteTreeUrl(remoteUrl),
+      githubId,
+      shareBranch,
+    );
     console.log("\n" + "=".repeat(50));
     console.log("Copy the ENTIRE block below and send it to the invitee.");
     console.log("They should paste the whole thing into their agent.");
