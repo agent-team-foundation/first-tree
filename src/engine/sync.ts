@@ -1006,6 +1006,7 @@ export async function runSync(
 
   const treeNodes = scanTreeNodes(repo.root);
   const driftReports: DriftReport[] = [];
+  let hasConfigErrors = false;
 
   for (const binding of bindings) {
     if (!binding.remoteUrl) {
@@ -1016,6 +1017,7 @@ export async function runSync(
         `     "remoteUrl": "https://github.com/<owner>/<repo>"\n` +
         `   Then re-run first-tree sync.`,
       );
+      hasConfigErrors = true;
       continue;
     }
     const ownerRepo = parseOwnerRepoFromRemoteUrl(binding.remoteUrl);
@@ -1106,13 +1108,17 @@ export async function runSync(
 
   logDriftTable(driftReports);
 
+  if (hasConfigErrors && driftReports.length === 0) {
+    return 1;
+  }
+
   if (!flags.propose && !flags.apply) {
-    return 0;
+    return hasConfigErrors ? 1 : 0;
   }
 
   if (driftReports.length === 0) {
     console.log("nothing stale to propose.");
-    return 0;
+    return hasConfigErrors ? 1 : 0;
   }
 
   for (const drift of driftReports) {
