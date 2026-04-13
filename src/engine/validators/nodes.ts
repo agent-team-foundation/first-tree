@@ -5,6 +5,7 @@ import {
   LEGACY_AGENT_INSTRUCTIONS_FILE,
   SKILL_NAME,
   SKILL_ROOT,
+  TREE_SOURCE_REPOS_FILE,
 } from "#engine/runtime/asset-loader.js";
 
 const FRONTMATTER_RE = /^---\s*\n(.*?)\n---/s;
@@ -21,6 +22,7 @@ const SKIP_FILES = new Set([
   AGENT_INSTRUCTIONS_FILE,
   LEGACY_AGENT_INSTRUCTIONS_FILE,
   "CLAUDE.md",
+  TREE_SOURCE_REPOS_FILE,
 ]);
 const MIN_BODY_LENGTH = 20;
 
