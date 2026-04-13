@@ -1,5 +1,6 @@
 # Local first-tree scratch data
-.first-tree/
+.first-tree/*
+!.first-tree/source.json
 
 # IDE
 .idea/
