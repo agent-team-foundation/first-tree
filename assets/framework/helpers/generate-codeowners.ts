@@ -75,9 +75,11 @@ export function formatOwners(owners: string[]): string {
   const seen = new Set<string>();
   const result: string[] = [];
   for (const o of owners) {
-    if (!seen.has(o)) {
-      seen.add(o);
-      result.push(`@${o}`);
+    // Strip leading @ if present, then add it — prevents @@double-prefix
+    const normalized = o.replace(/^@+/, "");
+    if (normalized && !seen.has(normalized)) {
+      seen.add(normalized);
+      result.push(`@${normalized}`);
     }
   }
   return result.join(" ");
