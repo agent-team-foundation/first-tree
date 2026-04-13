@@ -997,8 +997,12 @@ export async function runSync(
 
   for (const binding of bindings) {
     if (!binding.remoteUrl) {
-      console.log(
-        `\u23ED ${binding.sourceId}: no remoteUrl recorded \u2014 skipping`,
+      console.error(
+        `\u274C ${binding.sourceId}: no remoteUrl in binding file.\n` +
+        `   Sync needs a GitHub URL to fetch commits and merged PRs.\n` +
+        `   Fix: edit .first-tree/bindings/${binding.sourceId}.json and add:\n` +
+        `     "remoteUrl": "https://github.com/<owner>/<repo>"\n` +
+        `   Then re-run first-tree sync.`,
       );
       continue;
     }
