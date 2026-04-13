@@ -23,6 +23,7 @@ import {
   copyCanonicalSkill,
   resolveBundledPackageRoot,
 } from "#engine/runtime/installer.js";
+import { syncTreeSourceRepoIndex } from "#engine/runtime/source-repo-index.js";
 import {
   readLocalTreeConfig,
   upsertLocalTreeConfig,
@@ -40,7 +41,7 @@ What it does:
   2. Updates FIRST_TREE.md plus the managed FIRST-TREE-SOURCE-INTEGRATION block
   3. Writes .first-tree/source.json and refreshes .first-tree/local-tree.json
   4. Writes .first-tree/tree.json and .first-tree/bindings/<source-id>.json
-     in the target tree repo when a local tree checkout is available
+     in the target tree repo, and refreshes source-repos.md plus root guidance
   5. Ensures the target tree repo also has the first-tree skill installed
   6. Syncs the bound codebase repo into the tree repo under .first-tree/submodules/
 
@@ -474,6 +475,7 @@ export function runBind(repo?: Repo, options?: BindOptions): number {
         ? relativeRepoPath(treeResolution.treeRepo.root, workspaceRootPath)
         : undefined,
     });
+    const sourceRepoIndex = syncTreeSourceRepoIndex(treeResolution.treeRepo.root);
 
     if (bindingMode === "workspace-member" && workspaceId && workspaceRootPath) {
       upsertWorkspaceMember(
@@ -517,6 +519,17 @@ export function runBind(repo?: Repo, options?: BindOptions): number {
       console.log("  Installed the bundled first-tree skill in the tree repo.");
     } else {
       console.log("  Reused the existing first-tree skill in the tree repo.");
+    }
+    if (sourceRepoIndex.indexAction === "created") {
+      console.log("  Created source-repos.md in the tree repo.");
+    } else if (sourceRepoIndex.indexAction === "updated") {
+      console.log("  Updated source-repos.md in the tree repo.");
+    }
+    if (sourceRepoIndex.rootNodeAction === "updated") {
+      console.log("  Updated the root NODE.md with the source repo index link.");
+    }
+    if (sourceRepoIndex.agentsAction === "updated") {
+      console.log("  Updated AGENTS.md with source repo index guidance.");
     }
     if (gitIgnore.action === "created") {
       console.log("  Created .gitignore entries for first-tree local state.");

@@ -30,6 +30,7 @@ import {
   wipeInstalledSkill,
   writeTreeRuntimeVersion,
 } from "#engine/runtime/installer.js";
+import { syncTreeSourceRepoIndex } from "#engine/runtime/source-repo-index.js";
 import {
   upsertFirstTreeIndexFile,
   upsertSourceIntegrationFiles,
@@ -184,6 +185,24 @@ function logLocalSourceWorkspaceState(
     console.log("Created `.first-tree/local-tree.json` for the local tree checkout.");
   } else if (state.localTreeConfigAction === "updated") {
     console.log("Updated `.first-tree/local-tree.json` for the local tree checkout.");
+  }
+}
+
+function logTreeSourceRepoIndexSync(
+  state: ReturnType<typeof syncTreeSourceRepoIndex>,
+): void {
+  if (state.indexAction === "created") {
+    console.log("Created `source-repos.md` from the current tree bindings.");
+  } else if (state.indexAction === "updated") {
+    console.log("Updated `source-repos.md` from the current tree bindings.");
+  }
+
+  if (state.rootNodeAction === "updated") {
+    console.log("Updated the root `NODE.md` with the source repo index link.");
+  }
+
+  if (state.agentsAction === "updated") {
+    console.log("Updated `AGENTS.md` with source repo index guidance.");
   }
 }
 
@@ -506,10 +525,12 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
       && compareSkillVersions(installedTreeSkillVersion, packagedVersion) === 0;
 
     if (treeMetadataUpToDate && treeSkillUpToDate) {
+      const sourceRepoIndex = syncTreeSourceRepoIndex(workingRepo.root);
       ensureSyncRunbook(workingRepo.root, sourceRoot);
       console.log(
         `Already up to date with the bundled tree metadata and installed tree skill (${workingRepo.frameworkVersionPath()} = ${localVersion}).`,
       );
+      logTreeSourceRepoIndexSync(sourceRepoIndex);
       return 0;
     }
 
@@ -522,7 +543,6 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
     if (!treeSkillUpToDate) {
       const wipedPaths = wipeInstalledSkill(workingRepo.root);
       copyCanonicalSkill(sourceRoot, workingRepo.root);
-      ensureSyncRunbook(workingRepo.root, sourceRoot);
       if (wipedPaths.length > 0) {
         console.log(
           `Wiped previous tree skill installation: ${wipedPaths.map((p) => `\`${p}/\``).join(", ")}.`,
@@ -531,9 +551,10 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
       console.log(
         `Refreshed tree-repo skill payload at ${installedSkillRootsDisplay()}.`,
       );
-    } else {
-      ensureSyncRunbook(workingRepo.root, sourceRoot);
     }
+    const sourceRepoIndex = syncTreeSourceRepoIndex(workingRepo.root);
+    logTreeSourceRepoIndexSync(sourceRepoIndex);
+    ensureSyncRunbook(workingRepo.root, sourceRoot);
 
     const output = formatUpgradeTaskList(
       workingRepo,

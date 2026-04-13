@@ -101,6 +101,7 @@ first-tree bind --tree-url git@github.com:acme/org-context.git --tree-mode share
 - write `.first-tree/source.json`
 - refresh `.first-tree/local-tree.json`
 - write `.first-tree/tree.json` and `.first-tree/bindings/<source-id>.json`
+- refresh the tree repo's `source-repos.md` index plus root repo-discovery guidance
 
 ### Case C: Workspace Root + Shared Tree
 
@@ -190,6 +191,7 @@ but does not try to open many code PRs automatically.
 ## Routine Work After Publish
 
 - Start from `.first-tree/local-tree.json` in the current source/workspace root.
+- If you are starting from the tree repo itself, use `source-repos.md` as the quick index of bound source/workspace repos and their GitHub URLs, while treating `.first-tree/bindings/` as the canonical machine-readable source of truth.
 - Resolve the recorded `localPath`.
 - If the checkout is missing but the tree has been published, create a temporary
   clone under `.first-tree/tmp/`.

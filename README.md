@@ -159,6 +159,7 @@ folder before modifying anything. It reports:
     bindings/                # .first-tree/bindings/
       <source-id>.json
     bootstrap.json           # legacy compatibility for older publish flows
+  source-repos.md            # generated index of bound source/workspace repos
   NODE.md
   AGENTS.md
   CLAUDE.md
@@ -170,7 +171,8 @@ folder before modifying anything. It reports:
 The source/workspace root is not the tree. It should never contain `NODE.md`,
 `members/`, or tree-scoped `AGENTS.md` / `CLAUDE.md`.
 
-The tree repo stores binding metadata in `.first-tree/bindings/`, while
+The tree repo stores canonical binding metadata in `.first-tree/bindings/` and
+generates `source-repos.md` as the human/agent-friendly repo index, while
 source/workspace roots keep local checkout guidance in `.first-tree/local-tree.json`
 plus their own source/workspace binding state.
 

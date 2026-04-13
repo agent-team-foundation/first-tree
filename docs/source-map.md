@@ -41,6 +41,7 @@ This is the maintainer reading index for the current `first-tree` architecture.
 | `src/engine/verify.ts` | Tree verification |
 | `src/engine/runtime/binding-state.ts` | `source.json`, `workspace.json`, `tree.json`, and `bindings/` schema |
 | `src/engine/runtime/local-tree-config.ts` | `.first-tree/local-tree.json` contract |
+| `src/engine/runtime/source-repo-index.ts` | Generated `source-repos.md` index plus root tree repo guidance |
 | `src/engine/runtime/source-integration.ts` | Managed `AGENTS.md` / `CLAUDE.md` source integration block |
 | `src/engine/workspace.ts` | Child repo / submodule discovery |
 
