@@ -99,6 +99,43 @@ describe("refreshInjectContextHook", () => {
     expect(updated).not.toContain("inject-tree-context.sh");
   });
 
+  it("replaces a stale .context-tree/scripts/inject-tree-context.sh hook command", () => {
+    const tmp = useTmpDir();
+    mkdirSync(join(tmp.path, ".claude"), { recursive: true });
+    writeFileSync(
+      join(tmp.path, ".claude", "settings.json"),
+      JSON.stringify(
+        {
+          hooks: {
+            SessionStart: [
+              {
+                hooks: [
+                  {
+                    type: "command",
+                    command: ".context-tree/scripts/inject-tree-context.sh",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    const result = refreshInjectContextHook(tmp.path);
+    expect(result).toBe("updated");
+    const updated = readFileSync(
+      join(tmp.path, ".claude", "settings.json"),
+      "utf-8",
+    );
+    expect(updated).toContain(
+      "npx -p first-tree first-tree inject-context --skip-version-check",
+    );
+    expect(updated).not.toContain(".context-tree/scripts/inject-tree-context.sh");
+  });
+
   it("replaces a stale .claude/skills/.../inject-tree-context.sh path with the leading ./ stripped", () => {
     const tmp = useTmpDir();
     mkdirSync(join(tmp.path, ".claude"), { recursive: true });
@@ -131,6 +168,38 @@ describe("refreshInjectContextHook", () => {
       `"command":"npx -p first-tree first-tree inject-context --skip-version-check"`,
     );
     expect(updated).not.toContain("./npx");
+  });
+
+  it("replaces a stale scripts/inject-tree-context.sh hook command", () => {
+    const tmp = useTmpDir();
+    mkdirSync(join(tmp.path, ".claude"), { recursive: true });
+    writeFileSync(
+      join(tmp.path, ".claude", "settings.json"),
+      JSON.stringify({
+        hooks: {
+          SessionStart: [
+            {
+              hooks: [
+                {
+                  type: "command",
+                  command: "scripts/inject-tree-context.sh",
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+
+    const result = refreshInjectContextHook(tmp.path);
+    expect(result).toBe("updated");
+    const updated = readFileSync(
+      join(tmp.path, ".claude", "settings.json"),
+      "utf-8",
+    );
+    expect(updated).toContain(
+      `"command":"npx -p first-tree first-tree inject-context --skip-version-check"`,
+    );
   });
 
   it("returns unchanged when settings.json already uses the CLI command", () => {

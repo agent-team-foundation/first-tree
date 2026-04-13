@@ -17,6 +17,8 @@ const STALE_INJECT_CONTEXT_PATTERNS = [
   /\.claude\/skills\/first-tree\/assets\/framework\/helpers\/inject-tree-context\.sh/g,
   /skills\/first-tree\/assets\/framework\/helpers\/inject-tree-context\.sh/g,
   /\.context-tree\/helpers\/inject-tree-context\.sh/g,
+  /\.context-tree\/scripts\/inject-tree-context\.sh/g,
+  /\.scripts\/inject-tree-context\.sh/g,
 ];
 
 export function claudeCodeExampleCandidates(): string[] {
@@ -52,6 +54,10 @@ export function refreshInjectContextHook(
   for (const pattern of STALE_INJECT_CONTEXT_PATTERNS) {
     updated = updated.replace(pattern, INJECT_CONTEXT_COMMAND);
   }
+  updated = updated.replace(
+    /("command"\s*:\s*")(?:\.\/)?scripts\/inject-tree-context\.sh(")/g,
+    `$1${INJECT_CONTEXT_COMMAND}$2`,
+  );
   // Strip any leading "./" the legacy bash script started with so the
   // command runs cleanly.
   updated = updated.replace(

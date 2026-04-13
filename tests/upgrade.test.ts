@@ -1,5 +1,6 @@
 import {
   existsSync,
+  mkdirSync,
   lstatSync,
   readFileSync,
   readlinkSync,
@@ -45,6 +46,34 @@ function expectFirstTreeIndexSymlink(root: string): void {
   );
 }
 
+function writeStaleInjectContextSettings(
+  root: string,
+  command = ".context-tree/scripts/inject-tree-context.sh",
+): void {
+  mkdirSync(join(root, ".claude"), { recursive: true });
+  writeFileSync(
+    join(root, ".claude", "settings.json"),
+    JSON.stringify(
+      {
+        hooks: {
+          SessionStart: [
+            {
+              hooks: [
+                {
+                  type: "command",
+                  command,
+                },
+              ],
+            },
+          ],
+        },
+      },
+      null,
+      2,
+    ),
+  );
+}
+
 describe("runUpgrade", () => {
   it("migrates a legacy repo to the installed skill layout", () => {
     const repoDir = useTmpDir();
@@ -75,11 +104,12 @@ describe("runUpgrade", () => {
     );
   });
 
-  it("returns early when the installed skill already matches the packaged skill", () => {
+  it("returns early and refreshes a stale SessionStart hook when the installed skill already matches the packaged skill", () => {
     const repoDir = useTmpDir();
     const sourceDir = useTmpDir();
     makeFramework(repoDir.path, "0.2.0");
     makeSourceSkill(sourceDir.path, "0.2.0");
+    writeStaleInjectContextSettings(repoDir.path);
 
     const result = runUpgrade(new Repo(repoDir.path), {
       sourceRoot: sourceDir.path,
@@ -87,6 +117,11 @@ describe("runUpgrade", () => {
 
     expect(result).toBe(0);
     expect(existsSync(join(repoDir.path, INSTALLED_PROGRESS))).toBe(false);
+    expect(
+      readFileSync(join(repoDir.path, ".claude", "settings.json"), "utf-8"),
+    ).toContain(
+      "npx -p first-tree first-tree inject-context --skip-version-check",
+    );
   });
 
   it("migrates repos that still use the previous workspace skill path", () => {
@@ -215,6 +250,42 @@ describe("runUpgrade", () => {
     );
   });
 
+  it("refreshes a stale SessionStart hook even when a dedicated tree repo is already current", () => {
+    const repoDir = useTmpDir();
+    const sourceDir = useTmpDir();
+    makeTreeMetadata(repoDir.path, "0.2.0");
+    makeFramework(repoDir.path, "0.2.0");
+    makeAgentsMd(repoDir.path, { markers: true, userContent: true });
+    writeFileSync(
+      join(repoDir.path, "NODE.md"),
+      [
+        "---",
+        "title: Example Tree",
+        "owners: [alice]",
+        "---",
+        "",
+        "# Example Tree",
+        "",
+        "Context for the organization.",
+        "",
+      ].join("\n"),
+    );
+    writeStaleInjectContextSettings(repoDir.path);
+    makeSourceSkill(sourceDir.path, "0.2.0");
+
+    const result = runUpgrade(new Repo(repoDir.path), {
+      sourceRoot: sourceDir.path,
+    });
+
+    expect(result).toBe(0);
+    expect(existsSync(join(repoDir.path, TREE_PROGRESS))).toBe(false);
+    expect(
+      readFileSync(join(repoDir.path, ".claude", "settings.json"), "utf-8"),
+    ).toContain(
+      "npx -p first-tree first-tree inject-context --skip-version-check",
+    );
+  });
+
   it("refreshes source/workspace integration without writing tree progress", () => {
     const repoDir = useTmpDir();
     const sourceDir = useTmpDir();
@@ -258,7 +329,7 @@ describe("runUpgrade", () => {
     expect(existsSync(join(repoDir.path, INSTALLED_PROGRESS))).toBe(false);
   });
 
-  it("migrates a managed FIRST_TREE.md to a symlink even when the installed skill is already current", () => {
+  it("migrates a managed FIRST_TREE.md and refreshes a stale SessionStart hook even when the installed skill is already current", () => {
     const repoDir = useTmpDir();
     const sourceDir = useTmpDir();
     makeSourceRepo(repoDir.path);
@@ -282,6 +353,7 @@ describe("runUpgrade", () => {
         "",
       ].join("\n"),
     );
+    writeStaleInjectContextSettings(repoDir.path);
     makeSourceSkill(sourceDir.path, "0.2.0");
 
     const result = runUpgrade(new Repo(repoDir.path), {
@@ -291,6 +363,11 @@ describe("runUpgrade", () => {
     expect(result).toBe(0);
     expectFirstTreeIndexSymlink(repoDir.path);
     expect(existsSync(join(repoDir.path, INSTALLED_PROGRESS))).toBe(false);
+    expect(
+      readFileSync(join(repoDir.path, ".claude", "settings.json"), "utf-8"),
+    ).toContain(
+      "npx -p first-tree first-tree inject-context --skip-version-check",
+    );
   });
 
   it("preserves an existing legacy context binding in source/workspace integration", () => {
