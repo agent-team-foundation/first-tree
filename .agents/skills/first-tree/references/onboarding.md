@@ -65,10 +65,11 @@ first-tree init
 
 The CLI will:
 
-- install `.agents/skills/first-tree/` and `.claude/skills/first-tree/`
+- install `.agents/skills/first-tree/` and `.claude/skills/first-tree/` in the source/workspace root
 - create `FIRST_TREE.md`
 - refresh `AGENTS.md` and `CLAUDE.md`
 - create or reuse a sibling `<repo>-tree` checkout
+- install the bundled `first-tree` skill in that tree repo if it is missing
 - scaffold the tree repo there
 - write binding metadata in both the source repo and the tree repo
 
@@ -95,6 +96,7 @@ first-tree bind --tree-url git@github.com:acme/org-context.git --tree-mode share
 `bind` will clone a local checkout if needed, then:
 
 - install local skill integration in the current repo
+- install the bundled `first-tree` skill in the tree repo if it is missing
 - refresh `AGENTS.md` and `CLAUDE.md`
 - write `.first-tree/source.json`
 - refresh `.first-tree/local-tree.json`

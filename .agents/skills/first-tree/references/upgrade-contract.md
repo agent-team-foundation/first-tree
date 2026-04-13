@@ -43,6 +43,8 @@ CLAUDE.md
 In a tree repo, `first-tree init tree` produces:
 
 ```text
+.agents/skills/first-tree/
+.claude/skills/first-tree
 .first-tree/
   VERSION
   progress.md
@@ -69,8 +71,8 @@ members/
 6. preserves `.first-tree/local-tree.json`, `.first-tree/source.json`, and
    `.first-tree/workspace.json`
 
-`first-tree upgrade --tree-path ...` in a tree repo refreshes only tree-side
-metadata such as `.first-tree/VERSION`.
+`first-tree upgrade --tree-path ...` in a tree repo refreshes tree-side
+metadata such as `.first-tree/VERSION` plus the installed tree-repo skill.
 
 ## What Gets Preserved
 
@@ -108,3 +110,5 @@ metadata such as `.first-tree/VERSION`.
 - workspace child repos should share one tree, not create many parallel trees
 - shared tree bindings should live in `.first-tree/bindings/`, not in a single
   overwrite-prone bootstrap file
+- source/workspace roots should keep referencing the tree through binding
+  metadata and `.first-tree/local-tree.json`
