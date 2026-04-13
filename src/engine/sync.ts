@@ -695,6 +695,23 @@ function extractOwnersFromCodeowners(
   return [];
 }
 
+function readNodeOwners(treeRoot: string, nodePath: string): string[] {
+  const absPath = join(treeRoot, nodePath);
+  try {
+    const text = readFileSync(absPath, "utf-8");
+    const fmMatch = text.match(/^---\s*\n(.*?)\n---/s);
+    if (!fmMatch) return [];
+    const ownersMatch = fmMatch[1].match(/^owners:\s*\[([^\]]*)\]/m);
+    if (!ownersMatch) return [];
+    return ownersMatch[1]
+      .split(",")
+      .map((o) => o.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 async function ghAuthOk(shellRun: ShellRun): Promise<boolean> {
   const result = await shellRun("gh", ["auth", "status"]);
   return result.code === 0;
@@ -853,6 +870,9 @@ async function applyProposalGroup(
     }
   }
 
+  // Collect all directories that will contain NODE.md files
+  const createdDirs = new Set<string>();
+
   for (const proposal of group.proposals) {
     if (proposal.type === "TREE_OK") continue;
     if (proposal.type === "TREE_MISS") {
@@ -860,6 +880,7 @@ async function applyProposalGroup(
       const relDir = join("drift", binding.sourceId, dirSegment);
       const absDir = join(treeRoot, relDir);
       mkdirSync(absDir, { recursive: true });
+      createdDirs.add(relDir);
       const owners = extractOwnersFromCodeowners(treeRoot, relDir);
       const title = proposal.suggested_node_title;
       const body = proposal.suggested_node_body_markdown;
@@ -874,23 +895,56 @@ async function applyProposalGroup(
       ].join("\n");
       writeFileSync(join(absDir, "NODE.md"), content);
     } else if (proposal.type === "TREE_STALE" && proposal.target_node_path) {
+      // Write superseded content as a .superseded.json file (not .md) so
+      // verify does not treat it as a tree node. The reviewer sees the
+      // proposed update in the PR diff and manually edits the real NODE.md.
       const target = proposal.target_node_path;
       const targetAbs = join(treeRoot, target);
+      const originalOwners = readNodeOwners(treeRoot, target);
       const supersededPath = join(
         dirname(targetAbs),
-        `${basename(targetAbs, ".md")}.superseded-${shortSha}.md`,
+        `NODE.superseded-${shortSha}.json`,
       );
       mkdirSync(dirname(supersededPath), { recursive: true });
-      const content = [
-        "---",
-        `supersedes: ${target}`,
-        `source_commit: ${drift.toSha}`,
-        "---",
-        "",
-        proposal.suggested_node_body_markdown,
-        "",
-      ].join("\n");
-      writeFileSync(supersededPath, content);
+      writeFileSync(
+        supersededPath,
+        JSON.stringify(
+          {
+            supersedes: target,
+            source_commit: drift.toSha,
+            owners: originalOwners,
+            suggested_body: proposal.suggested_node_body_markdown,
+          },
+          null,
+          2,
+        ) + "\n",
+      );
+    }
+  }
+
+  // Ensure every intermediate directory under drift/ has a NODE.md
+  // so that verify doesn't fail on "directory without NODE.md"
+  for (const dir of createdDirs) {
+    const parts = dir.split("/");
+    for (let i = 1; i <= parts.length; i++) {
+      const parentRel = parts.slice(0, i).join("/");
+      const parentNodePath = join(treeRoot, parentRel, "NODE.md");
+      if (!existsSync(parentNodePath)) {
+        mkdirSync(join(treeRoot, parentRel), { recursive: true });
+        const parentTitle = parts[i - 1] ?? "Drift";
+        writeFileSync(
+          parentNodePath,
+          [
+            "---",
+            `title: "${parentTitle}"`,
+            "owners: []",
+            "---",
+            "",
+            `Auto-generated intermediate node for sync proposals.`,
+            "",
+          ].join("\n"),
+        );
+      }
     }
   }
 
@@ -985,6 +1039,14 @@ async function applyProposalGroup(
   const labels = hasGardener
     ? ["first-tree:sync", "auto-merge"]
     : ["first-tree:sync"];
+  // Pre-create labels if they don't exist (ignore errors — may lack permission)
+  for (const label of labels) {
+    await shellRun(
+      "gh",
+      ["label", "create", label, "--color", "2ea44f", "--description", `Created by first-tree sync`, "--force"],
+      { cwd: treeRoot },
+    );
+  }
   const labelArgs = labels.flatMap((l) => ["--add-label", l]);
   const labelResult = await shellRun(
     "gh",
