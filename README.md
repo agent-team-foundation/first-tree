@@ -250,3 +250,5 @@ pnpm pack
 ## License
 
 Apache 2.0
+
+<!-- githuber self-mention pickup test 2026-04-14T23:47:04Z -->
