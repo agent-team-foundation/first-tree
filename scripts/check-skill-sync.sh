@@ -56,8 +56,9 @@ for forbidden in engine assets tests scripts agents; do
   fi
 done
 
-# Maintainer docs moved to top-level docs/.
+# Source-repo maintainer docs live in top-level docs/.
 require_file "$REPO_ROOT/docs/source-map.md"
+require_file "$REPO_ROOT/docs/design-sync.md"
 require_file "$REPO_ROOT/docs/maintainer-architecture.md"
 require_file "$REPO_ROOT/docs/maintainer-thin-cli.md"
 require_file "$REPO_ROOT/docs/maintainer-build-and-distribution.md"

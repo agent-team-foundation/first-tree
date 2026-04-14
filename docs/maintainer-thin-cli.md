@@ -1,6 +1,10 @@
 # Thin CLI Shell
 
-Use this reference when changing the root CLI/package shell.
+Authoritative decision node: `first-tree-skill-cli/thin-cli-shell.md` in the
+bound Context Tree.
+
+Use this local reference when changing `src/cli.ts` or the command adapters in
+`src/engine/commands/`.
 
 ## Shell Responsibilities
 
@@ -8,7 +12,8 @@ The shell should:
 
 - parse commands and flags
 - expose help and version
-- dispatch into `src/engine/`
+- handle `--skip-version-check`
+- dispatch into `src/engine/commands/`
 - stay thin
 
 ## Current CLI Surface
@@ -22,16 +27,26 @@ Top-level user commands:
 - `publish`
 - `verify`
 - `upgrade`
+- `sync`
 - `review`
 - `generate-codeowners`
+- `invite`
+- `join`
 - `inject-context`
 - `help`
 
+## Local Touchpoints
+
+- `src/cli.ts` — usage text, global flags, and dispatch
+- `src/engine/commands/*.ts` — thin command adapters
+- `tests/thin-cli.test.ts` — direct CLI smoke coverage
+- `tests/cli-e2e.test.ts` — end-to-end command workflow coverage
+
 ## Rules For Shell Changes
 
-- keep onboarding semantics in the skill references, not only in `src/cli.ts`
-- if `inspect` / `bind` / `workspace sync` / `publish` behavior changes, update
-  `skills/first-tree/references/onboarding.md`,
-  `skills/first-tree/references/source-workspace-installation.md`, and
-  `skills/first-tree/references/upgrade-contract.md`
-- keep root prose short; detailed operational knowledge belongs in the skill
+- Keep onboarding semantics in the skill references and tree nodes, not only in
+  `src/cli.ts`.
+- If command behavior changes, update the relevant tree node and shipped
+  reference docs before relying on the code to explain it.
+- Keep root prose short; detailed implementation notes belong here, while
+  decision-grade operational knowledge belongs in the tree.

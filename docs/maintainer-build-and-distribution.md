@@ -1,7 +1,10 @@
 # Build And Distribution
 
-Use this reference when touching package wiring, release behavior, or the
-distributable contract of `first-tree`.
+Authoritative decision node: `first-tree-skill-cli/build-and-distribution.md`
+in the bound Context Tree.
+
+Use this local reference when touching package wiring, build surfaces, or the
+release checklist in this repo.
 
 ## Fast Validation
 
@@ -23,11 +26,9 @@ run:
 pnpm pack
 ```
 
-Inspect the tarball contents before merging packaging changes. The distribution
-must be able to carry the canonical skill and the thin CLI shell without
-requiring repo-local prose.
+Inspect the tarball contents before merging packaging changes.
 
-## Build Responsibilities
+## Local Packaging Surfaces
 
 - `package.json` defines package metadata, scripts, and import aliases.
 - `tsconfig.json` defines TypeScript compile boundaries.
@@ -35,28 +36,13 @@ requiring repo-local prose.
 - `vitest.config.ts` defines unit-test entrypoints, and
   `vitest.eval.config.ts` defines the repo-only maintainer eval entrypoint.
 - `.github/workflows/ci.yml` is the thin CI shell for repo validation.
+- `assets/framework/VERSION` marks the shipped framework payload version.
 
-These files are shell surfaces. Their meaning must be documented here or in
-another skill reference, not only in the files themselves.
+## Release Checklist
 
-## Distribution Rules
-
-- Do not introduce a second copy of the framework outside the skill.
-- `package.json` must ship `skills/first-tree/` in the published
-  package alongside the thin CLI build output.
-- Keep repo-only developer tooling such as root `evals/` out of the published
-  package unless it becomes part of the user-facing framework contract.
-- If the CLI needs bundled knowledge or payload files, ship the canonical skill
-  with the package rather than copying that information into root docs.
-- Normal `first-tree init` / `first-tree upgrade` flows must install from
-  the skill bundled in the running package, not by cloning the source repo.
-- Default dedicated-tree-repo creation must stay local-only. It may create a
-  sibling git repo on disk, but it must not require remote repo creation or
-  source-repo cloning.
-- `first-tree publish` is the explicit networked second-stage command for
-  GitHub repo creation, local binding refresh, and optional single-source PR
-  opening. Keep that remote behavior there instead of expanding default `init`.
-- If you change anything that gets copied into user repos, bump
-  `assets/framework/VERSION` and keep the upgrade task text in sync.
-- If packaging changes alter what gets installed into user repos, update
-  `references/upgrade-contract.md`, tests, and validation commands together.
+- If package contents or install/upgrade behavior changed, run `pnpm pack`.
+- Inspect the tarball to confirm it includes `dist/`, `skills/first-tree/`, and
+  `assets/`, while excluding repo-only sources such as `docs/`, `tests/`,
+  `src/`, and `evals/`.
+- If you changed anything copied into user repos, bump
+  `assets/framework/VERSION` and sync the upgrade docs/tests in the same change.

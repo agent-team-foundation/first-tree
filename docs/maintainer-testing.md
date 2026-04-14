@@ -1,7 +1,10 @@
 # Testing
 
-Use this reference when validating framework behavior or changing the testing
-surface.
+Authoritative decision node: `first-tree-skill-cli/validation-surface.md` in
+the bound Context Tree.
+
+Use this local reference when you need the concrete commands and file
+entrypoints for validating work in this source repo.
 
 ## Core Checks
 
@@ -30,14 +33,14 @@ Examples:
 
 ```bash
 pnpm test:e2e
-pnpm test -- skills/first-tree/tests/rules.test.ts
-pnpm test -- skills/first-tree/tests/verify.test.ts
-pnpm test -- skills/first-tree/tests/skill-artifacts.test.ts
-pnpm test -- skills/first-tree/tests/thin-cli.test.ts
+pnpm test -- tests/skill-artifacts.test.ts
+pnpm test -- tests/thin-cli.test.ts
+pnpm test -- tests/verify.test.ts
+pnpm test -- tests/sync.test.ts
 ```
 
 If a future refactor changes these paths again, keep the command semantics and
-coverage expectations documented here.
+coverage expectations aligned with the tree node.
 
 ## Packaging Check
 
@@ -57,7 +60,6 @@ source repo. Use `evals/README.md` when you need to run or update it.
 
 ## Change Discipline
 
-- Update this reference whenever core test entrypoints or packaging boundaries
-  change.
-- If a maintainer would need oral history to know which checks matter, that
-  knowledge belongs here.
+- Update this local reference whenever concrete test entrypoints change.
+- If the validation philosophy or coverage contract changes, update the tree
+  node first and then sync this file.

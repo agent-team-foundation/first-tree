@@ -7,10 +7,10 @@ for what gets shipped.
 
 ## Start Here
 
-1. `docs/source-map.md` — index of every maintainer-facing file
+1. `docs/source-map.md` — maintainer entrypoint; it points to canonical Context Tree nodes first, then local implementation notes
 2. `skills/first-tree/SKILL.md` — the user-facing skill payload (read this so
    you understand what ships to user repos)
-3. The specific maintainer reference linked from the source map
+3. The specific Context Tree node or repo-local maintainer reference linked from the source map
 4. `skills/first-tree/references/source-workspace-installation.md` for the
    user-facing install contract (also shipped to user repos)
 
@@ -23,7 +23,9 @@ for what gets shipped.
   - `skills/first-tree/` is the lightweight skill payload that gets copied
     verbatim to user repos via `copyCanonicalSkill`. It contains only
     `SKILL.md`, `VERSION`, and `references/` (user-facing references only).
-  - `docs/` holds maintainer-only references (source-map, maintainer-*)
+  - `docs/` holds source-repo implementation notes and file maps; canonical
+    design/architecture decisions belong in the bound Context Tree under
+    `first-tree-skill-cli/`
   - `tests/` holds the test suite
 - The tracked `.agents/skills/first-tree` and `.claude/skills/first-tree`
   entries in this repo are local alias symlinks for agent discovery; edit
@@ -35,6 +37,9 @@ for what gets shipped.
 - Keep source/workspace installs limited to local skill integration; `NODE.md`,
   `members/`, and tree-scoped `AGENTS.md` belong only in a dedicated
   `*-context` repo. See `skills/first-tree/references/source-workspace-installation.md`.
+- When a maintainer note becomes decision-grade knowledge other repos should
+  discover, move it into `first-tree-context/first-tree-skill-cli/` and leave a
+  thin repo-local pointer in `docs/`.
 - Keep shipped runtime assets generic.
 
 ## Validation
