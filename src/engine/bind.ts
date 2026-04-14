@@ -36,7 +36,7 @@ Bind the current source/workspace root to an existing Context Tree repo.
 
 What it does:
   1. Installs or refreshes the lightweight first-tree skill locally
-  2. Updates FIRST_TREE.md plus the managed FIRST-TREE-SOURCE-INTEGRATION block
+  2. Updates WHITEPAPER.md plus the managed FIRST-TREE-SOURCE-INTEGRATION block
   3. Writes .first-tree/source.json
   4. Writes .first-tree/tree.json and .first-tree/bindings/<source-id>.json
      in the target tree repo, and refreshes source-repos.md plus root guidance
@@ -493,9 +493,9 @@ export function runBind(repo?: Repo, options?: BindOptions): number {
     }
 
     if (firstTreeIndex.action === "created") {
-      console.log("  Created FIRST_TREE.md.");
+      console.log("  Created WHITEPAPER.md.");
     } else if (firstTreeIndex.action === "updated") {
-      console.log("  Updated FIRST_TREE.md.");
+      console.log("  Updated WHITEPAPER.md.");
     }
     if (sourceSkillAction === "installed") {
       console.log("  Installed the bundled first-tree skill locally.");

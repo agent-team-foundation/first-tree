@@ -41,7 +41,7 @@ require_symlink_target() {
 # Lightweight skill payload: SKILL.md, VERSION, and user-facing references only.
 require_file "$SKILL_DIR/SKILL.md"
 require_file "$SKILL_DIR/VERSION"
-require_file "$SKILL_DIR/references/about.md"
+require_file "$SKILL_DIR/references/whitepaper.md"
 require_file "$SKILL_DIR/references/onboarding.md"
 require_file "$SKILL_DIR/references/source-workspace-installation.md"
 require_file "$SKILL_DIR/references/principles.md"

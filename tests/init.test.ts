@@ -168,7 +168,7 @@ function expectFirstTreeIndexSymlink(root: string): void {
   const path = join(root, FIRST_TREE_INDEX_FILE);
   expect(lstatSync(path).isSymbolicLink()).toBe(true);
   expect(readlinkSync(path)).toBe(
-    join(".agents", "skills", "first-tree", "references", "about.md"),
+    join(".agents", "skills", "first-tree", "references", "whitepaper.md"),
   );
 }
 
@@ -338,7 +338,7 @@ describe("runInit", () => {
     ).toHaveLength(1);
   });
 
-  it("does not overwrite an unmanaged FIRST_TREE.md in the source repo", () => {
+  it("does not overwrite an unmanaged WHITEPAPER.md in the source repo", () => {
     const sourceRepoDir = useTmpDir();
     const sourceSkillDir = useTmpDir();
     makeSourceRepo(sourceRepoDir.path);
@@ -399,7 +399,7 @@ describe("runInit", () => {
     expect(sourceState.tree.remoteUrl).toBe("git@github.com:acme/example-source-repo-tree.git");
   });
 
-  it("migrates a previously managed FIRST_TREE.md to a symlink", () => {
+  it("migrates a previously managed WHITEPAPER.md to a symlink", () => {
     const sourceRepoDir = useTmpDir();
     const sourceSkillDir = useTmpDir();
     makeSourceRepo(sourceRepoDir.path);

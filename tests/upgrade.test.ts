@@ -41,7 +41,7 @@ function expectFirstTreeIndexSymlink(root: string): void {
   const path = join(root, FIRST_TREE_INDEX_FILE);
   expect(lstatSync(path).isSymbolicLink()).toBe(true);
   expect(readlinkSync(path)).toBe(
-    join(".agents", "skills", "first-tree", "references", "about.md"),
+    join(".agents", "skills", "first-tree", "references", "whitepaper.md"),
   );
 }
 
@@ -322,7 +322,7 @@ describe("runUpgrade", () => {
     expect(existsSync(join(repoDir.path, INSTALLED_PROGRESS))).toBe(false);
   });
 
-  it("migrates a managed FIRST_TREE.md and refreshes a stale SessionStart hook even when the installed skill is already current", () => {
+  it("migrates a managed WHITEPAPER.md and refreshes a stale SessionStart hook even when the installed skill is already current", () => {
     const repoDir = useTmpDir();
     const sourceDir = useTmpDir();
     makeSourceRepo(repoDir.path);

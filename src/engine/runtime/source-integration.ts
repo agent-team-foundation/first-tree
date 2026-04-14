@@ -35,7 +35,7 @@ const FIRST_TREE_INDEX_BEGIN = "<!-- BEGIN FIRST-TREE INDEX -->";
 const FIRST_TREE_INDEX_END = "<!-- END FIRST-TREE INDEX -->";
 export const FIRST_TREE_INDEX_SYMLINK_TARGET = join(
   SKILL_REFERENCES_DIR,
-  "about.md",
+  "whitepaper.md",
 );
 
 export interface SourceIntegrationUpdate {

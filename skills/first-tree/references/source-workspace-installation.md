@@ -13,7 +13,7 @@ workspace repo, or non-git workspace folder.
 - The current source/workspace root is **not** the Context Tree.
 - The current source/workspace root carries only:
   - `.agents/skills/first-tree/` and `.claude/skills/first-tree/`
-  - `FIRST_TREE.md`
+  - `WHITEPAPER.md`
   - a managed `FIRST-TREE-SOURCE-INTEGRATION:` block in `AGENTS.md` and `CLAUDE.md`
   - `.first-tree/source.json` (includes workspace members for workspace roots)
 - `NODE.md`, `members/`, and tree-scoped `AGENTS.md` / `CLAUDE.md` belong only
@@ -38,7 +38,7 @@ workspace repo, or non-git workspace folder.
 <source-or-workspace-root>/
   .agents/skills/first-tree/
   .claude/skills/first-tree
-  FIRST_TREE.md
+  WHITEPAPER.md
   AGENTS.md
   CLAUDE.md
   .first-tree/

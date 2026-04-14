@@ -66,7 +66,7 @@ first-tree init
 The CLI will:
 
 - install `.agents/skills/first-tree/` and `.claude/skills/first-tree/` in the source/workspace root
-- create `FIRST_TREE.md`
+- create `WHITEPAPER.md`
 - refresh `AGENTS.md` and `CLAUDE.md`
 - create or reuse a sibling `<repo>-tree` checkout
 - install the bundled `first-tree` skill in that tree repo if it is missing

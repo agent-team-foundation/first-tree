@@ -509,7 +509,7 @@ describe.sequential("CLI e2e smoke", () => {
       "FIRST-TREE-SOURCE-INTEGRATION",
     );
     expect(readFileSync(join(sourceRoot, FIRST_TREE_INDEX_FILE), "utf-8")).toContain(
-      "About Context Tree",
+      "First Tree — White Paper",
     );
     expect(readFileSync(join(treeRoot, ".agents", "skills", "first-tree", "SKILL.md"), "utf-8")).toContain(
       "name: first-tree",
@@ -665,7 +665,7 @@ describe.sequential("CLI e2e smoke", () => {
     expect(bindResult.code).toBe(0);
     expect(readSourceState(standaloneRepo)?.bindingMode).toBe("shared-source");
     expect(readFileSync(join(standaloneRepo, FIRST_TREE_INDEX_FILE), "utf-8")).toContain(
-      "About Context Tree",
+      "First Tree — White Paper",
     );
   });
 

@@ -72,7 +72,7 @@ first-tree init
 The CLI:
 
 - installs `.agents/skills/first-tree/` and `.claude/skills/first-tree/` in the source/workspace root
-- adds `FIRST_TREE.md`
+- adds `WHITEPAPER.md`
 - updates `AGENTS.md` / `CLAUDE.md`
 - creates or reuses a sibling `<repo>-tree` checkout
 - installs the bundled `first-tree` skill in that tree repo if it is missing
@@ -140,7 +140,7 @@ folder before modifying anything. It reports:
 <source-repo-or-workspace>/
   .agents/skills/first-tree/
   .claude/skills/first-tree
-  FIRST_TREE.md
+  WHITEPAPER.md
   AGENTS.md
   CLAUDE.md
   .first-tree/
@@ -209,7 +209,7 @@ User-facing references ship in `skills/first-tree/references/` and are copied
 to user repos via `first-tree init` / `first-tree bind`. Maintainer-only
 references live in `docs/` and never ship.
 
-- User-facing overview: `skills/first-tree/references/about.md`
+- User-facing overview: `skills/first-tree/references/whitepaper.md`
 - User onboarding: `skills/first-tree/references/onboarding.md`
 - Source/workspace install contract:
   `skills/first-tree/references/source-workspace-installation.md`
