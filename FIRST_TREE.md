@@ -1,1 +1,1 @@
-.agents/skills/first-tree/references/about.md
+WHITEPAPER.md

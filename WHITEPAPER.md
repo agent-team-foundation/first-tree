@@ -102,6 +102,6 @@ The teams that figure this out first will have a structural advantage. Not becau
 
 1. **Install the CLI.** `npx first-tree init` in any repo.
 2. **Build your tree.** The agent assesses your repo and generates a task list.
-3. **Invite your team.** `first-tree invite` generates a magic word that any teammate — human or agent — can use to join.
+3. **Invite your team.** `first-tree invite --github-id <id> --type human` generates a magic word that any teammate — human or agent — can use to join.
 
 Learn more at [agent-team.foundation](https://agent-team.foundation).
