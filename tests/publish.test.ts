@@ -1,5 +1,5 @@
-import { join, relative } from "node:path";
-import { readFileSync, writeFileSync } from "node:fs";
+import { join, basename, relative } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { Repo } from "#engine/repo.js";
 import {
@@ -9,12 +9,13 @@ import {
   type CommandRunner,
 } from "#engine/publish.js";
 import { writeBootstrapState } from "#engine/runtime/bootstrap.js";
+import { writeSourceState } from "#engine/runtime/binding-state.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
   CLAUDE_INSTRUCTIONS_FILE,
   CLAUDE_SKILL_ROOT,
   FIRST_TREE_INDEX_FILE,
-  LOCAL_TREE_CONFIG,
+  SOURCE_STATE,
   SKILL_ROOT,
 } from "#engine/runtime/asset-loader.js";
 import {
@@ -57,6 +58,19 @@ function makeSourceIntegration(root: string): void {
     join(root, CLAUDE_INSTRUCTIONS_FILE),
     buildSourceIntegrationBlock("ADHD-context"),
   );
+  writeSourceState(root, {
+    bindingMode: "standalone-source",
+    rootKind: "git-repo",
+    scope: "repo",
+    sourceId: `${basename(root)}-00000000`,
+    sourceName: basename(root),
+    tree: {
+      entrypoint: "/",
+      treeId: "adhd-context",
+      treeMode: "dedicated",
+      treeRepoName: "ADHD-context",
+    },
+  });
 }
 
 function createRunner(
@@ -246,15 +260,12 @@ describe("runPublish", () => {
     expect(
       readFileSync(join(sourceRoot, AGENT_INSTRUCTIONS_FILE), "utf-8"),
     ).toContain("FIRST-TREE-TREE-REPO-URL: `git@github.com:acme/ADHD-tree.git`");
-    expect(
-      JSON.parse(readFileSync(join(sourceRoot, LOCAL_TREE_CONFIG), "utf-8")),
-    ).toEqual({
-      localPath: "../ADHD-tree",
-      treeRepoName: "ADHD-tree",
-      treeRepoUrl: "git@github.com:acme/ADHD-tree.git",
-    });
+    const sourceState = JSON.parse(readFileSync(join(sourceRoot, SOURCE_STATE), "utf-8"));
+    expect(sourceState.tree.localPath).toBe("../ADHD-tree");
+    expect(sourceState.tree.treeRepoName).toBe("ADHD-tree");
+    expect(sourceState.tree.remoteUrl).toBe("git@github.com:acme/ADHD-tree.git");
     expect(readFileSync(join(sourceRoot, ".gitignore"), "utf-8")).toContain(
-      ".first-tree/local-tree.json",
+      ".first-tree/tmp/",
     );
   });
 
@@ -288,13 +299,10 @@ describe("runPublish", () => {
           && call.args[2] === join(rootDir.path, "ADHD-tree"),
       ),
     ).toBe(true);
-    expect(
-      JSON.parse(readFileSync(join(sourceRoot, LOCAL_TREE_CONFIG), "utf-8")),
-    ).toEqual({
-      localPath: "../ADHD-tree",
-      treeRepoName: "ADHD-tree",
-      treeRepoUrl: "git@github.com:acme/ADHD-tree.git",
-    });
+    const sourceState = JSON.parse(readFileSync(join(sourceRoot, SOURCE_STATE), "utf-8"));
+    expect(sourceState.tree.localPath).toBe("../ADHD-tree");
+    expect(sourceState.tree.treeRepoName).toBe("ADHD-tree");
+    expect(sourceState.tree.remoteUrl).toBe("git@github.com:acme/ADHD-tree.git");
   });
 
   it("skips source skill artifacts when the source repo ignores /.agents/", () => {

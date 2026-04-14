@@ -43,14 +43,12 @@ import {
   FIRST_TREE_INDEX_FILE,
   INSTALLED_PROGRESS,
   LEGACY_AGENT_INSTRUCTIONS_FILE,
-  LOCAL_TREE_CONFIG,
+  SOURCE_STATE,
   installedSkillRootsDisplay,
   SOURCE_INTEGRATION_MARKER,
   TREE_VERSION,
 } from "#engine/runtime/asset-loader.js";
 import {
-  readLocalTreeConfig,
-  upsertLocalTreeConfig,
   upsertLocalTreeGitIgnore,
 } from "#engine/runtime/local-tree-config.js";
 import {
@@ -192,7 +190,7 @@ export function formatTaskList(
         `- [ ] When this initial tree version is ready, run \`first-tree publish --open-pr\` from this dedicated tree repo. It will create or reuse the GitHub \`*-tree\` repo, continue supporting older \`*-context\` repos, record the published tree GitHub URL back in \`${context.sourceRepoName}\`, refresh the local tree checkout config, and open the source/workspace PR.`,
       );
       lines.push(
-        `- [ ] After publish succeeds, treat the checkout recorded in \`${LOCAL_TREE_CONFIG}\` as the canonical local working copy for this tree. The bootstrap repo can be deleted when you no longer need it.`,
+        `- [ ] After publish succeeds, treat the checkout recorded in \`${SOURCE_STATE}\` as the canonical local working copy for this tree. The bootstrap repo can be deleted when you no longer need it.`,
       );
       lines.push("");
     }
@@ -339,7 +337,7 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
     console.log(
       "  The source/workspace repo should keep only the installed skill," +
         ` ${FIRST_TREE_INDEX_FILE}, the managed ${SOURCE_INTEGRATION_MARKER}` +
-        ` section in ${AGENT_INSTRUCTIONS_FILE} and ${CLAUDE_INSTRUCTIONS_FILE}, and local-only tree checkout state under \`${LOCAL_TREE_CONFIG}\`.`,
+        ` section in ${AGENT_INSTRUCTIONS_FILE} and ${CLAUDE_INSTRUCTIONS_FILE}, and local-only tree checkout state under \`${SOURCE_STATE}\`.`,
     );
     console.log(
       `  Never add NODE.md, members/, or tree-scoped ${AGENT_INSTRUCTIONS_FILE}/${CLAUDE_INSTRUCTIONS_FILE} to the source/workspace repo.`,
@@ -363,15 +361,6 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
         initTarget.treeRepoName,
       );
       const gitIgnore = upsertLocalTreeGitIgnore(sourceRepo.root);
-      const existingLocalTreeConfig = readLocalTreeConfig(sourceRepo.root);
-      const localTreeConfig = upsertLocalTreeConfig(sourceRepo.root, {
-        localPath: relativeRepoPath(sourceRepo.root, r.root),
-        treeRepoName: initTarget.treeRepoName,
-        ...(existingLocalTreeConfig?.treeRepoName === initTarget.treeRepoName
-          && existingLocalTreeConfig.treeRepoUrl
-          ? { treeRepoUrl: existingLocalTreeConfig.treeRepoUrl }
-          : {}),
-      });
       const changedFiles = updates
         .filter((update) => update.action !== "unchanged")
         .map((update) => update.file);
@@ -397,19 +386,6 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
         console.log("  Created `.gitignore` entries for local tree checkout state");
       } else if (gitIgnore.action === "updated") {
         console.log("  Updated `.gitignore` for local tree checkout state");
-      }
-      if (localTreeConfig.action === "created") {
-        console.log(
-          `  Created \`${LOCAL_TREE_CONFIG}\` with the local tree checkout path`,
-        );
-      } else if (localTreeConfig.action === "updated") {
-        console.log(
-          `  Updated \`${LOCAL_TREE_CONFIG}\` with the local tree checkout path`,
-        );
-      } else {
-        console.log(
-          `  Reused the existing \`${LOCAL_TREE_CONFIG}\` local tree checkout path`,
-        );
       }
       console.log();
     } catch (err) {

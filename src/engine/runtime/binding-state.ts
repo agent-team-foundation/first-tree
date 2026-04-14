@@ -10,7 +10,6 @@ import {
   SOURCE_STATE,
   TREE_BINDINGS_DIR,
   TREE_STATE,
-  WORKSPACE_STATE,
 } from "#engine/runtime/asset-loader.js";
 
 export type TreeMode = "dedicated" | "shared";
@@ -37,6 +36,7 @@ export interface BoundTreeReference {
 
 export interface SourceState {
   bindingMode: SourceBindingMode;
+  members?: WorkspaceMember[];
   rootKind: RootKind;
   schemaVersion: number;
   scope: SourceScope;
@@ -190,8 +190,34 @@ export function readSourceState(root: string): SourceState | null {
   ) {
     return null;
   }
+  let members: WorkspaceMember[] | undefined;
+  if (Array.isArray(parsed.members)) {
+    const parsedMembers: WorkspaceMember[] = [];
+    for (const candidate of parsed.members) {
+      if (
+        !isObject(candidate)
+        || candidate.bindingMode !== "workspace-member"
+        || typeof candidate.relativePath !== "string"
+        || (candidate.rootKind !== "git-repo" && candidate.rootKind !== "folder")
+        || typeof candidate.sourceId !== "string"
+        || typeof candidate.sourceName !== "string"
+      ) {
+        return null;
+      }
+      parsedMembers.push({
+        bindingMode: "workspace-member",
+        relativePath: candidate.relativePath,
+        rootKind: candidate.rootKind,
+        sourceId: candidate.sourceId,
+        sourceName: candidate.sourceName,
+      });
+    }
+    members = parsedMembers;
+  }
+
   return {
     bindingMode: parsed.bindingMode,
+    members,
     rootKind: parsed.rootKind,
     schemaVersion:
       typeof parsed.schemaVersion === "number" ? parsed.schemaVersion : SCHEMA_VERSION,
@@ -205,59 +231,25 @@ export function readSourceState(root: string): SourceState | null {
 }
 
 export function writeSourceState(root: string, state: Omit<SourceState, "schemaVersion">): void {
+  const { members, ...rest } = state;
   writeJson(sourceStatePath(root), {
-    ...state,
+    ...rest,
+    ...(members !== undefined ? { members } : {}),
     schemaVersion: SCHEMA_VERSION,
   });
 }
 
-export function workspaceStatePath(root: string): string {
-  return join(root, WORKSPACE_STATE);
-}
-
 export function readWorkspaceState(root: string): WorkspaceState | null {
-  const parsed = readJson(workspaceStatePath(root));
-  if (!isObject(parsed)) {
+  const source = readSourceState(root);
+  if (source === null || source.workspaceId === undefined || !Array.isArray(source.members)) {
     return null;
-  }
-  if (
-    typeof parsed.workspaceId !== "string"
-    || (parsed.rootKind !== "git-repo" && parsed.rootKind !== "folder")
-    || !Array.isArray(parsed.members)
-  ) {
-    return null;
-  }
-  const tree = parseTreeReference(parsed.tree);
-  if (tree === null) {
-    return null;
-  }
-  const members: WorkspaceMember[] = [];
-  for (const candidate of parsed.members) {
-    if (
-      !isObject(candidate)
-      || candidate.bindingMode !== "workspace-member"
-      || typeof candidate.relativePath !== "string"
-      || (candidate.rootKind !== "git-repo" && candidate.rootKind !== "folder")
-      || typeof candidate.sourceId !== "string"
-      || typeof candidate.sourceName !== "string"
-    ) {
-      return null;
-    }
-    members.push({
-      bindingMode: "workspace-member",
-      relativePath: candidate.relativePath,
-      rootKind: candidate.rootKind,
-      sourceId: candidate.sourceId,
-      sourceName: candidate.sourceName,
-    });
   }
   return {
-    rootKind: parsed.rootKind,
-    schemaVersion:
-      typeof parsed.schemaVersion === "number" ? parsed.schemaVersion : SCHEMA_VERSION,
-    tree,
-    workspaceId: parsed.workspaceId,
-    members,
+    rootKind: source.rootKind,
+    schemaVersion: source.schemaVersion,
+    tree: source.tree,
+    workspaceId: source.workspaceId,
+    members: source.members,
   };
 }
 
@@ -265,9 +257,16 @@ export function writeWorkspaceState(
   root: string,
   state: Omit<WorkspaceState, "schemaVersion">,
 ): void {
-  writeJson(workspaceStatePath(root), {
-    ...state,
-    schemaVersion: SCHEMA_VERSION,
+  const existing = readSourceState(root);
+  if (existing === null) {
+    throw new Error("Cannot write workspace state without an existing source state");
+  }
+  writeSourceState(root, {
+    ...existing,
+    members: state.members,
+    tree: state.tree,
+    workspaceId: state.workspaceId,
+    rootKind: state.rootKind,
   });
 }
 
@@ -285,11 +284,16 @@ export function upsertWorkspaceMember(
     ),
     member,
   ].sort((left, right) => left.relativePath.localeCompare(right.relativePath));
-  writeWorkspaceState(root, {
-    rootKind,
+  const existing = readSourceState(root);
+  if (existing === null) {
+    throw new Error("Cannot upsert workspace member without an existing source state");
+  }
+  writeSourceState(root, {
+    ...existing,
+    members: nextMembers,
     tree,
     workspaceId,
-    members: nextMembers,
+    rootKind,
   });
 }
 

@@ -210,9 +210,7 @@ describe("skill artifacts", () => {
     expect(read("README.md")).toContain("first-tree inspect");
     expect(read("README.md")).toContain("first-tree bind");
     expect(read("README.md")).toContain("first-tree workspace sync");
-    expect(read("README.md")).toContain(".first-tree/local-tree.json");
     expect(read("README.md")).toContain(".first-tree/source.json");
-    expect(read("README.md")).toContain(".first-tree/workspace.json");
     expect(read("README.md")).toContain(".first-tree/tree.json");
     expect(read("README.md")).toContain(".first-tree/bindings/");
     expect(read("README.md")).toContain("source-repos.md");
@@ -237,10 +235,8 @@ describe("skill artifacts", () => {
     expect(onboarding).toContain("first-tree workspace sync");
     expect(onboarding).toContain("baseline coverage");
     expect(onboarding).toContain("source/workspace root");
-    expect(onboarding).toContain(".first-tree/local-tree.json");
     expect(onboarding).toContain(".first-tree/tmp/");
     expect(onboarding).toContain(".first-tree/source.json");
-    expect(onboarding).toContain(".first-tree/workspace.json");
     expect(onboarding).toContain(".first-tree/tree.json");
     expect(onboarding).toContain(".first-tree/bindings/");
     expect(onboarding).toContain("source-repos.md");
@@ -296,7 +292,7 @@ describe("skill artifacts", () => {
     expect(sourceMap).toContain("src/engine/workspace-sync.ts");
     expect(sourceMap).toContain("tests/publish.test.ts");
     expect(sourceMap).toContain("src/engine/runtime/binding-state.ts");
-    expect(sourceMap).toContain("src/engine/runtime/local-tree-config.ts");
+    expect(sourceMap).toContain("src/engine/runtime/local-tree-config.ts"); // still exists, delegates to source.json
     expect(sourceMap).toContain("src/engine/runtime/source-repo-index.ts");
     expect(sourceMap).toContain("tests/init.test.ts");
     expect(sourceMap).toContain("tests/thin-cli.test.ts");
@@ -306,9 +302,7 @@ describe("skill artifacts", () => {
       "skills/first-tree/references/source-workspace-installation.md",
     );
     expect(sourceWorkspaceInstall).toContain("FIRST-TREE-SOURCE-INTEGRATION:");
-    expect(sourceWorkspaceInstall).toContain(".first-tree/local-tree.json");
     expect(sourceWorkspaceInstall).toContain(".first-tree/source.json");
-    expect(sourceWorkspaceInstall).toContain(".first-tree/workspace.json");
     expect(sourceWorkspaceInstall).toContain(".first-tree/tree.json");
     expect(sourceWorkspaceInstall).toContain(".first-tree/bindings/");
     expect(sourceWorkspaceInstall).toContain("source-repos.md");
@@ -325,7 +319,6 @@ describe("skill artifacts", () => {
     expect(openaiPrompt).toContain("first-tree workspace sync");
     expect(openaiPrompt).toContain("baseline coverage");
     expect(openaiPrompt).toContain("progress.md");
-    expect(openaiPrompt).toContain(".first-tree/local-tree.json");
     expect(openaiPrompt).toContain(".first-tree/source.json");
     expect(openaiPrompt).toContain("source-repos.md");
 

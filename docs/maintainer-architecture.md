@@ -12,7 +12,7 @@ The user-facing system is now built around three explicit objects:
 
 Bindings are stored in:
 
-- source/workspace roots: `.first-tree/source.json` and `.first-tree/workspace.json`
+- source/workspace roots: `.first-tree/source.json` (includes workspace members for workspace roots)
 - tree repos: `.first-tree/tree.json` and `.first-tree/bindings/<source-id>.json`
 
 The tree repo may also generate a human/agent-facing `source-repos.md` index

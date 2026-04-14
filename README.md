@@ -114,7 +114,7 @@ first-tree init --scope workspace --sync-members
 ```
 
 The workspace root gets its own local skill integration plus
-`.first-tree/workspace.json`. Each discovered child repo is then bound as a
+`.first-tree/source.json` (with workspace members). Each discovered child repo is then bound as a
 `workspace-member` to the same tree via `first-tree workspace sync`.
 
 ### Explicit Tree Bootstrap
@@ -132,7 +132,7 @@ folder before modifying anything. It reports:
 
 - whether the root is a tree repo, source repo, workspace repo, or workspace folder
 - discovered child repos / submodules
-- existing `source.json`, `workspace.json`, `tree.json`, and local checkout state
+- existing `source.json`, `tree.json`, and local checkout state
 
 ## What Lives Where
 
@@ -144,9 +144,7 @@ folder before modifying anything. It reports:
   AGENTS.md
   CLAUDE.md
   .first-tree/
-    local-tree.json          # .first-tree/local-tree.json
-    source.json              # .first-tree/source.json
-    workspace.json           # .first-tree/workspace.json (workspace roots only)
+    source.json              # .first-tree/source.json (includes workspace members for workspace roots)
   ... source code or workspace folders ...
 
 <tree-repo>/
@@ -173,7 +171,7 @@ The source/workspace root is not the tree. It should never contain `NODE.md`,
 
 The tree repo stores canonical binding metadata in `.first-tree/bindings/` and
 generates `source-repos.md` as the human/agent-friendly repo index, while
-source/workspace roots keep local checkout guidance in `.first-tree/local-tree.json`
+source/workspace roots keep local checkout guidance in `.first-tree/source.json`
 plus their own source/workspace binding state.
 
 ## Commands

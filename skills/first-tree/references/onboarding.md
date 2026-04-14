@@ -40,8 +40,8 @@ This tells the agent whether the current root is:
 - a `workspace-folder`
 
 It also reports discovered child repos / submodules plus any existing
-`.first-tree/source.json`, `.first-tree/workspace.json`, `.first-tree/tree.json`,
-and `.first-tree/local-tree.json` state.
+`.first-tree/source.json`, `.first-tree/tree.json`,
+and `.first-tree/bindings/` state.
 
 ## Step 2: Ask Whether The User Already Has A Tree
 
@@ -98,8 +98,7 @@ first-tree bind --tree-url git@github.com:acme/org-context.git --tree-mode share
 - install local skill integration in the current repo
 - install the bundled `first-tree` skill in the tree repo if it is missing
 - refresh `AGENTS.md` and `CLAUDE.md`
-- write `.first-tree/source.json`
-- refresh `.first-tree/local-tree.json`
+- write `.first-tree/source.json` (includes tree localPath)
 - write `.first-tree/tree.json` and `.first-tree/bindings/<source-id>.json`
 - refresh the tree repo's `source-repos.md` index plus root repo-discovery guidance
 
@@ -118,7 +117,7 @@ Or bind to an existing shared tree:
 first-tree init --scope workspace --tree-path ../org-context --tree-mode shared --sync-members
 ```
 
-The workspace root gets local integration plus `.first-tree/workspace.json`.
+The workspace root gets local integration plus `.first-tree/source.json` (with workspace members).
 Then `first-tree workspace sync` binds every discovered child repo as a
 `workspace-member` to that same shared tree.
 
@@ -190,7 +189,7 @@ but does not try to open many code PRs automatically.
 
 ## Routine Work After Publish
 
-- Start from `.first-tree/local-tree.json` in the current source/workspace root.
+- Start from `.first-tree/source.json` in the current source/workspace root.
 - If you are starting from the tree repo itself, use `source-repos.md` as the quick index of bound source/workspace repos and their GitHub URLs, while treating `.first-tree/bindings/` as the canonical machine-readable source of truth.
 - Resolve the recorded `localPath`.
 - If the checkout is missing but the tree has been published, create a temporary

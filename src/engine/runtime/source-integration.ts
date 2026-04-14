@@ -16,14 +16,14 @@ import {
   BINDING_MODE_MARKER,
   ENTRYPOINT_MARKER,
   FIRST_TREE_INDEX_FILE,
-  LOCAL_TREE_CONFIG,
-  LOCAL_TREE_CONFIG_MARKER,
   LOCAL_TREE_TEMP_ROOT,
   SKILL_REFERENCES_DIR,
   SOURCE_INTEGRATION_BEGIN,
   SOURCE_INTEGRATION_END,
   SOURCE_INTEGRATION_FILES,
   SOURCE_INTEGRATION_MARKER,
+  SOURCE_STATE,
+  SOURCE_STATE_MARKER,
   TREE_MODE_MARKER,
   TREE_REPO_MARKER,
   TREE_REPO_URL_MARKER,
@@ -51,7 +51,7 @@ export interface FirstTreeIndexUpdate {
 export interface SourceIntegrationOptions {
   bindingMode?: SourceBindingMode;
   entrypoint?: string;
-  localConfigPath?: string;
+  sourceStatePath?: string;
   treeMode?: TreeMode;
   treeRepoName?: string;
   treeRepoUrl?: string;
@@ -65,14 +65,14 @@ export function buildSourceIntegrationBlock(
   const bindingMode = options?.bindingMode ?? "standalone-source";
   const treeMode = options?.treeMode ?? "dedicated";
   const entrypoint = options?.entrypoint ?? defaultEntrypoint(bindingMode);
-  const localConfigPath = options?.localConfigPath ?? LOCAL_TREE_CONFIG;
+  const sourceStatePathValue = options?.sourceStatePath ?? SOURCE_STATE;
   const treeRepoUrl = options?.treeRepoUrl?.trim() || null;
   const temporaryCheckoutPath = join(LOCAL_TREE_TEMP_ROOT, treeRepoName);
   const workspaceId = options?.workspaceId?.trim() || null;
   const description = describeBinding(bindingMode, treeMode, treeRepoName);
   const scopeText = describeScope(bindingMode, treeMode, treeRepoName, workspaceId);
   const fallbackInstruction = treeRepoUrl === null
-    ? `- If the tree has not been published yet, work from the local checkout recorded in \`${localConfigPath}\` or the tree path you just bound until \`first-tree publish\` records the GitHub repo URL.`
+    ? `- If the tree has not been published yet, work from the local checkout recorded in \`${sourceStatePathValue}\` or the tree path you just bound until \`first-tree publish\` records the GitHub repo URL.`
     : `- If the configured checkout is missing, clone a temporary working copy from \`${treeRepoUrl}\` into \`${temporaryCheckoutPath}/\`, use it for the current task, and delete it before you finish.`;
 
   return [
@@ -84,15 +84,15 @@ export function buildSourceIntegrationBlock(
     `${TREE_REPO_URL_MARKER} ${treeRepoUrl === null ? "pending publish" : `\`${treeRepoUrl}\``}`,
     `${ENTRYPOINT_MARKER} \`${entrypoint}\``,
     ...(workspaceId === null ? [] : [`${WORKSPACE_ID_MARKER} \`${workspaceId}\``]),
-    `${LOCAL_TREE_CONFIG_MARKER} \`${localConfigPath}\``,
+    `${SOURCE_STATE_MARKER} \`${sourceStatePathValue}\``,
     "",
     scopeText,
     "",
     "Before every task:",
-    `- Read \`${localConfigPath}\` first. If it exists, resolve its \`localPath\` value from this repo root and treat that checkout as the canonical local tree repo.`,
+    `- Read \`${sourceStatePathValue}\` first. If it exists, resolve its \`tree.localPath\` value from this repo root and treat that checkout as the canonical local tree repo.`,
     "- If that configured checkout exists locally, update it before you read anything else.",
     fallbackInstruction,
-    `- Never commit \`${localConfigPath}\` or anything under \`${LOCAL_TREE_TEMP_ROOT}/\` to this repo. They are local-only workspace state.`,
+    `- Never commit anything under \`${LOCAL_TREE_TEMP_ROOT}/\` to this repo. It is local-only workspace state.`,
     "",
     "After every task:",
     "- Always ask whether the tree needs updating.",
@@ -171,8 +171,8 @@ function upsertSourceIntegrationFile(
       options?.bindingMode ?? detectExistingBindingMode(normalized) ?? undefined,
     entrypoint:
       options?.entrypoint ?? detectExistingEntrypoint(normalized) ?? undefined,
-    localConfigPath:
-      options?.localConfigPath ?? detectExistingLocalConfigPath(normalized) ?? LOCAL_TREE_CONFIG,
+    sourceStatePath:
+      options?.sourceStatePath ?? detectExistingSourceStatePath(normalized) ?? SOURCE_STATE,
     treeMode:
       options?.treeMode ?? detectExistingTreeMode(normalized) ?? undefined,
     treeRepoName:
@@ -281,15 +281,23 @@ function detectExistingWorkspaceId(text: string): string | null {
   return match?.[1] ?? null;
 }
 
-function detectExistingLocalConfigPath(text: string): string | null {
+function detectExistingSourceStatePath(text: string): string | null {
   if (text === "") {
     return null;
   }
 
   const match = text.match(
+    /^FIRST-TREE-SOURCE-STATE:\s+`(.+?)`\s*$/m,
+  );
+  if (match?.[1]) {
+    return match[1];
+  }
+
+  // Backward compatibility: detect old LOCAL_TREE_CONFIG marker
+  const legacyMatch = text.match(
     /^FIRST-TREE-LOCAL-TREE-CONFIG:\s+`(.+?)`\s*$/m,
   );
-  return match?.[1] ?? null;
+  return legacyMatch?.[1] ?? null;
 }
 
 function describeBinding(

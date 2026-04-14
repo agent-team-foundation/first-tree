@@ -24,7 +24,7 @@ import {
   INSTALLED_PROGRESS,
   LEGACY_AGENT_INSTRUCTIONS_FILE,
   LEGACY_PROGRESS,
-  LOCAL_TREE_CONFIG,
+  SOURCE_STATE,
   TREE_PROGRESS,
   TREE_VERSION,
   BOOTSTRAP_STATE,
@@ -269,17 +269,8 @@ describe("runInit", () => {
     ).toContain(buildSourceIntegrationBlock(basename(treeRepo)));
     expectFirstTreeIndexSymlink(sourceRepoDir.path);
     expect(readFileSync(join(sourceRepoDir.path, ".gitignore"), "utf-8")).toContain(
-      ".first-tree/local-tree.json",
-    );
-    expect(readFileSync(join(sourceRepoDir.path, ".gitignore"), "utf-8")).toContain(
       ".first-tree/tmp/",
     );
-    expect(
-      JSON.parse(readFileSync(join(sourceRepoDir.path, LOCAL_TREE_CONFIG), "utf-8")),
-    ).toEqual({
-      localPath: `../${basename(treeRepo)}`,
-      treeRepoName: basename(treeRepo),
-    });
     expect(
       existsSync(join(treeRepo, ".agents", "skills", "first-tree", "SKILL.md")),
     ).toBe(true);
@@ -366,19 +357,30 @@ describe("runInit", () => {
     ).toBe("# Custom entrypoint\n");
   });
 
-  it("preserves an existing tree repo URL when refreshing local tree config", () => {
+  it("preserves an existing tree repo URL when source.json already exists", () => {
     const sourceRepoDir = useTmpDir();
     const sourceSkillDir = useTmpDir();
     makeSourceRepo(sourceRepoDir.path);
     makeSourceSkill(sourceSkillDir.path, "0.2.0");
     mkdirSync(join(sourceRepoDir.path, ".first-tree"), { recursive: true });
     writeFileSync(
-      join(sourceRepoDir.path, LOCAL_TREE_CONFIG),
+      join(sourceRepoDir.path, SOURCE_STATE),
       JSON.stringify(
         {
-          localPath: "../custom-tree",
-          treeRepoName: `${basename(sourceRepoDir.path)}-tree`,
-          treeRepoUrl: "git@github.com:acme/example-source-repo-tree.git",
+          bindingMode: "standalone-source",
+          rootKind: "git-repo",
+          schemaVersion: 2,
+          scope: "repo",
+          sourceId: "test-id",
+          sourceName: basename(sourceRepoDir.path),
+          tree: {
+            entrypoint: "/",
+            localPath: "../custom-tree",
+            treeId: `${basename(sourceRepoDir.path)}-tree`,
+            treeMode: "dedicated",
+            treeRepoName: `${basename(sourceRepoDir.path)}-tree`,
+            remoteUrl: "git@github.com:acme/example-source-repo-tree.git",
+          },
         },
         null,
         2,
@@ -392,17 +394,9 @@ describe("runInit", () => {
       }),
     ).toBe(0);
 
-    const treeRepo = join(
-      dirname(sourceRepoDir.path),
-      `${basename(sourceRepoDir.path)}-tree`,
-    );
-    expect(
-      JSON.parse(readFileSync(join(sourceRepoDir.path, LOCAL_TREE_CONFIG), "utf-8")),
-    ).toEqual({
-      localPath: `../${basename(treeRepo)}`,
-      treeRepoName: basename(treeRepo),
-      treeRepoUrl: "git@github.com:acme/example-source-repo-tree.git",
-    });
+    // source.json should still contain the remote URL
+    const sourceState = JSON.parse(readFileSync(join(sourceRepoDir.path, SOURCE_STATE), "utf-8"));
+    expect(sourceState.tree.remoteUrl).toBe("git@github.com:acme/example-source-repo-tree.git");
   });
 
   it("migrates a previously managed FIRST_TREE.md to a symlink", () => {
@@ -534,12 +528,6 @@ describe("runInit", () => {
     ).toEqual({
       sourceRepoName: basename(sourceRepoDir.path),
       sourceRepoPath: `../${basename(sourceRepoDir.path)}`,
-      treeRepoName: basename(legacyTreeRepo),
-    });
-    expect(
-      JSON.parse(readFileSync(join(sourceRepoDir.path, LOCAL_TREE_CONFIG), "utf-8")),
-    ).toEqual({
-      localPath: `../${basename(legacyTreeRepo)}`,
       treeRepoName: basename(legacyTreeRepo),
     });
     expect(

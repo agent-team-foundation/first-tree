@@ -7,7 +7,7 @@ import {
   resolveDedicatedTreeRepoForSource,
 } from "#engine/dedicated-tree.js";
 import { Repo } from "#engine/repo.js";
-import { readSourceState } from "#engine/runtime/binding-state.js";
+import { readSourceState, writeSourceState } from "#engine/runtime/binding-state.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
   CLAUDE_INSTRUCTIONS_FILE,
@@ -37,7 +37,6 @@ import {
 } from "#engine/runtime/source-integration.js";
 import {
   readLocalTreeConfig,
-  upsertLocalTreeConfig,
   upsertLocalTreeGitIgnore,
 } from "#engine/runtime/local-tree-config.js";
 import {
@@ -127,26 +126,29 @@ function syncLocalSourceWorkspaceState(
   treeRoot: string,
 ): {
   gitIgnoreAction: "created" | "updated" | "unchanged";
-  localTreeConfigAction: "created" | "updated" | "unchanged";
+  sourceStateAction: "created" | "updated" | "unchanged";
 } {
   const gitIgnore = upsertLocalTreeGitIgnore(sourceRepo.root);
-  const existingLocalTreeConfig = readLocalTreeConfig(sourceRepo.root);
-  const localTreeConfig = upsertLocalTreeConfig(sourceRepo.root, {
-    bindingMode: existingLocalTreeConfig?.bindingMode,
-    entrypoint: existingLocalTreeConfig?.entrypoint,
-    localPath: relativeRepoPath(sourceRepo.root, treeRoot),
-    sourceId: existingLocalTreeConfig?.sourceId,
-    treeMode: existingLocalTreeConfig?.treeMode,
-    treeRepoName,
-    ...(existingLocalTreeConfig?.treeRepoName === treeRepoName
-      && existingLocalTreeConfig.treeRepoUrl
-      ? { treeRepoUrl: existingLocalTreeConfig.treeRepoUrl }
-      : {}),
-    workspaceId: existingLocalTreeConfig?.workspaceId,
-  });
+  const existingSourceState = readSourceState(sourceRepo.root);
+  if (existingSourceState !== null) {
+    const before = JSON.stringify(existingSourceState);
+    writeSourceState(sourceRepo.root, {
+      ...existingSourceState,
+      tree: {
+        ...existingSourceState.tree,
+        localPath: relativeRepoPath(sourceRepo.root, treeRoot),
+        treeRepoName,
+      },
+    });
+    const after = JSON.stringify(readSourceState(sourceRepo.root));
+    return {
+      gitIgnoreAction: gitIgnore.action,
+      sourceStateAction: before === after ? "unchanged" : "updated",
+    };
+  }
   return {
     gitIgnoreAction: gitIgnore.action,
-    localTreeConfigAction: localTreeConfig.action,
+    sourceStateAction: "unchanged",
   };
 }
 
@@ -181,10 +183,10 @@ function logLocalSourceWorkspaceState(
     console.log("Updated `.gitignore` for local tree checkout state.");
   }
 
-  if (state.localTreeConfigAction === "created") {
-    console.log("Created `.first-tree/local-tree.json` for the local tree checkout.");
-  } else if (state.localTreeConfigAction === "updated") {
-    console.log("Updated `.first-tree/local-tree.json` for the local tree checkout.");
+  if (state.sourceStateAction === "created") {
+    console.log("Created `.first-tree/source.json` for the local tree checkout.");
+  } else if (state.sourceStateAction === "updated") {
+    console.log("Updated `.first-tree/source.json` for the local tree checkout.");
   }
 }
 

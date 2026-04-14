@@ -15,9 +15,7 @@ workspace repo, or non-git workspace folder.
   - `.agents/skills/first-tree/` and `.claude/skills/first-tree/`
   - `FIRST_TREE.md`
   - a managed `FIRST-TREE-SOURCE-INTEGRATION:` block in `AGENTS.md` and `CLAUDE.md`
-  - `.first-tree/local-tree.json`
-  - `.first-tree/source.json`
-  - `.first-tree/workspace.json` when the root is a workspace
+  - `.first-tree/source.json` (includes workspace members for workspace roots)
 - `NODE.md`, `members/`, and tree-scoped `AGENTS.md` / `CLAUDE.md` belong only
   in the tree repo.
 - The tree repo keeps its own installed skill under `.agents/skills/first-tree/`
@@ -44,9 +42,7 @@ workspace repo, or non-git workspace folder.
   AGENTS.md
   CLAUDE.md
   .first-tree/
-    local-tree.json
-    source.json
-    workspace.json          # workspace roots only
+    source.json             # includes workspace members for workspace roots
 
 <tree-repo>/
   .agents/skills/first-tree/

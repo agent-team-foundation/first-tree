@@ -17,7 +17,7 @@ See `.agents/skills/first-tree/references/principles.md` for detailed explanatio
 
 ## Before Every Task
 
-1. **Prefer the local checkout recorded by the source/workspace repo.** If this tree is associated with a source/workspace repo, read that repo's managed `FIRST-TREE-SOURCE-INTEGRATION:` section and `.first-tree/local-tree.json` first. If the recorded checkout exists locally, update it and use that copy for routine work.
+1. **Prefer the local checkout recorded by the source/workspace repo.** If this tree is associated with a source/workspace repo, read that repo's managed `FIRST-TREE-SOURCE-INTEGRATION:` section and `.first-tree/source.json` first. If the recorded checkout exists locally, update it and use that copy for routine work.
 2. **Use a temporary workspace clone only when the recorded checkout is missing.** If the tree has already been published but the recorded checkout is gone, clone a temporary copy into `.first-tree/tmp/<tree-repo-name>/` inside the active source/workspace repo, use it for the current task, and delete it before you finish.
 3. **Use the sibling bootstrap checkout only before publish.** If this tree has not been published yet, it is okay to work from the sibling `*-tree` or legacy `*-context` bootstrap repo until publish records the GitHub URL and local checkout config.
 4. **Read the root NODE.md** to understand the domain map.

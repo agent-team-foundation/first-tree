@@ -12,12 +12,11 @@ import {
   listTreeBindings,
   readSourceState,
   readTreeState,
+  writeSourceState,
   writeTreeState,
 } from "#engine/runtime/binding-state.js";
 import { readBootstrapState } from "#engine/runtime/bootstrap.js";
 import {
-  readLocalTreeConfig,
-  upsertLocalTreeConfig,
   upsertLocalTreeGitIgnore,
 } from "#engine/runtime/local-tree-config.js";
 import { upsertSourceIntegrationFiles } from "#engine/runtime/source-integration.js";
@@ -26,7 +25,7 @@ import {
   CLAUDE_INSTRUCTIONS_FILE,
   CLAUDE_SKILL_ROOT,
   FIRST_TREE_INDEX_FILE,
-  LOCAL_TREE_CONFIG,
+  SOURCE_STATE,
   SKILL_ROOT,
 } from "#engine/runtime/asset-loader.js";
 
@@ -44,7 +43,7 @@ What it does:
      remote when already bound)
   3. Pushes the local tree commits via the \`gh\` CLI
   4. Refreshes each bound source/workspace repo's
-     \`FIRST-TREE-SOURCE-INTEGRATION:\` block and \`.first-tree/local-tree.json\`
+     \`FIRST-TREE-SOURCE-INTEGRATION:\` block and \`.first-tree/source.json\`
      when that source/workspace repo is available locally
   5. Optionally opens a PR in the source repo when exactly one source repo is
      being refreshed
@@ -53,7 +52,7 @@ Requires the \`gh\` CLI installed and authenticated. Requires the source repo
 to be discoverable (bound locally, sibling directory, or --source-repo PATH).
 
 After publish succeeds, the canonical local working copy of the tree is the
-checkout recorded in \`.first-tree/local-tree.json\` inside the source repo.
+checkout recorded in \`.first-tree/source.json\` inside the source repo.
 The temporary sibling bootstrap checkout can be deleted.
 
 Options:
@@ -470,31 +469,42 @@ function updateSourceWorkspaceIntegration(
   localTreeRoot: string,
 ): {
   gitIgnoreAction: "created" | "updated" | "unchanged";
-  localTreeConfigAction: "created" | "updated" | "unchanged";
+  sourceStateAction: "created" | "updated" | "unchanged";
 } {
   const gitIgnore = upsertLocalTreeGitIgnore(sourceRepo.root);
   const sourceState = readSourceState(sourceRepo.root);
-  const existingLocalTreeConfig = readLocalTreeConfig(sourceRepo.root);
-  const localTreeConfig = upsertLocalTreeConfig(sourceRepo.root, {
-    bindingMode: sourceState?.bindingMode ?? existingLocalTreeConfig?.bindingMode,
-    entrypoint: sourceState?.tree.entrypoint ?? existingLocalTreeConfig?.entrypoint,
-    localPath: relativeRepoPath(sourceRepo.root, localTreeRoot),
-    sourceId: sourceState?.sourceId ?? existingLocalTreeConfig?.sourceId,
-    treeMode: sourceState?.tree.treeMode ?? existingLocalTreeConfig?.treeMode,
-    treeRepoName: treeRepo.repoName(),
-    treeRepoUrl,
-    workspaceId: sourceState?.workspaceId ?? existingLocalTreeConfig?.workspaceId,
-  });
+  if (sourceState !== null) {
+    const updatedTree = {
+      ...sourceState.tree,
+      localPath: relativeRepoPath(sourceRepo.root, localTreeRoot),
+      remoteUrl: treeRepoUrl,
+      treeRepoName: treeRepo.repoName(),
+    };
+    const before = JSON.stringify(sourceState);
+    writeSourceState(sourceRepo.root, {
+      ...sourceState,
+      tree: updatedTree,
+    });
+    const after = JSON.stringify(readSourceState(sourceRepo.root));
+    const sourceStateAction = before === after ? "unchanged" : "updated";
+    upsertSourceIntegrationFiles(sourceRepo.root, treeRepo.repoName(), {
+      bindingMode: sourceState.bindingMode,
+      entrypoint: sourceState.tree.entrypoint,
+      treeMode: sourceState.tree.treeMode,
+      treeRepoUrl,
+      workspaceId: sourceState.workspaceId,
+    });
+    return {
+      gitIgnoreAction: gitIgnore.action,
+      sourceStateAction,
+    };
+  }
   upsertSourceIntegrationFiles(sourceRepo.root, treeRepo.repoName(), {
-    bindingMode: sourceState?.bindingMode ?? existingLocalTreeConfig?.bindingMode,
-    entrypoint: sourceState?.tree.entrypoint ?? existingLocalTreeConfig?.entrypoint,
-    treeMode: sourceState?.tree.treeMode ?? existingLocalTreeConfig?.treeMode,
     treeRepoUrl,
-    workspaceId: sourceState?.workspaceId ?? existingLocalTreeConfig?.workspaceId,
   });
   return {
     gitIgnoreAction: gitIgnore.action,
-    localTreeConfigAction: localTreeConfig.action,
+    sourceStateAction: "unchanged",
   };
 }
 
@@ -667,7 +677,7 @@ function buildPrBody(
     "",
     `- record \`${treeSlug}\` as the published GitHub home for the tree`,
     `- refresh the managed source/workspace instructions with the tree repo URL and local checkout guidance`,
-    `- keep the local checkout state only in ignored \`${LOCAL_TREE_CONFIG}\``,
+    `- keep the local checkout state only in ignored \`${SOURCE_STATE}\``,
   ].join("\n");
 }
 
@@ -857,11 +867,11 @@ export function runPublish(repo?: Repo, options?: PublishOptions): number {
         console.log("    Updated `.gitignore` for local tree checkout state.");
       }
       console.log(
-        sourceIntegrationState.localTreeConfigAction === "created"
-          ? `    Created \`${LOCAL_TREE_CONFIG}\` for \`${relativeRepoPath(boundSourceRepo.root, localTreeRoot)}\`.`
-          : sourceIntegrationState.localTreeConfigAction === "updated"
-          ? `    Updated \`${LOCAL_TREE_CONFIG}\` for \`${relativeRepoPath(boundSourceRepo.root, localTreeRoot)}\`.`
-          : `    Reused the existing \`${LOCAL_TREE_CONFIG}\` entry for \`${relativeRepoPath(boundSourceRepo.root, localTreeRoot)}\`.`,
+        sourceIntegrationState.sourceStateAction === "created"
+          ? `    Created \`${SOURCE_STATE}\` for \`${relativeRepoPath(boundSourceRepo.root, localTreeRoot)}\`.`
+          : sourceIntegrationState.sourceStateAction === "updated"
+          ? `    Updated \`${SOURCE_STATE}\` for \`${relativeRepoPath(boundSourceRepo.root, localTreeRoot)}\`.`
+          : `    Reused the existing \`${SOURCE_STATE}\` entry for \`${relativeRepoPath(boundSourceRepo.root, localTreeRoot)}\`.`,
       );
     }
 
@@ -933,7 +943,7 @@ export function runPublish(repo?: Repo, options?: PublishOptions): number {
 
     console.log();
     console.log(
-      `Bound source/workspace repos now reference \`${LOCAL_TREE_CONFIG}\` and the published tree remote \`${treeRemote.remoteUrl}\`.`,
+      `Bound source/workspace repos now reference \`${SOURCE_STATE}\` and the published tree remote \`${treeRemote.remoteUrl}\`.`,
     );
     if (sourceRepoRoots.length > 1) {
       console.log(

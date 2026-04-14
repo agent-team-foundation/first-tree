@@ -25,8 +25,6 @@ import {
 } from "#engine/runtime/installer.js";
 import { syncTreeSourceRepoIndex } from "#engine/runtime/source-repo-index.js";
 import {
-  readLocalTreeConfig,
-  upsertLocalTreeConfig,
   upsertLocalTreeGitIgnore,
 } from "#engine/runtime/local-tree-config.js";
 import { upsertFirstTreeIndexFile, upsertSourceIntegrationFiles } from "#engine/runtime/source-integration.js";
@@ -39,7 +37,7 @@ Bind the current source/workspace root to an existing Context Tree repo.
 What it does:
   1. Installs or refreshes the lightweight first-tree skill locally
   2. Updates FIRST_TREE.md plus the managed FIRST-TREE-SOURCE-INTEGRATION block
-  3. Writes .first-tree/source.json and refreshes .first-tree/local-tree.json
+  3. Writes .first-tree/source.json
   4. Writes .first-tree/tree.json and .first-tree/bindings/<source-id>.json
      in the target tree repo, and refreshes source-repos.md plus root guidance
   5. Ensures the target tree repo also has the first-tree skill installed
@@ -412,17 +410,6 @@ export function runBind(repo?: Repo, options?: BindOptions): number {
 
     const firstTreeIndex = upsertFirstTreeIndexFile(sourceRepo.root);
     const gitIgnore = upsertLocalTreeGitIgnore(sourceRepo.root);
-    const existingLocalTreeConfig = readLocalTreeConfig(sourceRepo.root);
-    const localTreeConfig = upsertLocalTreeConfig(sourceRepo.root, {
-      bindingMode,
-      entrypoint,
-      localPath: localTreePath,
-      sourceId,
-      treeMode,
-      treeRepoName: treeResolution.treeRepoName,
-      treeRepoUrl: remoteUrl ?? existingLocalTreeConfig?.treeRepoUrl,
-      workspaceId,
-    });
     const integrationUpdates = upsertSourceIntegrationFiles(
       sourceRepo.root,
       treeResolution.treeRepoName,
@@ -535,11 +522,6 @@ export function runBind(repo?: Repo, options?: BindOptions): number {
       console.log("  Created .gitignore entries for first-tree local state.");
     } else if (gitIgnore.action === "updated") {
       console.log("  Updated .gitignore entries for first-tree local state.");
-    }
-    if (localTreeConfig.action === "created") {
-      console.log(`  Created ${localTreePath} in .first-tree/local-tree.json.`);
-    } else if (localTreeConfig.action === "updated") {
-      console.log(`  Updated .first-tree/local-tree.json -> ${localTreePath}.`);
     }
     const changedFiles = integrationUpdates
       .filter((update) => update.action !== "unchanged")

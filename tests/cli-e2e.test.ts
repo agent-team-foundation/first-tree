@@ -7,7 +7,7 @@ import {
   AGENT_INSTRUCTIONS_FILE,
   CLAUDE_INSTRUCTIONS_FILE,
   FIRST_TREE_INDEX_FILE,
-  LOCAL_TREE_CONFIG,
+  SOURCE_STATE,
   TREE_PROGRESS,
 } from "#engine/runtime/asset-loader.js";
 import {
@@ -722,7 +722,7 @@ describe.sequential("CLI e2e smoke", () => {
       "git@github.com:acme/ADHD-tree.git",
     );
     expect(
-      JSON.parse(readFileSync(join(sourceRoot, LOCAL_TREE_CONFIG), "utf-8")).localPath,
+      JSON.parse(readFileSync(join(sourceRoot, SOURCE_STATE), "utf-8")).tree.localPath,
     ).toBe("../ADHD-tree");
 
     const diffPath = join(sandbox.path, "pr.diff");

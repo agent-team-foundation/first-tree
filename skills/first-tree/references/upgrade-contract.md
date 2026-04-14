@@ -35,9 +35,7 @@ FIRST_TREE.md
 AGENTS.md
 CLAUDE.md
 .first-tree/
-  local-tree.json
-  source.json
-  workspace.json          # workspace roots only
+  source.json             # includes workspace members for workspace roots
 ```
 
 In a tree repo, `first-tree init tree` produces:
@@ -68,8 +66,7 @@ members/
 3. recreates the `.claude/skills/first-tree` symlink
 4. refreshes `FIRST_TREE.md`
 5. refreshes the managed `FIRST-TREE-SOURCE-INTEGRATION:` block
-6. preserves `.first-tree/local-tree.json`, `.first-tree/source.json`, and
-   `.first-tree/workspace.json`
+6. preserves `.first-tree/source.json`
 
 `first-tree upgrade --tree-path ...` in a tree repo refreshes tree-side
 metadata such as `.first-tree/VERSION` plus the installed tree-repo skill.
@@ -79,7 +76,7 @@ metadata such as `.first-tree/VERSION` plus the installed tree-repo skill.
 - tree content: `NODE.md`, domains, members, leaf nodes
 - user-authored content outside the managed framework markers
 - source/workspace binding metadata
-- local checkout guidance in `.first-tree/local-tree.json`
+- local checkout guidance in `.first-tree/source.json`
 
 ## Command Intent
 
@@ -111,4 +108,4 @@ metadata such as `.first-tree/VERSION` plus the installed tree-repo skill.
 - shared tree bindings should live in `.first-tree/bindings/`, not in a single
   overwrite-prone bootstrap file
 - source/workspace roots should keep referencing the tree through binding
-  metadata and `.first-tree/local-tree.json`
+  metadata and `.first-tree/source.json`
