@@ -776,6 +776,32 @@ async function runGenerateCodeownersForTree(treeRoot: string): Promise<void> {
   }
 }
 
+async function resolveStableCheckoutRef(
+  shellRun: ShellRun,
+  treeRoot: string,
+): Promise<string | null> {
+  const branchResult = await shellRun("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], {
+    cwd: treeRoot,
+  });
+  const branchName = branchResult.stdout.trim();
+  if (branchResult.code === 0 && branchName !== "") {
+    return branchName;
+  }
+
+  const headResult = await shellRun("git", ["rev-parse", "HEAD"], {
+    cwd: treeRoot,
+  });
+  const headSha = headResult.stdout.trim();
+  if (headResult.code === 0 && headSha !== "") {
+    return headSha;
+  }
+
+  console.error(
+    "\u274C could not determine the original git checkout for sync apply.",
+  );
+  return null;
+}
+
 /** Result of preparing a proposal group (branch created, files committed locally). */
 interface PreparedProposalGroup {
   branch: string;
@@ -797,6 +823,7 @@ async function prepareProposalGroup(
   binding: TreeBindingState,
   drift: DriftReport,
   group: ProposalGroup,
+  baseRef: string,
 ): Promise<PreparedProposalGroup | null> {
   const shortSha = drift.toSha.slice(0, 7);
   const branchSuffix = group.sourcePrNumber !== null
@@ -833,7 +860,7 @@ async function prepareProposalGroup(
     }
   }
 
-  const branchCreate = await shellRun("git", ["checkout", "-B", branch], {
+  const branchCreate = await shellRun("git", ["checkout", "-B", branch, baseRef], {
     cwd: treeRoot,
   });
   if (branchCreate.code !== 0) {
@@ -1312,7 +1339,10 @@ export async function runSync(
           `\nPreparing ${applyCount} tree PR(s) (creating branches, committing locally)...`,
         );
         const preparedGroups: PreparedProposalGroup[] = [];
-        const originalBranch = (await shellRun("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: repo.root })).stdout.trim();
+        const originalRef = await resolveStableCheckoutRef(shellRun, repo.root);
+        if (originalRef === null) {
+          return 1;
+        }
 
         for (const { pr, filtered, written } of groupsToApply) {
           const group: ProposalGroup = {
@@ -1327,6 +1357,7 @@ export async function runSync(
             drift.binding,
             drift,
             group,
+            originalRef,
           );
           if (prepared === null) {
             // Fatal error during preparation
@@ -1341,7 +1372,11 @@ export async function runSync(
         }
 
         // Return to original branch before parallel operations
-        await shellRun("git", ["checkout", originalBranch], { cwd: repo.root });
+        const restoreResult = await shellRun("git", ["checkout", originalRef], { cwd: repo.root });
+        if (restoreResult.code !== 0) {
+          console.error(`\u274C could not return to ${originalRef}: ${restoreResult.stderr.trim()}`);
+          return 1;
+        }
 
         if (flags.dryRun) {
           console.log(`\n(dry-run) would push ${preparedGroups.length} branch(es) and open PRs`);
@@ -1374,7 +1409,11 @@ export async function runSync(
         if (!flags.dryRun && preparedGroups.length > 0) {
           console.log("\nOpening housekeeping PR (binding pin + CODEOWNERS)...");
           const hkBranch = `first-tree/sync-${drift.binding.sourceId}-housekeeping`;
-          await shellRun("git", ["checkout", "-B", hkBranch], { cwd: repo.root });
+          const hkCheckout = await shellRun("git", ["checkout", "-B", hkBranch, originalRef], { cwd: repo.root });
+          if (hkCheckout.code !== 0) {
+            console.error(`\u274C could not create housekeeping branch ${hkBranch}: ${hkCheckout.stderr.trim()}`);
+            return 1;
+          }
 
           // Pin the binding to the latest synced commit
           writeTreeBinding(repo.root, drift.binding.sourceId, {
@@ -1409,7 +1448,11 @@ export async function runSync(
           } else {
             console.log("  No changes for housekeeping PR.");
           }
-          await shellRun("git", ["checkout", "-"], { cwd: repo.root });
+          const restoreAfterHousekeeping = await shellRun("git", ["checkout", originalRef], { cwd: repo.root });
+          if (restoreAfterHousekeeping.code !== 0) {
+            console.error(`\u274C could not return to ${originalRef}: ${restoreAfterHousekeeping.stderr.trim()}`);
+            return 1;
+          }
         } else if (flags.dryRun && preparedGroups.length > 0) {
           console.log(`\n(dry-run) would open housekeeping PR to pin binding to ${drift.toSha.slice(0, 7)} + regenerate CODEOWNERS`);
         }

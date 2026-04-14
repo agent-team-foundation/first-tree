@@ -413,6 +413,149 @@ describe("sync -- default run", () => {
 });
 
 describe("sync -- PR labeling", () => {
+  it("apply prepares every sync branch from the original ref", async () => {
+    const tmp = useTmpDir();
+    makeTreeShell(tmp.path);
+    mkdirSync(join(tmp.path, ".github"), { recursive: true });
+    writeFileSync(
+      join(tmp.path, ".github", "CODEOWNERS"),
+      "/pkg-a/ @alice\n/pkg-b/ @bob\n",
+    );
+    const fromSha = "aa".repeat(20);
+    const toSha = "bb".repeat(20);
+    writeTreeBinding(tmp.path, "source-parallel", {
+      bindingMode: "standalone-source",
+      entrypoint: "/repos/source",
+      lastReconciledSourceCommit: fromSha,
+      remoteUrl: "https://github.com/alice/source.git",
+      rootKind: "git-repo",
+      scope: "repo",
+      sourceId: "source-parallel",
+      sourceName: "source",
+      sourceRootPath: "../source",
+      treeMode: "dedicated",
+      treeRepoName: "tree",
+    });
+    const checkoutCommands: string[][] = [];
+    let classifyCall = 0;
+    const shellRun: ShellRun = async (command, args) => {
+      if (command === "gh" && args[0] === "auth") return okAuth();
+      if (command === "claude" && args[0] === "--version") return claudeVersionOk();
+      if (command === "gh" && args[0] === "api") {
+        const path = args[1] ?? "";
+        if (path === "/repos/alice/source/commits/HEAD") {
+          return { stdout: `${toSha}\n`, stderr: "", code: 0 };
+        }
+        if (path.startsWith("/repos/alice/source/compare/")) {
+          return {
+            stdout: JSON.stringify({
+              commits: [
+                {
+                  sha: "1".repeat(40),
+                  commit: {
+                    message: "feat(pkg-a): add thing (#101)",
+                    author: { name: "a", date: "2026-04-01T00:00:00Z" },
+                  },
+                  files: [{ filename: "pkg-a/x.ts" }],
+                },
+                {
+                  sha: "2".repeat(40),
+                  commit: {
+                    message: "feat(pkg-b): add thing (#102)",
+                    author: { name: "b", date: "2026-04-02T00:00:00Z" },
+                  },
+                  files: [{ filename: "pkg-b/y.ts" }],
+                },
+              ],
+            }),
+            stderr: "",
+            code: 0,
+          };
+        }
+        if (path.startsWith("search/issues")) {
+          return {
+            stdout: JSON.stringify({
+              items: [
+                {
+                  number: 101,
+                  title: "feat(pkg-a): add thing",
+                  pull_request: {
+                    merged_at: "2026-04-01T00:00:00Z",
+                    merge_commit_sha: "1".repeat(40),
+                  },
+                },
+                {
+                  number: 102,
+                  title: "feat(pkg-b): add thing",
+                  pull_request: {
+                    merged_at: "2026-04-02T00:00:00Z",
+                    merge_commit_sha: "2".repeat(40),
+                  },
+                },
+              ],
+            }),
+            stderr: "",
+            code: 0,
+          };
+        }
+      }
+      if (command === "gh" && args[0] === "pr" && args[1] === "list") {
+        return { stdout: "[]", stderr: "", code: 0 };
+      }
+      if (command === "claude" && args[0] === "-p") {
+        classifyCall += 1;
+        return {
+          stdout: JSON.stringify([
+            classifyCall === 1
+              ? {
+                  path: "pkg-a",
+                  type: "TREE_MISS",
+                  target_node_path: null,
+                  rationale: "No node for pkg-a",
+                  suggested_node_title: "pkg-a",
+                  suggested_node_body_markdown: "# pkg-a",
+                }
+              : {
+                  path: "pkg-b",
+                  type: "TREE_MISS",
+                  target_node_path: null,
+                  rationale: "No node for pkg-b",
+                  suggested_node_title: "pkg-b",
+                  suggested_node_body_markdown: "# pkg-b",
+                },
+          ]),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (command === "git") {
+        if (args[0] === "symbolic-ref") {
+          return { stdout: "main\n", stderr: "", code: 0 };
+        }
+        if (args[0] === "checkout") {
+          checkoutCommands.push([...args]);
+          return { stdout: "", stderr: "", code: 0 };
+        }
+        if (args.includes("diff") && args.includes("--cached") && args.includes("--quiet")) {
+          return { stdout: "", stderr: "", code: 1 };
+        }
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: `no mock for ${command} ${args.join(" ")}`, code: 1 };
+    };
+    const code = await runSync(
+      tmp.path,
+      { source: undefined, propose: false, apply: true, dryRun: true },
+      { shellRun },
+    );
+    expect(code).toBe(0);
+    expect(checkoutCommands).toEqual([
+      ["checkout", "-B", "first-tree/sync-source-parallel-pr101", "main"],
+      ["checkout", "-B", "first-tree/sync-source-parallel-pr102", "main"],
+      ["checkout", "main"],
+    ]);
+  });
+
   it("apply labels PR with first-tree:sync only, never auto-merge", async () => {
     const tmp = useTmpDir();
     makeTreeShell(tmp.path);
@@ -476,6 +619,9 @@ describe("sync -- PR labeling", () => {
         return { stdout: classifyResponse, stderr: "", code: 0 };
       }
       if (command === "git") {
+        if (args[0] === "symbolic-ref") {
+          return { stdout: "main\n", stderr: "", code: 0 };
+        }
         // diff --cached --quiet: exit 1 = has staged changes (simulate successful staging)
         if (args.includes("diff") && args.includes("--cached") && args.includes("--quiet")) {
           return { stdout: "", stderr: "", code: 1 };
