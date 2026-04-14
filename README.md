@@ -206,8 +206,11 @@ plus their own source/workspace binding state.
 ## Canonical Documentation
 
 User-facing references ship in `skills/first-tree/references/` and are copied
-to user repos via `first-tree init` / `first-tree bind`. Maintainer-only
-references live in `docs/` and never ship.
+to user repos via `first-tree init` / `first-tree bind`.
+
+Canonical design and architecture knowledge for this project lives in the bound
+Context Tree under `first-tree-skill-cli/`. Repo-local maintainer notes in
+`docs/` are implementation-only and never ship.
 
 - User-facing overview: `skills/first-tree/references/whitepaper.md`
 - User onboarding: `skills/first-tree/references/onboarding.md`
@@ -215,6 +218,8 @@ references live in `docs/` and never ship.
   `skills/first-tree/references/source-workspace-installation.md`
 - Upgrade and layout contract:
   `skills/first-tree/references/upgrade-contract.md`
+- Canonical architecture node: `first-tree-skill-cli/repo-architecture.md`
+- Canonical sync design node: `first-tree-skill-cli/sync.md`
 - Maintainer entrypoint: `docs/source-map.md`
 
 ## Developing This Repo
