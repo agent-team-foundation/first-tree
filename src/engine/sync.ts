@@ -7,9 +7,10 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { Repo } from "#engine/repo.js";
+import { runVerify } from "#engine/verify.js";
 import {
   TREE_RUNTIME_ROOT,
 } from "#engine/runtime/asset-loader.js";
@@ -19,6 +20,7 @@ import {
   writeTreeBinding,
   type TreeBindingState,
 } from "#engine/runtime/binding-state.js";
+import { resolveNodeOwners } from "../../assets/framework/helpers/generate-codeowners.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -64,6 +66,7 @@ export type ShellRun = (
 export interface SyncDeps {
   shellRun?: ShellRun;
   now?: () => Date;
+  verifyTree?: (treeRoot: string) => number | Promise<number>;
 }
 
 async function defaultShellRun(
@@ -141,16 +144,20 @@ const SCAN_SKIP_DIRS = new Set([
 const FRONTMATTER_RE = /^---\s*\n(.*?)\n---/s;
 const TITLE_RE = /^title:\s*['"]?(.+?)['"]?\s*$/m;
 const OWNERS_RE = /^owners:\s*\[([^\]]*)\]/m;
+const GITHUB_RE = /^github:\s*['"]?(.+?)['"]?\s*$/m;
+const LEADING_FRONTMATTER_RE = /^---\s*\r?\n[\s\S]*?\r?\n---(?:\s*\r?\n)?/;
 
 function parseNodeFrontmatter(text: string): {
   title: string | undefined;
   owners: string[] | undefined;
+  github: string | undefined;
 } {
   const match = text.match(FRONTMATTER_RE);
-  if (!match) return { title: undefined, owners: undefined };
+  if (!match) return { title: undefined, owners: undefined, github: undefined };
   const fm = match[1];
   const titleMatch = fm.match(TITLE_RE);
   const ownersMatch = fm.match(OWNERS_RE);
+  const githubMatch = fm.match(GITHUB_RE);
   const title = titleMatch ? titleMatch[1].trim() : undefined;
   let owners: string[] | undefined;
   if (ownersMatch) {
@@ -159,7 +166,8 @@ function parseNodeFrontmatter(text: string): {
       ? []
       : raw.split(",").map((o) => o.trim()).filter(Boolean);
   }
-  return { title, owners };
+  const github = githubMatch ? githubMatch[1].trim() : undefined;
+  return { title, owners, github };
 }
 
 export function scanTreeNodes(root: string): TreeNodeSummary[] {
@@ -205,6 +213,94 @@ export function scanTreeNodes(root: string): TreeNodeSummary[] {
   return results.sort((a, b) => a.path.localeCompare(b.path));
 }
 
+function normalizeGitHubLogin(value: string): string {
+  return value.trim().replace(/^@+/, "").toLowerCase();
+}
+
+function sanitizeSuggestedNodeBodyMarkdown(markdown: string): string {
+  const trimmed = markdown.trim();
+  if (trimmed === "") return trimmed;
+  const withoutFrontmatter = trimmed.replace(LEADING_FRONTMATTER_RE, "").trim();
+  return withoutFrontmatter === "" ? trimmed : withoutFrontmatter;
+}
+
+function findExistingMemberDirByAuthorLogin(
+  treeRoot: string,
+  authorLogin: string | null,
+): string | null {
+  if (!authorLogin) return null;
+  const normalizedAuthor = normalizeGitHubLogin(authorLogin);
+  if (normalizedAuthor === "") return null;
+  const membersRoot = join(treeRoot, "members");
+  if (!existsSync(membersRoot)) return null;
+
+  const matches: string[] = [];
+  const walk = (dir: string): void => {
+    const nodePath = join(dir, "NODE.md");
+    if (existsSync(nodePath)) {
+      try {
+        const text = readFileSync(nodePath, "utf-8");
+        const { owners, github } = parseNodeFrontmatter(text);
+        const matchesAuthor =
+          (owners ?? []).some((owner) => normalizeGitHubLogin(owner) === normalizedAuthor)
+          || (github ? normalizeGitHubLogin(github) === normalizedAuthor : false);
+        if (matchesAuthor) {
+          matches.push(relative(treeRoot, dir).split("\\").join("/"));
+        }
+      } catch {
+        // ignore unreadable member nodes
+      }
+    }
+
+    let entries: string[];
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.startsWith(".")) continue;
+      const child = join(dir, entry);
+      try {
+        if (!statSync(child).isDirectory()) continue;
+      } catch {
+        continue;
+      }
+      walk(child);
+    }
+  };
+
+  walk(membersRoot);
+  matches.sort((a, b) => {
+    const depthDiff = a.split("/").length - b.split("/").length;
+    return depthDiff !== 0 ? depthDiff : a.localeCompare(b);
+  });
+  return matches[0] ?? null;
+}
+
+function resolveProposalOwners(
+  treeRoot: string,
+  targetDir: string,
+  authorLogin: string | null,
+): string[] {
+  const combined = [...resolveNodeOwners(targetDir, treeRoot, new Map())];
+  if (authorLogin) {
+    combined.push(authorLogin);
+  }
+
+  const seen = new Set<string>();
+  const resolved: string[] = [];
+  for (const owner of combined) {
+    const cleaned = owner.replace(/^@+/, "").trim();
+    if (cleaned === "") continue;
+    const normalized = normalizeGitHubLogin(cleaned);
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    resolved.push(cleaned);
+  }
+  return resolved;
+}
+
 interface CommitSummary {
   sha: string;
   shortSha: string;
@@ -219,6 +315,7 @@ interface MergedPr {
   title: string;
   mergedAt: string;
   mergeCommitSha: string | null;
+  authorLogin: string | null;
 }
 
 interface DriftReport {
@@ -245,6 +342,7 @@ interface ClassificationItem {
 interface ProposalGroup {
   sourcePrNumber: number | null;
   sourcePrTitle: string | null;
+  sourcePrAuthorLogin: string | null;
   proposals: ClassificationItem[];
   proposalPaths: string[];
 }
@@ -484,6 +582,7 @@ async function fetchMergedPrs(
       items?: Array<{
         number?: number;
         title?: string;
+        user?: { login?: string };
         pull_request?: { merged_at?: string; merge_commit_sha?: string };
       }>;
     };
@@ -494,6 +593,7 @@ async function fetchMergedPrs(
         title: item.title!,
         mergedAt: item.pull_request?.merged_at ?? "",
         mergeCommitSha: item.pull_request?.merge_commit_sha ?? null,
+        authorLogin: item.user?.login?.trim() ?? null,
       }));
   } catch {
     return [];
@@ -575,10 +675,12 @@ Return a JSON array. Each element represents one area that needs a NEW tree node
   "target_node_path": null,
   "rationale": "one sentence explaining why the tree needs this node",
   "suggested_node_title": "Human-readable title for the node",
-  "suggested_node_body_markdown": "Draft NODE.md body content (2-5 paragraphs)"
+  "suggested_node_body_markdown": "Draft NODE.md body content ONLY (2-5 paragraphs, no YAML frontmatter)"
 }
 
 For TREE_OK items, only path, type, and rationale are required (other fields can be empty strings).
+
+IMPORTANT: \`suggested_node_body_markdown\` must contain body content only. Do NOT include YAML frontmatter or code fences.
 
 Return a JSON array only, no prose.`;
   const CLAUDE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes per classification
@@ -697,6 +799,7 @@ function writeProposalFile(
   const dir = join(treeRoot, TREE_RUNTIME_ROOT, "proposals", sourceId);
   mkdirSync(dir, { recursive: true });
   const filePath = join(dir, `${slug}.md`);
+  const body = sanitizeSuggestedNodeBodyMarkdown(item.suggested_node_body_markdown);
   const frontmatter = [
     "---",
     `type: ${item.type}`,
@@ -707,44 +810,8 @@ function writeProposalFile(
     "---",
     "",
   ].join("\n");
-  writeFileSync(filePath, `${frontmatter}${item.suggested_node_body_markdown}\n`);
+  writeFileSync(filePath, `${frontmatter}${body}\n`);
   return filePath;
-}
-
-function extractOwnersFromCodeowners(
-  treeRoot: string,
-  targetPath: string,
-): string[] {
-  const candidates = [
-    join(treeRoot, "CODEOWNERS"),
-    join(treeRoot, ".github", "CODEOWNERS"),
-    join(treeRoot, "docs", "CODEOWNERS"),
-  ];
-  for (const candidate of candidates) {
-    if (!existsSync(candidate)) continue;
-    let text;
-    try {
-      text = readFileSync(candidate, "utf-8");
-    } catch {
-      continue;
-    }
-    const matches: string[] = [];
-    for (const rawLine of text.split("\n")) {
-      const line = rawLine.trim();
-      if (line === "" || line.startsWith("#")) continue;
-      const parts = line.split(/\s+/);
-      if (parts.length < 2) continue;
-      const pattern = parts[0];
-      if (
-        pattern === "*"
-        || targetPath.startsWith(pattern.replace(/^\//, "").replace(/\/$/, ""))
-      ) {
-        matches.push(...parts.slice(1).map(s => s.replace(/^@+/, '')));
-      }
-    }
-    if (matches.length > 0) return matches;
-  }
-  return [];
 }
 
 async function ghAuthOk(shellRun: ShellRun): Promise<boolean> {
@@ -824,6 +891,7 @@ async function prepareProposalGroup(
   drift: DriftReport,
   group: ProposalGroup,
   baseRef: string,
+  verifyTree: (treeRoot: string) => number | Promise<number>,
 ): Promise<PreparedProposalGroup | null> {
   const shortSha = drift.toSha.slice(0, 7);
   const branchSuffix = group.sourcePrNumber !== null
@@ -878,12 +946,27 @@ async function prepareProposalGroup(
       let dirSegment = proposal.path === "(root)" ? "misc" : proposal.path;
       // Strip trailing /NODE.md if the AI included it in the path
       dirSegment = dirSegment.replace(/\/NODE\.md$/i, "").replace(/^NODE\.md$/i, "misc");
+      if (dirSegment.startsWith("members/")) {
+        const existingMemberDir = findExistingMemberDirByAuthorLogin(
+          treeRoot,
+          group.sourcePrAuthorLogin,
+        );
+        if (existingMemberDir) {
+          dirSegment = existingMemberDir;
+        }
+      }
       const absDir = join(treeRoot, dirSegment);
       mkdirSync(absDir, { recursive: true });
-      const owners = [...new Set(extractOwnersFromCodeowners(treeRoot, dirSegment))];
+      const owners = resolveProposalOwners(
+        treeRoot,
+        absDir,
+        group.sourcePrAuthorLogin,
+      );
       const title = proposal.suggested_node_title;
       const capitalizedTitle = title.charAt(0).toUpperCase() + title.slice(1);
-      const body = proposal.suggested_node_body_markdown;
+      const body = sanitizeSuggestedNodeBodyMarkdown(
+        proposal.suggested_node_body_markdown,
+      );
       const nodePath = join(absDir, "NODE.md");
       // Only write if NODE.md doesn't already exist (don't overwrite human-authored nodes)
       if (!existsSync(nodePath)) {
@@ -941,6 +1024,18 @@ async function prepareProposalGroup(
   if (commitResult.code !== 0) {
     console.error(`\u274C git commit failed: ${commitResult.stderr.trim()}`);
     return null;
+  }
+
+  const verifyCode = await verifyTree(treeRoot);
+  if (verifyCode !== 0) {
+    return {
+      branch,
+      prTitle,
+      prBody: "",
+      group,
+      skipped: true,
+      skipReason: "first-tree verify failed",
+    };
   }
 
   const bodyLines = [
@@ -1083,6 +1178,7 @@ export async function runSync(
 ): Promise<number> {
   const shellRun = deps.shellRun ?? defaultShellRun;
   const now = deps.now ?? (() => new Date());
+  const verifyTree = deps.verifyTree ?? ((root: string) => runVerify(new Repo(root)));
   const repo = new Repo(treeRoot);
 
   if (!repo.looksLikeTreeRepo()) {
@@ -1248,7 +1344,13 @@ export async function runSync(
     // Classify per merged PR (not per batch) so each source PR → one tree PR
     const prsToClassify = drift.mergedPrs.length > 0
       ? drift.mergedPrs
-      : [{ number: 0, title: "unlinked commits", mergeCommitSha: null }];
+      : [{
+          number: 0,
+          title: "unlinked commits",
+          mergeCommitSha: null,
+          mergedAt: "",
+          authorLogin: null,
+        }];
 
     // Phase 1: Classify all PRs in parallel (up to CONCURRENCY at a time)
     interface ClassifiedPr {
@@ -1348,6 +1450,7 @@ export async function runSync(
           const group: ProposalGroup = {
             sourcePrNumber: pr.number > 0 ? pr.number : null,
             sourcePrTitle: pr.number > 0 ? pr.title : null,
+            sourcePrAuthorLogin: pr.authorLogin,
             proposals: filtered,
             proposalPaths: written,
           };
@@ -1358,6 +1461,7 @@ export async function runSync(
             drift,
             group,
             originalRef,
+            verifyTree,
           );
           if (prepared === null) {
             // Fatal error during preparation

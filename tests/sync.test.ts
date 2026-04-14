@@ -546,7 +546,7 @@ describe("sync -- PR labeling", () => {
     const code = await runSync(
       tmp.path,
       { source: undefined, propose: false, apply: true, dryRun: true },
-      { shellRun },
+      { shellRun, verifyTree: () => 0 },
     );
     expect(code).toBe(0);
     expect(checkoutCommands).toEqual([
@@ -702,7 +702,7 @@ describe("sync -- PR labeling", () => {
     const code = await runSync(
       tmp.path,
       { source: undefined, propose: false, apply: true, dryRun: false },
-      { shellRun },
+      { shellRun, verifyTree: () => 0 },
     );
 
     expect(code).toBe(1);
@@ -796,14 +796,439 @@ describe("sync -- PR labeling", () => {
     const code = await runSync(
       tmp.path,
       { source: undefined, propose: false, apply: true, dryRun: false },
-      { shellRun },
+      { shellRun, verifyTree: () => 0 },
     );
     expect(code).toBe(0);
     expect(labelArgsCaptured.join(" ")).toContain("first-tree:sync");
     expect(labelArgsCaptured.join(" ")).not.toContain("auto-merge");
     const nodeText = readFileSync(join(tmp.path, "pkg-a", "NODE.md"), "utf-8");
-    expect(nodeText).toContain("owners: [alice, bob]");
+    expect(nodeText).toContain("owners: [alice]");
     expect(nodeText).not.toContain("@alice");
+  });
+
+  it("asks Claude for body-only markdown without YAML frontmatter", async () => {
+    const tmp = useTmpDir();
+    makeTreeShell(tmp.path);
+    const fromSha = "aa".repeat(20);
+    const toSha = "bb".repeat(20);
+    writeTreeBinding(tmp.path, "source-prompt", {
+      bindingMode: "standalone-source",
+      entrypoint: "/repos/source",
+      lastReconciledSourceCommit: fromSha,
+      remoteUrl: "https://github.com/alice/source.git",
+      rootKind: "git-repo",
+      scope: "repo",
+      sourceId: "source-prompt",
+      sourceName: "source",
+      sourceRootPath: "../source",
+      treeMode: "dedicated",
+      treeRepoName: "tree",
+    });
+
+    let claudePrompt = "";
+    const shellRun: ShellRun = async (command, args) => {
+      if (command === "gh" && args[0] === "auth") return okAuth();
+      if (command === "claude" && args[0] === "--version") return claudeVersionOk();
+      if (command === "gh" && args[0] === "api") {
+        const path = args[1] ?? "";
+        if (path === "/repos/alice/source/commits/HEAD") {
+          return { stdout: `${toSha}\n`, stderr: "", code: 0 };
+        }
+        if (path.startsWith("/repos/alice/source/compare/")) {
+          return {
+            stdout: JSON.stringify({
+              commits: [{
+                sha: "1".repeat(40),
+                commit: {
+                  message: "feat(pkg-a): add docs",
+                  author: { name: "alice", date: "2026-04-01T00:00:00Z" },
+                },
+                files: [{ filename: "pkg-a/x.ts" }],
+              }],
+            }),
+            stderr: "",
+            code: 0,
+          };
+        }
+        if (path.startsWith("search/issues")) {
+          return { stdout: JSON.stringify({ items: [] }), stderr: "", code: 0 };
+        }
+      }
+      if (command === "claude" && args[0] === "-p") {
+        claudePrompt = args.at(-1) ?? "";
+        return {
+          stdout: JSON.stringify([{
+            path: "pkg-a",
+            type: "TREE_OK",
+            target_node_path: null,
+            rationale: "Already documented",
+            suggested_node_title: "",
+            suggested_node_body_markdown: "",
+          }]),
+          stderr: "",
+          code: 0,
+        };
+      }
+      return { stdout: "", stderr: `no mock for ${command} ${args.join(" ")}`, code: 1 };
+    };
+
+    const code = await runSync(
+      tmp.path,
+      { source: undefined, propose: true, apply: false, dryRun: false },
+      { shellRun },
+    );
+
+    expect(code).toBe(0);
+    expect(claudePrompt).toContain("body content ONLY");
+    expect(claudePrompt).toContain("Do NOT include YAML frontmatter");
+  });
+
+  it("strips Claude frontmatter and inherits parent owners plus PR author", async () => {
+    const tmp = useTmpDir();
+    makeTreeShell(tmp.path);
+    mkdirSync(join(tmp.path, "engineering"), { recursive: true });
+    writeFileSync(
+      join(tmp.path, "engineering", "NODE.md"),
+      "---\ntitle: Engineering\nowners: [core-team, review-lead]\n---\n# Engineering\n",
+    );
+    const fromSha = "cc".repeat(20);
+    const toSha = "dd".repeat(20);
+    writeTreeBinding(tmp.path, "source-owners", {
+      bindingMode: "standalone-source",
+      entrypoint: "/repos/source",
+      lastReconciledSourceCommit: fromSha,
+      remoteUrl: "https://github.com/alice/source.git",
+      rootKind: "git-repo",
+      scope: "repo",
+      sourceId: "source-owners",
+      sourceName: "source",
+      sourceRootPath: "../source",
+      treeMode: "dedicated",
+      treeRepoName: "tree",
+    });
+
+    const shellRun: ShellRun = async (command, args) => {
+      if (command === "gh" && args[0] === "auth") return okAuth();
+      if (command === "claude" && args[0] === "--version") return claudeVersionOk();
+      if (command === "gh" && args[0] === "api") {
+        const path = args[1] ?? "";
+        if (path === "/repos/alice/source/commits/HEAD") {
+          return { stdout: `${toSha}\n`, stderr: "", code: 0 };
+        }
+        if (path.startsWith("/repos/alice/source/compare/")) {
+          return {
+            stdout: JSON.stringify({
+              commits: [{
+                sha: "1".repeat(40),
+                commit: {
+                  message: "feat(backend): add worker (#101)",
+                  author: { name: "dev", date: "2026-04-01T00:00:00Z" },
+                },
+                files: [{ filename: "engineering/backend/worker.ts" }],
+              }],
+            }),
+            stderr: "",
+            code: 0,
+          };
+        }
+        if (path.startsWith("search/issues")) {
+          return {
+            stdout: JSON.stringify({
+              items: [{
+                number: 101,
+                title: "feat(backend): add worker",
+                user: { login: "external-dev" },
+                pull_request: {
+                  merged_at: "2026-04-01T00:00:00Z",
+                  merge_commit_sha: "1".repeat(40),
+                },
+              }],
+            }),
+            stderr: "",
+            code: 0,
+          };
+        }
+      }
+      if (command === "gh" && args[0] === "pr" && args[1] === "list") {
+        return { stdout: "[]", stderr: "", code: 0 };
+      }
+      if (command === "claude" && args[0] === "-p") {
+        return {
+          stdout: JSON.stringify([{
+            path: "engineering/backend",
+            type: "TREE_MISS",
+            target_node_path: null,
+            rationale: "Backend worker is new knowledge",
+            suggested_node_title: "backend",
+            suggested_node_body_markdown: [
+              "---",
+              'title: "Backend"',
+              "owners: [wrong-owner]",
+              "soft_links: [/engineering]",
+              "---",
+              "",
+              "# Backend",
+              "",
+              "New worker details.",
+            ].join("\n"),
+          }]),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (command === "git") {
+        if (args[0] === "symbolic-ref") {
+          return { stdout: "main\n", stderr: "", code: 0 };
+        }
+        if (args.includes("diff") && args.includes("--cached") && args.includes("--quiet")) {
+          return { stdout: "", stderr: "", code: 1 };
+        }
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: `no mock for ${command} ${args.join(" ")}`, code: 1 };
+    };
+
+    const code = await runSync(
+      tmp.path,
+      { source: undefined, propose: false, apply: true, dryRun: true },
+      { shellRun, verifyTree: () => 0 },
+    );
+
+    expect(code).toBe(0);
+    const nodeText = readFileSync(join(tmp.path, "engineering", "backend", "NODE.md"), "utf-8");
+    expect(nodeText).toContain("owners: [core-team, review-lead, external-dev]");
+    expect(nodeText.match(/^---$/gm)?.length).toBe(2);
+    expect(nodeText).not.toContain("soft_links: [/engineering]");
+    expect(nodeText).toContain("# Backend");
+  });
+
+  it("reuses an existing member node when the PR author is already in members", async () => {
+    const tmp = useTmpDir();
+    makeTreeShell(tmp.path);
+    mkdirSync(join(tmp.path, "members", "dotta"), { recursive: true });
+    writeFileSync(
+      join(tmp.path, "members", "NODE.md"),
+      "---\ntitle: Members\nowners: []\n---\n# Members\n",
+    );
+    writeFileSync(
+      join(tmp.path, "members", "dotta", "NODE.md"),
+      [
+        "---",
+        'title: "Dotta"',
+        "owners: [cryppadotta]",
+        "github: cryppadotta",
+        'type: "human"',
+        'role: "Engineer"',
+        "domains:",
+        '  - "backend"',
+        "---",
+        "",
+        "# Dotta",
+      ].join("\n"),
+    );
+    const fromSha = "ee".repeat(20);
+    const toSha = "ff".repeat(20);
+    writeTreeBinding(tmp.path, "source-members", {
+      bindingMode: "standalone-source",
+      entrypoint: "/repos/source",
+      lastReconciledSourceCommit: fromSha,
+      remoteUrl: "https://github.com/alice/source.git",
+      rootKind: "git-repo",
+      scope: "repo",
+      sourceId: "source-members",
+      sourceName: "source",
+      sourceRootPath: "../source",
+      treeMode: "dedicated",
+      treeRepoName: "tree",
+    });
+
+    const shellRun: ShellRun = async (command, args) => {
+      if (command === "gh" && args[0] === "auth") return okAuth();
+      if (command === "claude" && args[0] === "--version") return claudeVersionOk();
+      if (command === "gh" && args[0] === "api") {
+        const path = args[1] ?? "";
+        if (path === "/repos/alice/source/commits/HEAD") {
+          return { stdout: `${toSha}\n`, stderr: "", code: 0 };
+        }
+        if (path.startsWith("/repos/alice/source/compare/")) {
+          return {
+            stdout: JSON.stringify({
+              commits: [{
+                sha: "2".repeat(40),
+                commit: {
+                  message: "docs(member): update bio (#102)",
+                  author: { name: "cryppadotta", date: "2026-04-02T00:00:00Z" },
+                },
+                files: [{ filename: "README.md" }],
+              }],
+            }),
+            stderr: "",
+            code: 0,
+          };
+        }
+        if (path.startsWith("search/issues")) {
+          return {
+            stdout: JSON.stringify({
+              items: [{
+                number: 102,
+                title: "docs(member): update bio",
+                user: { login: "cryppadotta" },
+                pull_request: {
+                  merged_at: "2026-04-02T00:00:00Z",
+                  merge_commit_sha: "2".repeat(40),
+                },
+              }],
+            }),
+            stderr: "",
+            code: 0,
+          };
+        }
+      }
+      if (command === "gh" && args[0] === "pr" && args[1] === "list") {
+        return { stdout: "[]", stderr: "", code: 0 };
+      }
+      if (command === "claude" && args[0] === "-p") {
+        return {
+          stdout: JSON.stringify([{
+            path: "members/cryppadotta",
+            type: "TREE_MISS",
+            target_node_path: null,
+            rationale: "Member node missing",
+            suggested_node_title: "cryppadotta",
+            suggested_node_body_markdown: "# cryppadotta",
+          }]),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (command === "git") {
+        if (args[0] === "symbolic-ref") {
+          return { stdout: "main\n", stderr: "", code: 0 };
+        }
+        if (args.includes("diff") && args.includes("--cached") && args.includes("--quiet")) {
+          return { stdout: "", stderr: "", code: 0 };
+        }
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: `no mock for ${command} ${args.join(" ")}`, code: 1 };
+    };
+
+    const code = await runSync(
+      tmp.path,
+      { source: undefined, propose: false, apply: true, dryRun: true },
+      { shellRun, verifyTree: () => 0 },
+    );
+
+    expect(code).toBe(0);
+    expect(existsSync(join(tmp.path, "members", "cryppadotta", "NODE.md"))).toBe(false);
+    expect(readFileSync(join(tmp.path, "members", "dotta", "NODE.md"), "utf-8")).toContain(
+      "owners: [cryppadotta]",
+    );
+  });
+
+  it("skips pushing PR branches that fail first-tree verify", async () => {
+    const tmp = useTmpDir();
+    makeTreeShell(tmp.path);
+    const fromSha = "11".repeat(20);
+    const toSha = "22".repeat(20);
+    writeTreeBinding(tmp.path, "source-verify", {
+      bindingMode: "standalone-source",
+      entrypoint: "/repos/source",
+      lastReconciledSourceCommit: fromSha,
+      remoteUrl: "https://github.com/alice/source.git",
+      rootKind: "git-repo",
+      scope: "repo",
+      sourceId: "source-verify",
+      sourceName: "source",
+      sourceRootPath: "../source",
+      treeMode: "dedicated",
+      treeRepoName: "tree",
+    });
+
+    const prCreateCalls: string[][] = [];
+    const shellRun: ShellRun = async (command, args) => {
+      if (command === "gh" && args[0] === "auth") return okAuth();
+      if (command === "claude" && args[0] === "--version") return claudeVersionOk();
+      if (command === "gh" && args[0] === "api") {
+        const path = args[1] ?? "";
+        if (path === "/repos/alice/source/commits/HEAD") {
+          return { stdout: `${toSha}\n`, stderr: "", code: 0 };
+        }
+        if (path.startsWith("/repos/alice/source/compare/")) {
+          return {
+            stdout: JSON.stringify({
+              commits: [{
+                sha: "3".repeat(40),
+                commit: {
+                  message: "feat(pkg-a): add thing (#103)",
+                  author: { name: "alice", date: "2026-04-03T00:00:00Z" },
+                },
+                files: [{ filename: "pkg-a/x.ts" }],
+              }],
+            }),
+            stderr: "",
+            code: 0,
+          };
+        }
+        if (path.startsWith("search/issues")) {
+          return {
+            stdout: JSON.stringify({
+              items: [{
+                number: 103,
+                title: "feat(pkg-a): add thing",
+                user: { login: "alice" },
+                pull_request: {
+                  merged_at: "2026-04-03T00:00:00Z",
+                  merge_commit_sha: "3".repeat(40),
+                },
+              }],
+            }),
+            stderr: "",
+            code: 0,
+          };
+        }
+      }
+      if (command === "gh" && args[0] === "pr" && args[1] === "list") {
+        return { stdout: "[]", stderr: "", code: 0 };
+      }
+      if (command === "gh" && args[0] === "pr" && args[1] === "create") {
+        prCreateCalls.push([...args]);
+        return { stdout: "https://github.com/x/y/pull/103", stderr: "", code: 0 };
+      }
+      if (command === "claude" && args[0] === "-p") {
+        return {
+          stdout: JSON.stringify([{
+            path: "pkg-a",
+            type: "TREE_MISS",
+            target_node_path: null,
+            rationale: "Need pkg-a node",
+            suggested_node_title: "pkg-a",
+            suggested_node_body_markdown: "# pkg-a",
+          }]),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (command === "git") {
+        if (args[0] === "symbolic-ref") {
+          return { stdout: "main\n", stderr: "", code: 0 };
+        }
+        if (args.includes("diff") && args.includes("--cached") && args.includes("--quiet")) {
+          return { stdout: "", stderr: "", code: 1 };
+        }
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: `no mock for ${command} ${args.join(" ")}`, code: 1 };
+    };
+
+    const code = await runSync(
+      tmp.path,
+      { source: undefined, propose: false, apply: true, dryRun: false },
+      { shellRun, verifyTree: () => 1 },
+    );
+
+    expect(code).toBe(0);
+    expect(prCreateCalls).toHaveLength(0);
   });
 });
 
