@@ -31,7 +31,7 @@ In a source/workspace root, `first-tree init` / `first-tree bind` produce:
 ```text
 .agents/skills/first-tree/
 .claude/skills/first-tree
-FIRST_TREE.md
+WHITEPAPER.md
 AGENTS.md
 CLAUDE.md
 .first-tree/
@@ -64,7 +64,7 @@ members/
 1. wipes previous installed skill locations
 2. reinstalls `.agents/skills/first-tree/`
 3. recreates the `.claude/skills/first-tree` symlink
-4. refreshes `FIRST_TREE.md`
+4. refreshes `WHITEPAPER.md`
 5. refreshes the managed `FIRST-TREE-SOURCE-INTEGRATION:` block
 6. preserves `.first-tree/source.json`
 

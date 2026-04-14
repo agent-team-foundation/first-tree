@@ -17,7 +17,7 @@ Each domain is a directory containing a `NODE.md`. Each leaf decision is a
 markdown file with frontmatter declaring `title`, `owners`, and optional
 `soft_links` to related nodes.
 
-Read `references/about.md` for the product framing and
+Read `references/whitepaper.md` for the product vision and methodology, and
 `references/principles.md` for the four core principles you must follow when
 reading or writing nodes.
 
@@ -128,7 +128,7 @@ See `references/ownership-and-naming.md`.
 
 - `SKILL.md` — this file
 - `VERSION` — installed skill payload version
-- `references/about.md` — what Context Tree is, who it is for, why it exists
+- `references/whitepaper.md` — First Tree white paper: Agent Team methodology, principles, and vision
 - `references/principles.md` — four core principles with examples
 - `references/ownership-and-naming.md` — node naming and ownership model
 - `references/onboarding.md` — onboarding narrative for repos, shared trees, and workspaces

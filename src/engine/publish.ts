@@ -569,7 +569,7 @@ function resolveStageableManagedPaths(
     FIRST_TREE_INDEX_FILE,
   ].filter((path) => managedPaths.includes(path));
 
-  // FIRST_TREE.md and .claude/skills/first-tree are symlink views into the
+  // WHITEPAPER.md and .claude/skills/first-tree are symlink views into the
   // canonical .agents/skills/first-tree bundle, so stage them only when the
   // canonical skill root itself can be added to git.
   if (

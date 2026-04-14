@@ -34,7 +34,7 @@ tree describes.
 
 See [AGENTS.md](AGENTS.md) for agent instructions — the before/during/after workflow, ownership model, and tree maintenance.
 
-See [about.md](.agents/skills/first-tree/references/about.md) for background — the problem, the idea, and who it's for.
+See [whitepaper.md](.agents/skills/first-tree/references/whitepaper.md) for the First Tree white paper — Agent Team methodology, principles, and vision.
 
 See the installed framework documentation:
 - [principles.md](.agents/skills/first-tree/references/principles.md) — core principles with examples

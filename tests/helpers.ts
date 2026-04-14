@@ -35,8 +35,8 @@ export function makeFramework(root: string, version = "0.1.0"): void {
       "---\nname: first-tree\ndescription: installed\n---\n",
     );
     writeFileSync(
-      join(root, skillRoot, "references", "about.md"),
-      "# About Context Tree\n",
+      join(root, skillRoot, "references", "whitepaper.md"),
+      "# First Tree — White Paper\n",
     );
     writeFileSync(
       join(root, skillRoot, "VERSION"),
@@ -135,7 +135,7 @@ export function makeSourceSkill(root: string, version = "0.2.0"): void {
     "{}\n",
   );
   writeFileSync(
-    join(skillRoot, "references", "about.md"),
+    join(skillRoot, "references", "whitepaper.md"),
     "# About Context Tree\n",
   );
   writeFileSync(

@@ -54,7 +54,7 @@ version is newer, the installed payload is replaced and a task list is
 emitted for any manual follow-ups (e.g., reapplying customizations).
 
 In a source/workspace repo: refreshes only the local installed skill, the
-\`FIRST_TREE.md\` symlink, and the managed \`FIRST-TREE-SOURCE-INTEGRATION:\`
+\`WHITEPAPER.md\` symlink, and the managed \`FIRST-TREE-SOURCE-INTEGRATION:\`
 section in AGENTS.md/CLAUDE.md. The dedicated tree repo must be upgraded
 separately with \`--tree-path\`.
 
@@ -241,7 +241,7 @@ function formatUpgradeTaskList(
   } else {
     lines.push(
       "## Installed Skill",
-      `- [ ] The skill payload at ${installedSkillRootsDisplay()} was wiped and replaced with the lightweight \`SKILL.md\` + \`references/\` + \`VERSION\` layout. Verify root symlinks (\`principles.md\`, \`ownership-and-naming.md\`, \`FIRST_TREE.md\`) still resolve.`,
+      `- [ ] The skill payload at ${installedSkillRootsDisplay()} was wiped and replaced with the lightweight \`SKILL.md\` + \`references/\` + \`VERSION\` layout. Verify root symlinks (\`principles.md\`, \`ownership-and-naming.md\`, \`WHITEPAPER.md\`) still resolve.`,
       "- [ ] If any local automation or docs still reference paths like `.agents/skills/first-tree/engine/`, `.agents/skills/first-tree/assets/`, or `.agents/skills/first-tree/helpers/`, update them to invoke the CLI instead (e.g. `npx -p first-tree first-tree <command>`).",
       "",
     );

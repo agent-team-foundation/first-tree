@@ -49,14 +49,14 @@ describe("skill artifacts", () => {
       existsSync(join(ROOT, "src", "engine", "member-seeding.ts")),
     ).toBe(true);
     expect(existsSync(join(ROOT, "AGENTS.md"))).toBe(true);
-    expect(existsSync(join(ROOT, "FIRST_TREE.md"))).toBe(true);
+    expect(existsSync(join(ROOT, "WHITEPAPER.md"))).toBe(true);
     expect(existsSync(join(ROOT, ".agents", "skills", "first-tree", "SKILL.md"))).toBe(true);
     expect(existsSync(join(ROOT, ".claude", "skills", "first-tree", "SKILL.md"))).toBe(true);
     expect(lstatSync(join(ROOT, "CLAUDE.md")).isSymbolicLink()).toBe(true);
     expect(readlinkSync(join(ROOT, "CLAUDE.md"))).toBe("AGENTS.md");
-    expect(lstatSync(join(ROOT, "FIRST_TREE.md")).isSymbolicLink()).toBe(true);
-    expect(readlinkSync(join(ROOT, "FIRST_TREE.md"))).toBe(
-      ".agents/skills/first-tree/references/about.md",
+    expect(lstatSync(join(ROOT, "WHITEPAPER.md")).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(join(ROOT, "WHITEPAPER.md"))).toBe(
+      ".agents/skills/first-tree/references/whitepaper.md",
     );
     expect(lstatSync(join(ROOT, ".agents", "skills", "first-tree")).isSymbolicLink()).toBe(true);
     expect(readlinkSync(join(ROOT, ".agents", "skills", "first-tree"))).toBe(
