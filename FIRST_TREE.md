@@ -1,1 +1,0 @@
-WHITEPAPER.md
