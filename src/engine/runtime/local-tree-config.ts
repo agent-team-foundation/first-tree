@@ -9,6 +9,7 @@ import {
 } from "#engine/runtime/binding-state.js";
 import {
   LOCAL_TREE_TEMP_ROOT,
+  SOURCE_LOCAL_STATE,
 } from "#engine/runtime/asset-loader.js";
 
 export interface LocalTreeConfig {
@@ -29,10 +30,30 @@ export interface GitIgnoreUpdate {
 
 const LOCAL_TREE_GITIGNORE_ENTRIES = [
   `${LOCAL_TREE_TEMP_ROOT}/`,
+  SOURCE_LOCAL_STATE,
 ] as const;
 
 export function tempLocalTreeRoot(root: string, treeRepoName: string): string {
   return join(root, LOCAL_TREE_TEMP_ROOT, treeRepoName);
+}
+
+/**
+ * Read local overrides from `.first-tree/source.local.json`.
+ * This file is gitignored and only needed when the user's local tree
+ * checkout path differs from the team-shared relative path in source.json.
+ * Returns only the `localPath` override, or null if the file doesn't exist.
+ */
+function readSourceLocalOverride(root: string): { localPath: string } | null {
+  const fullPath = join(root, SOURCE_LOCAL_STATE);
+  try {
+    const parsed = JSON.parse(readFileSync(fullPath, "utf-8")) as Record<string, unknown>;
+    if (typeof parsed.localPath === "string" && parsed.localPath.length > 0) {
+      return { localPath: parsed.localPath };
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 export function readLocalTreeConfig(root: string): LocalTreeConfig | null {
@@ -43,10 +64,14 @@ export function readLocalTreeConfig(root: string): LocalTreeConfig | null {
   if (typeof state.tree.localPath !== "string" || typeof state.tree.treeRepoName !== "string") {
     return null;
   }
+
+  // source.local.json overrides localPath when present
+  const localOverride = readSourceLocalOverride(root);
+
   return {
     bindingMode: state.bindingMode,
     entrypoint: state.tree.entrypoint,
-    localPath: state.tree.localPath,
+    localPath: localOverride?.localPath ?? state.tree.localPath,
     sourceId: state.sourceId,
     treeMode: state.tree.treeMode,
     treeRepoName: state.tree.treeRepoName,
