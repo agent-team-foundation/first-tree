@@ -1400,6 +1400,7 @@ export async function runSync(
           }
           if (failures > 0) {
             console.error(`\u26A0 ${failures} PR(s) failed to create. Check errors above.`);
+            return 1;
           }
         }
 
