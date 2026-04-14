@@ -1,20 +1,31 @@
-import { Activity, Bot, Cable, LayoutDashboard, LogOut, MessageSquare, Settings, Shield } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import { Activity, Bot, Cable, LayoutDashboard, LogOut, MessageSquare, Settings, Users } from "lucide-react";
 import { NavLink, Outlet } from "react-router";
 import { useAuth } from "../auth/auth-context.js";
 import { cn } from "../lib/utils.js";
 
-const navItems = [
+type NavItem = {
+  to: string;
+  icon: LucideIcon;
+  label: string;
+  adminOnly?: boolean;
+};
+
+const navItems: NavItem[] = [
   { to: "/", icon: LayoutDashboard, label: "Overview" },
   { to: "/agents", icon: Bot, label: "Agents" },
   { to: "/activity", icon: Activity, label: "Activity" },
-  { to: "/bindings", icon: Cable, label: "Bindings" },
+  { to: "/bindings", icon: Cable, label: "Bindings", adminOnly: true },
   { to: "/chats", icon: MessageSquare, label: "Chats" },
-  { to: "/admin-users", icon: Shield, label: "Admin Users" },
-  { to: "/settings", icon: Settings, label: "Settings" },
+  { to: "/members", icon: Users, label: "Members", adminOnly: true },
+  { to: "/settings", icon: Settings, label: "Settings", adminOnly: true },
 ];
 
 export function Layout() {
-  const { logout } = useAuth();
+  const { role, logout } = useAuth();
+  const isAdmin = role === "admin";
+
+  const visibleItems = navItems.filter((item) => !item.adminOnly || isAdmin);
 
   return (
     <div className="flex h-screen bg-background">
@@ -22,10 +33,10 @@ export function Layout() {
       <aside className="w-60 shrink-0 border-r border-border bg-card flex flex-col">
         <div className="p-4 border-b border-border">
           <h1 className="text-lg font-semibold tracking-tight">First Tree</h1>
-          <p className="text-xs text-muted-foreground">Admin Console</p>
+          <p className="text-xs text-muted-foreground">Workspace</p>
         </div>
         <nav className="flex-1 p-2 space-y-1">
-          {navItems.map((item) => (
+          {visibleItems.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}

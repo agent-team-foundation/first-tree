@@ -69,6 +69,7 @@ export async function createAgent(db: Database, data: CreateAgent) {
         source: data.source ?? null,
         public: data.public ?? false,
         metadata: data.metadata ?? {},
+        managerId: data.managerId ?? null,
       })
       .returning();
 

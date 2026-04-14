@@ -42,7 +42,7 @@ async function tryRefresh(refreshToken: string): Promise<StoredTokens | null> {
 
   refreshPromise = (async () => {
     try {
-      const res = await fetch(`${BASE_URL}/admin/auth/refresh`, {
+      const res = await fetch(`${BASE_URL}/auth/refresh`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ refreshToken }),

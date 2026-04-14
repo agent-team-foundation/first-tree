@@ -26,13 +26,13 @@ export {
   checkServerHealth,
   checkServerReachable,
   checkWebSocket,
-  createAdminUser,
+  createOwner,
   ensurePostgres,
   formatCheckReport,
   getGitHubToken,
   getGitHubUsername,
   // Admin management
-  hasAdminUser,
+  hasUser,
   // Docker PostgreSQL
   isDockerAvailable,
   isInteractive,

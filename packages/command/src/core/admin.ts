@@ -1,16 +1,16 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import bcrypt from "bcrypt";
 import { sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
 /**
- * Check if any admin user exists.
+ * Check if any user exists.
  */
-export async function hasAdminUser(databaseUrl: string): Promise<boolean> {
+export async function hasUser(databaseUrl: string): Promise<boolean> {
   const client = postgres(databaseUrl, { max: 1 });
   try {
-    const result = await client`SELECT count(*)::int AS count FROM admin_users`;
+    const result = await client`SELECT count(*)::int AS count FROM users`;
     return (result[0] as { count: number }).count > 0;
   } finally {
     await client.end();
@@ -18,11 +18,14 @@ export async function hasAdminUser(databaseUrl: string): Promise<boolean> {
 }
 
 /**
- * Create an admin user. Returns the generated password.
+ * Create the initial admin user + organization + member + human agent.
+ * Used during first-run onboard. Returns the generated password.
  */
-export async function createAdminUser(
+export async function createOwner(
   databaseUrl: string,
   username: string,
+  orgName: string,
+  displayName: string,
   password?: string,
 ): Promise<{ username: string; password: string }> {
   const pw = password ?? randomBytes(12).toString("base64url");
@@ -32,13 +35,63 @@ export async function createAdminUser(
   const db = drizzle(client);
 
   try {
-    await db.execute(sql`
-      INSERT INTO admin_users (id, username, password_hash, role)
-      VALUES (${randomUUID()}, ${username}, ${hash}, 'super_admin')
-    `);
+    const userId = makeUuidV7();
+    const orgId = makeUuidV7();
+    const agentId = makeUuidV7();
+    const memberId = makeUuidV7();
+
+    const agentName = username.replace(/[^a-z0-9_-]/gi, "-").toLowerCase();
+
+    await db.transaction(async (tx) => {
+      await tx.execute(sql`
+        INSERT INTO users (id, username, password_hash, display_name)
+        VALUES (${userId}, ${username}, ${hash}, ${displayName})
+      `);
+
+      await tx.execute(sql`
+        INSERT INTO organizations (id, name, display_name)
+        VALUES (${orgId}, ${orgName}, ${displayName})
+        ON CONFLICT DO NOTHING
+      `);
+
+      await tx.execute(sql`
+        INSERT INTO agents (uuid, name, organization_id, type, display_name, inbox_id, status, source)
+        VALUES (${agentId}, ${agentName}, ${orgId}, 'human', ${displayName}, ${`inbox_${agentId}`}, 'active', 'admin-api')
+      `);
+
+      await tx.execute(sql`
+        INSERT INTO members (id, user_id, organization_id, agent_id, role)
+        VALUES (${memberId}, ${userId}, ${orgId}, ${agentId}, 'admin')
+      `);
+
+      await tx.execute(sql`
+        UPDATE agents SET manager_id = ${memberId} WHERE uuid = ${agentId}
+      `);
+    });
   } finally {
     await client.end();
   }
 
   return { username, password: pw };
+}
+
+/** Generate a UUID v7 (time-ordered). Inline to avoid cross-package dependency. */
+function makeUuidV7(): string {
+  const now = BigInt(Date.now());
+  const bytes = new Uint8Array(16);
+  bytes[0] = Number((now >> 40n) & 0xffn);
+  bytes[1] = Number((now >> 32n) & 0xffn);
+  bytes[2] = Number((now >> 24n) & 0xffn);
+  bytes[3] = Number((now >> 16n) & 0xffn);
+  bytes[4] = Number((now >> 8n) & 0xffn);
+  bytes[5] = Number(now & 0xffn);
+  const rand = randomBytes(10);
+  for (let i = 0; i < 10; i++) {
+    const b = rand[i];
+    if (b !== undefined) bytes[6 + i] = b;
+  }
+  bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x70;
+  bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }

@@ -1,5 +1,6 @@
 import { boolean, index, jsonb, pgTable, text, timestamp, unique } from "drizzle-orm/pg-core";
 import { organizations } from "./organizations.js";
+// NOTE: members FK is deferred — added via raw SQL in migration to avoid circular import
 
 /** Agent registration. Each agent owns a unique inboxId for message delivery. */
 export const agents = pgTable(
@@ -29,11 +30,14 @@ export const agents = pgTable(
     /** Whether this agent is publicly discoverable */
     public: boolean("public").notNull().default(false),
     metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+    /** Member who manages this agent (nullable — unassigned agents visible only to admins) */
+    managerId: text("manager_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     index("idx_agents_org").on(table.organizationId),
+    index("idx_agents_manager").on(table.managerId),
     unique("uq_agents_org_name").on(table.organizationId, table.name),
   ],
 );

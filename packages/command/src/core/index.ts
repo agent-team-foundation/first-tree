@@ -1,7 +1,7 @@
 // Server lifecycle
 
 // Admin management
-export { createAdminUser, hasAdminUser } from "./admin.js";
+export { createOwner, hasUser } from "./admin.js";
 // Bootstrap
 export {
   bootstrapToken,

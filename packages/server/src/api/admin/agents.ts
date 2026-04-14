@@ -52,7 +52,14 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
 
   app.post("/", async (request, reply) => {
     const body = createAgentSchema.parse(request.body);
-    const agent = await agentService.createAgent(app.db, { ...body, source: body.source ?? "admin-api" });
+    // member role: managerId forced to self; admin role: can specify any managerId
+    const managerId =
+      request.member?.role === "admin" ? (body.managerId ?? request.member.memberId) : request.member?.memberId;
+    const agent = await agentService.createAgent(app.db, {
+      ...body,
+      source: body.source ?? "admin-api",
+      managerId,
+    });
     return reply.status(201).send({
       ...agent,
       createdAt: agent.createdAt.toISOString(),

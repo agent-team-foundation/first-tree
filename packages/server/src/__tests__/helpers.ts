@@ -58,26 +58,51 @@ export async function createTestAgent(
   return { agent, token: token.token };
 }
 
-/** Create an admin user and return JWT tokens. */
+/** Create a user + member + human agent and return JWT tokens. */
 export async function createTestAdmin(app: FastifyInstance, opts: { username?: string; password?: string } = {}) {
   const bcrypt = await import("bcrypt");
-  const { randomUUID } = await import("node:crypto");
-  const { adminUsers } = await import("../db/schema/admin-users.js");
+  const { users } = await import("../db/schema/users.js");
+  const { members } = await import("../db/schema/members.js");
+  const { uuidv7 } = await import("../uuid.js");
+  const { createAgent } = await import("../services/agent.js");
 
   const username = opts.username ?? "admin";
   const password = opts.password ?? "testpassword123";
   const passwordHash = await bcrypt.hash(password, 1);
 
-  await app.db.insert(adminUsers).values({
-    id: randomUUID(),
+  const userId = uuidv7();
+  await app.db.insert(users).values({
+    id: userId,
     username,
     passwordHash,
-    role: "super_admin",
+    displayName: "Test Admin",
   });
+
+  // Create human agent for this member
+  const agent = await createAgent(app.db, {
+    name: `test-admin-${userId.slice(0, 8)}`,
+    type: "human",
+    displayName: "Test Admin",
+    source: "admin-api",
+  });
+
+  const memberId = uuidv7();
+  await app.db.insert(members).values({
+    id: memberId,
+    userId,
+    organizationId: agent.organizationId,
+    agentId: agent.uuid,
+    role: "admin",
+  });
+
+  // Set manager_id on the human agent (match production behavior)
+  const { agents } = await import("../db/schema/agents.js");
+  const { eq } = await import("drizzle-orm");
+  await app.db.update(agents).set({ managerId: memberId }).where(eq(agents.uuid, agent.uuid));
 
   const loginRes = await app.inject({
     method: "POST",
-    url: "/api/v1/admin/auth/login",
+    url: "/api/v1/auth/login",
     payload: { username, password },
   });
   const body = loginRes.json<{ accessToken: string; refreshToken: string }>();

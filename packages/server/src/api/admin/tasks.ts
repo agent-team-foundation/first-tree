@@ -4,7 +4,7 @@ import {
   taskListQuerySchema,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import type { FastifyInstance } from "fastify";
-import { requireAdmin } from "../../middleware/require-identity.js";
+import { requireMember } from "../../middleware/require-identity.js";
 import type { SendMessageResult } from "../../services/message.js";
 import { type Notifier, notifyRecipients } from "../../services/notifier.js";
 import { resolveDefaultOrgId, resolveOrganization } from "../../services/organization.js";
@@ -45,12 +45,12 @@ export async function adminTaskRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post("/", async (request, reply) => {
-    const admin = requireAdmin(request);
+    const member = requireMember(request);
     const body = adminCreateTaskSchema.parse(request.body);
     const organizationId = body.organizationId ?? (await resolveDefaultOrgId(app.db));
     const { task, notification } = await taskService.createTask(
       app.db,
-      { type: "admin", adminId: admin.id },
+      { type: "admin", adminId: member.memberId },
       {
         title: body.title,
         body: body.body,
@@ -65,12 +65,12 @@ export async function adminTaskRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.patch<{ Params: { taskId: string } }>("/:taskId", async (request) => {
-    const admin = requireAdmin(request);
+    const member = requireMember(request);
     const body = adminUpdateTaskSchema.parse(request.body);
     const { task, notification } = await taskService.adminUpdateTask(
       app.db,
       request.params.taskId,
-      { type: "admin", adminId: admin.id },
+      { type: "admin", adminId: member.memberId },
       body,
     );
     dispatch(app.notifier, notification);
@@ -78,10 +78,10 @@ export async function adminTaskRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post<{ Params: { taskId: string } }>("/:taskId/cancel", async (request) => {
-    const admin = requireAdmin(request);
+    const member = requireMember(request);
     const { task, notification } = await taskService.cancelTask(app.db, request.params.taskId, {
       type: "admin",
-      adminId: admin.id,
+      adminId: member.memberId,
     });
     dispatch(app.notifier, notification);
     return taskService.serializeTask(task);

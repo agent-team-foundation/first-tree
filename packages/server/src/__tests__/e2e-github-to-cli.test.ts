@@ -92,7 +92,7 @@ describe("E2E: GitHub issue → Server → CLI pull", () => {
   afterEach(async () => {
     await app.db.execute(sql`
       TRUNCATE TABLE inbox_entries, messages, chat_participants, chats,
-        agent_tokens, agent_presence, agents, admin_users, system_configs,
+        agent_tokens, agent_presence, members, agents, users, system_configs,
         server_instances CASCADE
     `);
   });
