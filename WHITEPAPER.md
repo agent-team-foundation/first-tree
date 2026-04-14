@@ -36,53 +36,9 @@ An Agent Team is not a fully automated team. Humans remain essential — for jud
 
 ---
 
-## Infrastructure
-
-An Agent Team requires six pieces of infrastructure.
-
-### 1. Context Tree
-
-The organizational memory. A tree-structured, git-native knowledge base that captures decisions, designs, and context — maintained by agents and humans together.
-
-Every node represents a domain, decision, or design. Every node has an owner. When a decision is made, it is written to the tree. When things change, the tree updates. The tree is never a snapshot — it's the current state.
-
-The result: every agent and every human reads from the same, always-current source. Decisions are traceable — the what, the why, and who owns it. Knowledge compounds over time instead of evaporating.
-
-### 2. Message System
-
-The communication layer that allows agents and humans to coordinate across domains — sending requests, seeking approvals, and triggering action. When an agent needs something from a domain it does not own, it sends a message to the owner.
-
-Agent-to-agent routing is essential. Most existing messaging platforms do not support bot-to-bot communication natively. The message infrastructure provides a server-side routing layer so agents can message each other, even when the underlying platform does not allow it.
-
-### 3. Autonomous Agents
-
-Agents that run continuously, not just when invoked by a human. An autonomous agent has its own identity, its own execution environment, a home node in the Context Tree, an inbox in the message system, and the ability to act proactively.
-
-Any agent that meets these requirements — whether it is built on Claude, GPT, or any open-source model — can participate in an Agent Team. The infrastructure is agent-agnostic.
-
-### 4. Identity
-
-Agents and humans both need verifiable identities. An Agent Team has three types of participants:
-
-1. **Humans.** Set direction, make judgment calls, and grant permissions.
-2. **Personal agent assistants.** Agents that work on behalf of a specific human, holding delegated permissions.
-3. **Autonomous agents.** Independent agents that own domains and are accountable to the team.
-
-Every action is traceable to an identity. Permissions are explicit and revocable.
-
-### 5. Database
-
-Agents need structured storage for operational data — state that changes frequently, is queried programmatically, and does not belong in a markdown file. With a database, workflow engine, message system, and the ability to write code, an agent team can replace many point SaaS tools.
-
-### 6. Workflow / Automation
-
-Not everything should be handled by open-ended agent reasoning. Some processes are deterministic — if A then B, always. Workflow infrastructure handles these cases reliably and transparently, composing with agents rather than replacing them.
-
----
-
 ## First Tree Products
 
-**Context Tree CLI** (`first-tree`) — The open-source CLI and skill that lets any team bootstrap and maintain a Context Tree. Install with `npx first-tree init`.
+**Context Tree CLI** (`first-tree`) — The open-source CLI and skill that lets any team bootstrap and maintain a Context Tree.
 
 **Agent Hub** (`first-tree-hub`) — The collaboration server for agent teams: identity, messaging, inbox delivery, IM adapters, and admin surfaces.
 
@@ -98,4 +54,4 @@ The teams that figure this out first will have a structural advantage. Not becau
 
 ---
 
-Learn more at [agent-team.foundation](https://agent-team.foundation).
+Learn more at [first-tree.ai](https://first-tree.ai).
