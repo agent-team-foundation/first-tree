@@ -33,6 +33,11 @@ import {
 export type SourceIntegrationFile = (typeof SOURCE_INTEGRATION_FILES)[number];
 const FIRST_TREE_INDEX_BEGIN = "<!-- BEGIN FIRST-TREE INDEX -->";
 const FIRST_TREE_INDEX_END = "<!-- END FIRST-TREE INDEX -->";
+const LEGACY_FIRST_TREE_INDEX_FILE = "FIRST_TREE.md";
+const LEGACY_FIRST_TREE_INDEX_SYMLINK_TARGET = join(
+  SKILL_REFERENCES_DIR,
+  "about.md",
+);
 export const FIRST_TREE_INDEX_SYMLINK_TARGET = join(
   SKILL_REFERENCES_DIR,
   "whitepaper.md",
@@ -115,6 +120,7 @@ export function hasSourceIntegrationMarker(text: string | null): boolean {
 export function upsertFirstTreeIndexFile(
   root: string,
 ): FirstTreeIndexUpdate {
+  removeLegacyFirstTreeIndexFile(root);
   const fullPath = join(root, FIRST_TREE_INDEX_FILE);
   const existingType = detectFirstTreeIndexEntry(fullPath);
 
@@ -143,6 +149,29 @@ export function upsertFirstTreeIndexFile(
 
   symlinkSync(FIRST_TREE_INDEX_SYMLINK_TARGET, fullPath);
   return { action: "created", file: FIRST_TREE_INDEX_FILE };
+}
+
+function removeLegacyFirstTreeIndexFile(root: string): void {
+  const fullPath = join(root, LEGACY_FIRST_TREE_INDEX_FILE);
+  const existingType = detectFirstTreeIndexEntry(fullPath);
+
+  if (existingType === "symlink") {
+    const target = readlinkSync(fullPath);
+    if (
+      target === LEGACY_FIRST_TREE_INDEX_SYMLINK_TARGET ||
+      target === FIRST_TREE_INDEX_SYMLINK_TARGET
+    ) {
+      rmSync(fullPath, { force: true });
+    }
+    return;
+  }
+
+  if (existingType === "file") {
+    const current = readFileSync(fullPath, "utf-8");
+    if (isManagedFirstTreeIndexFile(current)) {
+      rmSync(fullPath, { force: true });
+    }
+  }
 }
 
 export function upsertSourceIntegrationFiles(

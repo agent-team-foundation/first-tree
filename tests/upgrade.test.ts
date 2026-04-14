@@ -4,6 +4,7 @@ import {
   lstatSync,
   readFileSync,
   readlinkSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { basename, join } from "node:path";
@@ -361,6 +362,46 @@ describe("runUpgrade", () => {
     ).toContain(
       "npx -p first-tree first-tree inject-context --skip-version-check",
     );
+  });
+
+  it("removes a managed legacy FIRST_TREE.md while installing WHITEPAPER.md", () => {
+    const repoDir = useTmpDir();
+    const sourceDir = useTmpDir();
+    makeSourceRepo(repoDir.path);
+    makeFramework(repoDir.path, "0.2.0");
+    writeFileSync(
+      join(repoDir.path, AGENT_INSTRUCTIONS_FILE),
+      `${SOURCE_INTEGRATION_MARKER} old text\n`,
+    );
+    writeFileSync(
+      join(repoDir.path, CLAUDE_INSTRUCTIONS_FILE),
+      `${SOURCE_INTEGRATION_MARKER} old text\n`,
+    );
+    writeFileSync(
+      join(
+        repoDir.path,
+        ".agents",
+        "skills",
+        "first-tree",
+        "references",
+        "about.md",
+      ),
+      "# Legacy About\n",
+    );
+    symlinkSync(
+      join(".agents", "skills", "first-tree", "references", "about.md"),
+      join(repoDir.path, "FIRST_TREE.md"),
+    );
+    makeSourceSkill(sourceDir.path, "0.2.0");
+
+    const result = runUpgrade(new Repo(repoDir.path), {
+      sourceRoot: sourceDir.path,
+    });
+
+    expect(result).toBe(0);
+    expect(() => lstatSync(join(repoDir.path, "FIRST_TREE.md"))).toThrow();
+    expectFirstTreeIndexSymlink(repoDir.path);
+    expect(existsSync(join(repoDir.path, INSTALLED_PROGRESS))).toBe(false);
   });
 
   it("preserves an existing legacy context binding in source/workspace integration", () => {
