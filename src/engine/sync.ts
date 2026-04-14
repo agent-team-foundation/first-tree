@@ -8,6 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { Repo } from "#engine/repo.js";
 import {
@@ -217,6 +218,7 @@ interface CommitSummary {
 interface MergedPr {
   number: number;
   title: string;
+  author: string;
   mergedAt: string;
   mergeCommitSha: string | null;
 }
@@ -234,7 +236,7 @@ interface DriftReport {
 
 interface ClassificationItem {
   path: string;
-  type: "TREE_MISS" | "TREE_OK";
+  type: "TREE_MISS" | "TREE_SUPPLEMENT" | "TREE_OK";
   target_node_path: string | null;
   rationale: string;
   suggested_node_title: string;
@@ -245,6 +247,7 @@ interface ClassificationItem {
 interface ProposalGroup {
   sourcePrNumber: number | null;
   sourcePrTitle: string | null;
+  sourcePrAuthor: string | null;
   proposals: ClassificationItem[];
   proposalPaths: string[];
 }
@@ -484,6 +487,7 @@ async function fetchMergedPrs(
       items?: Array<{
         number?: number;
         title?: string;
+        user?: { login?: string };
         pull_request?: { merged_at?: string; merge_commit_sha?: string };
       }>;
     };
@@ -492,6 +496,7 @@ async function fetchMergedPrs(
       .map((item) => ({
         number: item.number!,
         title: item.title!,
+        author: item.user?.login ?? "unknown",
         mergedAt: item.pull_request?.merged_at ?? "",
         mergeCommitSha: item.pull_request?.merge_commit_sha ?? null,
       }));
@@ -549,17 +554,18 @@ async function classifyDriftViaClaude(
   const relatedCount = relatedNodes.length;
   const prompt = `You are a Context Tree maintenance agent. A Context Tree is a structured knowledge base (markdown NODE.md files) that captures product decisions, architecture, conventions, and domain knowledge for a codebase.
 
-Your job: given the tree's current nodes and a recently merged PR, determine whether the tree is MISSING knowledge that this PR introduced.
+Your job: given the tree's current nodes and a recently merged PR, classify the change into one of three categories.
 
-Context: this PR has already been reviewed and approved (including context-fit review by gardener). It does not conflict with the tree. The only question is: did it introduce NEW knowledge that the tree doesn't yet capture?
+Context: this PR has already been reviewed and approved. It does not conflict with the tree.
 
-IMPORTANT: For nodes marked with CONTENT below, read the content carefully. A node might exist for an area but NOT cover the specific feature this PR added. For example, if an "Authentication" node only mentions JWT but the PR adds OAuth support, that is a TREE_MISS — the tree needs a new node (or the existing node needs supplementing, which counts as TREE_MISS for sync purposes).
+IMPORTANT: For nodes marked with CONTENT below, read the content carefully.
 
-Ask yourself:
-- Did this PR add a new feature, module, convention, or architectural pattern that NO existing node covers in its content? → TREE_MISS
-- Do the existing nodes (including their content) already adequately describe what this PR introduced? → TREE_OK
+Classify as one of:
+- **TREE_MISS**: This PR introduced a completely new feature, module, or domain that NO existing node covers. A new node is needed.
+- **TREE_SUPPLEMENT**: This PR adds new information to an area the tree already has a node for, but that node doesn't cover this specific change. The existing node needs supplementing. For example: auth node only mentions JWT, PR adds OAuth → TREE_SUPPLEMENT targeting the auth node.
+- **TREE_OK**: The existing nodes already adequately cover what this PR introduced. No tree changes needed.
 
-Bias toward TREE_MISS. If in doubt, classify as TREE_MISS.
+Bias toward TREE_MISS and TREE_SUPPLEMENT over TREE_OK. If in doubt, it's better to flag it.
 
 ## Current tree nodes (${treeNodes.length} total, ${relatedCount} with content shown)
 ${treeSummary}
@@ -568,18 +574,15 @@ ${treeSummary}
 ${driftSummary}
 
 ## Output format
-Return a JSON array. Each element represents one area that needs a NEW tree node (NOT one per commit — group related changes):
+Return a JSON array. Each element:
 {
   "path": "suggested/node/path",
-  "type": "TREE_MISS" | "TREE_OK",
-  "target_node_path": null,
-  "rationale": "one sentence explaining why the tree needs this node",
-  "suggested_node_title": "Human-readable title for the node",
-  "suggested_node_body_markdown": "Draft NODE.md body content (2-5 paragraphs)"
+  "type": "TREE_MISS" | "TREE_SUPPLEMENT" | "TREE_OK",
+  "target_node_path": "path/to/existing/NODE.md (for TREE_SUPPLEMENT) or null (for TREE_MISS/TREE_OK)",
+  "rationale": "one sentence explaining why",
+  "suggested_node_title": "title for new node (TREE_MISS) or empty string",
+  "suggested_node_body_markdown": "body content ONLY — do NOT include YAML frontmatter (no --- block). Start with a markdown heading. For TREE_MISS: draft NODE.md body (2-5 paragraphs). For TREE_SUPPLEMENT: suggested additions. For TREE_OK: empty string."
 }
-
-For TREE_OK items, only path, type, and rationale are required (other fields can be empty strings).
-
 Return a JSON array only, no prose.`;
   const CLAUDE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes per classification
   const MAX_RETRIES = 2;
@@ -803,28 +806,24 @@ async function resolveStableCheckoutRef(
 }
 
 /** Result of preparing a proposal group (branch created, files committed locally). */
-interface PreparedProposalGroup {
+interface PreparedPr {
   branch: string;
   prTitle: string;
   prBody: string;
   group: ProposalGroup;
-  skipped: boolean;
-  skipReason?: string;
 }
 
-/**
- * Phase 1: Prepare a proposal group by creating a branch and committing locally.
- * This must be done sequentially because git checkout requires exclusive access.
- * Returns the branch name and PR metadata for the push/create phase.
- */
-async function prepareProposalGroup(
+async function prepareProposalBranch(
   shellRun: ShellRun,
   treeRoot: string,
   binding: TreeBindingState,
   drift: DriftReport,
   group: ProposalGroup,
   baseRef: string,
-): Promise<PreparedProposalGroup | null> {
+  dryRun: boolean,
+  now: () => Date,
+): Promise<PreparedPr | null | false> {
+  // Returns PreparedPr on success, null if skipped, false on error
   const shortSha = drift.toSha.slice(0, 7);
   const branchSuffix = group.sourcePrNumber !== null
     ? `pr${group.sourcePrNumber}`
@@ -845,14 +844,8 @@ async function prepareProposalGroup(
       try {
         const parsed = JSON.parse(existingPr.stdout) as Array<{ number: number }>;
         if (parsed.length > 0) {
-          return {
-            branch,
-            prTitle,
-            prBody: "",
-            group,
-            skipped: true,
-            skipReason: `PR for source PR #${group.sourcePrNumber} already exists`,
-          };
+          console.log(`\u23ED PR for source PR #${group.sourcePrNumber} already exists \u2014 skipping`);
+          return null;
         }
       } catch {
         // ignore parse errors and continue
@@ -867,23 +860,43 @@ async function prepareProposalGroup(
     console.error(
       `\u274C could not create branch ${branch}: ${branchCreate.stderr.trim()}`,
     );
-    return null;
+    return false;
   }
 
-  // Write nodes directly to real tree paths (not drift/)
   const writtenFiles: string[] = [];
+  const prAuthor = (group.sourcePrAuthor ?? "").replace(/^@+/, "");
+
   for (const proposal of group.proposals) {
-    if (proposal.type === "TREE_OK") continue;
+    if (proposal.type === "TREE_OK" || proposal.type === "TREE_SUPPLEMENT") continue;
     if (proposal.type === "TREE_MISS") {
       let dirSegment = proposal.path === "(root)" ? "misc" : proposal.path;
       // Strip trailing /NODE.md if the AI included it in the path
       dirSegment = dirSegment.replace(/\/NODE\.md$/i, "").replace(/^NODE\.md$/i, "misc");
       const absDir = join(treeRoot, dirSegment);
       mkdirSync(absDir, { recursive: true });
-      const owners = [...new Set(extractOwnersFromCodeowners(treeRoot, dirSegment))];
+      // Resolve owners: inherit from parent node, add PR author if not already present
+      const parentDir = dirname(absDir);
+      let parentOwners: string[] = [];
+      try {
+        const { resolveNodeOwners } = await import("../../assets/framework/helpers/generate-codeowners.js");
+        parentOwners = resolveNodeOwners(parentDir, treeRoot, new Map());
+      } catch {
+        // Fallback: no parent owners available
+      }
+      const owners = [...parentOwners];
+      if (prAuthor && prAuthor !== "unknown" && !owners.includes(prAuthor)) {
+        owners.push(prAuthor);
+      }
+      if (owners.length === 0) {
+        owners.push(prAuthor || "unknown");
+      }
+
       const title = proposal.suggested_node_title;
       const capitalizedTitle = title.charAt(0).toUpperCase() + title.slice(1);
-      const body = proposal.suggested_node_body_markdown;
+
+      // Strip any frontmatter Claude may have included in the body
+      let body = proposal.suggested_node_body_markdown;
+      body = body.replace(/^---\n[\s\S]*?\n---\n*/, "").trim();
       const nodePath = join(absDir, "NODE.md");
       // Only write if NODE.md doesn't already exist (don't overwrite human-authored nodes)
       if (!existsSync(nodePath)) {
@@ -898,19 +911,67 @@ async function prepareProposalGroup(
         ].join("\n");
         writeFileSync(nodePath, content);
         writtenFiles.push(nodePath);
+
+        // Auto-create member if PR author isn't in members/ yet
+        // Check all existing member dirs to avoid duplicates (e.g., dotta vs cryppadotta)
+        if (prAuthor && prAuthor !== "unknown") {
+          const membersDir = join(treeRoot, "members");
+          let alreadyExists = false;
+          if (existsSync(membersDir)) {
+            try {
+              for (const entry of readdirSync(membersDir)) {
+                const entryNode = join(membersDir, entry, "NODE.md");
+                if (!existsSync(entryNode)) continue;
+                try {
+                  const content = readFileSync(entryNode, "utf-8");
+                  if (content.includes(`owners: [${prAuthor}]`) || entry === prAuthor) {
+                    alreadyExists = true;
+                    break;
+                  }
+                } catch { /* skip unreadable */ }
+              }
+            } catch { /* skip if members dir not listable */ }
+          }
+          const memberDir = join(treeRoot, "members", prAuthor);
+          const memberNode = join(memberDir, "NODE.md");
+          if (!alreadyExists && !existsSync(memberNode)) {
+            mkdirSync(memberDir, { recursive: true });
+            writeFileSync(
+              memberNode,
+              [
+                "---",
+                `title: "${prAuthor}"`,
+                `owners: [${prAuthor}]`,
+                `type: "human"`,
+                `role: "Contributor"`,
+                `domains:`,
+                `  - "${dirSegment.split("/")[0]}"`,
+                "---",
+                "",
+                `Auto-created by first-tree sync from source PR #${group.sourcePrNumber ?? "unknown"}.`,
+                "",
+              ].join("\n"),
+            );
+            writtenFiles.push(memberNode);
+            console.log(`  \u2713 Auto-created member: members/${prAuthor}/NODE.md`);
+          }
+        }
       }
     }
   }
 
-  if (writtenFiles.length === 0) {
-    return {
-      branch,
-      prTitle,
-      prBody: "",
-      group,
-      skipped: true,
-      skipReason: "No new files to commit",
-    };
+  // Check if there are TREE_SUPPLEMENT items (no files, but note in PR body)
+  const hasSupplements = group.proposals.some((p) => p.type === "TREE_SUPPLEMENT");
+  const hasMissFiles = writtenFiles.length > 0;
+
+  if (!hasMissFiles && !hasSupplements) {
+    console.log(`  \u23ED No new files or supplements for this PR — skipping.`);
+    return null;
+  }
+
+  const allowEmptyCommit = !hasMissFiles && hasSupplements;
+  if (allowEmptyCommit) {
+    console.log(`  \u2139 TREE_SUPPLEMENT only — suggestions will be in PR body.`);
   }
 
   // NOTE: Only stage the specific NODE.md files this PR created.
@@ -921,38 +982,56 @@ async function prepareProposalGroup(
   }
   // Check if there's anything staged (diff --cached --quiet exits 0 = nothing, 1 = has changes)
   const stagingCheck = await shellRun("git", ["diff", "--cached", "--quiet"], { cwd: treeRoot });
-  if (stagingCheck.code === 0) {
+  if (stagingCheck.code === 0 && !allowEmptyCommit) {
     // Nothing staged — files already existed or were already committed
-    return {
-      branch,
-      prTitle,
-      prBody: "",
-      group,
-      skipped: true,
-      skipReason: "Nothing new to commit",
-    };
+    console.log(`  \u23ED Nothing new to commit for this PR — skipping.`);
+    return null;
   }
   const commitMessage = group.sourcePrNumber !== null
     ? `chore(sync): ${binding.sourceId} PR#${group.sourcePrNumber} to ${shortSha}`
     : `chore(sync): sync ${binding.sourceId} to ${shortSha}`;
-  const commitResult = await shellRun("git", ["commit", "-m", commitMessage], {
+  const commitArgs = allowEmptyCommit
+    ? ["commit", "--allow-empty", "-m", commitMessage]
+    : ["commit", "-m", commitMessage];
+  const commitResult = await shellRun("git", commitArgs, {
     cwd: treeRoot,
   });
   if (commitResult.code !== 0) {
     console.error(`\u274C git commit failed: ${commitResult.stderr.trim()}`);
-    return null;
+    return false;
   }
 
+  const supplements = group.proposals.filter((p) => p.type === "TREE_SUPPLEMENT");
+  const misses = group.proposals.filter((p) => p.type === "TREE_MISS");
   const bodyLines = [
     `Automated drift sync for source \`${binding.sourceId}\`.`,
     "",
     `- Source range: ${drift.fromSha ? drift.fromSha.slice(0, 7) : "first-run"}..${shortSha}`,
-    `- Proposal files: ${group.proposalPaths.length}`,
+    `- New nodes: ${misses.length}`,
+    `- Supplement suggestions: ${supplements.length}`,
     "",
-    "Proposals:",
-    ...group.proposals.map(
-      (p) => `- ${p.type}: ${p.target_node_path ?? p.path} \u2014 ${p.rationale}`,
-    ),
+    ...(misses.length > 0 ? [
+      "**New nodes (TREE_MISS):**",
+      ...misses.map((p) => `- \`${p.path}\` — ${p.rationale}`),
+      "",
+    ] : []),
+    ...(supplements.length > 0 ? [
+      "**Suggested supplements (TREE_SUPPLEMENT):**",
+      "",
+      "The following existing nodes should be updated to cover new information from this PR:",
+      "",
+      ...supplements.map((p) => [
+        `<details>`,
+        `<summary><code>${p.target_node_path}</code> — ${p.rationale}</summary>`,
+        "",
+        "Suggested additions:",
+        "",
+        p.suggested_node_body_markdown,
+        "",
+        `</details>`,
+        "",
+      ]).flat(),
+    ] : []),
     "",
     "Commits:",
     ...drift.commits.map(
@@ -961,119 +1040,14 @@ async function prepareProposalGroup(
     ),
   ];
 
-  return {
-    branch,
-    prTitle,
-    prBody: bodyLines.join("\n"),
-    group,
-    skipped: false,
-  };
-}
-
-/**
- * Phase 2: Push branches and create PRs.
- * This can be parallelized because each branch is independent.
- */
-async function pushAndCreatePr(
-  shellRun: ShellRun,
-  treeRoot: string,
-  prepared: PreparedProposalGroup,
-): Promise<{ success: boolean; prUrl?: string; error?: string }> {
-  const { branch, prTitle, prBody } = prepared;
-
-  // Push the branch
-  const pushResult = await shellRun("git", ["push", "origin", branch], {
-    cwd: treeRoot,
-  });
-  if (pushResult.code !== 0) {
-    return { success: false, error: `git push failed: ${pushResult.stderr.trim()}` };
-  }
-
-  // Create the PR
-  const prCreate = await shellRun(
-    "gh",
-    ["pr", "create", "--head", branch, "--title", prTitle, "--body", prBody],
-    { cwd: treeRoot },
-  );
-  if (prCreate.code !== 0) {
-    const stderr = prCreate.stderr.trim();
-    if (
-      stderr.toLowerCase().includes("already exists")
-      || stderr.toLowerCase().includes("a pull request for branch")
-    ) {
-      return { success: true, prUrl: `(existing PR for ${branch})` };
-    }
-    return { success: false, error: `gh pr create failed: ${stderr}` };
-  }
-  const prUrl = prCreate.stdout.trim();
-
-  // Add labels (best effort, don't fail if this doesn't work)
-  const labels = ["first-tree:sync"];
-  for (const label of labels) {
-    await shellRun(
-      "gh",
-      ["label", "create", label, "--color", "2ea44f", "--description", `Created by first-tree sync`, "--force"],
-      { cwd: treeRoot },
+  if (dryRun) {
+    console.log(
+      `(dry-run) would push ${branch} and open PR titled "${prTitle}"`,
     );
-  }
-  const labelArgs = labels.flatMap((l) => ["--add-label", l]);
-  await shellRun("gh", ["pr", "edit", prUrl, ...labelArgs], { cwd: treeRoot });
-
-  return { success: true, prUrl };
-}
-
-/**
- * Run push and PR creation in parallel with concurrency limit and rate-limit backoff.
- */
-async function pushAndCreatePrsParallel(
-  shellRun: ShellRun,
-  treeRoot: string,
-  preparedGroups: PreparedProposalGroup[],
-  concurrency: number,
-): Promise<{ successes: number; failures: number; prUrls: string[] }> {
-  const results: { success: boolean; prUrl?: string; error?: string }[] = [];
-  const prUrls: string[] = [];
-
-  for (let i = 0; i < preparedGroups.length; i += concurrency) {
-    const batch = preparedGroups.slice(i, i + concurrency);
-    const batchResults = await Promise.all(
-      batch.map(async (prepared) => {
-        const MAX_RETRIES = 2;
-        for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-          const result = await pushAndCreatePr(shellRun, treeRoot, prepared);
-          if (result.success) return result;
-
-          // Check for rate limiting
-          const isRateLimit = result.error?.includes("429") ||
-            result.error?.toLowerCase().includes("rate") ||
-            result.error?.toLowerCase().includes("too many");
-          if (isRateLimit && attempt < MAX_RETRIES) {
-            const waitSec = (attempt + 1) * 10;
-            console.log(`  \u26A0 Rate limited. Retrying in ${waitSec}s... (attempt ${attempt + 2}/${MAX_RETRIES + 1})`);
-            await new Promise((resolve) => setTimeout(resolve, waitSec * 1000));
-            continue;
-          }
-          return result;
-        }
-        return { success: false, error: "Max retries exceeded" };
-      }),
-    );
-    results.push(...batchResults);
+    return { branch, prTitle, prBody: bodyLines.join("\n"), group };
   }
 
-  let successes = 0;
-  let failures = 0;
-  for (const result of results) {
-    if (result.success) {
-      successes++;
-      if (result.prUrl) prUrls.push(result.prUrl);
-    } else {
-      failures++;
-      console.error(`\u274C ${result.error}`);
-    }
-  }
-
-  return { successes, failures, prUrls };
+  return { branch, prTitle, prBody: bodyLines.join("\n"), group };
 }
 
 export async function runSync(
@@ -1248,7 +1222,7 @@ export async function runSync(
     // Classify per merged PR (not per batch) so each source PR → one tree PR
     const prsToClassify = drift.mergedPrs.length > 0
       ? drift.mergedPrs
-      : [{ number: 0, title: "unlinked commits", mergeCommitSha: null }];
+      : [{ number: 0, title: "unlinked commits", author: "unknown", mergeCommitSha: null }];
 
     // Phase 1: Classify all PRs in parallel (up to CONCURRENCY at a time)
     interface ClassifiedPr {
@@ -1324,139 +1298,197 @@ export async function runSync(
       `\u2713 ${drift.binding.sourceId}: ${totalProposals} total proposal(s) across ${prsToClassify.length} source PR(s)`,
     );
 
-    // Phase 2: Apply with parallelized push + PR creation
-    // Branch creation and commits must be sequential, but push and PR create can be parallel.
+    // Phase 2: Apply — create branches locally (serial), then push + open PRs (parallel)
     if (flags.apply) {
-      const APPLY_CONCURRENCY = 5; // Concurrency for push + PR create (avoid rate limits)
-      const groupsToApply = classifiedPrs.filter((c) => c.filtered.length > 0);
-      const applyCount = groupsToApply.length;
+      const toApply = classifiedPrs.filter((c) => c.filtered.length > 0);
+      console.log(
+        `\nApplying ${toApply.length} tree PR(s)...`,
+      );
 
-      if (applyCount === 0) {
-        console.log("\nNo tree PRs to apply.");
-      } else {
-        // Phase 2a: Prepare all branches sequentially (git checkout requires exclusive access)
-        console.log(
-          `\nPreparing ${applyCount} tree PR(s) (creating branches, committing locally)...`,
+      // Step 2a: Create all branches and commits locally (fast, no network)
+      const prepared: PreparedPr[] = [];
+      const originalRef = await resolveStableCheckoutRef(shellRun, repo.root);
+      if (originalRef === null) {
+        return 1;
+      }
+
+      for (const { pr, filtered, written } of toApply) {
+        const group: ProposalGroup = {
+          sourcePrNumber: pr.number > 0 ? pr.number : null,
+          sourcePrTitle: pr.number > 0 ? pr.title : null,
+          sourcePrAuthor: pr.number > 0 ? pr.author : null,
+          proposals: filtered,
+          proposalPaths: written,
+        };
+        const result = await prepareProposalBranch(
+          shellRun,
+          repo.root,
+          drift.binding,
+          drift,
+          group,
+          originalRef,
+          flags.dryRun,
+          now,
         );
-        const preparedGroups: PreparedProposalGroup[] = [];
-        const originalRef = await resolveStableCheckoutRef(shellRun, repo.root);
-        if (originalRef === null) {
+        if (result === false) return 1;
+        if (result !== null) {
+          prepared.push(result);
+        }
+      }
+
+      const restoreResult = await shellRun("git", ["checkout", originalRef], { cwd: repo.root });
+      if (restoreResult.code !== 0) {
+        console.error(`\u274C could not return to ${originalRef}: ${restoreResult.stderr.trim()}`);
+        return 1;
+      }
+
+      // Step 2b: Verify each branch before pushing (catch format errors early)
+      const verified: PreparedPr[] = [];
+      for (const p of prepared) {
+        await shellRun("git", ["checkout", p.branch], { cwd: repo.root });
+        const verifyResult = await shellRun("node", [
+          join(dirname(fileURLToPath(import.meta.url)), "..", "cli.js"),
+          "verify", "--tree-path", repo.root, "--skip-version-check",
+        ], { cwd: repo.root });
+        if (verifyResult.code !== 0) {
+          // Extract just the errors
+          const errors = verifyResult.stdout.split("\n").filter((l: string) => l.includes("[error]"));
+          console.error(`  \u26A0 verify failed for ${p.branch}:`);
+          if (errors.length > 0) {
+            for (const e of errors.slice(0, 5)) console.error(`    ${e.trim()}`);
+          } else if (verifyResult.stderr.trim() !== "") {
+            console.error(`    ${verifyResult.stderr.trim()}`);
+          } else if (verifyResult.stdout.trim() !== "") {
+            console.error(`    ${verifyResult.stdout.trim()}`);
+          } else {
+            console.error("    verify exited non-zero without error details.");
+          }
+          console.log(`  \u23ED Skipping this PR due to verify failure.`);
+        } else {
+          verified.push(p);
+        }
+        const restoreVerify = await shellRun("git", ["checkout", originalRef], { cwd: repo.root });
+        if (restoreVerify.code !== 0) {
+          console.error(`\u274C could not return to ${originalRef}: ${restoreVerify.stderr.trim()}`);
+          return 1;
+        }
+      }
+
+      // Step 2c: Push all verified branches in one command
+      if (!flags.dryRun && verified.length > 0) {
+        const branches = verified.map((p) => `${p.branch}:${p.branch}`);
+        console.log(`  Pushing ${branches.length} branch(es)...`);
+        const pushResult = await shellRun("git", ["push", "origin", ...branches], { cwd: repo.root });
+        if (pushResult.code !== 0) {
+          console.error(`\u274C batch push failed: ${pushResult.stderr.trim()}`);
           return 1;
         }
 
-        for (const { pr, filtered, written } of groupsToApply) {
-          const group: ProposalGroup = {
-            sourcePrNumber: pr.number > 0 ? pr.number : null,
-            sourcePrTitle: pr.number > 0 ? pr.title : null,
-            proposals: filtered,
-            proposalPaths: written,
-          };
-          const prepared = await prepareProposalGroup(
-            shellRun,
-            repo.root,
-            drift.binding,
-            drift,
-            group,
-            originalRef,
+        // Step 2d: Create all PRs in parallel (concurrency 5 to avoid GitHub rate limits)
+        const PR_CONCURRENCY = 5;
+        let prCreateFailures = 0;
+        console.log(`  Opening ${verified.length} PR(s) (concurrency: ${PR_CONCURRENCY})...`);
+        for (let i = 0; i < verified.length; i += PR_CONCURRENCY) {
+          const batch = verified.slice(i, i + PR_CONCURRENCY);
+          const batchResults = await Promise.all(
+            batch.map(async (p) => {
+              const prResult = await shellRun("gh", [
+                "pr", "create",
+                "--head", p.branch,
+                "--title", p.prTitle,
+                "--body", p.prBody,
+              ], { cwd: repo.root });
+              if (prResult.code === 0) {
+                const prUrl = prResult.stdout.trim();
+                console.log(`\u2713 opened PR ${prUrl}`);
+                await shellRun("gh", [
+                  "label",
+                  "create",
+                  "first-tree:sync",
+                  "--color",
+                  "2ea44f",
+                  "--description",
+                  "Created by first-tree sync",
+                  "--force",
+                ], { cwd: repo.root });
+                await shellRun("gh", [
+                  "pr",
+                  "edit",
+                  prUrl,
+                  "--add-label",
+                  "first-tree:sync",
+                ], { cwd: repo.root });
+                return true;
+              } else {
+                console.error(`\u274C failed to open PR for ${p.branch}: ${prResult.stderr.trim()}`);
+                return false;
+              }
+            }),
           );
-          if (prepared === null) {
-            // Fatal error during preparation
-            return 1;
-          }
-          if (prepared.skipped) {
-            console.log(`  \u23ED ${prepared.branch}: ${prepared.skipReason}`);
-          } else {
-            console.log(`  \u2713 ${prepared.branch}: ready for push`);
-            preparedGroups.push(prepared);
-          }
+          prCreateFailures += batchResults.filter((success) => !success).length;
         }
+        if (prCreateFailures > 0) {
+          console.error(`\u26A0 ${prCreateFailures} PR(s) failed to open. Check errors above.`);
+          return 1;
+        }
+      } else if (flags.dryRun) {
+        for (const p of verified) {
+          console.log(`(dry-run) would push ${p.branch} and open PR titled "${p.prTitle}"`);
+        }
+      }
 
-        // Return to original branch before parallel operations
-        const restoreResult = await shellRun("git", ["checkout", originalRef], { cwd: repo.root });
-        if (restoreResult.code !== 0) {
-          console.error(`\u274C could not return to ${originalRef}: ${restoreResult.stderr.trim()}`);
+      // Open a housekeeping PR: pin the binding + regenerate CODEOWNERS
+      // This is the ONLY PR that touches the binding file and CODEOWNERS,
+      // avoiding cascade merge conflicts between individual sync PRs.
+      if (!flags.dryRun && verified.length > 0) {
+        console.log("\nOpening housekeeping PR (binding pin + CODEOWNERS)...");
+        const hkBranch = `first-tree/sync-${drift.binding.sourceId}-housekeeping`;
+        const hkCheckout = await shellRun("git", ["checkout", "-B", hkBranch, originalRef], { cwd: repo.root });
+        if (hkCheckout.code !== 0) {
+          console.error(`\u274C could not create housekeeping branch ${hkBranch}: ${hkCheckout.stderr.trim()}`);
           return 1;
         }
 
-        if (flags.dryRun) {
-          console.log(`\n(dry-run) would push ${preparedGroups.length} branch(es) and open PRs`);
-          for (const prepared of preparedGroups) {
-            console.log(`  - ${prepared.branch}: "${prepared.prTitle}"`);
+        // Pin the binding to the latest synced commit
+        writeTreeBinding(repo.root, drift.binding.sourceId, {
+          ...drift.binding,
+          lastReconciledSourceCommit: drift.toSha,
+          lastReconciledAt: now().toISOString(),
+        });
+
+        // Regenerate CODEOWNERS
+        await runGenerateCodeownersForTree(repo.root);
+
+        await shellRun("git", ["add", "-A"], { cwd: repo.root });
+        const hkDiff = await shellRun("git", ["diff", "--cached", "--quiet"], { cwd: repo.root });
+        if (hkDiff.code !== 0) {
+          await shellRun("git", ["commit", "-m", `chore(sync): pin ${drift.binding.sourceId} to ${drift.toSha.slice(0, 7)} + regenerate CODEOWNERS`], { cwd: repo.root });
+          await shellRun("git", ["push", "origin", "HEAD"], { cwd: repo.root });
+          const hkPr = await shellRun("gh", [
+            "pr", "create",
+            "--title", `chore(sync): housekeeping for ${drift.binding.sourceId}`,
+            "--body", [
+              "Housekeeping PR — pins the sync bookmark and regenerates CODEOWNERS.",
+              "",
+              "**Merge this AFTER all sync PRs are merged.**",
+              "",
+              `Pins \`lastReconciledSourceCommit\` to \`${drift.toSha.slice(0, 7)}\`.`,
+            ].join("\n"),
+          ], { cwd: repo.root });
+          if (hkPr.code === 0) {
+            console.log(`\u2713 Housekeeping PR opened: ${hkPr.stdout.trim()}`);
+            console.log("  Merge this AFTER all other sync PRs are merged.");
           }
-        } else if (preparedGroups.length > 0) {
-          // Phase 2b: Push and create PRs in parallel
-          console.log(
-            `\nPushing ${preparedGroups.length} branch(es) and creating PRs (concurrency: ${APPLY_CONCURRENCY})...`,
-          );
-          const { successes, failures, prUrls } = await pushAndCreatePrsParallel(
-            shellRun,
-            repo.root,
-            preparedGroups,
-            APPLY_CONCURRENCY,
-          );
-          console.log(`\u2713 Push/PR phase complete: ${successes} succeeded, ${failures} failed`);
-          for (const prUrl of prUrls) {
-            console.log(`  - ${prUrl}`);
-          }
-          if (failures > 0) {
-            console.error(`\u26A0 ${failures} PR(s) failed to create. Check errors above.`);
-            return 1;
-          }
+        } else {
+          console.log("  No changes for housekeeping PR.");
         }
-
-        // Open a housekeeping PR: pin the binding + regenerate CODEOWNERS
-        // This is the ONLY PR that touches the binding file and CODEOWNERS,
-        // avoiding cascade merge conflicts between individual sync PRs.
-        if (!flags.dryRun && preparedGroups.length > 0) {
-          console.log("\nOpening housekeeping PR (binding pin + CODEOWNERS)...");
-          const hkBranch = `first-tree/sync-${drift.binding.sourceId}-housekeeping`;
-          const hkCheckout = await shellRun("git", ["checkout", "-B", hkBranch, originalRef], { cwd: repo.root });
-          if (hkCheckout.code !== 0) {
-            console.error(`\u274C could not create housekeeping branch ${hkBranch}: ${hkCheckout.stderr.trim()}`);
-            return 1;
-          }
-
-          // Pin the binding to the latest synced commit
-          writeTreeBinding(repo.root, drift.binding.sourceId, {
-            ...drift.binding,
-            lastReconciledSourceCommit: drift.toSha,
-            lastReconciledAt: now().toISOString(),
-          });
-
-          // Regenerate CODEOWNERS
-          await runGenerateCodeownersForTree(repo.root);
-
-          await shellRun("git", ["add", "-A"], { cwd: repo.root });
-          const hkDiff = await shellRun("git", ["diff", "--cached", "--quiet"], { cwd: repo.root });
-          if (hkDiff.code !== 0) {
-            await shellRun("git", ["commit", "-m", `chore(sync): pin ${drift.binding.sourceId} to ${drift.toSha.slice(0, 7)} + regenerate CODEOWNERS`], { cwd: repo.root });
-            await shellRun("git", ["push", "origin", "HEAD"], { cwd: repo.root });
-            const hkPr = await shellRun("gh", [
-              "pr", "create",
-              "--title", `chore(sync): housekeeping for ${drift.binding.sourceId}`,
-              "--body", [
-                "Housekeeping PR — pins the sync bookmark and regenerates CODEOWNERS.",
-                "",
-                "**Merge this AFTER all sync PRs are merged.**",
-                "",
-                `Pins \`lastReconciledSourceCommit\` to \`${drift.toSha.slice(0, 7)}\`.`,
-              ].join("\n"),
-            ], { cwd: repo.root });
-            if (hkPr.code === 0) {
-              console.log(`\u2713 Housekeeping PR opened: ${hkPr.stdout.trim()}`);
-              console.log("  Merge this AFTER all other sync PRs are merged.");
-            }
-          } else {
-            console.log("  No changes for housekeeping PR.");
-          }
-          const restoreAfterHousekeeping = await shellRun("git", ["checkout", originalRef], { cwd: repo.root });
-          if (restoreAfterHousekeeping.code !== 0) {
-            console.error(`\u274C could not return to ${originalRef}: ${restoreAfterHousekeeping.stderr.trim()}`);
-            return 1;
-          }
-        } else if (flags.dryRun && preparedGroups.length > 0) {
-          console.log(`\n(dry-run) would open housekeeping PR to pin binding to ${drift.toSha.slice(0, 7)} + regenerate CODEOWNERS`);
+        const restoreAfterHousekeeping = await shellRun("git", ["checkout", originalRef], { cwd: repo.root });
+        if (restoreAfterHousekeeping.code !== 0) {
+          console.error(`\u274C could not return to ${originalRef}: ${restoreAfterHousekeeping.stderr.trim()}`);
+          return 1;
         }
+      } else if (flags.dryRun && verified.length > 0) {
+        console.log(`\n(dry-run) would open housekeeping PR to pin binding to ${drift.toSha.slice(0, 7)} + regenerate CODEOWNERS`);
       }
     }
   }

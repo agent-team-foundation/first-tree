@@ -479,6 +479,7 @@ describe("sync -- PR labeling", () => {
                 {
                   number: 101,
                   title: "feat(pkg-a): add thing",
+                  user: { login: "alice" },
                   pull_request: {
                     merged_at: "2026-04-01T00:00:00Z",
                     merge_commit_sha: "1".repeat(40),
@@ -487,6 +488,7 @@ describe("sync -- PR labeling", () => {
                 {
                   number: 102,
                   title: "feat(pkg-b): add thing",
+                  user: { login: "bob" },
                   pull_request: {
                     merged_at: "2026-04-02T00:00:00Z",
                     merge_commit_sha: "2".repeat(40),
@@ -528,6 +530,9 @@ describe("sync -- PR labeling", () => {
           code: 0,
         };
       }
+      if (command === "node") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
       if (command === "git") {
         if (args[0] === "symbolic-ref") {
           return { stdout: "main\n", stderr: "", code: 0 };
@@ -549,31 +554,118 @@ describe("sync -- PR labeling", () => {
       { shellRun },
     );
     expect(code).toBe(0);
-    expect(checkoutCommands).toEqual([
+    expect(checkoutCommands.slice(0, 2)).toEqual([
       ["checkout", "-B", "first-tree/sync-source-parallel-pr101", "main"],
       ["checkout", "-B", "first-tree/sync-source-parallel-pr102", "main"],
-      ["checkout", "main"],
     ]);
+    expect(
+      checkoutCommands.filter((args) => args[0] === "checkout" && args[1] === "main").length,
+    ).toBeGreaterThan(0);
   });
 
-  it("does not open housekeeping after a partial parallel apply failure", async () => {
+  it("skips push and housekeeping when verify exits non-zero", async () => {
     const tmp = useTmpDir();
     makeTreeShell(tmp.path);
-    mkdirSync(join(tmp.path, ".github"), { recursive: true });
-    writeFileSync(
-      join(tmp.path, ".github", "CODEOWNERS"),
-      "/pkg-a/ @alice\n/pkg-b/ @bob\n",
-    );
     const fromSha = "aa".repeat(20);
     const toSha = "bb".repeat(20);
-    writeTreeBinding(tmp.path, "source-parallel", {
+    writeTreeBinding(tmp.path, "source-verify", {
       bindingMode: "standalone-source",
       entrypoint: "/repos/source",
       lastReconciledSourceCommit: fromSha,
       remoteUrl: "https://github.com/alice/source.git",
       rootKind: "git-repo",
       scope: "repo",
-      sourceId: "source-parallel",
+      sourceId: "source-verify",
+      sourceName: "source",
+      sourceRootPath: "../source",
+      treeMode: "dedicated",
+      treeRepoName: "tree",
+    });
+    const classifyResponse = JSON.stringify([
+      {
+        path: "pkg-a",
+        type: "TREE_MISS",
+        target_node_path: null,
+        rationale: "No node for pkg-a",
+        suggested_node_title: "pkg-a",
+        suggested_node_body_markdown: "# pkg-a",
+      },
+    ]);
+    const pushCalls: string[][] = [];
+    const prCreateCalls: string[][] = [];
+    const shellRun: ShellRun = async (command, args) => {
+      if (command === "gh" && args[0] === "auth") return okAuth();
+      if (command === "claude" && args[0] === "--version") return claudeVersionOk();
+      if (command === "gh" && args[0] === "api") {
+        const path = args[1] ?? "";
+        if (path === "/repos/alice/source/commits/HEAD") {
+          return { stdout: `${toSha}\n`, stderr: "", code: 0 };
+        }
+        if (path.startsWith("/repos/alice/source/compare/")) {
+          return {
+            stdout: JSON.stringify({
+              commits: [{
+                sha: "1".repeat(40),
+                commit: { message: "feat: thing", author: { name: "a", date: "2026-04-01T00:00:00Z" } },
+                files: [{ filename: "pkg-a/x.ts" }],
+              }],
+            }),
+            stderr: "",
+            code: 0,
+          };
+        }
+        if (path.startsWith("search/issues")) {
+          return { stdout: JSON.stringify({ items: [] }), stderr: "", code: 0 };
+        }
+      }
+      if (command === "claude" && args[0] === "-p") {
+        return { stdout: classifyResponse, stderr: "", code: 0 };
+      }
+      if (command === "node") {
+        return { stdout: "", stderr: "verify crashed", code: 1 };
+      }
+      if (command === "git") {
+        if (args[0] === "symbolic-ref") {
+          return { stdout: "main\n", stderr: "", code: 0 };
+        }
+        if (args.includes("diff") && args.includes("--cached") && args.includes("--quiet")) {
+          return { stdout: "", stderr: "", code: 1 };
+        }
+        if (args[0] === "push") {
+          pushCalls.push([...args]);
+        }
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (command === "gh" && args[0] === "pr" && args[1] === "create") {
+        prCreateCalls.push([...args]);
+        return { stdout: "https://github.com/x/y/pull/99", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: `no mock for ${command} ${args.join(" ")}`, code: 1 };
+    };
+    const code = await runSync(
+      tmp.path,
+      { source: undefined, propose: false, apply: true, dryRun: false },
+      { shellRun },
+    );
+    expect(code).toBe(0);
+    expect(pushCalls).toEqual([]);
+    expect(prCreateCalls).toEqual([]);
+    expect(readTreeBinding(tmp.path, "source-verify")?.lastReconciledSourceCommit).toBe(fromSha);
+  });
+
+  it("does not open housekeeping after a PR creation failure", async () => {
+    const tmp = useTmpDir();
+    makeTreeShell(tmp.path);
+    const fromSha = "aa".repeat(20);
+    const toSha = "bb".repeat(20);
+    writeTreeBinding(tmp.path, "source-partial", {
+      bindingMode: "standalone-source",
+      entrypoint: "/repos/source",
+      lastReconciledSourceCommit: fromSha,
+      remoteUrl: "https://github.com/alice/source.git",
+      rootKind: "git-repo",
+      scope: "repo",
+      sourceId: "source-partial",
       sourceName: "source",
       sourceRootPath: "../source",
       treeMode: "dedicated",
@@ -642,19 +734,6 @@ describe("sync -- PR labeling", () => {
           };
         }
       }
-      if (command === "gh" && args[0] === "pr" && args[1] === "list") {
-        return { stdout: "[]", stderr: "", code: 0 };
-      }
-      if (command === "gh" && args[0] === "pr" && args[1] === "create") {
-        prCreateCalls.push([...args]);
-        return { stdout: "https://github.com/x/y/pull/101\n", stderr: "", code: 0 };
-      }
-      if (command === "gh" && args[0] === "pr" && args[1] === "edit") {
-        return { stdout: "", stderr: "", code: 0 };
-      }
-      if (command === "gh" && args[0] === "label") {
-        return { stdout: "", stderr: "", code: 0 };
-      }
       if (command === "claude" && args[0] === "-p") {
         classifyCall += 1;
         return {
@@ -681,35 +760,45 @@ describe("sync -- PR labeling", () => {
           code: 0,
         };
       }
+      if (command === "node") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
       if (command === "git") {
         if (args[0] === "symbolic-ref") {
           return { stdout: "main\n", stderr: "", code: 0 };
-        }
-        if (args[0] === "checkout") {
-          return { stdout: "", stderr: "", code: 0 };
-        }
-        if (args[0] === "push" && args[2] === "first-tree/sync-source-parallel-pr102") {
-          return { stdout: "", stderr: "push failed", code: 1 };
         }
         if (args.includes("diff") && args.includes("--cached") && args.includes("--quiet")) {
           return { stdout: "", stderr: "", code: 1 };
         }
         return { stdout: "", stderr: "", code: 0 };
       }
+      if (command === "gh" && args[0] === "pr" && args[1] === "create") {
+        prCreateCalls.push([...args]);
+        const headIndex = args.indexOf("--head");
+        const branch = headIndex >= 0 ? args[headIndex + 1] : "";
+        if (branch === "first-tree/sync-source-partial-pr102") {
+          return { stdout: "", stderr: "create failed", code: 1 };
+        }
+        return { stdout: "https://github.com/x/y/pull/101", stderr: "", code: 0 };
+      }
+      if (command === "gh" && args[0] === "pr" && args[1] === "edit") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (command === "gh" && args[0] === "label") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
       return { stdout: "", stderr: `no mock for ${command} ${args.join(" ")}`, code: 1 };
     };
-
     const code = await runSync(
       tmp.path,
       { source: undefined, propose: false, apply: true, dryRun: false },
       { shellRun },
     );
-
     expect(code).toBe(1);
-    expect(readTreeBinding(tmp.path, "source-parallel")?.lastReconciledSourceCommit).toBe(fromSha);
     expect(
-      prCreateCalls.some((args) => args.includes("chore(sync): housekeeping for source-parallel")),
+      prCreateCalls.some((args) => args.includes("chore(sync): housekeeping for source-partial")),
     ).toBe(false);
+    expect(readTreeBinding(tmp.path, "source-partial")?.lastReconciledSourceCommit).toBe(fromSha);
   });
 
   it("apply labels PR with first-tree:sync only, never auto-merge", async () => {
@@ -774,6 +863,9 @@ describe("sync -- PR labeling", () => {
       if (command === "claude" && args[0] === "-p") {
         return { stdout: classifyResponse, stderr: "", code: 0 };
       }
+      if (command === "node") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
       if (command === "git") {
         if (args[0] === "symbolic-ref") {
           return { stdout: "main\n", stderr: "", code: 0 };
@@ -786,6 +878,9 @@ describe("sync -- PR labeling", () => {
       }
       if (command === "gh" && args[0] === "pr" && args[1] === "create") {
         return { stdout: "https://github.com/x/y/pull/99", stderr: "", code: 0 };
+      }
+      if (command === "gh" && args[0] === "label") {
+        return { stdout: "", stderr: "", code: 0 };
       }
       if (command === "gh" && args[0] === "pr" && args[1] === "edit") {
         labelArgsCaptured = [...args];
@@ -802,7 +897,7 @@ describe("sync -- PR labeling", () => {
     expect(labelArgsCaptured.join(" ")).toContain("first-tree:sync");
     expect(labelArgsCaptured.join(" ")).not.toContain("auto-merge");
     const nodeText = readFileSync(join(tmp.path, "pkg-a", "NODE.md"), "utf-8");
-    expect(nodeText).toContain("owners: [alice, bob]");
+    expect(nodeText).toContain("owners: [alice]");
     expect(nodeText).not.toContain("@alice");
   });
 });

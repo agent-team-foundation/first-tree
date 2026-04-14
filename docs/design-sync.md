@@ -59,18 +59,27 @@ A shared tree can bind multiple source repos. Each source gets its own `lastReco
 
 ## Classification logic
 
-For each merged source PR, the AI returns one of two verdicts:
+For each merged source PR, the AI returns one of three verdicts:
 
 | Verdict | Meaning | Action |
 |---|---|---|
-| **TREE_OK** | The tree already covers this change | No tree PR opened |
-| **TREE_MISS** | The tree has no coverage for this area | New node proposed |
+| **TREE_OK** | The tree already covers this change | No action |
+| **TREE_MISS** | Completely new area — no existing node covers it | New node created, owner = PR author, member auto-created if needed |
+| **TREE_SUPPLEMENT** | Existing node covers the area but not this specific change | No new node — suggestion to supplement the existing node is included in the PR body |
 
-There is intentionally no TREE_STALE verdict. Since gardener is required on the source repo, every merged PR has already passed context-fit review before merge. A merged PR cannot contradict the tree — if it did, gardener would have flagged it pre-merge. The only question sync asks is: "did this PR introduce new knowledge the tree hasn't captured yet?"
+There is intentionally no TREE_STALE/conflict verdict. Since gardener is required on the source repo, every merged PR has already passed context-fit review before merge.
 
-The classification prompt biases toward TREE_MISS. A sparse tree (missing context) is more dangerous than a detailed one (extra context), because downstream consumers make worse decisions with gaps than with redundancy.
+### Owner assignment
 
-The AI evaluates the overall picture of each PR, not individual commits within it.
+TREE_MISS nodes are owned by the **PR author** — the person who introduced the new area. If the author doesn't have a `members/<username>/NODE.md` entry yet, sync auto-creates one with `role: "Contributor"` and the relevant domain.
+
+### TREE_SUPPLEMENT behavior
+
+TREE_SUPPLEMENT does not create files or modify existing nodes. Instead, the tree PR body includes expandable suggestions showing what content to add to which existing node. The node owner decides how to incorporate the suggestion. This avoids AI-authored edits to human-maintained nodes.
+
+The classification prompt biases toward TREE_MISS and TREE_SUPPLEMENT over TREE_OK. If in doubt, it's better to flag it.
+
+The AI evaluates the overall picture of each PR, not individual commits within it. Related nodes' content (up to 500 chars) is included in the prompt so the AI can distinguish "node exists but doesn't cover this" (TREE_SUPPLEMENT) from "node already covers it" (TREE_OK).
 
 ## End-to-end flow
 

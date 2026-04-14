@@ -555,6 +555,7 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
     if (!treeSkillUpToDate) {
       const wipedPaths = wipeInstalledSkill(workingRepo.root);
       copyCanonicalSkill(sourceRoot, workingRepo.root);
+      ensureSyncRunbook(workingRepo.root, sourceRoot);
       if (wipedPaths.length > 0) {
         console.log(
           `Wiped previous tree skill installation: ${wipedPaths.map((p) => `\`${p}/\``).join(", ")}.`,
@@ -563,6 +564,8 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
       console.log(
         `Refreshed tree-repo skill payload at ${installedSkillRootsDisplay()}.`,
       );
+    } else {
+      ensureSyncRunbook(workingRepo.root, sourceRoot);
     }
     const sourceRepoIndex = syncTreeSourceRepoIndex(workingRepo.root);
     logTreeSourceRepoIndexSync(sourceRepoIndex);
