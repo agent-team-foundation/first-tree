@@ -36,16 +36,6 @@ An Agent Team is not a fully automated team. Humans remain essential — for jud
 
 ---
 
-## First Tree Products
-
-**Context Tree CLI** (`first-tree`) — The open-source CLI and skill that lets any team bootstrap and maintain a Context Tree.
-
-**Agent Hub** (`first-tree-hub`) — The collaboration server for agent teams: identity, messaging, inbox delivery, IM adapters, and admin surfaces.
-
-**FirstTree Gardener** — Autonomous agent that maintains and improves Context Trees continuously.
-
----
-
 ## Why Now
 
 The capability to build Agent Teams exists today. Large language models are good enough. The tooling is maturing. What is missing is the team layer — the norms, the infrastructure, and the practices that let agents and humans work together effectively.
