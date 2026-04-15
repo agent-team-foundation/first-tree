@@ -32,25 +32,6 @@ export {
   adapterBotStatusSchema,
 } from "./schemas/adapter-status.js";
 export {
-  ADMIN_ROLES,
-  type AdminRole,
-  type AdminUser,
-  adminRoleSchema,
-  adminUserSchema,
-  type Login,
-  type LoginResponse,
-  loginResponseSchema,
-  loginSchema,
-  type RefreshToken,
-  refreshTokenSchema,
-} from "./schemas/admin-auth.js";
-export {
-  type CreateAdminUser,
-  createAdminUserSchema,
-  type UpdateAdminUser,
-  updateAdminUserSchema,
-} from "./schemas/admin-user.js";
-export {
   AGENT_SOURCES,
   AGENT_STATUSES,
   AGENT_TYPES,
@@ -81,6 +62,14 @@ export {
   type CreateAgentToken,
   createAgentTokenSchema,
 } from "./schemas/agent-token.js";
+export {
+  type Login,
+  type LoginResponse,
+  loginResponseSchema,
+  loginSchema,
+  type RefreshToken,
+  refreshTokenSchema,
+} from "./schemas/auth.js";
 export {
   type AddParticipant,
   addParticipantSchema,
@@ -123,6 +112,19 @@ export {
   inboxEntryWithMessageSchema,
   inboxPollQuerySchema,
 } from "./schemas/inbox.js";
+export {
+  type CreateMember,
+  createMemberSchema,
+  MEMBER_ROLES,
+  type Member,
+  type MemberCreated,
+  type MemberRole,
+  memberCreatedSchema,
+  memberRoleSchema,
+  memberSchema,
+  type UpdateMember,
+  updateMemberSchema,
+} from "./schemas/member.js";
 export {
   MESSAGE_FORMATS,
   type Message,
@@ -213,3 +215,14 @@ export {
   type UpdateTaskStatus,
   updateTaskStatusSchema,
 } from "./schemas/task.js";
+export {
+  type CreateUser,
+  createUserSchema,
+  type UpdateUser,
+  USER_STATUSES,
+  type User,
+  type UserStatus,
+  updateUserSchema,
+  userSchema,
+  userStatusSchema,
+} from "./schemas/user.js";

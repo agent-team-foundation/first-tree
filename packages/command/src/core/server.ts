@@ -6,7 +6,6 @@ import { fileURLToPath } from "node:url";
 import { initConfig, serverConfigSchema } from "@agent-team-foundation/first-tree-hub-shared/config";
 import { buildApp } from "@first-tree-hub/server";
 import type { Config } from "@first-tree-hub/server/config";
-import { createAdminUser, hasAdminUser } from "./admin.js";
 import { ensurePostgres, isDockerAvailable } from "./docker-postgres.js";
 import { runMigrations } from "./migrate.js";
 import { blank, status } from "./output.js";
@@ -88,25 +87,7 @@ export async function startServer(options: StartOptions): Promise<void> {
   const tableCount = await runMigrations(serverConfig.database.url);
   status("Database", `initialized (${tableCount} tables)`);
 
-  // 5. Check/create admin
-  const hasAdmin = await hasAdminUser(serverConfig.database.url);
-  if (!hasAdmin) {
-    const envPassword = process.env.FIRST_TREE_HUB_ADMIN_PASSWORD;
-    const admin = await createAdminUser(serverConfig.database.url, "admin", envPassword || undefined);
-    status("Admin", "created");
-    blank();
-    status("  Username:", admin.username);
-    if (envPassword) {
-      status("  Password:", "(set via FIRST_TREE_HUB_ADMIN_PASSWORD)");
-    } else {
-      status("  Password:", `${admin.password}  (save this — shown only once)`);
-    }
-    blank();
-  } else {
-    status("Admin", "exists");
-  }
-
-  // 6. Resolve web dist (build if needed)
+  // 5. Resolve web dist (build if needed)
   const webDistPath = resolveWebDist();
   if (webDistPath) {
     status("Web", `serving from ${webDistPath}`);

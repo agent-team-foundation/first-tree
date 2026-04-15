@@ -4,7 +4,7 @@ import { createTestAdmin, useTestApp } from "./helpers.js";
 describe("Admin Auth", () => {
   const getApp = useTestApp();
 
-  describe("POST /api/v1/admin/auth/login", () => {
+  describe("POST /api/v1/auth/login", () => {
     it("returns tokens on valid credentials", async () => {
       const app = getApp();
       const admin = await createTestAdmin(app);
@@ -17,7 +17,7 @@ describe("Admin Auth", () => {
       await createTestAdmin(app);
       const res = await app.inject({
         method: "POST",
-        url: "/api/v1/admin/auth/login",
+        url: "/api/v1/auth/login",
         payload: { username: "admin", password: "wrong" },
       });
       expect(res.statusCode).toBe(401);
@@ -27,20 +27,20 @@ describe("Admin Auth", () => {
       const app = getApp();
       const res = await app.inject({
         method: "POST",
-        url: "/api/v1/admin/auth/login",
+        url: "/api/v1/auth/login",
         payload: { username: "nobody", password: "whatever" },
       });
       expect(res.statusCode).toBe(401);
     });
   });
 
-  describe("POST /api/v1/admin/auth/refresh", () => {
+  describe("POST /api/v1/auth/refresh", () => {
     it("returns new access token", async () => {
       const app = getApp();
       const admin = await createTestAdmin(app);
       const res = await app.inject({
         method: "POST",
-        url: "/api/v1/admin/auth/refresh",
+        url: "/api/v1/auth/refresh",
         payload: { refreshToken: admin.refreshToken },
       });
       expect(res.statusCode).toBe(200);
@@ -51,7 +51,7 @@ describe("Admin Auth", () => {
       const app = getApp();
       const res = await app.inject({
         method: "POST",
-        url: "/api/v1/admin/auth/refresh",
+        url: "/api/v1/auth/refresh",
         payload: { refreshToken: "invalid" },
       });
       expect(res.statusCode).toBe(401);

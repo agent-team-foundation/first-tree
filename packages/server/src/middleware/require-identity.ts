@@ -1,6 +1,6 @@
 import type { FastifyRequest } from "fastify";
 import { UnauthorizedError } from "../errors.js";
-import type { AdminIdentity, AgentIdentity } from "../types.js";
+import type { AgentIdentity, MemberIdentity } from "../types.js";
 
 export function requireAgent(request: FastifyRequest): AgentIdentity {
   const agent = request.agent;
@@ -10,10 +10,10 @@ export function requireAgent(request: FastifyRequest): AgentIdentity {
   return agent;
 }
 
-export function requireAdmin(request: FastifyRequest): AdminIdentity {
-  const admin = request.admin;
-  if (!admin) {
-    throw new UnauthorizedError("Admin authentication required");
+export function requireMember(request: FastifyRequest): MemberIdentity {
+  const member = request.member;
+  if (!member) {
+    throw new UnauthorizedError("Member authentication required");
   }
-  return admin;
+  return member;
 }

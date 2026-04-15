@@ -1,0 +1,188 @@
+import { randomBytes } from "node:crypto";
+import type { CreateMember, UpdateMember } from "@agent-team-foundation/first-tree-hub-shared";
+import bcrypt from "bcrypt";
+import { and, desc, eq, ne } from "drizzle-orm";
+import type { Database } from "../db/connection.js";
+import { agents } from "../db/schema/agents.js";
+import { members } from "../db/schema/members.js";
+import { users } from "../db/schema/users.js";
+import { BadRequestError, ConflictError, NotFoundError } from "../errors.js";
+import { uuidv7 } from "../uuid.js";
+import { createAgent } from "./agent.js";
+
+const SALT_ROUNDS = 10;
+
+/**
+ * Create a member in an organization.
+ * Creates user (if needed) + member + human agent in one transaction.
+ * Returns the member info plus a one-time plaintext password (only when user is new).
+ */
+export async function createMember(db: Database, orgId: string, data: CreateMember) {
+  // Check if user with this username already exists
+  const [existingUser] = await db.select().from(users).where(eq(users.username, data.username)).limit(1);
+
+  if (existingUser) {
+    // Check if already a member of this org
+    const [existingMember] = await db
+      .select()
+      .from(members)
+      .where(and(eq(members.userId, existingUser.id), eq(members.organizationId, orgId)))
+      .limit(1);
+    if (existingMember) {
+      throw new ConflictError(`User "${data.username}" is already a member of this organization`);
+    }
+  }
+
+  // Generate password only for new users
+  const isNewUser = !existingUser;
+  const password = isNewUser ? randomBytes(12).toString("base64url") : null;
+  const passwordHash = password ? await bcrypt.hash(password, SALT_ROUNDS) : null;
+
+  return db.transaction(async (tx) => {
+    // Create user if needed
+    const userId = existingUser?.id ?? uuidv7();
+    if (isNewUser && passwordHash) {
+      await tx.insert(users).values({
+        id: userId,
+        username: data.username,
+        passwordHash,
+        displayName: data.displayName,
+      });
+    }
+
+    // Create human agent for this member
+    const agentName = data.username.replace(/[^a-z0-9_-]/gi, "-").toLowerCase();
+    const agent = await createAgent(tx as unknown as Database, {
+      name: agentName,
+      type: "human",
+      displayName: data.displayName,
+      organizationId: orgId,
+      source: "admin-api",
+    });
+
+    // Create member
+    const memberId = uuidv7();
+    const [member] = await tx
+      .insert(members)
+      .values({
+        id: memberId,
+        userId,
+        organizationId: orgId,
+        agentId: agent.uuid,
+        role: data.role ?? "member",
+      })
+      .returning();
+
+    if (!member) throw new Error("Unexpected: INSERT RETURNING produced no row");
+
+    // Set manager_id on the human agent to point to this member
+    await tx.update(agents).set({ managerId: memberId }).where(eq(agents.uuid, agent.uuid));
+
+    return {
+      id: member.id,
+      userId: member.userId,
+      organizationId: member.organizationId,
+      agentId: member.agentId,
+      role: member.role,
+      createdAt: member.createdAt.toISOString(),
+      username: data.username,
+      displayName: data.displayName,
+      // Only return password for new users
+      ...(password ? { password } : { notice: "Existing user — use their current password to log in" }),
+    };
+  });
+}
+
+export async function listMembers(db: Database, orgId: string) {
+  const rows = await db
+    .select({
+      id: members.id,
+      userId: members.userId,
+      organizationId: members.organizationId,
+      agentId: members.agentId,
+      role: members.role,
+      createdAt: members.createdAt,
+      username: users.username,
+      displayName: users.displayName,
+    })
+    .from(members)
+    .innerJoin(users, eq(members.userId, users.id))
+    .where(eq(members.organizationId, orgId))
+    .orderBy(desc(members.createdAt));
+
+  return rows.map((r) => ({
+    ...r,
+    createdAt: r.createdAt.toISOString(),
+  }));
+}
+
+export async function getMember(db: Database, id: string) {
+  const [row] = await db
+    .select({
+      id: members.id,
+      userId: members.userId,
+      organizationId: members.organizationId,
+      agentId: members.agentId,
+      role: members.role,
+      createdAt: members.createdAt,
+      username: users.username,
+      displayName: users.displayName,
+    })
+    .from(members)
+    .innerJoin(users, eq(members.userId, users.id))
+    .where(eq(members.id, id))
+    .limit(1);
+
+  if (!row) throw new NotFoundError(`Member "${id}" not found`);
+  return { ...row, createdAt: row.createdAt.toISOString() };
+}
+
+export async function updateMember(db: Database, id: string, data: UpdateMember) {
+  if (!data.role) return getMember(db, id);
+
+  // Prevent demoting the last admin
+  if (data.role === "member") {
+    const member = await getMember(db, id);
+    if (member.role === "admin") {
+      await assertNotLastAdmin(db, member.organizationId, id);
+    }
+  }
+
+  const [row] = await db.update(members).set({ role: data.role }).where(eq(members.id, id)).returning();
+
+  if (!row) throw new NotFoundError(`Member "${id}" not found`);
+  return getMember(db, id);
+}
+
+export async function deleteMember(db: Database, id: string) {
+  const member = await getMember(db, id);
+
+  // Prevent deleting the last admin
+  if (member.role === "admin") {
+    await assertNotLastAdmin(db, member.organizationId, id);
+  }
+
+  // Clear managerId on any agents managed by this member (not just their human agent)
+  await db.update(agents).set({ managerId: null }).where(eq(agents.managerId, id));
+
+  // Mark the member's human agent as deleted
+  await db.update(agents).set({ status: "deleted", name: null }).where(eq(agents.uuid, member.agentId));
+
+  // Delete member record
+  await db.delete(members).where(eq(members.id, id));
+
+  // Note: user record is kept (for multi-org future — user may belong to other orgs)
+}
+
+/** Throw if this is the last admin in the organization. */
+async function assertNotLastAdmin(db: Database, orgId: string, excludeMemberId: string): Promise<void> {
+  const [otherAdmin] = await db
+    .select({ id: members.id })
+    .from(members)
+    .where(and(eq(members.organizationId, orgId), eq(members.role, "admin"), ne(members.id, excludeMemberId)))
+    .limit(1);
+
+  if (!otherAdmin) {
+    throw new BadRequestError("Cannot remove the last admin from the organization");
+  }
+}

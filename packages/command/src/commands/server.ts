@@ -6,7 +6,7 @@ import {
   checkNodeVersion,
   checkServerConfig,
   checkServerHealth,
-  createAdminUser,
+  createOwner,
   printResults,
   runMigrations,
   startServer,
@@ -108,13 +108,21 @@ export function registerServerCommands(program: Command): void {
 
   server
     .command("admin:create")
-    .description("Create an admin user")
+    .description("Create an admin user with organization")
     .option("-u, --username <name>", "Admin username", "admin")
-    .option("-p, --password <pass>", "Admin password (auto-generated if omitted)")
-    .action(async (options: { username: string; password?: string }) => {
+    .option("-n, --name <name>", "Display name", "Admin")
+    .option("-o, --org <org>", "Organization slug", "default")
+    .option("-p, --password <pass>", "Password (auto-generated if omitted)")
+    .action(async (options: { username: string; name: string; org: string; password?: string }) => {
       try {
         const config = await initConfig({ schema: serverConfigSchema, role: "server" });
-        const result = await createAdminUser(config.database.url, options.username, options.password);
+        const result = await createOwner(
+          config.database.url,
+          options.username,
+          options.org,
+          options.name,
+          options.password,
+        );
 
         process.stderr.write(`  Admin user "${result.username}" created.\n`);
         if (!options.password) {

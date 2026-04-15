@@ -4,12 +4,12 @@ import { AuthProvider } from "./auth/auth-context.js";
 import { RequireAuth } from "./auth/require-auth.js";
 import { Layout } from "./components/layout.js";
 import { ActivityPage } from "./pages/activity.js";
-import { AdminUsersPage } from "./pages/admin-users.js";
 import { AgentDetailPage } from "./pages/agent-detail.js";
 import { AgentsPage } from "./pages/agents.js";
 import { BindingsPage } from "./pages/bindings.js";
 import { ChatsPage } from "./pages/chats.js";
 import { LoginPage } from "./pages/login.js";
+import { MembersPage } from "./pages/members.js";
 import { OverviewPage } from "./pages/overview.js";
 import { SettingsPage } from "./pages/settings.js";
 
@@ -37,7 +37,7 @@ export function App() {
                 <Route path="agents/:uuid" element={<AgentDetailPage />} />
                 <Route path="bindings" element={<BindingsPage />} />
                 <Route path="chats" element={<ChatsPage />} />
-                <Route path="admin-users" element={<AdminUsersPage />} />
+                <Route path="members" element={<MembersPage />} />
                 <Route path="settings" element={<SettingsPage />} />
               </Route>
             </Route>

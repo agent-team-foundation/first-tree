@@ -45,6 +45,8 @@ export const createAgentSchema = z.object({
   /** Whether this agent is publicly discoverable */
   public: z.boolean().default(false).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
+  /** Member who manages this agent */
+  managerId: z.string().optional(),
 });
 export type CreateAgent = z.infer<typeof createAgentSchema>;
 
@@ -74,6 +76,8 @@ export const agentSchema = z.object({
   /** Whether this agent is publicly discoverable */
   public: z.boolean().optional(),
   metadata: z.record(z.string(), z.unknown()),
+  /** Member who manages this agent */
+  managerId: z.string().nullable(),
   presenceStatus: presenceStatusSchema.optional(),
   createdAt: z.string(),
   updatedAt: z.string(),

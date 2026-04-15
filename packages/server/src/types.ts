@@ -9,10 +9,12 @@ export type AgentIdentity = {
   inboxId: string;
 };
 
-export type AdminIdentity = {
-  id: string;
-  username: string;
+export type MemberIdentity = {
+  userId: string;
+  memberId: string;
+  organizationId: string;
   role: string;
+  agentId: string;
 };
 
 export type GitHubUserIdentity = {
@@ -28,7 +30,7 @@ declare module "fastify" {
   }
   interface FastifyRequest {
     agent?: AgentIdentity;
-    admin?: AdminIdentity;
+    member?: MemberIdentity;
     githubUser?: GitHubUserIdentity;
   }
 }

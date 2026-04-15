@@ -13,7 +13,6 @@ import { adminAdapterStatusRoutes } from "./api/admin/adapter-status.js";
 import { adminAdapterRoutes } from "./api/admin/adapters.js";
 
 import { adminAgentRoutes } from "./api/admin/agents.js";
-import { adminAuthRoutes } from "./api/admin/auth.js";
 import { adminChatRoutes } from "./api/admin/chats.js";
 import { adminActivityRoutes, adminClientRoutes } from "./api/admin/clients.js";
 import { adminOrganizationRoutes } from "./api/admin/organizations.js";
@@ -21,9 +20,7 @@ import { adminOverviewRoutes } from "./api/admin/overview.js";
 import { adminStatsRoutes } from "./api/admin/stats.js";
 import { adminSystemConfigRoutes } from "./api/admin/system-config.js";
 import { adminTaskRoutes } from "./api/admin/tasks.js";
-import { adminUserRoutes } from "./api/admin/users.js";
 import { agentChatRoutes } from "./api/agent/chats.js";
-
 import { agentFeishuBotRoutes } from "./api/agent/feishu-bot.js";
 import { agentFeishuUserRoutes } from "./api/agent/feishu-user.js";
 import { agentInboxRoutes } from "./api/agent/inbox.js";
@@ -32,19 +29,22 @@ import { agentMessageRoutes, agentSendToAgentRoutes } from "./api/agent/messages
 import { agentTaskRoutes } from "./api/agent/tasks.js";
 import { agentWsRoutes } from "./api/agent/ws.js";
 import { clientWsRoutes } from "./api/agent/ws-client.js";
+import { authRoutes } from "./api/auth.js";
 import { bootstrapConfigRoutes } from "./api/bootstrap/config.js";
 import { bootstrapRoutes } from "./api/bootstrap/token.js";
 import { contextTreeInfoRoutes } from "./api/context-tree-info.js";
 import { healthRoutes } from "./api/health.js";
 import { healthzRoutes } from "./api/healthz.js";
+import { meRoutes } from "./api/me.js";
+import { memberRoutes } from "./api/members.js";
 import { publicAgentRoutes } from "./api/public/agents.js";
 import { githubWebhookRoutes } from "./api/webhooks/github.js";
 import type { Config } from "./config.js";
 import { connectDatabase } from "./db/connection.js";
 import { AppError } from "./errors.js";
-import { adminAuthHook } from "./middleware/admin-auth.js";
 import { agentAuthHook } from "./middleware/agent-auth.js";
 import { githubAuthHook } from "./middleware/github-auth.js";
+import { memberAuthHook, requireAdminRoleHook } from "./middleware/member-auth.js";
 import { type AdapterManager, createAdapterManager } from "./services/adapter-manager.js";
 import { type BackgroundTasks, createBackgroundTasks } from "./services/background-tasks.js";
 import { createKaelRuntime, type KaelRuntime } from "./services/kael-runtime.js";
@@ -92,7 +92,8 @@ export async function buildApp(config: Config) {
 
   // Auth hooks
   const agentAuth = agentAuthHook(db);
-  const adminAuth = adminAuthHook(db, config.secrets.jwtSecret);
+  const memberAuth = memberAuthHook(db, config.secrets.jwtSecret);
+  const adminOnly = requireAdminRoleHook();
   const githubAuth = githubAuthHook();
 
   // Error handler
@@ -116,7 +117,7 @@ export async function buildApp(config: Config) {
       // Public routes
       await api.register(healthRoutes);
       await api.register(githubWebhookRoutes, { prefix: "/webhooks" });
-      await api.register(adminAuthRoutes, { prefix: "/admin/auth" });
+      await api.register(authRoutes, { prefix: "/auth" });
       await api.register(contextTreeInfoRoutes, { prefix: "/context-tree" });
       await api.register(bootstrapConfigRoutes, { prefix: "/bootstrap" });
 
@@ -132,7 +133,7 @@ export async function buildApp(config: Config) {
       // Admin routes (JWT protected)
       await api.register(
         async (adminApp) => {
-          adminApp.addHook("onRequest", adminAuth);
+          adminApp.addHook("onRequest", memberAuth);
           await adminApp.register(adminAgentRoutes);
         },
         { prefix: "/admin/agents" },
@@ -140,7 +141,8 @@ export async function buildApp(config: Config) {
 
       await api.register(
         async (adminApp) => {
-          adminApp.addHook("onRequest", adminAuth);
+          adminApp.addHook("onRequest", memberAuth);
+          adminApp.addHook("onRequest", adminOnly);
           await adminApp.register(adminSystemConfigRoutes);
         },
         { prefix: "/admin/system/config" },
@@ -148,7 +150,7 @@ export async function buildApp(config: Config) {
 
       await api.register(
         async (adminApp) => {
-          adminApp.addHook("onRequest", adminAuth);
+          adminApp.addHook("onRequest", memberAuth);
           await adminApp.register(adminOverviewRoutes);
         },
         { prefix: "/admin/overview" },
@@ -156,7 +158,8 @@ export async function buildApp(config: Config) {
 
       await api.register(
         async (adminApp) => {
-          adminApp.addHook("onRequest", adminAuth);
+          adminApp.addHook("onRequest", memberAuth);
+          adminApp.addHook("onRequest", adminOnly);
           await adminApp.register(adminAdapterRoutes);
         },
         { prefix: "/admin/adapters" },
@@ -164,7 +167,8 @@ export async function buildApp(config: Config) {
 
       await api.register(
         async (adminApp) => {
-          adminApp.addHook("onRequest", adminAuth);
+          adminApp.addHook("onRequest", memberAuth);
+          adminApp.addHook("onRequest", adminOnly);
           await adminApp.register(adminAdapterMappingRoutes);
         },
         { prefix: "/admin/adapter-mappings" },
@@ -172,23 +176,32 @@ export async function buildApp(config: Config) {
 
       await api.register(
         async (adminApp) => {
-          adminApp.addHook("onRequest", adminAuth);
+          adminApp.addHook("onRequest", memberAuth);
+          adminApp.addHook("onRequest", adminOnly);
           await adminApp.register(adminAdapterStatusRoutes);
         },
         { prefix: "/admin/adapters/status" },
       );
 
       await api.register(
-        async (adminApp) => {
-          adminApp.addHook("onRequest", adminAuth);
-          await adminApp.register(adminUserRoutes);
+        async (memberApp) => {
+          memberApp.addHook("onRequest", memberAuth);
+          await memberApp.register(memberRoutes);
         },
-        { prefix: "/admin/users" },
+        { prefix: "/members" },
+      );
+
+      await api.register(
+        async (memberApp) => {
+          memberApp.addHook("onRequest", memberAuth);
+          await memberApp.register(meRoutes);
+        },
+        { prefix: "" },
       );
 
       await api.register(
         async (adminApp) => {
-          adminApp.addHook("onRequest", adminAuth);
+          adminApp.addHook("onRequest", memberAuth);
           await adminApp.register(adminChatRoutes);
         },
         { prefix: "/admin/chats" },
@@ -197,7 +210,7 @@ export async function buildApp(config: Config) {
       // M1: Client management routes
       await api.register(
         async (adminApp) => {
-          adminApp.addHook("onRequest", adminAuth);
+          adminApp.addHook("onRequest", memberAuth);
           await adminApp.register(adminClientRoutes);
         },
         { prefix: "/admin/clients" },
@@ -206,7 +219,7 @@ export async function buildApp(config: Config) {
       // M1: Agent activity routes
       await api.register(
         async (adminApp) => {
-          adminApp.addHook("onRequest", adminAuth);
+          adminApp.addHook("onRequest", memberAuth);
           await adminApp.register(adminActivityRoutes);
         },
         { prefix: "/admin/agents/activity" },
@@ -214,7 +227,8 @@ export async function buildApp(config: Config) {
 
       await api.register(
         async (adminApp) => {
-          adminApp.addHook("onRequest", adminAuth);
+          adminApp.addHook("onRequest", memberAuth);
+          adminApp.addHook("onRequest", adminOnly);
           await adminApp.register(adminOrganizationRoutes);
         },
         { prefix: "/admin/organizations" },
@@ -222,7 +236,8 @@ export async function buildApp(config: Config) {
 
       await api.register(
         async (adminApp) => {
-          adminApp.addHook("onRequest", adminAuth);
+          adminApp.addHook("onRequest", memberAuth);
+          adminApp.addHook("onRequest", adminOnly);
           await adminApp.register(adminStatsRoutes);
         },
         { prefix: "/admin/stats" },
@@ -230,7 +245,7 @@ export async function buildApp(config: Config) {
 
       await api.register(
         async (adminApp) => {
-          adminApp.addHook("onRequest", adminAuth);
+          adminApp.addHook("onRequest", memberAuth);
           await adminApp.register(adminTaskRoutes);
         },
         { prefix: "/admin/tasks" },

@@ -3,7 +3,7 @@ import type { LoginResponse } from "@agent-team-foundation/first-tree-hub-shared
 const BASE_URL = "/api/v1";
 
 export async function login(username: string, password: string): Promise<LoginResponse> {
-  const res = await fetch(`${BASE_URL}/admin/auth/login`, {
+  const res = await fetch(`${BASE_URL}/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username, password }),

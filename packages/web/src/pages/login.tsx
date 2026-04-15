@@ -35,7 +35,7 @@ export function LoginPage() {
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
           <CardTitle className="text-2xl">First Tree</CardTitle>
-          <CardDescription>Sign in to admin console</CardDescription>
+          <CardDescription>Sign in to your workspace</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
