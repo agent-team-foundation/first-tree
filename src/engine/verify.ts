@@ -39,6 +39,8 @@ messages so you can fix them and re-run.
 When run inside a source/workspace repo (no tree content, only the source
 integration), verify exits with an error and points you to the dedicated
 tree repo. Pass \`--tree-path\` to verify the dedicated tree from elsewhere.
+When \`--tree-path\` is used from a bound source/workspace root, verify also
+reports caller-root Claude/Codex drift without rewriting those files.
 
 Options:
   --tree-path PATH   Verify a tree repo from another working directory
@@ -71,12 +73,48 @@ export interface ValidateNodesResult {
 
 export type NodeValidator = (root: string) => ValidateNodesResult;
 
+export interface VerifyOptions {
+  callerRepo?: Repo;
+}
+
 function defaultNodeValidator(root: string): ValidateNodesResult {
   const { exitCode } = runValidateNodes(root);
   return { exitCode };
 }
 
-export function runVerify(repo?: Repo, nodeValidator?: NodeValidator): number {
+function shouldCheckCallerRootAgentContext(
+  targetRepo: Repo,
+  callerRepo: Repo | undefined,
+): callerRepo is Repo {
+  return callerRepo !== undefined
+    && callerRepo.root !== targetRepo.root
+    && callerRepo.hasSourceWorkspaceIntegration();
+}
+
+function runAgentContextHookCheck(
+  label: string,
+  repo: Repo,
+): { passed: boolean } {
+  const agentContextHookReport = inspectAgentContextHookReport(repo.root);
+  if (agentContextHookReport.overall !== "current") {
+    console.log(`  ${label} drift detected:\n`);
+    for (const message of formatAgentContextHookDriftMessages(
+      agentContextHookReport,
+    )) {
+      console.log(`    - ${message}`);
+    }
+    console.log(`\n  ${agentContextHookReport.repairHint}\n`);
+  }
+  return {
+    passed: agentContextHookReport.overall === "current",
+  };
+}
+
+export function runVerify(
+  repo?: Repo,
+  nodeValidator?: NodeValidator,
+  options?: VerifyOptions,
+): number {
   const r = repo ?? new Repo();
   const validate = nodeValidator ?? defaultNodeValidator;
 
@@ -171,27 +209,30 @@ export function runVerify(repo?: Repo, nodeValidator?: NodeValidator): number {
       duplicatePlaceholderFiles.length === 0,
   ) && allPassed;
 
-  // 4. Agent context hook drift
-  const agentContextHookReport = inspectAgentContextHookReport(r.root);
-  if (agentContextHookReport.overall !== "current") {
-    console.log("  Agent context drift detected:\n");
-    for (const message of formatAgentContextHookDriftMessages(
-      agentContextHookReport,
-    )) {
-      console.log(`    - ${message}`);
-    }
-    console.log(`\n  ${agentContextHookReport.repairHint}\n`);
-  }
+  // 4. Agent context hook drift for the verified tree target
+  const treeAgentContextCheck = runAgentContextHookCheck("Agent context", r);
   allPassed = check(
     "Managed Claude Code / Codex agent context files are current",
-    agentContextHookReport.overall === "current",
+    treeAgentContextCheck.passed,
   ) && allPassed;
 
-  // 5. Node validation
+  // 5. Optional caller-root drift when verify targets another tree checkout
+  if (shouldCheckCallerRootAgentContext(r, options?.callerRepo)) {
+    const callerAgentContextCheck = runAgentContextHookCheck(
+      `Caller root agent context (${options.callerRepo.root})`,
+      options.callerRepo,
+    );
+    allPassed = check(
+      "Caller root managed Claude Code / Codex agent context files are current",
+      callerAgentContextCheck.passed,
+    ) && allPassed;
+  }
+
+  // 6. Node validation
   const { exitCode } = validate(r.root);
   allPassed = check("Node validation passes", exitCode === 0) && allPassed;
 
-  // 6. Member validation
+  // 7. Member validation
   const members = runValidateMembers(r.root);
   allPassed = check("Member validation passes", members.exitCode === 0) && allPassed;
 
@@ -230,5 +271,10 @@ export function runVerifyCli(args: string[] = []): number {
     return 1;
   }
 
-  return runVerify(treePath ? new Repo(resolve(process.cwd(), treePath)) : undefined);
+  const callerRepo = treePath ? new Repo() : undefined;
+  return runVerify(
+    treePath ? new Repo(resolve(process.cwd(), treePath)) : undefined,
+    undefined,
+    { callerRepo },
+  );
 }

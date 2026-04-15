@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runInit } from "#engine/init.js";
-import { check, checkProgress, runVerify } from "#engine/verify.js";
+import { check, checkProgress, runVerify, runVerifyCli } from "#engine/verify.js";
 import { Repo } from "#engine/repo.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
@@ -331,6 +331,34 @@ describe("runVerify failing", () => {
     );
     const repo = new Repo(tmp.path);
     expect(runVerify(repo, passValidator)).toBe(1);
+  });
+
+  it("fails via --tree-path when the caller root agent context drifts", () => {
+    const sandbox = useTmpDir();
+    const sourceRoot = join(sandbox.path, "product-repo");
+    const treeRoot = join(sandbox.path, "product-repo-tree");
+    makeSourceRepo(sourceRoot);
+    mkdirSync(treeRoot, { recursive: true });
+    buildFullRepo(treeRoot);
+    makeFramework(sourceRoot);
+    makeManagedAgentContext(sourceRoot);
+    writeFileSync(
+      join(sourceRoot, AGENT_INSTRUCTIONS_FILE),
+      `${SOURCE_INTEGRATION_MARKER} Use the installed \`first-tree\` skill here.\n`,
+    );
+    writeFileSync(
+      join(sourceRoot, CLAUDE_INSTRUCTIONS_FILE),
+      `${SOURCE_INTEGRATION_MARKER} Use the installed \`first-tree\` skill here.\n`,
+    );
+    rmSync(join(sourceRoot, CODEX_HOOKS_PATH));
+
+    const originalCwd = process.cwd();
+    process.chdir(sourceRoot);
+    try {
+      expect(runVerifyCli(["--tree-path", "../product-repo-tree"])).toBe(1);
+    } finally {
+      process.chdir(originalCwd);
+    }
   });
 
   it("gives a dedicated-tree hint when run from a source repo", () => {
