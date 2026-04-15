@@ -21,7 +21,7 @@ Commands:
   generate-codeowners   Generate .github/CODEOWNERS from tree ownership
   invite                Invite a new member to the Context Tree
   join                  Accept an invite and join a Context Tree
-  inject-context        Output Claude Code SessionStart hook payload from NODE.md
+  inject-context        Output tree-first SessionStart hook payload for Claude/Codex
   help                  Show help for a topic (e.g. \`help onboarding\`)
 
 Options:

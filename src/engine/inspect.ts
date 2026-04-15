@@ -5,6 +5,7 @@ import {
   readTreeState,
   readWorkspaceState,
 } from "#engine/runtime/binding-state.js";
+import { inspectAgentContextHooks } from "#engine/runtime/adapters.js";
 import { readLocalTreeConfig } from "#engine/runtime/local-tree-config.js";
 import { discoverWorkspaceRepos } from "#engine/workspace.js";
 
@@ -33,6 +34,7 @@ export interface InspectionResult {
     | "workspace-folder"
     | "workspace-repo";
   currentCwd: string;
+  agentContextHooks: ReturnType<typeof inspectAgentContextHooks>;
   hasSourceIntegration: boolean;
   root: string;
   rootKind: "folder" | "git-repo";
@@ -61,6 +63,7 @@ export function inspectRepo(repo?: Repo): InspectionResult {
   }
 
   return {
+    agentContextHooks: inspectAgentContextHooks(workingRepo.root),
     childRepos,
     classification,
     currentCwd: resolve(process.cwd()),
@@ -99,6 +102,10 @@ export function runInspect(repo?: Repo, json = false): number {
       console.log(`  - ${childRepo.relativePath} (${childRepo.kind})`);
     }
   }
+  console.log();
+  console.log(`  Claude hook:    ${inspection.agentContextHooks.claudeSettings}`);
+  console.log(`  Codex config:   ${inspection.agentContextHooks.codexConfig}`);
+  console.log(`  Codex hooks:    ${inspection.agentContextHooks.codexHooks}`);
   return 0;
 }
 

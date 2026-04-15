@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx -p first-tree first-tree inject-context --skip-version-check",
+            "statusMessage": "Loading First Tree context"
+          }
+        ]
+      }
+    ]
+  }
+}
