@@ -26,6 +26,7 @@ import { Input } from "../components/ui/input.js";
 import { Label } from "../components/ui/label.js";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.js";
 import { useAgentNameMap } from "../lib/use-agent-name-map.js";
+import { useMemberNameMap } from "../lib/use-member-name-map.js";
 import { cn, formatDate } from "../lib/utils.js";
 
 const platformValues = Object.values(ADAPTER_PLATFORMS);
@@ -36,6 +37,7 @@ export function AgentDetailPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const resolveAgentName = useAgentNameMap();
+  const resolveMemberName = useMemberNameMap();
 
   // Agent data
   const agentQuery = useQuery({
@@ -436,6 +438,12 @@ export function AgentDetailPage() {
               <div>
                 <dt className="text-muted-foreground mb-1">Delegate Mention</dt>
                 <dd className="font-mono">{resolveAgentName(agent.delegateMention)}</dd>
+              </div>
+            )}
+            {agent.managerId && (
+              <div>
+                <dt className="text-muted-foreground mb-1">Owner</dt>
+                <dd>{resolveMemberName(agent.managerId)}</dd>
               </div>
             )}
             {role && (

@@ -3,12 +3,13 @@ import { login as loginApi } from "../api/auth.js";
 import { api, clearStoredTokens, getStoredTokens, setStoredTokens } from "../api/client.js";
 
 type MeResponse = {
-  member: { role: string };
+  member: { id: string; role: string };
 };
 
 type AuthContextValue = {
   isAuthenticated: boolean;
   role: string | null;
+  memberId: string | null;
   login: (username: string, password: string) => Promise<void>;
   logout: () => void;
 };
@@ -18,17 +19,20 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [isAuthenticated, setIsAuthenticated] = useState(() => !!getStoredTokens());
   const [role, setRole] = useState<string | null>(null);
+  const [memberId, setMemberId] = useState<string | null>(null);
 
   const logout = useCallback(() => {
     clearStoredTokens();
     setIsAuthenticated(false);
     setRole(null);
+    setMemberId(null);
   }, []);
 
-  const fetchRole = useCallback(async () => {
+  const fetchMe = useCallback(async () => {
     try {
       const data = await api.get<MeResponse>("/me");
       setRole(data.member.role);
+      setMemberId(data.member.id);
     } catch {
       // If /me fails, role stays null — UI falls back to hiding admin features
     }
@@ -38,19 +42,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const tokens = await loginApi(username, password);
     setStoredTokens({ accessToken: tokens.accessToken, refreshToken: tokens.refreshToken });
     setIsAuthenticated(true);
-    // Fetch role immediately after login
+    // Fetch member info immediately after login
     await api
       .get<MeResponse>("/me")
-      .then((data) => setRole(data.member.role))
+      .then((data) => {
+        setRole(data.member.role);
+        setMemberId(data.member.id);
+      })
       .catch(() => {});
   }, []);
 
-  // Fetch role on initial load if already authenticated
+  // Fetch member info on initial load if already authenticated
   useEffect(() => {
     if (isAuthenticated && !role) {
-      fetchRole();
+      fetchMe();
     }
-  }, [isAuthenticated, role, fetchRole]);
+  }, [isAuthenticated, role, fetchMe]);
 
   // Listen for auth failure dispatched by the API client
   useEffect(() => {
@@ -59,7 +66,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("auth:logout", handler);
   }, [logout]);
 
-  return <AuthContext.Provider value={{ isAuthenticated, role, login, logout }}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={{ isAuthenticated, role, memberId, login, logout }}>{children}</AuthContext.Provider>
+  );
 }
 
 export function useAuth(): AuthContextValue {

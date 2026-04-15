@@ -129,6 +129,7 @@ export async function listAgents(db: Database, orgId: string, limit: number, cur
       cloudUserId: agents.cloudUserId,
       public: agents.public,
       metadata: agents.metadata,
+      managerId: agents.managerId,
       createdAt: agents.createdAt,
       updatedAt: agents.updatedAt,
       presenceStatus: agentPresence.status,
