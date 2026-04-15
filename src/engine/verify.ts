@@ -10,6 +10,10 @@ import {
   CLAUDE_INSTRUCTIONS_FILE,
   LEGACY_AGENT_INSTRUCTIONS_FILE,
 } from "#engine/runtime/asset-loader.js";
+import {
+  formatAgentContextHookDriftMessages,
+  inspectAgentContextHookReport,
+} from "#engine/runtime/adapters.js";
 import { runValidateMembers } from "#engine/validators/members.js";
 import { runValidateNodes } from "#engine/validators/nodes.js";
 
@@ -23,6 +27,7 @@ Checks performed:
   - Installed skill version file exists
   - Root NODE.md has valid frontmatter (title, owners)
   - AGENTS.md and CLAUDE.md exist with framework markers
+  - Claude Code / Codex SessionStart hook drift is reported without rewriting files
   - Node validation: frontmatter, owners syntax, soft_links resolve,
     directory listing consistency, no empty nodes, no title mismatches
   - Member validation: at least one member, required fields present
@@ -166,11 +171,27 @@ export function runVerify(repo?: Repo, nodeValidator?: NodeValidator): number {
       duplicatePlaceholderFiles.length === 0,
   ) && allPassed;
 
-  // 4. Node validation
+  // 4. Agent context hook drift
+  const agentContextHookReport = inspectAgentContextHookReport(r.root);
+  if (agentContextHookReport.overall !== "current") {
+    console.log("  Agent context drift detected:\n");
+    for (const message of formatAgentContextHookDriftMessages(
+      agentContextHookReport,
+    )) {
+      console.log(`    - ${message}`);
+    }
+    console.log(`\n  ${agentContextHookReport.repairHint}\n`);
+  }
+  allPassed = check(
+    "Managed Claude Code / Codex agent context files are current",
+    agentContextHookReport.overall === "current",
+  ) && allPassed;
+
+  // 5. Node validation
   const { exitCode } = validate(r.root);
   allPassed = check("Node validation passes", exitCode === 0) && allPassed;
 
-  // 5. Member validation
+  // 6. Member validation
   const members = runValidateMembers(r.root);
   allPassed = check("Member validation passes", members.exitCode === 0) && allPassed;
 

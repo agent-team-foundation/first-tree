@@ -5,7 +5,11 @@ import {
   readTreeState,
   readWorkspaceState,
 } from "#engine/runtime/binding-state.js";
-import { inspectAgentContextHooks } from "#engine/runtime/adapters.js";
+import {
+  formatAgentContextHookDriftMessages,
+  inspectAgentContextHookReport,
+  inspectAgentContextHooks,
+} from "#engine/runtime/adapters.js";
 import { readLocalTreeConfig } from "#engine/runtime/local-tree-config.js";
 import { discoverWorkspaceRepos } from "#engine/workspace.js";
 
@@ -18,6 +22,7 @@ Output includes:
   - whether the root looks like a tree repo, source repo, or workspace root
   - discovered child repos / submodules for workspace onboarding
   - any existing first-tree binding metadata
+  - managed Claude Code / Codex agent context hook health
 
 Options:
   --json   Emit machine-readable JSON
@@ -35,6 +40,7 @@ export interface InspectionResult {
     | "workspace-repo";
   currentCwd: string;
   agentContextHooks: ReturnType<typeof inspectAgentContextHooks>;
+  agentContextHookReport: ReturnType<typeof inspectAgentContextHookReport>;
   hasSourceIntegration: boolean;
   root: string;
   rootKind: "folder" | "git-repo";
@@ -48,6 +54,7 @@ export function inspectRepo(repo?: Repo): InspectionResult {
   const workingRepo = repo ?? new Repo();
   const childRepos = discoverWorkspaceRepos(workingRepo.root);
   const rootKind = workingRepo.isGitRepo() ? "git-repo" : "folder";
+  const agentContextHookReport = inspectAgentContextHookReport(workingRepo.root);
 
   let classification: InspectionResult["classification"];
   if (workingRepo.looksLikeTreeRepo()) {
@@ -63,7 +70,8 @@ export function inspectRepo(repo?: Repo): InspectionResult {
   }
 
   return {
-    agentContextHooks: inspectAgentContextHooks(workingRepo.root),
+    agentContextHooks: agentContextHookReport.health,
+    agentContextHookReport,
     childRepos,
     classification,
     currentCwd: resolve(process.cwd()),
@@ -103,9 +111,20 @@ export function runInspect(repo?: Repo, json = false): number {
     }
   }
   console.log();
+  console.log(`  Hook health:    ${inspection.agentContextHookReport.overall}`);
   console.log(`  Claude hook:    ${inspection.agentContextHooks.claudeSettings}`);
   console.log(`  Codex config:   ${inspection.agentContextHooks.codexConfig}`);
   console.log(`  Codex hooks:    ${inspection.agentContextHooks.codexHooks}`);
+  if (inspection.agentContextHookReport.overall !== "current") {
+    console.log();
+    console.log("  Agent context drift:");
+    for (const message of formatAgentContextHookDriftMessages(
+      inspection.agentContextHookReport,
+    )) {
+      console.log(`    - ${message}`);
+    }
+    console.log(`  Repair hint:    ${inspection.agentContextHookReport.repairHint}`);
+  }
   return 0;
 }
 

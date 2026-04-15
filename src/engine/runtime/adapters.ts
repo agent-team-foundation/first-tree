@@ -46,6 +46,23 @@ export interface AgentContextHookHealth {
   codexHooks: AgentConfigHealth;
 }
 
+export interface AgentContextHookFileReport {
+  id: keyof AgentContextHookHealth;
+  path: string;
+  status: AgentConfigHealth;
+  summary: string;
+}
+
+export interface AgentContextHookReport {
+  overall: "current" | "drifted";
+  files: AgentContextHookFileReport[];
+  health: AgentContextHookHealth;
+  repairHint: string;
+}
+
+const AGENT_CONTEXT_REPAIR_HINT =
+  "Repair with a mutating first-tree command such as `first-tree upgrade`, `first-tree bind`, `first-tree init`, `first-tree workspace sync`, or `first-tree publish`.";
+
 export function formatAgentContextHookMessages(
   result: AgentContextHookSyncResult,
 ): string[] {
@@ -101,11 +118,38 @@ export function injectTreeContextHint(): string {
 }
 
 export function inspectAgentContextHooks(targetRoot: string): AgentContextHookHealth {
-  return {
+  return inspectAgentContextHookReport(targetRoot).health;
+}
+
+export function inspectAgentContextHookReport(
+  targetRoot: string,
+): AgentContextHookReport {
+  const health: AgentContextHookHealth = {
     claudeSettings: inspectClaudeSettingsHealth(targetRoot),
     codexConfig: inspectCodexConfigHealth(targetRoot),
     codexHooks: inspectCodexHooksHealth(targetRoot),
   };
+
+  const files: AgentContextHookFileReport[] = [
+    buildAgentContextHookFileReport("claudeSettings", CLAUDE_SETTINGS_PATH, health.claudeSettings),
+    buildAgentContextHookFileReport("codexConfig", CODEX_CONFIG_PATH, health.codexConfig),
+    buildAgentContextHookFileReport("codexHooks", CODEX_HOOKS_PATH, health.codexHooks),
+  ];
+
+  return {
+    overall: files.every((file) => file.status === "current") ? "current" : "drifted",
+    files,
+    health,
+    repairHint: AGENT_CONTEXT_REPAIR_HINT,
+  };
+}
+
+export function formatAgentContextHookDriftMessages(
+  report: AgentContextHookReport,
+): string[] {
+  return report.files
+    .filter((file) => file.status !== "current")
+    .map((file) => `\`${file.path}\`: ${file.status} — ${file.summary}`);
 }
 
 export function ensureAgentContextHooks(
@@ -238,6 +282,48 @@ function inspectCodexHooksHealth(targetRoot: string): AgentConfigHealth {
     return "stale";
   } catch {
     return "stale";
+  }
+}
+
+function buildAgentContextHookFileReport(
+  id: keyof AgentContextHookHealth,
+  path: string,
+  status: AgentConfigHealth,
+): AgentContextHookFileReport {
+  switch (id) {
+    case "claudeSettings":
+      return {
+        id,
+        path,
+        status,
+        summary: status === "current"
+          ? "Claude Code SessionStart hook is current."
+          : status === "missing"
+          ? "Missing the managed Claude Code SessionStart hook file."
+          : "Does not point at the managed first-tree SessionStart hook.",
+      };
+    case "codexConfig":
+      return {
+        id,
+        path,
+        status,
+        summary: status === "current"
+          ? "Codex project config enables `codex_hooks`."
+          : status === "missing"
+          ? "Missing the managed Codex project config file."
+          : "Does not enable `codex_hooks = true` for project-scoped hooks.",
+      };
+    case "codexHooks":
+      return {
+        id,
+        path,
+        status,
+        summary: status === "current"
+          ? "Codex hooks file contains the managed SessionStart hook."
+          : status === "missing"
+          ? "Missing the managed Codex hooks file."
+          : "Does not contain the managed first-tree SessionStart hook.",
+      };
   }
 }
 
