@@ -43,8 +43,8 @@ export function MembersPage() {
         role: form.role as "admin" | "member",
       }),
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["members"] });
       setCreatedPassword(data.password);
+      queryClient.invalidateQueries({ queryKey: ["members"] });
     },
   });
 
