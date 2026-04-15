@@ -533,10 +533,28 @@ async function claudeCliAvailable(shellRun: ShellRun): Promise<boolean> {
   return result.code === 0;
 }
 
+async function fetchPrChangedFiles(
+  shellRun: ShellRun,
+  ownerRepo: { owner: string; repo: string },
+  prNumber: number,
+): Promise<string[]> {
+  try {
+    const result = await shellRun("gh", [
+      "api", `/repos/${ownerRepo.owner}/${ownerRepo.repo}/pulls/${prNumber}/files`,
+      "--jq", ".[].filename",
+    ]);
+    if (result.code !== 0) return [];
+    return result.stdout.trim().split("\n").filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 async function classifyDriftViaClaude(
   shellRun: ShellRun,
   drift: DriftReport,
   treeNodes: TreeNodeSummary[],
+  changedFiles?: string[],
 ): Promise<ClassificationItem[]> {
   // Build keywords from the PR for relevance matching
   const driftText = [
@@ -572,6 +590,9 @@ async function classifyDriftViaClaude(
   const driftSummary = [
     ...drift.commits.map((c) => `commit ${c.shortSha} [${c.topDir}] ${c.message}`),
     ...drift.mergedPrTitles.map((title) => `pr ${title}`),
+    ...(changedFiles && changedFiles.length > 0
+      ? [`\nChanged files in this PR (use these to verify what was actually modified):\n${changedFiles.slice(0, 50).join("\n")}`]
+      : []),
   ].join("\n");
 
   const relatedCount = relatedNodes.length;
@@ -581,7 +602,10 @@ Your job: given the tree's current nodes and a recently merged PR, classify the 
 
 Context: this PR has already been reviewed and approved. It does not conflict with the tree.
 
-IMPORTANT: For nodes marked with CONTENT below, read the content carefully.
+IMPORTANT:
+- For nodes marked with CONTENT below, read the content carefully.
+- If "Changed files" are listed, use them to verify what the PR actually modified. Do NOT describe features not reflected in the changed file paths.
+- Be factually precise: only describe capabilities the source PR actually introduced. Do not extrapolate or generalize beyond what the diff shows.
 
 Classify as one of:
 - **TREE_MISS**: This PR introduced a completely new feature, module, or domain that NO existing node covers. A new node is needed.
@@ -934,6 +958,26 @@ async function prepareProposalBranch(
         ].join("\n");
         writeFileSync(nodePath, content);
         writtenFiles.push(nodePath);
+
+        // Update parent NODE.md sub-domains list if the new dir isn't listed
+        const parentNodePath = join(dirname(absDir), "NODE.md");
+        if (existsSync(parentNodePath)) {
+          try {
+            const parentContent = readFileSync(parentNodePath, "utf-8");
+            const newDirName = basename(absDir);
+            if (!parentContent.includes(`${newDirName}/`) && !parentContent.includes(`${newDirName}\\`)) {
+              const subDomainsMatch = parentContent.match(/(##\s*Sub-?domains?[^\n]*\n)([\s\S]*?)(\n##|\n---|\z)/i);
+              if (subDomainsMatch) {
+                const insertPoint = parentContent.indexOf(subDomainsMatch[0]) + subDomainsMatch[1].length + subDomainsMatch[2].length;
+                const newLine = `- \`${newDirName}/\` — ${capitalizedTitle}\n`;
+                const updated = parentContent.slice(0, insertPoint) + newLine + parentContent.slice(insertPoint);
+                writeFileSync(parentNodePath, updated);
+                writtenFiles.push(parentNodePath);
+                console.log(`  \u2713 Updated parent: ${relative(treeRoot, parentNodePath)} (added ${newDirName}/)`);
+              }
+            }
+          } catch { /* non-fatal */ }
+        }
 
         // Auto-create member if PR author isn't in members/ yet
         // Check all existing member dirs to avoid duplicates (e.g., dotta vs cryppadotta)
@@ -1320,7 +1364,12 @@ export async function runSync(
             mergedPrTitles: [pr.title],
           };
 
-          const proposals = await classifyDriftViaClaude(shellRun, perPrDrift, treeNodes);
+          // Fetch changed files to ground classification in facts
+          const prFiles = pr.number > 0
+            ? await fetchPrChangedFiles(shellRun, drift.ownerRepo, pr.number)
+            : [];
+
+          const proposals = await classifyDriftViaClaude(shellRun, perPrDrift, treeNodes, prFiles);
 
           if (proposals.length === 0) {
             console.log(
@@ -1360,6 +1409,26 @@ export async function runSync(
         }),
       );
       classifiedPrs.push(...results);
+    }
+
+    // Deduplicate proposals targeting the same node path across PRs
+    const claimedPaths = new Set<string>();
+    for (const classified of classifiedPrs) {
+      const deduped: ClassificationItem[] = [];
+      for (const p of classified.filtered) {
+        if (p.type !== "TREE_MISS") {
+          deduped.push(p);
+          continue;
+        }
+        const normPath = (p.path ?? "").replace(/\/NODE\.md$/i, "").replace(/^\//, "").toLowerCase();
+        if (normPath && claimedPaths.has(normPath)) {
+          console.log(`  \u23ED Dedup: ${normPath} already claimed by another PR — skipping from PR #${classified.pr.number}`);
+          continue;
+        }
+        if (normPath) claimedPaths.add(normPath);
+        deduped.push(p);
+      }
+      classified.filtered = deduped;
     }
 
     const totalProposals = classifiedPrs.reduce((sum, c) => sum + c.filtered.length, 0);
