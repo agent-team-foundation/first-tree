@@ -34,6 +34,7 @@ describe("breeze cli USAGE", () => {
       expect(BREEZE_USAGE).toContain(sub);
     }
     expect(BREEZE_USAGE).toContain("BREEZE_RUNNER_BIN");
+    expect(BREEZE_USAGE).toContain("BREEZE_DIR");
   });
 });
 
@@ -81,6 +82,7 @@ describe("runBreeze dispatcher", () => {
       resolveBreezeRunner: resolveRunnerSpy,
       resolveBundledBreezeScript: vi.fn(),
       resolveBreezeSetupScript: vi.fn(),
+      resolveFirstTreePackageRoot: vi.fn(() => "/pkg"),
       spawnInherit: spawnSpy,
     }));
 
@@ -88,13 +90,14 @@ describe("runBreeze dispatcher", () => {
       "../src/products/breeze/cli.js"
     );
 
+    // Phase 2b: `poll` was migrated to a TS port; the remaining runner
+    // subcommands are still bridged to the Rust binary.
     const cases: Array<{ args: string[]; expected: string[] }> = [
       { args: ["run"], expected: ["run"] },
       { args: ["run-once", "--verbose"], expected: ["run-once", "--verbose"] },
       { args: ["start"], expected: ["start"] },
       { args: ["stop"], expected: ["stop"] },
       { args: ["status", "--json"], expected: ["status", "--json"] },
-      { args: ["poll"], expected: ["poll"] },
       { args: ["doctor"], expected: ["doctor"] },
       { args: ["cleanup"], expected: ["cleanup"] },
     ];
@@ -108,14 +111,17 @@ describe("runBreeze dispatcher", () => {
     }
   });
 
-  it("routes bundled scripts through resolveBundledBreezeScript + spawnInherit", async () => {
+  it("routes statusline through node + the separate dist bundle", async () => {
     const spawnSpy = vi.fn().mockReturnValue(0);
-    const resolveScriptSpy = vi.fn((name: string) => `/pkg/assets/breeze/bin/${name}`);
+    const resolvePackageRootSpy = vi.fn(() => "/pkg");
 
     vi.doMock("../src/products/breeze/bridge.js", () => ({
       resolveBreezeRunner: vi.fn(),
-      resolveBundledBreezeScript: resolveScriptSpy,
+      resolveBundledBreezeScript: vi.fn(() => {
+        throw new Error("statusline must not route through bundled scripts");
+      }),
       resolveBreezeSetupScript: vi.fn(),
+      resolveFirstTreePackageRoot: resolvePackageRootSpy,
       spawnInherit: spawnSpy,
     }));
 
@@ -123,27 +129,12 @@ describe("runBreeze dispatcher", () => {
       "../src/products/breeze/cli.js"
     );
 
-    // `status-manager` was migrated to a TS port in Phase 2a; it no longer
-    // goes through the bundled-script route. The remaining script targets
-    // (`watch`, `statusline`) stay on the bridge.
-    const cases: Array<{ args: string[]; script: string; rest: string[] }> = [
-      { args: ["watch"], script: "breeze-watch", rest: [] },
-      {
-        args: ["statusline"],
-        script: "breeze-statusline-wrapper",
-        rest: [],
-      },
-    ];
-    for (const { args, script, rest } of cases) {
-      spawnSpy.mockClear();
-      resolveScriptSpy.mockClear();
-      await freshRun(args, () => {});
-      expect(resolveScriptSpy).toHaveBeenCalledWith(script);
-      expect(spawnSpy).toHaveBeenCalledWith(
-        `/pkg/assets/breeze/bin/${script}`,
-        rest,
-      );
-    }
+    const code = await freshRun(["statusline"], () => {});
+    expect(code).toBe(0);
+    expect(resolvePackageRootSpy).toHaveBeenCalled();
+    expect(spawnSpy).toHaveBeenCalledWith(process.execPath, [
+      "/pkg/dist/breeze-statusline.js",
+    ]);
   });
 
   it("routes install through bash + resolveBreezeSetupScript", async () => {
@@ -154,6 +145,7 @@ describe("runBreeze dispatcher", () => {
       resolveBreezeRunner: vi.fn(),
       resolveBundledBreezeScript: vi.fn(),
       resolveBreezeSetupScript: resolveSetupSpy,
+      resolveFirstTreePackageRoot: vi.fn(() => "/pkg"),
       spawnInherit: spawnSpy,
     }));
 
@@ -168,6 +160,58 @@ describe("runBreeze dispatcher", () => {
     ]);
   });
 
+  it("routes poll through the TS port (not the runner)", async () => {
+    vi.doMock("../src/products/breeze/bridge.js", () => ({
+      resolveBreezeRunner: vi.fn(() => {
+        throw new Error("poll must not route through the runner bridge");
+      }),
+      resolveBundledBreezeScript: vi.fn(),
+      resolveBreezeSetupScript: vi.fn(),
+      resolveFirstTreePackageRoot: vi.fn(() => "/pkg"),
+      spawnInherit: vi.fn(() => {
+        throw new Error("poll must not route through the runner bridge");
+      }),
+    }));
+
+    const runPoll = vi.fn(async () => 0);
+    vi.doMock("../src/products/breeze/commands/poll.js", () => ({
+      runPoll,
+    }));
+
+    const { runBreeze: freshRun } = await import(
+      "../src/products/breeze/cli.js"
+    );
+    const code = await freshRun(["poll", "--foo"], () => {});
+    expect(code).toBe(0);
+    expect(runPoll).toHaveBeenCalledWith(["--foo"]);
+  });
+
+  it("routes watch through the TS port (not the bridge)", async () => {
+    vi.doMock("../src/products/breeze/bridge.js", () => ({
+      resolveBreezeRunner: vi.fn(),
+      resolveBundledBreezeScript: vi.fn(() => {
+        throw new Error("watch must not route through the bundled script bridge");
+      }),
+      resolveBreezeSetupScript: vi.fn(),
+      resolveFirstTreePackageRoot: vi.fn(() => "/pkg"),
+      spawnInherit: vi.fn(() => {
+        throw new Error("watch must not route through the bundled script bridge");
+      }),
+    }));
+
+    const runWatch = vi.fn(async () => 0);
+    vi.doMock("../src/products/breeze/commands/watch.js", () => ({
+      runWatch,
+    }));
+
+    const { runBreeze: freshRun } = await import(
+      "../src/products/breeze/cli.js"
+    );
+    const code = await freshRun(["watch"], () => {});
+    expect(code).toBe(0);
+    expect(runWatch).toHaveBeenCalledWith([]);
+  });
+
   it("propagates the child exit code", async () => {
     const spawnSpy = vi.fn().mockReturnValue(13);
     vi.doMock("../src/products/breeze/bridge.js", () => ({
@@ -176,6 +220,7 @@ describe("runBreeze dispatcher", () => {
         .mockReturnValue({ path: "/runner", source: "path" }),
       resolveBundledBreezeScript: vi.fn(),
       resolveBreezeSetupScript: vi.fn(),
+      resolveFirstTreePackageRoot: vi.fn(() => "/pkg"),
       spawnInherit: spawnSpy,
     }));
 
@@ -195,6 +240,7 @@ describe("runBreeze dispatcher", () => {
         throw new Error("should not be called for status-manager");
       }),
       resolveBreezeSetupScript: vi.fn(),
+      resolveFirstTreePackageRoot: vi.fn(() => "/pkg"),
       spawnInherit: vi.fn(() => {
         throw new Error("should not be called for status-manager");
       }),
@@ -222,6 +268,7 @@ describe("runBreeze dispatcher", () => {
       },
       resolveBundledBreezeScript: vi.fn(),
       resolveBreezeSetupScript: vi.fn(),
+      resolveFirstTreePackageRoot: vi.fn(() => "/pkg"),
       spawnInherit: vi.fn(),
     }));
 

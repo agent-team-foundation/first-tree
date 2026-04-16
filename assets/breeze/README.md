@@ -3,22 +3,18 @@
 Runtime assets bundled with the `first-tree` npm package for the `breeze`
 product surface.
 
-## `bin/`
+## Bash scripts removed in phase 2b
 
-Bundled copies of the bash scripts that ship alongside the Rust daemon. The
-canonical source still lives in `first-tree-breeze/bin/` at the repo root
-and is authoritative until Phase 2b ports these scripts to TypeScript. Do
-not hand-edit the files under `bin/` — update the source in
-`first-tree-breeze/bin/` and re-copy.
+All CLI-side commands are now TypeScript. The previous bash scripts under
+`assets/breeze/bin/` (`breeze-poll`, `breeze-watch`, `breeze-status`,
+`breeze-status-manager`, `breeze-statusline-wrapper`) were removed when
+their TS ports landed in `src/products/breeze/commands/` and
+`src/products/breeze/statusline.ts`.
 
-Scripts:
+The Rust daemon (`first-tree-breeze/breeze-runner/`) is still the sole
+implementation for the daemon commands (`run`, `run-once`, `start`,
+`stop`, `status`, `cleanup`, `doctor`); the CLI dispatcher bridges those
+to the binary. The daemon port is Phase 3.
 
-- `breeze-poll` — inbox poller used by the legacy bash workflow
-- `breeze-watch` — long-running watcher loop
-- `breeze-status` — status snapshot
-- `breeze-status-manager` — manages per-session status entries
-- `breeze-statusline-wrapper` — Claude Code statusline hook entrypoint
-
-The `first-tree breeze` CLI dispatcher (`src/products/breeze/`) spawns these
-scripts directly with `stdio: "inherit"` so TTY, colour, and interactive
-features pass through unchanged.
+The bundled `setup` script under `first-tree-breeze/setup` is also still
+bash; it is reached via `first-tree breeze install`. Phase 3 replaces it.
