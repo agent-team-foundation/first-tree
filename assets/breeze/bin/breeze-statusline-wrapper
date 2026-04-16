@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Runs existing statusline command, then appends breeze status
+INPUT=$(cat)
+EXISTING=$(echo "$INPUT" | bash -c 'node "$(ls -td ~/.claude/plugins/cache/claude-hud/claude-hud/*/ 2>/dev/null | head -1)dist/index.js"' 2>/dev/null || true)
+BREEZE=$(echo "$INPUT" | /Users/keyitan/breeze/bin/breeze-status 2>/dev/null || true)
+[ -n "$EXISTING" ] && echo "$EXISTING"
+[ -n "$BREEZE" ] && echo "$BREEZE"

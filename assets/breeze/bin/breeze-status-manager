@@ -1,0 +1,266 @@
+#!/usr/bin/env bash
+# breeze-status-manager — manages notification status via GitHub labels
+# States: new (default), wip, human, done
+#
+# Labels on GitHub:
+#   breeze:new    — explicitly marked as new (optional, absence = new)
+#   breeze:wip    — work in progress
+#   breeze:human  — needs human attention
+#   breeze:done   — handled
+#
+# Status is detected from labels + PR/issue state (merged/closed = done).
+# Non-labelers get new/done automatically.
+#
+# Usage:
+#   breeze-status-manager get <notification-id>       → prints current status
+#   breeze-status-manager set <notification-id> <status> [--by <session-id>] [--reason <text>]
+#   breeze-status-manager claim <notification-id> <session-id> [--action <text>]
+#   breeze-status-manager release <notification-id>
+#   breeze-status-manager list [--status <status>]    → prints notification IDs with given status
+#   breeze-status-manager count [--status <status>]   → prints count
+#   breeze-status-manager ensure-labels <repo>        → creates breeze:* labels on a repo
+set -euo pipefail
+
+export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/bin:$PATH"
+
+BREEZE_DIR="${BREEZE_DIR:-$HOME/.breeze}"
+CLAIMS_DIR="$BREEZE_DIR/claims"
+INBOX="$BREEZE_DIR/inbox.json"
+CLAIM_TIMEOUT=300  # 5 minutes in seconds
+
+LOG_FILE="$BREEZE_DIR/activity.log"
+
+mkdir -p "$BREEZE_DIR" "$CLAIMS_DIR"
+
+# All breeze labels
+BREEZE_LABELS="breeze:new,breeze:wip,breeze:human,breeze:done"
+
+# Log an event to activity.log (JSONL, append-only)
+log_event() {
+  echo "$1" >> "$LOG_FILE"
+}
+
+# Get notification metadata from inbox for logging
+notif_meta() {
+  local ID="$1"
+  jq -r --arg id "$ID" '.notifications[] | select(.id == $id) | "\(.type)\t\(.repo)\t\(.title)\t\(.html_url)\t\(.number // "")"' "$INBOX" 2>/dev/null || echo "unknown\tunknown\tunknown\t\t"
+}
+
+# Get repo and number for a notification ID
+notif_repo_number() {
+  local ID="$1"
+  jq -r --arg id "$ID" '.notifications[] | select(.id == $id) | "\(.repo)\t\(.number // "")"' "$INBOX" 2>/dev/null || echo "\t"
+}
+
+CMD="${1:-help}"
+shift || true
+
+case "$CMD" in
+  get)
+    NOTIF_ID="$1"
+    # Check claim first
+    if [ -d "$CLAIMS_DIR/$NOTIF_ID" ] && [ -f "$CLAIMS_DIR/$NOTIF_ID/claimed_at" ]; then
+      CLAIMED_AT=$(cat "$CLAIMS_DIR/$NOTIF_ID/claimed_at")
+      CLAIMED_TS=$(date -jf "%Y-%m-%dT%H:%M:%SZ" "$CLAIMED_AT" +%s 2>/dev/null || date -d "$CLAIMED_AT" +%s 2>/dev/null || echo "0")
+      NOW=$(date +%s)
+      if [ $(( NOW - CLAIMED_TS )) -lt $CLAIM_TIMEOUT ]; then
+        echo "wip (claimed)"
+        exit 0
+      fi
+    fi
+    # Read breeze_status from inbox.json
+    STATUS=$(jq -r --arg id "$NOTIF_ID" '.notifications[] | select(.id == $id) | .breeze_status // "new"' "$INBOX" 2>/dev/null)
+    echo "${STATUS:-new}"
+    ;;
+
+  set)
+    NOTIF_ID="$1"; shift
+    NEW_STATUS="$1"; shift
+    SESSION_ID=""
+    REASON=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --by) SESSION_ID="$2"; shift 2 ;;
+        --reason) REASON="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+
+    # Get repo and number for this notification
+    IFS=$'\t' read -r REPO NUMBER <<< "$(notif_repo_number "$NOTIF_ID")"
+
+    if [ -z "$REPO" ] || [ -z "$NUMBER" ]; then
+      echo "ERROR: cannot find repo/number for notification $NOTIF_ID" >&2
+      exit 1
+    fi
+
+    # Helper: remove each breeze label individually (gh fails if any label in a comma list doesn't exist)
+    remove_breeze_labels() {
+      local num="$1" repo="$2"
+      for lbl in breeze:new breeze:wip breeze:human breeze:done; do
+        gh issue edit "$num" --repo "$repo" --remove-label "$lbl" 2>/dev/null || true
+      done
+    }
+
+    # Helper: add a label, creating it on the repo first if needed
+    add_breeze_label() {
+      local num="$1" repo="$2" label="$3" color="$4" desc="$5"
+      gh issue edit "$num" --repo "$repo" --add-label "$label" 2>/dev/null || {
+        gh label create "$label" --repo "$repo" --color "$color" --description "$desc" --force 2>/dev/null || true
+        gh issue edit "$num" --repo "$repo" --add-label "$label" 2>/dev/null || true
+      }
+    }
+
+    # Determine label to add
+    case "$NEW_STATUS" in
+      new)
+        remove_breeze_labels "$NUMBER" "$REPO"
+        ;;
+      wip)
+        remove_breeze_labels "$NUMBER" "$REPO"
+        add_breeze_label "$NUMBER" "$REPO" "breeze:wip" "e4e669" "Breeze: work in progress"
+        ;;
+      human)
+        remove_breeze_labels "$NUMBER" "$REPO"
+        add_breeze_label "$NUMBER" "$REPO" "breeze:human" "d93f0b" "Breeze: needs human attention"
+        ;;
+      "done")
+        remove_breeze_labels "$NUMBER" "$REPO"
+        add_breeze_label "$NUMBER" "$REPO" "breeze:done" "0e8a16" "Breeze: handled"
+        ;;
+      *)
+        echo "ERROR: unknown status '$NEW_STATUS'. Use: new, wip, human, done" >&2
+        exit 1
+        ;;
+    esac
+
+    # Clean up claim if not wip
+    if [ "$NEW_STATUS" != "wip" ]; then
+      rm -rf "$CLAIMS_DIR/$NOTIF_ID" 2>/dev/null || true
+    fi
+
+    # Update breeze_status in inbox.json locally (will be confirmed on next poll)
+    if [ -f "$INBOX" ]; then
+      jq --arg id "$NOTIF_ID" --arg status "$NEW_STATUS" '
+        .notifications = [.notifications[] |
+          if .id == $id then .breeze_status = $status else . end
+        ]
+      ' "$INBOX" > "$BREEZE_DIR/inbox.json.tmp" && mv "$BREEZE_DIR/inbox.json.tmp" "$INBOX"
+    fi
+
+    # Log the status change as a transition
+    NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    IFS=$'\t' read -r N_TYPE N_REPO N_TITLE N_URL _ <<< "$(notif_meta "$NOTIF_ID")"
+    # Get old status from inbox
+    OLD_STATUS=$(jq -r --arg id "$NOTIF_ID" '.notifications[] | select(.id == $id) | .breeze_status // "new"' "$INBOX" 2>/dev/null || echo "new")
+    log_event "$(jq -nc \
+      --arg ts "$NOW" \
+      --arg event "transition" \
+      --arg id "$NOTIF_ID" \
+      --arg type "$N_TYPE" \
+      --arg repo "$N_REPO" \
+      --arg title "$N_TITLE" \
+      --arg url "$N_URL" \
+      --arg by "$SESSION_ID" \
+      --arg reason "$REASON" \
+      --arg from "$OLD_STATUS" \
+      --arg to "$NEW_STATUS" \
+      '{ts:$ts,event:$event,id:$id,type:$type,repo:$repo,title:$title,url:$url,by:$by,reason:$reason,from:$from,to:$to}')"
+    echo "$NEW_STATUS"
+    ;;
+
+  claim)
+    NOTIF_ID="$1"; shift
+    SESSION_ID="$1"; shift
+    ACTION="${1:-working}"
+    # Atomic claim via mkdir
+    if mkdir "$CLAIMS_DIR/$NOTIF_ID" 2>/dev/null; then
+      NOW_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+      echo "$SESSION_ID" > "$CLAIMS_DIR/$NOTIF_ID/claimed_by"
+      echo "$NOW_TS" > "$CLAIMS_DIR/$NOTIF_ID/claimed_at"
+      echo "$ACTION" > "$CLAIMS_DIR/$NOTIF_ID/action"
+      # Log the claim
+      IFS=$'\t' read -r N_TYPE N_REPO N_TITLE N_URL _ <<< "$(notif_meta "$NOTIF_ID")"
+      log_event "$(jq -nc \
+        --arg ts "$NOW_TS" --arg event "claimed" --arg id "$NOTIF_ID" \
+        --arg type "$N_TYPE" --arg repo "$N_REPO" --arg title "$N_TITLE" \
+        --arg url "$N_URL" --arg by "$SESSION_ID" --arg action "$ACTION" \
+        '{ts:$ts,event:$event,id:$id,type:$type,repo:$repo,title:$title,url:$url,by:$by,action:$action}')"
+      echo "claimed"
+    else
+      # Check if existing claim has timed out
+      if [ -f "$CLAIMS_DIR/$NOTIF_ID/claimed_at" ]; then
+        CLAIMED_AT=$(cat "$CLAIMS_DIR/$NOTIF_ID/claimed_at")
+        CLAIMED_TS=$(date -jf "%Y-%m-%dT%H:%M:%SZ" "$CLAIMED_AT" +%s 2>/dev/null || date -d "$CLAIMED_AT" +%s 2>/dev/null || echo "0")
+        NOW=$(date +%s)
+        if [ $(( NOW - CLAIMED_TS )) -ge $CLAIM_TIMEOUT ]; then
+          # Timed out, reclaim
+          echo "$SESSION_ID" > "$CLAIMS_DIR/$NOTIF_ID/claimed_by"
+          date -u +%Y-%m-%dT%H:%M:%SZ > "$CLAIMS_DIR/$NOTIF_ID/claimed_at"
+          echo "$ACTION" > "$CLAIMS_DIR/$NOTIF_ID/action"
+          echo "claimed"
+        else
+          OWNER=$(cat "$CLAIMS_DIR/$NOTIF_ID/claimed_by" 2>/dev/null || echo "unknown")
+          echo "already_claimed:$OWNER"
+        fi
+      else
+        # Stale claim dir without metadata, reclaim
+        echo "$SESSION_ID" > "$CLAIMS_DIR/$NOTIF_ID/claimed_by"
+        date -u +%Y-%m-%dT%H:%M:%SZ > "$CLAIMS_DIR/$NOTIF_ID/claimed_at"
+        echo "$ACTION" > "$CLAIMS_DIR/$NOTIF_ID/action"
+        echo "claimed"
+      fi
+    fi
+    ;;
+
+  release)
+    NOTIF_ID="$1"
+    rm -rf "$CLAIMS_DIR/$NOTIF_ID" 2>/dev/null || true
+    echo "released"
+    ;;
+
+  list)
+    FILTER_STATUS="new"
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --status) FILTER_STATUS="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    jq -r --arg s "$FILTER_STATUS" '.notifications[] | select(.breeze_status == $s) | .id' "$INBOX" 2>/dev/null || true
+    ;;
+
+  count)
+    FILTER_STATUS="new"
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --status) FILTER_STATUS="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    jq --arg s "$FILTER_STATUS" '[.notifications[] | select(.breeze_status == $s)] | length' "$INBOX" 2>/dev/null || echo "0"
+    ;;
+
+  ensure-labels)
+    REPO="$1"
+    echo "Creating breeze labels on $REPO..."
+    gh label create "breeze:new" --repo "$REPO" --color "0075ca" --description "Breeze: new notification" --force 2>/dev/null || true
+    gh label create "breeze:wip" --repo "$REPO" --color "e4e669" --description "Breeze: work in progress" --force 2>/dev/null || true
+    gh label create "breeze:human" --repo "$REPO" --color "d93f0b" --description "Breeze: needs human attention" --force 2>/dev/null || true
+    gh label create "breeze:done" --repo "$REPO" --color "0e8a16" --description "Breeze: handled" --force 2>/dev/null || true
+    echo "Labels created on $REPO"
+    ;;
+
+  help|*)
+    echo "Usage: breeze-status-manager <command> [args]"
+    echo ""
+    echo "Commands:"
+    echo "  get <id>                    Get breeze status for a notification"
+    echo "  set <id> <status>           Set status (new, wip, human, done) via GitHub labels"
+    echo "  claim <id> <session>        Claim a notification for local agent coordination"
+    echo "  release <id>                Release a claim"
+    echo "  list [--status <status>]    List notification IDs by status"
+    echo "  count [--status <status>]   Count notifications by status"
+    echo "  ensure-labels <repo>        Create breeze:* labels on a repo"
+    ;;
+esac

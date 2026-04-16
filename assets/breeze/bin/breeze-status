@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# breeze-status — statusline output based on GitHub labels (breeze_status field)
+# Shows human count first (most urgent), then new items broken down by type
+set -euo pipefail
+
+BREEZE_DIR="${BREEZE_DIR:-$HOME/.breeze}"
+INBOX="$BREEZE_DIR/inbox.json"
+BELL_STATE="$BREEZE_DIR/.bell_state"
+
+# Pass through stdin
+cat > /dev/null
+
+# If no inbox file, show nothing
+if [ ! -f "$INBOX" ]; then
+  exit 0
+fi
+
+# Check staleness (>10 min = stale)
+if [ "$(uname)" = "Darwin" ]; then
+  FILE_AGE=$(( $(date +%s) - $(stat -f %m "$INBOX") ))
+else
+  FILE_AGE=$(( $(date +%s) - $(stat -c %Y "$INBOX") ))
+fi
+
+if [ "$FILE_AGE" -gt 600 ]; then
+  echo "/breeze: stale (poller not running?)"
+  exit 0
+fi
+
+# Counts
+CURRENT_POLL=$(jq -r '.last_poll' "$INBOX" 2>/dev/null || echo "")
+NEW_COUNT=$(jq '[.notifications[] | select(.breeze_status == "new")] | length' "$INBOX" 2>/dev/null || echo "0")
+HUMAN_COUNT=$(jq '[.notifications[] | select(.breeze_status == "human")] | length' "$INBOX" 2>/dev/null || echo "0")
+
+# Build the summary (Option B: needs-you on the left, pulse on the right)
+# Format: [⚠ N need you ·] X PRs · Y issues · Z discussions
+HUMAN_PART=""
+if [ "$HUMAN_COUNT" -gt 0 ]; then
+  HUMAN_PART="⚠ ${HUMAN_COUNT} need you · "
+fi
+
+NEW_SUMMARY=$(jq -r '
+  [.notifications[] | select(.breeze_status == "new")]
+  | if length == 0 then ""
+    else
+      group_by(.type)
+      | map({type: .[0].type, count: length})
+      | sort_by(-.count)
+      | map(
+          if .type == "PullRequest" then "\(.count) PRs"
+          elif .type == "Issue" then "\(.count) issues"
+          elif .type == "Discussion" then "\(.count) discussions"
+          elif .type == "Release" then "\(.count) releases"
+          elif .type == "SecurityAlert" then "\(.count) security"
+          else "\(.count) \(.type)"
+          end
+        )
+      | join(" · ")
+    end
+' "$INBOX" 2>/dev/null)
+
+# Assemble: if both human and new exist, show both. If only human, show human.
+SUMMARY=""
+if [ -n "$HUMAN_PART" ] || [ -n "$NEW_SUMMARY" ]; then
+  SUMMARY="/breeze: ${HUMAN_PART}${NEW_SUMMARY}"
+fi
+
+# Bell logic: ring when human count increases OR new count increases
+NEW_SUFFIX=""
+if [ -f "$BELL_STATE" ]; then
+  PREV_POLL=$(cut -d' ' -f1 "$BELL_STATE" 2>/dev/null || echo "")
+  PREV_NEW=$(cut -d' ' -f2 "$BELL_STATE" 2>/dev/null || echo "0")
+  PREV_HUMAN=$(cut -d' ' -f3 "$BELL_STATE" 2>/dev/null || echo "0")
+
+  if [ "$CURRENT_POLL" != "$PREV_POLL" ]; then
+    if [ "$HUMAN_COUNT" -gt "$PREV_HUMAN" ]; then
+      HUMAN_DIFF=$(( HUMAN_COUNT - PREV_HUMAN ))
+      NEW_SUFFIX=" (+$HUMAN_DIFF needs you)"
+      printf '\a'
+    elif [ "$NEW_COUNT" -gt "$PREV_NEW" ]; then
+      NEW_DIFF=$(( NEW_COUNT - PREV_NEW ))
+      NEW_SUFFIX=" (+$NEW_DIFF new)"
+      printf '\a'
+    fi
+  fi
+fi
+
+echo "$CURRENT_POLL $NEW_COUNT $HUMAN_COUNT" > "$BELL_STATE"
+
+if [ -n "$SUMMARY" ]; then
+  echo "${SUMMARY}${NEW_SUFFIX}"
+fi

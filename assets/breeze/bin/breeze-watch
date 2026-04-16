@@ -1,0 +1,303 @@
+#!/usr/bin/env bash
+# breeze-watch — status board + live feed for breeze notifications
+# Layout:
+#   [Header: counts]
+#   [HUMAN section — always visible, red]
+#   [Board: repos grouped by status (orange=new, blue=wip, dim green=done)]
+#   [Live feed: real-time transitions as they happen]
+set -euo pipefail
+
+BREEZE_DIR="${BREEZE_DIR:-$HOME/.breeze}"
+LOG_FILE="$BREEZE_DIR/activity.log"
+INBOX="$BREEZE_DIR/inbox.json"
+
+mkdir -p "$BREEZE_DIR"
+touch "$LOG_FILE"
+
+# Status colors
+RED='\033[38;5;196m'       # HUMAN — critical, you block
+ORANGE='\033[38;5;208m'    # NEW — needs triage
+BLUE='\033[38;5;39m'       # WIP — agent working
+GREEN='\033[38;5;34m'      # DONE — complete
+DIM='\033[90m'
+BOLD='\033[1m'
+RESET='\033[0m'
+
+# Rainbow for decorative header banner only
+RAINBOW=(
+  '\033[38;5;196m'  # red
+  '\033[38;5;208m'  # orange
+  '\033[38;5;220m'  # yellow
+  '\033[38;5;46m'   # green
+  '\033[38;5;51m'   # cyan
+  '\033[38;5;33m'   # blue
+  '\033[38;5;129m'  # purple
+)
+
+# OSC 8 clickable link
+link() {
+  printf '\033]8;;%s\033\\%s\033]8;;\033\\' "$1" "$2"
+}
+
+# Short clickable repo#number
+short_link() {
+  local url="$1" repo="$2"
+  local short_repo="${repo#*/}"
+  local num=$(echo "$url" | grep -oE '[0-9]+$' || true)
+  if [ -n "$num" ]; then
+    link "$url" "${short_repo}#${num}"
+  else
+    link "$url" "$short_repo"
+  fi
+}
+
+# Truncate title
+truncate_title() {
+  local title="$1"
+  local max="${2:-60}"
+  if [ ${#title} -gt "$max" ]; then
+    echo "${title:0:$((max-1))}…"
+  else
+    echo "$title"
+  fi
+}
+
+# Convert UTC timestamp to local HH:MM:SS
+local_time() {
+  local ts="$1"
+  if [ -z "$ts" ]; then
+    echo ""
+    return
+  fi
+  if [ "$(uname)" = "Darwin" ]; then
+    local epoch=$(date -juf "%Y-%m-%dT%H:%M:%SZ" "$ts" "+%s" 2>/dev/null || echo "")
+    if [ -n "$epoch" ]; then
+      date -jf "%s" "$epoch" "+%H:%M:%S" 2>/dev/null
+    else
+      echo "$ts" | sed 's/.*T//' | sed 's/Z$//' | cut -c1-8
+    fi
+  else
+    date -d "$ts" "+%H:%M:%S" 2>/dev/null || echo "$ts" | sed 's/.*T//' | sed 's/Z$//' | cut -c1-8
+  fi
+}
+
+# Color code for a status
+status_color() {
+  case "$1" in
+    human) printf '%b' "$RED" ;;
+    new) printf '%b' "$ORANGE" ;;
+    wip) printf '%b' "$BLUE" ;;
+    "done"|resolved) printf '%b' "$GREEN" ;;
+    *) printf '%b' "$DIM" ;;
+  esac
+}
+
+# Label for a status (uppercase)
+status_label() {
+  case "$1" in
+    human) echo "HUMAN" ;;
+    new) echo "NEW" ;;
+    wip) echo "WIP" ;;
+    "done") echo "DONE" ;;
+    *) echo "$1" | tr '[:lower:]' '[:upper:]' ;;
+  esac
+}
+
+# Render the HUMAN section — always shown, always at top
+render_human_section() {
+  printf "${RED}${BOLD}▶ HUMAN${RESET}"
+  local count=$(jq '[.notifications[] | select(.breeze_status == "human")] | length' "$INBOX" 2>/dev/null || echo "0")
+  if [ "$count" = "0" ]; then
+    printf "  ${DIM}(0) — ✨ nothing needs you right now${RESET}\n\n"
+    return
+  fi
+  printf "  ${BOLD}(${count})${RESET} ${DIM}— you block these${RESET}\n"
+  jq -r '.notifications[] | select(.breeze_status == "human") | "\(.repo)\t\(.title)\t\(.html_url)"' "$INBOX" 2>/dev/null | \
+    while IFS=$'\t' read -r REPO TITLE URL; do
+      [ -z "$REPO" ] && continue
+      local LNK=$(short_link "$URL" "$REPO")
+      local T=$(truncate_title "$TITLE" 60)
+      printf "  ${RED}●${RESET} %s  %s\n" "$LNK" "$T"
+    done
+  echo ""
+}
+
+# Render repos board — grouped by repo, then by status within repo
+render_board() {
+  # Get repos that have at least one open (non-done, non-human) item
+  local REPOS=$(jq -r '
+    [.notifications[] | select(.breeze_status == "new" or .breeze_status == "wip")]
+    | group_by(.repo)
+    | map({repo: .[0].repo, open_count: length})
+    | sort_by(-.open_count)
+    | .[] | .repo
+  ' "$INBOX" 2>/dev/null)
+
+  [ -z "$REPOS" ] && return
+
+  while IFS= read -r REPO; do
+    [ -z "$REPO" ] && continue
+    local SHORT_REPO="${REPO#*/}"
+    local REPO_DATA=$(jq --arg repo "$REPO" '
+      [.notifications[] | select(.repo == $repo and .breeze_status != "human")]
+      | {
+          new: [.[] | select(.breeze_status == "new")],
+          wip: [.[] | select(.breeze_status == "wip")],
+          done: [.[] | select(.breeze_status == "done")]
+        }
+    ' "$INBOX" 2>/dev/null)
+
+    local NEW_COUNT=$(echo "$REPO_DATA" | jq '.new | length')
+    local WIP_COUNT=$(echo "$REPO_DATA" | jq '.wip | length')
+    local DONE_COUNT=$(echo "$REPO_DATA" | jq '."done" | length')
+    local OPEN_COUNT=$((NEW_COUNT + WIP_COUNT))
+
+    # Repo header
+    printf "${BOLD}%s${RESET} ${DIM}(%d open · %d done)${RESET}\n" "$SHORT_REPO" "$OPEN_COUNT" "$DONE_COUNT"
+
+    # WIP section (shown if > 0)
+    if [ "$WIP_COUNT" -gt 0 ]; then
+      printf "  ${BLUE}○ WIP (${WIP_COUNT})${RESET}\n"
+      echo "$REPO_DATA" | jq -r '.wip[] | "\(.title)\t\(.html_url)"' | head -5 | \
+        while IFS=$'\t' read -r TITLE URL; do
+          local LNK=$(short_link "$URL" "$REPO")
+          local T=$(truncate_title "$TITLE" 60)
+          printf "    %s  %s\n" "$LNK" "$T"
+        done
+      if [ "$WIP_COUNT" -gt 5 ]; then
+        printf "    ${DIM}… and %d more${RESET}\n" "$((WIP_COUNT - 5))"
+      fi
+    fi
+
+    # NEW section (shown if > 0)
+    if [ "$NEW_COUNT" -gt 0 ]; then
+      printf "  ${ORANGE}○ NEW (${NEW_COUNT})${RESET}\n"
+      echo "$REPO_DATA" | jq -r '.new[] | "\(.title)\t\(.html_url)"' | head -5 | \
+        while IFS=$'\t' read -r TITLE URL; do
+          local LNK=$(short_link "$URL" "$REPO")
+          local T=$(truncate_title "$TITLE" 60)
+          printf "    %s  %s\n" "$LNK" "$T"
+        done
+      if [ "$NEW_COUNT" -gt 5 ]; then
+        printf "    ${DIM}… and %d more${RESET}\n" "$((NEW_COUNT - 5))"
+      fi
+    fi
+
+    # DONE always collapsed
+    if [ "$DONE_COUNT" -gt 0 ]; then
+      printf "  ${GREEN}${DIM}○ DONE (${DONE_COUNT}) — collapsed${RESET}\n"
+    fi
+
+    echo ""
+  done <<< "$REPOS"
+}
+
+# Format a single live feed event
+format_live_event() {
+  local LINE="$1"
+  local TS=$(echo "$LINE" | jq -r '.ts // ""' 2>/dev/null)
+  local EVENT=$(echo "$LINE" | jq -r '.event // ""' 2>/dev/null)
+  local TITLE=$(echo "$LINE" | jq -r '.title // ""' 2>/dev/null)
+  local REPO=$(echo "$LINE" | jq -r '.repo // ""' 2>/dev/null)
+  local URL=$(echo "$LINE" | jq -r '.url // ""' 2>/dev/null)
+  local FROM=$(echo "$LINE" | jq -r '.from // ""' 2>/dev/null)
+  local TO=$(echo "$LINE" | jq -r '.to // ""' 2>/dev/null)
+  local BY=$(echo "$LINE" | jq -r '.by // ""' 2>/dev/null)
+  local REASON=$(echo "$LINE" | jq -r '.reason // ""' 2>/dev/null)
+
+  local TIME=$(local_time "$TS")
+  local LNK=""
+  [ -n "$URL" ] && LNK=$(short_link "$URL" "$REPO")
+  local T=$(truncate_title "$TITLE" 50)
+
+  case "$EVENT" in
+    new)
+      printf "${DIM}%s${RESET}  ${ORANGE}▸ NEW${RESET}         %s  %s\n" "$TIME" "$LNK" "$T"
+      ;;
+    transition)
+      local FROM_CLR=$(status_color "$FROM")
+      local TO_CLR=$(status_color "$TO")
+      local FROM_LBL=$(status_label "$FROM")
+      local TO_LBL=$(status_label "$TO")
+      # Highlight when transitioning TO human
+      if [ "$TO" = "human" ]; then
+        printf "${DIM}%s${RESET}  ${FROM_CLR}%s${RESET} → ${RED}${BOLD}%s${RESET}  %s  %s\n" \
+          "$TIME" "$FROM_LBL" "$TO_LBL" "$LNK" "$T"
+        [ -n "$REASON" ] && printf "              ${RED}${DIM}↳ %s${RESET}\n" "$REASON"
+      else
+        printf "${DIM}%s${RESET}  ${FROM_CLR}%s${RESET} → ${TO_CLR}%s${RESET}  %s  %s\n" \
+          "$TIME" "$FROM_LBL" "$TO_LBL" "$LNK" "$T"
+        [ -n "$REASON" ] && printf "              ${DIM}↳ %s${RESET}\n" "$REASON"
+      fi
+      ;;
+    claimed)
+      printf "${DIM}%s${RESET}  ${BLUE}⚡ CLAIM${RESET}       %s  %s\n" "$TIME" "$LNK" "$T"
+      [ -n "$BY" ] && printf "              ${DIM}↳ by %s${RESET}\n" "$BY"
+      ;;
+    wip|human|"done")
+      # Legacy events from old format — still handle gracefully
+      local CLR=$(status_color "$EVENT")
+      local LBL=$(status_label "$EVENT")
+      printf "${DIM}%s${RESET}  ${CLR}%s${RESET}  %s  %s\n" "$TIME" "$LBL" "$LNK" "$T"
+      ;;
+    poll)
+      # Poll events are muted; skip in live feed
+      ;;
+    *)
+      # Unknown event, skip
+      ;;
+  esac
+}
+
+# Print header banner
+print_header() {
+  clear
+  echo ""
+  printf "  ${RAINBOW[0]}b${RAINBOW[1]}r${RAINBOW[2]}e${RAINBOW[3]}e${RAINBOW[4]}z${RAINBOW[5]}e${RESET}  ${DIM}status board${RESET}\n"
+  echo ""
+
+  # Status summary
+  if [ -f "$INBOX" ]; then
+    local NEW=$(jq '[.notifications[] | select(.breeze_status == "new")] | length' "$INBOX" 2>/dev/null || echo "0")
+    local WIP=$(jq '[.notifications[] | select(.breeze_status == "wip")] | length' "$INBOX" 2>/dev/null || echo "0")
+    local HUMAN=$(jq '[.notifications[] | select(.breeze_status == "human")] | length' "$INBOX" 2>/dev/null || echo "0")
+    local DONE=$(jq '[.notifications[] | select(.breeze_status == "done")] | length' "$INBOX" 2>/dev/null || echo "0")
+
+    if [ "$HUMAN" -gt 0 ]; then
+      printf "  ${RED}${BOLD}● %s human${RESET}  " "$HUMAN"
+    else
+      printf "  ${DIM}● 0 human${RESET}  "
+    fi
+    printf "${ORANGE}● %s new${RESET}  " "$NEW"
+    printf "${BLUE}● %s wip${RESET}  " "$WIP"
+    printf "${GREEN}${DIM}● %s done${RESET}\n" "$DONE"
+  fi
+
+  echo ""
+  printf "  ${DIM}────────────────────────────────────────────────────────${RESET}\n"
+  echo ""
+}
+
+# Main render function — re-renders the entire board
+render_board_view() {
+  print_header
+  render_human_section
+  render_board
+  printf "${DIM}────── live ─────────────────────────────────────────────${RESET}\n"
+  echo ""
+}
+
+# Main
+render_board_view
+
+# Show recent transitions from history (last 10)
+if [ -s "$LOG_FILE" ]; then
+  grep -E '^\{.*\}$' "$LOG_FILE" | tail -20 | while IFS= read -r line; do
+    format_live_event "$line"
+  done
+fi
+
+# Stream new events as they arrive
+tail -f "$LOG_FILE" 2>/dev/null | while IFS= read -r line || true; do
+  [[ "${line:-}" == \{*\} ]] && format_live_event "$line"
+done
