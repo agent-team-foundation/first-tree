@@ -33,6 +33,7 @@ Do not skip this. The tree is already a compression of expensive knowledge — c
 - **The tree is not for execution details.** Function signatures, DB schemas, API endpoints, ad copy — those live in source systems. The tree captures the *why* and *how things connect*.
 - **Bring source repos in as additional working directories.** When you need to inspect or edit code, open the relevant source repositories alongside this tree instead of copying execution detail into the tree.
 - **Respect ownership.** Each node declares owners in its frontmatter. If your changes touch a domain you don't own, flag it — the owner needs to review.
+- **Cite the tree when it matters.** When a tree node influenced your decision — changed your approach, ruled out an option, or surfaced a constraint — mention it naturally: "Based on kael/chat-ux.md, streaming is required here" or "This conflicts with the constraint in platform/auth.md." Don't cite every read; cite the ones that shaped the outcome.
 
 ## After Every Task
 
@@ -43,6 +44,7 @@ Ask yourself: **Does the tree need updating?**
 - Not every task changes the tree, but the question must always be asked.
 - If the task changed decisions, constraints, rationale, or ownership, open the tree PR first. Then open the source/workspace code PR.
 - If the task changed only implementation details, skip the tree PR and open only the source/workspace code PR.
+- **Link tree PRs and code PRs.** When a task produces both a tree PR and a code PR, cross-reference them in the PR body: tree PR links to `Code PR: owner/repo#N`, code PR links to `Tree PR: owner/tree-repo#N`.
 
 ## Reference
 
