@@ -1,40 +1,14 @@
-import type { InboxEntryWithMessage, SessionState } from "@agent-team-foundation/first-tree-hub-shared";
+import type { SessionState } from "@agent-team-foundation/first-tree-hub-shared";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentHandler, HandlerFactory } from "../runtime/handler.js";
 import { SessionManager } from "../runtime/session-manager.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
+import { mockEntry } from "./test-helpers.js";
 
 /**
  * Tests for per-session state notifications (onStateChange callback),
  * deduplication via lastReportedStates, getSessionStates(), and shutdown reporting.
  */
-
-function mockEntry(opts: { id?: number; chatId?: string; content?: string } = {}): InboxEntryWithMessage {
-  const chatId = opts.chatId ?? "chat-1";
-  return {
-    id: opts.id ?? 1,
-    inboxId: "inbox-test",
-    messageId: `msg-${opts.id ?? 1}`,
-    chatId,
-    status: "delivered",
-    retryCount: 0,
-    createdAt: new Date().toISOString(),
-    deliveredAt: new Date().toISOString(),
-    ackedAt: null,
-    message: {
-      id: `msg-${opts.id ?? 1}`,
-      chatId,
-      senderId: "sender-1",
-      format: "text",
-      content: opts.content ?? "hello",
-      metadata: {},
-      replyToInbox: null,
-      replyToChat: null,
-      inReplyTo: null,
-      createdAt: new Date().toISOString(),
-    },
-  };
-}
 
 function mockSdk(): FirstTreeHubSDK {
   return {

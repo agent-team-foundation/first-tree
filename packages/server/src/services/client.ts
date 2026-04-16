@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
 import { clients } from "../db/schema/clients.js";
@@ -96,14 +96,16 @@ export async function cleanupStaleClients(db: Database, staleSeconds = 60): Prom
 
   if (result.length > 0) {
     const staleIds = result.map((r) => r.id);
-    await db.execute(sql`
-      UPDATE agent_presence SET
-        status = 'offline',
-        runtime_state = NULL,
-        active_sessions = NULL, total_sessions = NULL,
-        runtime_updated_at = NOW()
-      WHERE client_id = ANY(${staleIds})
-    `);
+    await db
+      .update(agentPresence)
+      .set({
+        status: "offline",
+        runtimeState: null,
+        activeSessions: null,
+        totalSessions: null,
+        runtimeUpdatedAt: new Date(),
+      })
+      .where(inArray(agentPresence.clientId, staleIds));
   }
 
   return result.length;

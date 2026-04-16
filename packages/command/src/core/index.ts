@@ -6,11 +6,16 @@ export { createOwner, hasUser } from "./admin.js";
 export {
   bootstrapToken,
   checkBootstrapStatus,
+  ensureFreshAdminToken,
   getGitHubToken,
   getGitHubUsername,
+  loadCredentials,
+  maskToken,
   resolveAdminToken,
   resolveAgentToken,
   resolveServerUrl,
+  saveAgentConfig,
+  saveCredentials,
 } from "./bootstrap.js";
 // Client runtime
 export { ClientRuntime } from "./client-runtime.js";

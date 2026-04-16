@@ -12,7 +12,14 @@ import {
 import { cleanWorkspaces, FirstTreeHubSDK, SdkError, SessionRegistry } from "@first-tree-hub/client";
 import type { Command } from "commander";
 import { fail, success } from "../cli/output.js";
-import { bootstrapToken, resolveAdminToken, resolveAgentToken, resolveServerUrl } from "../core/bootstrap.js";
+import {
+  bootstrapToken,
+  ensureFreshAdminToken,
+  maskToken,
+  resolveAgentToken,
+  resolveServerUrl,
+  saveAgentConfig,
+} from "../core/bootstrap.js";
 import { bindFeishuBot, bindFeishuUser } from "../core/feishu.js";
 import { promptAddAgent } from "../core/index.js";
 
@@ -79,6 +86,28 @@ function readStdin(): Promise<string | null> {
     process.stdin.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
     process.stdin.on("error", reject);
   });
+}
+
+type ResolvedAgent = { uuid: string; name: string | null; displayName: string | null };
+
+/**
+ * Resolve an agent name (or UUID) to its record via the admin agents API.
+ * Accepts either a name or a UUID; throws via fail() if not found.
+ */
+async function resolveAgent(serverUrl: string, adminToken: string, agentName: string): Promise<ResolvedAgent> {
+  const res = await fetch(`${serverUrl}/api/v1/admin/agents?limit=100`, {
+    headers: { Authorization: `Bearer ${adminToken}` },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) {
+    fail("FETCH_ERROR", `Failed to list agents: ${res.status}`, 1);
+  }
+  const data = (await res.json()) as { items: ResolvedAgent[] };
+  const found = data.items.find((a) => a.name === agentName || a.uuid === agentName);
+  if (!found) {
+    fail("NOT_FOUND", `Agent "${agentName}" not found`, 1);
+  }
+  return found;
 }
 
 // ── Main registration ─────────────────────────────────────────────────
@@ -150,11 +179,74 @@ export function registerAgentCommands(program: Command): void {
           return;
         }
         for (const [name, config] of agents) {
-          const masked = config.token.length > 8 ? `${config.token.slice(0, 6)}***${config.token.slice(-2)}` : "***";
-          process.stderr.write(`  ${name.padEnd(20)} type: ${config.type.padEnd(14)} token: ${masked}\n`);
+          process.stderr.write(
+            `  ${name.padEnd(20)} runtime: ${config.runtime.padEnd(14)} token: ${maskToken(config.token)}\n`,
+          );
         }
       } catch {
         process.stderr.write("  No agents configured.\n");
+      }
+    });
+
+  // ── CLI-first agent creation (M1) ───────────────────────────────────
+
+  agent
+    .command("create <name>")
+    .description("Create an agent on Hub and bind it locally (CLI-first)")
+    .requiredOption("--type <type>", "Agent type (human, personal_assistant, autonomous_agent)")
+    .option("--runtime <runtime>", "Runtime handler (default: claude-code)", "claude-code")
+    .option("--display-name <name>", "Display name")
+    .option("--server <url>", "Hub server URL")
+    .action(async (name: string, options: { type: string; runtime: string; displayName?: string; server?: string }) => {
+      try {
+        const serverUrl = resolveServerUrl(options.server);
+        const adminToken = await ensureFreshAdminToken();
+        const headers = {
+          Authorization: `Bearer ${adminToken}`,
+          "Content-Type": "application/json",
+        };
+
+        // 1. Create agent via Admin API
+        const createBody: Record<string, unknown> = {
+          name,
+          type: options.type,
+        };
+        if (options.displayName) createBody.displayName = options.displayName;
+
+        const createRes = await fetch(`${serverUrl}/api/v1/admin/agents`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(createBody),
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!createRes.ok) {
+          const body = (await createRes.json().catch(() => ({}))) as { error?: string };
+          fail("CREATE_ERROR", body.error ?? `Failed to create agent (HTTP ${createRes.status})`, 1);
+        }
+        const agent = (await createRes.json()) as { uuid: string; name: string | null };
+        process.stderr.write(`  \u2713 Agent created: ${agent.name ?? agent.uuid}\n`);
+
+        // 2. Generate token
+        const tokenRes = await fetch(`${serverUrl}/api/v1/admin/agents/${agent.uuid}/tokens`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ name: "default" }),
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!tokenRes.ok) {
+          fail("TOKEN_ERROR", `Failed to generate token (HTTP ${tokenRes.status})`, 1);
+        }
+        const tokenData = (await tokenRes.json()) as { token: string };
+
+        // 3. Write local agent config (triggers hot-reload in running client)
+        const agentDir = saveAgentConfig(name, tokenData.token, options.runtime);
+        process.stderr.write(`  \u2713 Token saved: ${agentDir}/agent.yaml\n`);
+
+        // 4. If a client is running, it will detect the new config via file watch
+        process.stderr.write(`  \u2713 Agent ready — running client will auto-bind\n`);
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        fail("CREATE_ERROR", msg);
       }
     });
 
@@ -386,7 +478,7 @@ export function registerAgentCommands(program: Command): void {
       try {
         const serverUrl = resolveServerUrl(options?.server);
         const response = await fetch(`${serverUrl}/api/v1/admin/agents/activity`, {
-          headers: { Authorization: `Bearer ${resolveAdminToken()}` },
+          headers: { Authorization: `Bearer ${await ensureFreshAdminToken()}` },
           signal: AbortSignal.timeout(10_000),
         });
         if (!response.ok) {
@@ -395,7 +487,7 @@ export function registerAgentCommands(program: Command): void {
         const data = (await response.json()) as {
           total: number;
           running: number;
-          byState: { idle: number; working: number; error: number };
+          byState: { idle: number; working: number; blocked: number; error: number };
           clients: number;
           agents: Array<{
             agentId: string;
@@ -430,7 +522,7 @@ export function registerAgentCommands(program: Command): void {
         process.stderr.write(`  Clients: ${data.clients} connected\n`);
         process.stderr.write(`  Agents: ${data.running} running / ${data.total} total\n`);
         process.stderr.write(
-          `  Errors: ${data.byState.error} | Working: ${data.byState.working} | Idle: ${data.byState.idle}\n\n`,
+          `  Errors: ${data.byState.error} | Blocked: ${data.byState.blocked} | Working: ${data.byState.working} | Idle: ${data.byState.idle}\n\n`,
         );
 
         if (data.agents.length > 0) {
@@ -472,7 +564,7 @@ export function registerAgentCommands(program: Command): void {
         const serverUrl = resolveServerUrl(options.server);
         const response = await fetch(`${serverUrl}/api/v1/admin/agents/activity/${name}/reset-activity`, {
           method: "POST",
-          headers: { Authorization: `Bearer ${resolveAdminToken()}` },
+          headers: { Authorization: `Bearer ${await ensureFreshAdminToken()}` },
           signal: AbortSignal.timeout(10_000),
         });
         if (!response.ok) {
@@ -482,6 +574,214 @@ export function registerAgentCommands(program: Command): void {
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         fail("RESET_ERROR", msg);
+      }
+    });
+
+  // ── M1: Session management ──────────────────────────────────────────
+
+  agent
+    .command("sessions <agent-name>")
+    .description("List sessions for an agent")
+    .option("--server <url>", "Hub server URL")
+    .option("--state <state>", "Filter by session state (active/suspended/evicted)")
+    .action(async (agentName: string, options: { server?: string; state?: string }) => {
+      try {
+        const serverUrl = resolveServerUrl(options.server);
+        const adminToken = await ensureFreshAdminToken();
+        const agentId = (await resolveAgent(serverUrl, adminToken, agentName)).uuid;
+        const qs = options.state ? `?state=${options.state}` : "";
+        const response = await fetch(`${serverUrl}/api/v1/admin/sessions/agents/${agentId}${qs}`, {
+          headers: { Authorization: `Bearer ${adminToken}` },
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!response.ok) {
+          fail("FETCH_ERROR", `Server returned ${response.status}`, 1);
+        }
+        const sessions = (await response.json()) as Array<{
+          chatId: string;
+          state: string;
+          runtimeState: string | null;
+          lastActivityAt: string;
+        }>;
+        if (sessions.length === 0) {
+          process.stderr.write(`\n  No sessions for "${agentName}".\n\n`);
+          return;
+        }
+        process.stderr.write(`\n  Sessions for "${agentName}":\n\n`);
+        const header = `  ${"CHAT".padEnd(40)} ${"STATE".padEnd(12)} ${"RUNTIME".padEnd(10)} LAST ACTIVITY`;
+        process.stderr.write(`${header}\n`);
+        process.stderr.write(`  ${"─".repeat(header.length - 2)}\n`);
+        for (const s of sessions) {
+          const chatShort = s.chatId.length > 38 ? `${s.chatId.slice(0, 35)}...` : s.chatId;
+          process.stderr.write(
+            `  ${chatShort.padEnd(40)} ${s.state.padEnd(12)} ${(s.runtimeState ?? "—").padEnd(10)} ${s.lastActivityAt}\n`,
+          );
+        }
+        process.stderr.write("\n");
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        fail("SESSIONS_ERROR", msg);
+      }
+    });
+
+  const sessionCmd = agent.command("session").description("Session lifecycle commands");
+
+  for (const [cmd, desc] of [
+    ["suspend", "Suspend a session"],
+    ["resume", "Resume a suspended session"],
+    ["terminate", "Terminate a session"],
+  ] as const) {
+    sessionCmd
+      .command(`${cmd} <agent-name> <chat-id>`)
+      .description(desc)
+      .option("--server <url>", "Hub server URL")
+      .action(async (agentName: string, chatId: string, options: { server?: string }) => {
+        try {
+          const serverUrl = resolveServerUrl(options.server);
+          const adminToken = await ensureFreshAdminToken();
+          const agentId = (await resolveAgent(serverUrl, adminToken, agentName)).uuid;
+          const response = await fetch(`${serverUrl}/api/v1/admin/sessions/agents/${agentId}/${chatId}/${cmd}`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${adminToken}` },
+            signal: AbortSignal.timeout(10_000),
+          });
+          if (!response.ok) {
+            const body = await response.text();
+            fail("SESSION_CMD_ERROR", `Server returned ${response.status}: ${body}`, 1);
+          }
+          process.stderr.write(`  Session ${cmd}: ${chatId} → sent\n`);
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          fail("SESSION_CMD_ERROR", msg);
+        }
+      });
+  }
+
+  // ── M1: Interactive chat (admin → agent) ────────────────────────────
+
+  agent
+    .command("chat <agent-name>")
+    .description("Open an interactive chat with an agent (as admin human agent)")
+    .option("--server <url>", "Hub server URL")
+    .action(async (agentName: string, options: { server?: string }) => {
+      try {
+        const serverUrl = resolveServerUrl(options.server);
+        const adminToken = await ensureFreshAdminToken();
+        const headers = {
+          Authorization: `Bearer ${adminToken}`,
+          "Content-Type": "application/json",
+        };
+
+        // 1. Resolve agent name → UUID via admin API
+        const targetAgent = await resolveAgent(serverUrl, adminToken, agentName);
+
+        // 2. Create or find DM via admin API
+        const dmRes = await fetch(`${serverUrl}/api/v1/admin/agents/${targetAgent.uuid}/chats`, {
+          method: "POST",
+          headers,
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!dmRes.ok) {
+          const body = await dmRes.text();
+          fail("DM_ERROR", `Failed to create DM: ${dmRes.status} — ${body}`, 1);
+        }
+        const dm = (await dmRes.json()) as { id: string };
+
+        process.stderr.write(`\n  Chat with ${targetAgent.displayName ?? targetAgent.name ?? targetAgent.uuid}\n`);
+        process.stderr.write(`  Chat ID: ${dm.id}\n`);
+        process.stderr.write(`  Type a message and press Enter. Ctrl+C to exit.\n\n`);
+
+        // 3. Interactive loop
+        const readline = await import("node:readline");
+        const rl = readline.createInterface({ input: process.stdin, output: process.stderr, prompt: "  > " });
+
+        let lastSeenAt: string | null = null;
+
+        const pollMessages = async (): Promise<void> => {
+          try {
+            const qs = lastSeenAt ? `?limit=50` : `?limit=10`;
+            const msgRes = await fetch(`${serverUrl}/api/v1/admin/chats/${dm.id}/messages${qs}`, {
+              headers,
+              signal: AbortSignal.timeout(10_000),
+            });
+            if (!msgRes.ok) return;
+            const msgData = (await msgRes.json()) as {
+              items: Array<{
+                id: string;
+                senderId: string;
+                content: unknown;
+                createdAt: string;
+              }>;
+            };
+
+            // Filter new messages from the agent (messages are returned newest-first)
+            const cutoff = lastSeenAt;
+            const newMessages = cutoff
+              ? msgData.items.filter((m) => m.createdAt > cutoff && m.senderId === targetAgent.uuid).reverse()
+              : [];
+
+            for (const msg of newMessages) {
+              const content = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
+              const preview = content.length > 500 ? `${content.slice(0, 500)}...` : content;
+              process.stderr.write(`\r  [${targetAgent.displayName ?? targetAgent.name ?? "agent"}] ${preview}\n`);
+            }
+
+            if (msgData.items.length > 0 && msgData.items[0]) {
+              const newest = msgData.items[0].createdAt;
+              if (!lastSeenAt || newest > lastSeenAt) {
+                lastSeenAt = newest;
+              }
+            }
+          } catch {
+            // ignore polling errors
+          }
+        };
+
+        // Initial poll to set lastSeenAt baseline
+        await pollMessages();
+
+        // Poll every 2 seconds
+        const pollTimer = setInterval(() => {
+          pollMessages().then(() => rl.prompt());
+        }, 2000);
+
+        rl.prompt();
+
+        rl.on("line", async (line: string) => {
+          const text = line.trim();
+          if (!text) {
+            rl.prompt();
+            return;
+          }
+
+          try {
+            const sendRes = await fetch(`${serverUrl}/api/v1/admin/chats/${dm.id}/messages`, {
+              method: "POST",
+              headers,
+              body: JSON.stringify({ format: "text", content: text }),
+              signal: AbortSignal.timeout(10_000),
+            });
+            if (!sendRes.ok) {
+              const body = await sendRes.text();
+              process.stderr.write(`  [error] Failed to send: ${sendRes.status} — ${body}\n`);
+            } else {
+              const sent = (await sendRes.json()) as { createdAt: string };
+              lastSeenAt = sent.createdAt;
+            }
+          } catch (err) {
+            process.stderr.write(`  [error] ${err instanceof Error ? err.message : String(err)}\n`);
+          }
+          rl.prompt();
+        });
+
+        rl.on("close", () => {
+          clearInterval(pollTimer);
+          process.stderr.write("\n  Chat ended.\n");
+          process.exit(0);
+        });
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        fail("CHAT_ERROR", msg);
       }
     });
 

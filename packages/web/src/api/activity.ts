@@ -16,6 +16,7 @@ export type ActivityOverview = {
   byState: {
     idle: number;
     working: number;
+    blocked: number;
     error: number;
   };
   clients: number;
@@ -51,4 +52,14 @@ export function disconnectClient(clientId: string): Promise<{ disconnected: bool
 
 export function resetAgentActivity(agentId: string): Promise<{ reset: boolean }> {
   return api.post(`/admin/agents/activity/${agentId}/reset-activity`);
+}
+
+export type ConnectTokenResponse = {
+  token: string;
+  expiresIn: number;
+  command: string;
+};
+
+export function generateConnectToken(): Promise<ConnectTokenResponse> {
+  return api.post<ConnectTokenResponse>("/connect-tokens");
 }

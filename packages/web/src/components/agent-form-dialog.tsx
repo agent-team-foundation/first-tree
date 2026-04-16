@@ -1,6 +1,7 @@
 import { AGENT_TYPES, type Agent, type AgentType } from "@agent-team-foundation/first-tree-hub-shared";
 import { useQuery } from "@tanstack/react-query";
 import { type FormEvent, useEffect, useState } from "react";
+import { listClients } from "../api/activity.js";
 import { listAgents } from "../api/agents.js";
 import { Button } from "./ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog.js";
@@ -22,6 +23,7 @@ export type AgentFormData = {
   type: AgentType;
   displayName: string | null;
   delegateMention: string | null;
+  clientId: string | null;
 };
 
 export function AgentFormDialog(props: AgentFormProps) {
@@ -32,9 +34,19 @@ export function AgentFormDialog(props: AgentFormProps) {
   const [formType, setFormType] = useState<AgentType>("personal_assistant");
   const [formDisplayName, setFormDisplayName] = useState("");
   const [formDelegateMention, setFormDelegateMention] = useState("");
+  const [formClientId, setFormClientId] = useState("");
+
+  // Fetch connected clients for binding (non-human agents only)
+  const showClient = mode === "create" && formType !== "human";
+  const clientsQuery = useQuery({
+    queryKey: ["clients-for-provision"],
+    queryFn: listClients,
+    enabled: open && showClient,
+  });
 
   // Fetch active personal_assistant agents for delegate mention dropdown (human agents only)
   const showDelegate = formType === "human";
+
   const assistantsQuery = useQuery({
     queryKey: ["agents-for-delegate"],
     queryFn: async () => {
@@ -57,6 +69,7 @@ export function AgentFormDialog(props: AgentFormProps) {
         setFormType("personal_assistant");
         setFormDisplayName("");
         setFormDelegateMention("");
+        setFormClientId("");
       }
     }
   }, [open, agent]);
@@ -68,6 +81,7 @@ export function AgentFormDialog(props: AgentFormProps) {
       type: formType,
       displayName: formDisplayName || null,
       delegateMention: formDelegateMention || null,
+      clientId: formClientId || null,
     });
   };
 
@@ -150,6 +164,32 @@ export function AgentFormDialog(props: AgentFormProps) {
                 ))}
               </select>
               <p className="text-xs text-muted-foreground">The personal assistant that acts on behalf of this agent</p>
+            </div>
+          )}
+
+          {/* Client — for non-human agents in create mode */}
+          {showClient && (
+            <div className="space-y-2">
+              <Label htmlFor="agent-client">Client</Label>
+              {clientsQuery.data && clientsQuery.data.length > 0 ? (
+                <select
+                  id="agent-client"
+                  value={formClientId}
+                  onChange={(e) => setFormClientId(e.target.value)}
+                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                >
+                  <option value="">No client (manual binding)</option>
+                  {clientsQuery.data.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.hostname ?? c.id.slice(0, 12)}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  No connected clients. Agent will be created without binding.
+                </p>
+              )}
             </div>
           )}
 

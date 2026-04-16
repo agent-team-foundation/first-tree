@@ -1025,7 +1025,14 @@ const STATUS_LABELS: Record<TestResult["status"], string> = {
   success: "Connected",
   timeout: "Timed out",
   offline: "Offline",
+  stale: "Stale",
   error: "Error",
+};
+
+const HEALTH_INDICATOR: Record<string, { icon: string; color: string; label: string }> = {
+  connected: { icon: "●", color: "text-green-500", label: "Connected" },
+  stale: { icon: "◐", color: "text-yellow-500", label: "Stale" },
+  disconnected: { icon: "○", color: "text-gray-400", label: "Disconnected" },
 };
 
 function TestResultCard({ result, onDismiss }: { result: TestResult; onDismiss: () => void }) {
@@ -1033,17 +1040,25 @@ function TestResultCard({ result, onDismiss }: { result: TestResult; onDismiss: 
     success: "border-l-green-500",
     timeout: "border-l-yellow-500",
     offline: "border-l-gray-400",
+    stale: "border-l-yellow-500",
     error: "border-l-red-500",
   }[result.status];
 
   const badgeVariant =
-    result.status === "success" ? "default" : result.status === "timeout" ? "secondary" : "destructive";
+    result.status === "success"
+      ? "default"
+      : result.status === "timeout" || result.status === "stale"
+        ? "secondary"
+        : "destructive";
+
+  const conn = result.connection;
+  const healthInfo = conn ? HEALTH_INDICATOR[conn.health] : null;
 
   return (
     <Card className={cn("border-l-4", borderColor)}>
       <CardContent className="pt-4">
         <div className="flex items-start justify-between">
-          <div className="space-y-1">
+          <div className="space-y-2">
             <div className="flex items-center gap-2">
               <Badge variant={badgeVariant}>{STATUS_LABELS[result.status]}</Badge>
               {result.responseTime != null && (
@@ -1051,6 +1066,33 @@ function TestResultCard({ result, onDismiss }: { result: TestResult; onDismiss: 
               )}
             </div>
             {result.message && <p className="text-sm text-muted-foreground">{result.message}</p>}
+
+            {/* Connection diagnostics */}
+            {conn && (
+              <div className="text-xs space-y-1 border-t pt-2 mt-1">
+                <div className="flex items-center gap-2">
+                  {healthInfo && (
+                    <span className={healthInfo.color}>
+                      {healthInfo.icon} {healthInfo.label}
+                    </span>
+                  )}
+                  {conn.runtimeState && <span className="text-muted-foreground">runtime: {conn.runtimeState}</span>}
+                </div>
+                {conn.client ? (
+                  <div className="text-muted-foreground">
+                    Client: {conn.client.hostname ?? conn.client.id}
+                    {conn.client.os && ` (${conn.client.os})`}
+                    {conn.client.sdkVersion && ` · SDK ${conn.client.sdkVersion}`}
+                  </div>
+                ) : (
+                  <div className="text-muted-foreground">No client bound</div>
+                )}
+                {conn.lastSeenAt && (
+                  <div className="text-muted-foreground">Last seen: {new Date(conn.lastSeenAt).toLocaleString()}</div>
+                )}
+              </div>
+            )}
+
             {result.responseContent && (
               <p className="text-sm mt-2 whitespace-pre-wrap bg-muted rounded p-2 max-h-40 overflow-auto">
                 {result.responseContent}

@@ -1,4 +1,8 @@
-import { loginSchema, refreshTokenSchema } from "@agent-team-foundation/first-tree-hub-shared";
+import {
+  connectTokenExchangeSchema,
+  loginSchema,
+  refreshTokenSchema,
+} from "@agent-team-foundation/first-tree-hub-shared";
 import type { FastifyInstance } from "fastify";
 import * as authService from "../services/auth.js";
 
@@ -16,4 +20,14 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const result = await authService.refreshAccessToken(app.db, body.refreshToken, app.config.secrets.jwtSecret);
     return reply.send(result);
   });
+
+  app.post(
+    "/connect-token",
+    { config: { rateLimit: { max: loginMax, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const body = connectTokenExchangeSchema.parse(request.body);
+      const result = await authService.exchangeConnectToken(app.db, body.token, app.config.secrets.jwtSecret);
+      return reply.send(result);
+    },
+  );
 }

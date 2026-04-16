@@ -39,9 +39,8 @@ describe("upsertSessionState", () => {
     expect(session?.chatId).toBe("chat-s1");
     expect(session?.state).toBe("active");
 
-    // Verify presence aggregates
+    // Verify presence session counts (runtimeState is set separately via runtime:state WS message)
     const presence = await presenceService.getPresence(app.db, agent.uuid);
-    expect(presence?.runtimeState).toBe("working");
     expect(presence?.activeSessions).toBe(1);
     expect(presence?.totalSessions).toBe(1);
   });
@@ -59,7 +58,6 @@ describe("upsertSessionState", () => {
     expect(session?.state).toBe("suspended");
 
     const presence = await presenceService.getPresence(app.db, agent.uuid);
-    expect(presence?.runtimeState).toBe("idle");
     expect(presence?.activeSessions).toBe(0);
     expect(presence?.totalSessions).toBe(1);
   });
@@ -77,7 +75,6 @@ describe("upsertSessionState", () => {
     await activityService.upsertSessionState(app.db, agent.uuid, "chat-s3c", "suspended");
 
     const presence = await presenceService.getPresence(app.db, agent.uuid);
-    expect(presence?.runtimeState).toBe("working");
     expect(presence?.activeSessions).toBe(2);
     expect(presence?.totalSessions).toBe(3);
 
@@ -90,7 +87,6 @@ describe("upsertSessionState", () => {
     // Suspend the last active
     await activityService.upsertSessionState(app.db, agent.uuid, "chat-s3b", "suspended");
     const presence3 = await presenceService.getPresence(app.db, agent.uuid);
-    expect(presence3?.runtimeState).toBe("idle");
     expect(presence3?.activeSessions).toBe(0);
   });
 
@@ -107,7 +103,6 @@ describe("upsertSessionState", () => {
     expect(session?.state).toBe("evicted");
 
     const presence = await presenceService.getPresence(app.db, agent.uuid);
-    expect(presence?.runtimeState).toBe("idle");
     expect(presence?.activeSessions).toBe(0);
   });
 });
@@ -201,8 +196,9 @@ describe("WS session:state message", () => {
     // Connect and bind the receiver agent
     const { ws, agentId } = await connectAndBind(token);
 
-    // Send session:state
+    // Send session:state + runtime:state (separate channels by design)
     ws.send(JSON.stringify({ type: "session:state", agentId, chatId, state: "active" }));
+    ws.send(JSON.stringify({ type: "runtime:state", agentId, runtimeState: "working" }));
 
     // Wait for server processing
     await new Promise((r) => setTimeout(r, 500));
@@ -213,13 +209,14 @@ describe("WS session:state message", () => {
     expect(session?.chatId).toBe(chatId);
     expect(session?.state).toBe("active");
 
-    // Verify presence updated
+    // Verify presence updated (session counts from session:state, runtimeState from runtime:state)
     const presence = await presenceService.getPresence(app.db, agentId);
     expect(presence?.runtimeState).toBe("working");
     expect(presence?.activeSessions).toBe(1);
 
-    // Now suspend
+    // Now suspend + set idle
     ws.send(JSON.stringify({ type: "session:state", agentId, chatId, state: "suspended" }));
+    ws.send(JSON.stringify({ type: "runtime:state", agentId, runtimeState: "idle" }));
     await new Promise((r) => setTimeout(r, 500));
 
     const presence2 = await presenceService.getPresence(app.db, agentId);

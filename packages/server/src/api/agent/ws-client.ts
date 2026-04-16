@@ -1,6 +1,8 @@
 import {
   agentBindSchema,
   clientRegisterSchema,
+  runtimeStateMessageSchema,
+  sessionOutputMessageSchema,
   sessionStateMessageSchema,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { and, eq, isNull } from "drizzle-orm";
@@ -11,8 +13,10 @@ import { agents } from "../../db/schema/agents.js";
 import * as activityService from "../../services/activity.js";
 import * as clientService from "../../services/client.js";
 import * as connectionManager from "../../services/connection-manager.js";
+import * as notificationService from "../../services/notification.js";
 import type { Notifier } from "../../services/notifier.js";
 import * as presenceService from "../../services/presence.js";
+import * as sessionOutputService from "../../services/session-output.js";
 import { hashToken } from "../../utils.js";
 
 const wsMessageSchema = z.object({
@@ -22,7 +26,7 @@ const wsMessageSchema = z.object({
 });
 
 /**
- * M1 Client WebSocket: one WS per client, multiple agents multiplexed.
+ * Client WebSocket: one WS per client, multiple agents multiplexed.
  *
  * Protocol:
  *   1. Client connects (no auth required at WS level)
@@ -32,6 +36,25 @@ const wsMessageSchema = z.object({
  *   5. heartbeat — client-level heartbeat
  *   6. agent:unbind — unbind agent
  */
+/** Notification cooldown: prevents duplicate notifications for same (agentId, type) within window. */
+const NOTIFICATION_COOLDOWN_MS = 300_000; // 5 minutes
+const notificationCooldowns = new Map<string, number>();
+
+function shouldNotify(agentId: string, notificationType: string): boolean {
+  const key = `${agentId}:${notificationType}`;
+  const now = Date.now();
+  const lastSent = notificationCooldowns.get(key);
+  if (lastSent && now - lastSent < NOTIFICATION_COOLDOWN_MS) return false;
+  notificationCooldowns.set(key, now);
+  // Prevent unbounded growth — prune old entries periodically
+  if (notificationCooldowns.size > 1000) {
+    for (const [k, ts] of notificationCooldowns) {
+      if (now - ts > NOTIFICATION_COOLDOWN_MS) notificationCooldowns.delete(k);
+    }
+  }
+  return true;
+}
+
 export function clientWsRoutes(notifier: Notifier, instanceId: string) {
   return async (app: FastifyInstance): Promise<void> => {
     app.get("/client", { websocket: true }, async (socket) => {
@@ -163,10 +186,53 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
             }
 
             const payload = sessionStateMessageSchema.parse(msg);
-            await activityService.upsertSessionState(app.db, agentId, payload.chatId, payload.state);
+            await activityService.upsertSessionState(app.db, agentId, payload.chatId, payload.state, notifier);
+          } else if (type === "runtime:state") {
+            const agentId = parsed.data.agentId;
+            if (!agentId || !boundAgents.has(agentId)) {
+              socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
+              return;
+            }
+
+            const payload = runtimeStateMessageSchema.parse(msg);
+            await presenceService.setRuntimeState(app.db, agentId, payload.runtimeState);
+
+            if (payload.runtimeState === "error" && shouldNotify(agentId, "agent_error")) {
+              notificationService
+                .notifyAgentEvent(app.db, agentId, "agent_error", "high", `Agent ${agentId} entered error state`)
+                .catch(() => {});
+            } else if (payload.runtimeState === "blocked" && shouldNotify(agentId, "agent_blocked")) {
+              notificationService
+                .notifyAgentEvent(app.db, agentId, "agent_blocked", "medium", `Agent ${agentId} is blocked`)
+                .catch(() => {});
+            }
+          } else if (type === "session:output") {
+            const agentId = parsed.data.agentId;
+            if (!agentId || !boundAgents.has(agentId)) {
+              socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
+              return;
+            }
+
+            const payload = sessionOutputMessageSchema.parse(msg);
+            sessionOutputService.appendOutput(app.db, agentId, payload.chatId, payload.content).catch(() => {});
+
+            // Notify session completed (with cooldown to avoid noise from rapid outputs)
+            if (shouldNotify(agentId, `session_completed:${payload.chatId}`)) {
+              notificationService
+                .notifyAgentEvent(
+                  app.db,
+                  agentId,
+                  "session_completed",
+                  "low",
+                  `Agent ${agentId} completed a task`,
+                  payload.chatId,
+                )
+                .catch(() => {});
+            }
           } else if (type === "heartbeat") {
             if (clientId) {
               await clientService.heartbeatClient(app.db, clientId);
+              await Promise.all([...boundAgents.keys()].map((id) => presenceService.touchAgent(app.db, id)));
             }
             socket.send(JSON.stringify({ type: "heartbeat:ack" }));
           }
@@ -186,6 +252,11 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
           if (currentOwner === clientId) {
             try {
               await presenceService.unbindAgent(app.db, agentId);
+              if (shouldNotify(agentId, "agent_disconnected")) {
+                notificationService
+                  .notifyAgentEvent(app.db, agentId, "agent_disconnected", "medium", `Agent ${agentId} disconnected`)
+                  .catch(() => {});
+              }
             } catch {
               // best-effort
             }

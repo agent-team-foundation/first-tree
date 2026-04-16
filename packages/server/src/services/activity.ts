@@ -4,9 +4,16 @@ import type { Database } from "../db/connection.js";
 import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
 import { clients } from "../db/schema/clients.js";
+import type { Notifier } from "./notifier.js";
 
 /** Upsert a session state and update materialized aggregates on agent_presence. */
-export async function upsertSessionState(db: Database, agentId: string, chatId: string, state: SessionState) {
+export async function upsertSessionState(
+  db: Database,
+  agentId: string,
+  chatId: string,
+  state: SessionState,
+  notifier?: Notifier,
+) {
   const now = new Date();
   await db.transaction(async (tx) => {
     // 1. Upsert session row
@@ -18,30 +25,34 @@ export async function upsertSessionState(db: Database, agentId: string, chatId: 
         set: { state, updatedAt: now },
       });
 
-    // 2. Aggregate and update presence
+    // 2. Aggregate session counts and update presence (session counts only).
+    //    runtimeState is NOT written here — the client-reported runtime:state
+    //    message is the single authority for runtimeState to avoid dual-write conflicts.
     const [counts] = await tx
       .select({
         active: sql<number>`count(*) FILTER (WHERE ${agentChatSessions.state} = 'active')::int`,
-        total: sql<number>`count(*)::int`,
+        total: sql<number>`count(*) FILTER (WHERE ${agentChatSessions.state} != 'evicted')::int`,
       })
       .from(agentChatSessions)
       .where(eq(agentChatSessions.agentId, agentId));
 
     const activeSessions = counts?.active ?? 0;
     const totalSessions = counts?.total ?? 0;
-    const runtimeState = activeSessions > 0 ? "working" : "idle";
 
     await tx
       .update(agentPresence)
       .set({
-        runtimeState,
         activeSessions,
         totalSessions,
-        runtimeUpdatedAt: now,
         lastSeenAt: now,
       })
       .where(eq(agentPresence.agentId, agentId));
   });
+
+  // Fire-and-forget PG NOTIFY for session state changes
+  if (notifier) {
+    notifier.notifySessionStateChange(agentId, chatId, state).catch(() => {});
+  }
 }
 
 export async function resetActivity(db: Database, agentId: string) {
@@ -62,6 +73,7 @@ export async function getActivityOverview(db: Database) {
       running: sql<number>`count(*) FILTER (WHERE ${agentPresence.runtimeState} IS NOT NULL)::int`,
       idle: sql<number>`count(*) FILTER (WHERE ${agentPresence.runtimeState} = 'idle')::int`,
       working: sql<number>`count(*) FILTER (WHERE ${agentPresence.runtimeState} = 'working')::int`,
+      blocked: sql<number>`count(*) FILTER (WHERE ${agentPresence.runtimeState} = 'blocked')::int`,
       error: sql<number>`count(*) FILTER (WHERE ${agentPresence.runtimeState} = 'error')::int`,
     })
     .from(agentPresence);
@@ -77,6 +89,7 @@ export async function getActivityOverview(db: Database) {
     byState: {
       idle: agentCounts?.idle ?? 0,
       working: agentCounts?.working ?? 0,
+      blocked: agentCounts?.blocked ?? 0,
       error: agentCounts?.error ?? 0,
     },
     clients: clientCounts?.count ?? 0,
@@ -90,4 +103,22 @@ export async function getAgentWithRuntime(db: Database, agentId: string) {
 
 export async function listAgentsWithRuntime(db: Database) {
   return db.select().from(agentPresence).where(isNotNull(agentPresence.runtimeState));
+}
+
+/**
+ * Clean up stale session rows from agent_chat_sessions.
+ * Removes evicted rows older than staleSeconds and suspended rows older than staleSeconds.
+ * Returns the number of rows deleted.
+ */
+export async function cleanupStaleSessions(db: Database, staleSeconds = 604_800): Promise<number> {
+  const result = await db.execute<{ cnt: number }>(sql`
+    WITH deleted AS (
+      DELETE FROM agent_chat_sessions
+      WHERE state IN ('evicted', 'suspended')
+      AND updated_at < NOW() - make_interval(secs => ${staleSeconds})
+      RETURNING 1
+    )
+    SELECT count(*)::int AS cnt FROM deleted
+  `);
+  return result[0]?.cnt ?? 0;
 }

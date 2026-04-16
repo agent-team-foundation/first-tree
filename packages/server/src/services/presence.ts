@@ -1,3 +1,4 @@
+import type { RuntimeState } from "@agent-team-foundation/first-tree-hub-shared";
 import { eq, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
@@ -120,6 +121,20 @@ export async function unbindAgent(db: Database, agentId: string) {
     .where(eq(agentPresence.agentId, agentId));
 }
 
+/** Set runtime state directly from client-reported value. */
+export async function setRuntimeState(db: Database, agentId: string, runtimeState: RuntimeState): Promise<void> {
+  const now = new Date();
+  await db
+    .update(agentPresence)
+    .set({ runtimeState, runtimeUpdatedAt: now, lastSeenAt: now })
+    .where(eq(agentPresence.agentId, agentId));
+}
+
+/** Touch agent last_seen_at on heartbeat (per-agent liveness). */
+export async function touchAgent(db: Database, agentId: string): Promise<void> {
+  await db.update(agentPresence).set({ lastSeenAt: new Date() }).where(eq(agentPresence.agentId, agentId));
+}
+
 // -- Server instance heartbeat --
 
 export async function heartbeatInstance(db: Database, instanceId: string) {
@@ -130,6 +145,30 @@ export async function heartbeatInstance(db: Database, instanceId: string) {
       target: serverInstances.instanceId,
       set: { lastHeartbeat: new Date() },
     });
+}
+
+/**
+ * M1: Mark agents as offline whose last_seen_at is older than staleSeconds.
+ * Unlike cleanupStalePresence (which checks instance liveness), this checks
+ * per-agent heartbeat liveness — detecting agents that stopped heartbeating
+ * while the client process may still be alive.
+ *
+ * Returns the list of agent IDs that were marked stale (for notification in Step 6).
+ */
+export async function markStaleAgents(db: Database, staleSeconds = 60): Promise<string[]> {
+  const result = await db.execute<{ agent_id: string }>(sql`
+    UPDATE agent_presence SET
+      status = 'offline',
+      client_id = NULL,
+      runtime_state = NULL,
+      active_sessions = NULL,
+      total_sessions = NULL,
+      runtime_updated_at = NOW()
+    WHERE status = 'online'
+    AND last_seen_at < NOW() - make_interval(secs => ${staleSeconds})
+    RETURNING agent_id
+  `);
+  return result.map((r) => r.agent_id);
 }
 
 export async function cleanupStalePresence(db: Database, staleSeconds = 60): Promise<number> {

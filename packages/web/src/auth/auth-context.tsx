@@ -3,13 +3,14 @@ import { login as loginApi } from "../api/auth.js";
 import { api, clearStoredTokens, getStoredTokens, setStoredTokens } from "../api/client.js";
 
 type MeResponse = {
-  member: { id: string; role: string };
+  member: { id: string; role: string; agentId: string };
 };
 
 type AuthContextValue = {
   isAuthenticated: boolean;
   role: string | null;
   memberId: string | null;
+  agentId: string | null;
   login: (username: string, password: string) => Promise<void>;
   logout: () => void;
 };
@@ -20,12 +21,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isAuthenticated, setIsAuthenticated] = useState(() => !!getStoredTokens());
   const [role, setRole] = useState<string | null>(null);
   const [memberId, setMemberId] = useState<string | null>(null);
+  const [agentId, setAgentId] = useState<string | null>(null);
 
   const logout = useCallback(() => {
     clearStoredTokens();
     setIsAuthenticated(false);
     setRole(null);
     setMemberId(null);
+    setAgentId(null);
   }, []);
 
   const fetchMe = useCallback(async () => {
@@ -33,6 +36,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const data = await api.get<MeResponse>("/me");
       setRole(data.member.role);
       setMemberId(data.member.id);
+      setAgentId(data.member.agentId);
     } catch {
       // If /me fails, role stays null — UI falls back to hiding admin features
     }
@@ -48,6 +52,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .then((data) => {
         setRole(data.member.role);
         setMemberId(data.member.id);
+        setAgentId(data.member.agentId);
       })
       .catch(() => {});
   }, []);
@@ -67,7 +72,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [logout]);
 
   return (
-    <AuthContext.Provider value={{ isAuthenticated, role, memberId, login, logout }}>{children}</AuthContext.Provider>
+    <AuthContext.Provider value={{ isAuthenticated, role, memberId, agentId, login, logout }}>
+      {children}
+    </AuthContext.Provider>
   );
 }
 

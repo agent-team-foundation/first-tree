@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import type { InboxEntryWithMessage, SessionState } from "@agent-team-foundation/first-tree-hub-shared";
+import type { InboxEntryWithMessage, RuntimeState, SessionState } from "@agent-team-foundation/first-tree-hub-shared";
 import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
 import type { ClientConnection } from "../client-connection.js";
 import { AgentConnection } from "../connection.js";
@@ -16,11 +16,11 @@ export type AgentSlotConfig = {
   handlerFactory: HandlerFactory;
   session: SessionConfig;
   concurrency: number;
-  /** M1: optional shared client connection */
+  /** Shared client connection for multiplexed mode. */
   clientConnection?: ClientConnection;
-  /** M1: runtime type for activity reporting */
+  /** Runtime type for activity reporting. */
   runtimeType?: string;
-  /** M1: runtime version for activity reporting */
+  /** Runtime version for activity reporting. */
   runtimeVersion?: string;
 };
 
@@ -33,6 +33,7 @@ export class AgentSlot {
   private agentId: string | null = null;
   private sdk: import("../sdk.js").FirstTreeHubSDK | null = null;
   private pollingTimer: ReturnType<typeof setInterval> | null = null;
+  private boundListeners: Array<{ event: string; fn: (...args: unknown[]) => void }> = [];
 
   constructor(config: AgentSlotConfig) {
     this.config = config;
@@ -73,15 +74,18 @@ export class AgentSlot {
 
       this.logFn(`Bound as ${agent.displayName ?? agent.agentId} (${agent.agentId})`);
 
-      this.clientConnection.on("agent:message", () => {
-        this.pullAndDispatch();
-      });
-
-      this.clientConnection.on("agent:bound", (boundAgent) => {
-        if (boundAgent.agentId === this.agentId) {
-          this.fullStateSync();
-        }
-      });
+      const onMessage = (agentId: string) => {
+        if (agentId === this.agentId) this.pullAndDispatch();
+      };
+      const onBound = (boundAgent: { agentId: string }) => {
+        if (boundAgent.agentId === this.agentId) this.fullStateSync();
+      };
+      this.clientConnection.on("agent:message", onMessage);
+      this.clientConnection.on("agent:bound", onBound);
+      this.boundListeners.push(
+        { event: "agent:message", fn: onMessage as (...args: unknown[]) => void },
+        { event: "agent:bound", fn: onBound as (...args: unknown[]) => void },
+      );
     } else {
       const conn = this.legacyConnection as AgentConnection;
       agent = await conn.connect();
@@ -113,9 +117,24 @@ export class AgentSlot {
       log: this.logFn,
       registryPath,
       onStateChange: this.clientConnection ? (chatId, state) => this.reportSessionState(chatId, state) : undefined,
+      onRuntimeStateChange: this.clientConnection ? (state) => this.reportRuntimeState(state) : undefined,
+      onSessionOutput: this.clientConnection
+        ? (chatId, content) => this.reportSessionOutput(chatId, content)
+        : undefined,
     });
 
     if (this.clientConnection) {
+      // Listen for session commands from server (suspend/resume/terminate)
+      const onCommand = (cmd: { agentId: string; chatId: string; type: string }) => {
+        if (cmd.agentId === this.agentId && this.sessionManager) {
+          this.sessionManager.handleCommand(cmd.chatId, cmd.type as "session:suspend").catch((err) => {
+            this.logFn(`Session command error: ${err instanceof Error ? err.message : String(err)}`);
+          });
+        }
+      };
+      this.clientConnection.on("session:command", onCommand);
+      this.boundListeners.push({ event: "session:command", fn: onCommand as (...args: unknown[]) => void });
+
       this.startPolling();
     } else {
       const conn = this.legacyConnection as AgentConnection;
@@ -132,6 +151,13 @@ export class AgentSlot {
       clearInterval(this.pollingTimer);
       this.pollingTimer = null;
     }
+    // Remove all registered listeners to prevent accumulation on restart
+    if (this.clientConnection) {
+      for (const { event, fn } of this.boundListeners) {
+        (this.clientConnection as unknown as { removeListener(e: string, f: unknown): void }).removeListener(event, fn);
+      }
+      this.boundListeners = [];
+    }
     if (this.clientConnection && this.agentId) {
       await this.clientConnection.unbindAgent(this.agentId);
     }
@@ -147,10 +173,26 @@ export class AgentSlot {
     this.clientConnection.reportSessionState(this.agentId, chatId, state);
   }
 
+  private reportRuntimeState(state: RuntimeState): void {
+    if (!this.clientConnection || !this.agentId) return;
+    this.clientConnection.reportRuntimeState(this.agentId, state);
+  }
+
+  private reportSessionOutput(chatId: string, content: string): void {
+    if (!this.clientConnection || !this.agentId) return;
+    this.clientConnection.reportSessionOutput(this.agentId, chatId, content);
+  }
+
   private fullStateSync(): void {
     if (!this.sessionManager || !this.clientConnection || !this.agentId) return;
+    // Re-sync per-session states
     for (const { chatId, state } of this.sessionManager.getSessionStates()) {
       this.clientConnection.reportSessionState(this.agentId, chatId, state);
+    }
+    // Re-sync aggregate runtime state so server doesn't hold stale value
+    const runtimeState = this.sessionManager.getAggregateRuntimeState();
+    if (runtimeState) {
+      this.clientConnection.reportRuntimeState(this.agentId, runtimeState);
     }
   }
 

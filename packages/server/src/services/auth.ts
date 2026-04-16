@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import bcrypt from "bcrypt";
 import { eq } from "drizzle-orm";
 import { jwtVerify, SignJWT } from "jose";
@@ -8,18 +9,23 @@ import { UnauthorizedError } from "../errors.js";
 
 const ACCESS_TOKEN_EXPIRY = "30m";
 const REFRESH_TOKEN_EXPIRY = "7d";
+const CONNECT_TOKEN_EXPIRY = "10m";
+
+/** In-memory set of consumed connect token JTIs. Entries auto-expire after 10 minutes. */
+const consumedConnectJtis = new Map<string, number>();
+const CONNECT_JTI_TTL_MS = 600_000;
 
 type TokenPayload = {
   sub: string;
   memberId: string;
   organizationId: string;
   role: string;
-  type: "access" | "refresh";
+  type: "access" | "refresh" | "connect";
 };
 
 async function signToken(
   secret: Uint8Array,
-  payload: Omit<TokenPayload, "type"> & { type: "access" | "refresh" },
+  payload: Omit<TokenPayload, "type"> & { type: TokenPayload["type"] },
   expiry: string,
 ): Promise<string> {
   return new SignJWT({ ...payload })
@@ -95,4 +101,93 @@ export async function refreshAccessToken(db: Database, refreshToken: string, jwt
   const tokenBase = { sub: user.id, memberId: member.id, organizationId: member.organizationId, role: member.role };
   const accessToken = await signToken(secret, { ...tokenBase, type: "access" }, ACCESS_TOKEN_EXPIRY);
   return { accessToken };
+}
+
+/**
+ * Generate a short-lived connect token for CLI authentication.
+ * The connect token carries the member's identity and can be exchanged
+ * for full access+refresh tokens via exchangeConnectToken().
+ */
+export async function generateConnectToken(
+  member: { userId: string; memberId: string; organizationId: string; role: string },
+  jwtSecretKey: string,
+): Promise<{ token: string; expiresIn: number }> {
+  const secret = new TextEncoder().encode(jwtSecretKey);
+  const jti = randomUUID();
+  const token = await new SignJWT({
+    sub: member.userId,
+    memberId: member.memberId,
+    organizationId: member.organizationId,
+    role: member.role,
+    type: "connect",
+  })
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuedAt()
+    .setJti(jti)
+    .setExpirationTime(CONNECT_TOKEN_EXPIRY)
+    .sign(secret);
+  return { token, expiresIn: 600 };
+}
+
+/**
+ * Exchange a connect token for full access+refresh tokens.
+ * Validates the connect token, verifies the user is still active,
+ * and issues a fresh token pair.
+ */
+export async function exchangeConnectToken(
+  db: Database,
+  connectToken: string,
+  jwtSecretKey: string,
+): Promise<{ accessToken: string; refreshToken: string }> {
+  const secret = new TextEncoder().encode(jwtSecretKey);
+
+  let payload: TokenPayload;
+  try {
+    const { payload: p } = await jwtVerify(connectToken, secret);
+    payload = p as unknown as TokenPayload;
+  } catch {
+    throw new UnauthorizedError("Invalid or expired connect token");
+  }
+
+  if (payload.type !== "connect" || !payload.sub || !payload.memberId) {
+    throw new UnauthorizedError("Invalid token type — expected connect token");
+  }
+
+  // One-time use: reject if jti already consumed
+  const jti = (payload as unknown as Record<string, unknown>).jti as string | undefined;
+  if (jti) {
+    if (consumedConnectJtis.has(jti)) {
+      throw new UnauthorizedError("Connect token has already been used");
+    }
+    consumedConnectJtis.set(jti, Date.now());
+    // Prune expired entries
+    const cutoff = Date.now() - CONNECT_JTI_TTL_MS;
+    for (const [k, ts] of consumedConnectJtis) {
+      if (ts < cutoff) consumedConnectJtis.delete(k);
+    }
+  }
+
+  // Verify user still exists and is active
+  const [user] = await db
+    .select({ id: users.id, status: users.status })
+    .from(users)
+    .where(eq(users.id, payload.sub))
+    .limit(1);
+
+  if (!user || user.status !== "active") {
+    throw new UnauthorizedError("User not found or suspended");
+  }
+
+  // Verify membership still exists
+  const [member] = await db.select().from(members).where(eq(members.id, payload.memberId)).limit(1);
+
+  if (!member) {
+    throw new UnauthorizedError("Membership not found");
+  }
+
+  const tokenBase = { sub: user.id, memberId: member.id, organizationId: member.organizationId, role: member.role };
+  const accessToken = await signToken(secret, { ...tokenBase, type: "access" }, ACCESS_TOKEN_EXPIRY);
+  const refreshToken = await signToken(secret, { ...tokenBase, type: "refresh" }, REFRESH_TOKEN_EXPIRY);
+
+  return { accessToken, refreshToken };
 }

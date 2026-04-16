@@ -5,6 +5,7 @@ import { Command } from "commander";
 import { registerAgentCommands } from "../commands/agent.js";
 import { registerClientCommands } from "../commands/client.js";
 import { registerConfigCommands } from "../commands/config.js";
+import { registerConnectCommand } from "../commands/connect.js";
 import { registerOnboardCommand } from "../commands/onboard.js";
 import { registerServerCommands } from "../commands/server.js";
 import { registerStatusCommand } from "../commands/status.js";
@@ -31,6 +32,9 @@ registerConfigCommands(program);
 
 // Global status overview
 registerStatusCommand(program);
+
+// Connect (first-time setup)
+registerConnectCommand(program);
 
 // Onboarding
 registerOnboardCommand(program);

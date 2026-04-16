@@ -63,6 +63,10 @@ export {
   createAgentTokenSchema,
 } from "./schemas/agent-token.js";
 export {
+  type ConnectTokenExchange,
+  type ConnectTokenResponse,
+  connectTokenExchangeSchema,
+  connectTokenResponseSchema,
   type Login,
   type LoginResponse,
   loginResponseSchema,
@@ -127,15 +131,30 @@ export {
 } from "./schemas/member.js";
 export {
   MESSAGE_FORMATS,
+  MESSAGE_SOURCES,
   type Message,
   type MessageFormat,
+  type MessageSource,
   messageFormatSchema,
   messageSchema,
+  messageSourceSchema,
   type SendMessage,
   type SendToAgent,
   sendMessageSchema,
   sendToAgentSchema,
 } from "./schemas/message.js";
+export {
+  NOTIFICATION_SEVERITIES,
+  NOTIFICATION_TYPES,
+  type Notification,
+  type NotificationQuery,
+  type NotificationSeverity,
+  type NotificationType,
+  notificationQuerySchema,
+  notificationSchema,
+  notificationSeveritySchema,
+  notificationTypeSchema,
+} from "./schemas/notification.js";
 export {
   type CreateOrganization,
   type CreateOrganizationInput,
@@ -157,6 +176,8 @@ export {
   presenceStatusSchema,
   RUNTIME_STATES,
   type RuntimeState,
+  type RuntimeStateMessage,
+  runtimeStateMessageSchema,
   runtimeStateSchema,
   SESSION_STATES,
   type SessionState,
@@ -164,6 +185,12 @@ export {
   sessionStateMessageSchema,
   sessionStateSchema,
 } from "./schemas/presence.js";
+export {
+  type SessionOutput,
+  type SessionOutputMessage,
+  sessionOutputMessageSchema,
+  sessionOutputSchema,
+} from "./schemas/session-output.js";
 export {
   type OrgStats,
   orgStatsSchema,

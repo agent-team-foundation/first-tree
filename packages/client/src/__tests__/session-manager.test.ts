@@ -1,36 +1,8 @@
-import type { InboxEntryWithMessage } from "@agent-team-foundation/first-tree-hub-shared";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentHandler, HandlerFactory, SessionContext } from "../runtime/handler.js";
 import { SessionManager } from "../runtime/session-manager.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
-
-/** Create a mock inbox entry for testing. */
-function mockEntry(opts: { id?: number; chatId?: string; content?: string } = {}): InboxEntryWithMessage {
-  const chatId = opts.chatId ?? "chat-1";
-  return {
-    id: opts.id ?? 1,
-    inboxId: "inbox-test",
-    messageId: `msg-${opts.id ?? 1}`,
-    chatId,
-    status: "delivered",
-    retryCount: 0,
-    createdAt: new Date().toISOString(),
-    deliveredAt: new Date().toISOString(),
-    ackedAt: null,
-    message: {
-      id: `msg-${opts.id ?? 1}`,
-      chatId,
-      senderId: "sender-1",
-      format: "text",
-      content: opts.content ?? "hello",
-      metadata: {},
-      replyToInbox: null,
-      replyToChat: null,
-      inReplyTo: null,
-      createdAt: new Date().toISOString(),
-    },
-  };
-}
+import { mockEntry } from "./test-helpers.js";
 
 /** Create a mock SDK that satisfies FirstTreeHubSDK shape. */
 function mockSdk(): FirstTreeHubSDK {
@@ -269,7 +241,7 @@ describe("SessionManager", () => {
           return sid;
         },
         async resume(msg, sessionId) {
-          lifecycleCalls.push({ type: "resume", chatId: msg.chatId, sessionId });
+          lifecycleCalls.push({ type: "resume", chatId: msg?.chatId ?? "", sessionId });
           return sessionId;
         },
       });

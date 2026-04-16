@@ -15,11 +15,14 @@ import { adminAdapterRoutes } from "./api/admin/adapters.js";
 import { adminAgentRoutes } from "./api/admin/agents.js";
 import { adminChatRoutes } from "./api/admin/chats.js";
 import { adminActivityRoutes, adminClientRoutes } from "./api/admin/clients.js";
+import { adminNotificationRoutes } from "./api/admin/notifications.js";
 import { adminOrganizationRoutes } from "./api/admin/organizations.js";
 import { adminOverviewRoutes } from "./api/admin/overview.js";
+import { adminSessionRoutes } from "./api/admin/sessions.js";
 import { adminStatsRoutes } from "./api/admin/stats.js";
 import { adminSystemConfigRoutes } from "./api/admin/system-config.js";
 import { adminTaskRoutes } from "./api/admin/tasks.js";
+import { adminWsRoutes } from "./api/admin/ws-admin.js";
 import { agentChatRoutes } from "./api/agent/chats.js";
 import { agentFeishuBotRoutes } from "./api/agent/feishu-bot.js";
 import { agentFeishuUserRoutes } from "./api/agent/feishu-user.js";
@@ -251,6 +254,24 @@ export async function buildApp(config: Config) {
         { prefix: "/admin/tasks" },
       );
 
+      // M1: Session visibility routes
+      await api.register(
+        async (adminApp) => {
+          adminApp.addHook("onRequest", memberAuth);
+          await adminApp.register(adminSessionRoutes);
+        },
+        { prefix: "/admin/sessions" },
+      );
+
+      // M1: Notification routes
+      await api.register(
+        async (adminApp) => {
+          adminApp.addHook("onRequest", memberAuth);
+          await adminApp.register(adminNotificationRoutes);
+        },
+        { prefix: "/admin/notifications" },
+      );
+
       // Public routes (no auth)
       await api.register(publicAgentRoutes, { prefix: "/public/agents" });
 
@@ -274,6 +295,9 @@ export async function buildApp(config: Config) {
 
       // M1: Client WebSocket (no auth at WS level — auth via agent:bind message)
       await api.register(clientWsRoutes(notifier, config.instanceId), { prefix: "/agent/ws" });
+
+      // M1: Admin WebSocket (JWT auth via query param)
+      await api.register(adminWsRoutes(notifier, config.secrets.jwtSecret), { prefix: "/ws" });
     },
     { prefix: "/api/v1" },
   );

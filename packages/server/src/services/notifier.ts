@@ -3,8 +3,10 @@ import type { WebSocket } from "ws";
 
 const INBOX_CHANNEL = "inbox_notifications";
 const CONFIG_CHANNEL = "config_changes";
+const SESSION_STATE_CHANNEL = "session_state_changes";
 
 export type ConfigChangeHandler = (channel: string) => void;
+export type SessionStateChangeHandler = (payload: { agentId: string; chatId: string; state: string }) => void;
 
 export type Notifier = {
   /** Subscribe a WebSocket connection for an inbox */
@@ -15,8 +17,12 @@ export type Notifier = {
   notify(inboxId: string, messageId: string): Promise<void>;
   /** Notify that a config has changed */
   notifyConfigChange(configType: string): Promise<void>;
+  /** Notify that a session state has changed */
+  notifySessionStateChange(agentId: string, chatId: string, state: string): Promise<void>;
   /** Register a handler for config change notifications */
   onConfigChange(handler: ConfigChangeHandler): void;
+  /** Register a handler for session state change notifications */
+  onSessionStateChange(handler: SessionStateChangeHandler): void;
   /** Start listening for PG notifications */
   start(): Promise<void>;
   /** Stop listening */
@@ -26,8 +32,10 @@ export type Notifier = {
 export function createNotifier(listenClient: postgres.Sql): Notifier {
   const subscriptions = new Map<string, Set<WebSocket>>();
   const configChangeHandlers: ConfigChangeHandler[] = [];
+  const sessionStateChangeHandlers: SessionStateChangeHandler[] = [];
   let unlistenInboxFn: (() => Promise<void>) | null = null;
   let unlistenConfigFn: (() => Promise<void>) | null = null;
+  let unlistenSessionStateFn: (() => Promise<void>) | null = null;
 
   function handleNotification(payload: string) {
     // payload format: "inboxId:messageId"
@@ -83,8 +91,20 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       }
     },
 
+    async notifySessionStateChange(agentId: string, chatId: string, state: string) {
+      try {
+        await listenClient`SELECT pg_notify(${SESSION_STATE_CHANNEL}, ${`${agentId}:${chatId}:${state}`})`;
+      } catch {
+        // fire-and-forget
+      }
+    },
+
     onConfigChange(handler: ConfigChangeHandler) {
       configChangeHandlers.push(handler);
+    },
+
+    onSessionStateChange(handler: SessionStateChangeHandler) {
+      sessionStateChangeHandlers.push(handler);
     },
 
     async start() {
@@ -101,6 +121,23 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
         }
       });
       unlistenConfigFn = configResult.unlisten;
+
+      const sessionStateResult = await listenClient.listen(SESSION_STATE_CHANNEL, (payload) => {
+        if (payload) {
+          // payload format: "agentId:chatId:state"
+          const firstSep = payload.indexOf(":");
+          const secondSep = payload.indexOf(":", firstSep + 1);
+          if (firstSep > 0 && secondSep > firstSep) {
+            const agentId = payload.slice(0, firstSep);
+            const chatId = payload.slice(firstSep + 1, secondSep);
+            const state = payload.slice(secondSep + 1);
+            for (const handler of sessionStateChangeHandlers) {
+              handler({ agentId, chatId, state });
+            }
+          }
+        }
+      });
+      unlistenSessionStateFn = sessionStateResult.unlisten;
     },
 
     async stop() {
@@ -111,6 +148,10 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       if (unlistenConfigFn) {
         await unlistenConfigFn();
         unlistenConfigFn = null;
+      }
+      if (unlistenSessionStateFn) {
+        await unlistenSessionStateFn();
+        unlistenSessionStateFn = null;
       }
     },
   };
