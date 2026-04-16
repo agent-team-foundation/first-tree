@@ -8,6 +8,7 @@ import {
   FRAMEWORK_VERSION,
   FIRST_TREE_INDEX_FILE,
   INSTALLED_PROGRESS,
+  INSTALLED_SKILL_REQUIRED_FILES,
   INSTALLED_SKILL_VERSION,
   LEGACY_AGENT_INSTRUCTIONS_FILE,
   LEGACY_PROGRESS,
@@ -201,8 +202,7 @@ export class Repo {
   missingInstalledSkillRoots(): string[] {
     return this.installedSkillRoots().filter(
       (root) =>
-        !this.pathExists(join(root, "SKILL.md")) ||
-        !this.pathExists(join(root, "VERSION")),
+        INSTALLED_SKILL_REQUIRED_FILES.some((relPath) => !this.pathExists(join(root, relPath))),
     );
   }
 

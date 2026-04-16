@@ -27,6 +27,33 @@ export function useTmpDir(): TmpDir {
   return { path: dir };
 }
 
+function writeCurrentSkillReferences(skillRoot: string): void {
+  writeFileSync(
+    join(skillRoot, "references", "whitepaper.md"),
+    "# First Tree — White Paper\n",
+  );
+  writeFileSync(
+    join(skillRoot, "references", "onboarding.md"),
+    "# Context Tree Onboarding\n",
+  );
+  writeFileSync(
+    join(skillRoot, "references", "source-workspace-installation.md"),
+    "# Source/Workspace Installation Contract\n",
+  );
+  writeFileSync(
+    join(skillRoot, "references", "principles.md"),
+    "# Tree Principles\n",
+  );
+  writeFileSync(
+    join(skillRoot, "references", "ownership-and-naming.md"),
+    "# Node Naming and Ownership Model\n",
+  );
+  writeFileSync(
+    join(skillRoot, "references", "upgrade-contract.md"),
+    "# Upgrade Contract\n",
+  );
+}
+
 export function makeFramework(root: string, version = "0.1.0"): void {
   for (const skillRoot of [SKILL_ROOT, CLAUDE_SKILL_ROOT]) {
     mkdirSync(join(root, skillRoot, "references"), { recursive: true });
@@ -34,10 +61,7 @@ export function makeFramework(root: string, version = "0.1.0"): void {
       join(root, skillRoot, "SKILL.md"),
       "---\nname: first-tree\ndescription: installed\n---\n",
     );
-    writeFileSync(
-      join(root, skillRoot, "references", "whitepaper.md"),
-      "# First Tree — White Paper\n",
-    );
+    writeCurrentSkillReferences(join(root, skillRoot));
     writeFileSync(
       join(root, skillRoot, "VERSION"),
       `${version}\n`,
@@ -134,10 +158,7 @@ export function makeSourceSkill(root: string, version = "0.2.0"): void {
     join(frameworkRoot, "manifest.json"),
     "{}\n",
   );
-  writeFileSync(
-    join(skillRoot, "references", "whitepaper.md"),
-    "# About Context Tree\n",
-  );
+  writeCurrentSkillReferences(skillRoot);
   writeFileSync(
     join(frameworkRoot, "VERSION"),
     `${version}\n`,

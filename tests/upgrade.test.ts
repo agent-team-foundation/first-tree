@@ -16,11 +16,13 @@ import { writeTreeBinding } from "#products/tree/engine/runtime/binding-state.js
 import {
   AGENT_INSTRUCTIONS_FILE,
   CLAUDE_INSTRUCTIONS_FILE,
+  CLAUDE_SKILL_ROOT,
   FIRST_TREE_INDEX_FILE,
   FRAMEWORK_VERSION,
   INSTALLED_PROGRESS,
   INSTALLED_SKILL_VERSION,
   LEGACY_AGENT_INSTRUCTIONS_FILE,
+  SKILL_ROOT,
   SOURCE_INTEGRATION_MARKER,
   TREE_PROGRESS,
   TREE_VERSION,
@@ -44,6 +46,21 @@ function expectFirstTreeIndexSymlink(root: string): void {
   expect(readlinkSync(path)).toBe(
     join(".agents", "skills", "first-tree", "references", "whitepaper.md"),
   );
+}
+
+function makeLegacyAboutInstalledSkill(root: string, version = "0.2.0"): void {
+  for (const skillRoot of [SKILL_ROOT, CLAUDE_SKILL_ROOT]) {
+    mkdirSync(join(root, skillRoot, "references"), { recursive: true });
+    writeFileSync(
+      join(root, skillRoot, "SKILL.md"),
+      "---\nname: first-tree\ndescription: installed\n---\n",
+    );
+    writeFileSync(
+      join(root, skillRoot, "references", "about.md"),
+      "# Legacy About\n",
+    );
+    writeFileSync(join(root, skillRoot, "VERSION"), `${version}\n`);
+  }
 }
 
 function writeStaleInjectContextSettings(
@@ -364,11 +381,11 @@ describe("runUpgrade", () => {
     );
   });
 
-  it("removes a managed legacy FIRST_TREE.md while installing WHITEPAPER.md", () => {
+  it("reinstalls an older 0.2.x skill before replacing FIRST_TREE.md with WHITEPAPER.md", () => {
     const repoDir = useTmpDir();
     const sourceDir = useTmpDir();
     makeSourceRepo(repoDir.path);
-    makeFramework(repoDir.path, "0.2.0");
+    makeLegacyAboutInstalledSkill(repoDir.path, "0.2.0");
     writeFileSync(
       join(repoDir.path, AGENT_INSTRUCTIONS_FILE),
       `${SOURCE_INTEGRATION_MARKER} old text\n`,
@@ -376,17 +393,6 @@ describe("runUpgrade", () => {
     writeFileSync(
       join(repoDir.path, CLAUDE_INSTRUCTIONS_FILE),
       `${SOURCE_INTEGRATION_MARKER} old text\n`,
-    );
-    writeFileSync(
-      join(
-        repoDir.path,
-        ".agents",
-        "skills",
-        "first-tree",
-        "references",
-        "about.md",
-      ),
-      "# Legacy About\n",
     );
     symlinkSync(
       join(".agents", "skills", "first-tree", "references", "about.md"),
@@ -400,6 +406,12 @@ describe("runUpgrade", () => {
 
     expect(result).toBe(0);
     expect(() => lstatSync(join(repoDir.path, "FIRST_TREE.md"))).toThrow();
+    expect(readFileSync(join(repoDir.path, INSTALLED_SKILL_VERSION), "utf-8").trim()).toBe("0.2.0");
+    expect(readFileSync(join(repoDir.path, SKILL_ROOT, "SKILL.md"), "utf-8")).toContain(
+      "description: test",
+    );
+    expect(existsSync(join(repoDir.path, SKILL_ROOT, "references", "about.md"))).toBe(false);
+    expect(existsSync(join(repoDir.path, SKILL_ROOT, "references", "whitepaper.md"))).toBe(true);
     expectFirstTreeIndexSymlink(repoDir.path);
     expect(existsSync(join(repoDir.path, INSTALLED_PROGRESS))).toBe(false);
   });

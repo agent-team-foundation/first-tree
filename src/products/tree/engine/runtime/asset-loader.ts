@@ -11,6 +11,16 @@ export const BUNDLED_SKILL_ROOT = join("skills", "tree");
 export const SKILL_ROOT = join(".agents", "skills", SKILL_NAME);
 export const CLAUDE_SKILL_ROOT = join(".claude", "skills", SKILL_NAME);
 export const INSTALLED_SKILL_ROOTS = [SKILL_ROOT, CLAUDE_SKILL_ROOT] as const;
+export const INSTALLED_SKILL_REQUIRED_FILES = [
+  "SKILL.md",
+  "VERSION",
+  join("references", "whitepaper.md"),
+  join("references", "onboarding.md"),
+  join("references", "source-workspace-installation.md"),
+  join("references", "principles.md"),
+  join("references", "ownership-and-naming.md"),
+  join("references", "upgrade-contract.md"),
+] as const;
 export const FIRST_TREE_INDEX_FILE = "WHITEPAPER.md";
 export const TREE_RUNTIME_ROOT = ".first-tree";
 export const TREE_VERSION = join(TREE_RUNTIME_ROOT, "VERSION");
