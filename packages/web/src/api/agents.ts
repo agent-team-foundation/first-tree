@@ -39,14 +39,32 @@ export function reactivateAgent(uuid: string): Promise<Agent> {
   return api.post<Agent>(`/admin/agents/${encodeURIComponent(uuid)}/reactivate`, {});
 }
 
+export function provisionAgent(uuid: string, clientId: string): Promise<{ provisioned: boolean; clientId: string }> {
+  return api.post(`/admin/agents/${encodeURIComponent(uuid)}/provision`, { clientId });
+}
+
 // -- Test Connection --
 
+export type ConnectionInfo = {
+  health: "connected" | "stale" | "disconnected";
+  runtimeState: string | null;
+  lastSeenAt: string | null;
+  client: {
+    id: string;
+    hostname: string | null;
+    os: string | null;
+    sdkVersion: string | null;
+    connectedAt: string | null;
+  } | null;
+};
+
 export type TestResult = {
-  status: "success" | "timeout" | "offline" | "error";
+  status: "success" | "timeout" | "offline" | "stale" | "error";
   message?: string;
   chatId?: string;
   responseContent?: string;
   responseTime?: number;
+  connection?: ConnectionInfo;
 };
 
 export function testAgentConnection(uuid: string): Promise<TestResult> {

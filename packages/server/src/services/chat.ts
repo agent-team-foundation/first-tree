@@ -119,6 +119,14 @@ export async function assertParticipant(db: Database, chatId: string, agentId: s
   }
 }
 
+/** Ensure an agent is a participant of a chat. Silently adds them if not already. */
+export async function ensureParticipant(db: Database, chatId: string, agentId: string): Promise<void> {
+  await db
+    .insert(chatParticipants)
+    .values({ chatId, agentId, mode: "full" })
+    .onConflictDoNothing({ target: [chatParticipants.chatId, chatParticipants.agentId] });
+}
+
 export async function addParticipant(db: Database, chatId: string, requesterId: string, data: AddParticipant) {
   // Verify chat exists
   const chat = await getChat(db, chatId);

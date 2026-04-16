@@ -1,5 +1,18 @@
 import { z } from "zod";
 
+// -- Message Source (which entry point created this message) --
+
+export const MESSAGE_SOURCES = {
+  HUB_UI: "hub_ui",
+  CLI: "cli",
+  FEISHU: "feishu",
+  GITHUB: "github",
+  API: "api",
+} as const;
+
+export const messageSourceSchema = z.enum(["hub_ui", "cli", "feishu", "github", "api"]);
+export type MessageSource = z.infer<typeof messageSourceSchema>;
+
 export const MESSAGE_FORMATS = {
   TEXT: "text",
   MARKDOWN: "markdown",
@@ -20,6 +33,7 @@ export const sendMessageSchema = z.object({
   inReplyTo: z.string().optional(),
   replyToInbox: z.string().optional(),
   replyToChat: z.string().optional(),
+  source: messageSourceSchema.optional(),
 });
 export type SendMessage = z.infer<typeof sendMessageSchema>;
 
@@ -29,6 +43,7 @@ export const sendToAgentSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
   replyToInbox: z.string().optional(),
   replyToChat: z.string().optional(),
+  source: messageSourceSchema.optional(),
 });
 export type SendToAgent = z.infer<typeof sendToAgentSchema>;
 
@@ -42,6 +57,7 @@ export const messageSchema = z.object({
   replyToInbox: z.string().nullable(),
   replyToChat: z.string().nullable(),
   inReplyTo: z.string().nullable(),
+  source: messageSourceSchema.nullable(),
   createdAt: z.string(),
 });
 export type Message = z.infer<typeof messageSchema>;

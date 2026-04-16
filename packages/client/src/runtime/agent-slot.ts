@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import type { InboxEntryWithMessage, SessionState } from "@agent-team-foundation/first-tree-hub-shared";
+import type { InboxEntryWithMessage, RuntimeState, SessionState } from "@agent-team-foundation/first-tree-hub-shared";
 import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
 import type { ClientConnection } from "../client-connection.js";
 import { AgentConnection } from "../connection.js";
@@ -16,11 +16,11 @@ export type AgentSlotConfig = {
   handlerFactory: HandlerFactory;
   session: SessionConfig;
   concurrency: number;
-  /** M1: optional shared client connection */
+  /** Shared client connection for multiplexed mode. */
   clientConnection?: ClientConnection;
-  /** M1: runtime type for activity reporting */
+  /** Runtime type for activity reporting. */
   runtimeType?: string;
-  /** M1: runtime version for activity reporting */
+  /** Runtime version for activity reporting. */
   runtimeVersion?: string;
 };
 
@@ -113,9 +113,22 @@ export class AgentSlot {
       log: this.logFn,
       registryPath,
       onStateChange: this.clientConnection ? (chatId, state) => this.reportSessionState(chatId, state) : undefined,
+      onRuntimeStateChange: this.clientConnection ? (state) => this.reportRuntimeState(state) : undefined,
+      onSessionOutput: this.clientConnection
+        ? (chatId, content) => this.reportSessionOutput(chatId, content)
+        : undefined,
     });
 
     if (this.clientConnection) {
+      // Listen for session commands from server (suspend/resume/terminate)
+      this.clientConnection.on("session:command", (cmd) => {
+        if (cmd.agentId === this.agentId && this.sessionManager) {
+          this.sessionManager.handleCommand(cmd.chatId, cmd.type).catch((err) => {
+            this.logFn(`Session command error: ${err instanceof Error ? err.message : String(err)}`);
+          });
+        }
+      });
+
       this.startPolling();
     } else {
       const conn = this.legacyConnection as AgentConnection;
@@ -145,6 +158,16 @@ export class AgentSlot {
   private reportSessionState(chatId: string, state: SessionState): void {
     if (!this.clientConnection || !this.agentId) return;
     this.clientConnection.reportSessionState(this.agentId, chatId, state);
+  }
+
+  private reportRuntimeState(state: RuntimeState): void {
+    if (!this.clientConnection || !this.agentId) return;
+    this.clientConnection.reportRuntimeState(this.agentId, state);
+  }
+
+  private reportSessionOutput(chatId: string, content: string): void {
+    if (!this.clientConnection || !this.agentId) return;
+    this.clientConnection.reportSessionOutput(this.agentId, chatId, content);
   }
 
   private fullStateSync(): void {

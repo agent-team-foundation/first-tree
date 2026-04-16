@@ -114,6 +114,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       if (!currentQuery) return;
 
       try {
+        sessionCtx.setRuntimeState("working");
+
         for await (const message of currentQuery) {
           // Every message refreshes lastActivity to prevent idle timeout
           sessionCtx.touch();
@@ -133,6 +135,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
               retryCount = 0;
               // Auto-bridge: forward result text back to the chat
               if (result.result && sessionCtx.chatId) {
+                sessionCtx.appendOutput(result.result);
+
                 sessionCtx.sdk
                   .sendMessage(sessionCtx.chatId, { format: "text", content: result.result })
                   .then(() => sessionCtx.log("Result forwarded to chat"))
@@ -142,13 +146,14 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
               }
             } else {
               const errors = result.errors ? result.errors.join("; ") : result.subtype;
-              sessionCtx.log(
-                `Query result error: ${errors} (subtype=${result.subtype}, turns=${result.num_turns ?? "?"}, duration=${result.duration_ms ?? "?"}ms)`,
-              );
+              const errorLog = `Query result error: ${errors} (subtype=${result.subtype}, turns=${result.num_turns ?? "?"}, duration=${result.duration_ms ?? "?"}ms)`;
+              sessionCtx.log(errorLog);
+              sessionCtx.appendOutput(`[ERROR] ${errorLog}`);
             }
+            sessionCtx.setRuntimeState("idle");
           }
         }
-        // Normal completion — exit loop
+        sessionCtx.setRuntimeState("idle");
         return;
       } catch (err) {
         // Process crash, OOM, or unexpected termination
@@ -167,6 +172,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
 
         if (retryCount >= MAX_RETRIES || !claudeSessionId) {
           sessionCtx.log("Exhausted retries, session will be suspended");
+          sessionCtx.setRuntimeState("error");
           return;
         }
 

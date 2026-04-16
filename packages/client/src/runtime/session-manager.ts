@@ -25,6 +25,7 @@ type SessionEntry = {
 type PendingMessage = {
   message: SessionMessage;
   chatId: string;
+  entryId: number;
 };
 
 type SessionManagerConfig = {
@@ -36,15 +37,19 @@ type SessionManagerConfig = {
   sdk: FirstTreeHubSDK;
   log: (msg: string) => void;
   registryPath?: string;
-  /** M1: callback when a session state changes (per-session granularity) */
+  /** Callback when a session state changes (per-session granularity). */
   onStateChange?: (chatId: string, state: SessionState) => void;
+  /** Callback when aggregated runtime state changes. */
+  onRuntimeStateChange?: (state: "idle" | "working" | "blocked" | "error") => void;
+  /** Callback when a session produces output text. */
+  onSessionOutput?: (chatId: string, content: string) => void;
 };
 
 /**
  * Manages per-chat session entries with session-oriented handler lifecycle.
  *
- * Key differences from the old SessionManager:
- * - Immediate ACK at dispatch (before handler processing)
+ * Key design:
+ * - Delayed ACK: messages are ACKed when handler starts processing
  * - Three session states: active / suspended / evicted
  * - Streaming input injection for active sessions
  * - Concurrency limit on simultaneously active sessions
@@ -61,6 +66,8 @@ export class SessionManager {
   private readonly registry: SessionRegistry | null;
   private readonly pendingQueue: PendingMessage[] = [];
   private readonly lastReportedStates = new Map<string, SessionState>();
+  private readonly sessionRuntimeStates = new Map<string, "idle" | "working" | "blocked" | "error">();
+  private lastReportedRuntimeState: "idle" | "working" | "blocked" | "error" | null = null;
   private idleTimer: ReturnType<typeof setInterval> | null = null;
   private _activeCount = 0;
 
@@ -73,30 +80,68 @@ export class SessionManager {
     this.loadPersistedSessions();
   }
 
-  /** Dispatch an inbox entry. ACK immediately, then route by session state. */
+  /**
+   * Dispatch an inbox entry. ACK is deferred until handler starts processing.
+   *
+   * Delayed ACK: messages are ACKed when the handler begins processing,
+   * not on pull. `delivered` = pulled but not yet processing,
+   * `acked` = handler has started processing (read receipt).
+   */
   async dispatch(entry: InboxEntryWithMessage): Promise<void> {
     const chatId = entry.chatId ?? entry.message.chatId;
     const messageId = entry.message.id;
 
-    // 1. Immediate ACK — Runtime owns processing guarantee from here
-    try {
-      await this.config.sdk.ack(entry.id);
-    } catch {
-      // ACK failure is non-fatal; message may be redelivered
-      this.config.log(`Session ${chatId}: ACK failed for entry ${entry.id}, continuing`);
-    }
-
-    // 2. Deduplication
+    // 1. Deduplication
     if (this.deduplicator.isDuplicate(messageId)) {
       this.config.log(`Session ${chatId}: duplicate message ${messageId}, skipping`);
       return;
     }
 
-    // 3. Extract message content (handler does not see inbox metadata)
+    // 2. Extract message content (handler does not see inbox metadata)
     const message = this.extractMessage(entry);
 
-    // 4. Route by session state
-    await this.routeMessage(chatId, message);
+    // 3. Route by session state — ACK happens inside route when handler starts
+    await this.routeMessage(chatId, message, entry.id);
+  }
+
+  /** Handle a session command from the server (suspend/resume/terminate). */
+  async handleCommand(
+    chatId: string,
+    command: "session:suspend" | "session:resume" | "session:terminate",
+  ): Promise<void> {
+    const session = this.sessions.get(chatId);
+
+    if (command === "session:suspend") {
+      if (session?.status === "active") {
+        this.config.log(`Session ${chatId}: suspend command received`);
+        this.suspendSession(session);
+      }
+    } else if (command === "session:resume") {
+      if (session?.status === "suspended") {
+        this.config.log(`Session ${chatId}: resume command received`);
+        // Resume with no new message — handler resumes its previous state
+        await this.resumeSession(session, { id: "", chatId, senderId: "", format: "text", content: "", metadata: {} });
+      }
+    } else if (command === "session:terminate") {
+      if (session) {
+        this.config.log(`Session ${chatId}: terminate command received`);
+        if (session.status === "active") {
+          this._activeCount--;
+          await session.handler.shutdown();
+        }
+        // Move to evicted
+        this.addEvictedMapping(chatId, {
+          claudeSessionId: session.claudeSessionId,
+          lastActivity: session.lastActivity,
+        });
+        this.sessions.delete(chatId);
+        this.sessionRuntimeStates.delete(chatId);
+        this.recomputeRuntimeState();
+        this.notifySessionState(chatId, "evicted");
+        this.persistRegistry();
+        this.drainPendingQueue();
+      }
+    }
   }
 
   /** Shut down all sessions gracefully. */
@@ -125,6 +170,8 @@ export class SessionManager {
     this.sessions.clear();
     this.evictedMappings.clear();
     this.lastReportedStates.clear();
+    this.sessionRuntimeStates.clear();
+    this.lastReportedRuntimeState = null;
     this._activeCount = 0;
   }
 
@@ -146,13 +193,14 @@ export class SessionManager {
 
   // ---- Internal -----------------------------------------------------------
 
-  private async routeMessage(chatId: string, message: SessionMessage): Promise<void> {
+  private async routeMessage(chatId: string, message: SessionMessage, entryId?: number): Promise<void> {
     const existing = this.sessions.get(chatId);
 
     if (existing) {
       switch (existing.status) {
         case "active":
-          // Inject into running session
+          // ACK before injecting — handler is already processing
+          await this.ackEntry(entryId, chatId);
           existing.handler.inject(message);
           existing.lastActivity = Date.now();
           this.config.log(`Session ${chatId}: message injected`);
@@ -160,19 +208,22 @@ export class SessionManager {
 
         case "suspended":
         case "evicted":
-          // Resume session
-          await this.resumeSession(existing, message);
+          // Resume session — ACK happens inside resumeSession
+          await this.resumeSession(existing, message, entryId);
           return;
       }
     }
 
     // No existing session — create new
-    await this.startNewSession(chatId, message);
+    await this.startNewSession(chatId, message, entryId);
   }
 
-  private async startNewSession(chatId: string, message: SessionMessage): Promise<void> {
+  private async startNewSession(chatId: string, message: SessionMessage, entryId?: number): Promise<void> {
     // Enforce concurrency limit
-    if (!this.acquireActiveSlot(chatId, message)) return;
+    if (!this.acquireActiveSlot(chatId, message, entryId)) return;
+
+    // ACK now — handler is about to start processing
+    await this.ackEntry(entryId, chatId);
 
     // Enforce max_sessions (evict LRU)
     this.evictIfNeeded();
@@ -213,18 +264,23 @@ export class SessionManager {
         `Session ${chatId}: ${evicted ? "resume" : "start"} failed: ${err instanceof Error ? err.message : String(err)}`,
       );
       this.sessions.delete(chatId);
+      this.sessionRuntimeStates.delete(chatId);
+      this.recomputeRuntimeState();
       this._activeCount--;
     }
   }
 
-  private async resumeSession(entry: SessionEntry, message: SessionMessage): Promise<void> {
+  private async resumeSession(entry: SessionEntry, message: SessionMessage, entryId?: number): Promise<void> {
     // Wait for in-flight suspension to complete before resuming
     if (entry.suspending) {
       await entry.suspending;
     }
 
     // Enforce concurrency limit
-    if (!this.acquireActiveSlot(entry.chatId, message)) return;
+    if (!this.acquireActiveSlot(entry.chatId, message, entryId)) return;
+
+    // ACK now — handler is about to resume processing
+    await this.ackEntry(entryId, entry.chatId);
 
     const ctx = this.buildSessionContext(entry.chatId);
     entry.status = "active";
@@ -250,7 +306,7 @@ export class SessionManager {
    *
    * Returns true if slot acquired, false if queued.
    */
-  private acquireActiveSlot(chatId: string, message: SessionMessage): boolean {
+  private acquireActiveSlot(chatId: string, message: SessionMessage, entryId?: number): boolean {
     if (this._activeCount < this.config.concurrency) return true;
 
     // Find least-recently-active session (excluding the target chat)
@@ -269,15 +325,18 @@ export class SessionManager {
       return true;
     }
 
-    // All active sessions are busy — queue
+    // All active sessions are busy — queue (no ACK yet — message stays as delivered)
     this.config.log(`Session ${chatId}: concurrency limit reached, queuing`);
-    this.pendingQueue.push({ message, chatId });
+    this.pendingQueue.push({ message, chatId, entryId: entryId ?? 0 });
     return false;
   }
 
   private suspendSession(entry: SessionEntry): void {
     entry.status = "suspended";
     this._activeCount--;
+    // Clear per-session runtime state on suspend
+    this.sessionRuntimeStates.delete(entry.chatId);
+    this.recomputeRuntimeState();
     entry.suspending = entry.handler
       .suspend()
       .catch((err) => {
@@ -299,8 +358,8 @@ export class SessionManager {
 
     const next = this.pendingQueue.shift();
     if (!next) return;
-    // Route asynchronously
-    this.routeMessage(next.chatId, next.message).catch((err) => {
+    // Route asynchronously — entryId is passed for delayed ACK
+    this.routeMessage(next.chatId, next.message, next.entryId || undefined).catch((err) => {
       this.config.log(
         `Session ${next.chatId}: pending drain error: ${err instanceof Error ? err.message : String(err)}`,
       );
@@ -340,18 +399,34 @@ export class SessionManager {
       candidate.session.status = "evicted";
       this.notifySessionState(candidate.key, "evicted");
       this.sessions.delete(candidate.key);
+      this.sessionRuntimeStates.delete(candidate.key);
+      this.recomputeRuntimeState();
       this.persistRegistry();
     }
   }
 
   private evictIdle(): void {
     const timeoutMs = this.config.session.idle_timeout * 1000;
+    // Blocked detection — 2 minutes without activity while session is active
+    const blockedThresholdMs = 120_000;
     const now = Date.now();
 
     for (const [, session] of this.sessions) {
-      if (session.status === "active" && now - session.lastActivity > timeoutMs) {
+      if (session.status !== "active") continue;
+      const inactiveMs = now - session.lastActivity;
+
+      if (inactiveMs > timeoutMs) {
         this.config.log(`Session ${session.chatId}: idle ${this.config.session.idle_timeout}s, suspending`);
         this.suspendSession(session);
+      } else if (inactiveMs > blockedThresholdMs) {
+        // Only mark blocked if handler was actively working — don't override idle
+        const currentState = this.sessionRuntimeStates.get(session.chatId);
+        if (currentState === "working") {
+          this.config.log(
+            `Session ${session.chatId}: working but no output for ${Math.round(inactiveMs / 1000)}s, marking blocked`,
+          );
+          this.setSessionRuntimeState(session.chatId, "blocked");
+        }
       }
     }
   }
@@ -374,6 +449,16 @@ export class SessionManager {
     this.config.onStateChange(chatId, state);
   }
 
+  /** ACK an inbox entry — delayed until handler starts processing. */
+  private async ackEntry(entryId: number | undefined, chatId: string): Promise<void> {
+    if (!entryId) return;
+    try {
+      await this.config.sdk.ack(entryId);
+    } catch {
+      this.config.log(`Session ${chatId}: ACK failed for entry ${entryId}, continuing`);
+    }
+  }
+
   private buildSessionContext(chatId: string): SessionContext {
     return {
       agent: this.config.agentIdentity,
@@ -382,11 +467,48 @@ export class SessionManager {
       chatId,
       touch: () => {
         const entry = this.sessions.get(chatId);
-        if (entry) {
+        if (entry && entry.status === "active") {
           entry.lastActivity = Date.now();
         }
       },
+      setRuntimeState: (state) => {
+        this.setSessionRuntimeState(chatId, state);
+      },
+      appendOutput: (content) => {
+        this.config.onSessionOutput?.(chatId, content);
+      },
     };
+  }
+
+  /** Update per-session runtime state and recompute aggregate. Only active sessions may update. */
+  private setSessionRuntimeState(chatId: string, state: "idle" | "working" | "blocked" | "error"): void {
+    const session = this.sessions.get(chatId);
+    if (!session || session.status !== "active") return;
+    this.sessionRuntimeStates.set(chatId, state);
+    this.recomputeRuntimeState();
+  }
+
+  /** Aggregate per-session runtime states: error > blocked > working > idle. */
+  private recomputeRuntimeState(): void {
+    if (!this.config.onRuntimeStateChange) return;
+
+    let aggregate: "idle" | "working" | "blocked" | "error" = "idle";
+    for (const state of this.sessionRuntimeStates.values()) {
+      if (state === "error") {
+        aggregate = "error";
+        break;
+      }
+      if (state === "blocked") {
+        aggregate = "blocked";
+      } else if (state === "working" && aggregate !== "blocked") {
+        aggregate = "working";
+      }
+    }
+
+    if (aggregate !== this.lastReportedRuntimeState) {
+      this.lastReportedRuntimeState = aggregate;
+      this.config.onRuntimeStateChange(aggregate);
+    }
   }
 
   private extractMessage(entry: InboxEntryWithMessage): SessionMessage {

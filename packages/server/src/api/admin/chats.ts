@@ -1,9 +1,13 @@
-import { paginationQuerySchema } from "@agent-team-foundation/first-tree-hub-shared";
+import { paginationQuerySchema, sendMessageSchema } from "@agent-team-foundation/first-tree-hub-shared";
 import { and, desc, eq, lt, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { chatParticipants, chats } from "../../db/schema/chats.js";
+import { inboxEntries } from "../../db/schema/inbox-entries.js";
 import { messages } from "../../db/schema/messages.js";
 import { BadRequestError } from "../../errors.js";
+import { ensureParticipant } from "../../services/chat.js";
+import { sendMessage } from "../../services/message.js";
+import { notifyRecipients } from "../../services/notifier.js";
 import { resolveDefaultOrgId, resolveOrganization } from "../../services/organization.js";
 
 export async function adminChatRoutes(app: FastifyInstance): Promise<void> {
@@ -83,7 +87,7 @@ export async function adminChatRoutes(app: FastifyInstance): Promise<void> {
     };
   });
 
-  /** List messages in a chat (read-only, for admin audit) */
+  /** List messages in a chat with delivery status (for admin audit + read receipts) */
   app.get<{ Params: { chatId: string } }>("/:chatId/messages", async (request) => {
     const { chatId } = request.params;
     const query = paginationQuerySchema.parse(request.query);
@@ -93,7 +97,30 @@ export async function adminChatRoutes(app: FastifyInstance): Promise<void> {
       : eq(messages.chatId, chatId);
 
     const rows = await app.db
-      .select()
+      .select({
+        id: messages.id,
+        chatId: messages.chatId,
+        senderId: messages.senderId,
+        format: messages.format,
+        content: messages.content,
+        metadata: messages.metadata,
+        replyToInbox: messages.replyToInbox,
+        replyToChat: messages.replyToChat,
+        inReplyTo: messages.inReplyTo,
+        source: messages.source,
+        createdAt: messages.createdAt,
+        // Best delivery status across all recipients: acked > delivered > pending
+        // Use raw "messages"."id" in subquery — ${messages.id} renders unqualified "id"
+        // which PG resolves to inbox_entries.id (bigint) instead of messages.id (text)
+        deliveryStatus: sql<string>`(
+          SELECT CASE
+            WHEN EXISTS (SELECT 1 FROM ${inboxEntries} ie WHERE ie.message_id = "messages"."id" AND ie.status = 'acked') THEN 'acked'
+            WHEN EXISTS (SELECT 1 FROM ${inboxEntries} ie WHERE ie.message_id = "messages"."id" AND ie.status = 'delivered') THEN 'delivered'
+            WHEN EXISTS (SELECT 1 FROM ${inboxEntries} ie WHERE ie.message_id = "messages"."id") THEN 'pending'
+            ELSE 'sent'
+          END
+        )`,
+      })
       .from(messages)
       .where(where)
       .orderBy(desc(messages.createdAt))
@@ -115,9 +142,41 @@ export async function adminChatRoutes(app: FastifyInstance): Promise<void> {
         replyToInbox: m.replyToInbox,
         replyToChat: m.replyToChat,
         inReplyTo: m.inReplyTo,
+        source: m.source,
+        deliveryStatus: m.deliveryStatus,
         createdAt: m.createdAt.toISOString(),
       })),
       nextCursor,
     };
+  });
+
+  /** POST /admin/chats/:chatId/messages — admin sends a message as their linked human agent */
+  app.post<{ Params: { chatId: string } }>("/:chatId/messages", async (request, reply) => {
+    const { chatId } = request.params;
+    const member = request.member;
+    if (!member) throw new BadRequestError("Member identity not available");
+    const body = sendMessageSchema.parse(request.body);
+
+    // Auto-join the member's agent if not already a participant (workspace chat)
+    await ensureParticipant(app.db, chatId, member.agentId);
+
+    // Send message as the member's linked agent, always with source=hub_ui
+    const result = await sendMessage(app.db, chatId, member.agentId, {
+      ...body,
+      source: "hub_ui",
+    });
+
+    // Notify recipients via PG NOTIFY
+    notifyRecipients(app.notifier, result.recipients, result.message.id);
+
+    return reply.status(201).send({
+      id: result.message.id,
+      chatId: result.message.chatId,
+      senderId: result.message.senderId,
+      format: result.message.format,
+      content: result.message.content,
+      source: result.message.source,
+      createdAt: result.message.createdAt.toISOString(),
+    });
   });
 }

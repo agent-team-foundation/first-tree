@@ -1,0 +1,32 @@
+import { notificationQuerySchema } from "@agent-team-foundation/first-tree-hub-shared";
+import type { FastifyInstance } from "fastify";
+import { ForbiddenError, NotFoundError } from "../../errors.js";
+import { requireMember } from "../../middleware/require-identity.js";
+import * as notificationService from "../../services/notification.js";
+
+export async function adminNotificationRoutes(app: FastifyInstance): Promise<void> {
+  /** GET /admin/notifications — list notifications scoped to caller's org */
+  app.get("/", async (request) => {
+    const member = requireMember(request);
+    const query = notificationQuerySchema.parse(request.query);
+    return notificationService.listNotifications(app.db, member.organizationId, query);
+  });
+
+  /** POST /admin/notifications/:id/read — mark a single notification as read */
+  app.post<{ Params: { id: string } }>("/:id/read", async (request) => {
+    const member = requireMember(request);
+    const result = await notificationService.markRead(app.db, request.params.id);
+    if (!result) throw new NotFoundError(`Notification "${request.params.id}" not found`);
+    if (result.organizationId !== member.organizationId) {
+      throw new ForbiddenError("Notification does not belong to your organization");
+    }
+    return { ...result, createdAt: result.createdAt.toISOString() };
+  });
+
+  /** POST /admin/notifications/read-all — mark all notifications as read */
+  app.post("/read-all", async (request) => {
+    const member = requireMember(request);
+    await notificationService.markAllRead(app.db, member.organizationId);
+    return { status: "ok" };
+  });
+}

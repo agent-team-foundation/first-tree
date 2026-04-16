@@ -1,8 +1,10 @@
 import type { FastifyInstance } from "fastify";
+import * as activityService from "./activity.js";
 import type { AdapterManager } from "./adapter-manager.js";
 import * as clientService from "./client.js";
 import * as inboxService from "./inbox.js";
 import type { KaelRuntime } from "./kael-runtime.js";
+import * as notificationService from "./notification.js";
 import * as presenceService from "./presence.js";
 import * as systemConfigService from "./system-config.js";
 
@@ -21,6 +23,7 @@ export function createBackgroundTasks(
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let adapterOutboundTimer: ReturnType<typeof setInterval> | null = null;
   let kaelOutboundTimer: ReturnType<typeof setInterval> | null = null;
+  let sessionCleanupTimer: ReturnType<typeof setInterval> | null = null;
 
   return {
     start() {
@@ -44,6 +47,17 @@ export function createBackgroundTasks(
           const staleSeconds = (configs.presence_cleanup_seconds as number) ?? 60;
           await presenceService.cleanupStalePresence(app.db, staleSeconds);
           await clientService.cleanupStaleClients(app.db, staleSeconds);
+          // M1: per-agent heartbeat staleness detection
+          const staleAgents = await presenceService.markStaleAgents(app.db, staleSeconds);
+          if (staleAgents.length > 0) {
+            app.log.info(`Marked ${staleAgents.length} agent(s) as stale: ${staleAgents.join(", ")}`);
+            // M1: Create notifications for stale agents
+            for (const agentId of staleAgents) {
+              notificationService
+                .notifyAgentEvent(app.db, agentId, "agent_stale", "medium", `Agent ${agentId} is unresponsive`)
+                .catch(() => {});
+            }
+          }
         } catch (err) {
           app.log.error(err, "Failed to heartbeat / cleanup presence");
         }
@@ -69,6 +83,18 @@ export function createBackgroundTasks(
         }, 5_000);
       }
 
+      // Session cleanup — runs every hour, removes evicted/suspended sessions older than 7 days
+      sessionCleanupTimer = setInterval(async () => {
+        try {
+          const deleted = await activityService.cleanupStaleSessions(app.db);
+          if (deleted > 0) {
+            app.log.info(`Cleaned up ${deleted} stale session(s)`);
+          }
+        } catch (err) {
+          app.log.error(err, "Failed to clean up stale sessions");
+        }
+      }, 3_600_000);
+
       // Initial heartbeat
       presenceService.heartbeatInstance(app.db, instanceId).catch((err) => {
         app.log.error(err, "Failed initial heartbeat");
@@ -91,6 +117,10 @@ export function createBackgroundTasks(
       if (kaelOutboundTimer) {
         clearInterval(kaelOutboundTimer);
         kaelOutboundTimer = null;
+      }
+      if (sessionCleanupTimer) {
+        clearInterval(sessionCleanupTimer);
+        sessionCleanupTimer = null;
       }
     },
   };

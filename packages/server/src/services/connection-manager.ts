@@ -133,6 +133,26 @@ export function removeClientConnection(clientId: string, ws: WebSocket): string[
   return agentIds;
 }
 
+/** Send a message to a client's WebSocket. Returns true if delivered. */
+export function sendToClient(clientId: string, message: Record<string, unknown>): boolean {
+  const entry = clientConnections.get(clientId);
+  if (!entry || entry.ws.readyState !== 1) return false;
+  entry.ws.send(JSON.stringify(message));
+  return true;
+}
+
+/** Send a message to a specific agent via its client's WebSocket. Returns true if delivered. */
+export function sendToAgent(agentId: string, message: Record<string, unknown>): boolean {
+  const clientId = agentToClient.get(agentId);
+  if (!clientId) return false;
+
+  const entry = clientConnections.get(clientId);
+  if (!entry || entry.ws.readyState !== 1) return false;
+
+  entry.ws.send(JSON.stringify({ ...message, agentId }));
+  return true;
+}
+
 export function forceDisconnectClient(clientId: string): string[] {
   const entry = clientConnections.get(clientId);
   if (!entry) return [];

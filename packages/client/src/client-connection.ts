@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { hostname as getHostname, platform } from "node:os";
-import type { SessionState } from "@agent-team-foundation/first-tree-hub-shared";
+import type { RuntimeState, SessionState } from "@agent-team-foundation/first-tree-hub-shared";
 import WebSocket from "ws";
 import { FirstTreeHubSDK } from "./sdk.js";
 
@@ -19,6 +19,18 @@ export type BoundAgent = {
   sdk: FirstTreeHubSDK;
 };
 
+export type SessionCommand = {
+  type: "session:suspend" | "session:resume" | "session:terminate";
+  agentId: string;
+  chatId: string;
+};
+
+export type AgentProvision = {
+  agentName: string;
+  agentType: string;
+  token: string;
+};
+
 type ClientConnectionEvents = {
   connected: [];
   disconnected: [];
@@ -28,6 +40,8 @@ type ClientConnectionEvents = {
   "agent:bound": [agent: BoundAgent];
   "agent:unbound": [agentId: string];
   "agent:message": [agentId: string, data: unknown];
+  "agent:provision": [provision: AgentProvision];
+  "session:command": [command: SessionCommand];
 };
 
 const RECONNECT_BASE_MS = 1000;
@@ -36,7 +50,7 @@ const WS_CONNECT_TIMEOUT_MS = 10_000;
 const HEARTBEAT_INTERVAL_MS = 30_000;
 
 /**
- * M1 Client Connection: one WebSocket per client process, multiple agents multiplexed.
+ * Client Connection: one WebSocket per client process, multiple agents multiplexed.
  *
  * Protocol:
  *   1. connect() → WS to /api/v1/agent/ws/client
@@ -130,6 +144,31 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
         agentId,
         chatId,
         state,
+      }),
+    );
+  }
+
+  /** Report agent-level runtime state (aggregated from per-session states). */
+  reportRuntimeState(agentId: string, runtimeState: RuntimeState): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(
+      JSON.stringify({
+        type: "runtime:state",
+        agentId,
+        runtimeState,
+      }),
+    );
+  }
+
+  /** Report session output text (appended to server-side buffer). */
+  reportSessionOutput(agentId: string, chatId: string, content: string): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(
+      JSON.stringify({
+        type: "session:output",
+        agentId,
+        chatId,
+        content,
       }),
     );
   }
@@ -270,6 +309,19 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       if (agentId && this.boundAgents.has(agentId)) {
         this.boundAgents.delete(agentId);
         this.emit("agent:unbound", agentId);
+      }
+    } else if (type === "session:suspend" || type === "session:resume" || type === "session:terminate") {
+      const agentId = msg.agentId as string;
+      const chatId = msg.chatId as string;
+      if (agentId && chatId) {
+        this.emit("session:command", { type: type as SessionCommand["type"], agentId, chatId });
+      }
+    } else if (type === "agent:provision") {
+      const agentName = msg.agentName as string;
+      const agentType = msg.agentType as string;
+      const token = msg.token as string;
+      if (agentName && agentType && token) {
+        this.emit("agent:provision", { agentName, agentType, token });
       }
     } else if (type === "new_message") {
       // Route to the correct agent

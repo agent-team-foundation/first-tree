@@ -1,14 +1,16 @@
 import type { Agent } from "@agent-team-foundation/first-tree-hub-shared";
 import { AGENT_TYPES } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus } from "lucide-react";
+import { Check, Copy, Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router";
-import { createAgent, listAgents } from "../api/agents.js";
+import { createAgent, listAgents, provisionAgent } from "../api/agents.js";
+import { createToken } from "../api/tokens.js";
 import { useAuth } from "../auth/auth-context.js";
 import { type AgentFormData, AgentFormDialog } from "../components/agent-form-dialog.js";
 import { Badge } from "../components/ui/badge.js";
 import { Button } from "../components/ui/button.js";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog.js";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.js";
 import { useAgentNameMap } from "../lib/use-agent-name-map.js";
 import { useMemberNameMap } from "../lib/use-member-name-map.js";
@@ -31,6 +33,12 @@ export function AgentsPage() {
   const [cursor, setCursor] = useState<string | undefined>();
   const [typeFilter, setTypeFilter] = useState<string>("");
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [createdAgent, setCreatedAgent] = useState<{
+    agent: Agent;
+    token: string | null;
+    provisioned: boolean;
+  } | null>(null);
+  const [copied, setCopied] = useState(false);
   const resolveAgentName = useAgentNameMap();
   const resolveMemberName = useMemberNameMap();
 
@@ -54,17 +62,42 @@ export function AgentsPage() {
   }, [data, memberId]);
 
   const createMutation = useMutation({
-    mutationFn: (formData: AgentFormData) =>
-      createAgent({
+    mutationFn: async (formData: AgentFormData) => {
+      const agent = await createAgent({
         name: formData.name,
         type: formData.type,
         displayName: formData.displayName ?? undefined,
         delegateMention: formData.delegateMention ?? undefined,
-      }),
-    onSuccess: (agent) => {
+      });
+      // Human agents don't need CLI tokens or provisioning
+      if (formData.type === "human") {
+        return { agent, token: null, provisioned: false };
+      }
+
+      // If a client is selected, provision directly (server pushes token to client)
+      if (formData.clientId) {
+        await provisionAgent(agent.uuid, formData.clientId);
+        return { agent, token: null, provisioned: true };
+      }
+
+      // No client selected — generate token for manual binding
+      const tokenResult = await createToken(agent.uuid, { name: "default" });
+      return { agent, token: tokenResult.token, provisioned: false };
+    },
+    onSuccess: ({ agent, token, provisioned }) => {
       setCreateDialogOpen(false);
       queryClient.invalidateQueries({ queryKey: ["agents"] });
-      navigate(`/agents/${agent.uuid}`);
+      queryClient.invalidateQueries({ queryKey: ["activity"] });
+      if (provisioned) {
+        // Agent was provisioned to client — go directly to detail page
+        navigate(`/agents/${agent.uuid}`);
+      } else if (token) {
+        // Show token for manual binding
+        setCreatedAgent({ agent, token, provisioned: false });
+        setCopied(false);
+      } else {
+        navigate(`/agents/${agent.uuid}`);
+      }
     },
   });
 
@@ -105,6 +138,16 @@ export function AgentsPage() {
       </TableRow>
     );
   }
+
+  const agentAddCommand = createdAgent?.token
+    ? `first-tree-hub agent add ${createdAgent.agent.name ?? createdAgent.agent.uuid} --token ${createdAgent.token}`
+    : "";
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(agentAddCommand);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   return (
     <div className="space-y-8">
@@ -216,6 +259,49 @@ export function AgentsPage() {
         isPending={createMutation.isPending}
         error={createMutation.error instanceof Error ? createMutation.error : null}
       />
+
+      {/* CLI command dialog — shown once after non-human agent creation */}
+      <Dialog
+        open={createdAgent !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            const uuid = createdAgent?.agent.uuid;
+            setCreatedAgent(null);
+            if (uuid) navigate(`/agents/${uuid}`);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Agent Created</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Run this command in your terminal to bind the agent to your client:
+            </p>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 bg-muted rounded-md px-3 py-2 text-xs font-mono break-all select-all">
+                {agentAddCommand}
+              </code>
+              <Button variant="outline" size="icon" className="shrink-0" onClick={handleCopy}>
+                {copied ? <Check className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">Copy this token now. It will not be shown again.</p>
+          </div>
+          <DialogFooter>
+            <Button
+              onClick={() => {
+                const uuid = createdAgent?.agent.uuid;
+                setCreatedAgent(null);
+                if (uuid) navigate(`/agents/${uuid}`);
+              }}
+            >
+              Done
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

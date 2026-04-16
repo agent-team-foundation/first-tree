@@ -25,6 +25,10 @@ export type SessionContext = HandlerContext & {
   chatId: string;
   /** Refresh `lastActivity` timestamp to prevent idle timeout. */
   touch: () => void;
+  /** Report per-session runtime state (working/idle/blocked/error). */
+  setRuntimeState: (state: "idle" | "working" | "blocked" | "error") => void;
+  /** Append output text to the session's server-side output buffer. */
+  appendOutput: (content: string) => void;
 };
 
 /** Message content extracted from an inbox entry (no entry metadata). */

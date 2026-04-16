@@ -18,9 +18,10 @@ import {
   checkNodeVersion,
   checkServerReachable,
   checkWebSocket,
+  ensureFreshAdminToken,
+  maskToken,
   printResults,
   promptMissingFields,
-  resolveAdminToken,
   resolveServerUrl,
 } from "../core/index.js";
 
@@ -45,15 +46,9 @@ export function registerClientCommands(program: Command): void {
           role: "client",
         });
 
-        // Load agents
+        // Load agents (may be empty — client can start without agents)
         const agentsDir = join(DEFAULT_CONFIG_DIR, "agents");
         const agents = loadAgents({ schema: agentConfigSchema, agentsDir });
-
-        if (agents.size === 0) {
-          process.stderr.write("  No agents configured.\n");
-          process.stderr.write("  Add one with: first-tree-hub agent add <name> --token <token>\n");
-          process.exit(1);
-        }
 
         process.stderr.write(`\n  Connecting to ${config.server.url}...\n`);
 
@@ -64,9 +59,13 @@ export function registerClientCommands(program: Command): void {
 
         await runtime.start();
 
+        // Watch agents config dir for hot-add
+        runtime.watchAgentsDir(agentsDir);
+
         // Graceful shutdown
         const shutdown = async () => {
           process.stderr.write("\n  Shutting down...\n");
+          runtime.unwatchAgentsDir();
           await runtime.stop();
           process.exit(0);
         };
@@ -123,8 +122,9 @@ export function registerClientCommands(program: Command): void {
         }
         process.stderr.write("\n  Configured agents:\n\n");
         for (const [name, config] of agents) {
-          const masked = config.token.length > 8 ? `${config.token.slice(0, 6)}***${config.token.slice(-2)}` : "***";
-          process.stderr.write(`  ${name.padEnd(20)} type: ${config.type.padEnd(14)} token: ${masked}\n`);
+          process.stderr.write(
+            `  ${name.padEnd(20)} runtime: ${config.runtime.padEnd(14)} token: ${maskToken(config.token)}\n`,
+          );
         }
         process.stderr.write("\n");
       } catch {
@@ -141,7 +141,7 @@ export function registerClientCommands(program: Command): void {
     .action(async (options: { server?: string }) => {
       try {
         const serverUrl = resolveServerUrl(options.server);
-        const token = resolveAdminToken();
+        const token = await ensureFreshAdminToken();
         const response = await fetch(`${serverUrl}/api/v1/admin/clients`, {
           headers: { Authorization: `Bearer ${token}` },
           signal: AbortSignal.timeout(10_000),
@@ -186,7 +186,7 @@ export function registerClientCommands(program: Command): void {
     .action(async (clientId: string, options: { server?: string }) => {
       try {
         const serverUrl = resolveServerUrl(options.server);
-        const token = resolveAdminToken();
+        const token = await ensureFreshAdminToken();
         const response = await fetch(`${serverUrl}/api/v1/admin/clients/${clientId}/disconnect`, {
           method: "POST",
           headers: { Authorization: `Bearer ${token}` },

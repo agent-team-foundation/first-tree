@@ -338,6 +338,26 @@ export async function checkGitHubOrgMembership(githubToken: string, org: string)
   return orgs.some((o) => o.login.toLowerCase() === org.toLowerCase());
 }
 
+/**
+ * Resolve the human agent linked to an admin user.
+ * Temporary M1 mapping: looks for a human agent whose cloudUserId matches the admin's id.
+ * Will be replaced by a proper user↔agent FK once the user system refactor lands.
+ */
+export async function resolveAdminAgent(db: Database, adminId: string) {
+  const [agent] = await db
+    .select({ uuid: agents.uuid, organizationId: agents.organizationId, name: agents.name })
+    .from(agents)
+    .where(and(eq(agents.cloudUserId, adminId), eq(agents.type, "human"), ne(agents.status, AGENT_STATUSES.DELETED)))
+    .limit(1);
+
+  if (!agent) {
+    throw new NotFoundError(
+      `No human agent linked to admin "${adminId}". Create a human agent with cloudUserId set to the admin user id.`,
+    );
+  }
+  return agent;
+}
+
 export async function createToken(db: Database, agentUuid: string, data: CreateAgentToken) {
   // Verify agent exists
   await getAgent(db, agentUuid);

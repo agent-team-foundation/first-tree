@@ -6,8 +6,12 @@ type PaginatedChats = {
   nextCursor: string | null;
 };
 
+export type MessageWithDelivery = Message & {
+  deliveryStatus?: "sent" | "pending" | "delivered" | "acked";
+};
+
 type PaginatedMessages = {
-  items: Message[];
+  items: MessageWithDelivery[];
   nextCursor: string | null;
 };
 
@@ -21,6 +25,17 @@ export function listChats(params?: { limit?: number; cursor?: string }): Promise
 
 export function getChat(chatId: string): Promise<ChatDetail> {
   return api.get<ChatDetail>(`/admin/chats/${encodeURIComponent(chatId)}`);
+}
+
+export function sendChatMessage(chatId: string, content: string): Promise<Message> {
+  return api.post<Message>(`/admin/chats/${encodeURIComponent(chatId)}/messages`, {
+    format: "text",
+    content,
+  });
+}
+
+export function createAgentChat(agentUuid: string): Promise<{ id: string }> {
+  return api.post<{ id: string }>(`/admin/agents/${encodeURIComponent(agentUuid)}/chats`, {});
 }
 
 export function listChatMessages(

@@ -13,10 +13,11 @@ export type PresenceStatus = z.infer<typeof presenceStatusSchema>;
 export const RUNTIME_STATES = {
   IDLE: "idle",
   WORKING: "working",
+  BLOCKED: "blocked",
   ERROR: "error",
 } as const;
 
-export const runtimeStateSchema = z.enum(["idle", "working", "error"]);
+export const runtimeStateSchema = z.enum(["idle", "working", "blocked", "error"]);
 export type RuntimeState = z.infer<typeof runtimeStateSchema>;
 
 // -- Session State (client → server, per-session) --
@@ -35,6 +36,12 @@ export const sessionStateMessageSchema = z.object({
   state: sessionStateSchema,
 });
 export type SessionStateMessage = z.infer<typeof sessionStateMessageSchema>;
+
+/** Client-reported runtime state override (client → server, per-agent). */
+export const runtimeStateMessageSchema = z.object({
+  runtimeState: runtimeStateSchema,
+});
+export type RuntimeStateMessage = z.infer<typeof runtimeStateMessageSchema>;
 
 // -- Agent Bind Payload (client → server) --
 
@@ -70,6 +77,7 @@ export const activityOverviewSchema = z.object({
   byState: z.object({
     idle: z.number().int(),
     working: z.number().int(),
+    blocked: z.number().int(),
     error: z.number().int(),
   }),
   clients: z.number().int(),

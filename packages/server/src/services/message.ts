@@ -36,6 +36,7 @@ export async function sendMessage(
         replyToInbox: data.replyToInbox ?? null,
         replyToChat: data.replyToChat ?? null,
         inReplyTo: data.inReplyTo ?? null,
+        source: data.source ?? null,
       })
       .returning();
 
@@ -138,6 +139,7 @@ export async function sendToAgent(
     metadata: data.metadata,
     replyToInbox: data.replyToInbox,
     replyToChat: data.replyToChat,
+    source: data.source,
   });
 }
 
