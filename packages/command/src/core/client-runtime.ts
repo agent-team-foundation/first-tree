@@ -139,7 +139,13 @@ export class ClientRuntime {
 
     process.stderr.write(`\n  Provisioned by Hub: ${agentName} (${agentType})\n`);
 
-    // Save agent config to disk — runtime defaults to claude-code (agentType is the business type, not the handler)
+    // Human agents are identity-only; skip runtime config and handler
+    if (agentType === "human") {
+      process.stderr.write(`  - ${agentName}: human agent — no runtime needed\n`);
+      return;
+    }
+
+    // Save agent config to disk — runtime defaults to claude-code
     const runtime = "claude-code";
     saveAgentConfig(agentName, token, runtime);
 

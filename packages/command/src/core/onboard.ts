@@ -212,8 +212,12 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
     }
   }
 
-  const agentToBootstrap = args.assistant ?? args.id;
-  process.stderr.write(`Token saved to ${DEFAULT_HOME_DIR}/config/agents/${agentToBootstrap}/agent.yaml\n`);
+  // Token path: human agents are not saved to agents/ (identity-only);
+  // only the assistant (or non-human agent) gets a runtime config.
+  const runtimeAgent = args.type === "human" ? args.assistant : args.id;
+  if (runtimeAgent) {
+    process.stderr.write(`Token saved to ${DEFAULT_HOME_DIR}/config/agents/${runtimeAgent}/agent.yaml\n`);
+  }
 
   // 3. Bind Feishu bot (if requested)
   if (args.feishuBotAppId && args.feishuBotAppSecret) {
@@ -242,7 +246,9 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
   if (args.assistant) {
     process.stderr.write(`  Assistant: ${args.assistant}\n`);
   }
-  process.stderr.write(`  Token:     ${DEFAULT_HOME_DIR}/config/agents/${agentToBootstrap}/agent.yaml\n`);
+  if (runtimeAgent) {
+    process.stderr.write(`  Token:     ${DEFAULT_HOME_DIR}/config/agents/${runtimeAgent}/agent.yaml\n`);
+  }
   if (args.feishuBotAppId) {
     process.stderr.write(`  Feishu:    bot bound (${args.feishuBotAppId})\n`);
   }
@@ -255,7 +261,10 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
     }
   }
 
-  process.stderr.write("\n  Start the agent:\n");
-  process.stderr.write("    first-tree-hub client start\n");
+  // Only show "client start" hint when there's an agent that needs a runtime
+  if (runtimeAgent) {
+    process.stderr.write("\n  Start the agent:\n");
+    process.stderr.write("    first-tree-hub client start\n");
+  }
   process.stderr.write("\n");
 }
