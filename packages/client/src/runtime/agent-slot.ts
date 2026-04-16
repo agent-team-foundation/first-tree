@@ -73,7 +73,25 @@ export class AgentSlot {
       agent = await sdk.register();
 
       this.logFn(`Bound as ${agent.displayName ?? agent.agentId} (${agent.agentId})`);
+    } else {
+      const conn = this.legacyConnection as AgentConnection;
+      agent = await conn.connect();
+      this.agentId = agent.agentId;
+      sdk = conn.sdk;
 
+      this.logFn(`Registered as ${agent.displayName ?? agent.agentId} (${agent.agentId})`);
+    }
+
+    // Defensive check: if server reports this is a human agent, skip message
+    // processing entirely — prevents infinite reply loops even if the agent
+    // was misconfigured into the agents/ directory with a runtime handler.
+    if (agent.type === "human") {
+      this.logFn("Server reports type=human — message processing disabled");
+      return agent;
+    }
+
+    // Register event listeners AFTER the human check to avoid unnecessary polling
+    if (this.clientConnection) {
       const onMessage = (agentId: string) => {
         if (agentId === this.agentId) this.pullAndDispatch();
       };
@@ -86,13 +104,6 @@ export class AgentSlot {
         { event: "agent:message", fn: onMessage as (...args: unknown[]) => void },
         { event: "agent:bound", fn: onBound as (...args: unknown[]) => void },
       );
-    } else {
-      const conn = this.legacyConnection as AgentConnection;
-      agent = await conn.connect();
-      this.agentId = agent.agentId;
-      sdk = conn.sdk;
-
-      this.logFn(`Registered as ${agent.displayName ?? agent.agentId} (${agent.agentId})`);
     }
 
     const registryPath = join(DEFAULT_DATA_DIR, "sessions", `${this.config.name}.json`);

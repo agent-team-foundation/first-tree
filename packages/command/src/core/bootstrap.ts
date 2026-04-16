@@ -103,14 +103,17 @@ export async function bootstrapToken(
 
   const data = (await res.json()) as { token: string; agentId: string };
 
-  // Save token to agent config if requested
-  if (options.saveTo === "agent" || !options.saveTo) {
+  // Save token to agent config if requested.
+  // Human agents are identity-only (managed by adapter); they don't need a client
+  // runtime config, so skip writing to the agents/ directory.
+  const isHuman = options.type === "human";
+  if ((options.saveTo === "agent" || !options.saveTo) && !isHuman) {
     const configDir = join(DEFAULT_CONFIG_DIR, "agents", agentName);
     const configPath = `${configDir}/agent.yaml`;
     mkdirSync(configDir, { recursive: true, mode: 0o700 });
     writeFileSync(configPath, `token: "${data.token}"\nruntime: claude-code\n`, { mode: 0o600 });
     chmodSync(configDir, 0o700);
-  } else if (options.saveTo) {
+  } else if (options.saveTo && options.saveTo !== "agent") {
     mkdirSync(dirname(options.saveTo), { recursive: true });
     writeFileSync(options.saveTo, data.token, { mode: 0o600 });
   }

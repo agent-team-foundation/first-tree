@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -22,10 +22,42 @@ function resolveMigrationsFolder(): string {
 }
 
 /**
+ * Validate that migration journal timestamps are strictly increasing.
+ * Drizzle silently skips migrations whose `when` is <= the last applied
+ * timestamp, which causes missing columns/tables with no error.
+ */
+function validateJournalOrder(migrationsFolder: string): void {
+  const journalPath = join(migrationsFolder, "meta", "_journal.json");
+  if (!existsSync(journalPath)) return;
+
+  const journal = JSON.parse(readFileSync(journalPath, "utf-8")) as {
+    entries: Array<{ idx: number; when: number; tag: string }>;
+  };
+
+  let prevWhen = 0;
+  let prevTag = "";
+  for (const entry of journal.entries) {
+    if (entry.when <= prevWhen) {
+      throw new Error(
+        `Migration journal timestamps are not monotonically increasing:\n` +
+          `  "${prevTag}" (when: ${prevWhen}) >= "${entry.tag}" (when: ${entry.when})\n` +
+          `  Drizzle will silently skip "${entry.tag}". Fix the 'when' values in:\n` +
+          `  ${journalPath}`,
+      );
+    }
+    prevWhen = entry.when;
+    prevTag = entry.tag;
+  }
+}
+
+/**
  * Run Drizzle database migrations.
  */
 export async function runMigrations(databaseUrl: string): Promise<number> {
   const migrationsFolder = resolveMigrationsFolder();
+
+  // Fail fast if journal timestamps are out of order
+  validateJournalOrder(migrationsFolder);
 
   const client = postgres(databaseUrl, { max: 1 });
   const db = drizzle(client);
