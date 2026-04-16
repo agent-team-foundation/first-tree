@@ -7,7 +7,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { Repo } from "#products/tree/engine/repo.js";
 import { runVerify } from "#products/tree/engine/verify.js";
@@ -605,10 +605,28 @@ async function claudeCliAvailable(shellRun: ShellRun): Promise<boolean> {
   return result.code === 0;
 }
 
+async function fetchPrChangedFiles(
+  shellRun: ShellRun,
+  ownerRepo: { owner: string; repo: string },
+  prNumber: number,
+): Promise<string[]> {
+  try {
+    const result = await shellRun("gh", [
+      "api", `/repos/${ownerRepo.owner}/${ownerRepo.repo}/pulls/${prNumber}/files`,
+      "--jq", ".[].filename",
+    ]);
+    if (result.code !== 0) return [];
+    return result.stdout.trim().split("\n").filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 async function classifyDriftViaClaude(
   shellRun: ShellRun,
   drift: DriftReport,
   treeNodes: TreeNodeSummary[],
+  changedFiles?: string[],
 ): Promise<ClassificationItem[]> {
   // Build keywords from the PR for relevance matching
   const driftText = [
@@ -644,6 +662,9 @@ async function classifyDriftViaClaude(
   const driftSummary = [
     ...drift.commits.map((c) => `commit ${c.shortSha} [${c.topDir}] ${c.message}`),
     ...drift.mergedPrTitles.map((title) => `pr ${title}`),
+    ...(changedFiles && changedFiles.length > 0
+      ? [`\nChanged files in this PR (use these to verify what was actually modified):\n${changedFiles.slice(0, 50).join("\n")}`]
+      : []),
   ].join("\n");
 
   const relatedCount = relatedNodes.length;
@@ -653,7 +674,11 @@ Your job: given the tree's current nodes and a recently merged PR, determine whe
 
 Context: this PR has already been reviewed and approved (including context-fit review by gardener). It does not conflict with the tree. The only question is: did it introduce NEW knowledge that the tree doesn't yet capture?
 
-IMPORTANT: For nodes marked with CONTENT below, read the content carefully. A node might exist for an area but NOT cover the specific feature this PR added. For example, if an "Authentication" node only mentions JWT but the PR adds OAuth support, that is a TREE_MISS — the tree needs a new node (or the existing node needs supplementing, which counts as TREE_MISS for sync purposes).
+IMPORTANT:
+- For nodes marked with CONTENT below, read the content carefully. A node might exist for an area but NOT cover the specific feature this PR added.
+- If "Changed files" are listed below, use them to verify what the PR actually modified. Do NOT describe features not reflected in the changed file paths.
+- Be factually precise: only describe capabilities the source PR actually introduced. Do not extrapolate or generalize beyond what the diff shows.
+- For example, if an "Authentication" node only mentions JWT but the PR adds OAuth support, that is a TREE_MISS — the tree needs a new node (or the existing node needs supplementing, which counts as TREE_MISS for sync purposes).
 
 Ask yourself:
 - Did this PR add a new feature, module, convention, or architectural pattern that NO existing node covers in its content? → TREE_MISS
@@ -981,6 +1006,26 @@ async function prepareProposalGroup(
         ].join("\n");
         writeFileSync(nodePath, content);
         writtenFiles.push(nodePath);
+
+        // Update parent NODE.md sub-domains list if the new dir isn't listed
+        const parentNodePath = join(dirname(absDir), "NODE.md");
+        if (existsSync(parentNodePath)) {
+          try {
+            const parentContent = readFileSync(parentNodePath, "utf-8");
+            const newDirName = basename(absDir);
+            if (!parentContent.includes(`${newDirName}/`) && !parentContent.includes(`${newDirName}\\`)) {
+              const subDomainsMatch = parentContent.match(/(##\s*Sub-?domains?[^\n]*\n)([\s\S]*?)(\n##|\n---|\z)/i);
+              if (subDomainsMatch) {
+                const insertPoint = parentContent.indexOf(subDomainsMatch[0]) + subDomainsMatch[1].length + subDomainsMatch[2].length;
+                const newLine = `- \`${newDirName}/\` — ${capitalizedTitle}\n`;
+                const updated = parentContent.slice(0, insertPoint) + newLine + parentContent.slice(insertPoint);
+                writeFileSync(parentNodePath, updated);
+                writtenFiles.push(parentNodePath);
+                console.log(`  \u2713 Updated parent: ${relative(treeRoot, parentNodePath)} (added ${newDirName}/)`);
+              }
+            }
+          } catch { /* non-fatal */ }
+        }
       }
     }
   }
@@ -1054,6 +1099,12 @@ async function prepareProposalGroup(
       (c) =>
         `- [\`${c.shortSha}\`](https://github.com/${drift.ownerRepo.owner}/${drift.ownerRepo.repo}/commit/${c.sha}) ${c.message}`,
     ),
+    "",
+    "---",
+    "",
+    "\uD83D\uDCAC **Reviewer:** comment `@gardener fix` after leaving feedback.",
+    "gardener will read your review, push a fix, and reply.",
+    "(Or just leave a review \u2014 gardener auto-checks every 30 minutes.)",
   ];
 
   return {
@@ -1387,7 +1438,10 @@ export async function runSync(
             mergedPrTitles: [pr.title],
           };
 
-          const proposals = await classifyDriftViaClaude(shellRun, perPrDrift, treeNodes);
+          const prFiles = pr.number > 0
+            ? await fetchPrChangedFiles(shellRun, drift.ownerRepo, pr.number)
+            : [];
+          const proposals = await classifyDriftViaClaude(shellRun, perPrDrift, treeNodes, prFiles);
 
           if (proposals.length === 0) {
             console.log(
@@ -1419,6 +1473,26 @@ export async function runSync(
         }),
       );
       classifiedPrs.push(...results);
+    }
+
+    // Deduplicate proposals targeting the same node path across PRs
+    const claimedPaths = new Set<string>();
+    for (const classified of classifiedPrs) {
+      const deduped: ClassificationItem[] = [];
+      for (const p of classified.filtered) {
+        if (p.type !== "TREE_MISS") {
+          deduped.push(p);
+          continue;
+        }
+        const normPath = (p.path ?? "").replace(/\/NODE\.md$/i, "").replace(/^\//, "").toLowerCase();
+        if (normPath && claimedPaths.has(normPath)) {
+          console.log(`  \u23ED Dedup: ${normPath} already claimed by another PR — skipping from PR #${classified.pr.number}`);
+          continue;
+        }
+        if (normPath) claimedPaths.add(normPath);
+        deduped.push(p);
+      }
+      classified.filtered = deduped;
     }
 
     const totalProposals = classifiedPrs.reduce((sum, c) => sum + c.filtered.length, 0);
