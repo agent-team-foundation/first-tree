@@ -1,4 +1,4 @@
-import { index, pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { index, pgTable, text, timestamp, unique } from "drizzle-orm/pg-core";
 
 /**
  * Session outputs — aggregated text output from agent sessions.
@@ -14,5 +14,8 @@ export const sessionOutputs = pgTable(
     content: text("content").notNull().default(""),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [index("idx_session_outputs_agent_chat").on(table.agentId, table.chatId)],
+  (table) => [
+    unique("uq_session_outputs_agent_chat").on(table.agentId, table.chatId),
+    index("idx_session_outputs_agent_chat").on(table.agentId, table.chatId),
+  ],
 );

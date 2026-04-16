@@ -10,6 +10,8 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { agents } from "../../db/schema/agents.js";
 import { messages } from "../../db/schema/messages.js";
+import { ForbiddenError } from "../../errors.js";
+import { requireMember } from "../../middleware/require-identity.js";
 import * as agentService from "../../services/agent.js";
 import { createChat, findOrCreateDirectChat } from "../../services/chat.js";
 import * as clientService from "../../services/client.js";
@@ -137,9 +139,13 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
   // Provision an agent to a connected client — generates token and pushes via WS
   app.post<{ Params: { uuid: string } }>("/:uuid/provision", async (request, reply) => {
     const { uuid } = request.params;
+    const member = requireMember(request);
     const body = z.object({ clientId: z.string().min(1) }).parse(request.body);
 
     const agent = await agentService.getAgent(app.db, uuid);
+    if (agent.organizationId !== member.organizationId) {
+      throw new ForbiddenError("Agent does not belong to your organization");
+    }
     if (!hasClientConnection(body.clientId)) {
       return reply.status(409).send({ error: "Client is not connected" });
     }
@@ -329,11 +335,13 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
   /** POST /admin/agents/:uuid/chats — create a new workspace chat with the target agent */
   app.post<{ Params: { uuid: string } }>("/:uuid/chats", async (request, reply) => {
     const { uuid: targetAgentId } = request.params;
-    const member = request.member;
-    if (!member) return reply.status(401).send({ error: "Member identity not available" });
+    const member = requireMember(request);
 
-    // Verify target agent exists
-    await agentService.getAgent(app.db, targetAgentId);
+    // Verify target agent exists and belongs to caller's org
+    const targetAgent = await agentService.getAgent(app.db, targetAgentId);
+    if (targetAgent.organizationId !== member.organizationId) {
+      throw new ForbiddenError("Agent does not belong to your organization");
+    }
 
     // Always create a new chat (workspace sessions are independent)
     const result = await createChat(app.db, member.agentId, {

@@ -236,7 +236,9 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
 
       sessionCtx.log(`Resuming session (${sessionId}), cwd=${cwd}`);
       spawnQuery(sessionId, sessionCtx, sessionId);
-      inputController?.push(toSDKUserMessage(message, sessionId));
+      if (message) {
+        inputController?.push(toSDKUserMessage(message, sessionId));
+      }
 
       sessionCtx.log(`Session resumed (${sessionId})`);
       return sessionId;

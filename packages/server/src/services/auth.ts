@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import bcrypt from "bcrypt";
 import { eq } from "drizzle-orm";
 import { jwtVerify, SignJWT } from "jose";
@@ -9,6 +10,10 @@ import { UnauthorizedError } from "../errors.js";
 const ACCESS_TOKEN_EXPIRY = "30m";
 const REFRESH_TOKEN_EXPIRY = "7d";
 const CONNECT_TOKEN_EXPIRY = "10m";
+
+/** In-memory set of consumed connect token JTIs. Entries auto-expire after 10 minutes. */
+const consumedConnectJtis = new Map<string, number>();
+const CONNECT_JTI_TTL_MS = 600_000;
 
 type TokenPayload = {
   sub: string;
@@ -108,17 +113,19 @@ export async function generateConnectToken(
   jwtSecretKey: string,
 ): Promise<{ token: string; expiresIn: number }> {
   const secret = new TextEncoder().encode(jwtSecretKey);
-  const token = await signToken(
-    secret,
-    {
-      sub: member.userId,
-      memberId: member.memberId,
-      organizationId: member.organizationId,
-      role: member.role,
-      type: "connect",
-    },
-    CONNECT_TOKEN_EXPIRY,
-  );
+  const jti = randomUUID();
+  const token = await new SignJWT({
+    sub: member.userId,
+    memberId: member.memberId,
+    organizationId: member.organizationId,
+    role: member.role,
+    type: "connect",
+  })
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuedAt()
+    .setJti(jti)
+    .setExpirationTime(CONNECT_TOKEN_EXPIRY)
+    .sign(secret);
   return { token, expiresIn: 600 };
 }
 
@@ -144,6 +151,20 @@ export async function exchangeConnectToken(
 
   if (payload.type !== "connect" || !payload.sub || !payload.memberId) {
     throw new UnauthorizedError("Invalid token type — expected connect token");
+  }
+
+  // One-time use: reject if jti already consumed
+  const jti = (payload as unknown as Record<string, unknown>).jti as string | undefined;
+  if (jti) {
+    if (consumedConnectJtis.has(jti)) {
+      throw new UnauthorizedError("Connect token has already been used");
+    }
+    consumedConnectJtis.set(jti, Date.now());
+    // Prune expired entries
+    const cutoff = Date.now() - CONNECT_JTI_TTL_MS;
+    for (const [k, ts] of consumedConnectJtis) {
+      if (ts < cutoff) consumedConnectJtis.delete(k);
+    }
   }
 
   // Verify user still exists and is active

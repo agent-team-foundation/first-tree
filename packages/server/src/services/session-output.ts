@@ -3,30 +3,19 @@ import type { Database } from "../db/connection.js";
 import { sessionOutputs } from "../db/schema/session-outputs.js";
 import { uuidv7 } from "../uuid.js";
 
-/** Append text content to a session's output buffer. Upserts (creates if missing). */
+/** Append text content to a session's output buffer. Upserts atomically via ON CONFLICT. */
 export async function appendOutput(db: Database, agentId: string, chatId: string, content: string): Promise<void> {
   const now = new Date();
-
-  // Try update first (most common path once session row exists)
-  const [updated] = await db
-    .update(sessionOutputs)
-    .set({
-      content: sql`${sessionOutputs.content} || ${content}`,
-      updatedAt: now,
-    })
-    .where(and(eq(sessionOutputs.agentId, agentId), eq(sessionOutputs.chatId, chatId)))
-    .returning({ id: sessionOutputs.id });
-
-  if (updated) return;
-
-  // No existing row — insert
-  await db.insert(sessionOutputs).values({
-    id: uuidv7(),
-    agentId,
-    chatId,
-    content,
-    updatedAt: now,
-  });
+  await db
+    .insert(sessionOutputs)
+    .values({ id: uuidv7(), agentId, chatId, content, updatedAt: now })
+    .onConflictDoUpdate({
+      target: [sessionOutputs.agentId, sessionOutputs.chatId],
+      set: {
+        content: sql`${sessionOutputs.content} || ${content}`,
+        updatedAt: now,
+      },
+    });
 }
 
 /** Get session output for a specific (agent, chat) pair. Returns null if no output. */

@@ -108,7 +108,7 @@ export async function bootstrapToken(
     const configDir = join(DEFAULT_CONFIG_DIR, "agents", agentName);
     const configPath = `${configDir}/agent.yaml`;
     mkdirSync(configDir, { recursive: true, mode: 0o700 });
-    writeFileSync(configPath, `token: "${data.token}"\ntype: claude-code\n`, { mode: 0o600 });
+    writeFileSync(configPath, `token: "${data.token}"\nruntime: claude-code\n`, { mode: 0o600 });
     chmodSync(configDir, 0o700);
   } else if (options.saveTo) {
     mkdirSync(dirname(options.saveTo), { recursive: true });
@@ -214,7 +214,7 @@ function isTokenExpired(token: string): boolean {
 }
 
 /** Persist credentials to disk. */
-function saveCredentials(creds: StoredCredentials): void {
+export function saveCredentials(creds: StoredCredentials): void {
   const dir = dirname(CREDENTIALS_PATH);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   writeFileSync(CREDENTIALS_PATH, JSON.stringify(creds, null, 2), { mode: 0o600 });

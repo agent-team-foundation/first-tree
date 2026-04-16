@@ -41,7 +41,7 @@ export function NotificationBell() {
 
   const { data: unreadData } = useQuery({
     queryKey: ["notifications", "unread-count"],
-    queryFn: () => listNotifications({ read: false, limit: 1 }),
+    queryFn: () => listNotifications({ read: false, limit: 100 }),
     refetchInterval: 10_000,
   });
 

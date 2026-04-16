@@ -241,7 +241,7 @@ describe("SessionManager", () => {
           return sid;
         },
         async resume(msg, sessionId) {
-          lifecycleCalls.push({ type: "resume", chatId: msg.chatId, sessionId });
+          lifecycleCalls.push({ type: "resume", chatId: msg?.chatId ?? "", sessionId });
           return sessionId;
         },
       });

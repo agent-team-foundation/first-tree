@@ -57,8 +57,9 @@ export type AgentHandler = {
   /** First message in a new chat. Spawn query, start consumer loop. Returns claudeSessionId. */
   start(message: SessionMessage, ctx: SessionContext): Promise<string>;
 
-  /** Message arrives for a suspended/evicted chat. Resume query from disk. Returns claudeSessionId. */
-  resume(message: SessionMessage, sessionId: string, ctx: SessionContext): Promise<string>;
+  /** Message arrives for a suspended/evicted chat. Resume query from disk. Returns claudeSessionId.
+   *  `message` is undefined for admin-triggered resume (no new user input). */
+  resume(message: SessionMessage | undefined, sessionId: string, ctx: SessionContext): Promise<string>;
 
   /** Message arrives while session is active. Push into InputController. Synchronous. */
   inject(message: SessionMessage): void;

@@ -55,9 +55,9 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       app.config.secrets.jwtSecret,
     );
 
-    // Build the CLI connect command using the request's origin
+    // Build the CLI connect command using the request's origin (preserve port)
     const proto = request.headers["x-forwarded-proto"] ?? request.protocol;
-    const host = request.headers["x-forwarded-host"] ?? request.hostname;
+    const host = request.headers["x-forwarded-host"] ?? request.headers.host ?? request.hostname;
     const serverUrl = `${proto}://${host}`;
     const command = `first-tree-hub connect ${serverUrl} --token ${token}`;
 

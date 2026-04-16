@@ -1,6 +1,6 @@
 import { notificationQuerySchema } from "@agent-team-foundation/first-tree-hub-shared";
 import type { FastifyInstance } from "fastify";
-import { ForbiddenError, NotFoundError } from "../../errors.js";
+import { NotFoundError } from "../../errors.js";
 import { requireMember } from "../../middleware/require-identity.js";
 import * as notificationService from "../../services/notification.js";
 
@@ -15,11 +15,8 @@ export async function adminNotificationRoutes(app: FastifyInstance): Promise<voi
   /** POST /admin/notifications/:id/read — mark a single notification as read */
   app.post<{ Params: { id: string } }>("/:id/read", async (request) => {
     const member = requireMember(request);
-    const result = await notificationService.markRead(app.db, request.params.id);
+    const result = await notificationService.markRead(app.db, request.params.id, member.organizationId);
     if (!result) throw new NotFoundError(`Notification "${request.params.id}" not found`);
-    if (result.organizationId !== member.organizationId) {
-      throw new ForbiddenError("Notification does not belong to your organization");
-    }
     return { ...result, createdAt: result.createdAt.toISOString() };
   });
 

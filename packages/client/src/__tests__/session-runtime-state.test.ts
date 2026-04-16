@@ -293,3 +293,86 @@ describe("SessionManager: runtime state cleanup on start failure", () => {
     await sm.shutdown();
   });
 });
+
+describe("SessionManager: getAggregateRuntimeState()", () => {
+  it("returns null when no sessions have reported state", async () => {
+    const sm = createSessionManager({});
+    expect(sm.getAggregateRuntimeState()).toBeNull();
+    await sm.shutdown();
+  });
+
+  it("returns current aggregate after session reports", async () => {
+    let capturedCtx: SessionContext | undefined;
+    const handler = createMockHandler({
+      async start(_msg, ctx) {
+        capturedCtx = ctx;
+        return "s1";
+      },
+    });
+
+    const sm = createSessionManager({
+      handler,
+      onRuntimeStateChange: () => {},
+    });
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-a" }));
+    defined(capturedCtx, "ctx").setRuntimeState("working");
+    expect(sm.getAggregateRuntimeState()).toBe("working");
+
+    defined(capturedCtx, "ctx").setRuntimeState("idle");
+    expect(sm.getAggregateRuntimeState()).toBe("idle");
+
+    await sm.shutdown();
+  });
+});
+
+describe("SessionManager: admin resume passes no message to handler", () => {
+  it("handleCommand('session:resume') does not push user content", async () => {
+    const resumeCalls: Array<{ message: unknown; sessionId: string }> = [];
+    const handler = createMockHandler({
+      async start() {
+        return "session-resume-test";
+      },
+      async resume(message, sessionId) {
+        resumeCalls.push({ message, sessionId });
+        return sessionId;
+      },
+    });
+
+    const sm = createSessionManager({ handler, concurrency: 1 });
+
+    // Start a session, then preempt it so it becomes suspended
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-a" }));
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-b" }));
+    // chat-a is now suspended
+
+    resumeCalls.length = 0;
+
+    // Admin resume — should pass undefined message
+    await sm.handleCommand("chat-a", "session:resume");
+
+    expect(resumeCalls).toHaveLength(1);
+    expect(resumeCalls[0]?.message).toBeUndefined();
+    expect(resumeCalls[0]?.sessionId).toBe("session-resume-test");
+
+    await sm.shutdown();
+  });
+});
+
+describe("SessionManager: ackEntry handles entryId correctly", () => {
+  it("ACKs entryId from pending queue after concurrency preemption", async () => {
+    const sdk = mockSdk();
+    const sm = createSessionManager({ sdk, concurrency: 1 });
+
+    // Fill concurrency
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-a" }));
+    // This gets queued (concurrency full), then drained when chat-a is preempted
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-b" }));
+
+    // Both should be ACKed
+    expect(sdk.ack).toHaveBeenCalledWith(1);
+    expect(sdk.ack).toHaveBeenCalledWith(2);
+
+    await sm.shutdown();
+  });
+});

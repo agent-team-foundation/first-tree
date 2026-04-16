@@ -100,12 +100,12 @@ export async function listNotifications(db: Database, orgId: string, query: Noti
   };
 }
 
-/** Mark a single notification as read. */
-export async function markRead(db: Database, notificationId: string) {
+/** Mark a single notification as read, scoped to organization. */
+export async function markRead(db: Database, notificationId: string, organizationId: string) {
   const [updated] = await db
     .update(notifications)
     .set({ read: true })
-    .where(eq(notifications.id, notificationId))
+    .where(and(eq(notifications.id, notificationId), eq(notifications.organizationId, organizationId)))
     .returning();
   return updated ?? null;
 }

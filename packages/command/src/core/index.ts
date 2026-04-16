@@ -15,6 +15,7 @@ export {
   resolveAgentToken,
   resolveServerUrl,
   saveAgentConfig,
+  saveCredentials,
 } from "./bootstrap.js";
 // Client runtime
 export { ClientRuntime } from "./client-runtime.js";

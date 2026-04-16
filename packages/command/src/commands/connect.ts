@@ -1,4 +1,3 @@
-import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   agentConfigSchema,
@@ -13,17 +12,7 @@ import {
 import { input, password } from "@inquirer/prompts";
 import type { Command } from "commander";
 import { fail } from "../cli/output.js";
-import { ClientRuntime } from "../core/index.js";
-
-const CREDENTIALS_PATH = join(DEFAULT_CONFIG_DIR, "credentials.json");
-
-/**
- * Persist Member credentials (JWT tokens) to local config.
- */
-function saveCredentials(data: { accessToken: string; refreshToken: string; serverUrl: string }): void {
-  mkdirSync(DEFAULT_CONFIG_DIR, { recursive: true, mode: 0o700 });
-  writeFileSync(CREDENTIALS_PATH, JSON.stringify(data, null, 2), { mode: 0o600 });
-}
+import { ClientRuntime, saveCredentials } from "../core/index.js";
 
 /**
  * Authenticate via connect token — exchange for full JWT credentials.

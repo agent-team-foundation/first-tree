@@ -125,14 +125,19 @@ function runtimeSortKey(state: string | null, clientId: string | null): number {
   return RUNTIME_SORT_ORDER[state] ?? 4;
 }
 
+const HEARTBEAT_COLORS: Record<string, string> = {
+  idle: "bg-green-500",
+  working: "bg-green-500 animate-pulse",
+  blocked: "bg-yellow-500",
+  error: "bg-red-500",
+};
+
 function HeartbeatDot({ runtimeState, clientId }: { runtimeState: string | null; clientId: string | null }) {
-  if (!clientId) {
+  if (!clientId || !runtimeState) {
     return <span className="h-2 w-2 rounded-full bg-gray-400 shrink-0 mt-1.5" />;
   }
-  if (!runtimeState) {
-    return <span className="h-2 w-2 rounded-full bg-gray-400 shrink-0 mt-1.5" />;
-  }
-  return <span className="h-2 w-2 rounded-full bg-green-500 animate-pulse shrink-0 mt-1.5" />;
+  const color = HEARTBEAT_COLORS[runtimeState] ?? "bg-gray-400";
+  return <span className={`h-2 w-2 rounded-full ${color} shrink-0 mt-1.5`} />;
 }
 
 function RuntimeBadge({ state }: { state: string | null }) {

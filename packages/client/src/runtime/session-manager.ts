@@ -119,8 +119,8 @@ export class SessionManager {
     } else if (command === "session:resume") {
       if (session?.status === "suspended") {
         this.config.log(`Session ${chatId}: resume command received`);
-        // Resume with no new message — handler resumes its previous state
-        await this.resumeSession(session, { id: "", chatId, senderId: "", format: "text", content: "", metadata: {} });
+        // Resume with no new user message — pass null to signal admin-triggered resume
+        await this.resumeSession(session, null);
       }
     } else if (command === "session:terminate") {
       if (session) {
@@ -181,6 +181,11 @@ export class SessionManager {
 
   get totalCount(): number {
     return this.sessions.size;
+  }
+
+  /** Return the current aggregate runtime state, or null if no sessions have reported. */
+  getAggregateRuntimeState(): "idle" | "working" | "blocked" | "error" | null {
+    return this.lastReportedRuntimeState;
   }
 
   /** Return all current session states for full state sync after reconnect. */
@@ -270,14 +275,28 @@ export class SessionManager {
     }
   }
 
-  private async resumeSession(entry: SessionEntry, message: SessionMessage, entryId?: number): Promise<void> {
+  private async resumeSession(
+    entry: SessionEntry,
+    message: SessionMessage | null | undefined,
+    entryId?: number,
+  ): Promise<void> {
     // Wait for in-flight suspension to complete before resuming
     if (entry.suspending) {
       await entry.suspending;
     }
 
+    // For admin-triggered resume (no message), synthesize a minimal stub for slot acquisition only
+    const slotMessage: SessionMessage = message ?? {
+      id: "",
+      chatId: entry.chatId,
+      senderId: "",
+      format: "text",
+      content: "",
+      metadata: {},
+    };
+
     // Enforce concurrency limit
-    if (!this.acquireActiveSlot(entry.chatId, message, entryId)) return;
+    if (!this.acquireActiveSlot(entry.chatId, slotMessage, entryId)) return;
 
     // ACK now — handler is about to resume processing
     await this.ackEntry(entryId, entry.chatId);
@@ -288,7 +307,7 @@ export class SessionManager {
     entry.lastActivity = Date.now();
 
     try {
-      await entry.handler.resume(message, entry.claudeSessionId, ctx);
+      await entry.handler.resume(message ?? undefined, entry.claudeSessionId, ctx);
       this.config.log(`Session ${entry.chatId}: resumed (${entry.claudeSessionId})`);
       this.persistRegistry();
       this.notifySessionState(entry.chatId, "active");
@@ -327,7 +346,7 @@ export class SessionManager {
 
     // All active sessions are busy — queue (no ACK yet — message stays as delivered)
     this.config.log(`Session ${chatId}: concurrency limit reached, queuing`);
-    this.pendingQueue.push({ message, chatId, entryId: entryId ?? 0 });
+    this.pendingQueue.push({ message, chatId, entryId: entryId ?? -1 });
     return false;
   }
 
@@ -359,7 +378,7 @@ export class SessionManager {
     const next = this.pendingQueue.shift();
     if (!next) return;
     // Route asynchronously — entryId is passed for delayed ACK
-    this.routeMessage(next.chatId, next.message, next.entryId || undefined).catch((err) => {
+    this.routeMessage(next.chatId, next.message, next.entryId > 0 ? next.entryId : undefined).catch((err) => {
       this.config.log(
         `Session ${next.chatId}: pending drain error: ${err instanceof Error ? err.message : String(err)}`,
       );
@@ -451,7 +470,7 @@ export class SessionManager {
 
   /** ACK an inbox entry — delayed until handler starts processing. */
   private async ackEntry(entryId: number | undefined, chatId: string): Promise<void> {
-    if (!entryId) return;
+    if (entryId === undefined) return;
     try {
       await this.config.sdk.ack(entryId);
     } catch {
