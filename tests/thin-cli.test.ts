@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { USAGE, isDirectExecution, runCli, stripGlobalFlags } from "../src/cli.js";
+import { TREE_USAGE } from "../src/products/tree/cli.js";
 
 const TEMP_DIRS: string[] = [];
 
@@ -39,12 +40,27 @@ afterEach(() => {
 });
 
 describe("thin CLI shell", () => {
-  it("documents the dedicated-repo meaning of --here", () => {
-    expect(USAGE).toContain("first-tree init tree --here");
-    expect(USAGE).toContain("first-tree init --tree-path ../org-context --tree-mode shared");
-    expect(USAGE).toContain("first-tree publish --tree-path ../org-context");
-    expect(USAGE).toContain("my-org-tree");
-    expect(USAGE).toContain("`first-tree init tree --here` is for when the current repo is already the tree repo.");
+  it("exposes both product namespaces in the top-level USAGE", () => {
+    expect(USAGE).toContain("first-tree <product>");
+    expect(USAGE).toContain("tree");
+    expect(USAGE).toContain("breeze");
+    expect(USAGE).toContain("--skip-version-check");
+    expect(USAGE).toContain("--version");
+  });
+
+  it("documents tree commands in the tree USAGE", () => {
+    expect(TREE_USAGE).toContain("first-tree tree init tree --here");
+    expect(TREE_USAGE).toContain(
+      "first-tree tree init --tree-path ../org-context --tree-mode shared",
+    );
+    expect(TREE_USAGE).toContain("first-tree tree publish --tree-path ../org-context");
+    expect(TREE_USAGE).toContain("my-org-tree");
+    expect(TREE_USAGE).toContain(
+      "`first-tree tree init tree --here` is for when the current repo is already the tree repo.",
+    );
+    expect(TREE_USAGE).toContain("review");
+    expect(TREE_USAGE).toContain("generate-codeowners");
+    expect(TREE_USAGE).toContain("inject-context");
   });
 
   it("treats a symlinked npm bin path as direct execution", () => {
@@ -79,26 +95,32 @@ describe("thin CLI shell", () => {
     expect(output.lines).toEqual([USAGE]);
   });
 
-  it("prints the CLI version with the bundled skill version", async () => {
+  it("prints the CLI, tree, and breeze versions", async () => {
     const output = captureOutput();
     const pkgPath = fileURLToPath(new URL("../package.json", import.meta.url));
     const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as { version: string };
-    const skillVersionPath = fileURLToPath(
-      new URL("../skills/first-tree/VERSION", import.meta.url),
+    const treeVersionPath = fileURLToPath(
+      new URL("../src/products/tree/VERSION", import.meta.url),
     );
-    const skillVersion = readFileSync(skillVersionPath, "utf-8").trim();
+    const breezeVersionPath = fileURLToPath(
+      new URL("../src/products/breeze/VERSION", import.meta.url),
+    );
+    const treeVersion = readFileSync(treeVersionPath, "utf-8").trim();
+    const breezeVersion = readFileSync(breezeVersionPath, "utf-8").trim();
 
     const code = await runCli(["--version"], output.write);
 
     expect(code).toBe(0);
-    expect(output.lines).toEqual([`${pkg.version} (skills: ${skillVersion})`]);
+    expect(output.lines).toEqual([
+      `first-tree=${pkg.version} tree=${treeVersion} breeze=${breezeVersion}`,
+    ]);
   });
 
-  it("routes help onboarding through the CLI entrypoint", async () => {
+  it("routes tree help onboarding through the CLI entrypoint", async () => {
     const output = captureOutput();
 
     const code = await runCli(
-      ["--skip-version-check", "help", "onboarding"],
+      ["--skip-version-check", "tree", "help", "onboarding"],
       output.write,
     );
 
@@ -107,7 +129,7 @@ describe("thin CLI shell", () => {
     expect(output.lines.join("\n")).toContain("Node.js 18+");
   });
 
-  it("fails with usage for an unknown command", async () => {
+  it("fails with hint for an unknown product", async () => {
     const output = captureOutput();
 
     const code = await runCli(
@@ -116,63 +138,96 @@ describe("thin CLI shell", () => {
     );
 
     expect(code).toBe(1);
-    expect(output.lines[0]).toBe("Unknown command: wat");
-    expect(output.lines[1]).toBe(USAGE);
+    expect(output.lines[0]).toBe("Unknown product: wat");
+    expect(output.lines[1]).toContain("first-tree tree wat");
   });
 
-  it("documents the new helper subcommands and global flag", () => {
-    expect(USAGE).toContain("review");
-    expect(USAGE).toContain("generate-codeowners");
-    expect(USAGE).toContain("inject-context");
-    expect(USAGE).toContain("--skip-version-check");
+  it("fails with tree USAGE for an unknown tree command", async () => {
+    const output = captureOutput();
+
+    const code = await runCli(
+      ["--skip-version-check", "tree", "nonsense"],
+      output.write,
+    );
+
+    expect(code).toBe(1);
+    expect(output.lines[0]).toBe("Unknown command: nonsense");
+    expect(output.lines[1]).toBe(TREE_USAGE);
   });
 
   it("strips --skip-version-check from args before dispatch", () => {
     const result = stripGlobalFlags([
       "--skip-version-check",
+      "tree",
       "init",
       "--here",
     ]);
     expect(result.skipVersionCheck).toBe(true);
-    expect(result.rest).toEqual(["init", "--here"]);
+    expect(result.rest).toEqual(["tree", "init", "--here"]);
   });
 
   it("strips --skip-version-check from positional position", () => {
-    const result = stripGlobalFlags(["init", "--skip-version-check", "--here"]);
+    const result = stripGlobalFlags([
+      "tree",
+      "init",
+      "--skip-version-check",
+      "--here",
+    ]);
     expect(result.skipVersionCheck).toBe(true);
-    expect(result.rest).toEqual(["init", "--here"]);
+    expect(result.rest).toEqual(["tree", "init", "--here"]);
   });
 
   it("returns false when --skip-version-check is absent", () => {
-    const result = stripGlobalFlags(["init", "--here"]);
+    const result = stripGlobalFlags(["tree", "init", "--here"]);
     expect(result.skipVersionCheck).toBe(false);
-    expect(result.rest).toEqual(["init", "--here"]);
+    expect(result.rest).toEqual(["tree", "init", "--here"]);
   });
 
-  it("routes inject-context command", async () => {
+  it("routes tree inject-context command", async () => {
     const output = captureOutput();
     const code = await runCli(
-      ["--skip-version-check", "inject-context", "--help"],
+      ["--skip-version-check", "tree", "inject-context", "--help"],
       output.write,
     );
     expect(code).toBe(0);
   });
 
-  it("routes generate-codeowners command", async () => {
+  it("routes tree generate-codeowners command", async () => {
     const output = captureOutput();
     const code = await runCli(
-      ["--skip-version-check", "generate-codeowners", "--help"],
+      ["--skip-version-check", "tree", "generate-codeowners", "--help"],
       output.write,
     );
     expect(code).toBe(0);
   });
 
-  it("routes review command", async () => {
+  it("routes tree review command", async () => {
     const output = captureOutput();
     const code = await runCli(
-      ["--skip-version-check", "review", "--help"],
+      ["--skip-version-check", "tree", "review", "--help"],
       output.write,
     );
     expect(code).toBe(0);
+  });
+
+  it("breeze product exits with a not-implemented error", async () => {
+    const output = captureOutput();
+    const errors: string[] = [];
+    const origError = console.error;
+    console.error = (...args: unknown[]) => {
+      errors.push(args.map((a) => String(a)).join(" "));
+    };
+    try {
+      const code = await runCli(
+        ["--skip-version-check", "breeze", "anything"],
+        output.write,
+      );
+      expect(code).toBe(2);
+      expect(errors.join("\n")).toContain(
+        "the TypeScript implementation is not yet available",
+      );
+    } finally {
+      console.error = origError;
+    }
   });
 });

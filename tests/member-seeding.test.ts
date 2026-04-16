@@ -6,7 +6,7 @@ import {
   parseGitHubRemoteUrl,
   parseGitShortlog,
   seedMembersFromContributors,
-} from "#engine/member-seeding.js";
+} from "#products/tree/engine/member-seeding.js";
 import { useTmpDir } from "./helpers.js";
 
 function writeInstalledTemplates(root: string): void {

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runInjectContext } from "../src/engine/commands/inject-context.js";
+import { runInjectContext } from "../src/products/tree/engine/commands/inject-context.js";
 
 describe("runInjectContext", () => {
   let tmpDir: string;

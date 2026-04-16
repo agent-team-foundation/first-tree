@@ -3,7 +3,7 @@ import {
   type AutoUpgradeDeps,
   type VersionCacheEntry,
   checkAndAutoUpgrade,
-} from "../src/engine/runtime/auto-upgrade.js";
+} from "../src/products/tree/engine/runtime/auto-upgrade.js";
 
 function makeDeps(overrides: Partial<AutoUpgradeDeps> = {}): {
   deps: AutoUpgradeDeps;

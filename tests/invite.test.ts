@@ -5,11 +5,11 @@ import {
   readTreeContext,
   sanitizeInviteTreeUrl,
   type TreeContext,
-} from "#engine/invite.js";
+} from "#products/tree/engine/invite.js";
 import {
   renderInviteMemberNode,
   type InviteMemberInput,
-} from "#engine/member-seeding.js";
+} from "#products/tree/engine/member-seeding.js";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { useTmpDir } from "./helpers.js";

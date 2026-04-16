@@ -2,14 +2,14 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
-import { runBind } from "#engine/bind.js";
-import { Repo } from "#engine/repo.js";
+import { runBind } from "#products/tree/engine/bind.js";
+import { Repo } from "#products/tree/engine/repo.js";
 import {
   readSourceState,
   readTreeBinding,
   readTreeState,
   treeBindingPath,
-} from "#engine/runtime/binding-state.js";
+} from "#products/tree/engine/runtime/binding-state.js";
 import { makeAgentsMd, makeGitRepo, makeSourceRepo, makeSourceSkill, makeTreeMetadata, useTmpDir } from "./helpers.js";
 
 describe("runBind", () => {

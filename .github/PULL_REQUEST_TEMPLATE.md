@@ -13,9 +13,12 @@
 
 ## Change Surface
 
-- [ ] Thin CLI shell (`src/`, package/build wiring)
-- [ ] Canonical skill behavior (`skills/first-tree/engine/`)
-- [ ] Shipped framework payload (`skills/first-tree/assets/framework/`)
+- [ ] Thin umbrella CLI (`src/cli.ts`, package/build wiring)
+- [ ] Tree product dispatcher (`src/products/tree/cli.ts`)
+- [ ] Tree engine behavior (`src/products/tree/engine/`)
+- [ ] Shipped tree asset payload (`assets/tree/`)
+- [ ] Tree skill payload (`skills/tree/`)
+- [ ] Breeze product (`src/products/breeze/`, `assets/breeze/`, `skills/breeze/`)
 - [ ] Maintainer or user docs (`README.md`, `CONTRIBUTING.md`, `references/`)
 
 ## Notes

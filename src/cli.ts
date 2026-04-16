@@ -1,52 +1,30 @@
 #!/usr/bin/env node
 
-import { realpathSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const USAGE = `usage: first-tree <command>
+export const USAGE = `usage: first-tree <product> <command>
 
+  first-tree is an umbrella CLI that dispatches into product namespaces.
   This CLI is designed for agents, not humans. Let your agent handle it.
-  New to first-tree? Run \`first-tree help onboarding\` first.
 
-Commands:
-  inspect               Classify the current folder before onboarding
-  init                  High-level onboarding wrapper for repo/workspace roots
-  bind                  Bind the current repo/workspace root to an existing tree repo
-  workspace             Workspace helpers (currently: sync child repos to a shared tree)
-  publish               Publish a tree repo to GitHub
-  verify                Run verification checks against a tree repo
-  upgrade               Refresh the installed skill in a tree repo
-  sync                  Detect drift between a tree repo and its bound sources
-  review                Run Claude Code PR review (CI helper)
-  generate-codeowners   Generate .github/CODEOWNERS from tree ownership
-  invite                Invite a new member to the Context Tree
-  join                  Accept an invite and join a Context Tree
-  inject-context        Output Claude Code SessionStart hook payload from NODE.md
-  help                  Show help for a topic (e.g. \`help onboarding\`)
+Products:
+  tree                  Context Tree tooling (init, bind, sync, publish, ...)
+  breeze                Breeze tooling (not yet available in the TypeScript port)
 
-Options:
-  --help                Show this help message
-  --version             Show version number
+Global options:
+  --help, -h            Show this help message
+  --version, -v         Show version numbers for the CLI and each product
   --skip-version-check  Skip the auto-upgrade check (for latency-sensitive callers)
 
-Common examples:
-  first-tree inspect --json
-  first-tree init
-  first-tree init --tree-path ../org-context --tree-mode shared
-  first-tree init --scope workspace --tree-path ../org-context --tree-mode shared --sync-members
-  first-tree bind --tree-path ../org-context --tree-mode shared
-  first-tree publish --tree-path ../org-context
-  mkdir my-org-tree && cd my-org-tree && git init && first-tree init tree --here
-  first-tree verify --tree-path ../my-org-tree
-  first-tree upgrade --tree-path ../my-org-tree
-
-Note:
-  \`first-tree init tree --here\` is for when the current repo is already the tree repo.
+Getting started:
+  first-tree tree --help
+  first-tree tree inspect --json
+  first-tree tree init
 `;
 
 type Output = (text: string) => void;
-
-export { USAGE };
 
 export function isDirectExecution(
   argv1: string | undefined,
@@ -90,9 +68,9 @@ async function runAutoUpgradeCheck(): Promise<void> {
       defaultInstallLatestVersion,
       defaultReadCache,
       defaultWriteCache,
-    } = await import("#engine/runtime/auto-upgrade.js");
+    } = await import("#products/tree/engine/runtime/auto-upgrade.js");
     const { resolveBundledPackageRoot, readCanonicalFrameworkVersion } =
-      await import("#engine/runtime/installer.js");
+      await import("#products/tree/engine/runtime/installer.js");
     const currentVersion = readCanonicalFrameworkVersion(
       resolveBundledPackageRoot(),
     );
@@ -108,6 +86,50 @@ async function runAutoUpgradeCheck(): Promise<void> {
   }
 }
 
+function readFirstTreeVersion(): string {
+  // Walk up from this module until we find the package.json that owns the CLI.
+  let dir = dirname(fileURLToPath(import.meta.url));
+  while (true) {
+    const candidate = join(dir, "package.json");
+    try {
+      const pkg = JSON.parse(readFileSync(candidate, "utf-8")) as {
+        name?: string;
+        version?: string;
+      };
+      if (pkg.name === "first-tree" && typeof pkg.version === "string") {
+        return pkg.version;
+      }
+    } catch {
+      // keep walking
+    }
+    const parent = dirname(dir);
+    if (parent === dir) {
+      return "unknown";
+    }
+    dir = parent;
+  }
+}
+
+function readProductVersion(productDir: string): string {
+  // VERSION files are siblings of the bundled product cli.ts. When the CLI
+  // runs from the published package they live under dist/products/<name>/;
+  // in the source tree they live under src/products/<name>/. Try both.
+  const here = dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    join(here, "products", productDir, "VERSION"),
+    join(here, "..", "src", "products", productDir, "VERSION"),
+    join(here, "..", "products", productDir, "VERSION"),
+  ];
+  for (const candidate of candidates) {
+    try {
+      return readFileSync(candidate, "utf-8").trim();
+    } catch {
+      // try next
+    }
+  }
+  return "unknown";
+}
+
 export async function runCli(
   rawArgs: string[],
   output: Output = console.log,
@@ -121,89 +143,34 @@ export async function runCli(
   }
 
   if (args[0] === "--version" || args[0] === "-v") {
-    const {
-      resolveBundledPackageRoot,
-      readCanonicalFrameworkVersion,
-      readSkillVersion,
-    } = await import("#engine/runtime/installer.js");
-    const packageRoot = resolveBundledPackageRoot();
-    const cliVersion = readCanonicalFrameworkVersion(packageRoot);
-    const skillVersion = readSkillVersion(packageRoot);
-    write(`${cliVersion} (skills: ${skillVersion})`);
+    const cliVersion = readFirstTreeVersion();
+    const treeVersion = readProductVersion("tree");
+    const breezeVersion = readProductVersion("breeze");
+    write(
+      `first-tree=${cliVersion} tree=${treeVersion} breeze=${breezeVersion}`,
+    );
     return 0;
   }
 
-  if (!skipVersionCheck) {
-    await runAutoUpgradeCheck();
-  }
+  const product = args[0];
 
-  const command = args[0];
-
-  switch (command) {
-    case "init": {
-      const { runInit } = await import("#engine/commands/init.js");
-      return runInit(args.slice(1));
+  switch (product) {
+    case "tree": {
+      if (!skipVersionCheck) {
+        await runAutoUpgradeCheck();
+      }
+      const { runTree } = await import("./products/tree/cli.js");
+      return runTree(args.slice(1), write);
     }
-    case "inspect": {
-      const { runInspect } = await import("#engine/commands/inspect.js");
-      return runInspect(args.slice(1));
+    case "breeze": {
+      const { runBreeze } = await import("./products/breeze/cli.js");
+      return runBreeze(args.slice(1));
     }
-    case "bind": {
-      const { runBind } = await import("#engine/commands/bind.js");
-      return runBind(args.slice(1));
-    }
-    case "workspace": {
-      const { runWorkspace } = await import("#engine/commands/workspace.js");
-      return runWorkspace(args.slice(1));
-    }
-    case "verify": {
-      const { runVerify } = await import("#engine/commands/verify.js");
-      return runVerify(args.slice(1));
-    }
-    case "publish": {
-      const { runPublish } = await import("#engine/commands/publish.js");
-      return runPublish(args.slice(1));
-    }
-    case "upgrade": {
-      const { runUpgrade } = await import("#engine/commands/upgrade.js");
-      return runUpgrade(args.slice(1));
-    }
-    case "sync": {
-      const { runSync } = await import("#engine/commands/sync.js");
-      return runSync(args.slice(1));
-    }
-    case "review": {
-      const { runReview } = await import("#engine/commands/review.js");
-      return runReview(args.slice(1));
-    }
-    case "generate-codeowners": {
-      const { runGenerateCodeowners } = await import(
-        "#engine/commands/generate-codeowners.js"
-      );
-      return runGenerateCodeowners(args.slice(1));
-    }
-    case "inject-context": {
-      const { runInjectContext } = await import(
-        "#engine/commands/inject-context.js"
-      );
-      return runInjectContext(args.slice(1));
-    }
-    case "invite": {
-      const { runInvite } = await import("#engine/commands/invite.js");
-      return runInvite(args.slice(1));
-    }
-    case "join": {
-      const { runJoin } = await import("#engine/commands/join.js");
-      return runJoin(args.slice(1));
-    }
-    case "help":
-      return (await import("#engine/commands/help.js")).runHelp(
-        args.slice(1),
-        write,
-      );
     default:
-      write(`Unknown command: ${command}`);
-      write(USAGE);
+      write(`Unknown product: ${product}`);
+      write(
+        `Did you mean \`first-tree tree ${product}\`? Run \`first-tree --help\` for the list of products.`,
+      );
       return 1;
   }
 }

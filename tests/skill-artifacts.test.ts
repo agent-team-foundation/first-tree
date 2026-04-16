@@ -28,26 +28,29 @@ function trackedEntriesInGit(...relativePaths: string[]): string[] {
 
 describe("skill artifacts", () => {
   it("keeps one canonical skill plus local alias entrypoints in the source repo", () => {
-    expect(existsSync(join(ROOT, "skills", "first-tree", "SKILL.md"))).toBe(true);
-    expect(existsSync(join(ROOT, "skills", "first-tree", "VERSION"))).toBe(true);
-    expect(existsSync(join(ROOT, "skills", "first-tree", "references", "onboarding.md"))).toBe(true);
+    expect(existsSync(join(ROOT, "skills", "tree", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(ROOT, "skills", "tree", "VERSION"))).toBe(true);
+    expect(existsSync(join(ROOT, "skills", "tree", "references", "onboarding.md"))).toBe(true);
     expect(
       existsSync(
         join(
           ROOT,
           "skills",
-          "first-tree",
+          "tree",
           "references",
           "source-workspace-installation.md",
         ),
       ),
     ).toBe(true);
-    expect(existsSync(join(ROOT, "assets", "framework", "manifest.json"))).toBe(true);
-    expect(existsSync(join(ROOT, "assets", "framework", "templates", "agents.md.template"))).toBe(true);
-    expect(existsSync(join(ROOT, "src", "engine", "init.ts"))).toBe(true);
+    expect(existsSync(join(ROOT, "assets", "tree", "manifest.json"))).toBe(true);
+    expect(existsSync(join(ROOT, "assets", "tree", "templates", "agents.md.template"))).toBe(true);
+    expect(existsSync(join(ROOT, "src", "products", "tree", "engine", "init.ts"))).toBe(true);
     expect(
-      existsSync(join(ROOT, "src", "engine", "member-seeding.ts")),
+      existsSync(join(ROOT, "src", "products", "tree", "engine", "member-seeding.ts")),
     ).toBe(true);
+    expect(existsSync(join(ROOT, "src", "products", "tree", "VERSION"))).toBe(true);
+    expect(existsSync(join(ROOT, "src", "products", "breeze", "VERSION"))).toBe(true);
+    expect(existsSync(join(ROOT, "src", "products", "breeze", "cli.ts"))).toBe(true);
     expect(existsSync(join(ROOT, "AGENTS.md"))).toBe(true);
     expect(existsSync(join(ROOT, "WHITEPAPER.md"))).toBe(true);
     expect(existsSync(join(ROOT, ".agents", "skills", "first-tree", "SKILL.md"))).toBe(true);
@@ -60,7 +63,7 @@ describe("skill artifacts", () => {
     );
     expect(lstatSync(join(ROOT, ".agents", "skills", "first-tree")).isSymbolicLink()).toBe(true);
     expect(readlinkSync(join(ROOT, ".agents", "skills", "first-tree"))).toBe(
-      "../../skills/first-tree",
+      "../../skills/tree",
     );
     expect(lstatSync(join(ROOT, ".claude", "skills", "first-tree")).isSymbolicLink()).toBe(true);
     expect(readlinkSync(join(ROOT, ".claude", "skills", "first-tree"))).toBe(
@@ -78,18 +81,18 @@ describe("skill artifacts", () => {
       ),
     ).toBe(true);
     expect(
-      existsSync(join(ROOT, "src", "engine", "runtime", "asset-loader.ts")),
+      existsSync(join(ROOT, "src", "products", "tree", "engine", "runtime", "asset-loader.ts")),
     ).toBe(true);
     expect(
       existsSync(
-        join(ROOT, "src", "engine", "runtime", "source-integration.ts"),
+        join(ROOT, "src", "products", "tree", "engine", "runtime", "source-integration.ts"),
       ),
     ).toBe(true);
     expect(
-      existsSync(join(ROOT, "src", "engine", "rules", "index.ts")),
+      existsSync(join(ROOT, "src", "products", "tree", "engine", "rules", "index.ts")),
     ).toBe(true);
     expect(
-      existsSync(join(ROOT, "src", "engine", "validators", "nodes.ts")),
+      existsSync(join(ROOT, "src", "products", "tree", "engine", "validators", "nodes.ts")),
     ).toBe(true);
     expect(
       existsSync(join(ROOT, "docs", "maintainer-architecture.md")),
@@ -117,21 +120,21 @@ describe("skill artifacts", () => {
     expect(existsSync(join(ROOT, "AGENT.md"))).toBe(false);
     expect(existsSync(join(ROOT, "evals"))).toBe(true);
     // Lightweight skill payload must not contain engine/tests/assets/scripts/agents.
-    expect(existsSync(join(ROOT, "skills", "first-tree", "engine"))).toBe(false);
-    expect(existsSync(join(ROOT, "skills", "first-tree", "tests"))).toBe(false);
-    expect(existsSync(join(ROOT, "skills", "first-tree", "assets"))).toBe(false);
-    expect(existsSync(join(ROOT, "skills", "first-tree", "scripts"))).toBe(false);
-    expect(existsSync(join(ROOT, "skills", "first-tree", "agents"))).toBe(false);
+    expect(existsSync(join(ROOT, "skills", "tree", "engine"))).toBe(false);
+    expect(existsSync(join(ROOT, "skills", "tree", "tests"))).toBe(false);
+    expect(existsSync(join(ROOT, "skills", "tree", "assets"))).toBe(false);
+    expect(existsSync(join(ROOT, "skills", "tree", "scripts"))).toBe(false);
+    expect(existsSync(join(ROOT, "skills", "tree", "agents"))).toBe(false);
     expect(
-      existsSync(join(ROOT, "skills", "first-tree", "references", "repo-snapshot")),
+      existsSync(join(ROOT, "skills", "tree", "references", "repo-snapshot")),
     ).toBe(false);
-    expect(existsSync(join(ROOT, "skills", "first-tree", "evals"))).toBe(false);
+    expect(existsSync(join(ROOT, "skills", "tree", "evals"))).toBe(false);
   });
 
   it("passes skill validation helpers", () => {
     execFileSync(
       "python3",
-      ["./scripts/quick_validate.py", "./skills/first-tree"],
+      ["./scripts/quick_validate.py", "./skills/tree"],
       {
         cwd: ROOT,
         stdio: "pipe",
@@ -166,27 +169,27 @@ describe("skill artifacts", () => {
       });
 
       expect(listing).toContain("package/dist/cli.js");
-      expect(listing).toContain("package/skills/first-tree/SKILL.md");
-      expect(listing).toContain("package/skills/first-tree/VERSION");
+      expect(listing).toContain("package/skills/tree/SKILL.md");
+      expect(listing).toContain("package/skills/tree/VERSION");
       expect(listing).toContain(
-        "package/skills/first-tree/references/onboarding.md",
+        "package/skills/tree/references/onboarding.md",
       );
       expect(listing).toContain(
-        "package/assets/framework/templates/agents.md.template",
+        "package/assets/tree/templates/agents.md.template",
       );
       expect(listing).not.toContain(
-        "package/assets/framework/templates/claude.md.template",
+        "package/assets/tree/templates/claude.md.template",
       );
       expect(listing).toContain(
-        "package/assets/framework/helpers/summarize-progress.js",
+        "package/assets/tree/helpers/summarize-progress.js",
       );
       // Lightweight skill payload does not ship engine/tests/agents/scripts.
-      expect(listing).not.toContain("package/skills/first-tree/engine/");
-      expect(listing).not.toContain("package/skills/first-tree/tests/");
-      expect(listing).not.toContain("package/skills/first-tree/agents/");
-      expect(listing).not.toContain("package/skills/first-tree/scripts/");
-      expect(listing).not.toContain("package/skills/first-tree/assets/");
-      expect(listing).not.toContain("package/skills/first-tree/evals/");
+      expect(listing).not.toContain("package/skills/tree/engine/");
+      expect(listing).not.toContain("package/skills/tree/tests/");
+      expect(listing).not.toContain("package/skills/tree/agents/");
+      expect(listing).not.toContain("package/skills/tree/scripts/");
+      expect(listing).not.toContain("package/skills/tree/assets/");
+      expect(listing).not.toContain("package/skills/tree/evals/");
       expect(listing).not.toContain("package/evals/");
       expect(listing).not.toContain("package/src/cli.ts");
       expect(listing).not.toContain("package/docs/");
@@ -207,24 +210,24 @@ describe("skill artifacts", () => {
     expect(read("README.md")).toContain("source-workspace-installation.md");
     expect(read("README.md")).toContain("first-tree-skill-cli/repo-architecture.md");
     expect(read("README.md")).toContain("first-tree-skill-cli/sync.md");
-    expect(read("README.md")).toContain("skills/first-tree/");
+    expect(read("README.md")).toContain("skills/tree/");
     expect(read("README.md")).toContain(".agents/skills/first-tree/");
     expect(read("README.md")).toContain(".claude/skills/first-tree/");
     expect(read("README.md")).toContain("bundled canonical");
     expect(read("README.md")).toContain("dedicated tree repo");
-    expect(read("README.md")).toContain("first-tree inspect");
-    expect(read("README.md")).toContain("first-tree bind");
-    expect(read("README.md")).toContain("first-tree workspace sync");
+    expect(read("README.md")).toContain("first-tree tree inspect");
+    expect(read("README.md")).toContain("first-tree tree bind");
+    expect(read("README.md")).toContain("first-tree tree workspace sync");
     expect(read("README.md")).toContain(".first-tree/source.json");
     expect(read("README.md")).toContain(".first-tree/tree.json");
     expect(read("README.md")).toContain(".first-tree/bindings/");
     expect(read("README.md")).toContain("source-repos.md");
     expect(read("README.md")).not.toContain(".first-tree/submodules/");
     expect(read("README.md")).toContain("`first-tree` skill");
-    expect(read("README.md")).toContain("first-tree publish");
+    expect(read("README.md")).toContain("first-tree tree publish");
     expect(read("README.md")).toContain("<repo>-tree");
     expect(read("README.md")).toContain("shared tree");
-    expect(read("README.md")).toContain("first-tree init tree --here");
+    expect(read("README.md")).toContain("first-tree tree init tree --here");
     expect(read("AGENTS.md")).toContain("docs/source-map.md");
     expect(read("AGENTS.md")).toContain("source-workspace-installation.md");
     expect(read("AGENTS.md")).toContain("first-tree-skill-cli/");
@@ -234,11 +237,11 @@ describe("skill artifacts", () => {
     expect(read("src/cli.ts")).not.toContain("from upstream");
     // Note: #evals/* import alias is in package.json but evals/ is excluded from "files" so it won't ship to npm
 
-    const onboarding = read("skills/first-tree/references/onboarding.md");
+    const onboarding = read("skills/tree/references/onboarding.md");
     expect(onboarding).toContain("Node.js 18+");
-    expect(onboarding).toContain("first-tree inspect --json");
-    expect(onboarding).toContain("first-tree bind");
-    expect(onboarding).toContain("first-tree workspace sync");
+    expect(onboarding).toContain("first-tree tree inspect --json");
+    expect(onboarding).toContain("first-tree tree bind");
+    expect(onboarding).toContain("first-tree tree workspace sync");
     expect(onboarding).toContain("baseline coverage");
     expect(onboarding).toContain("source/workspace root");
     expect(onboarding).toContain(".first-tree/tmp/");
@@ -248,12 +251,12 @@ describe("skill artifacts", () => {
     expect(onboarding).toContain("source-repos.md");
     expect(onboarding).not.toContain(".first-tree/submodules/");
     expect(onboarding).toContain("<repo>-tree");
-    expect(onboarding).toContain("first-tree init tree --here");
+    expect(onboarding).toContain("first-tree tree init tree --here");
     expect(onboarding).toContain("shared tree");
     expect(onboarding).not.toContain("This clones the framework into `.context-tree/`");
     expect(onboarding).not.toContain("from upstream");
 
-    const skillMd = read("skills/first-tree/SKILL.md");
+    const skillMd = read("skills/tree/SKILL.md");
     // SKILL.md is user-facing: shipped to user repos via copyCanonicalSkill.
     // It must NOT mention engine/, assets/, tests/, scripts/, maintainer-* docs,
     // or anything that doesn't exist in the lightweight installed payload.
@@ -269,13 +272,13 @@ describe("skill artifacts", () => {
     expect(skillMd).not.toContain("`scripts/`");
     // It SHOULD describe what the skill is, when to use it, and the CLI.
     expect(skillMd).toContain("Context Tree");
-    expect(skillMd).toContain("first-tree inspect");
-    expect(skillMd).toContain("first-tree init");
-    expect(skillMd).toContain("first-tree bind");
-    expect(skillMd).toContain("first-tree workspace sync");
-    expect(skillMd).toContain("first-tree verify");
-    expect(skillMd).toContain("first-tree upgrade");
-    expect(skillMd).toContain("first-tree publish");
+    expect(skillMd).toContain("first-tree tree inspect");
+    expect(skillMd).toContain("first-tree tree init");
+    expect(skillMd).toContain("first-tree tree bind");
+    expect(skillMd).toContain("first-tree tree workspace sync");
+    expect(skillMd).toContain("first-tree tree verify");
+    expect(skillMd).toContain("first-tree tree upgrade");
+    expect(skillMd).toContain("first-tree tree publish");
     expect(skillMd).toContain("references/principles.md");
     expect(skillMd).toContain("references/ownership-and-naming.md");
     expect(skillMd).toContain("Before Every Task");
@@ -298,22 +301,22 @@ describe("skill artifacts", () => {
     expect(sourceMap).toContain("maintainer-thin-cli.md");
     expect(sourceMap).toContain("maintainer-build-and-distribution.md");
     expect(sourceMap).toContain("maintainer-testing.md");
-    expect(sourceMap).toContain("src/engine/publish.ts");
-    expect(sourceMap).toContain("src/engine/sync.ts");
-    expect(sourceMap).toContain("src/engine/inspect.ts");
-    expect(sourceMap).toContain("src/engine/bind.ts");
-    expect(sourceMap).toContain("src/engine/workspace-sync.ts");
+    expect(sourceMap).toContain("src/products/tree/engine/publish.ts");
+    expect(sourceMap).toContain("src/products/tree/engine/sync.ts");
+    expect(sourceMap).toContain("src/products/tree/engine/inspect.ts");
+    expect(sourceMap).toContain("src/products/tree/engine/bind.ts");
+    expect(sourceMap).toContain("src/products/tree/engine/workspace-sync.ts");
     expect(sourceMap).toContain("tests/publish.test.ts");
     expect(sourceMap).toContain("tests/sync.test.ts");
-    expect(sourceMap).toContain("src/engine/runtime/binding-state.ts");
-    expect(sourceMap).toContain("src/engine/runtime/local-tree-config.ts"); // still exists, delegates to source.json
-    expect(sourceMap).toContain("src/engine/runtime/source-repo-index.ts");
+    expect(sourceMap).toContain("src/products/tree/engine/runtime/binding-state.ts");
+    expect(sourceMap).toContain("src/products/tree/engine/runtime/local-tree-config.ts"); // still exists, delegates to source.json
+    expect(sourceMap).toContain("src/products/tree/engine/runtime/source-repo-index.ts");
     expect(sourceMap).toContain("tests/init.test.ts");
     expect(sourceMap).toContain("tests/thin-cli.test.ts");
     expect(sourceMap).not.toContain("evals/first-tree-eval.test.ts");
 
     const sourceWorkspaceInstall = read(
-      "skills/first-tree/references/source-workspace-installation.md",
+      "skills/tree/references/source-workspace-installation.md",
     );
     expect(sourceWorkspaceInstall).toContain("FIRST-TREE-SOURCE-INTEGRATION:");
     expect(sourceWorkspaceInstall).toContain(".first-tree/source.json");
@@ -328,9 +331,9 @@ describe("skill artifacts", () => {
     expect(sourceWorkspaceInstall).toContain("Do not recreate a new sibling tree repo");
 
     const openaiPrompt = read("agents/openai.yaml");
-    expect(openaiPrompt).toContain("first-tree inspect --json");
-    expect(openaiPrompt).toContain("first-tree bind");
-    expect(openaiPrompt).toContain("first-tree workspace sync");
+    expect(openaiPrompt).toContain("first-tree tree inspect --json");
+    expect(openaiPrompt).toContain("first-tree tree bind");
+    expect(openaiPrompt).toContain("first-tree tree workspace sync");
     expect(openaiPrompt).toContain("baseline coverage");
     expect(openaiPrompt).toContain("progress.md");
     expect(openaiPrompt).toContain(".first-tree/source.json");
@@ -340,16 +343,16 @@ describe("skill artifacts", () => {
       "docs/maintainer-architecture.md",
     );
     expect(maintainerArchitecture).toContain("first-tree-skill-cli/repo-architecture.md");
-    expect(maintainerArchitecture).toContain("skills/first-tree/");
-    expect(maintainerArchitecture).toContain("assets/framework/");
-    expect(maintainerArchitecture).toContain("src/engine/");
+    expect(maintainerArchitecture).toContain("skills/tree/");
+    expect(maintainerArchitecture).toContain("assets/tree/");
+    expect(maintainerArchitecture).toContain("src/products/tree/engine/");
     expect(maintainerArchitecture).toContain("tests/");
     expect(maintainerArchitecture).toContain(".first-tree/bindings/");
     expect(maintainerArchitecture).toContain("source-repos.md");
     expect(maintainerArchitecture).not.toContain(".first-tree/submodules/");
 
     const upgradeContract = read(
-      "skills/first-tree/references/upgrade-contract.md",
+      "skills/tree/references/upgrade-contract.md",
     );
     expect(upgradeContract).not.toContain(".first-tree/submodules/");
 
@@ -358,11 +361,11 @@ describe("skill artifacts", () => {
     );
     expect(buildAndDistribution).toContain("first-tree-skill-cli/build-and-distribution.md");
     expect(buildAndDistribution).toContain("pnpm pack");
-    expect(buildAndDistribution).toContain("assets/framework/VERSION");
+    expect(buildAndDistribution).toContain("assets/tree/VERSION");
 
     const designSync = read("docs/design-sync.md");
     expect(designSync).toContain("first-tree-skill-cli/sync.md");
-    expect(designSync).toContain("src/engine/sync.ts");
+    expect(designSync).toContain("src/products/tree/engine/sync.ts");
     expect(designSync).toContain("tests/sync.test.ts");
   });
 

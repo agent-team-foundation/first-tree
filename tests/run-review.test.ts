@@ -8,7 +8,7 @@ import {
   extractReviewJson,
   prepareReviewWorkspace,
   splitDiffByFile,
-} from "../assets/framework/helpers/run-review.js";
+} from "../assets/tree/helpers/run-review.js";
 
 // --- extractStreamText ---
 

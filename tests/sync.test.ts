@@ -9,12 +9,12 @@ import {
   scanTreeNodes,
   type ShellResult,
   type ShellRun,
-} from "#engine/sync.js";
+} from "#products/tree/engine/sync.js";
 import {
   readTreeBinding,
   writeTreeBinding,
   type TreeBindingState,
-} from "#engine/runtime/binding-state.js";
+} from "#products/tree/engine/runtime/binding-state.js";
 import { makeTreeMetadata, useTmpDir } from "./helpers.js";
 
 function makeTreeShell(root: string): void {

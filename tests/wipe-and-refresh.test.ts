@@ -10,8 +10,8 @@ import { describe, expect, it } from "vitest";
 import {
   refreshInjectContextHook,
   refreshShippedWorkflows,
-} from "../src/engine/runtime/adapters.js";
-import { wipeInstalledSkill } from "../src/engine/runtime/installer.js";
+} from "../src/products/tree/engine/runtime/adapters.js";
+import { wipeInstalledSkill } from "../src/products/tree/engine/runtime/installer.js";
 import { useTmpDir } from "./helpers.js";
 
 describe("wipeInstalledSkill", () => {

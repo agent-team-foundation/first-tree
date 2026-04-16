@@ -2,8 +2,8 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { makeAgentsMd, makeGitRepo, makeTreeMetadata, useTmpDir } from "./helpers.js";
-import { syncTreeSourceRepoIndex } from "#engine/runtime/source-repo-index.js";
-import { writeTreeBinding } from "#engine/runtime/binding-state.js";
+import { syncTreeSourceRepoIndex } from "#products/tree/engine/runtime/source-repo-index.js";
+import { writeTreeBinding } from "#products/tree/engine/runtime/binding-state.js";
 
 describe("syncTreeSourceRepoIndex", () => {
   it("writes the repo index and updates root guidance from bindings", () => {

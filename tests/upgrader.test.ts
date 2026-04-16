@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   compareSkillVersions,
   extractMajorMinor,
-} from "../src/engine/runtime/upgrader.js";
+} from "../src/products/tree/engine/runtime/upgrader.js";
 
 describe("extractMajorMinor", () => {
   it("returns major.minor from a full version", () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseJoinArgs } from "#engine/join.js";
+import { parseJoinArgs } from "#products/tree/engine/join.js";
 
 // --- parseJoinArgs ---
 

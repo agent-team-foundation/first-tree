@@ -9,14 +9,14 @@ import {
   FIRST_TREE_INDEX_FILE,
   SOURCE_STATE,
   TREE_PROGRESS,
-} from "#engine/runtime/asset-loader.js";
+} from "#products/tree/engine/runtime/asset-loader.js";
 import {
   readSourceState,
   readTreeBinding,
   readTreeState,
   readWorkspaceState,
-} from "#engine/runtime/binding-state.js";
-import { readLocalTreeConfig } from "#engine/runtime/local-tree-config.js";
+} from "#products/tree/engine/runtime/binding-state.js";
+import { readLocalTreeConfig } from "#products/tree/engine/runtime/local-tree-config.js";
 import { makeMembers, makeSourceRepo, useTmpDir } from "./helpers.js";
 
 const ORIGINAL_CWD = process.cwd();
@@ -484,7 +484,7 @@ describe.sequential("CLI e2e smoke", () => {
 
     const inspectBefore = await runCliCaptured(sourceRoot, [
       "--skip-version-check",
-      "inspect",
+      "tree", "inspect",
       "--json",
     ]);
     expect(inspectBefore.code).toBe(0);
@@ -492,7 +492,7 @@ describe.sequential("CLI e2e smoke", () => {
 
     const initResult = await runCliCaptured(sourceRoot, [
       "--skip-version-check",
-      "init",
+      "tree", "init",
     ]);
     expect(initResult.code).toBe(0);
 
@@ -517,7 +517,7 @@ describe.sequential("CLI e2e smoke", () => {
 
     const inspectAfter = await runCliCaptured(treeRoot, [
       "--skip-version-check",
-      "inspect",
+      "tree", "inspect",
       "--json",
     ]);
     expect(inspectAfter.code).toBe(0);
@@ -529,7 +529,7 @@ describe.sequential("CLI e2e smoke", () => {
 
     const verifyResult = await runCliCaptured(sourceRoot, [
       "--skip-version-check",
-      "verify",
+      "tree", "verify",
       "--tree-path",
       "../product-repo-tree",
     ]);
@@ -540,7 +540,7 @@ describe.sequential("CLI e2e smoke", () => {
 
     const generateResult = await runCliCaptured(treeRoot, [
       "--skip-version-check",
-      "generate-codeowners",
+      "tree", "generate-codeowners",
     ]);
     expect(generateResult.code).toBe(0);
     expect(readFileSync(join(treeRoot, ".github", "CODEOWNERS"), "utf-8")).toContain(
@@ -549,14 +549,14 @@ describe.sequential("CLI e2e smoke", () => {
 
     const codeownersCheck = await runCliCaptured(treeRoot, [
       "--skip-version-check",
-      "generate-codeowners",
+      "tree", "generate-codeowners",
       "--check",
     ]);
     expect(codeownersCheck.code).toBe(0);
 
     const injectResult = await runCliCaptured(treeRoot, [
       "--skip-version-check",
-      "inject-context",
+      "tree", "inject-context",
     ]);
     expect(injectResult.code).toBe(0);
     expect(
@@ -565,13 +565,13 @@ describe.sequential("CLI e2e smoke", () => {
 
     const upgradeSource = await runCliCaptured(sourceRoot, [
       "--skip-version-check",
-      "upgrade",
+      "tree", "upgrade",
     ]);
     expect(upgradeSource.code).toBe(0);
 
     const upgradeTree = await runCliCaptured(sourceRoot, [
       "--skip-version-check",
-      "upgrade",
+      "tree", "upgrade",
       "--tree-path",
       "../product-repo-tree",
     ]);
@@ -593,7 +593,7 @@ describe.sequential("CLI e2e smoke", () => {
 
     const inspectWorkspace = await runCliCaptured(workspaceRoot, [
       "--skip-version-check",
-      "inspect",
+      "tree", "inspect",
       "--json",
     ]);
     expect(inspectWorkspace.code).toBe(0);
@@ -601,7 +601,7 @@ describe.sequential("CLI e2e smoke", () => {
 
     const treeInit = await runCliCaptured(workspaceRoot, [
       "--skip-version-check",
-      "init",
+      "tree", "init",
       "tree",
       "--tree-path",
       "../org-context",
@@ -610,7 +610,7 @@ describe.sequential("CLI e2e smoke", () => {
 
     const workspaceInit = await runCliCaptured(workspaceRoot, [
       "--skip-version-check",
-      "init",
+      "tree", "init",
       "--scope",
       "workspace",
       "--tree-path",
@@ -644,7 +644,7 @@ describe.sequential("CLI e2e smoke", () => {
     makeSourceRepo(childThree);
     const workspaceSync = await runCliCaptured(workspaceRoot, [
       "--skip-version-check",
-      "workspace",
+      "tree", "workspace",
       "sync",
       "--tree-path",
       "../org-context",
@@ -656,7 +656,7 @@ describe.sequential("CLI e2e smoke", () => {
     makeSourceRepo(standaloneRepo);
     const bindResult = await runCliCaptured(standaloneRepo, [
       "--skip-version-check",
-      "bind",
+      "tree", "bind",
       "--tree-path",
       "../org-context",
       "--tree-mode",
@@ -679,7 +679,7 @@ describe.sequential("CLI e2e smoke", () => {
 
     const initResult = await runCliCaptured(sourceRoot, [
       "--skip-version-check",
-      "init",
+      "tree", "init",
     ]);
     expect(initResult.code).toBe(0);
 
@@ -706,7 +706,7 @@ describe.sequential("CLI e2e smoke", () => {
 
     const publishResult = await runCliCaptured(sourceRoot, [
       "--skip-version-check",
-      "publish",
+      "tree", "publish",
       "--tree-path",
       "../ADHD-tree",
       "--open-pr",
@@ -731,7 +731,7 @@ describe.sequential("CLI e2e smoke", () => {
 
     const reviewResult = await runCliCaptured(treeRoot, [
       "--skip-version-check",
-      "review",
+      "tree", "review",
       "--diff",
       diffPath,
       "--output",
@@ -755,7 +755,7 @@ describe.sequential("CLI e2e smoke", () => {
 
     const inspectWorkspace = await runCliCaptured(workspaceRoot, [
       "--skip-version-check",
-      "inspect",
+      "tree", "inspect",
       "--json",
     ]);
     expect(inspectWorkspace.code).toBe(0);
@@ -763,7 +763,7 @@ describe.sequential("CLI e2e smoke", () => {
 
     const initTree = await runCliCaptured(workspaceRoot, [
       "--skip-version-check",
-      "init",
+      "tree", "init",
       "tree",
       "--tree-path",
       "../git-workspace-tree",
@@ -772,7 +772,7 @@ describe.sequential("CLI e2e smoke", () => {
 
     const initWorkspace = await runCliCaptured(workspaceRoot, [
       "--skip-version-check",
-      "init",
+      "tree", "init",
       "--scope",
       "workspace",
       "--tree-path",

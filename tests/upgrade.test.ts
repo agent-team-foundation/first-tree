@@ -9,10 +9,10 @@ import {
 } from "node:fs";
 import { basename, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { Repo } from "#engine/repo.js";
-import { runUpgrade } from "#engine/upgrade.js";
-import { copyCanonicalSkill } from "#engine/runtime/installer.js";
-import { writeTreeBinding } from "#engine/runtime/binding-state.js";
+import { Repo } from "#products/tree/engine/repo.js";
+import { runUpgrade } from "#products/tree/engine/upgrade.js";
+import { copyCanonicalSkill } from "#products/tree/engine/runtime/installer.js";
+import { writeTreeBinding } from "#products/tree/engine/runtime/binding-state.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
   CLAUDE_INSTRUCTIONS_FILE,
@@ -24,8 +24,8 @@ import {
   SOURCE_INTEGRATION_MARKER,
   TREE_PROGRESS,
   TREE_VERSION,
-} from "#engine/runtime/asset-loader.js";
-import { buildSourceIntegrationBlock } from "#engine/runtime/source-integration.js";
+} from "#products/tree/engine/runtime/asset-loader.js";
+import { buildSourceIntegrationBlock } from "#products/tree/engine/runtime/source-integration.js";
 import {
   makeAgentsMd,
   makeClaudeMd,
@@ -171,12 +171,12 @@ describe("runUpgrade", () => {
 
     copyCanonicalSkill(repoDir.path, repoDir.path);
 
-    expect(existsSync(join(repoDir.path, "skills", "first-tree", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(repoDir.path, "skills", "tree", "SKILL.md"))).toBe(true);
     expect(lstatSync(join(repoDir.path, ".agents", "skills", "first-tree")).isSymbolicLink()).toBe(
       true,
     );
     expect(readlinkSync(join(repoDir.path, ".agents", "skills", "first-tree"))).toBe(
-      "../../skills/first-tree",
+      "../../skills/tree",
     );
     expect(lstatSync(join(repoDir.path, ".claude", "skills", "first-tree")).isSymbolicLink()).toBe(
       true,

@@ -15,7 +15,7 @@ import {
   frameworkVersionCandidates,
   progressFileCandidates,
   resolveFirstExistingPath,
-} from "#engine/runtime/asset-loader.js";
+} from "#products/tree/engine/runtime/asset-loader.js";
 import { useTmpDir } from "./helpers.js";
 
 describe("asset-loader", () => {

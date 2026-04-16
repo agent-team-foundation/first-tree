@@ -13,12 +13,12 @@ Paste one of these into your agent (Claude Code, Codex, or any agent you are usi
 
 If you are the first person on your team to set up a Context Tree:
 ```text
-Use the latest first-tree CLI (https://github.com/agent-team-foundation/first-tree). First run `first-tree inspect --json` to determine whether the current folder is a single repo or a multi-repo workspace. If it is a multi-repo workspace, treat it as one workspace and create a single shared Context Tree for all repos in the current folder by default, rather than creating one tree per repo. Then install the skill in the current repo or workspace root and complete the onboarding process by creating the appropriate new Context Tree setup for this team.
+Use the latest first-tree CLI (https://github.com/agent-team-foundation/first-tree). First run `first-tree tree inspect --json` to determine whether the current folder is a single repo or a multi-repo workspace. If it is a multi-repo workspace, treat it as one workspace and create a single shared Context Tree for all repos in the current folder by default, rather than creating one tree per repo. Then install the skill in the current repo or workspace root and complete the onboarding process by creating the appropriate new Context Tree setup for this team.
 ```
 
 If your team already has a Context Tree:
 ```text
-Use the latest first-tree CLI (https://github.com/agent-team-foundation/first-tree). First run `first-tree inspect --json` to determine whether the current folder is a single repo or a multi-repo workspace. If it is a multi-repo workspace, treat it as one workspace and connect all repos in the current folder to the same shared Context Tree by default, rather than binding each repo to its own separate tree. Then install the skill in the current repo or workspace root and complete the onboarding process by connecting this repo or workspace to the existing shared Context Tree at `https://github.com/<your-organization>/<your-tree-repo-name>`.
+Use the latest first-tree CLI (https://github.com/agent-team-foundation/first-tree). First run `first-tree tree inspect --json` to determine whether the current folder is a single repo or a multi-repo workspace. If it is a multi-repo workspace, treat it as one workspace and connect all repos in the current folder to the same shared Context Tree by default, rather than binding each repo to its own separate tree. Then install the skill in the current repo or workspace root and complete the onboarding process by connecting this repo or workspace to the existing shared Context Tree at `https://github.com/<your-organization>/<your-tree-repo-name>`.
 ```
 
 ## Install And Run
@@ -28,15 +28,15 @@ The npm package and installed CLI command are both `first-tree`.
 - One-off use without installing globally:
 
   ```bash
-  npx -p first-tree first-tree inspect --json
-  npx -p first-tree first-tree init
+  npx -p first-tree first-tree tree inspect --json
+  npx -p first-tree first-tree tree init
   ```
 
 - Global install:
 
   ```bash
   npm install -g first-tree
-  first-tree init
+  first-tree tree init
   ```
 
 - Show the installed CLI version:
@@ -66,7 +66,7 @@ That model supports three first-class onboarding paths.
 This remains the default for a normal Git repo:
 
 ```bash
-first-tree init
+first-tree tree init
 ```
 
 The CLI:
@@ -85,13 +85,13 @@ If the user already has a shared Context Tree, bind to it instead of creating a
 new sibling:
 
 ```bash
-first-tree bind --tree-path ../org-context --tree-mode shared
+first-tree tree bind --tree-path ../org-context --tree-mode shared
 ```
 
 Or let `init` do the same thing as a high-level wrapper:
 
 ```bash
-first-tree init --tree-path ../org-context --tree-mode shared
+first-tree tree init --tree-path ../org-context --tree-mode shared
 ```
 
 If the tree is remote-only, pass `--tree-url`; `bind` / `init` will clone a
@@ -104,30 +104,30 @@ When the current root is a parent folder or root repo that contains child repos
 or submodules, use one shared tree for all of them:
 
 ```bash
-first-tree init --scope workspace --tree-path ../org-context --tree-mode shared --sync-members
+first-tree tree init --scope workspace --tree-path ../org-context --tree-mode shared --sync-members
 ```
 
 Or create a new shared tree automatically:
 
 ```bash
-first-tree init --scope workspace --sync-members
+first-tree tree init --scope workspace --sync-members
 ```
 
 The workspace root gets its own local skill integration plus
 `.first-tree/source.json` (with workspace members). Each discovered child repo is then bound as a
-`workspace-member` to the same tree via `first-tree workspace sync`.
+`workspace-member` to the same tree via `first-tree tree workspace sync`.
 
 ### Explicit Tree Bootstrap
 
 If you are already inside the tree repo itself, use:
 
 ```bash
-first-tree init tree --here
+first-tree tree init tree --here
 ```
 
 ## Inspect First
 
-`first-tree inspect --json` is the agent-friendly way to classify the current
+`first-tree tree inspect --json` is the agent-friendly way to classify the current
 folder before modifying anything. It reports:
 
 - whether the root is a tree repo, source repo, workspace repo, or workspace folder
@@ -178,46 +178,47 @@ plus their own source/workspace binding state.
 
 | Command | What it does |
 | --- | --- |
-| `first-tree inspect` | Classify the current folder and report existing bindings / child repos |
-| `first-tree init` | High-level onboarding wrapper for single repos, shared trees, and workspace roots |
-| `first-tree init tree` | Low-level tree bootstrap for an explicit tree checkout |
-| `first-tree bind` | Bind the current repo/workspace root to an existing tree repo |
-| `first-tree workspace sync` | Bind discovered child repos to the same shared tree |
-| `first-tree publish` | Publish a tree repo to GitHub and refresh locally bound source/workspace repos with the published URL |
-| `first-tree verify` | Run verification checks against a tree repo |
-| `first-tree upgrade` | Refresh installed source/workspace integration or tree metadata from the current package |
-| `first-tree generate-codeowners` | Generate `.github/CODEOWNERS` from tree ownership frontmatter |
-| `first-tree review` | Run the Claude Code PR review helper for a tree repo in CI |
-| `first-tree inject-context` | Output a Claude Code SessionStart hook payload from the root `NODE.md` |
-| `first-tree help onboarding` | Print the full onboarding guide |
+| `first-tree tree inspect` | Classify the current folder and report existing bindings / child repos |
+| `first-tree tree init` | High-level onboarding wrapper for single repos, shared trees, and workspace roots |
+| `first-tree tree init tree` | Low-level tree bootstrap for an explicit tree checkout |
+| `first-tree tree bind` | Bind the current repo/workspace root to an existing tree repo |
+| `first-tree tree workspace sync` | Bind discovered child repos to the same shared tree |
+| `first-tree tree publish` | Publish a tree repo to GitHub and refresh locally bound source/workspace repos with the published URL |
+| `first-tree tree verify` | Run verification checks against a tree repo |
+| `first-tree tree upgrade` | Refresh installed source/workspace integration or tree metadata from the current package |
+| `first-tree tree generate-codeowners` | Generate `.github/CODEOWNERS` from tree ownership frontmatter |
+| `first-tree tree review` | Run the Claude Code PR review helper for a tree repo in CI |
+| `first-tree tree inject-context` | Output a Claude Code SessionStart hook payload from the root `NODE.md` |
+| `first-tree tree help onboarding` | Print the full onboarding guide |
 
 ## Package And Command
 
 - The npm package is `first-tree`.
 - The installed CLI command is also `first-tree`.
 - The published package keeps its bundled canonical source under
-  `skills/first-tree/`.
+  `skills/tree/` (shipped to user repos as `skills/first-tree/`).
 - In this source repo, `.agents/skills/first-tree/` and
   `.claude/skills/first-tree/` are tracked symlink aliases back to
-  `skills/first-tree/` so local agents resolve the same `first-tree` skill
+  `skills/tree/` so local agents resolve the same `first-tree` skill
   that ships in the package.
 - `npx -p first-tree first-tree <command>` is the recommended one-off entrypoint.
 
 ## Canonical Documentation
 
-User-facing references ship in `skills/first-tree/references/` and are copied
-to user repos via `first-tree init` / `first-tree bind`.
+User-facing references ship in `skills/tree/references/` (installed in user
+repos as `skills/first-tree/references/`) and are copied to user repos via
+`first-tree tree init` / `first-tree tree bind`.
 
 Canonical design and architecture knowledge for this project lives in the bound
 Context Tree under `first-tree-skill-cli/`. Repo-local maintainer notes in
 `docs/` are implementation-only and never ship.
 
-- User-facing overview: `skills/first-tree/references/whitepaper.md`
-- User onboarding: `skills/first-tree/references/onboarding.md`
+- User-facing overview: `skills/tree/references/whitepaper.md`
+- User onboarding: `skills/tree/references/onboarding.md`
 - Source/workspace install contract:
-  `skills/first-tree/references/source-workspace-installation.md`
+  `skills/tree/references/source-workspace-installation.md`
 - Upgrade and layout contract:
-  `skills/first-tree/references/upgrade-contract.md`
+  `skills/tree/references/upgrade-contract.md`
 - Canonical architecture node: `first-tree-skill-cli/repo-architecture.md`
 - Canonical sync design node: `first-tree-skill-cli/sync.md`
 - Maintainer entrypoint: `docs/source-map.md`

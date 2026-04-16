@@ -13,7 +13,7 @@ import {
   LEGACY_VERSION,
   SKILL_ROOT,
   TREE_VERSION,
-} from "#engine/runtime/asset-loader.js";
+} from "#products/tree/engine/runtime/asset-loader.js";
 
 interface TmpDir {
   path: string;
@@ -110,8 +110,8 @@ export function makeLegacyRepoFramework(root: string, version = "0.1.0"): void {
 }
 
 export function makeSourceSkill(root: string, version = "0.2.0"): void {
-  const skillRoot = join(root, "skills", "first-tree");
-  const frameworkRoot = join(root, "assets", "framework");
+  const skillRoot = join(root, "skills", "tree");
+  const frameworkRoot = join(root, "assets", "tree");
   mkdirSync(join(root, "agents"), { recursive: true });
   mkdirSync(join(frameworkRoot, "templates"), {
     recursive: true,

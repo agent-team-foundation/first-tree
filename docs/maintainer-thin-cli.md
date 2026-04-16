@@ -3,22 +3,30 @@
 Authoritative decision node: `first-tree-skill-cli/thin-cli-shell.md` in the
 bound Context Tree.
 
-Use this local reference when changing `src/cli.ts` or the command adapters in
-`src/engine/commands/`.
+Use this local reference when changing `src/cli.ts`, the product dispatchers in
+`src/products/*/cli.ts`, or the tree command adapters in
+`src/products/tree/engine/commands/`.
 
 ## Shell Responsibilities
 
-The shell should:
+The top-level shell (`src/cli.ts`) should:
 
-- parse commands and flags
-- expose help and version
+- parse `first-tree <product> <command>`
+- expose help and version (CLI + per-product VERSION)
 - handle `--skip-version-check`
-- dispatch into `src/engine/commands/`
-- stay thin
+- lazy-load and dispatch into `src/products/<product>/cli.js`
+- stay thin — never statically import another product
+
+Each product dispatcher (currently `tree/cli.ts`; `breeze/cli.ts` is a stub)
+owns its own USAGE and dispatches into its engine's command adapters.
 
 ## Current CLI Surface
 
-Top-level user commands:
+```
+first-tree tree <command>
+```
+
+Tree commands:
 
 - `inspect`
 - `init`
@@ -35,10 +43,18 @@ Top-level user commands:
 - `inject-context`
 - `help`
 
+```
+first-tree breeze <command>
+```
+
+Breeze is a Phase 0 stub and exits with a not-implemented error.
+
 ## Local Touchpoints
 
-- `src/cli.ts` — usage text, global flags, and dispatch
-- `src/engine/commands/*.ts` — thin command adapters
+- `src/cli.ts` — umbrella usage text, global flags, and product dispatch
+- `src/products/tree/cli.ts` — tree product USAGE and command dispatch
+- `src/products/breeze/cli.ts` — breeze stub dispatcher
+- `src/products/tree/engine/commands/*.ts` — thin tree command adapters
 - `tests/thin-cli.test.ts` — direct CLI smoke coverage
 - `tests/cli-e2e.test.ts` — end-to-end command workflow coverage
 

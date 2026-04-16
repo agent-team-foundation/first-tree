@@ -1,15 +1,15 @@
 import { join, basename, relative } from "node:path";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { Repo } from "#engine/repo.js";
+import { Repo } from "#products/tree/engine/repo.js";
 import {
   PUBLISH_USAGE,
   parsePublishArgs,
   runPublish,
   type CommandRunner,
-} from "#engine/publish.js";
-import { writeBootstrapState } from "#engine/runtime/bootstrap.js";
-import { writeSourceState } from "#engine/runtime/binding-state.js";
+} from "#products/tree/engine/publish.js";
+import { writeBootstrapState } from "#products/tree/engine/runtime/bootstrap.js";
+import { writeSourceState } from "#products/tree/engine/runtime/binding-state.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
   CLAUDE_INSTRUCTIONS_FILE,
@@ -17,11 +17,11 @@ import {
   FIRST_TREE_INDEX_FILE,
   SOURCE_STATE,
   SKILL_ROOT,
-} from "#engine/runtime/asset-loader.js";
+} from "#products/tree/engine/runtime/asset-loader.js";
 import {
   buildSourceIntegrationBlock,
   upsertFirstTreeIndexFile,
-} from "#engine/runtime/source-integration.js";
+} from "#products/tree/engine/runtime/source-integration.js";
 import {
   makeAgentsMd,
   makeClaudeMd,

@@ -8,10 +8,10 @@ implementation touchpoints that do not belong in the tree.
 
 ## Local Implementation Touchpoints
 
-- `src/engine/sync.ts` — core detect/propose/apply implementation
-- `src/engine/commands/sync.ts` — CLI adapter
+- `src/products/tree/engine/sync.ts` — core detect/propose/apply implementation
+- `src/products/tree/engine/commands/sync.ts` — CLI adapter
 - `tests/sync.test.ts` — sync behavior coverage
-- `assets/framework/claude-commands/first-tree-sync*.md` — installed runbooks
+- `assets/tree/claude-commands/first-tree-sync*.md` — installed runbooks
   and schedule payload
 
 ## Change Checklist

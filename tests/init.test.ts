@@ -14,8 +14,8 @@ import {
   parseInitArgs,
   writeProgress,
   runInit,
-} from "#engine/init.js";
-import { Repo } from "#engine/repo.js";
+} from "#products/tree/engine/init.js";
+import { Repo } from "#products/tree/engine/repo.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
   CLAUDE_INSTRUCTIONS_FILE,
@@ -28,8 +28,8 @@ import {
   TREE_PROGRESS,
   TREE_VERSION,
   BOOTSTRAP_STATE,
-} from "#engine/runtime/asset-loader.js";
-import { buildSourceIntegrationBlock } from "#engine/runtime/source-integration.js";
+} from "#products/tree/engine/runtime/asset-loader.js";
+import { buildSourceIntegrationBlock } from "#products/tree/engine/runtime/source-integration.js";
 import {
   makeGitRepo,
   useTmpDir,

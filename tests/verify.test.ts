@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { runInit } from "#engine/init.js";
-import { check, checkProgress, runVerify } from "#engine/verify.js";
-import { Repo } from "#engine/repo.js";
+import { runInit } from "#products/tree/engine/init.js";
+import { check, checkProgress, runVerify } from "#products/tree/engine/verify.js";
+import { Repo } from "#products/tree/engine/repo.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
   CLAUDE_INSTRUCTIONS_FILE,
@@ -11,7 +11,7 @@ import {
   LEGACY_PROGRESS,
   SOURCE_INTEGRATION_MARKER,
   TREE_PROGRESS,
-} from "#engine/runtime/asset-loader.js";
+} from "#products/tree/engine/runtime/asset-loader.js";
 import {
   useTmpDir,
   makeAgentsMd,

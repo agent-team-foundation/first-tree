@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   countProjectSpecificPlaceholderBlocks,
   Repo,
-} from "#engine/repo.js";
+} from "#products/tree/engine/repo.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
   CLAUDE_INSTALLED_PROGRESS,
@@ -19,7 +19,7 @@ import {
   SOURCE_INTEGRATION_MARKER,
   TREE_PROGRESS,
   TREE_VERSION,
-} from "#engine/runtime/asset-loader.js";
+} from "#products/tree/engine/runtime/asset-loader.js";
 import {
   useTmpDir,
   makeFramework,

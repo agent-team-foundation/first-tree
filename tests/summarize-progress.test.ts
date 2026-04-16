@@ -6,7 +6,7 @@ import {
   formatProgressSummary,
   parseProgressMarkdown,
   summarizeProgressMarkdown,
-} from "../assets/framework/helpers/summarize-progress.js";
+} from "../assets/tree/helpers/summarize-progress.js";
 import { useTmpDir } from "./helpers.js";
 
 const SAMPLE_PROGRESS = `# Context Tree Init
@@ -77,7 +77,7 @@ describe("summarize-progress helper", () => {
         join(
           process.cwd(),
           "assets",
-          "framework",
+          "tree",
           "helpers",
           "summarize-progress.js",
         ),

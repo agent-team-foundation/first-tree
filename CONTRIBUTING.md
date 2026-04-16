@@ -9,20 +9,21 @@ Naming note:
 
 - `first-tree` is the npm package name.
 - `first-tree` is also the installed CLI command.
-- `skills/first-tree/` is the bundled skill path inside this repo.
+- `skills/tree/` is the bundled tree skill path inside this repo.
+- `skills/breeze/` is the placeholder for the breeze skill payload.
 - This source repo also tracks `.agents/skills/first-tree/` and
   `.claude/skills/first-tree/` as symlink aliases back to
-  `skills/first-tree/` for local agent discovery.
+  `skills/tree/` for local agent discovery.
 - User trees install that payload into `.agents/skills/first-tree/` and
-  `.claude/skills/first-tree/`.
+  `.claude/skills/first-tree/` (the installed name is unchanged).
 
-Most changes should land in the canonical skill under `skills/first-tree/`,
+Most changes should land in the canonical tree skill under `skills/tree/`,
 not in the local alias paths, root-level prose, or ad hoc helper files.
 
 ## Before You Change Anything
 
 - If you are trying to use Context Tree in your own repo, start with `README.md`
-  and `skills/first-tree/references/onboarding.md` instead of this maintainer
+  and `skills/tree/references/onboarding.md` instead of this maintainer
   guide.
 - If a change is large, cross-cutting, or changes the public contract, open an
   issue or draft PR first so maintainers can align on scope before
@@ -65,17 +66,16 @@ before running `EVALS=1 pnpm eval`.
 
 ## Change Discipline
 
-- Treat `skills/first-tree/` as the only canonical source of framework
-  knowledge.
-- If you change shipped payloads under `assets/framework/`, keep templates,
+- Treat `skills/tree/` as the only canonical source of tree skill knowledge.
+- If you change shipped payloads under `assets/tree/`, keep templates,
   task text, docs, and tests aligned.
 - If you change anything that gets copied into user repos, bump
-  `skills/first-tree/assets/framework/VERSION`.
+  `assets/tree/VERSION`.
 - If you change installed layout or upgrade semantics, update
-  `skills/first-tree/references/upgrade-contract.md` and the related tests in
+  `skills/tree/references/upgrade-contract.md` and the related tests in
   the same PR.
 - If you change maintainer workflows or package shell behavior, update the
-  relevant references under `skills/first-tree/references/`.
+  relevant references under `skills/tree/references/`.
 
 ## Pull Requests
 
@@ -94,5 +94,5 @@ context every time.
 ## Where To Start Reading
 
 - `README.md` for the public entrypoint
-- `skills/first-tree/SKILL.md` for the maintainer workflow
-- `skills/first-tree/references/source-map.md` for the canonical reading index
+- `skills/tree/SKILL.md` for the user-facing tree skill payload
+- `docs/source-map.md` for the maintainer reading index
