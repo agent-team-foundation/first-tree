@@ -123,13 +123,11 @@ describe("runBreeze dispatcher", () => {
       "../src/products/breeze/cli.js"
     );
 
+    // `status-manager` was migrated to a TS port in Phase 2a; it no longer
+    // goes through the bundled-script route. The remaining script targets
+    // (`watch`, `statusline`) stay on the bridge.
     const cases: Array<{ args: string[]; script: string; rest: string[] }> = [
       { args: ["watch"], script: "breeze-watch", rest: [] },
-      {
-        args: ["status-manager", "init"],
-        script: "breeze-status-manager",
-        rest: ["init"],
-      },
       {
         args: ["statusline"],
         script: "breeze-statusline-wrapper",
@@ -186,6 +184,33 @@ describe("runBreeze dispatcher", () => {
     );
     const code = await freshRun(["status"], () => {});
     expect(code).toBe(13);
+  });
+
+  it("routes status-manager through the TS port (not the bash bridge)", async () => {
+    // If the dispatcher still spawned the bash script, the bridge helpers
+    // would be called. Stub them to throw so any bridge call fails loudly.
+    vi.doMock("../src/products/breeze/bridge.js", () => ({
+      resolveBreezeRunner: vi.fn(),
+      resolveBundledBreezeScript: vi.fn(() => {
+        throw new Error("should not be called for status-manager");
+      }),
+      resolveBreezeSetupScript: vi.fn(),
+      spawnInherit: vi.fn(() => {
+        throw new Error("should not be called for status-manager");
+      }),
+    }));
+
+    const runStatusManager = vi.fn(async () => 0);
+    vi.doMock("../src/products/breeze/commands/status-manager.js", () => ({
+      runStatusManager,
+    }));
+
+    const { runBreeze: freshRun } = await import(
+      "../src/products/breeze/cli.js"
+    );
+    const code = await freshRun(["status-manager", "list"], () => {});
+    expect(code).toBe(0);
+    expect(runStatusManager).toHaveBeenCalledWith(["list"]);
   });
 
   it("surfaces resolver errors to stderr and returns 1", async () => {

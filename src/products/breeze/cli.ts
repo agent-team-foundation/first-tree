@@ -64,7 +64,13 @@ type SetupTarget = {
   kind: "setup";
 };
 
-type Target = RunnerTarget | ScriptTarget | SetupTarget;
+type TsTarget = {
+  kind: "ts";
+  /** The node:module specifier to `await import()`. */
+  specifier: "status-manager";
+};
+
+type Target = RunnerTarget | ScriptTarget | SetupTarget | TsTarget;
 
 const DISPATCH: Record<string, Target> = {
   install: { kind: "setup" },
@@ -81,8 +87,10 @@ const DISPATCH: Record<string, Target> = {
 
   // bundled bash scripts
   watch: { kind: "script", script: "breeze-watch" },
-  "status-manager": { kind: "script", script: "breeze-status-manager" },
   statusline: { kind: "script", script: "breeze-statusline-wrapper" },
+
+  // TS ports (Phase 2a onward)
+  "status-manager": { kind: "ts", specifier: "status-manager" },
 };
 
 export async function runBreeze(
@@ -106,21 +114,33 @@ export async function runBreeze(
     return 1;
   }
 
-  const bridge = await import("./bridge.js");
-
   try {
     switch (target.kind) {
       case "runner": {
+        const bridge = await import("./bridge.js");
         const runner = bridge.resolveBreezeRunner();
         return bridge.spawnInherit(runner.path, [target.subcommand, ...rest]);
       }
       case "script": {
+        const bridge = await import("./bridge.js");
         const scriptPath = bridge.resolveBundledBreezeScript(target.script);
         return bridge.spawnInherit(scriptPath, rest);
       }
       case "setup": {
+        const bridge = await import("./bridge.js");
         const setupPath = bridge.resolveBreezeSetupScript();
         return bridge.spawnInherit("bash", [setupPath, ...rest]);
+      }
+      case "ts": {
+        // Lazy-import the TS command so startup stays cheap for
+        // workflows that never touch the ported commands.
+        if (target.specifier === "status-manager") {
+          const mod = await import("./commands/status-manager.js");
+          return await mod.runStatusManager(rest);
+        }
+        // Exhaustiveness check.
+        const _never: never = target.specifier;
+        throw new Error(`unknown ts specifier: ${_never as string}`);
       }
     }
   } catch (err) {
