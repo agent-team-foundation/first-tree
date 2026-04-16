@@ -11,7 +11,7 @@ export const USAGE = `usage: first-tree <product> <command>
 
 Products:
   tree                  Context Tree tooling (init, bind, sync, publish, ...)
-  breeze                Breeze tooling (not yet available in the TypeScript port)
+  breeze                Breeze proposal/inbox agent (install, run, status, watch, ...)
 
 Global options:
   --help, -h            Show this help message
@@ -22,6 +22,8 @@ Getting started:
   first-tree tree --help
   first-tree tree inspect --json
   first-tree tree init
+  first-tree breeze --help
+  first-tree breeze status
 `;
 
 type Output = (text: string) => void;
@@ -164,7 +166,7 @@ export async function runCli(
     }
     case "breeze": {
       const { runBreeze } = await import("./products/breeze/cli.js");
-      return runBreeze(args.slice(1));
+      return runBreeze(args.slice(1), write);
     }
     default:
       write(`Unknown product: ${product}`);

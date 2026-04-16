@@ -210,24 +210,24 @@ describe("thin CLI shell", () => {
     expect(code).toBe(0);
   });
 
-  it("breeze product exits with a not-implemented error", async () => {
+  it("breeze product prints breeze USAGE for --help", async () => {
     const output = captureOutput();
-    const errors: string[] = [];
-    const origError = console.error;
-    console.error = (...args: unknown[]) => {
-      errors.push(args.map((a) => String(a)).join(" "));
-    };
-    try {
-      const code = await runCli(
-        ["--skip-version-check", "breeze", "anything"],
-        output.write,
-      );
-      expect(code).toBe(2);
-      expect(errors.join("\n")).toContain(
-        "the TypeScript implementation is not yet available",
-      );
-    } finally {
-      console.error = origError;
-    }
+    const code = await runCli(
+      ["--skip-version-check", "breeze", "--help"],
+      output.write,
+    );
+    expect(code).toBe(0);
+    expect(output.lines.join("\n")).toContain("usage: first-tree breeze");
+    expect(output.lines.join("\n")).toContain("run-once");
+  });
+
+  it("breeze product fails with hint for unknown subcommand", async () => {
+    const output = captureOutput();
+    const code = await runCli(
+      ["--skip-version-check", "breeze", "no-such-thing"],
+      output.write,
+    );
+    expect(code).toBe(1);
+    expect(output.lines[0]).toBe("Unknown breeze command: no-such-thing");
   });
 });
