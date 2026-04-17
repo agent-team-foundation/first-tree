@@ -1,5 +1,5 @@
 /**
- * Tests for `src/products/breeze/core/store.ts`.
+ * Tests for `src/products/breeze/engine/runtime/store.ts`.
  *
  * Covers:
  *   - round-trip: read the real-shape sample, write it back, ensure
@@ -26,8 +26,8 @@ import {
   readInbox,
   updateInbox,
   writeInbox,
-} from "../src/products/breeze/core/store.js";
-import type { Inbox } from "../src/products/breeze/core/types.js";
+} from "../src/products/breeze/engine/runtime/store.js";
+import type { Inbox } from "../src/products/breeze/engine/runtime/types.js";
 
 const FIXTURE = join(__dirname, "fixtures", "breeze", "inbox-sample.json");
 

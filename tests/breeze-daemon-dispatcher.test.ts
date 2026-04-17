@@ -9,18 +9,18 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createBus, type BusEvent } from "../src/products/breeze/daemon/bus.js";
+import { createBus, type BusEvent } from "../src/products/breeze/engine/daemon/bus.js";
 import {
   Dispatcher,
   type CompletionRecord,
   type TaskCandidate,
-} from "../src/products/breeze/daemon/dispatcher.js";
+} from "../src/products/breeze/engine/daemon/dispatcher.js";
 import {
   WorkspaceManager,
   type GitRunner,
-} from "../src/products/breeze/daemon/workspace.js";
-import type { RunnerSpawner } from "../src/products/breeze/daemon/runner.js";
-import { tryClaim } from "../src/products/breeze/daemon/claim.js";
+} from "../src/products/breeze/engine/daemon/workspace.js";
+import type { RunnerSpawner } from "../src/products/breeze/engine/daemon/runner.js";
+import { tryClaim } from "../src/products/breeze/engine/daemon/claim.js";
 
 const tempRoots: string[] = [];
 

@@ -31,18 +31,18 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 
-import { loadBreezeConfig } from "../core/config.js";
-import { GhClient } from "../core/gh.js";
-import { resolveBreezePaths } from "../core/paths.js";
-import { appendActivityEvent } from "../core/activity-log.js";
-import { readInbox, updateInbox } from "../core/store.js";
+import { loadBreezeConfig } from "../runtime/config.js";
+import { GhClient } from "../runtime/gh.js";
+import { resolveBreezePaths } from "../runtime/paths.js";
+import { appendActivityEvent } from "../runtime/activity-log.js";
+import { readInbox, updateInbox } from "../runtime/store.js";
 import {
   type BreezeStatus,
   BREEZE_LABEL_META,
   ALL_BREEZE_LABELS,
   type Inbox,
   type InboxEntry,
-} from "../core/types.js";
+} from "../runtime/types.js";
 
 // Re-export of the `BreezeStatus` enum for CLI-arg validation.
 const BREEZE_STATUSES = ["new", "wip", "human", "done"] as const;

@@ -6,7 +6,7 @@ import {
   shouldProcessReason,
   taskKindFromString,
   type TaskKind,
-} from "../src/products/breeze/core/task-kind.js";
+} from "../src/products/breeze/engine/runtime/task-kind.js";
 
 describe("classifyNotification", () => {
   it("returns review_request when reason=review_requested even on Issue subjects", () => {

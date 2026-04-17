@@ -21,14 +21,14 @@ import { join } from "node:path";
 import type { CompletionRecord } from "./dispatcher.js";
 import type { GhClient } from "./gh-client.js";
 import type { ThreadStore } from "./thread-store.js";
-import { encodeMultiline } from "../core/task-util.js";
+import { encodeMultiline } from "../runtime/task-util.js";
 import { shouldIgnoreLatestSelfActivity } from "./gh-client.js";
 import {
   candidateFromTaskMetadata,
   effectiveWorkspaceRepo,
   toDispatcherCandidate,
   type TaskCandidate,
-} from "../core/task.js";
+} from "../runtime/task.js";
 import type { TaskCandidate as DispatchCandidate } from "./dispatcher.js";
 import type { AgentIdentity } from "./runner.js";
 

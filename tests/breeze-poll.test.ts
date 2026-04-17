@@ -23,16 +23,16 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { runPoll } from "../src/products/breeze/commands/poll.js";
-import { GhClient } from "../src/products/breeze/core/gh.js";
-import { resolveBreezePaths } from "../src/products/breeze/core/paths.js";
-import { readActivityLog } from "../src/products/breeze/core/activity-log.js";
+import { runPoll } from "../src/products/breeze/engine/commands/poll.js";
+import { GhClient } from "../src/products/breeze/engine/runtime/gh.js";
+import { resolveBreezePaths } from "../src/products/breeze/engine/runtime/paths.js";
+import { readActivityLog } from "../src/products/breeze/engine/runtime/activity-log.js";
 import {
   parseNotifications,
   sortEntries,
   diffEvents,
   splitConcatenatedJsonArrays,
-} from "../src/products/breeze/commands/poll.js";
+} from "../src/products/breeze/engine/commands/poll.js";
 
 /**
  * Build a stubbed GhClient. Each call to `spawn` is matched against the

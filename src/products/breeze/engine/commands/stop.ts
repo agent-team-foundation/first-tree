@@ -7,7 +7,7 @@
 
 import { spawnSync } from "node:child_process";
 
-import { loadBreezeDaemonConfig } from "../core/config.js";
+import { loadBreezeDaemonConfig } from "../runtime/config.js";
 import { resolveDaemonIdentity } from "../daemon/identity.js";
 import {
   findServiceLock,

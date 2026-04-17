@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { classifyBreezeStatus } from "../src/products/breeze/core/classifier.js";
+import { classifyBreezeStatus } from "../src/products/breeze/engine/runtime/classifier.js";
 
 describe("classifier — precedence rules (spec §2)", () => {
   it("rule 1: breeze:done wins over everything", () => {

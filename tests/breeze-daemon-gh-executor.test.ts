@@ -7,7 +7,7 @@ import {
   isRateLimited,
   type ExecOutput,
   type GhCommandSpec,
-} from "../src/products/breeze/daemon/gh-executor.js";
+} from "../src/products/breeze/engine/daemon/gh-executor.js";
 
 describe("bucketForArgs", () => {
   it("classifies search commands", () => {

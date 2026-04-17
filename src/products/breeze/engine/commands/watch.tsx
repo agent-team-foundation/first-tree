@@ -25,14 +25,14 @@ import React, {
 } from "react";
 import { Box, render, Text, useApp, useInput } from "ink";
 
-import { resolveBreezePaths } from "../core/paths.js";
+import { resolveBreezePaths } from "../runtime/paths.js";
 import {
   type ActivityEvent,
   ActivityEventSchema,
   type BreezeStatus,
   type Inbox,
   InboxSchema,
-} from "../core/types.js";
+} from "../runtime/types.js";
 
 // Colours chosen to match the bash script's 8-bit SGR palette.
 const COLOR = {

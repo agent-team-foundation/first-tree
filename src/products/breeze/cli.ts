@@ -161,7 +161,7 @@ export async function runBreeze(
   try {
     switch (target.kind) {
       case "setup": {
-        const bridge = await import("./bridge.js");
+        const bridge = await import("./engine/bridge.js");
         const setupPath = bridge.resolveBreezeSetupScript();
         return bridge.spawnInherit("bash", [setupPath, ...rest]);
       }
@@ -169,35 +169,35 @@ export async function runBreeze(
         // Lazy-import the TS command so startup stays cheap for workflows
         // that never touch the ported commands.
         if (target.specifier === "status-manager") {
-          const mod = await import("./commands/status-manager.js");
+          const mod = await import("./engine/commands/status-manager.js");
           return await mod.runStatusManager(rest);
         }
         if (target.specifier === "poll") {
-          const mod = await import("./commands/poll.js");
+          const mod = await import("./engine/commands/poll.js");
           return await mod.runPoll(rest);
         }
         if (target.specifier === "watch") {
-          const mod = await import("./commands/watch.js");
+          const mod = await import("./engine/commands/watch.js");
           return await mod.runWatch(rest);
         }
         if (target.specifier === "doctor") {
-          const mod = await import("./commands/doctor.js");
+          const mod = await import("./engine/commands/doctor.js");
           return await mod.runDoctor(rest);
         }
         if (target.specifier === "status") {
-          const mod = await import("./commands/status.js");
+          const mod = await import("./engine/commands/status.js");
           return await mod.runStatus(rest);
         }
         if (target.specifier === "cleanup") {
-          const mod = await import("./commands/cleanup.js");
+          const mod = await import("./engine/commands/cleanup.js");
           return await mod.runCleanup(rest);
         }
         if (target.specifier === "start") {
-          const mod = await import("./commands/start.js");
+          const mod = await import("./engine/commands/start.js");
           return await mod.runStart(rest);
         }
         if (target.specifier === "stop") {
-          const mod = await import("./commands/stop.js");
+          const mod = await import("./engine/commands/stop.js");
           return await mod.runStop(rest);
         }
         // Exhaustiveness check.
@@ -208,7 +208,7 @@ export async function runBreeze(
         // Execute the separate `dist/breeze-statusline.js` bundle via
         // `node`. This keeps cold start under ~30ms: the bundle has zero
         // npm deps and doesn't load the full first-tree CLI.
-        const bridge = await import("./bridge.js");
+        const bridge = await import("./engine/bridge.js");
         const packageRoot = bridge.resolveFirstTreePackageRoot();
         const bundlePath = join(packageRoot, "dist", "breeze-statusline.js");
         return bridge.spawnInherit(process.execPath, [bundlePath, ...rest]);
@@ -216,7 +216,7 @@ export async function runBreeze(
       case "daemon": {
         // Strip any stray `--backend=` so existing scripts keep working.
         const { rest: residual } = extractBackendFlag(rest);
-        const mod = await import("./daemon/runner-skeleton.js");
+        const mod = await import("./engine/daemon/runner-skeleton.js");
         return await mod.runDaemon(residual, { once: target.once });
       }
     }

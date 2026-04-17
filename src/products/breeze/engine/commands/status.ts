@@ -5,14 +5,14 @@
  * `first-tree breeze status`.
  */
 
-import { loadBreezeDaemonConfig } from "../core/config.js";
+import { loadBreezeDaemonConfig } from "../runtime/config.js";
 import {
   findServiceLock,
   isLockStale,
   type LockInfo,
 } from "../daemon/claim.js";
 import { resolveDaemonIdentity } from "../daemon/identity.js";
-import { RepoFilter } from "../core/repo-filter.js";
+import { RepoFilter } from "../runtime/repo-filter.js";
 import { resolveRunnerHome } from "../daemon/runner-skeleton.js";
 import { ThreadStore } from "../daemon/thread-store.js";
 

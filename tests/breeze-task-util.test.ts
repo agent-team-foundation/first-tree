@@ -12,7 +12,7 @@ import {
   shellQuote,
   stableFileId,
   unescapeJqField,
-} from "../src/products/breeze/core/task-util.js";
+} from "../src/products/breeze/engine/runtime/task-util.js";
 
 describe("fnv1a64 / stableFileId", () => {
   it("matches known FNV-1a 64 outputs", () => {

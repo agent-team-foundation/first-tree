@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   parseDaemonArgs,
   runDaemon,
-} from "../src/products/breeze/daemon/runner-skeleton.js";
+} from "../src/products/breeze/engine/daemon/runner-skeleton.js";
 import { extractBackendFlag } from "../src/products/breeze/cli.js";
 
 describe("parseDaemonArgs", () => {
@@ -140,7 +140,7 @@ describe("cli dispatcher routes run / run-once / daemon to the TS runner", () =>
 
   it("routes `daemon` to runDaemon with once=false", async () => {
     const runDaemonSpy = vi.fn(async () => 0);
-    vi.doMock("../src/products/breeze/daemon/runner-skeleton.js", () => ({
+    vi.doMock("../src/products/breeze/engine/daemon/runner-skeleton.js", () => ({
       runDaemon: runDaemonSpy,
     }));
     const { runBreeze } = await import("../src/products/breeze/cli.js");
@@ -153,7 +153,7 @@ describe("cli dispatcher routes run / run-once / daemon to the TS runner", () =>
 
   it("routes `run` to runDaemon with once=false and strips any stray --backend flag", async () => {
     const runDaemonSpy = vi.fn(async () => 0);
-    vi.doMock("../src/products/breeze/daemon/runner-skeleton.js", () => ({
+    vi.doMock("../src/products/breeze/engine/daemon/runner-skeleton.js", () => ({
       runDaemon: runDaemonSpy,
     }));
     const { runBreeze } = await import("../src/products/breeze/cli.js");
@@ -163,7 +163,7 @@ describe("cli dispatcher routes run / run-once / daemon to the TS runner", () =>
 
   it("routes `run-once` to runDaemon with once=true", async () => {
     const runDaemonSpy = vi.fn(async () => 0);
-    vi.doMock("../src/products/breeze/daemon/runner-skeleton.js", () => ({
+    vi.doMock("../src/products/breeze/engine/daemon/runner-skeleton.js", () => ({
       runDaemon: runDaemonSpy,
     }));
     const { runBreeze } = await import("../src/products/breeze/cli.js");

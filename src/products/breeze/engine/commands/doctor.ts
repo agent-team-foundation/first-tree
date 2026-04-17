@@ -9,7 +9,7 @@
 
 import { existsSync, mkdirSync } from "node:fs";
 
-import { loadBreezeDaemonConfig } from "../core/config.js";
+import { loadBreezeDaemonConfig } from "../runtime/config.js";
 import {
   identityHasRequiredScope,
   resolveDaemonIdentity,
@@ -19,7 +19,7 @@ import {
   isLockStale,
   type LockInfo,
 } from "../daemon/claim.js";
-import { RepoFilter } from "../core/repo-filter.js";
+import { RepoFilter } from "../runtime/repo-filter.js";
 import {
   detectAvailableRunners,
   findExecutable,

@@ -38,10 +38,10 @@
 
 import { existsSync, mkdirSync } from "node:fs";
 
-import { appendActivityEvent } from "../core/activity-log.js";
-import { GhClient, GhExecError } from "../core/gh.js";
-import type { BreezePaths } from "../core/paths.js";
-import { updateInbox } from "../core/store.js";
+import { appendActivityEvent } from "../runtime/activity-log.js";
+import { GhClient, GhExecError } from "../runtime/gh.js";
+import type { BreezePaths } from "../runtime/paths.js";
+import { updateInbox } from "../runtime/store.js";
 import {
   classifyEntries,
   diffEvents,
@@ -50,7 +50,7 @@ import {
   sortEntries,
   splitConcatenatedJsonArrays,
 } from "../commands/poll.js";
-import type { Inbox } from "../core/types.js";
+import type { Inbox } from "../runtime/types.js";
 
 export interface PollerLogger {
   info: (line: string) => void;

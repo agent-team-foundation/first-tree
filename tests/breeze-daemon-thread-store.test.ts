@@ -10,11 +10,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { ThreadStore } from "../src/products/breeze/daemon/thread-store.js";
+import { ThreadStore } from "../src/products/breeze/engine/daemon/thread-store.js";
 import {
   defaultThreadRecord,
   type ThreadRecord,
-} from "../src/products/breeze/core/task.js";
+} from "../src/products/breeze/engine/runtime/task.js";
 
 const tempRoots: string[] = [];
 

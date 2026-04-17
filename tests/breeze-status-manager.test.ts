@@ -19,10 +19,10 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { runStatusManager } from "../src/products/breeze/commands/status-manager.js";
-import { resolveBreezePaths } from "../src/products/breeze/core/paths.js";
-import { GhClient } from "../src/products/breeze/core/gh.js";
-import { readActivityLog } from "../src/products/breeze/core/activity-log.js";
+import { runStatusManager } from "../src/products/breeze/engine/commands/status-manager.js";
+import { resolveBreezePaths } from "../src/products/breeze/engine/runtime/paths.js";
+import { GhClient } from "../src/products/breeze/engine/runtime/gh.js";
+import { readActivityLog } from "../src/products/breeze/engine/runtime/activity-log.js";
 
 const FIXTURE = join(__dirname, "fixtures", "breeze", "inbox-sample.json");
 

@@ -28,8 +28,8 @@ import {
   peekClaim,
   releaseClaim,
   tryClaim,
-} from "../src/products/breeze/daemon/claim.js";
-import type { DaemonIdentity } from "../src/products/breeze/daemon/identity.js";
+} from "../src/products/breeze/engine/daemon/claim.js";
+import type { DaemonIdentity } from "../src/products/breeze/engine/daemon/identity.js";
 
 function mkScratch(prefix: string): string {
   return mkdtempSync(join(tmpdir(), `breeze-claim-${prefix}-`));

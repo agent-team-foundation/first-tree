@@ -20,7 +20,7 @@ import {
   runWithTimeout,
   type RunnerRequest,
   type RunnerSpawner,
-} from "../src/products/breeze/daemon/runner.js";
+} from "../src/products/breeze/engine/daemon/runner.js";
 
 const tempRoots: string[] = [];
 

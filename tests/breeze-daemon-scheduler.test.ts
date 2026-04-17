@@ -17,12 +17,12 @@ import {
   retryDelaySec,
   routeWorkspaceCandidate,
   shouldRouteToOperatorRepo,
-} from "../src/products/breeze/daemon/scheduler.js";
-import { ThreadStore } from "../src/products/breeze/daemon/thread-store.js";
+} from "../src/products/breeze/engine/daemon/scheduler.js";
+import { ThreadStore } from "../src/products/breeze/engine/daemon/thread-store.js";
 import {
   buildReviewRequestCandidate,
   toDispatcherCandidate,
-} from "../src/products/breeze/core/task.js";
+} from "../src/products/breeze/engine/runtime/task.js";
 
 const tempRoots: string[] = [];
 

@@ -16,10 +16,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { runCleanup } from "../src/products/breeze/commands/cleanup.js";
-import { runDoctor } from "../src/products/breeze/commands/doctor.js";
-import { runStatus } from "../src/products/breeze/commands/status.js";
-import { ThreadStore } from "../src/products/breeze/daemon/thread-store.js";
+import { runCleanup } from "../src/products/breeze/engine/commands/cleanup.js";
+import { runDoctor } from "../src/products/breeze/engine/commands/doctor.js";
+import { runStatus } from "../src/products/breeze/engine/commands/status.js";
+import { ThreadStore } from "../src/products/breeze/engine/daemon/thread-store.js";
 
 const tempRoots: string[] = [];
 

@@ -7,7 +7,7 @@ import type { SpawnSyncReturns } from "node:child_process";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { GhClient, GhExecError } from "../src/products/breeze/core/gh.js";
+import { GhClient, GhExecError } from "../src/products/breeze/engine/runtime/gh.js";
 
 type SpawnFn = ConstructorParameters<typeof GhClient>[0] extends
   | { spawn?: infer S }

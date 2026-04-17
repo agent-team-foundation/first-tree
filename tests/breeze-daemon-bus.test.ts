@@ -10,7 +10,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 
-import { createBus, toSseBus, type BusEvent } from "../src/products/breeze/daemon/bus.js";
+import { createBus, toSseBus, type BusEvent } from "../src/products/breeze/engine/daemon/bus.js";
 
 describe("createBus", () => {
   it("delivers events to every live subscriber in subscription order", () => {

@@ -10,7 +10,7 @@ import { mkdirSync, openSync } from "node:fs";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 
-import { loadBreezeDaemonConfig } from "../core/config.js";
+import { loadBreezeDaemonConfig } from "../runtime/config.js";
 import { resolveDaemonIdentity } from "../daemon/identity.js";
 import {
   bootstrapLaunchdJob,

@@ -32,14 +32,14 @@ import { execSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import { resolveBreezePaths } from "../core/paths.js";
-import { loadBreezeDaemonConfig, type DaemonConfig } from "../core/config.js";
+import { resolveBreezePaths } from "../runtime/paths.js";
+import { loadBreezeDaemonConfig, type DaemonConfig } from "../runtime/config.js";
 
 import { resolveDaemonIdentity, identityHasRequiredScope } from "./identity.js";
 import { startHttpServer, type RunningHttpServer } from "./http.js";
 import { pollOnce, runPoller, type PollerLogger } from "./poller.js";
-import { GhClient as CoreGhClient } from "../core/gh.js";
-import type { BreezePaths } from "../core/paths.js";
+import { GhClient as CoreGhClient } from "../runtime/gh.js";
+import type { BreezePaths } from "../runtime/paths.js";
 import { createBus, toSseBus, type Bus } from "./bus.js";
 import { startGhBroker, type RunningBroker } from "./broker.js";
 import { GhExecutor } from "./gh-executor.js";
@@ -48,7 +48,7 @@ import { WorkspaceManager } from "./workspace.js";
 import type { RunnerSpec } from "./runner.js";
 import { GhClient as BrokerGhClient } from "./gh-client.js";
 import { runCandidateLoop } from "./candidate-loop.js";
-import { RepoFilter } from "../core/repo-filter.js";
+import { RepoFilter } from "../runtime/repo-filter.js";
 import { Scheduler } from "./scheduler.js";
 import { ThreadStore } from "./thread-store.js";
 

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   RepoFilter,
   searchScopesFor,
-} from "../src/products/breeze/core/repo-filter.js";
+} from "../src/products/breeze/engine/runtime/repo-filter.js";
 
 describe("RepoFilter.parseCsv", () => {
   it("accepts owner/repo and owner/*", () => {

@@ -35,17 +35,17 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 
-import { appendActivityEvent } from "../core/activity-log.js";
-import { classifyBreezeStatus } from "../core/classifier.js";
-import { loadBreezeConfig } from "../core/config.js";
-import { GhClient, GhExecError } from "../core/gh.js";
-import { resolveBreezePaths } from "../core/paths.js";
-import { updateInbox } from "../core/store.js";
+import { appendActivityEvent } from "../runtime/activity-log.js";
+import { classifyBreezeStatus } from "../runtime/classifier.js";
+import { loadBreezeConfig } from "../runtime/config.js";
+import { GhClient, GhExecError } from "../runtime/gh.js";
+import { resolveBreezePaths } from "../runtime/paths.js";
+import { updateInbox } from "../runtime/store.js";
 import {
   type GhState,
   type Inbox,
   type InboxEntry,
-} from "../core/types.js";
+} from "../runtime/types.js";
 
 export interface PollIO {
   stdout: (line: string) => void;

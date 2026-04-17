@@ -17,17 +17,17 @@ import {
   pickNewerActivity,
   shouldIgnoreLatestSelfActivity,
   shouldIgnoreSelfAuthored,
-} from "../src/products/breeze/daemon/gh-client.js";
+} from "../src/products/breeze/engine/daemon/gh-client.js";
 import {
   GhExecutor,
   type ExecOutput,
   type GhCommandSpec,
-} from "../src/products/breeze/daemon/gh-executor.js";
-import { RepoFilter } from "../src/products/breeze/core/repo-filter.js";
+} from "../src/products/breeze/engine/daemon/gh-executor.js";
+import { RepoFilter } from "../src/products/breeze/engine/runtime/repo-filter.js";
 import {
   buildNotificationCandidate,
   buildReviewRequestCandidate,
-} from "../src/products/breeze/core/task.js";
+} from "../src/products/breeze/engine/runtime/task.js";
 
 const tempRoots: string[] = [];
 

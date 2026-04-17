@@ -12,11 +12,11 @@ import { render } from "ink-testing-library";
 import React from "react";
 import { describe, expect, it } from "vitest";
 
-import { BreezeWatch } from "../src/products/breeze/commands/watch.js";
+import { BreezeWatch } from "../src/products/breeze/engine/commands/watch.js";
 import type {
   ActivityEvent,
   Inbox,
-} from "../src/products/breeze/core/types.js";
+} from "../src/products/breeze/engine/runtime/types.js";
 
 function mkInbox(entries: Inbox["notifications"]): Inbox {
   return { last_poll: "2026-04-16T20:00:00Z", notifications: entries };

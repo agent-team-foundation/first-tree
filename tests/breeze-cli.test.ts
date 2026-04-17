@@ -74,7 +74,7 @@ describe("runBreeze dispatcher", () => {
 
   it("routes run / run-once / daemon through the TS daemon", async () => {
     const runDaemonSpy = vi.fn(async () => 0);
-    vi.doMock("../src/products/breeze/daemon/runner-skeleton.js", () => ({
+    vi.doMock("../src/products/breeze/engine/daemon/runner-skeleton.js", () => ({
       runDaemon: runDaemonSpy,
     }));
     const { runBreeze: freshRun } = await import(
@@ -110,7 +110,7 @@ describe("runBreeze dispatcher", () => {
     const spawnSpy = vi.fn().mockReturnValue(0);
     const resolvePackageRootSpy = vi.fn(() => "/pkg");
 
-    vi.doMock("../src/products/breeze/bridge.js", () => ({
+    vi.doMock("../src/products/breeze/engine/bridge.js", () => ({
       resolveBreezeRunner: vi.fn(),
       resolveBundledBreezeScript: vi.fn(() => {
         throw new Error("statusline must not route through bundled scripts");
@@ -136,7 +136,7 @@ describe("runBreeze dispatcher", () => {
     const spawnSpy = vi.fn().mockReturnValue(0);
     const resolveSetupSpy = vi.fn().mockReturnValue("/pkg/first-tree-breeze/setup");
 
-    vi.doMock("../src/products/breeze/bridge.js", () => ({
+    vi.doMock("../src/products/breeze/engine/bridge.js", () => ({
       resolveBreezeRunner: vi.fn(),
       resolveBundledBreezeScript: vi.fn(),
       resolveBreezeSetupScript: resolveSetupSpy,
@@ -156,7 +156,7 @@ describe("runBreeze dispatcher", () => {
   });
 
   it("routes poll through the TS port (not the runner)", async () => {
-    vi.doMock("../src/products/breeze/bridge.js", () => ({
+    vi.doMock("../src/products/breeze/engine/bridge.js", () => ({
       resolveBreezeRunner: vi.fn(() => {
         throw new Error("poll must not route through the runner bridge");
       }),
@@ -169,7 +169,7 @@ describe("runBreeze dispatcher", () => {
     }));
 
     const runPoll = vi.fn(async () => 0);
-    vi.doMock("../src/products/breeze/commands/poll.js", () => ({
+    vi.doMock("../src/products/breeze/engine/commands/poll.js", () => ({
       runPoll,
     }));
 
@@ -182,7 +182,7 @@ describe("runBreeze dispatcher", () => {
   });
 
   it("routes watch through the TS port (not the bridge)", async () => {
-    vi.doMock("../src/products/breeze/bridge.js", () => ({
+    vi.doMock("../src/products/breeze/engine/bridge.js", () => ({
       resolveBreezeRunner: vi.fn(),
       resolveBundledBreezeScript: vi.fn(() => {
         throw new Error("watch must not route through the bundled script bridge");
@@ -195,7 +195,7 @@ describe("runBreeze dispatcher", () => {
     }));
 
     const runWatch = vi.fn(async () => 0);
-    vi.doMock("../src/products/breeze/commands/watch.js", () => ({
+    vi.doMock("../src/products/breeze/engine/commands/watch.js", () => ({
       runWatch,
     }));
 
@@ -209,7 +209,7 @@ describe("runBreeze dispatcher", () => {
 
   it("propagates the runDaemon exit code for `run`", async () => {
     const runDaemonSpy = vi.fn(async () => 13);
-    vi.doMock("../src/products/breeze/daemon/runner-skeleton.js", () => ({
+    vi.doMock("../src/products/breeze/engine/daemon/runner-skeleton.js", () => ({
       runDaemon: runDaemonSpy,
     }));
     const { runBreeze: freshRun } = await import(
@@ -222,7 +222,7 @@ describe("runBreeze dispatcher", () => {
   it("routes status-manager through the TS port (not the bash bridge)", async () => {
     // If the dispatcher still spawned the bash script, the bridge helpers
     // would be called. Stub them to throw so any bridge call fails loudly.
-    vi.doMock("../src/products/breeze/bridge.js", () => ({
+    vi.doMock("../src/products/breeze/engine/bridge.js", () => ({
       resolveBreezeRunner: vi.fn(),
       resolveBundledBreezeScript: vi.fn(() => {
         throw new Error("should not be called for status-manager");
@@ -235,7 +235,7 @@ describe("runBreeze dispatcher", () => {
     }));
 
     const runStatusManager = vi.fn(async () => 0);
-    vi.doMock("../src/products/breeze/commands/status-manager.js", () => ({
+    vi.doMock("../src/products/breeze/engine/commands/status-manager.js", () => ({
       runStatusManager,
     }));
 
@@ -248,7 +248,7 @@ describe("runBreeze dispatcher", () => {
   });
 
   it("surfaces runDaemon errors to stderr and returns 1", async () => {
-    vi.doMock("../src/products/breeze/daemon/runner-skeleton.js", () => ({
+    vi.doMock("../src/products/breeze/engine/daemon/runner-skeleton.js", () => ({
       runDaemon: async () => {
         throw new Error("daemon init failed");
       },

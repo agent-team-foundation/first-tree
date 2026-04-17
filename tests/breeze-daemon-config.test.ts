@@ -15,7 +15,7 @@ import {
   DAEMON_CONFIG_DEFAULTS,
   breezeDaemonConfigSearchPaths,
   loadBreezeDaemonConfig,
-} from "../src/products/breeze/core/config.js";
+} from "../src/products/breeze/engine/runtime/config.js";
 
 describe("loadBreezeDaemonConfig", () => {
   let tmp: string;

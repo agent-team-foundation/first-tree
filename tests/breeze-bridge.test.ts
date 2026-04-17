@@ -4,7 +4,7 @@ import {
   resolveFirstTreePackageRoot,
   spawnInherit,
   type SpawnFn,
-} from "../src/products/breeze/bridge.js";
+} from "../src/products/breeze/engine/bridge.js";
 import { join } from "node:path";
 
 describe("resolveFirstTreePackageRoot", () => {

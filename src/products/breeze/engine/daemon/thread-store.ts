@@ -33,13 +33,13 @@ import { dirname, join } from "node:path";
 import {
   parseKvLines,
   stableFileId,
-} from "../core/task-util.js";
+} from "../runtime/task-util.js";
 import {
   defaultThreadRecord,
   threadRecordFromKv,
   threadRecordToLines,
   type ThreadRecord,
-} from "../core/task.js";
+} from "../runtime/task.js";
 
 export interface ThreadStoreOptions {
   runnerHome: string;

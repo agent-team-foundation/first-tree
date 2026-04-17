@@ -20,7 +20,7 @@ import type { Scheduler } from "./scheduler.js";
 import {
   toDispatcherCandidate,
   type TaskCandidate,
-} from "../core/task.js";
+} from "../runtime/task.js";
 
 export interface CandidateLoopLogger {
   info: (line: string) => void;

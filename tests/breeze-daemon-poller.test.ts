@@ -21,14 +21,14 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { GhClient } from "../src/products/breeze/core/gh.js";
-import { resolveBreezePaths } from "../src/products/breeze/core/paths.js";
+import { GhClient } from "../src/products/breeze/engine/runtime/gh.js";
+import { resolveBreezePaths } from "../src/products/breeze/engine/runtime/paths.js";
 import {
   isRateLimited,
   pollOnce,
   rateLimitBackoffMs,
   runPoller,
-} from "../src/products/breeze/daemon/poller.js";
+} from "../src/products/breeze/engine/daemon/poller.js";
 
 interface ResponseMatcher {
   match: (argv: readonly string[]) => boolean;

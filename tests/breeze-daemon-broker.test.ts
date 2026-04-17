@@ -14,7 +14,7 @@ import {
   GhExecutor,
   type GhCommandSpec,
   type ExecOutput,
-} from "../src/products/breeze/daemon/gh-executor.js";
+} from "../src/products/breeze/engine/daemon/gh-executor.js";
 import {
   MUTATION_CACHE_TTL_MS,
   SHIM_SCRIPT,
@@ -23,7 +23,7 @@ import {
   stableFileId,
   startGhBroker,
   writeCachedMutationResponse,
-} from "../src/products/breeze/daemon/broker.js";
+} from "../src/products/breeze/engine/daemon/broker.js";
 
 const tempRoots: string[] = [];
 

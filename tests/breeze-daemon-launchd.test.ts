@@ -5,7 +5,7 @@ import {
   launchdLabel,
   launchdPlistPath,
   renderLaunchdPlist,
-} from "../src/products/breeze/daemon/launchd.js";
+} from "../src/products/breeze/engine/daemon/launchd.js";
 
 describe("launchdLabel", () => {
   it("sanitizes login and profile into a dotted reverse-dns label", () => {

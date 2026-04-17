@@ -17,7 +17,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { renderStatusline } from "../src/products/breeze/statusline.js";
+import { renderStatusline } from "../src/products/breeze/engine/statusline.js";
 
 function mkBreezeDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "breeze-sl-"));

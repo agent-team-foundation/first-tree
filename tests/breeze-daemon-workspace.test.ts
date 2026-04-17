@@ -12,7 +12,7 @@ import {
   WorkspaceManager,
   sanitizeFilename,
   type GitRunner,
-} from "../src/products/breeze/daemon/workspace.js";
+} from "../src/products/breeze/engine/daemon/workspace.js";
 
 const tempRoots: string[] = [];
 

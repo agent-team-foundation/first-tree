@@ -6,7 +6,7 @@
  */
 
 import { cleanupExpiredClaims } from "../daemon/claim.js";
-import { resolveBreezePaths } from "../core/paths.js";
+import { resolveBreezePaths } from "../runtime/paths.js";
 import { resolveRunnerHome } from "../daemon/runner-skeleton.js";
 import { ThreadStore } from "../daemon/thread-store.js";
 

@@ -11,8 +11,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_IDENTITY_TTL_MS,
   resolveIdentity,
-} from "../src/products/breeze/core/identity.js";
-import { GhClient } from "../src/products/breeze/core/gh.js";
+} from "../src/products/breeze/engine/runtime/identity.js";
+import { GhClient } from "../src/products/breeze/engine/runtime/gh.js";
 
 function mkTmp(): string {
   return mkdtempSync(join(tmpdir(), "breeze-identity-"));

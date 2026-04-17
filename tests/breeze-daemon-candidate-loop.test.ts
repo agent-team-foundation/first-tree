@@ -3,27 +3,27 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createBus } from "../src/products/breeze/daemon/bus.js";
+import { createBus } from "../src/products/breeze/engine/daemon/bus.js";
 import {
   Dispatcher,
   type TaskCandidate as DispatchCandidate,
-} from "../src/products/breeze/daemon/dispatcher.js";
+} from "../src/products/breeze/engine/daemon/dispatcher.js";
 import {
   GhClient,
   type CandidatePoll,
-} from "../src/products/breeze/daemon/gh-client.js";
+} from "../src/products/breeze/engine/daemon/gh-client.js";
 import {
   runCandidateCycle,
   runCandidateLoop,
-} from "../src/products/breeze/daemon/candidate-loop.js";
-import { buildReviewRequestCandidate } from "../src/products/breeze/core/task.js";
+} from "../src/products/breeze/engine/daemon/candidate-loop.js";
+import { buildReviewRequestCandidate } from "../src/products/breeze/engine/runtime/task.js";
 import {
   WorkspaceManager,
   type GitRunner,
-} from "../src/products/breeze/daemon/workspace.js";
-import type { RunnerSpawner } from "../src/products/breeze/daemon/runner.js";
-import { RepoFilter } from "../src/products/breeze/core/repo-filter.js";
-import { GhExecutor } from "../src/products/breeze/daemon/gh-executor.js";
+} from "../src/products/breeze/engine/daemon/workspace.js";
+import type { RunnerSpawner } from "../src/products/breeze/engine/daemon/runner.js";
+import { RepoFilter } from "../src/products/breeze/engine/runtime/repo-filter.js";
+import { GhExecutor } from "../src/products/breeze/engine/daemon/gh-executor.js";
 
 const tempRoots: string[] = [];
 

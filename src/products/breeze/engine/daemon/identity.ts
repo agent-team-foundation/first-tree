@@ -20,7 +20,7 @@
  * and keeps it in memory for the lifetime of the daemon process.
  */
 
-import { GhClient, GhExecError } from "../core/gh.js";
+import { GhClient, GhExecError } from "../runtime/gh.js";
 
 export interface DaemonIdentity {
   host: string;

@@ -14,7 +14,7 @@ export default defineConfig([
   // and load in <30ms. Keep this entry self-contained (no `./cli` imports,
   // no ink, no zod).
   {
-    entry: ["src/products/breeze/statusline.ts"],
+    entry: ["src/products/breeze/engine/statusline.ts"],
     format: "esm",
     outDir: "dist",
     outputOptions: {

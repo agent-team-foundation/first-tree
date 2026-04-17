@@ -25,7 +25,7 @@ import {
   RepoFilter,
   searchScopesFor,
   type SearchScope,
-} from "../core/repo-filter.js";
+} from "../runtime/repo-filter.js";
 import {
   buildAssignedCandidate,
   buildNotificationCandidate,
@@ -34,13 +34,13 @@ import {
   taskPrNumber,
   taskUrl,
   type TaskCandidate,
-} from "../core/task.js";
+} from "../runtime/task.js";
 import {
   canonicalApiPath,
   isRecentGithubTimestamp,
   parseTsvLine,
   shellQuote,
-} from "../core/task-util.js";
+} from "../runtime/task-util.js";
 
 export interface ThreadActivity {
   login: string;

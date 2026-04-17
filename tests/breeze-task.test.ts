@@ -15,7 +15,7 @@ import {
   threadRecordToLines,
   toDispatcherCandidate,
   type ThreadRecord,
-} from "../src/products/breeze/core/task.js";
+} from "../src/products/breeze/engine/runtime/task.js";
 
 describe("buildNotificationCandidate", () => {
   it("extracts pr number and sets review-request priority for review_requested", () => {

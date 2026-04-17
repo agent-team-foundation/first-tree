@@ -27,7 +27,7 @@ import {
   parseRoute,
   startHttpServer,
   tailAsJsonArray,
-} from "../src/products/breeze/daemon/http.js";
+} from "../src/products/breeze/engine/daemon/http.js";
 import {
   encodeSseFrame,
   encodeSseEvent,
@@ -36,7 +36,7 @@ import {
   SSE_READY_FRAME,
   type SseBus,
   type SseEvent,
-} from "../src/products/breeze/daemon/sse.js";
+} from "../src/products/breeze/engine/daemon/sse.js";
 
 /** Minimal controllable bus for SSE tests. */
 function makeManualBus(): {
