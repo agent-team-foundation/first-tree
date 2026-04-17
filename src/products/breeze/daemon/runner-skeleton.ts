@@ -1,26 +1,36 @@
 /**
  * Minimal TS daemon entrypoint.
  *
- * This is Phase 3a: read-path only. The daemon spins up the notification
- * poller and waits for a shutdown signal. HTTP, broker, bus, dispatcher
- * are deferred to Phase 3b/3c — this skeleton explicitly leaves those
- * wiring points as TODOs so reviewers can see the future surface.
+ * This is the Phase 3a/3b read-path entrypoint plus the Phase 3c
+ * broker/dispatcher startup. The daemon spins up the notification
+ * poller, HTTP/SSE server, gh broker, bus, and dispatcher; SIGTERM
+ * cascades through a single AbortController.
  *
  * Launch path:
  *   `first-tree breeze daemon --backend=ts`
  * delegates here via `src/products/breeze/cli.ts`. The `rust` backend
- * (default in Phase 3a) continues to route through
- * `bridge.ts::resolveBreezeRunner` and the Rust `breeze-runner` binary;
- * nothing in this file touches that path.
+ * continues to route through `bridge.ts::resolveBreezeRunner` and the
+ * Rust `breeze-runner` binary; nothing in this file touches that path.
  *
  * Shutdown contract:
  *   - SIGTERM / SIGINT cascade through a single AbortController.
  *   - The poller observes `signal.aborted`, finishes any in-flight
  *     `pollOnce` (including draining the inbox.json advisory lock),
  *     then resolves.
- *   - The daemon exits with code 0 on clean shutdown, 1 if the poller
- *     threw.
+ *   - Dispatcher.stop() aborts in-flight runner tasks and drains
+ *     pending. Broker.stop() waits for the serve-loop to unwind.
+ *   - The daemon exits with code 0 on clean shutdown, 1 on fatal error.
+ *
+ * Phase 4 note:
+ *   Dispatcher submissions (turning notifications into candidates) are
+ *   deferred. This entrypoint wires the lifecycle but does not yet
+ *   feed the dispatcher — a future poller callback will `submit()` as
+ *   notifications arrive.
  */
+
+import { execSync } from "node:child_process";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 import { resolveBreezePaths } from "../core/paths.js";
 import { loadBreezeDaemonConfig, type DaemonConfig } from "../core/config.js";
@@ -28,6 +38,12 @@ import { loadBreezeDaemonConfig, type DaemonConfig } from "../core/config.js";
 import { resolveDaemonIdentity, identityHasRequiredScope } from "./identity.js";
 import { startHttpServer, type RunningHttpServer } from "./http.js";
 import { runPoller, type PollerLogger } from "./poller.js";
+import { createBus, toSseBus, type Bus } from "./bus.js";
+import { startGhBroker, type RunningBroker } from "./broker.js";
+import { GhExecutor } from "./gh-executor.js";
+import { Dispatcher } from "./dispatcher.js";
+import { WorkspaceManager } from "./workspace.js";
+import type { RunnerSpec } from "./runner.js";
 
 export interface DaemonCliOverrides {
   pollIntervalSec?: number;
@@ -224,11 +240,78 @@ export async function runDaemon(
     `breeze daemon: poll-interval=${config.pollIntervalSec}s host=${config.host} http-port=${config.httpPort}`,
   );
 
+  // Phase 3c: shared in-process bus drives SSE + broker task events.
+  const bus = createBus({
+    onListenerError: (err) =>
+      logger.warn(
+        `bus listener threw: ${err instanceof Error ? err.message : String(err)}`,
+      ),
+  });
+
+  // Phase 3c: start gh broker + dispatcher if runners are available.
+  // Absence of codex/claude is non-fatal; the daemon still runs as
+  // read-only (poller + http).
+  let broker: RunningBroker | null = null;
+  let dispatcher: Dispatcher | null = null;
+  try {
+    const runners = detectAvailableRunners();
+    const realGh = findExecutable("gh");
+    if (runners.length > 0 && realGh) {
+      const runnerHome = resolveRunnerHome();
+      const brokerDir = join(runnerHome, "broker");
+      const identity = resolveDaemonIdentity({ host: config.host });
+      const executor = new GhExecutor({
+        realGh,
+        writeCooldownMs: 1_000,
+        signal: controller.signal,
+      });
+      broker = await startGhBroker({
+        brokerDir,
+        executor,
+        logger: {
+          warn: (line) => logger.warn(`broker: ${line}`),
+          error: (line) => logger.error(`broker: ${line}`),
+        },
+      });
+      const workspaceManager = new WorkspaceManager({
+        reposDir: join(runnerHome, "repos"),
+        workspacesDir: join(runnerHome, "workspaces"),
+        identity: { host: identity.host, login: identity.login },
+      });
+      dispatcher = new Dispatcher({
+        runnerHome,
+        identity: { host: identity.host, login: identity.login },
+        runners,
+        workspaceManager,
+        bus,
+        ghShimDir: broker.shimDir,
+        ghBrokerDir: broker.brokerDir,
+        claimsDir: paths.claimsDir,
+        disclosureText:
+          "This reply was drafted by breeze, an autonomous agent running on behalf of the account owner.",
+        maxParallel: 2,
+        taskTimeoutMs: config.taskTimeoutSec * 1_000,
+        logger,
+      });
+      logger.info(
+        `breeze daemon: dispatcher ready (runners=${runners.map((r) => r.kind).join(",")}, broker=${broker.shimDir})`,
+      );
+    } else {
+      const missing: string[] = [];
+      if (runners.length === 0) missing.push("no codex/claude on PATH");
+      if (!realGh) missing.push("no gh on PATH");
+      logger.warn(
+        `breeze daemon: skipping broker/dispatcher (${missing.join("; ")})`,
+      );
+    }
+  } catch (err) {
+    logger.error(
+      `failed to start broker/dispatcher: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    // Continue without dispatcher; still run poller + http.
+  }
+
   // Phase 3b: start the read-only HTTP + SSE server.
-  // Phase 3c will replace the inbox-mtime stub bus with the real
-  // broker-driven in-process bus. The http layer itself does NOT need
-  // to change when that lands.
-  //
   // If the shared controller is already aborted (tests inject a
   // pre-aborted signal; real SIGTERM arrives later), skip binding: we
   // would close immediately anyway and we'd rather not touch the
@@ -240,6 +323,7 @@ export async function runDaemon(
         httpPort: config.httpPort,
         inboxPath: paths.inbox,
         activityLogPath: paths.activityLog,
+        bus: toSseBus(bus),
         signal: controller.signal,
         logger,
       });
@@ -247,11 +331,12 @@ export async function runDaemon(
       logger.error(
         `failed to start http server: ${err instanceof Error ? err.message : String(err)}`,
       );
+      if (dispatcher) await dispatcher.stop();
+      if (broker) await broker.stop();
       if (uninstallHandlers) uninstallHandlers();
       return 1;
     }
   }
-  // TODO(Phase 3c): start broker gh-serializer + bus + dispatcher.
 
   let exitCode = 0;
   try {
@@ -268,14 +353,32 @@ export async function runDaemon(
     );
     exitCode = 1;
   } finally {
-    // Shutdown order (pinned by Phase 3a contract):
+    // Shutdown order:
     //   SIGTERM -> stop poller (above) -> flush store (poller's atomic
-    //   tmp+rename drains in updateInbox) -> stop http -> exit.
+    //   tmp+rename drains in updateInbox) -> stop dispatcher (aborts
+    //   in-flight runner tasks) -> stop broker (drains serve loop) ->
+    //   stop http -> close bus -> exit.
+    if (!controller.signal.aborted) controller.abort();
+    if (dispatcher) {
+      try {
+        await dispatcher.stop();
+      } catch (err) {
+        logger.warn(
+          `dispatcher shutdown failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    if (broker) {
+      try {
+        await broker.stop();
+      } catch (err) {
+        logger.warn(
+          `broker shutdown failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
     if (httpServer) {
       try {
-        // Ensure the shared controller is aborted so liveStreams cancel
-        // even if we got here via an exception rather than SIGTERM.
-        if (!controller.signal.aborted) controller.abort();
         await httpServer.done;
       } catch (err) {
         logger.warn(
@@ -283,11 +386,52 @@ export async function runDaemon(
         );
       }
     }
+    bus.close();
     if (uninstallHandlers) uninstallHandlers();
   }
 
   logger.info("breeze daemon: shutdown complete");
   return exitCode;
+}
+
+/**
+ * Walk PATH looking for a best-effort set of agent binaries. Returns
+ * the specs in the order we'd prefer as the primary runner. Missing
+ * binaries are silently omitted — the caller decides whether that is
+ * fatal.
+ */
+export function detectAvailableRunners(): RunnerSpec[] {
+  const runners: RunnerSpec[] = [];
+  if (findExecutable("codex")) runners.push({ kind: "codex" });
+  if (findExecutable("claude")) runners.push({ kind: "claude" });
+  return runners;
+}
+
+/** Return the absolute path to `name` on PATH, or null if not found. */
+export function findExecutable(name: string): string | null {
+  try {
+    const out = execSync(`command -v ${name}`, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return out.length > 0 ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `$BREEZE_HOME` or `$BREEZE_DIR/runner`, defaulting to
+ * `~/.breeze/runner`. Matches `resolve_inbox_dir` in Rust `fetcher.rs`.
+ */
+export function resolveRunnerHome(
+  env: (name: string) => string | undefined = (n) => process.env[n],
+): string {
+  const breezeHome = env("BREEZE_HOME");
+  if (breezeHome && breezeHome.length > 0) return breezeHome;
+  const breezeDir = env("BREEZE_DIR");
+  if (breezeDir && breezeDir.length > 0) return join(breezeDir, "runner");
+  return join(homedir(), ".breeze", "runner");
 }
 
 export default runDaemon;
