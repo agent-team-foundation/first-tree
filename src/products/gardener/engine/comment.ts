@@ -394,6 +394,158 @@ export function hasIgnoredMarker(body: string | undefined): boolean {
   return GARDENER_IGNORED_MARKER_RE.test(body);
 }
 
+/**
+ * Append `tree_issue_created=<url>` to an existing gardener:state
+ * marker. If the marker already has the field, the existing value is
+ * replaced (idempotent under duplicate dispatch: a retry after a
+ * successful issue create but failed marker PATCH sees the same URL
+ * and overwrites with the same URL).
+ *
+ * Returns null if `body` has no gardener:state marker — caller must
+ * decide how to recover (probably log & skip, not rewrite arbitrary
+ * comment bodies).
+ */
+export function withTreeIssueCreatedField(
+  body: string,
+  issueUrl: string,
+): string | null {
+  const marker = extractStateMarker(body);
+  if (!marker) return null;
+  const hasField = TREE_ISSUE_CREATED_IN_MARKER_RE.test(marker);
+  const newMarker = hasField
+    ? marker.replace(
+        TREE_ISSUE_CREATED_IN_MARKER_RE,
+        `tree_issue_created=${issueUrl}`,
+      )
+    : marker.replace(/\s*-->\s*$/, ` · tree_issue_created=${issueUrl} -->`);
+  return body.replace(marker, newMarker);
+}
+
+/**
+ * Parse a CODEOWNERS file and return the @-mentions that own the
+ * longest-prefix match of `path`. Matches GitHub's behavior: rules
+ * are evaluated top-to-bottom and the **last matching** rule wins.
+ *
+ * `path` is the tree-relative path the gardener verdict targets
+ * (e.g. `pkg-a/foo.ts` or `pkg-a/`). Directories must end with `/`.
+ * Returns @-prefixed logins ready to embed in an issue body.
+ *
+ * Pure string function — caller reads CODEOWNERS themselves (we don't
+ * do I/O here so this stays testable without fixtures).
+ */
+export function codeownersForPath(
+  codeownersText: string,
+  path: string,
+): string[] {
+  const normalized = path.startsWith("/") ? path : `/${path}`;
+  let winners: string[] = [];
+  for (const rawLine of codeownersText.split("\n")) {
+    const line = rawLine.split("#")[0].trim();
+    if (!line) continue;
+    const parts = line.split(/\s+/);
+    if (parts.length < 2) continue;
+    const pattern = parts[0];
+    const owners = parts.slice(1);
+    if (codeownersMatches(pattern, normalized)) winners = owners;
+  }
+  return winners
+    .map((o) => o.replace(/^@+/, ""))
+    .filter((o) => o.length > 0)
+    .map((o) => `@${o}`);
+}
+
+/**
+ * Minimal CODEOWNERS pattern matcher. Supports the subset
+ * `tree generate-codeowners` actually emits:
+ *   - `/dir/` — matches everything under /dir/
+ *   - `/file.ext` — exact file match
+ *   - `*` — root fallback (every path matches)
+ * Extra glob features (`**`, `*.ext`) are not emitted by our generator,
+ * so we don't try to replicate GitHub's full semantics.
+ */
+function codeownersMatches(pattern: string, path: string): boolean {
+  if (pattern === "*") return true;
+  if (pattern.endsWith("/")) return path.startsWith(pattern);
+  return path === pattern;
+}
+
+/**
+ * Build a tree-repo issue body describing a gardener verdict on a
+ * merged source PR. Consumed by Phase 2b's MERGED-scan branch. Kept
+ * separate from `buildCommentBody` (source-PR audience) because the
+ * tree-repo audience — node owners looking at an unassigned issue in
+ * their own repo — needs different framing: *what source change
+ * happened, which tree nodes might be affected, and why gardener
+ * flagged it*.
+ */
+export interface BuildTreeIssueBodyInput {
+  /** Source repo slug e.g. "alice/cool-thing". */
+  sourceRepo: string;
+  /** Source PR number. */
+  sourcePr: number;
+  /** Source PR title (for human context). */
+  sourcePrTitle: string;
+  /** URL to the source-PR gardener-state comment (for traceability). */
+  sourceCommentUrl: string;
+  verdict: Verdict;
+  severity: Severity;
+  /** One-line summary of the change — from the verdict. */
+  summary: string;
+  /** Tree nodes gardener cited. */
+  treeNodes: { path: string; summary: string }[];
+  /** @-prefixed logins to cc (from CODEOWNERS resolution). May be empty. */
+  codeownersMentions: string[];
+}
+
+export function buildTreeIssueBody(input: BuildTreeIssueBodyInput): string {
+  const {
+    sourceRepo,
+    sourcePr,
+    sourcePrTitle,
+    sourceCommentUrl,
+    verdict,
+    severity,
+    summary,
+    treeNodes,
+    codeownersMentions,
+  } = input;
+  const emoji = VERDICT_EMOJI[verdict];
+  const nodeList =
+    treeNodes.length > 0
+      ? treeNodes.map((n) => `- \`${n.path}\` — ${n.summary}`).join("\n")
+      : "- _(no tree nodes cited)_";
+  const ccLine =
+    codeownersMentions.length > 0
+      ? `cc ${codeownersMentions.join(" ")}`
+      : "_(no CODEOWNERS match for cited nodes — issue is unassigned)_";
+  return [
+    `## Merged source change needs tree review`,
+    "",
+    `${emoji} **verdict:** \`${verdict}\` · **severity:** \`${severity}\``,
+    "",
+    `**Source PR:** [${sourceRepo}#${sourcePr}](https://github.com/${sourceRepo}/pull/${sourcePr}) — ${sourcePrTitle}`,
+    `**Gardener verdict:** ${sourceCommentUrl}`,
+    "",
+    `### What changed`,
+    "",
+    summary,
+    "",
+    `### Tree nodes potentially affected`,
+    "",
+    nodeList,
+    "",
+    `### Action`,
+    "",
+    `A node owner should decide whether the tree needs an update in response to this merged change. This issue is auto-filed by gardener and not auto-assigned — pick it up via CODEOWNERS routing.`,
+    "",
+    ccLine,
+    "",
+    "---",
+    "",
+    `<sub>🌱 Auto-filed by [repo-gardener](https://github.com/agent-team-foundation/repo-gardener) via [First-Tree](https://github.com/agent-team-foundation/first-tree). Close this issue when the tree reflects the source change (or when no change is warranted).</sub>`,
+  ].join("\n");
+}
+
 export function hasPausedMarker(body: string | undefined): boolean {
   if (!body) return false;
   return GARDENER_PAUSED_MARKER_RE.test(body);

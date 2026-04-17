@@ -5,6 +5,8 @@ import { runCli } from "../src/cli.js";
 import { GARDENER_USAGE, runGardener } from "#products/gardener/cli.js";
 import {
   buildCommentBody,
+  buildTreeIssueBody,
+  codeownersForPath,
   COMMENT_USAGE,
   commentLogPath,
   defaultClassifier,
@@ -21,6 +23,7 @@ import {
   resolveState,
   runComment,
   shaMatches,
+  withTreeIssueCreatedField,
   type Classifier,
   type ShellResult,
   type ShellRun,
@@ -1095,5 +1098,143 @@ describe("commentLogPath (#159 — log-dir fallback)", () => {
   it("never returns a path inside process.cwd() when HOME is unset (regression for #159)", () => {
     const path = commentLogPath({});
     expect(path.startsWith(process.cwd())).toBe(false);
+    expect(path.endsWith("comment-runs.jsonl")).toBe(true);
+  });
+});
+
+describe("gardener comment -- Phase 2a tree-issue primitives", () => {
+  // ─────────────────── withTreeIssueCreatedField ───────────────────
+  it("withTreeIssueCreatedField appends field to marker that lacks it", () => {
+    const body =
+      "<!-- gardener:state · reviewed=abc · verdict=NEW_TERRITORY · severity=medium · tree_sha=def -->\nhello";
+    const out = withTreeIssueCreatedField(
+      body,
+      "https://github.com/alice/tree/issues/7",
+    );
+    expect(out).toContain(
+      "tree_issue_created=https://github.com/alice/tree/issues/7",
+    );
+    // Existing fields preserved:
+    expect(out).toContain("reviewed=abc");
+    expect(out).toContain("verdict=NEW_TERRITORY");
+    expect(out).toContain("tree_sha=def");
+    expect(out).toContain("\nhello");
+    // Round-trips through parser:
+    expect(parseStateMarker(out!)?.treeIssueCreated).toBe(
+      "https://github.com/alice/tree/issues/7",
+    );
+  });
+
+  it("withTreeIssueCreatedField replaces field when present (idempotent on retry)", () => {
+    const body =
+      "<!-- gardener:state · reviewed=abc · tree_issue_created=https://github.com/alice/tree/issues/1 -->";
+    const out = withTreeIssueCreatedField(
+      body,
+      "https://github.com/alice/tree/issues/2",
+    );
+    expect(out).toContain("tree_issue_created=https://github.com/alice/tree/issues/2");
+    expect(out).not.toContain("tree_issue_created=https://github.com/alice/tree/issues/1");
+  });
+
+  it("withTreeIssueCreatedField returns null for body with no gardener marker", () => {
+    expect(
+      withTreeIssueCreatedField(
+        "random body no marker",
+        "https://github.com/a/b/issues/1",
+      ),
+    ).toBeNull();
+  });
+
+  it("withTreeIssueCreatedField is idempotent — applying twice yields same result", () => {
+    const body =
+      "<!-- gardener:state · reviewed=abc · verdict=ALIGNED · severity=low · tree_sha=d -->";
+    const url = "https://github.com/alice/tree/issues/9";
+    const once = withTreeIssueCreatedField(body, url)!;
+    const twice = withTreeIssueCreatedField(once, url)!;
+    expect(twice).toBe(once);
+  });
+
+  // ─────────────────── codeownersForPath ───────────────────
+  it("codeownersForPath returns owners for longest last-match directory rule", () => {
+    const co = [
+      "* @default",
+      "/pkg-a/ @alice",
+      "/pkg-a/sub/ @bob",
+    ].join("\n");
+    expect(codeownersForPath(co, "pkg-a/sub/foo.ts")).toEqual(["@bob"]);
+    expect(codeownersForPath(co, "pkg-a/foo.ts")).toEqual(["@alice"]);
+    expect(codeownersForPath(co, "pkg-b/foo.ts")).toEqual(["@default"]);
+  });
+
+  it("codeownersForPath returns empty when no rules match and no fallback", () => {
+    const co = "/pkg-a/ @alice\n";
+    expect(codeownersForPath(co, "pkg-b/foo.ts")).toEqual([]);
+  });
+
+  it("codeownersForPath supports multi-owner lines and strips extra @ prefixes", () => {
+    const co = "/pkg-a/ @alice @@bob @team/frontend\n";
+    expect(codeownersForPath(co, "pkg-a/foo.ts")).toEqual([
+      "@alice",
+      "@bob",
+      "@team/frontend",
+    ]);
+  });
+
+  it("codeownersForPath ignores comment and blank lines", () => {
+    const co = [
+      "# header",
+      "",
+      "/pkg-a/ @alice # inline comment",
+      "",
+    ].join("\n");
+    expect(codeownersForPath(co, "pkg-a/foo.ts")).toEqual(["@alice"]);
+  });
+
+  it("codeownersForPath handles exact file patterns", () => {
+    const co = "/README.md @docs\n/pkg-a/ @alice\n";
+    expect(codeownersForPath(co, "README.md")).toEqual(["@docs"]);
+    expect(codeownersForPath(co, "pkg-a/README.md")).toEqual(["@alice"]);
+  });
+
+  // ─────────────────── buildTreeIssueBody ───────────────────
+  it("buildTreeIssueBody composes a tree-repo-audience issue body", () => {
+    const body = buildTreeIssueBody({
+      sourceRepo: "alice/cool",
+      sourcePr: 101,
+      sourcePrTitle: "feat(pkg-a): add thing",
+      sourceCommentUrl: "https://github.com/alice/cool/pull/101#issuecomment-999",
+      verdict: "NEW_TERRITORY",
+      severity: "medium",
+      summary: "Introduces new module pkg-a that isn't covered by any tree node.",
+      treeNodes: [{ path: "pkg-a", summary: "(none cited)" }],
+      codeownersMentions: ["@alice", "@team/frontend"],
+    });
+    expect(body).toContain("Merged source change needs tree review");
+    expect(body).toContain("[alice/cool#101](https://github.com/alice/cool/pull/101)");
+    expect(body).toContain("feat(pkg-a): add thing");
+    expect(body).toContain("#issuecomment-999");
+    expect(body).toContain("`NEW_TERRITORY`");
+    expect(body).toContain("`medium`");
+    expect(body).toContain("Introduces new module pkg-a");
+    expect(body).toContain("`pkg-a`");
+    expect(body).toContain("cc @alice @team/frontend");
+    expect(body).toContain("Auto-filed by [repo-gardener]");
+  });
+
+  it("buildTreeIssueBody handles empty CODEOWNERS mentions gracefully", () => {
+    const body = buildTreeIssueBody({
+      sourceRepo: "alice/cool",
+      sourcePr: 102,
+      sourcePrTitle: "chore: tweak",
+      sourceCommentUrl: "https://github.com/alice/cool/pull/102#issuecomment-1",
+      verdict: "ALIGNED",
+      severity: "low",
+      summary: "Minor tweak.",
+      treeNodes: [],
+      codeownersMentions: [],
+    });
+    expect(body).toContain("no CODEOWNERS match");
+    expect(body).not.toContain("cc @");
+    expect(body).toContain("(no tree nodes cited)");
   });
 });
