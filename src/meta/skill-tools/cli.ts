@@ -12,9 +12,7 @@
  * "Managing Skills On This Machine" section sends them here.
  */
 
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { readOwnVersion } from "#shared/version.js";
 
 export const SKILL_USAGE = `usage: first-tree skill <command>
 
@@ -39,20 +37,7 @@ Examples:
 type Output = (text: string) => void;
 
 function readSkillVersion(): string {
-  const here = dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    join(here, "VERSION"),
-    join(here, "..", "..", "..", "src", "meta", "skill-tools", "VERSION"),
-    join(here, "..", "src", "meta", "skill-tools", "VERSION"),
-  ];
-  for (const candidate of candidates) {
-    try {
-      return readFileSync(candidate, "utf-8").trim();
-    } catch {
-      // try next
-    }
-  }
-  return "unknown";
+  return readOwnVersion(import.meta.url, "src/meta/skill-tools");
 }
 
 export async function runSkill(

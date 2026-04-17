@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
-import { readFileSync, realpathSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -10,6 +9,7 @@ import {
   getCommand,
   readProductVersion,
 } from "./products/manifest.js";
+import { readPackageVersion } from "./shared/version.js";
 
 export const USAGE = buildUsage();
 
@@ -110,32 +110,8 @@ async function runAutoUpgradeCheck(): Promise<void> {
   }
 }
 
-function readFirstTreeVersion(): string {
-  // Walk up from this module until we find the package.json that owns the CLI.
-  let dir = dirname(fileURLToPath(import.meta.url));
-  while (true) {
-    const candidate = join(dir, "package.json");
-    try {
-      const pkg = JSON.parse(readFileSync(candidate, "utf-8")) as {
-        name?: string;
-        version?: string;
-      };
-      if (pkg.name === "first-tree" && typeof pkg.version === "string") {
-        return pkg.version;
-      }
-    } catch {
-      // keep walking
-    }
-    const parent = dirname(dir);
-    if (parent === dir) {
-      return "unknown";
-    }
-    dir = parent;
-  }
-}
-
 function formatVersionLine(): string {
-  const cliVersion = readFirstTreeVersion();
+  const cliVersion = readPackageVersion(import.meta.url, "first-tree");
   const parts = [`first-tree=${cliVersion}`];
   for (const product of PRODUCTS) {
     parts.push(`${product.name}=${readProductVersion(product.name)}`);
