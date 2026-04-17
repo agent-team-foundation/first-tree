@@ -1041,9 +1041,19 @@ async function prepareProposalGroup(
     };
   }
 
-  // NOTE: Only stage the specific NODE.md files this PR created.
-  // Do NOT use git add -A — that would pick up proposals, binding, CODEOWNERS
-  // from other operations and create a mega-PR.
+  // Regenerate CODEOWNERS alongside the new NODE.md files so each content PR
+  // is self-consistent under `generate-codeowners --check`. Without this the
+  // check fails per-PR until the housekeeping PR catches up (#119).
+  await runGenerateCodeownersForTree(treeRoot);
+  const codeownersPath = join(treeRoot, ".github", "CODEOWNERS");
+  if (existsSync(codeownersPath)) {
+    writtenFiles.push(codeownersPath);
+  }
+
+  // NOTE: Only stage the specific files this PR produced (new NODE.md files,
+  // any parent NODE.md updates, and the regenerated CODEOWNERS). Do NOT use
+  // `git add -A` — that would pick up proposal files and the binding from
+  // other in-flight work and create a mega-PR.
   for (const file of writtenFiles) {
     await shellRun("git", ["add", file], { cwd: treeRoot });
   }
@@ -1582,11 +1592,12 @@ export async function runSync(
           }
         }
 
-        // Open a housekeeping PR: pin the binding + regenerate CODEOWNERS
-        // This is the ONLY PR that touches the binding file and CODEOWNERS,
-        // avoiding cascade merge conflicts between individual sync PRs.
+        // Open a housekeeping PR that only pins the binding.
+        // CODEOWNERS used to live here too, but each content PR now regenerates
+        // it (#119) so per-PR `generate-codeowners --check` passes without
+        // waiting on housekeeping to merge.
         if (!flags.dryRun && preparedGroups.length > 0) {
-          console.log("\nOpening housekeeping PR (binding pin + CODEOWNERS)...");
+          console.log("\nOpening housekeeping PR (binding pin)...");
           const hkBranch = `first-tree/sync-${drift.binding.sourceId}-housekeeping`;
           const hkCheckout = await shellRun("git", ["checkout", "-B", hkBranch, originalRef], { cwd: repo.root });
           if (hkCheckout.code !== 0) {
@@ -1601,23 +1612,22 @@ export async function runSync(
             lastReconciledAt: now().toISOString(),
           });
 
-          // Regenerate CODEOWNERS
-          await runGenerateCodeownersForTree(repo.root);
-
           await shellRun("git", ["add", "-A"], { cwd: repo.root });
           const hkDiff = await shellRun("git", ["diff", "--cached", "--quiet"], { cwd: repo.root });
           if (hkDiff.code !== 0) {
-            await shellRun("git", ["commit", "-m", `chore(sync): pin ${drift.binding.sourceId} to ${drift.toSha.slice(0, 7)} + regenerate CODEOWNERS`], { cwd: repo.root });
+            await shellRun("git", ["commit", "-m", `chore(sync): pin ${drift.binding.sourceId} to ${drift.toSha.slice(0, 7)}`], { cwd: repo.root });
             await shellRun("git", ["push", "origin", "HEAD"], { cwd: repo.root });
             const hkPr = await shellRun("gh", [
               "pr", "create",
               "--title", `chore(sync): housekeeping for ${drift.binding.sourceId}`,
               "--body", [
-                "Housekeeping PR — pins the sync bookmark and regenerates CODEOWNERS.",
+                "Housekeeping PR — pins the sync bookmark.",
                 "",
                 "**Merge this AFTER all sync PRs are merged.**",
                 "",
                 `Pins \`lastReconciledSourceCommit\` to \`${drift.toSha.slice(0, 7)}\`.`,
+                "",
+                "CODEOWNERS is regenerated inside each content PR, so no CODEOWNERS diff is expected here.",
               ].join("\n"),
             ], { cwd: repo.root });
             if (hkPr.code === 0) {
@@ -1633,7 +1643,7 @@ export async function runSync(
             return 1;
           }
         } else if (flags.dryRun && preparedGroups.length > 0) {
-          console.log(`\n(dry-run) would open housekeeping PR to pin binding to ${drift.toSha.slice(0, 7)} + regenerate CODEOWNERS`);
+          console.log(`\n(dry-run) would open housekeeping PR to pin binding to ${drift.toSha.slice(0, 7)}`);
         }
       }
     }
