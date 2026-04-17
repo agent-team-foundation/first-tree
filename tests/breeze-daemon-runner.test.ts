@@ -61,9 +61,9 @@ describe("parseDaemonArgs", () => {
 });
 
 describe("extractBackendFlag", () => {
-  it("defaults to rust when no flag is present", () => {
+  it("defaults to ts when no flag is present", () => {
     const { backend, rest } = extractBackendFlag(["run", "--foo"]);
-    expect(backend).toBe("rust");
+    expect(backend).toBe("ts");
     expect(rest).toEqual(["run", "--foo"]);
   });
 
@@ -78,16 +78,16 @@ describe("extractBackendFlag", () => {
     });
   });
 
-  it("supports space-separated --backend ts", () => {
-    expect(extractBackendFlag(["--backend", "ts", "--x"])).toEqual({
-      backend: "ts",
+  it("supports space-separated --backend rust", () => {
+    expect(extractBackendFlag(["--backend", "rust", "--x"])).toEqual({
+      backend: "rust",
       rest: ["--x"],
     });
   });
 
-  it("keeps unknown --backend values in rest and defaults to rust", () => {
+  it("keeps unknown --backend values in rest and defaults to ts", () => {
     const { backend, rest } = extractBackendFlag(["--backend=julia"]);
-    expect(backend).toBe("rust");
+    expect(backend).toBe("ts");
     expect(rest).toEqual(["--backend=julia"]);
   });
 });
@@ -168,7 +168,7 @@ describe("cli dispatcher routes daemon --backend flag", () => {
     ]);
   });
 
-  it("routes `daemon` (default backend) through the Rust bridge's `run` subcommand", async () => {
+  it("routes `daemon --backend=rust` through the Rust bridge's `run` subcommand", async () => {
     const spawnSpy = vi.fn().mockReturnValue(0);
     const resolveRunnerSpy = vi
       .fn()
@@ -188,7 +188,10 @@ describe("cli dispatcher routes daemon --backend flag", () => {
     }));
 
     const { runBreeze } = await import("../src/products/breeze/cli.js");
-    const code = await runBreeze(["daemon", "--verbose"], () => {});
+    const code = await runBreeze(
+      ["daemon", "--backend=rust", "--verbose"],
+      () => {},
+    );
     expect(code).toBe(0);
     expect(resolveRunnerSpy).toHaveBeenCalledOnce();
     expect(spawnSpy).toHaveBeenCalledWith("/runner", ["run", "--verbose"]);
