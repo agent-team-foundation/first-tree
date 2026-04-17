@@ -806,6 +806,104 @@ describe("sync -- PR labeling", () => {
     expect(nodeText).not.toContain("@alice");
   });
 
+  it("feeds truncated diff hunks and filters lockfile noise in the classification prompt (#123)", async () => {
+    const tmp = useTmpDir();
+    makeTreeShell(tmp.path);
+    const fromSha = "aa".repeat(20);
+    const toSha = "bb".repeat(20);
+    writeTreeBinding(tmp.path, "source-diff", {
+      bindingMode: "standalone-source",
+      entrypoint: "/repos/source",
+      lastReconciledSourceCommit: fromSha,
+      remoteUrl: "https://github.com/alice/source.git",
+      rootKind: "git-repo",
+      scope: "repo",
+      sourceId: "source-diff",
+      sourceName: "source",
+      sourceRootPath: "../source",
+      treeMode: "dedicated",
+      treeRepoName: "tree",
+    });
+    let capturedPrompt = "";
+    const shellRun: ShellRun = async (command, args) => {
+      if (command === "gh" && args[0] === "auth") return okAuth();
+      if (command === "claude" && args[0] === "--version") return claudeVersionOk();
+      if (command === "gh" && args[0] === "api") {
+        const path = args[1] ?? "";
+        if (path === "/repos/alice/source/commits/HEAD") {
+          return { stdout: `${toSha}\n`, stderr: "", code: 0 };
+        }
+        if (path.startsWith("/repos/alice/source/compare/")) {
+          return {
+            stdout: JSON.stringify({
+              commits: [{
+                sha: "1".repeat(40),
+                commit: { message: "feat: add oauth (#301)", author: { name: "a", date: "2026-04-01T00:00:00Z" } },
+                files: [{ filename: "auth/oauth.ts" }],
+              }],
+            }),
+            stderr: "",
+            code: 0,
+          };
+        }
+        if (path.startsWith("search/issues")) {
+          return {
+            stdout: JSON.stringify({
+              items: [{
+                number: 301,
+                title: "feat: add oauth",
+                pull_request: { merged_at: "2026-04-01T00:00:00Z", merge_commit_sha: "1".repeat(40) },
+              }],
+            }),
+            stderr: "",
+            code: 0,
+          };
+        }
+        if (path.includes("/pulls/301/files")) {
+          return {
+            stdout: JSON.stringify([
+              {
+                filename: "auth/oauth.ts",
+                status: "added",
+                patch: "@@ -0,0 +1,3 @@\n+export function oauthLogin(code: string) {\n+  return fetch('/oauth/callback?code=' + code);\n+}",
+              },
+              {
+                filename: "pnpm-lock.yaml",
+                status: "modified",
+                patch: "@@ -1,5000 +1,5050 @@\n(massive lockfile churn)",
+              },
+            ]),
+            stderr: "",
+            code: 0,
+          };
+        }
+      }
+      if (command === "claude" && args[0] === "-p") {
+        capturedPrompt = args.at(-1) ?? "";
+        return {
+          stdout: JSON.stringify([]),
+          stderr: "",
+          code: 0,
+        };
+      }
+      return { stdout: "", stderr: `no mock for ${command} ${args.join(" ")}`, code: 1 };
+    };
+    const code = await runSync(
+      tmp.path,
+      { source: undefined, propose: true, apply: false, dryRun: false },
+      { shellRun },
+    );
+    expect(code).toBe(0);
+    expect(capturedPrompt).toContain("Truncated diff hunks");
+    expect(capturedPrompt).toContain("oauthLogin");
+    expect(capturedPrompt).toContain("auth/oauth.ts");
+    // Lockfile hunks must be filtered out of the diff section (filename is
+    // still allowed in the Changed-files list — that's a cheap signal).
+    const diffSection = capturedPrompt.split("Truncated diff hunks")[1] ?? "";
+    expect(diffSection).not.toContain("pnpm-lock.yaml");
+    expect(diffSection).not.toContain("massive lockfile churn");
+  });
+
   it("dedups duplicate-path proposals, keeps strongest, credits others (#121)", async () => {
     const tmp = useTmpDir();
     makeTreeShell(tmp.path);

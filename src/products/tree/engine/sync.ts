@@ -611,21 +611,75 @@ async function claudeCliAvailable(shellRun: ShellRun): Promise<boolean> {
   return result.code === 0;
 }
 
-async function fetchPrChangedFiles(
+interface PrFileChange {
+  filename: string;
+  patch: string | undefined;
+  status: string | undefined;
+}
+
+const DIFF_NOISE_PATTERNS = [
+  /(^|\/)(?:package-lock\.json|pnpm-lock\.yaml|yarn\.lock|Cargo\.lock|poetry\.lock|Gemfile\.lock)$/,
+  /(^|\/)(?:dist|build|out|coverage|node_modules|__pycache__)\//,
+  /\.(?:lock|min\.js|min\.css|map|snap)$/,
+];
+
+function isDiffNoise(filename: string): boolean {
+  return DIFF_NOISE_PATTERNS.some((re) => re.test(filename));
+}
+
+async function fetchPrFileChanges(
   shellRun: ShellRun,
   ownerRepo: { owner: string; repo: string },
   prNumber: number,
-): Promise<string[]> {
+): Promise<PrFileChange[]> {
   try {
     const result = await shellRun("gh", [
       "api", `/repos/${ownerRepo.owner}/${ownerRepo.repo}/pulls/${prNumber}/files`,
-      "--jq", ".[].filename",
+      "--paginate",
     ]);
     if (result.code !== 0) return [];
-    return result.stdout.trim().split("\n").filter(Boolean);
+    const raw = result.stdout.trim();
+    if (raw === "") return [];
+    // --paginate concatenates JSON arrays; normalize to a flat array.
+    const normalized = raw.replace(/\]\s*\[/g, ",");
+    const parsed = JSON.parse(normalized) as Array<{ filename?: string; patch?: string; status?: string }>;
+    return parsed
+      .filter((f) => typeof f.filename === "string")
+      .map((f) => ({ filename: f.filename!, patch: f.patch, status: f.status }));
   } catch {
     return [];
   }
+}
+
+/**
+ * Build a truncated diff summary for the classification prompt (#123).
+ * Filters generated/lockfile noise and caps per-file hunks so large PRs
+ * don't blow the context window.
+ */
+function formatPrDiffForPrompt(
+  files: PrFileChange[],
+  opts?: { maxFiles?: number; maxLinesPerFile?: number },
+): string {
+  const maxFiles = opts?.maxFiles ?? 15;
+  const maxLinesPerFile = opts?.maxLinesPerFile ?? 40;
+  const signal = files.filter((f) => !isDiffNoise(f.filename));
+  const selected = signal.slice(0, maxFiles);
+  const parts: string[] = [];
+  for (const f of selected) {
+    if (!f.patch) continue;
+    const lines = f.patch.split("\n");
+    const truncated = lines.length > maxLinesPerFile;
+    const shown = truncated ? lines.slice(0, maxLinesPerFile) : lines;
+    parts.push(`--- ${f.filename} (${f.status ?? "modified"})`);
+    parts.push(...shown);
+    if (truncated) {
+      parts.push(`... (${lines.length - maxLinesPerFile} more lines in this file)`);
+    }
+  }
+  if (signal.length > maxFiles) {
+    parts.push(`... (${signal.length - maxFiles} more files omitted)`);
+  }
+  return parts.join("\n");
 }
 
 async function classifyDriftViaClaude(
@@ -633,6 +687,7 @@ async function classifyDriftViaClaude(
   drift: DriftReport,
   treeNodes: TreeNodeSummary[],
   changedFiles?: string[],
+  diffSummary?: string,
 ): Promise<ClassificationItem[]> {
   // Build keywords from the PR for relevance matching
   const driftText = [
@@ -670,6 +725,9 @@ async function classifyDriftViaClaude(
     ...drift.mergedPrTitles.map((title) => `pr ${title}`),
     ...(changedFiles && changedFiles.length > 0
       ? [`\nChanged files in this PR (use these to verify what was actually modified):\n${changedFiles.slice(0, 50).join("\n")}`]
+      : []),
+    ...(diffSummary && diffSummary.length > 0
+      ? [`\nTruncated diff hunks (use these as factual ground truth; generated/lockfile noise is filtered):\n${diffSummary}`]
       : []),
   ].join("\n");
 
@@ -1466,10 +1524,20 @@ export async function runSync(
             mergedPrTitles: [pr.title],
           };
 
-          const prFiles = pr.number > 0
-            ? await fetchPrChangedFiles(shellRun, drift.ownerRepo, pr.number)
+          const prFileChanges = pr.number > 0
+            ? await fetchPrFileChanges(shellRun, drift.ownerRepo, pr.number)
             : [];
-          const proposals = await classifyDriftViaClaude(shellRun, perPrDrift, treeNodes, prFiles);
+          const prFiles = prFileChanges.map((f) => f.filename);
+          const diffSummary = prFileChanges.length > 0
+            ? formatPrDiffForPrompt(prFileChanges)
+            : "";
+          const proposals = await classifyDriftViaClaude(
+            shellRun,
+            perPrDrift,
+            treeNodes,
+            prFiles,
+            diffSummary,
+          );
 
           if (proposals.length === 0) {
             console.log(
