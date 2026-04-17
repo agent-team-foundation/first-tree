@@ -26,6 +26,7 @@ import { resolveBreezePaths } from "../core/paths.js";
 import { loadBreezeDaemonConfig, type DaemonConfig } from "../core/config.js";
 
 import { resolveDaemonIdentity, identityHasRequiredScope } from "./identity.js";
+import { startHttpServer, type RunningHttpServer } from "./http.js";
 import { runPoller, type PollerLogger } from "./poller.js";
 
 export interface DaemonCliOverrides {
@@ -222,10 +223,35 @@ export async function runDaemon(
   logger.info(
     `breeze daemon: poll-interval=${config.pollIntervalSec}s host=${config.host} http-port=${config.httpPort}`,
   );
-  // TODO(Phase 3b): start http server bound to 127.0.0.1:${config.httpPort}.
+
+  // Phase 3b: start the read-only HTTP + SSE server.
+  // Phase 3c will replace the inbox-mtime stub bus with the real
+  // broker-driven in-process bus. The http layer itself does NOT need
+  // to change when that lands.
+  //
+  // If the shared controller is already aborted (tests inject a
+  // pre-aborted signal; real SIGTERM arrives later), skip binding: we
+  // would close immediately anyway and we'd rather not touch the
+  // listener table in fast-exit paths.
+  let httpServer: RunningHttpServer | null = null;
+  if (!controller.signal.aborted) {
+    try {
+      httpServer = await startHttpServer({
+        httpPort: config.httpPort,
+        inboxPath: paths.inbox,
+        activityLogPath: paths.activityLog,
+        signal: controller.signal,
+        logger,
+      });
+    } catch (err) {
+      logger.error(
+        `failed to start http server: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      if (uninstallHandlers) uninstallHandlers();
+      return 1;
+    }
+  }
   // TODO(Phase 3c): start broker gh-serializer + bus + dispatcher.
-  // For now only the poller runs — it is the read path and is
-  // already feature-complete per the Phase 3a scope.
 
   let exitCode = 0;
   try {
@@ -242,6 +268,21 @@ export async function runDaemon(
     );
     exitCode = 1;
   } finally {
+    // Shutdown order (pinned by Phase 3a contract):
+    //   SIGTERM -> stop poller (above) -> flush store (poller's atomic
+    //   tmp+rename drains in updateInbox) -> stop http -> exit.
+    if (httpServer) {
+      try {
+        // Ensure the shared controller is aborted so liveStreams cancel
+        // even if we got here via an exception rather than SIGTERM.
+        if (!controller.signal.aborted) controller.abort();
+        await httpServer.done;
+      } catch (err) {
+        logger.warn(
+          `http server shutdown failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
     if (uninstallHandlers) uninstallHandlers();
   }
 
