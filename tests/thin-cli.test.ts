@@ -41,9 +41,13 @@ afterEach(() => {
 
 describe("thin CLI shell", () => {
   it("exposes both product namespaces in the top-level USAGE", () => {
-    expect(USAGE).toContain("first-tree <product>");
+    expect(USAGE).toContain("first-tree <command>");
+    expect(USAGE).toContain("Products:");
+    expect(USAGE).toContain("Diagnostics:");
     expect(USAGE).toContain("tree");
     expect(USAGE).toContain("breeze");
+    expect(USAGE).toContain("gardener");
+    expect(USAGE).toContain("skill");
     expect(USAGE).toContain("--skip-version-check");
     expect(USAGE).toContain("--version");
   });
@@ -115,7 +119,6 @@ describe("thin CLI shell", () => {
         `tree=${productVersion("tree")}`,
         `breeze=${productVersion("breeze")}`,
         `gardener=${productVersion("gardener")}`,
-        `skill=${productVersion("skill")}`,
       ].join(" "),
     ]);
   });
@@ -133,7 +136,7 @@ describe("thin CLI shell", () => {
     expect(output.lines.join("\n")).toContain("Node.js 18+");
   });
 
-  it("fails with hint for an unknown product", async () => {
+  it("fails with hint for an unknown command", async () => {
     const output = captureOutput();
 
     const code = await runCli(
@@ -142,7 +145,7 @@ describe("thin CLI shell", () => {
     );
 
     expect(code).toBe(1);
-    expect(output.lines[0]).toBe("Unknown product: wat");
+    expect(output.lines[0]).toBe("Unknown command: wat");
     expect(output.lines[1]).toContain("first-tree tree wat");
   });
 

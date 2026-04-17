@@ -1,13 +1,13 @@
 /**
- * Skill product dispatcher.
+ * Skill-tools meta dispatcher.
  *
  * Routes `first-tree skill <command>` into cross-cutting skill tooling:
  * listing installed skills, diagnosing their health, and repairing the
  * .claude/ alias symlinks that point into .agents/.
  *
- * Unlike tree/breeze/gardener, the skill product does not ship its own
- * skill payload — it IS the tooling that manages the other four
- * payloads. The `first-tree skill` command family is the user-facing
+ * This is a META command, not a product — it manages the four skill
+ * payloads (first-tree + tree/breeze/gardener) rather than shipping one
+ * of its own. The `first-tree skill` command family is the user-facing
  * entry point an agent reaches for when the first-tree skill's
  * "Managing Skills On This Machine" section sends them here.
  */
@@ -42,8 +42,8 @@ function readSkillVersion(): string {
   const here = dirname(fileURLToPath(import.meta.url));
   const candidates = [
     join(here, "VERSION"),
-    join(here, "..", "..", "..", "src", "products", "skill", "VERSION"),
-    join(here, "..", "src", "products", "skill", "VERSION"),
+    join(here, "..", "..", "..", "src", "meta", "skill-tools", "VERSION"),
+    join(here, "..", "src", "meta", "skill-tools", "VERSION"),
   ];
   for (const candidate of candidates) {
     try {

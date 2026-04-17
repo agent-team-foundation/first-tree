@@ -20,7 +20,7 @@ import {
   symlinkSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { allSkillLayouts } from "#products/skill/engine/lib/paths.js";
+import { allSkillLayouts } from "#meta/skill-tools/engine/lib/paths.js";
 
 export interface LinkDeps {
   targetRoot?: string;

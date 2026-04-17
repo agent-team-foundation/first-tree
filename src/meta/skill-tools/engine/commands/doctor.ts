@@ -9,7 +9,7 @@
 
 import { existsSync, lstatSync, readlinkSync } from "node:fs";
 import { join } from "node:path";
-import { allSkillLayouts } from "#products/skill/engine/lib/paths.js";
+import { allSkillLayouts } from "#meta/skill-tools/engine/lib/paths.js";
 
 export interface DoctorDeps {
   targetRoot?: string;

@@ -24,6 +24,7 @@
   },
   "imports": {
     "#products/*": "./src/products/*",
+    "#meta/*": "./src/meta/*",
     "#skill/*": "./skills/first-tree/*",
     "#evals/*": "./evals/*",
     "#src/*": "./src/*"

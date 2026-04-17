@@ -1,9 +1,9 @@
 import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { runDoctor } from "../src/products/skill/engine/commands/doctor.js";
-import { runLink } from "../src/products/skill/engine/commands/link.js";
-import { runList } from "../src/products/skill/engine/commands/list.js";
+import { runDoctor } from "../src/meta/skill-tools/engine/commands/doctor.js";
+import { runLink } from "../src/meta/skill-tools/engine/commands/link.js";
+import { runList } from "../src/meta/skill-tools/engine/commands/list.js";
 import { useTmpDir } from "./helpers.js";
 
 function seedAgentsSkill(root: string, name: string, version = "0.2"): void {

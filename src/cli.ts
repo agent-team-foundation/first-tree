@@ -5,17 +5,21 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  META_COMMANDS,
   PRODUCTS,
-  getProduct,
+  getCommand,
   readProductVersion,
 } from "./products/manifest.js";
 
 export const USAGE = buildUsage();
 
 function buildUsage(): string {
-  const productLines = PRODUCTS.map(
-    (p) => `  ${p.name.padEnd(20)}  ${p.description}`,
-  ).join("\n");
+  const formatRow = (name: string, description: string): string =>
+    `  ${name.padEnd(20)}  ${description}`;
+  const productLines = PRODUCTS.map((p) => formatRow(p.name, p.description))
+    .join("\n");
+  const metaLines = META_COMMANDS.map((m) => formatRow(m.name, m.description))
+    .join("\n");
   const gettingStarted = [
     "  first-tree tree --help",
     "  first-tree tree inspect --json",
@@ -23,13 +27,16 @@ function buildUsage(): string {
     "  first-tree breeze --help",
     "  first-tree breeze status",
   ].join("\n");
-  return `usage: first-tree <product> <command>
+  return `usage: first-tree <command> [...]
 
   first-tree is an umbrella CLI that dispatches into product namespaces.
   This CLI is designed for agents, not humans. Let your agent handle it.
 
 Products:
 ${productLines}
+
+Diagnostics:
+${metaLines}
 
 Global options:
   --help, -h            Show this help message
@@ -153,22 +160,22 @@ export async function runCli(
     return 0;
   }
 
-  const productName = args[0];
-  const product = getProduct(productName);
+  const commandName = args[0];
+  const command = getCommand(commandName);
 
-  if (!product) {
-    write(`Unknown product: ${productName}`);
+  if (!command) {
+    write(`Unknown command: ${commandName}`);
     write(
-      `Did you mean \`first-tree tree ${productName}\`? Run \`first-tree --help\` for the list of products.`,
+      `Did you mean \`first-tree tree ${commandName}\`? Run \`first-tree --help\` for the list of commands.`,
     );
     return 1;
   }
 
-  if (product.autoUpgradeOnInvoke && !skipVersionCheck) {
+  if (command.autoUpgradeOnInvoke && !skipVersionCheck) {
     await runAutoUpgradeCheck();
   }
 
-  const { run } = await product.load();
+  const { run } = await command.load();
   return run(args.slice(1), write);
 }
 
