@@ -16,9 +16,7 @@
  * comments.
  */
 
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { readOwnVersion } from "#shared/version.js";
 
 export const GARDENER_USAGE = `usage: first-tree gardener <command>
 
@@ -45,20 +43,7 @@ Examples:
 type Output = (text: string) => void;
 
 function readGardenerVersion(): string {
-  const here = dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    join(here, "VERSION"),
-    join(here, "..", "..", "..", "src", "products", "gardener", "VERSION"),
-    join(here, "..", "src", "products", "gardener", "VERSION"),
-  ];
-  for (const candidate of candidates) {
-    try {
-      return readFileSync(candidate, "utf-8").trim();
-    } catch {
-      // try next
-    }
-  }
-  return "unknown";
+  return readOwnVersion(import.meta.url, "src/products/gardener");
 }
 
 export async function runGardener(

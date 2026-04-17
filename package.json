@@ -25,6 +25,7 @@
   "imports": {
     "#products/*": "./src/products/*",
     "#meta/*": "./src/meta/*",
+    "#shared/*": "./src/shared/*",
     "#skill/*": "./skills/first-tree/*",
     "#evals/*": "./evals/*",
     "#src/*": "./src/*"

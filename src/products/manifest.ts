@@ -19,9 +19,7 @@
  * surface. `ALL_COMMANDS` is the concatenation for lookup.
  */
 
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { readOwnVersion } from "#shared/version.js";
 
 type Output = (text: string) => void;
 type CommandRunner = (args: string[], output: Output) => Promise<number>;
@@ -131,24 +129,11 @@ export function listProductNames(): readonly string[] {
 }
 
 /**
- * Read a product's VERSION file. VERSION files live as siblings of the
- * bundled product cli.ts. When the CLI runs from the published package
- * they are under `dist/products/<name>/`; in the source tree they are
- * under `src/products/<name>/`. We probe both.
+ * Read a product's VERSION file via the shared version reader.
  */
 export function readProductVersion(productName: string): string {
-  const here = dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    join(here, productName, "VERSION"),
-    join(here, "..", "..", "src", "products", productName, "VERSION"),
-    join(here, "..", "products", productName, "VERSION"),
-  ];
-  for (const candidate of candidates) {
-    try {
-      return readFileSync(candidate, "utf-8").trim();
-    } catch {
-      // try next
-    }
-  }
-  return "unknown";
+  return readOwnVersion(
+    import.meta.url,
+    `src/products/${productName}`,
+  );
 }
