@@ -25,6 +25,7 @@ export function mockEntry(opts: { id?: number; chatId?: string; content?: string
       inReplyTo: null,
       source: null,
       createdAt: new Date().toISOString(),
+      configVersion: 1,
     },
   };
 }

@@ -12,6 +12,8 @@ import { adminAdapterMappingRoutes } from "./api/admin/adapter-mappings.js";
 import { adminAdapterStatusRoutes } from "./api/admin/adapter-status.js";
 import { adminAdapterRoutes } from "./api/admin/adapters.js";
 
+import { adminAgentClientStatusRoutes } from "./api/admin/agent-client-status.js";
+import { adminAgentConfigRoutes } from "./api/admin/agent-config.js";
 import { adminAgentRoutes } from "./api/admin/agents.js";
 import { adminChatRoutes } from "./api/admin/chats.js";
 import { adminActivityRoutes, adminClientRoutes } from "./api/admin/clients.js";
@@ -24,17 +26,16 @@ import { adminSystemConfigRoutes } from "./api/admin/system-config.js";
 import { adminTaskRoutes } from "./api/admin/tasks.js";
 import { adminWsRoutes } from "./api/admin/ws-admin.js";
 import { agentChatRoutes } from "./api/agent/chats.js";
+import { agentConfigRoutes } from "./api/agent/config.js";
 import { agentFeishuBotRoutes } from "./api/agent/feishu-bot.js";
 import { agentFeishuUserRoutes } from "./api/agent/feishu-user.js";
 import { agentInboxRoutes } from "./api/agent/inbox.js";
 import { agentMeRoutes } from "./api/agent/me.js";
 import { agentMessageRoutes, agentSendToAgentRoutes } from "./api/agent/messages.js";
 import { agentTaskRoutes } from "./api/agent/tasks.js";
-import { agentWsRoutes } from "./api/agent/ws.js";
 import { clientWsRoutes } from "./api/agent/ws-client.js";
 import { authRoutes } from "./api/auth.js";
 import { bootstrapConfigRoutes } from "./api/bootstrap/config.js";
-import { bootstrapRoutes } from "./api/bootstrap/token.js";
 import { contextTreeInfoRoutes } from "./api/context-tree-info.js";
 import { healthRoutes } from "./api/health.js";
 import { healthzRoutes } from "./api/healthz.js";
@@ -45,11 +46,11 @@ import { githubWebhookRoutes } from "./api/webhooks/github.js";
 import type { Config } from "./config.js";
 import { connectDatabase } from "./db/connection.js";
 import { AppError } from "./errors.js";
-import { agentAuthHook } from "./middleware/agent-auth.js";
-import { githubAuthHook } from "./middleware/github-auth.js";
+import { agentSelectorHook } from "./middleware/agent-selector.js";
 import { memberAuthHook, requireAdminRoleHook } from "./middleware/member-auth.js";
 import { type AdapterManager, createAdapterManager } from "./services/adapter-manager.js";
 import { type BackgroundTasks, createBackgroundTasks } from "./services/background-tasks.js";
+import { createConfigService } from "./services/config-service.js";
 import { createKaelRuntime, type KaelRuntime } from "./services/kael-runtime.js";
 import { createNotifier, type Notifier } from "./services/notifier.js";
 import { ensureDefaultOrganization } from "./services/organization.js";
@@ -94,10 +95,9 @@ export async function buildApp(config: Config) {
   });
 
   // Auth hooks
-  const agentAuth = agentAuthHook(db);
   const memberAuth = memberAuthHook(db, config.secrets.jwtSecret);
   const adminOnly = requireAdminRoleHook();
-  const githubAuth = githubAuthHook();
+  const agentSelector = agentSelectorHook(db);
 
   // Error handler
   app.setErrorHandler((error, _request, reply) => {
@@ -124,20 +124,30 @@ export async function buildApp(config: Config) {
       await api.register(contextTreeInfoRoutes, { prefix: "/context-tree" });
       await api.register(bootstrapConfigRoutes, { prefix: "/bootstrap" });
 
-      // Bootstrap routes (GitHub token protected)
-      await api.register(
-        async (bootstrapApp) => {
-          bootstrapApp.addHook("onRequest", githubAuth);
-          await bootstrapApp.register(bootstrapRoutes);
-        },
-        { prefix: "/bootstrap" },
-      );
-
       // Admin routes (JWT protected)
       await api.register(
         async (adminApp) => {
           adminApp.addHook("onRequest", memberAuth);
           await adminApp.register(adminAgentRoutes);
+        },
+        { prefix: "/admin/agents" },
+      );
+
+      // Step 2: per-agent runtime config (admin role required)
+      await api.register(
+        async (adminApp) => {
+          adminApp.addHook("onRequest", memberAuth);
+          adminApp.addHook("onRequest", adminOnly);
+          await adminApp.register(adminAgentConfigRoutes);
+        },
+        { prefix: "/admin/agents" },
+      );
+
+      // Step 10: per-agent client connectivity probe
+      await api.register(
+        async (adminApp) => {
+          adminApp.addHook("onRequest", memberAuth);
+          await adminApp.register(adminAgentClientStatusRoutes);
         },
         { prefix: "/admin/agents" },
       );
@@ -272,25 +282,28 @@ export async function buildApp(config: Config) {
         { prefix: "/admin/notifications" },
       );
 
-      // Agent routes (Bearer token protected)
+      // Agent routes (member JWT + X-Agent-Id selector; see middleware/agent-selector.ts)
       await api.register(
         async (agentApp) => {
-          agentApp.addHook("onRequest", agentAuth);
+          agentApp.addHook("onRequest", memberAuth);
+          agentApp.addHook("onRequest", agentSelector);
           await agentApp.register(agentMeRoutes);
           await agentApp.register(agentChatRoutes, { prefix: "/chats" });
           await agentApp.register(agentMessageRoutes, { prefix: "/chats" });
           await agentApp.register(agentSendToAgentRoutes, { prefix: "/agents" });
           await agentApp.register(agentInboxRoutes, { prefix: "/inbox" });
+          await agentApp.register(agentConfigRoutes);
           await agentApp.register(agentTaskRoutes, { prefix: "/tasks" });
 
           await agentApp.register(agentFeishuBotRoutes);
           await agentApp.register(agentFeishuUserRoutes, { prefix: "/delegated" });
-          await agentApp.register(agentWsRoutes(notifier, config.instanceId), { prefix: "/ws" });
         },
         { prefix: "/agent" },
       );
 
-      // M1: Client WebSocket (no auth at WS level — auth via agent:bind message)
+      // Client WebSocket — JWT auth via first-frame `auth` message, then
+      // client:register + per-agent bind. Inbox notifications are fanned out
+      // through this WS via the notifier.
       await api.register(clientWsRoutes(notifier, config.instanceId), { prefix: "/agent/ws" });
 
       // M1: Admin WebSocket (JWT auth via query param)
@@ -317,6 +330,14 @@ export async function buildApp(config: Config) {
 
   // Decorate notifier so routes can trigger PG NOTIFY
   app.decorate("notifier", notifier);
+
+  // Per-agent runtime config service (Step 2)
+  const configService = createConfigService({
+    db,
+    notifier,
+    encryptionKey: config.secrets.encryptionKey,
+  });
+  app.decorate("configService", configService);
 
   // Adapter manager — decorated so admin routes can trigger reload
   const adapterManager = createAdapterManager(db, config.secrets.encryptionKey, app.log, notifier);

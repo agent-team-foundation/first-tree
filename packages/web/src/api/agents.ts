@@ -39,10 +39,6 @@ export function reactivateAgent(uuid: string): Promise<Agent> {
   return api.post<Agent>(`/admin/agents/${encodeURIComponent(uuid)}/reactivate`, {});
 }
 
-export function provisionAgent(uuid: string, clientId: string): Promise<{ provisioned: boolean; clientId: string }> {
-  return api.post(`/admin/agents/${encodeURIComponent(uuid)}/provision`, { clientId });
-}
-
 // -- Test Connection --
 
 export type ConnectionInfo = {

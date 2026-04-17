@@ -26,6 +26,7 @@ Thumbs.db
 
 # Test / coverage
 coverage/
+tests/e2e/
 
 # Drizzle
 drizzle/meta/

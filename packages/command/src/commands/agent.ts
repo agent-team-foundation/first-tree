@@ -5,48 +5,76 @@ import {
   agentConfigSchema,
   DEFAULT_CONFIG_DIR,
   DEFAULT_DATA_DIR,
-  DEFAULT_HOME_DIR,
   loadAgents,
   setConfigValue,
 } from "@agent-team-foundation/first-tree-hub-shared/config";
 import { cleanWorkspaces, FirstTreeHubSDK, SdkError, SessionRegistry } from "@first-tree-hub/client";
 import type { Command } from "commander";
 import { fail, success } from "../cli/output.js";
-import {
-  bootstrapToken,
-  ensureFreshAdminToken,
-  maskToken,
-  resolveAgentToken,
-  resolveServerUrl,
-  saveAgentConfig,
-} from "../core/bootstrap.js";
+import { ensureFreshAccessToken, resolveServerUrl, saveAgentConfig } from "../core/bootstrap.js";
 import { bindFeishuBot, bindFeishuUser } from "../core/feishu.js";
 import { promptAddAgent } from "../core/index.js";
+import { registerAgentConfigCommands } from "./agent-config.js";
 
 const DEFAULT_WORKSPACE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
-// ── SDK helpers (for send/chats/history/register/pull) ────────────────
+type ResolvedAgentConfig = {
+  serverUrl: string;
+  agentId: string;
+};
 
-function resolveAgentConfig(): { serverUrl: string; token: string } {
-  let token: string;
-  try {
-    token = resolveAgentToken();
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    fail("MISSING_TOKEN", msg, 2);
+/**
+ * Resolve the agent this CLI invocation should act on. We read the local
+ * `agents/<name>/agent.yaml` file to find the agentId, then pair it with the
+ * user's current member JWT (refreshed on demand) at call time.
+ *
+ * Only one agent is expected per command invocation — if the user has many
+ * agents configured they must pick one with `--agent <name>` (next step of
+ * CLI polish) or rely on a single entry.
+ */
+function resolveLocalAgent(agentName?: string): ResolvedAgentConfig {
+  const agentsDir = join(DEFAULT_CONFIG_DIR, "agents");
+  const agents = loadAgents({ schema: agentConfigSchema, agentsDir });
+  if (agents.size === 0) {
+    fail("MISSING_AGENT", "No agent configured. Run `first-tree-hub agent add` first.", 2);
   }
+
+  let resolvedName: string;
+  if (agentName) {
+    resolvedName = agentName;
+  } else if (agents.size === 1) {
+    const [only] = [...agents.keys()];
+    if (!only) fail("MISSING_AGENT", "No agent configured. Run `first-tree-hub agent add` first.", 2);
+    resolvedName = only;
+  } else {
+    fail(
+      "AMBIGUOUS_AGENT",
+      `Multiple agents configured — specify --agent <name>. Available: ${[...agents.keys()].join(", ")}`,
+      2,
+    );
+  }
+  const cfg = agents.get(resolvedName);
+  if (!cfg) {
+    fail("UNKNOWN_AGENT", `Agent "${resolvedName}" not found in ${agentsDir}`, 2);
+  }
+
   let serverUrl: string;
   try {
-    serverUrl = resolveServerUrl(process.env.FIRST_TREE_HUB_SERVER_URL);
+    serverUrl = resolveServerUrl(process.env.FIRST_TREE_HUB_SERVER);
   } catch {
     serverUrl = "http://localhost:8000";
   }
-  return { serverUrl, token };
+
+  return { serverUrl, agentId: cfg.agentId };
 }
 
-function createSdk(): FirstTreeHubSDK {
-  const config = resolveAgentConfig();
-  return new FirstTreeHubSDK(config);
+function createSdk(agentName?: string): FirstTreeHubSDK {
+  const { serverUrl, agentId } = resolveLocalAgent(agentName);
+  return new FirstTreeHubSDK({
+    serverUrl,
+    getAccessToken: () => ensureFreshAccessToken(),
+    agentId,
+  });
 }
 
 function handleSdkError(error: unknown): never {
@@ -69,7 +97,7 @@ function parseLimit(value: string, max: number): number {
   return limit;
 }
 
-const MAX_STDIN_BYTES = 10 * 1024 * 1024; // 10 MB
+const MAX_STDIN_BYTES = 10 * 1024 * 1024;
 
 function readStdin(): Promise<string | null> {
   if (process.stdin.isTTY) return Promise.resolve(null);
@@ -93,10 +121,6 @@ function readStdin(): Promise<string | null> {
 
 type ResolvedAgent = { uuid: string; name: string | null; displayName: string | null };
 
-/**
- * Resolve an agent name (or UUID) to its record via the admin agents API.
- * Accepts either a name or a UUID; throws via fail() if not found.
- */
 async function resolveAgent(serverUrl: string, adminToken: string, agentName: string): Promise<ResolvedAgent> {
   const res = await fetch(`${serverUrl}/api/v1/admin/agents?limit=100`, {
     headers: { Authorization: `Bearer ${adminToken}` },
@@ -116,28 +140,33 @@ async function resolveAgent(serverUrl: string, adminToken: string, agentName: st
 // ── Main registration ─────────────────────────────────────────────────
 
 export function registerAgentCommands(program: Command): void {
-  const agent = program.command("agent").description("Agent management — config, tokens, bindings, messaging");
+  const agent = program.command("agent").description("Agent management — config, bindings, messaging");
+
+  registerAgentConfigCommands(agent);
 
   // ── Config management (add / remove / list) ─────────────────────────
 
   agent
     .command("add [name]")
-    .description("Add an agent instance")
-    .option("-t, --token <token>", "Agent token")
-    .action(async (name?: string, options?: { token?: string }) => {
+    .description("Register a local alias for an existing Hub agent (stores agentId)")
+    .option("--agent-id <id>", "Agent UUID on the Hub")
+    .action(async (name?: string, options?: { agentId?: string }) => {
       try {
         let agentName = name;
-        let agentToken = options?.token;
+        let agentId = options?.agentId;
 
-        if (!agentName || !agentToken) {
+        if (!agentName || !agentId) {
           const result = await promptAddAgent();
           agentName = agentName ?? result.name;
-          agentToken = agentToken ?? result.token;
+          agentId = agentId ?? result.agentId;
+        }
+        if (!agentName || !agentId) {
+          fail("MISSING_AGENT_ARGS", "Both agent name and agent-id are required.", 2);
         }
 
         const agentDir = join(DEFAULT_CONFIG_DIR, "agents", agentName);
         mkdirSync(agentDir, { recursive: true, mode: 0o700 });
-        setConfigValue(join(agentDir, "agent.yaml"), "token", agentToken);
+        setConfigValue(join(agentDir, "agent.yaml"), "agentId", agentId);
 
         process.stderr.write(`  Agent "${agentName}" added.\n`);
         process.stderr.write(`  Config: ${join(agentDir, "agent.yaml")}\n`);
@@ -154,7 +183,7 @@ export function registerAgentCommands(program: Command): void {
 
   agent
     .command("remove <name>")
-    .description("Remove an agent instance and its runtime data")
+    .description("Remove a local agent alias and its runtime data")
     .action((name: string) => {
       const agentDir = join(DEFAULT_CONFIG_DIR, "agents", name);
       if (!existsSync(agentDir)) {
@@ -162,8 +191,6 @@ export function registerAgentCommands(program: Command): void {
         process.exit(1);
       }
       rmSync(agentDir, { recursive: true, force: true });
-
-      // Clean runtime data
       rmSync(join(DEFAULT_DATA_DIR, "workspaces", name), { recursive: true, force: true });
       rmSync(join(DEFAULT_DATA_DIR, "sessions", `${name}.json`), { force: true });
 
@@ -172,7 +199,7 @@ export function registerAgentCommands(program: Command): void {
 
   agent
     .command("list")
-    .description("List configured agents")
+    .description("List locally-configured agents")
     .action(() => {
       const agentsDir = join(DEFAULT_CONFIG_DIR, "agents");
       try {
@@ -183,7 +210,7 @@ export function registerAgentCommands(program: Command): void {
         }
         for (const [name, config] of agents) {
           process.stderr.write(
-            `  ${name.padEnd(20)} runtime: ${config.runtime.padEnd(14)} token: ${maskToken(config.token)}\n`,
+            `  ${name.padEnd(20)} runtime: ${config.runtime.padEnd(14)} agentId: ${config.agentId}\n`,
           );
         }
       } catch {
@@ -191,65 +218,100 @@ export function registerAgentCommands(program: Command): void {
       }
     });
 
-  // ── CLI-first agent creation (M1) ───────────────────────────────────
+  // ── CLI-first agent creation ────────────────────────────────────────
 
   agent
     .command("create <name>")
-    .description("Create an agent on Hub and bind it locally (CLI-first)")
+    .description("Create an agent on Hub and bind it locally")
     .requiredOption("--type <type>", "Agent type (human, personal_assistant, autonomous_agent)")
+    .requiredOption(
+      "--client-id <id>",
+      "Client (machine) that will run this agent — must be owned by you. Run `first-tree-hub connect` on that machine first.",
+    )
     .option("--runtime <runtime>", "Runtime handler (default: claude-code)", "claude-code")
     .option("--display-name <name>", "Display name")
     .option("--server <url>", "Hub server URL")
-    .action(async (name: string, options: { type: string; runtime: string; displayName?: string; server?: string }) => {
+    .action(
+      async (
+        name: string,
+        options: { type: string; clientId: string; runtime: string; displayName?: string; server?: string },
+      ) => {
+        try {
+          const serverUrl = resolveServerUrl(options.server);
+          const adminToken = await ensureFreshAccessToken();
+          const headers = {
+            Authorization: `Bearer ${adminToken}`,
+            "Content-Type": "application/json",
+          };
+
+          const createBody: Record<string, unknown> = {
+            name,
+            type: options.type,
+            clientId: options.clientId,
+          };
+          if (options.displayName) createBody.displayName = options.displayName;
+
+          const createRes = await fetch(`${serverUrl}/api/v1/admin/agents`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(createBody),
+            signal: AbortSignal.timeout(10_000),
+          });
+          if (!createRes.ok) {
+            const body = (await createRes.json().catch(() => ({}))) as { error?: string };
+            fail("CREATE_ERROR", body.error ?? `Failed to create agent (HTTP ${createRes.status})`, 1);
+          }
+          const created = (await createRes.json()) as { uuid: string; name: string | null };
+          process.stderr.write(`  \u2713 Agent created: ${created.name ?? created.uuid}\n`);
+
+          const agentDir = saveAgentConfig(name, created.uuid, options.runtime);
+          process.stderr.write(`  \u2713 Config saved: ${agentDir}/agent.yaml\n`);
+          process.stderr.write("  \u2713 Agent ready — start the client on that machine to bind\n");
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          fail("CREATE_ERROR", msg);
+        }
+      },
+    );
+
+  // ── Claim (set manager) ─────────────────────────────────────────────
+
+  agent
+    .command("claim <agentName>")
+    .description("Become the manager of an agent (admin-only, or self-claim an unmanaged agent)")
+    .option("--server <url>", "Hub server URL")
+    .action(async (agentName: string, options: { server?: string }) => {
       try {
         const serverUrl = resolveServerUrl(options.server);
-        const adminToken = await ensureFreshAdminToken();
-        const headers = {
-          Authorization: `Bearer ${adminToken}`,
-          "Content-Type": "application/json",
-        };
+        const accessToken = await ensureFreshAccessToken();
 
-        // 1. Create agent via Admin API
-        const createBody: Record<string, unknown> = {
-          name,
-          type: options.type,
-        };
-        if (options.displayName) createBody.displayName = options.displayName;
-
-        const createRes = await fetch(`${serverUrl}/api/v1/admin/agents`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(createBody),
+        // Look up the authenticated member's id via /me
+        const meRes = await fetch(`${serverUrl}/api/v1/me`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
           signal: AbortSignal.timeout(10_000),
         });
-        if (!createRes.ok) {
-          const body = (await createRes.json().catch(() => ({}))) as { error?: string };
-          fail("CREATE_ERROR", body.error ?? `Failed to create agent (HTTP ${createRes.status})`, 1);
-        }
-        const agent = (await createRes.json()) as { uuid: string; name: string | null };
-        process.stderr.write(`  \u2713 Agent created: ${agent.name ?? agent.uuid}\n`);
+        if (!meRes.ok) fail("ME_ERROR", `Failed to fetch current member (HTTP ${meRes.status})`, 1);
+        const me = (await meRes.json()) as { memberId: string };
 
-        // 2. Generate token
-        const tokenRes = await fetch(`${serverUrl}/api/v1/admin/agents/${agent.uuid}/tokens`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({ name: "default" }),
+        const target = await resolveAgent(serverUrl, accessToken, agentName);
+
+        const patchRes = await fetch(`${serverUrl}/api/v1/admin/agents/${target.uuid}`, {
+          method: "PATCH",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ managerId: me.memberId }),
           signal: AbortSignal.timeout(10_000),
         });
-        if (!tokenRes.ok) {
-          fail("TOKEN_ERROR", `Failed to generate token (HTTP ${tokenRes.status})`, 1);
+        if (!patchRes.ok) {
+          const body = (await patchRes.json().catch(() => ({}))) as { error?: string };
+          fail("CLAIM_ERROR", body.error ?? `Claim failed (HTTP ${patchRes.status})`, 1);
         }
-        const tokenData = (await tokenRes.json()) as { token: string };
-
-        // 3. Write local agent config (triggers hot-reload in running client)
-        const agentDir = saveAgentConfig(name, tokenData.token, options.runtime);
-        process.stderr.write(`  \u2713 Token saved: ${agentDir}/agent.yaml\n`);
-
-        // 4. If a client is running, it will detect the new config via file watch
-        process.stderr.write(`  \u2713 Agent ready — running client will auto-bind\n`);
+        process.stderr.write(`  Claimed "${target.name ?? target.uuid}" — now managed by you.\n`);
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        fail("CREATE_ERROR", msg);
+        fail("CLAIM_ERROR", msg);
       }
     });
 
@@ -298,33 +360,6 @@ export function registerAgentCommands(program: Command): void {
       process.stderr.write(`  ${totalRemoved} workspace(s) cleaned.\n`);
     });
 
-  // ── Token management ────────────────────────────────────────────────
-
-  const token = agent.command("token").description("Agent token management");
-
-  token
-    .command("bootstrap <agentName>")
-    .description("Bootstrap a token using GitHub identity (requires gh CLI)")
-    .option("--save-to <target>", 'Save token to: "agent" (default) or a file path', "agent")
-    .option("--server <url>", "Hub server URL")
-    .action(async (agentName: string, options: { saveTo: string; server?: string }) => {
-      try {
-        const serverUrl = resolveServerUrl(options.server);
-        const result = await bootstrapToken(serverUrl, agentName, { saveTo: options.saveTo });
-
-        if (options.saveTo === "agent") {
-          process.stderr.write(`Token saved to ${DEFAULT_HOME_DIR}/config/agents/${agentName}/agent.yaml\n`);
-        } else {
-          process.stderr.write(`Token saved to ${options.saveTo}\n`);
-        }
-
-        success({ agentId: result.agentId, tokenSaved: true });
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        fail("BOOTSTRAP_ERROR", msg);
-      }
-    });
-
   // ── Bind (Feishu bot / user) ────────────────────────────────────────
 
   const bind = agent.command("bind").description("Bind external IM accounts to agents");
@@ -335,46 +370,57 @@ export function registerAgentCommands(program: Command): void {
     .requiredOption("--platform <platform>", "Platform: feishu")
     .requiredOption("--app-id <id>", "Feishu bot App ID")
     .requiredOption("--app-secret <secret>", "Feishu bot App Secret")
+    .option("--agent <name>", "Local agent alias (default: first configured)")
     .option("--server <url>", "Hub server URL")
-    .action(async (options: { platform: string; appId: string; appSecret: string; server?: string }) => {
-      try {
-        if (options.platform !== "feishu") {
-          fail("UNSUPPORTED_PLATFORM", `Platform "${options.platform}" is not supported. Use "feishu".`);
-        }
+    .action(
+      async (options: { platform: string; appId: string; appSecret: string; agent?: string; server?: string }) => {
+        try {
+          if (options.platform !== "feishu") {
+            fail("UNSUPPORTED_PLATFORM", `Platform "${options.platform}" is not supported. Use "feishu".`);
+          }
 
-        const serverUrl = resolveServerUrl(options.server);
-        const agentToken = resolveAgentToken();
-        await bindFeishuBot(serverUrl, agentToken, options.appId, options.appSecret);
-        process.stderr.write("Feishu bot bound successfully.\n");
-        success({ platform: "feishu", bound: true });
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        fail("BIND_BOT_ERROR", msg);
-      }
-    });
+          const serverUrl = resolveServerUrl(options.server);
+          const { agentId } = resolveLocalAgent(options.agent);
+          const accessToken = await ensureFreshAccessToken();
+          await bindFeishuBot(serverUrl, accessToken, agentId, options.appId, options.appSecret);
+          process.stderr.write("Feishu bot bound successfully.\n");
+          success({ platform: "feishu", bound: true });
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          fail("BIND_BOT_ERROR", msg);
+        }
+      },
+    );
 
   bind
     .command("user <humanAgentId>")
     .description("Bind a Feishu user to a human agent (via delegate_mention)")
     .requiredOption("--platform <platform>", "Platform: feishu")
     .requiredOption("--feishu-id <id>", "Feishu user ID (ou_xxx)")
+    .option("--agent <name>", "Local agent alias (default: first configured)")
     .option("--server <url>", "Hub server URL")
-    .action(async (humanAgentId: string, options: { platform: string; feishuId: string; server?: string }) => {
-      try {
-        if (options.platform !== "feishu") {
-          fail("UNSUPPORTED_PLATFORM", `Platform "${options.platform}" is not supported. Use "feishu".`);
-        }
+    .action(
+      async (
+        humanAgentId: string,
+        options: { platform: string; feishuId: string; agent?: string; server?: string },
+      ) => {
+        try {
+          if (options.platform !== "feishu") {
+            fail("UNSUPPORTED_PLATFORM", `Platform "${options.platform}" is not supported. Use "feishu".`);
+          }
 
-        const serverUrl = resolveServerUrl(options.server);
-        const agentToken = resolveAgentToken();
-        await bindFeishuUser(serverUrl, agentToken, humanAgentId, options.feishuId);
-        process.stderr.write(`Feishu user ${options.feishuId} bound to ${humanAgentId}.\n`);
-        success({ platform: "feishu", humanAgentId, feishuUserId: options.feishuId });
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        fail("BIND_USER_ERROR", msg);
-      }
-    });
+          const serverUrl = resolveServerUrl(options.server);
+          const { agentId } = resolveLocalAgent(options.agent);
+          const accessToken = await ensureFreshAccessToken();
+          await bindFeishuUser(serverUrl, accessToken, agentId, humanAgentId, options.feishuId);
+          process.stderr.write(`Feishu user ${options.feishuId} bound to ${humanAgentId}.\n`);
+          success({ platform: "feishu", humanAgentId, feishuUserId: options.feishuId });
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          fail("BIND_USER_ERROR", msg);
+        }
+      },
+    );
 
   // ── Messaging (send / chats / history) ──────────────────────────────
 
@@ -385,6 +431,7 @@ export function registerAgentCommands(program: Command): void {
     replyTo?: string;
     replyToInbox?: string;
     replyToChat?: string;
+    agent?: string;
   }
 
   agent
@@ -396,6 +443,7 @@ export function registerAgentCommands(program: Command): void {
     .option("--reply-to <messageId>", "Message ID to reply to")
     .option("--reply-to-inbox <inboxId>", "Cross-chat reply target inbox")
     .option("--reply-to-chat <chatId>", "Cross-chat reply target chat")
+    .option("--agent <name>", "Local agent alias (default: first configured)")
     .action(async (target: string, message: string | undefined, options: SendOptions) => {
       try {
         const content = message ?? (await readStdin());
@@ -412,7 +460,7 @@ export function registerAgentCommands(program: Command): void {
           }
         }
 
-        const sdk = createSdk();
+        const sdk = createSdk(options.agent);
 
         if (options.chat) {
           const result = await sdk.sendMessage(target, {
@@ -444,10 +492,11 @@ export function registerAgentCommands(program: Command): void {
     .description("List chats this agent participates in")
     .option("-l, --limit <number>", "Maximum chats to return (1-100)", "20")
     .option("--cursor <cursor>", "Pagination cursor from previous response")
-    .action(async (options: { limit: string; cursor?: string }) => {
+    .option("--agent <name>", "Local agent alias (default: first configured)")
+    .action(async (options: { limit: string; cursor?: string; agent?: string }) => {
       try {
         const limit = parseLimit(options.limit, 100);
-        const sdk = createSdk();
+        const sdk = createSdk(options.agent);
         const result = await sdk.listChats({ limit, cursor: options.cursor });
         success(result);
       } catch (error) {
@@ -460,10 +509,11 @@ export function registerAgentCommands(program: Command): void {
     .description("View message history in a chat")
     .option("-l, --limit <number>", "Maximum messages to return (1-100)", "20")
     .option("--cursor <cursor>", "Pagination cursor from previous response")
-    .action(async (chatId: string, options: { limit: string; cursor?: string }) => {
+    .option("--agent <name>", "Local agent alias (default: first configured)")
+    .action(async (chatId: string, options: { limit: string; cursor?: string; agent?: string }) => {
       try {
         const limit = parseLimit(options.limit, 100);
-        const sdk = createSdk();
+        const sdk = createSdk(options.agent);
         const result = await sdk.listMessages(chatId, { limit, cursor: options.cursor });
         success(result);
       } catch (error) {
@@ -471,7 +521,7 @@ export function registerAgentCommands(program: Command): void {
       }
     });
 
-  // ── M1: Runtime status & management ─────────────────────────────────
+  // ── Runtime status & management ─────────────────────────────────────
 
   agent
     .command("status [name]")
@@ -481,7 +531,7 @@ export function registerAgentCommands(program: Command): void {
       try {
         const serverUrl = resolveServerUrl(options?.server);
         const response = await fetch(`${serverUrl}/api/v1/admin/agents/activity`, {
-          headers: { Authorization: `Bearer ${await ensureFreshAdminToken()}` },
+          headers: { Authorization: `Bearer ${await ensureFreshAccessToken()}` },
           signal: AbortSignal.timeout(10_000),
         });
         if (!response.ok) {
@@ -503,19 +553,19 @@ export function registerAgentCommands(program: Command): void {
         };
 
         if (name) {
-          const agent = data.agents.find((a) => a.agentId === name);
-          if (!agent) {
+          const ag = data.agents.find((a) => a.agentId === name);
+          if (!ag) {
             process.stderr.write(`\n  Agent "${name}" is not running.\n\n`);
             return;
           }
-          process.stderr.write(`\n  Agent: ${agent.agentId}\n`);
-          process.stderr.write(`  Runtime: ${agent.runtimeType ?? "—"}\n`);
-          process.stderr.write(`  State: ${agent.runtimeState ?? "—"}\n`);
-          if (agent.activeSessions !== null) {
-            process.stderr.write(`  Sessions: ${agent.activeSessions} active / ${agent.totalSessions ?? 0} total\n`);
+          process.stderr.write(`\n  Agent: ${ag.agentId}\n`);
+          process.stderr.write(`  Runtime: ${ag.runtimeType ?? "—"}\n`);
+          process.stderr.write(`  State: ${ag.runtimeState ?? "—"}\n`);
+          if (ag.activeSessions !== null) {
+            process.stderr.write(`  Sessions: ${ag.activeSessions} active / ${ag.totalSessions ?? 0} total\n`);
           }
-          if (agent.clientId) {
-            process.stderr.write(`  Client: ${agent.clientId}\n`);
+          if (ag.clientId) {
+            process.stderr.write(`  Client: ${ag.clientId}\n`);
           }
           process.stderr.write("\n");
           return;
@@ -541,18 +591,6 @@ export function registerAgentCommands(program: Command): void {
           process.stderr.write("\n");
         }
       } catch (error) {
-        if (error instanceof Error && error.message.includes("ADMIN_TOKEN")) {
-          try {
-            const sdk = createSdk();
-            const me = await sdk.register();
-            process.stderr.write(`\n  Agent: ${me.agentId} (${me.displayName ?? "no name"})\n`);
-            process.stderr.write(`  Type: ${me.type}\n`);
-            process.stderr.write(`  Status: ${me.status}\n\n`);
-          } catch (sdkError) {
-            handleSdkError(sdkError);
-          }
-          return;
-        }
         const msg = error instanceof Error ? error.message : String(error);
         fail("STATUS_ERROR", msg);
       }
@@ -567,7 +605,7 @@ export function registerAgentCommands(program: Command): void {
         const serverUrl = resolveServerUrl(options.server);
         const response = await fetch(`${serverUrl}/api/v1/admin/agents/activity/${name}/reset-activity`, {
           method: "POST",
-          headers: { Authorization: `Bearer ${await ensureFreshAdminToken()}` },
+          headers: { Authorization: `Bearer ${await ensureFreshAccessToken()}` },
           signal: AbortSignal.timeout(10_000),
         });
         if (!response.ok) {
@@ -580,7 +618,7 @@ export function registerAgentCommands(program: Command): void {
       }
     });
 
-  // ── M1: Session management ──────────────────────────────────────────
+  // ── Session management ──────────────────────────────────────────────
 
   agent
     .command("sessions <agent-name>")
@@ -590,7 +628,7 @@ export function registerAgentCommands(program: Command): void {
     .action(async (agentName: string, options: { server?: string; state?: string }) => {
       try {
         const serverUrl = resolveServerUrl(options.server);
-        const adminToken = await ensureFreshAdminToken();
+        const adminToken = await ensureFreshAccessToken();
         const agentId = (await resolveAgent(serverUrl, adminToken, agentName)).uuid;
         const qs = options.state ? `?state=${options.state}` : "";
         const response = await fetch(`${serverUrl}/api/v1/admin/sessions/agents/${agentId}${qs}`, {
@@ -641,7 +679,7 @@ export function registerAgentCommands(program: Command): void {
       .action(async (agentName: string, chatId: string, options: { server?: string }) => {
         try {
           const serverUrl = resolveServerUrl(options.server);
-          const adminToken = await ensureFreshAdminToken();
+          const adminToken = await ensureFreshAccessToken();
           const agentId = (await resolveAgent(serverUrl, adminToken, agentName)).uuid;
           const response = await fetch(`${serverUrl}/api/v1/admin/sessions/agents/${agentId}/${chatId}/${cmd}`, {
             method: "POST",
@@ -660,25 +698,23 @@ export function registerAgentCommands(program: Command): void {
       });
   }
 
-  // ── M1: Interactive chat (admin → agent) ────────────────────────────
+  // ── Interactive chat ────────────────────────────────────────────────
 
   agent
     .command("chat <agent-name>")
-    .description("Open an interactive chat with an agent (as admin human agent)")
+    .description("Open an interactive chat with an agent (as the current member's human agent)")
     .option("--server <url>", "Hub server URL")
     .action(async (agentName: string, options: { server?: string }) => {
       try {
         const serverUrl = resolveServerUrl(options.server);
-        const adminToken = await ensureFreshAdminToken();
+        const adminToken = await ensureFreshAccessToken();
         const headers = {
           Authorization: `Bearer ${adminToken}`,
           "Content-Type": "application/json",
         };
 
-        // 1. Resolve agent name → UUID via admin API
         const targetAgent = await resolveAgent(serverUrl, adminToken, agentName);
 
-        // 2. Create or find DM via admin API
         const dmRes = await fetch(`${serverUrl}/api/v1/admin/agents/${targetAgent.uuid}/chats`, {
           method: "POST",
           headers,
@@ -694,7 +730,6 @@ export function registerAgentCommands(program: Command): void {
         process.stderr.write(`  Chat ID: ${dm.id}\n`);
         process.stderr.write(`  Type a message and press Enter. Ctrl+C to exit.\n\n`);
 
-        // 3. Interactive loop
         const readline = await import("node:readline");
         const rl = readline.createInterface({ input: process.stdin, output: process.stderr, prompt: "  > " });
 
@@ -717,7 +752,6 @@ export function registerAgentCommands(program: Command): void {
               }>;
             };
 
-            // Filter new messages from the agent (messages are returned newest-first)
             const cutoff = lastSeenAt;
             const newMessages = cutoff
               ? msgData.items.filter((m) => m.createdAt > cutoff && m.senderId === targetAgent.uuid).reverse()
@@ -740,10 +774,8 @@ export function registerAgentCommands(program: Command): void {
           }
         };
 
-        // Initial poll to set lastSeenAt baseline
         await pollMessages();
 
-        // Poll every 2 seconds
         const pollTimer = setInterval(() => {
           pollMessages().then(() => rl.prompt());
         }, 2000);
@@ -793,9 +825,10 @@ export function registerAgentCommands(program: Command): void {
   agent
     .command("register")
     .description("Register this agent and return identity info")
-    .action(async () => {
+    .option("--agent <name>", "Local agent alias (default: first configured)")
+    .action(async (options: { agent?: string }) => {
       try {
-        const sdk = createSdk();
+        const sdk = createSdk(options.agent);
         const result = await sdk.register();
         success(result);
       } catch (error) {
@@ -808,9 +841,10 @@ export function registerAgentCommands(program: Command): void {
     .description("Pull pending messages from inbox")
     .option("-l, --limit <number>", "Maximum entries to return", "10")
     .option("-a, --ack", "Automatically ACK entries after pulling")
-    .action(async (options: { limit: string; ack?: boolean }) => {
+    .option("--agent <name>", "Local agent alias (default: first configured)")
+    .action(async (options: { limit: string; ack?: boolean; agent?: string }) => {
       try {
-        const sdk = createSdk();
+        const sdk = createSdk(options.agent);
         const limit = parseLimit(options.limit, 50);
         const result = await sdk.pull(limit);
 

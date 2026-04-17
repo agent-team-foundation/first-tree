@@ -5,7 +5,7 @@ import { formatCheckReport, loadOnboardState, onboardCheck, onboardCreate, saveO
 import { isInteractive } from "../core/prompt.js";
 
 async function promptMissing(args: Record<string, unknown>): Promise<void> {
-  // 1. Server URL first — everything depends on it
+  // 1. Server URL
   if (!args.server) {
     try {
       const { resolveServerUrl } = await import("../core/bootstrap.js");
@@ -16,40 +16,14 @@ async function promptMissing(args: Record<string, unknown>): Promise<void> {
     }
   }
 
-  // 2. Check server bootstrap config — fail fast if allowedOrg is not set
-  const { resolveServerUrl } = await import("../core/bootstrap.js");
-  const serverUrl = resolveServerUrl(args.server as string | undefined).replace(/\/+$/, "");
-  try {
-    const res = await fetch(`${serverUrl}/api/v1/bootstrap/config`);
-    if (res.ok) {
-      const config = (await res.json()) as { allowedOrg: string | null };
-      if (!config.allowedOrg) {
-        throw new Error(
-          "Server does not have FIRST_TREE_HUB_GITHUB_ALLOWED_ORG configured.\n" +
-            "  Ask the server admin to set this before onboarding.",
-        );
-      }
-    }
-  } catch (err) {
-    if (err instanceof Error && err.message.includes("FIRST_TREE_HUB_GITHUB_ALLOWED_ORG")) throw err;
-    // Network error — will be caught later by onboardCheck
+  // 2. Require that the user has already run `first-tree-hub connect`
+  const { loadCredentials } = await import("../core/bootstrap.js");
+  if (!loadCredentials()) {
+    throw new Error("No saved credentials. Run `first-tree-hub connect <server-url>` before onboarding.");
   }
 
-  // 3. GitHub CLI
-  let ghUsername: string | null = null;
-  try {
-    const { getGitHubUsername } = await import("../core/bootstrap.js");
-    ghUsername = getGitHubUsername();
-  } catch {
-    // gh not available, no defaults
-  }
-
-  // 4. Collect agent parameters
   if (!args.id) {
-    args.id = await input({
-      message: "Agent ID:",
-      default: ghUsername ?? undefined,
-    });
+    args.id = await input({ message: "Agent ID:" });
     saveOnboardState(args);
   }
 
@@ -61,6 +35,14 @@ async function promptMissing(args: Record<string, unknown>): Promise<void> {
         { name: "personal_assistant", value: "personal_assistant" },
         { name: "autonomous_agent", value: "autonomous_agent" },
       ],
+    });
+    saveOnboardState(args);
+  }
+
+  if (args.type !== "human" && !args.clientId) {
+    args.clientId = await input({
+      message: "Client ID (machine that will run this agent — must be owned by you):",
+      validate: (v) => (v.length > 0 ? true : "clientId is required for non-human agents"),
     });
     saveOnboardState(args);
   }
@@ -89,7 +71,6 @@ async function promptMissing(args: Record<string, unknown>): Promise<void> {
     }
   }
 
-  // Only human agents can have a personal assistant
   if (!args.assistant && args.type === "human") {
     const wantAssistant = await confirm({ message: "Create a personal assistant?", default: false });
     if (wantAssistant) {
@@ -97,11 +78,16 @@ async function promptMissing(args: Record<string, unknown>): Promise<void> {
         message: "Assistant ID:",
         default: `${args.id as string}-assistant`,
       });
+      if (!args.clientId) {
+        args.clientId = await input({
+          message: "Client ID for the assistant (must be owned by you):",
+          validate: (v) => (v.length > 0 ? true : "clientId is required"),
+        });
+      }
       saveOnboardState(args);
     }
   }
 
-  // Feishu bot binding is relevant for non-human agents, or human with assistant (bot binds to assistant)
   if (!args.feishuBotAppId && (args.type !== "human" || args.assistant)) {
     const wantFeishu = await confirm({ message: "Bind Feishu bot?", default: false });
     if (wantFeishu) {
@@ -118,10 +104,10 @@ export function registerOnboardCommand(program: Command): void {
     .description("Onboard a new agent to First Tree Hub")
     .option("--id <id>", "Agent ID")
     .option("--type <type>", "Agent type: human | personal_assistant | autonomous_agent")
+    .option("--client-id <id>", "Client (machine) to pin a non-human agent to")
     .option("--display-name <name>", "Display name (defaults to id)")
     .option("--role <role>", "Role description")
     .option("--domains <domains>", "Comma-separated domains")
-    .option("--profile <text>", "Agent profile (markdown)")
     .option("--assistant <id>", "Also create a personal_assistant with this ID")
     .option("--delegate-mention <id>", "Set delegate_mention field")
     .option("--server <url>", "Hub server URL")
@@ -130,16 +116,15 @@ export function registerOnboardCommand(program: Command): void {
     .option("--check", "Dry-run: show readiness checklist without executing")
     .action(async (options) => {
       try {
-        // Load saved state as defaults, then override with CLI args
         const saved = loadOnboardState() ?? {};
         const args: Record<string, unknown> = {
           ...saved,
           ...(options.id && { id: options.id }),
           ...(options.type && { type: options.type }),
+          ...(options.clientId && { clientId: options.clientId }),
           ...(options.displayName && { displayName: options.displayName }),
           ...(options.role && { role: options.role }),
           ...(options.domains && { domains: options.domains }),
-          ...(options.profile && { profile: options.profile }),
           ...(options.assistant && { assistant: options.assistant }),
           ...(options.delegateMention && { delegateMention: options.delegateMention }),
           ...(options.server && { server: options.server }),
@@ -148,7 +133,6 @@ export function registerOnboardCommand(program: Command): void {
           check: options.check,
         };
 
-        // Apply env var defaults
         if (!args.feishuBotAppId && process.env.FEISHU_APP_ID) args.feishuBotAppId = process.env.FEISHU_APP_ID;
         if (!args.feishuBotAppSecret && process.env.FEISHU_APP_SECRET)
           args.feishuBotAppSecret = process.env.FEISHU_APP_SECRET;
@@ -164,12 +148,10 @@ export function registerOnboardCommand(program: Command): void {
           return;
         }
 
-        // Interactive mode: prompt for missing required params
         if (isInteractive()) {
           await promptMissing(args);
         }
 
-        // Validate — show full checklist on failure
         const items = await onboardCheck(args as Parameters<typeof onboardCheck>[0]);
         const hasErrors = items.some((i) => i.status === "missing_required" || i.status === "error");
         if (hasErrors) {
@@ -178,7 +160,6 @@ export function registerOnboardCommand(program: Command): void {
           fail("MISSING_PARAMS", "Required parameters are missing. See checklist above.");
         }
 
-        // Execute — create agent via Admin API + bootstrap token
         await onboardCreate(args as Parameters<typeof onboardCreate>[0]);
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);

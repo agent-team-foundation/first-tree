@@ -1,5 +1,6 @@
-import type { InboxEntryWithMessage, SessionState } from "@agent-team-foundation/first-tree-hub-shared";
+import type { InboxEntryWithMessage, RuntimeState, SessionState } from "@agent-team-foundation/first-tree-hub-shared";
 import type { FirstTreeHubSDK } from "../sdk.js";
+import type { AgentConfigCache } from "./agent-config-cache.js";
 import type { SessionConfig } from "./config.js";
 import { Deduplicator } from "./deduplicator.js";
 import type {
@@ -37,10 +38,12 @@ type SessionManagerConfig = {
   sdk: FirstTreeHubSDK;
   log: (msg: string) => void;
   registryPath?: string;
+  /** Step 4: optional config cache for refresh-before-dispatch on configVersion bump. */
+  agentConfigCache?: AgentConfigCache;
   /** Callback when a session state changes (per-session granularity). */
   onStateChange?: (chatId: string, state: SessionState) => void;
   /** Callback when aggregated runtime state changes. */
-  onRuntimeStateChange?: (state: "idle" | "working" | "blocked" | "error") => void;
+  onRuntimeStateChange?: (state: RuntimeState) => void;
   /** Callback when a session produces output text. */
   onSessionOutput?: (chatId: string, content: string) => void;
 };
@@ -66,8 +69,8 @@ export class SessionManager {
   private readonly registry: SessionRegistry | null;
   private readonly pendingQueue: PendingMessage[] = [];
   private readonly lastReportedStates = new Map<string, SessionState>();
-  private readonly sessionRuntimeStates = new Map<string, "idle" | "working" | "blocked" | "error">();
-  private lastReportedRuntimeState: "idle" | "working" | "blocked" | "error" | null = null;
+  private readonly sessionRuntimeStates = new Map<string, RuntimeState>();
+  private lastReportedRuntimeState: RuntimeState | null = null;
   private idleTimer: ReturnType<typeof setInterval> | null = null;
   private _activeCount = 0;
 
@@ -97,10 +100,28 @@ export class SessionManager {
       return;
     }
 
-    // 2. Extract message content (handler does not see inbox metadata)
+    // 2. Step 4: refresh runtime config if the message brought a newer
+    // version. This is the *only* trigger for active-session re-config —
+    // matches PRD §7.2. Failures are logged but do not block delivery on
+    // M1: handler integration in Step 6 will decide whether to use the
+    // stale config or hold the message until Hub recovers.
+    if (this.config.agentConfigCache) {
+      try {
+        await this.config.agentConfigCache.refreshIfNewer(
+          this.config.agentIdentity.agentId,
+          entry.message.configVersion,
+        );
+      } catch (err) {
+        this.config.log(
+          `[configVersionMismatch] agentId=${this.config.agentIdentity.agentId} chatId=${chatId} incomingVersion=${entry.message.configVersion} action=skip — ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    // 3. Extract message content (handler does not see inbox metadata)
     const message = this.extractMessage(entry);
 
-    // 3. Route by session state — ACK happens inside route when handler starts
+    // 4. Route by session state — ACK happens inside route when handler starts
     await this.routeMessage(chatId, message, entry.id);
   }
 
@@ -184,7 +205,7 @@ export class SessionManager {
   }
 
   /** Return the current aggregate runtime state, or null if no sessions have reported. */
-  getAggregateRuntimeState(): "idle" | "working" | "blocked" | "error" | null {
+  getAggregateRuntimeState(): RuntimeState | null {
     return this.lastReportedRuntimeState;
   }
 
@@ -236,7 +257,12 @@ export class SessionManager {
     // Check for prior evicted session mapping
     const evicted = this.evictedMappings.get(chatId);
 
-    const handler = this.config.handlerFactory(this.config.handlerConfig);
+    // Step 6: thread the AgentConfigCache to the handler so it can read the
+    // current per-agent runtime config when launching its sub-process.
+    const handlerCfg = this.config.agentConfigCache
+      ? { ...this.config.handlerConfig, agentConfigCache: this.config.agentConfigCache }
+      : this.config.handlerConfig;
+    const handler = this.config.handlerFactory(handlerCfg);
     const ctx = this.buildSessionContext(chatId);
 
     const entry: SessionEntry = {
@@ -500,7 +526,7 @@ export class SessionManager {
   }
 
   /** Update per-session runtime state and recompute aggregate. Only active sessions may update. */
-  private setSessionRuntimeState(chatId: string, state: "idle" | "working" | "blocked" | "error"): void {
+  private setSessionRuntimeState(chatId: string, state: RuntimeState): void {
     const session = this.sessions.get(chatId);
     if (!session || session.status !== "active") return;
     this.sessionRuntimeStates.set(chatId, state);
@@ -511,7 +537,7 @@ export class SessionManager {
   private recomputeRuntimeState(): void {
     if (!this.config.onRuntimeStateChange) return;
 
-    let aggregate: "idle" | "working" | "blocked" | "error" = "idle";
+    let aggregate: RuntimeState = "idle";
     for (const state of this.sessionRuntimeStates.values()) {
       if (state === "error") {
         aggregate = "error";

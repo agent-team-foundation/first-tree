@@ -1,22 +1,25 @@
-import { randomBytes } from "node:crypto";
 import type {
   AgentType,
   AgentVisibility,
   CreateAgent,
-  CreateAgentToken,
   UpdateAgent,
 } from "@agent-team-foundation/first-tree-hub-shared";
-import { AGENT_STATUSES, AGENT_VISIBILITY } from "@agent-team-foundation/first-tree-hub-shared";
-import { and, count, desc, eq, isNull, lt, ne } from "drizzle-orm";
+import {
+  AGENT_STATUSES,
+  AGENT_VISIBILITY,
+  DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD,
+} from "@agent-team-foundation/first-tree-hub-shared";
+import { and, count, desc, eq, lt, ne } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { adapterAgentMappings } from "../db/schema/adapter-agent-mappings.js";
 import { adapterConfigs } from "../db/schema/adapter-configs.js";
+import { agentConfigs } from "../db/schema/agent-configs.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
-import { agentTokens } from "../db/schema/agent-tokens.js";
 import { agents } from "../db/schema/agents.js";
+import { clients } from "../db/schema/clients.js";
+import { members } from "../db/schema/members.js";
 import { organizations } from "../db/schema/organizations.js";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
-import { hashToken } from "../utils.js";
 import { uuidv7 } from "../uuid.js";
 import { agentVisibilityCondition, type MemberScope } from "./access-control.js";
 import { resolveDefaultOrgId } from "./organization.js";
@@ -42,7 +45,88 @@ function defaultVisibility(type: AgentType): AgentVisibility {
   }
 }
 
-export async function createAgent(db: Database, data: CreateAgent) {
+/**
+ * Resolve + validate the client that will own the new agent.
+ *
+ * Rule (unified-user-token M1):
+ *   - Non-human agents MUST pin a client at creation time. The pinned client
+ *     must belong to the manager's user (Rule R-RUN upstream).
+ *   - Human agents represent the member themselves and have no runtime, so a
+ *     missing `clientId` is allowed and the column stays NULL.
+ */
+async function resolveAgentClient(
+  db: Database,
+  data: { clientId?: string; managerId: string; type: string },
+): Promise<string | null> {
+  if (data.type === "human") {
+    if (data.clientId) {
+      throw new BadRequestError("Human agents cannot be pinned to a client");
+    }
+    return null;
+  }
+
+  if (!data.clientId) {
+    throw new BadRequestError(
+      "clientId is required — every non-human agent must be pinned to a client at creation time. " +
+        "Run `first-tree-hub connect` on the target machine first.",
+    );
+  }
+
+  const [manager] = await db
+    .select({ userId: members.userId })
+    .from(members)
+    .where(eq(members.id, data.managerId))
+    .limit(1);
+  if (!manager) {
+    throw new BadRequestError(`Manager "${data.managerId}" not found`);
+  }
+
+  const [client] = await db
+    .select({ id: clients.id, userId: clients.userId })
+    .from(clients)
+    .where(eq(clients.id, data.clientId))
+    .limit(1);
+  if (!client) {
+    throw new BadRequestError(`Client "${data.clientId}" not found`);
+  }
+
+  if (!client.userId) {
+    throw new BadRequestError(
+      `Client "${data.clientId}" has not been claimed by a user yet. Have the operator run ` +
+        "`first-tree-hub connect` on that machine before pinning an agent to it.",
+    );
+  }
+  if (client.userId !== manager.userId) {
+    throw new ForbiddenError(
+      `Client "${data.clientId}" is not owned by the manager's user — pick a client belonging to that user.`,
+    );
+  }
+
+  return client.id;
+}
+
+/**
+ * Pick the first admin member in the org for internal system agents. Throws
+ * if the org has no admin — the caller should surface the error so an admin
+ * is created before the system tries to register more agents.
+ */
+async function resolveFallbackManagerId(db: Database, orgId: string): Promise<string> {
+  const [row] = await db
+    .select({ id: members.id })
+    .from(members)
+    .where(and(eq(members.organizationId, orgId), eq(members.role, "admin")))
+    .orderBy(members.createdAt)
+    .limit(1);
+  if (!row) {
+    throw new BadRequestError(
+      `Cannot create agent in organization "${orgId}" — no admin member exists. ` +
+        "Create an admin member first (see `first-tree-hub onboard`).",
+    );
+  }
+  return row.id;
+}
+
+export async function createAgent(db: Database, data: CreateAgent & { managerId?: string }) {
   const uuid = uuidv7();
   const name = data.name ?? null;
   if (name?.startsWith(RESERVED_AGENT_NAME_PREFIX)) {
@@ -52,6 +136,18 @@ export async function createAgent(db: Database, data: CreateAgent) {
   }
   const inboxId = `inbox_${uuid}`;
   const orgId = data.organizationId ?? (await resolveDefaultOrgId(db));
+
+  // managerId is NOT NULL at the DB level. Callers (admin API, onboard) pass
+  // the member id directly; internal system callers (github webhook, task
+  // service) omit it, in which case we fall back to the first admin member
+  // in the org — matches the migration backfill strategy.
+  const managerId = data.managerId ?? (await resolveFallbackManagerId(db, orgId));
+
+  const clientId = await resolveAgentClient(db, {
+    clientId: data.clientId,
+    managerId,
+    type: data.type,
+  });
 
   // Check organization-level agent quota.
   // NOTE: TOCTOU race — concurrent requests may both pass the check. Acceptable for Phase 1;
@@ -84,19 +180,29 @@ export async function createAgent(db: Database, data: CreateAgent) {
         type: data.type,
         displayName: data.displayName ?? null,
         delegateMention: data.delegateMention ?? null,
-        profile: data.profile ?? null,
         inboxId,
         source: data.source ?? null,
         visibility: data.visibility ?? defaultVisibility(data.type),
         metadata: data.metadata ?? {},
-        managerId: data.managerId ?? null,
+        managerId,
+        clientId,
       })
       .returning();
 
     if (!agent) throw new Error("Unexpected: INSERT RETURNING produced no row");
+
+    await db
+      .insert(agentConfigs)
+      .values({
+        agentId: agent.uuid,
+        version: 1,
+        payload: DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD,
+        updatedBy: "system",
+      })
+      .onConflictDoNothing();
+
     return agent;
   } catch (err) {
-    // PostgreSQL unique_violation (23505) on UNIQUE(organization_id, name)
     const pgCode = (err as { code?: string })?.code ?? (err as { cause?: { code?: string } })?.cause?.code ?? "";
     if (pgCode === "23505" && name) {
       throw new ConflictError(`Agent name "${name}" already exists in organization "${orgId}"`);
@@ -143,18 +249,18 @@ export async function listAgents(db: Database, orgId: string, limit: number, cur
       type: agents.type,
       displayName: agents.displayName,
       delegateMention: agents.delegateMention,
-      profile: agents.profile,
       inboxId: agents.inboxId,
       status: agents.status,
       cloudUserId: agents.cloudUserId,
       visibility: agents.visibility,
       metadata: agents.metadata,
       managerId: agents.managerId,
+      clientId: agents.clientId,
       createdAt: agents.createdAt,
       updatedAt: agents.updatedAt,
       presenceStatus: agentPresence.status,
-      // M1: runtime fields
-      clientId: agentPresence.clientId,
+      // M1 runtime columns are still materialised on agent_presence. `clientId`
+      // comes from the authoritative agents table (the pinned client).
       runtimeType: agentPresence.runtimeType,
       runtimeState: agentPresence.runtimeState,
       activeSessions: agentPresence.activeSessions,
@@ -199,17 +305,16 @@ export async function listAgentsForMember(
       type: agents.type,
       displayName: agents.displayName,
       delegateMention: agents.delegateMention,
-      profile: agents.profile,
       inboxId: agents.inboxId,
       status: agents.status,
       cloudUserId: agents.cloudUserId,
       visibility: agents.visibility,
       metadata: agents.metadata,
       managerId: agents.managerId,
+      clientId: agents.clientId,
       createdAt: agents.createdAt,
       updatedAt: agents.updatedAt,
       presenceStatus: agentPresence.status,
-      clientId: agentPresence.clientId,
       runtimeType: agentPresence.runtimeType,
       runtimeState: agentPresence.runtimeState,
       activeSessions: agentPresence.activeSessions,
@@ -229,15 +334,41 @@ export async function listAgentsForMember(
 }
 
 export async function updateAgent(db: Database, uuid: string, data: UpdateAgent) {
+  // `clientId` is immutable post-creation in this milestone (unified-user-token
+  // M7). The schema tolerates the field so we can 400 explicitly instead of
+  // silently dropping a caller's update.
+  if (data.clientId !== undefined) {
+    throw new BadRequestError(
+      "clientId is immutable in this milestone — delete and re-create the agent on the target client to move it",
+    );
+  }
+
   const agent = await getAgent(db, uuid);
 
   const updates: Partial<typeof agents.$inferInsert> = { updatedAt: new Date() };
   if (data.type !== undefined) updates.type = data.type;
   if (data.displayName !== undefined) updates.displayName = data.displayName;
   if (data.delegateMention !== undefined) updates.delegateMention = data.delegateMention;
-  if (data.profile !== undefined) updates.profile = data.profile;
   if (data.visibility !== undefined) updates.visibility = data.visibility;
   if (data.metadata !== undefined) updates.metadata = data.metadata;
+
+  if (data.managerId !== undefined) {
+    if (data.managerId === null) {
+      throw new BadRequestError("managerId cannot be cleared — every agent must have a manager");
+    }
+    const [manager] = await db
+      .select({ id: members.id, organizationId: members.organizationId })
+      .from(members)
+      .where(eq(members.id, data.managerId))
+      .limit(1);
+    if (!manager) {
+      throw new BadRequestError(`Manager "${data.managerId}" not found`);
+    }
+    if (manager.organizationId !== agent.organizationId) {
+      throw new BadRequestError("Manager must belong to the same organization as the agent");
+    }
+    updates.managerId = data.managerId;
+  }
 
   const [updated] = await db.update(agents).set(updates).where(eq(agents.uuid, agent.uuid)).returning();
 
@@ -272,7 +403,8 @@ export async function reactivateAgent(db: Database, uuid: string) {
 }
 
 /**
- * Suspend an agent. Revokes all active tokens so the agent can no longer authenticate.
+ * Suspend an agent. Once suspended, Rule R-RUN refuses every runtime bind
+ * and every agent-selector-authorised HTTP call.
  */
 export async function suspendAgent(db: Database, uuid: string) {
   const [agent] = await db
@@ -285,19 +417,12 @@ export async function suspendAgent(db: Database, uuid: string) {
     throw new NotFoundError(`Agent "${uuid}" not found`);
   }
 
-  // Revoke all active tokens
-  await db
-    .update(agentTokens)
-    .set({ revokedAt: new Date() })
-    .where(and(eq(agentTokens.agentId, uuid), isNull(agentTokens.revokedAt)));
-
   return agent;
 }
 
 /**
- * Delete an agent. Only allowed when status is "suspended".
- * Suspend the agent first to revoke tokens, then delete.
- * Sets name to NULL to release the name for reuse.
+ * Delete an agent. Only allowed when status is "suspended". Sets name to NULL
+ * so the name becomes reusable.
  */
 export async function deleteAgent(db: Database, uuid: string) {
   const [existing] = await db
@@ -312,185 +437,16 @@ export async function deleteAgent(db: Database, uuid: string) {
     throw new BadRequestError("Only suspended agents can be deleted. Suspend the agent first.");
   }
 
-  // 1. Set status to deleted, release name
   const [agent] = await db
     .update(agents)
     .set({ status: AGENT_STATUSES.DELETED, name: null, updatedAt: new Date() })
     .where(eq(agents.uuid, uuid))
     .returning();
 
-  // 2. Revoke all active tokens (may already be revoked by suspend, but be safe)
-  await db
-    .update(agentTokens)
-    .set({ revokedAt: new Date() })
-    .where(and(eq(agentTokens.agentId, uuid), isNull(agentTokens.revokedAt)));
-
-  // 3. Clean up adapter bindings (bot credentials + user mappings)
+  // Clean up adapter bindings (bot credentials + user mappings)
   await db.delete(adapterConfigs).where(eq(adapterConfigs.agentId, uuid));
   await db.delete(adapterAgentMappings).where(eq(adapterAgentMappings.agentId, uuid));
 
   if (!agent) throw new Error("Unexpected: UPDATE RETURNING produced no row");
   return agent;
-}
-
-/**
- * Bootstrap a token for an agent using GitHub identity.
- * If the agent does not exist, it is auto-created with the GitHub user as owner.
- * Only works when the agent has no active (non-revoked, non-expired) tokens.
- */
-export type BootstrapOptions = {
-  tokenName?: string;
-  type?: string;
-  displayName?: string;
-  delegateMention?: string;
-  profile?: string;
-  metadata?: Record<string, unknown>;
-};
-
-export async function bootstrapToken(
-  db: Database,
-  agentName: string,
-  orgId: string,
-  githubUsername: string,
-  options?: BootstrapOptions,
-) {
-  // 1. Get or create agent
-  let agent: { uuid: string; metadata: Record<string, unknown> | null };
-  try {
-    agent = await getAgentByName(db, orgId, agentName);
-  } catch (err) {
-    if (err instanceof NotFoundError) {
-      // Auto-create agent with the GitHub user as owner
-      const metadata = { ...options?.metadata, owners: [githubUsername] };
-      agent = await createAgent(db, {
-        name: agentName,
-        type: (options?.type as "human" | "personal_assistant" | "autonomous_agent") ?? "autonomous_agent",
-        displayName: options?.displayName ?? agentName,
-        delegateMention: options?.delegateMention,
-        profile: options?.profile,
-        organizationId: orgId,
-        source: "bootstrap",
-        metadata,
-      });
-    } else {
-      throw err;
-    }
-  }
-
-  // 2. Check agent has owners in metadata
-  const owners: string[] = Array.isArray(agent.metadata?.owners) ? (agent.metadata.owners as string[]) : [];
-  if (!owners.includes(githubUsername)) {
-    throw new ForbiddenError(`GitHub user "${githubUsername}" is not in the owners list for agent "${agentName}"`);
-  }
-
-  // 3. Check no active tokens exist (non-revoked = active for bootstrap purposes)
-  const activeTokens = await db
-    .select({ id: agentTokens.id })
-    .from(agentTokens)
-    .where(and(eq(agentTokens.agentId, agent.uuid), isNull(agentTokens.revokedAt)));
-
-  if (activeTokens.length > 0) {
-    throw new ConflictError(
-      `Agent "${agentName}" already has ${activeTokens.length} active token(s). Revoke all tokens first to re-bootstrap.`,
-    );
-  }
-
-  // 4. Create token
-  return createToken(db, agent.uuid, { name: options?.tokenName ?? "bootstrap" });
-}
-
-/**
- * Check if a GitHub user belongs to a specific organization.
- */
-export async function checkGitHubOrgMembership(githubToken: string, org: string): Promise<boolean> {
-  const res = await fetch(`https://api.github.com/user/orgs`, {
-    headers: {
-      Authorization: `Bearer ${githubToken}`,
-      Accept: "application/vnd.github+json",
-    },
-  });
-  if (!res.ok) return false;
-  const orgs = (await res.json()) as Array<{ login: string }>;
-  return orgs.some((o) => o.login.toLowerCase() === org.toLowerCase());
-}
-
-/**
- * Resolve the human agent linked to an admin user.
- * Temporary M1 mapping: looks for a human agent whose cloudUserId matches the admin's id.
- * Will be replaced by a proper user↔agent FK once the user system refactor lands.
- */
-export async function resolveAdminAgent(db: Database, adminId: string) {
-  const [agent] = await db
-    .select({ uuid: agents.uuid, organizationId: agents.organizationId, name: agents.name })
-    .from(agents)
-    .where(and(eq(agents.cloudUserId, adminId), eq(agents.type, "human"), ne(agents.status, AGENT_STATUSES.DELETED)))
-    .limit(1);
-
-  if (!agent) {
-    throw new NotFoundError(
-      `No human agent linked to admin "${adminId}". Create a human agent with cloudUserId set to the admin user id.`,
-    );
-  }
-  return agent;
-}
-
-export async function createToken(db: Database, agentUuid: string, data: CreateAgentToken) {
-  // Verify agent exists
-  await getAgent(db, agentUuid);
-
-  const raw = `aghub_${randomBytes(32).toString("hex")}`;
-  const tokenHash = hashToken(raw);
-  const tokenId = uuidv7();
-
-  const [token] = await db
-    .insert(agentTokens)
-    .values({
-      id: tokenId,
-      agentId: agentUuid,
-      tokenHash,
-      name: data.name ?? null,
-      expiresAt: data.expiresAt ? new Date(data.expiresAt) : null,
-    })
-    .returning();
-
-  if (!token) throw new Error("Unexpected: INSERT RETURNING produced no row");
-  return {
-    id: token.id,
-    agentId: token.agentId,
-    name: token.name,
-    expiresAt: token.expiresAt,
-    revokedAt: token.revokedAt,
-    createdAt: token.createdAt,
-    lastUsedAt: token.lastUsedAt,
-    token: raw,
-  };
-}
-
-export async function listTokens(db: Database, agentUuid: string) {
-  return db
-    .select({
-      id: agentTokens.id,
-      agentId: agentTokens.agentId,
-      name: agentTokens.name,
-      expiresAt: agentTokens.expiresAt,
-      revokedAt: agentTokens.revokedAt,
-      createdAt: agentTokens.createdAt,
-      lastUsedAt: agentTokens.lastUsedAt,
-    })
-    .from(agentTokens)
-    .where(eq(agentTokens.agentId, agentUuid))
-    .orderBy(desc(agentTokens.createdAt));
-}
-
-export async function revokeToken(db: Database, agentUuid: string, tokenId: string) {
-  const [token] = await db
-    .update(agentTokens)
-    .set({ revokedAt: new Date() })
-    .where(and(eq(agentTokens.id, tokenId), eq(agentTokens.agentId, agentUuid), isNull(agentTokens.revokedAt)))
-    .returning();
-
-  if (!token) {
-    throw new NotFoundError("Token not found or already revoked");
-  }
-  return token;
 }

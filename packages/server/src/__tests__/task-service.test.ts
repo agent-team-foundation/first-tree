@@ -102,10 +102,13 @@ describe("Task service", () => {
       .insert(organizations)
       .values({ id: altOrgId, name: `alt-${Date.now()}`, displayName: "Alt" })
       .onConflictDoNothing();
+    // Use human type to avoid the R-RUN client pin requirement — this test
+    // is about cross-org assignee rejection, not runtime pinning.
     const foreignAgent = await createAgent(app.db, {
       name: "foreign-agent",
-      type: "autonomous_agent",
+      type: "human",
       organizationId: altOrgId,
+      managerId: creator.managerId ?? undefined,
     });
 
     await expect(

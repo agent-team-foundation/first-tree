@@ -50,7 +50,10 @@ export async function createMember(db: Database, orgId: string, data: CreateMemb
       });
     }
 
-    // Create human agent for this member
+    // Compute the member id up-front so we can set `agents.manager_id` to it
+    // at insert time (managerId is NOT NULL since the unified-user-token
+    // milestone). The human agent self-manages.
+    const memberId = uuidv7();
     const agentName = data.username.replace(/[^a-z0-9_-]/gi, "-").toLowerCase();
     const agent = await createAgent(tx as unknown as Database, {
       name: agentName,
@@ -58,10 +61,9 @@ export async function createMember(db: Database, orgId: string, data: CreateMemb
       displayName: data.displayName,
       organizationId: orgId,
       source: "admin-api",
+      managerId: memberId,
     });
 
-    // Create member
-    const memberId = uuidv7();
     const [member] = await tx
       .insert(members)
       .values({
@@ -74,9 +76,6 @@ export async function createMember(db: Database, orgId: string, data: CreateMemb
       .returning();
 
     if (!member) throw new Error("Unexpected: INSERT RETURNING produced no row");
-
-    // Set manager_id on the human agent to point to this member
-    await tx.update(agents).set({ managerId: memberId }).where(eq(agents.uuid, agent.uuid));
 
     return {
       id: member.id,
@@ -162,8 +161,21 @@ export async function deleteMember(db: Database, id: string) {
     await assertNotLastAdmin(db, member.organizationId, id);
   }
 
-  // Clear managerId on any agents managed by this member (not just their human agent)
-  await db.update(agents).set({ managerId: null }).where(eq(agents.managerId, id));
+  // Reassign every agent managed by this member to another admin in the org.
+  // managerId is NOT NULL after the unified-user-token milestone, so we can
+  // never clear it — a sibling admin takes over (assertNotLastAdmin above
+  // guarantees at least one remains).
+  const [fallback] = await db
+    .select({ id: members.id })
+    .from(members)
+    .where(and(eq(members.organizationId, member.organizationId), eq(members.role, "admin"), ne(members.id, id)))
+    .limit(1);
+  if (!fallback) {
+    throw new ConflictError(
+      `Cannot delete member "${id}" — another admin must exist in the organization to inherit their agents.`,
+    );
+  }
+  await db.update(agents).set({ managerId: fallback.id }).where(eq(agents.managerId, id));
 
   // Mark the member's human agent as deleted
   await db.update(agents).set({ status: "deleted", name: null }).where(eq(agents.uuid, member.agentId));

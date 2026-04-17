@@ -49,3 +49,42 @@ export function decryptCredentials(encryptedBase64: string, keyEncoded: string):
   const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
   return JSON.parse(decrypted.toString("utf8")) as unknown;
 }
+
+/** Marker prefix that lets `decryptValue` distinguish ciphertext from plaintext. */
+const VALUE_CIPHER_PREFIX = "enc:v1:";
+
+/**
+ * Encrypt a single string value with AES-256-GCM (field-level, not whole-object).
+ * Used for sensitive env entries inside agent runtime config.
+ */
+export function encryptValue(plain: string, keyEncoded: string): string {
+  const key = parseKey(keyEncoded);
+  const iv = randomBytes(IV_LENGTH);
+  const cipher = createCipheriv(ALGORITHM, key, iv);
+  const encrypted = Buffer.concat([cipher.update(plain, "utf8"), cipher.final()]);
+  const authTag = cipher.getAuthTag();
+  const combined = Buffer.concat([iv, authTag, encrypted]);
+  return `${VALUE_CIPHER_PREFIX}${combined.toString("base64")}`;
+}
+
+/**
+ * Decrypt a value previously produced by `encryptValue`. Returns `cipher`
+ * unchanged if it is missing the cipher prefix — useful for graceful
+ * coexistence with plaintext values during initial backfill.
+ */
+export function decryptValue(cipher: string, keyEncoded: string): string {
+  if (!cipher.startsWith(VALUE_CIPHER_PREFIX)) return cipher;
+  const key = parseKey(keyEncoded);
+  const combined = Buffer.from(cipher.slice(VALUE_CIPHER_PREFIX.length), "base64");
+  const iv = combined.subarray(0, IV_LENGTH);
+  const authTag = combined.subarray(IV_LENGTH, IV_LENGTH + AUTH_TAG_LENGTH);
+  const ciphertext = combined.subarray(IV_LENGTH + AUTH_TAG_LENGTH);
+  const decipher = createDecipheriv(ALGORITHM, key, iv);
+  decipher.setAuthTag(authTag);
+  const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+  return decrypted.toString("utf8");
+}
+
+export function isEncryptedValue(s: string): boolean {
+  return s.startsWith(VALUE_CIPHER_PREFIX);
+}

@@ -2,111 +2,99 @@ import { join } from "node:path";
 import type { InboxEntryWithMessage, RuntimeState, SessionState } from "@agent-team-foundation/first-tree-hub-shared";
 import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
 import type { ClientConnection } from "../client-connection.js";
-import { AgentConnection } from "../connection.js";
 import type { RegisterResult } from "../sdk.js";
+import { type AgentConfigCache, createAgentConfigCache } from "./agent-config-cache.js";
 import type { SessionConfig } from "./config.js";
+import { createGitMirrorManager } from "./git-mirror-manager.js";
 import type { HandlerFactory } from "./handler.js";
 import { SessionManager } from "./session-manager.js";
 
 export type AgentSlotConfig = {
   name: string;
+  /** Agent UUID (from agent.yaml) — sent as X-Agent-Id on every HTTP call. */
+  agentId: string;
   serverUrl: string;
-  token: string;
   type: string;
   handlerFactory: HandlerFactory;
   session: SessionConfig;
   concurrency: number;
-  /** Shared client connection for multiplexed mode. */
-  clientConnection?: ClientConnection;
-  /** Runtime type for activity reporting. */
+  /** Shared client connection (always present in unified-user-token milestone). */
+  clientConnection: ClientConnection;
   runtimeType?: string;
-  /** Runtime version for activity reporting. */
   runtimeVersion?: string;
 };
 
+type ConnectionListener =
+  | { event: "agent:message"; fn: (agentId: string, data: unknown) => void }
+  | { event: "agent:bound"; fn: (agent: { agentId: string }) => void }
+  | { event: "session:command"; fn: (cmd: { agentId: string; chatId: string; type: string }) => void };
+
 export class AgentSlot {
-  private readonly legacyConnection: AgentConnection | null;
-  private readonly clientConnection: ClientConnection | null;
   private sessionManager: SessionManager | null = null;
   private readonly config: AgentSlotConfig;
   private readonly logFn: (msg: string) => void;
-  private agentId: string | null = null;
   private sdk: import("../sdk.js").FirstTreeHubSDK | null = null;
+  private agentConfigCache: AgentConfigCache | null = null;
   private pollingTimer: ReturnType<typeof setInterval> | null = null;
-  private boundListeners: Array<{ event: string; fn: (...args: unknown[]) => void }> = [];
+  private listeners: ConnectionListener[] = [];
 
   constructor(config: AgentSlotConfig) {
     this.config = config;
     this.logFn = (msg: string) => {
       process.stderr.write(`[${config.name}] ${msg}\n`);
     };
+  }
 
-    if (config.clientConnection) {
-      this.clientConnection = config.clientConnection;
-      this.legacyConnection = null;
-    } else {
-      this.legacyConnection = new AgentConnection({
-        serverUrl: config.serverUrl,
-        token: config.token,
-      });
-      this.clientConnection = null;
-
-      this.legacyConnection.on("connected", () => this.logFn("Connected"));
-      this.legacyConnection.on("reconnecting", (attempt) => this.logFn(`Reconnecting (attempt ${attempt})...`));
-      this.legacyConnection.on("error", (err) => this.logFn(`Error: ${err.message}`));
-    }
+  private get clientConnection(): ClientConnection {
+    return this.config.clientConnection;
   }
 
   async start(contextTreePath?: string | null): Promise<RegisterResult> {
-    let agent: RegisterResult;
-    let sdk: import("../sdk.js").FirstTreeHubSDK;
+    const bound = await this.clientConnection.bindAgent(
+      this.config.agentId,
+      this.config.runtimeType ?? this.config.type,
+      this.config.runtimeVersion,
+    );
+    const sdk = bound.sdk;
+    this.sdk = sdk;
+    const agent = await sdk.register();
 
-    if (this.clientConnection) {
-      const bound = await this.clientConnection.bindAgent(
-        this.config.token,
-        this.config.runtimeType ?? this.config.type,
-        this.config.runtimeVersion,
-      );
-      this.agentId = bound.agentId;
-      sdk = bound.sdk;
-      this.sdk = sdk;
-      agent = await sdk.register();
+    this.logFn(`Bound as ${agent.displayName ?? agent.agentId} (${agent.agentId})`);
 
-      this.logFn(`Bound as ${agent.displayName ?? agent.agentId} (${agent.agentId})`);
-    } else {
-      const conn = this.legacyConnection as AgentConnection;
-      agent = await conn.connect();
-      this.agentId = agent.agentId;
-      sdk = conn.sdk;
-
-      this.logFn(`Registered as ${agent.displayName ?? agent.agentId} (${agent.agentId})`);
-    }
-
-    // Defensive check: if server reports this is a human agent, skip message
-    // processing entirely — prevents infinite reply loops even if the agent
-    // was misconfigured into the agents/ directory with a runtime handler.
     if (agent.type === "human") {
       this.logFn("Server reports type=human — message processing disabled");
       return agent;
     }
 
-    // Register event listeners AFTER the human check to avoid unnecessary polling
-    if (this.clientConnection) {
-      const onMessage = (agentId: string) => {
-        if (agentId === this.agentId) this.pullAndDispatch();
-      };
-      const onBound = (boundAgent: { agentId: string }) => {
-        if (boundAgent.agentId === this.agentId) this.fullStateSync();
-      };
-      this.clientConnection.on("agent:message", onMessage);
-      this.clientConnection.on("agent:bound", onBound);
-      this.boundListeners.push(
-        { event: "agent:message", fn: onMessage as (...args: unknown[]) => void },
-        { event: "agent:bound", fn: onBound as (...args: unknown[]) => void },
-      );
+    this.agentConfigCache = createAgentConfigCache({ sdk, log: this.logFn });
+    try {
+      const cfg = await this.agentConfigCache.refresh(agent.agentId);
+      this.logFn(`Loaded runtime config v${cfg.version}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logFn(`Failed to fetch agent config — bind aborted: ${msg}`);
+      throw new Error(`Hub unreachable while loading agent config: ${msg}`);
     }
 
+    const onMessage = (agentId: string) => {
+      if (agentId === this.config.agentId) this.pullAndDispatch();
+    };
+    const onBound = (boundAgent: { agentId: string }) => {
+      if (boundAgent.agentId === this.config.agentId) this.fullStateSync();
+    };
+    this.clientConnection.on("agent:message", onMessage);
+    this.clientConnection.on("agent:bound", onBound);
+    this.listeners.push({ event: "agent:message", fn: onMessage }, { event: "agent:bound", fn: onBound });
+
     const registryPath = join(DEFAULT_DATA_DIR, "sessions", `${this.config.name}.json`);
+
+    // Shared bare-mirror root across all agents of this client runtime — the
+    // directory layout hashes by URL so concurrent agents on the same repo
+    // reuse the same mirror (PRD §5.1.5).
+    const gitMirrorManager = createGitMirrorManager({
+      dataDir: DEFAULT_DATA_DIR,
+      log: (event, fields) => this.logFn(`git[${event}] ${JSON.stringify(fields)}`),
+    });
 
     this.sessionManager = new SessionManager({
       session: this.config.session,
@@ -115,44 +103,35 @@ export class AgentSlot {
       handlerConfig: {
         workspaceRoot: join(DEFAULT_DATA_DIR, "workspaces", this.config.name),
         contextTreePath: contextTreePath ?? undefined,
+        gitMirrorManager,
       },
       agentIdentity: {
         agentId: agent.agentId,
         displayName: agent.displayName,
         type: agent.type,
         delegateMention: agent.delegateMention,
-        profile: agent.profile,
         metadata: agent.metadata,
       },
       sdk,
       log: this.logFn,
       registryPath,
-      onStateChange: this.clientConnection ? (chatId, state) => this.reportSessionState(chatId, state) : undefined,
-      onRuntimeStateChange: this.clientConnection ? (state) => this.reportRuntimeState(state) : undefined,
-      onSessionOutput: this.clientConnection
-        ? (chatId, content) => this.reportSessionOutput(chatId, content)
-        : undefined,
+      agentConfigCache: this.agentConfigCache,
+      onStateChange: (chatId, state) => this.reportSessionState(chatId, state),
+      onRuntimeStateChange: (state) => this.reportRuntimeState(state),
+      onSessionOutput: (chatId, content) => this.reportSessionOutput(chatId, content),
     });
 
-    if (this.clientConnection) {
-      // Listen for session commands from server (suspend/resume/terminate)
-      const onCommand = (cmd: { agentId: string; chatId: string; type: string }) => {
-        if (cmd.agentId === this.agentId && this.sessionManager) {
-          this.sessionManager.handleCommand(cmd.chatId, cmd.type as "session:suspend").catch((err) => {
-            this.logFn(`Session command error: ${err instanceof Error ? err.message : String(err)}`);
-          });
-        }
-      };
-      this.clientConnection.on("session:command", onCommand);
-      this.boundListeners.push({ event: "session:command", fn: onCommand as (...args: unknown[]) => void });
+    const onCommand = (cmd: { agentId: string; chatId: string; type: string }) => {
+      if (cmd.agentId === this.config.agentId && this.sessionManager) {
+        this.sessionManager.handleCommand(cmd.chatId, cmd.type as "session:suspend").catch((err) => {
+          this.logFn(`Session command error: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      }
+    };
+    this.clientConnection.on("session:command", onCommand);
+    this.listeners.push({ event: "session:command", fn: onCommand });
 
-      this.startPolling();
-    } else {
-      const conn = this.legacyConnection as AgentConnection;
-      conn.onMessage(async (entry: InboxEntryWithMessage) => {
-        await this.sessionManager?.dispatch(entry);
-      });
-    }
+    this.startPolling();
 
     return agent;
   }
@@ -162,48 +141,37 @@ export class AgentSlot {
       clearInterval(this.pollingTimer);
       this.pollingTimer = null;
     }
-    // Remove all registered listeners to prevent accumulation on restart
-    if (this.clientConnection) {
-      for (const { event, fn } of this.boundListeners) {
-        (this.clientConnection as unknown as { removeListener(e: string, f: unknown): void }).removeListener(event, fn);
-      }
-      this.boundListeners = [];
+    for (const entry of this.listeners) {
+      if (entry.event === "agent:message") this.clientConnection.off(entry.event, entry.fn);
+      else if (entry.event === "agent:bound") this.clientConnection.off(entry.event, entry.fn);
+      else this.clientConnection.off(entry.event, entry.fn);
     }
-    if (this.clientConnection && this.agentId) {
-      await this.clientConnection.unbindAgent(this.agentId);
-    }
+    this.listeners = [];
+    await this.clientConnection.unbindAgent(this.config.agentId);
     await this.sessionManager?.shutdown();
-    if (this.legacyConnection) {
-      await this.legacyConnection.disconnect();
-    }
     this.logFn("Stopped");
   }
 
   private reportSessionState(chatId: string, state: SessionState): void {
-    if (!this.clientConnection || !this.agentId) return;
-    this.clientConnection.reportSessionState(this.agentId, chatId, state);
+    this.clientConnection.reportSessionState(this.config.agentId, chatId, state);
   }
 
   private reportRuntimeState(state: RuntimeState): void {
-    if (!this.clientConnection || !this.agentId) return;
-    this.clientConnection.reportRuntimeState(this.agentId, state);
+    this.clientConnection.reportRuntimeState(this.config.agentId, state);
   }
 
   private reportSessionOutput(chatId: string, content: string): void {
-    if (!this.clientConnection || !this.agentId) return;
-    this.clientConnection.reportSessionOutput(this.agentId, chatId, content);
+    this.clientConnection.reportSessionOutput(this.config.agentId, chatId, content);
   }
 
   private fullStateSync(): void {
-    if (!this.sessionManager || !this.clientConnection || !this.agentId) return;
-    // Re-sync per-session states
+    if (!this.sessionManager) return;
     for (const { chatId, state } of this.sessionManager.getSessionStates()) {
-      this.clientConnection.reportSessionState(this.agentId, chatId, state);
+      this.clientConnection.reportSessionState(this.config.agentId, chatId, state);
     }
-    // Re-sync aggregate runtime state so server doesn't hold stale value
     const runtimeState = this.sessionManager.getAggregateRuntimeState();
     if (runtimeState) {
-      this.clientConnection.reportRuntimeState(this.agentId, runtimeState);
+      this.clientConnection.reportRuntimeState(this.config.agentId, runtimeState);
     }
   }
 
@@ -215,14 +183,16 @@ export class AgentSlot {
   }
 
   private async pullAndDispatch(): Promise<void> {
-    if (!this.sdk) return;
+    if (!this.sdk || !this.sessionManager) return;
     try {
       const { entries } = await this.sdk.pull(10);
       for (const entry of entries) {
-        await this.sessionManager?.dispatch(entry);
+        await this.sessionManager.dispatch(entry);
       }
-    } catch {
-      // ignore polling errors
+    } catch (err) {
+      this.logFn(`Poll error: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 }
+
+export type { InboxEntryWithMessage };

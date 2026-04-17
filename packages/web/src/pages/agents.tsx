@@ -4,8 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router";
-import { createAgent, listAgents, provisionAgent } from "../api/agents.js";
-import { createToken } from "../api/tokens.js";
+import { createAgent, listAgents } from "../api/agents.js";
 import { useAuth } from "../auth/auth-context.js";
 import { type AgentFormData, AgentFormDialog } from "../components/agent-form-dialog.js";
 import { Badge } from "../components/ui/badge.js";
@@ -33,11 +32,7 @@ export function AgentsPage() {
   const [cursor, setCursor] = useState<string | undefined>();
   const [typeFilter, setTypeFilter] = useState<string>("");
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
-  const [createdAgent, setCreatedAgent] = useState<{
-    agent: Agent;
-    token: string | null;
-    provisioned: boolean;
-  } | null>(null);
+  const [createdAgent, setCreatedAgent] = useState<Agent | null>(null);
   const [copied, setCopied] = useState(false);
   const resolveAgentName = useAgentNameMap();
   const resolveMemberName = useMemberNameMap();
@@ -68,36 +63,21 @@ export function AgentsPage() {
         type: formData.type,
         displayName: formData.displayName ?? undefined,
         delegateMention: formData.delegateMention ?? undefined,
+        managerId: formData.managerId ?? undefined,
+        clientId: formData.clientId ?? undefined,
       });
-      // Human agents don't need CLI tokens or provisioning
-      if (formData.type === "human") {
-        return { agent, token: null, provisioned: false };
-      }
-
-      // If a client is selected, provision directly (server pushes token to client)
-      if (formData.clientId) {
-        await provisionAgent(agent.uuid, formData.clientId);
-        return { agent, token: null, provisioned: true };
-      }
-
-      // No client selected — generate token for manual binding
-      const tokenResult = await createToken(agent.uuid, { name: "default" });
-      return { agent, token: tokenResult.token, provisioned: false };
+      return agent;
     },
-    onSuccess: ({ agent, token, provisioned }) => {
+    onSuccess: (agent) => {
       setCreateDialogOpen(false);
       queryClient.invalidateQueries({ queryKey: ["agents"] });
       queryClient.invalidateQueries({ queryKey: ["activity"] });
-      if (provisioned) {
-        // Agent was provisioned to client — go directly to detail page
+      if (agent.type === "human") {
         navigate(`/agents/${agent.uuid}`);
-      } else if (token) {
-        // Show token for manual binding
-        setCreatedAgent({ agent, token, provisioned: false });
-        setCopied(false);
-      } else {
-        navigate(`/agents/${agent.uuid}`);
+        return;
       }
+      setCreatedAgent(agent);
+      setCopied(false);
     },
   });
 
@@ -139,8 +119,11 @@ export function AgentsPage() {
     );
   }
 
-  const agentAddCommand = createdAgent?.token
-    ? `first-tree-hub agent add ${createdAgent.agent.name ?? createdAgent.agent.uuid} --token ${createdAgent.token}`
+  // The post-creation dialog shows the operator how to wire up the pinned
+  // client: `agent add --agent-id <uuid>` replaces the old token-based
+  // `--token` flag now that agents no longer carry bearer tokens.
+  const agentAddCommand = createdAgent
+    ? `first-tree-hub agent add ${createdAgent.name ?? createdAgent.uuid} --agent-id ${createdAgent.uuid}`
     : "";
 
   const handleCopy = () => {
@@ -151,7 +134,6 @@ export function AgentsPage() {
 
   return (
     <div className="space-y-8">
-      {/* Page header with type filter */}
       <div className="flex items-center gap-4">
         <h1 className="text-2xl font-semibold">Agents</h1>
         <select
@@ -179,7 +161,6 @@ export function AgentsPage() {
         </div>
       ) : (
         <>
-          {/* My Agents */}
           <section>
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-lg font-medium">My Agents</h2>
@@ -217,7 +198,6 @@ export function AgentsPage() {
             </div>
           </section>
 
-          {/* Team Agents */}
           {teamAgents.length > 0 && (
             <section>
               <h2 className="text-lg font-medium mb-3">Team Agents</h2>
@@ -260,12 +240,11 @@ export function AgentsPage() {
         error={createMutation.error instanceof Error ? createMutation.error : null}
       />
 
-      {/* CLI command dialog — shown once after non-human agent creation */}
       <Dialog
         open={createdAgent !== null}
         onOpenChange={(open) => {
           if (!open) {
-            const uuid = createdAgent?.agent.uuid;
+            const uuid = createdAgent?.uuid;
             setCreatedAgent(null);
             if (uuid) navigate(`/agents/${uuid}`);
           }
@@ -277,7 +256,8 @@ export function AgentsPage() {
           </DialogHeader>
           <div className="space-y-3">
             <p className="text-sm text-muted-foreground">
-              Run this command in your terminal to bind the agent to your client:
+              Run this on the pinned client machine to register a local alias; the client connects with your JWT, not a
+              per-agent token.
             </p>
             <div className="flex items-center gap-2">
               <code className="flex-1 bg-muted rounded-md px-3 py-2 text-xs font-mono break-all select-all">
@@ -287,12 +267,11 @@ export function AgentsPage() {
                 {copied ? <Check className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
               </Button>
             </div>
-            <p className="text-xs text-muted-foreground">Copy this token now. It will not be shown again.</p>
           </div>
           <DialogFooter>
             <Button
               onClick={() => {
-                const uuid = createdAgent?.agent.uuid;
+                const uuid = createdAgent?.uuid;
                 setCreatedAgent(null);
                 if (uuid) navigate(`/agents/${uuid}`);
               }}

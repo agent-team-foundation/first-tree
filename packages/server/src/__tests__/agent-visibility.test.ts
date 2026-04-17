@@ -1,14 +1,16 @@
 import type { FastifyInstance } from "fastify";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { createAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
-import { createTestAdmin, useTestApp } from "./helpers.js";
+import { createAdminContext, seedClient, useTestApp } from "./helpers.js";
 
 /**
- * Helper: create an admin user + return a request function bound to their JWT.
+ * Helper: create an admin user + owned client, returning a request function
+ * bound to their JWT and the seeded client id (used when createAgent needs a
+ * pinned client).
  */
 async function authedRequest(app: FastifyInstance, username?: string) {
-  const admin = await createTestAdmin(app, {
+  const admin = await createAdminContext(app, {
     username: username ?? `vis-admin-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
   });
   return {
@@ -59,31 +61,58 @@ async function createMemberAndLogin(
   };
 }
 
+// Shared default-org admin + client so tests calling createAgent without
+// explicit managerId/clientId still get a valid pin after M1 Rule R-RUN.
+let fallback: { memberId: string; clientId: string };
+
+async function seedClientForMember(app: FastifyInstance, memberId: string): Promise<string> {
+  const { members } = await import("../db/schema/members.js");
+  const { eq } = await import("drizzle-orm");
+  const [row] = await app.db.select({ userId: members.userId }).from(members).where(eq(members.id, memberId)).limit(1);
+  if (!row) throw new Error(`member "${memberId}" not found`);
+  return seedClient(app, row.userId);
+}
+
+async function seedAgent(app: FastifyInstance, data: Parameters<typeof createAgent>[1]) {
+  const managerId = data.managerId ?? fallback.memberId;
+  let clientId = data.clientId;
+  if (!clientId && data.type !== "human") {
+    clientId = managerId === fallback.memberId ? fallback.clientId : await seedClientForMember(app, managerId);
+  }
+  return createAgent(app.db, { ...data, managerId, clientId });
+}
+
 describe("Agent Visibility", () => {
   const getApp = useTestApp();
+
+  beforeEach(async () => {
+    fallback = await createAdminContext(getApp(), {
+      username: `vis-fb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    });
+  });
 
   describe("default visibility by type", () => {
     it("human agents default to organization visibility", async () => {
       const app = getApp();
-      const agent = await createAgent(app.db, { name: "vis-human", type: "human" });
+      const agent = await seedAgent(app, { name: "vis-human", type: "human" });
       expect(agent.visibility).toBe("organization");
     });
 
     it("autonomous_agent defaults to organization visibility", async () => {
       const app = getApp();
-      const agent = await createAgent(app.db, { name: "vis-auto", type: "autonomous_agent" });
+      const agent = await seedAgent(app, { name: "vis-auto", type: "autonomous_agent" });
       expect(agent.visibility).toBe("organization");
     });
 
     it("personal_assistant defaults to private visibility", async () => {
       const app = getApp();
-      const agent = await createAgent(app.db, { name: "vis-pa", type: "personal_assistant" });
+      const agent = await seedAgent(app, { name: "vis-pa", type: "personal_assistant" });
       expect(agent.visibility).toBe("private");
     });
 
     it("explicit visibility overrides default", async () => {
       const app = getApp();
-      const agent = await createAgent(app.db, {
+      const agent = await seedAgent(app, {
         name: "vis-override",
         type: "personal_assistant",
         visibility: "organization",
@@ -102,9 +131,9 @@ describe("Agent Visibility", () => {
       const adminMemberId = meRes.json<{ member: { id: string } }>().member.id;
 
       // Create agents: org-visible, admin's private, unowned private
-      await createAgent(app.db, { name: "admin-see-org", type: "autonomous_agent" });
-      await createAgent(app.db, { name: "admin-see-own-priv", type: "personal_assistant", managerId: adminMemberId });
-      await createAgent(app.db, { name: "admin-hidden-priv", type: "personal_assistant" });
+      await seedAgent(app, { name: "admin-see-org", type: "autonomous_agent" });
+      await seedAgent(app, { name: "admin-see-own-priv", type: "personal_assistant", managerId: adminMemberId });
+      await seedAgent(app, { name: "admin-hidden-priv", type: "personal_assistant" });
 
       const res = await adminReq("GET", "/api/v1/admin/agents?limit=100");
       expect(res.statusCode).toBe(200);
@@ -121,13 +150,13 @@ describe("Agent Visibility", () => {
       const member = await createMemberAndLogin(app, admin);
 
       // Create agents: one org-visible, one private managed by this member, one private managed by admin
-      await createAgent(app.db, { name: "member-see-org", type: "autonomous_agent" });
-      await createAgent(app.db, {
+      await seedAgent(app, { name: "member-see-org", type: "autonomous_agent" });
+      await seedAgent(app, {
         name: "member-see-my",
         type: "personal_assistant",
         managerId: member.memberId,
       });
-      await createAgent(app.db, {
+      await seedAgent(app, {
         name: "member-hidden",
         type: "personal_assistant",
       });
@@ -149,7 +178,7 @@ describe("Agent Visibility", () => {
       const admin = await authedRequest(app);
       const member = await createMemberAndLogin(app, admin);
 
-      const privateAgent = await createAgent(app.db, {
+      const privateAgent = await seedAgent(app, {
         name: "no-access-priv",
         type: "personal_assistant",
       });
@@ -163,7 +192,7 @@ describe("Agent Visibility", () => {
       const admin = await authedRequest(app);
       const member = await createMemberAndLogin(app, admin);
 
-      const orgAgent = await createAgent(app.db, { name: "access-org", type: "autonomous_agent" });
+      const orgAgent = await seedAgent(app, { name: "access-org", type: "autonomous_agent" });
 
       const res = await member.req("GET", `/api/v1/admin/agents/${orgAgent.uuid}`);
       expect(res.statusCode).toBe(200);
@@ -174,7 +203,7 @@ describe("Agent Visibility", () => {
       const admin = await authedRequest(app);
       const member = await createMemberAndLogin(app, admin);
 
-      const myAgent = await createAgent(app.db, {
+      const myAgent = await seedAgent(app, {
         name: "access-my-priv",
         type: "personal_assistant",
         managerId: member.memberId,
@@ -191,7 +220,7 @@ describe("Agent Visibility", () => {
       const admin = await authedRequest(app);
       const member = await createMemberAndLogin(app, admin);
 
-      const myAgent = await createAgent(app.db, {
+      const myAgent = await seedAgent(app, {
         name: "patch-my",
         type: "personal_assistant",
         managerId: member.memberId,
@@ -209,7 +238,7 @@ describe("Agent Visibility", () => {
       const admin = await authedRequest(app);
       const member = await createMemberAndLogin(app, admin);
 
-      const otherAgent = await createAgent(app.db, {
+      const otherAgent = await seedAgent(app, {
         name: "patch-other",
         type: "autonomous_agent",
       });
@@ -224,7 +253,7 @@ describe("Agent Visibility", () => {
       const app = getApp();
       const { req: adminReq } = await authedRequest(app);
 
-      const agent = await createAgent(app.db, {
+      const agent = await seedAgent(app, {
         name: "patch-admin",
         type: "autonomous_agent",
       });
@@ -242,7 +271,7 @@ describe("Agent Visibility", () => {
       const app = getApp();
       const { req: adminReq } = await authedRequest(app);
 
-      const agent = await createAgent(app.db, { name: "vis-change", type: "personal_assistant" });
+      const agent = await seedAgent(app, { name: "vis-change", type: "personal_assistant" });
       expect(agent.visibility).toBe("private");
 
       const res = await adminReq("PATCH", `/api/v1/admin/agents/${agent.uuid}`, {
@@ -257,6 +286,12 @@ describe("Agent Visibility", () => {
 describe("Chat Access Control", () => {
   const getApp = useTestApp();
 
+  beforeEach(async () => {
+    fallback = await createAdminContext(getApp(), {
+      username: `chat-fb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    });
+  });
+
   describe("GET /admin/chats/mine — member-scoped grouped listing", () => {
     it("returns chats grouped by agent for the member", async () => {
       const app = getApp();
@@ -264,7 +299,7 @@ describe("Chat Access Control", () => {
       const member = await createMemberAndLogin(app, admin);
 
       // Create a personal assistant managed by member
-      const assistant = await createAgent(app.db, {
+      const assistant = await seedAgent(app, {
         name: "chat-pa",
         type: "personal_assistant",
         managerId: member.memberId,
@@ -294,12 +329,12 @@ describe("Chat Access Control", () => {
       const memberB = await createMemberAndLogin(app, admin);
 
       // Create agents for A and B
-      const assistantA = await createAgent(app.db, {
+      const assistantA = await seedAgent(app, {
         name: "chat-a-pa",
         type: "personal_assistant",
         managerId: memberA.memberId,
       });
-      const assistantB = await createAgent(app.db, {
+      const assistantB = await seedAgent(app, {
         name: "chat-b-pa",
         type: "personal_assistant",
         managerId: memberB.memberId,
@@ -333,12 +368,12 @@ describe("Chat Access Control", () => {
       const member = await createMemberAndLogin(app, admin);
 
       // Create two agents managed by member
-      const agentA = await createAgent(app.db, {
+      const agentA = await seedAgent(app, {
         name: "join-a",
         type: "personal_assistant",
         managerId: member.memberId,
       });
-      const agentB = await createAgent(app.db, {
+      const agentB = await seedAgent(app, {
         name: "join-b",
         type: "personal_assistant",
         managerId: member.memberId,
@@ -365,12 +400,12 @@ describe("Chat Access Control", () => {
       const memberB = await createMemberAndLogin(app, admin);
 
       // Create agents managed by member A
-      const agentA = await createAgent(app.db, {
+      const agentA = await seedAgent(app, {
         name: "nojoin-a",
         type: "personal_assistant",
         managerId: memberA.memberId,
       });
-      const agentA2 = await createAgent(app.db, {
+      const agentA2 = await seedAgent(app, {
         name: "nojoin-a2",
         type: "personal_assistant",
         managerId: memberA.memberId,
@@ -394,7 +429,7 @@ describe("Chat Access Control", () => {
       const admin = await authedRequest(app);
       const member = await createMemberAndLogin(app, admin);
 
-      const assistant = await createAgent(app.db, {
+      const assistant = await seedAgent(app, {
         name: "leave-pa",
         type: "personal_assistant",
         managerId: member.memberId,
@@ -420,7 +455,7 @@ describe("Chat Access Control", () => {
       const memberA = await createMemberAndLogin(app, admin);
       const memberB = await createMemberAndLogin(app, admin);
 
-      const assistant = await createAgent(app.db, {
+      const assistant = await seedAgent(app, {
         name: "leave-other-pa",
         type: "personal_assistant",
         managerId: memberA.memberId,
@@ -444,7 +479,7 @@ describe("Chat Access Control", () => {
       const memberA = await createMemberAndLogin(app, admin);
       const memberB = await createMemberAndLogin(app, admin);
 
-      const assistant = await createAgent(app.db, {
+      const assistant = await seedAgent(app, {
         name: "detail-pa",
         type: "personal_assistant",
         managerId: memberA.memberId,
@@ -467,7 +502,7 @@ describe("Chat Access Control", () => {
       const memberA = await createMemberAndLogin(app, admin);
       const memberB = await createMemberAndLogin(app, admin);
 
-      const assistant = await createAgent(app.db, {
+      const assistant = await seedAgent(app, {
         name: "msg-pa",
         type: "personal_assistant",
         managerId: memberA.memberId,
@@ -490,7 +525,7 @@ describe("Chat Access Control", () => {
       const memberA = await createMemberAndLogin(app, admin);
       const memberB = await createMemberAndLogin(app, admin);
 
-      const assistant = await createAgent(app.db, {
+      const assistant = await seedAgent(app, {
         name: "send-pa",
         type: "personal_assistant",
         managerId: memberA.memberId,
@@ -515,7 +550,7 @@ describe("Chat Access Control", () => {
       const admin = await authedRequest(app);
       const member = await createMemberAndLogin(app, admin);
 
-      const agent = await createAgent(app.db, {
+      const agent = await seedAgent(app, {
         name: "del-other",
         type: "autonomous_agent",
       });

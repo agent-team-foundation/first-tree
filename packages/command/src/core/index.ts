@@ -2,18 +2,13 @@
 
 // Admin management
 export { createOwner, hasUser } from "./admin.js";
-// Bootstrap
+// Bootstrap / credentials
 export {
-  bootstrapToken,
-  checkBootstrapStatus,
+  ensureFreshAccessToken,
   ensureFreshAdminToken,
-  getGitHubToken,
-  getGitHubUsername,
-  loadAgentTokenByName,
   loadCredentials,
   maskToken,
-  resolveAdminToken,
-  resolveAgentToken,
+  resolveAccessToken,
   resolveServerUrl,
   saveAgentConfig,
   saveCredentials,
@@ -26,7 +21,6 @@ export { ensurePostgres, isDockerAvailable, stopPostgres } from "./docker-postgr
 export type { CheckResult } from "./doctor.js";
 export {
   checkAgentConfigs,
-  checkAgentTokens,
   checkClientConfig,
   checkDatabase,
   checkDocker,

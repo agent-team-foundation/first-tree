@@ -55,7 +55,6 @@ function createSessionManager(opts: {
       displayName: "Agent",
       type: "autonomous_agent",
       delegateMention: null,
-      profile: null,
       metadata: {},
     },
     sdk,

@@ -6,50 +6,30 @@ describe("Agent Inbox API", () => {
 
   it("polls inbox and acks entry", async () => {
     const app = getApp();
-    const { token: t1 } = await createTestAgent(app, { name: "inbox-a1" });
-    const { agent: a2, token: t2 } = await createTestAgent(app, { name: "inbox-a2" });
+    const a1 = await createTestAgent(app, { name: "inbox-a1" });
+    const a2 = await createTestAgent(app, { name: "inbox-a2" });
 
-    // Create chat and send message
-    const chatRes = await app.inject({
-      method: "POST",
-      url: "/api/v1/agent/chats",
-      headers: { authorization: `Bearer ${t1}` },
-      payload: { type: "direct", participantIds: [a2.uuid] },
+    const chatRes = await a1.request("POST", "/api/v1/agent/chats", {
+      type: "direct",
+      participantIds: [a2.agent.uuid],
     });
     const chatId = chatRes.json().id;
 
-    await app.inject({
-      method: "POST",
-      url: `/api/v1/agent/chats/${chatId}/messages`,
-      headers: { authorization: `Bearer ${t1}` },
-      payload: { format: "text", content: "Inbox test" },
+    await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
+      format: "text",
+      content: "Inbox test",
     });
 
-    // Poll inbox as recipient
-    const pollRes = await app.inject({
-      method: "GET",
-      url: "/api/v1/agent/inbox",
-      headers: { authorization: `Bearer ${t2}` },
-    });
+    const pollRes = await a2.request("GET", "/api/v1/agent/inbox");
     expect(pollRes.statusCode).toBe(200);
     const entries = pollRes.json();
     expect(entries.length).toBeGreaterThanOrEqual(1);
     const entryId = entries[0].id;
 
-    // ACK the entry
-    const ackRes = await app.inject({
-      method: "POST",
-      url: `/api/v1/agent/inbox/${entryId}/ack`,
-      headers: { authorization: `Bearer ${t2}` },
-    });
+    const ackRes = await a2.request("POST", `/api/v1/agent/inbox/${entryId}/ack`);
     expect(ackRes.statusCode).toBe(204);
 
-    // Poll again — should be empty
-    const pollRes2 = await app.inject({
-      method: "GET",
-      url: "/api/v1/agent/inbox",
-      headers: { authorization: `Bearer ${t2}` },
-    });
+    const pollRes2 = await a2.request("GET", "/api/v1/agent/inbox");
     expect(pollRes2.json()).toHaveLength(0);
   });
 

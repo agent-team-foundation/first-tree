@@ -1,20 +1,21 @@
 import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
 import { createAgent } from "../services/agent.js";
-import { createTestAdmin, useTestApp } from "./helpers.js";
+import { createAdminContext, useTestApp } from "./helpers.js";
 
 describe("Admin Agents API", () => {
   const getApp = useTestApp();
 
   async function authedRequest(app: FastifyInstance) {
-    const admin = await createTestAdmin(app);
-    return (method: string, url: string, payload?: unknown) =>
+    const ctx = await createAdminContext(app);
+    const req = (method: string, url: string, payload?: unknown) =>
       app.inject({
         method: method as "GET" | "POST" | "PATCH" | "DELETE",
         url,
-        headers: { authorization: `Bearer ${admin.accessToken}` },
+        headers: { authorization: `Bearer ${ctx.accessToken}` },
         ...(payload ? { payload } : {}),
       });
+    return { req, ctx };
   }
 
   it("rejects creating an agent with a reserved `__` name prefix", async () => {
@@ -26,9 +27,15 @@ describe("Admin Agents API", () => {
 
   it("retrieves an agent created via service", async () => {
     const app = getApp();
-    const req = await authedRequest(app);
+    const { req, ctx } = await authedRequest(app);
 
-    const agent = await createAgent(app.db, { name: "agent-1", type: "autonomous_agent", displayName: "Bot One" });
+    const agent = await createAgent(app.db, {
+      name: "agent-1",
+      type: "autonomous_agent",
+      displayName: "Bot One",
+      managerId: ctx.memberId,
+      clientId: ctx.clientId,
+    });
 
     const getRes = await req("GET", `/api/v1/admin/agents/${agent.uuid}`);
     expect(getRes.statusCode).toBe(200);
@@ -38,7 +45,7 @@ describe("Admin Agents API", () => {
 
   it("lists agents with pagination", async () => {
     const app = getApp();
-    const req = await authedRequest(app);
+    const { req } = await authedRequest(app);
     await createAgent(app.db, { name: "a1", type: "human" });
     await createAgent(app.db, { name: "a2", type: "human" });
 
@@ -51,8 +58,13 @@ describe("Admin Agents API", () => {
 
   it("lists agents with presenceStatus field", async () => {
     const app = getApp();
-    const req = await authedRequest(app);
-    const created = await createAgent(app.db, { name: "presence-test", type: "autonomous_agent" });
+    const { req, ctx } = await authedRequest(app);
+    const created = await createAgent(app.db, {
+      name: "presence-test",
+      type: "autonomous_agent",
+      managerId: ctx.memberId,
+      clientId: ctx.clientId,
+    });
 
     const res = await req("GET", "/api/v1/admin/agents?limit=50");
     expect(res.statusCode).toBe(200);
@@ -65,41 +77,43 @@ describe("Admin Agents API", () => {
 
   it("creates an agent via POST", async () => {
     const app = getApp();
-    const req = await authedRequest(app);
+    const { req, ctx } = await authedRequest(app);
 
     const res = await req("POST", "/api/v1/admin/agents", {
       name: "api-created",
       type: "autonomous_agent",
       displayName: "API Bot",
-      profile: "I am a test bot.",
       metadata: { role: "testing" },
+      clientId: ctx.clientId,
     });
     expect(res.statusCode).toBe(201);
     const body = res.json();
     expect(body.name).toBe("api-created");
     expect(body.displayName).toBe("API Bot");
-    expect(body.profile).toBe("I am a test bot.");
     expect(body.metadata.role).toBe("testing");
   });
 
   it("updates an agent via PATCH", async () => {
     const app = getApp();
-    const req = await authedRequest(app);
+    const { req } = await authedRequest(app);
     const agent = await createAgent(app.db, { name: "patch-target", type: "human", displayName: "Old Name" });
 
     const res = await req("PATCH", `/api/v1/admin/agents/${agent.uuid}`, {
       displayName: "New Name",
-      profile: "Updated profile.",
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().displayName).toBe("New Name");
-    expect(res.json().profile).toBe("Updated profile.");
   });
 
   it("suspends and reactivates an agent", async () => {
     const app = getApp();
-    const req = await authedRequest(app);
-    const agent = await createAgent(app.db, { name: "lifecycle-agent", type: "autonomous_agent" });
+    const { req, ctx } = await authedRequest(app);
+    const agent = await createAgent(app.db, {
+      name: "lifecycle-agent",
+      type: "autonomous_agent",
+      managerId: ctx.memberId,
+      clientId: ctx.clientId,
+    });
 
     // Suspend
     const suspendRes = await req("POST", `/api/v1/admin/agents/${agent.uuid}/suspend`);
@@ -114,8 +128,13 @@ describe("Admin Agents API", () => {
 
   it("deletes only suspended agents", async () => {
     const app = getApp();
-    const req = await authedRequest(app);
-    const agent = await createAgent(app.db, { name: "delete-test", type: "autonomous_agent" });
+    const { req, ctx } = await authedRequest(app);
+    const agent = await createAgent(app.db, {
+      name: "delete-test",
+      type: "autonomous_agent",
+      managerId: ctx.memberId,
+      clientId: ctx.clientId,
+    });
 
     // Cannot delete active agent
     const failRes = await req("DELETE", `/api/v1/admin/agents/${agent.uuid}`);
@@ -131,29 +150,5 @@ describe("Admin Agents API", () => {
     const app = getApp();
     const res = await app.inject({ method: "GET", url: "/api/v1/admin/agents" });
     expect(res.statusCode).toBe(401);
-  });
-
-  describe("Token management", () => {
-    it("creates, lists, and revokes tokens", async () => {
-      const app = getApp();
-      const req = await authedRequest(app);
-      const agent = await createAgent(app.db, { name: "tok-agent", type: "autonomous_agent" });
-
-      // Create token
-      const createRes = await req("POST", `/api/v1/admin/agents/${agent.uuid}/tokens`, { name: "dev" });
-      expect(createRes.statusCode).toBe(201);
-      const tokenBody = createRes.json();
-      expect(tokenBody.token).toMatch(/^aghub_/);
-      expect(tokenBody.name).toBe("dev");
-
-      // List tokens
-      const listRes = await req("GET", `/api/v1/admin/agents/${agent.uuid}/tokens`);
-      expect(listRes.statusCode).toBe(200);
-      expect(listRes.json()).toHaveLength(1);
-
-      // Revoke token
-      const revokeRes = await req("DELETE", `/api/v1/admin/agents/${agent.uuid}/tokens/${tokenBody.id}`);
-      expect(revokeRes.statusCode).toBe(204);
-    });
   });
 });

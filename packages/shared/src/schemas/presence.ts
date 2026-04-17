@@ -44,13 +44,35 @@ export const runtimeStateMessageSchema = z.object({
 export type RuntimeStateMessage = z.infer<typeof runtimeStateMessageSchema>;
 
 // -- Agent Bind Payload (client → server) --
+// v2: token removed; authorization derives from the WS-level JWT and the
+// client_id pinned to the agent (Rule R-RUN).
 
-export const agentBindSchema = z.object({
-  token: z.string().min(1),
+export const agentBindRequestSchema = z.object({
+  agentId: z.string().min(1),
   runtimeType: z.string().max(50),
   runtimeVersion: z.string().max(50).optional(),
 });
-export type AgentBind = z.infer<typeof agentBindSchema>;
+export type AgentBindRequest = z.infer<typeof agentBindRequestSchema>;
+
+export const AGENT_BIND_REJECT_REASONS = {
+  WRONG_CLIENT: "wrong_client",
+  NOT_OWNED: "not_owned",
+  AGENT_SUSPENDED: "agent_suspended",
+  WRONG_ORG: "wrong_org",
+  UNKNOWN_AGENT: "unknown_agent",
+} as const;
+
+export const agentBindRejectReasonSchema = z.enum([
+  "wrong_client",
+  "not_owned",
+  "agent_suspended",
+  "wrong_org",
+  "unknown_agent",
+]);
+export type AgentBindRejectReason = z.infer<typeof agentBindRejectReasonSchema>;
+
+/** Header used on agent-scoped HTTP calls to select which managed agent the JWT acts as. */
+export const AGENT_SELECTOR_HEADER = "x-agent-id";
 
 // -- Extended Agent Presence --
 
