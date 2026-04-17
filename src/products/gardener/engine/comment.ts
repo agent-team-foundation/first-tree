@@ -41,6 +41,7 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import {
@@ -877,7 +878,7 @@ async function fetchGardenerUser(
 
 function commentLogPath(env: NodeJS.ProcessEnv): string {
   if (env.COMMENT_LOG && env.COMMENT_LOG.length > 0) return env.COMMENT_LOG;
-  const home = env.HOME ?? env.USERPROFILE ?? process.cwd();
+  const home = env.HOME ?? env.USERPROFILE ?? tmpdir();
   return join(home, ".gardener", "comment-runs.jsonl");
 }
 
