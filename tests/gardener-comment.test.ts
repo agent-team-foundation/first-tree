@@ -781,3 +781,177 @@ describe("gardener comment -- marker helpers", () => {
     );
   });
 });
+
+// ─────────────── 10. self-loop guard — first-tree:sync label ───────────────
+describe("gardener comment -- self-loop guard (first-tree:sync label)", () => {
+  it("exits 0 with skip message when PR carries first-tree:sync, without calling classify", async () => {
+    const tmp = useTmpDir();
+    const snapshotDir = join(tmp.path, "snap");
+    mkdirSync(snapshotDir, { recursive: true });
+    writeFileSync(
+      join(snapshotDir, "pr-view.json"),
+      JSON.stringify({
+        number: 301,
+        title: "sync: tree content",
+        headRefName: "first-tree/sync-301",
+        headRefOid: "abcd1234",
+        state: "OPEN",
+        author: { login: "serenakeyitan" },
+        additions: 10,
+        deletions: 3,
+        labels: [{ name: "first-tree:sync" }],
+        updatedAt: "2026-04-16T00:00:00Z",
+      }),
+    );
+    writeFileSync(join(snapshotDir, "issue-comments.json"), JSON.stringify([]));
+    writeFileSync(
+      join(snapshotDir, "subject.json"),
+      JSON.stringify({ gardenerUser: "repo-gardener" }),
+    );
+    writeFileSync(join(snapshotDir, "pr.diff"), "");
+
+    const calls: ShellCall[] = [];
+    const shell = makeShell(
+      [() => ({ stdout: "", stderr: "", code: 0 })],
+      calls,
+    );
+    const { write, lines } = captureWrite();
+    let classifyCalled = false;
+    const code = await runComment(
+      ["--pr", "301", "--repo", "owner/tree", "--tree-path", tmp.path],
+      {
+        shellRun: shell,
+        write,
+        env: { BREEZE_SNAPSHOT_DIR: snapshotDir },
+        now: () => new Date("2026-04-16T00:00:00Z"),
+        classifier: async () => {
+          classifyCalled = true;
+          return {
+            verdict: "ALIGNED",
+            severity: "low",
+            summary: "should not run",
+            treeNodes: [],
+          };
+        },
+      },
+    );
+    expect(code).toBe(0);
+    expect(classifyCalled).toBe(false);
+    expect(
+      lines.some((l) => l.includes("first-tree:sync label")),
+    ).toBe(true);
+    const last = lines[lines.length - 1];
+    expect(last).toMatch(/^BREEZE_RESULT: status=skipped summary=sync PR/);
+    // No gh pr comment / api post should have been issued.
+    const writes = calls.filter(
+      (c) =>
+        c.command === "gh" &&
+        (c.args[0] === "pr" && c.args[1] === "comment") ||
+        (c.command === "gh" && c.args[0] === "api" && c.args.includes("POST")),
+    );
+    expect(writes).toHaveLength(0);
+  });
+
+  it("proceeds normally when PR carries other labels", async () => {
+    const tmp = useTmpDir();
+    const snapshotDir = join(tmp.path, "snap");
+    mkdirSync(snapshotDir, { recursive: true });
+    writeFileSync(
+      join(snapshotDir, "pr-view.json"),
+      JSON.stringify({
+        number: 302,
+        title: "feat: new feature",
+        headRefName: "feature/new",
+        headRefOid: "efgh5678",
+        state: "OPEN",
+        author: { login: "external-contrib" },
+        additions: 5,
+        deletions: 1,
+        labels: [{ name: "enhancement" }],
+        updatedAt: "2026-04-16T00:00:00Z",
+      }),
+    );
+    writeFileSync(join(snapshotDir, "issue-comments.json"), JSON.stringify([]));
+    writeFileSync(
+      join(snapshotDir, "subject.json"),
+      JSON.stringify({ gardenerUser: "repo-gardener", treeSha: "tsha1234" }),
+    );
+    writeFileSync(join(snapshotDir, "pr.diff"), "");
+
+    const calls: ShellCall[] = [];
+    const shell = makeShell(
+      [() => ({ stdout: "", stderr: "", code: 0 })],
+      calls,
+    );
+    const { write, lines } = captureWrite();
+    let classifyCalled = false;
+    const code = await runComment(
+      ["--pr", "302", "--repo", "owner/source", "--tree-path", tmp.path],
+      {
+        shellRun: shell,
+        write,
+        env: { BREEZE_SNAPSHOT_DIR: snapshotDir },
+        now: () => new Date("2026-04-16T00:00:00Z"),
+        classifier: async () => {
+          classifyCalled = true;
+          return {
+            verdict: "ALIGNED",
+            severity: "low",
+            summary: "Looks aligned.",
+            treeNodes: [],
+          };
+        },
+      },
+    );
+    expect(code).toBe(0);
+    expect(classifyCalled).toBe(true);
+    expect(
+      lines.some((l) => l.includes("first-tree:sync label")),
+    ).toBe(false);
+  });
+});
+
+describe("gardener comment -- @gardener command detection ignores self-footer", () => {
+  it("does not treat @gardener re-review inside gardener's own state comment as a user command", () => {
+    // Gardener's footer text includes `@gardener re-review` as a command
+    // hint — resolveState must NOT treat this as a fresh user-issued
+    // command. We verify by giving the only such comment a gardener
+    // login AND a gardener: marker, and asserting state falls through
+    // to the sha-match / reviewed-label path rather than rereview.
+    const action = resolveState({
+      comments: [
+        {
+          user: { login: "repo-gardener" },
+          body:
+            "<!-- gardener:state · reviewed=headSha -->\nverdict text\n<sub>Commands: <code>@gardener re-review</code></sub>",
+          created_at: "2026-04-16T00:00:00Z",
+        },
+      ],
+      gardenerUser: "repo-gardener",
+      headIdentifier: "headSha",
+      hasReviewedLabel: false,
+    });
+    expect(action.kind).toBe("skip");
+  });
+
+  it("does not treat @gardener re-review in a non-gardener-login comment that carries a gardener marker as user command", () => {
+    // Marker-fallback path: a comment carries `<!-- gardener:` even
+    // though login does not match gardenerUser (e.g. a bot identity
+    // swap). We must still exclude it from userCommands.
+    const action = resolveState({
+      comments: [
+        {
+          user: { login: "old-bot-identity" },
+          body:
+            "<!-- gardener:state · reviewed=headSha -->\nverdict text <code>@gardener re-review</code>",
+          created_at: "2026-04-16T00:00:00Z",
+        },
+      ],
+      gardenerUser: "repo-gardener",
+      headIdentifier: "headSha",
+      hasReviewedLabel: false,
+    });
+    // Marker hides it from userCommands → sha matches → skip.
+    expect(action.kind).toBe("skip");
+  });
+});
