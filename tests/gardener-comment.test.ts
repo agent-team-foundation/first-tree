@@ -6,6 +6,7 @@ import { GARDENER_USAGE, runGardener } from "#products/gardener/cli.js";
 import {
   buildCommentBody,
   COMMENT_USAGE,
+  commentLogPath,
   defaultClassifier,
   extractStateMarker,
   GARDENER_COMMAND_RE,
@@ -1028,5 +1029,35 @@ describe("gardener comment -- @gardener command detection ignores self-footer", 
     });
     // Marker hides it from userCommands → sha matches → skip.
     expect(action.kind).toBe("skip");
+  });
+});
+
+describe("commentLogPath (#159 — log-dir fallback)", () => {
+  it("uses COMMENT_LOG verbatim when set", () => {
+    const path = commentLogPath({ COMMENT_LOG: "/custom/path/log.jsonl" });
+    expect(path).toBe("/custom/path/log.jsonl");
+  });
+
+  it("uses HOME when set", () => {
+    const path = commentLogPath({ HOME: "/home/user" });
+    expect(path).toBe("/home/user/.gardener/comment-runs.jsonl");
+  });
+
+  it("falls back to USERPROFILE on Windows-style env", () => {
+    const path = commentLogPath({ USERPROFILE: "C:\\Users\\user" });
+    expect(path.startsWith("C:\\Users\\user")).toBe(true);
+    expect(path.endsWith("comment-runs.jsonl")).toBe(true);
+  });
+
+  it("falls back to os.tmpdir() when HOME and USERPROFILE are unset (regression for #159)", async () => {
+    const { tmpdir } = await import("node:os");
+    const path = commentLogPath({});
+    expect(path.startsWith(tmpdir())).toBe(true);
+    expect(path.endsWith("comment-runs.jsonl")).toBe(true);
+  });
+
+  it("never returns a path inside process.cwd() when HOME is unset (regression for #159)", () => {
+    const path = commentLogPath({});
+    expect(path.startsWith(process.cwd())).toBe(false);
   });
 });

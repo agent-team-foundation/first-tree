@@ -85,7 +85,8 @@ Environment:
                         and subject.json. When set, those files are
                         read instead of invoking \`gh\`.
   COMMENT_LOG           Path for JSONL run events (default
-                        $HOME/.gardener/comment-runs.jsonl).
+                        $HOME/.gardener/comment-runs.jsonl; falls
+                        back to \$TMPDIR when HOME is unset).
 
 Exit codes:
   0 handled/skipped/disabled
@@ -876,7 +877,7 @@ async function fetchGardenerUser(
 
 // ───────────────────────── Logging + BREEZE_RESULT ───────────────
 
-function commentLogPath(env: NodeJS.ProcessEnv): string {
+export function commentLogPath(env: NodeJS.ProcessEnv): string {
   if (env.COMMENT_LOG && env.COMMENT_LOG.length > 0) return env.COMMENT_LOG;
   const home = env.HOME ?? env.USERPROFILE ?? tmpdir();
   return join(home, ".gardener", "comment-runs.jsonl");
