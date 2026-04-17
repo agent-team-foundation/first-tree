@@ -230,10 +230,12 @@ Use this when the user wants to verify delivery, inspect chats, or send test mes
 
 ### Recommended flow
 
-1. Make sure agent debug auth is available:
+1. Make sure agent debug auth is available (either set the token directly or point at a stored agent):
 
 ```bash
-export FIRST_TREE_HUB_TOKEN=...
+export FIRST_TREE_HUB_AGENT_TOKEN=...
+# Or, if the agent has a local config:
+export FIRST_TREE_HUB_AGENT=<agentName>
 ```
 
 2. Send a message:

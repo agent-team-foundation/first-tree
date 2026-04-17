@@ -36,6 +36,7 @@ export {
   // Docker PostgreSQL
   isDockerAvailable,
   isInteractive,
+  loadAgentTokenByName,
   onboardCheck,
   onboardCreate,
   printResults,

@@ -28,13 +28,16 @@ const DEFAULT_WORKSPACE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 // ── SDK helpers (for send/chats/history/register/pull) ────────────────
 
 function resolveAgentConfig(): { serverUrl: string; token: string } {
-  const token = process.env.FIRST_TREE_HUB_TOKEN;
-  if (!token) {
-    fail("MISSING_TOKEN", "FIRST_TREE_HUB_TOKEN environment variable is required.", 2);
+  let token: string;
+  try {
+    token = resolveAgentToken();
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    fail("MISSING_TOKEN", msg, 2);
   }
   let serverUrl: string;
   try {
-    serverUrl = resolveServerUrl(process.env.FIRST_TREE_HUB_SERVER);
+    serverUrl = resolveServerUrl(process.env.FIRST_TREE_HUB_SERVER_URL);
   } catch {
     serverUrl = "http://localhost:8000";
   }

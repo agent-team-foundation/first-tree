@@ -12,7 +12,7 @@
 | Manage local config files | `first-tree-hub config ...` | Scope defaults to server unless `-c` or `-a <name>` is passed |
 | Add or remove a local agent config | `first-tree-hub agent add/remove/list` | This is local configuration, not Context Tree identity management |
 | Bootstrap an agent token from GitHub identity | `first-tree-hub agent token bootstrap <agentId>` | Requires `gh` auth and a Hub server that already knows the agent |
-| Send or inspect debug messages as an agent | `first-tree-hub agent send/chats/history/pull/register` | Requires `FIRST_TREE_HUB_TOKEN`; these are low-level debugging utilities |
+| Send or inspect debug messages as an agent | `first-tree-hub agent send/chats/history/pull/register` | Requires `FIRST_TREE_HUB_AGENT_TOKEN` (or `FIRST_TREE_HUB_AGENT=<name>` to look up from local config); these are low-level debugging utilities |
 | Clean old isolated chat workspaces | `first-tree-hub agent workspace clean` | Removes stale workspaces only when there is no active non-evicted session |
 | Onboard a new human or autonomous agent | `first-tree-hub onboard` | Creates a PR in the Context Tree repo, not in `first-tree-hub` itself |
 
@@ -71,7 +71,7 @@
   - Used for Feishu bindings. Read `docs/claim-agent-guide.md` when claim/bind flows matter.
 - `agent send/chats/history/register/pull`
   - These are SDK-style debugging commands.
-  - They require `FIRST_TREE_HUB_TOKEN`.
+  - Auth resolution: `FIRST_TREE_HUB_AGENT_TOKEN` (explicit) → `FIRST_TREE_HUB_AGENT` env var lookup in `~/.first-tree-hub/agents/<name>/agent.yaml`.
   - `send` supports direct target vs `--chat`, stdin piping, and reply metadata.
   - `pull` is the low-level inbox polling path.
 
@@ -144,9 +144,12 @@
 - Client:
   - `FIRST_TREE_HUB_SERVER_URL`
   - `FIRST_TREE_HUB_LOG_LEVEL`
-- Onboard and agent debugging:
-  - `FIRST_TREE_HUB_TOKEN`
-  - `FIRST_TREE_HUB_SERVER`
+- Agent runtime / debugging:
+  - `FIRST_TREE_HUB_AGENT_TOKEN` (explicit token)
+  - `FIRST_TREE_HUB_AGENT` (agent name → looks up token from local config)
+  - `FIRST_TREE_HUB_SERVER_URL`
+- Onboard:
+  - `FIRST_TREE_HUB_SERVER_URL`
   - `FEISHU_APP_ID`
   - `FEISHU_APP_SECRET`
 
