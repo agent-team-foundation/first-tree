@@ -31,7 +31,6 @@
   "files": [
     "dist",
     "skills/tree",
-    "skills/breeze",
     "assets"
   ],
   "scripts": {
