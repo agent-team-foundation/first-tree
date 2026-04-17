@@ -64,9 +64,14 @@ Options:
 
 Environment:
   BREEZE_SNAPSHOT_DIR   Directory containing pre-fetched pr-view.json,
-                        pr.diff, pr-reviews.json, issue-comments.json.
-                        When set, those files are read instead of
-                        invoking \`gh\`.
+                        pr.diff, pr-reviews.json, issue-comments.json,
+                        and (optionally) pr-commits.json. When set, those
+                        files are read instead of invoking \`gh\`. If
+                        pr-commits.json is present, it enables the
+                        \`commitTime > reviewTime\` idempotency check in
+                        snapshot mode — without it, duplicate dispatches
+                        from breeze-runner would re-bump attempts and
+                        post duplicate reply comments.
   RESPOND_LOG           Path for JSONL run events (default
                         $HOME/.gardener/respond-runs.jsonl).
 
@@ -194,11 +199,25 @@ export interface PrIssueComment {
   created_at?: string;
 }
 
+export interface PrCommit {
+  commit?: {
+    committer?: { date?: string };
+    author?: { date?: string };
+  };
+}
+
 export interface SnapshotBundle {
   prView: PrView;
   diff: string;
   reviews: PrReview[];
   issueComments: PrIssueComment[];
+  /**
+   * Latest commit time on the PR head, derived from pr-commits.json in
+   * the snapshot dir. Null when the snapshot was produced by a
+   * breeze-runner that did not capture commits — callers must treat
+   * that as "unknown" and fall back to the live-gh path where possible.
+   */
+  latestCommitTime: string | null;
 }
 
 export const RESPOND_MAX_ATTEMPTS = 5;
@@ -340,6 +359,7 @@ export function readSnapshot(dir: string): SnapshotBundle | null {
   const reviewsPath = join(dir, "pr-reviews.json");
   const commentsPath = join(dir, "issue-comments.json");
   const diffPath = join(dir, "pr.diff");
+  const commitsPath = join(dir, "pr-commits.json");
   if (!existsSync(viewPath)) return null;
   const viewText = readFileSync(viewPath, "utf-8");
   const prView = jsonTryParse<PrView>(viewText);
@@ -351,7 +371,28 @@ export function readSnapshot(dir: string): SnapshotBundle | null {
     ? jsonTryParse<PrIssueComment[]>(readFileSync(commentsPath, "utf-8")) ?? []
     : [];
   const diff = existsSync(diffPath) ? readFileSync(diffPath, "utf-8") : "";
-  return { prView, diff, reviews, issueComments };
+  const commits = existsSync(commitsPath)
+    ? jsonTryParse<PrCommit[]>(readFileSync(commitsPath, "utf-8")) ?? []
+    : null;
+  const latestCommitTime = commits ? latestCommitTimeFromCommits(commits) : null;
+  return { prView, diff, reviews, issueComments, latestCommitTime };
+}
+
+/**
+ * Pick the latest commit time from a /repos/{owner}/{repo}/pulls/{n}/commits
+ * payload. Returns null if the array is empty or no entry carries a
+ * committer/author date.
+ */
+export function latestCommitTimeFromCommits(
+  commits: PrCommit[],
+): string | null {
+  let latest: string | null = null;
+  for (const c of commits) {
+    const d = c?.commit?.committer?.date ?? c?.commit?.author?.date ?? null;
+    if (!d) continue;
+    if (latest === null || d > latest) latest = d;
+  }
+  return latest;
 }
 
 async function fetchPrSnapshot(
@@ -398,7 +439,7 @@ async function fetchPrSnapshot(
   ]);
   const diff = diffRes.code === 0 ? diffRes.stdout : "";
 
-  return { prView, diff, reviews, issueComments };
+  return { prView, diff, reviews, issueComments, latestCommitTime: null };
 }
 
 function respondLogPath(env: NodeJS.ProcessEnv): string {
@@ -557,15 +598,14 @@ async function respondSinglePr(
   }
 
   // CHANGES_REQUESTED path — Step 3a idempotency.
+  // In snapshot mode, prefer the commit time captured by breeze-runner
+  // (pr-commits.json). Falling back to `null` would re-enable the
+  // double-dispatch bug from #158 — a retry/redelivery past the first
+  // fix would re-bump attempts and post a duplicate reply comment.
   const reviewTime = latestChangesRequestedAt(reviews);
-  let commitTime: string | null = null;
-  if (!snapshotDir) {
-    commitTime = await fetchLatestCommitTime(shell, repo, pr);
-  } else {
-    // Snapshot bundle does not include commit times; skip idempotency
-    // check — breeze-runner re-dispatches are expected to be fresh.
-    commitTime = null;
-  }
+  const commitTime = snapshotDir
+    ? bundle.latestCommitTime
+    : await fetchLatestCommitTime(shell, repo, pr);
   if (reviewTime && commitTime && commitTime > reviewTime) {
     write(`\u23ed #${pr}: fix already pushed, waiting for re-review`);
     logEvent(env, { kind: "skip", pr_number: pr, reason: "already_fixed" });

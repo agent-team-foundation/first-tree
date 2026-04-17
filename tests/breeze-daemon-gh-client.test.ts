@@ -272,6 +272,9 @@ describe("GhClient.writeTaskSnapshot", () => {
     expect(readFileSync(join(snapshotDir, "pr-view.json"), "utf8")).toBe(
       '{"number":42}',
     );
+    // pr-commits.json is required so gardener respond's idempotency
+    // check runs in snapshot mode — see #158.
+    expect(files).toContain("pr-commits.json");
     // Meta has bucket/status lines.
     const meta = readFileSync(
       join(snapshotDir, "pr-view.json.meta"),

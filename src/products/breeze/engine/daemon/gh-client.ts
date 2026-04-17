@@ -426,6 +426,22 @@ export class GhClient {
         bucket: "core",
         mutating: false,
       });
+      // Required by gardener respond's `commitTime > reviewTime` idempotency
+      // check in snapshot mode. Without it, a breeze-runner retry (network
+      // redelivery, crash recovery) would re-bump the attempts counter and
+      // post a duplicate reply comment. See #158.
+      await this.captureSnapshot(snapshotDir, "pr-commits.json", {
+        context: "hydrate pr commits",
+        envs: this.hostEnv(),
+        args: [
+          "api",
+          `/repos/${task.repo}/pulls/${prNumber}/commits?per_page=100`,
+          "-H",
+          "X-GitHub-Api-Version: 2022-11-28",
+        ],
+        bucket: "core",
+        mutating: false,
+      });
     } else if (issueNumber !== undefined) {
       await this.captureSnapshot(snapshotDir, "issue-view.json", {
         context: "hydrate issue view",
