@@ -988,9 +988,14 @@ async function reviewOne(
 
   // Resolve state (Step 2).
   const view = type === "pr" ? bundle.prView : bundle.issueView;
+  // headIdentifier must match the reviewedFull marker format written below
+  // (line ~1019). PRs use raw 40-char SHA; issues use `issue@<iso>` so that
+  // `shaMatches` compares like-for-like and avoids re-reviewing on every scan.
   const headIdentifier = type === "pr"
     ? bundle.prView?.headRefOid
-    : bundle.issueView?.updatedAt;
+    : bundle.issueView?.updatedAt
+      ? `issue@${bundle.issueView.updatedAt}`
+      : undefined;
   const action = resolveState({
     comments: bundle.issueComments,
     gardenerUser,
