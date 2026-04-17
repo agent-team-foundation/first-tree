@@ -1,7 +1,6 @@
 import {
   agentTypeSchema,
   createAgentSchema,
-  createAgentTokenSchema,
   paginationQuerySchema,
   updateAgentSchema,
 } from "@agent-team-foundation/first-tree-hub-shared";
@@ -10,22 +9,16 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { agents } from "../../db/schema/agents.js";
 import { messages } from "../../db/schema/messages.js";
+import { ForbiddenError } from "../../errors.js";
 import { requireMember } from "../../middleware/require-identity.js";
 import { assertAgentVisible, assertCanManage, memberScope } from "../../services/access-control.js";
 import * as agentService from "../../services/agent.js";
 import { createChat, findOrCreateDirectChat } from "../../services/chat.js";
 import * as clientService from "../../services/client.js";
-import {
-  forceDisconnect,
-  getAgentClientId,
-  hasActiveConnection,
-  hasClientConnection,
-  sendToClient,
-} from "../../services/connection-manager.js";
+import { forceDisconnect, getAgentClientId, hasActiveConnection } from "../../services/connection-manager.js";
 import { sendMessage } from "../../services/message.js";
 import { notifyRecipients } from "../../services/notifier.js";
 import * as presenceService from "../../services/presence.js";
-import { serializeDate } from "../../utils.js";
 
 export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
   const listAgentsFilterSchema = z.object({ type: agentTypeSchema.optional() });
@@ -42,7 +35,6 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
         presenceStatus: a.presenceStatus ?? "offline",
         createdAt: a.createdAt.toISOString(),
         updatedAt: a.updatedAt.toISOString(),
-        // M1: runtime fields
         clientId: a.clientId ?? null,
         runtimeType: a.runtimeType ?? null,
         runtimeState: a.runtimeState ?? null,
@@ -73,6 +65,13 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
     const scope = memberScope(request);
     await assertCanManage(app.db, scope, request.params.uuid);
     const body = updateAgentSchema.parse(request.body);
+    // Only admins may reassign the manager. clientId is not in the schema at
+    // all, so even an admin cannot move an agent to a different client in
+    // this milestone (proposal M7, M11: immutable).
+    const member = requireMember(request);
+    if (body.managerId !== undefined && member.role !== "admin") {
+      throw new ForbiddenError("Only admins can reassign an agent's manager");
+    }
     const agent = await agentService.updateAgent(app.db, request.params.uuid, body);
     return {
       ...agent,
@@ -92,41 +91,6 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
     };
   });
 
-  // Token management
-  app.post<{ Params: { uuid: string } }>("/:uuid/tokens", async (request, reply) => {
-    const scope = memberScope(request);
-    await assertCanManage(app.db, scope, request.params.uuid);
-    const body = createAgentTokenSchema.parse(request.body);
-    const result = await agentService.createToken(app.db, request.params.uuid, body);
-    return reply.status(201).send({
-      ...result,
-      expiresAt: serializeDate(result.expiresAt),
-      revokedAt: serializeDate(result.revokedAt),
-      createdAt: result.createdAt.toISOString(),
-      lastUsedAt: serializeDate(result.lastUsedAt),
-    });
-  });
-
-  app.get<{ Params: { uuid: string } }>("/:uuid/tokens", async (request) => {
-    const scope = memberScope(request);
-    await assertCanManage(app.db, scope, request.params.uuid);
-    const tokens = await agentService.listTokens(app.db, request.params.uuid);
-    return tokens.map((t) => ({
-      ...t,
-      expiresAt: serializeDate(t.expiresAt),
-      revokedAt: serializeDate(t.revokedAt),
-      createdAt: t.createdAt.toISOString(),
-      lastUsedAt: serializeDate(t.lastUsedAt),
-    }));
-  });
-
-  app.delete<{ Params: { uuid: string; tokenId: string } }>("/:uuid/tokens/:tokenId", async (request, reply) => {
-    const scope = memberScope(request);
-    await assertCanManage(app.db, scope, request.params.uuid);
-    await agentService.revokeToken(app.db, request.params.uuid, request.params.tokenId);
-    return reply.status(204).send();
-  });
-
   // Force-disconnect an agent's WebSocket connection
   app.post<{ Params: { uuid: string } }>("/:uuid/disconnect", async (request, reply) => {
     const { uuid } = request.params;
@@ -135,33 +99,6 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
     const wasConnected = forceDisconnect(uuid);
     await presenceService.setOffline(app.db, uuid);
     return reply.status(200).send({ disconnected: wasConnected });
-  });
-
-  // Provision an agent to a connected client — generates token and pushes via WS
-  app.post<{ Params: { uuid: string } }>("/:uuid/provision", async (request, reply) => {
-    const { uuid } = request.params;
-    const scope = memberScope(request);
-    await assertCanManage(app.db, scope, uuid);
-    const body = z.object({ clientId: z.string().min(1) }).parse(request.body);
-
-    const agent = await agentService.getAgent(app.db, uuid);
-    if (!hasClientConnection(body.clientId)) {
-      return reply.status(409).send({ error: "Client is not connected" });
-    }
-
-    const tokenResult = await agentService.createToken(app.db, uuid, { name: "provision" });
-    const delivered = sendToClient(body.clientId, {
-      type: "agent:provision",
-      agentName: agent.name,
-      agentType: agent.type,
-      token: tokenResult.token,
-    });
-
-    if (!delivered) {
-      return reply.status(409).send({ error: "Failed to deliver provision to client" });
-    }
-
-    return reply.status(200).send({ provisioned: true, clientId: body.clientId });
   });
 
   app.post<{ Params: { uuid: string } }>("/:uuid/suspend", async (request) => {

@@ -1,4 +1,5 @@
 import { index, jsonb, pgTable, text, timestamp, unique } from "drizzle-orm/pg-core";
+import { clients } from "./clients.js";
 import { organizations } from "./organizations.js";
 // NOTE: members FK is deferred — added via raw SQL in migration to avoid circular import
 
@@ -17,21 +18,26 @@ export const agents = pgTable(
     displayName: text("display_name"),
     /** Agent UUID to forward @mentions to (e.g. personal assistant) */
     delegateMention: text("delegate_mention"),
-    /** Agent self-description and instructions (markdown) */
-    profile: text("profile"),
     /** Delivery address, auto-generated as inbox_{uuid} */
     inboxId: text("inbox_id").unique().notNull(),
     /** "active" | "suspended" | "deleted". Suspended agents have all API requests rejected. */
     status: text("status").notNull().default("active"),
-    /** How this agent was created: "admin-api" | "bootstrap" | "portal" */
+    /** How this agent was created: "admin-api" | "portal" */
     source: text("source"),
     /** Control-plane user association (nullable, cloud-only) */
     cloudUserId: text("cloud_user_id"),
     /** Agent visibility: "private" (manager only) or "organization" (all members) */
     visibility: text("visibility").notNull().default("private"),
     metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
-    /** Member who manages this agent (nullable — unassigned agents visible only to admins) */
-    managerId: text("manager_id"),
+    /** Member who manages this agent (NOT NULL after 0019 unified-user-token migration) */
+    managerId: text("manager_id").notNull(),
+    /**
+     * Physical client this agent is pinned to. Nullable for human agents (no
+     * runtime); for every non-human agent the column is set at creation time
+     * and never changes (Rule R-RUN). Moving a non-human agent to a different
+     * client requires delete + recreate in this milestone.
+     */
+    clientId: text("client_id").references(() => clients.id, { onDelete: "restrict" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -39,6 +45,7 @@ export const agents = pgTable(
     index("idx_agents_org").on(table.organizationId),
     index("idx_agents_manager").on(table.managerId),
     index("idx_agents_visibility_org").on(table.organizationId, table.visibility),
+    index("idx_agents_client").on(table.clientId),
     unique("uq_agents_org_name").on(table.organizationId, table.name),
   ],
 );

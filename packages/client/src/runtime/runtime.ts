@@ -1,4 +1,5 @@
 import { ClientConnection } from "../client-connection.js";
+import type { AccessTokenProvider } from "../sdk.js";
 import { AgentSlot } from "./agent-slot.js";
 import { syncContextTree } from "./bootstrap.js";
 import type { RuntimeConfig } from "./config.js";
@@ -6,9 +7,15 @@ import { getHandlerFactory } from "./handler.js";
 
 export type AgentRuntimeOptions = {
   config: RuntimeConfig;
+  /**
+   * Returns the current member access JWT. Host processes (e.g. the command
+   * package) are responsible for keeping this fresh; the runtime calls it on
+   * every WS handshake and every SDK request.
+   */
+  getAccessToken: AccessTokenProvider;
+  /** Stable per-machine client identifier. Generated if omitted. */
+  clientId?: string;
   shutdownTimeout?: number;
-  /** M1: use shared client connection (default: true if multiple agents) */
-  useClientConnection?: boolean;
 };
 
 const DEFAULT_SHUTDOWN_TIMEOUT = 30_000;
@@ -17,60 +24,50 @@ export class AgentRuntime {
   private readonly slots: AgentSlot[] = [];
   private readonly config: RuntimeConfig;
   private readonly shutdownTimeout: number;
-  private clientConnection: ClientConnection | null = null;
+  private readonly clientConnection: ClientConnection;
+  private readonly getAccessToken: AccessTokenProvider;
   private stopping = false;
 
   constructor(options: AgentRuntimeOptions) {
     this.config = options.config;
     this.shutdownTimeout = options.shutdownTimeout ?? DEFAULT_SHUTDOWN_TIMEOUT;
+    this.getAccessToken = options.getAccessToken;
 
-    const agentEntries = Object.entries(this.config.agents);
-    const useClientConn = options.useClientConnection ?? agentEntries.length > 1;
+    this.clientConnection = new ClientConnection({
+      serverUrl: this.config.server,
+      clientId: options.clientId,
+      getAccessToken: this.getAccessToken,
+    });
 
-    if (useClientConn) {
-      this.clientConnection = new ClientConnection({
-        serverUrl: this.config.server,
-      });
-    }
-
-    for (const [name, agentConfig] of agentEntries) {
+    for (const [name, agentConfig] of Object.entries(this.config.agents)) {
       const handlerFactory = getHandlerFactory(agentConfig.type);
       this.slots.push(
         new AgentSlot({
           name,
+          agentId: agentConfig.agentId,
           serverUrl: this.config.server,
-          token: agentConfig.token,
           type: agentConfig.type,
           handlerFactory,
           session: agentConfig.session,
           concurrency: agentConfig.concurrency,
-          clientConnection: this.clientConnection ?? undefined,
+          clientConnection: this.clientConnection,
           runtimeType: agentConfig.type,
         }),
       );
     }
   }
 
-  /** Start all agent slots and block until shutdown signal. */
   async start(): Promise<void> {
     const log = (msg: string) => process.stderr.write(`[runtime] ${msg}\n`);
 
-    // Sync shared Context Tree clone (uses first agent's token)
-    const firstToken = Object.values(this.config.agents)[0]?.token;
-    let contextTreePath: string | null = null;
-    if (firstToken) {
-      contextTreePath = await syncContextTree(this.config.server, firstToken, log);
-    }
+    const contextTreePath = await syncContextTree(this.config.server, this.getAccessToken, log);
     if (!contextTreePath) {
       log("Context Tree not configured or sync skipped — agents will start without organizational context");
     }
 
-    // M1: Connect shared client connection first
-    if (this.clientConnection) {
-      log(`Connecting client (${this.clientConnection.clientId})...`);
-      await this.clientConnection.connect();
-      log(`Client connected (${this.clientConnection.clientId})`);
-    }
+    log(`Connecting client (${this.clientConnection.clientId})...`);
+    await this.clientConnection.connect();
+    log(`Client connected (${this.clientConnection.clientId})`);
 
     log(`Starting ${this.slots.length} agent(s)...`);
 
@@ -90,7 +87,6 @@ export class AgentRuntime {
 
     log("Ready. Press Ctrl+C to stop.");
 
-    // Wait for shutdown signal
     await new Promise<void>((resolve) => {
       const shutdown = async () => {
         if (this.stopping) return;
@@ -113,11 +109,8 @@ export class AgentRuntime {
     });
   }
 
-  /** Stop all slots. */
   async stop(): Promise<void> {
     await Promise.allSettled(this.slots.map((slot) => slot.stop()));
-    if (this.clientConnection) {
-      await this.clientConnection.disconnect();
-    }
+    await this.clientConnection.disconnect();
   }
 }

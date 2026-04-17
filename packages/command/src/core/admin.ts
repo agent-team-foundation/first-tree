@@ -54,9 +54,12 @@ export async function createOwner(
         ON CONFLICT DO NOTHING
       `);
 
+      // agents.manager_id is NOT NULL after the unified-user-token milestone;
+      // the FK is deferred so we can forward-reference the members row that
+      // gets inserted below within the same transaction.
       await tx.execute(sql`
-        INSERT INTO agents (uuid, name, organization_id, type, display_name, inbox_id, status, source)
-        VALUES (${agentId}, ${agentName}, ${orgId}, 'human', ${displayName}, ${`inbox_${agentId}`}, 'active', 'admin-api')
+        INSERT INTO agents (uuid, name, organization_id, type, display_name, inbox_id, status, source, manager_id)
+        VALUES (${agentId}, ${agentName}, ${orgId}, 'human', ${displayName}, ${`inbox_${agentId}`}, 'active', 'admin-api', ${memberId})
       `);
 
       await tx.execute(sql`
@@ -65,7 +68,9 @@ export async function createOwner(
       `);
 
       await tx.execute(sql`
-        UPDATE agents SET manager_id = ${memberId} WHERE uuid = ${agentId}
+        INSERT INTO agent_configs (agent_id, version, payload, updated_by)
+        VALUES (${agentId}, 1, ${sql`'{"prompt":{"append":""},"model":"","mcpServers":[],"env":[],"gitRepos":[]}'::jsonb`}, 'system')
+        ON CONFLICT (agent_id) DO NOTHING
       `);
     });
   } finally {

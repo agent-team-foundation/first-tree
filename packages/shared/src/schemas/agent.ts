@@ -26,11 +26,10 @@ export const AGENT_STATUSES = {
 
 export const AGENT_SOURCES = {
   ADMIN_API: "admin-api",
-  BOOTSTRAP: "bootstrap",
   PORTAL: "portal",
 } as const;
 
-export const agentSourceSchema = z.enum(["admin-api", "bootstrap", "portal"]);
+export const agentSourceSchema = z.enum(["admin-api", "portal"]);
 export type AgentSource = z.infer<typeof agentSourceSchema>;
 
 export const agentStatusSchema = z.enum(["active", "suspended"]);
@@ -46,7 +45,6 @@ export const createAgentSchema = z.object({
   type: agentTypeSchema,
   displayName: z.string().max(200).optional(),
   delegateMention: z.string().max(100).optional(),
-  profile: z.string().optional(),
   organizationId: z.string().max(100).optional(),
   /** How this agent was created */
   source: agentSourceSchema.optional(),
@@ -55,6 +53,12 @@ export const createAgentSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
   /** Member who manages this agent */
   managerId: z.string().optional(),
+  /**
+   * Physical client this agent is pinned to. REQUIRED for non-human agents —
+   * the pinned client is the only one authorised to run the agent (Rule R-RUN).
+   * Human agents (no runtime) may omit it.
+   */
+  clientId: z.string().min(1).max(100).optional(),
 });
 export type CreateAgent = z.infer<typeof createAgentSchema>;
 
@@ -62,9 +66,17 @@ export const updateAgentSchema = z.object({
   type: agentTypeSchema.optional(),
   displayName: z.string().max(200).nullable().optional(),
   delegateMention: z.string().max(100).nullable().optional(),
-  profile: z.string().nullable().optional(),
   visibility: agentVisibilitySchema.optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
+  /** Admin-only: reassign the manager */
+  managerId: z.string().nullable().optional(),
+  /**
+   * Present only so the API returns an explicit 400 when a caller tries to
+   * move a pinned agent. `clientId` is immutable post-creation in this
+   * milestone (unified-user-token M7 / Q4). The service layer inspects this
+   * field and rejects; it is never written to the DB.
+   */
+  clientId: z.string().optional(),
 });
 export type UpdateAgent = z.infer<typeof updateAgentSchema>;
 
@@ -75,7 +87,6 @@ export const agentSchema = z.object({
   type: agentTypeSchema,
   displayName: z.string().nullable(),
   delegateMention: z.string().nullable(),
-  profile: z.string().nullable(),
   inboxId: z.string(),
   status: z.string(),
   /** How this agent was created */
@@ -87,30 +98,13 @@ export const agentSchema = z.object({
   metadata: z.record(z.string(), z.unknown()),
   /** Member who manages this agent */
   managerId: z.string().nullable(),
+  /** Physical client this agent is pinned to. NULL for human agents only. */
+  clientId: z.string().nullable(),
   presenceStatus: presenceStatusSchema.optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
 export type Agent = z.infer<typeof agentSchema>;
-
-// -- Bootstrap schemas --
-
-export const bootstrapTokenRequestSchema = z.object({
-  name: z.string().max(100).optional(),
-  /** Optional fields used when the bootstrap endpoint auto-creates the agent. */
-  type: agentTypeSchema.optional(),
-  displayName: z.string().max(200).optional(),
-  delegateMention: z.string().max(100).optional(),
-  profile: z.string().optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
-});
-export type BootstrapTokenRequest = z.infer<typeof bootstrapTokenRequestSchema>;
-
-export const bootstrapStatusSchema = z.object({
-  exists: z.boolean(),
-  status: z.enum(["active", "suspended"]).nullable(),
-});
-export type BootstrapStatus = z.infer<typeof bootstrapStatusSchema>;
 
 export const contextTreeInfoSchema = z.object({
   repo: z.string().nullable(),

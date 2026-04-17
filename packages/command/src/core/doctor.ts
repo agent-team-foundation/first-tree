@@ -174,54 +174,6 @@ export function checkAgentConfigs(): CheckResult {
   }
 }
 
-export async function checkAgentTokens(): Promise<CheckResult> {
-  const config = getClientConfig();
-  const serverUrl = get(config, "server.url");
-  if (typeof serverUrl !== "string" || !serverUrl) {
-    return { label: "Agent Tokens", ok: false, detail: "cannot check (no server URL)" };
-  }
-
-  const agentsDir = join(DEFAULT_CONFIG_DIR, "agents");
-  if (!existsSync(agentsDir)) {
-    return { label: "Agent Tokens", ok: false, detail: "no agents to check" };
-  }
-
-  let agents: Map<string, { token: string }>;
-  try {
-    agents = loadAgents({ schema: agentConfigSchema, agentsDir }) as Map<string, { token: string }>;
-  } catch {
-    return { label: "Agent Tokens", ok: false, detail: "error reading agent configs" };
-  }
-
-  if (agents.size === 0) {
-    return { label: "Agent Tokens", ok: false, detail: "no agents to check" };
-  }
-
-  const valid: string[] = [];
-  const invalid: string[] = [];
-
-  for (const [name, agentConfig] of agents) {
-    try {
-      const res = await fetch(`${serverUrl}/api/v1/agent/me`, {
-        headers: { Authorization: `Bearer ${agentConfig.token}` },
-        signal: AbortSignal.timeout(3000),
-      });
-      if (res.ok) {
-        valid.push(name);
-      } else {
-        invalid.push(name);
-      }
-    } catch {
-      invalid.push(name);
-    }
-  }
-
-  if (invalid.length === 0) {
-    return { label: "Agent Tokens", ok: true, detail: `all ${valid.length} valid` };
-  }
-  return { label: "Agent Tokens", ok: false, detail: `invalid: ${invalid.join(", ")}` };
-}
-
 export async function checkWebSocket(): Promise<CheckResult> {
   const config = getClientConfig();
   const serverUrl = get(config, "server.url");

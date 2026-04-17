@@ -134,6 +134,27 @@
       "when": 1776816000000,
       "tag": "0018_agent_visibility",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1776902400000,
+      "tag": "0019_agent_configs",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1776988800000,
+      "tag": "0020_unified_user_token",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1777075200000,
+      "tag": "0021_drop_agents_profile",
+      "breakpoints": true
     }
   ]
 }

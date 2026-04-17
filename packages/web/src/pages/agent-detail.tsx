@@ -1,12 +1,18 @@
 import { ADAPTER_PLATFORMS } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Cable, Copy, Key, Link2, Pencil, Play, Plus, Trash2 } from "lucide-react";
-import { type FormEvent, useState } from "react";
-import Markdown from "react-markdown";
+import { ArrowLeft, Cable, Link2, MoreHorizontal, Play, Plus, Trash2 } from "lucide-react";
+import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router";
-import { createAdapterMapping, deleteAdapterMapping, listAdapterMappings } from "../api/adapter-mappings.js";
-import { getAdapterStatuses } from "../api/adapter-status.js";
-import { createAdapter, deleteAdapter, listAdapters, updateAdapter } from "../api/adapters.js";
+import { createAdapterMapping, deleteAdapterMapping, listAdapterMappings } from "./../api/adapter-mappings.js";
+import { getAdapterStatuses } from "./../api/adapter-status.js";
+import { createAdapter, deleteAdapter, listAdapters, updateAdapter } from "./../api/adapters.js";
+import {
+  type ClientStatusInfo,
+  dryRunAgentConfig,
+  getAgentClientStatus,
+  getAgentConfig,
+  updateAgentConfig,
+} from "./../api/agent-config.js";
 import {
   deleteAgent,
   getAgent,
@@ -15,20 +21,27 @@ import {
   type TestResult,
   testAgentConnection,
   updateAgent,
-} from "../api/agents.js";
-import { createToken, listTokens, revokeToken } from "../api/tokens.js";
-import { useAuth } from "../auth/auth-context.js";
-import { type AgentFormData, AgentFormDialog } from "../components/agent-form-dialog.js";
-import { Badge } from "../components/ui/badge.js";
-import { Button } from "../components/ui/button.js";
-import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card.js";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog.js";
-import { Input } from "../components/ui/input.js";
-import { Label } from "../components/ui/label.js";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.js";
-import { useAgentNameMap } from "../lib/use-agent-name-map.js";
-import { useMemberNameMap } from "../lib/use-member-name-map.js";
-import { cn, formatDate } from "../lib/utils.js";
+} from "./../api/agents.js";
+import { ApiError } from "./../api/client.js";
+import { listAgentSessions } from "./../api/sessions.js";
+import { Badge } from "./../components/ui/badge.js";
+import { Button } from "./../components/ui/button.js";
+import { Card, CardContent, CardHeader, CardTitle } from "./../components/ui/card.js";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./../components/ui/dialog.js";
+import { Input } from "./../components/ui/input.js";
+import { Label } from "./../components/ui/label.js";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./../components/ui/table.js";
+import { cn, formatDate } from "./../lib/utils.js";
+import { DangerZone } from "./agent-detail/danger-zone.js";
+import { EnvSection } from "./agent-detail/env-section.js";
+import { GitSection } from "./agent-detail/git-section.js";
+import { IdentitySection } from "./agent-detail/identity-section.js";
+import { McpSection } from "./agent-detail/mcp-section.js";
+import { ModelSection } from "./agent-detail/model-section.js";
+import { PromptSection } from "./agent-detail/prompt-section.js";
+import { SaveBar, sectionAnchorId } from "./agent-detail/save-bar.js";
+import { deriveSaveHint, StatusBar } from "./agent-detail/status-bar.js";
+import { type DraftSectionName, useConfigDraft } from "./agent-detail/use-config-draft.js";
 
 const platformValues = Object.values(ADAPTER_PLATFORMS);
 
@@ -37,25 +50,32 @@ export function AgentDetailPage() {
   const uuid = params.uuid ?? "";
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { memberId, role: memberRole } = useAuth();
-  const resolveAgentName = useAgentNameMap();
-  const resolveMemberName = useMemberNameMap();
 
-  // Agent data
+  // Agent identity data
   const agentQuery = useQuery({
     queryKey: ["agent", uuid],
     queryFn: () => getAgent(uuid),
     enabled: !!uuid,
   });
 
-  // Tokens data (only for non-human agents)
-  const tokensQuery = useQuery({
-    queryKey: ["tokens", uuid],
-    queryFn: () => listTokens(uuid),
-    enabled: !!uuid && agentQuery.isSuccess && agentQuery.data?.type !== "human",
+  const cfgQuery = useQuery({
+    queryKey: ["agent-config", uuid],
+    queryFn: () => getAgentConfig(uuid),
+    enabled: !!uuid && agentQuery.data?.type !== "human",
   });
 
-  // Adapter bindings for this agent
+  const clientStatusQuery = useQuery({
+    queryKey: ["agent-client-status", uuid],
+    queryFn: () => getAgentClientStatus(uuid),
+    enabled: !!uuid && agentQuery.data?.type !== "human",
+  });
+
+  const sessionsQuery = useQuery({
+    queryKey: ["agent-sessions-active", uuid],
+    queryFn: () => listAgentSessions(uuid, { state: "active" }),
+    enabled: !!uuid && agentQuery.data?.type !== "human",
+  });
+
   const adaptersQuery = useQuery({ queryKey: ["adapters"], queryFn: listAdapters });
   const mappingsQuery = useQuery({ queryKey: ["adapter-mappings"], queryFn: listAdapterMappings });
   const { data: botStatuses } = useQuery({
@@ -67,71 +87,91 @@ export function AgentDetailPage() {
   const agentAdapters = adaptersQuery.data?.filter((a) => a.agentId === uuid) ?? [];
   const agentMappings = mappingsQuery.data?.filter((m) => m.agentId === uuid) ?? [];
 
-  // Token dialog
-  const [tokenDialogOpen, setTokenDialogOpen] = useState(false);
-  const [tokenName, setTokenName] = useState("");
-  const [createdToken, setCreatedToken] = useState<string | null>(null);
+  // -- Config draft
+  const draft = useConfigDraft(cfgQuery.data);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [conflictMsg, setConflictMsg] = useState<string | null>(null);
 
-  // Binding dialog
-  const [bindingDialogOpen, setBindingDialogOpen] = useState(false);
-  const [bindingEditId, setBindingEditId] = useState<number | null>(null);
-  const [bindingForm, setBindingForm] = useState({
-    platform: "feishu",
-    feishuAppId: "",
-    feishuAppSecret: "",
-    credentialsJson: "{}",
-    status: "active",
-    externalUserId: "",
-    displayName: "",
-    kaelUserId: "",
-    kaelProjectId: "",
-    kaelAgentToken: "",
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      if (!cfgQuery.data) throw new Error("config not loaded");
+      const patch = draft.buildPayloadPatch();
+      return updateAgentConfig(uuid, { expectedVersion: cfgQuery.data.version, payload: patch });
+    },
+    onSuccess: (next) => {
+      queryClient.setQueryData(["agent-config", uuid], next);
+      setSaveError(null);
+      setConflictMsg(null);
+    },
+    onError: (err) => {
+      if (err instanceof ApiError && err.status === 409) {
+        setConflictMsg("Someone else saved a newer version while you were editing.");
+        setSaveError(null);
+        return;
+      }
+      setSaveError(err instanceof Error ? err.message : String(err));
+    },
   });
-  const [bindingCredError, setBindingCredError] = useState("");
 
-  // Mutations — agent lifecycle
+  const reloadRemote = useCallback(() => {
+    setConflictMsg(null);
+    setSaveError(null);
+    queryClient.invalidateQueries({ queryKey: ["agent-config", uuid] });
+    draft.resetAll();
+  }, [queryClient, uuid, draft]);
+
+  const jumpTo = useCallback((section: DraftSectionName) => {
+    const el = document.getElementById(sectionAnchorId(section));
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
+
+  // Identity mutations
+  const identityUpdateMutation = useMutation({
+    mutationFn: (patch: Parameters<typeof updateAgent>[1]) => updateAgent(uuid, patch),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["agent", uuid] });
+      queryClient.invalidateQueries({ queryKey: ["agents"] });
+    },
+  });
+
+  // Lifecycle mutations
   const suspendMutation = useMutation({
     mutationFn: () => suspendAgent(uuid),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["agent", uuid] }),
   });
-
   const reactivateMutation = useMutation({
     mutationFn: () => reactivateAgent(uuid),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["agent", uuid] }),
   });
-
   const deleteMutation = useMutation({
     mutationFn: () => deleteAgent(uuid),
     onSuccess: () => navigate("/agents"),
   });
 
-  // Mutations — tokens
-  const createTokenMutation = useMutation({
-    mutationFn: (name: string) => createToken(uuid, { name: name || undefined }),
-    onSuccess: (data) => {
-      setCreatedToken(data.token);
-      setTokenName("");
-      queryClient.invalidateQueries({ queryKey: ["tokens", uuid] });
-    },
-  });
+  // Test connection
+  const testMutation = useMutation({ mutationFn: () => testAgentConnection(uuid) });
 
-  const revokeTokenMutation = useMutation({
-    mutationFn: (tokenId: string) => revokeToken(uuid, tokenId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["tokens", uuid] }),
-  });
+  // Header ⋯ menu + binding dialogs
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!moreOpen) return;
+    function onClickAway(e: MouseEvent) {
+      if (moreRef.current && !moreRef.current.contains(e.target as Node)) setMoreOpen(false);
+    }
+    window.addEventListener("mousedown", onClickAway);
+    return () => window.removeEventListener("mousedown", onClickAway);
+  }, [moreOpen]);
 
-  // Mutations — bot binding (non-human agents)
+  // Binding dialog state (unchanged from previous)
+  const [bindingDialogOpen, setBindingDialogOpen] = useState(false);
+  const [bindingEditId, setBindingEditId] = useState<number | null>(null);
+  const [bindingForm, setBindingForm] = useState(EMPTY_BINDING_FORM);
+  const [bindingCredError, setBindingCredError] = useState("");
   const createAdapterMutation = useMutation({
     mutationFn: async () => {
-      let creds = buildCredentials(bindingForm);
+      const creds = buildCredentials(bindingForm);
       if (!creds) throw new Error("Credentials are required");
-
-      // For Kael: auto-create a dedicated agent token
-      if (bindingForm.platform === "kael" && !creds.agentToken) {
-        const tokenResult = await createToken(uuid, { name: "kael-hub-binding" });
-        creds = { ...creds, agentToken: tokenResult.token };
-      }
-
       return createAdapter({
         platform: bindingForm.platform as "feishu" | "slack" | "kael",
         agentId: uuid,
@@ -141,11 +181,9 @@ export function AgentDetailPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["adapters"] });
-      queryClient.invalidateQueries({ queryKey: ["tokens", uuid] });
       closeBindingDialog();
     },
   });
-
   const updateAdapterMutation = useMutation({
     mutationFn: () => {
       if (!bindingEditId) throw new Error("No adapter selected");
@@ -159,13 +197,10 @@ export function AgentDetailPage() {
       closeBindingDialog();
     },
   });
-
   const deleteAdapterMutation = useMutation({
     mutationFn: deleteAdapter,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["adapters"] }),
   });
-
-  // Mutations — user binding (human agents)
   const createMappingMutation = useMutation({
     mutationFn: () =>
       createAdapterMapping({
@@ -180,94 +215,75 @@ export function AgentDetailPage() {
       closeBindingDialog();
     },
   });
-
   const deleteMappingMutation = useMutation({
     mutationFn: deleteAdapterMapping,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["adapter-mappings"] }),
   });
 
-  // Edit agent
-  const [editDialogOpen, setEditDialogOpen] = useState(false);
-  const updateMutation = useMutation({
-    mutationFn: (formData: AgentFormData) =>
-      updateAgent(uuid, {
-        displayName: formData.displayName,
-        delegateMention: formData.delegateMention,
-      }),
-    onSuccess: () => {
-      setEditDialogOpen(false);
-      queryClient.invalidateQueries({ queryKey: ["agent", uuid] });
-      queryClient.invalidateQueries({ queryKey: ["agents"] });
+  // Dry-run (surfaced via small helper button next to Save)
+  const [dryRunText, setDryRunText] = useState<string | null>(null);
+  const dryRunMutation = useMutation({
+    mutationFn: () => dryRunAgentConfig(uuid, draft.buildPayloadPatch()),
+    onSuccess: (result) => {
+      const lines = result.diff.length ? result.diff.map((d) => `${d.op} ${d.path}`).join("\n") : "(no changes)";
+      setDryRunText(lines);
     },
+    onError: (err) => setDryRunText(`Dry run failed: ${err instanceof Error ? err.message : String(err)}`),
   });
 
-  // Test connection
-  const testMutation = useMutation({
-    mutationFn: () => testAgentConnection(uuid),
-  });
+  // Before navigating away with unsaved changes, warn.
+  useEffect(() => {
+    if (!draft.summary.anyDirty) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [draft.summary.anyDirty]);
 
-  // Profile editing
-  const [profileDialogOpen, setProfileDialogOpen] = useState(false);
-  const [profileDraft, setProfileDraft] = useState("");
-  const profileMutation = useMutation({
-    mutationFn: (profile: string) => updateAgent(uuid, { profile: profile || null }),
-    onSuccess: () => {
-      setProfileDialogOpen(false);
-      queryClient.invalidateQueries({ queryKey: ["agent", uuid] });
-    },
-  });
-
+  if (agentQuery.isLoading) return <div className="text-muted-foreground">Loading...</div>;
+  if (agentQuery.error) {
+    return (
+      <div className="text-destructive">
+        Failed to load agent: {agentQuery.error instanceof Error ? agentQuery.error.message : "Unknown error"}
+      </div>
+    );
+  }
   const agent = agentQuery.data;
-  const isHuman = agent?.type === "human";
+  if (!agent) return <div className="text-muted-foreground">Agent not found</div>;
 
-  // -- helpers --
+  const isHuman = agent.type === "human";
 
+  const clientStatus: ClientStatusInfo | undefined = clientStatusQuery.data;
+  const activeSessions = sessionsQuery.data?.length ?? 0;
+  const isUnclaimed = !isHuman && !clientStatus?.clientId;
+  const isOffline = !isHuman && clientStatus ? !clientStatus.online && !!clientStatus.clientId : false;
+
+  const runtimeExt = agent as Record<string, unknown>;
+  const runtimeState = (runtimeExt.runtimeState as string | null) ?? null;
+  const runtimeType = (runtimeExt.runtimeType as string | null) ?? null;
+
+  // -- helpers local to this component
   function closeBindingDialog() {
     setBindingDialogOpen(false);
     setBindingEditId(null);
-    setBindingForm({
-      platform: "feishu",
-      feishuAppId: "",
-      feishuAppSecret: "",
-      credentialsJson: "{}",
-      status: "active",
-      externalUserId: "",
-      displayName: "",
-      kaelUserId: "",
-      kaelProjectId: "",
-      kaelAgentToken: "",
-    });
+    setBindingForm(EMPTY_BINDING_FORM);
     setBindingCredError("");
   }
-
   function openEditAdapter(adapter: { id: number; platform: string; status: string }) {
     setBindingEditId(adapter.id);
-    setBindingForm({
-      platform: adapter.platform,
-      feishuAppId: "",
-      feishuAppSecret: "",
-      credentialsJson: "",
-      status: adapter.status,
-      externalUserId: "",
-      displayName: "",
-      kaelUserId: "",
-      kaelProjectId: "",
-      kaelAgentToken: "",
-    });
+    setBindingForm({ ...EMPTY_BINDING_FORM, platform: adapter.platform, status: adapter.status });
     setBindingDialogOpen(true);
   }
-
   function handleBindingSubmit(e: FormEvent) {
     e.preventDefault();
     setBindingCredError("");
-
     if (isHuman) {
       if (!bindingForm.externalUserId) return;
       createMappingMutation.mutate();
       return;
     }
-
-    // Non-human: validate credentials
     if (bindingForm.platform === "feishu") {
       if (!bindingEditId && (!bindingForm.feishuAppId || !bindingForm.feishuAppSecret)) {
         setBindingCredError("App ID and App Secret are required");
@@ -293,118 +309,124 @@ export function AgentDetailPage() {
         }
       }
     }
-
-    if (bindingEditId) {
-      updateAdapterMutation.mutate();
-    } else {
-      createAdapterMutation.mutate();
-    }
+    if (bindingEditId) updateAdapterMutation.mutate();
+    else createAdapterMutation.mutate();
   }
-
-  // -- render guards --
-
-  if (agentQuery.isLoading) {
-    return <div className="text-muted-foreground">Loading...</div>;
-  }
-  if (agentQuery.error) {
-    return (
-      <div className="text-destructive">
-        Failed to load agent: {agentQuery.error instanceof Error ? agentQuery.error.message : "Unknown error"}
-      </div>
-    );
-  }
-  if (!agent) {
-    return <div className="text-muted-foreground">Agent not found</div>;
-  }
-
-  const handleDelete = () => {
-    if (window.confirm("Are you sure you want to delete this agent? This cannot be undone.")) {
-      deleteMutation.mutate();
-    }
-  };
-
-  const handleCreateToken = (e: FormEvent) => {
-    e.preventDefault();
-    createTokenMutation.mutate(tokenName);
-  };
 
   const bindingMutationError =
     createAdapterMutation.error ?? updateAdapterMutation.error ?? createMappingMutation.error;
   const bindingIsPending =
     createAdapterMutation.isPending || updateAdapterMutation.isPending || createMappingMutation.isPending;
 
-  const metadata = agent.metadata as Record<string, unknown> | undefined;
-  const treeMeta = metadata?.tree as Record<string, unknown> | undefined;
-  const role = treeMeta?.role as string | undefined;
-  const domains = treeMeta?.domains as string[] | undefined;
+  const saveHint = deriveSaveHint({
+    activeSessions,
+    isUnclaimed,
+    isOffline,
+  });
 
-  // Can this member manage (edit/suspend/delete) this agent?
-  const canManage = memberRole === "admin" || agent.managerId === memberId;
+  const mcpActive = draft.draft.mcp.filter((i) => i.status !== "deleted");
+  const envActive = draft.draft.env.filter((i) => i.status !== "deleted");
+  const gitActive = draft.draft.git.filter((i) => i.status !== "deleted");
+
+  const mcpOtherNames = (exceptKey: string | null): ReadonlySet<string> =>
+    new Set(mcpActive.filter((i) => i.key !== exceptKey).map((i) => i.value.name.toLowerCase()));
+  const envOtherKeys = (exceptKey: string | null): ReadonlySet<string> =>
+    new Set(envActive.filter((i) => i.key !== exceptKey).map((i) => i.value.key));
+  const gitOtherPaths = (exceptKey: string | null): ReadonlySet<string> =>
+    new Set(
+      gitActive
+        .filter((i) => i.key !== exceptKey)
+        .map((i) => {
+          const { value } = i;
+          if (value.localPath) return value.localPath;
+          const noQuery = value.url.split(/[?#]/)[0] ?? "";
+          const last = noQuery.split(/[/:]/).filter(Boolean).pop() ?? "";
+          return last.replace(/\.git$/i, "");
+        })
+        .filter(Boolean),
+    );
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5 pb-24">
       {/* Header */}
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-3">
         <Button variant="ghost" size="icon" onClick={() => navigate("/agents")}>
           <ArrowLeft className="h-4 w-4" />
         </Button>
-        <div className="flex-1">
-          <h1 className="text-2xl font-semibold">{agent.displayName ?? agent.name}</h1>
-          <p className="text-sm text-muted-foreground font-mono">{agent.name}</p>
+        <div className="flex-1 min-w-0">
+          <h1 className="text-2xl font-semibold truncate">{agent.displayName ?? agent.name}</h1>
+          <p className="text-xs text-muted-foreground font-mono truncate">
+            @{agent.name ?? agent.uuid} · {agent.type}
+          </p>
         </div>
-        {canManage && agent.status === "active" && (
-          <Button variant="outline" size="sm" onClick={() => setEditDialogOpen(true)}>
-            <Pencil className="h-4 w-4 mr-2" />
-            Edit
+        <div className="relative" ref={moreRef}>
+          <Button variant="outline" size="icon" onClick={() => setMoreOpen((v) => !v)} title="More actions">
+            <MoreHorizontal className="h-4 w-4" />
           </Button>
-        )}
-        {canManage && !isHuman && agent.status === "active" && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              testMutation.reset();
-              testMutation.mutate();
-            }}
-            disabled={testMutation.isPending}
-          >
-            <Play className="h-4 w-4 mr-2" />
-            {testMutation.isPending ? "Testing..." : "Test Connection"}
-          </Button>
-        )}
-        {canManage && agent.status === "active" && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              if (window.confirm("Suspend this agent? All tokens will be revoked.")) {
-                suspendMutation.mutate();
-              }
-            }}
-            disabled={suspendMutation.isPending}
-          >
-            {suspendMutation.isPending ? "Suspending..." : "Suspend"}
-          </Button>
-        )}
-        {canManage && agent.status === "suspended" && (
-          <>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => reactivateMutation.mutate()}
-              disabled={reactivateMutation.isPending}
-            >
-              {reactivateMutation.isPending ? "Reactivating..." : "Reactivate"}
-            </Button>
-            <Button variant="destructive" size="sm" onClick={handleDelete}>
-              <Trash2 className="h-4 w-4 mr-2" />
-              Delete
-            </Button>
-          </>
-        )}
+          {moreOpen && (
+            <div className="absolute right-0 mt-1 z-40 min-w-48 rounded-md border bg-white shadow-lg text-sm">
+              <ul className="py-1">
+                {!isHuman && agent.status === "active" && (
+                  <li>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMoreOpen(false);
+                        testMutation.reset();
+                        testMutation.mutate();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-gray-50 flex items-center gap-2"
+                      disabled={testMutation.isPending}
+                    >
+                      <Play className="h-3.5 w-3.5" />
+                      {testMutation.isPending ? "Testing…" : "Test connection"}
+                    </button>
+                  </li>
+                )}
+                {agent.status === "active" ? (
+                  <li>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMoreOpen(false);
+                        if (confirm("Suspend this agent? All tokens will be revoked.")) {
+                          suspendMutation.mutate();
+                        }
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-gray-50"
+                    >
+                      Suspend
+                    </button>
+                  </li>
+                ) : (
+                  <li>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMoreOpen(false);
+                        reactivateMutation.mutate();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-gray-50"
+                    >
+                      Reactivate
+                    </button>
+                  </li>
+                )}
+                <li className="border-t">
+                  <a
+                    href={`#${sectionAnchorId("prompt")}`}
+                    onClick={() => setMoreOpen(false)}
+                    className="block px-3 py-1.5 text-xs text-muted-foreground hover:bg-gray-50"
+                  >
+                    Jump to Behavior
+                  </a>
+                </li>
+              </ul>
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* Test Connection Result */}
       {(testMutation.data || testMutation.error) && (
         <TestResultCard
           result={testMutation.data ?? { status: "error", message: "Failed to reach server" }}
@@ -412,198 +434,103 @@ export function AgentDetailPage() {
         />
       )}
 
-      {/* Agent Info */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Agent Info</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <dl className="grid grid-cols-2 gap-4 text-sm">
-            <div>
-              <dt className="text-muted-foreground mb-1">Display Name</dt>
-              <dd>{agent.displayName ?? "—"}</dd>
-            </div>
-            <div>
-              <dt className="text-muted-foreground mb-1">Type</dt>
-              <dd>
-                <Badge variant="secondary">{agent.type}</Badge>
-              </dd>
-            </div>
-            <div>
-              <dt className="text-muted-foreground mb-1">Status</dt>
-              <dd>
-                <Badge variant={agent.status === "active" ? "default" : "destructive"}>{agent.status}</Badge>
-              </dd>
-            </div>
-            <div>
-              <dt className="text-muted-foreground mb-1">Inbox ID</dt>
-              <dd className="font-mono">{agent.inboxId}</dd>
-            </div>
-            {agent.delegateMention && (
-              <div>
-                <dt className="text-muted-foreground mb-1">Delegate Mention</dt>
-                <dd className="font-mono">{resolveAgentName(agent.delegateMention)}</dd>
-              </div>
-            )}
-            {agent.managerId && (
-              <div>
-                <dt className="text-muted-foreground mb-1">Owner</dt>
-                <dd>{resolveMemberName(agent.managerId)}</dd>
-              </div>
-            )}
-            {role && (
-              <div>
-                <dt className="text-muted-foreground mb-1">Role</dt>
-                <dd>{role}</dd>
-              </div>
-            )}
-            {domains && domains.length > 0 && (
-              <div>
-                <dt className="text-muted-foreground mb-1">Domains</dt>
-                <dd className="flex flex-wrap gap-1">
-                  {domains.map((d) => (
-                    <Badge key={d} variant="outline">
-                      {d}
-                    </Badge>
-                  ))}
-                </dd>
-              </div>
-            )}
-            <div>
-              <dt className="text-muted-foreground mb-1">Created</dt>
-              <dd>{formatDate(agent.createdAt)}</dd>
-            </div>
-          </dl>
-        </CardContent>
-      </Card>
+      {/* Status Bar */}
+      <StatusBar
+        agent={agent}
+        cfg={cfgQuery.data}
+        clientStatus={clientStatus}
+        runtimeState={runtimeState}
+        runtimeType={runtimeType}
+        activeSessions={activeSessions}
+        isHuman={isHuman}
+      />
 
-      {/* M1: Runtime Info */}
-      {(() => {
-        const ext = agent as Record<string, unknown>;
-        const rState = ext.runtimeState as string | null;
-        const rType = ext.runtimeType as string | null;
-        const rSessions = ext.activeSessions as number | null;
-        const rClientId = ext.clientId as string | null;
-        if (!rState) return null;
-        return (
-          <Card>
-            <CardHeader>
-              <CardTitle>Runtime</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <dl className="grid grid-cols-2 gap-4 text-sm">
-                <div>
-                  <dt className="text-muted-foreground mb-1">Runtime Type</dt>
-                  <dd>{rType ?? "—"}</dd>
-                </div>
-                <div>
-                  <dt className="text-muted-foreground mb-1">State</dt>
-                  <dd>
-                    <Badge
-                      variant={rState === "error" ? "destructive" : rState === "working" ? "default" : "secondary"}
-                    >
-                      {rState}
-                    </Badge>
-                  </dd>
-                </div>
-                {rSessions !== null && (
-                  <div>
-                    <dt className="text-muted-foreground mb-1">Sessions</dt>
-                    <dd>{rSessions} active</dd>
-                  </div>
-                )}
-                {rClientId && (
-                  <div>
-                    <dt className="text-muted-foreground mb-1">Client</dt>
-                    <dd className="font-mono text-xs">{rClientId}</dd>
-                  </div>
-                )}
-              </dl>
-            </CardContent>
-          </Card>
-        );
-      })()}
+      {/* Identity */}
+      <IdentitySection
+        agent={agent}
+        onSave={async (patch) => {
+          await identityUpdateMutation.mutateAsync(patch);
+        }}
+      />
 
-      {/* Profile */}
+      {/* Behavior */}
+      {!isHuman && (
+        <BehaviorSection
+          loaded={!!cfgQuery.data}
+          loading={cfgQuery.isLoading}
+          error={cfgQuery.error ? String(cfgQuery.error) : null}
+          version={cfgQuery.data?.version ?? null}
+          dirty={draft.summary.anyDirty}
+        >
+          <div id={sectionAnchorId("prompt")}>
+            <PromptSection
+              value={draft.draft.promptAppend}
+              baseline={cfgQuery.data?.payload.prompt.append ?? ""}
+              onChange={draft.setPromptAppend}
+              onRevert={draft.revertPrompt}
+              disabled={agent.status !== "active"}
+            />
+          </div>
+          <div id={sectionAnchorId("model")}>
+            <ModelSection
+              value={draft.draft.model}
+              baseline={cfgQuery.data?.payload.model ?? ""}
+              onChange={draft.setModel}
+              onRevert={draft.revertModel}
+              disabled={agent.status !== "active"}
+            />
+          </div>
+          <div id={sectionAnchorId("mcp")}>
+            <McpSection
+              items={draft.draft.mcp}
+              otherNames={mcpOtherNames}
+              onAdd={draft.addMcp}
+              onUpdate={draft.updateMcp}
+              onDelete={draft.deleteMcp}
+              onUndoDelete={draft.undoDeleteMcp}
+              disabled={agent.status !== "active"}
+            />
+          </div>
+          <div id={sectionAnchorId("env")}>
+            <EnvSection
+              items={draft.draft.env}
+              otherKeys={envOtherKeys}
+              onAdd={draft.addEnv}
+              onUpdate={draft.updateEnv}
+              onDelete={draft.deleteEnv}
+              onUndoDelete={draft.undoDeleteEnv}
+              disabled={agent.status !== "active"}
+            />
+          </div>
+          <div id={sectionAnchorId("git")}>
+            <GitSection
+              items={draft.draft.git}
+              otherPaths={gitOtherPaths}
+              onAdd={draft.addGit}
+              onUpdate={draft.updateGit}
+              onDelete={draft.deleteGit}
+              onUndoDelete={draft.undoDeleteGit}
+              disabled={agent.status !== "active"}
+            />
+          </div>
+          {dryRunText && <pre className="whitespace-pre-wrap rounded border bg-gray-50 p-2 text-xs">{dryRunText}</pre>}
+        </BehaviorSection>
+      )}
+
+      {/* Platform Bindings (secondary) */}
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle>Profile</CardTitle>
-          {canManage && agent.status === "active" && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setProfileDraft(agent.profile ?? "");
-                setProfileDialogOpen(true);
-              }}
-            >
-              <Pencil className="h-4 w-4 mr-2" />
-              Edit
-            </Button>
-          )}
-        </CardHeader>
-        <CardContent>
-          {agent.profile ? (
-            <div className="prose prose-sm dark:prose-invert max-w-none max-h-64 overflow-auto bg-muted rounded p-4">
-              <Markdown>{agent.profile}</Markdown>
-            </div>
-          ) : (
-            <p className="text-sm text-muted-foreground">No profile</p>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Profile Edit Dialog */}
-      <Dialog open={profileDialogOpen} onOpenChange={setProfileDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Edit Profile</DialogTitle>
-          </DialogHeader>
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              profileMutation.mutate(profileDraft);
-            }}
-            className="space-y-4"
-          >
-            <div className="space-y-2">
-              <Label htmlFor="profile-editor">Markdown</Label>
-              <textarea
-                id="profile-editor"
-                value={profileDraft}
-                onChange={(e) => setProfileDraft(e.target.value)}
-                rows={12}
-                className="flex w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm font-mono transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                placeholder="Agent self-description in markdown..."
-              />
-            </div>
-            {profileMutation.error instanceof Error && (
-              <div className="text-sm text-destructive">{profileMutation.error.message}</div>
-            )}
-            <DialogFooter>
-              <Button type="submit" disabled={profileMutation.isPending}>
-                {profileMutation.isPending ? "Saving..." : "Save"}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      {/* Platform Bindings */}
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle className="flex items-center gap-2">
+          <CardTitle className="flex items-center gap-2 text-base">
             {isHuman ? <Link2 className="h-4 w-4" /> : <Cable className="h-4 w-4" />}
             Platform Bindings
           </CardTitle>
-          <Button size="sm" disabled={!canManage} onClick={() => setBindingDialogOpen(true)}>
+          <Button size="sm" variant="outline" onClick={() => setBindingDialogOpen(true)}>
             <Plus className="h-4 w-4 mr-2" />
             {isHuman ? "Bind User" : "Bind Bot"}
           </Button>
         </CardHeader>
         <CardContent>
           {isHuman ? (
-            /* Human agent: user mappings */
             <Table>
               <TableHeader>
                 <TableRow>
@@ -639,9 +566,9 @@ export function AgentDetailPage() {
                           variant="ghost"
                           size="icon"
                           onClick={() => {
-                            if (window.confirm("Remove this binding?")) deleteMappingMutation.mutate(m.id);
+                            if (confirm("Remove this binding?")) deleteMappingMutation.mutate(m.id);
                           }}
-                          disabled={!canManage || deleteMappingMutation.isPending}
+                          disabled={deleteMappingMutation.isPending}
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>
@@ -652,7 +579,6 @@ export function AgentDetailPage() {
               </TableBody>
             </Table>
           ) : (
-            /* Non-human agent: bot configs */
             <Table>
               <TableHeader>
                 <TableRow>
@@ -673,7 +599,6 @@ export function AgentDetailPage() {
                 ) : (
                   agentAdapters.map((a) => {
                     const status = botStatuses?.find((s) => s.configId === a.id);
-                    // Kael is server-embedded: connected whenever the config is active (no bot status needed)
                     const isConnected = a.platform === "kael" ? a.status === "active" : !!status?.connected;
                     return (
                       <TableRow key={a.id}>
@@ -697,22 +622,16 @@ export function AgentDetailPage() {
                         <TableCell className="text-muted-foreground">{formatDate(a.createdAt)}</TableCell>
                         <TableCell>
                           <div className="flex gap-1">
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              disabled={!canManage}
-                              onClick={() => openEditAdapter(a)}
-                              title="Edit"
-                            >
-                              <Pencil className="h-4 w-4" />
+                            <Button variant="ghost" size="icon" onClick={() => openEditAdapter(a)} title="Edit">
+                              …
                             </Button>
                             <Button
                               variant="ghost"
                               size="icon"
                               onClick={() => {
-                                if (window.confirm("Remove this bot binding?")) deleteAdapterMutation.mutate(a.id);
+                                if (confirm("Remove this bot binding?")) deleteAdapterMutation.mutate(a.id);
                               }}
-                              disabled={!canManage || deleteAdapterMutation.isPending}
+                              disabled={deleteAdapterMutation.isPending}
                               title="Delete"
                             >
                               <Trash2 className="h-4 w-4" />
@@ -729,82 +648,55 @@ export function AgentDetailPage() {
         </CardContent>
       </Card>
 
-      {/* Token Management — only for non-human agents */}
+      {/* Danger Zone */}
+      <DangerZone
+        agent={agent}
+        suspendPending={suspendMutation.isPending}
+        reactivatePending={reactivateMutation.isPending}
+        deletePending={deleteMutation.isPending}
+        onSuspend={() => {
+          if (confirm("Suspend this agent? Runtime binds and HTTP calls will be refused.")) suspendMutation.mutate();
+        }}
+        onReactivate={() => reactivateMutation.mutate()}
+        onDelete={() => deleteMutation.mutate()}
+      />
+
+      {/* Save Bar */}
       {!isHuman && (
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle className="flex items-center gap-2">
-              <Key className="h-4 w-4" />
-              Tokens
-            </CardTitle>
-            <Button
-              size="sm"
-              disabled={!canManage}
-              onClick={() => {
-                setCreatedToken(null);
-                setTokenName("");
-                setTokenDialogOpen(true);
-              }}
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              Create Token
-            </Button>
-          </CardHeader>
-          <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Created</TableHead>
-                  <TableHead>Last Used</TableHead>
-                  <TableHead>Expires</TableHead>
-                  <TableHead className="w-20" />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {tokensQuery.data?.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={5} className="text-center py-4 text-muted-foreground">
-                      No tokens
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  tokensQuery.data?.map((token) => (
-                    <TableRow key={token.id}>
-                      <TableCell>{token.name ?? "—"}</TableCell>
-                      <TableCell className="text-muted-foreground">{formatDate(token.createdAt)}</TableCell>
-                      <TableCell className="text-muted-foreground">{formatDate(token.lastUsedAt)}</TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {token.revokedAt ? (
-                          <Badge variant="destructive">Revoked</Badge>
-                        ) : token.expiresAt ? (
-                          formatDate(token.expiresAt)
-                        ) : (
-                          "Never"
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        {!token.revokedAt && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => revokeTokenMutation.mutate(token.id)}
-                            disabled={!canManage || revokeTokenMutation.isPending}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
+        <SaveBar
+          summary={draft.summary}
+          saveHint={saveHint}
+          conflictMessage={conflictMsg}
+          errorMessage={saveError}
+          saving={saveMutation.isPending}
+          onSave={() => saveMutation.mutate()}
+          onDiscard={() => {
+            if (!draft.summary.anyDirty || confirm("Discard all unsaved changes?")) {
+              draft.resetAll();
+              setSaveError(null);
+              setConflictMsg(null);
+            }
+          }}
+          onReloadRemote={reloadRemote}
+          onJumpTo={jumpTo}
+        />
       )}
 
-      {/* Binding Dialog — adapts based on agent type */}
+      {/* Dry-run helper (below Save Bar to avoid clutter) */}
+      {!isHuman && draft.summary.anyDirty && (
+        <div className="text-xs text-muted-foreground">
+          <button
+            type="button"
+            onClick={() => dryRunMutation.mutate()}
+            className="underline hover:text-gray-900"
+            disabled={dryRunMutation.isPending}
+          >
+            {dryRunMutation.isPending ? "Computing dry-run…" : "Preview server-side diff"}
+          </button>
+        </div>
+      )}
+
+      {/* Binding Dialog */}
       <Dialog
         open={bindingDialogOpen}
         onOpenChange={(open) => (open ? setBindingDialogOpen(true) : closeBindingDialog())}
@@ -823,7 +715,7 @@ export function AgentDetailPage() {
                 value={bindingForm.platform}
                 onChange={(e) => setBindingForm({ ...bindingForm, platform: e.target.value })}
                 disabled={!!bindingEditId}
-                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
+                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
               >
                 {platformValues.map((p) => (
                   <option key={p} value={p}>
@@ -834,7 +726,6 @@ export function AgentDetailPage() {
             </div>
 
             {isHuman ? (
-              /* Human agent: external user ID */
               <>
                 <div className="space-y-2">
                   <Label htmlFor="binding-ext-id">External User ID</Label>
@@ -857,7 +748,6 @@ export function AgentDetailPage() {
                 </div>
               </>
             ) : (
-              /* Non-human agent: bot credentials */
               <>
                 {bindingForm.platform === "feishu" ? (
                   <>
@@ -932,7 +822,7 @@ export function AgentDetailPage() {
                       value={bindingForm.credentialsJson}
                       onChange={(e) => setBindingForm({ ...bindingForm, credentialsJson: e.target.value })}
                       rows={4}
-                      className="flex w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm font-mono transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      className="flex w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm font-mono focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                       placeholder='{"bot_token": "xoxb-...", "signing_secret": "..."}'
                     />
                   </div>
@@ -944,7 +834,7 @@ export function AgentDetailPage() {
                     id="binding-status"
                     value={bindingForm.status}
                     onChange={(e) => setBindingForm({ ...bindingForm, status: e.target.value })}
-                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                   >
                     <option value="active">active</option>
                     <option value="inactive">inactive</option>
@@ -964,74 +854,78 @@ export function AgentDetailPage() {
           </form>
         </DialogContent>
       </Dialog>
-
-      {/* Edit Agent Dialog */}
-      {agent.status === "active" && (
-        <AgentFormDialog
-          mode="edit"
-          agent={agent}
-          open={editDialogOpen}
-          onOpenChange={setEditDialogOpen}
-          onSubmit={(formData) => updateMutation.mutate(formData)}
-          isPending={updateMutation.isPending}
-          error={updateMutation.error instanceof Error ? updateMutation.error : null}
-        />
-      )}
-
-      {/* Create Token Dialog */}
-      {!isHuman && (
-        <Dialog
-          open={tokenDialogOpen}
-          onOpenChange={(open) => {
-            setTokenDialogOpen(open);
-            if (!open) setCreatedToken(null);
-          }}
-        >
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>{createdToken ? "Token Created" : "Create Token"}</DialogTitle>
-            </DialogHeader>
-            {createdToken ? (
-              <div className="space-y-4">
-                <p className="text-sm text-muted-foreground">Copy this token now. It will not be shown again.</p>
-                <div className="flex gap-2">
-                  <Input value={createdToken} readOnly className="font-mono text-xs" />
-                  <Button variant="outline" size="icon" onClick={() => navigator.clipboard.writeText(createdToken)}>
-                    <Copy className="h-4 w-4" />
-                  </Button>
-                </div>
-                <DialogFooter>
-                  <Button onClick={() => setTokenDialogOpen(false)}>Done</Button>
-                </DialogFooter>
-              </div>
-            ) : (
-              <form onSubmit={handleCreateToken} className="space-y-4">
-                <div className="space-y-2">
-                  <Label>Name (optional)</Label>
-                  <Input
-                    value={tokenName}
-                    onChange={(e) => setTokenName(e.target.value)}
-                    placeholder="e.g. production"
-                  />
-                </div>
-                {createTokenMutation.error instanceof Error && (
-                  <div className="text-sm text-destructive">{createTokenMutation.error.message}</div>
-                )}
-                <DialogFooter>
-                  <Button type="submit" disabled={createTokenMutation.isPending}>
-                    {createTokenMutation.isPending ? "Creating..." : "Create"}
-                  </Button>
-                </DialogFooter>
-              </form>
-            )}
-          </DialogContent>
-        </Dialog>
-      )}
     </div>
   );
 }
 
-// ── Components ──────────────────────────────────────────────────────
+function BehaviorSection(props: {
+  loaded: boolean;
+  loading: boolean;
+  error: string | null;
+  version: number | null;
+  dirty: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <section className="space-y-3">
+      <div className="flex items-center justify-between">
+        <h2 className="text-base font-semibold">Behavior</h2>
+        <div className="text-xs text-muted-foreground">
+          {props.version != null && <span>v{props.version}</span>}
+          {props.dirty && <span className="ml-2 text-amber-700">· draft</span>}
+        </div>
+      </div>
+      {props.loading && <div className="text-sm text-muted-foreground">Loading configuration…</div>}
+      {props.error && <div className="text-sm text-destructive">Failed to load configuration: {props.error}</div>}
+      {props.loaded && <div className="space-y-3">{props.children}</div>}
+    </section>
+  );
+}
+
+// ─── binding helpers ──────────────────────────────────────────────────
+
+const EMPTY_BINDING_FORM = {
+  platform: "feishu",
+  feishuAppId: "",
+  feishuAppSecret: "",
+  credentialsJson: "{}",
+  status: "active",
+  externalUserId: "",
+  displayName: "",
+  kaelUserId: "",
+  kaelProjectId: "",
+  kaelAgentToken: "",
+};
+
+function buildCredentials(form: {
+  platform: string;
+  feishuAppId: string;
+  feishuAppSecret: string;
+  credentialsJson: string;
+  kaelUserId: string;
+  kaelProjectId: string;
+  kaelAgentToken: string;
+}): Record<string, unknown> | null {
+  if (form.platform === "feishu") {
+    if (!form.feishuAppId && !form.feishuAppSecret) return null;
+    if (!form.feishuAppId || !form.feishuAppSecret) {
+      throw new Error("Both App ID and App Secret are required");
+    }
+    return { app_id: form.feishuAppId, app_secret: form.feishuAppSecret };
+  }
+  if (form.platform === "kael") {
+    if (!form.kaelUserId && !form.kaelProjectId) return null;
+    if (!form.kaelUserId || !form.kaelProjectId) {
+      throw new Error("User ID and Project ID are required");
+    }
+    return { kaelUserId: form.kaelUserId, kaelProjectId: form.kaelProjectId };
+  }
+  const trimmed = form.credentialsJson.trim();
+  if (!trimmed) return null;
+  return JSON.parse(trimmed) as Record<string, unknown>;
+}
+
+// ─── test connection card ────────────────────────────────────────────
 
 const STATUS_LABELS: Record<TestResult["status"], string> = {
   success: "Connected",
@@ -1078,8 +972,6 @@ function TestResultCard({ result, onDismiss }: { result: TestResult; onDismiss: 
               )}
             </div>
             {result.message && <p className="text-sm text-muted-foreground">{result.message}</p>}
-
-            {/* Connection diagnostics */}
             {conn && (
               <div className="text-xs space-y-1 border-t pt-2 mt-1">
                 <div className="flex items-center gap-2">
@@ -1104,7 +996,6 @@ function TestResultCard({ result, onDismiss }: { result: TestResult; onDismiss: 
                 )}
               </div>
             )}
-
             {result.responseContent && (
               <p className="text-sm mt-2 whitespace-pre-wrap bg-muted rounded p-2 max-h-40 overflow-auto">
                 {result.responseContent}
@@ -1118,39 +1009,4 @@ function TestResultCard({ result, onDismiss }: { result: TestResult; onDismiss: 
       </CardContent>
     </Card>
   );
-}
-
-// ── Helpers ──────────────────────────────────────────────────────────
-
-function buildCredentials(form: {
-  platform: string;
-  feishuAppId: string;
-  feishuAppSecret: string;
-  credentialsJson: string;
-  kaelUserId: string;
-  kaelProjectId: string;
-  kaelAgentToken: string;
-}): Record<string, unknown> | null {
-  if (form.platform === "feishu") {
-    // Both fields must be filled or both empty — partial input would corrupt stored credentials
-    if (!form.feishuAppId && !form.feishuAppSecret) return null;
-    if (!form.feishuAppId || !form.feishuAppSecret) {
-      throw new Error("Both App ID and App Secret are required");
-    }
-    return { app_id: form.feishuAppId, app_secret: form.feishuAppSecret };
-  }
-  if (form.platform === "kael") {
-    if (!form.kaelUserId && !form.kaelProjectId) return null;
-    if (!form.kaelUserId || !form.kaelProjectId) {
-      throw new Error("User ID and Project ID are required");
-    }
-    // agentToken is auto-created by the mutation, not from the form
-    return {
-      kaelUserId: form.kaelUserId,
-      kaelProjectId: form.kaelProjectId,
-    };
-  }
-  const trimmed = form.credentialsJson.trim();
-  if (!trimmed) return null;
-  return JSON.parse(trimmed) as Record<string, unknown>;
 }

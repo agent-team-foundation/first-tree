@@ -61,3 +61,18 @@ export const messageSchema = z.object({
   createdAt: z.string(),
 });
 export type Message = z.infer<typeof messageSchema>;
+
+/**
+ * Wire format for messages routed FROM the Hub TO a client runtime.
+ *
+ * Adds `configVersion` so the client can compare against its locally cached
+ * agent runtime config and refresh before delivering the message to the SDK.
+ *
+ * Step 3: this is the single shape used by `buildClientMessagePayload` —
+ * never serialise a raw `messageSchema` row to a client; always go through
+ * the dispatcher.
+ */
+export const clientMessageSchema = messageSchema.extend({
+  configVersion: z.number().int().positive(),
+});
+export type ClientMessage = z.infer<typeof clientMessageSchema>;

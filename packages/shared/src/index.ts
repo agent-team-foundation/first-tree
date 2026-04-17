@@ -46,10 +46,6 @@ export {
   agentStatusSchema,
   agentTypeSchema,
   agentVisibilitySchema,
-  type BootstrapStatus,
-  type BootstrapTokenRequest,
-  bootstrapStatusSchema,
-  bootstrapTokenRequestSchema,
   type ContextTreeInfo,
   type CreateAgent,
   contextTreeInfoSchema,
@@ -58,13 +54,33 @@ export {
   updateAgentSchema,
 } from "./schemas/agent.js";
 export {
-  type AgentToken,
-  type AgentTokenCreated,
-  agentTokenCreatedSchema,
-  agentTokenSchema,
-  type CreateAgentToken,
-  createAgentTokenSchema,
-} from "./schemas/agent-token.js";
+  type AgentRuntimeConfig,
+  type AgentRuntimeConfigDryRunResult,
+  type AgentRuntimeConfigPayload,
+  agentRuntimeConfigDryRunResultSchema,
+  agentRuntimeConfigPayloadSchema,
+  agentRuntimeConfigSchema,
+  type ClientMessagePayload,
+  DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD,
+  type DryRunAgentRuntimeConfig,
+  deriveRepoLocalPath,
+  dryRunAgentRuntimeConfigSchema,
+  ENV_REDACTED_PLACEHOLDER,
+  type EnvEntry,
+  envEntrySchema,
+  type GitRepo,
+  gitRepoSchema,
+  isRedactedEnvValue,
+  type McpHttpServer,
+  type McpServer,
+  type McpSseServer,
+  type McpStdioServer,
+  mcpServerSchema,
+  type PromptConfig,
+  promptConfigSchema,
+  type UpdateAgentRuntimeConfig,
+  updateAgentRuntimeConfigSchema,
+} from "./schemas/agent-runtime-config.js";
 export {
   type ConnectTokenExchange,
   type ConnectTokenResponse,
@@ -133,6 +149,8 @@ export {
   updateMemberSchema,
 } from "./schemas/member.js";
 export {
+  type ClientMessage,
+  clientMessageSchema,
   MESSAGE_FORMATS,
   MESSAGE_SOURCES,
   type Message,
@@ -169,10 +187,14 @@ export {
 } from "./schemas/organization.js";
 export {
   type ActivityOverview,
-  type AgentBind,
+  AGENT_BIND_REJECT_REASONS,
+  AGENT_SELECTOR_HEADER,
+  type AgentBindRejectReason,
+  type AgentBindRequest,
   type AgentPresence,
   activityOverviewSchema,
-  agentBindSchema,
+  agentBindRejectReasonSchema,
+  agentBindRequestSchema,
   agentPresenceSchema,
   PRESENCE_STATUSES,
   type PresenceStatus,
@@ -256,3 +278,6 @@ export {
   userSchema,
   userStatusSchema,
 } from "./schemas/user.js";
+export type { WsAuthFrame } from "./schemas/ws-auth.js";
+// -- WebSocket auth frame (client → server on connect) --
+export { WS_AUTH_FRAME_TIMEOUT_MS, wsAuthFrameSchema } from "./schemas/ws-auth.js";

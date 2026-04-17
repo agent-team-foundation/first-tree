@@ -1,5 +1,6 @@
 import type { Database } from "./db/connection.js";
 import type { AdapterManager } from "./services/adapter-manager.js";
+import type { ConfigService } from "./services/config-service.js";
 import type { Notifier } from "./services/notifier.js";
 
 export type AgentIdentity = {
@@ -17,20 +18,16 @@ export type MemberIdentity = {
   agentId: string;
 };
 
-export type GitHubUserIdentity = {
-  username: string;
-};
-
 declare module "fastify" {
   interface FastifyInstance {
     db: Database;
     config: import("./config.js").Config;
     adapterManager: AdapterManager;
     notifier: Notifier;
+    configService: ConfigService;
   }
   interface FastifyRequest {
     agent?: AgentIdentity;
     member?: MemberIdentity;
-    githubUser?: GitHubUserIdentity;
   }
 }

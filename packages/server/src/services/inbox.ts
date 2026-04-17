@@ -3,6 +3,7 @@ import type { Database } from "../db/connection.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
 import { ForbiddenError, NotFoundError } from "../errors.js";
+import { buildClientMessagePayloadsForInbox } from "./message-dispatcher.js";
 
 const DEFAULT_INBOX_TIMEOUT_SECONDS = 300;
 const DEFAULT_MAX_RETRY_COUNT = 3;
@@ -44,10 +45,35 @@ export async function pollInbox(db: Database, inboxId: string, limit: number) {
 
     const msgMap = new Map(msgs.map((m) => [m.id, m]));
 
-    // 3. Compose response
+    // 3. Build wire payloads via the single dispatcher (Step 3): every
+    // outbound client message must carry the current agent_configs.version
+    // so the client can refresh config before delivering to the runtime.
+    const payloads = await buildClientMessagePayloadsForInbox(
+      tx,
+      inboxId,
+      claimed.map((entry) => {
+        const msg = msgMap.get(entry.message_id);
+        if (!msg) throw new Error(`Unexpected: message ${entry.message_id} not found`);
+        return {
+          id: msg.id,
+          chatId: msg.chatId,
+          senderId: msg.senderId,
+          format: msg.format,
+          content: msg.content,
+          metadata: msg.metadata,
+          replyToInbox: msg.replyToInbox,
+          replyToChat: msg.replyToChat,
+          inReplyTo: msg.inReplyTo,
+          source: msg.source,
+          createdAt: msg.createdAt.toISOString(),
+        };
+      }),
+    );
+    const payloadByMessageId = new Map(payloads.map((p) => [p.id, p]));
+
     return claimed.map((entry) => {
-      const msg = msgMap.get(entry.message_id);
-      if (!msg) throw new Error(`Unexpected: message ${entry.message_id} not found`);
+      const payload = payloadByMessageId.get(entry.message_id);
+      if (!payload) throw new Error(`Unexpected: payload for ${entry.message_id} not built`);
       return {
         id: entry.id,
         inboxId: entry.inbox_id,
@@ -58,18 +84,7 @@ export async function pollInbox(db: Database, inboxId: string, limit: number) {
         createdAt: entry.created_at,
         deliveredAt: entry.delivered_at ?? null,
         ackedAt: entry.acked_at ?? null,
-        message: {
-          id: msg.id,
-          chatId: msg.chatId,
-          senderId: msg.senderId,
-          format: msg.format,
-          content: msg.content,
-          metadata: msg.metadata,
-          replyToInbox: msg.replyToInbox,
-          replyToChat: msg.replyToChat,
-          inReplyTo: msg.inReplyTo,
-          createdAt: msg.createdAt.toISOString(),
-        },
+        message: payload,
       };
     });
   });

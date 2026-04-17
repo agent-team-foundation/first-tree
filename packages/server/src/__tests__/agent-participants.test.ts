@@ -7,117 +7,86 @@ describe("Agent Participants API", () => {
 
   async function setupChat(app: FastifyInstance) {
     const uid = crypto.randomUUID().slice(0, 6);
-    const { agent: a1, token: t1 } = await createTestAgent(app, { name: `part-a1-${uid}` });
-    const { agent: a2, token: t2 } = await createTestAgent(app, { name: `part-a2-${uid}` });
-    const { agent: a3, token: t3 } = await createTestAgent(app, { name: `part-a3-${uid}` });
+    const a1 = await createTestAgent(app, { name: `part-a1-${uid}` });
+    const a2 = await createTestAgent(app, { name: `part-a2-${uid}` });
+    const a3 = await createTestAgent(app, { name: `part-a3-${uid}` });
 
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/v1/agent/chats",
-      headers: { authorization: `Bearer ${t1}` },
-      payload: { type: "group", participantIds: [a2.uuid] },
+    const res = await a1.request("POST", "/api/v1/agent/chats", {
+      type: "group",
+      participantIds: [a2.agent.uuid],
     });
     const chat = res.json();
-    return { a1, a2, a3, t1, t2, t3, chatId: chat.id };
+    return { a1, a2, a3, chatId: chat.id };
   }
 
   it("adds a participant to a chat", async () => {
     const app = getApp();
-    const { t1, a3, chatId } = await setupChat(app);
+    const { a1, a3, chatId } = await setupChat(app);
 
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/agent/chats/${chatId}/participants`,
-      headers: { authorization: `Bearer ${t1}` },
-      payload: { agentId: a3.uuid },
+    const res = await a1.request("POST", `/api/v1/agent/chats/${chatId}/participants`, {
+      agentId: a3.agent.uuid,
     });
     expect(res.statusCode).toBe(201);
     const participants = res.json();
     expect(participants).toHaveLength(3);
-    expect(participants.map((p: { agentId: string }) => p.agentId)).toContain(a3.uuid);
+    expect(participants.map((p: { agentId: string }) => p.agentId)).toContain(a3.agent.uuid);
   });
 
   it("rejects adding duplicate participant", async () => {
     const app = getApp();
-    const { t1, a2, chatId } = await setupChat(app);
+    const { a1, a2, chatId } = await setupChat(app);
 
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/agent/chats/${chatId}/participants`,
-      headers: { authorization: `Bearer ${t1}` },
-      payload: { agentId: a2.uuid },
+    const res = await a1.request("POST", `/api/v1/agent/chats/${chatId}/participants`, {
+      agentId: a2.agent.uuid,
     });
     expect(res.statusCode).toBe(409);
   });
 
   it("rejects adding non-existent agent", async () => {
     const app = getApp();
-    const { t1, chatId } = await setupChat(app);
+    const { a1, chatId } = await setupChat(app);
 
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/agent/chats/${chatId}/participants`,
-      headers: { authorization: `Bearer ${t1}` },
-      payload: { agentId: "non-existent-agent" },
+    const res = await a1.request("POST", `/api/v1/agent/chats/${chatId}/participants`, {
+      agentId: "non-existent-agent",
     });
     expect(res.statusCode).toBe(404);
   });
 
   it("removes a participant from a chat", async () => {
     const app = getApp();
-    const { t1, a2, chatId } = await setupChat(app);
+    const { a1, a2, chatId } = await setupChat(app);
 
-    const res = await app.inject({
-      method: "DELETE",
-      url: `/api/v1/agent/chats/${chatId}/participants/${a2.uuid}`,
-      headers: { authorization: `Bearer ${t1}` },
-    });
+    const res = await a1.request("DELETE", `/api/v1/agent/chats/${chatId}/participants/${a2.agent.uuid}`);
     expect(res.statusCode).toBe(204);
 
-    // Verify participant is removed
-    const detail = await app.inject({
-      method: "GET",
-      url: `/api/v1/agent/chats/${chatId}`,
-      headers: { authorization: `Bearer ${t1}` },
-    });
+    const detail = await a1.request("GET", `/api/v1/agent/chats/${chatId}`);
     const participants = detail.json().participants;
     expect(participants).toHaveLength(1);
-    expect(participants[0].agentId).toBe((await setupChat(app)).a1.uuid.slice(0, 0) || participants[0].agentId);
+    expect(participants[0].agentId).toBe(a1.agent.uuid);
   });
 
   it("rejects removing non-participant agent", async () => {
     const app = getApp();
-    const { t1, a3, chatId } = await setupChat(app);
+    const { a1, a3, chatId } = await setupChat(app);
 
-    const res = await app.inject({
-      method: "DELETE",
-      url: `/api/v1/agent/chats/${chatId}/participants/${a3.uuid}`,
-      headers: { authorization: `Bearer ${t1}` },
-    });
+    const res = await a1.request("DELETE", `/api/v1/agent/chats/${chatId}/participants/${a3.agent.uuid}`);
     expect(res.statusCode).toBe(404);
   });
 
   it("rejects removing yourself", async () => {
     const app = getApp();
-    const { t1, a1, chatId } = await setupChat(app);
+    const { a1, chatId } = await setupChat(app);
 
-    const res = await app.inject({
-      method: "DELETE",
-      url: `/api/v1/agent/chats/${chatId}/participants/${a1.uuid}`,
-      headers: { authorization: `Bearer ${t1}` },
-    });
+    const res = await a1.request("DELETE", `/api/v1/agent/chats/${chatId}/participants/${a1.agent.uuid}`);
     expect(res.statusCode).toBe(400);
   });
 
   it("rejects non-participant adding someone", async () => {
     const app = getApp();
-    const { t3, a3, chatId } = await setupChat(app);
+    const { a3, chatId } = await setupChat(app);
 
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/agent/chats/${chatId}/participants`,
-      headers: { authorization: `Bearer ${t3}` },
-      payload: { agentId: a3.uuid },
+    const res = await a3.request("POST", `/api/v1/agent/chats/${chatId}/participants`, {
+      agentId: a3.agent.uuid,
     });
     expect(res.statusCode).toBe(403);
   });

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadRuntimeConfig } from "../runtime/config.js";
+import { CONCURRENCY, IDLE_TIMEOUT_MS, MAX_SESSIONS } from "../runtime/constants.js";
 
 function writeTempYaml(content: string): string {
   const path = join(tmpdir(), `first-tree-hub-test-${crypto.randomUUID().slice(0, 8)}.yaml`);
@@ -11,12 +12,12 @@ function writeTempYaml(content: string): string {
 }
 
 describe("Runtime Config", () => {
-  it("loads a valid config with type field", () => {
+  it("loads a valid config with agentId and type", () => {
     const path = writeTempYaml(`
 server: http://localhost:8000
 agents:
   kael:
-    token: test-token-123
+    agentId: agent-kael-uuid
     type: claude-code
 `);
     const config = loadRuntimeConfig(path);
@@ -24,11 +25,14 @@ agents:
 
     const kael = config.agents.kael;
     expect(kael).toBeDefined();
-    expect(kael?.token).toBe("test-token-123");
+    expect(kael?.agentId).toBe("agent-kael-uuid");
     expect(kael?.type).toBe("claude-code");
-    expect(kael?.concurrency).toBe(5); // default
-    expect(kael?.session.idle_timeout).toBe(300); // default
-    expect(kael?.session.max_sessions).toBe(10); // default
+    // Step 11 (PRD §D15): runtime params come from runtime/constants.ts,
+    // not from agent.yaml (the legacy fields are still warned about but
+    // ignored).
+    expect(kael?.concurrency).toBe(CONCURRENCY);
+    expect(kael?.session.idle_timeout).toBe(IDLE_TIMEOUT_MS / 1000);
+    expect(kael?.session.max_sessions).toBe(MAX_SESSIONS);
   });
 
   it("loads config with custom session and concurrency settings", () => {
@@ -36,7 +40,7 @@ agents:
 server: http://example.com:9000
 agents:
   reviewer:
-    token: review-token
+    agentId: agent-reviewer-uuid
     type: claude-code
     session:
       idle_timeout: 600
@@ -55,31 +59,31 @@ agents:
     const path = writeTempYaml(`
 agents:
   agent1:
-    token: token1
+    agentId: uuid-1
     type: claude-code
   agent2:
-    token: token2
+    agentId: uuid-2
     type: claude-code
 `);
     const config = loadRuntimeConfig(path);
     expect(Object.keys(config.agents)).toHaveLength(2);
-    expect(config.agents.agent1?.token).toBe("token1");
-    expect(config.agents.agent2?.token).toBe("token2");
+    expect(config.agents.agent1?.agentId).toBe("uuid-1");
+    expect(config.agents.agent2?.agentId).toBe("uuid-2");
   });
 
-  it("expands environment variables in token", () => {
-    process.env.TEST_CONFIG_TOKEN = "env-resolved-token";
+  it("expands environment variables in agentId", () => {
+    process.env.TEST_CONFIG_AGENT_ID = "env-resolved-agent";
     try {
       const path = writeTempYaml(`
 agents:
   myagent:
-    token: \${TEST_CONFIG_TOKEN}
+    agentId: \${TEST_CONFIG_AGENT_ID}
     type: claude-code
 `);
       const config = loadRuntimeConfig(path);
-      expect(config.agents.myagent?.token).toBe("env-resolved-token");
+      expect(config.agents.myagent?.agentId).toBe("env-resolved-agent");
     } finally {
-      delete process.env.TEST_CONFIG_TOKEN;
+      delete process.env.TEST_CONFIG_AGENT_ID;
     }
   });
 
@@ -88,7 +92,7 @@ agents:
     const path = writeTempYaml(`
 agents:
   myagent:
-    token: \${NONEXISTENT_VAR_XYZ}
+    agentId: \${NONEXISTENT_VAR_XYZ}
     type: claude-code
 `);
     expect(() => loadRuntimeConfig(path)).toThrow(/NONEXISTENT_VAR_XYZ/);
@@ -102,7 +106,7 @@ agents: {}
     expect(() => loadRuntimeConfig(path)).toThrow();
   });
 
-  it("throws when token is missing", () => {
+  it("throws when agentId is missing", () => {
     const path = writeTempYaml(`
 agents:
   myagent:
@@ -115,7 +119,7 @@ agents:
     const path = writeTempYaml(`
 agents:
   myagent:
-    token: some-token
+    agentId: some-uuid
 `);
     expect(() => loadRuntimeConfig(path)).toThrow();
   });
@@ -124,7 +128,7 @@ agents:
     const path = writeTempYaml(`
 agents:
   myagent:
-    token: tok
+    agentId: some-uuid
     type: claude-code
 `);
     const config = loadRuntimeConfig(path);

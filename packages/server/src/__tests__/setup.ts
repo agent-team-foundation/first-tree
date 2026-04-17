@@ -29,7 +29,6 @@ beforeEach(async () => {
       messages,
       chat_participants,
       chats,
-      agent_tokens,
       agent_presence,
       members,
       agents,

@@ -13,13 +13,11 @@ import { fail } from "../cli/output.js";
 import {
   ClientRuntime,
   checkAgentConfigs,
-  checkAgentTokens,
   checkClientConfig,
   checkNodeVersion,
   checkServerReachable,
   checkWebSocket,
-  ensureFreshAdminToken,
-  maskToken,
+  ensureFreshAccessToken,
   printResults,
   promptMissingFields,
   resolveServerUrl,
@@ -95,7 +93,6 @@ export function registerClientCommands(program: Command): void {
         checkClientConfig(),
         await checkServerReachable(),
         checkAgentConfigs(),
-        await checkAgentTokens(),
         await checkWebSocket(),
       ];
       printResults(results);
@@ -123,7 +120,7 @@ export function registerClientCommands(program: Command): void {
         process.stderr.write("\n  Configured agents:\n\n");
         for (const [name, config] of agents) {
           process.stderr.write(
-            `  ${name.padEnd(20)} runtime: ${config.runtime.padEnd(14)} token: ${maskToken(config.token)}\n`,
+            `  ${name.padEnd(20)} runtime: ${config.runtime.padEnd(14)} agentId: ${config.agentId}\n`,
           );
         }
         process.stderr.write("\n");
@@ -141,7 +138,7 @@ export function registerClientCommands(program: Command): void {
     .action(async (options: { server?: string }) => {
       try {
         const serverUrl = resolveServerUrl(options.server);
-        const token = await ensureFreshAdminToken();
+        const token = await ensureFreshAccessToken();
         const response = await fetch(`${serverUrl}/api/v1/admin/clients`, {
           headers: { Authorization: `Bearer ${token}` },
           signal: AbortSignal.timeout(10_000),
@@ -186,7 +183,7 @@ export function registerClientCommands(program: Command): void {
     .action(async (clientId: string, options: { server?: string }) => {
       try {
         const serverUrl = resolveServerUrl(options.server);
-        const token = await ensureFreshAdminToken();
+        const token = await ensureFreshAccessToken();
         const response = await fetch(`${serverUrl}/api/v1/admin/clients/${clientId}/disconnect`, {
           method: "POST",
           headers: { Authorization: `Bearer ${token}` },

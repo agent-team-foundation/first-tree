@@ -34,6 +34,7 @@ import { requireMember } from "../middleware/require-identity.js";
 // ---------------------------------------------------------------------------
 
 export type MemberScope = {
+  userId: string;
   memberId: string;
   humanAgentId: string;
   organizationId: string;
@@ -43,7 +44,13 @@ export type MemberScope = {
 /** Extract MemberScope from an authenticated request. Single definition, used by all routes. */
 export function memberScope(request: FastifyRequest): MemberScope {
   const m = requireMember(request);
-  return { memberId: m.memberId, humanAgentId: m.agentId, organizationId: m.organizationId, role: m.role };
+  return {
+    userId: m.userId,
+    memberId: m.memberId,
+    humanAgentId: m.agentId,
+    organizationId: m.organizationId,
+    role: m.role,
+  };
 }
 
 // ---------------------------------------------------------------------------

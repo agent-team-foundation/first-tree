@@ -19,12 +19,12 @@ describe("Admin Tasks API", () => {
   it("creates a task via admin and notifies the assignee", async () => {
     const app = getApp();
     const req = await authedRequest(app);
-    const { agent: a, token: at } = await createTestAgent(app, { name: "admin-task-target" });
+    const target = await createTestAgent(app, { name: "admin-task-target" });
 
     const createRes = await req("POST", "/api/v1/admin/tasks", {
       title: "Admin-issued work",
       body: "Please look at this",
-      assigneeAgentId: a.uuid,
+      assigneeAgentId: target.agent.uuid,
     });
     expect(createRes.statusCode).toBe(201);
     const task = createRes.json<{ id: string; status: string; createdByType: string }>();
@@ -32,12 +32,8 @@ describe("Admin Tasks API", () => {
     expect(task.createdByType).toBe("admin");
 
     // Target agent should have received a task notification via inbox
-    const inboxRes = await app.inject({
-      method: "GET",
-      url: "/api/v1/agent/inbox",
-      headers: { authorization: `Bearer ${at}` },
-    });
-    const entries = inboxRes.json<Array<{ message: { format: string } }>>();
+    const inboxRes = await target.request("GET", "/api/v1/agent/inbox");
+    const entries = inboxRes.json() as Array<{ message: { format: string } }>;
     expect(entries.some((e) => e.message.format === "task")).toBe(true);
   });
 

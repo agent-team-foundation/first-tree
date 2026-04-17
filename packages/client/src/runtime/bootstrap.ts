@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
-import { FirstTreeHubSDK } from "../sdk.js";
+import { type AccessTokenProvider, FirstTreeHubSDK } from "../sdk.js";
 import type { AgentIdentity } from "./handler.js";
 
 const CONTEXT_TREE_DIR = join(DEFAULT_DATA_DIR, "context-tree");
@@ -15,7 +15,7 @@ const CONTEXT_TREE_DIR = join(DEFAULT_DATA_DIR, "context-tree");
  */
 export async function syncContextTree(
   serverUrl: string,
-  token: string,
+  getAccessToken: AccessTokenProvider,
   log: (msg: string) => void,
 ): Promise<string | null> {
   // 1. Check git is available
@@ -30,7 +30,7 @@ export async function syncContextTree(
   let repo: string;
   let branch: string;
   try {
-    const sdk = new FirstTreeHubSDK({ serverUrl, token });
+    const sdk = new FirstTreeHubSDK({ serverUrl, getAccessToken });
     const config = await sdk.getContextTreeConfig();
     if (!config.repo) {
       log("Context Tree sync skipped: not configured on server");
@@ -135,7 +135,7 @@ export function bootstrapWorkspace(options: BootstrapOptions): void {
   const agentDir = join(workspacePath, ".agent");
   const contextDir = join(agentDir, "context");
 
-  // Clear stale context before repopulating (prevents serving outdated profile)
+  // Clear stale context before repopulating (prevents serving outdated files).
   if (existsSync(contextDir)) {
     rmSync(contextDir, { recursive: true, force: true });
   }
@@ -154,12 +154,10 @@ export function bootstrapWorkspace(options: BootstrapOptions): void {
   };
   writeFileSync(join(agentDir, "identity.json"), JSON.stringify(identityData, null, 2), "utf-8");
 
-  // 2. Write agent profile from Hub identity (if available)
-  if (identity.profile) {
-    writeFileSync(join(contextDir, "self.md"), identity.profile, "utf-8");
-  }
-
-  // 3. Copy organizational context from Context Tree (if available)
+  // 2. Copy organizational context from Context Tree (if available).
+  // Per PRD D7, the agent's behavior instructions live in the Hub-managed
+  // `agent_configs.payload.prompt.append` and are injected via the Claude
+  // Code SDK's `systemPrompt.append`, not via a workspace file.
   if (contextTreePath) {
     // Agent operating instructions (AGENT.md)
     const agentMdPath = join(contextTreePath, "AGENT.md");
@@ -191,7 +189,7 @@ You are running inside **Agent Hub**, a messaging platform for agent teams.
 - For **proactive communication** (sending to other agents, other chats, or structured data),
   use the \`first-tree-hub\` CLI below
 - **Use your judgment about when to respond.** Not every message requires a reply.
-  Your role and responsibilities (defined in your profile above) guide your behavior
+  Your role and responsibilities are injected via the Hub-managed system prompt.
 
 ## Environment Variables
 
@@ -200,15 +198,16 @@ These are injected automatically when the agent process starts:
 | Variable | Description |
 |----------|-------------|
 | \`FIRST_TREE_HUB_SERVER_URL\` | Server address for API calls |
-| \`FIRST_TREE_HUB_AGENT_TOKEN\` | Bearer token for authentication |
+| \`FIRST_TREE_HUB_ACCESS_TOKEN\` | User member access JWT (short-lived) |
+| \`FIRST_TREE_HUB_AGENT_ID\` | Your agent UUID — send as \`X-Agent-Id\` |
 | \`FIRST_TREE_HUB_CHAT_ID\` | Current chat context ID |
-| \`FIRST_TREE_HUB_AGENT_ID\` | Your agent ID |
 
 The \`first-tree-hub\` CLI reads these automatically — no extra setup needed.
 
 ## Sending Messages
 
-Use the \`first-tree-hub agent send\` CLI:
+Use the \`first-tree-hub agent send\` CLI — it reads the env vars above and
+attaches the \`Authorization\` + \`X-Agent-Id\` headers automatically:
 
 \`\`\`bash
 # Send to another agent (target = agent ID)

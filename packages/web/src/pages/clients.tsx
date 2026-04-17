@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronDown, ChevronRight, Copy, Terminal, Unplug } from "lucide-react";
-import { useState } from "react";
+import { Check, ChevronDown, ChevronRight, Copy, Terminal, Trash2, Unplug } from "lucide-react";
+import { useMemo, useState } from "react";
 import {
   type ConnectTokenResponse,
   disconnectClient,
@@ -9,7 +9,9 @@ import {
   type HubClient,
   listClients,
   type RuntimeAgent,
+  retireClient,
 } from "../api/activity.js";
+import { ApiError } from "../api/client.js";
 import { Badge } from "../components/ui/badge.js";
 import { Button } from "../components/ui/button.js";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.js";
@@ -83,6 +85,8 @@ export function ClientsPage() {
   const agentName = useAgentNameMap();
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [confirmDisconnect, setConfirmDisconnect] = useState<HubClient | null>(null);
+  const [confirmRetire, setConfirmRetire] = useState<HubClient | null>(null);
+  const [retireError, setRetireError] = useState<string | null>(null);
 
   const { data: clients } = useQuery({
     queryKey: ["clients"],
@@ -105,23 +109,94 @@ export function ClientsPage() {
     },
   });
 
-  // Build clientId → agents[] mapping
-  const agentsByClient = new Map<string, RuntimeAgent[]>();
-  if (activity?.agents) {
-    for (const a of activity.agents) {
-      if (a.clientId) {
-        const list = agentsByClient.get(a.clientId) ?? [];
-        list.push(a);
-        agentsByClient.set(a.clientId, list);
-      }
+  const retireMut = useMutation({
+    mutationFn: retireClient,
+    onSuccess: () => {
+      setConfirmRetire(null);
+      setRetireError(null);
+      queryClient.invalidateQueries({ queryKey: ["clients"] });
+      queryClient.invalidateQueries({ queryKey: ["activity"] });
+    },
+    onError: (err: unknown) => {
+      // WB7: 409 conflict carries the pinned-agent list in the error message.
+      // Surface it verbatim so the operator knows which agents block retire.
+      if (err instanceof ApiError) setRetireError(err.message);
+      else setRetireError(err instanceof Error ? err.message : String(err));
+    },
+  });
+
+  const agentsByClient = useMemo(() => {
+    const map = new Map<string, RuntimeAgent[]>();
+    for (const a of activity?.agents ?? []) {
+      if (!a.clientId) continue;
+      const list = map.get(a.clientId) ?? [];
+      list.push(a);
+      map.set(a.clientId, list);
     }
-  }
+    return map;
+  }, [activity?.agents]);
 
   const getClientAgents = (clientId: string): RuntimeAgent[] => agentsByClient.get(clientId) ?? [];
 
   return (
     <div>
       <ConnectCommandBanner />
+
+      {/* Confirm retire dialog */}
+      {confirmRetire && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-card border border-border rounded-lg p-6 max-w-md w-full shadow-lg">
+            <h3 className="text-lg font-semibold mb-2">Retire Client</h3>
+            <p className="text-sm text-muted-foreground mb-3">
+              Permanently remove{" "}
+              <span className="font-medium text-foreground">
+                {confirmRetire.hostname ?? confirmRetire.id.slice(0, 8)}
+              </span>
+              . Retire refuses if any agent is still pinned to this client — you must delete those agents first
+              (reassign is not available in this milestone).
+            </p>
+            {getClientAgents(confirmRetire.id).length > 0 && (
+              <div className="mb-3 p-2 rounded bg-yellow-50 dark:bg-yellow-950/30 border border-yellow-200 dark:border-yellow-900">
+                <div className="text-xs font-medium text-yellow-900 dark:text-yellow-200 mb-1">
+                  Agents currently bound to this client (delete them first):
+                </div>
+                <ul className="text-sm space-y-0.5">
+                  {getClientAgents(confirmRetire.id).map((a) => (
+                    <li key={a.agentId} className="font-medium">
+                      {agentName(a.agentId)}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {retireError && (
+              <div className="mb-3 p-2 rounded bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900 text-sm text-red-900 dark:text-red-200">
+                {retireError}
+              </div>
+            )}
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setConfirmRetire(null);
+                  setRetireError(null);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => retireMut.mutate(confirmRetire.id)}
+                disabled={retireMut.isPending}
+              >
+                {retireMut.isPending ? "Retiring..." : "Retire"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Confirm disconnect dialog */}
       {confirmDisconnect && (
@@ -196,6 +271,10 @@ export function ClientsPage() {
                     agentName={agentName}
                     onToggle={() => setExpandedId(isExpanded ? null : client.id)}
                     onDisconnect={() => setConfirmDisconnect(client)}
+                    onRetire={() => {
+                      setRetireError(null);
+                      setConfirmRetire(client);
+                    }}
                   />
                 );
               })}
@@ -214,6 +293,7 @@ function ClientRow({
   agentName,
   onToggle,
   onDisconnect,
+  onRetire,
 }: {
   client: HubClient;
   boundAgents: RuntimeAgent[];
@@ -221,6 +301,7 @@ function ClientRow({
   agentName: (uuid: string | null | undefined) => string;
   onToggle: () => void;
   onDisconnect: () => void;
+  onRetire: () => void;
 }) {
   return (
     <>
@@ -239,17 +320,30 @@ function ClientRow({
           <Badge variant={client.status === "connected" ? "default" : "secondary"}>{client.status}</Badge>
         </TableCell>
         <TableCell>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={(e) => {
-              e.stopPropagation();
-              onDisconnect();
-            }}
-          >
-            <Unplug className="h-3 w-3 mr-1" />
-            Disconnect
-          </Button>
+          <div className="flex gap-2 justify-end">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDisconnect();
+              }}
+            >
+              <Unplug className="h-3 w-3 mr-1" />
+              Disconnect
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={(e) => {
+                e.stopPropagation();
+                onRetire();
+              }}
+            >
+              <Trash2 className="h-3 w-3 mr-1" />
+              Retire
+            </Button>
+          </div>
         </TableCell>
       </TableRow>
       {isExpanded && (

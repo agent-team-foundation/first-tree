@@ -1,8 +1,6 @@
-import { execSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DEFAULT_CONFIG_DIR, getClientConfig } from "@agent-team-foundation/first-tree-hub-shared/config";
-import { parse as parseYaml } from "yaml";
 
 const CREDENTIALS_PATH = join(DEFAULT_CONFIG_DIR, "credentials.json");
 
@@ -13,41 +11,11 @@ type StoredCredentials = {
 };
 
 /**
- * Get the current GitHub username from `gh auth status`.
- */
-export function getGitHubUsername(): string {
-  try {
-    const output = execSync("gh api /user --jq .login", { encoding: "utf-8" }).trim();
-    if (!output) throw new Error("Empty response");
-    return output;
-  } catch {
-    throw new Error(
-      "Failed to get GitHub username. Ensure `gh` CLI is installed and authenticated:\n" + "  gh auth login",
-    );
-  }
-}
-
-/**
- * Get the GitHub auth token from `gh auth token`.
- */
-export function getGitHubToken(): string {
-  try {
-    const output = execSync("gh auth token", { encoding: "utf-8" }).trim();
-    if (!output) throw new Error("Empty response");
-    return output;
-  } catch {
-    throw new Error(
-      "Failed to get GitHub token. Ensure `gh` CLI is installed and authenticated:\n" + "  gh auth login",
-    );
-  }
-}
-
-/**
  * Resolve Hub server URL from flag, env, or config.
  */
 export function resolveServerUrl(flagValue?: string): string {
   if (flagValue) return flagValue;
-  if (process.env.FIRST_TREE_HUB_SERVER_URL) return process.env.FIRST_TREE_HUB_SERVER_URL;
+  if (process.env.FIRST_TREE_HUB_SERVER) return process.env.FIRST_TREE_HUB_SERVER;
 
   try {
     const config = getClientConfig();
@@ -58,167 +26,42 @@ export function resolveServerUrl(flagValue?: string): string {
 
   throw new Error(
     "Server URL not configured.\n" +
-      "  Provide via: --server <url>, FIRST_TREE_HUB_SERVER_URL env var, or\n" +
+      "  Provide via: --server <url>, FIRST_TREE_HUB_SERVER env var, or\n" +
       "  first-tree-hub config set -c server.url <url>",
   );
 }
 
 /**
- * Bootstrap a token for an agent using GitHub identity.
+ * Resolve the current member access JWT from persisted credentials.
+ *
+ * Unified-user-token milestone: the CLI has a single credential store and a
+ * single onboarding path (`first-tree-hub connect`). The legacy
+ * `FIRST_TREE_HUB_TOKEN` env var is no longer read — callers get a clear
+ * error pointing at `connect` instead.
  */
-export async function bootstrapToken(
-  serverUrl: string,
-  agentName: string,
-  options: {
-    saveTo?: string;
-    type?: string;
-    displayName?: string;
-    delegateMention?: string;
-    profile?: string;
-    metadata?: Record<string, unknown>;
-  } = {},
-): Promise<{ token: string; agentId: string }> {
-  const githubToken = getGitHubToken();
-
-  const body: Record<string, unknown> = { name: "bootstrap" };
-  if (options.type) body.type = options.type;
-  if (options.displayName) body.displayName = options.displayName;
-  if (options.delegateMention) body.delegateMention = options.delegateMention;
-  if (options.profile) body.profile = options.profile;
-  if (options.metadata) body.metadata = options.metadata;
-
-  const res = await fetch(`${serverUrl}/api/v1/bootstrap/${encodeURIComponent(agentName)}/token`, {
-    method: "POST",
-    headers: {
-      "X-GitHub-Token": githubToken,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
-
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    const msg = body.error ?? `HTTP ${res.status}`;
-    throw new Error(`Bootstrap failed for "${agentName}": ${msg}`);
-  }
-
-  const data = (await res.json()) as { token: string; agentId: string };
-
-  // Save token to agent config if requested.
-  // Human agents are identity-only (managed by adapter); they don't need a client
-  // runtime config, so skip writing to the agents/ directory.
-  const isHuman = options.type === "human";
-  if ((options.saveTo === "agent" || !options.saveTo) && !isHuman) {
-    const configDir = join(DEFAULT_CONFIG_DIR, "agents", agentName);
-    const configPath = `${configDir}/agent.yaml`;
-    mkdirSync(configDir, { recursive: true, mode: 0o700 });
-    writeFileSync(configPath, `token: "${data.token}"\nruntime: claude-code\n`, { mode: 0o600 });
-    chmodSync(configDir, 0o700);
-  } else if (options.saveTo && options.saveTo !== "agent") {
-    mkdirSync(dirname(options.saveTo), { recursive: true });
-    writeFileSync(options.saveTo, data.token, { mode: 0o600 });
-  }
-
-  return data;
-}
-
-/**
- * Load an agent's token from `~/.first-tree-hub/agents/<agentName>/agent.yaml`.
- * Returns null if the file is missing or has no token.
- */
-export function loadAgentTokenByName(agentName: string): string | null {
-  const configPath = join(DEFAULT_CONFIG_DIR, "agents", agentName, "agent.yaml");
-  if (!existsSync(configPath)) return null;
-  try {
-    const raw = parseYaml(readFileSync(configPath, "utf-8")) as { token?: unknown };
-    if (typeof raw.token === "string" && raw.token.length > 0) return raw.token;
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Resolve agent token with the following precedence:
- *   1. FIRST_TREE_HUB_AGENT_TOKEN env var (explicit token; runtime or manual export)
- *   2. FIRST_TREE_HUB_AGENT env var → lookup in ~/.first-tree-hub/agents/<name>/agent.yaml
- * Throws if neither is configured or the named agent has no stored token.
- */
-export function resolveAgentToken(): string {
-  const token = process.env.FIRST_TREE_HUB_AGENT_TOKEN;
-  if (token) return token;
-
-  const agentName = process.env.FIRST_TREE_HUB_AGENT;
-  if (agentName) {
-    const loaded = loadAgentTokenByName(agentName);
-    if (loaded) return loaded;
-    throw new Error(
-      `Agent "${agentName}" has no token in ${join(DEFAULT_CONFIG_DIR, "agents", agentName)}/agent.yaml.\n` +
-        `  Verify the agent exists locally or set FIRST_TREE_HUB_AGENT_TOKEN explicitly.`,
-    );
-  }
-
-  throw new Error(
-    "No agent token configured.\n" +
-      "  Set FIRST_TREE_HUB_AGENT_TOKEN directly, or\n" +
-      "  set FIRST_TREE_HUB_AGENT=<agentName> to use a stored agent config.",
-  );
-}
-
-/**
- * Resolve admin JWT token from FIRST_TREE_HUB_ADMIN_TOKEN env var
- * or persisted credentials from `connect` command.
- * Auto-refreshes expired access tokens when a refresh token is available.
- * Throws if neither is available.
- */
-export function resolveAdminToken(): string {
-  const envToken = process.env.FIRST_TREE_HUB_ADMIN_TOKEN;
-  if (envToken) return envToken;
-
-  // Fall back to persisted credentials from `connect`
+export function resolveAccessToken(): string {
   const creds = loadCredentials();
   if (!creds) {
-    throw new Error(
-      "No credentials found.\n" +
-        "  Run: first-tree-hub connect <server-url>\n" +
-        "  Or set FIRST_TREE_HUB_ADMIN_TOKEN environment variable.",
-    );
+    throw new Error("No credentials found. Run `first-tree-hub connect <server-url>` to sign in.");
   }
-
-  // Check if the access token is expired (JWT payload is base64url-encoded)
-  if (isTokenExpired(creds.accessToken)) {
-    // Return the stored token as-is; the async refresh will happen lazily
-    // To avoid making this function async (breaking many call sites),
-    // callers get the possibly-expired token — but we schedule a sync refresh
-    // via the refreshCredentials() helper that can be awaited at the call site.
-    return creds.accessToken;
-  }
-
   return creds.accessToken;
 }
 
 /**
- * Ensure the persisted access token is fresh. Call before any admin API request
- * when using persisted credentials. Returns the (possibly refreshed) access token.
+ * Ensure the persisted access token is fresh. Call before any API request
+ * when using persisted credentials. Returns the (possibly refreshed) access
+ * token. Service-user API keys are out of scope for this milestone.
  */
-export async function ensureFreshAdminToken(): Promise<string> {
-  const envToken = process.env.FIRST_TREE_HUB_ADMIN_TOKEN;
-  if (envToken) return envToken;
-
+export async function ensureFreshAccessToken(): Promise<string> {
   const creds = loadCredentials();
   if (!creds) {
-    throw new Error(
-      "No credentials found.\n" +
-        "  Run: first-tree-hub connect <server-url>\n" +
-        "  Or set FIRST_TREE_HUB_ADMIN_TOKEN environment variable.",
-    );
+    throw new Error("No credentials found. Run `first-tree-hub connect <server-url>` to sign in.");
   }
 
   if (!isTokenExpired(creds.accessToken)) {
     return creds.accessToken;
   }
 
-  // Refresh the access token using the refresh token
   const res = await fetch(`${creds.serverUrl}/api/v1/auth/refresh`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -227,7 +70,7 @@ export async function ensureFreshAdminToken(): Promise<string> {
   });
 
   if (!res.ok) {
-    throw new Error("Access token expired and refresh failed.\n" + "  Run: first-tree-hub connect <server-url>");
+    throw new Error("Access token expired and refresh failed. Run `first-tree-hub connect <server-url>`.");
   }
 
   const data = (await res.json()) as { accessToken: string };
@@ -235,7 +78,9 @@ export async function ensureFreshAdminToken(): Promise<string> {
   return data.accessToken;
 }
 
-/** Check if a JWT access token is expired (with 30s margin). */
+/** Back-compat alias retained so existing call sites keep compiling. */
+export const ensureFreshAdminToken = ensureFreshAccessToken;
+
 function isTokenExpired(token: string): boolean {
   try {
     const parts = token.split(".");
@@ -256,7 +101,7 @@ export function saveCredentials(creds: StoredCredentials): void {
 }
 
 /**
- * Load persisted credentials saved by `connect` command.
+ * Load persisted credentials saved by the `connect` command.
  */
 export function loadCredentials(): StoredCredentials | null {
   try {
@@ -270,38 +115,16 @@ export function loadCredentials(): StoredCredentials | null {
 }
 
 /**
- * Check if an agent exists and is synced.
+ * Write agent config (agentId + runtime) to disk.
  */
-export async function checkBootstrapStatus(
-  serverUrl: string,
-  agentName: string,
-): Promise<{ exists: boolean; status: string | null }> {
-  const githubToken = getGitHubToken();
-
-  const res = await fetch(`${serverUrl}/api/v1/bootstrap/${encodeURIComponent(agentName)}/status`, {
-    headers: { "X-GitHub-Token": githubToken },
-  });
-
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error ?? `HTTP ${res.status}`);
-  }
-
-  return (await res.json()) as { exists: boolean; status: string | null };
-}
-
-/**
- * Write agent config (token + runtime) to disk.
- * Used by `agent create`, `agent add`, bootstrap, and server-pushed provisioning.
- */
-export function saveAgentConfig(agentName: string, token: string, runtime: string): string {
+export function saveAgentConfig(agentName: string, agentId: string, runtime: string): string {
   const agentDir = join(DEFAULT_CONFIG_DIR, "agents", agentName);
   mkdirSync(agentDir, { recursive: true, mode: 0o700 });
-  writeFileSync(join(agentDir, "agent.yaml"), `token: "${token}"\nruntime: ${runtime}\n`, { mode: 0o600 });
+  writeFileSync(join(agentDir, "agent.yaml"), `agentId: "${agentId}"\nruntime: ${runtime}\n`, { mode: 0o600 });
   return agentDir;
 }
 
-/** Mask a token for display: show first 6 + last 2 chars. */
+/** Mask a JWT/token for display: show first 6 + last 2 chars. */
 export function maskToken(token: string): string {
   return token.length > 8 ? `${token.slice(0, 6)}***${token.slice(-2)}` : "***";
 }

@@ -6,26 +6,19 @@ describe("Agent Send-to-Agent API", () => {
 
   it("sends a message to another agent (auto-creates direct chat)", async () => {
     const app = getApp();
-    const { token: t1 } = await createTestAgent(app, { name: "sta-a1" });
-    const { agent: a2, token: t2 } = await createTestAgent(app, { name: "sta-a2" });
+    const a1 = await createTestAgent(app, { name: "sta-a1" });
+    const a2 = await createTestAgent(app, { name: "sta-a2" });
 
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/agent/agents/${a2.name}/messages`,
-      headers: { authorization: `Bearer ${t1}` },
-      payload: { format: "text", content: "Hello agent!" },
+    const res = await a1.request("POST", `/api/v1/agent/agents/${a2.agent.name}/messages`, {
+      format: "text",
+      content: "Hello agent!",
     });
     expect(res.statusCode).toBe(201);
     const msg = res.json();
     expect(msg.content).toBe("Hello agent!");
     expect(msg.chatId).toBeDefined();
 
-    // Recipient should see the message in inbox
-    const pollRes = await app.inject({
-      method: "GET",
-      url: "/api/v1/agent/inbox",
-      headers: { authorization: `Bearer ${t2}` },
-    });
+    const pollRes = await a2.request("GET", "/api/v1/agent/inbox");
     expect(pollRes.statusCode).toBe(200);
     const entries = pollRes.json();
     expect(entries.length).toBeGreaterThanOrEqual(1);
@@ -34,22 +27,18 @@ describe("Agent Send-to-Agent API", () => {
 
   it("reuses existing direct chat for same pair", async () => {
     const app = getApp();
-    const { token: t1 } = await createTestAgent(app, { name: "reuse-a1" });
+    const a1 = await createTestAgent(app, { name: "reuse-a1" });
     const { agent: a2 } = await createTestAgent(app, { name: "reuse-a2" });
 
-    const res1 = await app.inject({
-      method: "POST",
-      url: `/api/v1/agent/agents/${a2.name}/messages`,
-      headers: { authorization: `Bearer ${t1}` },
-      payload: { format: "text", content: "First message" },
+    const res1 = await a1.request("POST", `/api/v1/agent/agents/${a2.name}/messages`, {
+      format: "text",
+      content: "First message",
     });
     const chatId1 = res1.json().chatId;
 
-    const res2 = await app.inject({
-      method: "POST",
-      url: `/api/v1/agent/agents/${a2.name}/messages`,
-      headers: { authorization: `Bearer ${t1}` },
-      payload: { format: "text", content: "Second message" },
+    const res2 = await a1.request("POST", `/api/v1/agent/agents/${a2.name}/messages`, {
+      format: "text",
+      content: "Second message",
     });
     const chatId2 = res2.json().chatId;
 
@@ -58,36 +47,29 @@ describe("Agent Send-to-Agent API", () => {
 
   it("rejects sending to non-existent agent", async () => {
     const app = getApp();
-    const { token: t1 } = await createTestAgent(app, { name: "noagent-a1" });
+    const a1 = await createTestAgent(app, { name: "noagent-a1" });
 
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/v1/agent/agents/non-existent/messages",
-      headers: { authorization: `Bearer ${t1}` },
-      payload: { format: "text", content: "Hello?" },
+    const res = await a1.request("POST", "/api/v1/agent/agents/non-existent/messages", {
+      format: "text",
+      content: "Hello?",
     });
     expect(res.statusCode).toBe(404);
   });
 
   it("sends with replyTo fields", async () => {
     const app = getApp();
-    const { agent: a1, token: t1 } = await createTestAgent(app, { name: "reply-a1" });
+    const a1 = await createTestAgent(app, { name: "reply-a1" });
     const { agent: a2 } = await createTestAgent(app, { name: "reply-a2" });
 
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/agent/agents/${a2.name}/messages`,
-      headers: { authorization: `Bearer ${t1}` },
-      payload: {
-        format: "text",
-        content: "Need approval",
-        replyToInbox: a1.inboxId,
-        replyToChat: "some-chat-id",
-      },
+    const res = await a1.request("POST", `/api/v1/agent/agents/${a2.name}/messages`, {
+      format: "text",
+      content: "Need approval",
+      replyToInbox: a1.agent.inboxId,
+      replyToChat: "some-chat-id",
     });
     expect(res.statusCode).toBe(201);
     const msg = res.json();
-    expect(msg.replyToInbox).toBe(a1.inboxId);
+    expect(msg.replyToInbox).toBe(a1.agent.inboxId);
     expect(msg.replyToChat).toBe("some-chat-id");
   });
 });

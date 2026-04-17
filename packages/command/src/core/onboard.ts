@@ -5,17 +5,17 @@ import {
   DEFAULT_HOME_DIR,
   setConfigValue,
 } from "@agent-team-foundation/first-tree-hub-shared/config";
-import { bootstrapToken, getGitHubUsername, resolveServerUrl } from "./bootstrap.js";
+import { ensureFreshAccessToken, loadCredentials, resolveServerUrl, saveAgentConfig } from "./bootstrap.js";
 
 // ── Types ────────────────────────────────────────────────────────────
 
 type OnboardArgs = {
   id: string;
   type: "human" | "personal_assistant" | "autonomous_agent";
+  clientId?: string;
   role?: string;
   domains?: string;
   displayName?: string;
-  profile?: string;
   assistant?: string;
   delegateMention?: string;
   server?: string;
@@ -54,26 +54,22 @@ export function loadOnboardState(): Record<string, unknown> | null {
 export async function onboardCheck(args: OnboardArgs): Promise<CheckItem[]> {
   const items: CheckItem[] = [];
 
-  // GitHub CLI — check first, everything else depends on it
-  let ghUsername: string | null = null;
-  try {
-    ghUsername = getGitHubUsername();
-    items.push({ key: "github_cli", label: "GitHub CLI", status: "ok", value: `authenticated as ${ghUsername}` });
-  } catch {
+  const creds = loadCredentials();
+  if (creds) {
+    items.push({ key: "connect", label: "Signed in", status: "ok", value: creds.serverUrl });
+  } else {
     items.push({
-      key: "github_cli",
-      label: "GitHub CLI",
+      key: "connect",
+      label: "Signed in",
       status: "missing_required",
-      hint: "Install and authenticate: gh auth login",
+      hint: "Run `first-tree-hub connect <server-url>` first",
     });
   }
 
-  // Server URL
   try {
     const serverUrl = resolveServerUrl(args.server);
     items.push({ key: "server", label: "Server URL", status: "ok", value: serverUrl });
 
-    // Check server reachable
     try {
       const res = await fetch(`${serverUrl}/api/v1/health`);
       items.push({
@@ -82,28 +78,6 @@ export async function onboardCheck(args: OnboardArgs): Promise<CheckItem[]> {
         status: res.ok ? "ok" : "error",
         value: res.ok ? "healthy" : `HTTP ${res.status}`,
       });
-
-      // Check bootstrap config (allowedOrg)
-      if (res.ok) {
-        try {
-          const configRes = await fetch(`${serverUrl}/api/v1/bootstrap/config`);
-          if (configRes.ok) {
-            const config = (await configRes.json()) as { allowedOrg: string | null };
-            if (config.allowedOrg) {
-              items.push({ key: "allowed_org", label: "GitHub org", status: "ok", value: config.allowedOrg });
-            } else {
-              items.push({
-                key: "allowed_org",
-                label: "GitHub org",
-                status: "error",
-                hint: "FIRST_TREE_HUB_GITHUB_ALLOWED_ORG not configured on server",
-              });
-            }
-          }
-        } catch {
-          // Non-critical — older servers may not have this endpoint
-        }
-      }
     } catch {
       items.push({
         key: "server_reachable",
@@ -121,7 +95,6 @@ export async function onboardCheck(args: OnboardArgs): Promise<CheckItem[]> {
     });
   }
 
-  // Required params
   if (args.id) {
     items.push({ key: "id", label: "Agent ID", status: "ok", value: args.id });
   } else {
@@ -132,6 +105,15 @@ export async function onboardCheck(args: OnboardArgs): Promise<CheckItem[]> {
     items.push({ key: "type", label: "Agent type", status: "ok", value: args.type });
   } else {
     items.push({ key: "type", label: "Agent type", status: "missing_required", hint: "Provide via --type" });
+  }
+
+  if (args.type && args.type !== "human" && !args.clientId) {
+    items.push({
+      key: "client",
+      label: "Target client",
+      status: "missing_required",
+      hint: "Non-human agents must pin a client via --client-id <id>",
+    });
   }
 
   return items;
@@ -157,81 +139,92 @@ export function formatCheckReport(items: CheckItem[]): string {
   return lines.join("\n");
 }
 
-// ── Create agent via bootstrap endpoint ─────────────────────────────
+// ── Create flow ──────────────────────────────────────────────────────
+
+async function createAgentViaAdmin(
+  serverUrl: string,
+  accessToken: string,
+  body: Record<string, unknown>,
+): Promise<{ uuid: string; name: string | null }> {
+  const res = await fetch(`${serverUrl}/api/v1/admin/agents`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) {
+    const errBody = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(errBody.error ?? `Failed to create agent (HTTP ${res.status})`);
+  }
+  return (await res.json()) as { uuid: string; name: string | null };
+}
 
 export async function onboardCreate(args: OnboardArgs): Promise<void> {
   const serverUrl = resolveServerUrl(args.server).replace(/\/+$/, "");
-  getGitHubUsername(); // verify gh is authenticated (throws if not)
+  const accessToken = await ensureFreshAccessToken();
 
-  // 1. Bootstrap token for the main agent (auto-creates if not exists)
-  process.stderr.write(`Bootstrapping agent "${args.id}"...\n`);
-
-  // Build metadata from role/domains if provided
   const metadata: Record<string, unknown> = {};
   if (args.role) metadata.role = args.role;
   if (args.domains) metadata.domains = args.domains.split(",").map((d) => d.trim());
 
-  let token: string;
-  try {
-    const result = await bootstrapToken(serverUrl, args.id, {
-      saveTo: "agent",
-      type: args.type,
-      displayName: args.displayName ?? args.id,
-      profile: args.profile,
-      delegateMention: args.assistant ?? args.delegateMention,
-      metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
-    });
-    token = result.token;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes("already has") || msg.includes("409")) {
-      throw new Error(
-        `Agent "${args.id}" already has an active token.\n` +
-          "Ask an admin to revoke the existing token in the Web UI, then re-run onboard.",
-      );
-    }
-    throw err;
-  }
-  process.stderr.write(`Agent "${args.id}" ready.\n`);
+  process.stderr.write(`Creating agent "${args.id}"...\n`);
+  const primary = await createAgentViaAdmin(serverUrl, accessToken, {
+    name: args.id,
+    type: args.type,
+    displayName: args.displayName ?? args.id,
+    delegateMention: args.assistant ?? args.delegateMention,
+    metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+    clientId: args.type === "human" ? undefined : args.clientId,
+  });
+  process.stderr.write(`Agent "${args.id}" created (uuid ${primary.uuid}).\n`);
 
-  // 2. Bootstrap assistant if requested (auto-creates if not exists)
+  // For non-human agents, persist the local alias so `client start` can bind.
+  if (args.type !== "human") {
+    saveAgentConfig(args.id, primary.uuid, "claude-code");
+  }
+
+  let assistantUuid: string | null = null;
   if (args.assistant) {
-    process.stderr.write(`Bootstrapping assistant "${args.assistant}"...\n`);
+    process.stderr.write(`Creating assistant "${args.assistant}"...\n`);
     try {
-      const assistantResult = await bootstrapToken(serverUrl, args.assistant, {
-        saveTo: "agent",
+      const assistant = await createAgentViaAdmin(serverUrl, accessToken, {
+        name: args.assistant,
         type: "personal_assistant",
         displayName: args.assistant,
         metadata: { role: `Personal Assistant to ${args.id}`, domains: ["message triage", "task coordination"] },
+        clientId: args.clientId,
       });
-      token = assistantResult.token; // use assistant token for Feishu binding
+      assistantUuid = assistant.uuid;
+      saveAgentConfig(args.assistant, assistant.uuid, "claude-code");
       process.stderr.write(`Assistant "${args.assistant}" ready.\n`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      process.stderr.write(`Warning: Failed to bootstrap assistant "${args.assistant}": ${msg}\n`);
+      process.stderr.write(`Warning: Failed to create assistant "${args.assistant}": ${msg}\n`);
     }
   }
 
-  // Token path: human agents are not saved to agents/ (identity-only);
-  // only the assistant (or non-human agent) gets a runtime config.
   const runtimeAgent = args.type === "human" ? args.assistant : args.id;
-  if (runtimeAgent) {
-    process.stderr.write(`Token saved to ${DEFAULT_HOME_DIR}/config/agents/${runtimeAgent}/agent.yaml\n`);
-  }
 
-  // 3. Bind Feishu bot (if requested)
+  // Bind Feishu bot if requested — runs on the runtime agent (assistant for
+  // human, otherwise self).
   if (args.feishuBotAppId && args.feishuBotAppSecret) {
     const { bindFeishuBot } = await import("./feishu.js");
-    process.stderr.write("Binding Feishu bot...\n");
-    await bindFeishuBot(serverUrl, token, args.feishuBotAppId, args.feishuBotAppSecret);
-    process.stderr.write("Feishu bot bound.\n");
+    const targetAgentUuid = args.type === "human" ? assistantUuid : primary.uuid;
+    if (!targetAgentUuid) {
+      process.stderr.write(`Warning: Cannot bind Feishu bot — no runtime agent available for "${args.id}".\n`);
+    } else {
+      process.stderr.write("Binding Feishu bot...\n");
+      await bindFeishuBot(serverUrl, accessToken, targetAgentUuid, args.feishuBotAppId, args.feishuBotAppSecret);
+      process.stderr.write("Feishu bot bound.\n");
+    }
   }
 
-  // 4. Auto-configure client config
   const clientConfigPath = join(DEFAULT_CONFIG_DIR, "client.yaml");
   setConfigValue(clientConfigPath, "server.url", serverUrl);
 
-  // Clean up state file
   try {
     const { unlinkSync } = await import("node:fs");
     unlinkSync(STATE_FILE);
@@ -239,7 +232,6 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
     // Ignore
   }
 
-  // Summary
   const typeLabel = args.type === "human" ? "Human" : args.type === "autonomous_agent" ? "Agent" : "Assistant";
   process.stderr.write("\n\u2705 Onboard complete!\n\n");
   process.stderr.write(`  ${typeLabel}:${" ".repeat(Math.max(1, 10 - typeLabel.length))}${args.id}\n`);
@@ -247,7 +239,7 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
     process.stderr.write(`  Assistant: ${args.assistant}\n`);
   }
   if (runtimeAgent) {
-    process.stderr.write(`  Token:     ${DEFAULT_HOME_DIR}/config/agents/${runtimeAgent}/agent.yaml\n`);
+    process.stderr.write(`  Config:    ${DEFAULT_HOME_DIR}/config/agents/${runtimeAgent}/agent.yaml\n`);
   }
   if (args.feishuBotAppId) {
     process.stderr.write(`  Feishu:    bot bound (${args.feishuBotAppId})\n`);
@@ -261,7 +253,6 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
     }
   }
 
-  // Only show "client start" hint when there's an agent that needs a runtime
   if (runtimeAgent) {
     process.stderr.write("\n  Start the agent:\n");
     process.stderr.write("    first-tree-hub client start\n");

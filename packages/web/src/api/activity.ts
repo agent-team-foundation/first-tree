@@ -25,6 +25,7 @@ export type ActivityOverview = {
 
 export type HubClient = {
   id: string;
+  userId: string | null;
   status: string;
   sdkVersion: string | null;
   hostname: string | null;
@@ -33,6 +34,10 @@ export type HubClient = {
   connectedAt: string | null;
   lastSeenAt: string;
 };
+
+export function retireClient(clientId: string): Promise<void> {
+  return api.delete<void>(`/admin/clients/${encodeURIComponent(clientId)}`);
+}
 
 export function getActivityOverview(): Promise<ActivityOverview> {
   return api.get<ActivityOverview>("/admin/agents/activity");

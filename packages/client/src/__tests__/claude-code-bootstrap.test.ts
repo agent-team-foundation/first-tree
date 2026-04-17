@@ -41,12 +41,9 @@ function generateClaudeMd(workspacePath: string, identity: AgentIdentity, contex
     sections.push(`# Agent Identity\n\nYou are ${name}, an autonomous agent.\n`);
   }
 
-  // Agent profile (from Hub)
-  const selfMdPath = join(contextDir, "self.md");
-  if (existsSync(selfMdPath)) {
-    const selfContent = readFileSync(selfMdPath, "utf-8");
-    sections.push(`## Your Profile\n\n${selfContent}\n`);
-  }
+  // PRD D7: profile / self.md is intentionally not consumed here — the
+  // agent's behavior prompt now lives in `agent_configs.payload.prompt.append`
+  // and is passed to the Claude SDK via `systemPrompt.append`.
 
   // Context Tree operating instructions (AGENT.md)
   const agentInstructionsPath = join(contextDir, "agent-instructions.md");
@@ -89,7 +86,6 @@ describe("CLAUDE.md generation", () => {
       displayName: "yuezengwu-assistant",
       type: "personal_assistant",
       delegateMention: null, // null — should still detect as personal_assistant
-      profile: null,
       metadata: {},
     };
 
@@ -107,7 +103,6 @@ describe("CLAUDE.md generation", () => {
       displayName: "Code Reviewer",
       type: "autonomous_agent",
       delegateMention: null,
-      profile: null,
       metadata: {},
     };
 
@@ -116,43 +111,23 @@ describe("CLAUDE.md generation", () => {
     expect(md).not.toContain("personal assistant");
   });
 
-  it("includes member profile from self.md", () => {
-    const workspace = join(tmpBase, "ws-self");
+  it("never includes a Profile section — prompt lives in agent_configs per PRD D7", () => {
+    const workspace = join(tmpBase, "ws-no-profile");
     mkdirSync(join(workspace, ".agent", "context"), { recursive: true });
-    writeFileSync(
-      join(workspace, ".agent", "context", "self.md"),
-      "---\ntype: personal_assistant\nrole: Personal Assistant\n---\nI help yuezengwu with tasks.",
-    );
-
-    const identity: AgentIdentity = {
-      agentId: "yuezengwu-assistant",
-      displayName: "yuezengwu-assistant",
-      type: "personal_assistant",
-      delegateMention: null,
-      profile: null,
-      metadata: {},
-    };
-
-    const md = generateClaudeMd(workspace, identity, null);
-    expect(md).toContain("Your Profile");
-    expect(md).toContain("I help yuezengwu with tasks.");
-  });
-
-  it("omits profile section when no self.md exists", () => {
-    const workspace = join(tmpBase, "ws-no-self");
-    mkdirSync(join(workspace, ".agent", "context"), { recursive: true });
+    // Drop a self.md anyway to prove generateClaudeMd does not consume it.
+    writeFileSync(join(workspace, ".agent", "context", "self.md"), "stale profile content");
 
     const identity: AgentIdentity = {
       agentId: "test",
       displayName: "Test",
       type: "autonomous_agent",
       delegateMention: null,
-      profile: null,
       metadata: {},
     };
 
     const md = generateClaudeMd(workspace, identity, null);
     expect(md).not.toContain("Your Profile");
+    expect(md).not.toContain("stale profile content");
   });
 
   it("includes AGENT.md operating instructions", () => {
@@ -168,7 +143,6 @@ describe("CLAUDE.md generation", () => {
       displayName: "Test",
       type: "autonomous_agent",
       delegateMention: null,
-      profile: null,
       metadata: {},
     };
 
@@ -187,7 +161,6 @@ describe("CLAUDE.md generation", () => {
       displayName: "Test",
       type: "autonomous_agent",
       delegateMention: null,
-      profile: null,
       metadata: {},
     };
 
@@ -208,7 +181,6 @@ describe("CLAUDE.md generation", () => {
       displayName: "Test",
       type: "autonomous_agent",
       delegateMention: null,
-      profile: null,
       metadata: {},
     };
 
@@ -226,7 +198,6 @@ describe("CLAUDE.md generation", () => {
       displayName: "Test",
       type: "autonomous_agent",
       delegateMention: null,
-      profile: null,
       metadata: {},
     };
 
@@ -245,7 +216,6 @@ describe("CLAUDE.md generation", () => {
       displayName: "Test",
       type: "autonomous_agent",
       delegateMention: null,
-      profile: null,
       metadata: {},
     };
 
@@ -263,7 +233,6 @@ describe("CLAUDE.md generation", () => {
       displayName: "Test",
       type: "autonomous_agent",
       delegateMention: null,
-      profile: null,
       metadata: {},
     };
 
@@ -281,7 +250,6 @@ describe("CLAUDE.md generation", () => {
       displayName: null,
       type: "autonomous_agent",
       delegateMention: null,
-      profile: null,
       metadata: {},
     };
 

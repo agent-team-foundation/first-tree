@@ -26,7 +26,6 @@ function makeIdentity(overrides?: Partial<AgentIdentity>): AgentIdentity {
     displayName: "Test Agent",
     type: "autonomous_agent",
     delegateMention: null,
-    profile: null,
     metadata: {},
     ...overrides,
   };
@@ -73,28 +72,27 @@ describe("bootstrapWorkspace", () => {
 
     const content = readFileSync(toolsPath, "utf-8");
     expect(content).toContain("FIRST_TREE_HUB_SERVER_URL");
-    expect(content).toContain("FIRST_TREE_HUB_AGENT_TOKEN");
+    expect(content).toContain("FIRST_TREE_HUB_ACCESS_TOKEN");
     expect(content).toContain("How You Communicate");
     expect(content).toContain("Agent Hub");
     expect(content).toContain("[From: sender-id]");
     expect(content).toContain("Use your judgment about when to respond");
   });
 
-  it("writes self.md from identity.profile when available", () => {
-    const workspace = join(tmpBase, "ws-profile");
+  it("does not write self.md (per PRD D7 — prompt lives in agent_configs)", () => {
+    const workspace = join(tmpBase, "ws-no-self-md");
     mkdirSync(workspace, { recursive: true });
 
     bootstrapWorkspace({
       workspacePath: workspace,
-      identity: makeIdentity({ agentId: "my-agent", profile: "I am an agent with a profile." }),
+      identity: makeIdentity({ agentId: "my-agent" }),
       contextTreePath: null,
       serverUrl: "http://localhost:8000",
       chatId: "chat-1",
     });
 
     const selfPath = join(workspace, ".agent", "context", "self.md");
-    expect(existsSync(selfPath)).toBe(true);
-    expect(readFileSync(selfPath, "utf-8")).toContain("I am an agent with a profile.");
+    expect(existsSync(selfPath)).toBe(false);
   });
 
   it("skips context when contextTreePath is null", () => {

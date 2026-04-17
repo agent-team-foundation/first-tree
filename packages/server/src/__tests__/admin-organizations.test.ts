@@ -1,25 +1,26 @@
 import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
 import { createAgent } from "../services/agent.js";
-import { createTestAdmin, useTestApp } from "./helpers.js";
+import { createAdminContext, useTestApp } from "./helpers.js";
 
 describe("Admin Organizations API", () => {
   const getApp = useTestApp();
 
   async function authedRequest(app: FastifyInstance) {
-    const admin = await createTestAdmin(app, { username: `org-admin-${Date.now()}` });
-    return (method: string, url: string, payload?: unknown) =>
+    const ctx = await createAdminContext(app, { username: `org-admin-${Date.now()}` });
+    const req = (method: string, url: string, payload?: unknown) =>
       app.inject({
         method: method as "GET" | "POST" | "PATCH" | "DELETE",
         url,
-        headers: { authorization: `Bearer ${admin.accessToken}` },
+        headers: { authorization: `Bearer ${ctx.accessToken}` },
         ...(payload ? { payload } : {}),
       });
+    return { req, ctx };
   }
 
   it("lists organizations (default org exists)", async () => {
     const app = getApp();
-    const req = await authedRequest(app);
+    const { req } = await authedRequest(app);
 
     const res = await req("GET", "/api/v1/admin/organizations");
     expect(res.statusCode).toBe(200);
@@ -29,7 +30,7 @@ describe("Admin Organizations API", () => {
 
   it("creates a new organization", async () => {
     const app = getApp();
-    const req = await authedRequest(app);
+    const { req } = await authedRequest(app);
 
     const res = await req("POST", "/api/v1/admin/organizations", {
       name: "test-org",
@@ -48,7 +49,7 @@ describe("Admin Organizations API", () => {
 
   it("rejects duplicate organization name", async () => {
     const app = getApp();
-    const req = await authedRequest(app);
+    const { req } = await authedRequest(app);
 
     await req("POST", "/api/v1/admin/organizations", {
       name: "dup-org",
@@ -63,7 +64,7 @@ describe("Admin Organizations API", () => {
 
   it("gets organization by name", async () => {
     const app = getApp();
-    const req = await authedRequest(app);
+    const { req } = await authedRequest(app);
 
     await req("POST", "/api/v1/admin/organizations", {
       name: "get-org",
@@ -77,7 +78,7 @@ describe("Admin Organizations API", () => {
 
   it("gets organization by UUID", async () => {
     const app = getApp();
-    const req = await authedRequest(app);
+    const { req } = await authedRequest(app);
 
     const createRes = await req("POST", "/api/v1/admin/organizations", {
       name: "get-uuid-org",
@@ -92,7 +93,7 @@ describe("Admin Organizations API", () => {
 
   it("returns 404 for non-existent organization", async () => {
     const app = getApp();
-    const req = await authedRequest(app);
+    const { req } = await authedRequest(app);
 
     const res = await req("GET", "/api/v1/admin/organizations/no-such-org");
     expect(res.statusCode).toBe(404);
@@ -100,7 +101,7 @@ describe("Admin Organizations API", () => {
 
   it("updates an organization", async () => {
     const app = getApp();
-    const req = await authedRequest(app);
+    const { req } = await authedRequest(app);
 
     const createRes = await req("POST", "/api/v1/admin/organizations", {
       name: "update-org",
@@ -119,7 +120,7 @@ describe("Admin Organizations API", () => {
 
   it("updates an organization by name", async () => {
     const app = getApp();
-    const req = await authedRequest(app);
+    const { req } = await authedRequest(app);
 
     await req("POST", "/api/v1/admin/organizations", {
       name: "patch-by-name",
@@ -135,7 +136,7 @@ describe("Admin Organizations API", () => {
 
   it("deletes an empty organization", async () => {
     const app = getApp();
-    const req = await authedRequest(app);
+    const { req } = await authedRequest(app);
 
     const createRes = await req("POST", "/api/v1/admin/organizations", {
       name: "delete-org",
@@ -152,7 +153,7 @@ describe("Admin Organizations API", () => {
 
   it("deletes an organization by name", async () => {
     const app = getApp();
-    const req = await authedRequest(app);
+    const { req } = await authedRequest(app);
 
     await req("POST", "/api/v1/admin/organizations", {
       name: "delete-by-name",
@@ -165,7 +166,7 @@ describe("Admin Organizations API", () => {
 
   it("cannot delete organization with active agents", async () => {
     const app = getApp();
-    const req = await authedRequest(app);
+    const { req, ctx } = await authedRequest(app);
 
     const createRes = await req("POST", "/api/v1/admin/organizations", {
       name: "busy-org",
@@ -173,10 +174,13 @@ describe("Admin Organizations API", () => {
     });
     const created = createRes.json<{ id: string }>();
 
+    // human type skips the clientId requirement — enough to prove the org has
+    // an active agent that should block deletion.
     await createAgent(app.db, {
       name: "org-agent",
-      type: "autonomous_agent",
+      type: "human",
       organizationId: created.id,
+      managerId: ctx.memberId,
     });
 
     const res = await req("DELETE", `/api/v1/admin/organizations/${created.id}`);
@@ -186,7 +190,7 @@ describe("Admin Organizations API", () => {
 
   it("cannot delete the default organization", async () => {
     const app = getApp();
-    const req = await authedRequest(app);
+    const { req } = await authedRequest(app);
 
     const res = await req("DELETE", "/api/v1/admin/organizations/default");
     expect(res.statusCode).toBe(400);

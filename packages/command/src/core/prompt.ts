@@ -73,16 +73,16 @@ export async function promptMissingFields(options: {
 /**
  * Interactive add agent — simple two-field prompt.
  */
-export async function promptAddAgent(): Promise<{ name: string; token: string }> {
+export async function promptAddAgent(): Promise<{ name: string; agentId: string }> {
   const name = await input({
-    message: "Agent name:",
+    message: "Local alias:",
     validate: (v) => (/^[a-z0-9][a-z0-9-]*$/.test(v) ? true : "Lowercase alphanumeric and hyphens only"),
   });
-  const token = await input({
-    message: "Agent token:",
-    validate: (v) => (v.length > 0 ? true : "Token is required"),
+  const agentId = await input({
+    message: "Agent UUID on the Hub:",
+    validate: (v) => (v.length > 0 ? true : "Agent UUID is required"),
   });
-  return { name, token };
+  return { name, agentId };
 }
 
 // ── Internal ─────────────────────────────────────────────────────────

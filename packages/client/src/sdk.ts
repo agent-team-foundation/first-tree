@@ -1,15 +1,32 @@
-import type {
-  Agent,
-  Chat,
-  InboxEntryWithMessage,
-  Message,
-  SendMessage,
-  SendToAgent,
+import {
+  AGENT_SELECTOR_HEADER,
+  type Agent,
+  type AgentRuntimeConfig,
+  type Chat,
+  type InboxEntryWithMessage,
+  type Message,
+  type SendMessage,
+  type SendToAgent,
 } from "@agent-team-foundation/first-tree-hub-shared";
+
+/** Callback that returns the current member access JWT. */
+export type AccessTokenProvider = () => string | Promise<string>;
 
 export type SdkConfig = {
   serverUrl: string;
-  token: string;
+  /**
+   * Returns the current member access JWT. Callers are expected to refresh
+   * the token transparently (e.g. via a background refresher in the command
+   * package). The SDK calls this on every request, so short-lived tokens
+   * don't need explicit invalidation here.
+   */
+  getAccessToken: AccessTokenProvider;
+  /**
+   * Agent UUID this SDK instance acts on. When set, every request carries
+   * `X-Agent-Id`; the server's agent-selector middleware translates that to
+   * `request.agent`. Omit for admin/member-only calls (/me, /auth/*).
+   */
+  agentId?: string;
 };
 
 export type RegisterResult = {
@@ -19,7 +36,6 @@ export type RegisterResult = {
   displayName: string | null;
   type: string;
   delegateMention: string | null;
-  profile: string | null;
   metadata: Record<string, unknown>;
 };
 
@@ -41,12 +57,13 @@ const FETCH_TIMEOUT_MS = 15_000;
 
 export class FirstTreeHubSDK {
   private readonly _baseUrl: string;
-  private readonly _token: string;
+  private readonly getAccessToken: AccessTokenProvider;
+  private readonly _agentId: string | undefined;
 
   constructor(config: SdkConfig) {
-    // Strip trailing slash
     this._baseUrl = config.serverUrl.replace(/\/+$/, "");
-    this._token = config.token;
+    this.getAccessToken = config.getAccessToken;
+    this._agentId = config.agentId;
   }
 
   /** Server base URL (without trailing slash). */
@@ -54,12 +71,12 @@ export class FirstTreeHubSDK {
     return this._baseUrl;
   }
 
-  /** Agent bearer token. */
-  get agentToken(): string {
-    return this._token;
+  /** The agent UUID this SDK is scoped to, if any. */
+  get agentId(): string | undefined {
+    return this._agentId;
   }
 
-  /** Validate token, return agent identity. */
+  /** Validate current JWT + X-Agent-Id, return agent identity. */
   async register(): Promise<RegisterResult> {
     const agent = await this.requestJson<Agent>("/api/v1/agent/me");
     return {
@@ -69,7 +86,6 @@ export class FirstTreeHubSDK {
       displayName: agent.displayName,
       type: agent.type,
       delegateMention: agent.delegateMention ?? null,
-      profile: agent.profile ?? null,
       metadata: (agent.metadata as Record<string, unknown>) ?? {},
     };
   }
@@ -79,23 +95,33 @@ export class FirstTreeHubSDK {
     return this.requestJson<ContextTreeConfig>("/api/v1/context-tree/info");
   }
 
-  /** Fetch pending inbox entries. */
+  async fetchAgentConfig(): Promise<AgentRuntimeConfig> {
+    return this.requestJson<AgentRuntimeConfig>("/api/v1/agent/config");
+  }
+
+  async isHubReachable(timeoutMs = 3_000): Promise<boolean> {
+    try {
+      const url = `${this._baseUrl}/api/v1/health`;
+      const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
   async pull(limit = 10): Promise<PullResult> {
     const entries = await this.requestJson<InboxEntryWithMessage[]>(`/api/v1/agent/inbox?limit=${limit}`);
     return { entries };
   }
 
-  /** Acknowledge an inbox entry. */
   async ack(entryId: number): Promise<void> {
     await this.requestVoid(`/api/v1/agent/inbox/${entryId}/ack`, { method: "POST" });
   }
 
-  /** Renew lease on an inbox entry. */
   async renew(entryId: number): Promise<void> {
     await this.requestVoid(`/api/v1/agent/inbox/${entryId}/renew`, { method: "POST" });
   }
 
-  /** Send a message to a chat. */
   async sendMessage(chatId: string, data: SendMessage): Promise<Message> {
     return this.requestJson<Message>(`/api/v1/agent/chats/${chatId}/messages`, {
       method: "POST",
@@ -103,7 +129,6 @@ export class FirstTreeHubSDK {
     });
   }
 
-  /** Send a direct message to another agent. */
   async sendToAgent(agentName: string, data: SendToAgent): Promise<Message> {
     return this.requestJson<Message>(`/api/v1/agent/agents/${agentName}/messages`, {
       method: "POST",
@@ -111,12 +136,10 @@ export class FirstTreeHubSDK {
     });
   }
 
-  /** List chats the current agent participates in. */
   async listChats(options?: { limit?: number; cursor?: string }): Promise<PaginatedResult<Chat>> {
     return this.requestJson(`/api/v1/agent/chats${this.queryString(options)}`);
   }
 
-  /** List messages in a chat. Requires caller to be a participant. */
   async listMessages(chatId: string, options?: { limit?: number; cursor?: string }): Promise<PaginatedResult<Message>> {
     return this.requestJson(`/api/v1/agent/chats/${chatId}/messages${this.queryString(options)}`);
   }
@@ -146,10 +169,13 @@ export class FirstTreeHubSDK {
 
   private async doFetch(path: string, init?: RequestInit): Promise<Response> {
     const url = `${this._baseUrl}${path}`;
+    const token = await this.getAccessToken();
     const headers: Record<string, string> = {
-      Authorization: `Bearer ${this._token}`,
+      Authorization: `Bearer ${token}`,
     };
-    // Only set Content-Type for requests with a body — Fastify rejects empty JSON bodies
+    if (this._agentId) {
+      headers[AGENT_SELECTOR_HEADER] = this._agentId;
+    }
     if (init?.body) {
       headers["Content-Type"] = "application/json";
     }

@@ -14,6 +14,8 @@ export type ClientStatus = z.infer<typeof clientStatusSchema>;
 
 export const clientSchema = z.object({
   id: z.string(),
+  /** Owning user id (nullable until a legacy client re-registers under an authenticated JWT). */
+  userId: z.string().nullable(),
   status: clientStatusSchema,
   sdkVersion: z.string().max(50).nullable(),
   hostname: z.string().max(100).nullable(),

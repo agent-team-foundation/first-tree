@@ -1,15 +1,23 @@
 import {
-  agentBindSchema,
+  AGENT_BIND_REJECT_REASONS,
+  type AgentBindRejectReason,
+  agentBindRequestSchema,
   clientRegisterSchema,
   runtimeStateMessageSchema,
   sessionOutputMessageSchema,
   sessionStateMessageSchema,
+  WS_AUTH_FRAME_TIMEOUT_MS,
+  wsAuthFrameSchema,
 } from "@agent-team-foundation/first-tree-hub-shared";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
+import { jwtVerify } from "jose";
+import type { WebSocket } from "ws";
 import { z } from "zod";
-import { agentTokens } from "../../db/schema/agent-tokens.js";
 import { agents } from "../../db/schema/agents.js";
+import { clients } from "../../db/schema/clients.js";
+import { members } from "../../db/schema/members.js";
+import { users } from "../../db/schema/users.js";
 import * as activityService from "../../services/activity.js";
 import * as clientService from "../../services/client.js";
 import * as connectionManager from "../../services/connection-manager.js";
@@ -17,7 +25,6 @@ import * as notificationService from "../../services/notification.js";
 import type { Notifier } from "../../services/notifier.js";
 import * as presenceService from "../../services/presence.js";
 import * as sessionOutputService from "../../services/session-output.js";
-import { hashToken } from "../../utils.js";
 
 const wsMessageSchema = z.object({
   type: z.string(),
@@ -28,14 +35,19 @@ const wsMessageSchema = z.object({
 /**
  * Client WebSocket: one WS per client, multiple agents multiplexed.
  *
- * Protocol:
- *   1. Client connects (no auth required at WS level)
- *   2. client:register — register client with env info
- *   3. agent:bind — bind agent to this client (authenticates via token)
- *   4. session:state — report per-session state changes
- *   5. heartbeat — client-level heartbeat
- *   6. agent:unbind — unbind agent
+ * Protocol (unified-user-token milestone):
+ *   1. Client connects; server waits up to {@link WS_AUTH_FRAME_TIMEOUT_MS}
+ *      for the first `auth` frame carrying a member access JWT.
+ *      Failure ⇒ server sends `auth:rejected` and closes (code 4401).
+ *   2. `client:register` — bind the client_id to the authenticated user.
+ *   3. `agent:bind` — run Rule R-RUN (no token); populate presence.
+ *   4. `session:state` / `runtime:state` / `session:output` / `heartbeat`.
+ *   5. `agent:unbind` — stop multiplexing for a specific agent.
+ *
+ * When the JWT is about to expire the server sends `auth:expired` so the
+ * SDK can refresh and reconnect without silently half-opening the socket.
  */
+
 /** Notification cooldown: prevents duplicate notifications for same (agentId, type) within window. */
 const NOTIFICATION_COOLDOWN_MS = 300_000; // 5 minutes
 const notificationCooldowns = new Map<string, number>();
@@ -46,7 +58,6 @@ function shouldNotify(agentId: string, notificationType: string): boolean {
   const lastSent = notificationCooldowns.get(key);
   if (lastSent && now - lastSent < NOTIFICATION_COOLDOWN_MS) return false;
   notificationCooldowns.set(key, now);
-  // Prevent unbounded growth — prune old entries periodically
   if (notificationCooldowns.size > 1000) {
     for (const [k, ts] of notificationCooldowns) {
       if (now - ts > NOTIFICATION_COOLDOWN_MS) notificationCooldowns.delete(k);
@@ -55,11 +66,55 @@ function shouldNotify(agentId: string, notificationType: string): boolean {
   return true;
 }
 
+type AuthenticatedSession = {
+  userId: string;
+  memberId: string;
+  organizationId: string;
+  role: string;
+};
+
+function sendRejected(socket: WebSocket, ref: string | undefined, reason: AgentBindRejectReason): void {
+  socket.send(JSON.stringify({ type: "agent:bind:rejected", ref, reason }));
+}
+
 export function clientWsRoutes(notifier: Notifier, instanceId: string) {
   return async (app: FastifyInstance): Promise<void> => {
+    const jwtSecretBytes = new TextEncoder().encode(app.config.secrets.jwtSecret);
+
     app.get("/client", { websocket: true }, async (socket) => {
+      let session: AuthenticatedSession | null = null;
       let clientId: string | null = null;
+      let authExpiryTimer: NodeJS.Timeout | null = null;
       const boundAgents = new Map<string, { agentId: string; inboxId: string }>();
+
+      const authTimeout = setTimeout(() => {
+        if (!session) {
+          try {
+            socket.send(JSON.stringify({ type: "auth:rejected", reason: "timeout" }));
+          } catch {
+            // socket may already be closed
+          }
+          socket.close(4401, "auth timeout");
+        }
+      }, WS_AUTH_FRAME_TIMEOUT_MS);
+
+      const scheduleAuthExpiry = (expSeconds: number | undefined) => {
+        if (authExpiryTimer) {
+          clearTimeout(authExpiryTimer);
+          authExpiryTimer = null;
+        }
+        if (!expSeconds) return;
+        const delay = expSeconds * 1000 - Date.now();
+        if (delay <= 0) return;
+        authExpiryTimer = setTimeout(() => {
+          try {
+            socket.send(JSON.stringify({ type: "auth:expired" }));
+          } catch {
+            // ignore
+          }
+          socket.close(4401, "auth expired");
+        }, delay);
+      };
 
       socket.on("message", async (raw) => {
         let msg: unknown;
@@ -78,21 +133,91 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
 
         const { type, ref } = parsed.data;
 
+        // ── Auth gate — the very first frame must be {type:"auth"}.
+        if (!session) {
+          if (type !== "auth") {
+            socket.send(JSON.stringify({ type: "auth:rejected", reason: "not_authenticated" }));
+            socket.close(4401, "not authenticated");
+            return;
+          }
+          const authParsed = wsAuthFrameSchema.safeParse(msg);
+          if (!authParsed.success) {
+            socket.send(JSON.stringify({ type: "auth:rejected", reason: "invalid_frame" }));
+            socket.close(4401, "invalid auth");
+            return;
+          }
+
+          try {
+            const { payload } = await jwtVerify(authParsed.data.token, jwtSecretBytes);
+            const claims = payload as {
+              sub?: string;
+              memberId?: string;
+              organizationId?: string;
+              role?: string;
+              type?: string;
+              exp?: number;
+            };
+            if (claims.type !== "access" || !claims.sub || !claims.memberId) {
+              throw new Error("Invalid token claims");
+            }
+
+            const [user] = await app.db
+              .select({ id: users.id, status: users.status })
+              .from(users)
+              .where(eq(users.id, claims.sub))
+              .limit(1);
+            if (!user || user.status !== "active") {
+              throw new Error("User not found or suspended");
+            }
+
+            const [member] = await app.db
+              .select({ id: members.id, organizationId: members.organizationId, role: members.role })
+              .from(members)
+              .where(eq(members.id, claims.memberId))
+              .limit(1);
+            if (!member) {
+              throw new Error("Membership not found");
+            }
+
+            session = {
+              userId: user.id,
+              memberId: member.id,
+              organizationId: member.organizationId,
+              role: member.role,
+            };
+            clearTimeout(authTimeout);
+            scheduleAuthExpiry(claims.exp);
+            socket.send(JSON.stringify({ type: "auth:ok" }));
+          } catch (err) {
+            const message = err instanceof Error ? err.message : "auth failure";
+            socket.send(JSON.stringify({ type: "auth:rejected", reason: message }));
+            socket.close(4401, "auth rejected");
+          }
+          return;
+        }
+
         try {
           if (type === "client:register") {
             const data = clientRegisterSchema.parse(msg);
+
+            try {
+              await clientService.registerClient(app.db, {
+                clientId: data.clientId,
+                userId: session.userId,
+                instanceId,
+                hostname: data.hostname,
+                os: data.os,
+                sdkVersion: data.sdkVersion,
+              });
+            } catch (err) {
+              const message = err instanceof Error ? err.message : "client register failed";
+              socket.send(JSON.stringify({ type: "client:register:rejected", message }));
+              socket.close(4403, "client register rejected");
+              return;
+            }
+
             clientId = data.clientId;
-
-            await clientService.registerClient(app.db, {
-              clientId: data.clientId,
-              instanceId,
-              hostname: data.hostname,
-              os: data.os,
-              sdkVersion: data.sdkVersion,
-            });
-
             connectionManager.setClientConnection(data.clientId, socket);
-
             socket.send(JSON.stringify({ type: "client:registered", clientId: data.clientId }));
           } else if (type === "agent:bind") {
             if (!clientId) {
@@ -100,26 +225,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               return;
             }
 
-            const data = agentBindSchema.parse(msg);
-
-            // Authenticate agent via token
-            const raw = data.token;
-            if (!raw.startsWith("aghub_")) {
-              socket.send(JSON.stringify({ type: "error", ref, message: "Invalid token format" }));
-              return;
-            }
-
-            const hash = hashToken(raw);
-            const [tokenRow] = await app.db
-              .select({ agentId: agentTokens.agentId })
-              .from(agentTokens)
-              .where(and(eq(agentTokens.tokenHash, hash), isNull(agentTokens.revokedAt)))
-              .limit(1);
-
-            if (!tokenRow) {
-              socket.send(JSON.stringify({ type: "error", ref, message: "Invalid or revoked token" }));
-              return;
-            }
+            const bindRequest = agentBindRequestSchema.parse(msg);
 
             const [agent] = await app.db
               .select({
@@ -128,28 +234,46 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 type: agents.type,
                 organizationId: agents.organizationId,
                 inboxId: agents.inboxId,
+                status: agents.status,
+                clientId: agents.clientId,
+                clientUserId: clients.userId,
               })
               .from(agents)
-              .where(and(eq(agents.uuid, tokenRow.agentId), eq(agents.status, "active")))
+              .leftJoin(clients, eq(agents.clientId, clients.id))
+              .where(and(eq(agents.uuid, bindRequest.agentId)))
               .limit(1);
 
             if (!agent) {
-              socket.send(JSON.stringify({ type: "error", ref, message: "Agent is suspended or not found" }));
+              sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.UNKNOWN_AGENT);
+              return;
+            }
+            if (agent.organizationId !== session.organizationId) {
+              sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.WRONG_ORG);
+              return;
+            }
+            if (agent.status !== "active") {
+              sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.AGENT_SUSPENDED);
+              return;
+            }
+            if (!agent.clientId || agent.clientId !== clientId) {
+              sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.WRONG_CLIENT);
+              return;
+            }
+            if (!agent.clientUserId || agent.clientUserId !== session.userId) {
+              sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.NOT_OWNED);
               return;
             }
 
-            // Bind agent to this client
             await presenceService.bindAgent(app.db, agent.id, {
               clientId,
               instanceId,
-              runtimeType: data.runtimeType,
-              runtimeVersion: data.runtimeVersion,
+              runtimeType: bindRequest.runtimeType,
+              runtimeVersion: bindRequest.runtimeVersion,
             });
 
             connectionManager.bindAgentToClient(clientId, agent.id);
             boundAgents.set(agent.id, { agentId: agent.id, inboxId: agent.inboxId });
 
-            // Subscribe to inbox notifications
             notifier.subscribe(agent.inboxId, socket);
 
             socket.send(
@@ -216,7 +340,6 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
             const payload = sessionOutputMessageSchema.parse(msg);
             sessionOutputService.appendOutput(app.db, agentId, payload.chatId, payload.content).catch(() => {});
 
-            // Notify session completed (with cooldown to avoid noise from rapid outputs)
             if (shouldNotify(agentId, `session_completed:${payload.chatId}`)) {
               notificationService
                 .notifyAgentEvent(
@@ -243,9 +366,9 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
       });
 
       socket.on("close", async () => {
-        // Unbind agents that are still owned by this client.
-        // If an agent was re-bound to a different client while this socket was alive,
-        // we must NOT unbind it (that would corrupt the new binding).
+        clearTimeout(authTimeout);
+        if (authExpiryTimer) clearTimeout(authExpiryTimer);
+
         for (const [agentId, info] of boundAgents) {
           notifier.unsubscribe(info.inboxId, socket);
           const currentOwner = connectionManager.getAgentClientId(agentId);
