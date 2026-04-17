@@ -262,6 +262,55 @@ describe("gardener comment -- state resolution", () => {
     });
     expect(action.kind).toBe("skip");
   });
+
+  it("paused marker alone (no surviving pause command) → still skip (regression for #132 review)", () => {
+    // User deleted the @gardener pause command after gardener acknowledged it.
+    // The marker is the authoritative record — we must still treat as paused.
+    const action = resolveState({
+      comments: [
+        {
+          id: 10,
+          user: { login: gardenerUser },
+          body: "<!-- gardener:state · reviewed=abc -->\n<!-- gardener:paused -->",
+          created_at: "2026-04-10T00:00:00Z",
+        },
+        // No @gardener pause command anywhere.
+      ],
+      gardenerUser,
+      headIdentifier: "xyz",
+      hasReviewedLabel: false,
+    });
+    expect(action.kind).toBe("skip");
+    if (action.kind === "skip") expect(action.reason).toContain("paused");
+  });
+
+  it("paused marker cleared by newer @gardener resume → fall through (not skipped for paused)", () => {
+    const action = resolveState({
+      comments: [
+        {
+          id: 10,
+          user: { login: gardenerUser },
+          body: "<!-- gardener:state · reviewed=abc -->\n<!-- gardener:paused -->",
+          created_at: "2026-04-10T00:00:00Z",
+        },
+        {
+          id: 12,
+          user: { login: "someone" },
+          body: "@gardener resume",
+          created_at: "2026-04-15T00:00:00Z",
+        },
+      ],
+      gardenerUser,
+      headIdentifier: "abc", // matches marker → skip for "matches head"
+      hasReviewedLabel: false,
+    });
+    // Should NOT be "skip: paused". It skips for "matches head" (rule 4) since
+    // the state marker's SHA equals headIdentifier. That's the fall-through path.
+    expect(action.kind).toBe("skip");
+    if (action.kind === "skip") {
+      expect(action.reason).not.toContain("paused");
+    }
+  });
 });
 
 // ─────────────────── 5. @gardener re-review ───────────────────
@@ -349,12 +398,15 @@ describe("gardener comment -- @gardener re-review", () => {
 
 // ─────────────────── 6. verdict classification ───────────────────
 describe("gardener comment -- verdict classification", () => {
-  it("default classifier returns NEW_TERRITORY/low", async () => {
+  it("default classifier returns INSUFFICIENT_CONTEXT/low (semantically honest when no LLM is wired)", async () => {
     const out = await defaultClassifier({
       type: "pr",
       treeRoot: "/tmp",
     });
-    expect(out.verdict).toBe("NEW_TERRITORY");
+    // Previously returned NEW_TERRITORY which misrepresented "no judgment
+    // made" as "judged this is new". INSUFFICIENT_CONTEXT accurately
+    // signals that no real classifier has been wired.
+    expect(out.verdict).toBe("INSUFFICIENT_CONTEXT");
     expect(out.severity).toBe("low");
   });
 
