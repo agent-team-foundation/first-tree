@@ -1,0 +1,32 @@
+{
+  "exitCode": 0,
+  "calls": [
+    {
+      "command": "gh",
+      "args": [
+        "auth",
+        "status"
+      ],
+      "cwdLabel": null
+    },
+    {
+      "command": "claude",
+      "args": [
+        "--version"
+      ],
+      "cwdLabel": null
+    },
+    {
+      "command": "gh",
+      "args": [
+        "api",
+        "/repos/alice/source/commits/HEAD",
+        "--jq",
+        ".sha"
+      ],
+      "cwdLabel": null
+    }
+  ],
+  "bodyHashes": {},
+  "nodeMdFiles": {}
+}
