@@ -12,6 +12,7 @@ import {
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  ALL_SKILL_NAMES,
   BUNDLED_SKILL_ROOT,
   CLAUDE_SKILL_ROOT,
   INSTALLED_SKILL_ROOTS,
@@ -92,12 +93,13 @@ export function readSkillVersion(sourceRoot: string): string {
  */
 export function wipeInstalledSkill(targetRoot: string): string[] {
   const removed: string[] = [];
-  const candidates = [
-    SKILL_ROOT, // .agents/skills/first-tree/
-    CLAUDE_SKILL_ROOT, // .claude/skills/first-tree/
-    LEGACY_REPO_SKILL_ROOT, // skills/first-tree/ (legacy)
-    ".context-tree", // oldest legacy layout
-  ];
+  const candidates: string[] = [];
+  for (const skillName of ALL_SKILL_NAMES) {
+    candidates.push(join(".agents", "skills", skillName));
+    candidates.push(join(".claude", "skills", skillName));
+  }
+  candidates.push(LEGACY_REPO_SKILL_ROOT); // skills/first-tree/ (legacy)
+  candidates.push(".context-tree"); // oldest legacy layout
   for (const relPath of candidates) {
     const fullPath = join(targetRoot, relPath);
     if (existsSync(fullPath) || isSymlink(fullPath)) {
@@ -109,31 +111,66 @@ export function wipeInstalledSkill(targetRoot: string): string[] {
 }
 
 export function copyCanonicalSkill(sourceRoot: string, targetRoot: string): void {
-  const src = resolveCanonicalSkillRoot(sourceRoot);
+  // The entry-point skill (first-tree) is the only one that must exist in
+  // the source package; we fail fast here if it is missing.
+  const primarySrc = resolveCanonicalSkillRoot(sourceRoot);
   const sourceRepoSkillRoot = join(targetRoot, BUNDLED_SKILL_ROOT);
-  const useSourceRepoAliases = resolve(sourceRepoSkillRoot) === resolve(src);
-  for (const relPath of [
-    ...INSTALLED_SKILL_ROOTS,
-    ...(useSourceRepoAliases ? [] : [LEGACY_REPO_SKILL_ROOT]),
-  ]) {
-    const fullPath = join(targetRoot, relPath);
-    if (existsSync(fullPath) || isSymlink(fullPath)) {
-      rmSync(fullPath, { recursive: true, force: true });
+  const useSourceRepoAliases =
+    resolve(sourceRepoSkillRoot) === resolve(primarySrc);
+
+  // Phase 1: wipe previously installed skill roots (and the legacy
+  // vendored copy if we're not running inside the source repo). This
+  // covers every skill name, not just the entry-point — otherwise an
+  // upgrade from a pre-multi-skill install would leave orphaned copies
+  // of the old per-product skills around.
+  for (const skillName of ALL_SKILL_NAMES) {
+    const agentsPath = join(targetRoot, ".agents", "skills", skillName);
+    const claudePath = join(targetRoot, ".claude", "skills", skillName);
+    for (const fullPath of [agentsPath, claudePath]) {
+      if (existsSync(fullPath) || isSymlink(fullPath)) {
+        rmSync(fullPath, { recursive: true, force: true });
+      }
     }
   }
-  const primaryDst = join(targetRoot, SKILL_ROOT);
-  mkdirSync(dirname(primaryDst), { recursive: true });
-  if (useSourceRepoAliases) {
-    const relTarget = relative(dirname(primaryDst), src);
-    symlinkSync(relTarget, primaryDst);
-  } else {
-    cpSync(src, primaryDst, { recursive: true });
+  if (!useSourceRepoAliases) {
+    const legacyPath = join(targetRoot, LEGACY_REPO_SKILL_ROOT);
+    if (existsSync(legacyPath) || isSymlink(legacyPath)) {
+      rmSync(legacyPath, { recursive: true, force: true });
+    }
   }
 
-  const symlinkDst = join(targetRoot, CLAUDE_SKILL_ROOT);
-  mkdirSync(dirname(symlinkDst), { recursive: true });
-  const relTarget = relative(dirname(symlinkDst), primaryDst);
-  symlinkSync(relTarget, symlinkDst);
+  // Phase 2: install every skill the source package ships. The
+  // entry-point skill is required; per-product skills are installed
+  // best-effort so test fixtures and older source packages that ship
+  // only the entry-point skill continue to work.
+  for (const skillName of ALL_SKILL_NAMES) {
+    const skillSrc =
+      skillName === "first-tree"
+        ? primarySrc
+        : join(sourceRoot, "skills", skillName);
+    if (!existsSync(join(skillSrc, "SKILL.md"))) {
+      if (skillName === "first-tree") {
+        throw new Error(
+          `Canonical skill not found under ${sourceRoot}. Reinstall the \`first-tree\` package and try again.`,
+        );
+      }
+      continue;
+    }
+
+    const primaryDst = join(targetRoot, ".agents", "skills", skillName);
+    mkdirSync(dirname(primaryDst), { recursive: true });
+    if (useSourceRepoAliases) {
+      const relTarget = relative(dirname(primaryDst), skillSrc);
+      symlinkSync(relTarget, primaryDst);
+    } else {
+      cpSync(skillSrc, primaryDst, { recursive: true });
+    }
+
+    const symlinkDst = join(targetRoot, ".claude", "skills", skillName);
+    mkdirSync(dirname(symlinkDst), { recursive: true });
+    const relTarget = relative(dirname(symlinkDst), primaryDst);
+    symlinkSync(relTarget, symlinkDst);
+  }
 }
 
 function isSymlink(path: string): boolean {

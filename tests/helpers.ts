@@ -222,6 +222,24 @@ export function makeSourceSkill(root: string, version = "0.2.0"): void {
   );
 }
 
+/**
+ * Seed the three per-product skill payloads (tree, breeze, gardener) at
+ * the source-package-relative layout the installer expects. `makeSourceSkill`
+ * only creates the first-tree entry-point skill; call this in addition when
+ * a test needs the full four-skill install to succeed.
+ */
+export function makeProductSkills(root: string, version = "0.2.0"): void {
+  for (const name of ["tree", "breeze", "gardener"] as const) {
+    const dir = join(root, "skills", name);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "SKILL.md"),
+      `---\nname: ${name}\ndescription: test stub for ${name}\n---\n`,
+    );
+    writeFileSync(join(dir, "VERSION"), `${version}\n`);
+  }
+}
+
 export function makeNode(
   root: string,
   opts?: { placeholder?: boolean },
