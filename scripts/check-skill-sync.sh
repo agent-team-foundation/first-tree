@@ -90,11 +90,11 @@ require_file "$REPO_ROOT/src/products/tree/cli.ts"
 require_file "$REPO_ROOT/src/products/breeze/VERSION"
 require_file "$REPO_ROOT/src/products/breeze/cli.ts"
 
-# Tests live under tests/.
-require_file "$TESTS_DIR/init.test.ts"
-require_file "$TESTS_DIR/member-seeding.test.ts"
-require_file "$TESTS_DIR/verify.test.ts"
-require_file "$TESTS_DIR/skill-artifacts.test.ts"
+# Tests live under tests/<product>/.
+require_file "$TESTS_DIR/tree/init.test.ts"
+require_file "$TESTS_DIR/tree/member-seeding.test.ts"
+require_file "$TESTS_DIR/tree/verify.test.ts"
+require_file "$TESTS_DIR/tree/skill-artifacts.test.ts"
 
 # Assets live under assets/tree.
 require_file "$ASSETS_DIR/manifest.json"

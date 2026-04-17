@@ -33,10 +33,10 @@ Examples:
 
 ```bash
 pnpm test:e2e
-pnpm test -- tests/skill-artifacts.test.ts
-pnpm test -- tests/thin-cli.test.ts
-pnpm test -- tests/verify.test.ts
-pnpm test -- tests/sync.test.ts
+pnpm test -- tests/tree/skill-artifacts.test.ts
+pnpm test -- tests/e2e/thin-cli.test.ts
+pnpm test -- tests/tree/verify.test.ts
+pnpm test -- tests/tree/sync.test.ts
 ```
 
 If a future refactor changes these paths again, keep the command semantics and

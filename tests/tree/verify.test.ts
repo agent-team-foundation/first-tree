@@ -1,0 +1,387 @@
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { runInit } from "#products/tree/engine/init.js";
+import { check, checkProgress, runVerify, runVerifyCli } from "#products/tree/engine/verify.js";
+import { Repo } from "#products/tree/engine/repo.js";
+import {
+  AGENT_INSTRUCTIONS_FILE,
+  CLAUDE_INSTRUCTIONS_FILE,
+  INSTALLED_PROGRESS,
+  LEGACY_PROGRESS,
+  SOURCE_INTEGRATION_MARKER,
+  TREE_PROGRESS,
+} from "#products/tree/engine/runtime/asset-loader.js";
+import {
+  CLAUDE_SETTINGS_PATH,
+  CODEX_HOOKS_PATH,
+} from "#products/tree/engine/runtime/adapters.js";
+import {
+  useTmpDir,
+  makeAgentsMd,
+  makeClaudeMd,
+  makeFramework,
+  makeLegacyFramework,
+  makeNode,
+  makeSourceRepo,
+  makeMembers,
+  makeManagedAgentContext,
+  makeSourceSkill,
+  makeTreeMetadata,
+} from "../helpers.js";
+
+// --- check ---
+
+describe("check", () => {
+  it("returns true on pass", () => {
+    expect(check("my check", true)).toBe(true);
+  });
+
+  it("returns false on fail", () => {
+    expect(check("my check", false)).toBe(false);
+  });
+});
+
+// --- checkProgress ---
+
+describe("checkProgress", () => {
+  it("returns empty for no progress file", () => {
+    const tmp = useTmpDir();
+    const repo = new Repo(tmp.path);
+    expect(checkProgress(repo)).toEqual([]);
+  });
+
+  it("returns empty when all checked", () => {
+    const tmp = useTmpDir();
+    makeFramework(tmp.path);
+    writeFileSync(
+      join(tmp.path, INSTALLED_PROGRESS),
+      "# Progress\n- [x] Task one\n- [x] Task two\n",
+    );
+    const repo = new Repo(tmp.path);
+    expect(checkProgress(repo)).toEqual([]);
+  });
+
+  it("returns unchecked items", () => {
+    const tmp = useTmpDir();
+    makeFramework(tmp.path);
+    writeFileSync(
+      join(tmp.path, INSTALLED_PROGRESS),
+      "# Progress\n- [x] Done task\n- [ ] Pending task\n- [ ] Another pending\n",
+    );
+    const repo = new Repo(tmp.path);
+    expect(checkProgress(repo)).toEqual(["Pending task", "Another pending"]);
+  });
+
+  it("returns empty for empty progress", () => {
+    const tmp = useTmpDir();
+    makeFramework(tmp.path);
+    writeFileSync(join(tmp.path, INSTALLED_PROGRESS), "");
+    const repo = new Repo(tmp.path);
+    expect(checkProgress(repo)).toEqual([]);
+  });
+
+  it("falls back to the legacy progress file", () => {
+    const tmp = useTmpDir();
+    makeLegacyFramework(tmp.path);
+    writeFileSync(
+      join(tmp.path, LEGACY_PROGRESS),
+      "# Progress\n- [ ] Legacy task\n",
+    );
+    const repo = new Repo(tmp.path);
+    expect(checkProgress(repo)).toEqual(["Legacy task"]);
+  });
+
+  it("reads the dedicated tree progress file", () => {
+    const tmp = useTmpDir();
+    makeTreeMetadata(tmp.path);
+    writeFileSync(
+      join(tmp.path, TREE_PROGRESS),
+      "# Progress\n- [ ] Tree task\n",
+    );
+    const repo = new Repo(tmp.path);
+    expect(checkProgress(repo)).toEqual(["Tree task"]);
+  });
+});
+
+// --- helpers for building a full repo ---
+
+function buildFullRepo(root: string): void {
+  mkdirSync(join(root, ".git"));
+  makeTreeMetadata(root);
+  makeManagedAgentContext(root);
+  writeFileSync(
+    join(root, "NODE.md"),
+    "---\ntitle: My Org\nowners: [alice]\n---\n# Content\n",
+  );
+  makeAgentsMd(root, { markers: true });
+  makeClaudeMd(root, { markers: true });
+  makeMembers(root, 1);
+}
+
+const passValidator = () => ({ exitCode: 0 });
+const failValidator = () => ({ exitCode: 1 });
+
+// --- runVerify — all passing ---
+
+describe("runVerify all passing", () => {
+  it("returns 0 when all checks pass", () => {
+    const tmp = useTmpDir();
+    buildFullRepo(tmp.path);
+    const repo = new Repo(tmp.path);
+    const ret = runVerify(repo, passValidator);
+    expect(ret).toBe(0);
+  });
+
+  it("passes after a real init flow when only the user tree remains to validate", () => {
+    const repoDir = useTmpDir();
+    const sourceDir = useTmpDir();
+    mkdirSync(join(repoDir.path, ".git"));
+    makeSourceSkill(sourceDir.path, "0.2.0");
+
+    expect(runInit(new Repo(repoDir.path), { sourceRoot: sourceDir.path })).toBe(0);
+
+    writeFileSync(
+      join(repoDir.path, "NODE.md"),
+      [
+        "---",
+        'title: "Example Tree"',
+        "owners: [alice]",
+        "---",
+        "",
+        "# Example Tree",
+        "",
+        "A repository initialized from the bundled skill for verification coverage.",
+        "",
+        "## Domains",
+        "",
+        "- **[members/](members/NODE.md)** — Team member definitions and responsibilities.",
+        "",
+      ].join("\n"),
+    );
+
+    const agentPath = join(repoDir.path, AGENT_INSTRUCTIONS_FILE);
+    writeFileSync(
+      agentPath,
+      `${readFileSync(agentPath, "utf-8").trim()}\n\nProject-specific verification instructions.\n`,
+    );
+    const claudePath = join(repoDir.path, CLAUDE_INSTRUCTIONS_FILE);
+    writeFileSync(
+      claudePath,
+      `${readFileSync(claudePath, "utf-8").trim()}\n\nProject-specific verification instructions.\n`,
+    );
+
+    mkdirSync(join(repoDir.path, "members", "alice"), { recursive: true });
+    writeFileSync(
+      join(repoDir.path, "members", "alice", "NODE.md"),
+      [
+        "---",
+        'title: "Alice"',
+        "owners: [alice]",
+        'type: "human"',
+        'role: "Maintainer"',
+        "domains:",
+        '  - "members"',
+        "---",
+        "",
+        "# Alice",
+        "",
+        "## About",
+        "",
+        "Maintains the initialized tree and keeps the docs current.",
+        "",
+        "## Current Focus",
+        "",
+        "Validating the init-to-verify workflow.",
+        "",
+      ].join("\n"),
+    );
+
+    const progressPath = join(repoDir.path, TREE_PROGRESS);
+    writeFileSync(
+      progressPath,
+      readFileSync(progressPath, "utf-8").replace(/^- \[ \]/gm, "- [x]"),
+    );
+
+    expect(runVerify(new Repo(repoDir.path))).toBe(0);
+  });
+});
+
+// --- runVerify — failing checks ---
+
+describe("runVerify failing", () => {
+  it("fails on empty repo", () => {
+    const tmp = useTmpDir();
+    const repo = new Repo(tmp.path);
+    const ret = runVerify(repo, passValidator);
+    expect(ret).toBe(1);
+  });
+
+  it("fails when AGENTS.md is missing", () => {
+    const tmp = useTmpDir();
+    makeTreeMetadata(tmp.path);
+    makeManagedAgentContext(tmp.path);
+    writeFileSync(
+      join(tmp.path, "NODE.md"),
+      "---\ntitle: My Org\nowners: [alice]\n---\n",
+    );
+    makeClaudeMd(tmp.path, { markers: true, userContent: true });
+    const repo = new Repo(tmp.path);
+    const ret = runVerify(repo, passValidator);
+    expect(ret).toBe(1);
+  });
+
+  it("fails when CLAUDE.md is missing", () => {
+    const tmp = useTmpDir();
+    makeFramework(tmp.path);
+    makeManagedAgentContext(tmp.path);
+    writeFileSync(
+      join(tmp.path, "NODE.md"),
+      "---\ntitle: My Org\nowners: [alice]\n---\n",
+    );
+    makeAgentsMd(tmp.path, { markers: true, userContent: true });
+    makeMembers(tmp.path, 1);
+    const repo = new Repo(tmp.path);
+    expect(runVerify(repo, passValidator)).toBe(1);
+  });
+
+  it("fails when only legacy AGENT.md exists", () => {
+    const tmp = useTmpDir();
+    mkdirSync(join(tmp.path, ".git"));
+    makeTreeMetadata(tmp.path);
+    makeManagedAgentContext(tmp.path);
+    makeNode(tmp.path);
+    makeAgentsMd(tmp.path, { legacyName: true, markers: true, userContent: true });
+    makeClaudeMd(tmp.path, { markers: true, userContent: true });
+    makeMembers(tmp.path, 1);
+    const repo = new Repo(tmp.path);
+    const ret = runVerify(repo, passValidator);
+    expect(existsSync(join(tmp.path, AGENT_INSTRUCTIONS_FILE))).toBe(false);
+    expect(ret).toBe(1);
+  });
+
+  it("fails when AGENTS.md contains duplicate placeholder blocks", () => {
+    const tmp = useTmpDir();
+    buildFullRepo(tmp.path);
+    writeFileSync(
+      join(tmp.path, AGENT_INSTRUCTIONS_FILE),
+      [
+        "<!-- BEGIN CONTEXT-TREE FRAMEWORK -->",
+        "framework stuff",
+        "<!-- END CONTEXT-TREE FRAMEWORK -->",
+        "",
+        "# Project-Specific Instructions",
+        "",
+        "<!-- Add your project-specific agent instructions below this line. -->",
+        "",
+        "# Project-Specific Instructions",
+        "",
+        "<!-- Add your project-specific agent instructions below this line. -->",
+        "",
+      ].join("\n"),
+    );
+    const repo = new Repo(tmp.path);
+    expect(runVerify(repo, passValidator)).toBe(1);
+  });
+
+  it("fails when legacy AGENT.md remains alongside AGENTS.md", () => {
+    const tmp = useTmpDir();
+    buildFullRepo(tmp.path);
+    makeAgentsMd(tmp.path, { legacyName: true, markers: true, userContent: true });
+    const repo = new Repo(tmp.path);
+    const ret = runVerify(repo, passValidator);
+    expect(ret).toBe(1);
+  });
+
+  it("fails when node validation returns non-zero", () => {
+    const tmp = useTmpDir();
+    buildFullRepo(tmp.path);
+    const repo = new Repo(tmp.path);
+    const ret = runVerify(repo, failValidator);
+    expect(ret).toBe(1);
+  });
+
+  it("fails when a managed agent context file is missing", () => {
+    const tmp = useTmpDir();
+    buildFullRepo(tmp.path);
+    rmSync(join(tmp.path, CODEX_HOOKS_PATH));
+    const repo = new Repo(tmp.path);
+    expect(runVerify(repo, passValidator)).toBe(1);
+  });
+
+  it("fails when the Claude SessionStart hook is stale", () => {
+    const tmp = useTmpDir();
+    buildFullRepo(tmp.path);
+    writeFileSync(
+      join(tmp.path, CLAUDE_SETTINGS_PATH),
+      JSON.stringify({
+        hooks: {
+          SessionStart: [
+            {
+              hooks: [
+                {
+                  type: "command",
+                  command: ".context-tree/scripts/inject-tree-context.sh",
+                },
+              ],
+            },
+          ],
+        },
+      }, null, 2),
+    );
+    const repo = new Repo(tmp.path);
+    expect(runVerify(repo, passValidator)).toBe(1);
+  });
+
+  it("fails via --tree-path when the caller root agent context drifts", () => {
+    const sandbox = useTmpDir();
+    const sourceRoot = join(sandbox.path, "product-repo");
+    const treeRoot = join(sandbox.path, "product-repo-tree");
+    makeSourceRepo(sourceRoot);
+    mkdirSync(treeRoot, { recursive: true });
+    buildFullRepo(treeRoot);
+    makeFramework(sourceRoot);
+    makeManagedAgentContext(sourceRoot);
+    writeFileSync(
+      join(sourceRoot, AGENT_INSTRUCTIONS_FILE),
+      `${SOURCE_INTEGRATION_MARKER} Use the installed \`first-tree\` skill here.\n`,
+    );
+    writeFileSync(
+      join(sourceRoot, CLAUDE_INSTRUCTIONS_FILE),
+      `${SOURCE_INTEGRATION_MARKER} Use the installed \`first-tree\` skill here.\n`,
+    );
+    rmSync(join(sourceRoot, CODEX_HOOKS_PATH));
+
+    const originalCwd = process.cwd();
+    process.chdir(sourceRoot);
+    try {
+      expect(runVerifyCli(["--tree-path", "../product-repo-tree"])).toBe(1);
+    } finally {
+      process.chdir(originalCwd);
+    }
+  });
+
+  it("gives a dedicated-tree hint when run from a source repo", () => {
+    const tmp = useTmpDir();
+    makeSourceRepo(tmp.path);
+    const repo = new Repo(tmp.path);
+    const ret = runVerify(repo, passValidator);
+    expect(ret).toBe(1);
+  });
+
+  it("refuses to verify a source/workspace repo that only has local first-tree integration", () => {
+    const tmp = useTmpDir();
+    makeSourceRepo(tmp.path);
+    makeFramework(tmp.path);
+    writeFileSync(
+      join(tmp.path, AGENT_INSTRUCTIONS_FILE),
+      `${SOURCE_INTEGRATION_MARKER} Use the installed \`first-tree\` skill here.\n`,
+    );
+    writeFileSync(
+      join(tmp.path, CLAUDE_INSTRUCTIONS_FILE),
+      `${SOURCE_INTEGRATION_MARKER} Use the installed \`first-tree\` skill here.\n`,
+    );
+    const repo = new Repo(tmp.path);
+    expect(runVerify(repo, passValidator)).toBe(1);
+  });
+});

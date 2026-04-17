@@ -70,14 +70,14 @@ docs below only for source-repo implementation details.
 
 | Path | Coverage |
 | --- | --- |
-| `tests/init.test.ts` | Tree bootstrap and init wrapper behavior |
-| `tests/cli-e2e.test.ts` | End-to-end CLI smoke coverage across repo, workspace, publish, and review workflows |
-| `tests/publish.test.ts` | Publish orchestration |
-| `tests/sync.test.ts` | Sync behavior and apply flow |
-| `tests/thin-cli.test.ts` | Thin CLI smoke coverage |
-| `tests/skill-artifacts.test.ts` | Skill export and doc integrity |
-| `tests/upgrade.test.ts` | Upgrade behavior |
-| `tests/verify.test.ts` | Verification behavior |
+| `tests/tree/init.test.ts` | Tree bootstrap and init wrapper behavior |
+| `tests/e2e/cli-e2e.test.ts` | End-to-end CLI smoke coverage across repo, workspace, publish, and review workflows |
+| `tests/tree/publish.test.ts` | Publish orchestration |
+| `tests/tree/sync.test.ts` | Sync behavior and apply flow |
+| `tests/e2e/thin-cli.test.ts` | Thin CLI smoke coverage |
+| `tests/tree/skill-artifacts.test.ts` | Skill export and doc integrity |
+| `tests/tree/upgrade.test.ts` | Upgrade behavior |
+| `tests/tree/verify.test.ts` | Verification behavior |
 
 ## Notes
 

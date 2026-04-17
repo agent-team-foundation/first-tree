@@ -55,8 +55,8 @@ Breeze is a Phase 0 stub and exits with a not-implemented error.
 - `src/products/tree/cli.ts` — tree product USAGE and command dispatch
 - `src/products/breeze/cli.ts` — breeze stub dispatcher
 - `src/products/tree/engine/commands/*.ts` — thin tree command adapters
-- `tests/thin-cli.test.ts` — direct CLI smoke coverage
-- `tests/cli-e2e.test.ts` — end-to-end command workflow coverage
+- `tests/e2e/thin-cli.test.ts` — direct CLI smoke coverage
+- `tests/e2e/cli-e2e.test.ts` — end-to-end command workflow coverage
 
 ## Rules For Shell Changes
 

@@ -41,7 +41,7 @@
     "version:check": "node scripts/sync-version.js",
     "build": "tsdown",
     "prepack": "pnpm build",
-    "test:e2e": "vitest run tests/cli-e2e.test.ts",
+    "test:e2e": "vitest run tests/e2e/cli-e2e.test.ts",
     "test": "vitest run",
     "eval": "vitest run --config vitest.eval.config.ts",
     "typecheck": "tsc --noEmit",

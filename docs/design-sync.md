@@ -10,7 +10,7 @@ implementation touchpoints that do not belong in the tree.
 
 - `src/products/tree/engine/sync.ts` — core detect/propose/apply implementation
 - `src/products/tree/engine/commands/sync.ts` — CLI adapter
-- `tests/sync.test.ts` — sync behavior coverage
+- `tests/tree/sync.test.ts` — sync behavior coverage
 - `assets/tree/claude-commands/first-tree-sync*.md` — installed runbooks
   and schedule payload
 
