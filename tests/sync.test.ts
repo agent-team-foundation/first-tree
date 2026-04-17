@@ -899,6 +899,119 @@ describe("sync -- PR labeling", () => {
     expect(nodeText).not.toMatch(/soft_links:[^\n]*mcp/);
   });
 
+  it("drops TREE_SUPPLEMENT items instead of advertising unapplied edits (#125)", async () => {
+    const tmp = useTmpDir();
+    makeTreeShell(tmp.path);
+    // Seed an existing node that a supplement item would target.
+    mkdirSync(join(tmp.path, "backend"), { recursive: true });
+    writeFileSync(
+      join(tmp.path, "backend", "NODE.md"),
+      "---\ntitle: \"Backend\"\nowners: [@alice]\n---\n\nHand-authored.\n",
+    );
+    const fromSha = "aa".repeat(20);
+    const toSha = "bb".repeat(20);
+    writeTreeBinding(tmp.path, "source-supplement", {
+      bindingMode: "standalone-source",
+      entrypoint: "/repos/source",
+      lastReconciledSourceCommit: fromSha,
+      remoteUrl: "https://github.com/alice/source.git",
+      rootKind: "git-repo",
+      scope: "repo",
+      sourceId: "source-supplement",
+      sourceName: "source",
+      sourceRootPath: "../source",
+      treeMode: "dedicated",
+      treeRepoName: "tree",
+    });
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const shellRun: ShellRun = async (command, args) => {
+      if (command === "gh" && args[0] === "auth") return okAuth();
+      if (command === "claude" && args[0] === "--version") return claudeVersionOk();
+      if (command === "gh" && args[0] === "api") {
+        const path = args[1] ?? "";
+        if (path === "/repos/alice/source/commits/HEAD") {
+          return { stdout: `${toSha}\n`, stderr: "", code: 0 };
+        }
+        if (path.startsWith("/repos/alice/source/compare/")) {
+          return {
+            stdout: JSON.stringify({
+              commits: [{
+                sha: "1".repeat(40),
+                commit: { message: "feat(api): ratelimits (#501)", author: { name: "a", date: "2026-04-01T00:00:00Z" } },
+                files: [{ filename: "api/ratelimit.ts" }],
+              }],
+            }),
+            stderr: "",
+            code: 0,
+          };
+        }
+        if (path.startsWith("search/issues")) {
+          return {
+            stdout: JSON.stringify({
+              items: [{
+                number: 501,
+                title: "feat(api): ratelimits",
+                pull_request: { merged_at: "2026-04-01T00:00:00Z", merge_commit_sha: "1".repeat(40) },
+              }],
+            }),
+            stderr: "",
+            code: 0,
+          };
+        }
+      }
+      if (command === "claude" && args[0] === "-p") {
+        return {
+          stdout: JSON.stringify([
+            {
+              path: "api/ratelimits",
+              type: "TREE_MISS",
+              rationale: "New rate-limit subsystem",
+              suggested_node_title: "API ratelimits",
+              suggested_node_body_markdown: "# Ratelimits\nBody.",
+            },
+            {
+              path: "backend",
+              type: "TREE_SUPPLEMENT",
+              rationale: "Existing backend node should mention rate limits too",
+              suggested_node_title: "Backend",
+              suggested_node_body_markdown: "Supplement content that would rewrite Backend.",
+            },
+          ]),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (command === "gh" && args[0] === "pr" && args[1] === "list") {
+        return { stdout: "[]", stderr: "", code: 0 };
+      }
+      if (command === "git") {
+        if (args[0] === "symbolic-ref") return { stdout: "main\n", stderr: "", code: 0 };
+        if (args.includes("diff") && args.includes("--cached") && args.includes("--quiet")) {
+          return { stdout: "", stderr: "", code: 1 };
+        }
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: `no mock for ${command} ${args.join(" ")}`, code: 1 };
+    };
+    const code = await runSync(
+      tmp.path,
+      { source: undefined, propose: false, apply: true, dryRun: true },
+      { shellRun, verifyTree: () => 0 },
+    );
+    expect(code).toBe(0);
+    // TREE_MISS proposal produced a new NODE.md.
+    expect(existsSync(join(tmp.path, "api", "ratelimits", "NODE.md"))).toBe(true);
+    // Existing backend NODE.md is preserved byte-for-byte (no supplement applied).
+    const backendText = readFileSync(join(tmp.path, "backend", "NODE.md"), "utf-8");
+    expect(backendText).toBe(
+      "---\ntitle: \"Backend\"\nowners: [@alice]\n---\n\nHand-authored.\n",
+    );
+    // Sync logged that it dropped the unsupported TREE_SUPPLEMENT item.
+    const logs = logSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+    expect(logs).toMatch(/dropping unsupported classification type "TREE_SUPPLEMENT"/);
+    logSpy.mockRestore();
+  });
+
   it("feeds truncated diff hunks and filters lockfile noise in the classification prompt (#123)", async () => {
     const tmp = useTmpDir();
     makeTreeShell(tmp.path);

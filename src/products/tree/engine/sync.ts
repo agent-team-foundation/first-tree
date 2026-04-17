@@ -332,7 +332,6 @@ interface DriftReport {
 interface ClassificationItem {
   path: string;
   type: "TREE_MISS" | "TREE_OK";
-  target_node_path: string | null;
   rationale: string;
   suggested_node_title: string;
   suggested_node_body_markdown: string;
@@ -768,7 +767,6 @@ Return a JSON array. Each element represents one area that needs a NEW tree node
 {
   "path": "suggested/node/path",
   "type": "TREE_MISS" | "TREE_OK",
-  "target_node_path": null,
   "rationale": "one sentence explaining why the tree needs this node",
   "suggested_node_title": "Human-readable title for the node",
   "suggested_node_body_markdown": "Draft NODE.md body content ONLY (2-5 paragraphs, no YAML frontmatter)",
@@ -778,6 +776,7 @@ Return a JSON array. Each element represents one area that needs a NEW tree node
 For TREE_OK items, only path, type, and rationale are required (other fields can be empty strings or omitted).
 
 IMPORTANT:
+- Only return TREE_MISS or TREE_OK. Sync does not support in-place edits to existing NODE.md files, so do not propose supplement-style updates — if an existing node needs more content, classify as TREE_MISS with a new path and leave the existing node alone.
 - \`suggested_node_body_markdown\` must contain body content only. Do NOT include YAML frontmatter or code fences.
 - \`suggested_soft_links\` must list every tree path the body cross-references (other domains, governance, backend, etc.) so the new node shows up in the tree graph. Use paths from the "Current tree nodes" list above. Omit or use [] when the body does not reference other domains.
 
@@ -1197,7 +1196,7 @@ async function prepareProposalGroup(
     "",
     "Proposals:",
     ...group.proposals.map((p) => {
-      const base = `- ${p.type}: ${p.target_node_path ?? p.path} \u2014 ${p.rationale}`;
+      const base = `- ${p.type}: ${p.path} \u2014 ${p.rationale}`;
       if (p.coClaimingSourcePrs && p.coClaimingSourcePrs.length > 0) {
         const credits = p.coClaimingSourcePrs.map((n) => `#${n}`).join(", ");
         return `${base} (also identified by ${credits})`;
@@ -1571,8 +1570,16 @@ export async function runSync(
             return { pr, filtered: [] as ClassificationItem[], written: [] as string[] };
           }
 
-          const filtered = proposals.filter((p) => p.type !== "TREE_OK");
-          const okCount = proposals.length - filtered.length;
+          const dropped = proposals.filter(
+            (p) => p.type !== "TREE_MISS" && p.type !== "TREE_OK",
+          );
+          for (const d of dropped) {
+            console.log(
+              `  \u26A0 ${prLabel}: dropping unsupported classification type "${d.type}" for path "${d.path}" (sync only applies TREE_MISS edits; see #125)`,
+            );
+          }
+          const filtered = proposals.filter((p) => p.type === "TREE_MISS");
+          const okCount = proposals.filter((p) => p.type === "TREE_OK").length;
 
           console.log(
             `  ${prLabel}: ${filtered.length} proposals (${okCount} TREE_OK skipped)`,
