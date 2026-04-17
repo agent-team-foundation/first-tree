@@ -12,6 +12,7 @@ export const USAGE = `usage: first-tree <product> <command>
 Products:
   tree                  Context Tree tooling (init, bind, sync, publish, ...)
   breeze                Breeze proposal/inbox agent (install, run, status, watch, ...)
+  gardener              Context Tree maintenance agent (respond, ...)
 
 Global options:
   --help, -h            Show this help message
@@ -148,8 +149,9 @@ export async function runCli(
     const cliVersion = readFirstTreeVersion();
     const treeVersion = readProductVersion("tree");
     const breezeVersion = readProductVersion("breeze");
+    const gardenerVersion = readProductVersion("gardener");
     write(
-      `first-tree=${cliVersion} tree=${treeVersion} breeze=${breezeVersion}`,
+      `first-tree=${cliVersion} tree=${treeVersion} breeze=${breezeVersion} gardener=${gardenerVersion}`,
     );
     return 0;
   }
@@ -167,6 +169,10 @@ export async function runCli(
     case "breeze": {
       const { runBreeze } = await import("./products/breeze/cli.js");
       return runBreeze(args.slice(1), write);
+    }
+    case "gardener": {
+      const { runGardener } = await import("./products/gardener/cli.js");
+      return runGardener(args.slice(1), write);
     }
     default:
       write(`Unknown product: ${product}`);
