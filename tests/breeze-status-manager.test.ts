@@ -1,12 +1,11 @@
 /**
- * status-manager CLI parity + behaviour tests.
+ * status-manager CLI behaviour tests.
  *
- * Most tests exercise the TS port directly with stubbed `gh`. One
- * end-to-end parity test diffs the TS stdout against the bash script
- * for the subset of commands that are safe to run without `gh` network
- * access (get / list / count / release).
+ * All tests exercise the TS port directly with stubbed `gh`. Phase 2a
+ * established bash parity for get / list / count / release; Phase 2b
+ * deleted the bash script, so those parity cases have been converted
+ * to pure TS assertions against the TS port.
  */
-import { execFileSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -26,14 +25,6 @@ import { GhClient } from "../src/products/breeze/core/gh.js";
 import { readActivityLog } from "../src/products/breeze/core/activity-log.js";
 
 const FIXTURE = join(__dirname, "fixtures", "breeze", "inbox-sample.json");
-const BASH_SCRIPT = join(
-  __dirname,
-  "..",
-  "assets",
-  "breeze",
-  "bin",
-  "breeze-status-manager",
-);
 
 function mkBreezeDir(): { dir: string; inbox: string; activity: string; claims: string } {
   const dir = mkdtempSync(join(tmpdir(), "breeze-sm-"));
@@ -497,76 +488,58 @@ describe("status-manager: help", () => {
   });
 });
 
-describe("status-manager: bash parity (read-only commands)", () => {
-  // The bash script writes labels via `gh`, so parity for `set` requires a
-  // real GitHub. We diff only the purely-local read commands: get, list,
-  // count, release. These all just read inbox.json / claims/ and print to
-  // stdout.
+describe("status-manager: read-only commands (TS-only, post-bash-deletion)", () => {
+  // Phase 2a established bash parity for these read commands. Phase 2b
+  // deleted the bash script; these assertions now encode the exact
+  // contract the TS port must keep producing.
   let ctx: ReturnType<typeof mkBreezeDir>;
   beforeEach(() => {
     ctx = mkBreezeDir();
   });
   afterEach(() => rmSync(ctx.dir, { recursive: true, force: true }));
 
-  function bash(argv: string[]): { stdout: string; status: number } {
-    try {
-      const stdout = execFileSync(BASH_SCRIPT, argv, {
-        env: { ...process.env, BREEZE_DIR: ctx.dir },
-        encoding: "utf-8",
-      });
-      return { stdout, status: 0 };
-    } catch (err) {
-      const e = err as { stdout?: string; status?: number };
-      return { stdout: e.stdout ?? "", status: e.status ?? 1 };
-    }
-  }
-
-  async function ts(argv: string[]): Promise<{ stdout: string; status: number }> {
+  async function ts(
+    argv: string[],
+  ): Promise<{ stdout: string; status: number }> {
     const { stdout, io } = captureIO();
     const paths = resolveBreezePaths({ env: () => ctx.dir });
     const code = await runStatusManager(argv, { io, paths });
-    // Match bash trailing-newline behaviour.
     return { stdout: stdout.map((l) => `${l}\n`).join(""), status: code };
   }
 
-  it("get matches bash for wip entry", async () => {
-    const b = bash(["get", "23576674031"]);
+  it("get returns `wip` for a wip entry with trailing newline", async () => {
     const t = await ts(["get", "23576674031"]);
-    expect(t).toEqual(b);
+    expect(t).toEqual({ stdout: "wip\n", status: 0 });
   });
 
-  it("get matches bash for unknown id (→ new)", async () => {
-    const b = bash(["get", "no-such-id"]);
+  it("get returns `new` for unknown id with trailing newline", async () => {
     const t = await ts(["get", "no-such-id"]);
-    expect(t).toEqual(b);
+    expect(t).toEqual({ stdout: "new\n", status: 0 });
   });
 
-  it("list --status new matches bash", async () => {
-    const b = bash(["list", "--status", "new"]);
+  it("list --status new prints ids one per line", async () => {
     const t = await ts(["list", "--status", "new"]);
-    expect(t).toEqual(b);
+    expect(t).toEqual({
+      stdout: "23576674030\n23576674033\n",
+      status: 0,
+    });
   });
 
-  it("list --status wip matches bash", async () => {
-    const b = bash(["list", "--status", "wip"]);
+  it("list --status wip prints the wip id", async () => {
     const t = await ts(["list", "--status", "wip"]);
-    expect(t).toEqual(b);
+    expect(t).toEqual({ stdout: "23576674031\n", status: 0 });
   });
 
-  it("count --status done matches bash", async () => {
-    const b = bash(["count", "--status", "done"]);
+  it("count --status done prints a single integer", async () => {
     const t = await ts(["count", "--status", "done"]);
-    expect(t).toEqual(b);
+    expect(t).toEqual({ stdout: "1\n", status: 0 });
   });
 
-  it("release matches bash", async () => {
-    // Pre-create a claim dir so both have something to release.
+  it("release prints `released` and removes the claim dir", async () => {
     const d1 = join(ctx.claims, "23576674030");
     mkdirSync(d1, { recursive: true });
-    const b = bash(["release", "23576674030"]);
-    // Recreate the dir for TS since bash just removed it.
-    mkdirSync(d1, { recursive: true });
     const t = await ts(["release", "23576674030"]);
-    expect(t).toEqual(b);
+    expect(t).toEqual({ stdout: "released\n", status: 0 });
+    expect(existsSync(d1)).toBe(false);
   });
 });

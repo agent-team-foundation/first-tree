@@ -9,7 +9,8 @@
     "outDir": "dist",
     "rootDir": ".",
     "declaration": true,
-    "sourceMap": true
+    "sourceMap": true,
+    "jsx": "react-jsx"
   },
   "include": ["src", "tests"],
   "exclude": ["node_modules", "dist"]
