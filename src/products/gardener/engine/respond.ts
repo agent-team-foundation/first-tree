@@ -205,6 +205,32 @@ export const RESPOND_MAX_ATTEMPTS = 5;
 const ATTEMPTS_MARKER_RE = /<!--\s*gardener:respond-attempts=(\d+)\s*-->/;
 const SOURCE_PR_RE = /source_pr=(\d+)/;
 const GARDENER_FIX_RE = /@gardener\s+fix/i;
+const GARDENER_MARKER_RE = /<!--\s*gardener:/;
+
+/**
+ * True when a review or comment was authored by gardener itself.
+ *
+ * Two signals (either one fires):
+ *   - login match: entry.user.login === gardenerLogin (when known)
+ *   - HTML marker fallback: entry.body contains `<!-- gardener:`
+ *
+ * Used to filter self-authored feedback out of the "actionable review"
+ * count so gardener-respond never reacts to gardener-sync's own
+ * review-pass comment (self-loop guard — first-tree#134 / repo-gardener#22).
+ */
+export function isFromGardener(
+  entry: { user?: { login?: string }; body?: string },
+  gardenerLogin: string,
+): boolean {
+  if (gardenerLogin && entry.user?.login === gardenerLogin) return true;
+  if (entry.body && GARDENER_MARKER_RE.test(entry.body)) return true;
+  return false;
+}
+
+async function resolveGardenerLogin(shell: ShellRun): Promise<string> {
+  const res = await shell("gh", ["api", "user", "--jq", ".login"]);
+  return res.code === 0 ? res.stdout.trim() : "";
+}
 
 export function readRespondAttempts(body: string | undefined): number {
   if (!body) return 0;
@@ -432,12 +458,13 @@ interface RespondSinglePrOpts {
   env: NodeJS.ProcessEnv;
   write: (line: string) => void;
   now: () => Date;
+  gardenerLogin: string;
 }
 
 async function respondSinglePr(
   opts: RespondSinglePrOpts,
 ): Promise<{ status: RespondStatus; summary: string }> {
-  const { repo, pr, dryRun, shell, env, write, now } = opts;
+  const { repo, pr, dryRun, shell, env, write, now, gardenerLogin } = opts;
 
   const snapshotDir = env.BREEZE_SNAPSHOT_DIR;
   const bundle = snapshotDir
@@ -460,9 +487,44 @@ async function respondSinglePr(
     return { status: "skipped", summary: msg };
   }
 
-  const hasGardenerFix = issueComments.some((c) =>
-    c.body ? GARDENER_FIX_RE.test(c.body) : false,
+  // Self-loop guard: only count feedback from reviewers who are NOT
+  // gardener itself. Without this, gardener-sync's review-pass comment
+  // looks like reviewer feedback and respond would try to "fix" it,
+  // push a commit, re-trigger review → loop.
+  // See: agent-team-foundation/first-tree#134, repo-gardener#22.
+  const nonGardenerReviews = reviews.filter(
+    (r) => r.state === "CHANGES_REQUESTED" && !isFromGardener(r, gardenerLogin),
   );
+  const nonGardenerFixComments = issueComments.filter(
+    (c) => c.body && GARDENER_FIX_RE.test(c.body) && !isFromGardener(c, gardenerLogin),
+  );
+
+  // If the PR's review decision is CHANGES_REQUESTED but every
+  // CHANGES_REQUESTED entry is self-authored, and there are no
+  // non-gardener @gardener-fix mentions, skip to avoid self-loop.
+  const wantsChangesRequested =
+    prView.reviewDecision === "CHANGES_REQUESTED" ||
+    issueComments.some((c) => c.body && GARDENER_FIX_RE.test(c.body));
+  if (
+    wantsChangesRequested &&
+    nonGardenerReviews.length === 0 &&
+    nonGardenerFixComments.length === 0
+  ) {
+    write(
+      `\u23ed no non-gardener feedback on PR #${pr} — skipping to avoid self-loop`,
+    );
+    logEvent(env, {
+      kind: "skip",
+      pr_number: pr,
+      reason: "no_non_gardener_feedback",
+    });
+    return {
+      status: "skipped",
+      summary: `no non-gardener feedback`,
+    };
+  }
+
+  const hasGardenerFix = nonGardenerFixComments.length > 0;
   const decision = classifyReviewDecision(prView, hasGardenerFix);
 
   if (decision === "approved") {
@@ -600,9 +662,10 @@ async function respondScanMode(
     env: NodeJS.ProcessEnv;
     write: (line: string) => void;
     now: () => Date;
+    gardenerLogin: string;
   },
 ): Promise<{ status: RespondStatus; summary: string }> {
-  const { shell, write, env } = opts;
+  const { shell, write, env, gardenerLogin } = opts;
   // Best-effort: detect tree repo slug from `gh repo view`.
   const repoRes = await shell("gh", [
     "repo",
@@ -663,6 +726,7 @@ async function respondScanMode(
       env,
       write,
       now: opts.now,
+      gardenerLogin,
     });
     if (result.status === "handled") handled += 1;
     else if (result.status === "failed") failed += 1;
@@ -725,6 +789,16 @@ export async function runRespond(
     return 0;
   }
 
+  // Resolve gardener's own GitHub login once, so isFromGardener() can
+  // filter out self-authored feedback (self-loop guard — first-tree#134).
+  // In snapshot mode (breeze-runner) we prefer GARDENER_LOGIN from the
+  // environment to avoid an extra `gh api` call, and fall back to the
+  // marker-only path when unset.
+  let gardenerLogin = env.GARDENER_LOGIN?.trim() ?? "";
+  if (!gardenerLogin && !env.BREEZE_SNAPSHOT_DIR) {
+    gardenerLogin = await resolveGardenerLogin(shell);
+  }
+
   try {
     if (flags.pr !== undefined || flags.repo !== undefined) {
       if (flags.pr === undefined || !flags.repo) {
@@ -740,6 +814,7 @@ export async function runRespond(
         env,
         write,
         now,
+        gardenerLogin,
       });
       emitBreezeResult(write, result.status, result.summary);
       return result.status === "failed" ? 1 : 0;
@@ -752,6 +827,7 @@ export async function runRespond(
       env,
       write,
       now,
+      gardenerLogin,
     });
     emitBreezeResult(write, result.status, result.summary);
     return result.status === "failed" ? 1 : 0;

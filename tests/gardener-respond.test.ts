@@ -10,6 +10,7 @@ import {
   classifyReviewDecision,
   extractSourcePr,
   hasSyncLabel,
+  isFromGardener,
   isSyncPr,
   latestChangesRequestedAt,
   readRespondAttempts,
@@ -348,7 +349,17 @@ describe("gardener respond -- attempts counter", () => {
       updatedAt: "2026-04-15T00:00:00Z",
     };
     writeFileSync(join(snapshotDir, "pr-view.json"), JSON.stringify(prView));
-    writeFileSync(join(snapshotDir, "pr-reviews.json"), JSON.stringify([]));
+    writeFileSync(
+      join(snapshotDir, "pr-reviews.json"),
+      JSON.stringify([
+        {
+          user: { login: "bingran-you" },
+          state: "CHANGES_REQUESTED",
+          body: "still broken",
+          submitted_at: "2026-04-15T10:00:00Z",
+        },
+      ]),
+    );
     writeFileSync(join(snapshotDir, "issue-comments.json"), JSON.stringify([]));
     writeFileSync(join(snapshotDir, "pr.diff"), "");
 
@@ -564,5 +575,243 @@ describe("gardener respond -- helpers", () => {
   it("readSnapshot returns null when pr-view.json is missing", () => {
     const tmp = useTmpDir();
     expect(readSnapshot(tmp.path)).toBeNull();
+  });
+});
+
+describe("gardener respond -- isFromGardener helper", () => {
+  it("matches by login when gardenerLogin is set", () => {
+    expect(
+      isFromGardener(
+        { user: { login: "serenakeyitan" }, body: "plain text" },
+        "serenakeyitan",
+      ),
+    ).toBe(true);
+    expect(
+      isFromGardener(
+        { user: { login: "someone-else" }, body: "plain text" },
+        "serenakeyitan",
+      ),
+    ).toBe(false);
+  });
+
+  it("falls back to HTML marker when login is empty or differs", () => {
+    // Marker present, login empty → still treated as gardener.
+    expect(
+      isFromGardener(
+        {
+          user: { login: "bot-identity" },
+          body: "looks good <!-- gardener:sync · source_pr=1 -->",
+        },
+        "",
+      ),
+    ).toBe(true);
+    // Marker present, login differs from gardenerLogin → still gardener.
+    expect(
+      isFromGardener(
+        {
+          user: { login: "different-bot" },
+          body: "<!-- gardener:review-pass -->",
+        },
+        "serenakeyitan",
+      ),
+    ).toBe(true);
+    // No marker, no login match → not gardener.
+    expect(
+      isFromGardener(
+        { user: { login: "bingran-you" }, body: "please fix" },
+        "serenakeyitan",
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("gardener respond -- self-loop guard", () => {
+  it("skips when the only CHANGES_REQUESTED review is from gardener itself", async () => {
+    const tmp = useTmpDir();
+    const snapshotDir = join(tmp.path, "snap");
+    mkdirSync(snapshotDir, { recursive: true });
+    const prView = {
+      number: 201,
+      title: "sync: something",
+      headRefName: "first-tree/sync-201",
+      reviewDecision: "CHANGES_REQUESTED",
+      body: "plain body",
+      updatedAt: "2026-04-15T00:00:00Z",
+    };
+    writeFileSync(join(snapshotDir, "pr-view.json"), JSON.stringify(prView));
+    writeFileSync(
+      join(snapshotDir, "pr-reviews.json"),
+      JSON.stringify([
+        {
+          user: { login: "serenakeyitan" },
+          state: "CHANGES_REQUESTED",
+          body: "<!-- gardener:review-pass -->\nstructural check\n",
+          submitted_at: "2026-04-15T10:00:00Z",
+        },
+      ]),
+    );
+    writeFileSync(join(snapshotDir, "issue-comments.json"), JSON.stringify([]));
+    writeFileSync(join(snapshotDir, "pr.diff"), "");
+
+    const calls: ShellCall[] = [];
+    const shell = makeShell(
+      [() => ({ stdout: "", stderr: "", code: 0 })],
+      calls,
+    );
+    const { write, lines } = captureWrite();
+    const code = await runRespond(
+      ["--pr", "201", "--repo", "owner/name", "--tree-path", tmp.path],
+      {
+        shellRun: shell,
+        write,
+        env: {
+          BREEZE_SNAPSHOT_DIR: snapshotDir,
+          GARDENER_LOGIN: "serenakeyitan",
+        },
+        now: () => new Date("2026-04-16T00:00:00Z"),
+      },
+    );
+    expect(code).toBe(0);
+    expect(
+      lines.some((l) => l.includes("no non-gardener feedback")),
+    ).toBe(true);
+    const last = lines[lines.length - 1];
+    expect(last).toMatch(/^BREEZE_RESULT: status=skipped summary=no non-gardener feedback/);
+    // No gh pr edit / gh pr comment / git commit should have fired.
+    const writes = calls.filter(
+      (c) =>
+        (c.command === "gh" &&
+          c.args[0] === "pr" &&
+          (c.args[1] === "edit" || c.args[1] === "comment")) ||
+        c.command === "git",
+    );
+    expect(writes).toHaveLength(0);
+  });
+
+  it("proceeds when at least one non-gardener CHANGES_REQUESTED review exists", async () => {
+    const tmp = useTmpDir();
+    const snapshotDir = join(tmp.path, "snap");
+    mkdirSync(snapshotDir, { recursive: true });
+    const prView = {
+      number: 202,
+      title: "sync: something",
+      headRefName: "first-tree/sync-202",
+      reviewDecision: "CHANGES_REQUESTED",
+      body: "plain body",
+      updatedAt: "2026-04-15T00:00:00Z",
+    };
+    writeFileSync(join(snapshotDir, "pr-view.json"), JSON.stringify(prView));
+    writeFileSync(
+      join(snapshotDir, "pr-reviews.json"),
+      JSON.stringify([
+        {
+          user: { login: "serenakeyitan" },
+          state: "CHANGES_REQUESTED",
+          body: "<!-- gardener:review-pass -->",
+          submitted_at: "2026-04-15T10:00:00Z",
+        },
+        {
+          user: { login: "human-reviewer" },
+          state: "CHANGES_REQUESTED",
+          body: "please also rename the helper",
+          submitted_at: "2026-04-15T11:00:00Z",
+        },
+      ]),
+    );
+    writeFileSync(join(snapshotDir, "issue-comments.json"), JSON.stringify([]));
+    writeFileSync(join(snapshotDir, "pr.diff"), "");
+
+    const calls: ShellCall[] = [];
+    const shell = makeShell(
+      [() => ({ stdout: "", stderr: "", code: 0 })],
+      calls,
+    );
+    const { write, lines } = captureWrite();
+    const code = await runRespond(
+      ["--pr", "202", "--repo", "owner/name", "--tree-path", tmp.path],
+      {
+        shellRun: shell,
+        write,
+        env: {
+          BREEZE_SNAPSHOT_DIR: snapshotDir,
+          GARDENER_LOGIN: "serenakeyitan",
+        },
+        now: () => new Date("2026-04-16T00:00:00Z"),
+      },
+    );
+    expect(code).toBe(0);
+    expect(
+      lines.some((l) => l.includes("no non-gardener feedback")),
+    ).toBe(false);
+    // Normal fix path fires a pr edit (attempts counter) + pr comment.
+    const editCall = calls.find(
+      (c) => c.command === "gh" && c.args[0] === "pr" && c.args[1] === "edit",
+    );
+    const commentCall = calls.find(
+      (c) => c.command === "gh" && c.args[0] === "pr" && c.args[1] === "comment",
+    );
+    expect(editCall).toBeDefined();
+    expect(commentCall).toBeDefined();
+  });
+
+  it("skips when the only @gardener fix comment was posted by gardener itself", async () => {
+    const tmp = useTmpDir();
+    const snapshotDir = join(tmp.path, "snap");
+    mkdirSync(snapshotDir, { recursive: true });
+    const prView = {
+      number: 203,
+      title: "sync: something",
+      headRefName: "first-tree/sync-203",
+      // Note: reviewDecision is NOT CHANGES_REQUESTED here — the only
+      // reason respond would otherwise act is the @gardener fix mention.
+      reviewDecision: "",
+      body: "plain body",
+      updatedAt: "2026-04-15T00:00:00Z",
+    };
+    writeFileSync(join(snapshotDir, "pr-view.json"), JSON.stringify(prView));
+    writeFileSync(join(snapshotDir, "pr-reviews.json"), JSON.stringify([]));
+    writeFileSync(
+      join(snapshotDir, "issue-comments.json"),
+      JSON.stringify([
+        {
+          user: { login: "serenakeyitan" },
+          body:
+            "<!-- gardener:sync -->\nping @gardener fix (self-reminder)\n",
+          created_at: "2026-04-15T10:00:00Z",
+        },
+      ]),
+    );
+    writeFileSync(join(snapshotDir, "pr.diff"), "");
+
+    const calls: ShellCall[] = [];
+    const shell = makeShell(
+      [() => ({ stdout: "", stderr: "", code: 0 })],
+      calls,
+    );
+    const { write, lines } = captureWrite();
+    const code = await runRespond(
+      ["--pr", "203", "--repo", "owner/name", "--tree-path", tmp.path],
+      {
+        shellRun: shell,
+        write,
+        env: {
+          BREEZE_SNAPSHOT_DIR: snapshotDir,
+          GARDENER_LOGIN: "serenakeyitan",
+        },
+        now: () => new Date("2026-04-16T00:00:00Z"),
+      },
+    );
+    expect(code).toBe(0);
+    expect(
+      lines.some((l) => l.includes("no non-gardener feedback")),
+    ).toBe(true);
+    // No writes to the PR.
+    const writes = calls.filter(
+      (c) =>
+        c.command === "gh" &&
+        c.args[0] === "pr" &&
+        (c.args[1] === "edit" || c.args[1] === "comment"),
+    );
+    expect(writes).toHaveLength(0);
   });
 });
