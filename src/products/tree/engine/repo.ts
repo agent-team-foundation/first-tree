@@ -191,7 +191,11 @@ export class Repo {
   }
 
   anyAgentConfig(): boolean {
-    const knownConfigs = [".claude/settings.json", ".codex/config.json"];
+    const knownConfigs = [
+      ".claude/settings.json",
+      ".codex/config.toml",
+      ".codex/hooks.json",
+    ];
     return knownConfigs.some((c) => this.pathExists(c));
   }
 

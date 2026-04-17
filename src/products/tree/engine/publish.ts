@@ -21,6 +21,13 @@ import {
 } from "#products/tree/engine/runtime/local-tree-config.js";
 import { upsertSourceIntegrationFiles } from "#products/tree/engine/runtime/source-integration.js";
 import {
+  ensureAgentContextHooks,
+  formatAgentContextHookMessages,
+  CODEX_CONFIG_PATH,
+  CODEX_HOOKS_PATH,
+  CLAUDE_SETTINGS_PATH,
+} from "#products/tree/engine/runtime/adapters.js";
+import {
   AGENT_INSTRUCTIONS_FILE,
   CLAUDE_INSTRUCTIONS_FILE,
   CLAUDE_SKILL_ROOT,
@@ -468,6 +475,7 @@ function updateSourceWorkspaceIntegration(
   treeRepoUrl: string,
   localTreeRoot: string,
 ): {
+  agentHookActions: ReturnType<typeof ensureAgentContextHooks>;
   gitIgnoreAction: "created" | "updated" | "unchanged";
   sourceStateAction: "created" | "updated" | "unchanged";
 } {
@@ -495,6 +503,7 @@ function updateSourceWorkspaceIntegration(
       workspaceId: sourceState.workspaceId,
     });
     return {
+      agentHookActions: ensureAgentContextHooks(sourceRepo.root),
       gitIgnoreAction: gitIgnore.action,
       sourceStateAction,
     };
@@ -503,6 +512,7 @@ function updateSourceWorkspaceIntegration(
     treeRepoUrl,
   });
   return {
+    agentHookActions: ensureAgentContextHooks(sourceRepo.root),
     gitIgnoreAction: gitIgnore.action,
     sourceStateAction: "unchanged",
   };
@@ -520,6 +530,9 @@ function commitSourceIntegration(
       FIRST_TREE_INDEX_FILE,
       AGENT_INSTRUCTIONS_FILE,
       CLAUDE_INSTRUCTIONS_FILE,
+      CLAUDE_SETTINGS_PATH,
+      CODEX_CONFIG_PATH,
+      CODEX_HOOKS_PATH,
       ".gitignore",
     ].filter((path) => existsSync(join(sourceRepo.root, path))),
   ].filter((path, index, items) => items.indexOf(path) === index);
@@ -813,6 +826,10 @@ export function runPublish(repo?: Repo, options?: PublishOptions): number {
       sourceRepo.root,
     );
     const treeSlug = `${sourceGitHub.owner}/${treeRepo.repoName()}`;
+    const treeAgentHooks = ensureAgentContextHooks(treeRepo.root);
+    for (const message of formatAgentContextHookMessages(treeAgentHooks)) {
+      console.log(`  ${message}`);
+    }
 
     const committedTreeChanges = commitTreeState(runner, treeRepo);
     if (committedTreeChanges) {
@@ -873,6 +890,9 @@ export function runPublish(repo?: Repo, options?: PublishOptions): number {
           ? `    Updated \`${SOURCE_STATE}\` for \`${relativeRepoPath(boundSourceRepo.root, localTreeRoot)}\`.`
           : `    Reused the existing \`${SOURCE_STATE}\` entry for \`${relativeRepoPath(boundSourceRepo.root, localTreeRoot)}\`.`,
       );
+      for (const message of formatAgentContextHookMessages(sourceIntegrationState.agentHookActions)) {
+        console.log(`    ${message}`);
+      }
     }
 
     if (sourceRepoRoots.length === 1) {

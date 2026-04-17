@@ -1,15 +1,15 @@
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { buildTreeFirstContextBundle } from "#products/tree/engine/runtime/tree-first-context.js";
 
 export const INJECT_CONTEXT_USAGE = `usage: first-tree inject-context
 
-Output a Claude Code SessionStart hook payload that injects the root NODE.md
-content as additional session context. Reads NODE.md from the current working
-directory.
+Output a SessionStart hook payload that injects tree-first cross-repo context.
+When the current working directory is a bound source/workspace root, the
+command resolves the canonical tree checkout, reads the tree root NODE.md,
+and appends a bindings-derived repo index. Tree repos still work directly.
 
-Intended to be wired into \`.claude/settings.json\` as the SessionStart hook
-command. Use \`--skip-version-check\` (the global flag) to avoid the npm
-registry check on every session start.
+Intended to be wired into Claude Code and Codex SessionStart hooks. Use
+\`--skip-version-check\` (the global flag) to avoid the npm registry check
+on every session start.
 
 Options:
   --help         Show this help message
@@ -21,17 +21,16 @@ export function runInjectContext(args: string[] = []): number {
     return 0;
   }
 
-  const nodeMdPath = join(process.cwd(), "NODE.md");
-  if (!existsSync(nodeMdPath)) {
+  const bundle = buildTreeFirstContextBundle(process.cwd());
+  if (bundle === null) {
     // Silent no-op: emit empty payload so the hook doesn't fail
     return 0;
   }
 
-  const content = readFileSync(nodeMdPath, "utf-8");
   const payload = {
     hookSpecificOutput: {
       hookEventName: "SessionStart",
-      additionalContext: content,
+      additionalContext: bundle.additionalContext,
     },
   };
   console.log(JSON.stringify(payload));

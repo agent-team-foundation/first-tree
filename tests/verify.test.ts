@@ -1,8 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runInit } from "#products/tree/engine/init.js";
-import { check, checkProgress, runVerify } from "#products/tree/engine/verify.js";
+import { check, checkProgress, runVerify, runVerifyCli } from "#products/tree/engine/verify.js";
 import { Repo } from "#products/tree/engine/repo.js";
 import {
   AGENT_INSTRUCTIONS_FILE,
@@ -13,6 +13,10 @@ import {
   TREE_PROGRESS,
 } from "#products/tree/engine/runtime/asset-loader.js";
 import {
+  CLAUDE_SETTINGS_PATH,
+  CODEX_HOOKS_PATH,
+} from "#products/tree/engine/runtime/adapters.js";
+import {
   useTmpDir,
   makeAgentsMd,
   makeClaudeMd,
@@ -21,6 +25,7 @@ import {
   makeNode,
   makeSourceRepo,
   makeMembers,
+  makeManagedAgentContext,
   makeSourceSkill,
   makeTreeMetadata,
 } from "./helpers.js";
@@ -104,6 +109,7 @@ describe("checkProgress", () => {
 function buildFullRepo(root: string): void {
   mkdirSync(join(root, ".git"));
   makeTreeMetadata(root);
+  makeManagedAgentContext(root);
   writeFileSync(
     join(root, "NODE.md"),
     "---\ntitle: My Org\nowners: [alice]\n---\n# Content\n",
@@ -214,6 +220,7 @@ describe("runVerify failing", () => {
   it("fails when AGENTS.md is missing", () => {
     const tmp = useTmpDir();
     makeTreeMetadata(tmp.path);
+    makeManagedAgentContext(tmp.path);
     writeFileSync(
       join(tmp.path, "NODE.md"),
       "---\ntitle: My Org\nowners: [alice]\n---\n",
@@ -227,6 +234,7 @@ describe("runVerify failing", () => {
   it("fails when CLAUDE.md is missing", () => {
     const tmp = useTmpDir();
     makeFramework(tmp.path);
+    makeManagedAgentContext(tmp.path);
     writeFileSync(
       join(tmp.path, "NODE.md"),
       "---\ntitle: My Org\nowners: [alice]\n---\n",
@@ -241,6 +249,7 @@ describe("runVerify failing", () => {
     const tmp = useTmpDir();
     mkdirSync(join(tmp.path, ".git"));
     makeTreeMetadata(tmp.path);
+    makeManagedAgentContext(tmp.path);
     makeNode(tmp.path);
     makeAgentsMd(tmp.path, { legacyName: true, markers: true, userContent: true });
     makeClaudeMd(tmp.path, { markers: true, userContent: true });
@@ -290,6 +299,66 @@ describe("runVerify failing", () => {
     const repo = new Repo(tmp.path);
     const ret = runVerify(repo, failValidator);
     expect(ret).toBe(1);
+  });
+
+  it("fails when a managed agent context file is missing", () => {
+    const tmp = useTmpDir();
+    buildFullRepo(tmp.path);
+    rmSync(join(tmp.path, CODEX_HOOKS_PATH));
+    const repo = new Repo(tmp.path);
+    expect(runVerify(repo, passValidator)).toBe(1);
+  });
+
+  it("fails when the Claude SessionStart hook is stale", () => {
+    const tmp = useTmpDir();
+    buildFullRepo(tmp.path);
+    writeFileSync(
+      join(tmp.path, CLAUDE_SETTINGS_PATH),
+      JSON.stringify({
+        hooks: {
+          SessionStart: [
+            {
+              hooks: [
+                {
+                  type: "command",
+                  command: ".context-tree/scripts/inject-tree-context.sh",
+                },
+              ],
+            },
+          ],
+        },
+      }, null, 2),
+    );
+    const repo = new Repo(tmp.path);
+    expect(runVerify(repo, passValidator)).toBe(1);
+  });
+
+  it("fails via --tree-path when the caller root agent context drifts", () => {
+    const sandbox = useTmpDir();
+    const sourceRoot = join(sandbox.path, "product-repo");
+    const treeRoot = join(sandbox.path, "product-repo-tree");
+    makeSourceRepo(sourceRoot);
+    mkdirSync(treeRoot, { recursive: true });
+    buildFullRepo(treeRoot);
+    makeFramework(sourceRoot);
+    makeManagedAgentContext(sourceRoot);
+    writeFileSync(
+      join(sourceRoot, AGENT_INSTRUCTIONS_FILE),
+      `${SOURCE_INTEGRATION_MARKER} Use the installed \`first-tree\` skill here.\n`,
+    );
+    writeFileSync(
+      join(sourceRoot, CLAUDE_INSTRUCTIONS_FILE),
+      `${SOURCE_INTEGRATION_MARKER} Use the installed \`first-tree\` skill here.\n`,
+    );
+    rmSync(join(sourceRoot, CODEX_HOOKS_PATH));
+
+    const originalCwd = process.cwd();
+    process.chdir(sourceRoot);
+    try {
+      expect(runVerifyCli(["--tree-path", "../product-repo-tree"])).toBe(1);
+    } finally {
+      process.chdir(originalCwd);
+    }
   });
 
   it("gives a dedicated-tree hint when run from a source repo", () => {

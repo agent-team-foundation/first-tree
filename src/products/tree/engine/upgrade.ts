@@ -20,7 +20,8 @@ import {
   type FrameworkLayout,
 } from "#products/tree/engine/runtime/asset-loader.js";
 import {
-  refreshInjectContextHook,
+  ensureAgentContextHooks,
+  formatAgentContextHookMessages,
   refreshShippedWorkflows,
 } from "#products/tree/engine/runtime/adapters.js";
 import {
@@ -208,13 +209,11 @@ function logTreeSourceRepoIndexSync(
   }
 }
 
-function logInjectContextHookRefresh(
-  hookRefresh: "updated" | "unchanged",
+function logAgentContextHookRefresh(
+  hookRefresh: ReturnType<typeof ensureAgentContextHooks>,
 ): void {
-  if (hookRefresh === "updated") {
-    console.log(
-      "Updated `.claude/settings.json` SessionStart hook to use `npx -p first-tree first-tree inject-context --skip-version-check`.",
-    );
+  for (const message of formatAgentContextHookMessages(hookRefresh)) {
+    console.log(message);
   }
 }
 
@@ -405,10 +404,11 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
       const changedFiles = updates
         .filter((update) => update.action !== "unchanged")
         .map((update) => update.file);
-      const hookRefresh = refreshInjectContextHook(workingRepo.root);
+      const hookRefresh = ensureAgentContextHooks(workingRepo.root);
       const indexChanged =
         firstTreeIndex.action === "created" || firstTreeIndex.action === "updated";
-      if (changedFiles.length === 0 && !indexChanged && hookRefresh === "unchanged") {
+      const hookChanged = formatAgentContextHookMessages(hookRefresh).length > 0;
+      if (changedFiles.length === 0 && !indexChanged && !hookChanged) {
         if (firstTreeIndex.action === "skipped") {
           console.log(
             `Left \`${FIRST_TREE_INDEX_FILE}\` unchanged because it already contains unmanaged content.`,
@@ -435,7 +435,7 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
           `Left \`${FIRST_TREE_INDEX_FILE}\` unchanged because it already contains unmanaged content.`,
         );
       }
-      logInjectContextHookRefresh(hookRefresh);
+      logAgentContextHookRefresh(hookRefresh);
       if (changedFiles.length > 0) {
         console.log(
           `Updated the ${SOURCE_INTEGRATION_MARKER} marker lines in ${changedFiles.map((file) => `\`${file}\``).join(" and ")}.`,
@@ -454,7 +454,7 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
 
     const wipedPaths = wipeInstalledSkill(workingRepo.root);
     copyCanonicalSkill(sourceRoot, workingRepo.root);
-    const hookRefresh = refreshInjectContextHook(workingRepo.root);
+    const hookRefresh = ensureAgentContextHooks(workingRepo.root);
     const refreshedWorkflows = refreshShippedWorkflows(
       workingRepo.root,
       join(resolveBundledAssetRoot(sourceRoot), "workflows"),
@@ -483,7 +483,7 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
     console.log(
       `Refreshed ${installedSkillRootsDisplay()} in this source/workspace repo.`,
     );
-    logInjectContextHookRefresh(hookRefresh);
+    logAgentContextHookRefresh(hookRefresh);
     if (refreshedWorkflows.length > 0) {
       console.log(
         `Overwrote shipped workflow files: ${refreshedWorkflows.map((f) => `\`.github/workflows/${f}\``).join(", ")}.`,
@@ -533,7 +533,7 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
       installedTreeSkillVersion !== null
       && missingInstalledRoots.length === 0
       && compareSkillVersions(installedTreeSkillVersion, packagedVersion) === 0;
-    const hookRefresh = refreshInjectContextHook(workingRepo.root);
+    const hookRefresh = ensureAgentContextHooks(workingRepo.root);
 
     if (treeMetadataUpToDate && treeSkillUpToDate) {
       const sourceRepoIndex = syncTreeSourceRepoIndex(workingRepo.root);
@@ -542,7 +542,7 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
         `Already up to date with the bundled tree metadata and installed tree skill (${workingRepo.frameworkVersionPath()} = ${localVersion}).`,
       );
       logTreeSourceRepoIndexSync(sourceRepoIndex);
-      logInjectContextHookRefresh(hookRefresh);
+      logAgentContextHookRefresh(hookRefresh);
       return 0;
     }
 
@@ -567,7 +567,7 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
     const sourceRepoIndex = syncTreeSourceRepoIndex(workingRepo.root);
     logTreeSourceRepoIndexSync(sourceRepoIndex);
     ensureSyncRunbook(workingRepo.root, sourceRoot);
-    logInjectContextHookRefresh(hookRefresh);
+    logAgentContextHookRefresh(hookRefresh);
 
     const output = formatUpgradeTaskList(
       workingRepo,
@@ -586,17 +586,17 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
     missingInstalledRoots.length === 0 &&
     compareSkillVersions(localVersion, packagedVersion) === 0
   ) {
-    const hookRefresh = refreshInjectContextHook(workingRepo.root);
+    const hookRefresh = ensureAgentContextHooks(workingRepo.root);
     console.log(
       `Already up to date with the bundled skill (${workingRepo.frameworkVersionPath()} = ${localVersion}).`,
     );
-    logInjectContextHookRefresh(hookRefresh);
+    logAgentContextHookRefresh(hookRefresh);
     return 0;
   }
 
   const wipedPaths = wipeInstalledSkill(workingRepo.root);
   copyCanonicalSkill(sourceRoot, workingRepo.root);
-  const hookRefresh = refreshInjectContextHook(workingRepo.root);
+  const hookRefresh = ensureAgentContextHooks(workingRepo.root);
   const refreshedWorkflows = refreshShippedWorkflows(
     workingRepo.root,
     join(resolveBundledAssetRoot(sourceRoot), "workflows"),
@@ -609,7 +609,7 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
   console.log(
     `Installed lightweight skill payload at ${installedSkillRootsDisplay()}.`,
   );
-  logInjectContextHookRefresh(hookRefresh);
+  logAgentContextHookRefresh(hookRefresh);
   if (refreshedWorkflows.length > 0) {
     console.log(
       `Overwrote shipped workflow files: ${refreshedWorkflows.map((f) => `\`.github/workflows/${f}\``).join(", ")}.`,

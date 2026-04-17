@@ -265,6 +265,9 @@ describe("runUpgrade", () => {
     expect(readFileSync(join(repoDir.path, "AGENTS.md"), "utf-8")).toContain(
       "## Source Repo Index",
     );
+    expect(existsSync(join(repoDir.path, ".claude", "settings.json"))).toBe(true);
+    expect(existsSync(join(repoDir.path, ".codex", "config.toml"))).toBe(true);
+    expect(existsSync(join(repoDir.path, ".codex", "hooks.json"))).toBe(true);
   });
 
   it("refreshes a stale SessionStart hook even when a dedicated tree repo is already current", () => {
@@ -336,6 +339,9 @@ describe("runUpgrade", () => {
     expect(readFileSync(join(repoDir.path, ".gitignore"), "utf-8")).toContain(
       ".first-tree/tmp/",
     );
+    expect(existsSync(join(repoDir.path, ".claude", "settings.json"))).toBe(true);
+    expect(existsSync(join(repoDir.path, ".codex", "config.toml"))).toBe(true);
+    expect(existsSync(join(repoDir.path, ".codex", "hooks.json"))).toBe(true);
     expectFirstTreeIndexSymlink(repoDir.path);
     expect(existsSync(join(repoDir.path, INSTALLED_PROGRESS))).toBe(false);
   });

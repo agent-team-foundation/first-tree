@@ -46,6 +46,12 @@ describe("runBind", () => {
     expect(existsSync(join(treeRoot, ".claude", "skills", "first-tree", "SKILL.md"))).toBe(
       true,
     );
+    expect(existsSync(join(sourceRoot, ".claude", "settings.json"))).toBe(true);
+    expect(existsSync(join(sourceRoot, ".codex", "config.toml"))).toBe(true);
+    expect(existsSync(join(sourceRoot, ".codex", "hooks.json"))).toBe(true);
+    expect(existsSync(join(treeRoot, ".claude", "settings.json"))).toBe(true);
+    expect(existsSync(join(treeRoot, ".codex", "config.toml"))).toBe(true);
+    expect(existsSync(join(treeRoot, ".codex", "hooks.json"))).toBe(true);
     expect(treeBinding?.sourceName).toBe("product-repo");
     expect(existsSync(join(treeRoot, ".gitmodules"))).toBe(false);
     expect(

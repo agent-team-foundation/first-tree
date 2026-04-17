@@ -55,6 +55,10 @@ import {
   upsertFirstTreeIndexFile,
   upsertSourceIntegrationFiles,
 } from "#products/tree/engine/runtime/source-integration.js";
+import {
+  ensureAgentContextHooks,
+  formatAgentContextHookMessages,
+} from "#products/tree/engine/runtime/adapters.js";
 import { runWorkspaceSync } from "#products/tree/engine/workspace-sync.js";
 
 /**
@@ -402,6 +406,10 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
       installSkill(resolvedSourceRoot, r.root);
     } else {
       console.log("Reusing the existing first-tree skill in the tree repo.");
+    }
+    const treeAgentHooks = ensureAgentContextHooks(r.root);
+    for (const message of formatAgentContextHookMessages(treeAgentHooks)) {
+      console.log(`  ${message}`);
     }
     console.log();
   } catch (err) {

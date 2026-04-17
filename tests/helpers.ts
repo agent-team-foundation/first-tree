@@ -14,6 +14,7 @@ import {
   SKILL_ROOT,
   TREE_VERSION,
 } from "#products/tree/engine/runtime/asset-loader.js";
+import { ensureAgentContextHooks } from "#products/tree/engine/runtime/adapters.js";
 
 interface TmpDir {
   path: string;
@@ -114,6 +115,10 @@ export function makeSourceRepo(root: string): void {
   );
   writeFileSync(join(root, "src", "index.ts"), "export const ready = true;\n");
   commitWorkingTree(root, "Initial source repo");
+}
+
+export function makeManagedAgentContext(root: string): void {
+  ensureAgentContextHooks(root);
 }
 
 export function makeLegacyFramework(root: string, version = "0.1.0"): void {

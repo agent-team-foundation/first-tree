@@ -179,6 +179,14 @@ describe("anyAgentConfig", () => {
     expect(repo.anyAgentConfig()).toBe(true);
   });
 
+  it("returns true with codex hooks", () => {
+    const tmp = useTmpDir();
+    mkdirSync(join(tmp.path, ".codex"), { recursive: true });
+    writeFileSync(join(tmp.path, ".codex", "hooks.json"), "{}");
+    const repo = new Repo(tmp.path);
+    expect(repo.anyAgentConfig()).toBe(true);
+  });
+
   it("returns false without any config", () => {
     const tmp = useTmpDir();
     const repo = new Repo(tmp.path);
