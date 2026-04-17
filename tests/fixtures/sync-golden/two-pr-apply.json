@@ -1,0 +1,407 @@
+{
+  "exitCode": 0,
+  "calls": [
+    {
+      "command": "gh",
+      "args": [
+        "auth",
+        "status"
+      ],
+      "cwdLabel": null
+    },
+    {
+      "command": "claude",
+      "args": [
+        "--version"
+      ],
+      "cwdLabel": null
+    },
+    {
+      "command": "gh",
+      "args": [
+        "api",
+        "/repos/alice/source/commits/HEAD",
+        "--jq",
+        ".sha"
+      ],
+      "cwdLabel": null
+    },
+    {
+      "command": "gh",
+      "args": [
+        "api",
+        "/repos/alice/source/compare/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ],
+      "cwdLabel": null
+    },
+    {
+      "command": "gh",
+      "args": [
+        "api",
+        "search/issues?q=repo:alice/source+is:pr+is:merged+merged:>=2026-04-01&per_page=100"
+      ],
+      "cwdLabel": null
+    },
+    {
+      "command": "gh",
+      "args": [
+        "api",
+        "/repos/alice/source/pulls/101/files",
+        "--paginate"
+      ],
+      "cwdLabel": null
+    },
+    {
+      "command": "gh",
+      "args": [
+        "api",
+        "/repos/alice/source/pulls/102/files",
+        "--paginate"
+      ],
+      "cwdLabel": null
+    },
+    {
+      "command": "claude",
+      "args": [
+        "-p",
+        "--output-format",
+        "json",
+        "You are a Context Tree maintenance agent. A Context Tree is a structured knowledge base (markdown NODE.md files) that captures product decisions, architecture, conventions, and domain knowledge for a codebase.\n\nYour job: given the tree's current nodes and a recently merged PR, determine whether the tree is MISSING knowledge that this PR introduced.\n\nContext: this PR has already been reviewed and approved (including context-fit review by gardener). It does not conflict with the tree. The only question is: did it introduce NEW knowledge that the tree doesn't yet capture?\n\nIMPORTANT:\n- For nodes marked with CONTENT below, read the content carefully. A node might exist for an area but NOT cover the specific feature this PR added.\n- If \"Changed files\" are listed below, use them to verify what the PR actually modified. Do NOT describe features not reflected in the changed file paths.\n- Be factually precise: only describe capabilities the source PR actually introduced. Do not extrapolate or generalize beyond what the diff shows.\n- For example, if an \"Authentication\" node only mentions JWT but the PR adds OAuth support, that is a TREE_MISS — the tree needs a new node (or the existing node needs supplementing, which counts as TREE_MISS for sync purposes).\n\nAsk yourself:\n- Did this PR add a new feature, module, convention, or architectural pattern that NO existing node covers in its content? → TREE_MISS\n- Do the existing nodes (including their content) already adequately describe what this PR introduced? → TREE_OK\n\nBias toward TREE_MISS. If in doubt, classify as TREE_MISS.\n\n## Current tree nodes (1 total, 0 with content shown)\n- NODE.md title=\"Example Tree\" owners=alice\n\n## Merged PR\ncommit 1111111 [pkg-a] feat(pkg-a): add thing (#101)\npr feat(pkg-a): add thing\n\n## Output format\nReturn a JSON array. Each element represents one area that needs a NEW tree node (NOT one per commit — group related changes):\n{\n  \"path\": \"suggested/node/path\",\n  \"type\": \"TREE_MISS\" | \"TREE_OK\",\n  \"rationale\": \"one sentence explaining why the tree needs this node\",\n  \"suggested_node_title\": \"Human-readable title for the node\",\n  \"suggested_node_body_markdown\": \"Draft NODE.md body content ONLY (2-5 paragraphs, no YAML frontmatter)\",\n  \"suggested_soft_links\": [\"other/tree/path\", \"another/one\"]\n}\n\nFor TREE_OK items, only path, type, and rationale are required (other fields can be empty strings or omitted).\n\nIMPORTANT:\n- Only return TREE_MISS or TREE_OK. Sync does not support in-place edits to existing NODE.md files, so do not propose supplement-style updates — if an existing node needs more content, classify as TREE_MISS with a new path and leave the existing node alone.\n- `suggested_node_body_markdown` must contain body content only. Do NOT include YAML frontmatter or code fences.\n- `suggested_soft_links` must list every tree path the body cross-references (other domains, governance, backend, etc.) so the new node shows up in the tree graph. Use paths from the \"Current tree nodes\" list above. Omit or use [] when the body does not reference other domains.\n\nReturn a JSON array only, no prose."
+      ],
+      "cwdLabel": null
+    },
+    {
+      "command": "claude",
+      "args": [
+        "-p",
+        "--output-format",
+        "json",
+        "You are a Context Tree maintenance agent. A Context Tree is a structured knowledge base (markdown NODE.md files) that captures product decisions, architecture, conventions, and domain knowledge for a codebase.\n\nYour job: given the tree's current nodes and a recently merged PR, determine whether the tree is MISSING knowledge that this PR introduced.\n\nContext: this PR has already been reviewed and approved (including context-fit review by gardener). It does not conflict with the tree. The only question is: did it introduce NEW knowledge that the tree doesn't yet capture?\n\nIMPORTANT:\n- For nodes marked with CONTENT below, read the content carefully. A node might exist for an area but NOT cover the specific feature this PR added.\n- If \"Changed files\" are listed below, use them to verify what the PR actually modified. Do NOT describe features not reflected in the changed file paths.\n- Be factually precise: only describe capabilities the source PR actually introduced. Do not extrapolate or generalize beyond what the diff shows.\n- For example, if an \"Authentication\" node only mentions JWT but the PR adds OAuth support, that is a TREE_MISS — the tree needs a new node (or the existing node needs supplementing, which counts as TREE_MISS for sync purposes).\n\nAsk yourself:\n- Did this PR add a new feature, module, convention, or architectural pattern that NO existing node covers in its content? → TREE_MISS\n- Do the existing nodes (including their content) already adequately describe what this PR introduced? → TREE_OK\n\nBias toward TREE_MISS. If in doubt, classify as TREE_MISS.\n\n## Current tree nodes (1 total, 0 with content shown)\n- NODE.md title=\"Example Tree\" owners=alice\n\n## Merged PR\ncommit 2222222 [pkg-b] feat(pkg-b): add thing (#102)\npr feat(pkg-b): add thing\n\n## Output format\nReturn a JSON array. Each element represents one area that needs a NEW tree node (NOT one per commit — group related changes):\n{\n  \"path\": \"suggested/node/path\",\n  \"type\": \"TREE_MISS\" | \"TREE_OK\",\n  \"rationale\": \"one sentence explaining why the tree needs this node\",\n  \"suggested_node_title\": \"Human-readable title for the node\",\n  \"suggested_node_body_markdown\": \"Draft NODE.md body content ONLY (2-5 paragraphs, no YAML frontmatter)\",\n  \"suggested_soft_links\": [\"other/tree/path\", \"another/one\"]\n}\n\nFor TREE_OK items, only path, type, and rationale are required (other fields can be empty strings or omitted).\n\nIMPORTANT:\n- Only return TREE_MISS or TREE_OK. Sync does not support in-place edits to existing NODE.md files, so do not propose supplement-style updates — if an existing node needs more content, classify as TREE_MISS with a new path and leave the existing node alone.\n- `suggested_node_body_markdown` must contain body content only. Do NOT include YAML frontmatter or code fences.\n- `suggested_soft_links` must list every tree path the body cross-references (other domains, governance, backend, etc.) so the new node shows up in the tree graph. Use paths from the \"Current tree nodes\" list above. Omit or use [] when the body does not reference other domains.\n\nReturn a JSON array only, no prose."
+      ],
+      "cwdLabel": null
+    },
+    {
+      "command": "git",
+      "args": [
+        "symbolic-ref",
+        "--quiet",
+        "--short",
+        "HEAD"
+      ],
+      "cwdLabel": "<tree-root>"
+    },
+    {
+      "command": "gh",
+      "args": [
+        "pr",
+        "list",
+        "--search",
+        "sync(source-golden): from alice/source#101",
+        "--json",
+        "number",
+        "--limit",
+        "1"
+      ],
+      "cwdLabel": "<tree-root>"
+    },
+    {
+      "command": "git",
+      "args": [
+        "checkout",
+        "-B",
+        "first-tree/sync-source-golden-pr101",
+        "main"
+      ],
+      "cwdLabel": "<tree-root>"
+    },
+    {
+      "command": "git",
+      "args": [
+        "add",
+        "<TREE_ROOT>/pkg-a/NODE.md"
+      ],
+      "cwdLabel": "<tree-root>"
+    },
+    {
+      "command": "git",
+      "args": [
+        "add",
+        "<TREE_ROOT>/NODE.md"
+      ],
+      "cwdLabel": "<tree-root>"
+    },
+    {
+      "command": "git",
+      "args": [
+        "add",
+        "<TREE_ROOT>/.github/CODEOWNERS"
+      ],
+      "cwdLabel": "<tree-root>"
+    },
+    {
+      "command": "git",
+      "args": [
+        "diff",
+        "--cached",
+        "--quiet"
+      ],
+      "cwdLabel": "<tree-root>"
+    },
+    {
+      "command": "git",
+      "args": [
+        "commit",
+        "-m",
+        "<COMMIT_MSG_HASH:0217cf5ab0f427fc>"
+      ],
+      "cwdLabel": "<tree-root>"
+    },
+    {
+      "command": "gh",
+      "args": [
+        "pr",
+        "list",
+        "--search",
+        "sync(source-golden): from alice/source#102",
+        "--json",
+        "number",
+        "--limit",
+        "1"
+      ],
+      "cwdLabel": "<tree-root>"
+    },
+    {
+      "command": "git",
+      "args": [
+        "checkout",
+        "-B",
+        "first-tree/sync-source-golden-pr102",
+        "main"
+      ],
+      "cwdLabel": "<tree-root>"
+    },
+    {
+      "command": "git",
+      "args": [
+        "add",
+        "<TREE_ROOT>/pkg-b/NODE.md"
+      ],
+      "cwdLabel": "<tree-root>"
+    },
+    {
+      "command": "git",
+      "args": [
+        "add",
+        "<TREE_ROOT>/NODE.md"
+      ],
+      "cwdLabel": "<tree-root>"
+    },
+    {
+      "command": "git",
+      "args": [
+        "add",
+        "<TREE_ROOT>/.github/CODEOWNERS"
+      ],
+      "cwdLabel": "<tree-root>"
+    },
+    {
+      "command": "git",
+      "args": [
+        "diff",
+        "--cached",
+        "--quiet"
+      ],
+      "cwdLabel": "<tree-root>"
+    },
+    {
+      "command": "git",
+      "args": [
+        "commit",
+        "-m",
+        "<COMMIT_MSG_HASH:4f58b50f16b07c57>"
+      ],
+      "cwdLabel": "<tree-root>"
+    },
+    {
+      "command": "git",
+      "args": [
+        "checkout",
+        "main"
+      ],
+      "cwdLabel": "<tree-root>"
+    },
+    {
+      "command": "git",
+      "args": [
+        "push",
+        "origin",
+        "first-tree/sync-source-golden-pr101"
+      ],
+      "cwdLabel": "<tree-root>"
+    },
+    {
+      "command": "git",
+      "args": [
+        "push",
+        "origin",
+        "first-tree/sync-source-golden-pr102"
+      ],
+      "cwdLabel": "<tree-root>"
+    },
+    {
+      "command": "gh",
+      "args": [
+        "pr",
+        "create",
+        "--head",
+        "first-tree/sync-source-golden-pr101",
+        "--title",
+        "sync(source-golden): feat(pkg-a): add thing (from alice/source#101)",
+        "--body",
+        "<BODY_HASH:e51af67dddca1c20>"
+      ],
+      "cwdLabel": "<tree-root>"
+    },
+    {
+      "command": "gh",
+      "args": [
+        "pr",
+        "create",
+        "--head",
+        "first-tree/sync-source-golden-pr102",
+        "--title",
+        "sync(source-golden): feat(pkg-b): add thing (from alice/source#102)",
+        "--body",
+        "<BODY_HASH:b0f4343e58e66ccb>"
+      ],
+      "cwdLabel": "<tree-root>"
+    },
+    {
+      "command": "gh",
+      "args": [
+        "label",
+        "create",
+        "first-tree:sync",
+        "--color",
+        "2ea44f",
+        "--description",
+        "Created by first-tree sync",
+        "--force"
+      ],
+      "cwdLabel": "<tree-root>"
+    },
+    {
+      "command": "gh",
+      "args": [
+        "label",
+        "create",
+        "first-tree:sync",
+        "--color",
+        "2ea44f",
+        "--description",
+        "Created by first-tree sync",
+        "--force"
+      ],
+      "cwdLabel": "<tree-root>"
+    },
+    {
+      "command": "gh",
+      "args": [
+        "pr",
+        "edit",
+        "https://github.com/alice/tree/pull/501",
+        "--add-label",
+        "first-tree:sync"
+      ],
+      "cwdLabel": "<tree-root>"
+    },
+    {
+      "command": "gh",
+      "args": [
+        "pr",
+        "edit",
+        "https://github.com/alice/tree/pull/502",
+        "--add-label",
+        "first-tree:sync"
+      ],
+      "cwdLabel": "<tree-root>"
+    },
+    {
+      "command": "git",
+      "args": [
+        "checkout",
+        "-B",
+        "first-tree/sync-source-golden-housekeeping",
+        "main"
+      ],
+      "cwdLabel": "<tree-root>"
+    },
+    {
+      "command": "git",
+      "args": [
+        "add",
+        "-A"
+      ],
+      "cwdLabel": "<tree-root>"
+    },
+    {
+      "command": "git",
+      "args": [
+        "diff",
+        "--cached",
+        "--quiet"
+      ],
+      "cwdLabel": "<tree-root>"
+    },
+    {
+      "command": "git",
+      "args": [
+        "commit",
+        "-m",
+        "<COMMIT_MSG_HASH:6dde9c54721fee28>"
+      ],
+      "cwdLabel": "<tree-root>"
+    },
+    {
+      "command": "git",
+      "args": [
+        "push",
+        "origin",
+        "HEAD"
+      ],
+      "cwdLabel": "<tree-root>"
+    },
+    {
+      "command": "gh",
+      "args": [
+        "pr",
+        "create",
+        "--title",
+        "chore(sync): housekeeping for source-golden",
+        "--body",
+        "<BODY_HASH:ad8c287fdfc5d99a>"
+      ],
+      "cwdLabel": "<tree-root>"
+    },
+    {
+      "command": "git",
+      "args": [
+        "checkout",
+        "main"
+      ],
+      "cwdLabel": "<tree-root>"
+    }
+  ],
+  "bodyHashes": {
+    "commit-msg::0": "0217cf5ab0f427fc",
+    "commit-msg::1": "4f58b50f16b07c57",
+    "pr-body::first-tree/sync-source-golden-pr101": "e51af67dddca1c20",
+    "pr-body::first-tree/sync-source-golden-pr102": "b0f4343e58e66ccb",
+    "commit-msg::2": "6dde9c54721fee28",
+    "pr-body::title:chore(sync): housekeeping for source-golden": "ad8c287fdfc5d99a"
+  },
+  "nodeMdFiles": {
+    "pkg-a": "d27a7d643355409c",
+    "pkg-b": "984a086d0ba85dfd"
+  }
+}
