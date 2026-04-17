@@ -40,7 +40,7 @@ idempotent and guarded against acting on its own prior comments.
 
 | Command | Purpose |
 |---|---|
-| `first-tree gardener respond` | Fix a sync PR based on reviewer feedback |
+| `first-tree gardener respond` | Acknowledge reviewer feedback on a sync PR (placeholder reply only — does not yet edit, commit, or push; see [#160](https://github.com/agent-team-foundation/first-tree/issues/160)) |
 | `first-tree gardener comment` | Review a source-repo PR/issue against the tree and post a structured verdict comment |
 
 For full options on any command, run `first-tree gardener <command> --help`.
@@ -54,6 +54,13 @@ npx -p first-tree first-tree gardener respond --pr 123 --repo owner/tree-repo
 ```
 
 Add `--dry-run` to preview the proposed changes without editing the PR.
+
+> **Current behavior (placeholder reply only):** `respond` bumps the
+> attempts marker and posts an acknowledgement reply, but does **not**
+> yet edit `NODE.md`, commit, or push. Wiring the real edit orchestrator
+> is tracked in [#160](https://github.com/agent-team-foundation/first-tree/issues/160)
+> and is sequenced after the respond refactor in
+> [#162](https://github.com/agent-team-foundation/first-tree/issues/162).
 
 ### Comment on a source-repo PR or issue
 
