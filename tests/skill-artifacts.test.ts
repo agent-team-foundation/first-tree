@@ -28,15 +28,15 @@ function trackedEntriesInGit(...relativePaths: string[]): string[] {
 
 describe("skill artifacts", () => {
   it("keeps one canonical skill plus local alias entrypoints in the source repo", () => {
-    expect(existsSync(join(ROOT, "skills", "tree", "SKILL.md"))).toBe(true);
-    expect(existsSync(join(ROOT, "skills", "tree", "VERSION"))).toBe(true);
-    expect(existsSync(join(ROOT, "skills", "tree", "references", "onboarding.md"))).toBe(true);
+    expect(existsSync(join(ROOT, "skills", "first-tree", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(ROOT, "skills", "first-tree", "VERSION"))).toBe(true);
+    expect(existsSync(join(ROOT, "skills", "first-tree", "references", "onboarding.md"))).toBe(true);
     expect(
       existsSync(
         join(
           ROOT,
           "skills",
-          "tree",
+          "first-tree",
           "references",
           "source-workspace-installation.md",
         ),
@@ -63,7 +63,7 @@ describe("skill artifacts", () => {
     );
     expect(lstatSync(join(ROOT, ".agents", "skills", "first-tree")).isSymbolicLink()).toBe(true);
     expect(readlinkSync(join(ROOT, ".agents", "skills", "first-tree"))).toBe(
-      "../../skills/tree",
+      "../../skills/first-tree",
     );
     expect(lstatSync(join(ROOT, ".claude", "skills", "first-tree")).isSymbolicLink()).toBe(true);
     expect(readlinkSync(join(ROOT, ".claude", "skills", "first-tree"))).toBe(
@@ -120,21 +120,21 @@ describe("skill artifacts", () => {
     expect(existsSync(join(ROOT, "AGENT.md"))).toBe(false);
     expect(existsSync(join(ROOT, "evals"))).toBe(true);
     // Lightweight skill payload must not contain engine/tests/assets/scripts/agents.
-    expect(existsSync(join(ROOT, "skills", "tree", "engine"))).toBe(false);
-    expect(existsSync(join(ROOT, "skills", "tree", "tests"))).toBe(false);
-    expect(existsSync(join(ROOT, "skills", "tree", "assets"))).toBe(false);
-    expect(existsSync(join(ROOT, "skills", "tree", "scripts"))).toBe(false);
-    expect(existsSync(join(ROOT, "skills", "tree", "agents"))).toBe(false);
+    expect(existsSync(join(ROOT, "skills", "first-tree", "engine"))).toBe(false);
+    expect(existsSync(join(ROOT, "skills", "first-tree", "tests"))).toBe(false);
+    expect(existsSync(join(ROOT, "skills", "first-tree", "assets"))).toBe(false);
+    expect(existsSync(join(ROOT, "skills", "first-tree", "scripts"))).toBe(false);
+    expect(existsSync(join(ROOT, "skills", "first-tree", "agents"))).toBe(false);
     expect(
-      existsSync(join(ROOT, "skills", "tree", "references", "repo-snapshot")),
+      existsSync(join(ROOT, "skills", "first-tree", "references", "repo-snapshot")),
     ).toBe(false);
-    expect(existsSync(join(ROOT, "skills", "tree", "evals"))).toBe(false);
+    expect(existsSync(join(ROOT, "skills", "first-tree", "evals"))).toBe(false);
   });
 
   it("passes skill validation helpers", () => {
     execFileSync(
       "python3",
-      ["./scripts/quick_validate.py", "./skills/tree"],
+      ["./scripts/quick_validate.py", "./skills/first-tree"],
       {
         cwd: ROOT,
         stdio: "pipe",
@@ -169,10 +169,10 @@ describe("skill artifacts", () => {
       });
 
       expect(listing).toContain("package/dist/cli.js");
-      expect(listing).toContain("package/skills/tree/SKILL.md");
-      expect(listing).toContain("package/skills/tree/VERSION");
+      expect(listing).toContain("package/skills/first-tree/SKILL.md");
+      expect(listing).toContain("package/skills/first-tree/VERSION");
       expect(listing).toContain(
-        "package/skills/tree/references/onboarding.md",
+        "package/skills/first-tree/references/onboarding.md",
       );
       expect(listing).toContain(
         "package/assets/tree/templates/agents.md.template",
@@ -184,12 +184,12 @@ describe("skill artifacts", () => {
         "package/assets/tree/helpers/summarize-progress.js",
       );
       // Lightweight skill payload does not ship engine/tests/agents/scripts.
-      expect(listing).not.toContain("package/skills/tree/engine/");
-      expect(listing).not.toContain("package/skills/tree/tests/");
-      expect(listing).not.toContain("package/skills/tree/agents/");
-      expect(listing).not.toContain("package/skills/tree/scripts/");
-      expect(listing).not.toContain("package/skills/tree/assets/");
-      expect(listing).not.toContain("package/skills/tree/evals/");
+      expect(listing).not.toContain("package/skills/first-tree/engine/");
+      expect(listing).not.toContain("package/skills/first-tree/tests/");
+      expect(listing).not.toContain("package/skills/first-tree/agents/");
+      expect(listing).not.toContain("package/skills/first-tree/scripts/");
+      expect(listing).not.toContain("package/skills/first-tree/assets/");
+      expect(listing).not.toContain("package/skills/first-tree/evals/");
       expect(listing).not.toContain("package/evals/");
       expect(listing).not.toContain("package/src/cli.ts");
       expect(listing).not.toContain("package/docs/");
@@ -210,7 +210,7 @@ describe("skill artifacts", () => {
     expect(read("README.md")).toContain("source-workspace-installation.md");
     expect(read("README.md")).toContain("first-tree-skill-cli/repo-architecture.md");
     expect(read("README.md")).toContain("first-tree-skill-cli/sync.md");
-    expect(read("README.md")).toContain("skills/tree/");
+    expect(read("README.md")).toContain("skills/first-tree/");
     expect(read("README.md")).toContain(".agents/skills/first-tree/");
     expect(read("README.md")).toContain(".claude/skills/first-tree/");
     expect(read("README.md")).toContain("bundled canonical");
@@ -237,7 +237,7 @@ describe("skill artifacts", () => {
     expect(read("src/cli.ts")).not.toContain("from upstream");
     // Note: #evals/* import alias is in package.json but evals/ is excluded from "files" so it won't ship to npm
 
-    const onboarding = read("skills/tree/references/onboarding.md");
+    const onboarding = read("skills/first-tree/references/onboarding.md");
     expect(onboarding).toContain("Node.js 18+");
     expect(onboarding).toContain("first-tree tree inspect --json");
     expect(onboarding).toContain("first-tree tree bind");
@@ -256,7 +256,7 @@ describe("skill artifacts", () => {
     expect(onboarding).not.toContain("This clones the framework into `.context-tree/`");
     expect(onboarding).not.toContain("from upstream");
 
-    const skillMd = read("skills/tree/SKILL.md");
+    const skillMd = read("skills/first-tree/SKILL.md");
     // SKILL.md is user-facing: shipped to user repos via copyCanonicalSkill.
     // It must NOT mention engine/, assets/, tests/, scripts/, maintainer-* docs,
     // or anything that doesn't exist in the lightweight installed payload.
@@ -316,7 +316,7 @@ describe("skill artifacts", () => {
     expect(sourceMap).not.toContain("evals/first-tree-eval.test.ts");
 
     const sourceWorkspaceInstall = read(
-      "skills/tree/references/source-workspace-installation.md",
+      "skills/first-tree/references/source-workspace-installation.md",
     );
     expect(sourceWorkspaceInstall).toContain("FIRST-TREE-SOURCE-INTEGRATION:");
     expect(sourceWorkspaceInstall).toContain(".first-tree/source.json");
@@ -343,7 +343,7 @@ describe("skill artifacts", () => {
       "docs/maintainer-architecture.md",
     );
     expect(maintainerArchitecture).toContain("first-tree-skill-cli/repo-architecture.md");
-    expect(maintainerArchitecture).toContain("skills/tree/");
+    expect(maintainerArchitecture).toContain("skills/first-tree/");
     expect(maintainerArchitecture).toContain("assets/tree/");
     expect(maintainerArchitecture).toContain("src/products/tree/engine/");
     expect(maintainerArchitecture).toContain("tests/");
@@ -352,7 +352,7 @@ describe("skill artifacts", () => {
     expect(maintainerArchitecture).not.toContain(".first-tree/submodules/");
 
     const upgradeContract = read(
-      "skills/tree/references/upgrade-contract.md",
+      "skills/first-tree/references/upgrade-contract.md",
     );
     expect(upgradeContract).not.toContain(".first-tree/submodules/");
 

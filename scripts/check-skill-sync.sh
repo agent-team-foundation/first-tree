@@ -9,7 +9,7 @@ if [[ ! -f "$REPO_ROOT/package.json" ]] || ! grep -q '"name": "first-tree"' "$RE
   exit 1
 fi
 
-SKILL_DIR="$REPO_ROOT/skills/tree"
+SKILL_DIR="$REPO_ROOT/skills/first-tree"
 ASSETS_DIR="$REPO_ROOT/assets/tree"
 ENGINE_DIR="$REPO_ROOT/src/products/tree/engine"
 TESTS_DIR="$REPO_ROOT/tests"
@@ -118,21 +118,23 @@ require_file "$REPO_ROOT/evals/README.md"
 require_file "$REPO_ROOT/evals/helpers/case-loader.ts"
 require_file "$REPO_ROOT/evals/scripts/tree-manager.ts"
 require_file "$REPO_ROOT/evals/tests/eval-helpers.test.ts"
-require_symlink_target "$REPO_ROOT/.agents/skills/first-tree" "../../skills/tree"
+require_symlink_target "$REPO_ROOT/.agents/skills/first-tree" "../../skills/first-tree"
 require_symlink_target "$REPO_ROOT/.claude/skills/first-tree" "../../.agents/skills/first-tree"
 
-# Check for legacy artifacts that should not be committed.
+# Check for legacy artifacts that should not be committed. The skill payload
+# under skills/first-tree/ must contain only SKILL.md, VERSION, and references/;
+# never engine code, test code, scripts, or build artefacts.
 for legacy_path in \
   ".context-tree" \
-  "skills/first-tree" \
+  "skills/tree" \
   "assets/framework" \
   "src/engine" \
-  "skills/tree/engine" \
-  "skills/tree/assets" \
-  "skills/tree/tests" \
-  "skills/tree/scripts" \
-  "skills/tree/agents" \
-  "skills/tree/references/repo-snapshot"
+  "skills/first-tree/engine" \
+  "skills/first-tree/assets" \
+  "skills/first-tree/tests" \
+  "skills/first-tree/scripts" \
+  "skills/first-tree/agents" \
+  "skills/first-tree/references/repo-snapshot"
 do
   if git -C "$REPO_ROOT" ls-files --error-unmatch "$legacy_path" >/dev/null 2>&1; then
     echo "Unexpected legacy artifact tracked in git: $legacy_path" >&2
@@ -163,8 +165,8 @@ if ! grep -q '"#products/\*"' "$REPO_ROOT/package.json"; then
   exit 1
 fi
 
-if ! grep -q '"skills/tree"' "$REPO_ROOT/package.json"; then
-  echo "package.json is missing skills/tree in the published files list." >&2
+if ! grep -q '"skills/first-tree"' "$REPO_ROOT/package.json"; then
+  echo "package.json is missing skills/first-tree in the published files list." >&2
   exit 1
 fi
 

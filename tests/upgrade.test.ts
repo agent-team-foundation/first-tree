@@ -188,12 +188,12 @@ describe("runUpgrade", () => {
 
     copyCanonicalSkill(repoDir.path, repoDir.path);
 
-    expect(existsSync(join(repoDir.path, "skills", "tree", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(repoDir.path, "skills", "first-tree", "SKILL.md"))).toBe(true);
     expect(lstatSync(join(repoDir.path, ".agents", "skills", "first-tree")).isSymbolicLink()).toBe(
       true,
     );
     expect(readlinkSync(join(repoDir.path, ".agents", "skills", "first-tree"))).toBe(
-      "../../skills/tree",
+      "../../skills/first-tree",
     );
     expect(lstatSync(join(repoDir.path, ".claude", "skills", "first-tree")).isSymbolicLink()).toBe(
       true,

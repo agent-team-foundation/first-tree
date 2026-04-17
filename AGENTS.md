@@ -3,16 +3,16 @@
 This repo distributes the `first-tree` npm package: a thin umbrella CLI that
 dispatches into product namespaces (`tree`, `breeze`) plus lightweight skill
 payloads. It is not a user context tree. Maintaining this repo is different
-from using it — see the user-facing `skills/tree/SKILL.md` for what gets
+from using it — see the user-facing `skills/first-tree/SKILL.md` for what gets
 shipped as the Context Tree skill.
 
 ## Start Here
 
 1. `docs/source-map.md` — maintainer entrypoint; it points to canonical Context Tree nodes first, then local implementation notes
-2. `skills/tree/SKILL.md` — the user-facing tree skill payload (read this so
+2. `skills/first-tree/SKILL.md` — the user-facing tree skill payload (read this so
    you understand what ships to user repos)
 3. The specific Context Tree node or repo-local maintainer reference linked from the source map
-4. `skills/tree/references/source-workspace-installation.md` for the
+4. `skills/first-tree/references/source-workspace-installation.md` for the
    user-facing install contract (also shipped to user repos)
 
 ## Rules
@@ -25,7 +25,7 @@ shipped as the Context Tree skill.
   - `assets/tree/` is the tree runtime asset payload (templates, workflows,
     prompts, helpers, examples) read by the CLI at runtime
   - `assets/breeze/` is the placeholder for breeze runtime assets
-  - `skills/tree/` is the lightweight tree skill payload that gets copied
+  - `skills/first-tree/` is the lightweight tree skill payload that gets copied
     verbatim to user repos (as `skills/first-tree/`) via `copyCanonicalSkill`.
     It contains only `SKILL.md`, `VERSION`, and `references/` (user-facing
     references only).
@@ -36,14 +36,14 @@ shipped as the Context Tree skill.
   - `tests/` holds the test suite
 - The tracked `.agents/skills/first-tree` and `.claude/skills/first-tree`
   entries in this repo are local alias symlinks for agent discovery; edit
-  `skills/tree/`, not the aliases.
+  `skills/first-tree/`, not the aliases.
 - Use `first-tree` for both the npm package and CLI command, and
-  `skills/tree/` when you mean the bundled skill payload path.
+  `skills/first-tree/` when you mean the bundled skill payload path.
 - Never put engine code, test code, helpers, or maintainer docs inside
-  `skills/tree/` — that directory ships to user repos as-is.
+  `skills/first-tree/` — that directory ships to user repos as-is.
 - Keep source/workspace installs limited to local skill integration; `NODE.md`,
   `members/`, and tree-scoped `AGENTS.md` belong only in a dedicated
-  `*-context` repo. See `skills/tree/references/source-workspace-installation.md`.
+  `*-context` repo. See `skills/first-tree/references/source-workspace-installation.md`.
 - When a maintainer note becomes decision-grade knowledge other repos should
   discover, move it into `first-tree-context/first-tree-skill-cli/` and leave a
   thin repo-local pointer in `docs/`.

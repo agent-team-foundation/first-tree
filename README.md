@@ -196,16 +196,16 @@ plus their own source/workspace binding state.
 - The npm package is `first-tree`.
 - The installed CLI command is also `first-tree`.
 - The published package keeps its bundled canonical source under
-  `skills/tree/` (shipped to user repos as `skills/first-tree/`).
+  `skills/first-tree/` (shipped to user repos as `skills/first-tree/`).
 - In this source repo, `.agents/skills/first-tree/` and
   `.claude/skills/first-tree/` are tracked symlink aliases back to
-  `skills/tree/` so local agents resolve the same `first-tree` skill
+  `skills/first-tree/` so local agents resolve the same `first-tree` skill
   that ships in the package.
 - `npx -p first-tree first-tree <command>` is the recommended one-off entrypoint.
 
 ## Canonical Documentation
 
-User-facing references ship in `skills/tree/references/` (installed in user
+User-facing references ship in `skills/first-tree/references/` (installed in user
 repos as `skills/first-tree/references/`) and are copied to user repos via
 `first-tree tree init` / `first-tree tree bind`.
 
@@ -213,12 +213,12 @@ Canonical design and architecture knowledge for this project lives in the bound
 Context Tree under `first-tree-skill-cli/`. Repo-local maintainer notes in
 `docs/` are implementation-only and never ship.
 
-- User-facing overview: `skills/tree/references/whitepaper.md`
-- User onboarding: `skills/tree/references/onboarding.md`
+- User-facing overview: `skills/first-tree/references/whitepaper.md`
+- User onboarding: `skills/first-tree/references/onboarding.md`
 - Source/workspace install contract:
-  `skills/tree/references/source-workspace-installation.md`
+  `skills/first-tree/references/source-workspace-installation.md`
 - Upgrade and layout contract:
-  `skills/tree/references/upgrade-contract.md`
+  `skills/first-tree/references/upgrade-contract.md`
 - Canonical architecture node: `first-tree-skill-cli/repo-architecture.md`
 - Canonical sync design node: `first-tree-skill-cli/sync.md`
 - Maintainer entrypoint: `docs/source-map.md`

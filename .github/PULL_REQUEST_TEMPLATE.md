@@ -17,7 +17,7 @@
 - [ ] Tree product dispatcher (`src/products/tree/cli.ts`)
 - [ ] Tree engine behavior (`src/products/tree/engine/`)
 - [ ] Shipped tree asset payload (`assets/tree/`)
-- [ ] Tree skill payload (`skills/tree/`)
+- [ ] Tree skill payload (`skills/first-tree/`)
 - [ ] Breeze product (`src/products/breeze/`, `assets/breeze/`, `skills/breeze/`)
 - [ ] Maintainer or user docs (`README.md`, `CONTRIBUTING.md`, `references/`)
 

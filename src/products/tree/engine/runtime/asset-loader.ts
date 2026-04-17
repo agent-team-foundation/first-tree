@@ -3,11 +3,10 @@ import { join } from "node:path";
 
 export const SKILL_NAME = "first-tree";
 // BUNDLED_SKILL_ROOT points at the source-side payload inside the published
-// package. After the Phase 0 layout split it lives under `skills/tree/`.
-// SKILL_ROOT still targets the user-installed path `.agents/skills/first-tree/`
-// because the installed shape is part of the user-facing contract and did not
-// change.
-export const BUNDLED_SKILL_ROOT = join("skills", "tree");
+// package. The source directory and the installed directory share the same
+// `skills/first-tree/` name now that the source payload has been renamed to
+// match the `name:` in its SKILL.md frontmatter.
+export const BUNDLED_SKILL_ROOT = join("skills", SKILL_NAME);
 export const SKILL_ROOT = join(".agents", "skills", SKILL_NAME);
 export const CLAUDE_SKILL_ROOT = join(".claude", "skills", SKILL_NAME);
 export const INSTALLED_SKILL_ROOTS = [SKILL_ROOT, CLAUDE_SKILL_ROOT] as const;

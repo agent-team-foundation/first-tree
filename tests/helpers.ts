@@ -139,7 +139,7 @@ export function makeLegacyRepoFramework(root: string, version = "0.1.0"): void {
 }
 
 export function makeSourceSkill(root: string, version = "0.2.0"): void {
-  const skillRoot = join(root, "skills", "tree");
+  const skillRoot = join(root, "skills", "first-tree");
   const frameworkRoot = join(root, "assets", "tree");
   mkdirSync(join(root, "agents"), { recursive: true });
   mkdirSync(join(frameworkRoot, "templates"), {

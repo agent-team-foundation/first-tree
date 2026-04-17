@@ -3,7 +3,7 @@
  * Check that the version sources agree:
  *   1. package.json `version`              — full major.minor.patch (CLI)
  *   2. assets/tree/VERSION                 — full major.minor.patch (tree product)
- *   3. skills/tree/VERSION                 — major.minor only (tree skill payload)
+ *   3. skills/first-tree/VERSION                 — major.minor only (tree skill payload)
  *   4. src/products/tree/VERSION           — full major.minor.patch (tree product)
  *
  * The first two and the fourth must be identical. The third must equal the
@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const pkgFile = join(root, "package.json");
 const cliVersionFile = join(root, "assets/tree/VERSION");
-const skillVersionFile = join(root, "skills/tree/VERSION");
+const skillVersionFile = join(root, "skills/first-tree/VERSION");
 const productVersionFile = join(root, "src/products/tree/VERSION");
 
 const pkg = JSON.parse(readFileSync(pkgFile, "utf-8"));
@@ -46,14 +46,14 @@ if (pkg.version !== productVersion) {
 
 if (skillVersion !== majorMinor(pkg.version)) {
   errors.push(
-    `skills/tree/VERSION (${skillVersion}) does not match the major.minor of package.json (${majorMinor(pkg.version)}).`,
+    `skills/first-tree/VERSION (${skillVersion}) does not match the major.minor of package.json (${majorMinor(pkg.version)}).`,
   );
 }
 
 if (errors.length > 0) {
   for (const err of errors) console.error(err);
   console.error(
-    "Update all four so package.json + assets/tree/VERSION + src/products/tree/VERSION carry the full version, and skills/tree/VERSION carries just major.minor.",
+    "Update all four so package.json + assets/tree/VERSION + src/products/tree/VERSION carry the full version, and skills/first-tree/VERSION carries just major.minor.",
   );
   process.exit(1);
 }

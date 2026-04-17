@@ -43,7 +43,7 @@ Inspect the tarball contents before merging packaging changes.
 ## Release Checklist
 
 - If package contents or install/upgrade behavior changed, run `pnpm pack`.
-- Inspect the tarball to confirm it includes `dist/`, `skills/tree/`,
+- Inspect the tarball to confirm it includes `dist/`, `skills/first-tree/`,
   `skills/breeze/`, and `assets/`, while excluding repo-only sources such as
   `docs/`, `tests/`, `src/`, and `evals/`.
 - If you changed anything copied into user repos, bump

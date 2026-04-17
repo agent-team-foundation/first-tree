@@ -14,10 +14,10 @@ docs below only for source-repo implementation details.
 | `first-tree-skill-cli/build-and-distribution.md` | Packaging and release invariants |
 | `first-tree-skill-cli/validation-surface.md` | Validation philosophy and coverage expectations |
 | `first-tree-skill-cli/sync.md` | Authoritative product/architecture context for `first-tree sync` |
-| `skills/tree/SKILL.md` | User-facing tree skill workflow |
-| `skills/tree/references/onboarding.md` | Repo, shared-tree, and workspace onboarding model |
-| `skills/tree/references/source-workspace-installation.md` | Binding model and source/workspace contract |
-| `skills/tree/references/upgrade-contract.md` | Installed layout and upgrade invariants |
+| `skills/first-tree/SKILL.md` | User-facing tree skill workflow |
+| `skills/first-tree/references/onboarding.md` | Repo, shared-tree, and workspace onboarding model |
+| `skills/first-tree/references/source-workspace-installation.md` | Binding model and source/workspace contract |
+| `skills/first-tree/references/upgrade-contract.md` | Installed layout and upgrade invariants |
 | `docs/maintainer-architecture.md` | Local file-level architecture map for this source repo |
 | `docs/maintainer-thin-cli.md` | Implementation touchpoints for `src/cli.ts` and command adapters |
 | `docs/maintainer-build-and-distribution.md` | Packaging surfaces and release checklist in this repo |
@@ -76,6 +76,6 @@ docs below only for source-repo implementation details.
 - Keep decision-grade knowledge in the bound Context Tree under
   `first-tree-skill-cli/`.
 - Keep root `README.md` and `AGENTS.md` short and distribution-focused.
-- Keep shipped user knowledge in `skills/tree/references/`.
+- Keep shipped user knowledge in `skills/first-tree/references/`.
 - Keep runtime metadata changes synchronized across tree nodes, local docs,
   tests, and code.

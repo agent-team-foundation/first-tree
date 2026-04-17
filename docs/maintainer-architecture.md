@@ -10,7 +10,7 @@ the files maintainers edit in this repo.
 
 | Path | Local responsibility |
 | --- | --- |
-| `skills/tree/` | Canonical tree skill payload that ships verbatim to user repos (installed as `skills/first-tree/`) |
+| `skills/first-tree/` | Canonical tree skill payload that ships verbatim to user repos (installed as `skills/first-tree/`) |
 | `skills/breeze/` | Placeholder for the breeze skill payload (Phase 1+) |
 | `assets/tree/` | Runtime assets for the tree product, installed or refreshed by the CLI |
 | `assets/breeze/` | Placeholder for breeze runtime assets |
@@ -24,7 +24,7 @@ the files maintainers edit in this repo.
 ## Local Guardrails
 
 - Keep `.agents/skills/first-tree/` and `.claude/skills/first-tree/` as alias
-  symlinks; edit `skills/tree/`, not the aliases.
+  symlinks; edit `skills/first-tree/`, not the aliases.
 - Keep source/workspace repos free of tree content; tree nodes belong in the
   bound Context Tree repo.
 - Treat `source-repos.md` as generated output; tree-side truth still lives in
