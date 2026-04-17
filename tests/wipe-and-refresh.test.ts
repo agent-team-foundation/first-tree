@@ -8,6 +8,8 @@ import {
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  ensureAgentContextHooks,
+  inspectAgentContextHooks,
   refreshInjectContextHook,
   refreshShippedWorkflows,
 } from "../src/products/tree/engine/runtime/adapters.js";
@@ -229,6 +231,77 @@ describe("refreshInjectContextHook", () => {
   it("returns unchanged when settings.json is missing", () => {
     const tmp = useTmpDir();
     expect(refreshInjectContextHook(tmp.path)).toBe("unchanged");
+  });
+});
+
+describe("ensureAgentContextHooks", () => {
+  it("creates Claude Code and Codex hook files when they are missing", () => {
+    const tmp = useTmpDir();
+
+    const result = ensureAgentContextHooks(tmp.path);
+
+    expect(result).toEqual({
+      claudeSettings: "created",
+      codexConfig: "created",
+      codexHooks: "created",
+    });
+    expect(
+      readFileSync(join(tmp.path, ".claude", "settings.json"), "utf-8"),
+    ).toContain("first-tree inject-context");
+    expect(
+      readFileSync(join(tmp.path, ".codex", "config.toml"), "utf-8"),
+    ).toContain("codex_hooks = true");
+    expect(
+      readFileSync(join(tmp.path, ".codex", "hooks.json"), "utf-8"),
+    ).toContain("\"matcher\": \"startup|resume\"");
+    expect(inspectAgentContextHooks(tmp.path)).toEqual({
+      claudeSettings: "current",
+      codexConfig: "current",
+      codexHooks: "current",
+    });
+  });
+
+  it("updates stale Codex files while preserving unrelated configuration", () => {
+    const tmp = useTmpDir();
+    mkdirSync(join(tmp.path, ".codex"), { recursive: true });
+    writeFileSync(
+      join(tmp.path, ".codex", "config.toml"),
+      ['model = "gpt-5.4"', "", "[features]", "codex_hooks = false", ""].join("\n"),
+    );
+    writeFileSync(
+      join(tmp.path, ".codex", "hooks.json"),
+      JSON.stringify(
+        {
+          hooks: {
+            PreToolUse: [
+              {
+                matcher: "Bash",
+                hooks: [
+                  {
+                    type: "command",
+                    command: "echo pre-tool",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    const result = ensureAgentContextHooks(tmp.path);
+    const config = readFileSync(join(tmp.path, ".codex", "config.toml"), "utf-8");
+    const hooks = readFileSync(join(tmp.path, ".codex", "hooks.json"), "utf-8");
+
+    expect(result.codexConfig).toBe("updated");
+    expect(result.codexHooks).toBe("updated");
+    expect(config).toContain('model = "gpt-5.4"');
+    expect(config).toContain("codex_hooks = true");
+    expect(hooks).toContain("\"PreToolUse\"");
+    expect(hooks).toContain("\"SessionStart\"");
+    expect(hooks).toContain("Loading First Tree context");
   });
 });
 

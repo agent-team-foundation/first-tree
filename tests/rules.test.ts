@@ -284,7 +284,7 @@ describe("agentIntegration rule", () => {
     mkdirSync(join(tmp.path, ".claude"));
     writeFileSync(
       join(tmp.path, ".claude", "settings.json"),
-      '{"hooks": {"inject-tree-context": true}}',
+      '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"npx -p first-tree first-tree inject-context --skip-version-check"}]}]}}',
     );
     const repo = new Repo(tmp.path);
     const result = agentIntegration.evaluate(repo);
@@ -450,7 +450,7 @@ describe("evaluateAll", () => {
     mkdirSync(join(tmp.path, ".claude"), { recursive: true });
     writeFileSync(
       join(tmp.path, ".claude", "settings.json"),
-      '{"hooks": {"inject-tree-context": true}}',
+      '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"npx -p first-tree first-tree inject-context --skip-version-check"}]}]}}',
     );
     const wfDir = join(tmp.path, ".github", "workflows");
     mkdirSync(wfDir, { recursive: true });

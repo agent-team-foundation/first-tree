@@ -55,10 +55,20 @@ export function buildSourceRepoIndex(bindings: TreeBindingState[]): string {
     return `${lines.join("\n")}\n`;
   }
 
-  lines.push(
+  lines.push(...buildSourceRepoIndexTable(bindings));
+  lines.push("");
+  return `${lines.join("\n")}\n`;
+}
+
+export function buildSourceRepoIndexTable(bindings: TreeBindingState[]): string[] {
+  if (bindings.length === 0) {
+    return ["No bound source/workspace repos have been recorded yet."];
+  }
+
+  const lines = [
     "| Source | GitHub | Binding | Tree Entrypoint |",
     "| --- | --- | --- | --- |",
-  );
+  ];
 
   for (const binding of [...bindings].sort(compareBindings)) {
     lines.push(
@@ -71,18 +81,20 @@ export function buildSourceRepoIndex(bindings: TreeBindingState[]): string {
     );
   }
 
-  lines.push("");
-  return `${lines.join("\n")}\n`;
+  return lines;
 }
 
-function compareBindings(left: TreeBindingState, right: TreeBindingState): number {
+export function compareBindings(
+  left: TreeBindingState,
+  right: TreeBindingState,
+): number {
   const nameOrder = left.sourceName.localeCompare(right.sourceName);
   return nameOrder === 0
     ? left.sourceId.localeCompare(right.sourceId)
     : nameOrder;
 }
 
-function formatRemoteCell(binding: TreeBindingState): string {
+export function formatRemoteCell(binding: TreeBindingState): string {
   if (!binding.remoteUrl) {
     return "Missing in binding metadata";
   }

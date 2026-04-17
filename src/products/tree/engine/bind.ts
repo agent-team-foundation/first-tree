@@ -23,6 +23,10 @@ import {
   copyCanonicalSkill,
   resolveBundledPackageRoot,
 } from "#products/tree/engine/runtime/installer.js";
+import {
+  ensureAgentContextHooks,
+  formatAgentContextHookMessages,
+} from "#products/tree/engine/runtime/adapters.js";
 import { syncTreeSourceRepoIndex } from "#products/tree/engine/runtime/source-repo-index.js";
 import {
   upsertLocalTreeGitIgnore,
@@ -421,6 +425,7 @@ export function runBind(repo?: Repo, options?: BindOptions): number {
         workspaceId,
       },
     );
+    const sourceAgentHooks = ensureAgentContextHooks(sourceRepo.root);
     writeSourceState(sourceRepo.root, {
       bindingMode,
       rootKind,
@@ -462,6 +467,7 @@ export function runBind(repo?: Repo, options?: BindOptions): number {
         ? relativeRepoPath(treeResolution.treeRepo.root, workspaceRootPath)
         : undefined,
     });
+    const treeAgentHooks = ensureAgentContextHooks(treeResolution.treeRepo.root);
     const sourceRepoIndex = syncTreeSourceRepoIndex(treeResolution.treeRepo.root);
 
     if (bindingMode === "workspace-member" && workspaceId && workspaceRootPath) {
@@ -530,6 +536,12 @@ export function runBind(repo?: Repo, options?: BindOptions): number {
       console.log(`  Updated ${changedFiles.join(" and ")}.`);
     } else {
       console.log("  Source integration instructions were already current.");
+    }
+    for (const message of formatAgentContextHookMessages(sourceAgentHooks)) {
+      console.log(`  ${message}`);
+    }
+    for (const message of formatAgentContextHookMessages(treeAgentHooks)) {
+      console.log(`  ${message}`);
     }
     console.log("  Wrote source and tree binding metadata.");
     return 0;
