@@ -138,7 +138,12 @@ for legacy_path in \
   "skills/tree/assets" \
   "skills/tree/tests" \
   "skills/tree/scripts" \
-  "skills/tree/agents"
+  "skills/tree/agents" \
+  "skills/breeze/engine" \
+  "skills/breeze/assets" \
+  "skills/breeze/tests" \
+  "skills/breeze/scripts" \
+  "skills/breeze/agents"
 do
   if git -C "$REPO_ROOT" ls-files --error-unmatch "$legacy_path" >/dev/null 2>&1; then
     echo "Unexpected legacy artifact tracked in git: $legacy_path" >&2
@@ -146,10 +151,13 @@ do
   fi
 done
 
-# The tree operational skill is a SKILL.md + VERSION only — no references/
-# of its own; shared references live under the first-tree entry-point skill.
+# The product operational skills are SKILL.md + VERSION only — no
+# references/ of their own; shared references live under the first-tree
+# entry-point skill.
 require_file "$REPO_ROOT/skills/tree/SKILL.md"
 require_file "$REPO_ROOT/skills/tree/VERSION"
+require_file "$REPO_ROOT/skills/breeze/SKILL.md"
+require_file "$REPO_ROOT/skills/breeze/VERSION"
 
 tracked_aliases="$(git -C "$REPO_ROOT" ls-files .agents .claude)"
 expected_aliases=$'.agents/skills/first-tree\n.claude/skills/first-tree'
