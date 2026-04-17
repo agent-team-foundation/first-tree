@@ -195,13 +195,20 @@ plus their own source/workspace binding state.
 
 - The npm package is `first-tree`.
 - The installed CLI command is also `first-tree`.
-- The published package keeps its bundled canonical source under
-  `skills/first-tree/` (shipped to user repos as `skills/first-tree/`).
-- In this source repo, `.agents/skills/first-tree/` and
-  `.claude/skills/first-tree/` are tracked symlink aliases back to
-  `skills/first-tree/` so local agents resolve the same `first-tree` skill
-  that ships in the package.
-- `npx -p first-tree first-tree <command>` is the recommended one-off entrypoint.
+- The CLI dispatches into three products: `tree`, `breeze`, `gardener`.
+  Run `first-tree --help` for the routing.
+- The published package ships four skill payloads, each with the same
+  name in the package and when installed into a user repo:
+  - `skills/first-tree/` — entry-point skill: methodology, references,
+    and routing to the product skills
+  - `skills/tree/` — operational handbook for the `first-tree tree` CLI
+  - `skills/breeze/` — operational handbook for the `first-tree breeze` CLI
+  - `skills/gardener/` — operational handbook for the `first-tree gardener` CLI
+- In this source repo, `.agents/skills/<name>/` and `.claude/skills/<name>/`
+  are tracked symlink aliases back to the four `skills/<name>/` payloads
+  so local agents resolve the same skills the package ships.
+- `npx -p first-tree first-tree <product> <command>` is the recommended
+  one-off entrypoint.
 
 ## Canonical Documentation
 

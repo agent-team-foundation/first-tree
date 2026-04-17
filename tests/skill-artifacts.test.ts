@@ -221,7 +221,7 @@ describe("skill artifacts", () => {
     expect(read("README.md")).toContain("skills/first-tree/");
     expect(read("README.md")).toContain(".agents/skills/first-tree/");
     expect(read("README.md")).toContain(".claude/skills/first-tree/");
-    expect(read("README.md")).toContain("bundled canonical");
+    expect(read("README.md")).toContain("four skill payloads");
     expect(read("README.md")).toContain("dedicated tree repo");
     expect(read("README.md")).toContain("first-tree tree inspect");
     expect(read("README.md")).toContain("first-tree tree bind");
@@ -239,7 +239,7 @@ describe("skill artifacts", () => {
     expect(read("AGENTS.md")).toContain("docs/source-map.md");
     expect(read("AGENTS.md")).toContain("source-workspace-installation.md");
     expect(read("AGENTS.md")).toContain("first-tree-skill-cli/");
-    expect(read("AGENTS.md")).toContain("bundled skill payload path");
+    expect(read("AGENTS.md")).toContain("entry-point skill payload");
     expect(read("AGENTS.md")).not.toContain("### Running evals");
     expect(read("AGENTS.md")).not.toContain("EVALS_TREE_REPO");
     expect(read("src/cli.ts")).not.toContain("from upstream");

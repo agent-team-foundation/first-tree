@@ -14,7 +14,11 @@ docs below only for source-repo implementation details.
 | `first-tree-skill-cli/build-and-distribution.md` | Packaging and release invariants |
 | `first-tree-skill-cli/validation-surface.md` | Validation philosophy and coverage expectations |
 | `first-tree-skill-cli/sync.md` | Authoritative product/architecture context for `first-tree sync` |
-| `skills/first-tree/SKILL.md` | User-facing tree skill workflow |
+| `src/products/manifest.ts` | Single source of truth for the three products (tree, breeze, gardener) |
+| `skills/first-tree/SKILL.md` | User-facing entry-point skill: methodology + routing to product skills |
+| `skills/tree/SKILL.md` | Operational handbook for the `first-tree tree` CLI |
+| `skills/breeze/SKILL.md` | Operational handbook for the `first-tree breeze` CLI |
+| `skills/gardener/SKILL.md` | Operational handbook for the `first-tree gardener` CLI |
 | `skills/first-tree/references/onboarding.md` | Repo, shared-tree, and workspace onboarding model |
 | `skills/first-tree/references/source-workspace-installation.md` | Binding model and source/workspace contract |
 | `skills/first-tree/references/upgrade-contract.md` | Installed layout and upgrade invariants |
@@ -35,15 +39,19 @@ docs below only for source-repo implementation details.
 | `assets/tree/prompts/` | Review prompt payload |
 | `assets/tree/examples/` | Agent integration examples |
 | `assets/tree/helpers/` | Shipped helper scripts and TS utilities |
-| `assets/breeze/` | Breeze runtime assets (Phase 1+ placeholder) |
+| `assets/breeze/dashboard.html` | SSE dashboard served by the breeze daemon HTTP server |
 
 ## Engine Surface
 
 | Path | Purpose |
 | --- | --- |
-| `src/cli.ts` | Top-level umbrella dispatcher for `first-tree <product> <command>` |
+| `src/cli.ts` | Top-level umbrella dispatcher for `first-tree <product> <command>`; reads from the product manifest |
+| `src/products/manifest.ts` | Product manifest (name, description, lazy entrypoint, auto-upgrade, asset/skill flags) |
 | `src/products/tree/cli.ts` | Tree product dispatcher (lazy-loaded) |
-| `src/products/breeze/cli.ts` | Breeze product dispatcher stub (Phase 1+) |
+| `src/products/breeze/cli.ts` | Breeze product dispatcher (lazy-loaded) |
+| `src/products/gardener/cli.ts` | Gardener product dispatcher (lazy-loaded) |
+| `src/products/breeze/engine/` | Breeze business logic: `commands/`, `runtime/`, `daemon/`, `bridge.ts`, `statusline.ts` |
+| `src/products/gardener/engine/` | Gardener business logic: `commands/`, `runtime/`, `comment.ts`, `respond.ts` |
 | `src/products/tree/engine/init.ts` | High-level onboarding wrapper plus low-level tree bootstrap |
 | `src/products/tree/engine/inspect.ts` | Root classification before onboarding |
 | `src/products/tree/engine/bind.ts` | Binding a source/workspace root to an existing tree |
@@ -76,6 +84,8 @@ docs below only for source-repo implementation details.
 - Keep decision-grade knowledge in the bound Context Tree under
   `first-tree-skill-cli/`.
 - Keep root `README.md` and `AGENTS.md` short and distribution-focused.
-- Keep shipped user knowledge in `skills/first-tree/references/`.
+- Keep shipped user knowledge in `skills/first-tree/references/` (shared
+  across all four skills; individual product skills have no `references/`
+  of their own).
 - Keep runtime metadata changes synchronized across tree nodes, local docs,
   tests, and code.

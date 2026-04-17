@@ -2,23 +2,25 @@
 
 Thanks for helping improve `first-tree`.
 
-This repository ships one canonical `first-tree` skill plus a thin
-`first-tree` CLI shell.
+This repository ships a thin `first-tree` umbrella CLI over three products
+(`tree`, `breeze`, `gardener`) plus four lightweight skill payloads.
 
 Naming note:
 
 - `first-tree` is the npm package name.
 - `first-tree` is also the installed CLI command.
-- `skills/first-tree/` is the bundled tree skill path inside this repo.
-- `skills/breeze/` is the placeholder for the breeze skill payload.
-- This source repo also tracks `.agents/skills/first-tree/` and
-  `.claude/skills/first-tree/` as symlink aliases back to
-  `skills/first-tree/` for local agent discovery.
-- User trees install that payload into `.agents/skills/first-tree/` and
-  `.claude/skills/first-tree/` (the installed name is unchanged).
+- `skills/first-tree/` holds the entry-point skill payload (methodology,
+  shared `references/`, routing to the product skills).
+- `skills/tree/`, `skills/breeze/`, `skills/gardener/` hold the per-product
+  operational skills.
+- This source repo tracks `.agents/skills/<name>/` and `.claude/skills/<name>/`
+  symlink aliases for each of the four skills so local agents can discover
+  them without an install step.
+- User repos install the four payloads at the same paths
+  (`.agents/skills/<name>/` and `.claude/skills/<name>/`).
 
-Most changes should land in the canonical tree skill under `skills/first-tree/`,
-not in the local alias paths, root-level prose, or ad hoc helper files.
+Most skill content changes should land in `skills/<name>/SKILL.md`, not in
+the local alias paths, root-level prose, or ad hoc helper files.
 
 ## Before You Change Anything
 

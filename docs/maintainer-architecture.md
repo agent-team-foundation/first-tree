@@ -6,28 +6,66 @@ the bound Context Tree.
 This file is source-repo-local. It maps the tree's architectural decisions onto
 the files maintainers edit in this repo.
 
+## Three Products, One Umbrella CLI
+
+`first-tree` is an umbrella CLI that dispatches into three products:
+
+- **`tree`** — Context Tree tooling (inspect / init / bind / verify / publish / upgrade / sync / ...)
+- **`breeze`** — Proposal / inbox daemon with a GitHub notifications statusline
+- **`gardener`** — Automated maintenance agent for tree sync PRs and source-repo review comments
+
+All three live under `src/products/<name>/` and share the same shape. The
+single source of truth for the product set is `src/products/manifest.ts` —
+the umbrella CLI, version reporting, and skill tooling read from there.
+
+## Four Skills
+
+The package ships four skill payloads under `skills/`:
+
+- **`skills/first-tree/`** — the entry-point skill: methodology, references
+  (whitepaper, principles, ownership, onboarding, source-workspace-installation,
+  upgrade-contract), and routing to the three product skills
+- **`skills/tree/`**, **`skills/breeze/`**, **`skills/gardener/`** — one-file
+  operational handbooks (`SKILL.md` + `VERSION`) for each product CLI; no
+  `references/` of their own
+
+Each skill has tracked alias symlinks at `.agents/skills/<name>/` and
+`.claude/skills/<name>/` so local agents discover every skill the package
+ships.
+
 ## Local Responsibility Map
 
 | Path | Local responsibility |
 | --- | --- |
-| `skills/first-tree/` | Canonical tree skill payload that ships verbatim to user repos (installed as `skills/first-tree/`) |
-| `skills/breeze/` | Placeholder for the breeze skill payload (Phase 1+) |
-| `assets/tree/` | Runtime assets for the tree product, installed or refreshed by the CLI |
-| `assets/breeze/` | Placeholder for breeze runtime assets |
-| `src/cli.ts` | Top-level umbrella dispatcher for `first-tree <product> <command>` |
-| `src/products/tree/engine/` | Tree command behavior, binding logic, verification, publish, and sync orchestration |
-| `src/products/tree/cli.ts` | Tree product dispatcher (lazy-loaded from the umbrella CLI) |
-| `src/products/breeze/cli.ts` | Breeze product dispatcher stub (Phase 1+) |
+| `src/cli.ts` | Top-level umbrella dispatcher for `first-tree <product> <command>`; iterates the product manifest |
+| `src/products/manifest.ts` | Single source of truth for the three products; add a new product by adding one entry here |
+| `src/products/tree/` | Tree product root (CLI dispatcher + `VERSION`) |
+| `src/products/tree/engine/` | Tree business logic: `commands/`, `runtime/`, `rules/`, `validators/`, plus `bind.ts`, `init.ts`, `verify.ts`, `publish.ts`, `sync.ts`, `workspace.ts`, `upgrade.ts`, `inspect.ts`, etc. |
+| `src/products/breeze/` | Breeze product: CLI dispatcher + `engine/` (commands, runtime, daemon, bridge, statusline) |
+| `src/products/gardener/` | Gardener product: CLI dispatcher + `engine/` (commands, runtime, comment, respond) |
+| `skills/first-tree/` | Entry-point skill payload that ships verbatim to user repos |
+| `skills/tree/`, `skills/breeze/`, `skills/gardener/` | Per-product operational skill payloads |
+| `assets/tree/` | Runtime assets for the tree product, installed or refreshed by the CLI (templates, workflows, prompts, helpers, examples) |
+| `assets/breeze/dashboard.html` | SSE dashboard served by the breeze daemon HTTP server |
 | `tests/` | Repo-local validation surface |
 | Root package files | Packaging, build, and shell entrypoints |
 
 ## Local Guardrails
 
-- Keep `.agents/skills/first-tree/` and `.claude/skills/first-tree/` as alias
-  symlinks; edit `skills/first-tree/`, not the aliases.
+- Keep `.agents/skills/<name>/` and `.claude/skills/<name>/` as alias
+  symlinks; edit `skills/<name>/`, not the aliases.
+- Product directories must share the same shape: `cli.ts` + `VERSION` at the
+  root, business logic under `engine/` (`commands/`, `runtime/`, and domain
+  subdirectories). Breeze uses `engine/daemon/`; tree uses `engine/rules/`
+  and `engine/validators/`. Do not place business logic at the product root
+  alongside `cli.ts`.
+- Every product must be listed in `src/products/manifest.ts` — `src/cli.ts`
+  iterates the manifest, so a missing entry means the product is invisible
+  to the umbrella.
 - Keep source/workspace repos free of tree content; tree nodes belong in the
   bound Context Tree repo.
 - Treat `source-repos.md` as generated output; tree-side truth still lives in
-  `.first-tree/tree.json` and `.first-tree/bindings/`.
+  `.first-tree/tree.json` and `.first-tree/bindings/`. Source-side truth
+  lives in `.first-tree/source.json` and `.first-tree/local-tree.json`.
 - When the binding schema or install contract changes, update the tree node,
   source docs, code, and tests together.
