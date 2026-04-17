@@ -332,10 +332,22 @@ interface DriftReport {
 interface ClassificationItem {
   path: string;
   type: "TREE_MISS" | "TREE_OK";
-  target_node_path: string | null;
   rationale: string;
   suggested_node_title: string;
   suggested_node_body_markdown: string;
+  /**
+   * Tree paths (e.g. "engineering/backend", "governance") that the drafted
+   * NODE.md body references and should be declared as frontmatter
+   * `soft_links` (#124). Optional — omit or empty when there are no
+   * cross-domain references.
+   */
+  suggested_soft_links?: string[];
+  /**
+   * Source PR numbers (other than the owning group's) that independently
+   * proposed this same target path. Populated by the dedup pass so the
+   * surviving PR can credit the dropped claimants in its body (#121).
+   */
+  coClaimingSourcePrs?: number[];
 }
 
 /** A group of proposals tied to one source PR (or unlinked commits). */
@@ -605,21 +617,75 @@ async function claudeCliAvailable(shellRun: ShellRun): Promise<boolean> {
   return result.code === 0;
 }
 
-async function fetchPrChangedFiles(
+interface PrFileChange {
+  filename: string;
+  patch: string | undefined;
+  status: string | undefined;
+}
+
+const DIFF_NOISE_PATTERNS = [
+  /(^|\/)(?:package-lock\.json|pnpm-lock\.yaml|yarn\.lock|Cargo\.lock|poetry\.lock|Gemfile\.lock)$/,
+  /(^|\/)(?:dist|build|out|coverage|node_modules|__pycache__)\//,
+  /\.(?:lock|min\.js|min\.css|map|snap)$/,
+];
+
+function isDiffNoise(filename: string): boolean {
+  return DIFF_NOISE_PATTERNS.some((re) => re.test(filename));
+}
+
+async function fetchPrFileChanges(
   shellRun: ShellRun,
   ownerRepo: { owner: string; repo: string },
   prNumber: number,
-): Promise<string[]> {
+): Promise<PrFileChange[]> {
   try {
     const result = await shellRun("gh", [
       "api", `/repos/${ownerRepo.owner}/${ownerRepo.repo}/pulls/${prNumber}/files`,
-      "--jq", ".[].filename",
+      "--paginate",
     ]);
     if (result.code !== 0) return [];
-    return result.stdout.trim().split("\n").filter(Boolean);
+    const raw = result.stdout.trim();
+    if (raw === "") return [];
+    // --paginate concatenates JSON arrays; normalize to a flat array.
+    const normalized = raw.replace(/\]\s*\[/g, ",");
+    const parsed = JSON.parse(normalized) as Array<{ filename?: string; patch?: string; status?: string }>;
+    return parsed
+      .filter((f) => typeof f.filename === "string")
+      .map((f) => ({ filename: f.filename!, patch: f.patch, status: f.status }));
   } catch {
     return [];
   }
+}
+
+/**
+ * Build a truncated diff summary for the classification prompt (#123).
+ * Filters generated/lockfile noise and caps per-file hunks so large PRs
+ * don't blow the context window.
+ */
+function formatPrDiffForPrompt(
+  files: PrFileChange[],
+  opts?: { maxFiles?: number; maxLinesPerFile?: number },
+): string {
+  const maxFiles = opts?.maxFiles ?? 15;
+  const maxLinesPerFile = opts?.maxLinesPerFile ?? 40;
+  const signal = files.filter((f) => !isDiffNoise(f.filename));
+  const selected = signal.slice(0, maxFiles);
+  const parts: string[] = [];
+  for (const f of selected) {
+    if (!f.patch) continue;
+    const lines = f.patch.split("\n");
+    const truncated = lines.length > maxLinesPerFile;
+    const shown = truncated ? lines.slice(0, maxLinesPerFile) : lines;
+    parts.push(`--- ${f.filename} (${f.status ?? "modified"})`);
+    parts.push(...shown);
+    if (truncated) {
+      parts.push(`... (${lines.length - maxLinesPerFile} more lines in this file)`);
+    }
+  }
+  if (signal.length > maxFiles) {
+    parts.push(`... (${signal.length - maxFiles} more files omitted)`);
+  }
+  return parts.join("\n");
 }
 
 async function classifyDriftViaClaude(
@@ -627,6 +693,7 @@ async function classifyDriftViaClaude(
   drift: DriftReport,
   treeNodes: TreeNodeSummary[],
   changedFiles?: string[],
+  diffSummary?: string,
 ): Promise<ClassificationItem[]> {
   // Build keywords from the PR for relevance matching
   const driftText = [
@@ -665,6 +732,9 @@ async function classifyDriftViaClaude(
     ...(changedFiles && changedFiles.length > 0
       ? [`\nChanged files in this PR (use these to verify what was actually modified):\n${changedFiles.slice(0, 50).join("\n")}`]
       : []),
+    ...(diffSummary && diffSummary.length > 0
+      ? [`\nTruncated diff hunks (use these as factual ground truth; generated/lockfile noise is filtered):\n${diffSummary}`]
+      : []),
   ].join("\n");
 
   const relatedCount = relatedNodes.length;
@@ -697,15 +767,18 @@ Return a JSON array. Each element represents one area that needs a NEW tree node
 {
   "path": "suggested/node/path",
   "type": "TREE_MISS" | "TREE_OK",
-  "target_node_path": null,
   "rationale": "one sentence explaining why the tree needs this node",
   "suggested_node_title": "Human-readable title for the node",
-  "suggested_node_body_markdown": "Draft NODE.md body content ONLY (2-5 paragraphs, no YAML frontmatter)"
+  "suggested_node_body_markdown": "Draft NODE.md body content ONLY (2-5 paragraphs, no YAML frontmatter)",
+  "suggested_soft_links": ["other/tree/path", "another/one"]
 }
 
-For TREE_OK items, only path, type, and rationale are required (other fields can be empty strings).
+For TREE_OK items, only path, type, and rationale are required (other fields can be empty strings or omitted).
 
-IMPORTANT: \`suggested_node_body_markdown\` must contain body content only. Do NOT include YAML frontmatter or code fences.
+IMPORTANT:
+- Only return TREE_MISS or TREE_OK. Sync does not support in-place edits to existing NODE.md files, so do not propose supplement-style updates — if an existing node needs more content, classify as TREE_MISS with a new path and leave the existing node alone.
+- \`suggested_node_body_markdown\` must contain body content only. Do NOT include YAML frontmatter or code fences.
+- \`suggested_soft_links\` must list every tree path the body cross-references (other domains, governance, backend, etc.) so the new node shows up in the tree graph. Use paths from the "Current tree nodes" list above. Omit or use [] when the body does not reference other domains.
 
 Return a JSON array only, no prose.`;
   const CLAUDE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes per classification
@@ -995,11 +1068,26 @@ async function prepareProposalGroup(
       const nodePath = join(absDir, "NODE.md");
       // Only write if NODE.md doesn't already exist (don't overwrite human-authored nodes)
       if (!existsSync(nodePath)) {
-        const content = [
+        const frontmatter = [
           "---",
           `title: "${capitalizedTitle.replace(/"/g, '\\"')}"`,
           `owners: [${owners.join(", ")}]`,
-          "---",
+        ];
+        const softLinks = Array.isArray(proposal.suggested_soft_links)
+          ? Array.from(
+              new Set(
+                proposal.suggested_soft_links
+                  .map((s) => (typeof s === "string" ? s.trim() : ""))
+                  .filter((s) => s.length > 0 && s !== dirSegment),
+              ),
+            ).sort()
+          : [];
+        if (softLinks.length > 0) {
+          frontmatter.push(`soft_links: [${softLinks.join(", ")}]`);
+        }
+        frontmatter.push("---");
+        const content = [
+          ...frontmatter,
           "",
           body,
           "",
@@ -1007,22 +1095,29 @@ async function prepareProposalGroup(
         writeFileSync(nodePath, content);
         writtenFiles.push(nodePath);
 
-        // Update parent NODE.md sub-domains list if the new dir isn't listed
+        // Update parent NODE.md sub-domains list if the new dir isn't listed.
+        // If the parent has no Sub-domains section at all, append one so the
+        // child is discoverable via top-down tree navigation (#122).
         const parentNodePath = join(dirname(absDir), "NODE.md");
         if (existsSync(parentNodePath)) {
           try {
             const parentContent = readFileSync(parentNodePath, "utf-8");
             const newDirName = basename(absDir);
-            if (!parentContent.includes(`${newDirName}/`) && !parentContent.includes(`${newDirName}\\`)) {
+            const alreadyListed = parentContent.includes(`${newDirName}/`) || parentContent.includes(`${newDirName}\\`);
+            if (!alreadyListed) {
+              const newLine = `- \`${newDirName}/\` — ${capitalizedTitle}\n`;
               const subDomainsMatch = parentContent.match(/(##\s*Sub-?domains?[^\n]*\n)([\s\S]*?)(\n##|\n---|\z)/i);
+              let updated: string | null = null;
               if (subDomainsMatch) {
                 const insertPoint = parentContent.indexOf(subDomainsMatch[0]) + subDomainsMatch[1].length + subDomainsMatch[2].length;
-                const newLine = `- \`${newDirName}/\` — ${capitalizedTitle}\n`;
-                const updated = parentContent.slice(0, insertPoint) + newLine + parentContent.slice(insertPoint);
-                writeFileSync(parentNodePath, updated);
-                writtenFiles.push(parentNodePath);
-                console.log(`  \u2713 Updated parent: ${relative(treeRoot, parentNodePath)} (added ${newDirName}/)`);
+                updated = parentContent.slice(0, insertPoint) + newLine + parentContent.slice(insertPoint);
+              } else {
+                const trimmed = parentContent.replace(/\s+$/, "");
+                updated = `${trimmed}\n\n## Sub-domains\n\n${newLine}`;
               }
+              writeFileSync(parentNodePath, updated);
+              writtenFiles.push(parentNodePath);
+              console.log(`  \u2713 Updated parent: ${relative(treeRoot, parentNodePath)} (added ${newDirName}/)`);
             }
           } catch { /* non-fatal */ }
         }
@@ -1100,9 +1195,14 @@ async function prepareProposalGroup(
     `- Proposal files: ${group.proposalPaths.length}`,
     "",
     "Proposals:",
-    ...group.proposals.map(
-      (p) => `- ${p.type}: ${p.target_node_path ?? p.path} \u2014 ${p.rationale}`,
-    ),
+    ...group.proposals.map((p) => {
+      const base = `- ${p.type}: ${p.path} \u2014 ${p.rationale}`;
+      if (p.coClaimingSourcePrs && p.coClaimingSourcePrs.length > 0) {
+        const credits = p.coClaimingSourcePrs.map((n) => `#${n}`).join(", ");
+        return `${base} (also identified by ${credits})`;
+      }
+      return base;
+    }),
     "",
     "Commits:",
     ...drift.commits.map(
@@ -1448,10 +1548,20 @@ export async function runSync(
             mergedPrTitles: [pr.title],
           };
 
-          const prFiles = pr.number > 0
-            ? await fetchPrChangedFiles(shellRun, drift.ownerRepo, pr.number)
+          const prFileChanges = pr.number > 0
+            ? await fetchPrFileChanges(shellRun, drift.ownerRepo, pr.number)
             : [];
-          const proposals = await classifyDriftViaClaude(shellRun, perPrDrift, treeNodes, prFiles);
+          const prFiles = prFileChanges.map((f) => f.filename);
+          const diffSummary = prFileChanges.length > 0
+            ? formatPrDiffForPrompt(prFileChanges)
+            : "";
+          const proposals = await classifyDriftViaClaude(
+            shellRun,
+            perPrDrift,
+            treeNodes,
+            prFiles,
+            diffSummary,
+          );
 
           if (proposals.length === 0) {
             console.log(
@@ -1460,8 +1570,16 @@ export async function runSync(
             return { pr, filtered: [] as ClassificationItem[], written: [] as string[] };
           }
 
-          const filtered = proposals.filter((p) => p.type !== "TREE_OK");
-          const okCount = proposals.length - filtered.length;
+          const dropped = proposals.filter(
+            (p) => p.type !== "TREE_MISS" && p.type !== "TREE_OK",
+          );
+          for (const d of dropped) {
+            console.log(
+              `  \u26A0 ${prLabel}: dropping unsupported classification type "${d.type}" for path "${d.path}" (sync only applies TREE_MISS edits; see #125)`,
+            );
+          }
+          const filtered = proposals.filter((p) => p.type === "TREE_MISS");
+          const okCount = proposals.filter((p) => p.type === "TREE_OK").length;
 
           console.log(
             `  ${prLabel}: ${filtered.length} proposals (${okCount} TREE_OK skipped)`,
@@ -1485,24 +1603,59 @@ export async function runSync(
       classifiedPrs.push(...results);
     }
 
-    // Deduplicate proposals targeting the same node path across PRs
-    const claimedPaths = new Set<string>();
+    // Deduplicate proposals that target the same node path across source PRs.
+    // Strategy (#121): group all proposals by normalized target path, pick the
+    // entry with the longest suggested body as the winner, drop the rest, and
+    // annotate the winner with the losing source-PR numbers so the surviving
+    // tree PR can credit every contributor in its body.
+    interface DedupEntry {
+      classified: ClassifiedPr;
+      proposal: ClassificationItem;
+    }
+    const byPath = new Map<string, DedupEntry[]>();
     for (const classified of classifiedPrs) {
-      const deduped: ClassificationItem[] = [];
       for (const p of classified.filtered) {
-        if (p.type !== "TREE_MISS") {
-          deduped.push(p);
-          continue;
-        }
+        if (p.type !== "TREE_MISS") continue;
         const normPath = (p.path ?? "").replace(/\/NODE\.md$/i, "").replace(/^\//, "").toLowerCase();
-        if (normPath && claimedPaths.has(normPath)) {
-          console.log(`  \u23ED Dedup: ${normPath} already claimed by another PR — skipping from PR #${classified.pr.number}`);
-          continue;
-        }
-        if (normPath) claimedPaths.add(normPath);
-        deduped.push(p);
+        if (!normPath) continue;
+        const list = byPath.get(normPath) ?? [];
+        list.push({ classified, proposal: p });
+        byPath.set(normPath, list);
       }
-      classified.filtered = deduped;
+    }
+    const winningProposals = new Set<ClassificationItem>();
+    for (const [normPath, entries] of byPath) {
+      if (entries.length === 1) {
+        winningProposals.add(entries[0].proposal);
+        continue;
+      }
+      // Rank by body length (stronger content first), then by source PR number
+      // (oldest first) for stable ties.
+      const ranked = [...entries].sort((a, b) => {
+        const aLen = (a.proposal.suggested_node_body_markdown ?? "").length;
+        const bLen = (b.proposal.suggested_node_body_markdown ?? "").length;
+        if (aLen !== bLen) return bLen - aLen;
+        const aNum = a.classified.pr.number ?? Number.MAX_SAFE_INTEGER;
+        const bNum = b.classified.pr.number ?? Number.MAX_SAFE_INTEGER;
+        return aNum - bNum;
+      });
+      const winner = ranked[0];
+      winningProposals.add(winner.proposal);
+      const coClaimants = ranked
+        .slice(1)
+        .map((e) => e.classified.pr.number)
+        .filter((n): n is number => typeof n === "number" && n > 0);
+      if (coClaimants.length > 0) {
+        winner.proposal.coClaimingSourcePrs = Array.from(new Set(coClaimants)).sort((a, b) => a - b);
+      }
+      console.log(
+        `  \u23ED Dedup: ${normPath} claimed by ${ranked.length} PR(s); kept PR #${winner.classified.pr.number} (body=${(winner.proposal.suggested_node_body_markdown ?? "").length} chars), dropped ${coClaimants.map((n) => `#${n}`).join(", ") || "(none)"}`,
+      );
+    }
+    for (const classified of classifiedPrs) {
+      classified.filtered = classified.filtered.filter(
+        (p) => p.type !== "TREE_MISS" || winningProposals.has(p),
+      );
     }
 
     const totalProposals = classifiedPrs.reduce((sum, c) => sum + c.filtered.length, 0);
