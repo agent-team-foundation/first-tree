@@ -465,12 +465,22 @@ export function resolveState(input: ResolveStateInput): StateAction {
   const { comments, gardenerUser, headIdentifier, hasReviewedLabel } = input;
 
   // Find gardener's own comments (state comments) and user commands.
+  // A comment is "from gardener" if EITHER the login matches OR the
+  // body carries a `<!-- gardener:` HTML marker (marker fallback handles
+  // comments authored under a different bot identity — self-loop guard
+  // from first-tree#134 / repo-gardener#22).
+  const hasGardenerMarker = (body: string | undefined): boolean =>
+    typeof body === "string" && /<!--\s*gardener:/.test(body);
   const gardenerComments = comments.filter(
-    (c) => c.user?.login === gardenerUser && c.body && c.body.length > 0,
+    (c) =>
+      (c.user?.login === gardenerUser || hasGardenerMarker(c.body)) &&
+      c.body &&
+      c.body.length > 0,
   );
   const userCommands = comments.filter(
     (c) =>
       c.user?.login !== gardenerUser &&
+      !hasGardenerMarker(c.body) &&
       typeof c.body === "string" &&
       GARDENER_COMMAND_RE.test(c.body),
   );
@@ -925,6 +935,27 @@ async function reviewOne(
     write(msg);
     logEvent(env, { kind: "error", message: msg });
     return { status: "failed", summary: `fetch failed for ${repo}#${number}` };
+  }
+
+  // Self-loop guard: gardener-comment is for source-repo PRs, not for
+  // gardener's own tree PRs. Tree PRs carry the `first-tree:sync` label
+  // — skip them here so the comment module never posts a verdict on a
+  // PR gardener opened. See: agent-team-foundation/first-tree#134,
+  // repo-gardener#22.
+  const prOrIssueView = type === "pr" ? bundle.prView : bundle.issueView;
+  const labels = labelNames(prOrIssueView?.labels);
+  if (labels.includes("first-tree:sync")) {
+    const msg = `#${number} has first-tree:sync label — gardener-comment skips sync PRs to avoid self-loops`;
+    write(`\u23ed ${msg}`);
+    logEvent(env, {
+      kind: "skip",
+      number,
+      reason: "first-tree:sync label",
+    });
+    return {
+      status: "skipped",
+      summary: `sync PR — not a comment-module target`,
+    };
   }
 
   // Resolve gardener user: from subject, env, or gh.
