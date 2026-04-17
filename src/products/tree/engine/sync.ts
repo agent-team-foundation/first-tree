@@ -1007,22 +1007,29 @@ async function prepareProposalGroup(
         writeFileSync(nodePath, content);
         writtenFiles.push(nodePath);
 
-        // Update parent NODE.md sub-domains list if the new dir isn't listed
+        // Update parent NODE.md sub-domains list if the new dir isn't listed.
+        // If the parent has no Sub-domains section at all, append one so the
+        // child is discoverable via top-down tree navigation (#122).
         const parentNodePath = join(dirname(absDir), "NODE.md");
         if (existsSync(parentNodePath)) {
           try {
             const parentContent = readFileSync(parentNodePath, "utf-8");
             const newDirName = basename(absDir);
-            if (!parentContent.includes(`${newDirName}/`) && !parentContent.includes(`${newDirName}\\`)) {
+            const alreadyListed = parentContent.includes(`${newDirName}/`) || parentContent.includes(`${newDirName}\\`);
+            if (!alreadyListed) {
+              const newLine = `- \`${newDirName}/\` — ${capitalizedTitle}\n`;
               const subDomainsMatch = parentContent.match(/(##\s*Sub-?domains?[^\n]*\n)([\s\S]*?)(\n##|\n---|\z)/i);
+              let updated: string | null = null;
               if (subDomainsMatch) {
                 const insertPoint = parentContent.indexOf(subDomainsMatch[0]) + subDomainsMatch[1].length + subDomainsMatch[2].length;
-                const newLine = `- \`${newDirName}/\` — ${capitalizedTitle}\n`;
-                const updated = parentContent.slice(0, insertPoint) + newLine + parentContent.slice(insertPoint);
-                writeFileSync(parentNodePath, updated);
-                writtenFiles.push(parentNodePath);
-                console.log(`  \u2713 Updated parent: ${relative(treeRoot, parentNodePath)} (added ${newDirName}/)`);
+                updated = parentContent.slice(0, insertPoint) + newLine + parentContent.slice(insertPoint);
+              } else {
+                const trimmed = parentContent.replace(/\s+$/, "");
+                updated = `${trimmed}\n\n## Sub-domains\n\n${newLine}`;
               }
+              writeFileSync(parentNodePath, updated);
+              writtenFiles.push(parentNodePath);
+              console.log(`  \u2713 Updated parent: ${relative(treeRoot, parentNodePath)} (added ${newDirName}/)`);
             }
           } catch { /* non-fatal */ }
         }

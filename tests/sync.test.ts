@@ -806,6 +806,111 @@ describe("sync -- PR labeling", () => {
     expect(nodeText).not.toContain("@alice");
   });
 
+  it("creates a Sub-domains section on parent NODE.md when missing (#122)", async () => {
+    const tmp = useTmpDir();
+    makeTreeShell(tmp.path);
+    mkdirSync(join(tmp.path, "engineering"), { recursive: true });
+    writeFileSync(
+      join(tmp.path, "engineering", "NODE.md"),
+      "---\ntitle: Engineering\nowners: [alice]\n---\n# Engineering\n\nSome intro text.\n",
+    );
+    const fromSha = "aa".repeat(20);
+    const toSha = "bb".repeat(20);
+    writeTreeBinding(tmp.path, "source-parent", {
+      bindingMode: "standalone-source",
+      entrypoint: "/repos/source",
+      lastReconciledSourceCommit: fromSha,
+      remoteUrl: "https://github.com/alice/source.git",
+      rootKind: "git-repo",
+      scope: "repo",
+      sourceId: "source-parent",
+      sourceName: "source",
+      sourceRootPath: "../source",
+      treeMode: "dedicated",
+      treeRepoName: "tree",
+    });
+    const shellRun: ShellRun = async (command, args) => {
+      if (command === "gh" && args[0] === "auth") return okAuth();
+      if (command === "claude" && args[0] === "--version") return claudeVersionOk();
+      if (command === "gh" && args[0] === "api") {
+        const path = args[1] ?? "";
+        if (path === "/repos/alice/source/commits/HEAD") {
+          return { stdout: `${toSha}\n`, stderr: "", code: 0 };
+        }
+        if (path.startsWith("/repos/alice/source/compare/")) {
+          return {
+            stdout: JSON.stringify({
+              commits: [{
+                sha: "1".repeat(40),
+                commit: {
+                  message: "feat(mcp): bootstrap server (#201)",
+                  author: { name: "alice", date: "2026-04-01T00:00:00Z" },
+                },
+                files: [{ filename: "engineering/mcp/server.ts" }],
+              }],
+            }),
+            stderr: "",
+            code: 0,
+          };
+        }
+        if (path.startsWith("search/issues")) {
+          return {
+            stdout: JSON.stringify({
+              items: [{
+                number: 201,
+                title: "feat(mcp): bootstrap server",
+                pull_request: {
+                  merged_at: "2026-04-01T00:00:00Z",
+                  merge_commit_sha: "1".repeat(40),
+                },
+              }],
+            }),
+            stderr: "",
+            code: 0,
+          };
+        }
+      }
+      if (command === "claude" && args[0] === "-p") {
+        return {
+          stdout: JSON.stringify([{
+            path: "engineering/mcp",
+            type: "TREE_MISS",
+            target_node_path: null,
+            rationale: "New MCP area not in tree",
+            suggested_node_title: "MCP",
+            suggested_node_body_markdown: "# MCP\nBootstrap details.",
+          }]),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (command === "gh" && args[0] === "pr" && args[1] === "list") {
+        return { stdout: "[]", stderr: "", code: 0 };
+      }
+      if (command === "git") {
+        if (args[0] === "symbolic-ref") {
+          return { stdout: "main\n", stderr: "", code: 0 };
+        }
+        if (args.includes("diff") && args.includes("--cached") && args.includes("--quiet")) {
+          return { stdout: "", stderr: "", code: 1 };
+        }
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: `no mock for ${command} ${args.join(" ")}`, code: 1 };
+    };
+    const code = await runSync(
+      tmp.path,
+      { source: undefined, propose: false, apply: true, dryRun: true },
+      { shellRun, verifyTree: () => 0 },
+    );
+    expect(code).toBe(0);
+
+    const parentText = readFileSync(join(tmp.path, "engineering", "NODE.md"), "utf-8");
+    expect(parentText).toMatch(/## Sub-domains/);
+    expect(parentText).toContain("`mcp/`");
+    expect(parentText).toContain("MCP");
+  });
+
   it("regenerates and stages CODEOWNERS inside each content PR (#119)", async () => {
     const tmp = useTmpDir();
     makeTreeShell(tmp.path);
