@@ -1,16 +1,18 @@
 /**
  * Breeze product dispatcher.
  *
- * Phase 3a adds the `daemon` subcommand with a `--backend=ts|rust` flag.
- * The `rust` backend (default) continues to route through `bridge.ts`
- * into the `breeze-runner` binary — identical to the Phase 2b behaviour,
- * just under a new command name. The `ts` backend lazy-imports the
- * Phase 3a runner skeleton (`./daemon/runner-skeleton.ts`).
+ * As of Phase 7 the TypeScript daemon is the default backend for
+ * `first-tree breeze daemon`. `--backend=rust` stays wired so operators
+ * who prefer the Rust binary can opt back in while we bake; passing
+ * nothing picks TS.
  *
- * Phase 2b ports: `poll`, `watch`, `statusline` are TS commands. The
- * daemon-mode commands (`run`, `run-once`, `start`, `stop`, `status`,
- * `cleanup`, `doctor`) still bridge to the Rust binary while Phase 3b/3c
- * (http, broker, bus) are implemented.
+ * Runner subcommands that still bridge to the Rust binary:
+ *   - `run`, `run-once` — the long-running blocking loop flavours.
+ *     Foreground: `breeze daemon` (TS) replaces `run`. Anyone who
+ *     specifically wants the Rust loop can invoke `run` directly.
+ *
+ * Runner subcommands ported to TypeScript (Phase 6):
+ *   - `start`, `stop`, `status`, `doctor`, `cleanup`, `poll-inbox`.
  *
  * Heavy deps (child_process, ink, react, daemon modules) live in the
  * dynamically-imported command modules so `first-tree breeze --help`
@@ -35,11 +37,12 @@ Commands ported to TypeScript (run against \`~/.breeze\`):
   cleanup               Remove stale workspaces + expired claims
   poll-inbox            Alias for \`poll\` (one-shot notification fetch)
 
-Daemon (phase 3, experimental):
+Daemon:
   daemon [--backend=ts|rust]
                         Run the breeze daemon in the foreground.
-                        \`--backend=rust\` (default) is equivalent to \`run\`.
-                        \`--backend=ts\` launches the in-progress TS port.
+                        Defaults to the TypeScript backend. Pass
+                        \`--backend=rust\` to route through the legacy
+                        \`breeze-runner\` binary (equivalent to \`run\`).
 
 TypeScript commands (no daemon required):
   poll                  Poll GitHub notifications once and update the inbox
@@ -141,7 +144,7 @@ export function extractBackendFlag(args: readonly string[]): {
   rest: string[];
 } {
   const rest: string[] = [];
-  let backend: "ts" | "rust" = "rust";
+  let backend: "ts" | "rust" = "ts";
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === "--backend") {
@@ -254,14 +257,13 @@ export async function runBreeze(
       case "daemon": {
         const { backend, rest: residual } = extractBackendFlag(rest);
         if (backend === "ts") {
-          // Phase 3a: TS daemon (read path only). Lazy-imported so the
-          // daemon modules (poller, identity, yaml config) never touch
-          // cold-start latency for non-daemon commands.
+          // Default: TS daemon. Lazy-imported so the daemon modules
+          // never touch cold-start latency for non-daemon commands.
           const mod = await import("./daemon/runner-skeleton.js");
           return await mod.runDaemon(residual);
         }
-        // Default: route through the Rust runner's `run` subcommand for
-        // parity with Phase 2b. Forwards flag order verbatim.
+        // Opt-in: route through the Rust runner's `run` subcommand for
+        // operators who still rely on the legacy binary.
         const bridge = await import("./bridge.js");
         const runner = bridge.resolveBreezeRunner();
         return bridge.spawnInherit(runner.path, ["run", ...residual]);
