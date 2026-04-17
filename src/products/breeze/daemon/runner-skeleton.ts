@@ -44,6 +44,9 @@ import { GhExecutor } from "./gh-executor.js";
 import { Dispatcher } from "./dispatcher.js";
 import { WorkspaceManager } from "./workspace.js";
 import type { RunnerSpec } from "./runner.js";
+import { GhClient as BrokerGhClient } from "./gh-client.js";
+import { runCandidateLoop } from "./candidate-loop.js";
+import { RepoFilter } from "../core/repo-filter.js";
 
 export interface DaemonCliOverrides {
   pollIntervalSec?: number;
@@ -253,6 +256,7 @@ export async function runDaemon(
   // read-only (poller + http).
   let broker: RunningBroker | null = null;
   let dispatcher: Dispatcher | null = null;
+  let candidateLoopDone: Promise<void> | null = null;
   try {
     const runners = detectAvailableRunners();
     const realGh = findExecutable("gh");
@@ -296,6 +300,28 @@ export async function runDaemon(
       logger.info(
         `breeze daemon: dispatcher ready (runners=${runners.map((r) => r.kind).join(",")}, broker=${broker.shimDir})`,
       );
+
+      // Phase 4: candidate loop — feeds the dispatcher from GitHub.
+      const candidateClient = new BrokerGhClient({
+        host: identity.host,
+        repoFilter: RepoFilter.empty(),
+        executor,
+      });
+      candidateLoopDone = runCandidateLoop({
+        client: candidateClient,
+        dispatcher,
+        bus,
+        pollIntervalSec: config.pollIntervalSec,
+        searchLimit: 10,
+        includeSearch: true,
+        lookbackSecs: 24 * 3_600,
+        signal: controller.signal,
+        logger,
+      }).catch((err) => {
+        logger.error(
+          `candidate loop crashed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
     } else {
       const missing: string[] = [];
       if (runners.length === 0) missing.push("no codex/claude on PATH");
@@ -359,6 +385,15 @@ export async function runDaemon(
     //   in-flight runner tasks) -> stop broker (drains serve loop) ->
     //   stop http -> close bus -> exit.
     if (!controller.signal.aborted) controller.abort();
+    if (candidateLoopDone) {
+      try {
+        await candidateLoopDone;
+      } catch (err) {
+        logger.warn(
+          `candidate loop shutdown failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
     if (dispatcher) {
       try {
         await dispatcher.stop();

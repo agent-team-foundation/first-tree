@@ -24,3 +24,4 @@ dist/
 .first-tree/local-tree.json
 .first-tree/tmp/
 /.claude/worktrees
+.gardener/
