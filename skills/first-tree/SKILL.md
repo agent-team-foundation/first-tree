@@ -1,13 +1,20 @@
 ---
 name: first-tree
-description: Read and update the Context Tree — the living source of truth for cross-domain decisions, constraints, and ownership in this organization. Use whenever a task touches strategic choices, cross-domain relationships, workspace-wide context, or Context Tree onboarding.
+description: Entry point for the first-tree toolkit — Context Tree methodology, the `first-tree` CLI, and routing into the `tree`, `breeze`, and `gardener` product skills. Use whenever a task touches strategic choices, cross-domain relationships, workspace-wide context, Context Tree onboarding, or any `first-tree` CLI command.
 ---
 
 # First Tree
 
-This skill teaches you how to work with a repo's Context Tree and how to use
-the `first-tree` CLI for inspect, bind, init, verify, publish, and upgrade
-flows.
+This is the entry-point skill for the `first-tree` toolkit. It teaches:
+
+1. **What a Context Tree is** — the methodology shared across the toolkit
+2. **Which product skill to load** for the specific task in front of you
+3. **How to get the `first-tree` CLI** installed and up to date
+4. **How skills are managed** on the machine you are working on
+
+If your task needs product-specific operational detail (running commands,
+inspecting state, fixing things), follow the routing below to the right
+product skill and load that in addition to this one.
 
 ## What Is Context Tree
 
@@ -25,15 +32,31 @@ reading or writing nodes.
 
 Trigger this skill when you are asked to:
 
-- Read or update any `NODE.md` or leaf node in the tree
+- Read or update any `NODE.md` or leaf node
 - Make a decision that affects multiple domains or repos
 - Check ownership before editing a node
 - Onboard a new repo, shared tree, or workspace root
-- Run `first-tree` CLI commands
+- Run any `first-tree` CLI command
 - Investigate why a particular decision was made
+- Install, update, or inspect the `first-tree` skills on this machine
 
 Do **not** use this skill for routine code edits that do not touch decisions,
 constraints, ownership, or cross-domain relationships.
+
+## Three Products Under One CLI
+
+`first-tree` is an umbrella CLI over three products. Each product has its own
+operational skill — load the one that matches your task:
+
+| Product | Skill to load | Use when you need to… |
+|---|---|---|
+| **tree** | `tree` | Read, write, bind, init, verify, publish, or upgrade a Context Tree repo |
+| **breeze** | `breeze` | Run or inspect the breeze daemon: notifications inbox, statusline, background polling |
+| **gardener** | `gardener` | Have an agent automatically respond to feedback on tree sync PRs or comment on source-repo PRs/issues |
+
+If you do not know which product you need, start here, skim the table above,
+and load whichever skill looks like the closest match. Loading more than one
+is fine.
 
 ## Before Every Task
 
@@ -58,62 +81,42 @@ Always ask: **does the tree need updating?**
 - Did you discover something the tree failed to capture?
 - Did you find outdated tree content?
 
-## CLI Workflow
-
-The CLI now centers on three concepts:
-
-- `source/workspace root`
-- `tree repo`
-- `binding`
-
-Default onboarding workflow:
-
-1. Run `first-tree tree inspect --json`.
-2. Ask whether the user already has a Context Tree.
-3. If they do, use `first-tree tree bind`.
-4. If they do not, use `first-tree tree init`.
-5. If the current root is a workspace, run `first-tree tree workspace sync` so all
-   child repos bind to the same shared tree.
-
-During `bind` / `init`, the CLI also ensures the tree repo has the bundled
-`first-tree` skill installed and refreshes binding metadata in both locations.
-
-## CLI Commands
-
-| Command | Purpose |
-|---|---|
-| `first-tree tree inspect` | Classify the current folder and report bindings / child repos |
-| `first-tree tree init` | High-level onboarding wrapper for single repos, shared trees, and workspace roots |
-| `first-tree tree init tree` | Low-level tree bootstrap for an explicit tree checkout |
-| `first-tree tree bind` | Bind the current repo/workspace root to an existing tree repo |
-| `first-tree tree workspace sync` | Bind child repos to the same shared tree |
-| `first-tree tree verify` | Validate a tree repo: frontmatter, owners, soft_links, members, progress |
-| `first-tree tree upgrade` | Refresh the installed skill or tree metadata from the bundled package |
-| `first-tree tree publish` | Publish a tree repo to GitHub and refresh locally bound source/workspace repos |
-| `first-tree tree review` | CI helper: run Claude Code PR review against tree changes |
-| `first-tree tree generate-codeowners` | Regenerate `.github/CODEOWNERS` from tree ownership |
-| `first-tree tree inject-context` | Output a Claude Code SessionStart hook payload from `NODE.md` |
-| `first-tree tree help onboarding` | Show the onboarding narrative |
-
-For full options, run `first-tree tree <command> --help`.
-
 ## Installing And Updating The CLI
 
-Recommended invocation:
+Recommended invocation — no install step needed, always runs the latest
+published version:
 
 ```bash
-npx -p first-tree first-tree tree <command>
+npx -p first-tree first-tree <product> <command>
 ```
 
-This always runs the latest published version. The CLI auto-checks for
-updates on every invocation; pass `--skip-version-check` to suppress the
-check for latency-sensitive callers like SessionStart hooks.
+The CLI auto-checks for updates on every invocation. Pass
+`--skip-version-check` to suppress the check for latency-sensitive callers
+like SessionStart hooks.
 
-To refresh the bundled skill payload when a new minor version is released:
+## Managing Skills On This Machine
+
+The `first-tree` toolkit ships four skills: this one (`first-tree`) plus one
+per product (`tree`, `breeze`, `gardener`). They live at:
+
+```
+.agents/skills/first-tree/
+.agents/skills/tree/
+.agents/skills/breeze/
+.agents/skills/gardener/
+```
+
+Each is also mirrored at `.claude/skills/<name>/` via a symlink so both
+Claude Code and other agent runtimes discover them.
+
+To refresh the installed skill payloads from the current `first-tree` package:
 
 ```bash
 npx -p first-tree first-tree tree upgrade
 ```
+
+This rewrites the installed skill copies to match the skills bundled inside
+the package. Safe to re-run; idempotent.
 
 ## Ownership And Editing
 
