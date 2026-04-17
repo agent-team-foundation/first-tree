@@ -173,13 +173,21 @@ if ! grep -q '"assets"' "$REPO_ROOT/package.json"; then
   exit 1
 fi
 
-if ! grep -q './products/tree/cli.js' "$REPO_ROOT/src/cli.ts"; then
-  echo "src/cli.ts is not lazy-loading the tree product dispatcher." >&2
+MANIFEST_PATH="$REPO_ROOT/src/products/manifest.ts"
+require_file "$MANIFEST_PATH"
+
+if ! grep -q './tree/cli.js' "$MANIFEST_PATH"; then
+  echo "src/products/manifest.ts is not lazy-loading the tree product dispatcher." >&2
   exit 1
 fi
 
-if ! grep -q './products/breeze/cli.js' "$REPO_ROOT/src/cli.ts"; then
-  echo "src/cli.ts is not lazy-loading the breeze product dispatcher." >&2
+if ! grep -q './breeze/cli.js' "$MANIFEST_PATH"; then
+  echo "src/products/manifest.ts is not lazy-loading the breeze product dispatcher." >&2
+  exit 1
+fi
+
+if ! grep -q './gardener/cli.js' "$MANIFEST_PATH"; then
+  echo "src/products/manifest.ts is not lazy-loading the gardener product dispatcher." >&2
   exit 1
 fi
 

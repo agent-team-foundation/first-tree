@@ -4,15 +4,32 @@ import { readFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const USAGE = `usage: first-tree <product> <command>
+import {
+  PRODUCTS,
+  getProduct,
+  readProductVersion,
+} from "./products/manifest.js";
+
+export const USAGE = buildUsage();
+
+function buildUsage(): string {
+  const productLines = PRODUCTS.map(
+    (p) => `  ${p.name.padEnd(20)}  ${p.description}`,
+  ).join("\n");
+  const gettingStarted = [
+    "  first-tree tree --help",
+    "  first-tree tree inspect --json",
+    "  first-tree tree init",
+    "  first-tree breeze --help",
+    "  first-tree breeze status",
+  ].join("\n");
+  return `usage: first-tree <product> <command>
 
   first-tree is an umbrella CLI that dispatches into product namespaces.
   This CLI is designed for agents, not humans. Let your agent handle it.
 
 Products:
-  tree                  Context Tree tooling (init, bind, sync, publish, ...)
-  breeze                Breeze proposal/inbox agent (install, run, status, watch, ...)
-  gardener              Context Tree maintenance agent (respond, ...)
+${productLines}
 
 Global options:
   --help, -h            Show this help message
@@ -20,12 +37,9 @@ Global options:
   --skip-version-check  Skip the auto-upgrade check (for latency-sensitive callers)
 
 Getting started:
-  first-tree tree --help
-  first-tree tree inspect --json
-  first-tree tree init
-  first-tree breeze --help
-  first-tree breeze status
+${gettingStarted}
 `;
+}
 
 type Output = (text: string) => void;
 
@@ -113,24 +127,13 @@ function readFirstTreeVersion(): string {
   }
 }
 
-function readProductVersion(productDir: string): string {
-  // VERSION files are siblings of the bundled product cli.ts. When the CLI
-  // runs from the published package they live under dist/products/<name>/;
-  // in the source tree they live under src/products/<name>/. Try both.
-  const here = dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    join(here, "products", productDir, "VERSION"),
-    join(here, "..", "src", "products", productDir, "VERSION"),
-    join(here, "..", "products", productDir, "VERSION"),
-  ];
-  for (const candidate of candidates) {
-    try {
-      return readFileSync(candidate, "utf-8").trim();
-    } catch {
-      // try next
-    }
+function formatVersionLine(): string {
+  const cliVersion = readFirstTreeVersion();
+  const parts = [`first-tree=${cliVersion}`];
+  for (const product of PRODUCTS) {
+    parts.push(`${product.name}=${readProductVersion(product.name)}`);
   }
-  return "unknown";
+  return parts.join(" ");
 }
 
 export async function runCli(
@@ -146,41 +149,27 @@ export async function runCli(
   }
 
   if (args[0] === "--version" || args[0] === "-v") {
-    const cliVersion = readFirstTreeVersion();
-    const treeVersion = readProductVersion("tree");
-    const breezeVersion = readProductVersion("breeze");
-    const gardenerVersion = readProductVersion("gardener");
-    write(
-      `first-tree=${cliVersion} tree=${treeVersion} breeze=${breezeVersion} gardener=${gardenerVersion}`,
-    );
+    write(formatVersionLine());
     return 0;
   }
 
-  const product = args[0];
+  const productName = args[0];
+  const product = getProduct(productName);
 
-  switch (product) {
-    case "tree": {
-      if (!skipVersionCheck) {
-        await runAutoUpgradeCheck();
-      }
-      const { runTree } = await import("./products/tree/cli.js");
-      return runTree(args.slice(1), write);
-    }
-    case "breeze": {
-      const { runBreeze } = await import("./products/breeze/cli.js");
-      return runBreeze(args.slice(1), write);
-    }
-    case "gardener": {
-      const { runGardener } = await import("./products/gardener/cli.js");
-      return runGardener(args.slice(1), write);
-    }
-    default:
-      write(`Unknown product: ${product}`);
-      write(
-        `Did you mean \`first-tree tree ${product}\`? Run \`first-tree --help\` for the list of products.`,
-      );
-      return 1;
+  if (!product) {
+    write(`Unknown product: ${productName}`);
+    write(
+      `Did you mean \`first-tree tree ${productName}\`? Run \`first-tree --help\` for the list of products.`,
+    );
+    return 1;
   }
+
+  if (product.autoUpgradeOnInvoke && !skipVersionCheck) {
+    await runAutoUpgradeCheck();
+  }
+
+  const { run } = await product.load();
+  return run(args.slice(1), write);
 }
 
 async function main(): Promise<number> {
