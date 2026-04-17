@@ -13,8 +13,8 @@ docs below only for source-repo implementation details.
 | `first-tree-skill-cli/thin-cli-shell.md` | Command-surface contract for the thin CLI shell |
 | `first-tree-skill-cli/build-and-distribution.md` | Packaging and release invariants |
 | `first-tree-skill-cli/validation-surface.md` | Validation philosophy and coverage expectations |
-| `first-tree-skill-cli/sync.md` | Authoritative product/architecture context for `first-tree sync` |
-| `src/products/manifest.ts` | Single source of truth for the three products (tree, breeze, gardener) |
+| `first-tree-skill-cli/sync.md` | Authoritative product/architecture context for `first-tree tree sync` |
+| `src/products/manifest.ts` | Single source of truth for the CLI namespace set: products (`tree`, `breeze`, `gardener`) plus maintenance (`skill`) |
 | `skills/first-tree/SKILL.md` | User-facing entry-point skill: methodology + routing to product skills |
 | `skills/tree/SKILL.md` | Operational handbook for the `first-tree tree` CLI |
 | `skills/breeze/SKILL.md` | Operational handbook for the `first-tree breeze` CLI |
@@ -46,11 +46,12 @@ docs below only for source-repo implementation details.
 
 | Path | Purpose |
 | --- | --- |
-| `src/cli.ts` | Top-level umbrella dispatcher for `first-tree <product> <command>`; reads from the product manifest |
-| `src/products/manifest.ts` | Product manifest (name, description, lazy entrypoint, auto-upgrade, asset/skill flags) |
+| `src/cli.ts` | Top-level umbrella dispatcher for `first-tree <namespace> <command>`; reads from the namespace manifest |
+| `src/products/manifest.ts` | Namespace manifest (kind, name, description, lazy entrypoint, auto-upgrade, asset/skill flags) |
 | `src/products/tree/cli.ts` | Tree product dispatcher (lazy-loaded) |
 | `src/products/breeze/cli.ts` | Breeze product dispatcher (lazy-loaded) |
 | `src/products/gardener/cli.ts` | Gardener product dispatcher (lazy-loaded) |
+| `src/meta/skill-tools/cli.ts` | Skill maintenance-namespace dispatcher (lazy-loaded) |
 | `src/products/breeze/engine/` | Breeze business logic: `commands/`, `runtime/`, `daemon/`, `bridge.ts`, `statusline.ts` |
 | `src/products/gardener/engine/` | Gardener business logic: `commands/`, `runtime/`, `comment.ts`, `respond.ts` |
 | `src/products/tree/engine/init.ts` | High-level onboarding wrapper plus low-level tree bootstrap |

@@ -68,7 +68,7 @@ describe("inspectRepo", () => {
 
     expect(inspection.agentContextHookReport.overall).toBe("drifted");
     expect(inspection.agentContextHookReport.repairHint).toContain(
-      "first-tree upgrade",
+      "first-tree tree upgrade",
     );
     expect(inspection.agentContextHookReport.files).toEqual(
       expect.arrayContaining([

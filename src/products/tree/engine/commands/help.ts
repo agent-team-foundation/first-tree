@@ -1,4 +1,4 @@
-const HELP_USAGE = `usage: first-tree help <topic>
+const HELP_USAGE = `usage: first-tree tree help <topic>
 
 Topics:
   onboarding   How to set up a context tree from scratch

@@ -1,6 +1,6 @@
 import { buildTreeFirstContextBundle } from "#products/tree/engine/runtime/tree-first-context.js";
 
-export const INJECT_CONTEXT_USAGE = `usage: first-tree inject-context
+export const INJECT_CONTEXT_USAGE = `usage: first-tree tree inject-context
 
 Output a SessionStart hook payload that injects tree-first cross-repo context.
 When the current working directory is a bound source/workspace root, the

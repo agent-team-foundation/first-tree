@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
-export const JOIN_USAGE = `usage: first-tree join --tree-url <url> --invite <github-id>
+export const JOIN_USAGE = `usage: first-tree tree join --tree-url <url> --invite <github-id>
        [--branch <name>] [--tree-path <path>] [--skip-install]
 
 Accept a pending invite to a Context Tree.

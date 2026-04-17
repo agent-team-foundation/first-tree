@@ -207,7 +207,7 @@ export function generate(
       return 0;
     }
     console.log(
-      "CODEOWNERS is out-of-date. Run: npx first-tree generate-codeowners",
+      "CODEOWNERS is out-of-date. Run: npx -p first-tree first-tree tree generate-codeowners",
     );
     return 1;
   }

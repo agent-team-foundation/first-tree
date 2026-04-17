@@ -96,7 +96,7 @@ describe("refreshInjectContextHook", () => {
       "utf-8",
     );
     expect(updated).toContain(
-      "npx -p first-tree first-tree inject-context --skip-version-check",
+      "npx -p first-tree first-tree tree inject-context --skip-version-check",
     );
     expect(updated).not.toContain("inject-tree-context.sh");
   });
@@ -133,7 +133,7 @@ describe("refreshInjectContextHook", () => {
       "utf-8",
     );
     expect(updated).toContain(
-      "npx -p first-tree first-tree inject-context --skip-version-check",
+      "npx -p first-tree first-tree tree inject-context --skip-version-check",
     );
     expect(updated).not.toContain(".context-tree/scripts/inject-tree-context.sh");
   });
@@ -167,7 +167,7 @@ describe("refreshInjectContextHook", () => {
       "utf-8",
     );
     expect(updated).toContain(
-      `"command":"npx -p first-tree first-tree inject-context --skip-version-check"`,
+      `"command":"npx -p first-tree first-tree tree inject-context --skip-version-check"`,
     );
     expect(updated).not.toContain("./npx");
   });
@@ -200,7 +200,7 @@ describe("refreshInjectContextHook", () => {
       "utf-8",
     );
     expect(updated).toContain(
-      `"command":"npx -p first-tree first-tree inject-context --skip-version-check"`,
+      `"command":"npx -p first-tree first-tree tree inject-context --skip-version-check"`,
     );
   });
 
@@ -217,7 +217,7 @@ describe("refreshInjectContextHook", () => {
                 {
                   type: "command",
                   command:
-                    "npx -p first-tree first-tree inject-context --skip-version-check",
+                    "npx -p first-tree first-tree tree inject-context --skip-version-check",
                 },
               ],
             },
@@ -247,7 +247,7 @@ describe("ensureAgentContextHooks", () => {
     });
     expect(
       readFileSync(join(tmp.path, ".claude", "settings.json"), "utf-8"),
-    ).toContain("first-tree inject-context");
+    ).toContain("first-tree tree inject-context");
     expect(
       readFileSync(join(tmp.path, ".codex", "config.toml"), "utf-8"),
     ).toContain("codex_hooks = true");

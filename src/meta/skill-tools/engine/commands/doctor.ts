@@ -1,15 +1,13 @@
 /**
  * `first-tree skill doctor` — diagnose skill install health.
- *
- * Reports per-skill: presence of the .agents/ entry, presence of the
- * .claude/ symlink, whether the symlinks point at the expected targets,
- * and whether the SKILL.md frontmatter is readable. Exits non-zero if
- * anything is wrong so CI can gate on it.
  */
 
 import { existsSync, lstatSync, readlinkSync } from "node:fs";
 import { join } from "node:path";
-import { allSkillLayouts } from "#meta/skill-tools/engine/lib/paths.js";
+import {
+  allSkillLayouts,
+  requiredFilesForSkill,
+} from "#meta/skill-tools/engine/lib/paths.js";
 
 export interface DoctorDeps {
   targetRoot?: string;
@@ -23,38 +21,40 @@ interface Diagnosis {
 
 function inspect(targetRoot: string, name: string): Diagnosis {
   const problems: string[] = [];
-  const layouts = allSkillLayouts().find((l) => l.name === name)!;
-  const agentsFull = join(targetRoot, layouts.agentsPath);
-  const claudeFull = join(targetRoot, layouts.claudePath);
+  const layout = allSkillLayouts().find((l) => l.name === name)!;
+  const agentsFull = join(targetRoot, layout.agentsPath);
+  const claudeFull = join(targetRoot, layout.claudePath);
 
   if (!existsSync(agentsFull)) {
-    problems.push(`missing: ${layouts.agentsPath}`);
+    problems.push(`missing: ${layout.agentsPath}`);
   } else {
-    const skillMd = join(agentsFull, "SKILL.md");
-    if (!existsSync(skillMd)) {
-      problems.push(`${layouts.agentsPath}/SKILL.md does not exist`);
+    for (const relPath of requiredFilesForSkill(name)) {
+      const fullPath = join(agentsFull, relPath);
+      if (!existsSync(fullPath)) {
+        problems.push(`${layout.agentsPath}/${relPath} does not exist`);
+      }
     }
   }
 
   if (!existsSync(claudeFull)) {
-    problems.push(`missing: ${layouts.claudePath}`);
+    problems.push(`missing: ${layout.claudePath}`);
   } else {
     try {
       const stat = lstatSync(claudeFull);
       if (!stat.isSymbolicLink()) {
         problems.push(
-          `${layouts.claudePath} should be a symlink to ${layouts.claudeSymlinkTarget}`,
+          `${layout.claudePath} should be a symlink to ${layout.claudeSymlinkTarget}`,
         );
       } else {
         const actual = readlinkSync(claudeFull);
-        if (actual !== layouts.claudeSymlinkTarget) {
+        if (actual !== layout.claudeSymlinkTarget) {
           problems.push(
-            `${layouts.claudePath} -> ${actual}, expected ${layouts.claudeSymlinkTarget}`,
+            `${layout.claudePath} -> ${actual}, expected ${layout.claudeSymlinkTarget}`,
           );
         }
       }
     } catch {
-      problems.push(`${layouts.claudePath} is unreadable`);
+      problems.push(`${layout.claudePath} is unreadable`);
     }
   }
 
@@ -70,7 +70,7 @@ export function runDoctor(
 
   Diagnoses the health of the four first-tree skill installs in the
   current working directory (or --root <path>). Reports per-skill
-  presence, SKILL.md readability, and symlink target correctness.
+  presence, required-file completeness, and symlink target correctness.
 
   Exits 0 if all four skills are healthy, 1 otherwise.
 
@@ -112,7 +112,7 @@ Options:
   write(`${bad} of 4 skills have problems.`);
   write("");
   write("Fix with:");
-  write("  first-tree skill link    # repair symlinks");
-  write("  first-tree tree upgrade  # reinstall all four skills");
+  write("  first-tree skill link     # repair symlinks");
+  write("  first-tree skill upgrade  # reinstall all four skills");
   return 1;
 }

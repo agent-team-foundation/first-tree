@@ -9,6 +9,7 @@ import {
 import { basename, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  BOOTSTRAP_USAGE,
   formatTaskList,
   INIT_USAGE,
   parseInitArgs,
@@ -85,7 +86,7 @@ describe("formatTaskList", () => {
     const groups = [{ group: "G", order: 1, tasks: ["t"] }];
     const output = formatTaskList(groups);
     expect(output).toContain("## Verification");
-    expect(output).toContain("first-tree verify");
+    expect(output).toContain("first-tree tree verify");
   });
 
   it("handles empty groups", () => {
@@ -101,7 +102,7 @@ describe("formatTaskList", () => {
       sourceRepoPath: "../ADHD",
     });
 
-    expect(output).toContain("first-tree publish --open-pr");
+    expect(output).toContain("first-tree tree publish --open-pr");
     expect(output).toContain("canonical local working copy");
   });
 });
@@ -540,8 +541,8 @@ describe("runInit", () => {
 
 describe("parseInitArgs", () => {
   it("documents that --here is only for dedicated tree repos", () => {
-    expect(INIT_USAGE).toContain("first-tree init tree --here");
-    expect(INIT_USAGE).toContain("Initialize the current repo in place as a tree repo");
+    expect(BOOTSTRAP_USAGE).toContain("first-tree tree bootstrap --here");
+    expect(BOOTSTRAP_USAGE).toContain("Initialize the current repo in place as a tree repo");
   });
 
   it("parses dedicated repo options", () => {

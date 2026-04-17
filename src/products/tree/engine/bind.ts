@@ -34,7 +34,7 @@ import {
 import { upsertFirstTreeIndexFile, upsertSourceIntegrationFiles } from "#products/tree/engine/runtime/source-integration.js";
 import { relativeRepoPath } from "#products/tree/engine/dedicated-tree.js";
 
-export const BIND_USAGE = `usage: first-tree bind [--tree-path PATH | --tree-url URL] [--tree-mode dedicated|shared] [--mode standalone-source|shared-source|workspace-root|workspace-member] [--workspace-id ID] [--workspace-root PATH] [--entrypoint PATH]
+export const BIND_USAGE = `usage: first-tree tree bind [--tree-path PATH | --tree-url URL] [--tree-mode dedicated|shared] [--mode standalone-source|shared-source|workspace-root|workspace-member] [--workspace-id ID] [--workspace-root PATH] [--entrypoint PATH]
 
 Bind the current source/workspace root to an existing Context Tree repo.
 
@@ -48,9 +48,9 @@ What it does:
   6. Syncs the bound codebase repo into the tree repo under .first-tree/submodules/
 
 Typical examples:
-  first-tree bind --tree-path ../org-context --tree-mode shared
-  first-tree bind --tree-path ../org-context --tree-mode shared --mode workspace-root --workspace-id my-workspace
-  first-tree bind --tree-path ../org-context --tree-mode shared --mode workspace-member --workspace-id my-workspace --workspace-root ..
+  first-tree tree bind --tree-path ../org-context --tree-mode shared
+  first-tree tree bind --tree-path ../org-context --tree-mode shared --mode workspace-root --workspace-id my-workspace
+  first-tree tree bind --tree-path ../org-context --tree-mode shared --mode workspace-member --workspace-id my-workspace --workspace-root ..
 
 Options:
   --tree-path PATH      Local checkout of the tree repo to bind
@@ -234,12 +234,12 @@ function ensureTreeCheckout(
   const treeRepo = new Repo(resolvedTreeRoot);
   if (!treeRepo.isGitRepo()) {
     throw new Error(
-      `Tree checkout is not a git repository: ${resolvedTreeRoot}. Run \`first-tree init tree\` first or point bind at an existing tree checkout.`,
+      `Tree checkout is not a git repository: ${resolvedTreeRoot}. Run \`first-tree tree bootstrap\` first or point bind at an existing tree checkout.`,
     );
   }
   if (treeRepo.root === sourceRepo.root) {
     throw new Error(
-      "The source/workspace root and tree repo resolved to the same path. Use `first-tree init --here` only when the current repo itself should become the tree.",
+      "The source/workspace root and tree repo resolved to the same path. Use `first-tree tree bootstrap --here` only when the current repo itself should become the tree.",
     );
   }
 

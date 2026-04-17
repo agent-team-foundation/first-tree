@@ -3,7 +3,7 @@
 Authoritative decision node: `first-tree-skill-cli/thin-cli-shell.md` in the
 bound Context Tree.
 
-Use this local reference when changing `src/cli.ts`, the product dispatchers in
+Use this local reference when changing `src/cli.ts`, the namespace dispatchers in
 `src/products/*/cli.ts`, or the tree command adapters in
 `src/products/tree/engine/commands/`.
 
@@ -11,49 +11,35 @@ Use this local reference when changing `src/cli.ts`, the product dispatchers in
 
 The top-level shell (`src/cli.ts`) should:
 
-- parse `first-tree <product> <command>`
-- expose help and version (CLI + per-product VERSION)
+- parse `first-tree <namespace> <command>`
+- expose help and version (CLI + per-namespace VERSION)
 - handle `--skip-version-check`
-- lazy-load and dispatch into `src/products/<product>/cli.js`
-- stay thin — never statically import another product
+- lazy-load and dispatch into `src/products/<namespace>/cli.js`
+- stay thin — never statically import another namespace
 
-Each product dispatcher (currently `tree/cli.ts`; `breeze/cli.ts` is a stub)
-owns its own USAGE and dispatches into its engine's command adapters.
+Each namespace dispatcher owns its own USAGE and dispatches into its engine's
+command adapters. The primary products are `tree`, `breeze`, and `gardener`;
+`skill` is the maintenance namespace for shipped skill health and repair.
 
 ## Current CLI Surface
 
-```
-first-tree tree <command>
-```
+Primary product namespaces:
 
-Tree commands:
+- `first-tree tree <command>`
+- `first-tree breeze <command>`
+- `first-tree gardener <command>`
 
-- `inspect`
-- `init`
-- `bind`
-- `workspace`
-- `publish`
-- `verify`
-- `upgrade`
-- `sync`
-- `review`
-- `generate-codeowners`
-- `invite`
-- `join`
-- `inject-context`
-- `help`
+Maintenance namespace:
 
-```
-first-tree breeze <command>
-```
-
-Breeze is a Phase 0 stub and exits with a not-implemented error.
+- `first-tree skill <command>`
 
 ## Local Touchpoints
 
-- `src/cli.ts` — umbrella usage text, global flags, and product dispatch
+- `src/cli.ts` — umbrella usage text, global flags, and namespace dispatch
 - `src/products/tree/cli.ts` — tree product USAGE and command dispatch
-- `src/products/breeze/cli.ts` — breeze stub dispatcher
+- `src/products/breeze/cli.ts` — breeze product dispatcher
+- `src/products/gardener/cli.ts` — gardener product dispatcher
+- `src/meta/skill-tools/cli.ts` — maintenance-namespace dispatcher for shipped skill health
 - `src/products/tree/engine/commands/*.ts` — thin tree command adapters
 - `tests/e2e/thin-cli.test.ts` — direct CLI smoke coverage
 - `tests/e2e/cli-e2e.test.ts` — end-to-end command workflow coverage

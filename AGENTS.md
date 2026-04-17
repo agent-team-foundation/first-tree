@@ -1,17 +1,17 @@
 # Agent Instructions for first-tree
 
-This repo distributes the `first-tree` npm package: a thin umbrella CLI that
-dispatches into three product namespaces (`tree`, `breeze`, `gardener`) plus
-four lightweight skill payloads (`first-tree` entry point + one per product).
-It is not a user context tree. Maintaining this repo is different from using
-it — see the user-facing `skills/first-tree/SKILL.md` for what gets shipped
-as the entry-point skill.
+This repo distributes the `first-tree` npm package: a thin umbrella CLI with
+three primary product namespaces (`tree`, `breeze`, `gardener`), one
+maintenance namespace (`skill`), and four lightweight skill payloads
+(`first-tree` entry point + one per product). It is not a user context tree.
+Maintaining this repo is different from using it — see the user-facing
+`skills/first-tree/SKILL.md` for what gets shipped as the entry-point skill.
 
 ## Start Here
 
 1. `docs/source-map.md` — maintainer entrypoint; it points to canonical Context Tree nodes first, then local implementation notes
-2. `src/products/manifest.ts` — the single source of truth for the three
-   products; all dispatch, version reporting, and skill management reads from
+2. `src/products/manifest.ts` — the single source of truth for the CLI
+   namespaces; all dispatch, version reporting, and skill management reads from
    here
 3. `skills/first-tree/SKILL.md` — the user-facing entry-point skill (read
    this so you understand what ships to user repos and how it routes to the
@@ -25,9 +25,9 @@ as the entry-point skill.
 
 - Treat the source repo as a TypeScript project, not a tree repo.
 - Canonical layout:
-  - `src/cli.ts` — top-level umbrella dispatcher (`first-tree <product> <command>`); delegates to the manifest
-  - `src/products/manifest.ts` — the product manifest (name, description,
-    lazy entrypoint, auto-upgrade, assets/skill flags)
+  - `src/cli.ts` — top-level umbrella dispatcher (`first-tree <namespace> <command>`); delegates to the manifest
+  - `src/products/manifest.ts` — the CLI namespace manifest (kind, name,
+    description, lazy entrypoint, auto-upgrade, assets/skill flags)
   - `src/products/<name>/` — one folder per product (`tree`, `breeze`,
     `gardener`). Each has the same shape:
     - `VERSION` — product version (separate from npm package version)
@@ -39,6 +39,9 @@ as the entry-point skill.
     - `engine/` root — business-logic modules (domain specific)
     - Product-specific extras: `engine/daemon/` (breeze), `engine/rules/`
       and `engine/validators/` (tree)
+  - `src/meta/skill-tools/` — maintenance namespace for skill inspection and
+    repair (`list`, `doctor`, `link`); it ships no product skill payload of
+    its own
   - `assets/<name>/` — runtime payloads read by the CLI at runtime. Only
     `tree` ships real assets today; `breeze` ships just the SSE dashboard
     HTML; `gardener` ships none.

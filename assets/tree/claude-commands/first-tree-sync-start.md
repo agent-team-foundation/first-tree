@@ -9,7 +9,7 @@ those PRs for context fit.
 Check that `.claude/commands/first-tree-sync.md` exists locally.
 
 - If missing → output:
-  "❌ first-tree sync is not installed. Run `first-tree upgrade` to
+  "❌ first-tree sync is not installed. Run `first-tree tree upgrade` to
   install the sync runbook, then retry."
   STOP.
 
@@ -20,7 +20,7 @@ Check that `.first-tree/bindings/` exists and contains at least one
 
 - If empty or missing → output:
   "❌ No bound sources found in `.first-tree/bindings/`.
-  Bind a source repo first with `first-tree bind`, then retry."
+  Bind a source repo first with `first-tree tree bind`, then retry."
   STOP.
 
 ## 3. Verify bindings have remoteUrl

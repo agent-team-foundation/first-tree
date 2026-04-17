@@ -10,7 +10,7 @@ import {
 import { listTreeBindings } from "#products/tree/engine/runtime/binding-state.js";
 import { resolveBundledPackageRoot } from "#products/tree/engine/runtime/installer.js";
 
-export const INVITE_USAGE = `usage: first-tree invite --github-id <id> --type <type>
+export const INVITE_USAGE = `usage: first-tree tree invite --github-id <id> --type <type>
        [--title <name>] [--role <role>] [--domains <d1,d2>]
        [--delegate-mention <id>]
        [--tree-path <path>]
@@ -310,7 +310,7 @@ export function composeMagicWord(
   );
   lines.push("");
   lines.push(
-    `  npx first-tree join --tree-url ${treeUrl} --invite ${githubId} --branch ${branchName}`,
+    `  npx -p first-tree first-tree tree join --tree-url ${treeUrl} --invite ${githubId} --branch ${branchName}`,
   );
   lines.push("");
   lines.push("--- End Invite ---");

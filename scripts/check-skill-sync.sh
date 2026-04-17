@@ -84,7 +84,7 @@ require_file "$ENGINE_DIR/runtime/adapters.ts"
 require_file "$ENGINE_DIR/validators/members.ts"
 require_file "$ENGINE_DIR/validators/nodes.ts"
 
-# Tree product has its own VERSION + cli entrypoint; breeze is a stub.
+# Primary product namespaces keep their own VERSION + cli entrypoint.
 require_file "$REPO_ROOT/src/products/tree/VERSION"
 require_file "$REPO_ROOT/src/products/tree/cli.ts"
 require_file "$REPO_ROOT/src/products/breeze/VERSION"
@@ -109,9 +109,35 @@ require_file "$ASSETS_DIR/workflows/pr-review.yml"
 require_file "$ASSETS_DIR/workflows/codeowners.yml"
 require_file "$ASSETS_DIR/examples/claude-code/README.md"
 require_file "$ASSETS_DIR/examples/claude-code/settings.json"
+require_file "$ASSETS_DIR/examples/codex/hooks.json"
 require_file "$ASSETS_DIR/helpers/generate-codeowners.ts"
 require_file "$ASSETS_DIR/helpers/run-review.ts"
 require_file "$ASSETS_DIR/helpers/summarize-progress.js"
+
+if ! grep -q 'first-tree tree verify' "$ASSETS_DIR/workflows/validate.yml"; then
+  echo "validate.yml is not using the namespaced tree verify command." >&2
+  exit 1
+fi
+
+if ! grep -q 'first-tree tree review' "$ASSETS_DIR/workflows/pr-review.yml"; then
+  echo "pr-review.yml is not using the namespaced tree review command." >&2
+  exit 1
+fi
+
+if ! grep -q 'first-tree tree generate-codeowners' "$ASSETS_DIR/workflows/codeowners.yml"; then
+  echo "codeowners.yml is not using the namespaced tree generate-codeowners command." >&2
+  exit 1
+fi
+
+if ! grep -q 'first-tree tree inject-context' "$ASSETS_DIR/examples/claude-code/settings.json"; then
+  echo "Claude Code example settings are not using the namespaced tree inject-context command." >&2
+  exit 1
+fi
+
+if ! grep -q 'first-tree tree inject-context' "$ASSETS_DIR/examples/codex/hooks.json"; then
+  echo "Codex example hooks are not using the namespaced tree inject-context command." >&2
+  exit 1
+fi
 
 require_file "$REPO_ROOT/evals/first-tree-eval.test.ts"
 require_file "$REPO_ROOT/evals/README.md"
@@ -212,6 +238,18 @@ if ! grep -q '"assets"' "$REPO_ROOT/package.json"; then
   echo "package.json is missing assets in the published files list." >&2
   exit 1
 fi
+
+for version_path in \
+  '"src/products/tree/VERSION"' \
+  '"src/products/breeze/VERSION"' \
+  '"src/products/gardener/VERSION"' \
+  '"src/meta/skill-tools/VERSION"'
+do
+  if ! grep -q "$version_path" "$REPO_ROOT/package.json"; then
+    echo "package.json is missing $version_path in the published files list." >&2
+    exit 1
+  fi
+done
 
 MANIFEST_PATH="$REPO_ROOT/src/products/manifest.ts"
 require_file "$MANIFEST_PATH"

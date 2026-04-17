@@ -46,7 +46,7 @@ jobs:
           gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid > /tmp/pr-head-sha.txt
 
       - name: Run Claude review
-        run: npx -p first-tree first-tree review
+        run: npx -p first-tree first-tree tree review
 
       - name: Parse and post review
         run: |

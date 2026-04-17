@@ -50,7 +50,7 @@ During `bind` / `init`, the CLI also ensures the tree repo has the bundled
 |---|---|
 | `first-tree tree inspect` | Classify the current folder and report bindings / child repos |
 | `first-tree tree init` | High-level onboarding wrapper for single repos, shared trees, and workspace roots |
-| `first-tree tree init tree` | Low-level tree bootstrap for an explicit tree checkout |
+| `first-tree tree bootstrap` | Low-level tree bootstrap for an explicit tree checkout |
 | `first-tree tree bind` | Bind the current repo/workspace root to an existing tree repo |
 | `first-tree tree workspace sync` | Bind child repos to the same shared tree |
 | `first-tree tree verify` | Validate a tree repo: frontmatter, owners, soft_links, members, progress |
@@ -66,18 +66,23 @@ For full options on any command, run `first-tree tree <command> --help`.
 ## Recommended Invocation
 
 ```bash
-npx -p first-tree first-tree tree <command>
+npx first-tree tree <command>
 ```
 
-This always runs the latest published version. The CLI auto-checks for
+This is the recommended human-facing one-off invocation. The CLI auto-checks for
 updates on every invocation; pass `--skip-version-check` to suppress the
 check for latency-sensitive callers like SessionStart hooks.
 
-To refresh the installed skill payload when a new minor version is released:
+To refresh source/workspace integration or tree metadata from the current
+package:
 
 ```bash
-npx -p first-tree first-tree tree upgrade
+npx first-tree tree upgrade
 ```
+
+If you only need to wipe and reinstall the four shipped skill payloads under
+`.agents/skills/*` and `.claude/skills/*`, use `npx first-tree skill upgrade`
+instead.
 
 ## Ownership
 
