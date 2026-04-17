@@ -806,6 +806,99 @@ describe("sync -- PR labeling", () => {
     expect(nodeText).not.toContain("@alice");
   });
 
+  it("emits soft_links frontmatter when Claude returns cross-domain references (#124)", async () => {
+    const tmp = useTmpDir();
+    makeTreeShell(tmp.path);
+    const fromSha = "aa".repeat(20);
+    const toSha = "bb".repeat(20);
+    writeTreeBinding(tmp.path, "source-softlinks", {
+      bindingMode: "standalone-source",
+      entrypoint: "/repos/source",
+      lastReconciledSourceCommit: fromSha,
+      remoteUrl: "https://github.com/alice/source.git",
+      rootKind: "git-repo",
+      scope: "repo",
+      sourceId: "source-softlinks",
+      sourceName: "source",
+      sourceRootPath: "../source",
+      treeMode: "dedicated",
+      treeRepoName: "tree",
+    });
+    const shellRun: ShellRun = async (command, args) => {
+      if (command === "gh" && args[0] === "auth") return okAuth();
+      if (command === "claude" && args[0] === "--version") return claudeVersionOk();
+      if (command === "gh" && args[0] === "api") {
+        const path = args[1] ?? "";
+        if (path === "/repos/alice/source/commits/HEAD") {
+          return { stdout: `${toSha}\n`, stderr: "", code: 0 };
+        }
+        if (path.startsWith("/repos/alice/source/compare/")) {
+          return {
+            stdout: JSON.stringify({
+              commits: [{
+                sha: "1".repeat(40),
+                commit: { message: "feat(mcp): add server (#401)", author: { name: "a", date: "2026-04-01T00:00:00Z" } },
+                files: [{ filename: "mcp/server.ts" }],
+              }],
+            }),
+            stderr: "",
+            code: 0,
+          };
+        }
+        if (path.startsWith("search/issues")) {
+          return {
+            stdout: JSON.stringify({
+              items: [{
+                number: 401,
+                title: "feat(mcp): add server",
+                pull_request: { merged_at: "2026-04-01T00:00:00Z", merge_commit_sha: "1".repeat(40) },
+              }],
+            }),
+            stderr: "",
+            code: 0,
+          };
+        }
+      }
+      if (command === "claude" && args[0] === "-p") {
+        return {
+          stdout: JSON.stringify([{
+            path: "mcp",
+            type: "TREE_MISS",
+            target_node_path: null,
+            rationale: "New MCP area",
+            suggested_node_title: "MCP",
+            suggested_node_body_markdown: "# MCP\nUses governance/ rules and backend/ transport.",
+            suggested_soft_links: ["governance", "backend", "governance", "mcp"],
+          }]),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (command === "gh" && args[0] === "pr" && args[1] === "list") {
+        return { stdout: "[]", stderr: "", code: 0 };
+      }
+      if (command === "git") {
+        if (args[0] === "symbolic-ref") return { stdout: "main\n", stderr: "", code: 0 };
+        if (args.includes("diff") && args.includes("--cached") && args.includes("--quiet")) {
+          return { stdout: "", stderr: "", code: 1 };
+        }
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: `no mock for ${command} ${args.join(" ")}`, code: 1 };
+    };
+    const code = await runSync(
+      tmp.path,
+      { source: undefined, propose: false, apply: true, dryRun: true },
+      { shellRun, verifyTree: () => 0 },
+    );
+    expect(code).toBe(0);
+    const nodeText = readFileSync(join(tmp.path, "mcp", "NODE.md"), "utf-8");
+    // soft_links must be present, sorted, deduped, and must not include the
+    // target's own path ("mcp").
+    expect(nodeText).toMatch(/soft_links: \[backend, governance\]/);
+    expect(nodeText).not.toMatch(/soft_links:[^\n]*mcp/);
+  });
+
   it("feeds truncated diff hunks and filters lockfile noise in the classification prompt (#123)", async () => {
     const tmp = useTmpDir();
     makeTreeShell(tmp.path);

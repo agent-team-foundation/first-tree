@@ -337,6 +337,13 @@ interface ClassificationItem {
   suggested_node_title: string;
   suggested_node_body_markdown: string;
   /**
+   * Tree paths (e.g. "engineering/backend", "governance") that the drafted
+   * NODE.md body references and should be declared as frontmatter
+   * `soft_links` (#124). Optional — omit or empty when there are no
+   * cross-domain references.
+   */
+  suggested_soft_links?: string[];
+  /**
    * Source PR numbers (other than the owning group's) that independently
    * proposed this same target path. Populated by the dedup pass so the
    * surviving PR can credit the dropped claimants in its body (#121).
@@ -764,12 +771,15 @@ Return a JSON array. Each element represents one area that needs a NEW tree node
   "target_node_path": null,
   "rationale": "one sentence explaining why the tree needs this node",
   "suggested_node_title": "Human-readable title for the node",
-  "suggested_node_body_markdown": "Draft NODE.md body content ONLY (2-5 paragraphs, no YAML frontmatter)"
+  "suggested_node_body_markdown": "Draft NODE.md body content ONLY (2-5 paragraphs, no YAML frontmatter)",
+  "suggested_soft_links": ["other/tree/path", "another/one"]
 }
 
-For TREE_OK items, only path, type, and rationale are required (other fields can be empty strings).
+For TREE_OK items, only path, type, and rationale are required (other fields can be empty strings or omitted).
 
-IMPORTANT: \`suggested_node_body_markdown\` must contain body content only. Do NOT include YAML frontmatter or code fences.
+IMPORTANT:
+- \`suggested_node_body_markdown\` must contain body content only. Do NOT include YAML frontmatter or code fences.
+- \`suggested_soft_links\` must list every tree path the body cross-references (other domains, governance, backend, etc.) so the new node shows up in the tree graph. Use paths from the "Current tree nodes" list above. Omit or use [] when the body does not reference other domains.
 
 Return a JSON array only, no prose.`;
   const CLAUDE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes per classification
@@ -1059,11 +1069,26 @@ async function prepareProposalGroup(
       const nodePath = join(absDir, "NODE.md");
       // Only write if NODE.md doesn't already exist (don't overwrite human-authored nodes)
       if (!existsSync(nodePath)) {
-        const content = [
+        const frontmatter = [
           "---",
           `title: "${capitalizedTitle.replace(/"/g, '\\"')}"`,
           `owners: [${owners.join(", ")}]`,
-          "---",
+        ];
+        const softLinks = Array.isArray(proposal.suggested_soft_links)
+          ? Array.from(
+              new Set(
+                proposal.suggested_soft_links
+                  .map((s) => (typeof s === "string" ? s.trim() : ""))
+                  .filter((s) => s.length > 0 && s !== dirSegment),
+              ),
+            ).sort()
+          : [];
+        if (softLinks.length > 0) {
+          frontmatter.push(`soft_links: [${softLinks.join(", ")}]`);
+        }
+        frontmatter.push("---");
+        const content = [
+          ...frontmatter,
           "",
           body,
           "",
