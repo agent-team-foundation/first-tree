@@ -26,11 +26,14 @@ export const BREEZE_USAGE = `usage: first-tree breeze <command>
 Commands that run the Rust daemon (\`breeze-runner\`):
   run                   Run the broker loop forever
   run-once              Run a single broker iteration and exit
-  start                 Start the broker in the background
-  stop                  Stop a background broker
-  status                Print broker / inbox status
+
+Commands ported to TypeScript (run against \`~/.breeze\`):
+  start                 Launch the TS daemon in the background (launchd on macOS)
+  stop                  Stop the TS daemon and remove its lock
+  status                Print daemon lock + runtime/status.env
   doctor                Diagnose the local install
-  cleanup               Clean up stale state
+  cleanup               Remove stale workspaces + expired claims
+  poll-inbox            Alias for \`poll\` (one-shot notification fetch)
 
 Daemon (phase 3, experimental):
   daemon [--backend=ts|rust]
@@ -73,7 +76,15 @@ type SetupTarget = {
 type TsTarget = {
   kind: "ts";
   /** The node:module specifier to `await import()`. */
-  specifier: "status-manager" | "poll" | "watch";
+  specifier:
+    | "status-manager"
+    | "poll"
+    | "watch"
+    | "doctor"
+    | "status"
+    | "cleanup"
+    | "start"
+    | "stop";
 };
 
 type StatuslineTarget = {
@@ -94,14 +105,16 @@ type Target =
 const DISPATCH: Record<string, Target> = {
   install: { kind: "setup" },
 
-  // breeze-runner subcommands (Phase 3 ports)
+  // breeze-runner subcommands — `run` / `run-once` still bridge to the
+  // Rust binary while Phase 3-7 overlap lands; the rest are TS.
   run: { kind: "runner", subcommand: "run" },
   "run-once": { kind: "runner", subcommand: "run-once" },
-  start: { kind: "runner", subcommand: "start" },
-  stop: { kind: "runner", subcommand: "stop" },
-  status: { kind: "runner", subcommand: "status" },
-  doctor: { kind: "runner", subcommand: "doctor" },
-  cleanup: { kind: "runner", subcommand: "cleanup" },
+  start: { kind: "ts", specifier: "start" },
+  stop: { kind: "ts", specifier: "stop" },
+  status: { kind: "ts", specifier: "status" },
+  doctor: { kind: "ts", specifier: "doctor" },
+  cleanup: { kind: "ts", specifier: "cleanup" },
+  "poll-inbox": { kind: "ts", specifier: "poll" },
 
   // TS ports
   "status-manager": { kind: "ts", specifier: "status-manager" },
@@ -204,6 +217,26 @@ export async function runBreeze(
         if (target.specifier === "watch") {
           const mod = await import("./commands/watch.js");
           return await mod.runWatch(rest);
+        }
+        if (target.specifier === "doctor") {
+          const mod = await import("./commands/doctor.js");
+          return await mod.runDoctor(rest);
+        }
+        if (target.specifier === "status") {
+          const mod = await import("./commands/status.js");
+          return await mod.runStatus(rest);
+        }
+        if (target.specifier === "cleanup") {
+          const mod = await import("./commands/cleanup.js");
+          return await mod.runCleanup(rest);
+        }
+        if (target.specifier === "start") {
+          const mod = await import("./commands/start.js");
+          return await mod.runStart(rest);
+        }
+        if (target.specifier === "stop") {
+          const mod = await import("./commands/stop.js");
+          return await mod.runStop(rest);
         }
         // Exhaustiveness check.
         const _never: never = target.specifier;

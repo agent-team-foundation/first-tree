@@ -90,16 +90,11 @@ describe("runBreeze dispatcher", () => {
       "../src/products/breeze/cli.js"
     );
 
-    // Phase 2b: `poll` was migrated to a TS port; the remaining runner
-    // subcommands are still bridged to the Rust binary.
+    // Phase 6: `start`/`stop`/`status`/`doctor`/`cleanup` were migrated
+    // to TS. Only `run` + `run-once` still bridge to the Rust binary.
     const cases: Array<{ args: string[]; expected: string[] }> = [
       { args: ["run"], expected: ["run"] },
       { args: ["run-once", "--verbose"], expected: ["run-once", "--verbose"] },
-      { args: ["start"], expected: ["start"] },
-      { args: ["stop"], expected: ["stop"] },
-      { args: ["status", "--json"], expected: ["status", "--json"] },
-      { args: ["doctor"], expected: ["doctor"] },
-      { args: ["cleanup"], expected: ["cleanup"] },
     ];
     for (const { args, expected } of cases) {
       spawnSpy.mockClear();
@@ -212,7 +207,7 @@ describe("runBreeze dispatcher", () => {
     expect(runWatch).toHaveBeenCalledWith([]);
   });
 
-  it("propagates the child exit code", async () => {
+  it("propagates the child exit code for runner-bridged subcommands", async () => {
     const spawnSpy = vi.fn().mockReturnValue(13);
     vi.doMock("../src/products/breeze/bridge.js", () => ({
       resolveBreezeRunner: vi
@@ -227,7 +222,7 @@ describe("runBreeze dispatcher", () => {
     const { runBreeze: freshRun } = await import(
       "../src/products/breeze/cli.js"
     );
-    const code = await freshRun(["status"], () => {});
+    const code = await freshRun(["run"], () => {});
     expect(code).toBe(13);
   });
 
@@ -283,7 +278,7 @@ describe("runBreeze dispatcher", () => {
       const { runBreeze: freshRun } = await import(
         "../src/products/breeze/cli.js"
       );
-      const code = await freshRun(["status"], () => {});
+      const code = await freshRun(["run"], () => {});
       expect(code).toBe(1);
       expect(writes.join("")).toContain("cargo install --path .");
     } finally {
