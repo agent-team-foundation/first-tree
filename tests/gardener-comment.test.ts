@@ -801,6 +801,42 @@ describe("gardener comment -- marker helpers", () => {
     expect(parsed?.verdict).toBe("CONFLICT");
     expect(parsed?.severity).toBe("high");
     expect(parsed?.treeSha).toBe("deadbeef");
+    expect(parsed?.treeIssueCreated).toBeUndefined();
+  });
+
+  it("parseStateMarker extracts tree_issue_created URL when present", () => {
+    const parsed = parseStateMarker(
+      "<!-- gardener:state · reviewed=abcdef · verdict=NEW_TERRITORY · severity=medium · tree_sha=deadbeef · tree_issue_created=https://github.com/alice/tree/issues/42 -->",
+    );
+    expect(parsed?.treeIssueCreated).toBe(
+      "https://github.com/alice/tree/issues/42",
+    );
+    expect(parsed?.reviewed).toBe("abcdef");
+    expect(parsed?.verdict).toBe("NEW_TERRITORY");
+  });
+
+  it("parseStateMarker leaves treeIssueCreated undefined when marker is pre-Phase-1 (backward compat)", () => {
+    const parsed = parseStateMarker(
+      "<!-- gardener:state · reviewed=abcdef · verdict=ALIGNED · severity=low · tree_sha=deadbeef -->",
+    );
+    expect(parsed?.treeIssueCreated).toBeUndefined();
+  });
+
+  it("parseStateMarker stops URL capture at the marker's ' · ' separator, not mid-URL", () => {
+    const parsed = parseStateMarker(
+      "<!-- gardener:state · tree_issue_created=https://github.com/alice/tree/issues/7 · reviewed=abcdef -->",
+    );
+    expect(parsed?.treeIssueCreated).toBe(
+      "https://github.com/alice/tree/issues/7",
+    );
+    expect(parsed?.reviewed).toBe("abcdef");
+  });
+
+  it("parseStateMarker ignores non-GitHub URLs in tree_issue_created (markers only carry github.com links)", () => {
+    const parsed = parseStateMarker(
+      "<!-- gardener:state · reviewed=abc · tree_issue_created=https://evil.example/issues/1 -->",
+    );
+    expect(parsed?.treeIssueCreated).toBeUndefined();
   });
 
   it("hasIgnoredMarker / hasPausedMarker detect markers", () => {

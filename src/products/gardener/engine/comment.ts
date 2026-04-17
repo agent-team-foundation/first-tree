@@ -275,6 +275,8 @@ export const REVIEWED_SHA_RE = /reviewed=([A-Za-z0-9@:.-]+)/;
 export const VERDICT_IN_MARKER_RE = /verdict=([A-Z_]+)/;
 export const SEVERITY_IN_MARKER_RE = /severity=([a-z]+)/;
 export const TREE_SHA_IN_MARKER_RE = /tree_sha=([A-Za-z0-9]+)/;
+export const TREE_ISSUE_CREATED_IN_MARKER_RE =
+  /tree_issue_created=(https:\/\/github\.com\/[^\s·>]+)/;
 
 /**
  * Recognizes `@gardener <command>` in user comments. Matches the
@@ -358,6 +360,7 @@ export function parseStateMarker(body: string | undefined): {
   verdict?: Verdict;
   severity?: Severity;
   treeSha?: string;
+  treeIssueCreated?: string;
 } | null {
   const marker = extractStateMarker(body);
   if (!marker) return null;
@@ -366,6 +369,7 @@ export function parseStateMarker(body: string | undefined): {
     verdict?: Verdict;
     severity?: Severity;
     treeSha?: string;
+    treeIssueCreated?: string;
   } = {};
   const reviewed = marker.match(REVIEWED_SHA_RE);
   if (reviewed) out.reviewed = reviewed[1];
@@ -379,6 +383,8 @@ export function parseStateMarker(body: string | undefined): {
   }
   const treeSha = marker.match(TREE_SHA_IN_MARKER_RE);
   if (treeSha) out.treeSha = treeSha[1];
+  const treeIssue = marker.match(TREE_ISSUE_CREATED_IN_MARKER_RE);
+  if (treeIssue) out.treeIssueCreated = treeIssue[1];
   return out;
 }
 
