@@ -72,10 +72,10 @@ describe("BreezeWatch view", () => {
     const frame = strip(lastFrame());
     expect(frame).toMatch(/breeze/u);
     expect(frame).toMatch(/status board/u);
-    expect(frame).toMatch(/1 human/u);
+    expect(frame).toMatch(/1 need-you/u);
     expect(frame).toMatch(/2 new/u);
     expect(frame).toMatch(/1 wip/u);
-    expect(frame).toMatch(/1 done/u);
+    expect(frame).toMatch(/1 finished/u);
   });
 
   it("shows the HUMAN section when items exist", () => {
@@ -84,7 +84,7 @@ describe("BreezeWatch view", () => {
       <BreezeWatch inbox={inbox} events={[]} />,
     );
     const frame = strip(lastFrame());
-    expect(frame).toMatch(/HUMAN/u);
+    expect(frame).toMatch(/NEED-YOU/u);
     expect(frame).toMatch(/\(1\)/u);
     expect(frame).toMatch(/needs review/u);
   });
@@ -114,7 +114,7 @@ describe("BreezeWatch view", () => {
     expect(frame).toMatch(/NEW \(1\)/u);
     expect(frame).toMatch(/WIP \(1\)/u);
     // Done is collapsed.
-    expect(frame).toMatch(/DONE \(1\).*collapsed/u);
+    expect(frame).toMatch(/FINISHED \(1\).*collapsed/u);
   });
 
   it("renders live-feed transition events with from/to labels", () => {

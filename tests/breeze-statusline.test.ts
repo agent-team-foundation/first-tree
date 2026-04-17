@@ -39,9 +39,9 @@ function cleanCount(): {
 }
 
 describe("renderStatusline", () => {
-  it("returns no line when counts are all zero", () => {
+  it("returns a line with 0 need-you when counts are all zero", () => {
     const out = renderStatusline(cleanCount(), null);
-    expect(out.line).toBe(null);
+    expect(out.line).toBe("/breeze: ⚠ 0 need-you · ");
     expect(out.ring).toBe(false);
   });
 
@@ -49,7 +49,7 @@ describe("renderStatusline", () => {
     const c = cleanCount();
     c.human = 2;
     const out = renderStatusline(c, null);
-    expect(out.line).toBe("/breeze: ⚠ 2 need you · ");
+    expect(out.line).toBe("/breeze: ⚠ 2 need-you · ");
     expect(out.ring).toBe(false);
   });
 
@@ -59,7 +59,7 @@ describe("renderStatusline", () => {
     c.new_by_type.set("PullRequest", 2);
     c.new_by_type.set("Issue", 1);
     const out = renderStatusline(c, null);
-    expect(out.line).toBe("/breeze: 2 PRs · 1 issues");
+    expect(out.line).toBe("/breeze: ⚠ 0 need-you · 2 PRs · 1 issues");
   });
 
   it("orders new-type breakdown by count desc", () => {
@@ -69,7 +69,7 @@ describe("renderStatusline", () => {
     c.new_by_type.set("PullRequest", 3);
     c.new_by_type.set("Discussion", 1);
     const out = renderStatusline(c, null);
-    expect(out.line).toBe("/breeze: 3 PRs · 1 issues · 1 discussions");
+    expect(out.line).toBe("/breeze: ⚠ 0 need-you · 3 PRs · 1 issues · 1 discussions");
   });
 
   it("rings on new-count increase", () => {
@@ -82,7 +82,7 @@ describe("renderStatusline", () => {
       prevHuman: 0,
     };
     const out = renderStatusline(c, prior);
-    expect(out.line).toBe("/breeze: 5 PRs (+2 new)");
+    expect(out.line).toBe("/breeze: ⚠ 0 need-you · 5 PRs (+2 new)");
     expect(out.ring).toBe(true);
   });
 
@@ -97,7 +97,7 @@ describe("renderStatusline", () => {
       prevHuman: 1,
     };
     const out = renderStatusline(c, prior);
-    expect(out.line).toContain("(+1 needs you)");
+    expect(out.line).toContain("(+1 need-you)");
     expect(out.ring).toBe(true);
   });
 
@@ -112,7 +112,7 @@ describe("renderStatusline", () => {
     };
     const out = renderStatusline(c, prior);
     expect(out.ring).toBe(false);
-    expect(out.line).toBe("/breeze: 5 PRs");
+    expect(out.line).toBe("/breeze: ⚠ 0 need-you · 5 PRs");
   });
 });
 
@@ -152,7 +152,7 @@ describe("breeze-statusline dist bundle", () => {
       });
       expect(result.status).toBe(0);
       expect(result.stdout).toMatch(/\/breeze:/u);
-      expect(result.stdout).toContain("1 need you");
+      expect(result.stdout).toContain("1 need-you");
       expect(result.stdout).toContain("2 PRs");
       expect(result.stdout).toContain("1 issues");
     } finally {
