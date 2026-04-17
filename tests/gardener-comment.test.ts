@@ -207,6 +207,29 @@ describe("gardener comment -- state resolution", () => {
     }
   });
 
+  it("gardener:state for issue with matching issue@<iso> → skip (regression guard for #132 review)", () => {
+    // Issues store `issue@<iso-timestamp>` in the marker. reviewOne must pass
+    // the same form as headIdentifier so shaMatches compares like-for-like.
+    // Previously headIdentifier was raw ISO and marker was `issue@<iso>` —
+    // shaMatches never matched → every scan re-PATCHed historical issue comments.
+    const iso = "2026-04-15T10:00:00Z";
+    const action = resolveState({
+      comments: [
+        {
+          id: 7,
+          user: { login: gardenerUser },
+          body:
+            `<!-- gardener:state · reviewed=issue@${iso} · verdict=ALIGNED · severity=low · tree_sha=t -->`,
+          created_at: iso,
+        },
+      ],
+      gardenerUser,
+      headIdentifier: `issue@${iso}`,
+      hasReviewedLabel: false,
+    });
+    expect(action.kind).toBe("skip");
+  });
+
   it("no marker and no label → first_review", () => {
     const action = resolveState({
       comments: [],
