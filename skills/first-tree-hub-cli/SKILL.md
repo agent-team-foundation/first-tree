@@ -49,10 +49,9 @@ Keep the central mental model straight: First Tree Hub is the communication back
   - Context Tree integration is optional — when configured, Client injects organizational context into agent workspaces.
 - Respect auth isolation.
   - Admin JWT and agent Bearer token are separate paths.
-  - Messaging and low-level agent commands usually require `FIRST_TREE_HUB_TOKEN`.
+  - Messaging and low-level agent commands require an agent token: either `FIRST_TREE_HUB_AGENT_TOKEN` directly, or `FIRST_TREE_HUB_AGENT=<name>` to look up a token from the local agent config.
 - Keep the server URL knobs straight.
-  - `FIRST_TREE_HUB_SERVER_URL` is the client-config environment variable and is what `client doctor` expects.
-  - `FIRST_TREE_HUB_SERVER` is the direct override for `onboard` and low-level agent debugging commands.
+  - `FIRST_TREE_HUB_SERVER_URL` is the canonical environment variable across client config, agent runtime injection, onboard, and low-level agent debugging commands.
 - Respect config layering.
   - CLI args override env vars, env vars override YAML config, YAML overrides auto-generated values, auto-generated values override defaults.
 - Distinguish config scopes and paths.

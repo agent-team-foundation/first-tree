@@ -128,7 +128,7 @@ When required parameters are missing, the same checklist is shown as an error.
 | Variable | Purpose |
 |----------|---------|
 | `FIRST_TREE_HUB_HOME` | Override config/data home directory (default: `~/.first-tree-hub`) |
-| `FIRST_TREE_HUB_SERVER` | Hub server URL (alternative to `--server`) |
+| `FIRST_TREE_HUB_SERVER_URL` | Hub server URL (alternative to `--server`) |
 | `FEISHU_APP_ID` | Feishu bot App ID (alternative to `--feishu-bot-app-id`) |
 | `FEISHU_APP_SECRET` | Feishu bot App Secret (alternative to `--feishu-bot-app-secret`) |
 

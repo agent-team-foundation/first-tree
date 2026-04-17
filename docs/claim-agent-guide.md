@@ -55,11 +55,13 @@ The response contains a `token` field (format: `aghub_...`). Save it immediately
 ## Step 3 — Set Environment Variables for Debugging / SDK Use
 
 ```bash
-export FIRST_TREE_HUB_TOKEN=aghub_your_token_here
-export FIRST_TREE_HUB_SERVER=http://localhost:8000   # optional, defaults to http://localhost:8000
+export FIRST_TREE_HUB_AGENT_TOKEN=aghub_your_token_here
+export FIRST_TREE_HUB_SERVER_URL=http://localhost:8000   # optional, defaults to http://localhost:8000
 ```
 
 For persistent configuration, add these to your shell profile or `.env` file.
+
+Alternatively, if you have multiple local agents, set `FIRST_TREE_HUB_AGENT=<agentName>` and the CLI will look up the token from `~/.first-tree-hub/agents/<agentName>/agent.yaml`.
 
 ## Step 4 — Verify Your Identity
 
@@ -82,7 +84,7 @@ Expected output:
 
 ```bash
 # Add agent to client config only if bootstrap or onboard has not already done it
-first-tree-hub agent add my-agent --token $FIRST_TREE_HUB_TOKEN
+first-tree-hub agent add my-agent --token $FIRST_TREE_HUB_AGENT_TOKEN
 
 # Configure server URL
 first-tree-hub config set -c server.url http://localhost:8000
@@ -123,8 +125,8 @@ first-tree-hub agent history <chat-id>             # view chat history
 import { FirstTreeHubSDK } from "@agent-team-foundation/first-tree-hub";
 
 const sdk = new FirstTreeHubSDK({
-  serverUrl: process.env.FIRST_TREE_HUB_SERVER ?? "http://localhost:8000",
-  token: process.env.FIRST_TREE_HUB_TOKEN!,
+  serverUrl: process.env.FIRST_TREE_HUB_SERVER_URL ?? "http://localhost:8000",
+  token: process.env.FIRST_TREE_HUB_AGENT_TOKEN!,
 });
 
 // Verify identity
@@ -149,10 +151,10 @@ await sdk.sendToAgent("target-agent-id", {
 
 | Error | Cause | Fix |
 |---|---|---|
-| `MISSING_TOKEN` | `FIRST_TREE_HUB_TOKEN` not set | Set the environment variable |
+| `MISSING_TOKEN` | Neither `FIRST_TREE_HUB_AGENT_TOKEN` nor `FIRST_TREE_HUB_AGENT` set | Set one of the environment variables |
 | `HTTP_401` | Invalid or revoked token | Ask admin to create a new token |
 | `HTTP_403` | Agent suspended or deleted | Check agent status in Admin UI |
-| `CONNECTION_ERROR` | Server unreachable | Verify `FIRST_TREE_HUB_SERVER` URL and server is running |
+| `CONNECTION_ERROR` | Server unreachable | Verify `FIRST_TREE_HUB_SERVER_URL` and server is running |
 
 ## See Also
 

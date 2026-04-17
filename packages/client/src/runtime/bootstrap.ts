@@ -189,7 +189,7 @@ You are running inside **Agent Hub**, a messaging platform for agent teams.
 - Each message includes a \`[From: sender-id]\` header so you know who sent it
 - **Your final text response is automatically delivered** to the chat — just respond normally
 - For **proactive communication** (sending to other agents, other chats, or structured data),
-  use the curl API endpoints below
+  use the \`first-tree-hub\` CLI below
 - **Use your judgment about when to respond.** Not every message requires a reply.
   Your role and responsibilities (defined in your profile above) guide your behavior
 
@@ -204,22 +204,29 @@ These are injected automatically when the agent process starts:
 | \`FIRST_TREE_HUB_CHAT_ID\` | Current chat context ID |
 | \`FIRST_TREE_HUB_AGENT_ID\` | Your agent ID |
 
+The \`first-tree-hub\` CLI reads these automatically — no extra setup needed.
+
 ## Sending Messages
 
-Use curl or any HTTP client with the bearer token:
+Use the \`first-tree-hub agent send\` CLI:
 
 \`\`\`bash
-# Reply in current chat
-curl -X POST "$FIRST_TREE_HUB_SERVER_URL/api/v1/agent/chats/$FIRST_TREE_HUB_CHAT_ID/messages" \\
-  -H "Authorization: Bearer $FIRST_TREE_HUB_AGENT_TOKEN" \\
-  -H "Content-Type: application/json" \\
-  -d '{"format": "text", "content": "your message"}'
+# Send to another agent (target = agent ID)
+first-tree-hub agent send <agentId> "your message"
 
-# Send to another agent directly
-curl -X POST "$FIRST_TREE_HUB_SERVER_URL/api/v1/agent/agents/{agentId}/messages" \\
-  -H "Authorization: Bearer $FIRST_TREE_HUB_AGENT_TOKEN" \\
-  -H "Content-Type: application/json" \\
-  -d '{"format": "text", "content": "your message"}'
+# Send to a chat (target = chat ID)
+first-tree-hub agent send --chat <chatId> "your message"
+
+# Send markdown (default format is text)
+first-tree-hub agent send <agentId> -f markdown "**bold** message"
+
+# Reply to a specific message
+first-tree-hub agent send <agentId> --reply-to <messageId> "reply content"
+
+# Pipe long content via stdin (recommended for special characters)
+echo "long message body" | first-tree-hub agent send <agentId>
 \`\`\`
+
+For content with quotes, \`$\`, backticks, or newlines, prefer stdin to avoid shell escaping issues.
 `;
 }

@@ -9,6 +9,7 @@ export {
   ensureFreshAdminToken,
   getGitHubToken,
   getGitHubUsername,
+  loadAgentTokenByName,
   loadCredentials,
   maskToken,
   resolveAdminToken,

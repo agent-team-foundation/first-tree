@@ -159,7 +159,7 @@ first-tree-hub agent pull
 first-tree-hub agent pull --ack
 ```
 
-Messaging commands require `FIRST_TREE_HUB_TOKEN`. Use `FIRST_TREE_HUB_SERVER` to override the server URL for these low-level agent commands.
+Messaging commands require an agent token (see Agent env vars below). Use `FIRST_TREE_HUB_SERVER_URL` to override the server URL for these low-level agent commands.
 
 ## config
 
@@ -232,14 +232,21 @@ Most environment variables use the `FIRST_TREE_HUB_` prefix. `onboard` also acce
 
 | Variable | Purpose |
 |---------|------|
-| `FIRST_TREE_HUB_TOKEN` | Agent token (required for `agent send/chats/history/register/pull`) |
-| `FIRST_TREE_HUB_SERVER` | Server URL override for messaging commands |
+| `FIRST_TREE_HUB_AGENT_TOKEN` | Agent bearer token. Highest priority. Injected automatically when running inside a Hub agent runtime. |
+| `FIRST_TREE_HUB_AGENT` | Agent name. CLI looks up the token from `~/.first-tree-hub/agents/<name>/agent.yaml`. Used when token is not set explicitly. |
+| `FIRST_TREE_HUB_SERVER_URL` | Server URL override for messaging commands. Falls back to client config. |
+
+Resolution order for the agent token:
+
+1. `FIRST_TREE_HUB_AGENT_TOKEN` — explicit value
+2. `FIRST_TREE_HUB_AGENT` → lookup in `~/.first-tree-hub/agents/<name>/agent.yaml`
+3. Error
 
 ### Onboard
 
 | Variable | Purpose |
 |---------|------|
-| `FIRST_TREE_HUB_SERVER` | Hub server URL alternative to `--server` |
+| `FIRST_TREE_HUB_SERVER_URL` | Hub server URL alternative to `--server` |
 | `FEISHU_APP_ID` | Feishu bot App ID alternative to `--feishu-bot-app-id` |
 | `FEISHU_APP_SECRET` | Feishu bot App Secret alternative to `--feishu-bot-app-secret` |
 

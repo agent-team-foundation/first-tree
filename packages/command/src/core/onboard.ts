@@ -117,7 +117,7 @@ export async function onboardCheck(args: OnboardArgs): Promise<CheckItem[]> {
       key: "server",
       label: "Server URL",
       status: "missing_required",
-      hint: "Provide via --server, FIRST_TREE_HUB_SERVER, or config",
+      hint: "Provide via --server, FIRST_TREE_HUB_SERVER_URL, or config",
     });
   }
 

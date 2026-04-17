@@ -1,7 +1,8 @@
 import { execSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DEFAULT_CONFIG_DIR, getClientConfig } from "@agent-team-foundation/first-tree-hub-shared/config";
+import { parse as parseYaml } from "yaml";
 
 const CREDENTIALS_PATH = join(DEFAULT_CONFIG_DIR, "credentials.json");
 
@@ -46,7 +47,7 @@ export function getGitHubToken(): string {
  */
 export function resolveServerUrl(flagValue?: string): string {
   if (flagValue) return flagValue;
-  if (process.env.FIRST_TREE_HUB_SERVER) return process.env.FIRST_TREE_HUB_SERVER;
+  if (process.env.FIRST_TREE_HUB_SERVER_URL) return process.env.FIRST_TREE_HUB_SERVER_URL;
 
   try {
     const config = getClientConfig();
@@ -57,7 +58,7 @@ export function resolveServerUrl(flagValue?: string): string {
 
   throw new Error(
     "Server URL not configured.\n" +
-      "  Provide via: --server <url>, FIRST_TREE_HUB_SERVER env var, or\n" +
+      "  Provide via: --server <url>, FIRST_TREE_HUB_SERVER_URL env var, or\n" +
       "  first-tree-hub config set -c server.url <url>",
   );
 }
@@ -122,15 +123,46 @@ export async function bootstrapToken(
 }
 
 /**
- * Resolve agent token from FIRST_TREE_HUB_TOKEN env var.
- * Throws if not set.
+ * Load an agent's token from `~/.first-tree-hub/agents/<agentName>/agent.yaml`.
+ * Returns null if the file is missing or has no token.
+ */
+export function loadAgentTokenByName(agentName: string): string | null {
+  const configPath = join(DEFAULT_CONFIG_DIR, "agents", agentName, "agent.yaml");
+  if (!existsSync(configPath)) return null;
+  try {
+    const raw = parseYaml(readFileSync(configPath, "utf-8")) as { token?: unknown };
+    if (typeof raw.token === "string" && raw.token.length > 0) return raw.token;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve agent token with the following precedence:
+ *   1. FIRST_TREE_HUB_AGENT_TOKEN env var (explicit token; runtime or manual export)
+ *   2. FIRST_TREE_HUB_AGENT env var → lookup in ~/.first-tree-hub/agents/<name>/agent.yaml
+ * Throws if neither is configured or the named agent has no stored token.
  */
 export function resolveAgentToken(): string {
-  const token = process.env.FIRST_TREE_HUB_TOKEN;
-  if (!token) {
-    throw new Error("FIRST_TREE_HUB_TOKEN environment variable is required.");
+  const token = process.env.FIRST_TREE_HUB_AGENT_TOKEN;
+  if (token) return token;
+
+  const agentName = process.env.FIRST_TREE_HUB_AGENT;
+  if (agentName) {
+    const loaded = loadAgentTokenByName(agentName);
+    if (loaded) return loaded;
+    throw new Error(
+      `Agent "${agentName}" has no token in ${join(DEFAULT_CONFIG_DIR, "agents", agentName)}/agent.yaml.\n` +
+        `  Verify the agent exists locally or set FIRST_TREE_HUB_AGENT_TOKEN explicitly.`,
+    );
   }
-  return token;
+
+  throw new Error(
+    "No agent token configured.\n" +
+      "  Set FIRST_TREE_HUB_AGENT_TOKEN directly, or\n" +
+      "  set FIRST_TREE_HUB_AGENT=<agentName> to use a stored agent config.",
+  );
 }
 
 /**
