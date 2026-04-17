@@ -1,7 +1,7 @@
 /**
  * Tests for the Phase 3a daemon config loader.
  *
- * Verifies the priority pipeline documented in `core/config.ts`:
+ * Verifies the priority pipeline documented in `runtime/config.ts`:
  *   CLI overrides > env vars > yaml > defaults.
  */
 

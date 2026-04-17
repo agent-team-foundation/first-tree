@@ -1,13 +1,9 @@
 /**
  * Thin process-spawn helpers used by the breeze CLI.
  *
- * Phase 8 retired the `breeze-runner` Rust binary and its resolution
- * helpers. What remains:
+ * What remains after the Rust daemon and bash setup script were retired:
  *   - `resolveFirstTreePackageRoot` — locate the npm package root so
- *     callers can find bundled assets (statusline dist bundle, setup
- *     script).
- *   - `resolveBreezeSetupScript` — path to the `first-tree-breeze/setup`
- *     bash installer (still wrapped as `first-tree breeze install`).
+ *     callers can find bundled assets (the statusline dist bundle).
  *   - `spawnInherit` — synchronous spawn with inherited stdio.
  */
 
@@ -19,8 +15,6 @@ import {
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-
-export type FileExistsFn = (path: string) => boolean;
 
 /**
  * Walk up from the current module until we find the npm package root
@@ -57,24 +51,6 @@ export function resolveFirstTreePackageRoot(
     }
     dir = parent;
   }
-}
-
-/**
- * Resolve the breeze setup script bundled under
- * `first-tree-breeze/setup`. Still a bash script.
- */
-export function resolveBreezeSetupScript(
-  deps: { packageRoot?: string; fileExists?: FileExistsFn } = {},
-): string {
-  const fileExists = deps.fileExists ?? existsSync;
-  const packageRoot = deps.packageRoot ?? resolveFirstTreePackageRoot();
-  const candidate = join(packageRoot, "first-tree-breeze", "setup");
-  if (!fileExists(candidate)) {
-    throw new Error(
-      `breeze setup script not found at ${candidate}. The \`first-tree-breeze/\` source directory is missing; reinstall or check out the repo source.`,
-    );
-  }
-  return candidate;
 }
 
 export type SpawnFn = (

@@ -2,7 +2,7 @@
  * SSE framing + stream helper for the Phase 3b daemon HTTP server.
  *
  * Byte-level parity with the Rust `send_sse` in
- * `first-tree-breeze/breeze-runner/src/http.rs:310-332` is a hard
+ * `http.rs:310-332` is a hard
  * requirement of Phase 3b. Any drift here leaks into the dashboard's
  * `EventSource` parsing.
  *
@@ -32,7 +32,7 @@
  * Keep-alive cadence: 15s of idle emits `: ping\n\n`, matching
  * `http.rs:282`.
  *
- * READ-ONLY MODULE: this file never touches `core/store.ts` writers.
+ * READ-ONLY MODULE: this file never touches `runtime/store.ts` writers.
  * The bus stub (`subscribeToInboxMtime`) is Phase 3b scaffolding —
  * Phase 3c replaces it with the real in-process `Bus`.
  */

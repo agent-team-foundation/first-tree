@@ -1,7 +1,7 @@
 /**
  * Phase 3c: in-process event bus for the TypeScript breeze daemon.
  *
- * Port of `first-tree-breeze/breeze-runner/src/bus.rs`.
+ * Port of `bus.rs`.
  *
  * SINGLE-WRITER RULE (spec doc 2 §1.3):
  * -------------------------------------

@@ -1,7 +1,7 @@
 /**
  * Phase 3c: `gh` command executor with rate-limit throttling.
  *
- * Port of `first-tree-breeze/breeze-runner/src/gh_executor.rs`.
+ * Port of `gh_executor.rs`.
  *
  * This is the low-level `gh` runner used by the broker. It does two
  * things:

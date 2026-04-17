@@ -1,5 +1,5 @@
 /**
- * TS port of `first-tree-breeze/breeze-runner/src/task.rs`.
+ * TS port of `task.rs`.
  *
  * `TaskCandidate` is the canonical shape produced by the notification
  * poll / search path and consumed by the dispatcher. `ThreadRecord`

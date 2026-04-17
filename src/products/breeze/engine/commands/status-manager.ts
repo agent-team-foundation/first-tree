@@ -1,5 +1,5 @@
 /**
- * TS port of `first-tree-breeze/bin/breeze-status-manager`.
+ * TS port of `breeze-status-manager`.
  *
  * Surface mirrors the bash script exactly — same stdout, stderr, and
  * exit codes for every documented usage. Differences versus bash are

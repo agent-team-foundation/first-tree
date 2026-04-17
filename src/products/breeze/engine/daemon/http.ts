@@ -1,12 +1,12 @@
 /**
  * Phase 3b: TypeScript port of the breeze daemon HTTP + SSE server.
  *
- * Source of truth: `first-tree-breeze/breeze-runner/src/http.rs` (384
+ * Source of truth: `http.rs` (384
  * lines). Contract pinned in `docs/migration/01-http-api-contract.md`.
  *
  * READ-ONLY DISCIPLINE:
  * ---------------------
- * This module NEVER calls `core/store.ts` writers. The HTTP server is
+ * This module NEVER calls `runtime/store.ts` writers. The HTTP server is
  * strictly a reader: it passes through `~/.breeze/inbox.json`, tails
  * `~/.breeze/activity.log`, and publishes SSE events produced by an
  * upstream bus. The single-writer rule for `inbox.json` (spec doc 2

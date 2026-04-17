@@ -1,7 +1,7 @@
 /**
  * Daemon-level identity resolver.
  *
- * TS port of `first-tree-breeze/breeze-runner/src/identity.rs`.
+ * TS port of `identity.rs`.
  *
  * The daemon needs a richer identity than the one-shot commands:
  *   - `host`  — GitHub host (default `github.com`)
@@ -13,7 +13,7 @@
  *     lock directory (`~/.breeze/runner/locks/<lockKey>/`). Phase 3c
  *     consumes this; we produce it now so identity is stable.
  *
- * Caching: delegates to `core/identity-cache.ts`'s 24h-TTL JSON file at
+ * Caching: delegates to `runtime/identity-cache.ts`'s 24h-TTL JSON file at
  * `~/.breeze/identity.json`. The core cache only stores `{login, host,
  * fetched_at_ms}` because one-shot callers don't need scopes. The
  * daemon fetches the richer payload via `gh auth status --json hosts`

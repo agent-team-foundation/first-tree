@@ -1,5 +1,5 @@
 /**
- * TS port of `first-tree-breeze/breeze-runner/src/classify.rs`.
+ * TS port of `classify.rs`.
  *
  * `TaskKind` classifies a GitHub notification subject + reason into the
  * breeze task taxonomy. `priority_for` returns the dispatcher priority;

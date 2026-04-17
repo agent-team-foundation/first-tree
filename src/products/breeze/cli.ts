@@ -57,10 +57,6 @@ Environment:
 
 type Output = (text: string) => void;
 
-type SetupTarget = {
-  kind: "setup";
-};
-
 type TsTarget = {
   kind: "ts";
   /** The node:module specifier to `await import()`. */
@@ -72,7 +68,8 @@ type TsTarget = {
     | "status"
     | "cleanup"
     | "start"
-    | "stop";
+    | "stop"
+    | "install";
 };
 
 type StatuslineTarget = {
@@ -85,10 +82,10 @@ type DaemonTarget = {
   once: boolean;
 };
 
-type Target = SetupTarget | TsTarget | StatuslineTarget | DaemonTarget;
+type Target = TsTarget | StatuslineTarget | DaemonTarget;
 
 const DISPATCH: Record<string, Target> = {
-  install: { kind: "setup" },
+  install: { kind: "ts", specifier: "install" },
 
   // Foreground loops — all TS-backed.
   run: { kind: "daemon", once: false },
@@ -160,11 +157,6 @@ export async function runBreeze(
 
   try {
     switch (target.kind) {
-      case "setup": {
-        const bridge = await import("./engine/bridge.js");
-        const setupPath = bridge.resolveBreezeSetupScript();
-        return bridge.spawnInherit("bash", [setupPath, ...rest]);
-      }
       case "ts": {
         // Lazy-import the TS command so startup stays cheap for workflows
         // that never touch the ported commands.
@@ -199,6 +191,10 @@ export async function runBreeze(
         if (target.specifier === "stop") {
           const mod = await import("./engine/commands/stop.js");
           return await mod.runStop(rest);
+        }
+        if (target.specifier === "install") {
+          const mod = await import("./engine/commands/install.js");
+          return mod.runInstall(rest);
         }
         // Exhaustiveness check.
         const _never: never = target.specifier;

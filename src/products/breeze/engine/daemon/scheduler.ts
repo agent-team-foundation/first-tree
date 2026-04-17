@@ -1,7 +1,7 @@
 /**
  * Phase 5: the per-thread state machine that sits between the candidate
  * loop and the dispatcher. Mirrors the logic in
- * `first-tree-breeze/breeze-runner/src/service.rs`:
+ * `service.rs`:
  *   - `should_schedule`        — gate on ThreadRecord retry/backoff
  *   - `handle_completion`      — persist ThreadRecord + task.env updates
  *   - `record_setup_failure`   — workspace failures bump the retry counter

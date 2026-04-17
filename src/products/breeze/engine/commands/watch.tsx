@@ -1,5 +1,5 @@
 /**
- * TS port of `first-tree-breeze/bin/breeze-watch` + `WATCH_DESIGN.md`.
+ * TS port of `breeze-watch` + `WATCH_DESIGN.md`.
  *
  * A read-only TUI board rendered with `ink` (React-for-terminals):
  *   - header: "breeze status board" + status-count summary

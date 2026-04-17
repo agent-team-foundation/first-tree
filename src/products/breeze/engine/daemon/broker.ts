@@ -1,7 +1,7 @@
 /**
  * Phase 3c: cross-process `gh` broker for the TypeScript breeze daemon.
  *
- * Port of `first-tree-breeze/breeze-runner/src/broker.rs`.
+ * Port of `broker.rs`.
  *
  * Purpose
  * -------

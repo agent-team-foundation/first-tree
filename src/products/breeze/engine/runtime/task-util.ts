@@ -1,6 +1,6 @@
 /**
  * TS port of the string / id / timestamp helpers in
- * `first-tree-breeze/breeze-runner/src/util.rs`.
+ * `util.rs`.
  *
  * Ported functions:
  *   - `fnv1a64` + `stable_file_id`    — deterministic 16-hex-char id

@@ -2,7 +2,7 @@
  * Pure derivation of `breeze_status` from GitHub labels + PR/issue state.
  *
  * TS port of `compute_breeze_status` in
- * `first-tree-breeze/breeze-runner/src/fetcher.rs:353-368`.
+ * `fetcher.rs:353-368`.
  *
  * Spec: `docs/migration/03-status-state-machine.md` §2.
  *

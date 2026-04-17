@@ -1,7 +1,7 @@
 /**
  * Phase 3c: per-task agent runner.
  *
- * Port of `first-tree-breeze/breeze-runner/src/runner.rs`.
+ * Port of `runner.rs`.
  *
  * Each dispatched task picks one or more runner specs from the pool,
  * builds a prompt, writes it to `<task-dir>/prompt.txt`, and execs the
@@ -16,7 +16,7 @@
  *
  * Phase 3c adds a per-task timeout (spec doc 4 §11, §8). Rust's
  * runner had no timeout; the TS version always enforces one, with a
- * default in `core/config.ts::DAEMON_CONFIG_DEFAULTS.taskTimeoutSec`.
+ * default in `runtime/config.ts::DAEMON_CONFIG_DEFAULTS.taskTimeoutSec`.
  */
 
 import {

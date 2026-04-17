@@ -24,7 +24,7 @@ export type GhState = z.infer<typeof GhStateSchema>;
 
 /**
  * Single inbox entry. Matches `entry_to_json` in
- * `first-tree-breeze/breeze-runner/src/fetcher.rs:601-631`.
+ * `fetcher.rs:601-631`.
  *
  * The encoder never omits keys; nullable fields are emitted as JSON `null`.
  */

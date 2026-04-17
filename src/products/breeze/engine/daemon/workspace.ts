@@ -1,7 +1,7 @@
 /**
  * Phase 3c: workspace manager for agent task execution.
  *
- * Port of `first-tree-breeze/breeze-runner/src/workspace.rs`.
+ * Port of `workspace.rs`.
  *
  * Each dispatched task gets a detached-HEAD git worktree at
  * `<workspacesDir>/<slug>/<kind>-<stableId>`, backed by a bare mirror

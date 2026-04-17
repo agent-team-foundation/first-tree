@@ -5,7 +5,7 @@
  * `launchd_plist_contents`, `launchd_label`, `launchd_domain`,
  * `passthrough_launchd_env_vars`, `resolve_launchd_env_var`, and
  * `escape_xml` helpers from
- * `first-tree-breeze/breeze-runner/src/service.rs`.
+ * `service.rs`.
  *
  * Linux / Windows are intentional no-ops — callers should fall back to
  * a `nohup` spawn via `spawn(...)` with `detached: true` when

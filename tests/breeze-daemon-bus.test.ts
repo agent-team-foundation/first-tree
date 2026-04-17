@@ -1,7 +1,7 @@
 /**
  * Phase 3c contract tests for the in-process event bus.
  *
- * The bus is the Node equivalent of `first-tree-breeze/breeze-runner/src/bus.rs`.
+ * The bus is the Node equivalent of `bus.rs`.
  * It fans out broker/poller events to any number of read-only subscribers
  * (HTTP SSE stream, in-process task monitors) without allowing them to
  * mutate `inbox.json`. The single-writer rule (see `daemon/bus.ts` header)

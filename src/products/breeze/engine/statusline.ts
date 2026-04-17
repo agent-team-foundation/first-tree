@@ -9,7 +9,7 @@
  *   - hand-rolled field extraction so we never parse the whole inbox
  *     (common case: a few hundred notifications)
  *
- * Behaviour is a line-for-line port of `first-tree-breeze/bin/breeze-status`
+ * Behaviour is a line-for-line port of `breeze-status`
  * +  `breeze-statusline-wrapper` (the wrapper just passes stdin through and
  * prints our output). Stdin is drained silently per the Claude Code
  * statusline contract.

@@ -1,5 +1,5 @@
 /**
- * Phase 4: TS port of `first-tree-breeze/breeze-runner/src/gh.rs`.
+ * Phase 4: TS port of `gh.rs`.
  *
  * `GhClient` wraps a `GhExecutor` with the GitHub-specific query set
  * (notifications, review requests, assigned issues/PRs) and the

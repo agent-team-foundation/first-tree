@@ -1,6 +1,6 @@
 /**
  * TS port of `Service::doctor` in
- * `first-tree-breeze/breeze-runner/src/service.rs:107-143`.
+ * `service.rs:107-143`.
  *
  * Prints a one-screen diagnostic of the daemon's local environment.
  * Designed for `first-tree breeze doctor` — no subprocesses the user

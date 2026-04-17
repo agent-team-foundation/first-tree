@@ -1,37 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  resolveBreezeSetupScript,
   resolveFirstTreePackageRoot,
   spawnInherit,
   type SpawnFn,
 } from "../src/products/breeze/engine/bridge.js";
-import { join } from "node:path";
 
 describe("resolveFirstTreePackageRoot", () => {
   it("returns a directory that contains the first-tree package.json", () => {
     const root = resolveFirstTreePackageRoot();
     expect(typeof root).toBe("string");
     expect(root.length).toBeGreaterThan(0);
-  });
-});
-
-describe("resolveBreezeSetupScript", () => {
-  it("throws a helpful error when the setup script is missing", () => {
-    expect(() =>
-      resolveBreezeSetupScript({
-        packageRoot: "/nowhere",
-        fileExists: () => false,
-      }),
-    ).toThrow(/breeze setup script not found/);
-  });
-
-  it("returns the path when the script is present", () => {
-    const path = resolveBreezeSetupScript({
-      packageRoot: "/pkg",
-      fileExists: (candidate: string): boolean =>
-        candidate === join("/pkg", "first-tree-breeze", "setup"),
-    });
-    expect(path).toBe(join("/pkg", "first-tree-breeze", "setup"));
   });
 });
 

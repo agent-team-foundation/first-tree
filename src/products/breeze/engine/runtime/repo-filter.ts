@@ -1,6 +1,6 @@
 /**
  * TS port of `RepoFilter` from
- * `first-tree-breeze/breeze-runner/src/config.rs:39-114`.
+ * `config.rs:39-114`.
  *
  * Allow-list with two shapes:
  *   - `owner/repo`  → exact match

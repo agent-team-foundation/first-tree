@@ -1,5 +1,5 @@
 /**
- * TS port of `first-tree-breeze/bin/breeze-poll`.
+ * TS port of `breeze-poll`.
  *
  * One-shot poll of GitHub notifications. Fetches the user's notifications
  * via `gh api`, enriches each PR/Issue with labels + state via a batched
@@ -7,16 +7,16 @@
  * and appends `new` / `transition` events to `activity.log`.
  *
  * Reuses the shared core modules:
- *   - `core/gh.ts`        : `gh` subprocess wrapper
- *   - `core/classifier.ts`: label → status derivation
- *   - `core/store.ts`     : atomic inbox writer under advisory lock
- *   - `core/activity-log.ts`: append-only JSONL writer
- *   - `core/paths.ts`     : `$BREEZE_DIR` layout
+ *   - `runtime/gh.ts`        : `gh` subprocess wrapper
+ *   - `runtime/classifier.ts`: label → status derivation
+ *   - `runtime/store.ts`     : atomic inbox writer under advisory lock
+ *   - `runtime/activity-log.ts`: append-only JSONL writer
+ *   - `runtime/paths.ts`     : `$BREEZE_DIR` layout
  *
  * Spec references:
  *   - `docs/migration/02-inbox-store-schema.md` §1 (inbox) and §2 (activity)
  *   - `docs/migration/03-status-state-machine.md` (classifier precedence)
- *   - Rust parity: `first-tree-breeze/breeze-runner/src/fetcher.rs::poll_once`
+ *   - Rust parity: `fetcher.rs::poll_once`
  *
  * Differences vs. the bash script:
  *   - No `.poll.pid` lockfile — we rely on `updateInbox`'s advisory lock.

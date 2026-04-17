@@ -2,7 +2,7 @@
  * Phase 3c: service-wide lock + per-notification claim helpers for the
  * TypeScript breeze daemon.
  *
- * Port of `first-tree-breeze/breeze-runner/src/lock.rs`.
+ * Port of `lock.rs`.
  *
  * SINGLE-WRITER RULE (spec doc 2 §1.3):
  * -------------------------------------
@@ -50,7 +50,7 @@ export const LOCK_STALE_AFTER_SEC = 20 * 60;
 
 /**
  * Per-notification claim staleness. Mirrors `CLAIM_TIMEOUT_SECS` in
- * `core/config.ts` (5 minutes) so the daemon and the skill agree on
+ * `runtime/config.ts` (5 minutes) so the daemon and the skill agree on
  * when a claim can be reassigned.
  */
 export const CLAIM_STALE_AFTER_SEC = 5 * 60;

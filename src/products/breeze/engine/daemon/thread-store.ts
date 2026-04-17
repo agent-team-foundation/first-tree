@@ -2,7 +2,7 @@
  * Phase 5: daemon-private persistence for thread records + task metadata.
  *
  * Port of the relevant parts of
- * `first-tree-breeze/breeze-runner/src/store.rs`:
+ * `store.rs`:
  *   - `thread_path`, `load_thread_record`, `save_thread_record`
  *   - `task_dir`, `write_task_metadata`, `read_task_metadata`,
  *     `list_task_metadata`

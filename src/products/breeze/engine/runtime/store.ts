@@ -20,7 +20,7 @@
  *
  * Atomicity: write-to-`.tmp` + `rename` — POSIX rename is atomic w.r.t.
  * concurrent readers, matching `write_inbox` in
- * `first-tree-breeze/breeze-runner/src/fetcher.rs:583-599`.
+ * `fetcher.rs:583-599`.
  *
  * Format compatibility: encoder emits every key for every entry in the
  * order the Rust `entry_to_json` does (fetcher.rs:601-631), using JSON

@@ -3,7 +3,7 @@
  * HTTP + SSE server.
  *
  * Spec: `docs/migration/01-http-api-contract.md`. Source of truth:
- * `first-tree-breeze/breeze-runner/src/http.rs`.
+ * `http.rs`.
  *
  * Per route, the test asserts status code, key headers, and body shape
  * against the contract. The SSE test additionally pins byte-exact

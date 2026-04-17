@@ -1,6 +1,6 @@
 /**
  * TypeScript port of the Rust breeze daemon's notification poller
- * (`first-tree-breeze/breeze-runner/src/fetcher.rs`, ~981 lines).
+ * (`fetcher.rs`, ~981 lines).
  *
  * SINGLE-WRITER RULE (spec doc 2 §1.3, matches core/store.ts):
  * -------------------------------------------------------------
@@ -9,7 +9,7 @@
  * bus (Phase 3b/3c) are read-only with respect to the inbox.
  *
  * The on-disk format is bit-compatible with the Rust fetcher:
- * `core/store.ts` emits the same key order as `entry_to_json`, uses JSON
+ * `runtime/store.ts` emits the same key order as `entry_to_json`, uses JSON
  * `null` for nullable fields, and writes via atomic tmp+rename.
  *
  * Throttling (ported 1:1 from `gh_executor.rs`):

@@ -2,7 +2,7 @@
  * Phase 3c: task dispatcher.
  *
  * Port of the dispatch loop in
- * `first-tree-breeze/breeze-runner/src/service.rs::run_loop` +
+ * `service.rs::run_loop` +
  * `dispatch_pending` + `handle_completion`.
  *
  * Role:
