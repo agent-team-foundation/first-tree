@@ -37,7 +37,9 @@ import { loadBreezeDaemonConfig, type DaemonConfig } from "../core/config.js";
 
 import { resolveDaemonIdentity, identityHasRequiredScope } from "./identity.js";
 import { startHttpServer, type RunningHttpServer } from "./http.js";
-import { runPoller, type PollerLogger } from "./poller.js";
+import { pollOnce, runPoller, type PollerLogger } from "./poller.js";
+import { GhClient as CoreGhClient } from "../core/gh.js";
+import type { BreezePaths } from "../core/paths.js";
 import { createBus, toSseBus, type Bus } from "./bus.js";
 import { startGhBroker, type RunningBroker } from "./broker.js";
 import { GhExecutor } from "./gh-executor.js";
@@ -68,6 +70,13 @@ export interface DaemonRunOptions {
   signal?: AbortSignal;
   /** Logger override for tests. */
   logger?: PollerLogger;
+  /**
+   * When true, do exactly one candidate-poll cycle, wait until the
+   * dispatcher drains (no active or pending tasks), then exit. Mirrors
+   * the Rust `run_loop(once=true)` semantics. Used by the `run-once`
+   * CLI command.
+   */
+  once?: boolean;
 }
 
 const DEFAULT_LOGGER: PollerLogger = {
@@ -382,13 +391,20 @@ export async function runDaemon(
 
   let exitCode = 0;
   try {
-    await runPoller({
-      pollIntervalSec: config.pollIntervalSec,
-      host: config.host,
-      paths,
-      signal: controller.signal,
-      logger,
-    });
+    if (options.once) {
+      // One-shot: run a single poll cycle, then wait for the
+      // dispatcher to drain. Mirrors Rust `run_loop(once=true)`.
+      await runPollerOnce(config, paths, controller.signal, logger);
+      if (dispatcher) await waitForDispatcherDrain(dispatcher, controller.signal);
+    } else {
+      await runPoller({
+        pollIntervalSec: config.pollIntervalSec,
+        host: config.host,
+        paths,
+        signal: controller.signal,
+        logger,
+      });
+    }
   } catch (err) {
     logger.error(
       `poller exited with error: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
@@ -483,6 +499,61 @@ export function resolveRunnerHome(
   const breezeDir = env("BREEZE_DIR");
   if (breezeDir && breezeDir.length > 0) return join(breezeDir, "runner");
   return join(homedir(), ".breeze", "runner");
+}
+
+/**
+ * Run exactly one inbox-poll cycle against `pollOnce`. Mirrors Rust
+ * `fetcher.poll_once`. Used by the `run-once` path.
+ */
+async function runPollerOnce(
+  config: DaemonConfig,
+  paths: BreezePaths,
+  signal: AbortSignal,
+  logger: PollerLogger,
+): Promise<void> {
+  if (signal.aborted) return;
+  try {
+    const outcome = await pollOnce({
+      gh: new CoreGhClient(),
+      paths,
+      host: config.host,
+      now: Date.now,
+    });
+    for (const warning of outcome.warnings) logger.warn(warning);
+    logger.info(
+      `breeze: polled ${outcome.total} notifications (${outcome.newCount} new)`,
+    );
+  } catch (err) {
+    logger.warn(
+      `run-once poll failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+/**
+ * Wait until the dispatcher has no active or pending tasks, or the
+ * signal fires. Polls the dispatcher counters every 250ms.
+ */
+async function waitForDispatcherDrain(
+  dispatcher: Dispatcher,
+  signal: AbortSignal,
+): Promise<void> {
+  while (!signal.aborted) {
+    if (dispatcher.activeCount() === 0 && dispatcher.pendingCount() === 0) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 250);
+      signal.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(timer);
+          resolve();
+        },
+        { once: true },
+      );
+    });
+  }
 }
 
 export default runDaemon;

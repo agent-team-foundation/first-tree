@@ -33,8 +33,8 @@ describe("breeze cli USAGE", () => {
     for (const sub of subcommands) {
       expect(BREEZE_USAGE).toContain(sub);
     }
-    expect(BREEZE_USAGE).toContain("BREEZE_RUNNER_BIN");
     expect(BREEZE_USAGE).toContain("BREEZE_DIR");
+    expect(BREEZE_USAGE).toContain("BREEZE_HOME");
   });
 });
 
@@ -72,37 +72,37 @@ describe("runBreeze dispatcher", () => {
     expect(output.lines[1]).toBe(BREEZE_USAGE);
   });
 
-  it("routes runner subcommands through resolveBreezeRunner + spawnInherit", async () => {
-    const spawnSpy = vi.fn().mockReturnValue(7);
-    const resolveRunnerSpy = vi
-      .fn()
-      .mockReturnValue({ path: "/runner", source: "path" });
-
-    vi.doMock("../src/products/breeze/bridge.js", () => ({
-      resolveBreezeRunner: resolveRunnerSpy,
-      resolveBundledBreezeScript: vi.fn(),
-      resolveBreezeSetupScript: vi.fn(),
-      resolveFirstTreePackageRoot: vi.fn(() => "/pkg"),
-      spawnInherit: spawnSpy,
+  it("routes run / run-once / daemon through the TS daemon", async () => {
+    const runDaemonSpy = vi.fn(async () => 0);
+    vi.doMock("../src/products/breeze/daemon/runner-skeleton.js", () => ({
+      runDaemon: runDaemonSpy,
     }));
-
     const { runBreeze: freshRun } = await import(
       "../src/products/breeze/cli.js"
     );
 
-    // Phase 6: `start`/`stop`/`status`/`doctor`/`cleanup` were migrated
-    // to TS. Only `run` + `run-once` still bridge to the Rust binary.
-    const cases: Array<{ args: string[]; expected: string[] }> = [
-      { args: ["run"], expected: ["run"] },
-      { args: ["run-once", "--verbose"], expected: ["run-once", "--verbose"] },
+    const cases: Array<{
+      args: string[];
+      expectedArgs: string[];
+      once: boolean;
+    }> = [
+      { args: ["run"], expectedArgs: [], once: false },
+      {
+        args: ["run-once", "--verbose"],
+        expectedArgs: ["--verbose"],
+        once: true,
+      },
+      {
+        args: ["daemon", "--poll-interval-secs", "30"],
+        expectedArgs: ["--poll-interval-secs", "30"],
+        once: false,
+      },
     ];
-    for (const { args, expected } of cases) {
-      spawnSpy.mockClear();
-      resolveRunnerSpy.mockClear();
+    for (const { args, expectedArgs, once } of cases) {
+      runDaemonSpy.mockClear();
       const code = await freshRun(args, () => {});
-      expect(code).toBe(7);
-      expect(resolveRunnerSpy).toHaveBeenCalledOnce();
-      expect(spawnSpy).toHaveBeenCalledWith("/runner", expected);
+      expect(code).toBe(0);
+      expect(runDaemonSpy).toHaveBeenCalledWith(expectedArgs, { once });
     }
   });
 
@@ -207,18 +207,11 @@ describe("runBreeze dispatcher", () => {
     expect(runWatch).toHaveBeenCalledWith([]);
   });
 
-  it("propagates the child exit code for runner-bridged subcommands", async () => {
-    const spawnSpy = vi.fn().mockReturnValue(13);
-    vi.doMock("../src/products/breeze/bridge.js", () => ({
-      resolveBreezeRunner: vi
-        .fn()
-        .mockReturnValue({ path: "/runner", source: "path" }),
-      resolveBundledBreezeScript: vi.fn(),
-      resolveBreezeSetupScript: vi.fn(),
-      resolveFirstTreePackageRoot: vi.fn(() => "/pkg"),
-      spawnInherit: spawnSpy,
+  it("propagates the runDaemon exit code for `run`", async () => {
+    const runDaemonSpy = vi.fn(async () => 13);
+    vi.doMock("../src/products/breeze/daemon/runner-skeleton.js", () => ({
+      runDaemon: runDaemonSpy,
     }));
-
     const { runBreeze: freshRun } = await import(
       "../src/products/breeze/cli.js"
     );
@@ -254,17 +247,11 @@ describe("runBreeze dispatcher", () => {
     expect(runStatusManager).toHaveBeenCalledWith(["list"]);
   });
 
-  it("surfaces resolver errors to stderr and returns 1", async () => {
-    vi.doMock("../src/products/breeze/bridge.js", () => ({
-      resolveBreezeRunner: () => {
-        throw new Error(
-          "breeze-runner not found. Install with `cd first-tree-breeze/breeze-runner && cargo install --path .`",
-        );
+  it("surfaces runDaemon errors to stderr and returns 1", async () => {
+    vi.doMock("../src/products/breeze/daemon/runner-skeleton.js", () => ({
+      runDaemon: async () => {
+        throw new Error("daemon init failed");
       },
-      resolveBundledBreezeScript: vi.fn(),
-      resolveBreezeSetupScript: vi.fn(),
-      resolveFirstTreePackageRoot: vi.fn(() => "/pkg"),
-      spawnInherit: vi.fn(),
     }));
 
     const writes: string[] = [];
@@ -280,7 +267,7 @@ describe("runBreeze dispatcher", () => {
       );
       const code = await freshRun(["run"], () => {});
       expect(code).toBe(1);
-      expect(writes.join("")).toContain("cargo install --path .");
+      expect(writes.join("")).toContain("daemon init failed");
     } finally {
       process.stderr.write = origWrite;
     }
