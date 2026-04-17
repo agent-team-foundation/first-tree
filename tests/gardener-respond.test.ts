@@ -13,6 +13,7 @@ import {
   isFromGardener,
   isSyncPr,
   latestChangesRequestedAt,
+  latestCommitTimeFromCommits,
   readRespondAttempts,
   readSnapshot,
   RESPOND_MAX_ATTEMPTS,
@@ -257,6 +258,146 @@ describe("gardener respond -- snapshot mode", () => {
     );
     expect(apiCalls).toHaveLength(0);
     expect(lines[lines.length - 1]).toMatch(/^BREEZE_RESULT: /);
+  });
+
+  it("skips without double-bumping attempts when pr-commits.json shows the fix is already pushed (regression #158)", async () => {
+    const tmp = useTmpDir();
+    const snapshotDir = join(tmp.path, "snap");
+    mkdirSync(snapshotDir, { recursive: true });
+    const prView = {
+      number: 55,
+      title: "sync: something",
+      headRefName: "first-tree/sync-55",
+      reviewDecision: "CHANGES_REQUESTED",
+      body: "plain body",
+      updatedAt: "2026-04-15T00:00:00Z",
+    };
+    writeFileSync(join(snapshotDir, "pr-view.json"), JSON.stringify(prView));
+    writeFileSync(
+      join(snapshotDir, "pr-reviews.json"),
+      JSON.stringify([
+        {
+          user: { login: "bingran-you" },
+          state: "CHANGES_REQUESTED",
+          body: "fix this",
+          submitted_at: "2026-04-15T10:00:00Z",
+        },
+      ]),
+    );
+    writeFileSync(
+      join(snapshotDir, "issue-comments.json"),
+      JSON.stringify([]),
+    );
+    writeFileSync(join(snapshotDir, "pr.diff"), "");
+    // Latest commit is AFTER the CHANGES_REQUESTED review — simulates a
+    // duplicate dispatch (retry/webhook redelivery/crash recovery) after
+    // the first respond already pushed a fix.
+    writeFileSync(
+      join(snapshotDir, "pr-commits.json"),
+      JSON.stringify([
+        {
+          commit: {
+            committer: { date: "2026-04-15T10:30:00Z" },
+          },
+        },
+      ]),
+    );
+
+    const calls: ShellCall[] = [];
+    const shell = makeShell(
+      [() => ({ stdout: "", stderr: "", code: 0 })],
+      calls,
+    );
+    const { write, lines } = captureWrite();
+    const code = await runRespond(
+      ["--pr", "55", "--repo", "owner/name", "--tree-path", tmp.path],
+      {
+        shellRun: shell,
+        write,
+        env: { BREEZE_SNAPSHOT_DIR: snapshotDir },
+        now: () => new Date("2026-04-16T00:00:00Z"),
+      },
+    );
+    expect(code).toBe(0);
+    const last = lines[lines.length - 1];
+    expect(last).toMatch(
+      /^BREEZE_RESULT: status=skipped summary=already fixed/,
+    );
+    // No attempts bump and no duplicate reply: neither `gh pr edit` nor
+    // `gh pr comment` should have fired.
+    const writes = calls.filter(
+      (c) =>
+        c.command === "gh" &&
+        c.args[0] === "pr" &&
+        (c.args[1] === "edit" || c.args[1] === "comment"),
+    );
+    expect(writes).toHaveLength(0);
+  });
+
+  it("still proceeds when pr-commits.json shows the latest commit predates the review", async () => {
+    const tmp = useTmpDir();
+    const snapshotDir = join(tmp.path, "snap");
+    mkdirSync(snapshotDir, { recursive: true });
+    const prView = {
+      number: 56,
+      title: "sync: something",
+      headRefName: "first-tree/sync-56",
+      reviewDecision: "CHANGES_REQUESTED",
+      body: "plain body",
+      updatedAt: "2026-04-15T00:00:00Z",
+    };
+    writeFileSync(join(snapshotDir, "pr-view.json"), JSON.stringify(prView));
+    writeFileSync(
+      join(snapshotDir, "pr-reviews.json"),
+      JSON.stringify([
+        {
+          user: { login: "bingran-you" },
+          state: "CHANGES_REQUESTED",
+          body: "fix this",
+          submitted_at: "2026-04-15T10:00:00Z",
+        },
+      ]),
+    );
+    writeFileSync(
+      join(snapshotDir, "issue-comments.json"),
+      JSON.stringify([]),
+    );
+    writeFileSync(join(snapshotDir, "pr.diff"), "");
+    // Latest commit is BEFORE the review — the fix hasn't been pushed yet.
+    writeFileSync(
+      join(snapshotDir, "pr-commits.json"),
+      JSON.stringify([
+        {
+          commit: {
+            committer: { date: "2026-04-14T10:00:00Z" },
+          },
+        },
+      ]),
+    );
+
+    const calls: ShellCall[] = [];
+    const shell = makeShell(
+      [() => ({ stdout: "", stderr: "", code: 0 })],
+      calls,
+    );
+    const { write, lines } = captureWrite();
+    const code = await runRespond(
+      ["--pr", "56", "--repo", "owner/name", "--tree-path", tmp.path],
+      {
+        shellRun: shell,
+        write,
+        env: { BREEZE_SNAPSHOT_DIR: snapshotDir },
+        now: () => new Date("2026-04-16T00:00:00Z"),
+      },
+    );
+    expect(code).toBe(0);
+    expect(lines[lines.length - 1]).toMatch(
+      /^BREEZE_RESULT: status=handled/,
+    );
+    const edits = calls.filter(
+      (c) => c.command === "gh" && c.args[0] === "pr" && c.args[1] === "edit",
+    );
+    expect(edits.length).toBeGreaterThan(0);
   });
 
   it("calls gh when BREEZE_SNAPSHOT_DIR is unset", async () => {
@@ -575,6 +716,45 @@ describe("gardener respond -- helpers", () => {
   it("readSnapshot returns null when pr-view.json is missing", () => {
     const tmp = useTmpDir();
     expect(readSnapshot(tmp.path)).toBeNull();
+  });
+
+  it("latestCommitTimeFromCommits picks the max committer/author date", () => {
+    expect(
+      latestCommitTimeFromCommits([
+        { commit: { committer: { date: "2026-04-15T10:00:00Z" } } },
+        { commit: { committer: { date: "2026-04-15T11:00:00Z" } } },
+        { commit: { author: { date: "2026-04-15T09:00:00Z" } } },
+      ]),
+    ).toBe("2026-04-15T11:00:00Z");
+    expect(latestCommitTimeFromCommits([])).toBeNull();
+    expect(latestCommitTimeFromCommits([{ commit: {} }])).toBeNull();
+  });
+
+  it("readSnapshot populates latestCommitTime from pr-commits.json", () => {
+    const tmp = useTmpDir();
+    writeFileSync(
+      join(tmp.path, "pr-view.json"),
+      JSON.stringify({ number: 1 }),
+    );
+    writeFileSync(
+      join(tmp.path, "pr-commits.json"),
+      JSON.stringify([
+        { commit: { committer: { date: "2026-04-15T10:00:00Z" } } },
+        { commit: { committer: { date: "2026-04-15T12:00:00Z" } } },
+      ]),
+    );
+    const bundle = readSnapshot(tmp.path);
+    expect(bundle?.latestCommitTime).toBe("2026-04-15T12:00:00Z");
+  });
+
+  it("readSnapshot returns latestCommitTime=null when pr-commits.json is missing", () => {
+    const tmp = useTmpDir();
+    writeFileSync(
+      join(tmp.path, "pr-view.json"),
+      JSON.stringify({ number: 1 }),
+    );
+    const bundle = readSnapshot(tmp.path);
+    expect(bundle?.latestCommitTime).toBeNull();
   });
 });
 
