@@ -47,6 +47,8 @@ import type { RunnerSpec } from "./runner.js";
 import { GhClient as BrokerGhClient } from "./gh-client.js";
 import { runCandidateLoop } from "./candidate-loop.js";
 import { RepoFilter } from "../core/repo-filter.js";
+import { Scheduler } from "./scheduler.js";
+import { ThreadStore } from "./thread-store.js";
 
 export interface DaemonCliOverrides {
   pollIntervalSec?: number;
@@ -282,6 +284,21 @@ export async function runDaemon(
         workspacesDir: join(runnerHome, "workspaces"),
         identity: { host: identity.host, login: identity.login },
       });
+      // Phase 5: ThreadStore + Scheduler — gates dispatch on retry state.
+      const threadStore = new ThreadStore({ runnerHome });
+      const candidateClient = new BrokerGhClient({
+        host: identity.host,
+        repoFilter: RepoFilter.empty(),
+        executor,
+      });
+      const scheduler = new Scheduler({
+        store: threadStore,
+        ghClient: candidateClient,
+        identity: { host: identity.host, login: identity.login },
+        pollIntervalSec: config.pollIntervalSec,
+        logger,
+      });
+
       dispatcher = new Dispatcher({
         runnerHome,
         identity: { host: identity.host, login: identity.login },
@@ -296,17 +313,13 @@ export async function runDaemon(
         maxParallel: 2,
         taskTimeoutMs: config.taskTimeoutSec * 1_000,
         logger,
+        onCompletion: (record) => scheduler.handleCompletion(record),
       });
       logger.info(
         `breeze daemon: dispatcher ready (runners=${runners.map((r) => r.kind).join(",")}, broker=${broker.shimDir})`,
       );
 
       // Phase 4: candidate loop — feeds the dispatcher from GitHub.
-      const candidateClient = new BrokerGhClient({
-        host: identity.host,
-        repoFilter: RepoFilter.empty(),
-        executor,
-      });
       candidateLoopDone = runCandidateLoop({
         client: candidateClient,
         dispatcher,
@@ -317,6 +330,9 @@ export async function runDaemon(
         lookbackSecs: 24 * 3_600,
         signal: controller.signal,
         logger,
+        scheduler,
+        recoverableCandidates: () =>
+          scheduler.enqueueRecoverableTasks(identity.host),
       }).catch((err) => {
         logger.error(
           `candidate loop crashed: ${err instanceof Error ? err.message : String(err)}`,

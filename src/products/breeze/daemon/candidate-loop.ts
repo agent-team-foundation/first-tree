@@ -16,7 +16,11 @@ import type { Bus } from "./bus.js";
 import type { Dispatcher } from "./dispatcher.js";
 import type { GhClient } from "./gh-client.js";
 import { rateLimitBackoffMs } from "./poller.js";
-import { toDispatcherCandidate } from "../core/task.js";
+import type { Scheduler } from "./scheduler.js";
+import {
+  toDispatcherCandidate,
+  type TaskCandidate,
+} from "../core/task.js";
 
 export interface CandidateLoopLogger {
   info: (line: string) => void;
@@ -54,6 +58,17 @@ export interface CandidateLoopOptions {
    * can persist ThreadRecord state (Phase 5). Defaults to no-op.
    */
   onCycle?: (outcome: CandidateCycleOutcome) => void;
+  /**
+   * Scheduler gate: dispatcher.submit is only called when
+   * `scheduler.shouldSchedule(candidate)` returns true. When absent,
+   * every candidate is submitted (back-compat with Phase 4).
+   */
+  scheduler?: Scheduler;
+  /**
+   * Recovery hook: called once before the first cycle to re-submit
+   * orphaned `status=running` tasks. Scheduler constructs these.
+   */
+  recoverableCandidates?: () => TaskCandidate[];
 }
 
 export interface CandidateCycleOutcome {
@@ -69,6 +84,19 @@ export async function runCandidateLoop(
   const nowSec = options.nowSec ?? (() => Math.floor(Date.now() / 1_000));
   const sleep = options.sleep ?? defaultSleep;
   const signal = options.signal;
+
+  // One-shot orphan recovery before the first cycle.
+  if (options.recoverableCandidates) {
+    for (const candidate of options.recoverableCandidates()) {
+      if (
+        options.scheduler &&
+        !(await options.scheduler.shouldSchedule(candidate))
+      ) {
+        continue;
+      }
+      options.dispatcher.submit(toDispatcherCandidate(candidate));
+    }
+  }
 
   let rateLimitStreak = 0;
 
@@ -115,6 +143,7 @@ export async function runCandidateCycle(
     | "includeSearch"
     | "lookbackSecs"
     | "onCycle"
+    | "scheduler"
   >,
   nowSec: () => number,
 ): Promise<CandidateCycleOutcome> {
@@ -127,6 +156,10 @@ export async function runCandidateCycle(
 
   let submitted = 0;
   for (const candidate of poll.tasks) {
+    if (options.scheduler) {
+      const ok = await options.scheduler.shouldSchedule(candidate);
+      if (!ok) continue;
+    }
     options.dispatcher.submit(toDispatcherCandidate(candidate));
     submitted += 1;
   }
