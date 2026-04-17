@@ -1,18 +1,16 @@
 /**
  * Breeze product dispatcher.
  *
- * As of Phase 7 the TypeScript daemon is the default backend for
- * `first-tree breeze daemon`. `--backend=rust` stays wired so operators
- * who prefer the Rust binary can opt back in while we bake; passing
- * nothing picks TS.
+ * As of Phase 8 every breeze subcommand runs on the TypeScript daemon.
+ * `run` / `run-once` / `daemon` all route through `daemon/runner-skeleton.ts`;
+ * the historical `breeze-runner` Rust binary and the `--backend=` flag
+ * have been retired.
  *
- * Runner subcommands that still bridge to the Rust binary:
- *   - `run`, `run-once` — the long-running blocking loop flavours.
- *     Foreground: `breeze daemon` (TS) replaces `run`. Anyone who
- *     specifically wants the Rust loop can invoke `run` directly.
+ * Lifecycle + diagnostic subcommands (Phase 6): `start`, `stop`,
+ * `status`, `doctor`, `cleanup`, `poll-inbox`.
  *
- * Runner subcommands ported to TypeScript (Phase 6):
- *   - `start`, `stop`, `status`, `doctor`, `cleanup`, `poll-inbox`.
+ * Foreground loops (Phase 8): `run` = TS daemon forever; `run-once` =
+ * one poll cycle + drain + exit. `daemon` is an alias for `run`.
  *
  * Heavy deps (child_process, ink, react, daemon modules) live in the
  * dynamically-imported command modules so `first-tree breeze --help`
@@ -23,28 +21,24 @@ import { join } from "node:path";
 
 export const BREEZE_USAGE = `usage: first-tree breeze <command>
 
-  Breeze is the proposal/inbox agent.
+  Breeze is the proposal/inbox agent. Every subcommand runs on the
+  TypeScript daemon (\`~/.breeze/runner\`).
 
-Commands that run the Rust daemon (\`breeze-runner\`):
-  run                   Run the broker loop forever
-  run-once              Run a single broker iteration and exit
+Foreground daemon:
+  run, daemon           Run the broker loop forever (default)
+  run-once              Run one poll cycle, wait for drain, exit
 
-Commands ported to TypeScript (run against \`~/.breeze\`):
-  start                 Launch the TS daemon in the background (launchd on macOS)
-  stop                  Stop the TS daemon and remove its lock
+Background lifecycle:
+  start                 Launch the daemon in the background (launchd on macOS)
+  stop                  Stop the daemon and remove its lock
+
+Diagnostics:
   status                Print daemon lock + runtime/status.env
   doctor                Diagnose the local install
   cleanup               Remove stale workspaces + expired claims
   poll-inbox            Alias for \`poll\` (one-shot notification fetch)
 
-Daemon:
-  daemon [--backend=ts|rust]
-                        Run the breeze daemon in the foreground.
-                        Defaults to the TypeScript backend. Pass
-                        \`--backend=rust\` to route through the legacy
-                        \`breeze-runner\` binary (equivalent to \`run\`).
-
-TypeScript commands (no daemon required):
+One-shot commands (no daemon required):
   poll                  Poll GitHub notifications once and update the inbox
   watch                 Live TUI: status board + activity feed
   statusline            Claude Code statusline hook (single-line output)
@@ -57,20 +51,11 @@ Options:
   --help, -h            Show this help message
 
 Environment:
-  BREEZE_RUNNER_BIN     Override the path to the \`breeze-runner\` binary
   BREEZE_DIR            Override \`~/.breeze\` (store root)
+  BREEZE_HOME           Override \`~/.breeze/runner\` (daemon private state)
 `;
 
 type Output = (text: string) => void;
-
-// Keep in sync with the breeze-runner subcommand set in
-// first-tree-breeze/breeze-runner/src/lib.rs. The dispatcher table below
-// is the single source of truth for routing.
-type RunnerTarget = {
-  kind: "runner";
-  /** Subcommand name passed to `breeze-runner`. */
-  subcommand: string;
-};
 
 type SetupTarget = {
   kind: "setup";
@@ -96,22 +81,21 @@ type StatuslineTarget = {
 
 type DaemonTarget = {
   kind: "daemon";
+  /** `false` for `run`/`daemon`; `true` for `run-once`. */
+  once: boolean;
 };
 
-type Target =
-  | RunnerTarget
-  | SetupTarget
-  | TsTarget
-  | StatuslineTarget
-  | DaemonTarget;
+type Target = SetupTarget | TsTarget | StatuslineTarget | DaemonTarget;
 
 const DISPATCH: Record<string, Target> = {
   install: { kind: "setup" },
 
-  // breeze-runner subcommands — `run` / `run-once` still bridge to the
-  // Rust binary while Phase 3-7 overlap lands; the rest are TS.
-  run: { kind: "runner", subcommand: "run" },
-  "run-once": { kind: "runner", subcommand: "run-once" },
+  // Foreground loops — all TS-backed.
+  run: { kind: "daemon", once: false },
+  daemon: { kind: "daemon", once: false },
+  "run-once": { kind: "daemon", once: true },
+
+  // Lifecycle (Phase 6)
   start: { kind: "ts", specifier: "start" },
   stop: { kind: "ts", specifier: "stop" },
   status: { kind: "ts", specifier: "status" },
@@ -119,58 +103,38 @@ const DISPATCH: Record<string, Target> = {
   cleanup: { kind: "ts", specifier: "cleanup" },
   "poll-inbox": { kind: "ts", specifier: "poll" },
 
-  // TS ports
+  // One-shot TS commands
   "status-manager": { kind: "ts", specifier: "status-manager" },
   poll: { kind: "ts", specifier: "poll" },
   watch: { kind: "ts", specifier: "watch" },
 
   // Statusline gets its own tiny dist bundle for sub-30ms cold start.
   statusline: { kind: "statusline" },
-
-  // Phase 3a daemon (backend-switched).
-  daemon: { kind: "daemon" },
 };
 
 /**
- * Split `--backend=...` out of the argv. Supports both
- * `--backend=ts` and `--backend ts` forms. Unknown values fall through
- * to the default (`rust`) and leave the flag in the residual argv so
- * the chosen backend can reject/surface it.
+ * Historical `--backend=...` splitter. The flag is no longer meaningful
+ * (Phase 8 dropped the Rust backend), but we still strip any stray
+ * occurrence from the argv so existing scripts keep working.
  *
  * Exported for tests.
  */
 export function extractBackendFlag(args: readonly string[]): {
-  backend: "ts" | "rust";
+  backend: "ts";
   rest: string[];
 } {
   const rest: string[] = [];
-  let backend: "ts" | "rust" = "ts";
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === "--backend") {
-      const value = args[i + 1];
-      if (value === "ts" || value === "rust") {
-        backend = value;
-        i += 1;
-        continue;
-      }
-      // Unknown/missing value: keep the flag in `rest` so the backend
-      // complains with a full error message.
-      rest.push(arg);
+      // Drop both the flag and its value.
+      i += 1;
       continue;
     }
-    if (arg?.startsWith("--backend=")) {
-      const value = arg.slice("--backend=".length);
-      if (value === "ts" || value === "rust") {
-        backend = value;
-        continue;
-      }
-      rest.push(arg);
-      continue;
-    }
+    if (arg?.startsWith("--backend=")) continue;
     rest.push(arg);
   }
-  return { backend, rest };
+  return { backend: "ts", rest };
 }
 
 export async function runBreeze(
@@ -196,11 +160,6 @@ export async function runBreeze(
 
   try {
     switch (target.kind) {
-      case "runner": {
-        const bridge = await import("./bridge.js");
-        const runner = bridge.resolveBreezeRunner();
-        return bridge.spawnInherit(runner.path, [target.subcommand, ...rest]);
-      }
       case "setup": {
         const bridge = await import("./bridge.js");
         const setupPath = bridge.resolveBreezeSetupScript();
@@ -255,18 +214,10 @@ export async function runBreeze(
         return bridge.spawnInherit(process.execPath, [bundlePath, ...rest]);
       }
       case "daemon": {
-        const { backend, rest: residual } = extractBackendFlag(rest);
-        if (backend === "ts") {
-          // Default: TS daemon. Lazy-imported so the daemon modules
-          // never touch cold-start latency for non-daemon commands.
-          const mod = await import("./daemon/runner-skeleton.js");
-          return await mod.runDaemon(residual);
-        }
-        // Opt-in: route through the Rust runner's `run` subcommand for
-        // operators who still rely on the legacy binary.
-        const bridge = await import("./bridge.js");
-        const runner = bridge.resolveBreezeRunner();
-        return bridge.spawnInherit(runner.path, ["run", ...residual]);
+        // Strip any stray `--backend=` so existing scripts keep working.
+        const { rest: residual } = extractBackendFlag(rest);
+        const mod = await import("./daemon/runner-skeleton.js");
+        return await mod.runDaemon(residual, { once: target.once });
       }
     }
   } catch (err) {

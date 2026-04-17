@@ -61,34 +61,34 @@ describe("parseDaemonArgs", () => {
 });
 
 describe("extractBackendFlag", () => {
-  it("defaults to ts when no flag is present", () => {
+  it("passes argv through unchanged when no flag is present", () => {
     const { backend, rest } = extractBackendFlag(["run", "--foo"]);
     expect(backend).toBe("ts");
     expect(rest).toEqual(["run", "--foo"]);
   });
 
-  it("supports --backend=ts / --backend=rust", () => {
-    expect(extractBackendFlag(["--backend=ts"])).toEqual({
+  it("strips --backend=<value> forms", () => {
+    expect(extractBackendFlag(["--backend=ts", "--x"])).toEqual({
       backend: "ts",
-      rest: [],
+      rest: ["--x"],
     });
     expect(extractBackendFlag(["--backend=rust", "--verbose"])).toEqual({
-      backend: "rust",
+      backend: "ts",
       rest: ["--verbose"],
     });
   });
 
-  it("supports space-separated --backend rust", () => {
+  it("strips space-separated --backend <value> forms", () => {
     expect(extractBackendFlag(["--backend", "rust", "--x"])).toEqual({
-      backend: "rust",
+      backend: "ts",
       rest: ["--x"],
     });
   });
 
-  it("keeps unknown --backend values in rest and defaults to ts", () => {
+  it("also drops unknown --backend values", () => {
     const { backend, rest } = extractBackendFlag(["--backend=julia"]);
     expect(backend).toBe("ts");
-    expect(rest).toEqual(["--backend=julia"]);
+    expect(rest).toEqual([]);
   });
 });
 
@@ -129,7 +129,7 @@ describe("runDaemon end-to-end skeleton", () => {
   });
 });
 
-describe("cli dispatcher routes daemon --backend flag", () => {
+describe("cli dispatcher routes run / run-once / daemon to the TS runner", () => {
   beforeEach(() => {
     vi.resetModules();
   });
@@ -138,62 +138,36 @@ describe("cli dispatcher routes daemon --backend flag", () => {
     vi.restoreAllMocks();
   });
 
-  it("routes `daemon --backend=ts` to the TS runner", async () => {
+  it("routes `daemon` to runDaemon with once=false", async () => {
     const runDaemonSpy = vi.fn(async () => 0);
-
     vi.doMock("../src/products/breeze/daemon/runner-skeleton.js", () => ({
       runDaemon: runDaemonSpy,
     }));
-    vi.doMock("../src/products/breeze/bridge.js", () => ({
-      resolveBreezeRunner: vi.fn(() => {
-        throw new Error("TS backend must not call the Rust bridge");
-      }),
-      resolveBundledBreezeScript: vi.fn(),
-      resolveBreezeSetupScript: vi.fn(),
-      resolveFirstTreePackageRoot: vi.fn(() => "/pkg"),
-      spawnInherit: vi.fn(() => {
-        throw new Error("TS backend must not spawn");
-      }),
-    }));
-
     const { runBreeze } = await import("../src/products/breeze/cli.js");
-    const code = await runBreeze(
-      ["daemon", "--backend=ts", "--poll-interval-secs", "30"],
-      () => {},
+    await runBreeze(["daemon", "--poll-interval-secs", "30"], () => {});
+    expect(runDaemonSpy).toHaveBeenCalledWith(
+      ["--poll-interval-secs", "30"],
+      { once: false },
     );
-    expect(code).toBe(0);
-    expect(runDaemonSpy).toHaveBeenCalledWith([
-      "--poll-interval-secs",
-      "30",
-    ]);
   });
 
-  it("routes `daemon --backend=rust` through the Rust bridge's `run` subcommand", async () => {
-    const spawnSpy = vi.fn().mockReturnValue(0);
-    const resolveRunnerSpy = vi
-      .fn()
-      .mockReturnValue({ path: "/runner", source: "path" });
-
+  it("routes `run` to runDaemon with once=false and strips any stray --backend flag", async () => {
+    const runDaemonSpy = vi.fn(async () => 0);
     vi.doMock("../src/products/breeze/daemon/runner-skeleton.js", () => ({
-      runDaemon: vi.fn(() => {
-        throw new Error("Rust backend must not call the TS daemon");
-      }),
+      runDaemon: runDaemonSpy,
     }));
-    vi.doMock("../src/products/breeze/bridge.js", () => ({
-      resolveBreezeRunner: resolveRunnerSpy,
-      resolveBundledBreezeScript: vi.fn(),
-      resolveBreezeSetupScript: vi.fn(),
-      resolveFirstTreePackageRoot: vi.fn(() => "/pkg"),
-      spawnInherit: spawnSpy,
-    }));
-
     const { runBreeze } = await import("../src/products/breeze/cli.js");
-    const code = await runBreeze(
-      ["daemon", "--backend=rust", "--verbose"],
-      () => {},
-    );
-    expect(code).toBe(0);
-    expect(resolveRunnerSpy).toHaveBeenCalledOnce();
-    expect(spawnSpy).toHaveBeenCalledWith("/runner", ["run", "--verbose"]);
+    await runBreeze(["run", "--backend=rust", "--verbose"], () => {});
+    expect(runDaemonSpy).toHaveBeenCalledWith(["--verbose"], { once: false });
+  });
+
+  it("routes `run-once` to runDaemon with once=true", async () => {
+    const runDaemonSpy = vi.fn(async () => 0);
+    vi.doMock("../src/products/breeze/daemon/runner-skeleton.js", () => ({
+      runDaemon: runDaemonSpy,
+    }));
+    const { runBreeze } = await import("../src/products/breeze/cli.js");
+    await runBreeze(["run-once"], () => {});
+    expect(runDaemonSpy).toHaveBeenCalledWith([], { once: true });
   });
 });
