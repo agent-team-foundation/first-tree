@@ -1,4 +1,4 @@
-import { boolean, index, jsonb, pgTable, text, timestamp, unique } from "drizzle-orm/pg-core";
+import { index, jsonb, pgTable, text, timestamp, unique } from "drizzle-orm/pg-core";
 import { organizations } from "./organizations.js";
 // NOTE: members FK is deferred — added via raw SQL in migration to avoid circular import
 
@@ -27,8 +27,8 @@ export const agents = pgTable(
     source: text("source"),
     /** Control-plane user association (nullable, cloud-only) */
     cloudUserId: text("cloud_user_id"),
-    /** Whether this agent is publicly discoverable */
-    public: boolean("public").notNull().default(false),
+    /** Agent visibility: "private" (manager only) or "organization" (all members) */
+    visibility: text("visibility").notNull().default("private"),
     metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
     /** Member who manages this agent (nullable — unassigned agents visible only to admins) */
     managerId: text("manager_id"),
@@ -38,6 +38,7 @@ export const agents = pgTable(
   (table) => [
     index("idx_agents_org").on(table.organizationId),
     index("idx_agents_manager").on(table.managerId),
+    index("idx_agents_visibility_org").on(table.organizationId, table.visibility),
     unique("uq_agents_org_name").on(table.organizationId, table.name),
   ],
 );

@@ -10,8 +10,8 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { agents } from "../../db/schema/agents.js";
 import { messages } from "../../db/schema/messages.js";
-import { ForbiddenError } from "../../errors.js";
 import { requireMember } from "../../middleware/require-identity.js";
+import { assertAgentVisible, assertCanManage, memberScope } from "../../services/access-control.js";
 import * as agentService from "../../services/agent.js";
 import { createChat, findOrCreateDirectChat } from "../../services/chat.js";
 import * as clientService from "../../services/client.js";
@@ -24,7 +24,6 @@ import {
 } from "../../services/connection-manager.js";
 import { sendMessage } from "../../services/message.js";
 import { notifyRecipients } from "../../services/notifier.js";
-import { resolveDefaultOrgId, resolveOrganization } from "../../services/organization.js";
 import * as presenceService from "../../services/presence.js";
 import { serializeDate } from "../../utils.js";
 
@@ -34,15 +33,8 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
   app.get("/", async (request) => {
     const query = paginationQuerySchema.parse(request.query);
     const { type } = listAgentsFilterSchema.parse(request.query);
-    const orgParam = (request.query as Record<string, string>).org;
-    let org: string;
-    if (orgParam) {
-      const resolved = await resolveOrganization(app.db, orgParam);
-      org = resolved.id;
-    } else {
-      org = await resolveDefaultOrgId(app.db);
-    }
-    const result = await agentService.listAgents(app.db, org, query.limit, query.cursor, type);
+    const scope = memberScope(request);
+    const result = await agentService.listAgentsForMember(app.db, scope, query.limit, query.cursor, type);
     return {
       items: result.items.map((a) => ({
         ...a,
@@ -61,10 +53,10 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post("/", async (request, reply) => {
+    const scope = memberScope(request);
     const body = createAgentSchema.parse(request.body);
     // member role: managerId forced to self; admin role: can specify any managerId
-    const managerId =
-      request.member?.role === "admin" ? (body.managerId ?? request.member.memberId) : request.member?.memberId;
+    const managerId = scope.role === "admin" ? (body.managerId ?? scope.memberId) : scope.memberId;
     const agent = await agentService.createAgent(app.db, {
       ...body,
       source: body.source ?? "admin-api",
@@ -78,6 +70,8 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.patch<{ Params: { uuid: string } }>("/:uuid", async (request) => {
+    const scope = memberScope(request);
+    await assertCanManage(app.db, scope, request.params.uuid);
     const body = updateAgentSchema.parse(request.body);
     const agent = await agentService.updateAgent(app.db, request.params.uuid, body);
     return {
@@ -88,6 +82,8 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.get<{ Params: { uuid: string } }>("/:uuid", async (request) => {
+    const scope = memberScope(request);
+    await assertAgentVisible(app.db, scope, request.params.uuid);
     const agent = await agentService.getAgent(app.db, request.params.uuid);
     return {
       ...agent,
@@ -98,6 +94,8 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
 
   // Token management
   app.post<{ Params: { uuid: string } }>("/:uuid/tokens", async (request, reply) => {
+    const scope = memberScope(request);
+    await assertCanManage(app.db, scope, request.params.uuid);
     const body = createAgentTokenSchema.parse(request.body);
     const result = await agentService.createToken(app.db, request.params.uuid, body);
     return reply.status(201).send({
@@ -110,6 +108,8 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.get<{ Params: { uuid: string } }>("/:uuid/tokens", async (request) => {
+    const scope = memberScope(request);
+    await assertCanManage(app.db, scope, request.params.uuid);
     const tokens = await agentService.listTokens(app.db, request.params.uuid);
     return tokens.map((t) => ({
       ...t,
@@ -121,6 +121,8 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.delete<{ Params: { uuid: string; tokenId: string } }>("/:uuid/tokens/:tokenId", async (request, reply) => {
+    const scope = memberScope(request);
+    await assertCanManage(app.db, scope, request.params.uuid);
     await agentService.revokeToken(app.db, request.params.uuid, request.params.tokenId);
     return reply.status(204).send();
   });
@@ -128,9 +130,8 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
   // Force-disconnect an agent's WebSocket connection
   app.post<{ Params: { uuid: string } }>("/:uuid/disconnect", async (request, reply) => {
     const { uuid } = request.params;
-    // Verify agent exists
-    await agentService.getAgent(app.db, uuid);
-    // Close WebSocket and set presence offline
+    const scope = memberScope(request);
+    await assertCanManage(app.db, scope, uuid);
     const wasConnected = forceDisconnect(uuid);
     await presenceService.setOffline(app.db, uuid);
     return reply.status(200).send({ disconnected: wasConnected });
@@ -139,21 +140,16 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
   // Provision an agent to a connected client — generates token and pushes via WS
   app.post<{ Params: { uuid: string } }>("/:uuid/provision", async (request, reply) => {
     const { uuid } = request.params;
-    const member = requireMember(request);
+    const scope = memberScope(request);
+    await assertCanManage(app.db, scope, uuid);
     const body = z.object({ clientId: z.string().min(1) }).parse(request.body);
 
     const agent = await agentService.getAgent(app.db, uuid);
-    if (agent.organizationId !== member.organizationId) {
-      throw new ForbiddenError("Agent does not belong to your organization");
-    }
     if (!hasClientConnection(body.clientId)) {
       return reply.status(409).send({ error: "Client is not connected" });
     }
 
-    // Generate token
     const tokenResult = await agentService.createToken(app.db, uuid, { name: "provision" });
-
-    // Push to client via WS
     const delivered = sendToClient(body.clientId, {
       type: "agent:provision",
       agentName: agent.name,
@@ -169,6 +165,8 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post<{ Params: { uuid: string } }>("/:uuid/suspend", async (request) => {
+    const scope = memberScope(request);
+    await assertCanManage(app.db, scope, request.params.uuid);
     const agent = await agentService.suspendAgent(app.db, request.params.uuid);
     return {
       ...agent,
@@ -178,6 +176,8 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post<{ Params: { uuid: string } }>("/:uuid/reactivate", async (request) => {
+    const scope = memberScope(request);
+    await assertCanManage(app.db, scope, request.params.uuid);
     const agent = await agentService.reactivateAgent(app.db, request.params.uuid);
     return {
       ...agent,
@@ -186,36 +186,33 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
     };
   });
 
-  // DELETE agent — only allowed for suspended agents
   app.delete<{ Params: { uuid: string } }>("/:uuid", async (request, reply) => {
+    const scope = memberScope(request);
+    await assertCanManage(app.db, scope, request.params.uuid);
     await agentService.deleteAgent(app.db, request.params.uuid);
     return reply.status(204).send();
   });
 
   app.post<{ Params: { uuid: string } }>("/:uuid/test", async (request, reply) => {
     const { uuid } = request.params;
+    const scope = memberScope(request);
+    await assertCanManage(app.db, scope, uuid);
 
     // ── Phase 1: Connection diagnostics ──
-    const [, presence] = await Promise.all([
-      agentService.getAgent(app.db, uuid),
-      presenceService.getPresence(app.db, uuid),
-    ]);
+    const presence = await presenceService.getPresence(app.db, uuid);
 
     const wsConnected = hasActiveConnection(uuid);
     const clientId = getAgentClientId(uuid) ?? presence?.clientId ?? null;
 
-    // Determine presence health per M1 three-dimensional model
     const STALE_THRESHOLD_MS = 60_000;
     let health: "connected" | "stale" | "disconnected" = "disconnected";
     if (wsConnected) {
       const lastSeen = presence?.lastSeenAt?.getTime() ?? 0;
       health = Date.now() - lastSeen > STALE_THRESHOLD_MS ? "stale" : "connected";
     } else if (presence?.status === "online") {
-      // DB says online but no WS — zombie connection
       health = "stale";
     }
 
-    // Fetch client info
     let clientInfo: {
       id: string;
       hostname: string | null;
@@ -260,7 +257,6 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
     }
 
     // ── Phase 2: Message delivery test ──
-    // Find sender: look for human owner (whose delegateMention points to this agent), then fall back to any other active agent
     const [owner] = await app.db
       .select({ uuid: agents.uuid })
       .from(agents)
@@ -294,7 +290,6 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
     });
     notifyRecipients(app.notifier, result.recipients, result.message.id);
 
-    // Poll for response (admin diagnostic, acceptable to hold connection)
     const POLL_TIMEOUT = 30_000;
     const POLL_INTERVAL = 1_000;
     const threshold = result.message.createdAt;
@@ -335,15 +330,10 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
   /** POST /admin/agents/:uuid/chats — create a new workspace chat with the target agent */
   app.post<{ Params: { uuid: string } }>("/:uuid/chats", async (request, reply) => {
     const { uuid: targetAgentId } = request.params;
+    const scope = memberScope(request);
+    await assertAgentVisible(app.db, scope, targetAgentId);
+
     const member = requireMember(request);
-
-    // Verify target agent exists and belongs to caller's org
-    const targetAgent = await agentService.getAgent(app.db, targetAgentId);
-    if (targetAgent.organizationId !== member.organizationId) {
-      throw new ForbiddenError("Agent does not belong to your organization");
-    }
-
-    // Always create a new chat (workspace sessions are independent)
     const result = await createChat(app.db, member.agentId, {
       type: "direct",
       participantIds: [targetAgentId],

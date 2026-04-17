@@ -3,7 +3,7 @@ import type { Database } from "../db/connection.js";
 import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
 import { agents } from "../db/schema/agents.js";
-import { chats } from "../db/schema/chats.js";
+import { chatParticipants, chats } from "../db/schema/chats.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { NotFoundError } from "../errors.js";
 
@@ -197,4 +197,26 @@ export async function listAllSessions(
     })),
     nextCursor,
   };
+}
+
+/**
+ * Filter sessions to only those where the given agent is also a participant in the chat.
+ * Used when a non-manager views sessions of an org-visible agent — they should only see
+ * sessions for chats they participate in.
+ */
+export async function filterSessionsByParticipant(
+  db: Database,
+  sessions: SessionListItem[],
+  participantAgentId: string,
+): Promise<SessionListItem[]> {
+  if (sessions.length === 0) return [];
+
+  const chatIds = sessions.map((s) => s.chatId);
+  const participantRows = await db
+    .select({ chatId: chatParticipants.chatId })
+    .from(chatParticipants)
+    .where(and(inArray(chatParticipants.chatId, chatIds), eq(chatParticipants.agentId, participantAgentId)));
+
+  const allowedChatIds = new Set(participantRows.map((r) => r.chatId));
+  return sessions.filter((s) => allowedChatIds.has(s.chatId));
 }

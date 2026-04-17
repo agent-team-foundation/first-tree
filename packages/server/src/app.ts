@@ -40,7 +40,7 @@ import { healthRoutes } from "./api/health.js";
 import { healthzRoutes } from "./api/healthz.js";
 import { meRoutes } from "./api/me.js";
 import { memberRoutes } from "./api/members.js";
-import { publicAgentRoutes } from "./api/public/agents.js";
+// Public agent discovery removed — visibility is now handled via agent.visibility field
 import { githubWebhookRoutes } from "./api/webhooks/github.js";
 import type { Config } from "./config.js";
 import { connectDatabase } from "./db/connection.js";
@@ -271,9 +271,6 @@ export async function buildApp(config: Config) {
         },
         { prefix: "/admin/notifications" },
       );
-
-      // Public routes (no auth)
-      await api.register(publicAgentRoutes, { prefix: "/public/agents" });
 
       // Agent routes (Bearer token protected)
       await api.register(

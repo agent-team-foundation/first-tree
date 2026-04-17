@@ -17,6 +17,7 @@ import {
   updateAgent,
 } from "../api/agents.js";
 import { createToken, listTokens, revokeToken } from "../api/tokens.js";
+import { useAuth } from "../auth/auth-context.js";
 import { type AgentFormData, AgentFormDialog } from "../components/agent-form-dialog.js";
 import { Badge } from "../components/ui/badge.js";
 import { Button } from "../components/ui/button.js";
@@ -36,6 +37,7 @@ export function AgentDetailPage() {
   const uuid = params.uuid ?? "";
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { memberId, role: memberRole } = useAuth();
   const resolveAgentName = useAgentNameMap();
   const resolveMemberName = useMemberNameMap();
 
@@ -336,6 +338,9 @@ export function AgentDetailPage() {
   const role = treeMeta?.role as string | undefined;
   const domains = treeMeta?.domains as string[] | undefined;
 
+  // Can this member manage (edit/suspend/delete) this agent?
+  const canManage = memberRole === "admin" || agent.managerId === memberId;
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -347,13 +352,13 @@ export function AgentDetailPage() {
           <h1 className="text-2xl font-semibold">{agent.displayName ?? agent.name}</h1>
           <p className="text-sm text-muted-foreground font-mono">{agent.name}</p>
         </div>
-        {agent.status === "active" && (
+        {canManage && agent.status === "active" && (
           <Button variant="outline" size="sm" onClick={() => setEditDialogOpen(true)}>
             <Pencil className="h-4 w-4 mr-2" />
             Edit
           </Button>
         )}
-        {!isHuman && agent.status === "active" && (
+        {canManage && !isHuman && agent.status === "active" && (
           <Button
             variant="outline"
             size="sm"
@@ -367,7 +372,7 @@ export function AgentDetailPage() {
             {testMutation.isPending ? "Testing..." : "Test Connection"}
           </Button>
         )}
-        {agent.status === "active" && (
+        {canManage && agent.status === "active" && (
           <Button
             variant="outline"
             size="sm"
@@ -381,7 +386,7 @@ export function AgentDetailPage() {
             {suspendMutation.isPending ? "Suspending..." : "Suspend"}
           </Button>
         )}
-        {agent.status === "suspended" && (
+        {canManage && agent.status === "suspended" && (
           <>
             <Button
               variant="outline"
@@ -523,7 +528,7 @@ export function AgentDetailPage() {
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle>Profile</CardTitle>
-          {agent.status === "active" && (
+          {canManage && agent.status === "active" && (
             <Button
               variant="outline"
               size="sm"
@@ -591,7 +596,7 @@ export function AgentDetailPage() {
             {isHuman ? <Link2 className="h-4 w-4" /> : <Cable className="h-4 w-4" />}
             Platform Bindings
           </CardTitle>
-          <Button size="sm" onClick={() => setBindingDialogOpen(true)}>
+          <Button size="sm" disabled={!canManage} onClick={() => setBindingDialogOpen(true)}>
             <Plus className="h-4 w-4 mr-2" />
             {isHuman ? "Bind User" : "Bind Bot"}
           </Button>
@@ -636,7 +641,7 @@ export function AgentDetailPage() {
                           onClick={() => {
                             if (window.confirm("Remove this binding?")) deleteMappingMutation.mutate(m.id);
                           }}
-                          disabled={deleteMappingMutation.isPending}
+                          disabled={!canManage || deleteMappingMutation.isPending}
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>
@@ -692,7 +697,13 @@ export function AgentDetailPage() {
                         <TableCell className="text-muted-foreground">{formatDate(a.createdAt)}</TableCell>
                         <TableCell>
                           <div className="flex gap-1">
-                            <Button variant="ghost" size="icon" onClick={() => openEditAdapter(a)} title="Edit">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              disabled={!canManage}
+                              onClick={() => openEditAdapter(a)}
+                              title="Edit"
+                            >
                               <Pencil className="h-4 w-4" />
                             </Button>
                             <Button
@@ -701,7 +712,7 @@ export function AgentDetailPage() {
                               onClick={() => {
                                 if (window.confirm("Remove this bot binding?")) deleteAdapterMutation.mutate(a.id);
                               }}
-                              disabled={deleteAdapterMutation.isPending}
+                              disabled={!canManage || deleteAdapterMutation.isPending}
                               title="Delete"
                             >
                               <Trash2 className="h-4 w-4" />
@@ -728,6 +739,7 @@ export function AgentDetailPage() {
             </CardTitle>
             <Button
               size="sm"
+              disabled={!canManage}
               onClick={() => {
                 setCreatedToken(null);
                 setTokenName("");
@@ -777,7 +789,7 @@ export function AgentDetailPage() {
                             variant="ghost"
                             size="sm"
                             onClick={() => revokeTokenMutation.mutate(token.id)}
-                            disabled={revokeTokenMutation.isPending}
+                            disabled={!canManage || revokeTokenMutation.isPending}
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AddParticipant, CreateChat } from "@agent-team-foundation/first-tree-hub-shared";
-import { and, desc, eq, inArray, lt } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatParticipants, chats } from "../db/schema/chats.js";
@@ -185,6 +185,198 @@ export async function removeParticipant(db: Database, chatId: string, requesterI
 
   if (!removed) {
     throw new NotFoundError(`Agent "${targetAgentId}" is not a participant of this chat`);
+  }
+
+  return db.select().from(chatParticipants).where(eq(chatParticipants.chatId, chatId));
+}
+
+/**
+ * List chats visible to a member, grouped by agent.
+ * A member sees chats where:
+ *   1. Their human agent is a participant, OR
+ *   2. Any agent they manage (managerId = memberId) is a participant (supervision)
+ */
+// TODO: consolidate the three sequential queries (managedAgents, participations, chatRows)
+// into a single JOIN query for better performance at scale
+export async function listChatsForMember(db: Database, memberId: string, humanAgentId: string) {
+  // Find all agent UUIDs this member can see chats for:
+  // their own human agent + all agents they manage
+  const managedAgents = await db
+    .select({ uuid: agents.uuid, name: agents.name, type: agents.type, displayName: agents.displayName })
+    .from(agents)
+    .where(eq(agents.managerId, memberId));
+
+  // Ensure human agent is included (it should be, but be safe)
+  const agentMap = new Map<string, { uuid: string; name: string | null; type: string; displayName: string | null }>();
+  for (const a of managedAgents) {
+    agentMap.set(a.uuid, a);
+  }
+  if (!agentMap.has(humanAgentId)) {
+    const [ha] = await db
+      .select({ uuid: agents.uuid, name: agents.name, type: agents.type, displayName: agents.displayName })
+      .from(agents)
+      .where(eq(agents.uuid, humanAgentId))
+      .limit(1);
+    if (ha) agentMap.set(ha.uuid, ha);
+  }
+
+  const agentIds = [...agentMap.keys()];
+  if (agentIds.length === 0) return [];
+
+  // Find all chat participations for these agents
+  const participations = await db
+    .select({
+      chatId: chatParticipants.chatId,
+      agentId: chatParticipants.agentId,
+      role: chatParticipants.role,
+      mode: chatParticipants.mode,
+    })
+    .from(chatParticipants)
+    .where(inArray(chatParticipants.agentId, agentIds));
+
+  if (participations.length === 0) return [];
+
+  // Collect unique chat IDs and build agent → chatIds mapping
+  const chatIds = [...new Set(participations.map((p) => p.chatId))];
+  const agentChatMap = new Map<string, string[]>();
+  for (const p of participations) {
+    const list = agentChatMap.get(p.agentId) ?? [];
+    list.push(p.chatId);
+    agentChatMap.set(p.agentId, list);
+  }
+
+  // Fetch chat details
+  const chatRows = await db
+    .select({
+      id: chats.id,
+      type: chats.type,
+      topic: chats.topic,
+      metadata: chats.metadata,
+      createdAt: chats.createdAt,
+      updatedAt: chats.updatedAt,
+      participantCount: sql<number>`(SELECT count(*)::int FROM chat_participants WHERE chat_id = ${chats.id})`,
+    })
+    .from(chats)
+    .where(inArray(chats.id, chatIds))
+    .orderBy(desc(chats.updatedAt));
+
+  const chatMap = new Map(chatRows.map((c) => [c.id, c]));
+
+  // Determine which chats the member's human agent is actually a participant in (vs supervise-only)
+  const humanParticipantChatIds = new Set(
+    participations.filter((p) => p.agentId === humanAgentId).map((p) => p.chatId),
+  );
+
+  // Build grouped result: per agent, list of chats
+  const result: Array<{
+    agent: { uuid: string; name: string | null; type: string; displayName: string | null };
+    chats: Array<{
+      id: string;
+      type: string | null;
+      topic: string | null;
+      participantCount: number;
+      isSupervisionOnly: boolean;
+      createdAt: string;
+      updatedAt: string;
+    }>;
+  }> = [];
+
+  for (const [agentId, agentChatIds] of agentChatMap) {
+    const agentInfo = agentMap.get(agentId);
+    if (!agentInfo) continue;
+
+    const agentChats = agentChatIds
+      .map((chatId) => {
+        const chat = chatMap.get(chatId);
+        if (!chat) return null;
+        // A chat is supervision-only if the member's human agent is NOT a participant
+        // AND the chat is visible only because a managed agent is in it
+        const isSupervisionOnly = agentId !== humanAgentId && !humanParticipantChatIds.has(chatId);
+        return {
+          id: chat.id,
+          type: chat.type,
+          topic: chat.topic,
+          participantCount: chat.participantCount,
+          isSupervisionOnly,
+          createdAt: chat.createdAt.toISOString(),
+          updatedAt: chat.updatedAt.toISOString(),
+        };
+      })
+      .filter((c): c is NonNullable<typeof c> => c !== null);
+
+    if (agentChats.length > 0) {
+      result.push({ agent: agentInfo, chats: agentChats });
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Manager joins a chat. Adds their human agent as a participant.
+ * Requires the member to have supervision rights (manages at least one existing participant).
+ */
+// TODO: getChat is called only for organizationId validation; could be merged
+// with the participants query to reduce one DB round-trip
+export async function joinChat(db: Database, chatId: string, memberId: string, humanAgentId: string) {
+  const chat = await getChat(db, chatId);
+
+  // Check supervision rights: member must manage at least one participant
+  const participants = await db.select().from(chatParticipants).where(eq(chatParticipants.chatId, chatId));
+
+  const participantAgentIds = participants.map((p) => p.agentId);
+  if (participantAgentIds.length === 0) {
+    throw new NotFoundError("Chat has no participants");
+  }
+
+  // Check if already a participant
+  if (participantAgentIds.includes(humanAgentId)) {
+    throw new ConflictError("Already a participant in this chat");
+  }
+
+  // Verify supervision: at least one participant is managed by this member
+  const managedParticipants = await db
+    .select({ uuid: agents.uuid })
+    .from(agents)
+    .where(and(inArray(agents.uuid, participantAgentIds), eq(agents.managerId, memberId)));
+
+  if (managedParticipants.length === 0) {
+    throw new ForbiddenError("You can only join chats where you manage at least one participant");
+  }
+
+  // Verify human agent belongs to same org as chat
+  const [humanAgent] = await db
+    .select({ organizationId: agents.organizationId })
+    .from(agents)
+    .where(eq(agents.uuid, humanAgentId))
+    .limit(1);
+
+  if (!humanAgent || humanAgent.organizationId !== chat.organizationId) {
+    throw new BadRequestError("Agent does not belong to the same organization as the chat");
+  }
+
+  await db.insert(chatParticipants).values({
+    chatId,
+    agentId: humanAgentId,
+    role: "member",
+    mode: "full",
+  });
+
+  return db.select().from(chatParticipants).where(eq(chatParticipants.chatId, chatId));
+}
+
+/**
+ * Manager leaves a chat. Removes their human agent from participants.
+ * Only allowed if the human agent is a participant.
+ */
+export async function leaveChat(db: Database, chatId: string, humanAgentId: string) {
+  const [removed] = await db
+    .delete(chatParticipants)
+    .where(and(eq(chatParticipants.chatId, chatId), eq(chatParticipants.agentId, humanAgentId)))
+    .returning();
+
+  if (!removed) {
+    throw new NotFoundError("Not a participant of this chat");
   }
 
   return db.select().from(chatParticipants).where(eq(chatParticipants.chatId, chatId));
