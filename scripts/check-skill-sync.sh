@@ -121,12 +121,11 @@ require_file "$REPO_ROOT/evals/tests/eval-helpers.test.ts"
 require_symlink_target "$REPO_ROOT/.agents/skills/first-tree" "../../skills/first-tree"
 require_symlink_target "$REPO_ROOT/.claude/skills/first-tree" "../../.agents/skills/first-tree"
 
-# Check for legacy artifacts that should not be committed. The skill payload
-# under skills/first-tree/ must contain only SKILL.md, VERSION, and references/;
-# never engine code, test code, scripts, or build artefacts.
+# Check for legacy artifacts that should not be committed. Skill payload
+# directories must contain only SKILL.md, VERSION, and (optionally)
+# references/; never engine code, test code, scripts, or build artefacts.
 for legacy_path in \
   ".context-tree" \
-  "skills/tree" \
   "assets/framework" \
   "src/engine" \
   "skills/first-tree/engine" \
@@ -134,13 +133,23 @@ for legacy_path in \
   "skills/first-tree/tests" \
   "skills/first-tree/scripts" \
   "skills/first-tree/agents" \
-  "skills/first-tree/references/repo-snapshot"
+  "skills/first-tree/references/repo-snapshot" \
+  "skills/tree/engine" \
+  "skills/tree/assets" \
+  "skills/tree/tests" \
+  "skills/tree/scripts" \
+  "skills/tree/agents"
 do
   if git -C "$REPO_ROOT" ls-files --error-unmatch "$legacy_path" >/dev/null 2>&1; then
     echo "Unexpected legacy artifact tracked in git: $legacy_path" >&2
     exit 1
   fi
 done
+
+# The tree operational skill is a SKILL.md + VERSION only — no references/
+# of its own; shared references live under the first-tree entry-point skill.
+require_file "$REPO_ROOT/skills/tree/SKILL.md"
+require_file "$REPO_ROOT/skills/tree/VERSION"
 
 tracked_aliases="$(git -C "$REPO_ROOT" ls-files .agents .claude)"
 expected_aliases=$'.agents/skills/first-tree\n.claude/skills/first-tree'

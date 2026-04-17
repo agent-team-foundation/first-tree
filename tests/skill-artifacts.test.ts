@@ -256,36 +256,42 @@ describe("skill artifacts", () => {
     expect(onboarding).not.toContain("This clones the framework into `.context-tree/`");
     expect(onboarding).not.toContain("from upstream");
 
-    const skillMd = read("skills/first-tree/SKILL.md");
-    // SKILL.md is user-facing: shipped to user repos via copyCanonicalSkill.
-    // It must NOT mention engine/, assets/, tests/, scripts/, maintainer-* docs,
-    // or anything that doesn't exist in the lightweight installed payload.
-    expect(skillMd).not.toContain("sync-skill-artifacts.sh");
-    expect(skillMd).not.toContain("portable-smoke-test.sh");
-    expect(skillMd).not.toContain("maintainer-build-and-distribution.md");
-    expect(skillMd).not.toContain("maintainer-testing.md");
-    expect(skillMd).not.toContain("maintainer-architecture.md");
-    expect(skillMd).not.toContain("source-map.md");
-    expect(skillMd).not.toContain("canonical eval harness");
-    expect(skillMd).not.toContain("`engine/`");
-    expect(skillMd).not.toContain("`tests/`");
-    expect(skillMd).not.toContain("`scripts/`");
-    // It SHOULD describe what the skill is, when to use it, and the CLI.
-    expect(skillMd).toContain("Context Tree");
-    expect(skillMd).toContain("first-tree tree inspect");
-    expect(skillMd).toContain("first-tree tree init");
-    expect(skillMd).toContain("first-tree tree bind");
-    expect(skillMd).toContain("first-tree tree workspace sync");
-    expect(skillMd).toContain("first-tree tree verify");
-    expect(skillMd).toContain("first-tree tree upgrade");
-    expect(skillMd).toContain("first-tree tree publish");
-    expect(skillMd).toContain("references/principles.md");
-    expect(skillMd).toContain("references/ownership-and-naming.md");
-    expect(skillMd).toContain("Before Every Task");
-    expect(skillMd).toContain("After Every Task");
-    expect(skillMd).toContain("npx -p first-tree first-tree");
-    expect(skillMd).toContain("--skip-version-check");
-    expect(skillMd).not.toContain(".first-tree/submodules/");
+    const firstTreeSkillMd = read("skills/first-tree/SKILL.md");
+    const treeSkillMd = read("skills/tree/SKILL.md");
+    // Skill payloads are user-facing: shipped to user repos via
+    // copyCanonicalSkill. They must NOT mention engine/, assets/, tests/,
+    // scripts/, maintainer-* docs, or anything that doesn't exist in the
+    // lightweight installed payload.
+    for (const skillMd of [firstTreeSkillMd, treeSkillMd]) {
+      expect(skillMd).not.toContain("sync-skill-artifacts.sh");
+      expect(skillMd).not.toContain("portable-smoke-test.sh");
+      expect(skillMd).not.toContain("maintainer-build-and-distribution.md");
+      expect(skillMd).not.toContain("maintainer-testing.md");
+      expect(skillMd).not.toContain("maintainer-architecture.md");
+      expect(skillMd).not.toContain("source-map.md");
+      expect(skillMd).not.toContain("canonical eval harness");
+      expect(skillMd).not.toContain("`engine/`");
+      expect(skillMd).not.toContain("`tests/`");
+      expect(skillMd).not.toContain("`scripts/`");
+      expect(skillMd).not.toContain(".first-tree/submodules/");
+    }
+    // first-tree is the entry-point skill: methodology, routing, install,
+    // and skill management.
+    expect(firstTreeSkillMd).toContain("Context Tree");
+    expect(firstTreeSkillMd).toContain("Before Every Task");
+    expect(firstTreeSkillMd).toContain("After Every Task");
+    expect(firstTreeSkillMd).toContain("npx -p first-tree first-tree");
+    expect(firstTreeSkillMd).toContain("--skip-version-check");
+    expect(firstTreeSkillMd).toContain("references/principles.md");
+    expect(firstTreeSkillMd).toContain("references/ownership-and-naming.md");
+    // tree is the operational handbook for `first-tree tree` commands.
+    expect(treeSkillMd).toContain("first-tree tree inspect");
+    expect(treeSkillMd).toContain("first-tree tree init");
+    expect(treeSkillMd).toContain("first-tree tree bind");
+    expect(treeSkillMd).toContain("first-tree tree workspace sync");
+    expect(treeSkillMd).toContain("first-tree tree verify");
+    expect(treeSkillMd).toContain("first-tree tree upgrade");
+    expect(treeSkillMd).toContain("first-tree tree publish");
 
     const sourceMap = read("docs/source-map.md");
     expect(sourceMap).not.toContain("repo-snapshot");
