@@ -95,28 +95,28 @@ describe("thin CLI shell", () => {
     expect(output.lines).toEqual([USAGE]);
   });
 
-  it("prints the CLI, tree, breeze, and gardener versions", async () => {
+  it("prints the CLI version plus one version per product in the manifest", async () => {
     const output = captureOutput();
     const pkgPath = fileURLToPath(new URL("../package.json", import.meta.url));
     const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as { version: string };
-    const treeVersionPath = fileURLToPath(
-      new URL("../src/products/tree/VERSION", import.meta.url),
-    );
-    const breezeVersionPath = fileURLToPath(
-      new URL("../src/products/breeze/VERSION", import.meta.url),
-    );
-    const gardenerVersionPath = fileURLToPath(
-      new URL("../src/products/gardener/VERSION", import.meta.url),
-    );
-    const treeVersion = readFileSync(treeVersionPath, "utf-8").trim();
-    const breezeVersion = readFileSync(breezeVersionPath, "utf-8").trim();
-    const gardenerVersion = readFileSync(gardenerVersionPath, "utf-8").trim();
+    const productVersion = (name: string): string => {
+      const versionPath = fileURLToPath(
+        new URL(`../src/products/${name}/VERSION`, import.meta.url),
+      );
+      return readFileSync(versionPath, "utf-8").trim();
+    };
 
     const code = await runCli(["--version"], output.write);
 
     expect(code).toBe(0);
     expect(output.lines).toEqual([
-      `first-tree=${pkg.version} tree=${treeVersion} breeze=${breezeVersion} gardener=${gardenerVersion}`,
+      [
+        `first-tree=${pkg.version}`,
+        `tree=${productVersion("tree")}`,
+        `breeze=${productVersion("breeze")}`,
+        `gardener=${productVersion("gardener")}`,
+        `skill=${productVersion("skill")}`,
+      ].join(" "),
     ]);
   });
 

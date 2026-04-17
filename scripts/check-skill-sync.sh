@@ -231,4 +231,9 @@ if ! grep -q './gardener/cli.js' "$MANIFEST_PATH"; then
   exit 1
 fi
 
+if ! grep -q './skill/cli.js' "$MANIFEST_PATH"; then
+  echo "src/products/manifest.ts is not lazy-loading the skill product dispatcher." >&2
+  exit 1
+fi
+
 echo "Canonical skill structure is clean."

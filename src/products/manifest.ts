@@ -66,6 +66,18 @@ export const PRODUCTS: readonly ProductDefinition[] = [
     hasAssets: false,
     hasSkill: true,
   },
+  {
+    name: "skill",
+    description:
+      "Inspect and repair the four bundled first-tree skills (list, doctor, link)",
+    load: async () => {
+      const mod = await import("./skill/cli.js");
+      return { run: (args, output) => mod.runSkill(args, output) };
+    },
+    autoUpgradeOnInvoke: false,
+    hasAssets: false,
+    hasSkill: false,
+  },
 ];
 
 export function getProduct(name: string): ProductDefinition | undefined {

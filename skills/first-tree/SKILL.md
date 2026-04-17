@@ -118,6 +118,14 @@ npx -p first-tree first-tree tree upgrade
 This rewrites the installed skill copies to match the skills bundled inside
 the package. Safe to re-run; idempotent.
 
+To inspect or repair the installed skills directly:
+
+```bash
+npx -p first-tree first-tree skill list     # show all four skills + versions
+npx -p first-tree first-tree skill doctor   # diagnose install health; exits non-zero on problems
+npx -p first-tree first-tree skill link     # repair .claude/skills/* symlinks
+```
+
 ## Ownership And Editing
 
 - Every directory has a `NODE.md` declaring `owners` in its frontmatter.
