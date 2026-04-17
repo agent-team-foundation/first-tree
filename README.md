@@ -38,7 +38,7 @@
 Every product ships:
 - an operational handbook at `skills/<name>/SKILL.md` (loaded into agents),
 - a lazy CLI dispatcher at `src/products/<name>/cli.ts`,
-- its own semver'd `VERSION` file, independent from the npm package version.
+- its own semver'd `VERSION` file, independent from the npm package version (see [docs/architecture/versioning.md](docs/architecture/versioning.md)).
 
 The umbrella skill at [`skills/first-tree/`](skills/first-tree) is the single entry point an agent reads first — it teaches the Context Tree methodology and routes to the three product skills above. Diagnostic/meta commands (`first-tree skill list/doctor/link`) live under [`src/meta/skill-tools/`](src/meta/skill-tools) and are not products.
 

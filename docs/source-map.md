@@ -27,6 +27,7 @@ docs below only for source-repo implementation details.
 | `docs/build/distribution.md` | Packaging surfaces and release checklist in this repo |
 | `docs/testing/overview.md` | Concrete validation commands and targeted test entrypoints |
 | `docs/design/sync.md` | Local implementation touchpoints for the sync feature |
+| `docs/architecture/versioning.md` | Policy for the four independent VERSION files (npm, product, skill, asset) |
 
 ## Runtime Payload
 
