@@ -1,6 +1,10 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { DEFAULT_CONFIG_DIR, getClientConfig } from "@agent-team-foundation/first-tree-hub-shared/config";
+import {
+  clientConfigSchema,
+  DEFAULT_CONFIG_DIR,
+  resolveConfigReadonly,
+} from "@agent-team-foundation/first-tree-hub-shared/config";
 
 const CREDENTIALS_PATH = join(DEFAULT_CONFIG_DIR, "credentials.json");
 
@@ -12,16 +16,19 @@ type StoredCredentials = {
 
 /**
  * Resolve Hub server URL from flag, env, or config.
+ *
+ * Uses resolveConfigReadonly (not the singleton getClientConfig) so CLI entry
+ * points don't have to remember to call initConfig() first.
  */
 export function resolveServerUrl(flagValue?: string): string {
   if (flagValue) return flagValue;
   if (process.env.FIRST_TREE_HUB_SERVER) return process.env.FIRST_TREE_HUB_SERVER;
 
-  try {
-    const config = getClientConfig();
-    if (config.server?.url) return config.server.url;
-  } catch {
-    // Config not available
+  const config = resolveConfigReadonly({ schema: clientConfigSchema, role: "client" });
+  const server = config.server;
+  if (server !== null && typeof server === "object") {
+    const url = Reflect.get(server, "url");
+    if (typeof url === "string" && url.length > 0) return url;
   }
 
   throw new Error(
