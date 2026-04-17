@@ -379,6 +379,21 @@ describe("gardener respond -- attempts counter", () => {
     expect(
       lines.some((l) => l.includes("max attempts reached") || l.includes("respond attempts reached")),
     ).toBe(true);
+    // When the cap is hit we must NOT bump the attempts marker or post a
+    // new "attempt N/5" comment — only add the breeze:human label.
+    const bodyEdit = calls.find(
+      (c) =>
+        c.command === "gh" &&
+        c.args[0] === "pr" &&
+        c.args[1] === "edit" &&
+        c.args.includes("--body"),
+    );
+    expect(bodyEdit).toBeUndefined();
+    const comment = calls.find(
+      (c) =>
+        c.command === "gh" && c.args[0] === "pr" && c.args[1] === "comment",
+    );
+    expect(comment).toBeUndefined();
   });
 });
 
@@ -519,6 +534,14 @@ describe("gardener respond -- helpers", () => {
     expect(info?.sourcePr).toBe(3001);
     expect(info?.sourceRepo).toContain("paperclip");
     expect(extractSourcePr("no marker")).toBeNull();
+  });
+
+  it("extracts source repo slugs that contain hyphens", () => {
+    const body =
+      "<!-- gardener:sync · source_pr=42 · source_repo=agent-team-foundation/first-tree -->";
+    const info = extractSourcePr(body);
+    expect(info?.sourcePr).toBe(42);
+    expect(info?.sourceRepo).toBe("agent-team-foundation/first-tree");
   });
 
   it("finds the latest CHANGES_REQUESTED review timestamp", () => {

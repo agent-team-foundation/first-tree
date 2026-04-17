@@ -251,7 +251,7 @@ export function extractSourcePr(
   if (!prMatch) return null;
   const sourcePr = Number(prMatch[1]);
   if (!Number.isFinite(sourcePr)) return null;
-  const repoMatch = body.match(/source_repo=([^\s·-]+(?:\/[^\s·]+)?)/);
+  const repoMatch = body.match(/source_repo=([^\s·]+)/);
   const sourceRepo = repoMatch ? repoMatch[1].trim() : undefined;
   return { sourcePr, sourceRepo };
 }
@@ -277,13 +277,23 @@ export function latestChangesRequestedAt(reviews: PrReview[]): string | null {
   return latest;
 }
 
-function firstReviewerLogin(reviews: PrReview[]): string | undefined {
+function latestReviewerLogin(reviews: PrReview[]): string | undefined {
+  let latestAt: string | undefined;
+  let latestLogin: string | undefined;
   for (const review of reviews) {
-    if (review.state === "CHANGES_REQUESTED" && review.user?.login) {
-      return review.user.login;
+    if (review.state !== "CHANGES_REQUESTED") continue;
+    if (!review.user?.login) continue;
+    const at = review.submitted_at;
+    if (!at) {
+      if (!latestLogin) latestLogin = review.user.login;
+      continue;
+    }
+    if (!latestAt || at > latestAt) {
+      latestAt = at;
+      latestLogin = review.user.login;
     }
   }
-  return undefined;
+  return latestLogin;
 }
 
 function jsonTryParse<T>(text: string): T | null {
@@ -417,7 +427,6 @@ async function fetchLatestCommitTime(
 interface RespondSinglePrOpts {
   repo: string;
   pr: number;
-  treeRoot: string;
   dryRun: boolean;
   shell: ShellRun;
   env: NodeJS.ProcessEnv;
@@ -538,7 +547,7 @@ async function respondSinglePr(
   // bump the attempts counter, and emit a reply comment stub. The
   // runbook's "apply edits" step is a semantic change that lives in the
   // calling agent; this CLI is the deterministic scaffold around it.
-  const reviewer = firstReviewerLogin(reviews) ?? "reviewer";
+  const reviewer = latestReviewerLogin(reviews) ?? "reviewer";
   const sourceInfo = extractSourcePr(prView.body);
 
   if (!dryRun) {
@@ -649,7 +658,6 @@ async function respondScanMode(
     const result = await respondSinglePr({
       repo: treeRepo,
       pr: pr.number,
-      treeRoot: opts.treeRoot,
       dryRun: opts.dryRun,
       shell,
       env,
@@ -727,7 +735,6 @@ export async function runRespond(
       const result = await respondSinglePr({
         repo: flags.repo,
         pr: flags.pr,
-        treeRoot,
         dryRun: flags.dryRun,
         shell,
         env,
