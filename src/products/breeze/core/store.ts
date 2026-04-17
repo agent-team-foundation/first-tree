@@ -4,11 +4,14 @@
  *
  * SINGLE-WRITER RULE (spec doc 2 §1.3):
  * -------------------------------------
- * Only the Rust daemon's poller loop (Phase 3: TS daemon's poller) may
- * call `writeInbox` directly with a full payload. All other callers —
- * `status-manager`, ad-hoc commands, this module's consumers — must go
- * through `updateInbox(mutator)` which acquires the advisory lock,
- * reads the current inbox, applies `mutator`, and writes atomically.
+ * Only a poller loop — the Rust `breeze-runner` fetcher, the TS daemon
+ * poller at `daemon/poller.ts`, or the one-shot TS `commands/poll.ts` —
+ * may call `writeInbox` directly with a full payload. All other callers
+ * (`status-manager`, ad-hoc commands, this module's consumers, the
+ * Phase 3b/3c http/broker/bus) must go through `updateInbox(mutator)`
+ * which acquires the advisory lock, reads the current inbox, applies
+ * `mutator`, and writes atomically. This rule keeps the notification
+ * set authoritative in exactly one place.
  *
  * The lock is implemented with `proper-lockfile` (mkdir-style under the
  * hood, cross-process safe). Stale locks are reclaimed after 10s by
