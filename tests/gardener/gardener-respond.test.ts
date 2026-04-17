@@ -198,6 +198,90 @@ describe("gardener respond -- BREEZE_RESULT trailer", () => {
   });
 });
 
+describe("gardener respond -- single-PR only (scan mode removed, #160/#162 step 5)", () => {
+  it("exits 1 with a clear error when invoked with no --pr/--repo", async () => {
+    const tmp = useTmpDir();
+    const calls: ShellCall[] = [];
+    const shell = makeShell([], calls);
+    const { write, lines } = captureWrite();
+    const code = await runRespond(
+      ["--tree-path", tmp.path],
+      {
+        shellRun: shell,
+        write,
+        // Pre-set GARDENER_LOGIN so resolveGardenerLogin doesn't make a
+        // `gh api /user` call — this test only cares about dispatch, not
+        // login resolution.
+        env: { GARDENER_LOGIN: "gardener-bot" },
+        now: () => new Date("2026-04-17T00:00:00Z"),
+      },
+    );
+    expect(code).toBe(1);
+    // No gh calls should happen — we reject before any scan/fetch I/O.
+    expect(calls.filter((c) => c.command === "gh")).toHaveLength(0);
+    const joined = lines.join("\n");
+    expect(joined).toContain("--pr and --repo are required");
+    expect(lines[lines.length - 1]).toMatch(
+      /^BREEZE_RESULT: status=failed summary=pr\/repo flags required/,
+    );
+  });
+
+  it("exits 1 when only --pr is supplied (no --repo)", async () => {
+    const tmp = useTmpDir();
+    const { write, lines } = captureWrite();
+    const shell = makeShell([]);
+    const code = await runRespond(
+      ["--pr", "42", "--tree-path", tmp.path],
+      { shellRun: shell, write, env: { GARDENER_LOGIN: "gardener-bot" } },
+    );
+    expect(code).toBe(1);
+    expect(lines[lines.length - 1]).toMatch(/^BREEZE_RESULT: status=failed /);
+  });
+
+  it("exits 1 when only --repo is supplied (no --pr)", async () => {
+    const tmp = useTmpDir();
+    const { write, lines } = captureWrite();
+    const shell = makeShell([]);
+    const code = await runRespond(
+      ["--repo", "alice/tree", "--tree-path", tmp.path],
+      { shellRun: shell, write, env: { GARDENER_LOGIN: "gardener-bot" } },
+    );
+    expect(code).toBe(1);
+    expect(lines[lines.length - 1]).toMatch(/^BREEZE_RESULT: status=failed /);
+  });
+
+  it("does not invoke `gh pr list` (scan mode is removed)", async () => {
+    const tmp = useTmpDir();
+    const calls: ShellCall[] = [];
+    const shell = makeShell([], calls);
+    const { write } = captureWrite();
+    // Invoke with no flags — would have triggered scan-mode on main, now rejects.
+    await runRespond(
+      ["--tree-path", tmp.path],
+      { shellRun: shell, write, env: { GARDENER_LOGIN: "gardener-bot" } },
+    );
+    // Assert no gh pr list call happened. (Under the old scan-mode path, this
+    // was the first gh call after `gh repo view`.)
+    const prListCalls = calls.filter(
+      (c) => c.command === "gh" && c.args[0] === "pr" && c.args[1] === "list",
+    );
+    expect(prListCalls).toHaveLength(0);
+  });
+
+  it("help text documents single-PR-only invocation", () => {
+    // The pre-refactor "Modes: (default) Scan ..." section is gone.
+    expect(RESPOND_USAGE).not.toMatch(/^\s*Modes:/m);
+    expect(RESPOND_USAGE).not.toMatch(/\(default\)\s+Scan/);
+    // The required single-PR flags are documented.
+    expect(RESPOND_USAGE).toContain("--pr <n>");
+    expect(RESPOND_USAGE).toContain("--repo <owner/name>");
+    expect(RESPOND_USAGE).toContain("required");
+    // The synopsis line no longer wraps --pr/--repo in brackets
+    // (they're not optional anymore).
+    expect(RESPOND_USAGE).toMatch(/respond --pr <n> --repo <owner\/name>/);
+  });
+});
+
 describe("gardener respond -- snapshot mode", () => {
   it("reads from BREEZE_SNAPSHOT_DIR when set and does not call gh api", async () => {
     const tmp = useTmpDir();
