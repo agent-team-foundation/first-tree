@@ -24,10 +24,10 @@ docs below only for source-repo implementation details.
 | `skills/first-tree/references/upgrade-contract.md` | Installed layout and upgrade invariants |
 | `docs/architecture/overview.md` | Local file-level architecture map for this source repo |
 | `docs/architecture/thin-cli.md` | Implementation touchpoints for `src/cli.ts` and command adapters |
+| `docs/architecture/versioning.md` | Local contract for VERSION files, package version reporting, and release-layer boundaries |
 | `docs/build/distribution.md` | Packaging surfaces and release checklist in this repo |
 | `docs/testing/overview.md` | Concrete validation commands and targeted test entrypoints |
 | `docs/design/sync.md` | Local implementation touchpoints for the sync feature |
-| `docs/architecture/versioning.md` | Policy for the four independent VERSION files (npm, product, skill, asset) |
 
 ## Runtime Payload
 
@@ -49,9 +49,13 @@ docs below only for source-repo implementation details.
 | `src/cli.ts` | Top-level umbrella dispatcher for `first-tree <namespace> <command>`; reads from the namespace manifest |
 | `src/products/manifest.ts` | Namespace manifest (kind, name, description, lazy entrypoint, auto-upgrade, asset/skill flags) |
 | `src/products/tree/cli.ts` | Tree product dispatcher (lazy-loaded) |
+| `src/products/tree/README.md` | Maintainer/product-local overview for the tree product |
 | `src/products/breeze/cli.ts` | Breeze product dispatcher (lazy-loaded) |
+| `src/products/breeze/README.md` | Maintainer/product-local overview for the breeze product |
 | `src/products/gardener/cli.ts` | Gardener product dispatcher (lazy-loaded) |
+| `src/products/gardener/README.md` | Maintainer/product-local overview for the gardener product |
 | `src/meta/skill-tools/cli.ts` | Skill maintenance-namespace dispatcher (lazy-loaded) |
+| `src/meta/skill-tools/README.md` | Maintainer/meta overview for the skill maintenance namespace |
 | `src/products/breeze/engine/` | Breeze business logic: `commands/`, `runtime/`, `daemon/`, `bridge.ts`, `statusline.ts` |
 | `src/products/gardener/engine/` | Gardener business logic: `commands/`, `runtime/`, `comment.ts`, `respond.ts` |
 | `src/products/tree/engine/init.ts` | High-level onboarding wrapper plus low-level tree bootstrap |

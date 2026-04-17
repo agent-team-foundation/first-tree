@@ -41,10 +41,10 @@ cross-domain relationships that humans and agents maintain together —
 Every product ships:
 - an operational handbook at `skills/<name>/SKILL.md` (loaded into agents),
 - a lazy CLI dispatcher at `src/products/<name>/cli.ts`,
-- its own semver'd `VERSION` file, independent from the npm package version (see [docs/architecture/versioning.md](docs/architecture/versioning.md)).
+- its own semver'd `VERSION` file, independent from the npm package version.
 
-The umbrella `first-tree` skill at [`skills/first-tree/`](skills/first-tree/) is
-the single entry point an agent reads first — it teaches the Context Tree
+The umbrella `first-tree` skill at [`skills/first-tree/`](skills/first-tree/)
+is the single entry point an agent reads first — it teaches the Context Tree
 methodology and routes to the three product skills above. The CLI also exposes
 one **maintenance namespace** — `first-tree skill ...` — for skill
 installation, diagnosis, and repair. It is not a fourth product.
@@ -171,10 +171,10 @@ for the full guide, and run `first-tree tree help onboarding` to print it.
 
 The source/workspace root is never a tree — it never contains `NODE.md`,
 `members/`, or tree-scoped `AGENTS.md` / `CLAUDE.md`. Source-side state lives
-under `.first-tree/source.json`; tree-side state lives under `.first-tree/tree.json`
-and `.first-tree/bindings/<source-id>.json`. The default dedicated tree repo
-name is `<repo>-tree`, while shared tree setups continue to work cleanly for
-multi-repo workspaces.
+under `.first-tree/source.json`; tree-side state lives under
+`.first-tree/tree.json` and `.first-tree/bindings/<source-id>.json`. The
+default dedicated tree repo name is `<repo>-tree`, while shared tree setups
+continue to work cleanly for multi-repo workspaces.
 
 ---
 
@@ -245,6 +245,7 @@ Repo-local maintainer notes live in:
 - `docs/source-map.md`
 - `docs/architecture/overview.md`
 - `docs/architecture/thin-cli.md`
+- `docs/architecture/versioning.md`
 - `docs/build/distribution.md`
 - `docs/testing/overview.md`
 - `docs/design/sync.md`
