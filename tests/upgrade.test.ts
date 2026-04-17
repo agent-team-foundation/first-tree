@@ -35,6 +35,7 @@ import {
   makeSourceRepo,
   makeLegacyFramework,
   makeLegacyRepoFramework,
+  makeProductSkills,
   makeSourceSkill,
   makeTreeMetadata,
   useTmpDir,
@@ -202,6 +203,45 @@ describe("runUpgrade", () => {
       "../../.agents/skills/first-tree",
     );
     expect(readFileSync(join(repoDir.path, INSTALLED_SKILL_VERSION), "utf-8").trim()).toBe("0.2.0");
+  });
+
+  it("installs all four skill payloads into a user repo when the source ships them", () => {
+    const repoDir = useTmpDir();
+    const sourceDir = useTmpDir();
+    makeSourceSkill(sourceDir.path, "0.2.0");
+    makeProductSkills(sourceDir.path, "0.2.0");
+
+    copyCanonicalSkill(sourceDir.path, repoDir.path);
+
+    for (const name of ["first-tree", "tree", "breeze", "gardener"]) {
+      expect(
+        existsSync(join(repoDir.path, ".agents", "skills", name, "SKILL.md")),
+      ).toBe(true);
+      expect(
+        lstatSync(join(repoDir.path, ".claude", "skills", name)).isSymbolicLink(),
+      ).toBe(true);
+      expect(
+        readlinkSync(join(repoDir.path, ".claude", "skills", name)),
+      ).toBe(join("..", "..", ".agents", "skills", name));
+    }
+  });
+
+  it("still installs when only the entry-point skill is available in the source package", () => {
+    const repoDir = useTmpDir();
+    const sourceDir = useTmpDir();
+    makeSourceSkill(sourceDir.path, "0.2.0");
+    // Deliberately skip makeProductSkills() — source has only first-tree.
+
+    copyCanonicalSkill(sourceDir.path, repoDir.path);
+
+    expect(
+      existsSync(join(repoDir.path, ".agents", "skills", "first-tree", "SKILL.md")),
+    ).toBe(true);
+    for (const name of ["tree", "breeze", "gardener"]) {
+      expect(
+        existsSync(join(repoDir.path, ".agents", "skills", name)),
+      ).toBe(false);
+    }
   });
 
   it("refreshes a dedicated tree repo and installs the tree-repo skill", () => {

@@ -52,7 +52,7 @@ export const PRODUCTS: readonly ProductDefinition[] = [
     },
     autoUpgradeOnInvoke: false,
     hasAssets: true,
-    hasSkill: false,
+    hasSkill: true,
   },
   {
     name: "gardener",
@@ -64,7 +64,7 @@ export const PRODUCTS: readonly ProductDefinition[] = [
     },
     autoUpgradeOnInvoke: false,
     hasAssets: false,
-    hasSkill: false,
+    hasSkill: true,
   },
 ];
 

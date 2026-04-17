@@ -10,6 +10,20 @@ export const BUNDLED_SKILL_ROOT = join("skills", SKILL_NAME);
 export const SKILL_ROOT = join(".agents", "skills", SKILL_NAME);
 export const CLAUDE_SKILL_ROOT = join(".claude", "skills", SKILL_NAME);
 export const INSTALLED_SKILL_ROOTS = [SKILL_ROOT, CLAUDE_SKILL_ROOT] as const;
+
+/**
+ * All four skill payload names shipped by the first-tree package:
+ * the entry-point skill plus one operational skill per product. The
+ * installer copies every one of these into user repos when they exist
+ * in the source package — the entry-point skill is the only one that
+ * must be present; others are installed best-effort if found.
+ */
+export const ALL_SKILL_NAMES = [
+  SKILL_NAME, // entry-point skill (required)
+  "tree",
+  "breeze",
+  "gardener",
+] as const;
 export const INSTALLED_SKILL_REQUIRED_FILES = [
   "SKILL.md",
   "VERSION",
