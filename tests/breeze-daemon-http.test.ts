@@ -2,7 +2,7 @@
  * Contract tests for the Phase 3b TypeScript port of the breeze daemon
  * HTTP + SSE server.
  *
- * Spec: `docs/migration/01-http-api-contract.md`. Source of truth:
+ * Spec: the HTTP/SSE API contract (historical migration doc, now removed; see git history). Source of truth:
  * `http.rs`.
  *
  * Per route, the test asserts status code, key headers, and body shape

@@ -4,7 +4,7 @@
  * Covers:
  *   - `pollOnce` transforms a single notification into an inbox entry
  *     that matches the canonical shape from
- *     `docs/migration/02-inbox-store-schema.md` §1.2.
+ *     the inbox/activity-log schema (historical migration doc, now removed; see git history) §1.2.
  *   - `isRateLimited` classifier recognises the same signatures as
  *     `gh_executor.rs::is_rate_limited`.
  *   - `rateLimitBackoffMs` follows the Rust exponential schedule.
@@ -112,7 +112,7 @@ describe("pollOnce parity with Rust fetcher", () => {
   afterEach(() => rmSync(ctx.dir, { recursive: true, force: true }));
 
   it("writes an inbox.json whose single entry matches the canonical schema", async () => {
-    // Canonical shape (redacted) copied from docs/migration §1.2:
+    // Canonical shape (redacted) copied from the inbox schema migration doc §1.2:
     //   {
     //     "id": "23576674030",
     //     "type": "PullRequest",

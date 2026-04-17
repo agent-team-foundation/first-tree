@@ -22,7 +22,7 @@
  * `splitIntoLines`.
  *
  * The trailing `data: \n` frame is the "suspicious" behaviour flagged in
- * `docs/migration/01-http-api-contract.md` §8. It does NOT fire for the
+ * the HTTP/SSE API contract (historical migration doc, now removed; see git history) §8. It does NOT fire for the
  * payloads Phase 3b emits (they are compact JSON without a trailing
  * newline) but we preserve it anyway so the TS server is a drop-in
  * replacement for the Rust one. The byte-exact test

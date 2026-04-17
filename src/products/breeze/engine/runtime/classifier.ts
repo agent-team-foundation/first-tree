@@ -4,7 +4,7 @@
  * TS port of `compute_breeze_status` in
  * `fetcher.rs:353-368`.
  *
- * Spec: `docs/migration/03-status-state-machine.md` §2.
+ * Spec: the status state-machine spec (historical migration doc, now removed; see git history) §2.
  *
  * Precedence (top wins, each branch cites the spec):
  *   1. labels contains `breeze:done`                     → "done"  (§2 rule 1)

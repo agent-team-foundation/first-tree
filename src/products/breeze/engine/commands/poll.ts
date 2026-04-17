@@ -14,8 +14,8 @@
  *   - `runtime/paths.ts`     : `$BREEZE_DIR` layout
  *
  * Spec references:
- *   - `docs/migration/02-inbox-store-schema.md` §1 (inbox) and §2 (activity)
- *   - `docs/migration/03-status-state-machine.md` (classifier precedence)
+ *   - the inbox/activity-log schema (historical migration doc, now removed; see git history) §1 (inbox) and §2 (activity)
+ *   - the status state-machine spec (historical migration doc, now removed; see git history) (classifier precedence)
  *   - Rust parity: `fetcher.rs::poll_once`
  *
  * Differences vs. the bash script:

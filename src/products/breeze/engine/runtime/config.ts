@@ -72,7 +72,7 @@ export const DAEMON_CONFIG_DEFAULTS: DaemonConfig = {
   pollIntervalSec: 60,
   // Phase 3c bug fix 1: per-task timeout default 30 min. Rust dispatcher
   // had no timeout (documented silent-hang failure mode in
-  // `docs/migration/04-broker-agent-lifecycle.md` §8). We set a generous
+  // the broker/agent lifecycle spec (historical migration doc, now removed; see git history) §8). We set a generous
   // ceiling so the broker will always eventually reclaim a stuck task.
   taskTimeoutSec: 30 * 60,
   logLevel: "info",

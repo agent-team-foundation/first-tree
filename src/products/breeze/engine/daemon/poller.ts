@@ -22,8 +22,8 @@
  * consecutive 429/abuse responses. See `registerRateLimit`.
  *
  * Spec refs:
- *   - `docs/migration/02-inbox-store-schema.md` (inbox shape)
- *   - `docs/migration/04-broker-agent-lifecycle.md` §1 (poll cadence)
+ *   - the inbox/activity-log schema (historical migration doc, now removed; see git history) (inbox shape)
+ *   - the broker/agent lifecycle spec (historical migration doc, now removed; see git history) §1 (poll cadence)
  *   - Rust parity: `fetcher.rs::Fetcher::poll_once` and
  *     `gh_executor.rs::{GhExecutor,is_rate_limited,command_is_mutating}`
  *

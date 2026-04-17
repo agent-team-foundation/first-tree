@@ -1,6 +1,6 @@
 /**
  * Exhaustive coverage for `classifyBreezeStatus`, mirroring the state
- * machine defined in `docs/migration/03-status-state-machine.md`.
+ * machine defined in the status state-machine spec (historical migration doc, now removed; see git history).
  *
  * Every named transition from spec §1 and every precedence rule from
  * spec §2 gets its own assertion so the intent is visible.

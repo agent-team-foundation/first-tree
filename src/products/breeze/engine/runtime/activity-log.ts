@@ -1,7 +1,7 @@
 /**
  * Append-only JSONL writer for `~/.breeze/activity.log`.
  *
- * Spec: `docs/migration/02-inbox-store-schema.md` §2.
+ * Spec: the inbox/activity-log schema (historical migration doc, now removed; see git history) §2.
  *
  * The Rust fetcher uses `read + full-rewrite` (`append_activity_events`,
  * fetcher.rs:633-650). We use a plain `appendFileSync` — functionally

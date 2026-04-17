@@ -2,7 +2,7 @@
  * Phase 3b: TypeScript port of the breeze daemon HTTP + SSE server.
  *
  * Source of truth: `http.rs` (384
- * lines). Contract pinned in `docs/migration/01-http-api-contract.md`.
+ * lines). Contract pinned in the HTTP/SSE API contract (historical migration doc, now removed; see git history).
  *
  * READ-ONLY DISCIPLINE:
  * ---------------------

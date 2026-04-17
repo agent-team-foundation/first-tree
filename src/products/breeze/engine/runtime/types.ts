@@ -1,8 +1,8 @@
 /**
  * Runtime-validated types for the shared breeze store.
  *
- * Authoritative spec: `docs/migration/02-inbox-store-schema.md` and
- * `docs/migration/03-status-state-machine.md`. These must round-trip
+ * Authoritative spec: the inbox/activity-log schema (historical migration doc, now removed; see git history) and
+ * the status state-machine spec (historical migration doc, now removed; see git history). These must round-trip
  * existing `~/.breeze/inbox.json` and `~/.breeze/activity.log` files
  * produced by the Rust `breeze-runner` and the legacy bash scripts.
  *
