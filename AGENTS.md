@@ -96,22 +96,21 @@ npx tsx evals/scripts/run-eval.ts --trials 3 --cases pydantic-importstring-error
 ```
 
 <!-- BEGIN FIRST-TREE-SOURCE-INTEGRATION -->
-FIRST-TREE-SOURCE-INTEGRATION: workspace member bound to shared tree repo `first-tree-context`
+FIRST-TREE-SOURCE-INTEGRATION: source repo bound to shared tree repo `first-tree-context`
 FIRST-TREE-TREE-REPO: `first-tree-context`
 FIRST-TREE-TREE-MODE: `shared`
-FIRST-TREE-BINDING-MODE: `workspace-member`
+FIRST-TREE-BINDING-MODE: `shared-source`
 FIRST-TREE-TREE-REPO-URL: `https://github.com/agent-team-foundation/first-tree-context`
-FIRST-TREE-ENTRYPOINT: `/workspaces/first-tree-all/repos/first-tree`
-FIRST-TREE-WORKSPACE-ID: `first-tree-all`
-FIRST-TREE-LOCAL-TREE-CONFIG: `.first-tree/local-tree.json`
+FIRST-TREE-ENTRYPOINT: `/repos/first-tree`
+FIRST-TREE-SOURCE-STATE: `.first-tree/source.json`
 
-This repo is a workspace member. Keep all Context Tree files only in the shared `first-tree-context` repo and follow the workspace root's binding for shared context updates in workspace `first-tree-all`.
+This repo is bound to an existing shared Context Tree. Keep all Context Tree files only in the shared `first-tree-context` repo.
 
 Before every task:
-- Read `.first-tree/local-tree.json` first. If it exists, resolve its `localPath` value from this repo root and treat that checkout as the canonical local tree repo.
+- Read `.first-tree/source.json` first. Resolve its `tree.localPath` value from this repo root and treat that checkout as the canonical local tree repo. If `.first-tree/source.local.json` exists, its `localPath` overrides the one in `source.json`.
 - If that configured checkout exists locally, update it before you read anything else.
 - If the configured checkout is missing, clone a temporary working copy from `https://github.com/agent-team-foundation/first-tree-context` into `.first-tree/tmp/first-tree-context/`, use it for the current task, and delete it before you finish.
-- Never commit `.first-tree/local-tree.json` or anything under `.first-tree/tmp/` to this repo. They are local-only workspace state.
+- Never commit `.first-tree/source.local.json` or anything under `.first-tree/tmp/` to this repo. They are local-only state.
 
 After every task:
 - Always ask whether the tree needs updating.
