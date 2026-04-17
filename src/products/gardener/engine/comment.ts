@@ -493,6 +493,14 @@ export function resolveState(input: ResolveStateInput): StateAction {
   }
 
   // Rule 2: paused (with resume override).
+  //
+  // Semantics: the presence of a `gardener:paused` marker on gardener's own
+  // comment IS the paused state. gardener only writes that marker in
+  // response to a valid `@gardener pause` command, so the marker itself is
+  // the authoritative record. Do NOT require the `@gardener pause` comment
+  // to still exist — a user may have edited or deleted it.
+  //
+  // Only a `@gardener resume` command newer than the marker clears the state.
   const latestByCmd = (cmd: "pause" | "resume"): string | null => {
     let latest: string | null = null;
     const re = new RegExp(`@gardener ${cmd}\\b`);
@@ -504,14 +512,21 @@ export function resolveState(input: ResolveStateInput): StateAction {
     return latest;
   };
 
-  const hasPausedState = gardenerComments.some((c) => hasPausedMarker(c.body));
-  if (hasPausedState) {
-    const lastPause = latestByCmd("pause");
+  const latestPausedMarkerTime = gardenerComments
+    .filter((c) => hasPausedMarker(c.body))
+    .reduce<string | null>((latest, c) => {
+      const ts = c.created_at ?? null;
+      if (!ts) return latest;
+      if (!latest || ts > latest) return ts;
+      return latest;
+    }, null);
+
+  if (latestPausedMarkerTime) {
     const lastResume = latestByCmd("resume");
-    if (lastPause && (!lastResume || lastResume <= lastPause)) {
+    if (!lastResume || lastResume <= latestPausedMarkerTime) {
       return { kind: "skip", reason: "paused by user" };
     }
-    // else fall through to rule 4 — resume is active.
+    // else fall through to rule 4 — resume is newer than paused marker.
   }
 
   // Rule 3: @gardener re-review — find newest re-review command and
@@ -595,17 +610,20 @@ export interface ClassifyOutput {
 /**
  * Classifier hook. The real verdict is a judgment call that belongs
  * to an LLM (matching the runbook's "this is a judgment, not a pattern
- * match" guidance). This default returns `NEW_TERRITORY` with low
- * severity so the deterministic scaffolding is exercisable in tests
- * and in CI without LLM access. Callers that want real verdicts
- * should inject a classifier that reads the diff and the tree.
+ * match" guidance). This default returns `INSUFFICIENT_CONTEXT` with
+ * low severity — semantically honest, since no LLM has been consulted.
+ * Previously this returned `NEW_TERRITORY/low`, which misrepresented
+ * "no judgment made" as "judged this is a new area" and would send a
+ * misleading signal if ever posted to a real PR. Callers must inject
+ * a real classifier to get meaningful verdicts.
  */
 export type Classifier = (input: ClassifyInput) => Promise<ClassifyOutput>;
 
 export const defaultClassifier: Classifier = async () => ({
-  verdict: "NEW_TERRITORY",
+  verdict: "INSUFFICIENT_CONTEXT",
   severity: "low",
-  summary: "Tree guidance not yet available for this area.",
+  summary:
+    "No classifier was injected; gardener cannot judge this PR without one.",
   treeNodes: [],
 });
 
@@ -655,15 +673,16 @@ export function buildCommentBody(input: BuildCommentInput): string {
   const consumedId =
     consumedRereviewId !== undefined ? String(consumedRereviewId) : "none";
   const headerLabel = itemType === "pr" ? "This PR" : "This PR/Issue";
-  const treeUrl = treeRepoUrl ?? "";
+  // If treeRepoUrl is missing (no tree_repo in config, or unparseable), render
+  // tree node paths as plain inline code — DO NOT produce `[`path`](/blob/main/path)`
+  // which GitHub resolves relative to the current repo and 404s.
+  const renderNode = (n: { path: string; summary: string }): string =>
+    treeRepoUrl
+      ? `- [\`${n.path}\`](${treeRepoUrl}/blob/main/${n.path}) — ${n.summary}`
+      : `- \`${n.path}\` — ${n.summary}`;
   const treeNodeLinks =
     treeNodes.length > 0
-      ? treeNodes
-          .map(
-            (n) =>
-              `- [\`${n.path}\`](${treeUrl}/blob/main/${n.path}) — ${n.summary}`,
-          )
-          .join("\n")
+      ? treeNodes.map(renderNode).join("\n")
       : `- _(no tree nodes cited — tree may be empty or irrelevant to this change)_`;
   const markerLine1 = `<!-- gardener:state · reviewed=${reviewedFull} · verdict=${verdict} · severity=${severity} · tree_sha=${treeSha} -->`;
   const markerLine2 = `<!-- gardener:last_consumed_rereview=${consumedId} -->`;
