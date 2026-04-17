@@ -336,6 +336,12 @@ interface ClassificationItem {
   rationale: string;
   suggested_node_title: string;
   suggested_node_body_markdown: string;
+  /**
+   * Source PR numbers (other than the owning group's) that independently
+   * proposed this same target path. Populated by the dedup pass so the
+   * surviving PR can credit the dropped claimants in its body (#121).
+   */
+  coClaimingSourcePrs?: number[];
 }
 
 /** A group of proposals tied to one source PR (or unlinked commits). */
@@ -1107,9 +1113,14 @@ async function prepareProposalGroup(
     `- Proposal files: ${group.proposalPaths.length}`,
     "",
     "Proposals:",
-    ...group.proposals.map(
-      (p) => `- ${p.type}: ${p.target_node_path ?? p.path} \u2014 ${p.rationale}`,
-    ),
+    ...group.proposals.map((p) => {
+      const base = `- ${p.type}: ${p.target_node_path ?? p.path} \u2014 ${p.rationale}`;
+      if (p.coClaimingSourcePrs && p.coClaimingSourcePrs.length > 0) {
+        const credits = p.coClaimingSourcePrs.map((n) => `#${n}`).join(", ");
+        return `${base} (also identified by ${credits})`;
+      }
+      return base;
+    }),
     "",
     "Commits:",
     ...drift.commits.map(
@@ -1492,24 +1503,59 @@ export async function runSync(
       classifiedPrs.push(...results);
     }
 
-    // Deduplicate proposals targeting the same node path across PRs
-    const claimedPaths = new Set<string>();
+    // Deduplicate proposals that target the same node path across source PRs.
+    // Strategy (#121): group all proposals by normalized target path, pick the
+    // entry with the longest suggested body as the winner, drop the rest, and
+    // annotate the winner with the losing source-PR numbers so the surviving
+    // tree PR can credit every contributor in its body.
+    interface DedupEntry {
+      classified: ClassifiedPr;
+      proposal: ClassificationItem;
+    }
+    const byPath = new Map<string, DedupEntry[]>();
     for (const classified of classifiedPrs) {
-      const deduped: ClassificationItem[] = [];
       for (const p of classified.filtered) {
-        if (p.type !== "TREE_MISS") {
-          deduped.push(p);
-          continue;
-        }
+        if (p.type !== "TREE_MISS") continue;
         const normPath = (p.path ?? "").replace(/\/NODE\.md$/i, "").replace(/^\//, "").toLowerCase();
-        if (normPath && claimedPaths.has(normPath)) {
-          console.log(`  \u23ED Dedup: ${normPath} already claimed by another PR — skipping from PR #${classified.pr.number}`);
-          continue;
-        }
-        if (normPath) claimedPaths.add(normPath);
-        deduped.push(p);
+        if (!normPath) continue;
+        const list = byPath.get(normPath) ?? [];
+        list.push({ classified, proposal: p });
+        byPath.set(normPath, list);
       }
-      classified.filtered = deduped;
+    }
+    const winningProposals = new Set<ClassificationItem>();
+    for (const [normPath, entries] of byPath) {
+      if (entries.length === 1) {
+        winningProposals.add(entries[0].proposal);
+        continue;
+      }
+      // Rank by body length (stronger content first), then by source PR number
+      // (oldest first) for stable ties.
+      const ranked = [...entries].sort((a, b) => {
+        const aLen = (a.proposal.suggested_node_body_markdown ?? "").length;
+        const bLen = (b.proposal.suggested_node_body_markdown ?? "").length;
+        if (aLen !== bLen) return bLen - aLen;
+        const aNum = a.classified.pr.number ?? Number.MAX_SAFE_INTEGER;
+        const bNum = b.classified.pr.number ?? Number.MAX_SAFE_INTEGER;
+        return aNum - bNum;
+      });
+      const winner = ranked[0];
+      winningProposals.add(winner.proposal);
+      const coClaimants = ranked
+        .slice(1)
+        .map((e) => e.classified.pr.number)
+        .filter((n): n is number => typeof n === "number" && n > 0);
+      if (coClaimants.length > 0) {
+        winner.proposal.coClaimingSourcePrs = Array.from(new Set(coClaimants)).sort((a, b) => a - b);
+      }
+      console.log(
+        `  \u23ED Dedup: ${normPath} claimed by ${ranked.length} PR(s); kept PR #${winner.classified.pr.number} (body=${(winner.proposal.suggested_node_body_markdown ?? "").length} chars), dropped ${coClaimants.map((n) => `#${n}`).join(", ") || "(none)"}`,
+      );
+    }
+    for (const classified of classifiedPrs) {
+      classified.filtered = classified.filtered.filter(
+        (p) => p.type !== "TREE_MISS" || winningProposals.has(p),
+      );
     }
 
     const totalProposals = classifiedPrs.reduce((sum, c) => sum + c.filtered.length, 0);
