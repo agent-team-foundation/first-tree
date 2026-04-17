@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { AppError } from "../../errors.js";
+import { memberScope } from "../../services/access-control.js";
 import * as activityService from "../../services/activity.js";
 import * as clientService from "../../services/client.js";
 import { forceDisconnectClient } from "../../services/connection-manager.js";
@@ -54,10 +55,11 @@ export async function adminClientRoutes(app: FastifyInstance): Promise<void> {
 }
 
 export async function adminActivityRoutes(app: FastifyInstance): Promise<void> {
-  // GET /admin/agents/activity — activity overview
-  app.get("/", async () => {
+  // GET /admin/agents/activity — activity overview (visibility-scoped)
+  app.get("/", async (request) => {
+    const scope = memberScope(request);
     const overview = await activityService.getActivityOverview(app.db);
-    const runningAgents = await activityService.listAgentsWithRuntime(app.db);
+    const runningAgents = await activityService.listAgentsWithRuntime(app.db, scope);
 
     return {
       ...overview,

@@ -4,6 +4,7 @@ import type { FastifyInstance } from "fastify";
 import { adapterAgentMappings } from "../../db/schema/adapter-agent-mappings.js";
 import { agents } from "../../db/schema/agents.js";
 import { BadRequestError, NotFoundError } from "../../errors.js";
+import { assertCanManage, memberScope } from "../../services/access-control.js";
 import { createAgentMapping } from "../../services/adapter-mapping.js";
 
 function parseId(raw: string): number {
@@ -30,6 +31,8 @@ export async function adminAdapterMappingRoutes(app: FastifyInstance): Promise<v
 
   app.post("/", async (request, reply) => {
     const body = createAdapterMappingSchema.parse(request.body);
+    const scope = memberScope(request);
+    await assertCanManage(app.db, scope, body.agentId);
 
     // Validate agent exists and is human type
     const [agent] = await app.db
@@ -65,8 +68,12 @@ export async function adminAdapterMappingRoutes(app: FastifyInstance): Promise<v
 
   app.delete<{ Params: { id: string } }>("/:id", async (request, reply) => {
     const id = parseId(request.params.id);
-    const [row] = await app.db.delete(adapterAgentMappings).where(eq(adapterAgentMappings.id, id)).returning();
-    if (!row) throw new NotFoundError(`Adapter mapping "${id}" not found`);
+    // Look up the mapping to find its agentId for authorization
+    const [existing] = await app.db.select().from(adapterAgentMappings).where(eq(adapterAgentMappings.id, id)).limit(1);
+    if (!existing) throw new NotFoundError(`Adapter mapping "${id}" not found`);
+    const scope = memberScope(request);
+    await assertCanManage(app.db, scope, existing.agentId);
+    await app.db.delete(adapterAgentMappings).where(eq(adapterAgentMappings.id, id));
     return reply.status(204).send();
   });
 }

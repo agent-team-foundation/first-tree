@@ -1,9 +1,11 @@
 import type { SessionState } from "@agent-team-foundation/first-tree-hub-shared";
-import { eq, isNotNull, sql } from "drizzle-orm";
+import { and, eq, isNotNull, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
+import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
+import { agentVisibilityCondition, type MemberScope } from "./access-control.js";
 import type { Notifier } from "./notifier.js";
 
 /** Upsert a session state and update materialized aggregates on agent_presence. */
@@ -101,8 +103,34 @@ export async function getAgentWithRuntime(db: Database, agentId: string) {
   return row ?? null;
 }
 
-export async function listAgentsWithRuntime(db: Database) {
-  return db.select().from(agentPresence).where(isNotNull(agentPresence.runtimeState));
+/**
+ * List agents with active runtime state.
+ * When scope is provided, filters to agents visible to the member.
+ */
+export async function listAgentsWithRuntime(db: Database, scope?: MemberScope) {
+  if (!scope) {
+    return db.select().from(agentPresence).where(isNotNull(agentPresence.runtimeState));
+  }
+
+  // JOIN with agents table to apply visibility filter
+  return db
+    .select({
+      agentId: agentPresence.agentId,
+      status: agentPresence.status,
+      instanceId: agentPresence.instanceId,
+      connectedAt: agentPresence.connectedAt,
+      lastSeenAt: agentPresence.lastSeenAt,
+      clientId: agentPresence.clientId,
+      runtimeType: agentPresence.runtimeType,
+      runtimeVersion: agentPresence.runtimeVersion,
+      runtimeState: agentPresence.runtimeState,
+      activeSessions: agentPresence.activeSessions,
+      totalSessions: agentPresence.totalSessions,
+      runtimeUpdatedAt: agentPresence.runtimeUpdatedAt,
+    })
+    .from(agentPresence)
+    .innerJoin(agents, eq(agentPresence.agentId, agents.uuid))
+    .where(and(isNotNull(agentPresence.runtimeState), agentVisibilityCondition(scope)));
 }
 
 /**

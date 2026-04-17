@@ -1,6 +1,12 @@
 import { randomBytes } from "node:crypto";
-import type { CreateAgent, CreateAgentToken, UpdateAgent } from "@agent-team-foundation/first-tree-hub-shared";
-import { AGENT_STATUSES } from "@agent-team-foundation/first-tree-hub-shared";
+import type {
+  AgentType,
+  AgentVisibility,
+  CreateAgent,
+  CreateAgentToken,
+  UpdateAgent,
+} from "@agent-team-foundation/first-tree-hub-shared";
+import { AGENT_STATUSES, AGENT_VISIBILITY } from "@agent-team-foundation/first-tree-hub-shared";
 import { and, count, desc, eq, isNull, lt, ne } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { adapterAgentMappings } from "../db/schema/adapter-agent-mappings.js";
@@ -12,6 +18,7 @@ import { organizations } from "../db/schema/organizations.js";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 import { hashToken } from "../utils.js";
 import { uuidv7 } from "../uuid.js";
+import { agentVisibilityCondition, type MemberScope } from "./access-control.js";
 import { resolveDefaultOrgId } from "./organization.js";
 
 /**
@@ -21,6 +28,19 @@ import { resolveDefaultOrgId } from "./organization.js";
  * real account.
  */
 const RESERVED_AGENT_NAME_PREFIX = "__";
+
+/** Default visibility per agent type. */
+function defaultVisibility(type: AgentType): AgentVisibility {
+  switch (type) {
+    case "human":
+    case "autonomous_agent":
+      return AGENT_VISIBILITY.ORGANIZATION;
+    case "personal_assistant":
+      return AGENT_VISIBILITY.PRIVATE;
+    default:
+      return AGENT_VISIBILITY.PRIVATE;
+  }
+}
 
 export async function createAgent(db: Database, data: CreateAgent) {
   const uuid = uuidv7();
@@ -67,7 +87,7 @@ export async function createAgent(db: Database, data: CreateAgent) {
         profile: data.profile ?? null,
         inboxId,
         source: data.source ?? null,
-        public: data.public ?? false,
+        visibility: data.visibility ?? defaultVisibility(data.type),
         metadata: data.metadata ?? {},
         managerId: data.managerId ?? null,
       })
@@ -127,13 +147,68 @@ export async function listAgents(db: Database, orgId: string, limit: number, cur
       inboxId: agents.inboxId,
       status: agents.status,
       cloudUserId: agents.cloudUserId,
-      public: agents.public,
+      visibility: agents.visibility,
       metadata: agents.metadata,
       managerId: agents.managerId,
       createdAt: agents.createdAt,
       updatedAt: agents.updatedAt,
       presenceStatus: agentPresence.status,
       // M1: runtime fields
+      clientId: agentPresence.clientId,
+      runtimeType: agentPresence.runtimeType,
+      runtimeState: agentPresence.runtimeState,
+      activeSessions: agentPresence.activeSessions,
+    })
+    .from(agents)
+    .leftJoin(agentPresence, eq(agents.uuid, agentPresence.agentId))
+    .where(where)
+    .orderBy(desc(agents.createdAt))
+    .limit(limit + 1);
+
+  const hasMore = rows.length > limit;
+  const items = hasMore ? rows.slice(0, limit) : rows;
+  const last = items[items.length - 1];
+  const nextCursor = hasMore && last ? last.createdAt.toISOString() : null;
+
+  return { items, nextCursor };
+}
+
+/**
+ * List agents visible to a specific member.
+ * Uses agentVisibilityCondition from access-control (same rules for all roles).
+ */
+export async function listAgentsForMember(
+  db: Database,
+  scope: MemberScope,
+  limit: number,
+  cursor?: string,
+  type?: string,
+) {
+  // agentVisibilityCondition already includes org + status + visibility filtering
+  const conditions = [agentVisibilityCondition(scope)];
+  if (cursor) conditions.push(lt(agents.createdAt, new Date(cursor)));
+  if (type) conditions.push(eq(agents.type, type));
+
+  const where = and(...conditions);
+
+  const rows = await db
+    .select({
+      uuid: agents.uuid,
+      name: agents.name,
+      organizationId: agents.organizationId,
+      type: agents.type,
+      displayName: agents.displayName,
+      delegateMention: agents.delegateMention,
+      profile: agents.profile,
+      inboxId: agents.inboxId,
+      status: agents.status,
+      cloudUserId: agents.cloudUserId,
+      visibility: agents.visibility,
+      metadata: agents.metadata,
+      managerId: agents.managerId,
+      createdAt: agents.createdAt,
+      updatedAt: agents.updatedAt,
+      presenceStatus: agentPresence.status,
       clientId: agentPresence.clientId,
       runtimeType: agentPresence.runtimeType,
       runtimeState: agentPresence.runtimeState,
@@ -161,6 +236,7 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
   if (data.displayName !== undefined) updates.displayName = data.displayName;
   if (data.delegateMention !== undefined) updates.delegateMention = data.delegateMention;
   if (data.profile !== undefined) updates.profile = data.profile;
+  if (data.visibility !== undefined) updates.visibility = data.visibility;
   if (data.metadata !== undefined) updates.metadata = data.metadata;
 
   const [updated] = await db.update(agents).set(updates).where(eq(agents.uuid, agent.uuid)).returning();

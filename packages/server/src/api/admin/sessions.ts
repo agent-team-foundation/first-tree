@@ -1,8 +1,9 @@
 import { paginationQuerySchema } from "@agent-team-foundation/first-tree-hub-shared";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { ConflictError, ForbiddenError } from "../../errors.js";
+import { ConflictError } from "../../errors.js";
 import { requireMember } from "../../middleware/require-identity.js";
+import { assertAgentVisible, assertCanManage, memberScope } from "../../services/access-control.js";
 import * as agentService from "../../services/agent.js";
 import { sendToAgent } from "../../services/connection-manager.js";
 import * as sessionService from "../../services/session.js";
@@ -18,18 +19,7 @@ const globalSessionFilterSchema = paginationQuerySchema.extend({
   agentId: z.string().optional(),
 });
 
-/** Verify the agent belongs to the caller's organization. */
-async function assertAgentInOrg(
-  app: FastifyInstance,
-  request: { member?: { organizationId: string } },
-  agentId: string,
-): Promise<void> {
-  const member = requireMember(request as Parameters<typeof requireMember>[0]);
-  const agent = await agentService.getAgent(app.db, agentId);
-  if (agent.organizationId !== member.organizationId) {
-    throw new ForbiddenError("Agent does not belong to your organization");
-  }
-}
+// assertAgentInOrg replaced by assertAgentVisible from access-control.ts
 
 export async function adminSessionRoutes(app: FastifyInstance): Promise<void> {
   /** GET /admin/sessions — global session list, scoped to caller's org */
@@ -43,22 +33,29 @@ export async function adminSessionRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
-  /** GET /admin/sessions/agents/:agentId — sessions for a specific agent */
+  /** GET /admin/sessions/agents/:agentId — sessions for a specific agent.
+   *  Manager sees all sessions. Non-manager sees only sessions where their human agent is also a participant. */
   app.get<{ Params: { agentId: string } }>("/agents/:agentId", async (request) => {
-    await assertAgentInOrg(app, request, request.params.agentId);
+    const scope = memberScope(request);
+    await assertAgentVisible(app.db, scope, request.params.agentId);
     const filters = sessionFilterSchema.parse(request.query);
-    return sessionService.listAgentSessions(app.db, request.params.agentId, filters);
+    const agent = await agentService.getAgent(app.db, request.params.agentId);
+    const isManager = agent.managerId === scope.memberId;
+    const sessions = await sessionService.listAgentSessions(app.db, request.params.agentId, filters);
+    if (isManager) return sessions;
+    // Non-manager: filter to sessions where the member's human agent is also a participant in the chat
+    return sessionService.filterSessionsByParticipant(app.db, sessions, scope.humanAgentId);
   });
 
   /** GET /admin/sessions/agents/:agentId/:chatId — single session detail */
   app.get<{ Params: { agentId: string; chatId: string } }>("/agents/:agentId/:chatId", async (request) => {
-    await assertAgentInOrg(app, request, request.params.agentId);
+    await assertAgentVisible(app.db, memberScope(request), request.params.agentId);
     return sessionService.getSession(app.db, request.params.agentId, request.params.chatId);
   });
 
   /** GET /admin/sessions/agents/:agentId/:chatId/output — session output text */
   app.get<{ Params: { agentId: string; chatId: string } }>("/agents/:agentId/:chatId/output", async (request) => {
-    await assertAgentInOrg(app, request, request.params.agentId);
+    await assertAgentVisible(app.db, memberScope(request), request.params.agentId);
     const output = await sessionOutputService.getOutput(app.db, request.params.agentId, request.params.chatId);
     return output ?? { content: "", updatedAt: null };
   });
@@ -68,7 +65,7 @@ export async function adminSessionRoutes(app: FastifyInstance): Promise<void> {
     "/agents/:agentId/:chatId/suspend",
     async (request, reply) => {
       const { agentId, chatId } = request.params;
-      await assertAgentInOrg(app, request, agentId);
+      await assertCanManage(app.db, memberScope(request), agentId);
       const sent = sendToAgent(agentId, { type: "session:suspend", chatId });
       if (!sent) {
         throw new ConflictError("Agent is not connected — session command requires a live connection");
@@ -82,7 +79,7 @@ export async function adminSessionRoutes(app: FastifyInstance): Promise<void> {
     "/agents/:agentId/:chatId/resume",
     async (request, reply) => {
       const { agentId, chatId } = request.params;
-      await assertAgentInOrg(app, request, agentId);
+      await assertCanManage(app.db, memberScope(request), agentId);
       const sent = sendToAgent(agentId, { type: "session:resume", chatId });
       if (!sent) {
         throw new ConflictError("Agent is not connected — session command requires a live connection");
@@ -96,7 +93,7 @@ export async function adminSessionRoutes(app: FastifyInstance): Promise<void> {
     "/agents/:agentId/:chatId/terminate",
     async (request, reply) => {
       const { agentId, chatId } = request.params;
-      await assertAgentInOrg(app, request, agentId);
+      await assertCanManage(app.db, memberScope(request), agentId);
       const sent = sendToAgent(agentId, { type: "session:terminate", chatId });
       if (!sent) {
         throw new ConflictError("Agent is not connected — session command requires a live connection");

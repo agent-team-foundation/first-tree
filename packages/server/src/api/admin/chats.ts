@@ -4,15 +4,17 @@ import type { FastifyInstance } from "fastify";
 import { chatParticipants, chats } from "../../db/schema/chats.js";
 import { inboxEntries } from "../../db/schema/inbox-entries.js";
 import { messages } from "../../db/schema/messages.js";
-import { BadRequestError } from "../../errors.js";
-import { ensureParticipant } from "../../services/chat.js";
+import { requireAdminRoleHook } from "../../middleware/member-auth.js";
+import { requireMember } from "../../middleware/require-identity.js";
+import { assertChatAccess, memberScope } from "../../services/access-control.js";
+import { ensureParticipant, joinChat, leaveChat, listChatsForMember } from "../../services/chat.js";
 import { sendMessage } from "../../services/message.js";
 import { notifyRecipients } from "../../services/notifier.js";
 import { resolveDefaultOrgId, resolveOrganization } from "../../services/organization.js";
 
 export async function adminChatRoutes(app: FastifyInstance): Promise<void> {
-  /** List chats with participant count */
-  app.get("/", async (request) => {
+  /** List all chats in org (admin-only, for audit). Members should use GET /mine. */
+  app.get("/", { preHandler: requireAdminRoleHook() }, async (request) => {
     const query = paginationQuerySchema.parse(request.query);
     const orgParam = (request.query as Record<string, string>).org;
     let orgId: string;
@@ -66,11 +68,15 @@ export async function adminChatRoutes(app: FastifyInstance): Promise<void> {
     };
   });
 
-  /** Get chat detail with participants */
+  /** Get chat detail with participants (requires participation or supervision) */
   app.get<{ Params: { chatId: string } }>("/:chatId", async (request) => {
     const { chatId } = request.params;
+    const scope = memberScope(request);
+    await assertChatAccess(app.db, scope, chatId); // also verifies chat exists
+
+    // assertChatAccess guarantees the chat exists; the select is for full data
     const [chat] = await app.db.select().from(chats).where(eq(chats.id, chatId)).limit(1);
-    if (!chat) throw new BadRequestError(`Chat "${chatId}" not found`);
+    if (!chat) throw new Error("Unexpected: chat missing after access check");
 
     const participants = await app.db.select().from(chatParticipants).where(eq(chatParticipants.chatId, chatId));
 
@@ -87,9 +93,11 @@ export async function adminChatRoutes(app: FastifyInstance): Promise<void> {
     };
   });
 
-  /** List messages in a chat with delivery status (for admin audit + read receipts) */
+  /** List messages in a chat with delivery status (requires participation or supervision) */
   app.get<{ Params: { chatId: string } }>("/:chatId/messages", async (request) => {
     const { chatId } = request.params;
+    const scope = memberScope(request);
+    await assertChatAccess(app.db, scope, chatId);
     const query = paginationQuerySchema.parse(request.query);
 
     const where = query.cursor
@@ -150,14 +158,61 @@ export async function adminChatRoutes(app: FastifyInstance): Promise<void> {
     };
   });
 
-  /** POST /admin/chats/:chatId/messages — admin sends a message as their linked human agent */
+  /**
+   * GET /admin/chats/mine — member-scoped chat listing grouped by agent.
+   * Returns only chats where the member's agents participate or are supervised.
+   */
+  // TODO: add pagination (limit/cursor) — currently returns all results which may be too large
+  app.get("/mine", async (request) => {
+    const member = requireMember(request);
+    return listChatsForMember(app.db, member.memberId, member.agentId);
+  });
+
+  /** POST /admin/chats/:chatId/join — manager joins a chat (adds human agent as participant) */
+  app.post<{ Params: { chatId: string } }>("/:chatId/join", async (request, reply) => {
+    const { chatId } = request.params;
+    const member = requireMember(request);
+
+    const participants = await joinChat(app.db, chatId, member.memberId, member.agentId);
+
+    return reply.status(200).send({
+      chatId,
+      participants: participants.map((p) => ({
+        agentId: p.agentId,
+        role: p.role,
+        mode: p.mode,
+        joinedAt: p.joinedAt.toISOString(),
+      })),
+    });
+  });
+
+  /** POST /admin/chats/:chatId/leave — manager leaves a chat (removes human agent from participants) */
+  app.post<{ Params: { chatId: string } }>("/:chatId/leave", async (request, reply) => {
+    const { chatId } = request.params;
+    const member = requireMember(request);
+
+    const participants = await leaveChat(app.db, chatId, member.agentId);
+
+    return reply.status(200).send({
+      chatId,
+      participants: participants.map((p) => ({
+        agentId: p.agentId,
+        role: p.role,
+        mode: p.mode,
+        joinedAt: p.joinedAt.toISOString(),
+      })),
+    });
+  });
+
+  /** POST /admin/chats/:chatId/messages — member sends a message as their linked human agent */
   app.post<{ Params: { chatId: string } }>("/:chatId/messages", async (request, reply) => {
     const { chatId } = request.params;
-    const member = request.member;
-    if (!member) throw new BadRequestError("Member identity not available");
+    const scope = memberScope(request);
+    const member = requireMember(request);
     const body = sendMessageSchema.parse(request.body);
 
-    // Auto-join the member's agent if not already a participant (workspace chat)
+    // Verify the member has legitimate access (participant or supervision), then auto-join
+    await assertChatAccess(app.db, scope, chatId);
     await ensureParticipant(app.db, chatId, member.agentId);
 
     // Send message as the member's linked agent, always with source=hub_ui
