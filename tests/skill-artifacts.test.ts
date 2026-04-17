@@ -109,11 +109,19 @@ describe("skill artifacts", () => {
     expect(
       existsSync(join(ROOT, "docs", "design-sync.md")),
     ).toBe(true);
+    const allowedAliases = new Set([
+      ".agents/skills/first-tree",
+      ".agents/skills/tree",
+      ".agents/skills/breeze",
+      ".agents/skills/gardener",
+      ".claude/skills/first-tree",
+      ".claude/skills/tree",
+      ".claude/skills/breeze",
+      ".claude/skills/gardener",
+    ]);
     expect(
       trackedEntriesInGit(".agents", ".claude").filter(
-        (entry) =>
-          entry !== ".agents/skills/first-tree"
-          && entry !== ".claude/skills/first-tree",
+        (entry) => !allowedAliases.has(entry),
       ),
     ).toEqual([]);
     expect(trackedEntriesInGit(".context-tree")).toEqual([]);

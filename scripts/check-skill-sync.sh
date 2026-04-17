@@ -119,7 +119,13 @@ require_file "$REPO_ROOT/evals/helpers/case-loader.ts"
 require_file "$REPO_ROOT/evals/scripts/tree-manager.ts"
 require_file "$REPO_ROOT/evals/tests/eval-helpers.test.ts"
 require_symlink_target "$REPO_ROOT/.agents/skills/first-tree" "../../skills/first-tree"
+require_symlink_target "$REPO_ROOT/.agents/skills/tree" "../../skills/tree"
+require_symlink_target "$REPO_ROOT/.agents/skills/breeze" "../../skills/breeze"
+require_symlink_target "$REPO_ROOT/.agents/skills/gardener" "../../skills/gardener"
 require_symlink_target "$REPO_ROOT/.claude/skills/first-tree" "../../.agents/skills/first-tree"
+require_symlink_target "$REPO_ROOT/.claude/skills/tree" "../../.agents/skills/tree"
+require_symlink_target "$REPO_ROOT/.claude/skills/breeze" "../../.agents/skills/breeze"
+require_symlink_target "$REPO_ROOT/.claude/skills/gardener" "../../.agents/skills/gardener"
 
 # Check for legacy artifacts that should not be committed. Skill payload
 # directories must contain only SKILL.md, VERSION, and (optionally)
@@ -166,8 +172,16 @@ require_file "$REPO_ROOT/skills/breeze/VERSION"
 require_file "$REPO_ROOT/skills/gardener/SKILL.md"
 require_file "$REPO_ROOT/skills/gardener/VERSION"
 
-tracked_aliases="$(git -C "$REPO_ROOT" ls-files .agents .claude)"
-expected_aliases=$'.agents/skills/first-tree\n.claude/skills/first-tree'
+tracked_aliases="$(git -C "$REPO_ROOT" ls-files .agents .claude | sort)"
+expected_aliases="$(printf '%s\n' \
+  .agents/skills/breeze \
+  .agents/skills/first-tree \
+  .agents/skills/gardener \
+  .agents/skills/tree \
+  .claude/skills/breeze \
+  .claude/skills/first-tree \
+  .claude/skills/gardener \
+  .claude/skills/tree | sort)"
 if [[ -n "$tracked_aliases" && "$tracked_aliases" != "$expected_aliases" ]]; then
   echo "Tracked .agents/.claude entries are out of sync with the expected local skill aliases." >&2
   printf 'Expected:\n%s\nGot:\n%s\n' "$expected_aliases" "$tracked_aliases" >&2
