@@ -9,6 +9,11 @@
  * Phase 1 ships the `respond` subcommand — a port of the
  * `gardener-respond-manual.md` runbook that fixes sync PRs based on
  * reviewer feedback.
+ *
+ * Phase 2 adds the `comment` subcommand — a port of the
+ * `gardener-comment-manual.md` runbook that reviews open PRs and issues
+ * on a source repo against a Context Tree and posts structured verdict
+ * comments.
  */
 
 import { readFileSync } from "node:fs";
@@ -22,6 +27,7 @@ export const GARDENER_USAGE = `usage: first-tree gardener <command>
 
 Commands:
   respond               Fix sync PRs based on reviewer feedback
+  comment               Review source-repo PRs/issues against the tree
 
 Options:
   --help, -h            Show this help message
@@ -31,6 +37,9 @@ Examples:
   first-tree gardener respond --help
   first-tree gardener respond --dry-run
   first-tree gardener respond --pr 123 --repo owner/name
+  first-tree gardener comment --help
+  first-tree gardener comment --pr 42 --repo owner/name
+  first-tree gardener comment --issue 7 --repo owner/name
 `;
 
 type Output = (text: string) => void;
@@ -76,6 +85,12 @@ export async function runGardener(
         "./engine/commands/respond.js"
       );
       return runRespond(args.slice(1), { write });
+    }
+    case "comment": {
+      const { runComment } = await import(
+        "./engine/commands/comment.js"
+      );
+      return runComment(args.slice(1), { write });
     }
     default:
       write(`Unknown gardener command: ${command}`);
