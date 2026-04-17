@@ -95,19 +95,19 @@ describe("skill artifacts", () => {
       existsSync(join(ROOT, "src", "products", "tree", "engine", "validators", "nodes.ts")),
     ).toBe(true);
     expect(
-      existsSync(join(ROOT, "docs", "maintainer-architecture.md")),
+      existsSync(join(ROOT, "docs", "architecture", "overview.md")),
     ).toBe(true);
     expect(
-      existsSync(join(ROOT, "docs", "maintainer-thin-cli.md")),
+      existsSync(join(ROOT, "docs", "architecture", "thin-cli.md")),
     ).toBe(true);
     expect(
-      existsSync(join(ROOT, "docs", "maintainer-build-and-distribution.md")),
+      existsSync(join(ROOT, "docs", "build", "distribution.md")),
     ).toBe(true);
     expect(
-      existsSync(join(ROOT, "docs", "maintainer-testing.md")),
+      existsSync(join(ROOT, "docs", "testing", "overview.md")),
     ).toBe(true);
     expect(
-      existsSync(join(ROOT, "docs", "design-sync.md")),
+      existsSync(join(ROOT, "docs", "design", "sync.md")),
     ).toBe(true);
     const allowedAliases = new Set([
       ".agents/skills/first-tree",
@@ -273,9 +273,9 @@ describe("skill artifacts", () => {
     for (const skillMd of [firstTreeSkillMd, treeSkillMd]) {
       expect(skillMd).not.toContain("sync-skill-artifacts.sh");
       expect(skillMd).not.toContain("portable-smoke-test.sh");
-      expect(skillMd).not.toContain("maintainer-build-and-distribution.md");
-      expect(skillMd).not.toContain("maintainer-testing.md");
-      expect(skillMd).not.toContain("maintainer-architecture.md");
+      expect(skillMd).not.toContain("docs/build/distribution.md");
+      expect(skillMd).not.toContain("docs/testing/overview.md");
+      expect(skillMd).not.toContain("docs/architecture/overview.md");
       expect(skillMd).not.toContain("source-map.md");
       expect(skillMd).not.toContain("canonical eval harness");
       expect(skillMd).not.toContain("`engine/`");
@@ -310,11 +310,11 @@ describe("skill artifacts", () => {
     expect(sourceMap).toContain("first-tree-skill-cli/validation-surface.md");
     expect(sourceMap).toContain("first-tree-skill-cli/sync.md");
     expect(sourceMap).toContain("source-workspace-installation.md");
-    expect(sourceMap).toContain("docs/design-sync.md");
-    expect(sourceMap).toContain("maintainer-architecture.md");
-    expect(sourceMap).toContain("maintainer-thin-cli.md");
-    expect(sourceMap).toContain("maintainer-build-and-distribution.md");
-    expect(sourceMap).toContain("maintainer-testing.md");
+    expect(sourceMap).toContain("docs/design/sync.md");
+    expect(sourceMap).toContain("docs/architecture/overview.md");
+    expect(sourceMap).toContain("docs/architecture/thin-cli.md");
+    expect(sourceMap).toContain("docs/build/distribution.md");
+    expect(sourceMap).toContain("docs/testing/overview.md");
     expect(sourceMap).toContain("src/products/tree/engine/publish.ts");
     expect(sourceMap).toContain("src/products/tree/engine/sync.ts");
     expect(sourceMap).toContain("src/products/tree/engine/inspect.ts");
@@ -354,7 +354,7 @@ describe("skill artifacts", () => {
     expect(openaiPrompt).toContain("source-repos.md");
 
     const maintainerArchitecture = read(
-      "docs/maintainer-architecture.md",
+      "docs/architecture/overview.md",
     );
     expect(maintainerArchitecture).toContain("first-tree-skill-cli/repo-architecture.md");
     expect(maintainerArchitecture).toContain("skills/first-tree/");
@@ -371,13 +371,13 @@ describe("skill artifacts", () => {
     expect(upgradeContract).not.toContain(".first-tree/submodules/");
 
     const buildAndDistribution = read(
-      "docs/maintainer-build-and-distribution.md",
+      "docs/build/distribution.md",
     );
     expect(buildAndDistribution).toContain("first-tree-skill-cli/build-and-distribution.md");
     expect(buildAndDistribution).toContain("pnpm pack");
     expect(buildAndDistribution).toContain("assets/tree/VERSION");
 
-    const designSync = read("docs/design-sync.md");
+    const designSync = read("docs/design/sync.md");
     expect(designSync).toContain("first-tree-skill-cli/sync.md");
     expect(designSync).toContain("src/products/tree/engine/sync.ts");
     expect(designSync).toContain("tests/tree/sync.test.ts");

@@ -58,11 +58,11 @@ done
 
 # Source-repo maintainer docs live in top-level docs/.
 require_file "$REPO_ROOT/docs/source-map.md"
-require_file "$REPO_ROOT/docs/design-sync.md"
-require_file "$REPO_ROOT/docs/maintainer-architecture.md"
-require_file "$REPO_ROOT/docs/maintainer-thin-cli.md"
-require_file "$REPO_ROOT/docs/maintainer-build-and-distribution.md"
-require_file "$REPO_ROOT/docs/maintainer-testing.md"
+require_file "$REPO_ROOT/docs/design/sync.md"
+require_file "$REPO_ROOT/docs/architecture/overview.md"
+require_file "$REPO_ROOT/docs/architecture/thin-cli.md"
+require_file "$REPO_ROOT/docs/build/distribution.md"
+require_file "$REPO_ROOT/docs/testing/overview.md"
 
 # Engine lives under src/products/tree/engine.
 require_file "$ENGINE_DIR/init.ts"

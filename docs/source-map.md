@@ -22,11 +22,11 @@ docs below only for source-repo implementation details.
 | `skills/first-tree/references/onboarding.md` | Repo, shared-tree, and workspace onboarding model |
 | `skills/first-tree/references/source-workspace-installation.md` | Binding model and source/workspace contract |
 | `skills/first-tree/references/upgrade-contract.md` | Installed layout and upgrade invariants |
-| `docs/maintainer-architecture.md` | Local file-level architecture map for this source repo |
-| `docs/maintainer-thin-cli.md` | Implementation touchpoints for `src/cli.ts` and command adapters |
-| `docs/maintainer-build-and-distribution.md` | Packaging surfaces and release checklist in this repo |
-| `docs/maintainer-testing.md` | Concrete validation commands and targeted test entrypoints |
-| `docs/design-sync.md` | Local implementation touchpoints for the sync feature |
+| `docs/architecture/overview.md` | Local file-level architecture map for this source repo |
+| `docs/architecture/thin-cli.md` | Implementation touchpoints for `src/cli.ts` and command adapters |
+| `docs/build/distribution.md` | Packaging surfaces and release checklist in this repo |
+| `docs/testing/overview.md` | Concrete validation commands and targeted test entrypoints |
+| `docs/design/sync.md` | Local implementation touchpoints for the sync feature |
 
 ## Runtime Payload
 
