@@ -53,7 +53,8 @@
     "eval": "vitest run --config vitest.eval.config.ts",
     "typecheck": "tsc --noEmit",
     "validate:skill": "python3 ./scripts/quick_validate.py ./skills/first-tree && bash ./scripts/check-skill-sync.sh",
-    "release:check": "pnpm version:check && pnpm validate:skill && pnpm typecheck && pnpm test && pnpm build && pnpm test:dist && pnpm test:release"
+    "release:check": "pnpm version:check && pnpm validate:skill && pnpm typecheck && pnpm test && pnpm build && pnpm test:dist && pnpm test:release",
+    "prepublishOnly": "pnpm release:check"
   },
   "packageManager": "pnpm@10.25.0",
   "license": "Apache-2.0",

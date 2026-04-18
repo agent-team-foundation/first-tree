@@ -73,13 +73,25 @@ Maintaining this repo is different from using it — see the user-facing
 
 ## Validation
 
+Single release gate — CI runs this exact command and `prepublishOnly`
+reruns it before `npm publish`:
+
+```bash
+pnpm release:check
+```
+
+Individual steps if you want to iterate on one layer:
+
 ```bash
 pnpm validate:skill
 pnpm typecheck
 pnpm test
 pnpm build
-pnpm pack
+pnpm test:dist     # post-build binary smoke (requires a prior pnpm build)
+pnpm test:release  # pack + npm install <tarball> smoke
 ```
+
+See `docs/testing/overview.md` for the layered gate contract.
 
 Maintainer-only eval tooling lives in `evals/`. See `evals/README.md` before
 running `EVALS=1 pnpm eval`.
