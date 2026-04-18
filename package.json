@@ -32,6 +32,10 @@
   },
   "files": [
     "dist",
+    "src/products/tree/VERSION",
+    "src/products/breeze/VERSION",
+    "src/products/gardener/VERSION",
+    "src/meta/skill-tools/VERSION",
     "skills/first-tree",
     "skills/tree",
     "skills/breeze",

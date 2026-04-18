@@ -4,19 +4,12 @@
  * The surface splits into two kinds of commands:
  *
  *   - Products: `tree`, `breeze`, `gardener`. Each is a real tool with its
- *     own CLI, its own skill payload under `skills/<name>/`, and optional
- *     runtime assets under `assets/<name>/`. These are what users mean
- *     when they say "a first-tree product".
+ *     own CLI, its own skill payload under `skills/<name>`, and optional
+ *     runtime assets under `assets/<name>`.
  *
- *   - Meta commands: `skill`. These are maintenance/diagnostic tools that
- *     operate on the product suite itself. They don't ship skills or
- *     assets, aren't subject to auto-upgrade, and shouldn't be treated as
- *     products by callers that iterate the product set.
- *
- * The umbrella CLI (src/cli.ts) and maintainer scripts should iterate
- * `PRODUCTS` for product-level logic (help listing, version reporting,
- * auto-upgrade) and `META_COMMANDS` when they want the full dispatch
- * surface. `ALL_COMMANDS` is the concatenation for lookup.
+ *   - Meta commands: `skill`. These are maintenance tools that operate on the
+ *     product suite itself. They don't ship skills or assets, and shouldn't be
+ *     treated as products by callers that iterate only the product set.
  */
 
 import { readOwnVersion } from "#shared/version.js";
@@ -27,23 +20,17 @@ type CommandRunner = (args: string[], output: Output) => Promise<number>;
 export type CommandKind = "product" | "meta";
 
 export interface CommandDefinition {
-  /** Subcommand name as typed on the CLI (`first-tree <name> ...`). */
   readonly name: string;
-  /** `product` = real tool; `meta` = maintenance/diagnostic command. */
   readonly kind: CommandKind;
-  /** One-line description shown in the umbrella `--help` usage block. */
   readonly description: string;
-  /** Lazy loader for the command's CLI entrypoint. */
   readonly load: () => Promise<{ run: CommandRunner }>;
-  /** Whether invoking this command should trigger the auto-upgrade check. */
   readonly autoUpgradeOnInvoke: boolean;
+  readonly versionDir: string;
 }
 
 export interface ProductDefinition extends CommandDefinition {
   readonly kind: "product";
-  /** Whether this product ships runtime assets under `assets/<name>/`. */
   readonly hasAssets: boolean;
-  /** Whether this product ships a skill under `skills/<name>/`. */
   readonly hasSkill: boolean;
 }
 
@@ -55,13 +42,13 @@ export const PRODUCTS: readonly ProductDefinition[] = [
   {
     name: "tree",
     kind: "product",
-    description:
-      "Context Tree tooling (init, bind, sync, publish, ...)",
+    description: "Context Tree tooling (init, bind, sync, publish, ...)",
     load: async () => {
       const mod = await import("./tree/cli.js");
       return { run: (args, output) => mod.runTree(args, output) };
     },
     autoUpgradeOnInvoke: true,
+    versionDir: "src/products/tree",
     hasAssets: true,
     hasSkill: true,
   },
@@ -75,19 +62,20 @@ export const PRODUCTS: readonly ProductDefinition[] = [
       return { run: (args, output) => mod.runBreeze(args, output) };
     },
     autoUpgradeOnInvoke: false,
+    versionDir: "src/products/breeze",
     hasAssets: true,
     hasSkill: true,
   },
   {
     name: "gardener",
     kind: "product",
-    description:
-      "Context Tree maintenance agent (respond, comment, ...)",
+    description: "Context Tree maintenance agent (respond, comment, ...)",
     load: async () => {
       const mod = await import("./gardener/cli.js");
       return { run: (args, output) => mod.runGardener(args, output) };
     },
     autoUpgradeOnInvoke: false,
+    versionDir: "src/products/gardener",
     hasAssets: false,
     hasSkill: true,
   },
@@ -98,12 +86,13 @@ export const META_COMMANDS: readonly MetaDefinition[] = [
     name: "skill",
     kind: "meta",
     description:
-      "Inspect and repair the four bundled first-tree skills (list, doctor, link)",
+      "Manage the four bundled first-tree skills (install, upgrade, list, doctor, link)",
     load: async () => {
       const mod = await import("#meta/skill-tools/cli.js");
       return { run: (args, output) => mod.runSkill(args, output) };
     },
     autoUpgradeOnInvoke: false,
+    versionDir: "src/meta/skill-tools",
   },
 ];
 
@@ -128,12 +117,14 @@ export function listProductNames(): readonly string[] {
   return PRODUCTS.map((p) => p.name);
 }
 
-/**
- * Read a product's VERSION file via the shared version reader.
- */
-export function readProductVersion(productName: string): string {
-  return readOwnVersion(
-    import.meta.url,
-    `src/products/${productName}`,
-  );
+export function listMetaCommandNames(): readonly string[] {
+  return META_COMMANDS.map((m) => m.name);
+}
+
+export function readCommandVersion(commandName: string): string {
+  const command = getCommand(commandName);
+  if (!command) {
+    return "unknown";
+  }
+  return readOwnVersion(import.meta.url, command.versionDir);
 }

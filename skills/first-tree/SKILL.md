@@ -58,6 +58,10 @@ If you do not know which product you need, start here, skim the table above,
 and load whichever skill looks like the closest match. Loading more than one
 is fine.
 
+The CLI also exposes one maintenance namespace: `first-tree skill ...`. That
+namespace is not a fourth product — it is the toolkit surface for inspecting
+and repairing the four shipped skills.
+
 ## Before Every Task
 
 1. Read the root `NODE.md`.
@@ -87,7 +91,13 @@ Recommended invocation — no install step needed, always runs the latest
 published version:
 
 ```bash
-npx -p first-tree first-tree <product> <command>
+npx first-tree <namespace> <command>
+```
+
+For automation, hooks, and CI templates, prefer the more explicit form:
+
+```bash
+npx -p first-tree first-tree <namespace> <command>
 ```
 
 The CLI auto-checks for updates on every invocation. Pass
@@ -109,21 +119,25 @@ per product (`tree`, `breeze`, `gardener`). They live at:
 Each is also mirrored at `.claude/skills/<name>/` via a symlink so both
 Claude Code and other agent runtimes discover them.
 
-To refresh the installed skill payloads from the current `first-tree` package:
+To install or refresh the shipped skill payloads in the current repo:
 
 ```bash
-npx -p first-tree first-tree tree upgrade
+npx first-tree skill install
+npx first-tree skill upgrade
 ```
 
-This rewrites the installed skill copies to match the skills bundled inside
-the package. Safe to re-run; idempotent.
+These commands rewrite the installed skill copies to match the skills bundled
+inside the package. Safe to re-run; idempotent.
+
+Use `npx first-tree tree upgrade` when you want the broader
+source/workspace integration or tree metadata refreshed too.
 
 To inspect or repair the installed skills directly:
 
 ```bash
-npx -p first-tree first-tree skill list     # show all four skills + versions
-npx -p first-tree first-tree skill doctor   # diagnose install health; exits non-zero on problems
-npx -p first-tree first-tree skill link     # repair .claude/skills/* symlinks
+npx first-tree skill list     # show all four skills + versions
+npx first-tree skill doctor   # diagnose install health; exits non-zero on problems
+npx first-tree skill link     # repair .claude/skills/* symlinks
 ```
 
 ## Ownership And Editing

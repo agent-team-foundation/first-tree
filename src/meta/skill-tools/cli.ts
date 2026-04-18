@@ -1,15 +1,10 @@
 /**
- * Skill-tools meta dispatcher.
+ * Skill maintenance-namespace dispatcher.
  *
  * Routes `first-tree skill <command>` into cross-cutting skill tooling:
- * listing installed skills, diagnosing their health, and repairing the
- * .claude/ alias symlinks that point into .agents/.
- *
- * This is a META command, not a product — it manages the four skill
- * payloads (first-tree + tree/breeze/gardener) rather than shipping one
- * of its own. The `first-tree skill` command family is the user-facing
- * entry point an agent reaches for when the first-tree skill's
- * "Managing Skills On This Machine" section sends them here.
+ * listing installed skills, diagnosing their health, repairing the
+ * .claude/ alias symlinks that point into .agents/, and reinstalling the
+ * shipped skill payloads.
  */
 
 import { readOwnVersion } from "#shared/version.js";
@@ -20,15 +15,19 @@ export const SKILL_USAGE = `usage: first-tree skill <command>
   (first-tree, tree, breeze, gardener).
 
 Commands:
+  install               Install the four skills into .agents/ and .claude/
+  upgrade               Wipe and reinstall the four skills from this package
   list                  Print the four skills with installed status + version
   doctor                Diagnose skill-install health (exits non-zero on problems)
   link                  Idempotently repair .claude/skills/* symlinks
 
 Options:
   --help, -h            Show this help message
-  --version, -v         Show skill product version
+  --version, -v         Show the skill maintenance-namespace version
 
 Examples:
+  first-tree skill install
+  first-tree skill upgrade
   first-tree skill list
   first-tree skill doctor
   first-tree skill link --root /path/to/repo
@@ -68,6 +67,14 @@ export async function runSkill(
     case "list": {
       const { runList } = await import("./engine/commands/list.js");
       return runList(rest, { write });
+    }
+    case "install": {
+      const { runInstall } = await import("./engine/commands/install.js");
+      return runInstall(rest, { write });
+    }
+    case "upgrade": {
+      const { runUpgrade } = await import("./engine/commands/upgrade.js");
+      return runUpgrade(rest, { write });
     }
     case "doctor": {
       const { runDoctor } = await import("./engine/commands/doctor.js");

@@ -19,7 +19,7 @@ jobs:
         with:
           node-version: "22"
 
-      - run: npx -p first-tree first-tree generate-codeowners
+      - run: npx -p first-tree first-tree tree generate-codeowners
 
       - name: Commit if changed
         run: |

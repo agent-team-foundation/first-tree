@@ -7,7 +7,7 @@ import {
 } from "#products/tree/engine/runtime/binding-state.js";
 import { discoverWorkspaceRepos } from "#products/tree/engine/workspace.js";
 
-export const WORKSPACE_SYNC_USAGE = `usage: first-tree workspace sync [--tree-path PATH | --tree-url URL] [--workspace-id ID] [--dry-run]
+export const WORKSPACE_SYNC_USAGE = `usage: first-tree tree workspace sync [--tree-path PATH | --tree-url URL] [--workspace-id ID] [--dry-run]
 
 Bind every discovered child repo / submodule under the current workspace root
 to the same shared Context Tree.
@@ -137,7 +137,7 @@ export function runWorkspaceSync(repo?: Repo, options?: WorkspaceSyncOptions): n
 export function runWorkspaceCli(args: string[] = []): number {
   const subcommand = args[0];
   if (!subcommand || subcommand === "--help" || subcommand === "-h") {
-    console.log(`usage: first-tree workspace <subcommand>\n\nSubcommands:\n  sync   Bind all discovered child repos to the same shared tree\n`);
+    console.log(`usage: first-tree tree workspace <subcommand>\n\nSubcommands:\n  sync   Bind all discovered child repos to the same shared tree\n`);
     return 0;
   }
 

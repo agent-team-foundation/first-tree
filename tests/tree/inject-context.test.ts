@@ -129,6 +129,6 @@ describe("runInjectContext", () => {
   it("prints help with --help", () => {
     const code = runInjectContext(["--help"]);
     expect(code).toBe(0);
-    expect(logged.join("\n")).toContain("first-tree inject-context");
+    expect(logged.join("\n")).toContain("first-tree tree inject-context");
   });
 });

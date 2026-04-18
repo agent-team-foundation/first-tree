@@ -13,8 +13,8 @@ docs below only for source-repo implementation details.
 | `first-tree-skill-cli/thin-cli-shell.md` | Command-surface contract for the thin CLI shell |
 | `first-tree-skill-cli/build-and-distribution.md` | Packaging and release invariants |
 | `first-tree-skill-cli/validation-surface.md` | Validation philosophy and coverage expectations |
-| `first-tree-skill-cli/sync.md` | Authoritative product/architecture context for `first-tree sync` |
-| `src/products/manifest.ts` | Single source of truth for the three products (tree, breeze, gardener) |
+| `first-tree-skill-cli/sync.md` | Authoritative product/architecture context for `first-tree tree sync` |
+| `src/products/manifest.ts` | Single source of truth for the CLI namespace set: products (`tree`, `breeze`, `gardener`) plus maintenance (`skill`) |
 | `skills/first-tree/SKILL.md` | User-facing entry-point skill: methodology + routing to product skills |
 | `skills/tree/SKILL.md` | Operational handbook for the `first-tree tree` CLI |
 | `skills/breeze/SKILL.md` | Operational handbook for the `first-tree breeze` CLI |
@@ -24,10 +24,10 @@ docs below only for source-repo implementation details.
 | `skills/first-tree/references/upgrade-contract.md` | Installed layout and upgrade invariants |
 | `docs/architecture/overview.md` | Local file-level architecture map for this source repo |
 | `docs/architecture/thin-cli.md` | Implementation touchpoints for `src/cli.ts` and command adapters |
+| `docs/architecture/versioning.md` | Local contract for VERSION files, package version reporting, and release-layer boundaries |
 | `docs/build/distribution.md` | Packaging surfaces and release checklist in this repo |
 | `docs/testing/overview.md` | Concrete validation commands and targeted test entrypoints |
 | `docs/design/sync.md` | Local implementation touchpoints for the sync feature |
-| `docs/architecture/versioning.md` | Policy for the four independent VERSION files (npm, product, skill, asset) |
 
 ## Runtime Payload
 
@@ -46,11 +46,16 @@ docs below only for source-repo implementation details.
 
 | Path | Purpose |
 | --- | --- |
-| `src/cli.ts` | Top-level umbrella dispatcher for `first-tree <product> <command>`; reads from the product manifest |
-| `src/products/manifest.ts` | Product manifest (name, description, lazy entrypoint, auto-upgrade, asset/skill flags) |
+| `src/cli.ts` | Top-level umbrella dispatcher for `first-tree <namespace> <command>`; reads from the namespace manifest |
+| `src/products/manifest.ts` | Namespace manifest (kind, name, description, lazy entrypoint, auto-upgrade, asset/skill flags) |
 | `src/products/tree/cli.ts` | Tree product dispatcher (lazy-loaded) |
+| `src/products/tree/README.md` | Maintainer/product-local overview for the tree product |
 | `src/products/breeze/cli.ts` | Breeze product dispatcher (lazy-loaded) |
+| `src/products/breeze/README.md` | Maintainer/product-local overview for the breeze product |
 | `src/products/gardener/cli.ts` | Gardener product dispatcher (lazy-loaded) |
+| `src/products/gardener/README.md` | Maintainer/product-local overview for the gardener product |
+| `src/meta/skill-tools/cli.ts` | Skill maintenance-namespace dispatcher (lazy-loaded) |
+| `src/meta/skill-tools/README.md` | Maintainer/meta overview for the skill maintenance namespace |
 | `src/products/breeze/engine/` | Breeze business logic: `commands/`, `runtime/`, `daemon/`, `bridge.ts`, `statusline.ts` |
 | `src/products/gardener/engine/` | Gardener business logic: `commands/`, `runtime/`, `comment.ts`, `respond.ts` |
 | `src/products/tree/engine/init.ts` | High-level onboarding wrapper plus low-level tree bootstrap |

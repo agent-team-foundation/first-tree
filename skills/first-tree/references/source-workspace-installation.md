@@ -66,11 +66,11 @@ workspace repo, or non-git workspace folder.
 
 When an agent is asked to install `first-tree`:
 
-1. Run `first-tree inspect --json`.
+1. Run `first-tree tree inspect --json`.
 2. Ask whether an existing Context Tree already exists.
-3. If yes, prefer `first-tree bind`.
-4. If no, use `first-tree init`.
-5. If the current root is a workspace, follow with `first-tree workspace sync`.
+3. If yes, prefer `first-tree tree bind`.
+4. If no, use `first-tree tree init`.
+5. If the current root is a workspace, follow with `first-tree tree workspace sync`.
 
 Do not recreate a new sibling tree repo when the user already has a shared tree
 they want to keep using.
@@ -95,15 +95,17 @@ package folders that are not repos do not get repo-level binding metadata.
 
 ## Verification And Upgrade
 
-- Verify the tree repo with `first-tree verify`.
-- Use `first-tree upgrade` in a source/workspace root to refresh local
+- Verify the tree repo with `first-tree tree verify`.
+- Use `first-tree skill upgrade` when you only need the four local skill
+  payloads refreshed under `.agents/skills/*` and `.claude/skills/*`.
+- Use `first-tree tree upgrade` in a source/workspace root to refresh local
   integration.
-- Use `first-tree upgrade --tree-path ...` to refresh the tree repo metadata
+- Use `first-tree tree upgrade --tree-path ...` to refresh the tree repo metadata
   plus its installed tree-repo skill.
 
 ## Publish Rule
 
-`first-tree publish` is tree-centric:
+`first-tree tree publish` is tree-centric:
 
 - it publishes the tree repo
 - it refreshes locally bound source/workspace repos with the published tree URL

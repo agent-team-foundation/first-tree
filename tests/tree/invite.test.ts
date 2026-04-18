@@ -233,7 +233,7 @@ describe("composeMagicWord", () => {
     expect(result).toContain("- frontend-app");
     expect(result).toContain("- infra");
     expect(result).toContain(
-      "npx first-tree join --tree-url https://github.com/org/my-org-context.git --invite bob --branch invite/bob",
+      "npx -p first-tree first-tree tree join --tree-url https://github.com/org/my-org-context.git --invite bob --branch invite/bob",
     );
   });
 
@@ -252,7 +252,7 @@ describe("composeMagicWord", () => {
     );
 
     expect(result).not.toContain("## What repositories does it cover?");
-    expect(result).toContain("npx first-tree join");
+    expect(result).toContain("npx -p first-tree first-tree tree join");
   });
 });
 

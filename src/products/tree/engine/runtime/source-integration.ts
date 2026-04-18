@@ -77,7 +77,7 @@ export function buildSourceIntegrationBlock(
   const description = describeBinding(bindingMode, treeMode, treeRepoName);
   const scopeText = describeScope(bindingMode, treeMode, treeRepoName, workspaceId);
   const fallbackInstruction = treeRepoUrl === null
-    ? `- If the tree has not been published yet, work from the local checkout recorded in \`${sourceStatePathValue}\` or the tree path you just bound until \`first-tree publish\` records the GitHub repo URL.`
+    ? `- If the tree has not been published yet, work from the local checkout recorded in \`${sourceStatePathValue}\` or the tree path you just bound until \`first-tree tree publish\` records the GitHub repo URL.`
     : `- If the configured checkout is missing, clone a temporary working copy from \`${treeRepoUrl}\` into \`${temporaryCheckoutPath}/\`, use it for the current task, and delete it before you finish.`;
 
   return [

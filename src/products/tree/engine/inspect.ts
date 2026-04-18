@@ -13,7 +13,7 @@ import {
 import { readLocalTreeConfig } from "#products/tree/engine/runtime/local-tree-config.js";
 import { discoverWorkspaceRepos } from "#products/tree/engine/workspace.js";
 
-export const INSPECT_USAGE = `usage: first-tree inspect [--json]
+export const INSPECT_USAGE = `usage: first-tree tree inspect [--json]
 
 Inspect the current folder and report how first-tree would classify it.
 
@@ -92,7 +92,7 @@ export function runInspect(repo?: Repo, json = false): number {
     return 0;
   }
 
-  console.log("first-tree inspect\n");
+  console.log("first-tree tree inspect\n");
   console.log(`  Root:           ${inspection.root}`);
   console.log(`  Root kind:      ${inspection.rootKind}`);
   console.log(`  Classification: ${inspection.classification}`);

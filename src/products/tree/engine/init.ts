@@ -66,9 +66,30 @@ import { runWorkspaceSync } from "#products/tree/engine/workspace-sync.js";
  * Different agents may name this differently — change it here to update
  * all generated task text at once.
  */
-export const INTERACTIVE_TOOL = "AskUserQuestion";
-export const INIT_USAGE = `usage: first-tree init [--tree-path PATH | --tree-url URL] [--tree-mode dedicated|shared] [--scope repo|workspace] [--workspace-id ID] [--sync-members] [--seed-members contributors]
-       first-tree init tree [--here] [--tree-path PATH] [--seed-members contributors]
+export const INTERACTIVE_TOOL = "structured user-input tool";
+export const BOOTSTRAP_USAGE = `usage: first-tree tree bootstrap [--here] [--tree-path PATH] [--seed-members contributors]
+
+Low-level tree-repo bootstrap for an explicit tree checkout.
+
+Use this only when the current repo itself should become the tree repo, or
+when you are intentionally creating / refreshing a dedicated tree checkout.
+
+Examples:
+  first-tree tree bootstrap --here
+  first-tree tree bootstrap --tree-path ../my-org-tree
+
+Legacy alias:
+  first-tree tree init tree ...
+
+Options:
+  --here                     Initialize the current repo in place as a tree repo
+  --seed-members contributors
+                             Seed initial \`members/*/NODE.md\` files from contributor history
+  --tree-path PATH           Use an explicit local tree repo path
+  --help                     Show this help message
+`;
+
+export const INIT_USAGE = `usage: first-tree tree init [--tree-path PATH | --tree-url URL] [--tree-mode dedicated|shared] [--scope repo|workspace] [--workspace-id ID] [--sync-members] [--seed-members contributors]
 
 High-level onboarding wrapper for source repos, workspace roots, and shared trees.
 
@@ -84,19 +105,18 @@ Default behavior:
     the provided tree instead of creating a new sibling tree repo.
 
 Low-level tree bootstrap:
-  - \`first-tree init tree --here\` initializes the current repo in place as a
+  - Use \`first-tree tree bootstrap --here\` when the current repo should become the
     tree repo.
-  - \`first-tree init tree --tree-path ../my-tree\` creates or refreshes a tree
-    checkout at an explicit path.
+  - Use \`first-tree tree bootstrap --tree-path ../my-tree\` to create or refresh a
+    tree checkout at an explicit path.
 
 Recommended examples:
-  first-tree init
-  first-tree init --tree-path ../org-context --tree-mode shared
-  first-tree init --scope workspace --tree-path ../org-context --tree-mode shared --sync-members
-  mkdir my-org-tree && cd my-org-tree && git init && first-tree init tree --here
+  first-tree tree init
+  first-tree tree init --tree-path ../org-context --tree-mode shared
+  first-tree tree init --scope workspace --tree-path ../org-context --tree-mode shared --sync-members
+  mkdir my-org-tree && cd my-org-tree && git init && first-tree tree bootstrap --here
 
 Options:
-  --here                     Initialize the current repo in place as a tree repo
   --seed-members contributors
                              Seed initial \`members/*/NODE.md\` files from contributor history
   --tree-name NAME           Override the default sibling repo name (\`<repo>-tree\`)
@@ -191,7 +211,7 @@ export function formatTaskList(
       );
       lines.push("## Source Workspace Workflow");
       lines.push(
-        `- [ ] When this initial tree version is ready, run \`first-tree publish --open-pr\` from this dedicated tree repo. It will create or reuse the GitHub \`*-tree\` repo, continue supporting older \`*-context\` repos, record the published tree GitHub URL back in \`${context.sourceRepoName}\`, refresh the local tree checkout config, and open the source/workspace PR.`,
+        `- [ ] When this initial tree version is ready, run \`first-tree tree publish --open-pr\` from this dedicated tree repo. It will create or reuse the GitHub \`*-tree\` repo, continue supporting older \`*-context\` repos, record the published tree GitHub URL back in \`${context.sourceRepoName}\`, refresh the local tree checkout config, and open the source/workspace PR.`,
       );
       lines.push(
         `- [ ] After publish succeeds, treat the checkout recorded in \`${SOURCE_STATE}\` as the canonical local working copy for this tree. The bootstrap repo can be deleted when you no longer need it.`,
@@ -210,10 +230,10 @@ export function formatTaskList(
       " identify all information you need from the user. Ask the user for their code" +
       " repositories or project directories so you can analyze the source yourself —" +
       " derive project descriptions, domains, and members from the code instead of" +
-      " asking the user to describe them. Collect everything upfront using the" +
-      ` **${INTERACTIVE_TOOL}** tool with structured options — present selectable choices` +
+      " asking the user to describe them. Collect everything upfront using your" +
+      ` agent's **${INTERACTIVE_TOOL}** when available — present selectable choices` +
       " (with label and description) so the user can pick instead of typing free-form" +
-      ` answers. You may batch up to 4 questions per ${INTERACTIVE_TOOL} call.\n`,
+      " answers.\n",
   );
   for (const group of groups) {
     lines.push(`## ${group.group}`);
@@ -224,7 +244,7 @@ export function formatTaskList(
   }
   lines.push("## Verification");
   lines.push(
-    "After completing the tasks above, run `first-tree verify` to confirm:",
+    "After completing the tasks above, run `first-tree tree verify` to confirm:",
   );
   lines.push(
     `- [ ] \`${context?.frameworkVersionPath ?? FRAMEWORK_VERSION}\` exists`,
@@ -233,7 +253,7 @@ export function formatTaskList(
   lines.push(
     `- [ ] \`${AGENT_INSTRUCTIONS_FILE}\` has framework markers and \`${CLAUDE_INSTRUCTIONS_FILE}\` mirrors the same workflow guidance`,
   );
-  lines.push("- [ ] `first-tree verify` passes with no errors");
+  lines.push("- [ ] `first-tree tree verify` passes with no errors");
   lines.push("- [ ] At least one member node exists");
   lines.push("");
   lines.push("---");
@@ -241,7 +261,7 @@ export function formatTaskList(
   lines.push(
     "**Important:** As you complete each task, check it off in" +
       ` \`${context?.progressPath ?? INSTALLED_PROGRESS}\` by changing \`- [ ]\` to \`- [x]\`.` +
-      " Run `first-tree verify` when done — it will fail if any" +
+      " Run `first-tree tree verify` when done — it will fail if any" +
       " items remain unchecked.",
   );
   lines.push("");
@@ -298,9 +318,9 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
   const r = initTarget.repo;
   if (options?.here && sourceRepo.isLikelySourceRepo() && !sourceRepo.looksLikeTreeRepo()) {
     console.log(
-      "Warning: `first-tree init --here` is initializing this source/workspace" +
+      "Warning: `first-tree tree bootstrap --here` is initializing this source/workspace" +
         " repo in place. This will create `NODE.md`, `members/`, and tree-scoped" +
-        ` ${AGENT_INSTRUCTIONS_FILE}/${CLAUDE_INSTRUCTIONS_FILE} here. Use plain \`first-tree init\` to create` +
+        ` ${AGENT_INSTRUCTIONS_FILE}/${CLAUDE_INSTRUCTIONS_FILE} here. Use \`first-tree tree init\` to create` +
         " a sibling dedicated tree repo instead.",
     );
     console.log();
@@ -529,7 +549,6 @@ export interface ParsedInitArgs {
 
 export interface ParsedInitCliArgs extends ParsedInitArgs {
   scope?: "repo" | "workspace";
-  subcommand?: "tree";
   syncMembers?: boolean;
   treeMode?: "dedicated" | "shared";
   treeUrl?: string;
@@ -595,7 +614,16 @@ export function parseInitArgs(
   return parsed;
 }
 
+export function parseBootstrapArgs(
+  args: string[],
+): ParsedInitArgs | { error: string } {
+  return parseInitArgs(args);
+}
+
 export function runInitCli(args: string[] = []): number {
+  if (args[0] === "tree") {
+    return runBootstrapCli(args.slice(1));
+  }
   if (args.includes("--help") || args.includes("-h")) {
     console.log(INIT_USAGE);
     return 0;
@@ -611,16 +639,30 @@ export function runInitCli(args: string[] = []): number {
   return runInitWorkflow(parsed);
 }
 
+export function runBootstrapCli(
+  args: string[] = [],
+  output: (text: string) => void = console.log,
+): number {
+  if (args.includes("--help") || args.includes("-h")) {
+    output(BOOTSTRAP_USAGE);
+    return 0;
+  }
+
+  const parsed = parseBootstrapArgs(args);
+  if ("error" in parsed) {
+    console.error(parsed.error);
+    output(BOOTSTRAP_USAGE);
+    return 1;
+  }
+
+  return runExplicitTreeInit(parsed);
+}
+
 export function parseInitCliArgs(
   args: string[],
 ): ParsedInitCliArgs | { error: string } {
   const parsed: ParsedInitCliArgs = {};
   let index = 0;
-
-  if (args[0] === "tree") {
-    parsed.subcommand = "tree";
-    index = 1;
-  }
 
   for (; index < args.length; index += 1) {
     const arg = args[index];
@@ -714,7 +756,7 @@ export function parseInitCliArgs(
   if (parsed.here && parsed.treeName) {
     return { error: "Cannot combine --here with --tree-name" };
   }
-  if (parsed.here && parsed.treePath && parsed.subcommand !== "tree") {
+  if (parsed.here && parsed.treePath) {
     return { error: "Cannot combine --here with --tree-path" };
   }
   if (parsed.treeName && parsed.treePath) {
@@ -804,7 +846,7 @@ function runExplicitTreeInit(parsed: ParsedInitCliArgs): number {
 }
 
 function runInitWorkflow(parsed: ParsedInitCliArgs): number {
-  if (parsed.subcommand === "tree" || parsed.here) {
+  if (parsed.here) {
     return runExplicitTreeInit(parsed);
   }
 
@@ -885,7 +927,7 @@ function resolveInitTarget(
     return {
       ok: false,
       message:
-        "not a git repository. Run this from your source/workspace repo, or create a dedicated tree repo first:\n  git init\n  first-tree init --here",
+        "not a git repository. Run this from your source/workspace repo, or create a dedicated tree repo first:\n  git init\n  first-tree tree bootstrap --here",
     };
   }
 

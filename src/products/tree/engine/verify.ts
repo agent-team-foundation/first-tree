@@ -18,7 +18,7 @@ import { runValidateMembers } from "#products/tree/engine/validators/members.js"
 import { runValidateNodes } from "#products/tree/engine/validators/nodes.js";
 
 const UNCHECKED_RE = /^- \[ \] (.+)$/gm;
-export const VERIFY_USAGE = `usage: first-tree verify [--tree-path PATH]
+export const VERIFY_USAGE = `usage: first-tree tree verify [--tree-path PATH]
 
 Run validation checks against a Context Tree repo. Reads the tree from the
 current working directory unless \`--tree-path\` is provided.
@@ -120,14 +120,14 @@ export function runVerify(
 
   if (r.hasSourceWorkspaceIntegration() && !r.looksLikeTreeRepo()) {
     console.error(
-      `Error: this repo only has the first-tree source/workspace integration installed. Verify the dedicated tree repo instead, for example ${formatDedicatedTreePathExample("first-tree verify", r)}.`,
+      `Error: this repo only has the first-tree source/workspace integration installed. Verify the dedicated tree repo instead, for example ${formatDedicatedTreePathExample("first-tree tree verify", r)}.`,
     );
     return 1;
   }
 
   if (r.isLikelySourceRepo() && !r.looksLikeTreeRepo()) {
     console.error(
-      "Error: no first-tree framework metadata found here. This looks like a source/workspace repo. Run `first-tree init` to create a dedicated tree repo, or pass `--tree-path` to verify an existing tree repo.",
+      "Error: no first-tree framework metadata found here. This looks like a source/workspace repo. Run `first-tree tree init` to create a dedicated tree repo, or pass `--tree-path` to verify an existing tree repo.",
     );
     return 1;
   }

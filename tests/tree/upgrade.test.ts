@@ -138,7 +138,7 @@ describe("runUpgrade", () => {
     expect(
       readFileSync(join(repoDir.path, ".claude", "settings.json"), "utf-8"),
     ).toContain(
-      "npx -p first-tree first-tree inject-context --skip-version-check",
+      "npx -p first-tree first-tree tree inject-context --skip-version-check",
     );
   });
 
@@ -342,7 +342,7 @@ describe("runUpgrade", () => {
     expect(
       readFileSync(join(repoDir.path, ".claude", "settings.json"), "utf-8"),
     ).toContain(
-      "npx -p first-tree first-tree inject-context --skip-version-check",
+      "npx -p first-tree first-tree tree inject-context --skip-version-check",
     );
   });
 
@@ -423,7 +423,7 @@ describe("runUpgrade", () => {
     expect(
       readFileSync(join(repoDir.path, ".claude", "settings.json"), "utf-8"),
     ).toContain(
-      "npx -p first-tree first-tree inject-context --skip-version-check",
+      "npx -p first-tree first-tree tree inject-context --skip-version-check",
     );
   });
 

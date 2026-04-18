@@ -6,9 +6,14 @@
  */
 
 import { join } from "node:path";
-import { ALL_SKILL_NAMES } from "#products/tree/engine/runtime/asset-loader.js";
+import {
+  ALL_SKILL_NAMES,
+  INSTALLED_SKILL_REQUIRED_FILES,
+} from "#products/tree/engine/runtime/asset-loader.js";
 
 export { ALL_SKILL_NAMES };
+
+const PRODUCT_SKILL_REQUIRED_FILES = ["SKILL.md", "VERSION"] as const;
 
 export interface SkillLayout {
   readonly name: string;
@@ -37,4 +42,10 @@ export function layoutForSkill(name: string): SkillLayout {
 
 export function allSkillLayouts(): readonly SkillLayout[] {
   return ALL_SKILL_NAMES.map(layoutForSkill);
+}
+
+export function requiredFilesForSkill(name: string): readonly string[] {
+  return name === "first-tree"
+    ? INSTALLED_SKILL_REQUIRED_FILES
+    : PRODUCT_SKILL_REQUIRED_FILES;
 }

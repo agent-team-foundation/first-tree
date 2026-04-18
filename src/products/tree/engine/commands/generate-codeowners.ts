@@ -1,6 +1,6 @@
 import { generate } from "../../../../../assets/tree/helpers/generate-codeowners.js";
 
-export const GENERATE_CODEOWNERS_USAGE = `usage: first-tree generate-codeowners [--check]
+export const GENERATE_CODEOWNERS_USAGE = `usage: first-tree tree generate-codeowners [--check]
 
 Generate \`.github/CODEOWNERS\` from the Context Tree's NODE.md ownership
 frontmatter. Walks the tree, resolves owners (with parent inheritance), and

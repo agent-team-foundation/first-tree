@@ -1,4 +1,4 @@
-# `first-tree sync`
+# `first-tree tree sync`
 
 Authoritative decision node: `first-tree-skill-cli/sync.md` in the bound
 Context Tree.

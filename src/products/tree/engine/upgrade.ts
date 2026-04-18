@@ -45,7 +45,7 @@ import {
   readBundledSkillVersion,
 } from "#products/tree/engine/runtime/upgrader.js";
 
-export const UPGRADE_USAGE = `usage: first-tree upgrade [--tree-path PATH]
+export const UPGRADE_USAGE = `usage: first-tree tree upgrade [--tree-path PATH]
 
 Refresh the installed skill payload from the bundled \`first-tree\` package.
 
@@ -108,7 +108,7 @@ export function ensureSyncRunbook(
       "\n\u26A0\uFE0F  repo-gardener is required for sync to review tree-update PRs before merge.\n" +
       "   Install it by running this in Claude Code:\n\n" +
       '   Fetch the latest release of repo-gardener and execute its onboarding script: https://github.com/agent-team-foundation/repo-gardener/releases/latest\n\n' +
-      "   After installing gardener, run `first-tree upgrade` again.\n",
+      "   After installing gardener, run `first-tree tree upgrade` again.\n",
     );
   }
 
@@ -281,7 +281,7 @@ function formatUpgradeTaskList(
   if (repo.hasAgentInstructionsMarkers()) {
     lines.push(
       "## Agent Instructions",
-      `- [ ] Compare the framework section in \`${AGENT_INSTRUCTIONS_FILE}\` with the bundled template (run \`first-tree init --help\` to see what templates ship) and update the text between the markers if needed`,
+      `- [ ] Compare the framework section in \`${AGENT_INSTRUCTIONS_FILE}\` with the bundled template (run \`first-tree tree init --help\` to see what templates ship) and update the text between the markers if needed`,
       `- [ ] Compare the framework section in \`${CLAUDE_INSTRUCTIONS_FILE}\` with the bundled template and update the text between the markers if needed`,
       "",
     );
@@ -290,13 +290,13 @@ function formatUpgradeTaskList(
   lines.push(
     "## Verification",
     `- [ ] \`${repo.frameworkVersionPath()}\` reads \`${packagedVersion}\``,
-    "- [ ] `first-tree verify` passes",
+    "- [ ] `first-tree tree verify` passes",
     "",
     "---",
     "",
     "**Important:** As you complete each task, check it off in" +
       ` \`${repo.preferredProgressPath()}\` by changing \`- [ ]\` to \`- [x]\`.` +
-      " Run `first-tree verify` when done — it will fail if any" +
+      " Run `first-tree tree verify` when done — it will fail if any" +
       " items remain unchecked.",
     "",
   );
@@ -315,14 +315,14 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
 
   if (workingRepo.isLikelySourceRepo() && !workingRepo.looksLikeTreeRepo() && !workspaceOnlyIntegration) {
     console.error(
-      "Error: no installed framework skill found here. This looks like a source/workspace repo. Run `first-tree init` to create a dedicated tree repo, or pass `--tree-path` to upgrade an existing tree repo.",
+      "Error: no installed framework skill found here. This looks like a source/workspace repo. Run `first-tree tree init` to create a dedicated tree repo, or pass `--tree-path` to upgrade an existing tree repo.",
     );
     return 1;
   }
 
   if (!workingRepo.hasFramework()) {
     console.error(
-      "Error: no first-tree framework metadata found. Run `first-tree init` first.",
+      "Error: no first-tree framework metadata found. Run `first-tree tree init` first.",
     );
     return 1;
   }
@@ -330,7 +330,7 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
   const layout = workingRepo.frameworkLayout();
   if (layout === null) {
     console.error(
-      "Error: no first-tree framework metadata found. Run `first-tree init` first.",
+      "Error: no first-tree framework metadata found. Run `first-tree tree init` first.",
     );
     return 1;
   }
@@ -363,7 +363,7 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
     compareSkillVersions(localVersion, packagedVersion) > 0
   ) {
     console.log(
-      "The installed skill is newer than the skill bundled with this `first-tree` package. Install a newer package version before running `first-tree upgrade`.",
+      "The installed skill is newer than the skill bundled with this `first-tree` package. Install a newer package version before running `first-tree tree upgrade`.",
     );
     return 1;
   }
@@ -377,7 +377,7 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
     ? treeResolution.value.root
     : join(dirname(workingRepo.root), treeRepoName);
   const sourceRepoTreePathHint = formatDedicatedTreePathExample(
-    "first-tree upgrade",
+    "first-tree tree upgrade",
     workingRepo,
   );
 
@@ -522,7 +522,7 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
       && compareSkillVersions(installedTreeSkillVersion, packagedVersion) > 0
     ) {
       console.log(
-        "The installed tree-repo skill is newer than the skill bundled with this `first-tree` package. Install a newer package version before running `first-tree upgrade`.",
+        "The installed tree-repo skill is newer than the skill bundled with this `first-tree` package. Install a newer package version before running `first-tree tree upgrade`.",
       );
       return 1;
     }
