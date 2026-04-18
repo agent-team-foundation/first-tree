@@ -21,6 +21,7 @@ import {
   type TreeBindingState,
 } from "#products/tree/engine/runtime/binding-state.js";
 import { resolveNodeOwners } from "../../../../assets/tree/helpers/generate-codeowners.js";
+import { openTreePr } from "#products/tree/engine/open-tree-pr.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -1229,53 +1230,21 @@ async function prepareProposalGroup(
 /**
  * Phase 2: Push branches and create PRs.
  * This can be parallelized because each branch is independent.
+ *
+ * Thin adapter over `openTreePr` that maps sync's `PreparedProposalGroup`
+ * to the primitive's option shape and applies the sync-specific label set.
  */
 async function pushAndCreatePr(
   shellRun: ShellRun,
   treeRoot: string,
   prepared: PreparedProposalGroup,
 ): Promise<{ success: boolean; prUrl?: string; error?: string }> {
-  const { branch, prTitle, prBody } = prepared;
-
-  // Push the branch
-  const pushResult = await shellRun("git", ["push", "origin", branch], {
-    cwd: treeRoot,
+  return openTreePr(shellRun, treeRoot, {
+    branch: prepared.branch,
+    title: prepared.prTitle,
+    body: prepared.prBody,
+    labels: ["first-tree:sync"],
   });
-  if (pushResult.code !== 0) {
-    return { success: false, error: `git push failed: ${pushResult.stderr.trim()}` };
-  }
-
-  // Create the PR
-  const prCreate = await shellRun(
-    "gh",
-    ["pr", "create", "--head", branch, "--title", prTitle, "--body", prBody],
-    { cwd: treeRoot },
-  );
-  if (prCreate.code !== 0) {
-    const stderr = prCreate.stderr.trim();
-    if (
-      stderr.toLowerCase().includes("already exists")
-      || stderr.toLowerCase().includes("a pull request for branch")
-    ) {
-      return { success: true, prUrl: `(existing PR for ${branch})` };
-    }
-    return { success: false, error: `gh pr create failed: ${stderr}` };
-  }
-  const prUrl = prCreate.stdout.trim();
-
-  // Add labels (best effort, don't fail if this doesn't work)
-  const labels = ["first-tree:sync"];
-  for (const label of labels) {
-    await shellRun(
-      "gh",
-      ["label", "create", label, "--color", "2ea44f", "--description", `Created by first-tree sync`, "--force"],
-      { cwd: treeRoot },
-    );
-  }
-  const labelArgs = labels.flatMap((l) => ["--add-label", l]);
-  await shellRun("gh", ["pr", "edit", prUrl, ...labelArgs], { cwd: treeRoot });
-
-  return { success: true, prUrl };
 }
 
 /**
