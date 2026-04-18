@@ -32,13 +32,10 @@ import {
 import { writeTreeBinding } from "#products/tree/engine/runtime/binding-state.js";
 import { makeTreeMetadata, useTmpDir } from "../helpers.js";
 
-const FIXTURE_PATH = join(
-  __dirname,
-  "..",
-  "fixtures",
-  "sync-golden",
-  "two-pr-apply.json",
-);
+const FIXTURE_DIR = join(__dirname, "..", "fixtures", "sync-golden");
+const FIXTURE_PATH = join(FIXTURE_DIR, "two-pr-apply.json");
+const FIXTURE_PATH_ZERO = join(FIXTURE_DIR, "zero-changes.json");
+const FIXTURE_PATH_EXISTING = join(FIXTURE_DIR, "existing-pr.json");
 
 interface Captured {
   command: string;
@@ -78,9 +75,21 @@ function makeTreeShell(root: string): void {
   );
 }
 
+interface ShellOverrides {
+  /** Replaces the `/repos/alice/source/compare/<...>` response. Pass null for zero commits. */
+  compareCommits?: Array<{ sha: string; message: string; files: string[] }> | null;
+  /** Replaces the `search/issues` response for merged PRs. */
+  mergedPrItems?: Array<{ number: number; title: string; mergedSha: string; mergedAt: string }>;
+  /** Returned when sync.ts calls `gh pr list --search` to check for an existing tree PR. */
+  existingTreePrsBySearch?: Array<{ number: number }>;
+  /** Overrides the `/repos/alice/source/commits/HEAD` SHA (40 hex chars). Default: "bb"*20. */
+  headSha?: string;
+}
+
 function makeRecordingShell(
   tmpPath: string,
   classifyResponses: string[],
+  overrides: ShellOverrides = {},
 ): { shellRun: ShellRun; captured: Captured[]; bodies: string[] } {
   const captured: Captured[] = [];
   const bodies: string[] = [];
@@ -104,56 +113,77 @@ function makeRecordingShell(
     if (command === "gh" && args[0] === "api") {
       const path = args[1] ?? "";
       if (path === "/repos/alice/source/commits/HEAD") {
-        return { stdout: "bb".repeat(20) + "\n", stderr: "", code: 0 };
+        const sha = overrides.headSha ?? "bb".repeat(20);
+        return { stdout: sha + "\n", stderr: "", code: 0 };
       }
       if (path.startsWith("/repos/alice/source/compare/")) {
-        return {
-          stdout: JSON.stringify({
-            commits: [
-              {
-                sha: "1".repeat(40),
+        const defaultCommits = [
+          {
+            sha: "1".repeat(40),
+            commit: {
+              message: "feat(pkg-a): add thing (#101)",
+              author: { name: "a", date: "2026-04-01T00:00:00Z" },
+            },
+            files: [{ filename: "pkg-a/x.ts" }],
+          },
+          {
+            sha: "2".repeat(40),
+            commit: {
+              message: "feat(pkg-b): add thing (#102)",
+              author: { name: "b", date: "2026-04-02T00:00:00Z" },
+            },
+            files: [{ filename: "pkg-b/y.ts" }],
+          },
+        ];
+        const commits = overrides.compareCommits === undefined
+          ? defaultCommits
+          : overrides.compareCommits === null
+            ? []
+            : overrides.compareCommits.map((c) => ({
+                sha: c.sha,
                 commit: {
-                  message: "feat(pkg-a): add thing (#101)",
+                  message: c.message,
                   author: { name: "a", date: "2026-04-01T00:00:00Z" },
                 },
-                files: [{ filename: "pkg-a/x.ts" }],
-              },
-              {
-                sha: "2".repeat(40),
-                commit: {
-                  message: "feat(pkg-b): add thing (#102)",
-                  author: { name: "b", date: "2026-04-02T00:00:00Z" },
-                },
-                files: [{ filename: "pkg-b/y.ts" }],
-              },
-            ],
-          }),
+                files: c.files.map((filename) => ({ filename })),
+              }));
+        return {
+          stdout: JSON.stringify({ commits }),
           stderr: "",
           code: 0,
         };
       }
       if (path.startsWith("search/issues")) {
+        const defaultItems = [
+          {
+            number: 101,
+            title: "feat(pkg-a): add thing",
+            pull_request: {
+              merged_at: "2026-04-01T00:00:00Z",
+              merge_commit_sha: "1".repeat(40),
+            },
+          },
+          {
+            number: 102,
+            title: "feat(pkg-b): add thing",
+            pull_request: {
+              merged_at: "2026-04-02T00:00:00Z",
+              merge_commit_sha: "2".repeat(40),
+            },
+          },
+        ];
+        const items = overrides.mergedPrItems
+          ? overrides.mergedPrItems.map((i) => ({
+              number: i.number,
+              title: i.title,
+              pull_request: {
+                merged_at: i.mergedAt,
+                merge_commit_sha: i.mergedSha,
+              },
+            }))
+          : defaultItems;
         return {
-          stdout: JSON.stringify({
-            items: [
-              {
-                number: 101,
-                title: "feat(pkg-a): add thing",
-                pull_request: {
-                  merged_at: "2026-04-01T00:00:00Z",
-                  merge_commit_sha: "1".repeat(40),
-                },
-              },
-              {
-                number: 102,
-                title: "feat(pkg-b): add thing",
-                pull_request: {
-                  merged_at: "2026-04-02T00:00:00Z",
-                  merge_commit_sha: "2".repeat(40),
-                },
-              },
-            ],
-          }),
+          stdout: JSON.stringify({ items }),
           stderr: "",
           code: 0,
         };
@@ -165,6 +195,16 @@ function makeRecordingShell(
       return { stdout: response, stderr: "", code: 0 };
     }
     if (command === "gh" && args[0] === "pr" && args[1] === "list") {
+      if (
+        overrides.existingTreePrsBySearch
+        && args.includes("--search")
+      ) {
+        return {
+          stdout: JSON.stringify(overrides.existingTreePrsBySearch),
+          stderr: "",
+          code: 0,
+        };
+      }
       return { stdout: "[]", stderr: "", code: 0 };
     }
     if (command === "gh" && args[0] === "pr" && args[1] === "create") {
@@ -251,6 +291,71 @@ function extractBodies(calls: Captured[]): Record<string, string> {
   return out;
 }
 
+function makeBoundTree(tmpPath: string) {
+  makeTreeShell(tmpPath);
+  writeTreeBinding(tmpPath, "source-golden", {
+    bindingMode: "standalone-source",
+    entrypoint: "/repos/source",
+    lastReconciledSourceCommit: "aa".repeat(20),
+    remoteUrl: "https://github.com/alice/source.git",
+    rootKind: "git-repo",
+    scope: "repo",
+    sourceId: "source-golden",
+    sourceName: "source",
+    sourceRootPath: "../source",
+    treeMode: "dedicated",
+    treeRepoName: "tree",
+  });
+}
+
+async function runAndCapture(
+  tmpPath: string,
+  classifyResponses: string[],
+  overrides: ShellOverrides,
+  nodeDirs: string[],
+): Promise<Snapshot> {
+  const { shellRun, captured } = makeRecordingShell(
+    tmpPath,
+    classifyResponses,
+    overrides,
+  );
+  const exitCode = await runSync(
+    tmpPath,
+    { source: undefined, propose: false, apply: true, dryRun: false },
+    { shellRun, verifyTree: () => 0 },
+  );
+  const bodies = extractBodies(captured);
+  const bodyHashes: Record<string, string> = {};
+  for (const [k, v] of Object.entries(bodies)) bodyHashes[k] = hash(v);
+  const nodeMdFiles: Record<string, string> = {};
+  for (const dir of nodeDirs) {
+    try {
+      const p = join(tmpPath, dir, "NODE.md");
+      nodeMdFiles[dir] = hash(readFileSync(p, "utf-8"));
+    } catch {
+      nodeMdFiles[dir] = "<absent>";
+    }
+  }
+  return {
+    exitCode,
+    calls: redact(captured, tmpPath),
+    bodyHashes,
+    nodeMdFiles,
+  };
+}
+
+function assertOrUpdate(snapshot: Snapshot, fixturePath: string): void {
+  if (process.env.UPDATE_SYNC_GOLDEN === "1") {
+    mkdirSync(FIXTURE_DIR, { recursive: true });
+    writeFileSync(fixturePath, JSON.stringify(snapshot, null, 2) + "\n");
+    // eslint-disable-next-line no-console
+    console.log(`[golden] wrote fixture: ${fixturePath}`);
+    return;
+  }
+  const expected: Snapshot = JSON.parse(readFileSync(fixturePath, "utf-8"));
+  expect(snapshot).toEqual(expected);
+}
+
 describe("sync --apply golden snapshot (Phase 0.a)", () => {
   it("produces byte-identical git/gh call shape for two-PR scheduled sync", async () => {
     const tmp = useTmpDir();
@@ -332,5 +437,58 @@ describe("sync --apply golden snapshot (Phase 0.a)", () => {
 
     const expected: Snapshot = JSON.parse(readFileSync(FIXTURE_PATH, "utf-8"));
     expect(snapshot).toEqual(expected);
+  });
+
+  it("captures the zero-changes path: head == lastReconciledSourceCommit, no PR created", async () => {
+    // Scenario: sync runs but source HEAD already matches lastReconciledSourceCommit.
+    // sync.ts short-circuits at `binding.lastReconciledSourceCommit === head` and
+    // emits "up to date" without calling compareCommits, classify, push, or pr create.
+    // Repo-gardener relies on this being a clean no-op (no PR, no branch, exit 0).
+    const tmp = useTmpDir();
+    makeBoundTree(tmp.path);
+    const snapshot = await runAndCapture(
+      tmp.path,
+      [],
+      { headSha: "aa".repeat(20) },
+      [],
+    );
+    assertOrUpdate(snapshot, FIXTURE_PATH_ZERO);
+  });
+
+  it("captures the existing-PR short-circuit: skipReason set, no push/create for matched group", async () => {
+    // Scenario: one source PR has commits to sync, but a tree PR for that source
+    // PR already exists (matched via `gh pr list --search`). sync.ts must skip
+    // the push/create path for that group. Repo-gardener depends on this
+    // idempotency — rerunning sync must not open duplicate tree PRs.
+    const tmp = useTmpDir();
+    makeBoundTree(tmp.path);
+    const snapshot = await runAndCapture(
+      tmp.path,
+      [
+        JSON.stringify([
+          {
+            path: "pkg-a",
+            type: "TREE_MISS",
+            target_node_path: null,
+            rationale: "No node for pkg-a",
+            suggested_node_title: "pkg-a",
+            suggested_node_body_markdown: "# pkg-a",
+          },
+        ]),
+        JSON.stringify([
+          {
+            path: "pkg-b",
+            type: "TREE_MISS",
+            target_node_path: null,
+            rationale: "No node for pkg-b",
+            suggested_node_title: "pkg-b",
+            suggested_node_body_markdown: "# pkg-b",
+          },
+        ]),
+      ],
+      { existingTreePrsBySearch: [{ number: 777 }] },
+      ["pkg-a", "pkg-b"],
+    );
+    assertOrUpdate(snapshot, FIXTURE_PATH_EXISTING);
   });
 });
