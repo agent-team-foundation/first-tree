@@ -47,11 +47,12 @@
     "build": "tsdown",
     "prepack": "pnpm build",
     "test:e2e": "vitest run tests/e2e/cli-e2e.test.ts",
+    "test:dist": "FIRST_TREE_DIST_TESTS=1 vitest run tests/dist",
     "test": "vitest run",
     "eval": "vitest run --config vitest.eval.config.ts",
     "typecheck": "tsc --noEmit",
     "validate:skill": "python3 ./scripts/quick_validate.py ./skills/first-tree && bash ./scripts/check-skill-sync.sh",
-    "release:check": "pnpm version:check && pnpm validate:skill && pnpm typecheck && pnpm test && pnpm build"
+    "release:check": "pnpm version:check && pnpm validate:skill && pnpm typecheck && pnpm test && pnpm build && pnpm test:dist"
   },
   "packageManager": "pnpm@10.25.0",
   "license": "Apache-2.0",

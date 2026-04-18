@@ -19,7 +19,7 @@ Thumbs.db
 
 # Node.js
 node_modules/
-dist/
+/dist/
 *.tsbuildinfo
 .first-tree/local-tree.json
 .first-tree/tmp/
