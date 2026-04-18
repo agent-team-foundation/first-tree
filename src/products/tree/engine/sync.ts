@@ -982,6 +982,11 @@ interface PreparedProposalGroup {
  * This must be done sequentially because git checkout requires exclusive access.
  * Returns the branch name and PR metadata for the push/create phase.
  */
+interface ParentSubDomainAddition {
+  dirName: string;
+  title: string;
+}
+
 async function prepareProposalGroup(
   shellRun: ShellRun,
   treeRoot: string,
@@ -990,6 +995,7 @@ async function prepareProposalGroup(
   group: ProposalGroup,
   baseRef: string,
   verifyTree: (treeRoot: string) => number | Promise<number>,
+  pendingParentAdditions: Map<string, ParentSubDomainAddition[]>,
 ): Promise<PreparedProposalGroup | null> {
   const shortSha = drift.toSha.slice(0, 7);
   const branchSuffix = group.sourcePrNumber !== null
@@ -1095,31 +1101,20 @@ async function prepareProposalGroup(
         writeFileSync(nodePath, content);
         writtenFiles.push(nodePath);
 
-        // Update parent NODE.md sub-domains list if the new dir isn't listed.
-        // If the parent has no Sub-domains section at all, append one so the
-        // child is discoverable via top-down tree navigation (#122).
+        // Queue the parent NODE.md `## Sub-domains` update for the
+        // housekeeping branch (#188). Per-content branches all fork from
+        // the same baseRef, so writing the parent here would make each
+        // branch's edit conflict with siblings at merge time. The
+        // housekeeping branch runs last and can batch every sibling's
+        // rollup in one idempotent pass.
         const parentNodePath = join(dirname(absDir), "NODE.md");
         if (existsSync(parentNodePath)) {
-          try {
-            const parentContent = readFileSync(parentNodePath, "utf-8");
-            const newDirName = basename(absDir);
-            const alreadyListed = parentContent.includes(`${newDirName}/`) || parentContent.includes(`${newDirName}\\`);
-            if (!alreadyListed) {
-              const newLine = `- \`${newDirName}/\` — ${capitalizedTitle}\n`;
-              const subDomainsMatch = parentContent.match(/(##\s*Sub-?domains?[^\n]*\n)([\s\S]*?)(\n##|\n---|\z)/i);
-              let updated: string | null = null;
-              if (subDomainsMatch) {
-                const insertPoint = parentContent.indexOf(subDomainsMatch[0]) + subDomainsMatch[1].length + subDomainsMatch[2].length;
-                updated = parentContent.slice(0, insertPoint) + newLine + parentContent.slice(insertPoint);
-              } else {
-                const trimmed = parentContent.replace(/\s+$/, "");
-                updated = `${trimmed}\n\n## Sub-domains\n\n${newLine}`;
-              }
-              writeFileSync(parentNodePath, updated);
-              writtenFiles.push(parentNodePath);
-              console.log(`  \u2713 Updated parent: ${relative(treeRoot, parentNodePath)} (added ${newDirName}/)`);
-            }
-          } catch { /* non-fatal */ }
+          const newDirName = basename(absDir);
+          const list = pendingParentAdditions.get(parentNodePath) ?? [];
+          if (!list.some((a) => a.dirName === newDirName)) {
+            list.push({ dirName: newDirName, title: capitalizedTitle });
+          }
+          pendingParentAdditions.set(parentNodePath, list);
         }
       }
     }
@@ -1678,6 +1673,10 @@ export async function runSync(
           `\nPreparing ${applyCount} tree PR(s) (creating branches, committing locally)...`,
         );
         const preparedGroups: PreparedProposalGroup[] = [];
+        // Accumulator for parent NODE.md `## Sub-domains` rollups across all
+        // content groups in this drift (#188). Applied in the housekeeping
+        // branch so sibling content PRs don't collide on the same parent file.
+        const pendingParentAdditions = new Map<string, ParentSubDomainAddition[]>();
         const originalRef = await resolveStableCheckoutRef(shellRun, repo.root);
         if (originalRef === null) {
           return 1;
@@ -1699,6 +1698,7 @@ export async function runSync(
             group,
             originalRef,
             verifyTree,
+            pendingParentAdditions,
           );
           if (prepared === null) {
             // Fatal error during preparation
@@ -1765,11 +1765,60 @@ export async function runSync(
             lastReconciledAt: now().toISOString(),
           });
 
+          // Apply accumulated parent NODE.md `## Sub-domains` rollups here,
+          // on the housekeeping branch (#188). Per-content branches used to
+          // do this in-place and collide at merge time; centralizing here
+          // makes the rollup idempotent (re-reads parent at current main
+          // HEAD, skips already-listed children) and structurally
+          // conflict-free (housekeeping merges last by design).
+          const appliedRollups: string[] = [];
+          for (const [parentPath, additions] of pendingParentAdditions) {
+            if (!existsSync(parentPath)) continue;
+            try {
+              let parentContent = readFileSync(parentPath, "utf-8");
+              let changed = false;
+              for (const { dirName, title } of additions) {
+                const alreadyListed = parentContent.includes(`${dirName}/`)
+                  || parentContent.includes(`${dirName}\\`);
+                if (alreadyListed) continue;
+                const newLine = `- \`${dirName}/\` — ${title}\n`;
+                const subDomainsMatch = parentContent.match(/(##\s*Sub-?domains?[^\n]*\n)([\s\S]*?)(\n##|\n---|\z)/i);
+                if (subDomainsMatch) {
+                  const insertPoint = parentContent.indexOf(subDomainsMatch[0])
+                    + subDomainsMatch[1].length
+                    + subDomainsMatch[2].length;
+                  parentContent = parentContent.slice(0, insertPoint) + newLine + parentContent.slice(insertPoint);
+                } else {
+                  const trimmed = parentContent.replace(/\s+$/, "");
+                  parentContent = `${trimmed}\n\n## Sub-domains\n\n${newLine}`;
+                }
+                changed = true;
+                appliedRollups.push(`${relative(repo.root, parentPath)} ← ${dirName}/`);
+              }
+              if (changed) {
+                writeFileSync(parentPath, parentContent);
+                console.log(`  \u2713 Housekeeping rollup: ${relative(repo.root, parentPath)}`);
+              }
+            } catch { /* non-fatal */ }
+          }
+
           await shellRun("git", ["add", "-A"], { cwd: repo.root });
           const hkDiff = await shellRun("git", ["diff", "--cached", "--quiet"], { cwd: repo.root });
           if (hkDiff.code !== 0) {
             await shellRun("git", ["commit", "-m", `chore(sync): pin ${drift.binding.sourceId} to ${drift.toSha.slice(0, 7)}`], { cwd: repo.root });
             await shellRun("git", ["push", "origin", "HEAD"], { cwd: repo.root });
+            const rollupBody = appliedRollups.length > 0
+              ? [
+                  "",
+                  "## Sub-domains rollup",
+                  "",
+                  "This run introduced new child nodes; parent `NODE.md` navigation",
+                  "sections are updated here (not in per-content branches) to avoid",
+                  "merge conflicts between sibling sync PRs (#188).",
+                  "",
+                  ...appliedRollups.map((r) => `- ${r}`),
+                ].join("\n")
+              : "";
             const hkPr = await shellRun("gh", [
               "pr", "create",
               "--title", `chore(sync): housekeeping for ${drift.binding.sourceId}`,
@@ -1781,6 +1830,7 @@ export async function runSync(
                 `Pins \`lastReconciledSourceCommit\` to \`${drift.toSha.slice(0, 7)}\`.`,
                 "",
                 "CODEOWNERS is regenerated inside each content PR, so no CODEOWNERS diff is expected here.",
+                rollupBody,
               ].join("\n"),
             ], { cwd: repo.root });
             if (hkPr.code === 0) {
