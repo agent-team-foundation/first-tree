@@ -102,7 +102,12 @@ export interface ShellResult {
 export type ShellRun = (
   command: string,
   args: string[],
-  options?: { cwd?: string; input?: string; timeout?: number },
+  options?: {
+    cwd?: string;
+    input?: string;
+    timeout?: number;
+    env?: NodeJS.ProcessEnv;
+  },
 ) => Promise<ShellResult>;
 
 export interface CommentDeps {
@@ -115,7 +120,12 @@ export interface CommentDeps {
 async function defaultShellRun(
   command: string,
   args: string[],
-  options: { cwd?: string; input?: string; timeout?: number } = {},
+  options: {
+    cwd?: string;
+    input?: string;
+    timeout?: number;
+    env?: NodeJS.ProcessEnv;
+  } = {},
 ): Promise<ShellResult> {
   try {
     const { stdout, stderr } = await execFileAsync(command, args, {
@@ -123,6 +133,7 @@ async function defaultShellRun(
       encoding: "utf-8",
       maxBuffer: 32 * 1024 * 1024,
       timeout: options.timeout,
+      env: options.env,
     });
     return { stdout: String(stdout), stderr: String(stderr), code: 0 };
   } catch (err) {
@@ -1062,9 +1073,308 @@ function emitBreezeResult(
   write: (line: string) => void,
   status: CommentStatus,
   summary: string,
+  extras?: Record<string, string>,
 ): void {
   const compact = summary.replace(/\s+/g, " ").trim() || "no-op";
-  write(`BREEZE_RESULT: status=${status} summary=${compact}`);
+  const extraPairs = extras
+    ? Object.entries(extras)
+        .map(([k, v]) => ` ${k}=${v.replace(/\s+/g, "_")}`)
+        .join("")
+    : "";
+  write(`BREEZE_RESULT: status=${status} summary=${compact}${extraPairs}`);
+}
+
+// ───────────────────────── MERGED → tree-repo issue ────────────────
+
+export interface HandleMergedIssueInput {
+  sourceRepo: string;
+  sourcePr: number;
+  sourcePrTitle: string;
+  /** The existing gardener-state comment on the source PR. */
+  gardenerCommentId: number;
+  gardenerCommentBody: string;
+  /** Tree repo slug `owner/name`. */
+  treeSlug: string;
+  /** Classifier output from the merged SHA (verdict + severity + nodes). */
+  verdict: Verdict;
+  severity: Severity;
+  summary: string;
+  treeNodes: { path: string; summary: string }[];
+  /** Resolved CODEOWNERS cc list, already @-prefixed. */
+  codeownersMentions: string[];
+  shell: ShellRun;
+  env: NodeJS.ProcessEnv;
+  write: (line: string) => void;
+  dryRun: boolean;
+}
+
+export type HandleMergedIssueOutcome =
+  | { kind: "created"; issueUrl: string; markerPatched: boolean }
+  | { kind: "skipped"; reason: string }
+  | { kind: "failed"; reason: string; issueUrl?: string };
+
+/**
+ * Creates a tree-repo issue for a merged source PR and PATCHes the
+ * source-PR gardener comment to mark the link. Called exactly once
+ * per merged source PR per scan from `reviewOne`.
+ *
+ * Contract (spec: #166, signed off on 2026-04-17):
+ *   - `TREE_REPO_TOKEN` is required on both tree-repo calls. No fallback
+ *     to ambient `gh` auth — unset → `skipped`.
+ *   - Marker is the sole source of truth for idempotency; caller must
+ *     already have checked `tree_issue_created` is absent from the
+ *     existing marker before invoking this function.
+ *   - No in-process retry. 401/403/404 on tree-repo calls → `skipped`
+ *     (treat as config error). 5xx/network → `failed`.
+ *   - On issue-create success + marker-PATCH failure, returns
+ *     `failed` but with `issueUrl` set so the caller logs it for
+ *     manual recovery.
+ */
+export async function handleMergedIssue(
+  input: HandleMergedIssueInput,
+): Promise<HandleMergedIssueOutcome> {
+  const {
+    sourceRepo,
+    sourcePr,
+    sourcePrTitle,
+    gardenerCommentId,
+    gardenerCommentBody,
+    treeSlug,
+    verdict,
+    severity,
+    summary,
+    treeNodes,
+    codeownersMentions,
+    shell,
+    env,
+    write,
+    dryRun,
+  } = input;
+
+  const treeRepoToken = env.TREE_REPO_TOKEN;
+  if (!treeRepoToken) {
+    return { kind: "skipped", reason: "TREE_REPO_TOKEN unset" };
+  }
+
+  const sourceCommentUrl =
+    `https://github.com/${sourceRepo}/pull/${sourcePr}#issuecomment-${gardenerCommentId}`;
+
+  const body = buildTreeIssueBody({
+    sourceRepo,
+    sourcePr,
+    sourcePrTitle,
+    sourceCommentUrl,
+    verdict,
+    severity,
+    summary,
+    treeNodes,
+    codeownersMentions,
+  });
+  const title = `[gardener] tree update needed for ${sourceRepo}#${sourcePr}`;
+
+  write(
+    `\u2712 merged ${sourceRepo}#${sourcePr}: creating tree issue on ${treeSlug}`,
+  );
+
+  if (dryRun) {
+    return { kind: "created", issueUrl: "(dry-run)", markerPatched: true };
+  }
+
+  const tokenEnv: NodeJS.ProcessEnv = { ...env, GH_TOKEN: treeRepoToken };
+
+  const createRes = await shell(
+    "gh",
+    ["issue", "create", "--repo", treeSlug, "--title", title, "--body", body],
+    { env: tokenEnv },
+  );
+  if (createRes.code !== 0) {
+    const stderr = createRes.stderr || "";
+    const isConfigError = /\b(401|403|404)\b/.test(stderr);
+    const reason = isConfigError
+      ? `tree-repo auth/access error (${stderr.split("\n")[0] || "401/403/404"})`
+      : `gh issue create failed: ${stderr.split("\n")[0] || "unknown"}`;
+    return isConfigError
+      ? { kind: "skipped", reason }
+      : { kind: "failed", reason };
+  }
+  const issueUrl = createRes.stdout.trim().split("\n").pop()?.trim() ?? "";
+
+  const newBody = withTreeIssueCreatedField(gardenerCommentBody, issueUrl);
+  if (!newBody) {
+    return {
+      kind: "failed",
+      reason: "marker not found on gardener comment — cannot PATCH",
+      issueUrl,
+    };
+  }
+
+  const patchRes = await shell(
+    "gh",
+    [
+      "api",
+      "-X",
+      "PATCH",
+      `/repos/${sourceRepo}/issues/comments/${gardenerCommentId}`,
+      "-f",
+      `body=${newBody}`,
+    ],
+    { env: tokenEnv },
+  );
+  if (patchRes.code !== 0) {
+    write(
+      `\u26A0 tree issue created at ${issueUrl} but marker PATCH failed — ` +
+        `record manually: ${patchRes.stderr.split("\n")[0] || "unknown error"}`,
+    );
+    return { kind: "failed", reason: "marker PATCH failed", issueUrl };
+  }
+
+  return { kind: "created", issueUrl, markerPatched: true };
+}
+
+/**
+ * Decide whether a MERGED source PR requires a tree-repo issue, and
+ * if so, run the create + marker-PATCH dance via `handleMergedIssue`.
+ *
+ * Returns:
+ *   - `null`  — fall through to the existing stale-skip (no gardener
+ *               marker, or marker already has `tree_issue_created`).
+ *   - a `{ status, summary }` shape when the merged branch took
+ *               responsibility for this PR (handled | skipped | failed).
+ */
+async function tryHandleMergedPr(input: {
+  sourceRepo: string;
+  sourcePr: number;
+  sourcePrTitle: string;
+  sourcePrDiff?: string;
+  sourcePrView?: PrView;
+  comments: IssueComment[];
+  gardenerUser: string;
+  treeRoot: string;
+  treeSlug?: string;
+  treeSha?: string;
+  classifier: Classifier;
+  shell: ShellRun;
+  env: NodeJS.ProcessEnv;
+  write: (line: string) => void;
+  dryRun: boolean;
+}): Promise<{ status: CommentStatus; summary: string } | null> {
+  const {
+    sourceRepo,
+    sourcePr,
+    sourcePrTitle,
+    sourcePrDiff,
+    sourcePrView,
+    comments,
+    gardenerUser,
+    treeRoot,
+    treeSlug,
+    treeSha,
+    classifier,
+    shell,
+    env,
+    write,
+    dryRun,
+  } = input;
+
+  const hasGardenerMarker = (b: string | undefined): boolean =>
+    typeof b === "string" && /<!--\s*gardener:/.test(b);
+  const gardenerComments = comments.filter(
+    (c) =>
+      (c.user?.login === gardenerUser || hasGardenerMarker(c.body)) &&
+      c.body && c.body.length > 0,
+  );
+  const latestState = gardenerComments
+    .filter((c) => extractStateMarker(c.body) !== null)
+    .sort((a, b) => (a.created_at ?? "").localeCompare(b.created_at ?? ""))
+    .pop();
+
+  if (!latestState || latestState.id === undefined) return null;
+  const parsed = parseStateMarker(latestState.body);
+  if (!parsed) return null;
+  if (parsed.treeIssueCreated) {
+    // Already linked — idempotent skip, but count it as handled so the
+    // trailer reflects that this PR was considered by the branch.
+    return {
+      status: "skipped",
+      summary: `merged #${sourcePr}: already linked to ${parsed.treeIssueCreated}`,
+    };
+  }
+
+  if (!treeSlug) {
+    return {
+      status: "skipped",
+      summary: `merged #${sourcePr}: tree_repo not configured`,
+    };
+  }
+
+  // Token gate — load-bearing. No fallback to ambient gh auth.
+  const treeRepoToken = env.TREE_REPO_TOKEN;
+  if (!treeRepoToken) {
+    return {
+      status: "skipped",
+      summary: `merged #${sourcePr}: TREE_REPO_TOKEN unset`,
+    };
+  }
+
+  const classification = await classifier({
+    type: "pr",
+    prView: sourcePrView,
+    diff: sourcePrDiff,
+    treeRoot,
+    treeSha,
+  });
+
+  const codeownersPath = join(treeRoot, ".github", "CODEOWNERS");
+  const codeownersText = existsSync(codeownersPath)
+    ? readFileSync(codeownersPath, "utf-8")
+    : "";
+  const mentions = new Set<string>();
+  for (const node of classification.treeNodes) {
+    for (const m of codeownersForPath(codeownersText, node.path)) {
+      mentions.add(m);
+    }
+  }
+
+  const outcome = await handleMergedIssue({
+    sourceRepo,
+    sourcePr,
+    sourcePrTitle,
+    gardenerCommentId: latestState.id,
+    gardenerCommentBody: latestState.body ?? "",
+    treeSlug,
+    verdict: classification.verdict,
+    severity: classification.severity,
+    summary: classification.summary,
+    treeNodes: classification.treeNodes,
+    codeownersMentions: Array.from(mentions),
+    shell,
+    env,
+    write,
+    dryRun,
+  });
+
+  if (outcome.kind === "created") {
+    write(
+      `\u2713 merged ${sourceRepo}#${sourcePr}: tree issue ${outcome.issueUrl}`,
+    );
+    return {
+      status: "handled",
+      summary: `merged #${sourcePr}: opened ${outcome.issueUrl}`,
+    };
+  }
+  if (outcome.kind === "skipped") {
+    write(`\u23ed merged ${sourceRepo}#${sourcePr}: ${outcome.reason}`);
+    return {
+      status: "skipped",
+      summary: `merged #${sourcePr}: ${outcome.reason}`,
+    };
+  }
+  const tail = outcome.issueUrl ? ` (issue: ${outcome.issueUrl})` : "";
+  write(`\u274c merged ${sourceRepo}#${sourcePr}: ${outcome.reason}${tail}`);
+  return {
+    status: "failed",
+    summary: `merged #${sourcePr}: ${outcome.reason}${tail}`,
+  };
 }
 
 // ───────────────────────── Single-item review ─────────────────────
@@ -1148,10 +1458,46 @@ async function reviewOne(
     return { status: "failed", summary: msg };
   }
 
-  // Freshness guard — skip merged/closed items (Step 4-pre).
+  // Freshness guard — handle merged/closed items.
+  //
+  // MERGED-PR branch (Phase 2b, #162/#166): if the source PR was
+  // merged with a `gardener:state` marker that has not yet been
+  // linked to a tree-repo issue, create the tree issue (gated on
+  // `TREE_REPO_TOKEN`) and PATCH the marker. Other MERGED paths —
+  // no marker, or marker already linked — fall through to the
+  // existing stale skip.
   const itemState = type === "pr"
     ? bundle.prView?.state
     : bundle.issueView?.state;
+  if (type === "pr" && itemState === "MERGED") {
+    const mergedOutcome = await tryHandleMergedPr({
+      sourceRepo: repo,
+      sourcePr: number,
+      sourcePrTitle: bundle.prView?.title ?? `#${number}`,
+      sourcePrDiff: bundle.diff,
+      sourcePrView: bundle.prView,
+      comments: bundle.issueComments,
+      gardenerUser,
+      treeRoot,
+      treeSlug: opts.treeSlug,
+      treeSha: opts.treeSha ?? bundle.subject.treeSha,
+      classifier,
+      shell,
+      env,
+      write,
+      dryRun,
+    });
+    if (mergedOutcome) {
+      logEvent(env, {
+        kind: "merged_issue",
+        number,
+        status: mergedOutcome.status,
+        summary: mergedOutcome.summary,
+      });
+      return mergedOutcome;
+    }
+    // Otherwise fall through to stale skip.
+  }
   if (type === "pr" && (itemState === "MERGED" || itemState === "CLOSED")) {
     const msg = `#${number}: ${itemState} since scan, skipping`;
     write(`\u23ed ${msg}`);
@@ -1498,7 +1844,9 @@ export async function runComment(
         treeRepoUrl,
         treeSlug,
       });
-      emitBreezeResult(write, result.status, result.summary);
+      emitBreezeResult(write, result.status, result.summary, {
+        tree_repo_token: env.TREE_REPO_TOKEN ? "present" : "absent",
+      });
       return result.status === "failed" ? 1 : 0;
     }
 
@@ -1526,7 +1874,9 @@ export async function runComment(
       treeRepoUrl,
       treeSlug,
     });
-    emitBreezeResult(write, result.status, result.summary);
+    emitBreezeResult(write, result.status, result.summary, {
+      tree_repo_token: env.TREE_REPO_TOKEN ? "present" : "absent",
+    });
     return result.status === "failed" ? 1 : 0;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

@@ -1238,3 +1238,377 @@ describe("gardener comment -- Phase 2a tree-issue primitives", () => {
     expect(body).toContain("(no tree nodes cited)");
   });
 });
+
+// ─────────────────── Phase 2b: MERGED → tree-repo issue ───────────────────
+
+describe("gardener comment -- MERGED-PR scan branch (#193, Phase 2b of #162)", () => {
+  // Shared fixture: a merged source PR with an existing gardener:state
+  // marker comment that has no `tree_issue_created` field yet.
+  function writeMergedSnapshot(
+    snapshotDir: string,
+    opts: { markerExtras?: string } = {},
+  ): void {
+    mkdirSync(snapshotDir, { recursive: true });
+    writeFileSync(
+      join(snapshotDir, "pr-view.json"),
+      JSON.stringify({
+        number: 42,
+        title: "feat: add thing",
+        headRefOid: "dead1234",
+        state: "MERGED",
+        author: { login: "someone" },
+        additions: 10,
+        deletions: 0,
+        updatedAt: "2026-04-16T00:00:00Z",
+      }),
+    );
+    const markerSuffix = opts.markerExtras ? ` · ${opts.markerExtras}` : "";
+    writeFileSync(
+      join(snapshotDir, "issue-comments.json"),
+      JSON.stringify([
+        {
+          id: 9001,
+          user: { login: "repo-gardener" },
+          created_at: "2026-04-15T00:00:00Z",
+          body:
+            `<!-- gardener:state · reviewed=dead1234 · verdict=NEW_TERRITORY ` +
+            `· severity=medium · tree_sha=tsha1234${markerSuffix} -->\n\n` +
+            `🌱 **gardener** · NEW_TERRITORY\n`,
+        },
+      ]),
+    );
+    writeFileSync(
+      join(snapshotDir, "subject.json"),
+      JSON.stringify({ gardenerUser: "repo-gardener", treeSha: "tsha1234" }),
+    );
+    writeFileSync(join(snapshotDir, "pr.diff"), "");
+  }
+
+  const mergedClassifier: Classifier = async () => ({
+    verdict: "NEW_TERRITORY",
+    severity: "medium",
+    summary: "Introduces a new area not covered by the tree.",
+    treeNodes: [{ path: "product/NODE.md", summary: "product scope" }],
+  });
+
+  it("TREE_REPO_TOKEN unset → skipped with tree_repo_token=absent trailer", async () => {
+    const tmp = useTmpDir();
+    const snapshotDir = join(tmp.path, "snap");
+    writeMergedSnapshot(snapshotDir);
+    writeConfig(tmp.path, "tree_repo: o/tree\ntarget_repo: o/src\n");
+
+    const calls: ShellCall[] = [];
+    const shell = makeShell(
+      [() => ({ stdout: "", stderr: "", code: 0 })],
+      calls,
+    );
+    const { write, lines } = captureWrite();
+
+    const code = await runComment(
+      ["--pr", "42", "--repo", "o/src", "--tree-path", tmp.path],
+      {
+        shellRun: shell,
+        write,
+        env: { BREEZE_SNAPSHOT_DIR: snapshotDir },
+        classifier: mergedClassifier,
+      },
+    );
+
+    expect(code).toBe(0);
+    const trailer = lines[lines.length - 1];
+    expect(trailer).toMatch(/^BREEZE_RESULT: status=skipped /);
+    expect(trailer).toContain("tree_repo_token=absent");
+    expect(trailer).toContain("TREE_REPO_TOKEN");
+    expect(calls.some((c) => c.args.includes("create"))).toBe(false);
+  });
+
+  it("marker already has tree_issue_created → skipped, no issue-create call", async () => {
+    const tmp = useTmpDir();
+    const snapshotDir = join(tmp.path, "snap");
+    writeMergedSnapshot(snapshotDir, {
+      markerExtras: "tree_issue_created=https://github.com/o/tree/issues/7",
+    });
+    writeConfig(tmp.path, "tree_repo: o/tree\ntarget_repo: o/src\n");
+
+    const calls: ShellCall[] = [];
+    const shell = makeShell(
+      [() => ({ stdout: "", stderr: "", code: 0 })],
+      calls,
+    );
+    const { write, lines } = captureWrite();
+
+    const code = await runComment(
+      ["--pr", "42", "--repo", "o/src", "--tree-path", tmp.path],
+      {
+        shellRun: shell,
+        write,
+        env: {
+          BREEZE_SNAPSHOT_DIR: snapshotDir,
+          TREE_REPO_TOKEN: "tok-xyz",
+        },
+        classifier: mergedClassifier,
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(lines[lines.length - 1]).toContain("already linked");
+    expect(calls.some((c) => c.args[0] === "issue")).toBe(false);
+    expect(calls.some((c) => c.args[1] === "PATCH")).toBe(false);
+  });
+
+  it("happy path: creates tree issue and PATCHes the source-PR marker", async () => {
+    const tmp = useTmpDir();
+    const snapshotDir = join(tmp.path, "snap");
+    writeMergedSnapshot(snapshotDir);
+    writeConfig(tmp.path, "tree_repo: o/tree\ntarget_repo: o/src\n");
+
+    const calls: ShellCall[] = [];
+    const shell = makeShell(
+      [
+        (call) => {
+          if (call.args[0] === "issue" && call.args[1] === "create") {
+            return {
+              stdout: "https://github.com/o/tree/issues/123\n",
+              stderr: "",
+              code: 0,
+            };
+          }
+          return null;
+        },
+        () => ({ stdout: "", stderr: "", code: 0 }),
+      ],
+      calls,
+    );
+    const { write, lines } = captureWrite();
+
+    const code = await runComment(
+      ["--pr", "42", "--repo", "o/src", "--tree-path", tmp.path],
+      {
+        shellRun: shell,
+        write,
+        env: {
+          BREEZE_SNAPSHOT_DIR: snapshotDir,
+          TREE_REPO_TOKEN: "tok-xyz",
+        },
+        classifier: mergedClassifier,
+      },
+    );
+
+    expect(code).toBe(0);
+
+    const issueCreate = calls.find(
+      (c) => c.args[0] === "issue" && c.args[1] === "create",
+    );
+    expect(issueCreate).toBeDefined();
+    expect(issueCreate!.args).toContain("--repo");
+    expect(issueCreate!.args).toContain("o/tree");
+    expect(issueCreate!.args).toContain("--title");
+    const titleIdx = issueCreate!.args.indexOf("--title");
+    expect(issueCreate!.args[titleIdx + 1]).toBe(
+      "[gardener] tree update needed for o/src#42",
+    );
+
+    const patch = calls.find(
+      (c) => c.args[0] === "api" && c.args[1] === "-X" && c.args[2] === "PATCH",
+    );
+    expect(patch).toBeDefined();
+    expect(patch!.args[3]).toBe("/repos/o/src/issues/comments/9001");
+    const bodyArg = patch!.args[5];
+    expect(bodyArg).toContain("body=");
+    expect(bodyArg).toContain(
+      "tree_issue_created=https://github.com/o/tree/issues/123",
+    );
+
+    const trailer = lines[lines.length - 1];
+    expect(trailer).toMatch(/^BREEZE_RESULT: status=handled /);
+    expect(trailer).toContain("tree_repo_token=present");
+    expect(trailer).toContain("https://github.com/o/tree/issues/123");
+  });
+
+  it("issue-create 404 → skipped (config error), no PATCH", async () => {
+    const tmp = useTmpDir();
+    const snapshotDir = join(tmp.path, "snap");
+    writeMergedSnapshot(snapshotDir);
+    writeConfig(tmp.path, "tree_repo: o/tree\ntarget_repo: o/src\n");
+
+    const calls: ShellCall[] = [];
+    const shell = makeShell(
+      [
+        (call) => {
+          if (call.args[0] === "issue" && call.args[1] === "create") {
+            return {
+              stdout: "",
+              stderr: "HTTP 404: Not Found (o/tree)",
+              code: 1,
+            };
+          }
+          return null;
+        },
+        () => ({ stdout: "", stderr: "", code: 0 }),
+      ],
+      calls,
+    );
+    const { write, lines } = captureWrite();
+
+    const code = await runComment(
+      ["--pr", "42", "--repo", "o/src", "--tree-path", tmp.path],
+      {
+        shellRun: shell,
+        write,
+        env: {
+          BREEZE_SNAPSHOT_DIR: snapshotDir,
+          TREE_REPO_TOKEN: "tok-xyz",
+        },
+        classifier: mergedClassifier,
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(lines[lines.length - 1]).toMatch(/^BREEZE_RESULT: status=skipped /);
+    expect(lines[lines.length - 1]).toContain("tree_repo_token=present");
+    expect(calls.some((c) => c.args[1] === "PATCH")).toBe(false);
+  });
+
+  it("issue-create 503 → failed with issue URL absent", async () => {
+    const tmp = useTmpDir();
+    const snapshotDir = join(tmp.path, "snap");
+    writeMergedSnapshot(snapshotDir);
+    writeConfig(tmp.path, "tree_repo: o/tree\ntarget_repo: o/src\n");
+
+    const calls: ShellCall[] = [];
+    const shell = makeShell(
+      [
+        (call) => {
+          if (call.args[0] === "issue" && call.args[1] === "create") {
+            return {
+              stdout: "",
+              stderr: "HTTP 503: Service Unavailable",
+              code: 1,
+            };
+          }
+          return null;
+        },
+        () => ({ stdout: "", stderr: "", code: 0 }),
+      ],
+      calls,
+    );
+    const { write, lines } = captureWrite();
+
+    const code = await runComment(
+      ["--pr", "42", "--repo", "o/src", "--tree-path", tmp.path],
+      {
+        shellRun: shell,
+        write,
+        env: {
+          BREEZE_SNAPSHOT_DIR: snapshotDir,
+          TREE_REPO_TOKEN: "tok-xyz",
+        },
+        classifier: mergedClassifier,
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(lines[lines.length - 1]).toMatch(/^BREEZE_RESULT: status=failed /);
+    expect(calls.some((c) => c.args[1] === "PATCH")).toBe(false);
+  });
+
+  it("create succeeds, PATCH fails → failed but logs issue URL for manual recovery", async () => {
+    const tmp = useTmpDir();
+    const snapshotDir = join(tmp.path, "snap");
+    writeMergedSnapshot(snapshotDir);
+    writeConfig(tmp.path, "tree_repo: o/tree\ntarget_repo: o/src\n");
+
+    const calls: ShellCall[] = [];
+    const shell = makeShell(
+      [
+        (call) => {
+          if (call.args[0] === "issue" && call.args[1] === "create") {
+            return {
+              stdout: "https://github.com/o/tree/issues/124\n",
+              stderr: "",
+              code: 0,
+            };
+          }
+          if (call.args[0] === "api" && call.args[1] === "-X" && call.args[2] === "PATCH") {
+            return { stdout: "", stderr: "HTTP 500", code: 1 };
+          }
+          return null;
+        },
+        () => ({ stdout: "", stderr: "", code: 0 }),
+      ],
+      calls,
+    );
+    const { write, lines } = captureWrite();
+
+    const code = await runComment(
+      ["--pr", "42", "--repo", "o/src", "--tree-path", tmp.path],
+      {
+        shellRun: shell,
+        write,
+        env: {
+          BREEZE_SNAPSHOT_DIR: snapshotDir,
+          TREE_REPO_TOKEN: "tok-xyz",
+        },
+        classifier: mergedClassifier,
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(lines[lines.length - 1]).toMatch(/^BREEZE_RESULT: status=failed /);
+    // Issue URL must appear in log output so operators can recover.
+    expect(lines.some((l) => l.includes("https://github.com/o/tree/issues/124")))
+      .toBe(true);
+  });
+
+  it("MERGED PR without a gardener marker → falls through to existing stale skip", async () => {
+    const tmp = useTmpDir();
+    const snapshotDir = join(tmp.path, "snap");
+    mkdirSync(snapshotDir, { recursive: true });
+    writeFileSync(
+      join(snapshotDir, "pr-view.json"),
+      JSON.stringify({
+        number: 42,
+        title: "random merged PR",
+        headRefOid: "beef0000",
+        state: "MERGED",
+        author: { login: "someone" },
+        additions: 1,
+        deletions: 0,
+        updatedAt: "2026-04-16T00:00:00Z",
+      }),
+    );
+    writeFileSync(join(snapshotDir, "issue-comments.json"), JSON.stringify([]));
+    writeFileSync(
+      join(snapshotDir, "subject.json"),
+      JSON.stringify({ gardenerUser: "repo-gardener" }),
+    );
+    writeFileSync(join(snapshotDir, "pr.diff"), "");
+    writeConfig(tmp.path, "tree_repo: o/tree\ntarget_repo: o/src\n");
+
+    const calls: ShellCall[] = [];
+    const shell = makeShell(
+      [() => ({ stdout: "", stderr: "", code: 0 })],
+      calls,
+    );
+    const { write, lines } = captureWrite();
+
+    const code = await runComment(
+      ["--pr", "42", "--repo", "o/src", "--tree-path", tmp.path],
+      {
+        shellRun: shell,
+        write,
+        env: {
+          BREEZE_SNAPSHOT_DIR: snapshotDir,
+          TREE_REPO_TOKEN: "tok-xyz",
+        },
+        classifier: mergedClassifier,
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(lines[lines.length - 1]).toMatch(/^BREEZE_RESULT: status=skipped /);
+    expect(lines.some((l) => l.includes("MERGED since scan"))).toBe(true);
+    expect(calls.some((c) => c.args[0] === "issue" && c.args[1] === "create"))
+      .toBe(false);
+  });
+});
