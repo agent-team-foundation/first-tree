@@ -126,14 +126,6 @@
       "command": "git",
       "args": [
         "add",
-        "<TREE_ROOT>/NODE.md"
-      ],
-      "cwdLabel": "<tree-root>"
-    },
-    {
-      "command": "git",
-      "args": [
-        "add",
         "<TREE_ROOT>/.github/CODEOWNERS"
       ],
       "cwdLabel": "<tree-root>"
@@ -185,14 +177,6 @@
       "args": [
         "add",
         "<TREE_ROOT>/pkg-b/NODE.md"
-      ],
-      "cwdLabel": "<tree-root>"
-    },
-    {
-      "command": "git",
-      "args": [
-        "add",
-        "<TREE_ROOT>/NODE.md"
       ],
       "cwdLabel": "<tree-root>"
     },
@@ -379,7 +363,7 @@
         "--title",
         "chore(sync): housekeeping for source-golden",
         "--body",
-        "<BODY_HASH:ad8c287fdfc5d99a>"
+        "<BODY_HASH:fb363870ba1f9505>"
       ],
       "cwdLabel": "<tree-root>"
     },
@@ -398,7 +382,7 @@
     "pr-body::first-tree/sync-source-golden-pr101": "e51af67dddca1c20",
     "pr-body::first-tree/sync-source-golden-pr102": "b0f4343e58e66ccb",
     "commit-msg::2": "6dde9c54721fee28",
-    "pr-body::title:chore(sync): housekeeping for source-golden": "ad8c287fdfc5d99a"
+    "pr-body::title:chore(sync): housekeeping for source-golden": "fb363870ba1f9505"
   },
   "nodeMdFiles": {
     "pkg-a": "d27a7d643355409c",
