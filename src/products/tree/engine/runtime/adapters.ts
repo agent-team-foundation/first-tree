@@ -17,7 +17,7 @@ export const CLAUDE_SETTINGS_PATH = ".claude/settings.json";
 export const CODEX_CONFIG_PATH = ".codex/config.toml";
 export const CODEX_HOOKS_PATH = ".codex/hooks.json";
 export const INJECT_CONTEXT_COMMAND =
-  "npx -p first-tree first-tree inject-context --skip-version-check";
+  "npx -p first-tree first-tree tree inject-context --skip-version-check";
 
 const CODEX_SESSION_START_MATCHER = "startup|resume";
 const CODEX_SESSION_START_STATUS = "Loading First Tree context";
@@ -61,7 +61,7 @@ export interface AgentContextHookReport {
 }
 
 const AGENT_CONTEXT_REPAIR_HINT =
-  "Repair with a mutating first-tree command such as `first-tree upgrade`, `first-tree bind`, `first-tree init`, `first-tree workspace sync`, or `first-tree publish`.";
+  "Repair with a mutating first-tree command such as `first-tree tree upgrade`, `first-tree tree bind`, `first-tree tree init`, `first-tree tree workspace sync`, or `first-tree tree publish`.";
 
 export function formatAgentContextHookMessages(
   result: AgentContextHookSyncResult,
@@ -193,7 +193,7 @@ export function refreshInjectContextHook(
     `$1${INJECT_CONTEXT_COMMAND}$2`,
   );
   updated = updated.replace(
-    /\.\/(npx -p first-tree first-tree inject-context --skip-version-check)/g,
+    /\.\/(npx -p first-tree first-tree tree inject-context --skip-version-check)/g,
     "$1",
   );
 
@@ -469,6 +469,12 @@ function isCodexManagedHook(hook: Record<string, unknown>): boolean {
 
 function matchesLegacyHookPattern(command: string): boolean {
   if (command === INJECT_CONTEXT_COMMAND || command === `./${INJECT_CONTEXT_COMMAND}`) {
+    return true;
+  }
+  if (
+    command === "npx -p first-tree first-tree inject-context --skip-version-check"
+    || command === "./npx -p first-tree first-tree inject-context --skip-version-check"
+  ) {
     return true;
   }
   return STALE_INJECT_CONTEXT_PATTERNS.some((pattern) => {

@@ -1,12 +1,16 @@
 # `first-tree breeze`
 
-Local daemon that takes over your `gh` login and turns GitHub notifications (PRs, comments, discussions, issues) into a triaged, optionally auto-handled inbox. Drives a Claude Code statusline, an SSE dashboard, and scheduled background work.
+Local daemon that takes over your `gh` login and turns GitHub notifications
+(PRs, comments, discussions, issues) into a triaged, optionally auto-handled
+inbox. Drives a Claude Code statusline, an SSE dashboard, and scheduled
+background work.
 
-## What's in this directory
+## What's In This Directory
 
-```
+```text
 breeze/
 ├── VERSION
+├── README.md              # product overview
 ├── cli.ts                 # dispatcher
 └── engine/
     ├── commands/          # install, start, stop, poll, watch, doctor, cleanup, status, status-manager
@@ -30,9 +34,12 @@ breeze/
 
 Run `first-tree breeze --help` for the authoritative list.
 
-## Runtime constraints
+## Runtime Constraints
 
-`engine/statusline.ts` is bundled separately (`dist/breeze-statusline.js`) and is called every few seconds by the Claude Code statusline hook. It must stay zero-dep and cold-start under 30ms — do not import `ink`, `zod`, or the umbrella CLI from it.
+`engine/statusline.ts` is bundled separately (`dist/breeze-statusline.js`) and
+is called every few seconds by the Claude Code statusline hook. It must stay
+zero-dep and cold-start under 30ms — do not import `ink`, `zod`, or the
+umbrella CLI from it.
 
 ## Related
 

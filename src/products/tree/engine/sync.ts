@@ -24,7 +24,7 @@ import { resolveNodeOwners } from "../../../../assets/tree/helpers/generate-code
 
 const execFileAsync = promisify(execFile);
 
-export const SYNC_USAGE = `usage: first-tree sync [--tree-path PATH] [--source ID] [--propose] [--apply] [--dry-run]
+export const SYNC_USAGE = `usage: first-tree tree sync [--tree-path PATH] [--source ID] [--propose] [--apply] [--dry-run]
 
 Detect drift between a Context Tree and the source repo(s) it describes.
 Runs in three phases controlled by flags:
@@ -813,7 +813,7 @@ Return a JSON array only, no prose.`;
       "  npm install -g @anthropic-ai/claude-code\n\n" +
       "Then authenticate:\n" +
       "  claude login\n\n" +
-      "Once installed, re-run: first-tree sync --tree-path <path>",
+      "Once installed, re-run: first-tree tree sync --tree-path <path>",
     );
     process.exit(1);
   }
@@ -1184,7 +1184,7 @@ async function prepareProposalGroup(
       prBody: "",
       group,
       skipped: true,
-      skipReason: "first-tree verify failed",
+      skipReason: "first-tree tree verify failed",
     };
   }
 
@@ -1344,7 +1344,7 @@ export async function runSync(
 
   if (!repo.looksLikeTreeRepo()) {
     console.error(
-      `\u274C ${treeRoot} does not look like a Context Tree repo. Run first-tree sync inside a tree repo, or pass --tree-path.`,
+      `\u274C ${treeRoot} does not look like a Context Tree repo. Run first-tree tree sync inside a tree repo, or pass --tree-path.`,
     );
     return 1;
   }
@@ -1364,7 +1364,7 @@ export async function runSync(
       "  npm install -g @anthropic-ai/claude-code\n\n" +
       "Then authenticate:\n" +
       "  claude login\n\n" +
-      "Once installed, re-run: first-tree sync --tree-path <path>",
+      "Once installed, re-run: first-tree tree sync --tree-path <path>",
     );
     return 1;
   }
@@ -1393,7 +1393,7 @@ export async function runSync(
         `   Sync needs a GitHub URL to fetch commits and merged PRs.\n` +
         `   Fix: edit .first-tree/bindings/${binding.sourceId}.json and add:\n` +
         `     "remoteUrl": "https://github.com/<owner>/<repo>"\n` +
-        `   Then re-run first-tree sync.`,
+        `   Then re-run first-tree tree sync.`,
       );
       hasConfigErrors = true;
       continue;

@@ -40,7 +40,7 @@ Check the calling context:
 `RUN_MODE` determines which GitHub access mechanism is required:
 
 - `manual` / `loop` -> runs locally on the user's machine. Use the
-  `gh` CLI and the bundled `first-tree sync` command. Verify
+  `gh` CLI and the bundled `first-tree tree sync` command. Verify
   `gh auth status` succeeds; if not, exit with:
 
   > ❌ `gh` is not authenticated. Run `gh auth login` and retry.
@@ -79,7 +79,7 @@ server naming. If the connected connector uses different names (e.g.
 `mcp__claude_ai_github__list_commits`), use the equivalent tool.
 
 **Local execution advantage**: in `manual` / `loop` mode the bundled
-`first-tree sync` CLI handles Steps 1-3 as a single command,
+`first-tree tree sync` CLI handles Steps 1-3 as a single command,
 including LLM-backed classification via the local `claude` CLI. Cloud
 `schedule` mode must reimplement the same logic step-by-step using MCP
 tools because the container cannot shell out to `claude`.
@@ -105,7 +105,7 @@ done
 If `.first-tree/bindings/` is empty, exit with:
 
 > ⏭ No bindings recorded under `.first-tree/bindings/`. Nothing to
-> sync. Run `first-tree bind` from a source repo first.
+> sync. Run `first-tree tree bind` from a source repo first.
 
 ### Cloud (`schedule`)
 
@@ -146,7 +146,7 @@ stderr and surface it to the user.
 If you do not have a built `dist/`, fall back to:
 
 ```bash
-npx -p first-tree first-tree sync --tree-path "$PWD" --propose
+npx -p first-tree first-tree tree sync --tree-path "$PWD" --propose
 ```
 
 ✓ If the CLI succeeded, proposals are written under
@@ -320,7 +320,7 @@ with the GitHub connector wired. A reasonable cadence:
 
 ## Recap
 
-- Local mode is a thin wrapper around `first-tree sync`. The CLI
+- Local mode is a thin wrapper around `first-tree tree sync`. The CLI
   does the heavy lifting, including LLM-backed classification via the
   local `claude` CLI (required).
 - Cloud mode reimplements detection + classification using MCP

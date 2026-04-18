@@ -4,10 +4,11 @@ import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import {
+  ALL_COMMANDS,
   META_COMMANDS,
   PRODUCTS,
   getCommand,
-  readProductVersion,
+  readCommandVersion,
 } from "./products/manifest.js";
 import { readPackageVersion } from "./shared/version.js";
 
@@ -18,29 +19,34 @@ function buildUsage(): string {
     `  ${name.padEnd(20)}  ${description}`;
   const productLines = PRODUCTS.map((p) => formatRow(p.name, p.description))
     .join("\n");
-  const metaLines = META_COMMANDS.map((m) => formatRow(m.name, m.description))
-    .join("\n");
+  const maintenanceLines = META_COMMANDS.map((m) =>
+    formatRow(m.name, m.description)
+  ).join("\n");
+  const primaryProducts = PRODUCTS.map((p) => p.name).join(", ");
+  const maintenanceNamespaces = META_COMMANDS.map((m) => m.name).join(", ");
   const gettingStarted = [
     "  first-tree tree --help",
     "  first-tree tree inspect --json",
     "  first-tree tree init",
     "  first-tree breeze --help",
     "  first-tree breeze status",
+    "  first-tree skill doctor",
   ].join("\n");
-  return `usage: first-tree <command> [...]
+  return `usage: first-tree <namespace> <command>
 
-  first-tree is an umbrella CLI that dispatches into product namespaces.
+  first-tree is an umbrella CLI with three primary products (${primaryProducts})
+  plus a maintenance namespace (${maintenanceNamespaces}).
   This CLI is designed for agents, not humans. Let your agent handle it.
 
 Products:
 ${productLines}
 
-Diagnostics:
-${metaLines}
+Maintenance:
+${maintenanceLines}
 
 Global options:
   --help, -h            Show this help message
-  --version, -v         Show version numbers for the CLI and each product
+  --version, -v         Show version numbers for the CLI and each namespace
   --skip-version-check  Skip the auto-upgrade check (for latency-sensitive callers)
 
 Getting started:
@@ -59,7 +65,6 @@ export function isDirectExecution(
   }
 
   try {
-    // npm commonly invokes bins through a symlink or shim path.
     return realpathSync(argv1) === realpathSync(fileURLToPath(metaUrl));
   } catch {
     return false;
@@ -83,8 +88,6 @@ export function stripGlobalFlags(args: string[]): {
 }
 
 async function runAutoUpgradeCheck(): Promise<void> {
-  // Best-effort silent auto-upgrade. Any failure is swallowed so the user's
-  // command always runs.
   try {
     const {
       checkAndAutoUpgrade,
@@ -113,8 +116,8 @@ async function runAutoUpgradeCheck(): Promise<void> {
 function formatVersionLine(): string {
   const cliVersion = readPackageVersion(import.meta.url, "first-tree");
   const parts = [`first-tree=${cliVersion}`];
-  for (const product of PRODUCTS) {
-    parts.push(`${product.name}=${readProductVersion(product.name)}`);
+  for (const command of ALL_COMMANDS) {
+    parts.push(`${command.name}=${readCommandVersion(command.name)}`);
   }
   return parts.join(" ");
 }
@@ -136,13 +139,13 @@ export async function runCli(
     return 0;
   }
 
-  const commandName = args[0];
-  const command = getCommand(commandName);
+  const namespaceName = args[0];
+  const command = getCommand(namespaceName);
 
   if (!command) {
-    write(`Unknown command: ${commandName}`);
+    write(`Unknown first-tree namespace: ${namespaceName}`);
     write(
-      `Did you mean \`first-tree tree ${commandName}\`? Run \`first-tree --help\` for the list of commands.`,
+      `Did you mean \`first-tree tree ${namespaceName}\`? Run \`first-tree --help\` for the list of products and maintenance commands.`,
     );
     return 1;
   }

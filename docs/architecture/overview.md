@@ -6,7 +6,7 @@ the bound Context Tree.
 This file is source-repo-local. It maps the tree's architectural decisions onto
 the files maintainers edit in this repo.
 
-## Three Products, One Umbrella CLI
+## Three Products, One Maintenance Namespace
 
 `first-tree` is an umbrella CLI that dispatches into three products:
 
@@ -14,9 +14,14 @@ the files maintainers edit in this repo.
 - **`breeze`** — Proposal / inbox daemon with a GitHub notifications statusline
 - **`gardener`** — Automated maintenance agent for tree sync PRs and source-repo review comments
 
-All three live under `src/products/<name>/` and share the same shape. The
-single source of truth for the product set is `src/products/manifest.ts` —
-the umbrella CLI, version reporting, and skill tooling read from there.
+It also exposes one maintenance namespace:
+
+- **`skill`** — inspect, diagnose, and repair the four shipped skill payloads
+
+The three products live under `src/products/<name>/` and share the same shape.
+The single source of truth for the CLI namespace set is
+`src/products/manifest.ts` — the umbrella CLI, version reporting, and skill
+tooling read from there.
 
 ## Four Skills
 
@@ -37,12 +42,13 @@ ships.
 
 | Path | Local responsibility |
 | --- | --- |
-| `src/cli.ts` | Top-level umbrella dispatcher for `first-tree <product> <command>`; iterates the product manifest |
-| `src/products/manifest.ts` | Single source of truth for the three products; add a new product by adding one entry here |
+| `src/cli.ts` | Top-level umbrella dispatcher for `first-tree <namespace> <command>`; iterates the namespace manifest |
+| `src/products/manifest.ts` | Single source of truth for the CLI namespace set; add a new namespace by adding one entry here |
 | `src/products/tree/` | Tree product root (CLI dispatcher + `VERSION`) |
 | `src/products/tree/engine/` | Tree business logic: `commands/`, `runtime/`, `rules/`, `validators/`, plus `bind.ts`, `init.ts`, `verify.ts`, `publish.ts`, `sync.ts`, `workspace.ts`, `upgrade.ts`, `inspect.ts`, etc. |
 | `src/products/breeze/` | Breeze product: CLI dispatcher + `engine/` (commands, runtime, daemon, bridge, statusline) |
 | `src/products/gardener/` | Gardener product: CLI dispatcher + `engine/` (commands, runtime, comment, respond) |
+| `src/meta/skill-tools/` | Maintenance namespace: skill inventory, diagnosis, installation, and symlink repair |
 | `skills/first-tree/` | Entry-point skill payload that ships verbatim to user repos |
 | `skills/tree/`, `skills/breeze/`, `skills/gardener/` | Per-product operational skill payloads |
 | `assets/tree/` | Runtime assets for the tree product, installed or refreshed by the CLI (templates, workflows, prompts, helpers, examples) |
@@ -59,9 +65,9 @@ ships.
   subdirectories). Breeze uses `engine/daemon/`; tree uses `engine/rules/`
   and `engine/validators/`. Do not place business logic at the product root
   alongside `cli.ts`.
-- Every product must be listed in `src/products/manifest.ts` — `src/cli.ts`
-  iterates the manifest, so a missing entry means the product is invisible
-  to the umbrella.
+- Every CLI namespace must be listed in `src/products/manifest.ts` —
+  `src/cli.ts` iterates the manifest, so a missing entry means the namespace is
+  invisible to the umbrella.
 - Keep source/workspace repos free of tree content; tree nodes belong in the
   bound Context Tree repo.
 - Treat `source-repos.md` as generated output; tree-side truth still lives in

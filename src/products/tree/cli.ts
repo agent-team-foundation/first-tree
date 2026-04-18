@@ -14,11 +14,12 @@ export const TREE_USAGE = `usage: first-tree tree <command>
 Commands:
   inspect               Classify the current folder before onboarding
   init                  High-level onboarding wrapper for repo/workspace roots
+  bootstrap             Low-level tree-repo bootstrap for an explicit tree checkout
   bind                  Bind the current repo/workspace root to an existing tree repo
   workspace             Workspace helpers (currently: sync child repos to a shared tree)
   publish               Publish a tree repo to GitHub
   verify                Run verification checks against a tree repo
-  upgrade               Refresh the installed skill in a tree repo
+  upgrade               Refresh source/workspace integration or tree metadata
   sync                  Detect drift between a tree repo and its bound sources
   review                Run Claude Code PR review (CI helper)
   generate-codeowners   Generate .github/CODEOWNERS from tree ownership
@@ -35,14 +36,16 @@ Common examples:
   first-tree tree init
   first-tree tree init --tree-path ../org-context --tree-mode shared
   first-tree tree init --scope workspace --tree-path ../org-context --tree-mode shared --sync-members
+  first-tree tree bootstrap --here
   first-tree tree bind --tree-path ../org-context --tree-mode shared
   first-tree tree publish --tree-path ../org-context
-  mkdir my-org-tree && cd my-org-tree && git init && first-tree tree init tree --here
+  mkdir my-org-tree && cd my-org-tree && git init && first-tree tree bootstrap --here
   first-tree tree verify --tree-path ../my-org-tree
   first-tree tree upgrade --tree-path ../my-org-tree
 
 Note:
-  \`first-tree tree init tree --here\` is for when the current repo is already the tree repo.
+  \`first-tree tree bootstrap --here\` is for when the current repo is already the tree repo.
+  Legacy alias: \`first-tree tree init tree ...\`
 `;
 
 type Output = (text: string) => void;
@@ -66,6 +69,12 @@ export async function runTree(
         "#products/tree/engine/commands/init.js"
       );
       return runInit(args.slice(1));
+    }
+    case "bootstrap": {
+      const { runBootstrap } = await import(
+        "#products/tree/engine/commands/bootstrap.js"
+      );
+      return runBootstrap(args.slice(1), write);
     }
     case "inspect": {
       const { runInspect } = await import(

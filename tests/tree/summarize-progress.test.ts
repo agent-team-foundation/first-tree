@@ -24,7 +24,7 @@ const SAMPLE_PROGRESS = `# Context Tree Init
 - [ ] Launch wave-based domain population
 
 ## Verification
-- [ ] Run first-tree verify
+- [ ] Run first-tree tree verify
 `;
 
 describe("summarize-progress helper", () => {

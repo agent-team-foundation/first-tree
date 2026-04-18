@@ -16,4 +16,4 @@ jobs:
           node-version: "22"
 
       - name: Validate tree
-        run: npx -p first-tree first-tree verify
+        run: npx -p first-tree first-tree tree verify

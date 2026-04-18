@@ -40,10 +40,10 @@ afterEach(() => {
 });
 
 describe("thin CLI shell", () => {
-  it("exposes both product namespaces in the top-level USAGE", () => {
-    expect(USAGE).toContain("first-tree <command>");
+  it("exposes the product and maintenance namespaces in the top-level USAGE", () => {
+    expect(USAGE).toContain("first-tree <namespace>");
     expect(USAGE).toContain("Products:");
-    expect(USAGE).toContain("Diagnostics:");
+    expect(USAGE).toContain("Maintenance:");
     expect(USAGE).toContain("tree");
     expect(USAGE).toContain("breeze");
     expect(USAGE).toContain("gardener");
@@ -53,15 +53,16 @@ describe("thin CLI shell", () => {
   });
 
   it("documents tree commands in the tree USAGE", () => {
-    expect(TREE_USAGE).toContain("first-tree tree init tree --here");
+    expect(TREE_USAGE).toContain("first-tree tree bootstrap --here");
     expect(TREE_USAGE).toContain(
       "first-tree tree init --tree-path ../org-context --tree-mode shared",
     );
     expect(TREE_USAGE).toContain("first-tree tree publish --tree-path ../org-context");
     expect(TREE_USAGE).toContain("my-org-tree");
     expect(TREE_USAGE).toContain(
-      "`first-tree tree init tree --here` is for when the current repo is already the tree repo.",
+      "`first-tree tree bootstrap --here` is for when the current repo is already the tree repo.",
     );
+    expect(TREE_USAGE).toContain("Legacy alias");
     expect(TREE_USAGE).toContain("review");
     expect(TREE_USAGE).toContain("generate-codeowners");
     expect(TREE_USAGE).toContain("inject-context");
@@ -99,14 +100,15 @@ describe("thin CLI shell", () => {
     expect(output.lines).toEqual([USAGE]);
   });
 
-  it("prints the CLI version plus one version per product in the manifest", async () => {
+  it("prints the CLI version plus one version per command in the manifest", async () => {
     const output = captureOutput();
     const pkgPath = fileURLToPath(new URL("../../package.json", import.meta.url));
     const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as { version: string };
-    const productVersion = (name: string): string => {
-      const versionPath = fileURLToPath(
-        new URL(`../../src/products/${name}/VERSION`, import.meta.url),
-      );
+    const commandVersion = (name: string): string => {
+      const relPath = name === "skill"
+        ? "../../src/meta/skill-tools/VERSION"
+        : `../../src/products/${name}/VERSION`;
+      const versionPath = fileURLToPath(new URL(relPath, import.meta.url));
       return readFileSync(versionPath, "utf-8").trim();
     };
 
@@ -116,9 +118,10 @@ describe("thin CLI shell", () => {
     expect(output.lines).toEqual([
       [
         `first-tree=${pkg.version}`,
-        `tree=${productVersion("tree")}`,
-        `breeze=${productVersion("breeze")}`,
-        `gardener=${productVersion("gardener")}`,
+        `tree=${commandVersion("tree")}`,
+        `breeze=${commandVersion("breeze")}`,
+        `gardener=${commandVersion("gardener")}`,
+        `skill=${commandVersion("skill")}`,
       ].join(" "),
     ]);
   });
@@ -136,7 +139,7 @@ describe("thin CLI shell", () => {
     expect(output.lines.join("\n")).toContain("Node.js 18+");
   });
 
-  it("fails with hint for an unknown command", async () => {
+  it("fails with hint for an unknown namespace", async () => {
     const output = captureOutput();
 
     const code = await runCli(
@@ -145,7 +148,7 @@ describe("thin CLI shell", () => {
     );
 
     expect(code).toBe(1);
-    expect(output.lines[0]).toBe("Unknown command: wat");
+    expect(output.lines[0]).toBe("Unknown first-tree namespace: wat");
     expect(output.lines[1]).toContain("first-tree tree wat");
   });
 
@@ -215,6 +218,16 @@ describe("thin CLI shell", () => {
       output.write,
     );
     expect(code).toBe(0);
+  });
+
+  it("routes tree bootstrap command", async () => {
+    const output = captureOutput();
+    const code = await runCli(
+      ["--skip-version-check", "tree", "bootstrap", "--help"],
+      output.write,
+    );
+    expect(code).toBe(0);
+    expect(output.lines.join("\n")).toContain("usage: first-tree tree bootstrap");
   });
 
   it("breeze product prints breeze USAGE for --help", async () => {

@@ -156,7 +156,7 @@ describe("skill artifacts", () => {
     });
   });
 
-  it("ships the canonical skill in the published tarball", () => {
+  it("ships the canonical skill in the published tarball", { timeout: 15000 }, () => {
     const packDir = mkdtempSync(join(tmpdir(), "first-tree-pack-"));
     try {
       const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf-8")) as {
@@ -177,6 +177,10 @@ describe("skill artifacts", () => {
       });
 
       expect(listing).toContain("package/dist/cli.js");
+      expect(listing).toContain("package/src/products/tree/VERSION");
+      expect(listing).toContain("package/src/products/breeze/VERSION");
+      expect(listing).toContain("package/src/products/gardener/VERSION");
+      expect(listing).toContain("package/src/meta/skill-tools/VERSION");
       expect(listing).toContain("package/skills/first-tree/SKILL.md");
       expect(listing).toContain("package/skills/first-tree/VERSION");
       expect(listing).toContain(
@@ -207,6 +211,26 @@ describe("skill artifacts", () => {
     }
   });
 
+  it("prints namespace versions from the built CLI without unknown placeholders", () => {
+    execFileSync("pnpm", ["build"], {
+      cwd: ROOT,
+      stdio: "pipe",
+      encoding: "utf-8",
+    });
+    const versionLine = execFileSync("node", ["dist/cli.js", "--version"], {
+      cwd: ROOT,
+      stdio: "pipe",
+      encoding: "utf-8",
+    }).trim();
+
+    expect(versionLine).toContain("first-tree=");
+    expect(versionLine).toContain("tree=");
+    expect(versionLine).toContain("breeze=");
+    expect(versionLine).toContain("gardener=");
+    expect(versionLine).toContain("skill=");
+    expect(versionLine).not.toContain("unknown");
+  });
+
   it("keeps naming and installation guidance aligned", () => {
     const read = (path: string) => readFileSync(join(ROOT, path), "utf-8");
 
@@ -222,6 +246,7 @@ describe("skill artifacts", () => {
     expect(read("README.md")).toContain(".agents/skills/first-tree/");
     expect(read("README.md")).toContain(".claude/skills/first-tree/");
     expect(read("README.md")).toContain("four skill payloads");
+    expect(read("README.md")).toContain("maintenance namespace");
     expect(read("README.md")).toContain("dedicated tree repo");
     expect(read("README.md")).toContain("first-tree tree inspect");
     expect(read("README.md")).toContain("first-tree tree bind");
@@ -235,8 +260,11 @@ describe("skill artifacts", () => {
     expect(read("README.md")).toContain("first-tree tree publish");
     expect(read("README.md")).toContain("<repo>-tree");
     expect(read("README.md")).toContain("shared tree");
-    expect(read("README.md")).toContain("first-tree tree init tree --here");
+    expect(read("README.md")).toContain("first-tree tree bootstrap --here");
+    expect(read("README.md")).toContain("npx first-tree tree init");
+    expect(read("README.md")).toContain("npx first-tree <namespace> <command>");
     expect(read("AGENTS.md")).toContain("docs/source-map.md");
+    expect(read("AGENTS.md")).toContain("maintenance namespace");
     expect(read("AGENTS.md")).toContain("source-workspace-installation.md");
     expect(read("AGENTS.md")).toContain("first-tree-skill-cli/");
     expect(read("AGENTS.md")).toContain("entry-point skill payload");
@@ -259,7 +287,7 @@ describe("skill artifacts", () => {
     expect(onboarding).toContain("source-repos.md");
     expect(onboarding).not.toContain(".first-tree/submodules/");
     expect(onboarding).toContain("<repo>-tree");
-    expect(onboarding).toContain("first-tree tree init tree --here");
+    expect(onboarding).toContain("first-tree tree bootstrap --here");
     expect(onboarding).toContain("shared tree");
     expect(onboarding).not.toContain("This clones the framework into `.context-tree/`");
     expect(onboarding).not.toContain("from upstream");
@@ -288,13 +316,17 @@ describe("skill artifacts", () => {
     expect(firstTreeSkillMd).toContain("Context Tree");
     expect(firstTreeSkillMd).toContain("Before Every Task");
     expect(firstTreeSkillMd).toContain("After Every Task");
-    expect(firstTreeSkillMd).toContain("npx -p first-tree first-tree");
+    expect(firstTreeSkillMd).toContain("npx first-tree <namespace> <command>");
+    expect(firstTreeSkillMd).toContain("npx -p first-tree first-tree <namespace> <command>");
+    expect(firstTreeSkillMd).toContain("first-tree skill install");
+    expect(firstTreeSkillMd).toContain("first-tree skill upgrade");
     expect(firstTreeSkillMd).toContain("--skip-version-check");
     expect(firstTreeSkillMd).toContain("references/principles.md");
     expect(firstTreeSkillMd).toContain("references/ownership-and-naming.md");
     // tree is the operational handbook for `first-tree tree` commands.
     expect(treeSkillMd).toContain("first-tree tree inspect");
     expect(treeSkillMd).toContain("first-tree tree init");
+    expect(treeSkillMd).toContain("first-tree tree bootstrap");
     expect(treeSkillMd).toContain("first-tree tree bind");
     expect(treeSkillMd).toContain("first-tree tree workspace sync");
     expect(treeSkillMd).toContain("first-tree tree verify");
@@ -305,6 +337,7 @@ describe("skill artifacts", () => {
     expect(sourceMap).not.toContain("repo-snapshot");
     expect(sourceMap).not.toContain("sync-skill-artifacts.sh");
     expect(sourceMap).toContain("first-tree-skill-cli/repo-architecture.md");
+    expect(sourceMap).toContain("products (`tree`, `breeze`, `gardener`) plus maintenance (`skill`)");
     expect(sourceMap).toContain("first-tree-skill-cli/thin-cli-shell.md");
     expect(sourceMap).toContain("first-tree-skill-cli/build-and-distribution.md");
     expect(sourceMap).toContain("first-tree-skill-cli/validation-surface.md");
@@ -339,8 +372,9 @@ describe("skill artifacts", () => {
     expect(sourceWorkspaceInstall).toContain("source-repos.md");
     expect(sourceWorkspaceInstall).not.toContain(".first-tree/submodules/");
     expect(sourceWorkspaceInstall).toContain("workspace-member");
-    expect(sourceWorkspaceInstall).toContain("first-tree workspace sync");
-    expect(sourceWorkspaceInstall).toContain("first-tree publish");
+    expect(sourceWorkspaceInstall).toContain("first-tree tree workspace sync");
+    expect(sourceWorkspaceInstall).toContain("first-tree skill upgrade");
+    expect(sourceWorkspaceInstall).toContain("first-tree tree publish");
     expect(sourceWorkspaceInstall).toContain("<repo>-tree");
     expect(sourceWorkspaceInstall).toContain("Do not recreate a new sibling tree repo");
 

@@ -126,13 +126,13 @@ Then `first-tree tree workspace sync` binds every discovered child repo as a
 If you have already switched into the tree repo itself:
 
 ```bash
-first-tree tree init tree --here
+first-tree tree bootstrap --here
 ```
 
 Or from elsewhere:
 
 ```bash
-first-tree tree init tree --tree-path ../org-context
+first-tree tree bootstrap --tree-path ../org-context
 ```
 
 Use this only for the tree repo. Do not use `--here` inside a source/workspace

@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { resolveBundledAssetRoot, resolveBundledPackageRoot } from "#products/tree/engine/runtime/installer.js";
 import { runReview as runReviewImpl } from "../../../../../assets/tree/helpers/run-review.js";
 
-export const REVIEW_USAGE = `usage: first-tree review [--diff PATH] [--output PATH]
+export const REVIEW_USAGE = `usage: first-tree tree review [--diff PATH] [--output PATH]
 
 Run Claude Code PR review against a Context Tree repo. Reads the PR diff,
 loads the bundled review prompt and the repo's AGENTS.md/NODE.md, invokes

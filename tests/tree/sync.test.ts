@@ -1818,7 +1818,7 @@ describe("sync -- PR labeling", () => {
     );
   });
 
-  it("skips pushing PR branches that fail first-tree verify", async () => {
+  it("skips pushing PR branches that fail first-tree tree verify", async () => {
     const tmp = useTmpDir();
     makeTreeShell(tmp.path);
     const fromSha = "11".repeat(20);

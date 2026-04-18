@@ -1,17 +1,23 @@
 # `first-tree gardener`
 
-Local maintenance agent for Context Trees. Keeps the tree coherent as code and reviews evolve:
+Local maintenance agent for Context Trees. Keeps the tree coherent as code and
+reviews evolve:
 
 - **`respond`** — fixes sync PRs based on reviewer feedback (reactive maintenance).
 - **`comment`** — reviews source-repo PRs / issues against the bound tree and posts structured verdict comments.
 
-The intended scope extends beyond reactive maintenance: gardener should proactively watch source repos for changes that affect tree coverage, open corresponding issues on the tree repo, and assign the right owners. That proactive layer is the next milestone and currently ships only the `respond` + `comment` primitives.
+The intended scope extends beyond reactive maintenance: gardener should
+proactively watch source repos for changes that affect tree coverage, open
+corresponding issues on the tree repo, and assign the right owners. That
+proactive layer is the next milestone and currently ships only the `respond` +
+`comment` primitives.
 
-## What's in this directory
+## What's In This Directory
 
-```
+```text
 gardener/
 ├── VERSION
+├── README.md              # product overview
 ├── cli.ts                 # dispatcher
 └── engine/
     ├── commands/          # respond.ts, comment.ts

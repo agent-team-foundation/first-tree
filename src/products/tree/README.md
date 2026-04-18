@@ -2,14 +2,15 @@
 
 CLI toolkit for creating, binding, and maintaining a Context Tree repo.
 
-## What's in this directory
+## What's In This Directory
 
-```
+```text
 tree/
 ├── VERSION                # product semver (independent of npm package)
+├── README.md              # product overview
 ├── cli.ts                 # thin arg-routing dispatcher (lazy-loads commands)
 └── engine/
-    ├── commands/          # one file per subcommand (bind, init, publish, …)
+    ├── commands/          # one file per subcommand (bind, init, bootstrap, publish, …)
     ├── rules/             # tree validation rules
     ├── runtime/           # asset loader, installer, upgrader, source integration
     ├── validators/        # node + member validators
@@ -22,6 +23,7 @@ tree/
 |---------|------|
 | `first-tree tree inspect` | Classify the current folder (source / workspace / tree) |
 | `first-tree tree init` | High-level onboarding wrapper |
+| `first-tree tree bootstrap` | Canonical low-level tree bootstrap for an explicit tree checkout |
 | `first-tree tree bind` | Bind current repo/workspace to an existing tree |
 | `first-tree tree workspace sync` | Bind discovered child repos to a shared tree |
 | `first-tree tree publish` | Push the tree to GitHub and refresh bound sources |

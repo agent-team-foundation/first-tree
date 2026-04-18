@@ -437,7 +437,7 @@ function renderMemberNode(
     ? "GitHub"
     : "git";
   const aboutText =
-    `Seeded from ${sourceLabel} contributor history during \`first-tree init\`. ` +
+    `Seeded from ${sourceLabel} contributor history during \`first-tree tree init\`. ` +
     "Review this node, remove stale contributors, and replace the placeholder role and domains with current ownership.";
   const focusText = contributor.type === "autonomous_agent"
     ? "Review the automation scope and current ownership before relying on this node."

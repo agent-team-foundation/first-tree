@@ -36,11 +36,11 @@ import {
   SKILL_ROOT,
 } from "#products/tree/engine/runtime/asset-loader.js";
 
-export const PUBLISH_USAGE = `usage: first-tree publish [--open-pr] [--tree-path PATH] [--source-repo PATH] [--source-remote NAME]
+export const PUBLISH_USAGE = `usage: first-tree tree publish [--open-pr] [--tree-path PATH] [--source-repo PATH] [--source-remote NAME]
 
 Publish a Context Tree repo to GitHub and refresh any bound source/workspace
 repos with the published tree URL. This is the networked second-stage command
-after \`first-tree init\` / \`first-tree bind\`, run from the tree repo (or
+after \`first-tree tree init\` / \`first-tree tree bind\`, run from the tree repo (or
 pointed at one with --tree-path).
 
 What it does:
@@ -748,14 +748,14 @@ export function runPublish(repo?: Repo, options?: PublishOptions): number {
 
   if (treeRepo.hasSourceWorkspaceIntegration() && !treeRepo.looksLikeTreeRepo()) {
     console.error(
-      `Error: this repo only has the first-tree source/workspace integration installed. Run ${formatDedicatedTreePathExample("first-tree publish", treeRepo)} or switch into the dedicated tree repo first.`,
+      `Error: this repo only has the first-tree source/workspace integration installed. Run ${formatDedicatedTreePathExample("first-tree tree publish", treeRepo)} or switch into the dedicated tree repo first.`,
     );
     return 1;
   }
 
   if (!treeRepo.hasFramework() || !treeRepo.looksLikeTreeRepo()) {
     console.error(
-      "Error: `first-tree publish` must run from a dedicated tree repo (or use `--tree-path` to point at one). Run `first-tree init` first.",
+      "Error: `first-tree tree publish` must run from a dedicated tree repo (or use `--tree-path` to point at one). Run `first-tree tree init` first.",
     );
     return 1;
   }
@@ -763,7 +763,7 @@ export function runPublish(repo?: Repo, options?: PublishOptions): number {
   const sourceRepoRoots = resolveBoundSourceRepoRoots(treeRepo, options);
   if (sourceRepoRoots.length === 0) {
     console.error(
-      "Error: could not determine any bound source/workspace repo for this tree. Re-run `first-tree bind` or `first-tree init` first, or pass `--source-repo PATH`.",
+      "Error: could not determine any bound source/workspace repo for this tree. Re-run `first-tree tree bind` or `first-tree tree init` first, or pass `--source-repo PATH`.",
     );
     return 1;
   }
@@ -786,14 +786,14 @@ export function runPublish(repo?: Repo, options?: PublishOptions): number {
 
   if (sourceRepo.root === treeRepo.root) {
     console.error(
-      "Error: the source/workspace repo and dedicated tree repo resolved to the same path. `first-tree publish` expects two separate repos.",
+      "Error: the source/workspace repo and dedicated tree repo resolved to the same path. `first-tree tree publish` expects two separate repos.",
     );
     return 1;
   }
 
   if (!sourceRepo.hasCurrentInstalledSkill() || !sourceRepo.hasSourceWorkspaceIntegration()) {
     console.error(
-      "Error: the source/workspace repo does not have the first-tree source integration installed. Run `first-tree init` from the source/workspace repo first.",
+      "Error: the source/workspace repo does not have the first-tree source integration installed. Run `first-tree tree init` from the source/workspace repo first.",
     );
     return 1;
   }
