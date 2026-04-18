@@ -1326,6 +1326,12 @@ describe("sync -- PR labeling", () => {
       if (command === "gh" && args[0] === "pr" && args[1] === "list") {
         return { stdout: "[]", stderr: "", code: 0 };
       }
+      if (command === "gh" && args[0] === "pr" && args[1] === "create") {
+        return { stdout: "https://example/pr/1", stderr: "", code: 0 };
+      }
+      if (command === "gh" && (args[0] === "pr" || args[0] === "label")) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
       if (command === "git") {
         if (args[0] === "symbolic-ref") {
           return { stdout: "main\n", stderr: "", code: 0 };
@@ -1337,9 +1343,11 @@ describe("sync -- PR labeling", () => {
       }
       return { stdout: "", stderr: `no mock for ${command} ${args.join(" ")}`, code: 1 };
     };
+    // Parent Sub-domains updates now land in the housekeeping branch (#188),
+    // not per-content-branch, so run with dryRun: false to exercise it.
     const code = await runSync(
       tmp.path,
-      { source: undefined, propose: false, apply: true, dryRun: true },
+      { source: undefined, propose: false, apply: true, dryRun: false },
       { shellRun, verifyTree: () => 0 },
     );
     expect(code).toBe(0);
@@ -1921,6 +1929,188 @@ describe("sync -- PR labeling", () => {
 
     expect(code).toBe(0);
     expect(prCreateCalls).toHaveLength(0);
+  });
+
+  it("does not stage parent NODE.md in per-content-branch git add calls (#188)", async () => {
+    // Regression for #188: two source PRs both add new child dirs under
+    // `engineering/`. Both per-content branches (fork from same baseRef)
+    // were appending to `engineering/NODE.md` Sub-domains — whichever
+    // merged second hit a conflict.
+    //
+    // Fix per #189 / bingran option B: parent Sub-domains edits move to
+    // the housekeeping branch. Per-content branches must only stage
+    // their own child NODE.md (+ regenerated CODEOWNERS).
+    const tmp = useTmpDir();
+    makeTreeShell(tmp.path);
+    mkdirSync(join(tmp.path, "engineering"), { recursive: true });
+    writeFileSync(
+      join(tmp.path, "engineering", "NODE.md"),
+      "---\ntitle: Engineering\nowners: [alice]\n---\n# Engineering\n",
+    );
+    const fromSha = "aa".repeat(20);
+    const toSha = "bb".repeat(20);
+    writeTreeBinding(tmp.path, "source-conflict", {
+      bindingMode: "standalone-source",
+      entrypoint: "/repos/source",
+      lastReconciledSourceCommit: fromSha,
+      remoteUrl: "https://github.com/alice/source.git",
+      rootKind: "git-repo",
+      scope: "repo",
+      sourceId: "source-conflict",
+      sourceName: "source",
+      sourceRootPath: "../source",
+      treeMode: "dedicated",
+      treeRepoName: "tree",
+    });
+
+    // Track which branch is currently checked out so we can bucket
+    // `git add <file>` calls by branch. `git checkout -B <branch> <ref>`
+    // is how sync.ts enters a content branch; we snoop the first arg
+    // after `-B`.
+    let currentBranch: string = "main";
+    const addCallsByBranch: Record<string, string[]> = {};
+
+    const classifyResponses = [
+      JSON.stringify([{
+        path: "engineering/mcp",
+        type: "TREE_MISS",
+        target_node_path: null,
+        rationale: "New MCP area",
+        suggested_node_title: "MCP",
+        suggested_node_body_markdown: "# MCP\n",
+      }]),
+      JSON.stringify([{
+        path: "engineering/router",
+        type: "TREE_MISS",
+        target_node_path: null,
+        rationale: "New router area",
+        suggested_node_title: "Router",
+        suggested_node_body_markdown: "# Router\n",
+      }]),
+    ];
+    let classifyIdx = 0;
+
+    const shellRun: ShellRun = async (command, args) => {
+      if (command === "gh" && args[0] === "auth") return okAuth();
+      if (command === "claude" && args[0] === "--version") return claudeVersionOk();
+      if (command === "gh" && args[0] === "api") {
+        const path = args[1] ?? "";
+        if (path === "/repos/alice/source/commits/HEAD") {
+          return { stdout: `${toSha}\n`, stderr: "", code: 0 };
+        }
+        if (path.startsWith("/repos/alice/source/compare/")) {
+          return {
+            stdout: JSON.stringify({
+              commits: [
+                {
+                  sha: "1".repeat(40),
+                  commit: {
+                    message: "feat(mcp): add (#201)",
+                    author: { name: "a", date: "2026-04-01T00:00:00Z" },
+                  },
+                  files: [{ filename: "engineering/mcp/x.ts" }],
+                },
+                {
+                  sha: "2".repeat(40),
+                  commit: {
+                    message: "feat(router): add (#202)",
+                    author: { name: "b", date: "2026-04-02T00:00:00Z" },
+                  },
+                  files: [{ filename: "engineering/router/y.ts" }],
+                },
+              ],
+            }),
+            stderr: "",
+            code: 0,
+          };
+        }
+        if (path.startsWith("search/issues")) {
+          return {
+            stdout: JSON.stringify({
+              items: [
+                {
+                  number: 201,
+                  title: "feat(mcp): add",
+                  pull_request: { merged_at: "2026-04-01T00:00:00Z", merge_commit_sha: "1".repeat(40) },
+                },
+                {
+                  number: 202,
+                  title: "feat(router): add",
+                  pull_request: { merged_at: "2026-04-02T00:00:00Z", merge_commit_sha: "2".repeat(40) },
+                },
+              ],
+            }),
+            stderr: "",
+            code: 0,
+          };
+        }
+      }
+      if (command === "claude" && args[0] === "-p") {
+        const resp = classifyResponses[classifyIdx] ?? classifyResponses[0];
+        classifyIdx += 1;
+        return { stdout: resp, stderr: "", code: 0 };
+      }
+      if (command === "gh" && args[0] === "pr" && args[1] === "list") {
+        return { stdout: "[]", stderr: "", code: 0 };
+      }
+      if (command === "gh" && args[0] === "pr" && args[1] === "create") {
+        return { stdout: "https://example/pr/1", stderr: "", code: 0 };
+      }
+      if (command === "gh" && (args[0] === "pr" || args[0] === "label")) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (command === "git") {
+        if (args[0] === "symbolic-ref") return { stdout: "main\n", stderr: "", code: 0 };
+        if (args[0] === "checkout" && args[1] === "-B" && typeof args[2] === "string") {
+          currentBranch = args[2];
+        } else if (args[0] === "checkout" && typeof args[1] === "string" && args[1] !== "-B") {
+          currentBranch = args[1];
+        }
+        if (args[0] === "add" && args[1] !== "-A" && typeof args[1] === "string") {
+          addCallsByBranch[currentBranch] ??= [];
+          addCallsByBranch[currentBranch].push(args[1]);
+        }
+        if (args.includes("diff") && args.includes("--cached") && args.includes("--quiet")) {
+          return { stdout: "", stderr: "", code: 1 };
+        }
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: `no mock for ${command} ${args.join(" ")}`, code: 1 };
+    };
+
+    const code = await runSync(
+      tmp.path,
+      { source: undefined, propose: false, apply: true, dryRun: false },
+      { shellRun, verifyTree: () => 0 },
+    );
+    expect(code).toBe(0);
+
+    // Collect per-content-branch `git add <file>` calls (exclude housekeeping).
+    const contentBranches = Object.keys(addCallsByBranch).filter(
+      (b) => b.startsWith("first-tree/sync-") && !b.endsWith("-housekeeping"),
+    );
+    expect(contentBranches.length).toBeGreaterThanOrEqual(2);
+
+    // The fix: no content branch should `git add engineering/NODE.md`.
+    // That parent edit now lives on the housekeeping branch.
+    const parentRel = join("engineering", "NODE.md");
+    for (const branch of contentBranches) {
+      const staged = addCallsByBranch[branch] ?? [];
+      const stagedParent = staged.filter(
+        (p) => p === join(tmp.path, parentRel) || p === parentRel,
+      );
+      expect(
+        stagedParent,
+        `content branch ${branch} must not stage parent ${parentRel}; staged: ${staged.join(", ")}`,
+      ).toEqual([]);
+    }
+
+    // And the parent file on disk (housekeeping branch is the last checkout)
+    // should still reflect BOTH new children — housekeeping did the rollup.
+    const parentText = readFileSync(join(tmp.path, "engineering", "NODE.md"), "utf-8");
+    expect(parentText).toMatch(/## Sub-domains/);
+    expect(parentText).toContain("`mcp/`");
+    expect(parentText).toContain("`router/`");
   });
 });
 
