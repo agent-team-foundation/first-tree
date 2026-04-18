@@ -40,25 +40,25 @@ import {
 
 const execFileAsync = promisify(execFile);
 
-export const RESPOND_USAGE = `usage: first-tree gardener respond [--pr <n> --repo <owner/name>] [--tree-path PATH]
+export const RESPOND_USAGE = `usage: first-tree gardener respond --pr <n> --repo <owner/name> [--tree-path PATH]
 
-Fix sync PRs based on reviewer feedback. Ports the
+Fix a single sync PR based on reviewer feedback. Ports the
 gardener-respond-manual.md runbook into a deterministic CLI.
 
 Only acts on PRs whose branch starts with \`first-tree/sync-\` or whose
 label set contains \`first-tree:sync\`. Never force-pushes, never creates
 new PRs, never merges (that is the reviewer agent's job).
 
-Modes:
-  (default)             Scan all open sync PRs on the tree repo in cwd
-                        and fix each CHANGES_REQUESTED PR.
-  --pr <n> --repo <o/r> Single-PR mode. Fix one PR. Used by breeze-runner
-                        when dispatched from a review notification.
+Invocation is single-PR only. The trigger is breeze-runner dispatching
+on a \`review_requested\`/reviewer-feedback notification, which supplies
+the target \`--pr\` and \`--repo\`. There is no scan mode — the scheduled
+"find all PRs that need fixing" loop was removed; discovery now lives
+in breeze's notification poller.
 
 Options:
   --tree-path PATH      Tree repo directory (default: cwd)
-  --pr <n>              PR number (requires --repo)
-  --repo <owner/name>   Target repository (requires --pr)
+  --pr <n>              PR number (required; must be paired with --repo)
+  --repo <owner/name>   Target repository (required; must be paired with --pr)
   --dry-run             Print planned actions; do not push or comment
   --help, -h            Show this help message
 
@@ -694,102 +694,6 @@ async function respondSinglePr(
   };
 }
 
-async function respondScanMode(
-  opts: {
-    treeRoot: string;
-    dryRun: boolean;
-    shell: ShellRun;
-    env: NodeJS.ProcessEnv;
-    write: (line: string) => void;
-    now: () => Date;
-    gardenerLogin: string;
-  },
-): Promise<{ status: RespondStatus; summary: string }> {
-  const { shell, write, env, gardenerLogin } = opts;
-  // Best-effort: detect tree repo slug from `gh repo view`.
-  const repoRes = await shell("gh", [
-    "repo",
-    "view",
-    "--json",
-    "nameWithOwner",
-    "-q",
-    ".nameWithOwner",
-  ], { cwd: opts.treeRoot });
-  if (repoRes.code !== 0) {
-    const msg = `Could not determine tree repo slug (is this a git repo with gh set up?)`;
-    write(msg);
-    logEvent(env, { kind: "error", message: msg });
-    return { status: "failed", summary: msg };
-  }
-  const treeRepo = repoRes.stdout.trim();
-
-  const listRes = await shell("gh", [
-    "pr",
-    "list",
-    "--repo",
-    treeRepo,
-    "--state",
-    "open",
-    "--json",
-    "number,title,headRefName,reviewDecision,updatedAt,labels",
-  ]);
-  if (listRes.code !== 0) {
-    const msg = `gh pr list failed: ${listRes.stderr.trim()}`;
-    write(msg);
-    logEvent(env, { kind: "error", message: msg });
-    return { status: "failed", summary: msg };
-  }
-  const prs = jsonTryParse<PrView[]>(listRes.stdout) ?? [];
-  const syncPrs = prs.filter(isSyncPr);
-
-  logEvent(env, {
-    kind: "scan",
-    tree_repo: treeRepo,
-    total_prs: prs.length,
-    needs_fix: syncPrs.length,
-  });
-
-  if (syncPrs.length === 0) {
-    write(`No open sync PRs on ${treeRepo}`);
-    return { status: "skipped", summary: `no sync PRs on ${treeRepo}` };
-  }
-
-  let handled = 0;
-  let skipped = 0;
-  let failed = 0;
-  for (const pr of syncPrs) {
-    const result = await respondSinglePr({
-      repo: treeRepo,
-      pr: pr.number,
-      dryRun: opts.dryRun,
-      shell,
-      env,
-      write,
-      now: opts.now,
-      gardenerLogin,
-    });
-    if (result.status === "handled") handled += 1;
-    else if (result.status === "failed") failed += 1;
-    else skipped += 1;
-  }
-
-  const summary = `scanned=${syncPrs.length} handled=${handled} skipped=${skipped} failed=${failed}`;
-  write(
-    `gardener-respond run complete (scan)\n  Tree repo: ${treeRepo}\n  ${summary}`,
-  );
-  logEvent(env, {
-    kind: "run",
-    prs_scanned: syncPrs.length,
-    prs_fixed: handled,
-    learnings: 0,
-    duration_s: 0,
-  });
-  return {
-    status: failed > 0 ? "failed" : handled > 0 ? "handled" : "skipped",
-    summary,
-  };
-}
-
 export async function runRespond(
   args: string[],
   deps: RespondDeps = {},
@@ -840,28 +744,18 @@ export async function runRespond(
   }
 
   try {
-    if (flags.pr !== undefined || flags.repo !== undefined) {
-      if (flags.pr === undefined || !flags.repo) {
-        write(`--pr and --repo must be used together`);
-        emitBreezeResult(write, "failed", "pr/repo flag pair incomplete");
-        return 1;
-      }
-      const result = await respondSinglePr({
-        repo: flags.repo,
-        pr: flags.pr,
-        dryRun: flags.dryRun,
-        shell,
-        env,
-        write,
-        now,
-        gardenerLogin,
-      });
-      emitBreezeResult(write, result.status, result.summary);
-      return result.status === "failed" ? 1 : 0;
+    if (flags.pr === undefined || !flags.repo) {
+      write(
+        `--pr and --repo are required: gardener-respond is single-PR only.\n`
+          + `Breeze dispatches this command with both flags set when a\n`
+          + `review_requested notification fires. See --help.`,
+      );
+      emitBreezeResult(write, "failed", "pr/repo flags required");
+      return 1;
     }
-
-    const result = await respondScanMode({
-      treeRoot,
+    const result = await respondSinglePr({
+      repo: flags.repo,
+      pr: flags.pr,
       dryRun: flags.dryRun,
       shell,
       env,
