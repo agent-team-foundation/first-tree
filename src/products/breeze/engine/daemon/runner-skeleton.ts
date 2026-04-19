@@ -59,6 +59,12 @@ export interface DaemonCliOverrides {
   httpPort?: number;
   // taskTimeoutSec is read today but not yet consumed; kept for Phase 3b.
   taskTimeoutSec?: number;
+  /**
+   * Comma-separated allow-list of repos the daemon should act on.
+   * Patterns are `owner/repo` or `owner/*`. An empty or undefined value
+   * means "match everything" (the prior default).
+   */
+  allowRepo?: string;
 }
 
 export interface DaemonRunOptions {
@@ -96,6 +102,11 @@ const DEFAULT_LOGGER: PollerLogger = {
  *   --log-level <level>
  *   --http-port <n>
  *   --task-timeout-secs <n>
+ *   --allow-repo <csv>            (owner/repo,owner/* — scopes the daemon
+ *                                  to the listed repos; empty = all)
+ *
+ * Both `--flag value` and `--flag=value` forms are accepted for
+ * `--allow-repo`.
  *
  * Unknown flags are dropped silently in Phase 3a — they'll be parsed by
  * the future full-featured daemon in 3b/3c. This keeps the skeleton
@@ -109,7 +120,20 @@ export function parseDaemonArgs(argv: readonly string[]): DaemonCliOverrides {
     const advance = (): void => {
       i += 1;
     };
+    if (arg && arg.startsWith("--allow-repo=")) {
+      const value = arg.slice("--allow-repo=".length);
+      if (value.length > 0) overrides.allowRepo = value;
+      continue;
+    }
     switch (arg) {
+      case "--allow-repo": {
+        const value = next();
+        if (value !== undefined && value.length > 0) {
+          overrides.allowRepo = value;
+          advance();
+        }
+        break;
+      }
       case "--poll-interval-secs":
       case "--poll-interval-sec": {
         const value = next();
@@ -250,8 +274,25 @@ export async function runDaemon(
     });
   }
 
+  // Scope filter: empty = all repos (prior default). Construct once so we
+  // can both log it and pass it to the broker gh-client below. Parse
+  // failures (invalid patterns) are fatal — better to refuse to start than
+  // silently act on every repo.
+  let repoFilter: RepoFilter;
+  try {
+    repoFilter =
+      cliOverrides.allowRepo && cliOverrides.allowRepo.length > 0
+        ? RepoFilter.parseCsv(cliOverrides.allowRepo)
+        : RepoFilter.empty();
+  } catch (err) {
+    logger.error(
+      `invalid --allow-repo value: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return 1;
+  }
+
   logger.info(
-    `breeze daemon: poll-interval=${config.pollIntervalSec}s host=${config.host} http-port=${config.httpPort}`,
+    `breeze daemon: poll-interval=${config.pollIntervalSec}s host=${config.host} http-port=${config.httpPort} allow-repo=${repoFilter.isEmpty() ? "all" : repoFilter.displayPatterns()}`,
   );
 
   // Phase 3c: shared in-process bus drives SSE + broker task events.
@@ -297,7 +338,7 @@ export async function runDaemon(
       const threadStore = new ThreadStore({ runnerHome });
       const candidateClient = new BrokerGhClient({
         host: identity.host,
-        repoFilter: RepoFilter.empty(),
+        repoFilter,
         executor,
       });
       const scheduler = new Scheduler({

@@ -58,6 +58,20 @@ describe("parseDaemonArgs", () => {
     expect(out.pollIntervalSec).toBeUndefined();
     expect(out.httpPort).toBeUndefined();
   });
+
+  it("parses --allow-repo in both space and = forms", () => {
+    expect(
+      parseDaemonArgs(["--allow-repo", "foo/bar,baz/*"]).allowRepo,
+    ).toBe("foo/bar,baz/*");
+    expect(
+      parseDaemonArgs(["--allow-repo=foo/bar"]).allowRepo,
+    ).toBe("foo/bar");
+  });
+
+  it("drops empty --allow-repo values", () => {
+    expect(parseDaemonArgs(["--allow-repo", ""]).allowRepo).toBeUndefined();
+    expect(parseDaemonArgs(["--allow-repo="]).allowRepo).toBeUndefined();
+  });
 });
 
 describe("extractBackendFlag", () => {
