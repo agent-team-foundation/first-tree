@@ -89,9 +89,13 @@ pnpm test
 pnpm build
 pnpm test:dist     # post-build binary smoke (requires a prior pnpm build)
 pnpm test:release  # pack + npm install <tarball> smoke
+pnpm test:agent    # LLM-judge + real-Claude skill behaviour (needs ANTHROPIC_API_KEY; out-of-band from release:check)
 ```
 
-See `docs/testing/overview.md` for the layered gate contract.
+See `docs/testing/overview.md` for the layered gate contract. The
+agent-e2e tier runs on a weekly cron via `.github/workflows/agent-e2e.yml`
+and can be dispatched manually before a release; it is not part of
+every-PR CI.
 
 Maintainer-only eval tooling lives in `evals/`. See `evals/README.md` before
 running `EVALS=1 pnpm eval`.

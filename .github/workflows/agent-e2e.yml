@@ -1,0 +1,65 @@
+name: Agent E2E
+
+# Behavioural tier that exercises the SKILL.md files and CLI help
+# surface via a real Claude subprocess. Kept off every-PR CI because
+# (a) it costs money and (b) LLM flake would create noisy red builds.
+# Runs on cron plus manual dispatch (e.g. pre-release).
+
+on:
+  schedule:
+    # Weekly on Monday 07:00 UTC — an hour after the npm publish
+    # window, so drift from a new model or a merged SKILL.md refactor
+    # shows up early in the week.
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "Filter (vitest name pattern). Empty = whole tier."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  agent-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Gate on the secret so forks without the key don't attempt the job.
+    if: ${{ github.event_name != 'schedule' || github.repository == 'agent-team-foundation/first-tree' }}
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # dist/cli.js is required by the help-self-sufficiency suite and
+      # by any future subprocess test that invokes the bundled CLI.
+      - run: pnpm build
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Fail fast if the API key is missing
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "ANTHROPIC_API_KEY is not available to this run; skipping agent-e2e." >&2
+            exit 0
+          fi
+
+      - name: Run agent-e2e tier
+        if: env.ANTHROPIC_API_KEY != ''
+        run: |
+          if [ -n "${{ inputs.stage }}" ]; then
+            pnpm test:agent -- -t "${{ inputs.stage }}"
+          else
+            pnpm test:agent
+          fi

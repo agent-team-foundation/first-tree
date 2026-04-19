@@ -100,11 +100,69 @@ Useful for manual tarball inspection. For automated coverage,
 the package contents; you shouldn't need to run `pnpm pack` by hand unless
 you're diagnosing a specific packaging regression.
 
+## Agent-E2E Tier
+
+A separate, out-of-band tier exercises the agent-facing behaviour of
+the shipped `SKILL.md` files and CLI `--help` output via a real Claude
+Code subprocess. It is intentionally **not** part of `release:check`:
+LLM flake would create noisy red PRs, and every run costs money.
+
+```bash
+pnpm test:agent
+```
+
+Requires `ANTHROPIC_API_KEY` and `FIRST_TREE_AGENT_TESTS=1` (the script
+sets the flag). Without either, every test in the tier skips cleanly.
+
+### Suites
+
+- `tests/agent-e2e/skill-quality.test.ts` — LLM judge scores each of the
+  four `SKILL.md` files on clarity / completeness / actionability
+  (≥4/5, regression check against `baselines/skill-quality.json`).
+- `tests/agent-e2e/command-discovery.test.ts` — spawns a real Claude
+  subprocess against six intent prompts and asserts the correct
+  `first-tree <ns> <cmd>` was invoked.
+- `tests/agent-e2e/path-disambiguation.test.ts` — three scenarios that
+  verify the agent picks the right command among source-repo vs
+  dedicated-tree vs workspace contexts.
+- `tests/agent-e2e/anti-hallucination.test.ts` — three negative tests
+  that assert the agent does **not** fabricate plausible-but-fake verbs
+  (`tree owner-set`, `tree status`, `breeze ack`, etc.).
+- `tests/agent-e2e/help-self-sufficiency.test.ts` — LLM judge on
+  `first-tree <ns> --help` for all four namespaces (baseline in
+  `baselines/help-quality.json`).
+
+### When it runs
+
+- **Weekly cron** via `.github/workflows/agent-e2e.yml` (Monday 07:00 UTC),
+  so SKILL.md or prompt drift caused by a recent merge shows up early in
+  the week without gating individual PRs.
+- **Manual dispatch** — run via GitHub Actions → "Agent E2E" before a
+  release, optionally filtering with a vitest name pattern.
+- **Locally** — `ANTHROPIC_API_KEY=… pnpm test:agent`.
+
+### Baselines
+
+Stage A (skill quality) and Stage E (help quality) use pinned baselines
+that maintainers hand-bump. To seed or update them:
+
+```bash
+ANTHROPIC_API_KEY=… pnpm test:agent
+# Review the printed scores; if acceptable, commit updated baseline
+# files under tests/agent-e2e/baselines/.
+```
+
+Never update a baseline automatically on a passing run — regressions
+should be an explicit human sign-off.
+
 ## Repo-Only Evals
 
-The end-to-end eval harness is intentionally not part of the distributed skill.
-It lives under root `evals/` for `first-tree` maintainers working in this
-source repo. Use `evals/README.md` when you need to run or update it.
+The full end-to-end bug-fix eval harness is intentionally not part of
+the distributed skill. It lives under root `evals/` for `first-tree`
+maintainers working in this source repo. Use `evals/README.md` when
+you need to run or update it. Agent-e2e (above) is cheaper and
+behaviour-focused; evals are higher-fidelity and fix-a-real-bug
+focused.
 
 ## Change Discipline
 
