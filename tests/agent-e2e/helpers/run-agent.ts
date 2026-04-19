@@ -11,7 +11,7 @@
  *   - guards behind FIRST_TREE_AGENT_TESTS=1 so it's a no-op elsewhere
  */
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   mkdirSync,
   mkdtempSync,
@@ -36,10 +36,25 @@ export interface AgentRunResult extends SessionResult {
   cleanup: () => void;
 }
 
+/**
+ * The agent-e2e tier is runnable iff
+ *   - FIRST_TREE_AGENT_TESTS=1 is set, AND
+ *   - the `claude` CLI is on PATH.
+ *
+ * The CLI authenticates transparently via the user's subscription
+ * (local dev) or via ANTHROPIC_API_KEY (CI) — no extra check needed.
+ */
 export function agentAvailable(): boolean {
   if (process.env.FIRST_TREE_AGENT_TESTS !== "1") return false;
-  if (!process.env.ANTHROPIC_API_KEY) return false;
-  return true;
+  try {
+    const result = spawnSync("claude", ["--version"], {
+      encoding: "utf-8",
+      timeout: 5_000,
+    });
+    return result.status === 0;
+  } catch {
+    return false;
+  }
 }
 
 /**

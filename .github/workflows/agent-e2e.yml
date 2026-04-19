@@ -28,6 +28,9 @@ jobs:
     # Gate on the secret so forks without the key don't attempt the job.
     if: ${{ github.event_name != 'schedule' || github.repository == 'agent-team-foundation/first-tree' }}
     env:
+      # Locally maintainers authenticate via their Claude Code subscription
+      # (no key set). In CI we inject an API key so the shared `claude` CLI
+      # has credentials; the CLI auto-detects the env var.
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
       - uses: actions/checkout@v4
@@ -48,10 +51,13 @@ jobs:
       - name: Install Claude Code CLI
         run: npm install -g @anthropic-ai/claude-code
 
-      - name: Fail fast if the API key is missing
+      - name: Sanity check claude CLI
+        run: claude --version
+
+      - name: Fail fast if no credentials are available
         run: |
           if [ -z "$ANTHROPIC_API_KEY" ]; then
-            echo "ANTHROPIC_API_KEY is not available to this run; skipping agent-e2e." >&2
+            echo "ANTHROPIC_API_KEY is not set on this run; agent-e2e tier will skip." >&2
             exit 0
           fi
 

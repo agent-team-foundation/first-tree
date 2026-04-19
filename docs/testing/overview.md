@@ -111,8 +111,20 @@ LLM flake would create noisy red PRs, and every run costs money.
 pnpm test:agent
 ```
 
-Requires `ANTHROPIC_API_KEY` and `FIRST_TREE_AGENT_TESTS=1` (the script
-sets the flag). Without either, every test in the tier skips cleanly.
+Requires the Claude Code CLI (`claude`) on PATH plus
+`FIRST_TREE_AGENT_TESTS=1` (the script sets the flag). The tier uses a
+real `claude -p` subprocess for both the judge and the agent runs, so
+auth goes through whatever the local `claude` binary is configured for:
+
+- **Local, Claude Code subscription** — zero extra setup and no
+  per-token cost; the subscription covers every judge call and every
+  agent run.
+- **CI / no subscription** — set `ANTHROPIC_API_KEY`; the `claude` CLI
+  automatically uses the key instead of an OAuth token. This is how
+  the scheduled workflow runs.
+
+Without either the `claude` binary or the env flag, every test in the
+tier skips cleanly.
 
 ### Suites
 

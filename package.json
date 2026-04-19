@@ -60,7 +60,6 @@
   "packageManager": "pnpm@10.25.0",
   "license": "Apache-2.0",
   "devDependencies": {
-    "@anthropic-ai/sdk": "^0.90.0",
     "@types/node": "^25.5.0",
     "@types/proper-lockfile": "^4.1.4",
     "@types/react": "^19.2.14",

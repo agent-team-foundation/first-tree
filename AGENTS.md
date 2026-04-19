@@ -89,7 +89,7 @@ pnpm test
 pnpm build
 pnpm test:dist     # post-build binary smoke (requires a prior pnpm build)
 pnpm test:release  # pack + npm install <tarball> smoke
-pnpm test:agent    # LLM-judge + real-Claude skill behaviour (needs ANTHROPIC_API_KEY; out-of-band from release:check)
+pnpm test:agent    # LLM-judge + real-Claude skill behaviour (needs `claude` CLI; uses your subscription locally or ANTHROPIC_API_KEY in CI; out-of-band from release:check)
 ```
 
 See `docs/testing/overview.md` for the layered gate contract. The
