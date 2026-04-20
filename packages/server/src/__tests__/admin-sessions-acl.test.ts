@@ -36,24 +36,18 @@ describe("Admin sessions — chat-level access control", () => {
     // Seed a client owned by the new member's user so we can pin agents to them.
     const { members } = await import("../db/schema/members.js");
     const { eq } = await import("drizzle-orm");
-    const [row] = await app.db.select({ userId: members.userId }).from(members).where(eq(members.id, created.id)).limit(1);
+    const [row] = await app.db
+      .select({ userId: members.userId })
+      .from(members)
+      .where(eq(members.id, created.id))
+      .limit(1);
     if (!row) throw new Error("member missing after creation");
     const clientId = await seedClient(app, row.userId);
     return { memberId: created.id, humanAgentId: created.agentId, accessToken, clientId };
   }
 
   async function seedSessionRow(app: FastifyInstance, agentId: string, chatId: string) {
-    await app.db
-      .insert(agentChatSessions)
-      .values({
-        agentId,
-        chatId,
-        state: "active",
-        runtimeState: "idle",
-        startedAt: new Date(),
-        lastActivityAt: new Date(),
-      })
-      .onConflictDoNothing();
+    await app.db.insert(agentChatSessions).values({ agentId, chatId, state: "active" }).onConflictDoNothing();
   }
 
   it("returns 404 to a non-participant member, 200 to a participant", async () => {
