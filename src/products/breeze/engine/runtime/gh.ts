@@ -59,15 +59,32 @@ export interface GhClientDeps {
   spawn?: GhSpawnFn;
   /** Binary name/path; defaults to `"gh"`. */
   binary?: string;
+  /**
+   * Max bytes captured from gh's stdout/stderr. Defaults to 64 MiB
+   * — the default `spawnSync` cap of ~1 MiB is trivially exceeded by
+   * `gh api notifications` on accounts with a few hundred threads,
+   * which makes the whole poll cycle fail with ENOBUFS.
+   */
+  maxBufferBytes?: number;
 }
+
+/**
+ * 64 MiB. Big enough for a fully-hydrated `gh api notifications`
+ * payload on heavy accounts (observed ~1 MB empirically, but GitHub
+ * can return much more when repos expand), still a tiny fraction of
+ * process RAM so we'd rather cap than hang.
+ */
+export const DEFAULT_GH_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 
 export class GhClient {
   private readonly spawn: GhSpawnFn;
   private readonly binary: string;
+  private readonly maxBuffer: number;
 
   constructor(deps: GhClientDeps = {}) {
     this.spawn = deps.spawn ?? (spawnSync as GhSpawnFn);
     this.binary = deps.binary ?? "gh";
+    this.maxBuffer = deps.maxBufferBytes ?? DEFAULT_GH_MAX_BUFFER_BYTES;
   }
 
   /**
@@ -77,6 +94,7 @@ export class GhClient {
   run(args: readonly string[]): GhExecResult {
     const result = this.spawn(this.binary, args, {
       stdio: ["ignore", "pipe", "pipe"],
+      maxBuffer: this.maxBuffer,
     });
     if (result.error) {
       return {
