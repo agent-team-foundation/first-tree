@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { hostname as getHostname, platform } from "node:os";
-import type {
-  AgentBindRejectReason,
-  RuntimeState,
-  SessionEvent,
-  SessionState,
+import {
+  type AgentBindRejectReason,
+  type AgentPinnedMessage,
+  agentPinnedMessageSchema,
+  type RuntimeState,
+  type SessionEvent,
+  type SessionState,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import WebSocket from "ws";
 import { type AccessTokenProvider, FirstTreeHubSDK } from "./sdk.js";
@@ -47,6 +49,13 @@ type ClientConnectionEvents = {
   "agent:unbound": [agentId: string];
   "agent:message": [agentId: string, data: unknown];
   "agent:bind:rejected": [reason: AgentBindRejectReason, agentId: string];
+  /**
+   * Server announced that an agent has been pinned to this client (either
+   * created with `clientId` or bound via PATCH NULL → ID). Consumers can use
+   * this to auto-register the agent locally without a manual
+   * `first-tree-hub agent add`.
+   */
+  "agent:pinned": [message: AgentPinnedMessage];
   "session:command": [command: SessionCommand];
   "auth:expired": [];
 };
@@ -386,6 +395,14 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       const agentId = msg.agentId as string;
       this.boundAgents.delete(agentId);
       this.emit("agent:unbound", agentId);
+      return;
+    }
+
+    if (type === "agent:pinned") {
+      const parsed = agentPinnedMessageSchema.safeParse(msg);
+      if (parsed.success) {
+        this.emit("agent:pinned", parsed.data);
+      }
       return;
     }
 

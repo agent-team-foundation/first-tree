@@ -108,6 +108,27 @@ export async function getClient(db: Database, clientId: string) {
   return row ?? null;
 }
 
+/**
+ * List the active agents currently pinned to a client. Used by the WS
+ * registration handshake to backfill `agent:pinned` notifications missed while
+ * the client was offline — without it, an admin who pinned an agent during a
+ * client outage would still need a manual `first-tree-hub agent add`.
+ *
+ * Excludes soft-deleted agents (status = "deleted"). Human agents are
+ * naturally excluded by the `clientId` filter — they never carry a clientId.
+ */
+export async function listActiveAgentsPinnedToClient(db: Database, clientId: string) {
+  return db
+    .select({
+      uuid: agents.uuid,
+      name: agents.name,
+      displayName: agents.displayName,
+      type: agents.type,
+    })
+    .from(agents)
+    .where(and(eq(agents.clientId, clientId), ne(agents.status, "deleted")));
+}
+
 export async function listClients(db: Database, userId: string) {
   const rows = await db.select().from(clients).where(eq(clients.userId, userId));
   const counts = await db

@@ -1,4 +1,5 @@
 import {
+  agentPinnedMessageSchema,
   agentTypeSchema,
   createAgentSchema,
   paginationQuerySchema,
@@ -15,12 +16,55 @@ import { assertAgentVisible, assertCanManage, memberScope } from "../../services
 import * as agentService from "../../services/agent.js";
 import { createChat, findOrCreateDirectChat } from "../../services/chat.js";
 import * as clientService from "../../services/client.js";
-import { forceDisconnect, getAgentClientId, hasActiveConnection } from "../../services/connection-manager.js";
+import {
+  forceDisconnect,
+  getAgentClientId,
+  hasActiveConnection,
+  sendToClient,
+} from "../../services/connection-manager.js";
 import { sendMessage } from "../../services/message.js";
 import { notifyRecipients } from "../../services/notifier.js";
 import * as presenceService from "../../services/presence.js";
 
 export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
+  /**
+   * Push an `agent:pinned` frame to the connected client so it can auto-register
+   * the agent locally without the operator running `first-tree-hub agent add`.
+   *
+   * Best-effort: if the client is not currently connected to this server
+   * instance, the notification is silently dropped here — the client picks the
+   * pinning up on its next `client:register` handshake via the backfill path
+   * in `api/agent/ws-client.ts`.
+   */
+  function notifyClientAgentPinned(agent: {
+    uuid: string;
+    name: string | null;
+    displayName: string | null;
+    type: string;
+    clientId: string | null;
+  }): void {
+    if (!agent.clientId) return;
+    const parsed = agentPinnedMessageSchema.safeParse({
+      type: "agent:pinned",
+      agentId: agent.uuid,
+      name: agent.name,
+      displayName: agent.displayName,
+      agentType: agent.type,
+    });
+    if (!parsed.success) {
+      // Schema drift between server and shared types is a contract bug — log
+      // it so the gap doesn't stay invisible. Best-effort: we still don't
+      // throw, since failing the admin write on a notification mismatch would
+      // break the operator workflow.
+      app.log.warn(
+        { err: parsed.error.flatten(), agentId: agent.uuid, clientId: agent.clientId },
+        "agent:pinned frame failed schema validation — not sending",
+      );
+      return;
+    }
+    sendToClient(agent.clientId, parsed.data);
+  }
+
   const listAgentsFilterSchema = z.object({ type: agentTypeSchema.optional() });
 
   app.get("/", async (request) => {
@@ -54,6 +98,10 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
       source: body.source ?? "admin-api",
       managerId,
     });
+    // Auto-register on the pinned client: push an `agent:pinned` frame so the
+    // running client writes its local agent config without a manual
+    // `first-tree-hub agent add` step.
+    notifyClientAgentPinned(agent);
     return reply.status(201).send({
       ...agent,
       createdAt: agent.createdAt.toISOString(),
@@ -65,14 +113,21 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
     const scope = memberScope(request);
     await assertCanManage(app.db, scope, request.params.uuid);
     const body = updateAgentSchema.parse(request.body);
-    // Only admins may reassign the manager. clientId is not in the schema at
-    // all, so even an admin cannot move an agent to a different client in
-    // this milestone (proposal M7, M11: immutable).
+    // Only admins may reassign the manager. clientId is NULL → ID one-shot;
+    // see updateAgent service for the immutability rule.
     const member = requireMember(request);
     if (body.managerId !== undefined && member.role !== "admin") {
       throw new ForbiddenError("Only admins can reassign an agent's manager");
     }
+    // Only fetch the pre-state when the caller is trying to set `clientId` —
+    // for every other PATCH (rename, delegateMention, visibility, …) we'd be
+    // paying for a read whose answer we don't use.
+    const wantsToBindClient = body.clientId !== undefined;
+    const before = wantsToBindClient ? await agentService.getAgent(app.db, request.params.uuid) : null;
     const agent = await agentService.updateAgent(app.db, request.params.uuid, body);
+    if (before && before.clientId === null && agent.clientId !== null) {
+      notifyClientAgentPinned(agent);
+    }
     return {
       ...agent,
       createdAt: agent.createdAt.toISOString(),
