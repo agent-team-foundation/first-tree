@@ -20,6 +20,7 @@ import { agents } from "../../db/schema/agents.js";
 import { clients } from "../../db/schema/clients.js";
 import { members } from "../../db/schema/members.js";
 import { users } from "../../db/schema/users.js";
+import { endWsConnectionSpan, setWsConnectionAttrs, startWsConnectionSpan } from "../../observability/index.js";
 import * as activityService from "../../services/activity.js";
 import * as clientService from "../../services/client.js";
 import * as connectionManager from "../../services/connection-manager.js";
@@ -83,7 +84,12 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
   return async (app: FastifyInstance): Promise<void> => {
     const jwtSecretBytes = new TextEncoder().encode(app.config.secrets.jwtSecret);
 
-    app.get("/client", { websocket: true }, async (socket) => {
+    // config.otel=false skips @fastify/otel's HTTP instrumentation for the
+    // upgrade request. We already emit a long-running `ws.connection` span
+    // ourselves via startWsConnectionSpan — a parallel HTTP-style span for a
+    // protocol upgrade would double-report and never finish cleanly.
+    app.get("/client", { websocket: true, config: { otel: false } }, async (socket) => {
+      startWsConnectionSpan(socket);
       let session: AuthenticatedSession | null = null;
       let clientId: string | null = null;
       let authExpiryTimer: NodeJS.Timeout | null = null;
@@ -204,6 +210,10 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               organizationId: member.organizationId,
               role: member.role,
             };
+            setWsConnectionAttrs(socket, {
+              "organization.id": member.organizationId,
+              "member.id": member.id,
+            });
             clearTimeout(authTimeout);
             scheduleAuthExpiry(claims.exp);
             socket.send(JSON.stringify({ type: "auth:ok" }));
@@ -236,6 +246,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
             }
 
             clientId = data.clientId;
+            setWsConnectionAttrs(socket, { "client.id": data.clientId });
             connectionManager.setClientConnection(data.clientId, socket);
             socket.send(JSON.stringify({ type: "client:registered", clientId: data.clientId }));
 
@@ -476,7 +487,8 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
         }
       });
 
-      socket.on("close", async () => {
+      socket.on("close", async (closeCode?: number) => {
+        endWsConnectionSpan(socket, closeCode);
         clearTimeout(authTimeout);
         if (authExpiryTimer) clearTimeout(authExpiryTimer);
 

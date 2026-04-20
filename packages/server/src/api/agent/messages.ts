@@ -6,9 +6,12 @@ import {
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { requireAgent } from "../../middleware/require-identity.js";
+import { createLogger } from "../../observability/index.js";
 import * as chatService from "../../services/chat.js";
 import * as messageService from "../../services/message.js";
 import { notifyRecipients } from "../../services/notifier.js";
+
+const log = createLogger("AgentMessages");
 
 const editMessageSchema = z.object({
   format: z.string().optional(),
@@ -49,7 +52,7 @@ export async function agentMessageRoutes(app: FastifyInstance): Promise<void> {
 
     app.adapterManager
       .editOutboundMessage(msg.id, msg.format, msg.content)
-      .catch((err) => app.log.error({ err, messageId: msg.id }, "Failed to edit outbound message"));
+      .catch((err) => log.error({ err, messageId: msg.id }, "failed to edit outbound message"));
 
     return {
       ...msg,

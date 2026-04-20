@@ -32,8 +32,10 @@ export async function createTestApp(): Promise<FastifyInstance> {
       allowedOrg: "test-org",
     },
     rateLimit: { max: 10000, loginMax: 10000, webhookMax: 10000 },
+    observability: {
+      logging: { level: "error", format: "json", bridgeToSpanLevel: "off" },
+    },
     instanceId: "test-instance",
-    logger: false,
   };
   const app = await buildApp(config);
   await app.ready();

@@ -1,0 +1,162 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { applyLoggerConfig, createLogger, setErrorSink } from "../logger.js";
+
+type SinkCall = { message: string; err: unknown; context: Record<string, unknown> };
+
+function installSpySink(): { calls: SinkCall[]; restore: () => void } {
+  const calls: SinkCall[] = [];
+  setErrorSink((message, err, context) => {
+    calls.push({ message, err, context });
+  });
+  return { calls, restore: () => setErrorSink(null) };
+}
+
+describe("logger ErrorSink bridging", () => {
+  // Silence stdout writes from the logger during tests.
+  // `vi.spyOn` on overloaded signatures (process.stdout.write) resists typing;
+  // the spy is only used to restore the mock so `unknown` is fine.
+  let writeSpy: { mockRestore(): void } | undefined;
+
+  afterEach(() => {
+    writeSpy?.mockRestore();
+    // Reset log config back to permissive defaults so other tests are unaffected.
+    applyLoggerConfig({ level: "trace", format: "json", bridgeToSpanLevel: "error" });
+    setErrorSink(null);
+  });
+
+  function silenceStdout() {
+    writeSpy = vi.spyOn(process.stdout, "write").mockImplementation((() => true) as never);
+  }
+
+  it("forwards error-level logs to the registered sink", () => {
+    silenceStdout();
+    applyLoggerConfig({ level: "trace", format: "json", bridgeToSpanLevel: "error" });
+    const { calls, restore } = installSpySink();
+
+    const log = createLogger("TestModule");
+    log.error({ err: new Error("boom"), userId: "u1" }, "something exploded");
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.message).toBe("something exploded");
+    expect(calls[0]?.err).toMatchObject({ message: "boom" });
+    expect(calls[0]?.context.userId).toBe("u1");
+    expect(calls[0]?.context.module).toBe("TestModule");
+
+    restore();
+  });
+
+  it("forwards fatal-level logs to the sink", () => {
+    silenceStdout();
+    applyLoggerConfig({ level: "trace", format: "json", bridgeToSpanLevel: "error" });
+    const { calls, restore } = installSpySink();
+
+    createLogger("M").fatal("dying");
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.message).toBe("dying");
+    restore();
+  });
+
+  it("does NOT forward warn-level logs when bridgeToSpanLevel=error", () => {
+    silenceStdout();
+    applyLoggerConfig({ level: "trace", format: "json", bridgeToSpanLevel: "error" });
+    const { calls, restore } = installSpySink();
+
+    createLogger("M").warn("non-fatal");
+
+    expect(calls).toHaveLength(0);
+    restore();
+  });
+
+  it("DOES forward warn-level logs when bridgeToSpanLevel=warn", () => {
+    silenceStdout();
+    applyLoggerConfig({ level: "trace", format: "json", bridgeToSpanLevel: "warn" });
+    const { calls, restore } = installSpySink();
+
+    createLogger("M").warn("heads up");
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.message).toBe("heads up");
+    restore();
+  });
+
+  it("does NOT forward any level when bridgeToSpanLevel=off", () => {
+    silenceStdout();
+    applyLoggerConfig({ level: "trace", format: "json", bridgeToSpanLevel: "off" });
+    const { calls, restore } = installSpySink();
+
+    const log = createLogger("M");
+    log.error("boom1");
+    log.fatal("boom2");
+
+    expect(calls).toHaveLength(0);
+    restore();
+  });
+
+  it("does nothing when no sink is registered", () => {
+    silenceStdout();
+    applyLoggerConfig({ level: "trace", format: "json", bridgeToSpanLevel: "error" });
+    setErrorSink(null);
+
+    // Should not throw when no sink is installed.
+    expect(() => createLogger("M").error("no-sink-registered")).not.toThrow();
+  });
+
+  it("swallows sink exceptions without breaking the logging path", () => {
+    silenceStdout();
+    applyLoggerConfig({ level: "trace", format: "json", bridgeToSpanLevel: "error" });
+    setErrorSink(() => {
+      throw new Error("sink blew up");
+    });
+
+    expect(() => createLogger("M").error("boom")).not.toThrow();
+    setErrorSink(null);
+  });
+});
+
+describe("logger output format", () => {
+  // `vi.spyOn` on overloaded signatures (process.stdout.write) resists typing;
+  // the spy is only used to restore the mock so `unknown` is fine.
+  let writeSpy: { mockRestore(): void } | undefined;
+
+  afterEach(() => {
+    writeSpy?.mockRestore();
+    applyLoggerConfig({ level: "trace", format: "json", bridgeToSpanLevel: "error" });
+  });
+
+  it("emits NDJSON when format=json", () => {
+    const chunks: string[] = [];
+    // process.stdout.write has multiple overloads; cast keeps the mock simple.
+    writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: string | Uint8Array) => {
+      chunks.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk));
+      return true;
+    }) as never);
+    applyLoggerConfig({ level: "trace", format: "json", bridgeToSpanLevel: "off" });
+
+    createLogger("M").info({ k: "v" }, "hello");
+
+    const combined = chunks.join("");
+    // json format writes raw NDJSON from pino; should parse back.
+    const parsed = JSON.parse(combined.trim());
+    expect(parsed.module).toBe("M");
+    expect(parsed.msg).toBe("hello");
+    expect(parsed.k).toBe("v");
+  });
+
+  it("emits human-readable pretty output when format=pretty", () => {
+    const chunks: string[] = [];
+    // process.stdout.write has multiple overloads; cast keeps the mock simple.
+    writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: string | Uint8Array) => {
+      chunks.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk));
+      return true;
+    }) as never);
+    applyLoggerConfig({ level: "trace", format: "pretty", bridgeToSpanLevel: "off" });
+
+    createLogger("M").info("hello");
+
+    const combined = chunks.join("");
+    expect(combined).toContain("INFO");
+    expect(combined).toContain("[M]");
+    expect(combined).toContain("hello");
+  });
+});

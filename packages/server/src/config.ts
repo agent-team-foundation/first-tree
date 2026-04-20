@@ -7,8 +7,6 @@ import type { ServerConfig } from "@agent-team-foundation/first-tree-hub-shared/
 export type Config = ServerConfig & {
   /** Unique ID for this server instance — generated at startup */
   instanceId: string;
-  /** Fastify logger config */
-  logger?: boolean;
   /** Web static files dist path — resolved by CLI startup */
   webDistPath?: string;
 };

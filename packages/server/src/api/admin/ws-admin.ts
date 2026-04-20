@@ -73,7 +73,8 @@ export function adminWsRoutes(notifier: Notifier, jwtSecret: string) {
   });
 
   return async (app: FastifyInstance): Promise<void> => {
-    app.get("/admin", { websocket: true }, async (socket, request) => {
+    // See ws-client.ts for why config.otel is disabled on WS upgrade routes.
+    app.get("/admin", { websocket: true, config: { otel: false } }, async (socket, request) => {
       const token = (request.query as Record<string, string>).token;
       if (!token) {
         socket.send(JSON.stringify({ type: "error", message: "Missing token query parameter" }));

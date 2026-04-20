@@ -6,6 +6,7 @@ import type { Database } from "../db/connection.js";
 import { adapterConfigs } from "../db/schema/adapter-configs.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
+import { withSpan } from "../observability/index.js";
 import { decryptCredentials } from "./crypto.js";
 
 const OUTBOUND_BATCH_SIZE = 10;
@@ -144,18 +145,22 @@ export function createKaelRuntime(
         return { sent: 0, errors: 0 };
       }
 
-      let sent = 0;
-      let errorCount = 0;
+      return withSpan(
+        "kael.forward",
+        { "kael.endpoint": kaelEndpoint, "kael.agent_count": agentConfigs.size },
+        async () => {
+          let sent = 0;
+          let errorCount = 0;
 
-      try {
-        // Claim pending inbox entries for agents that have kael adapter_configs
-        const agentIds = [...agentConfigs.keys()];
-        const claimed = await db.execute<{
-          id: number;
-          inbox_id: string;
-          message_id: string;
-          chat_id: string | null;
-        }>(sql`
+          try {
+            // Claim pending inbox entries for agents that have kael adapter_configs
+            const agentIds = [...agentConfigs.keys()];
+            const claimed = await db.execute<{
+              id: number;
+              inbox_id: string;
+              message_id: string;
+              chat_id: string | null;
+            }>(sql`
           UPDATE inbox_entries
           SET status = 'delivered', delivered_at = NOW()
           WHERE id IN (
@@ -175,73 +180,75 @@ export function createKaelRuntime(
           RETURNING id, inbox_id, message_id, chat_id
         `);
 
-        for (const entry of claimed) {
-          try {
-            const [msg] = await db.select().from(messages).where(eq(messages.id, entry.message_id)).limit(1);
+            for (const entry of claimed) {
+              try {
+                const [msg] = await db.select().from(messages).where(eq(messages.id, entry.message_id)).limit(1);
 
-            if (!msg) {
-              await ackEntry(db, entry.id);
-              continue;
+                if (!msg) {
+                  await ackEntry(db, entry.id);
+                  continue;
+                }
+
+                // Find which agent this entry belongs to (O(1) reverse map lookup)
+                const config = inboxToConfig.get(entry.inbox_id);
+                if (!config) {
+                  await ackEntry(db, entry.id);
+                  continue;
+                }
+
+                // Resolve message content to string
+                const messageContent = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
+
+                const payload: Record<string, unknown> = {
+                  hub_chat_id: entry.chat_id ?? msg.chatId,
+                  hub_agent_id: config.agentId,
+                  hub_server_url: serverUrl,
+                  hub_agent_token: config.agentToken,
+                  user_id: config.kaelUserId,
+                  project_id: config.kaelProjectId,
+                  message: messageContent,
+                  sender_id: msg.senderId,
+                  format: msg.format,
+                };
+                if (agentsMd) {
+                  payload.agents_md = agentsMd;
+                }
+
+                const response = await fetch(`${kaelEndpoint}/api/v1/hub/messages`, {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    ...(kaelApiKey ? { "X-Internal-API-Key": kaelApiKey } : {}),
+                  },
+                  body: JSON.stringify(payload),
+                });
+
+                if (!response.ok) {
+                  const body = await response.text().catch(() => "");
+                  log.error({ entryId: entry.id, status: response.status, body }, "Kael API rejected outbound message");
+                  await nackEntry(db, entry.id);
+                  errorCount++;
+                  continue;
+                }
+
+                await ackEntry(db, entry.id);
+                sent++;
+              } catch (err) {
+                log.error({ entryId: entry.id, err }, "Failed to send outbound Kael message");
+                await nackEntry(db, entry.id).catch((nackErr) => {
+                  log.error({ entryId: entry.id, err: nackErr }, "Failed to NACK entry");
+                });
+                errorCount++;
+              }
             }
-
-            // Find which agent this entry belongs to (O(1) reverse map lookup)
-            const config = inboxToConfig.get(entry.inbox_id);
-            if (!config) {
-              await ackEntry(db, entry.id);
-              continue;
-            }
-
-            // Resolve message content to string
-            const messageContent = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
-
-            const payload: Record<string, unknown> = {
-              hub_chat_id: entry.chat_id ?? msg.chatId,
-              hub_agent_id: config.agentId,
-              hub_server_url: serverUrl,
-              hub_agent_token: config.agentToken,
-              user_id: config.kaelUserId,
-              project_id: config.kaelProjectId,
-              message: messageContent,
-              sender_id: msg.senderId,
-              format: msg.format,
-            };
-            if (agentsMd) {
-              payload.agents_md = agentsMd;
-            }
-
-            const response = await fetch(`${kaelEndpoint}/api/v1/hub/messages`, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                ...(kaelApiKey ? { "X-Internal-API-Key": kaelApiKey } : {}),
-              },
-              body: JSON.stringify(payload),
-            });
-
-            if (!response.ok) {
-              const body = await response.text().catch(() => "");
-              log.error({ entryId: entry.id, status: response.status, body }, "Kael API rejected outbound message");
-              await nackEntry(db, entry.id);
-              errorCount++;
-              continue;
-            }
-
-            await ackEntry(db, entry.id);
-            sent++;
           } catch (err) {
-            log.error({ entryId: entry.id, err }, "Failed to send outbound Kael message");
-            await nackEntry(db, entry.id).catch((nackErr) => {
-              log.error({ entryId: entry.id, err: nackErr }, "Failed to NACK entry");
-            });
-            errorCount++;
+            log.error({ err }, "Kael outbound processing error");
+            return { sent: 0, errors: 1 };
           }
-        }
-      } catch (err) {
-        log.error({ err }, "Kael outbound processing error");
-        return { sent: 0, errors: 1 };
-      }
 
-      return { sent, errors: errorCount };
+          return { sent, errors: errorCount };
+        },
+      );
     },
 
     shutdown(): void {

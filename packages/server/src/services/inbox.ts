@@ -3,12 +3,19 @@ import type { Database } from "../db/connection.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
 import { ForbiddenError, NotFoundError } from "../errors.js";
+import { FIRST_TREE_HUB_ATTR, withSpan } from "../observability/index.js";
 import { buildClientMessagePayloadsForInbox } from "./message-dispatcher.js";
 
 const DEFAULT_INBOX_TIMEOUT_SECONDS = 300;
 const DEFAULT_MAX_RETRY_COUNT = 3;
 
 export async function pollInbox(db: Database, inboxId: string, limit: number) {
+  return withSpan("inbox.deliver", { "inbox.id": inboxId, "inbox.poll.limit": limit }, () =>
+    pollInboxInner(db, inboxId, limit),
+  );
+}
+
+async function pollInboxInner(db: Database, inboxId: string, limit: number) {
   // Use raw SQL for SELECT ... FOR UPDATE SKIP LOCKED (not supported by Drizzle query builder)
   const result = await db.transaction(async (tx) => {
     // 1. Claim pending entries with SKIP LOCKED
@@ -93,17 +100,25 @@ export async function pollInbox(db: Database, inboxId: string, limit: number) {
 }
 
 export async function ackEntry(db: Database, entryId: number, inboxId: string) {
-  const [entry] = await db
-    .update(inboxEntries)
-    .set({ status: "acked", ackedAt: new Date() })
-    .where(and(eq(inboxEntries.id, entryId), eq(inboxEntries.inboxId, inboxId), eq(inboxEntries.status, "delivered")))
-    .returning();
+  return withSpan(
+    "inbox.ack",
+    { [FIRST_TREE_HUB_ATTR.INBOX_ENTRY_ID]: String(entryId), "inbox.id": inboxId },
+    async () => {
+      const [entry] = await db
+        .update(inboxEntries)
+        .set({ status: "acked", ackedAt: new Date() })
+        .where(
+          and(eq(inboxEntries.id, entryId), eq(inboxEntries.inboxId, inboxId), eq(inboxEntries.status, "delivered")),
+        )
+        .returning();
 
-  if (!entry) {
-    throw new NotFoundError("Inbox entry not found or not in delivered status");
-  }
+      if (!entry) {
+        throw new NotFoundError("Inbox entry not found or not in delivered status");
+      }
 
-  return entry;
+      return entry;
+    },
+  );
 }
 
 export async function renewEntry(db: Database, entryId: number, inboxId: string) {
