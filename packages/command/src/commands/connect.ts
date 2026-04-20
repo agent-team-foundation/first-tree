@@ -12,7 +12,7 @@ import {
 import { input, password } from "@inquirer/prompts";
 import type { Command } from "commander";
 import { fail } from "../cli/output.js";
-import { ClientRuntime, saveCredentials } from "../core/index.js";
+import { ClientRuntime, installClientService, isServiceSupported, saveCredentials } from "../core/index.js";
 
 /**
  * Authenticate via connect token — exchange for full JWT credentials.
@@ -63,9 +63,10 @@ async function authenticateInteractive(url: string): Promise<{ accessToken: stri
 export function registerConnectCommand(parent: Command): void {
   parent
     .command("connect <server-url>")
-    .description("Connect to a Hub server — configure, authenticate, and start client")
+    .description("Connect to a Hub server — configure, authenticate, and install the background service")
     .option("--token <token>", "Connect token (from Hub web console) — skips interactive login")
-    .action(async (serverUrl: string, options: { token?: string }) => {
+    .option("--no-service", "Skip background service install (runs inline until Ctrl+C)")
+    .action(async (serverUrl: string, options: { token?: string; service?: boolean }) => {
       try {
         const url = serverUrl.replace(/\/+$/, "");
 
@@ -82,19 +83,41 @@ export function registerConnectCommand(parent: Command): void {
         saveCredentials({ ...tokens, serverUrl: url });
         process.stderr.write("  \u2713 Authenticated\n");
 
-        // 3. Start client process
+        // Touch config + client.id so the background service picks up the
+        // persisted clientId on its first launch (see #99).
         resetConfig();
         resetConfigMeta();
-
         const config = await initConfig({
           schema: clientConfigSchema,
           role: "client",
         });
+        process.stderr.write(`  \u2713 Connected as this computer (id: ${config.client.id})\n`);
+
+        // 3. Install background service (default) OR run inline (--no-service).
+        const shouldInstallService = options.service !== false && isServiceSupported();
+
+        if (shouldInstallService) {
+          const info = installClientService();
+          process.stderr.write(
+            `  \u2713 Installed as a background service (${info.platform}) — you can close this terminal\n\n`,
+          );
+          process.stderr.write(`    Unit:  ${info.unitPath}\n`);
+          process.stderr.write(`    Logs:  ${info.logDir}\n`);
+          if (info.state === "active" && info.detail) {
+            process.stderr.write(`    State: running (${info.detail})\n`);
+          }
+          process.stderr.write("\n");
+          return;
+        }
+
+        if (options.service === false) {
+          process.stderr.write("  (--no-service) running inline — Ctrl+C to stop\n");
+        } else {
+          process.stderr.write(`  Background service not supported on ${process.platform}; running inline.\n`);
+        }
 
         const agentsDir = join(DEFAULT_CONFIG_DIR, "agents");
         const agents = loadAgents({ schema: agentConfigSchema, agentsDir });
-
-        process.stderr.write(`\n  Starting client (id: ${config.client.id})...\n`);
 
         const runtime = new ClientRuntime(config.server.url, config.client.id);
         for (const [name, agentConfig] of agents) {
