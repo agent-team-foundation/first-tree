@@ -88,6 +88,23 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
       let authExpiryTimer: NodeJS.Timeout | null = null;
       const boundAgents = new Map<string, { agentId: string; inboxId: string }>();
 
+      // FIFO per session so session:event persistence happens before any
+      // subsequent eviction's clearEvents — without this, the message handler
+      // is async and the next message can race the previous one's DB write.
+      const sessionOpQueues = new Map<string, Promise<void>>();
+      function chainSessionOp(agentId: string, chatId: string, op: () => Promise<void>): Promise<void> {
+        const key = `${agentId}:${chatId}`;
+        const prev = sessionOpQueues.get(key) ?? Promise.resolve();
+        const next = prev.then(op, op);
+        sessionOpQueues.set(
+          key,
+          next.finally(() => {
+            if (sessionOpQueues.get(key) === next) sessionOpQueues.delete(key);
+          }),
+        );
+        return next;
+      }
+
       const authTimeout = setTimeout(() => {
         if (!session) {
           try {
@@ -334,12 +351,12 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
 
             const payload = sessionStateMessageSchema.parse(msg);
 
-            // D4: drop persisted events on eviction regardless of whether the
-            // session-state upsert below succeeds. Both LRU eviction and
-            // admin-triggered terminate surface as "evicted" from the client
-            // (see SessionManager.notifySessionState). Fire-and-forget.
+            // Drop persisted events on eviction. Chained through the per-session FIFO so any
+            // in-flight appendEvent finishes BEFORE clearEvents (otherwise late inserts resurrect rows).
             if (payload.state === "evicted") {
-              sessionEventService.clearEvents(app.db, agentId, payload.chatId).catch(() => {});
+              chainSessionOp(agentId, payload.chatId, () =>
+                sessionEventService.clearEvents(app.db, agentId, payload.chatId).catch(() => {}),
+              );
             }
 
             await activityService.upsertSessionState(
@@ -380,13 +397,17 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
             }
 
             const payload = sessionEventMessageSchema.parse(msg);
-            sessionEventService.appendEvent(app.db, agentId, payload.chatId, payload.event).catch((err) => {
-              socket.send(
-                JSON.stringify({
-                  type: "error",
-                  message: `Failed to persist session event: ${err instanceof Error ? err.message : String(err)}`,
-                }),
-              );
+            chainSessionOp(agentId, payload.chatId, async () => {
+              try {
+                await sessionEventService.appendEvent(app.db, agentId, payload.chatId, payload.event);
+              } catch (err) {
+                socket.send(
+                  JSON.stringify({
+                    type: "error",
+                    message: `Failed to persist session event: ${err instanceof Error ? err.message : String(err)}`,
+                  }),
+                );
+              }
             });
           } else if (type === "session:completion") {
             const agentId = parsed.data.agentId;

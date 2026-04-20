@@ -39,16 +39,7 @@ function rowToEvent(row: {
   };
 }
 
-/**
- * Append one event to `(agentId, chatId)`. `seq` is allocated as
- * COALESCE(MAX(seq), 0) + 1 in a single statement; a unique index on
- * (agent_id, chat_id, seq) + ON CONFLICT DO NOTHING turns a lost race
- * into a retry. Throws after MAX_SEQ_RETRIES — callers should treat
- * that as a hard failure.
- *
- * Zod validates the event before inserting so a malformed payload
- * never lands as opaque jsonb (no DB-side CHECK per project rule).
- */
+/** Append one event; throws after MAX_SEQ_RETRIES on persistent seq contention. */
 export async function appendEvent(
   db: Database,
   agentId: string,

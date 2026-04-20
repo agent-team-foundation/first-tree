@@ -45,6 +45,23 @@ function isToolResultBlock(block: unknown): block is ToolResultBlock {
   return b.type === "tool_result" && typeof b.tool_use_id === "string";
 }
 
+type ResultMessage = {
+  type: "result";
+  subtype: string;
+  result?: string;
+  errors?: string[];
+  duration_ms?: number;
+  total_cost_usd?: number;
+  num_turns?: number;
+  session_id?: string;
+};
+
+function isResultMessage(message: unknown): message is ResultMessage {
+  if (!message || typeof message !== "object") return false;
+  const m = message as Record<string, unknown>;
+  return m.type === "result" && typeof m.subtype === "string";
+}
+
 function extractToolResultText(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
@@ -58,13 +75,8 @@ function extractToolResultText(content: unknown): string {
 }
 
 /**
- * Pair `tool_use` blocks (from assistant messages) with `tool_result` blocks
- * (from user messages) and emit a structured `tool_call` event per completed
- * pair. Unpaired `tool_use` entries can be flushed as `status: "pending"`
- * when the consumer loop exits (normal return or fatal error).
- *
- * Extracted for unit testability — the consumer loop in `consumeOutput`
- * delegates all tool-call event emission to this processor.
+ * Pair `tool_use` (assistant) with `tool_result` (user) blocks and emit a
+ * `tool_call` event per pair. Unpaired entries are flushed as `status: "pending"`.
  */
 export type ToolCallProcessor = {
   onMessage(message: unknown): void;
@@ -373,34 +385,31 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
 
             toolCallProcessor.onMessage(message);
 
-            if (message.type === "result") {
-              const result = message as {
-                type: "result";
-                subtype: string;
-                result?: string;
-                errors?: string[];
-                duration_ms?: number;
-                total_cost_usd?: number;
-                num_turns?: number;
-                session_id?: string;
-              };
-              if (result.subtype === "success") {
+            if (isResultMessage(message)) {
+              if (message.subtype === "success") {
                 retryCount = 0;
-                // Auto-bridge: forward result text back to the chat
-                if (result.result && sessionCtx.chatId) {
+                // Auto-bridge: forward result text back to the chat. If the forward fails the text
+                // is otherwise lost (no session_output table since NC2) — surface it via the events
+                // API so admins see both the failure and a snapshot of what would have been sent.
+                if (message.result && sessionCtx.chatId) {
+                  const resultText = message.result;
                   sessionCtx.sdk
-                    .sendMessage(sessionCtx.chatId, { format: "text", content: result.result })
+                    .sendMessage(sessionCtx.chatId, { format: "text", content: resultText })
                     .then(() => {
                       sessionCtx.log("Result forwarded to chat");
                       sessionCtx.reportSessionCompletion();
                     })
-                    .catch((err) =>
-                      sessionCtx.log(`Failed to forward result: ${err instanceof Error ? err.message : String(err)}`),
-                    );
+                    .catch((err) => {
+                      const reason = err instanceof Error ? err.message : String(err);
+                      sessionCtx.log(`Failed to forward result: ${reason}`);
+                      const preview = resultText.slice(0, 1500);
+                      const message = `Result forward failed: ${reason}\n---\n${preview}`.slice(0, 2000);
+                      sessionCtx.emitEvent({ kind: "error", payload: { source: "runtime", message } });
+                    });
                 }
               } else {
-                const errors = result.errors ? result.errors.join("; ") : result.subtype;
-                const errorLog = `Query result error: ${errors} (subtype=${result.subtype}, turns=${result.num_turns ?? "?"}, duration=${result.duration_ms ?? "?"}ms)`;
+                const errors = message.errors ? message.errors.join("; ") : message.subtype;
+                const errorLog = `Query result error: ${errors} (subtype=${message.subtype}, turns=${message.num_turns ?? "?"}, duration=${message.duration_ms ?? "?"}ms)`;
                 sessionCtx.log(errorLog);
                 sessionCtx.emitEvent({ kind: "error", payload: { source: "sdk", message: errors } });
               }

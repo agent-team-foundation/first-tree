@@ -94,11 +94,7 @@ function isTokenExpired(token: string): boolean {
     if (parts.length !== 3 || !parts[1]) return true;
     const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString()) as { exp?: number };
     if (!payload.exp) return false;
-    // Refresh 30s BEFORE exp so the next request hits the server with a
-    // still-valid token and the 401/refresh loop never starts. (The previous
-    // `Date.now() - 30_000` inverted the margin: tokens were kept for 30s
-    // AFTER exp, producing a 30s window where the SDK sent stale JWTs and
-    // callers saw "Invalid or expired token".)
+    // Refresh 30s before exp so requests never fly with an about-to-expire token.
     return payload.exp * 1000 < Date.now() + 30_000;
   } catch {
     return true;

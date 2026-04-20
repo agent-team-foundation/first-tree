@@ -1,6 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Leaf } from "lucide-react";
-import type { ReactNode } from "react";
 import { useSearchParams } from "react-router";
 import { getActivityOverview, type RuntimeAgent } from "../../../api/activity.js";
 import { listNotifications, markNotificationRead } from "../../../api/notifications.js";
@@ -8,6 +7,7 @@ import { StateChip } from "../../../components/ui/state-chip.js";
 import { useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { useClientMap } from "../../../lib/use-client-map.js";
 import { cn, formatDate } from "../../../lib/utils.js";
+import { KV, KVRow, SectionLabel } from "./_shared.js";
 
 function formatUptime(connectedAt: string | null): string {
   if (!connectedAt) return "\u2014";
@@ -30,49 +30,6 @@ const NOTIFICATION_TYPE_LABELS: Record<string, string> = {
   agent_needs_decision: "Decision",
   session_completed: "Completed",
 };
-
-function SectionLabel({ children }: { children: ReactNode }) {
-  return (
-    <div
-      className="mono uppercase"
-      style={{
-        fontSize: 9,
-        letterSpacing: 0.1,
-        color: "var(--fg-4)",
-        marginBottom: 8,
-      }}
-    >
-      {children}
-    </div>
-  );
-}
-
-function KVRow({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <>
-      <div style={{ color: "var(--fg-3)" }}>{label}</div>
-      <div className="text-right truncate" style={{ color: "var(--fg)", overflow: "hidden", textOverflow: "ellipsis" }}>
-        {children}
-      </div>
-    </>
-  );
-}
-
-function KV({ children }: { children: ReactNode }) {
-  return (
-    <div
-      className="grid"
-      style={{
-        gridTemplateColumns: "auto 1fr",
-        columnGap: 10,
-        rowGap: 4,
-        fontSize: 11.5,
-      }}
-    >
-      {children}
-    </div>
-  );
-}
 
 function Tile({ label, value, accent }: { label: string; value: string | number; accent?: string }) {
   return (
@@ -155,8 +112,8 @@ function NotificationList({
             }}
             onClick={() => {
               if (!n.read) markReadMut.mutate(n.id);
-              if (hasChatLink) {
-                setSearchParams({ a: agentId, c: n.chatId as string });
+              if (n.chatId) {
+                setSearchParams({ a: agentId, c: n.chatId });
               }
             }}
           >

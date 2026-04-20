@@ -3,17 +3,9 @@ import type { AdminBroadcastPayload } from "./admin-broadcast.js";
 import type { Notifier, RuntimeStateChangeHandler } from "./notifier.js";
 
 /**
- * NC1 pulse aggregator.
- *
- * Holds an in-memory ring of `bucketCount` PulseBuckets per (org, agent).
- * Every `intervalMs` tick:
- *   1. broadcast the current snapshot to each org's admin sockets
- *   2. advance the ring index and reset the new head bucket
- *
- * Consumers (pulse-bar.tsx in S9) render the 32 buckets as a rolling
- * 5-minute heartbeat. Lazy-init keeps the aggregator decoupled from the
- * DB: the first runtime-state change for an (org, agent) conjures its
- * 32-slot ring.
+ * In-memory ring of `bucketCount` PulseBuckets per (org, agent), advanced on
+ * `intervalMs`. Lazy-init: the first runtime-state change for an (org, agent)
+ * creates its ring.
  */
 
 export type PulseAggregatorIngest = {
@@ -32,6 +24,7 @@ export type PulseAggregatorOptions = {
 export type PulseAggregator = {
   start(): void;
   stop(): void;
+  /** Direct entry point for tests; production runs go through the notifier subscription installed by `start()`. */
   ingest(payload: PulseAggregatorIngest): void;
 };
 
@@ -80,10 +73,7 @@ export function createPulseAggregator(options: PulseAggregatorOptions): PulseAgg
   };
 
   function snapshotBuckets(buckets: PulseBucket[]): PulseBucket[] {
-    // Re-order ring buffer → time-ordered [oldest … newest] so clients can
-    // render left-to-right without knowing currentIdx. The just-finished
-    // bucket sits at currentIdx (newest, placed last); the next-to-be-cleared
-    // bucket at (currentIdx + 1) is oldest, placed first.
+    // Ring buffer → time-ordered [oldest…newest]; clients render left-to-right.
     const out: PulseBucket[] = [];
     for (let i = 0; i < bucketCount; i++) {
       const idx = (currentIdx + 1 + i) % bucketCount;

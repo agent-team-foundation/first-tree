@@ -1,15 +1,10 @@
+import { type PulseBucket, pulseTickSchema } from "@agent-team-foundation/first-tree-hub-shared";
 import { createContext, type ReactNode, useContext, useEffect, useMemo, useState } from "react";
 import { useAdminWs } from "./use-admin-ws.js";
 
-export type PulseBucket = { workingCount: number; errorMask: boolean };
+export type { PulseBucket };
 
 const EMPTY_BUCKETS: PulseBucket[] = Array.from({ length: 32 }, () => ({ workingCount: 0, errorMask: false }));
-
-type PulseTick = {
-  type: "pulse:tick";
-  organizationId: string;
-  agents: Record<string, PulseBucket[]>;
-};
 
 type PulseState = {
   aggregated: PulseBucket[];
@@ -39,10 +34,6 @@ function aggregate(agents: Record<string, PulseBucket[]>): PulseBucket[] {
   return out;
 }
 
-function isPulseTick(msg: { type: string; [k: string]: unknown }): msg is PulseTick {
-  return msg.type === "pulse:tick" && typeof msg.agents === "object" && msg.agents !== null;
-}
-
 export function PulseProvider({ children }: { children: ReactNode }) {
   const [latest, setLatest] = useState<Omit<PulseState, "stale">>({
     aggregated: EMPTY_BUCKETS,
@@ -53,17 +44,19 @@ export function PulseProvider({ children }: { children: ReactNode }) {
 
   useAdminWs({
     onMessage: (msg) => {
-      if (!isPulseTick(msg)) return;
+      const parsed = pulseTickSchema.safeParse(msg);
+      if (!parsed.success) return;
       setLatest({
-        aggregated: aggregate(msg.agents),
-        agents: msg.agents,
+        aggregated: aggregate(parsed.data.agents),
+        agents: parsed.data.agents,
         receivedAtMs: Date.now(),
       });
     },
   });
 
   useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 2_000);
+    // 10s cadence is enough to flip `stale` (threshold = 30s); 2s burned re-renders for no gain.
+    const id = setInterval(() => setNow(Date.now()), 10_000);
     return () => clearInterval(id);
   }, []);
 

@@ -8,14 +8,7 @@ import { clients } from "../db/schema/clients.js";
 import { agentVisibilityCondition, type MemberScope } from "./access-control.js";
 import type { Notifier } from "./notifier.js";
 
-/**
- * Upsert a session state and update materialized aggregates on agent_presence.
- *
- * `organizationId` is passed through to the PG NOTIFY payload so the admin
- * WS route can filter strictly. Callers already have it in scope (session
- * closure for WS, agent row for tests) — the service deliberately does not
- * re-query `agents` here to keep the hot path SELECT-free.
- */
+/** Upsert a session state, refresh materialized aggregates on agent_presence, and emit org-scoped NOTIFY. */
 export async function upsertSessionState(
   db: Database,
   agentId: string,

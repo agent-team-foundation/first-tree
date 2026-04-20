@@ -6,16 +6,12 @@ type StateChipProps = {
   className?: string;
 };
 
-const VALID: Record<string, AgentState> = {
-  idle: "idle",
-  working: "working",
-  blocked: "blocked",
-  error: "error",
-  offline: "offline",
-};
+function isAgentState(state: string): state is AgentState {
+  return state === "idle" || state === "working" || state === "blocked" || state === "error" || state === "offline";
+}
 
 export function StateChip({ state, className }: StateChipProps) {
-  const normalized: AgentState = state && VALID[state] ? VALID[state] : "offline";
+  const normalized: AgentState = state !== null && isAgentState(state) ? state : "offline";
   const color = normalized === "offline" ? "var(--fg-3)" : `var(--state-${normalized})`;
   return (
     <span

@@ -291,6 +291,49 @@ describe("Agent WS — session event protocol (S10)", () => {
     }
   }, 15000);
 
+  it("eviction immediately following session:event leaves no resurrected row", async () => {
+    const seed = await seedBoundAgent("race");
+    const ws = await openBoundSocket(seed);
+    const chatId = `chat-${crypto.randomUUID()}`;
+
+    try {
+      // Send N events back-to-back, then immediately send eviction. Without the
+      // per-(agent, chat) FIFO guard, the late appendEvent(s) can land AFTER
+      // clearEvents and resurrect rows for a session that was supposed to be wiped.
+      const eventCount = 5;
+      for (let i = 0; i < eventCount; i += 1) {
+        ws.send(
+          JSON.stringify({
+            type: "session:event",
+            agentId: seed.agent.uuid,
+            chatId,
+            event: {
+              kind: "tool_call",
+              payload: { toolUseId: `tu-${i}`, name: "Bash", args: { i }, status: "ok", durationMs: 1 },
+            },
+          }),
+        );
+      }
+      ws.send(
+        JSON.stringify({
+          type: "session:state",
+          agentId: seed.agent.uuid,
+          chatId,
+          state: "evicted",
+        }),
+      );
+
+      // Give the server time to drain the queue and process the eviction.
+      await new Promise((r) => setTimeout(r, 800));
+
+      const { items } = await sessionEventService.listEvents(app.db, seed.agent.uuid, chatId, { limit: 50 });
+      expect(items).toEqual([]);
+    } finally {
+      ws.close();
+      await new Promise<void>((r) => ws.once("close", () => r()));
+    }
+  }, 15000);
+
   it("`session:completion` creates a session_completed notification", async () => {
     const seed = await seedBoundAgent("compl");
     const ws = await openBoundSocket(seed);
