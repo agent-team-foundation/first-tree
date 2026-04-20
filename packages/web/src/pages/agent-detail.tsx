@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Cable, Link2, MoreHorizontal, Play, Plus, Trash2 } from "lucide-react";
 import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router";
+import { type HubClient, listClients } from "./../api/activity.js";
 import { createAdapterMapping, deleteAdapterMapping, listAdapterMappings } from "./../api/adapter-mappings.js";
 import { getAdapterStatuses } from "./../api/adapter-status.js";
 import { createAdapter, deleteAdapter, listAdapters, updateAdapter } from "./../api/adapters.js";
@@ -162,6 +163,28 @@ export function AgentDetailPage() {
     window.addEventListener("mousedown", onClickAway);
     return () => window.removeEventListener("mousedown", onClickAway);
   }, [moreOpen]);
+
+  // Bind-client (agent ↔ client first-time binding) dialog state
+  const [bindClientOpen, setBindClientOpen] = useState(false);
+  const [bindClientSelected, setBindClientSelected] = useState<string>("");
+  const [bindClientError, setBindClientError] = useState<string | null>(null);
+  const clientsQuery = useQuery({
+    queryKey: ["clients"],
+    queryFn: listClients,
+    enabled: bindClientOpen,
+  });
+  const bindClientMutation = useMutation({
+    mutationFn: (clientId: string) => updateAgent(uuid, { clientId }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["agent", uuid] });
+      queryClient.invalidateQueries({ queryKey: ["agent-client-status", uuid] });
+      queryClient.invalidateQueries({ queryKey: ["agents"] });
+      setBindClientOpen(false);
+      setBindClientSelected("");
+      setBindClientError(null);
+    },
+    onError: (err) => setBindClientError(err instanceof Error ? err.message : String(err)),
+  });
 
   // Binding dialog state (unchanged from previous)
   const [bindingDialogOpen, setBindingDialogOpen] = useState(false);
@@ -445,6 +468,21 @@ export function AgentDetailPage() {
         isHuman={isHuman}
       />
 
+      {isUnclaimed && agent.status === "active" && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 flex items-center justify-between gap-3">
+          <div className="text-sm text-amber-900">
+            <div className="font-medium">No client bound</div>
+            <div className="text-xs text-amber-800/80">
+              Bind this agent to a client machine so it can run. A client will also claim it on first WebSocket connect.
+            </div>
+          </div>
+          <Button size="sm" variant="outline" onClick={() => setBindClientOpen(true)}>
+            <Link2 className="h-4 w-4 mr-2" />
+            Bind Client
+          </Button>
+        </div>
+      )}
+
       {/* Identity */}
       <IdentitySection
         agent={agent}
@@ -696,6 +734,59 @@ export function AgentDetailPage() {
         </div>
       )}
 
+      {/* Bind Client Dialog — first-time NULL → ID bind only */}
+      <Dialog
+        open={bindClientOpen}
+        onOpenChange={(open) => {
+          setBindClientOpen(open);
+          if (!open) {
+            setBindClientSelected("");
+            setBindClientError(null);
+            bindClientMutation.reset();
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Bind client</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Pick a client machine you own to pin this agent to. The bind is one-shot — once set, moving the agent
+              requires deleting and re-creating it on the target client.
+            </p>
+            {clientsQuery.isLoading ? (
+              <div className="text-sm text-muted-foreground">Loading clients…</div>
+            ) : clientsQuery.error ? (
+              <div className="text-sm text-destructive">
+                Failed to load clients: {clientsQuery.error instanceof Error ? clientsQuery.error.message : "Unknown"}
+              </div>
+            ) : (
+              <BindClientList
+                clients={clientsQuery.data ?? []}
+                selected={bindClientSelected}
+                onSelect={setBindClientSelected}
+              />
+            )}
+            {bindClientError && <div className="text-sm text-destructive">{bindClientError}</div>}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBindClientOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              disabled={!bindClientSelected || bindClientMutation.isPending}
+              onClick={() => {
+                setBindClientError(null);
+                bindClientMutation.mutate(bindClientSelected);
+              }}
+            >
+              {bindClientMutation.isPending ? "Binding…" : "Bind"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Binding Dialog */}
       <Dialog
         open={bindingDialogOpen}
@@ -923,6 +1014,63 @@ function buildCredentials(form: {
   const trimmed = form.credentialsJson.trim();
   if (!trimmed) return null;
   return JSON.parse(trimmed) as Record<string, unknown>;
+}
+
+// ─── bind-client picker ──────────────────────────────────────────────
+
+function BindClientList({
+  clients,
+  selected,
+  onSelect,
+}: {
+  clients: HubClient[];
+  selected: string;
+  onSelect: (id: string) => void;
+}) {
+  const bindable = clients.filter((c) => c.status === "connected");
+  if (bindable.length === 0) {
+    return (
+      <div className="rounded border bg-muted/40 px-3 py-4 text-sm text-muted-foreground">
+        No connected clients available. Run{" "}
+        <code className="font-mono text-xs">first-tree-hub client connect &lt;url&gt;</code> on the machine that should
+        run this agent, then reopen this dialog.
+      </div>
+    );
+  }
+  return (
+    <ul className="divide-y rounded border max-h-64 overflow-y-auto">
+      {bindable.map((c) => {
+        const picked = c.id === selected;
+        const online = c.status === "online" || c.status === "active";
+        return (
+          <li key={c.id}>
+            <button
+              type="button"
+              onClick={() => onSelect(c.id)}
+              className={cn(
+                "w-full text-left px-3 py-2 flex items-center gap-3 hover:bg-gray-50",
+                picked && "bg-blue-50",
+              )}
+            >
+              <span
+                className={cn("inline-block h-2 w-2 rounded-full", online ? "bg-green-500" : "bg-gray-400")}
+                aria-hidden
+              />
+              <span className="flex-1 min-w-0">
+                <span className="block text-sm font-medium truncate">{c.hostname ?? c.id}</span>
+                <span className="block text-xs text-muted-foreground font-mono truncate">
+                  {c.id}
+                  {c.os ? ` · ${c.os}` : ""}
+                  {c.sdkVersion ? ` · SDK ${c.sdkVersion}` : ""}
+                </span>
+              </span>
+              <span className="text-xs text-muted-foreground">{c.status}</span>
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
 }
 
 // ─── test connection card ────────────────────────────────────────────

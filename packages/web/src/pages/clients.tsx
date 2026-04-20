@@ -130,6 +130,7 @@ export function ClientsPage() {
 
   return (
     <div>
+      <h1 className="text-2xl font-semibold mb-4">Clients</h1>
       <ConnectCommandBanner />
 
       {/* Confirm retire dialog */}
@@ -231,7 +232,7 @@ export function ClientsPage() {
 
       {!clients || clients.length === 0 ? (
         <div className="text-center text-muted-foreground py-12">
-          No connected clients. Use the button above to generate a connect command.
+          No clients. Use the button above to generate a connect command.
         </div>
       ) : (
         <div className="border rounded-lg overflow-hidden">

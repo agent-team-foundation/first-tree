@@ -6,7 +6,7 @@ import { forceDisconnectClient } from "../../services/connection-manager.js";
 import { serializeDate } from "../../utils.js";
 
 export async function adminClientRoutes(app: FastifyInstance): Promise<void> {
-  // GET /admin/clients — clients owned by the caller. Every `clients.user_id`
+  // GET /clients — clients owned by the caller. Every `clients.user_id`
   // is the authoritative owner (Rule R-RUN); routes are scoped to that user
   // so a cross-org or cross-user caller can't see or touch clients that
   // aren't theirs.
@@ -26,7 +26,7 @@ export async function adminClientRoutes(app: FastifyInstance): Promise<void> {
     }));
   });
 
-  // GET /admin/clients/:clientId — single client, owner-scoped.
+  // GET /clients/:clientId — single client, owner-scoped.
   app.get<{ Params: { clientId: string } }>("/:clientId", async (request) => {
     const scope = memberScope(request);
     await clientService.assertClientOwner(app.db, request.params.clientId, scope.userId);
@@ -45,7 +45,7 @@ export async function adminClientRoutes(app: FastifyInstance): Promise<void> {
     };
   });
 
-  // POST /admin/clients/:clientId/disconnect — force disconnect, owner-scoped.
+  // POST /clients/:clientId/disconnect — force disconnect, owner-scoped.
   app.post<{ Params: { clientId: string } }>("/:clientId/disconnect", async (request) => {
     const scope = memberScope(request);
     const { clientId } = request.params;
@@ -57,7 +57,7 @@ export async function adminClientRoutes(app: FastifyInstance): Promise<void> {
     return { disconnected: true, agentIds };
   });
 
-  // DELETE /admin/clients/:clientId — retire, owner-scoped. Refuses while
+  // DELETE /clients/:clientId — retire, owner-scoped. Refuses while
   // agents are still pinned (proposal M12); the service layer surfaces a 409
   // with the pinned agent list so the UI can display it.
   app.delete<{ Params: { clientId: string } }>("/:clientId", async (request, reply) => {

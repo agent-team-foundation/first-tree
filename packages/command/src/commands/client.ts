@@ -139,13 +139,13 @@ export function registerClientCommands(program: Command): void {
 
   client
     .command("hub-list")
-    .description("List connected clients on the Hub server")
+    .description("List clients on the Hub server")
     .option("--server <url>", "Hub server URL")
     .action(async (options: { server?: string }) => {
       try {
         const serverUrl = resolveServerUrl(options.server);
         const token = await ensureFreshAccessToken();
-        const response = await fetch(`${serverUrl}/api/v1/admin/clients`, {
+        const response = await fetch(`${serverUrl}/api/v1/clients`, {
           headers: { Authorization: `Bearer ${token}` },
           signal: AbortSignal.timeout(10_000),
         });
@@ -161,11 +161,11 @@ export function registerClientCommands(program: Command): void {
         }>;
 
         if (clients.length === 0) {
-          process.stderr.write("  No connected clients.\n");
+          process.stderr.write("  No clients.\n");
           return;
         }
 
-        process.stderr.write(`\n  Connected Clients: ${clients.length}\n\n`);
+        process.stderr.write(`\n  Clients: ${clients.length}\n\n`);
         const header = `  ${"CLIENT".padEnd(20)} ${"HOST".padEnd(25)} ${"AGENTS".padEnd(8)} CONNECTED`;
         process.stderr.write(`${header}\n`);
         process.stderr.write(`  ${"─".repeat(header.length - 2)}\n`);
@@ -190,7 +190,7 @@ export function registerClientCommands(program: Command): void {
       try {
         const serverUrl = resolveServerUrl(options.server);
         const token = await ensureFreshAccessToken();
-        const response = await fetch(`${serverUrl}/api/v1/admin/clients/${clientId}/disconnect`, {
+        const response = await fetch(`${serverUrl}/api/v1/clients/${clientId}/disconnect`, {
           method: "POST",
           headers: { Authorization: `Bearer ${token}` },
           signal: AbortSignal.timeout(10_000),

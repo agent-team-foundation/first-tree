@@ -39,7 +39,7 @@ export type HubClient = {
 };
 
 export function retireClient(clientId: string): Promise<void> {
-  return api.delete<void>(`/admin/clients/${encodeURIComponent(clientId)}`);
+  return api.delete<void>(`/clients/${encodeURIComponent(clientId)}`);
 }
 
 export function getActivityOverview(): Promise<ActivityOverview> {
@@ -47,15 +47,15 @@ export function getActivityOverview(): Promise<ActivityOverview> {
 }
 
 export function listClients(): Promise<HubClient[]> {
-  return api.get<HubClient[]>("/admin/clients");
+  return api.get<HubClient[]>("/clients");
 }
 
 export function getClient(clientId: string): Promise<HubClient> {
-  return api.get<HubClient>(`/admin/clients/${clientId}`);
+  return api.get<HubClient>(`/clients/${clientId}`);
 }
 
 export function disconnectClient(clientId: string): Promise<{ disconnected: boolean; agentIds: string[] }> {
-  return api.post(`/admin/clients/${clientId}/disconnect`);
+  return api.post(`/clients/${clientId}/disconnect`);
 }
 
 export function resetAgentActivity(agentId: string): Promise<{ reset: boolean }> {
