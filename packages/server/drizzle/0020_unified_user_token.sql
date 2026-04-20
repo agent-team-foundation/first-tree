@@ -6,9 +6,14 @@
 --   1. Drop `agent_tokens` (table + FK cascade).
 --   2. Add `clients.user_id` (nullable) — owning user of the physical client.
 --   3. Add `agents.client_id` (nullable FK) — pin an agent to the client that
---      runs it. `client_id` is backfilled from `agent_presence` and is
---      required for every non-human agent (enforced in the service layer per
---      CLAUDE.md "integrity in service layer"; no DB CHECK/trigger).
+--      runs it. `client_id` is backfilled from `agent_presence`. Rows that
+--      cannot be backfilled stay NULL and bind on first WS connect (see
+--      `api/agent/ws-client.ts` first-bind path). Originally this migration
+--      raised an exception when any non-human agent was unbacked — that
+--      gated startup on a data state the operator usually can't fix until
+--      the server is up. Relaxed to NOTICE so the loop is broken; runtime
+--      enforcement (Rule R-RUN in `services/agent.ts` + `agent-selector.ts`)
+--      still rejects unclaimed agents on the request path.
 --   4. Make `agents.manager_id` NOT NULL after backfilling the first admin
 --      member of each org onto the unmanaged rows.
 --
@@ -53,11 +58,11 @@ WHERE ap."agent_id" = a."uuid"
   AND a."client_id" IS NULL;
 --> statement-breakpoint
 
--- Fail loudly if any non-deleted non-human agent is missing a client_id.
--- These rows would pass migration but surface at runtime as `WRONG_CLIENT` /
--- `assertClientOwner` 404 — which looks like "installed but broken" to the
--- operator. Admins must either soft-delete the orphans or re-register their
--- client via `first-tree-hub connect` and manually UPDATE before retrying.
+-- Surface (do not block) any non-deleted non-human agent still missing a
+-- client_id after the backfill. They will sit in an "unclaimed" state until
+-- a client connects via WS and the first-bind path in
+-- `api/agent/ws-client.ts` claims them. Runtime guards reject HTTP / WS
+-- requests for those agents in the meantime.
 DO $$
 DECLARE
   unpinned_count integer;
@@ -69,10 +74,9 @@ BEGIN
     AND "status" <> 'deleted';
 
   IF unpinned_count > 0 THEN
-    RAISE EXCEPTION
+    RAISE NOTICE
       'unified-user-token migration: % non-human agents have no client_id after backfill; '
-      're-register their client via `first-tree-hub connect` (which will update agent_presence) '
-      'or soft-delete the orphan agents, then retry',
+      'they will be claimed on first WS bind (see ws-client.ts first-bind path)',
       unpinned_count;
   END IF;
 END $$;

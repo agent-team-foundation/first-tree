@@ -54,9 +54,9 @@ export const createAgentSchema = z.object({
   /** Member who manages this agent */
   managerId: z.string().optional(),
   /**
-   * Physical client this agent is pinned to. REQUIRED for non-human agents —
-   * the pinned client is the only one authorised to run the agent (Rule R-RUN).
-   * Human agents (no runtime) may omit it.
+   * Physical client this agent is pinned to. Optional — when omitted for a
+   * non-human agent the row stays NULL and is claimed on the first WS bind
+   * (see `api/agent/ws-client.ts`). Human agents must omit it.
    */
   clientId: z.string().min(1).max(100).optional(),
 });
@@ -71,12 +71,11 @@ export const updateAgentSchema = z.object({
   /** Admin-only: reassign the manager */
   managerId: z.string().nullable().optional(),
   /**
-   * Present only so the API returns an explicit 400 when a caller tries to
-   * move a pinned agent. `clientId` is immutable post-creation in this
-   * milestone (unified-user-token M7 / Q4). The service layer inspects this
-   * field and rejects; it is never written to the DB.
+   * One-shot bind. NULL → ID is allowed (admin claims an unbound agent for
+   * a known client); ID → another ID and ID → null are rejected by the
+   * service layer with explicit 400s.
    */
-  clientId: z.string().optional(),
+  clientId: z.string().min(1).max(100).nullable().optional(),
 });
 export type UpdateAgent = z.infer<typeof updateAgentSchema>;
 

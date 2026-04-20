@@ -48,11 +48,13 @@ function defaultVisibility(type: AgentType): AgentVisibility {
 /**
  * Resolve + validate the client that will own the new agent.
  *
- * Rule (unified-user-token M1):
- *   - Non-human agents MUST pin a client at creation time. The pinned client
- *     must belong to the manager's user (Rule R-RUN upstream).
- *   - Human agents represent the member themselves and have no runtime, so a
- *     missing `clientId` is allowed and the column stays NULL.
+ * Rule (unified-user-token, post-first-bind relaxation):
+ *   - Human agents represent the member themselves and have no runtime; a
+ *     missing `clientId` is required and the column stays NULL.
+ *   - Non-human agents MAY omit `clientId` at creation; the row stays NULL
+ *     and is claimed on the first WS bind (see `api/agent/ws-client.ts`).
+ *   - When a non-human agent IS created with a `clientId`, the pinned client
+ *     must already be owned by the manager's user (Rule R-RUN).
  */
 async function resolveAgentClient(
   db: Database,
@@ -66,10 +68,7 @@ async function resolveAgentClient(
   }
 
   if (!data.clientId) {
-    throw new BadRequestError(
-      "clientId is required — every non-human agent must be pinned to a client at creation time. " +
-        "Run `first-tree-hub connect` on the target machine first.",
-    );
+    return null;
   }
 
   const [manager] = await db
@@ -334,16 +333,21 @@ export async function listAgentsForMember(
 }
 
 export async function updateAgent(db: Database, uuid: string, data: UpdateAgent) {
-  // `clientId` is immutable post-creation in this milestone (unified-user-token
-  // M7). The schema tolerates the field so we can 400 explicitly instead of
-  // silently dropping a caller's update.
-  if (data.clientId !== undefined) {
-    throw new BadRequestError(
-      "clientId is immutable in this milestone — delete and re-create the agent on the target client to move it",
-    );
-  }
-
   const agent = await getAgent(db, uuid);
+
+  // `clientId` is one-shot: NULL → ID is allowed (admin claiming an unbound
+  // agent for a known client). ID → null and ID → another ID are not —
+  // moving a running agent requires delete + recreate.
+  if (data.clientId !== undefined) {
+    if (data.clientId === null) {
+      throw new BadRequestError("clientId cannot be cleared — once bound, an agent stays bound to its client");
+    }
+    if (agent.clientId !== null && agent.clientId !== data.clientId) {
+      throw new BadRequestError(
+        "clientId is immutable once set — delete and re-create the agent on the target client to move it",
+      );
+    }
+  }
 
   const updates: Partial<typeof agents.$inferInsert> = { updatedAt: new Date() };
   if (data.type !== undefined) updates.type = data.type;
@@ -368,6 +372,20 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
       throw new BadRequestError("Manager must belong to the same organization as the agent");
     }
     updates.managerId = data.managerId;
+  }
+
+  // First-set clientId (NULL → ID): validate ownership against the agent's
+  // current manager. Reuses the resolveAgentClient ownership check so the
+  // semantics match agent creation.
+  if (data.clientId !== undefined && data.clientId !== null && agent.clientId === null) {
+    const resolvedClientId = await resolveAgentClient(db, {
+      clientId: data.clientId,
+      managerId: updates.managerId ?? agent.managerId,
+      type: agent.type,
+    });
+    if (resolvedClientId !== null) {
+      updates.clientId = resolvedClientId;
+    }
   }
 
   const [updated] = await db.update(agents).set(updates).where(eq(agents.uuid, agent.uuid)).returning();
