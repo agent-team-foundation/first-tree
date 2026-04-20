@@ -323,7 +323,7 @@ export async function runDaemon(
   }
 
   logger.info(
-    `breeze daemon: poll-interval=${config.pollIntervalSec}s host=${config.host} http-port=${config.httpPort} allow-repo=${repoFilter.isEmpty() ? "all" : repoFilter.displayPatterns()}`,
+    `breeze daemon: poll-interval=${config.pollIntervalSec}s host=${config.host} http-port=${config.httpPort} max-parallel=${config.maxParallel} search-limit=${config.searchLimit} allow-repo=${repoFilter.isEmpty() ? "all" : repoFilter.displayPatterns()}`,
   );
 
   // Phase 3c: shared in-process bus drives SSE + broker task events.
@@ -391,7 +391,7 @@ export async function runDaemon(
         claimsDir: paths.claimsDir,
         disclosureText:
           "This reply was drafted by breeze, an autonomous agent running on behalf of the account owner.",
-        maxParallel: 2,
+        maxParallel: config.maxParallel,
         taskTimeoutMs: config.taskTimeoutSec * 1_000,
         logger,
         onCompletion: (record) => scheduler.handleCompletion(record),
@@ -406,7 +406,7 @@ export async function runDaemon(
         dispatcher,
         bus,
         pollIntervalSec: config.pollIntervalSec,
-        searchLimit: 10,
+        searchLimit: config.searchLimit,
         includeSearch: true,
         lookbackSecs: 24 * 3_600,
         signal: controller.signal,

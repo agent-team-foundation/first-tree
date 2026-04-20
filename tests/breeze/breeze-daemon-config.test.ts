@@ -160,6 +160,76 @@ httpPort: 8080
     expect(cfg).toEqual(DAEMON_CONFIG_DEFAULTS);
   });
 
+  it("defaults maxParallel to 20 and searchLimit to 10", () => {
+    const cfg = loadBreezeDaemonConfig({
+      env: () => undefined,
+      fileExists: () => false,
+      readFile: () => "",
+      homeDir: () => tmp,
+    });
+    expect(cfg.maxParallel).toBe(20);
+    expect(cfg.searchLimit).toBe(10);
+  });
+
+  it("reads max_parallel and search_limit from yaml", () => {
+    const configPath = join(tmp, "config.yaml");
+    writeFileSync(
+      configPath,
+      "max_parallel: 4\nsearch_limit: 50\n",
+      "utf-8",
+    );
+    const cfg = loadBreezeDaemonConfig({
+      env: () => undefined,
+      configPath,
+    });
+    expect(cfg.maxParallel).toBe(4);
+    expect(cfg.searchLimit).toBe(50);
+  });
+
+  it("env vars override yaml for concurrency knobs", () => {
+    const configPath = join(tmp, "config.yaml");
+    writeFileSync(
+      configPath,
+      "max_parallel: 4\nsearch_limit: 50\n",
+      "utf-8",
+    );
+    const envBag: Record<string, string> = {
+      BREEZE_MAX_PARALLEL: "30",
+      BREEZE_SEARCH_LIMIT: "25",
+    };
+    const cfg = loadBreezeDaemonConfig({
+      env: (name) => envBag[name],
+      configPath,
+    });
+    expect(cfg.maxParallel).toBe(30);
+    expect(cfg.searchLimit).toBe(25);
+  });
+
+  it("CLI overrides beat env for concurrency knobs", () => {
+    const envBag: Record<string, string> = {
+      BREEZE_MAX_PARALLEL: "30",
+      BREEZE_SEARCH_LIMIT: "25",
+    };
+    const cfg = loadBreezeDaemonConfig({
+      env: (name) => envBag[name],
+      configPath: join(tmp, "no-such.yaml"),
+      cliOverrides: { maxParallel: 100, searchLimit: 5 },
+    });
+    expect(cfg.maxParallel).toBe(100);
+    expect(cfg.searchLimit).toBe(5);
+  });
+
+  it("rejects non-positive maxParallel / searchLimit overrides silently", () => {
+    const cfg = loadBreezeDaemonConfig({
+      env: () => undefined,
+      configPath: join(tmp, "no-such.yaml"),
+      cliOverrides: { maxParallel: -1, searchLimit: 0 },
+    });
+    // Fall back to defaults.
+    expect(cfg.maxParallel).toBe(20);
+    expect(cfg.searchLimit).toBe(10);
+  });
+
   it("accepts first existing yaml in the search order (first-tree wins)", () => {
     const primaryDir = join(tmp, ".first-tree", "breeze");
     const legacyDir = join(tmp, ".breeze");

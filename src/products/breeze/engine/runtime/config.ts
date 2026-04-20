@@ -66,6 +66,19 @@ export interface DaemonConfig {
   httpPort: number;
   /** GitHub API host. */
   host: string;
+  /**
+   * Max concurrent agent tasks the dispatcher may run at once.
+   * Formerly hardcoded to 2; bumped to 20 after a live smoke showed
+   * the infra handles that comfortably. Tunable via
+   * `BREEZE_MAX_PARALLEL` or `max_parallel` in yaml.
+   */
+  maxParallel: number;
+  /**
+   * Per-poll cap on search-based candidates. Only the search path is
+   * limited; the notifications path returns everything it sees.
+   * Tunable via `BREEZE_SEARCH_LIMIT` or `search_limit` in yaml.
+   */
+  searchLimit: number;
 }
 
 export const DAEMON_CONFIG_DEFAULTS: DaemonConfig = {
@@ -78,6 +91,8 @@ export const DAEMON_CONFIG_DEFAULTS: DaemonConfig = {
   logLevel: "info",
   httpPort: 7878,
   host: "github.com",
+  maxParallel: 20,
+  searchLimit: 10,
 };
 
 export interface DaemonCliOverrides {
@@ -86,6 +101,8 @@ export interface DaemonCliOverrides {
   logLevel?: string;
   httpPort?: number;
   host?: string;
+  maxParallel?: number;
+  searchLimit?: number;
 }
 
 export interface LoadDaemonConfigDeps {
@@ -123,6 +140,10 @@ interface RawYamlConfig {
   http_port?: unknown;
   httpPort?: unknown;
   host?: unknown;
+  max_parallel?: unknown;
+  maxParallel?: unknown;
+  search_limit?: unknown;
+  searchLimit?: unknown;
 }
 
 function pickNumber(...values: unknown[]): number | undefined {
@@ -166,6 +187,8 @@ function pickLogLevel(value: unknown): DaemonConfig["logLevel"] | undefined {
  *   BREEZE_LOG_LEVEL
  *   BREEZE_HOST / GH_HOST
  *   BREEZE_TASK_TIMEOUT_SECS
+ *   BREEZE_MAX_PARALLEL
+ *   BREEZE_SEARCH_LIMIT
  *
  * The yaml schema accepts snake_case (preferred) or camelCase keys.
  * Unknown yaml keys are ignored (forward-compat).
@@ -216,6 +239,10 @@ export function loadBreezeDaemonConfig(
       }
       const host = pickString(y.host);
       if (host !== undefined) config.host = host;
+      const maxParallel = pickNumber(y.max_parallel, y.maxParallel);
+      if (maxParallel !== undefined) config.maxParallel = maxParallel;
+      const searchLimit = pickNumber(y.search_limit, y.searchLimit);
+      if (searchLimit !== undefined) config.searchLimit = searchLimit;
     }
     // First existing file wins — stop searching.
     break;
@@ -235,6 +262,10 @@ export function loadBreezeDaemonConfig(
   if (envPort !== undefined && envPort < 65_536) config.httpPort = envPort;
   const envHost = pickString(env("BREEZE_HOST"), env("GH_HOST"));
   if (envHost !== undefined) config.host = envHost;
+  const envMaxParallel = pickNumber(env("BREEZE_MAX_PARALLEL"));
+  if (envMaxParallel !== undefined) config.maxParallel = envMaxParallel;
+  const envSearchLimit = pickNumber(env("BREEZE_SEARCH_LIMIT"));
+  if (envSearchLimit !== undefined) config.searchLimit = envSearchLimit;
 
   // 4. CLI overrides.
   if (cli.pollIntervalSec !== undefined && cli.pollIntervalSec > 0) {
@@ -254,6 +285,12 @@ export function loadBreezeDaemonConfig(
   }
   if (cli.host !== undefined && cli.host.length > 0) {
     config.host = cli.host;
+  }
+  if (cli.maxParallel !== undefined && cli.maxParallel > 0) {
+    config.maxParallel = cli.maxParallel;
+  }
+  if (cli.searchLimit !== undefined && cli.searchLimit > 0) {
+    config.searchLimit = cli.searchLimit;
   }
 
   return config;
