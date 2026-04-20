@@ -55,11 +55,19 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       app.config.secrets.jwtSecret,
     );
 
-    // Build the CLI connect command using the request's origin (preserve port)
+    // Build the CLI connect command using the request's origin (preserve port).
+    //
+    // The command is self-bootstrapping: `npm install -g` first so the target
+    // machine doesn't have to pre-install the CLI (covers the Pre-MVP
+    // onboarding M8 gap until a hosted install.sh lands). The `&&` chain
+    // means a failed install short-circuits before `client connect` runs,
+    // which then triggers M7's launchd/systemd service install.
     const proto = request.headers["x-forwarded-proto"] ?? request.protocol;
     const host = request.headers["x-forwarded-host"] ?? request.headers.host ?? request.hostname;
     const serverUrl = `${proto}://${host}`;
-    const command = `first-tree-hub client connect ${serverUrl} --token ${token}`;
+    const command =
+      `npm install -g @agent-team-foundation/first-tree-hub && ` +
+      `first-tree-hub client connect ${serverUrl} --token ${token}`;
 
     return { token, expiresIn, command };
   });

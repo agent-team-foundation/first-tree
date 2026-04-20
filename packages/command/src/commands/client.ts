@@ -29,7 +29,9 @@ import {
 import { registerConnectCommand } from "./connect.js";
 
 export function registerClientCommands(program: Command): void {
-  const client = program.command("client").description("Client runtime — connect agents to the server");
+  const client = program
+    .command("client")
+    .description("Connect this computer's agents to the Hub (start/stop/status/doctor)");
 
   // `client connect` — first-time setup: configure server URL, authenticate,
   // and start the runtime. Registered here so all machine-level commands live
@@ -38,7 +40,7 @@ export function registerClientCommands(program: Command): void {
 
   client
     .command("start")
-    .description("Start client — connect all configured agents to the server")
+    .description("Start this computer — connect all configured agents to the Hub")
     .option("--no-interactive", "Skip interactive prompts (for Docker/CI)")
     .action(async (options: { interactive?: boolean }) => {
       try {
@@ -54,11 +56,11 @@ export function registerClientCommands(program: Command): void {
           role: "client",
         });
 
-        // Load agents (may be empty — client can start without agents)
+        // Load agents (may be empty — a computer can start without agents)
         const agentsDir = join(DEFAULT_CONFIG_DIR, "agents");
         const agents = loadAgents({ schema: agentConfigSchema, agentsDir });
 
-        process.stderr.write(`\n  Connecting to ${config.server.url} (client id: ${config.client.id})...\n`);
+        process.stderr.write(`\n  Connecting to ${config.server.url} (computer id: ${config.client.id})...\n`);
 
         const runtime = new ClientRuntime(config.server.url, config.client.id);
         for (const [name, agentConfig] of agents) {
@@ -95,9 +97,9 @@ export function registerClientCommands(program: Command): void {
 
   client
     .command("doctor")
-    .description("Check client environment readiness")
+    .description("Check this computer's environment readiness")
     .action(async () => {
-      process.stderr.write("\n  First Tree Hub Client Doctor\n\n");
+      process.stderr.write("\n  First Tree Hub Computer Doctor\n\n");
       const results = [
         checkNodeVersion(),
         checkClientConfig(),
@@ -110,15 +112,15 @@ export function registerClientCommands(program: Command): void {
 
   client
     .command("stop")
-    .description("Stop the client (sends SIGTERM to running process)")
+    .description("Stop this computer (sends SIGTERM to running process)")
     .action(() => {
-      process.stderr.write("  Client stop: use Ctrl+C or `kill` the running process.\n");
+      process.stderr.write("  To stop: use Ctrl+C or `kill` the running process.\n");
       process.stderr.write("  Daemon mode with PID file is planned for a future release.\n");
     });
 
   client
     .command("status")
-    .description("Show client and agent connection status")
+    .description("Show this computer and agent connection status")
     .action(() => {
       const agentsDir = join(DEFAULT_CONFIG_DIR, "agents");
       try {
@@ -205,11 +207,11 @@ export function registerClientCommands(program: Command): void {
       }
     });
 
-  // ── M1: Hub-level client management ────────────────────────────────
+  // ── M1: Hub-level computer management ──────────────────────────────
 
   client
     .command("hub-list")
-    .description("List clients on the Hub server")
+    .description("List computers connected to the Hub")
     .option("--server <url>", "Hub server URL")
     .action(async (options: { server?: string }) => {
       try {
@@ -231,12 +233,12 @@ export function registerClientCommands(program: Command): void {
         }>;
 
         if (clients.length === 0) {
-          process.stderr.write("  No clients.\n");
+          process.stderr.write("  No computers connected.\n");
           return;
         }
 
-        process.stderr.write(`\n  Clients: ${clients.length}\n\n`);
-        const header = `  ${"CLIENT".padEnd(20)} ${"HOST".padEnd(25)} ${"AGENTS".padEnd(8)} CONNECTED`;
+        process.stderr.write(`\n  Connected Computers: ${clients.length}\n\n`);
+        const header = `  ${"COMPUTER".padEnd(20)} ${"HOST".padEnd(25)} ${"AGENTS".padEnd(8)} CONNECTED`;
         process.stderr.write(`${header}\n`);
         process.stderr.write(`  ${"─".repeat(header.length - 2)}\n`);
         for (const c of clients) {
@@ -254,7 +256,7 @@ export function registerClientCommands(program: Command): void {
 
   client
     .command("hub-disconnect <clientId>")
-    .description("Force-disconnect a client from the Hub server")
+    .description("Force-disconnect a computer from the Hub")
     .option("--server <url>", "Hub server URL")
     .action(async (clientId: string, options: { server?: string }) => {
       try {
@@ -268,7 +270,7 @@ export function registerClientCommands(program: Command): void {
         if (!response.ok) {
           fail("DISCONNECT_ERROR", `Server returned ${response.status}`, 1);
         }
-        process.stderr.write(`  Client "${clientId}" disconnected.\n`);
+        process.stderr.write(`  Computer "${clientId}" disconnected.\n`);
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         fail("DISCONNECT_ERROR", msg);

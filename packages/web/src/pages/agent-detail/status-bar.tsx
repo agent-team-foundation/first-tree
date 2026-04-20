@@ -63,7 +63,7 @@ function derivePrimary(inputs: StatusBarInputs): { tone: Tone; symbol: string; l
     return { tone: "muted", symbol: "○", label: "Unclaimed" };
   }
   if (clientStatus && !clientStatus.online) {
-    return { tone: "warning", symbol: "⚠", label: "Client offline" };
+    return { tone: "warning", symbol: "⚠", label: "Computer offline" };
   }
   if (runtimeState === "error") return { tone: "danger", symbol: "●", label: "Error" };
   if (runtimeState === "working") return { tone: "neutral", symbol: "●", label: "Working" };
@@ -112,7 +112,7 @@ export function StatusBar(inputs: StatusBarInputs) {
         <div className="text-xs text-muted-foreground">
           {clientStatus?.clientId ? (
             <>
-              Client <span className="font-mono">{clientStatus.clientId}</span>
+              Computer <span className="font-mono">{clientStatus.clientId}</span>
               {clientStatus.online ? null : (
                 <>
                   {" · offline since "}
@@ -121,7 +121,7 @@ export function StatusBar(inputs: StatusBarInputs) {
               )}
             </>
           ) : (
-            <span>No client bound yet</span>
+            <span>No computer bound yet</span>
           )}
         </div>
       )}
@@ -133,11 +133,13 @@ export function StatusBar(inputs: StatusBarInputs) {
       )}
 
       {showOfflineHint && (
-        <p className="mt-1 text-xs text-amber-900">Changes saved here won't take effect until the client reconnects.</p>
+        <p className="mt-1 text-xs text-amber-900">
+          Changes saved here won't take effect until the computer reconnects.
+        </p>
       )}
       {!isHuman && !clientStatus?.clientId && agent.status === "active" && (
         <p className="mt-1 text-xs text-muted-foreground">
-          Configure now; it will apply when a client claims this agent.
+          Configure now; it will apply when a computer claims this agent.
         </p>
       )}
     </div>
@@ -146,10 +148,10 @@ export function StatusBar(inputs: StatusBarInputs) {
 
 export function deriveSaveHint(opts: { activeSessions: number; isUnclaimed: boolean; isOffline: boolean }): string {
   if (opts.isUnclaimed) {
-    return "Saving: configuration stored; will apply when a client claims this agent.";
+    return "Saving: configuration stored; will apply when a computer claims this agent.";
   }
   if (opts.isOffline) {
-    return "Saving: configuration stored; will apply when the client reconnects.";
+    return "Saving: configuration stored; will apply when the computer reconnects.";
   }
   if (opts.activeSessions > 0) {
     return `Saving: new chats use this immediately; ${opts.activeSessions} active chat${

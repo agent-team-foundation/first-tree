@@ -57,9 +57,9 @@ export function registerStatusCommand(program: Command): void {
       if (existsSync(clientConfigPath)) {
         const clientConfig = readConfigFile(clientConfigPath);
         const clientServerUrl = getNestedValue(clientConfig, "server.url");
-        process.stderr.write(`  Client:     configured → ${clientServerUrl}\n`);
+        process.stderr.write(`  Computer:   configured → ${clientServerUrl}\n`);
       } else {
-        process.stderr.write("  Client:     not configured\n");
+        process.stderr.write("  Computer:   not configured\n");
       }
 
       process.stderr.write("\n");

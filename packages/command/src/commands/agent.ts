@@ -227,7 +227,7 @@ export function registerAgentCommands(program: Command): void {
     .requiredOption("--type <type>", "Agent type (human, personal_assistant, autonomous_agent)")
     .requiredOption(
       "--client-id <id>",
-      "Client (machine) that will run this agent — must be owned by you. Run `first-tree-hub client connect` on that machine first.",
+      "Computer that will run this agent — must be owned by you. Run `first-tree-hub client connect` on that machine first.",
     )
     .option("--runtime <runtime>", "Runtime handler (default: claude-code)", "claude-code")
     .option("--display-name <name>", "Display name")
@@ -267,7 +267,7 @@ export function registerAgentCommands(program: Command): void {
 
           const agentDir = saveAgentConfig(name, created.uuid, options.runtime);
           process.stderr.write(`  \u2713 Config saved: ${agentDir}/agent.yaml\n`);
-          process.stderr.write("  \u2713 Agent ready — start the client on that machine to bind\n");
+          process.stderr.write("  \u2713 Agent ready — start on that computer to bind\n");
         } catch (error) {
           const msg = error instanceof Error ? error.message : String(error);
           fail("CREATE_ERROR", msg);
@@ -608,7 +608,7 @@ export function registerAgentCommands(program: Command): void {
         }
 
         process.stderr.write(`\n  Hub: ${serverUrl}\n\n`);
-        process.stderr.write(`  Clients: ${data.clients} connected\n`);
+        process.stderr.write(`  Computers: ${data.clients} connected\n`);
         process.stderr.write(`  Agents: ${data.running} running / ${data.total} total\n`);
         process.stderr.write(
           `  Errors: ${data.byState.error} | Blocked: ${data.byState.blocked} | Working: ${data.byState.working} | Idle: ${data.byState.idle}\n\n`,

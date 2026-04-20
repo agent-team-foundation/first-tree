@@ -1132,12 +1132,12 @@ function TestResultCard({ result, onDismiss }: { result: TestResult; onDismiss: 
                 </div>
                 {conn.client ? (
                   <div className="text-muted-foreground">
-                    Client: {conn.client.hostname ?? conn.client.id}
+                    Computer: {conn.client.hostname ?? conn.client.id}
                     {conn.client.os && ` (${conn.client.os})`}
                     {conn.client.sdkVersion && ` · SDK ${conn.client.sdkVersion}`}
                   </div>
                 ) : (
-                  <div className="text-muted-foreground">No client bound</div>
+                  <div className="text-muted-foreground">No computer bound</div>
                 )}
                 {conn.lastSeenAt && (
                   <div className="text-muted-foreground">Last seen: {new Date(conn.lastSeenAt).toLocaleString()}</div>

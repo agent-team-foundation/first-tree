@@ -41,7 +41,7 @@ async function promptMissing(args: Record<string, unknown>): Promise<void> {
 
   if (args.type !== "human" && args.clientId === undefined) {
     args.clientId = await input({
-      message: "Client ID (Enter to leave unbound — first WS connect will claim it):",
+      message: "Computer ID (Enter to leave unbound — first WS connect will claim it):",
     });
     if (!args.clientId) args.clientId = undefined;
     saveOnboardState(args);
@@ -80,7 +80,7 @@ async function promptMissing(args: Record<string, unknown>): Promise<void> {
       });
       if (args.clientId === undefined) {
         const v = await input({
-          message: "Client ID for the assistant (Enter to leave unbound):",
+          message: "Computer ID for the assistant (Enter to leave unbound):",
         });
         args.clientId = v || undefined;
       }
@@ -104,7 +104,7 @@ export function registerOnboardCommand(program: Command): void {
     .description("Onboard a new agent to First Tree Hub")
     .option("--id <id>", "Agent ID")
     .option("--type <type>", "Agent type: human | personal_assistant | autonomous_agent")
-    .option("--client-id <id>", "Client (machine) to pin a non-human agent to")
+    .option("--client-id <id>", "Computer to pin a non-human agent to")
     .option("--display-name <name>", "Display name (defaults to id)")
     .option("--role <role>", "Role description")
     .option("--domains <domains>", "Comma-separated domains")

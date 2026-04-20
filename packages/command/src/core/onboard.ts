@@ -109,11 +109,11 @@ export async function onboardCheck(args: OnboardArgs): Promise<CheckItem[]> {
 
   if (args.type && args.type !== "human") {
     if (args.clientId) {
-      items.push({ key: "client", label: "Target client", status: "ok", value: args.clientId });
+      items.push({ key: "client", label: "Target computer", status: "ok", value: args.clientId });
     } else {
       items.push({
         key: "client",
-        label: "Target client",
+        label: "Target computer",
         status: "ok",
         value: "(unbound — claimed on first WS connect)",
       });
