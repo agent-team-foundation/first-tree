@@ -159,6 +159,7 @@ See `references/ownership-and-naming.md`.
 - `references/onboarding.md` — onboarding narrative for repos, shared trees, and workspaces
 - `references/source-workspace-installation.md` — source/workspace binding contract
 - `references/upgrade-contract.md` — installed layout and upgrade semantics
+- `references/workflow-mode.md` — agent-driven install guide for the gardener push-mode sync workflow (replaces the gardener service with a `.github/workflows/first-tree-sync.yml` in the codebase)
 
 Everything else lives in the `first-tree` npm package and is invoked via the
 CLI.
