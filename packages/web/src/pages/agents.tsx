@@ -58,12 +58,25 @@ export function AgentsPage() {
 
   function handleCreated(agent: Agent, runtime: "claude-code" | "kael") {
     setCreateDialogOpen(false);
+
+    // Scenario B (server already pinned the agent to one of the caller's
+    // connected computers). The server has emitted an `agent:pinned` frame
+    // to that client; its runtime auto-registers the local alias and opens
+    // the agent WS within ~1-2s. Skip the Last-step terminal flow entirely
+    // and jump to the Workspace — the agent will light up green shortly.
+    if (agent.clientId) {
+      navigate(`/?a=${agent.uuid}`);
+      return;
+    }
+
+    // Scenario A (no connected computer yet, or the caller explicitly
+    // chose not to pin). Claude Code needs a computer — hand off to the
+    // Last-step modal so the user can paste the install/add/connect
+    // command. Kael is cloud-hosted — just jump straight to the chat.
     if (runtime === "claude-code") {
       setLastStepAgent(agent);
       return;
     }
-    // Kael: cloud-hosted, no computer required — jump to the Workspace
-    // with this agent selected so the user can start chatting immediately.
     navigate(`/?a=${agent.uuid}`);
   }
 
