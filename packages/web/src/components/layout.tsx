@@ -1,66 +1,165 @@
-import { Bot, LogOut } from "lucide-react";
+import { Leaf, LogOut, Search } from "lucide-react";
+import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router";
 import { useAuth } from "../auth/auth-context.js";
 import { cn } from "../lib/utils.js";
+import { CommandPalette } from "../pages/workspace/palette/command-palette.js";
 import { NotificationBell } from "./notification-bell.js";
+import { ThemeToggle } from "./ui/theme-toggle.js";
 
 const navTabs = [
-  { to: "/", label: "Workspace", end: true },
-  { to: "/agents", label: "Agents", end: false },
+  { to: "/", label: "Workspace", end: true, kbd: "⌘1" },
+  { to: "/agents", label: "Agents", end: false, kbd: "⌘2" },
 ];
 
-const adminTab = { to: "/admin", label: "Admin", end: false };
+const adminTab = { to: "/admin", label: "Admin", end: false, kbd: "⌘3" };
 
 export function Layout() {
   const { role, logout } = useAuth();
   const isAdmin = role === "admin";
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
   const tabs = isAdmin ? [...navTabs, adminTab] : navTabs;
 
-  // Workspace route uses full viewport (no padding/max-width)
   const location = useLocation();
   const isWorkspace = location.pathname === "/" || location.search.includes("a=");
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((o) => !o);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   return (
-    <div className="flex flex-col h-screen bg-background">
+    <div className="flex flex-col overflow-hidden" style={{ height: "100vh", background: "var(--bg)" }}>
       {/* Top bar */}
-      <header className="relative h-12 shrink-0 border-b border-border bg-card flex items-center px-4">
-        <div className="flex items-center gap-2">
-          <Bot className="h-5 w-5 text-primary" />
-          <span className="font-semibold text-sm tracking-tight">First Tree</span>
+      <header
+        className="relative shrink-0 grid items-center"
+        style={{
+          height: 40,
+          gridTemplateColumns: "auto 1fr auto",
+          padding: "0 12px",
+          borderBottom: "1px solid var(--border)",
+          background: "var(--bg-raised)",
+        }}
+      >
+        {/* Brand */}
+        <div className="flex items-center" style={{ gap: 10 }}>
+          <Leaf className="h-4 w-4" style={{ color: "var(--accent)" }} />
+          <span
+            style={{
+              fontWeight: 600,
+              fontSize: 13,
+              letterSpacing: -0.1,
+              color: "var(--fg)",
+            }}
+          >
+            First Tree <span style={{ color: "var(--fg-3)", fontWeight: 400 }}>Hub</span>
+          </span>
         </div>
 
-        <nav className="absolute inset-x-0 flex items-center justify-center gap-1 pointer-events-none">
+        {/* Tabs */}
+        <nav className="flex justify-center" style={{ gap: 2, pointerEvents: "none" }}>
           {tabs.map((tab) => (
             <NavLink
               key={tab.to}
               to={tab.to}
               end={tab.end}
+              style={{ pointerEvents: "auto" }}
               className={({ isActive }) =>
-                cn(
-                  "pointer-events-auto px-3 py-1.5 rounded-md text-sm font-medium transition-colors",
-                  isActive
-                    ? "bg-accent text-accent-foreground"
-                    : "text-muted-foreground hover:bg-accent/50 hover:text-accent-foreground",
-                )
+                cn("inline-flex items-center transition-colors", isActive ? "" : "hover:text-[var(--fg)]")
               }
             >
-              {tab.label}
+              {({ isActive }) => (
+                <span
+                  className="inline-flex items-center"
+                  style={{
+                    padding: "5px 12px",
+                    fontSize: 12,
+                    fontWeight: 500,
+                    gap: 6,
+                    borderRadius: 5,
+                    color: isActive ? "var(--fg)" : "var(--fg-3)",
+                    background: isActive ? "var(--bg-hover)" : "transparent",
+                  }}
+                >
+                  {tab.label}
+                  {isActive && <span className="kbd">{tab.kbd}</span>}
+                </span>
+              )}
             </NavLink>
           ))}
         </nav>
 
-        <div className="ml-auto flex items-center gap-2">
+        {/* Right controls */}
+        <div className="flex items-center" style={{ gap: 6 }}>
+          <button
+            type="button"
+            onClick={() => setPaletteOpen(true)}
+            aria-label="Open command palette"
+            className="inline-flex items-center transition-colors"
+            style={{
+              gap: 8,
+              padding: "4px 8px",
+              fontSize: 11,
+              color: "var(--fg-3)",
+              border: "1px solid var(--border)",
+              borderRadius: 4,
+              background: "var(--bg-sunken)",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = "var(--fg)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = "var(--fg-3)";
+            }}
+          >
+            <Search className="h-3.5 w-3.5" />
+            <span>Jump to…</span>
+            <span className="kbd">⌘K</span>
+          </button>
+          <span
+            style={{
+              width: 1,
+              height: 18,
+              background: "var(--border)",
+              margin: "0 4px",
+            }}
+          />
           <NotificationBell />
+          <ThemeToggle />
+          <span
+            style={{
+              width: 1,
+              height: 18,
+              background: "var(--border)",
+              margin: "0 4px",
+            }}
+          />
           <button
             type="button"
             onClick={logout}
-            className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
+            className="inline-flex items-center transition-colors hover:text-[var(--fg)]"
+            style={{
+              padding: "4px 8px",
+              color: "var(--fg-3)",
+              borderRadius: 4,
+              gap: 6,
+              fontSize: 11,
+            }}
+            aria-label="Log out"
           >
-            <LogOut className="h-4 w-4" />
+            <LogOut className="h-3.5 w-3.5" />
           </button>
         </div>
       </header>
+
+      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
 
       {/* Main content */}
       {isWorkspace ? (

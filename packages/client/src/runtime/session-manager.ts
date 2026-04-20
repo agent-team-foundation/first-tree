@@ -1,4 +1,9 @@
-import type { InboxEntryWithMessage, RuntimeState, SessionState } from "@agent-team-foundation/first-tree-hub-shared";
+import type {
+  InboxEntryWithMessage,
+  RuntimeState,
+  SessionEvent,
+  SessionState,
+} from "@agent-team-foundation/first-tree-hub-shared";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import type { AgentConfigCache } from "./agent-config-cache.js";
 import type { SessionConfig } from "./config.js";
@@ -44,8 +49,10 @@ type SessionManagerConfig = {
   onStateChange?: (chatId: string, state: SessionState) => void;
   /** Callback when aggregated runtime state changes. */
   onRuntimeStateChange?: (state: RuntimeState) => void;
-  /** Callback when a session produces output text. */
-  onSessionOutput?: (chatId: string, content: string) => void;
+  /** Callback when a session emits a structured event (tool_call / error). */
+  onSessionEvent?: (chatId: string, event: SessionEvent) => void;
+  /** Callback when a session query completes end-to-end. */
+  onSessionCompletion?: (chatId: string) => void;
 };
 
 /**
@@ -519,8 +526,11 @@ export class SessionManager {
       setRuntimeState: (state) => {
         this.setSessionRuntimeState(chatId, state);
       },
-      appendOutput: (content) => {
-        this.config.onSessionOutput?.(chatId, content);
+      emitEvent: (event) => {
+        this.config.onSessionEvent?.(chatId, event);
+      },
+      reportSessionCompletion: () => {
+        this.config.onSessionCompletion?.(chatId);
       },
     };
   }

@@ -49,11 +49,13 @@ import { AppError } from "./errors.js";
 import { agentSelectorHook } from "./middleware/agent-selector.js";
 import { memberAuthHook, requireAdminRoleHook } from "./middleware/member-auth.js";
 import { type AdapterManager, createAdapterManager } from "./services/adapter-manager.js";
+import { broadcastToAdmins } from "./services/admin-broadcast.js";
 import { type BackgroundTasks, createBackgroundTasks } from "./services/background-tasks.js";
 import { createConfigService } from "./services/config-service.js";
 import { createKaelRuntime, type KaelRuntime } from "./services/kael-runtime.js";
 import { createNotifier, type Notifier } from "./services/notifier.js";
 import { ensureDefaultOrganization } from "./services/organization.js";
+import { createPulseAggregator } from "./services/pulse-aggregator.js";
 
 // Fastify type augmentation
 import "./types.js";
@@ -360,6 +362,12 @@ export async function buildApp(config: Config) {
   // Background tasks
   const backgroundTasks = createBackgroundTasks(app, config.instanceId, adapterManager, kaelRuntime);
 
+  // NC1 pulse aggregator — 32-bucket rolling window over runtime state
+  // transitions. Broadcasts a per-org `pulse:tick` frame every 5s to admin
+  // sockets. Lifecycle aligned with backgroundTasks via the onReady/onClose
+  // hooks below.
+  const pulseAggregator = createPulseAggregator({ notifier, broadcast: broadcastToAdmins });
+
   // Register config change handler for hot reload
   notifier.onConfigChange((configType) => {
     if (configType === "adapter_configs") {
@@ -374,12 +382,14 @@ export async function buildApp(config: Config) {
     await ensureDefaultOrganization(db);
     await notifier.start();
     backgroundTasks.start();
+    pulseAggregator.start();
     await adapterManager.reload();
     await kaelRuntime?.reload();
   });
 
   // Cleanup on close
   app.addHook("onClose", async () => {
+    pulseAggregator.stop();
     backgroundTasks.stop();
     adapterManager.shutdown();
     kaelRuntime?.shutdown();

@@ -94,7 +94,8 @@ function buildSessionCtx(chatId: string, log: (msg: string) => void): SessionCon
     log,
     touch: () => {},
     setRuntimeState: () => {},
-    appendOutput: () => {},
+    emitEvent: () => {},
+    reportSessionCompletion: () => {},
   };
 }
 

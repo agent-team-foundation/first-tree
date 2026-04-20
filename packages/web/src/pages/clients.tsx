@@ -14,20 +14,10 @@ import {
 import { ApiError } from "../api/client.js";
 import { Badge } from "../components/ui/badge.js";
 import { Button } from "../components/ui/button.js";
+import { StateChip } from "../components/ui/state-chip.js";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.js";
 import { useAgentNameMap } from "../lib/use-agent-name-map.js";
-import { cn, formatDate } from "../lib/utils.js";
-
-function RuntimeBadge({ state }: { state: string | null }) {
-  if (!state) return <span className="text-xs text-muted-foreground">offline</span>;
-  const colors: Record<string, string> = {
-    idle: "text-green-600",
-    working: "text-blue-600",
-    blocked: "text-yellow-600",
-    error: "text-red-600",
-  };
-  return <span className={cn("text-xs font-medium", colors[state] ?? "text-muted-foreground")}>{state}</span>;
-}
+import { formatDate } from "../lib/utils.js";
 
 function ConnectCommandBanner() {
   const [connectData, setConnectData] = useState<ConnectTokenResponse | null>(null);
@@ -217,7 +207,7 @@ export function ClientsPage() {
                 getClientAgents(confirmDisconnect.id).map((a) => (
                   <li key={a.agentId} className="text-sm flex items-center gap-2">
                     <span className="font-medium">{agentName(a.agentId)}</span>
-                    <RuntimeBadge state={a.runtimeState} />
+                    <StateChip state={a.runtimeState} />
                   </li>
                 ))
               )}
@@ -359,7 +349,7 @@ function ClientRow({
                 {boundAgents.map((a) => (
                   <div key={a.agentId} className="flex items-center gap-3 text-sm">
                     <span className="font-medium">{agentName(a.agentId)}</span>
-                    <RuntimeBadge state={a.runtimeState} />
+                    <StateChip state={a.runtimeState} />
                     <span className="text-xs text-muted-foreground">
                       {a.activeSessions !== null ? `${a.activeSessions}/${a.totalSessions ?? 0} sessions` : ""}
                     </span>

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { AgentRuntimeConfigPayload } from "@agent-team-foundation/first-tree-hub-shared";
+import type { AgentRuntimeConfigPayload, SessionEvent } from "@agent-team-foundation/first-tree-hub-shared";
 import { deriveRepoLocalPath } from "@agent-team-foundation/first-tree-hub-shared";
 import type { McpServerConfig, PermissionMode, Query, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { query as claudeQuery } from "@anthropic-ai/claude-agent-sdk";
@@ -19,6 +19,121 @@ import { InputController } from "../runtime/input-controller.js";
 import { acquireWorkspace } from "../runtime/workspace.js";
 
 const MAX_RETRIES = 2;
+
+const TOOL_RESULT_PREVIEW_LIMIT = 400;
+
+type ToolUseBlock = { type: "tool_use"; id: string; name: string; input: unknown };
+type ToolResultBlock = { type: "tool_result"; tool_use_id: string; content: unknown; is_error?: boolean };
+
+function extractContentBlocks(message: unknown): unknown[] {
+  if (!message || typeof message !== "object") return [];
+  const inner = (message as { message?: unknown }).message;
+  if (!inner || typeof inner !== "object") return [];
+  const content = (inner as { content?: unknown }).content;
+  return Array.isArray(content) ? content : [];
+}
+
+function isToolUseBlock(block: unknown): block is ToolUseBlock {
+  if (!block || typeof block !== "object") return false;
+  const b = block as Record<string, unknown>;
+  return b.type === "tool_use" && typeof b.id === "string" && typeof b.name === "string";
+}
+
+function isToolResultBlock(block: unknown): block is ToolResultBlock {
+  if (!block || typeof block !== "object") return false;
+  const b = block as Record<string, unknown>;
+  return b.type === "tool_result" && typeof b.tool_use_id === "string";
+}
+
+function extractToolResultText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  const parts: string[] = [];
+  for (const part of content) {
+    if (!part || typeof part !== "object") continue;
+    const p = part as Record<string, unknown>;
+    if (p.type === "text" && typeof p.text === "string") parts.push(p.text);
+  }
+  return parts.join("\n");
+}
+
+/**
+ * Pair `tool_use` blocks (from assistant messages) with `tool_result` blocks
+ * (from user messages) and emit a structured `tool_call` event per completed
+ * pair. Unpaired `tool_use` entries can be flushed as `status: "pending"`
+ * when the consumer loop exits (normal return or fatal error).
+ *
+ * Extracted for unit testability — the consumer loop in `consumeOutput`
+ * delegates all tool-call event emission to this processor.
+ */
+export type ToolCallProcessor = {
+  onMessage(message: unknown): void;
+  flush(): void;
+};
+
+export function createToolCallProcessor(emit: (event: SessionEvent) => void): ToolCallProcessor {
+  type Pending = { toolUseId: string; name: string; args: unknown; startedAt: number };
+  const pending = new Map<string, Pending>();
+
+  function pairResult(block: ToolResultBlock): void {
+    const entry = pending.get(block.tool_use_id);
+    if (!entry) return;
+    const status: "ok" | "error" = block.is_error === true ? "error" : "ok";
+    const durationMs = Date.now() - entry.startedAt;
+    const previewRaw = extractToolResultText(block.content);
+    const resultPreview = previewRaw.length > 0 ? previewRaw.slice(0, TOOL_RESULT_PREVIEW_LIMIT) : undefined;
+    emit({
+      kind: "tool_call",
+      payload: {
+        toolUseId: entry.toolUseId,
+        name: entry.name,
+        args: entry.args,
+        status,
+        durationMs,
+        ...(resultPreview !== undefined ? { resultPreview } : {}),
+      },
+    });
+    pending.delete(block.tool_use_id);
+  }
+
+  return {
+    onMessage(message: unknown): void {
+      if (!message || typeof message !== "object") return;
+      const type = (message as { type?: unknown }).type;
+      if (type === "assistant") {
+        for (const block of extractContentBlocks(message)) {
+          if (!isToolUseBlock(block)) continue;
+          pending.set(block.id, {
+            toolUseId: block.id,
+            name: block.name,
+            args: block.input,
+            startedAt: Date.now(),
+          });
+        }
+      } else if (type === "user") {
+        for (const block of extractContentBlocks(message)) {
+          if (isToolResultBlock(block)) pairResult(block);
+        }
+      }
+    },
+    flush(): void {
+      if (pending.size === 0) return;
+      for (const entry of pending.values()) {
+        emit({
+          kind: "tool_call",
+          payload: {
+            toolUseId: entry.toolUseId,
+            name: entry.name,
+            args: entry.args,
+            status: "pending",
+            durationMs: Date.now() - entry.startedAt,
+          },
+        });
+      }
+      pending.clear();
+    },
+  };
+}
 
 /**
  * Map a payload's MCP server list to the SDK's record type. Handles all three
@@ -244,82 +359,97 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   }
 
   async function consumeOutput(sessionCtx: SessionContext): Promise<void> {
-    while (true) {
-      if (!currentQuery) return;
+    const toolCallProcessor = createToolCallProcessor((event) => sessionCtx.emitEvent(event));
+    try {
+      while (true) {
+        if (!currentQuery) return;
 
-      try {
-        sessionCtx.setRuntimeState("working");
+        try {
+          sessionCtx.setRuntimeState("working");
 
-        for await (const message of currentQuery) {
-          // Every message refreshes lastActivity to prevent idle timeout
-          sessionCtx.touch();
+          for await (const message of currentQuery) {
+            // Every message refreshes lastActivity to prevent idle timeout
+            sessionCtx.touch();
 
-          if (message.type === "result") {
-            const result = message as {
-              type: "result";
-              subtype: string;
-              result?: string;
-              errors?: string[];
-              duration_ms?: number;
-              total_cost_usd?: number;
-              num_turns?: number;
-              session_id?: string;
-            };
-            if (result.subtype === "success") {
-              retryCount = 0;
-              // Auto-bridge: forward result text back to the chat
-              if (result.result && sessionCtx.chatId) {
-                sessionCtx.appendOutput(result.result);
+            toolCallProcessor.onMessage(message);
 
-                sessionCtx.sdk
-                  .sendMessage(sessionCtx.chatId, { format: "text", content: result.result })
-                  .then(() => sessionCtx.log("Result forwarded to chat"))
-                  .catch((err) =>
-                    sessionCtx.log(`Failed to forward result: ${err instanceof Error ? err.message : String(err)}`),
-                  );
+            if (message.type === "result") {
+              const result = message as {
+                type: "result";
+                subtype: string;
+                result?: string;
+                errors?: string[];
+                duration_ms?: number;
+                total_cost_usd?: number;
+                num_turns?: number;
+                session_id?: string;
+              };
+              if (result.subtype === "success") {
+                retryCount = 0;
+                // Auto-bridge: forward result text back to the chat
+                if (result.result && sessionCtx.chatId) {
+                  sessionCtx.sdk
+                    .sendMessage(sessionCtx.chatId, { format: "text", content: result.result })
+                    .then(() => {
+                      sessionCtx.log("Result forwarded to chat");
+                      sessionCtx.reportSessionCompletion();
+                    })
+                    .catch((err) =>
+                      sessionCtx.log(`Failed to forward result: ${err instanceof Error ? err.message : String(err)}`),
+                    );
+                }
+              } else {
+                const errors = result.errors ? result.errors.join("; ") : result.subtype;
+                const errorLog = `Query result error: ${errors} (subtype=${result.subtype}, turns=${result.num_turns ?? "?"}, duration=${result.duration_ms ?? "?"}ms)`;
+                sessionCtx.log(errorLog);
+                sessionCtx.emitEvent({ kind: "error", payload: { source: "sdk", message: errors } });
               }
-            } else {
-              const errors = result.errors ? result.errors.join("; ") : result.subtype;
-              const errorLog = `Query result error: ${errors} (subtype=${result.subtype}, turns=${result.num_turns ?? "?"}, duration=${result.duration_ms ?? "?"}ms)`;
-              sessionCtx.log(errorLog);
-              sessionCtx.appendOutput(`[ERROR] ${errorLog}`);
+              sessionCtx.setRuntimeState("idle");
             }
-            sessionCtx.setRuntimeState("idle");
+          }
+          sessionCtx.setRuntimeState("idle");
+          return;
+        } catch (err) {
+          // Process crash, OOM, or unexpected termination
+          const errMsg = err instanceof Error ? err.message : String(err);
+          sessionCtx.log(`Query error: ${errMsg}`);
+
+          // Log additional diagnostic details when available
+          if (err instanceof Error) {
+            if (err.cause)
+              sessionCtx.log(`  cause: ${err.cause instanceof Error ? err.cause.message : String(err.cause)}`);
+            if ("exitCode" in err) sessionCtx.log(`  exitCode: ${(err as Record<string, unknown>).exitCode}`);
+            if ("stderr" in err) sessionCtx.log(`  stderr: ${(err as Record<string, unknown>).stderr}`);
+            if ("code" in err) sessionCtx.log(`  code: ${(err as Record<string, unknown>).code}`);
+            if (err.stack) sessionCtx.log(`  stack: ${err.stack.split("\n").slice(1, 4).join(" | ")}`);
+          }
+
+          if (retryCount >= MAX_RETRIES || !claudeSessionId) {
+            sessionCtx.log("Exhausted retries, session will be suspended");
+            sessionCtx.setRuntimeState("error");
+            return;
+          }
+
+          // Automatic retry — respawn query and continue loop. Flush any
+          // tool_use blocks that were in-flight when the session crashed so
+          // the admin event stream sees them as status:"pending" rather than
+          // getting paired against a replayed tool_use_id after resume.
+          toolCallProcessor.flush();
+
+          retryCount++;
+          sessionCtx.log(`Attempting auto-resume (retry ${retryCount}/${MAX_RETRIES})`);
+          try {
+            respawnQuery(claudeSessionId, sessionCtx);
+          } catch (resumeErr) {
+            sessionCtx.log(`Auto-resume failed: ${resumeErr instanceof Error ? resumeErr.message : String(resumeErr)}`);
+            return;
           }
         }
-        sessionCtx.setRuntimeState("idle");
-        return;
-      } catch (err) {
-        // Process crash, OOM, or unexpected termination
-        const errMsg = err instanceof Error ? err.message : String(err);
-        sessionCtx.log(`Query error: ${errMsg}`);
-
-        // Log additional diagnostic details when available
-        if (err instanceof Error) {
-          if (err.cause)
-            sessionCtx.log(`  cause: ${err.cause instanceof Error ? err.cause.message : String(err.cause)}`);
-          if ("exitCode" in err) sessionCtx.log(`  exitCode: ${(err as Record<string, unknown>).exitCode}`);
-          if ("stderr" in err) sessionCtx.log(`  stderr: ${(err as Record<string, unknown>).stderr}`);
-          if ("code" in err) sessionCtx.log(`  code: ${(err as Record<string, unknown>).code}`);
-          if (err.stack) sessionCtx.log(`  stack: ${err.stack.split("\n").slice(1, 4).join(" | ")}`);
-        }
-
-        if (retryCount >= MAX_RETRIES || !claudeSessionId) {
-          sessionCtx.log("Exhausted retries, session will be suspended");
-          sessionCtx.setRuntimeState("error");
-          return;
-        }
-
-        // Automatic retry — respawn query and continue loop
-        retryCount++;
-        sessionCtx.log(`Attempting auto-resume (retry ${retryCount}/${MAX_RETRIES})`);
-        try {
-          respawnQuery(claudeSessionId, sessionCtx);
-        } catch (resumeErr) {
-          sessionCtx.log(`Auto-resume failed: ${resumeErr instanceof Error ? resumeErr.message : String(resumeErr)}`);
-          return;
-        }
       }
+    } finally {
+      // Normal completion (for-await ended) or fatal return — flush any
+      // tool_use blocks that never received a tool_result as status:"pending".
+      toolCallProcessor.flush();
     }
   }
 

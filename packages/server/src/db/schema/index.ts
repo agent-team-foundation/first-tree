@@ -14,7 +14,7 @@ export { messages } from "./messages.js";
 export { notifications } from "./notifications.js";
 export { organizations } from "./organizations.js";
 export { serverInstances } from "./server-instances.js";
-export { sessionOutputs } from "./session-outputs.js";
+export { sessionEvents } from "./session-events.js";
 export { systemConfigs } from "./system-configs.js";
 export { taskChats, tasks } from "./tasks.js";
 export { users } from "./users.js";

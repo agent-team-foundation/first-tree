@@ -3,6 +3,7 @@ import { eq, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
 import { serverInstances } from "../db/schema/server-instances.js";
+import type { Notifier } from "./notifier.js";
 
 /** Common field reset when agent goes offline or is unbound. */
 export function runtimeFieldsReset(now: Date) {
@@ -121,13 +122,26 @@ export async function unbindAgent(db: Database, agentId: string) {
     .where(eq(agentPresence.agentId, agentId));
 }
 
-/** Set runtime state directly from client-reported value. */
-export async function setRuntimeState(db: Database, agentId: string, runtimeState: RuntimeState): Promise<void> {
+/** Set runtime state directly from client-reported value.
+ *
+ * When an org-scoped notifier is provided, emit a PG NOTIFY on the
+ * `runtime_state_changes` channel so the pulse aggregator (and any future
+ * admin-side consumers) can observe the transition. Fire-and-forget to match
+ * notifier semantics elsewhere in this module. */
+export async function setRuntimeState(
+  db: Database,
+  agentId: string,
+  runtimeState: RuntimeState,
+  options?: { organizationId?: string; notifier?: Notifier },
+): Promise<void> {
   const now = new Date();
   await db
     .update(agentPresence)
     .set({ runtimeState, runtimeUpdatedAt: now, lastSeenAt: now })
     .where(eq(agentPresence.agentId, agentId));
+  if (options?.notifier && options.organizationId) {
+    options.notifier.notifyRuntimeStateChange(agentId, runtimeState, options.organizationId).catch(() => {});
+  }
 }
 
 /** Touch agent last_seen_at on heartbeat (per-agent liveness). */

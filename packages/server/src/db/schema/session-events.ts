@@ -1,0 +1,31 @@
+import { index, integer, jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+
+/**
+ * Session events — structured event stream per (agent, chat) session.
+ * `kind` is 'tool_call' | 'error'; the payload shape is enforced by the
+ * service layer via Zod (no FK / CHECK on this table per project rule).
+ *
+ * `seq` is monotonic per (agent_id, chat_id). The single-writer invariant
+ * in the client-side session-manager guarantees ordering; the service wraps
+ * the insert in a MAX(seq)+1 retry loop to recover from restart-overlap
+ * windows.
+ *
+ * Cleanup: rows are dropped when the session is evicted or terminated —
+ * see sessionEventService.clearEvents.
+ */
+export const sessionEvents = pgTable(
+  "session_events",
+  {
+    id: text("id").primaryKey(),
+    agentId: text("agent_id").notNull(),
+    chatId: text("chat_id").notNull(),
+    seq: integer("seq").notNull(),
+    kind: text("kind").notNull(),
+    payload: jsonb("payload").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("uq_session_events_chat_seq").on(table.agentId, table.chatId, table.seq),
+    index("idx_session_events_chat_created").on(table.agentId, table.chatId, table.createdAt.desc()),
+  ],
+);

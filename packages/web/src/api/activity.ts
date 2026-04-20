@@ -1,5 +1,7 @@
 import { api } from "./client.js";
 
+export type AgentType = "human" | "personal_assistant" | "autonomous_agent";
+
 export type RuntimeAgent = {
   agentId: string;
   clientId: string | null;
@@ -8,6 +10,7 @@ export type RuntimeAgent = {
   activeSessions: number | null;
   totalSessions: number | null;
   runtimeUpdatedAt: string | null;
+  type: AgentType | null;
 };
 
 export type ActivityOverview = {

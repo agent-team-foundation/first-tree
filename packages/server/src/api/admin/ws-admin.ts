@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { jwtVerify } from "jose";
 import type { WebSocket } from "ws";
-import { setAdminWsBroadcast } from "../../services/notification.js";
+import { registerAdminBroadcaster } from "../../services/admin-broadcast.js";
 import type { Notifier } from "../../services/notifier.js";
 
 /**
@@ -17,26 +17,27 @@ export function adminWsRoutes(notifier: Notifier, jwtSecret: string) {
   const adminSockets = new Map<WebSocket, { organizationId: string }>();
   const secret = new TextEncoder().encode(jwtSecret);
 
-  // Register the broadcast function for the notification service
-  setAdminWsBroadcast((payload) => {
-    const orgId = (payload as Record<string, unknown>).organizationId as string | undefined;
+  function broadcastOrgScoped(payload: Record<string, unknown>) {
+    const orgId = payload.organizationId;
+    // Strict org filter: payloads without a top-level organizationId are dropped
+    // rather than fanning out to every org (the former bug).
+    if (typeof orgId !== "string" || orgId.length === 0) return;
     const data = JSON.stringify(payload);
     for (const [ws, meta] of adminSockets) {
-      if (ws.readyState === 1 && (!orgId || meta.organizationId === orgId)) {
+      if (ws.readyState === 1 && meta.organizationId === orgId) {
         ws.send(data);
       }
     }
-  });
+  }
 
-  // Subscribe to session state changes and forward to matching admin sockets
+  // Install the shared admin broadcaster. Any service that wants to push to
+  // admin sockets calls broadcastToAdmins(...) from services/admin-broadcast.
+  registerAdminBroadcaster(broadcastOrgScoped);
+
+  // Subscribe to session state changes and forward to matching admin sockets.
+  // Payload now carries organizationId (see notifier.ts).
   notifier.onSessionStateChange((payload) => {
-    const data = JSON.stringify({ type: "session:state", ...payload });
-    const orgId = (payload as Record<string, unknown>).organizationId as string | undefined;
-    for (const [ws, meta] of adminSockets) {
-      if (ws.readyState === 1 && (!orgId || meta.organizationId === orgId)) {
-        ws.send(data);
-      }
-    }
+    broadcastOrgScoped({ type: "session:state", ...payload });
   });
 
   return async (app: FastifyInstance): Promise<void> => {

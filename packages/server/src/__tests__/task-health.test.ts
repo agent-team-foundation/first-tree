@@ -68,7 +68,7 @@ describe("Task health detection", () => {
       organizationId: assignee.organizationId,
     });
     // Assignee session is suspended
-    await activityService.upsertSessionState(app.db, assignee.uuid, chat.id, "suspended");
+    await activityService.upsertSessionState(app.db, assignee.uuid, chat.id, "suspended", assignee.organizationId);
     const health = await taskService.getTaskHealth(app.db, task.id);
     expect(health.signal).toBe("idle_island");
   });
@@ -82,7 +82,7 @@ describe("Task health detection", () => {
       agentId: assignee.uuid,
       organizationId: assignee.organizationId,
     });
-    await activityService.upsertSessionState(app.db, assignee.uuid, chat.id, "active");
+    await activityService.upsertSessionState(app.db, assignee.uuid, chat.id, "active", assignee.organizationId);
     // Assignee writes the last message
     await sendMessage(app.db, chat.id, assignee.uuid, { format: "text", content: "Waiting" });
     const health = await taskService.getTaskHealth(app.db, task.id);
@@ -98,7 +98,7 @@ describe("Task health detection", () => {
       agentId: assignee.uuid,
       organizationId: assignee.organizationId,
     });
-    await activityService.upsertSessionState(app.db, assignee.uuid, chat.id, "active");
+    await activityService.upsertSessionState(app.db, assignee.uuid, chat.id, "active", assignee.organizationId);
     // Creator writes the last message; assignee must reply next
     await sendMessage(app.db, chat.id, creator.uuid, { format: "text", content: "Please work" });
     const health = await taskService.getTaskHealth(app.db, task.id);
