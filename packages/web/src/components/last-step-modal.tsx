@@ -27,6 +27,15 @@ type Props = {
   onBound: (agent: Agent) => void;
 };
 
+/**
+ * Quote for a POSIX shell. Agent names are already slugified to
+ * `[a-z0-9_-]`, so this is belt-and-suspenders.
+ */
+function shellQuote(value: string): string {
+  if (/^[A-Za-z0-9_./:=-]+$/.test(value)) return value;
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
 export function LastStepModal({ agent, open, onClose, onBound }: Props) {
   const [copied, setCopied] = useState(false);
 
@@ -54,7 +63,23 @@ export function LastStepModal({ agent, open, onClose, onBound }: Props) {
     }
   }, [agentQuery.data, onBound]);
 
-  const command = tokenQuery.data?.command ?? "";
+  // Assemble the Last-step one-liner entirely on the web side so the server
+  // stays out of UI-shaped concerns (it only returns the raw `client connect`
+  // invocation). The three segments, in order:
+  //   1. `npm install -g` — bootstrap the CLI for users who've never run it
+  //   2. `agent add`      — pure local file write,no auth/network;the
+  //                          resulting `agent.yaml` is what the runtime picks
+  //                          up on first load
+  //   3. `client connect` — computer-level auth + launchd/systemd service;
+  //                          runtime's first `loadAgents` already sees the
+  //                          agent written in step 2,no watcher race
+  const baseCommand = tokenQuery.data?.command ?? "";
+  const command =
+    baseCommand && agent.name
+      ? `npm install -g @agent-team-foundation/first-tree-hub && ` +
+        `first-tree-hub agent add ${shellQuote(agent.name)} --agent-id ${agent.uuid} && ` +
+        baseCommand
+      : baseCommand;
 
   function handleCopy() {
     if (!command) return;
