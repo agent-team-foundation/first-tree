@@ -1,15 +1,15 @@
 import type { Agent } from "@agent-team-foundation/first-tree-hub-shared";
 import { AGENT_TYPES } from "@agent-team-foundation/first-tree-hub-shared";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Copy, Plus } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router";
-import { createAgent, listAgents } from "../api/agents.js";
+import { listAgents } from "../api/agents.js";
 import { useAuth } from "../auth/auth-context.js";
-import { type AgentFormData, AgentFormDialog } from "../components/agent-form-dialog.js";
+import { LastStepModal } from "../components/last-step-modal.js";
+import { NewAgentDialog } from "../components/new-agent-dialog.js";
 import { Badge } from "../components/ui/badge.js";
 import { Button } from "../components/ui/button.js";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog.js";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.js";
 import { useAgentNameMap } from "../lib/use-agent-name-map.js";
 import { useMemberNameMap } from "../lib/use-member-name-map.js";
@@ -27,13 +27,13 @@ function sortByName(agents: Agent[]): Agent[] {
 
 export function AgentsPage() {
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const { memberId } = useAuth();
   const [cursor, setCursor] = useState<string | undefined>();
   const [typeFilter, setTypeFilter] = useState<string>("");
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
-  const [createdAgent, setCreatedAgent] = useState<Agent | null>(null);
-  const [copied, setCopied] = useState(false);
+  // After create: Claude Code → show Last-step modal; Kael → skip straight
+  // to the Workspace. `lastStepAgent` non-null means the modal is visible.
+  const [lastStepAgent, setLastStepAgent] = useState<Agent | null>(null);
   const resolveAgentName = useAgentNameMap();
   const resolveMemberName = useMemberNameMap();
 
@@ -56,30 +56,16 @@ export function AgentsPage() {
     return { myAgents: sortByName(my), teamAgents: sortByName(team) };
   }, [data, memberId]);
 
-  const createMutation = useMutation({
-    mutationFn: async (formData: AgentFormData) => {
-      const agent = await createAgent({
-        name: formData.name,
-        type: formData.type,
-        displayName: formData.displayName ?? undefined,
-        delegateMention: formData.delegateMention ?? undefined,
-        managerId: formData.managerId ?? undefined,
-        clientId: formData.clientId ?? undefined,
-      });
-      return agent;
-    },
-    onSuccess: (agent) => {
-      setCreateDialogOpen(false);
-      queryClient.invalidateQueries({ queryKey: ["agents"] });
-      queryClient.invalidateQueries({ queryKey: ["activity"] });
-      if (agent.type === "human") {
-        navigate(`/agents/${agent.uuid}`);
-        return;
-      }
-      setCreatedAgent(agent);
-      setCopied(false);
-    },
-  });
+  function handleCreated(agent: Agent, runtime: "claude-code" | "kael") {
+    setCreateDialogOpen(false);
+    if (runtime === "claude-code") {
+      setLastStepAgent(agent);
+      return;
+    }
+    // Kael: cloud-hosted, no computer required — jump to the Workspace
+    // with this agent selected so the user can start chatting immediately.
+    navigate(`/?a=${agent.uuid}`);
+  }
 
   function renderAgentRow(agent: Agent) {
     const ext = agent as Record<string, unknown>;
@@ -118,19 +104,6 @@ export function AgentsPage() {
       </TableRow>
     );
   }
-
-  // The post-creation dialog shows the operator how to wire up the pinned
-  // client: `agent add --agent-id <uuid>` replaces the old token-based
-  // `--token` flag now that agents no longer carry bearer tokens.
-  const agentAddCommand = createdAgent
-    ? `first-tree-hub agent add ${createdAgent.name ?? createdAgent.uuid} --agent-id ${createdAgent.uuid}`
-    : "";
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(agentAddCommand);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
 
   return (
     <div className="space-y-8">
@@ -231,56 +204,25 @@ export function AgentsPage() {
         </div>
       )}
 
-      <AgentFormDialog
-        mode="create"
-        open={createDialogOpen}
-        onOpenChange={setCreateDialogOpen}
-        onSubmit={(formData) => createMutation.mutate(formData)}
-        isPending={createMutation.isPending}
-        error={createMutation.error instanceof Error ? createMutation.error : null}
-      />
+      <NewAgentDialog open={createDialogOpen} onOpenChange={setCreateDialogOpen} onCreated={handleCreated} />
 
-      <Dialog
-        open={createdAgent !== null}
-        onOpenChange={(open) => {
-          if (!open) {
-            const uuid = createdAgent?.uuid;
-            setCreatedAgent(null);
-            if (uuid) navigate(`/agents/${uuid}`);
-          }
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Agent Created</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
-            <p className="text-sm text-muted-foreground">
-              Run this on the pinned client machine to register a local alias; the client connects with your JWT, not a
-              per-agent token.
-            </p>
-            <div className="flex items-center gap-2">
-              <code className="flex-1 bg-muted rounded-md px-3 py-2 text-xs font-mono break-all select-all">
-                {agentAddCommand}
-              </code>
-              <Button variant="outline" size="icon" className="shrink-0" onClick={handleCopy}>
-                {copied ? <Check className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
-              </Button>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button
-              onClick={() => {
-                const uuid = createdAgent?.uuid;
-                setCreatedAgent(null);
-                if (uuid) navigate(`/agents/${uuid}`);
-              }}
-            >
-              Done
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {lastStepAgent && (
+        <LastStepModal
+          agent={lastStepAgent}
+          open={lastStepAgent !== null}
+          onClose={() => {
+            // "Skip for now" — user can still chat; Workspace shows Offline.
+            const uuid = lastStepAgent.uuid;
+            setLastStepAgent(null);
+            navigate(`/?a=${uuid}`);
+          }}
+          onBound={(bound) => {
+            // Computer claimed the agent — land in Workspace with it selected.
+            setLastStepAgent(null);
+            navigate(`/?a=${bound.uuid}`);
+          }}
+        />
+      )}
     </div>
   );
 }
