@@ -6,6 +6,7 @@ import { generateConnectToken } from "../api/activity.js";
 import { getAgent } from "../api/agents.js";
 import { Button } from "./ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog.js";
+import { StateDot } from "./ui/state-dot.js";
 
 /**
  * Last-step modal — shown after a Claude Code agent is created.
@@ -76,11 +77,15 @@ export function LastStepModal({ agent, open, onClose, onBound }: Props) {
           <div className="flex items-start gap-2 rounded-md border border-border bg-muted p-3">
             <code className="flex-1 text-xs font-mono break-all select-all">{command || "Generating command…"}</code>
             <Button variant="outline" size="icon" className="shrink-0" onClick={handleCopy} disabled={!command}>
-              {copied ? <Check className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
+              {copied ? (
+                <Check className="h-4 w-4" style={{ color: "var(--state-idle)" }} />
+              ) : (
+                <Copy className="h-4 w-4" />
+              )}
             </Button>
           </div>
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <span className="inline-block h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
+            <StateDot state="working" size={8} />
             <span>Waiting for your computer to connect…</span>
           </div>
           <p className="text-xs text-muted-foreground">
