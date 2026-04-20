@@ -8,7 +8,8 @@ import { Button } from "../../components/ui/button.js";
 export type ModelOption = { value: string; label: string; hint?: string };
 
 export const CLAUDE_MODEL_OPTIONS: ModelOption[] = [
-  { value: "claude-opus-4-6", label: "claude-opus-4-6", hint: "most capable" },
+  { value: "claude-opus-4-7", label: "claude-opus-4-7", hint: "most capable" },
+  { value: "claude-opus-4-6", label: "claude-opus-4-6" },
   { value: "claude-sonnet-4-6", label: "claude-sonnet-4-6", hint: "default" },
   { value: "claude-haiku-4-5", label: "claude-haiku-4-5", hint: "fastest" },
 ];

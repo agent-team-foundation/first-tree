@@ -62,6 +62,7 @@ describe("claude-code handler helpers (Step 6)", () => {
 
     it("returns true for same family different rev", () => {
       expect(isSameModelFamily("claude-opus-4-5", "claude-opus-4-6")).toBe(true);
+      expect(isSameModelFamily("claude-opus-4-6", "claude-opus-4-7")).toBe(true);
     });
 
     it("returns false across families (opus ↔ haiku)", () => {
