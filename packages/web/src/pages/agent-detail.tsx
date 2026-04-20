@@ -471,14 +471,14 @@ export function AgentDetailPage() {
       {isUnclaimed && agent.status === "active" && (
         <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 flex items-center justify-between gap-3">
           <div className="text-sm text-amber-900">
-            <div className="font-medium">No client bound</div>
+            <div className="font-medium">No computer bound</div>
             <div className="text-xs text-amber-800/80">
-              Bind this agent to a client machine so it can run. A client will also claim it on first WebSocket connect.
+              Bind this agent to a computer so it can run. A computer will also claim it on first WebSocket connect.
             </div>
           </div>
           <Button size="sm" variant="outline" onClick={() => setBindClientOpen(true)}>
             <Link2 className="h-4 w-4 mr-2" />
-            Bind Client
+            Bind Computer
           </Button>
         </div>
       )}
@@ -734,7 +734,7 @@ export function AgentDetailPage() {
         </div>
       )}
 
-      {/* Bind Client Dialog — first-time NULL → ID bind only */}
+      {/* Bind Computer Dialog — first-time NULL → ID bind only */}
       <Dialog
         open={bindClientOpen}
         onOpenChange={(open) => {
@@ -748,18 +748,18 @@ export function AgentDetailPage() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Bind client</DialogTitle>
+            <DialogTitle>Bind computer</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
-              Pick a client machine you own to pin this agent to. The bind is one-shot — once set, moving the agent
-              requires deleting and re-creating it on the target client.
+              Pick a computer you own to pin this agent to. The bind is one-shot — once set, moving the agent requires
+              deleting and re-creating it on the target computer.
             </p>
             {clientsQuery.isLoading ? (
-              <div className="text-sm text-muted-foreground">Loading clients…</div>
+              <div className="text-sm text-muted-foreground">Loading computers…</div>
             ) : clientsQuery.error ? (
               <div className="text-sm text-destructive">
-                Failed to load clients: {clientsQuery.error instanceof Error ? clientsQuery.error.message : "Unknown"}
+                Failed to load computers: {clientsQuery.error instanceof Error ? clientsQuery.error.message : "Unknown"}
               </div>
             ) : (
               <BindClientList
@@ -1031,8 +1031,8 @@ function BindClientList({
   if (bindable.length === 0) {
     return (
       <div className="rounded border bg-muted/40 px-3 py-4 text-sm text-muted-foreground">
-        No connected clients available. Run{" "}
-        <code className="font-mono text-xs">first-tree-hub client connect &lt;url&gt;</code> on the machine that should
+        No connected computers available. Run{" "}
+        <code className="font-mono text-xs">first-tree-hub client connect &lt;url&gt;</code> on the computer that should
         run this agent, then reopen this dialog.
       </div>
     );
@@ -1132,12 +1132,12 @@ function TestResultCard({ result, onDismiss }: { result: TestResult; onDismiss: 
                 </div>
                 {conn.client ? (
                   <div className="text-muted-foreground">
-                    Client: {conn.client.hostname ?? conn.client.id}
+                    Computer: {conn.client.hostname ?? conn.client.id}
                     {conn.client.os && ` (${conn.client.os})`}
                     {conn.client.sdkVersion && ` · SDK ${conn.client.sdkVersion}`}
                   </div>
                 ) : (
-                  <div className="text-muted-foreground">No client bound</div>
+                  <div className="text-muted-foreground">No computer bound</div>
                 )}
                 {conn.lastSeenAt && (
                   <div className="text-muted-foreground">Last seen: {new Date(conn.lastSeenAt).toLocaleString()}</div>

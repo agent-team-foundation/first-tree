@@ -42,7 +42,7 @@ function ConnectCommandBanner() {
     return (
       <div className="flex items-center gap-3 mb-4 p-3 border border-border rounded-lg bg-muted/30">
         <Terminal className="h-4 w-4 text-muted-foreground shrink-0" />
-        <span className="text-sm text-muted-foreground">Connect a new client to this Hub</span>
+        <span className="text-sm text-muted-foreground">Connect a new computer to this Hub</span>
         <Button variant="outline" size="sm" onClick={() => generateMut.mutate()} disabled={generateMut.isPending}>
           {generateMut.isPending ? "Generating..." : "Generate Connect Command"}
         </Button>
@@ -130,26 +130,26 @@ export function ClientsPage() {
 
   return (
     <div>
-      <h1 className="text-2xl font-semibold mb-4">Clients</h1>
+      <h1 className="text-2xl font-semibold mb-4">Computers</h1>
       <ConnectCommandBanner />
 
       {/* Confirm retire dialog */}
       {confirmRetire && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="bg-card border border-border rounded-lg p-6 max-w-md w-full shadow-lg">
-            <h3 className="text-lg font-semibold mb-2">Retire Client</h3>
+            <h3 className="text-lg font-semibold mb-2">Retire Computer</h3>
             <p className="text-sm text-muted-foreground mb-3">
               Permanently remove{" "}
               <span className="font-medium text-foreground">
                 {confirmRetire.hostname ?? confirmRetire.id.slice(0, 8)}
               </span>
-              . Retire refuses if any agent is still pinned to this client — you must delete those agents first
+              . Retire refuses if any agent is still pinned to this computer — you must delete those agents first
               (reassign is not available in this milestone).
             </p>
             {getClientAgents(confirmRetire.id).length > 0 && (
               <div className="mb-3 p-2 rounded bg-yellow-50 dark:bg-yellow-950/30 border border-yellow-200 dark:border-yellow-900">
                 <div className="text-xs font-medium text-yellow-900 dark:text-yellow-200 mb-1">
-                  Agents currently bound to this client (delete them first):
+                  Agents currently bound to this computer (delete them first):
                 </div>
                 <ul className="text-sm space-y-0.5">
                   {getClientAgents(confirmRetire.id).map((a) => (
@@ -193,7 +193,7 @@ export function ClientsPage() {
       {confirmDisconnect && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="bg-card border border-border rounded-lg p-6 max-w-md w-full shadow-lg">
-            <h3 className="text-lg font-semibold mb-2">Disconnect Client</h3>
+            <h3 className="text-lg font-semibold mb-2">Disconnect Computer</h3>
             <p className="text-sm text-muted-foreground mb-3">
               This will disconnect{" "}
               <span className="font-medium text-foreground">
@@ -232,7 +232,7 @@ export function ClientsPage() {
 
       {!clients || clients.length === 0 ? (
         <div className="text-center text-muted-foreground py-12">
-          No clients. Use the button above to generate a connect command.
+          No computers. Use the button above to generate a connect command.
         </div>
       ) : (
         <div className="border rounded-lg overflow-hidden">
@@ -344,7 +344,7 @@ function ClientRow({
               Bound Agents ({boundAgents.length})
             </div>
             {boundAgents.length === 0 ? (
-              <div className="text-sm text-muted-foreground">No agents bound to this client</div>
+              <div className="text-sm text-muted-foreground">No agents bound to this computer</div>
             ) : (
               <div className="space-y-1">
                 {boundAgents.map((a) => (
