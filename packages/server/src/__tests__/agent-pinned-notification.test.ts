@@ -253,6 +253,81 @@ describe("Agent WS — agent:pinned push on create/bind", () => {
     }
   }, 15000);
 
+  it("backfills agent:pinned for agents pinned while the client was offline", async () => {
+    // Models the gap the realtime push doesn't cover: an admin pins an agent
+    // while the client process isn't connected. Without backfill the operator
+    // would still need a manual `first-tree-hub agent add` after restart.
+    const seed = await seedConnectedClient("backfill");
+
+    // Seed two agents pinned to this client BEFORE we open any WS, so the
+    // realtime push has nothing to deliver to.
+    const offlineCreated = await createAgent(app.db, {
+      name: `pin-offline-${crypto.randomUUID().slice(0, 6)}`,
+      type: "autonomous_agent",
+      displayName: "Offline Pinned",
+      source: "admin-api",
+      managerId: seed.memberId,
+      clientId: seed.clientId,
+      organizationId: seed.organizationId,
+    });
+    const offlineCreated2 = await createAgent(app.db, {
+      name: `pin-offline-${crypto.randomUUID().slice(0, 6)}`,
+      type: "autonomous_agent",
+      source: "admin-api",
+      managerId: seed.memberId,
+      clientId: seed.clientId,
+      organizationId: seed.organizationId,
+    });
+
+    const ws = new WebSocket(wsUrl);
+    await new Promise<void>((resolve, reject) => {
+      ws.once("open", () => resolve());
+      ws.once("error", reject);
+    });
+
+    try {
+      const seenPinned = new Map<string, Record<string, unknown>>();
+      ws.on("message", (raw) => {
+        try {
+          const msg = JSON.parse(raw.toString()) as Record<string, unknown>;
+          if (msg.type === "agent:pinned" && typeof msg.agentId === "string") {
+            seenPinned.set(msg.agentId, msg);
+          }
+        } catch {
+          // ignore
+        }
+      });
+
+      ws.send(JSON.stringify({ type: "auth", token: seed.token }));
+      await waitForFrame(ws, (m) => (m as { type?: string }).type === "auth:ok");
+      ws.send(JSON.stringify({ type: "client:register", clientId: seed.clientId }));
+      await waitForFrame(ws, (m) => (m as { type?: string }).type === "client:registered");
+
+      // Both backfill frames must arrive shortly after `client:registered`.
+      await waitForFrame(
+        ws,
+        (m) => {
+          const msg = m as { type?: string; agentId?: string };
+          return (
+            msg.type === "agent:pinned" && seenPinned.has(offlineCreated.uuid) && seenPinned.has(offlineCreated2.uuid)
+          );
+        },
+        2000,
+      );
+
+      const a = seenPinned.get(offlineCreated.uuid);
+      expect(a).toBeDefined();
+      expect(a?.name).toBe(offlineCreated.name);
+      expect(a?.agentType).toBe("autonomous_agent");
+      const b = seenPinned.get(offlineCreated2.uuid);
+      expect(b).toBeDefined();
+      expect(b?.name).toBe(offlineCreated2.name);
+    } finally {
+      ws.close();
+      await new Promise<void>((r) => ws.once("close", () => r()));
+    }
+  }, 15000);
+
   it("does NOT push agent:pinned on PATCHes that don't transition NULL → ID", async () => {
     const seed = await seedConnectedClient("rename");
     const ws = await openRegisteredSocket(seed);

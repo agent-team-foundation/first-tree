@@ -83,19 +83,20 @@ Expected output:
 ## Step 5 — Add Agent and Start Client
 
 ```bash
-# Add agent to client config only if bootstrap or onboard has not already done it
-first-tree-hub agent add my-agent --token $FIRST_TREE_HUB_AGENT_TOKEN
-
 # Configure server URL
 first-tree-hub config set -c server.url http://localhost:8000
 
-# Start client — connects all configured agents
+# Start client — connects all configured agents and auto-registers any
+# agent the admin pinned to this client (whether before or after start)
 first-tree-hub client start
 ```
 
-If you used `first-tree-hub agent token bootstrap <your-agent-id>` with the default `--save-to agent`, the local agent config is already written for you. In that case you can skip `agent add` and just confirm it exists with:
+The running client picks up server-side pinning automatically: when an admin creates an agent with `--client-id <thisClientId>` (or binds an existing one via PATCH) the server pushes an `agent:pinned` frame and the runtime materialises the local `agents/<name>/agent.yaml`. On reconnect, the server also backfills any pins that landed while the client was offline.
+
+You only need `first-tree-hub agent add` for legacy setups or when you want a custom local name:
 
 ```bash
+first-tree-hub agent add my-agent --token $FIRST_TREE_HUB_AGENT_TOKEN
 first-tree-hub agent list
 ```
 

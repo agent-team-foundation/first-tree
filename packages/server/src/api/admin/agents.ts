@@ -26,36 +26,45 @@ import { sendMessage } from "../../services/message.js";
 import { notifyRecipients } from "../../services/notifier.js";
 import * as presenceService from "../../services/presence.js";
 
-/**
- * Push an `agent:pinned` frame to the connected client so it can auto-register
- * the agent locally without the operator running `first-tree-hub agent add`.
- *
- * Best-effort: if the client is not currently connected to this server
- * instance, the notification is silently dropped — the client will discover
- * the pinning on its next manual add or via a future sync path.
- */
-function notifyClientAgentPinned(agent: {
-  uuid: string;
-  name: string | null;
-  displayName: string | null;
-  type: string;
-  clientId: string | null;
-}): void {
-  if (!agent.clientId) return;
-  // Parse through the schema so we get a narrowed, validated frame without
-  // resorting to a hand-written `as` assertion on `agent.type`.
-  const parsed = agentPinnedMessageSchema.safeParse({
-    type: "agent:pinned",
-    agentId: agent.uuid,
-    name: agent.name,
-    displayName: agent.displayName,
-    agentType: agent.type,
-  });
-  if (!parsed.success) return;
-  sendToClient(agent.clientId, parsed.data);
-}
-
 export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
+  /**
+   * Push an `agent:pinned` frame to the connected client so it can auto-register
+   * the agent locally without the operator running `first-tree-hub agent add`.
+   *
+   * Best-effort: if the client is not currently connected to this server
+   * instance, the notification is silently dropped here — the client picks the
+   * pinning up on its next `client:register` handshake via the backfill path
+   * in `api/agent/ws-client.ts`.
+   */
+  function notifyClientAgentPinned(agent: {
+    uuid: string;
+    name: string | null;
+    displayName: string | null;
+    type: string;
+    clientId: string | null;
+  }): void {
+    if (!agent.clientId) return;
+    const parsed = agentPinnedMessageSchema.safeParse({
+      type: "agent:pinned",
+      agentId: agent.uuid,
+      name: agent.name,
+      displayName: agent.displayName,
+      agentType: agent.type,
+    });
+    if (!parsed.success) {
+      // Schema drift between server and shared types is a contract bug — log
+      // it so the gap doesn't stay invisible. Best-effort: we still don't
+      // throw, since failing the admin write on a notification mismatch would
+      // break the operator workflow.
+      app.log.warn(
+        { err: parsed.error.flatten(), agentId: agent.uuid, clientId: agent.clientId },
+        "agent:pinned frame failed schema validation — not sending",
+      );
+      return;
+    }
+    sendToClient(agent.clientId, parsed.data);
+  }
+
   const listAgentsFilterSchema = z.object({ type: agentTypeSchema.optional() });
 
   app.get("/", async (request) => {
@@ -110,12 +119,13 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
     if (body.managerId !== undefined && member.role !== "admin") {
       throw new ForbiddenError("Only admins can reassign an agent's manager");
     }
-    // Capture pre-state so we only notify when `clientId` was just set
-    // (NULL → ID). Subsequent PATCHes that leave clientId unchanged should
-    // not re-fire the auto-add flow.
-    const before = await agentService.getAgent(app.db, request.params.uuid);
+    // Only fetch the pre-state when the caller is trying to set `clientId` —
+    // for every other PATCH (rename, delegateMention, visibility, …) we'd be
+    // paying for a read whose answer we don't use.
+    const wantsToBindClient = body.clientId !== undefined;
+    const before = wantsToBindClient ? await agentService.getAgent(app.db, request.params.uuid) : null;
     const agent = await agentService.updateAgent(app.db, request.params.uuid, body);
-    if (before.clientId === null && agent.clientId !== null) {
+    if (before && before.clientId === null && agent.clientId !== null) {
       notifyClientAgentPinned(agent);
     }
     return {

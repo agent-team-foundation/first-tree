@@ -109,6 +109,10 @@ Agent management — configuration, tokens, bindings, and messaging.
 
 ```bash
 # Add an agent (interactive or command-line)
+# Optional: a running `first-tree-hub client start` auto-registers any agent
+# the admin pins to this clientId via the Hub UI / API, so this command is
+# only needed for unattended setups, scripted seeding, or when you want a
+# custom local name.
 first-tree-hub agent add
 first-tree-hub agent add my-agent --token aghub_xxx
 

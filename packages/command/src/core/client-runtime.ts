@@ -5,6 +5,7 @@ import type { AgentPinnedMessage } from "@agent-team-foundation/first-tree-hub-s
 import type { AgentConfig } from "@agent-team-foundation/first-tree-hub-shared/config";
 import { agentConfigSchema, loadAgents } from "@agent-team-foundation/first-tree-hub-shared/config";
 import { AgentSlot, ClientConnection, getHandlerFactory, registerBuiltinHandlers } from "@first-tree-hub/client";
+import { stringify as stringifyYaml } from "yaml";
 import { ensureFreshAccessToken } from "./bootstrap.js";
 
 type AgentEntry = {
@@ -184,9 +185,8 @@ export class ClientRuntime {
     const agentDir = join(this.agentsDir, localName);
     try {
       mkdirSync(agentDir, { recursive: true, mode: 0o700 });
-      writeFileSync(join(agentDir, "agent.yaml"), `agentId: "${message.agentId}"\nruntime: claude-code\n`, {
-        mode: 0o600,
-      });
+      const yaml = stringifyYaml({ agentId: message.agentId, runtime: "claude-code" });
+      writeFileSync(join(agentDir, "agent.yaml"), yaml, { mode: 0o600 });
       process.stderr.write(`  \u2713 Auto-added agent "${localName}" (${message.agentId}) from server push.\n`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -203,17 +203,32 @@ export class ClientRuntime {
   /**
    * Choose the directory name under `agents/<name>/agent.yaml` for an agent
    * pushed by the server. Prefer the server-side `name` when set and not
-   * already claimed; otherwise fall back to a deterministic UUID-derived name
-   * so collisions with an existing local alias don't silently overwrite.
+   * already claimed; otherwise fall back to a UUID-derived name with a numeric
+   * suffix on collision.
+   *
+   * UUID v7 packs the unix-ms timestamp in the high bits, so two agents
+   * created in the same millisecond share the first 8 hex chars. Take 16 chars
+   * (the full ms-timestamp segment plus the random tail) to make accidental
+   * collisions astronomically unlikely, and re-check `agentNames` so even an
+   * adversarial collision falls through to a `-2`, `-3`, … suffix.
    */
   private pickLocalName(message: AgentPinnedMessage): string {
     const preferred = message.name;
     if (preferred && !this.agentNames.has(preferred)) return preferred;
     const shortId = message.agentId
       .replace(/[^a-z0-9]/gi, "")
-      .slice(0, 8)
+      .slice(0, 16)
       .toLowerCase();
-    return `agent-${shortId}`;
+    const base = `agent-${shortId}`;
+    if (!this.agentNames.has(base)) return base;
+    for (let suffix = 2; suffix < 1000; suffix++) {
+      const candidate = `${base}-${suffix}`;
+      if (!this.agentNames.has(candidate)) return candidate;
+    }
+    // Pathological fallback — UUID-derived names colliding 1000 times means
+    // something is structurally wrong upstream. Use the full agentId so we at
+    // least don't return a duplicate name and overwrite an existing config.
+    return `agent-${message.agentId.replace(/[^a-z0-9]/gi, "").toLowerCase()}`;
   }
 
   private startAgent(name: string): void {

@@ -2,6 +2,7 @@ import {
   AGENT_BIND_REJECT_REASONS,
   type AgentBindRejectReason,
   agentBindRequestSchema,
+  agentPinnedMessageSchema,
   clientRegisterSchema,
   runtimeStateMessageSchema,
   sessionCompletionMessageSchema,
@@ -237,6 +238,38 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
             clientId = data.clientId;
             connectionManager.setClientConnection(data.clientId, socket);
             socket.send(JSON.stringify({ type: "client:registered", clientId: data.clientId }));
+
+            // Backfill `agent:pinned` for any agent already bound to this
+            // client at registration time. Without this, an admin who pins an
+            // agent while the client is offline would still need a manual
+            // `first-tree-hub agent add` after restart — the realtime push in
+            // admin/agents.ts only fires for live sockets. The client dedupes
+            // on agentId, so re-firing on every reconnect is safe.
+            try {
+              const pinned = await clientService.listActiveAgentsPinnedToClient(app.db, data.clientId);
+              for (const agent of pinned) {
+                const parsed = agentPinnedMessageSchema.safeParse({
+                  type: "agent:pinned",
+                  agentId: agent.uuid,
+                  name: agent.name,
+                  displayName: agent.displayName,
+                  agentType: agent.type,
+                });
+                if (!parsed.success) {
+                  app.log.warn(
+                    { err: parsed.error.flatten(), agentId: agent.uuid, clientId: data.clientId },
+                    "agent:pinned backfill frame failed schema validation — skipping",
+                  );
+                  continue;
+                }
+                socket.send(JSON.stringify(parsed.data));
+              }
+            } catch (err) {
+              app.log.error(
+                { err, clientId: data.clientId },
+                "agent:pinned backfill on client:register failed — client may need manual `agent add`",
+              );
+            }
           } else if (type === "agent:bind") {
             if (!clientId) {
               socket.send(JSON.stringify({ type: "error", ref, message: "Must register client first" }));
