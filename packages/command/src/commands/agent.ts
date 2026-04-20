@@ -60,9 +60,10 @@ function resolveLocalAgent(agentName?: string): ResolvedAgentConfig {
 
   let serverUrl: string;
   try {
-    serverUrl = resolveServerUrl(process.env.FIRST_TREE_HUB_SERVER);
-  } catch {
-    serverUrl = "http://localhost:8000";
+    serverUrl = resolveServerUrl(process.env.FIRST_TREE_HUB_SERVER_URL);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    fail("MISSING_SERVER_URL", msg, 2);
   }
 
   return { serverUrl, agentId: cfg.agentId };
