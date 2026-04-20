@@ -28,6 +28,10 @@ describe("parseDaemonArgs", () => {
       "9191",
       "--task-timeout-secs",
       "600",
+      "--max-parallel",
+      "7",
+      "--search-limit",
+      "25",
     ]);
     expect(out).toEqual({
       pollIntervalSec: 30,
@@ -35,6 +39,8 @@ describe("parseDaemonArgs", () => {
       logLevel: "debug",
       httpPort: 9191,
       taskTimeoutSec: 600,
+      maxParallel: 7,
+      searchLimit: 25,
     });
   });
 
@@ -71,6 +77,15 @@ describe("parseDaemonArgs", () => {
   it("drops empty --allow-repo values", () => {
     expect(parseDaemonArgs(["--allow-repo", ""]).allowRepo).toBeUndefined();
     expect(parseDaemonArgs(["--allow-repo="]).allowRepo).toBeUndefined();
+  });
+
+  it("parses numeric equals-forms for max-parallel and search-limit", () => {
+    const out = parseDaemonArgs([
+      "--max-parallel=11",
+      "--search-limit=31",
+    ]);
+    expect(out.maxParallel).toBe(11);
+    expect(out.searchLimit).toBe(31);
   });
 });
 

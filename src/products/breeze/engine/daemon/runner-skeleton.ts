@@ -52,7 +52,7 @@ import { Dispatcher } from "./dispatcher.js";
 import { WorkspaceManager } from "./workspace.js";
 import type { AgentSpec } from "./runner.js";
 import { GhClient as BrokerGhClient } from "./gh-client.js";
-import { runCandidateLoop } from "./candidate-loop.js";
+import { runCandidateCycle, runCandidateLoop } from "./candidate-loop.js";
 import { RepoFilter } from "../runtime/repo-filter.js";
 import { Scheduler } from "./scheduler.js";
 import { ThreadStore } from "./thread-store.js";
@@ -64,6 +64,8 @@ export interface DaemonCliOverrides {
   httpPort?: number;
   // taskTimeoutSec is read today but not yet consumed; kept for Phase 3b.
   taskTimeoutSec?: number;
+  maxParallel?: number;
+  searchLimit?: number;
   /**
    * Comma-separated allow-list of repos the daemon should act on.
    * Patterns are `owner/repo` or `owner/*`. An empty or undefined value
@@ -107,11 +109,13 @@ const DEFAULT_LOGGER: PollerLogger = {
  *   --log-level <level>
  *   --http-port <n>
  *   --task-timeout-secs <n>
+ *   --max-parallel <n>
+ *   --search-limit <n>
  *   --allow-repo <csv>            (owner/repo,owner/* — scopes the daemon
  *                                  to the listed repos; empty = all)
  *
  * Both `--flag value` and `--flag=value` forms are accepted for
- * `--allow-repo`.
+ * `--allow-repo`, `--max-parallel`, and `--search-limit`.
  *
  * Unknown flags are dropped silently in Phase 3a — they'll be parsed by
  * the future full-featured daemon in 3b/3c. This keeps the skeleton
@@ -128,6 +132,16 @@ export function parseDaemonArgs(argv: readonly string[]): DaemonCliOverrides {
     if (arg && arg.startsWith("--allow-repo=")) {
       const value = arg.slice("--allow-repo=".length);
       if (value.length > 0) overrides.allowRepo = value;
+      continue;
+    }
+    if (arg && arg.startsWith("--max-parallel=")) {
+      const value = Number.parseInt(arg.slice("--max-parallel=".length), 10);
+      if (Number.isFinite(value) && value > 0) overrides.maxParallel = value;
+      continue;
+    }
+    if (arg && arg.startsWith("--search-limit=")) {
+      const value = Number.parseInt(arg.slice("--search-limit=".length), 10);
+      if (Number.isFinite(value) && value > 0) overrides.searchLimit = value;
       continue;
     }
     switch (arg) {
@@ -182,6 +196,24 @@ export function parseDaemonArgs(argv: readonly string[]): DaemonCliOverrides {
         if (value !== undefined) {
           const n = Number.parseInt(value, 10);
           if (Number.isFinite(n) && n > 0) overrides.taskTimeoutSec = n;
+          advance();
+        }
+        break;
+      }
+      case "--max-parallel": {
+        const value = next();
+        if (value !== undefined) {
+          const n = Number.parseInt(value, 10);
+          if (Number.isFinite(n) && n > 0) overrides.maxParallel = n;
+          advance();
+        }
+        break;
+      }
+      case "--search-limit": {
+        const value = next();
+        if (value !== undefined) {
+          const n = Number.parseInt(value, 10);
+          if (Number.isFinite(n) && n > 0) overrides.searchLimit = n;
           advance();
         }
         break;
@@ -344,6 +376,13 @@ export async function runDaemon(
   let broker: RunningBroker | null = null;
   let dispatcher: Dispatcher | null = null;
   let candidateLoopDone: Promise<void> | null = null;
+  let candidateRuntime:
+    | {
+        client: BrokerGhClient;
+        dispatcher: Dispatcher;
+        scheduler: Scheduler;
+      }
+    | null = null;
   try {
     const agents = detectAvailableAgents();
     const realGh = findExecutable("gh");
@@ -404,25 +443,32 @@ export async function runDaemon(
         `breeze daemon: dispatcher ready (agents=${agents.map((r) => r.kind).join(",")}, broker=${broker.shimDir})`,
       );
 
-      // Phase 4: candidate loop — feeds the dispatcher from GitHub.
-      candidateLoopDone = runCandidateLoop({
+      candidateRuntime = {
         client: candidateClient,
         dispatcher,
-        bus,
-        pollIntervalSec: config.pollIntervalSec,
-        searchLimit: config.searchLimit,
-        includeSearch: true,
-        lookbackSecs: 24 * 3_600,
-        signal: controller.signal,
-        logger,
         scheduler,
-        recoverableCandidates: () =>
-          scheduler.enqueueRecoverableTasks(identity.host),
-      }).catch((err) => {
-        logger.error(
-          `candidate loop crashed: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      });
+      };
+      if (!options.once) {
+        // Phase 4: candidate loop — feeds the dispatcher from GitHub.
+        candidateLoopDone = runCandidateLoop({
+          client: candidateClient,
+          dispatcher,
+          bus,
+          pollIntervalSec: config.pollIntervalSec,
+          searchLimit: config.searchLimit,
+          includeSearch: true,
+          lookbackSecs: 24 * 3_600,
+          signal: controller.signal,
+          logger,
+          scheduler,
+          recoverableCandidates: () =>
+            scheduler.enqueueRecoverableTasks(identity.host),
+        }).catch((err) => {
+          logger.error(
+            `candidate loop crashed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
+      }
     } else {
       const missing: string[] = [];
       if (agents.length === 0) missing.push("no codex/claude on PATH");
@@ -469,8 +515,23 @@ export async function runDaemon(
   try {
     if (options.once) {
       // One-shot: run a single poll cycle, then wait for the
-      // dispatcher to drain. Mirrors Rust `run_loop(once=true)`.
+      // dispatcher to drain. Also run one candidate-search cycle so
+      // assigned/review-requested work is not lost before shutdown.
       await runPollerOnce(config, paths, controller.signal, logger);
+      if (candidateRuntime) {
+        const outcome = await runCandidateCycle(
+          {
+            client: candidateRuntime.client,
+            dispatcher: candidateRuntime.dispatcher,
+            searchLimit: config.searchLimit,
+            includeSearch: true,
+            lookbackSecs: 24 * 3_600,
+            scheduler: candidateRuntime.scheduler,
+          },
+          () => Math.floor(Date.now() / 1_000),
+        );
+        logCandidateOutcome(outcome, logger, bus);
+      }
       if (dispatcher) await waitForDispatcherDrain(dispatcher, controller.signal);
     } else {
       await runPoller({
@@ -584,6 +645,23 @@ export function resolveRunnerHome(
   const breezeDir = env("BREEZE_DIR");
   if (breezeDir && breezeDir.length > 0) return join(breezeDir, "runner");
   return join(homedir(), ".breeze", "runner");
+}
+
+function logCandidateOutcome(
+  outcome: Awaited<ReturnType<typeof runCandidateCycle>>,
+  logger: PollerLogger,
+  bus: Bus,
+): void {
+  for (const warning of outcome.warnings) {
+    logger.warn(`candidates: ${warning}`);
+    bus.publish({ kind: "activity", line: warning });
+  }
+  if (outcome.rateLimited) {
+    logger.warn("candidate search rate-limited during one-shot cycle");
+  }
+  if (outcome.submitted > 0) {
+    logger.info(`candidates: submitted ${outcome.submitted} task(s)`);
+  }
 }
 
 /**

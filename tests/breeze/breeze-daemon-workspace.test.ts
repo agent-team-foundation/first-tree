@@ -163,4 +163,38 @@ describe("WorkspaceManager.prepare", () => {
       mgr.prepare({ repo: "o/r", kind: "issue", stableId: "1" }),
     ).rejects.toThrow(/resolve mirror HEAD/);
   });
+
+  it("serializes prepare calls that target the same repo mirror", async () => {
+    const root = makeTempDir("serial");
+    const reposDir = join(root, "repos");
+    const workspacesDir = join(root, "workspaces");
+    mkdirSync(join(reposDir, "o__r.git"), { recursive: true });
+
+    let active = 0;
+    let maxActive = 0;
+    const runner: GitRunner = async ({ args }) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      active -= 1;
+      if (args.includes("rev-parse")) {
+        return { stdout: "deadbeef\n", stderr: "", statusCode: 0 };
+      }
+      return { stdout: "", stderr: "", statusCode: 0 };
+    };
+
+    const mgr = new WorkspaceManager({
+      reposDir,
+      workspacesDir,
+      identity: { host: "github.com", login: "alice" },
+      runGit: runner,
+    });
+
+    await Promise.all([
+      mgr.prepare({ repo: "o/r", kind: "issue", stableId: "1" }),
+      mgr.prepare({ repo: "o/r", kind: "issue", stableId: "2" }),
+    ]);
+
+    expect(maxActive).toBe(1);
+  });
 });

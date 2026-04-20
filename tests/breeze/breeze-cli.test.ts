@@ -106,6 +106,33 @@ describe("runBreeze dispatcher", () => {
     }
   });
 
+  it("prints inline help for daemon-like subcommands without executing them", async () => {
+    const runDaemonSpy = vi.fn(async () => 0);
+    const runStartSpy = vi.fn(async () => 0);
+    vi.doMock("../../src/products/breeze/engine/daemon/runner-skeleton.js", () => ({
+      runDaemon: runDaemonSpy,
+    }));
+    vi.doMock("../../src/products/breeze/engine/commands/start.js", () => ({
+      runStart: runStartSpy,
+    }));
+
+    const { runBreeze: freshRun } = await import(
+      "../../src/products/breeze/cli.js"
+    );
+
+    const runOutput = captureOutput();
+    const runCode = await freshRun(["run", "--help"], runOutput.write);
+    expect(runCode).toBe(0);
+    expect(runOutput.lines.join("\n")).toContain("usage: first-tree breeze run");
+    expect(runDaemonSpy).not.toHaveBeenCalled();
+
+    const startOutput = captureOutput();
+    const startCode = await freshRun(["start", "--help"], startOutput.write);
+    expect(startCode).toBe(0);
+    expect(startOutput.lines.join("\n")).toContain("usage: first-tree breeze start");
+    expect(runStartSpy).not.toHaveBeenCalled();
+  });
+
   it("routes statusline through node + the separate dist bundle", async () => {
     const spawnSpy = vi.fn().mockReturnValue(0);
     const resolvePackageRootSpy = vi.fn(() => "/pkg");

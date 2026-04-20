@@ -82,6 +82,8 @@ export function launchdDomain(): string {
  * `passthrough_launchd_env_vars`. Caller-supplied `env` overrides.
  */
 export const PASSTHROUGH_ENV_VARS: readonly string[] = [
+  "BREEZE_DIR",
+  "BREEZE_HOME",
   "AZURE_OPENAI_ENDPOINT",
   "AZURE_OPENAI_API_KEY",
   "AZURE_OPENAI_ENDPOINT_BACKUP",
@@ -152,6 +154,9 @@ export function renderLaunchdPlist(inputs: LaunchdPlistInputs): string {
   };
   pushEnv("PATH", inputs.env?.PATH ?? process.env.PATH);
   pushEnv("HOME", inputs.env?.HOME ?? process.env.HOME);
+  for (const [key, value] of Object.entries(inputs.env ?? {})) {
+    pushEnv(key, value);
+  }
   for (const variable of PASSTHROUGH_ENV_VARS) {
     pushEnv(variable, inputs.env?.[variable] ?? resolveLaunchdEnvVar(variable));
   }
