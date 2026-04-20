@@ -294,6 +294,57 @@ describe("startGhBroker serve loop", () => {
     }
   });
 
+  it("recovers when the request dir vanishes mid-handle", async () => {
+    // Regression: the shim's request dir could be reaped (by an external
+    // cleaner or an abandoned shim timeout) after the broker picked it
+    // up. The broker's writeFailureResponse then hit ENOENT and killed
+    // the serve loop with an unhandled rejection, losing every in-flight
+    // agent's gh request.
+    const brokerDir = makeTempDir("reap");
+    const reqDir = join(brokerDir, "requests", "req-reap");
+    const executor = new GhExecutor({
+      realGh: "/usr/bin/gh",
+      writeCooldownMs: 0,
+      spawnGh: async () => {
+        // Simulate the external reap racing against broker response write.
+        rmSync(reqDir, { recursive: true, force: true });
+        throw new Error("network boom");
+      },
+      now: () => 0,
+      sleep: async () => {},
+    });
+    const broker = await startGhBroker({
+      brokerDir,
+      executor,
+      pollIntervalMs: 5,
+    });
+    try {
+      mkdirSync(reqDir, { recursive: true });
+      writeFileSync(join(reqDir, "argv.txt"), "api\n/notifications\n");
+      writeFileSync(join(reqDir, "cwd.txt"), "/tmp\n");
+      await waitFor(
+        () => existsSync(join(reqDir, "response.env")),
+        2_000,
+      );
+      expect(readFileSync(join(reqDir, "response.env"), "utf8")).toContain(
+        "status_code=1",
+      );
+      // Serve loop survived: a subsequent request still completes.
+      const reqDir2 = join(brokerDir, "requests", "req-after");
+      mkdirSync(reqDir2, { recursive: true });
+      writeFileSync(join(reqDir2, "argv.txt"), "api\n/rate_limit\n");
+      writeFileSync(join(reqDir2, "cwd.txt"), "/tmp\n");
+      // The executor was primed to throw for every call, but handleRequest
+      // will still write a failure response and keep the loop alive.
+      await waitFor(
+        () => existsSync(join(reqDir2, "response.env")),
+        2_000,
+      );
+    } finally {
+      await broker.stop();
+    }
+  });
+
   it("writes failure response when executor throws", async () => {
     const brokerDir = makeTempDir("fail");
     const executor = new GhExecutor({

@@ -210,11 +210,21 @@ export async function startGhBroker(
             now,
           });
         } catch (err) {
-          writeFailureResponse(
-            requestDir,
-            err instanceof Error ? err.message : String(err),
-            now,
-          );
+          try {
+            writeFailureResponse(
+              requestDir,
+              err instanceof Error ? err.message : String(err),
+              now,
+            );
+          } catch (writeErr) {
+            logger.warn(
+              `broker: failed to write failure response for ${requestDir}: ${
+                writeErr instanceof Error
+                  ? writeErr.message
+                  : String(writeErr)
+              }`,
+            );
+          }
         }
       }
     }
@@ -461,6 +471,10 @@ interface WriteSuccessOptions {
 }
 
 function writeSuccessResponse(opts: WriteSuccessOptions): void {
+  // Defensive: the shim's request dir can be cleaned up concurrently
+  // (external reaper, shim timeout abandon). Recreate it so our writes
+  // don't ENOENT and crash the broker loop.
+  ensureDir(opts.requestDir);
   const stdoutPath = join(opts.requestDir, "stdout.txt");
   const stderrPath = join(opts.requestDir, "stderr.txt");
   writeFileSync(stdoutPath, opts.stdout);
@@ -482,6 +496,8 @@ function writeFailureResponse(
   error: string,
   now: () => number,
 ): void {
+  // Defensive: same concurrent-cleanup rationale as writeSuccessResponse.
+  ensureDir(requestDir);
   const stdoutPath = join(requestDir, "stdout.txt");
   const stderrPath = join(requestDir, "stderr.txt");
   writeFileSync(stdoutPath, "");
