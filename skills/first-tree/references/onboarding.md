@@ -169,7 +169,39 @@ first-tree tree verify --tree-path ../my-org-tree
 Do not run `first-tree tree verify` in a source/workspace root without pointing it
 at a tree checkout.
 
-## Step 6: Publish
+## Step 6: Opt In To Modules (Optional)
+
+`first-tree` ships two optional modules that live on top of the core
+tree toolkit:
+
+- **gardener** — automated review/response on source-repo PRs and sync
+  PRs. Write `.claude/gardener-config.yaml` in the tree repo to enable
+  it:
+
+  ```yaml
+  target_repo: owner/app-repo          # source repo to review
+  tree_repo: owner/tree-repo            # this tree repo (for attribution)
+  modules:
+    comment:
+      enabled: true                     # scan open/merged source PRs + issues
+    respond:
+      enabled: true                     # handle reviewer feedback on sync PRs
+  ```
+
+  Omit a module or set `enabled: false` to opt out. Without the config
+  file, gardener exits cleanly as disabled — no config is the same as
+  fully opted out.
+
+- **breeze** — local notification daemon that dispatches gardener on
+  real GitHub events. Only needed if you want gardener to react to
+  review requests and assignments in real time. See the `breeze` skill
+  for setup.
+
+Both modules are off by default for new trees. Add them only once the
+tree itself is in a useful state — noisy gardener comments on a skeleton
+tree train reviewers to ignore it.
+
+## Step 7: Publish
 
 When the tree repo is ready:
 
@@ -195,6 +227,55 @@ but does not try to open many code PRs automatically.
 - If the checkout is missing but the tree has been published, create a temporary
   clone under `.first-tree/tmp/`.
 - At task close-out, always ask whether the tree needs updating.
+
+## Sample Tasks After Onboarding
+
+A few common things an agent does after the tree is live. These are
+examples, not a required sequence — pick what fits the task at hand.
+
+### Propose tree updates from a code change
+
+From the tree repo:
+
+```bash
+first-tree tree sync                         # detect drift between source + tree
+first-tree tree sync --apply                 # open tree PRs for each drift group
+```
+
+Runs against the bound source repo, groups changes by affected tree
+domain, and opens one PR per group (plus a housekeeping PR that pins
+the sync bookmark).
+
+### Review a source-repo PR against the tree
+
+From the tree repo, with `.claude/gardener-config.yaml` set up:
+
+```bash
+first-tree gardener comment --pr 42 --repo owner/app-repo
+```
+
+Or scan every open PR + issue on the bound source repo at once:
+
+```bash
+first-tree gardener comment
+```
+
+### Respond to reviewer feedback on a sync PR
+
+```bash
+first-tree gardener respond --pr 123 --repo owner/tree-repo
+```
+
+Add `--dry-run` to any of the above to preview without writing.
+
+### Add a new member to a shared tree
+
+Edit `members/<login>.md` in the tree repo, then regenerate CODEOWNERS:
+
+```bash
+first-tree tree generate-codeowners --check    # confirm what changes
+first-tree tree generate-codeowners            # apply
+```
 
 ## Further Reading
 
