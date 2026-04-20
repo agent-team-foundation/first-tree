@@ -289,6 +289,12 @@ export const SEVERITY_IN_MARKER_RE = /severity=([a-z]+)/;
 export const TREE_SHA_IN_MARKER_RE = /tree_sha=([A-Za-z0-9]+)/;
 export const TREE_ISSUE_CREATED_IN_MARKER_RE =
   /tree_issue_created=(https:\/\/github\.com\/[^\s·>]+)/;
+// Lives on its own `<!-- gardener:quiet_refresh_cid=<id> -->` line, not
+// inside gardener:state. Self-embeds the comment's own ID so rescans can
+// fast-path past quiet-refresh updates (#178, repo-gardener#24).
+export const QUIET_REFRESH_CID_MARKER_RE =
+  /<!--\s*gardener:quiet_refresh_cid=([^\s]*?)\s*-->/;
+export const QUIET_REFRESH_CID_PLACEHOLDER = "self";
 
 /**
  * Recognizes `@gardener <command>` in user comments. Matches the
@@ -373,6 +379,7 @@ export function parseStateMarker(body: string | undefined): {
   severity?: Severity;
   treeSha?: string;
   treeIssueCreated?: string;
+  quietRefreshCid?: string;
 } | null {
   const marker = extractStateMarker(body);
   if (!marker) return null;
@@ -382,6 +389,7 @@ export function parseStateMarker(body: string | undefined): {
     severity?: Severity;
     treeSha?: string;
     treeIssueCreated?: string;
+    quietRefreshCid?: string;
   } = {};
   const reviewed = marker.match(REVIEWED_SHA_RE);
   if (reviewed) out.reviewed = reviewed[1];
@@ -397,7 +405,37 @@ export function parseStateMarker(body: string | undefined): {
   if (treeSha) out.treeSha = treeSha[1];
   const treeIssue = marker.match(TREE_ISSUE_CREATED_IN_MARKER_RE);
   if (treeIssue) out.treeIssueCreated = treeIssue[1];
+  // quiet_refresh_cid lives on a separate HTML comment line — scan the
+  // full body, not just the state marker. Empty or placeholder values
+  // parse as undefined so callers can treat them as "not yet patched."
+  const cidMatch = (body ?? "").match(QUIET_REFRESH_CID_MARKER_RE);
+  if (cidMatch) {
+    const raw = cidMatch[1];
+    if (raw.length > 0 && raw !== QUIET_REFRESH_CID_PLACEHOLDER) {
+      out.quietRefreshCid = raw;
+    }
+  }
   return out;
+}
+
+/**
+ * Rewrite the quiet_refresh_cid marker's value — used after POST to
+ * replace the placeholder with the real comment ID. Idempotent: running
+ * on a body that already has `cid=<realId>` overwrites with the same
+ * value (a retry on an already-patched comment is a no-op diff).
+ *
+ * Returns null if `body` has no quiet_refresh_cid marker line — caller
+ * logs and skips rather than rewriting arbitrary comment bodies.
+ */
+export function withQuietRefreshCid(
+  body: string,
+  commentId: string | number,
+): string | null {
+  if (!QUIET_REFRESH_CID_MARKER_RE.test(body)) return null;
+  return body.replace(
+    QUIET_REFRESH_CID_MARKER_RE,
+    `<!-- gardener:quiet_refresh_cid=${String(commentId)} -->`,
+  );
 }
 
 export function hasIgnoredMarker(body: string | undefined): boolean {
@@ -857,6 +895,10 @@ export function buildCommentBody(input: BuildCommentInput): string {
       : `- _(no tree nodes cited — tree may be empty or irrelevant to this change)_`;
   const markerLine1 = `<!-- gardener:state · reviewed=${reviewedFull} · verdict=${verdict} · severity=${severity} · tree_sha=${treeSha} -->`;
   const markerLine2 = `<!-- gardener:last_consumed_rereview=${consumedId} -->`;
+  // Placeholder on first POST; comment.ts issues a follow-up PATCH to
+  // replace `<self>` with the newly-created comment's own ID. Old
+  // comments without this line continue to parse as cid=undefined.
+  const markerLine3 = `<!-- gardener:quiet_refresh_cid=${QUIET_REFRESH_CID_PLACEHOLDER} -->`;
 
   const detailsOpen = isMinimalAligned ? "<details>" : "<details open>";
   const closing = isMinimalAligned
@@ -870,6 +912,7 @@ export function buildCommentBody(input: BuildCommentInput): string {
   const lines = [
     markerLine1,
     markerLine2,
+    markerLine3,
     "",
     `🌱 **gardener** · ${emoji} \`${verdict}\` · severity: \`${severity}\` · commit: \`${reviewedShort}\``,
     "",
@@ -1611,10 +1654,14 @@ async function reviewOne(
   });
 
   if (action.kind === "rereview" && action.commentId > 0) {
-    // PATCH existing comment (Step 4e).
+    // PATCH existing comment (Step 4e). On the same PATCH, fill the
+    // quiet_refresh_cid placeholder with this comment's own ID so
+    // re-reviews keep the cid in sync (covers legacy comments that
+    // never had the cid patched in on first POST).
     write(
       `\u2712 #${number}: re-review → PATCH comment ${action.commentId} (${classification.verdict})`,
     );
+    const patchedBody = withQuietRefreshCid(body, action.commentId) ?? body;
     if (!dryRun) {
       await shell("gh", [
         "api",
@@ -1622,7 +1669,7 @@ async function reviewOne(
         "PATCH",
         `/repos/${repo}/issues/comments/${action.commentId}`,
         "-f",
-        `body=${body}`,
+        `body=${patchedBody}`,
       ]);
     }
     logEvent(env, {
@@ -1640,12 +1687,16 @@ async function reviewOne(
     };
   }
 
-  // First review — POST new comment.
+  // First review — POST new comment, then PATCH to self-embed the
+  // comment's own ID into the quiet_refresh_cid placeholder. Two-step
+  // sequence matches the repo-gardener runbook (#178): POST returns
+  // the new ID, PATCH rewrites `<self>` to the real value so rescans
+  // can fast-path past gardener's own quiet-refresh updates.
   write(
     `\u2713 #${number}: first review → POST (${classification.verdict}/${classification.severity})`,
   );
   if (!dryRun) {
-    await shell("gh", [
+    const postRes = await shell("gh", [
       "api",
       "-X",
       "POST",
@@ -1653,6 +1704,23 @@ async function reviewOne(
       "-f",
       `body=${body}`,
     ]);
+    if (postRes.code === 0) {
+      const parsed = jsonTryParse<{ id?: number | string }>(postRes.stdout);
+      const newId = parsed?.id;
+      if (newId !== undefined && newId !== null) {
+        const patchedBody = withQuietRefreshCid(body, newId);
+        if (patchedBody !== null && patchedBody !== body) {
+          await shell("gh", [
+            "api",
+            "-X",
+            "PATCH",
+            `/repos/${repo}/issues/comments/${newId}`,
+            "-f",
+            `body=${patchedBody}`,
+          ]);
+        }
+      }
+    }
   }
   logEvent(env, {
     kind: "item",
