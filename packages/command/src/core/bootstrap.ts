@@ -22,7 +22,7 @@ type StoredCredentials = {
  */
 export function resolveServerUrl(flagValue?: string): string {
   if (flagValue) return flagValue;
-  if (process.env.FIRST_TREE_HUB_SERVER) return process.env.FIRST_TREE_HUB_SERVER;
+  if (process.env.FIRST_TREE_HUB_SERVER_URL) return process.env.FIRST_TREE_HUB_SERVER_URL;
 
   const config = resolveConfigReadonly({ schema: clientConfigSchema, role: "client" });
   const server = config.server;
@@ -33,7 +33,7 @@ export function resolveServerUrl(flagValue?: string): string {
 
   throw new Error(
     "Server URL not configured.\n" +
-      "  Provide via: --server <url>, FIRST_TREE_HUB_SERVER env var, or\n" +
+      "  Provide via: --server <url>, FIRST_TREE_HUB_SERVER_URL env var, or\n" +
       "  first-tree-hub config set -c server.url <url>",
   );
 }

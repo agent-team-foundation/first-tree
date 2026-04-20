@@ -101,7 +101,7 @@ export function registerAgentConfigCommands(parent: Command): void {
     .command("get <agent>")
     .description("Print the current runtime config for an agent")
     .action(async (agentName: string) => {
-      const serverUrl = resolveServerUrl(process.env.FIRST_TREE_HUB_SERVER);
+      const serverUrl = resolveServerUrl(process.env.FIRST_TREE_HUB_SERVER_URL);
       const adminToken = await ensureFreshAdminToken();
       const { uuid } = await resolveAgentRecord(serverUrl, adminToken, agentName);
       const cfg = await getCurrent(serverUrl, adminToken, uuid);
@@ -112,7 +112,7 @@ export function registerAgentConfigCommands(parent: Command): void {
     .command("set-model <agent> <model>")
     .description("Replace the model field (e.g. claude-opus-4-6)")
     .action(async (agentName: string, model: string) => {
-      const serverUrl = resolveServerUrl(process.env.FIRST_TREE_HUB_SERVER);
+      const serverUrl = resolveServerUrl(process.env.FIRST_TREE_HUB_SERVER_URL);
       const adminToken = await ensureFreshAdminToken();
       const { uuid } = await resolveAgentRecord(serverUrl, adminToken, agentName);
       const current = await getCurrent(serverUrl, adminToken, uuid);
@@ -125,7 +125,7 @@ export function registerAgentConfigCommands(parent: Command): void {
     .description("Replace the systemPrompt append text — reads from -f file or stdin")
     .option("-f, --file <path>", "Read prompt text from this file")
     .action(async (agentName: string, opts: { file?: string }) => {
-      const serverUrl = resolveServerUrl(process.env.FIRST_TREE_HUB_SERVER);
+      const serverUrl = resolveServerUrl(process.env.FIRST_TREE_HUB_SERVER_URL);
       const adminToken = await ensureFreshAdminToken();
       const { uuid } = await resolveAgentRecord(serverUrl, adminToken, agentName);
       let text: string;
@@ -161,7 +161,7 @@ export function registerAgentConfigCommands(parent: Command): void {
         agentName: string,
         opts: { name: string; transport: string; command?: string; args?: string[]; url?: string },
       ) => {
-        const serverUrl = resolveServerUrl(process.env.FIRST_TREE_HUB_SERVER);
+        const serverUrl = resolveServerUrl(process.env.FIRST_TREE_HUB_SERVER_URL);
         const adminToken = await ensureFreshAdminToken();
         const { uuid } = await resolveAgentRecord(serverUrl, adminToken, agentName);
         const current = await getCurrent(serverUrl, adminToken, uuid);
@@ -190,7 +190,7 @@ export function registerAgentConfigCommands(parent: Command): void {
     .description("Set an env variable: KEY=VALUE. Use --sensitive for secrets.")
     .option("--sensitive", "Mark this value as sensitive (encrypted at rest, masked in echo)")
     .action(async (agentName: string, kv: string, opts: { sensitive?: boolean }) => {
-      const serverUrl = resolveServerUrl(process.env.FIRST_TREE_HUB_SERVER);
+      const serverUrl = resolveServerUrl(process.env.FIRST_TREE_HUB_SERVER_URL);
       const adminToken = await ensureFreshAdminToken();
       const { uuid } = await resolveAgentRecord(serverUrl, adminToken, agentName);
       const eqIdx = kv.indexOf("=");
@@ -211,7 +211,7 @@ export function registerAgentConfigCommands(parent: Command): void {
     .option("--ref <ref>", "branch / tag / commit (defaults to repo HEAD)")
     .option("--path <path>", "local path relative to session cwd")
     .action(async (agentName: string, url: string, opts: { ref?: string; path?: string }) => {
-      const serverUrl = resolveServerUrl(process.env.FIRST_TREE_HUB_SERVER);
+      const serverUrl = resolveServerUrl(process.env.FIRST_TREE_HUB_SERVER_URL);
       const adminToken = await ensureFreshAdminToken();
       const { uuid } = await resolveAgentRecord(serverUrl, adminToken, agentName);
       const current = await getCurrent(serverUrl, adminToken, uuid);
@@ -227,7 +227,7 @@ export function registerAgentConfigCommands(parent: Command): void {
     .description("Validate a JSON patch and print the diff without persisting")
     .requiredOption("-f, --file <path>", "JSON file with the partial payload to apply")
     .action(async (agentName: string, opts: { file: string }) => {
-      const serverUrl = resolveServerUrl(process.env.FIRST_TREE_HUB_SERVER);
+      const serverUrl = resolveServerUrl(process.env.FIRST_TREE_HUB_SERVER_URL);
       const adminToken = await ensureFreshAdminToken();
       const { uuid } = await resolveAgentRecord(serverUrl, adminToken, agentName);
       const patch = JSON.parse(readFileSync(opts.file, "utf-8")) as Partial<AgentRuntimeConfigPayload>;
