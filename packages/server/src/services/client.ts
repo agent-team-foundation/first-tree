@@ -108,13 +108,8 @@ export async function getClient(db: Database, clientId: string) {
   return row ?? null;
 }
 
-export async function listClients(db: Database, userId?: string) {
-  const conditions = [eq(clients.status, "connected")];
-  if (userId) conditions.push(eq(clients.userId, userId));
-  const rows = await db
-    .select()
-    .from(clients)
-    .where(conditions.length === 1 ? conditions[0] : and(...conditions));
+export async function listClients(db: Database, userId: string) {
+  const rows = await db.select().from(clients).where(eq(clients.userId, userId));
   const counts = await db
     .select({
       clientId: agents.clientId,

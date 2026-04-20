@@ -361,9 +361,44 @@ export function registerAgentCommands(program: Command): void {
       process.stderr.write(`  ${totalRemoved} workspace(s) cleaned.\n`);
     });
 
-  // ── Bind (Feishu bot / user) ────────────────────────────────────────
+  // ── Bind (client machine / Feishu bot / user) ───────────────────────
 
-  const bind = agent.command("bind").description("Bind external IM accounts to agents");
+  const bind = agent.command("bind").description("Bind an agent to a client machine or external IM account");
+
+  bind
+    .command("client <agentName>")
+    .description("Bind an unbound agent to a client machine (first-time bind only — ID is immutable once set)")
+    .requiredOption(
+      "--client-id <id>",
+      "Client (machine) ID — must be owned by you. Run `first-tree-hub client connect` on that machine first.",
+    )
+    .option("--server <url>", "Hub server URL")
+    .action(async (agentName: string, options: { clientId: string; server?: string }) => {
+      try {
+        const serverUrl = resolveServerUrl(options.server);
+        const accessToken = await ensureFreshAccessToken();
+        const target = await resolveAgent(serverUrl, accessToken, agentName);
+
+        const patchRes = await fetch(`${serverUrl}/api/v1/admin/agents/${target.uuid}`, {
+          method: "PATCH",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ clientId: options.clientId }),
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!patchRes.ok) {
+          const body = (await patchRes.json().catch(() => ({}))) as { error?: string };
+          fail("BIND_CLIENT_ERROR", body.error ?? `Bind failed (HTTP ${patchRes.status})`, 1);
+        }
+        process.stderr.write(`  \u2713 Bound "${target.name ?? target.uuid}" to client ${options.clientId}.\n`);
+        success({ agentId: target.uuid, clientId: options.clientId });
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        fail("BIND_CLIENT_ERROR", msg);
+      }
+    });
 
   bind
     .command("bot")

@@ -69,8 +69,10 @@ export function AgentFormDialog(props: AgentFormProps) {
   // Filter clients by the selected manager's user_id. The manager dropdown
   // is admin-only; members auto-pin under their own user, so their options
   // are already filtered server-side by clients the user owns.
+  // Only connected clients are pin-eligible — disconnected ones surface in
+  // the Clients page but cannot accept new agent bindings.
   const visibleClients = useMemo(() => {
-    const all = clientsQuery.data ?? [];
+    const all = (clientsQuery.data ?? []).filter((c) => c.status === "connected");
     if (!showClient) return all;
     if (!isAdmin) {
       // Server should only return clients owned by the caller for non-admins.
