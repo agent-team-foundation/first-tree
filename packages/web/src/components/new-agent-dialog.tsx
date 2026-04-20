@@ -2,7 +2,6 @@ import type { Agent } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useEffect, useState } from "react";
 import { type HubClient, listClients } from "../api/activity.js";
-import { getAgentConfig, updateAgentConfig } from "../api/agent-config.js";
 import { createAgent } from "../api/agents.js";
 import { Button } from "./ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog.js";
@@ -24,41 +23,12 @@ import { Label } from "./ui/label.js";
  *     `curl | sh … --token` command + polling.
  *   - "kael" — agent runs in the hub's managed runtime. Disabled for
  *     Pre-MVP until adapter_configs provisioning lands (#86).
+ *
+ * Prompt is intentionally not asked here — users edit it on the agent detail
+ * page after creation. Keeps onboarding focused on identity + location.
  */
 
 type Runtime = "claude-code" | "kael";
-
-type Template = {
-  key: "writing" | "coding" | "research" | "custom";
-  label: string;
-  emoji: string;
-  prompt: string;
-};
-
-const TEMPLATES: Template[] = [
-  {
-    key: "writing",
-    label: "Writing",
-    emoji: "📝",
-    prompt:
-      "You are a writing assistant. Help the user draft, edit, and polish text — emails, docs, posts, proposals. Match the user's tone, ask for the target audience when it's unclear, and suggest tighter phrasings without being precious about it.",
-  },
-  {
-    key: "coding",
-    label: "Coding",
-    emoji: "💻",
-    prompt:
-      "You are a coding assistant, skilled at debugging, refactoring, and writing clean code. Prefer minimal, targeted diffs. Trace actual behavior before changing it. State assumptions explicitly. When the user reports a bug, investigate the root cause before suggesting a fix.",
-  },
-  {
-    key: "research",
-    label: "Research",
-    emoji: "🔬",
-    prompt:
-      "You are a research assistant. Help the user find, compare, and synthesize information. Cite sources, flag uncertainty, surface trade-offs, and summarize long documents into the three things the user actually needs to decide.",
-  },
-  { key: "custom", label: "Custom", emoji: "✏️", prompt: "" },
-];
 
 function slugify(raw: string): string {
   return raw
@@ -72,10 +42,9 @@ type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /**
-   * Called after the agent row + prompt config are saved. Receives the new
-   * agent and the chosen runtime so the caller can decide what to do next
-   * (e.g. open the Last-step modal for Claude Code, or redirect to the
-   * Workspace for Kael).
+   * Called after the agent row is created. Receives the new agent and the
+   * chosen runtime so the caller can decide what to do next (e.g. open the
+   * Last-step modal for Claude Code, or redirect to the Workspace for Kael).
    */
   onCreated: (agent: Agent, runtime: Runtime) => void;
 };
@@ -86,9 +55,6 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
   const [nameDirty, setNameDirty] = useState(false);
-  const [templateKey, setTemplateKey] = useState<Template["key"]>("coding");
-  const codingTemplate = TEMPLATES.find((t) => t.key === "coding");
-  const [prompt, setPrompt] = useState(codingTemplate?.prompt ?? "");
   const [runtime, setRuntime] = useState<Runtime>("claude-code");
 
   // Step 2 state — shown only when the user has multiple connected computers
@@ -102,8 +68,6 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
     if (open) {
       setName("");
       setNameDirty(false);
-      setTemplateKey("coding");
-      setPrompt(TEMPLATES.find((t) => t.key === "coding")?.prompt ?? "");
       setRuntime("claude-code");
       setStep("form");
       setCandidateClients([]);
@@ -118,30 +82,17 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
     mutationFn: async (opts: { clientId?: string }) => {
       const displayName = name.trim() || "Untitled assistant";
       const effectiveName = slug || undefined;
-      const agent = await createAgent({
+      // When a clientId is provided (scenario B), the server pins the agent
+      // on create and emits an `agent:pinned` WebSocket frame to the
+      // matching client; its runtime then writes the local agent.yaml and
+      // opens the agent WS on its own. The caller can skip the Last-step
+      // modal and jump straight to the Workspace.
+      return createAgent({
         name: effectiveName,
         type: "personal_assistant",
         displayName,
-        // When a clientId is provided (scenario B), the server pins the agent
-        // on create and emits an `agent:pinned` WebSocket frame to the
-        // matching client; its runtime then writes the local agent.yaml and
-        // opens the agent WS on its own. The caller can skip the Last-step
-        // modal and jump straight to the Workspace.
         clientId: opts.clientId,
       });
-      // Seed the prompt — fetch current config to grab expectedVersion, then PATCH.
-      if (prompt.trim()) {
-        try {
-          const current = await getAgentConfig(agent.uuid);
-          await updateAgentConfig(agent.uuid, {
-            expectedVersion: current.version,
-            payload: { prompt: { append: prompt.trim() } },
-          });
-        } catch {
-          // Non-fatal — the agent exists, the user can edit the prompt later.
-        }
-      }
-      return agent;
     },
     onSuccess: (agent) => {
       queryClient.invalidateQueries({ queryKey: ["agents"] });
@@ -149,16 +100,6 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
       onCreated(agent, runtime);
     },
   });
-
-  function selectTemplate(t: Template) {
-    setTemplateKey(t.key);
-    // Only overwrite the prompt when it still matches the previous template,
-    // or when picking Custom (which is meant to start blank).
-    const previous = TEMPLATES.find((x) => x.key === templateKey);
-    if (!prompt.trim() || prompt === previous?.prompt || t.key === "custom") {
-      setPrompt(t.prompt);
-    }
-  }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -293,39 +234,6 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
                 ID on hub: <span className="font-mono">{slug}</span>
               </p>
             )}
-          </div>
-
-          <div className="space-y-2">
-            <Label>What it does</Label>
-            <div className="flex flex-wrap gap-2">
-              {TEMPLATES.map((t) => (
-                <button
-                  key={t.key}
-                  type="button"
-                  onClick={() => selectTemplate(t)}
-                  className={
-                    templateKey === t.key
-                      ? "inline-flex items-center gap-1.5 rounded-full border border-primary bg-primary/10 px-3 py-1 text-sm"
-                      : "inline-flex items-center gap-1.5 rounded-full border border-border px-3 py-1 text-sm hover:bg-accent/50 transition-colors"
-                  }
-                >
-                  <span>{t.emoji}</span>
-                  <span>{t.label}</span>
-                </button>
-              ))}
-            </div>
-            <textarea
-              value={prompt}
-              onChange={(e) => {
-                setPrompt(e.target.value);
-                // Switching to Custom the moment the user edits a template.
-                if (templateKey !== "custom") setTemplateKey("custom");
-              }}
-              placeholder="You are a coding assistant, skilled at debugging and refactoring…"
-              rows={5}
-              maxLength={8000}
-              className="flex w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            />
           </div>
 
           <div className="space-y-2">
