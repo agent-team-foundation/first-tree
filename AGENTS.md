@@ -12,6 +12,22 @@ First Tree Hub ≠ Orchestration framework
 First Tree Hub ≠ Context Tree
 ```
 
+## Breeze Naming
+
+In this repo, **Breeze** means the Hub-hosted GitHub delivery surface inside
+`first-tree-hub`, not the local `first-tree breeze` daemon shipped by the
+`first-tree` npm package.
+
+- Hub-hosted Breeze: lives here; built on top of Hub messaging,
+  notifications, and Gardener review logic.
+- Local CLI Breeze: lives in the `first-tree` repo; owns `first-tree breeze`,
+  launchd wiring, `~/.breeze/`, local GitHub notification polling, and local
+  agent workspaces.
+
+If a task is about `first-tree breeze`, launchd, `~/.breeze/`, local daemon
+lifecycle, or Codex/Claude runner behavior, switch to the `first-tree` repo
+and the shared Context Tree nodes before editing Hub code here.
+
 ## Tech Stack
 
 **Server:** Fastify / Drizzle ORM / PostgreSQL / Zod / bcrypt / jose / @fastify/websocket / @fastify/rate-limit
