@@ -1,0 +1,304 @@
+import type { FastifyInstance } from "fastify";
+import { SignJWT } from "jose";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import WebSocket from "ws";
+import { clients } from "../db/schema/clients.js";
+import { members } from "../db/schema/members.js";
+import { users } from "../db/schema/users.js";
+import { createAgent } from "../services/agent.js";
+import { resolveDefaultOrgId } from "../services/organization.js";
+import { uuidv7 } from "../uuid.js";
+import { createTestApp } from "./helpers.js";
+
+/**
+ * Regression guard for the "auto agent add" fix: when an admin creates (or
+ * binds) an agent with a `clientId` pinned to a live client WebSocket, the
+ * server must push an `agent:pinned` frame so the client runtime can
+ * materialise its local config without a manual `first-tree-hub agent add`.
+ */
+describe("Agent WS — agent:pinned push on create/bind", () => {
+  let app: FastifyInstance;
+  let wsUrl: string;
+  const jwtSecret = process.env.JWT_SECRET ?? "test-jwt-secret-key-for-vitest";
+
+  async function signMemberJwt(
+    userId: string,
+    memberId: string,
+    organizationId: string,
+    role: string,
+  ): Promise<string> {
+    const secret = new TextEncoder().encode(jwtSecret);
+    const now = Math.floor(Date.now() / 1000);
+    return new SignJWT({
+      sub: userId,
+      memberId,
+      organizationId,
+      role,
+      type: "access",
+    })
+      .setProtectedHeader({ alg: "HS256" })
+      .setIssuedAt(now)
+      .setExpirationTime(now + 300)
+      .sign(secret);
+  }
+
+  async function seedConnectedClient(suffix: string) {
+    const orgId = await resolveDefaultOrgId(app.db);
+    const userId = uuidv7();
+    const memberId = uuidv7();
+    const clientId = `cli-pin-${suffix}-${crypto.randomUUID().slice(0, 6)}`;
+    const role = "admin";
+
+    await app.db.transaction(async (tx) => {
+      await tx.insert(users).values({
+        id: userId,
+        username: `pin-user-${suffix}-${crypto.randomUUID().slice(0, 6)}`,
+        passwordHash: "x",
+        displayName: `Pin User ${suffix}`,
+      });
+
+      const humanAgent = await createAgent(tx as unknown as typeof app.db, {
+        name: `pin-human-${suffix}-${crypto.randomUUID().slice(0, 6)}`,
+        type: "human",
+        displayName: `Pin Human ${suffix}`,
+        source: "admin-api",
+        managerId: memberId,
+        organizationId: orgId,
+      });
+
+      await tx.insert(members).values({
+        id: memberId,
+        userId,
+        organizationId: orgId,
+        agentId: humanAgent.uuid,
+        role,
+      });
+
+      await tx.insert(clients).values({
+        id: clientId,
+        userId,
+        status: "connected",
+      });
+    });
+
+    const token = await signMemberJwt(userId, memberId, orgId, role);
+    return { token, clientId, memberId, userId, organizationId: orgId };
+  }
+
+  function waitForFrame(
+    ws: WebSocket,
+    match: (m: unknown) => boolean,
+    timeoutMs = 5000,
+  ): Promise<Record<string, unknown>> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        ws.off("message", onMessage);
+        reject(new Error(`timeout waiting for frame (${timeoutMs}ms)`));
+      }, timeoutMs);
+      const onMessage = (raw: WebSocket.RawData) => {
+        try {
+          const parsed = JSON.parse(raw.toString()) as Record<string, unknown>;
+          if (match(parsed)) {
+            clearTimeout(timer);
+            ws.off("message", onMessage);
+            resolve(parsed);
+          }
+        } catch {
+          // ignore non-JSON
+        }
+      };
+      ws.on("message", onMessage);
+    });
+  }
+
+  async function openRegisteredSocket(seed: Awaited<ReturnType<typeof seedConnectedClient>>): Promise<WebSocket> {
+    const ws = new WebSocket(wsUrl);
+    await new Promise<void>((resolve, reject) => {
+      ws.once("open", () => resolve());
+      ws.once("error", reject);
+    });
+
+    ws.send(JSON.stringify({ type: "auth", token: seed.token }));
+    await waitForFrame(ws, (m) => (m as { type?: string }).type === "auth:ok");
+
+    ws.send(JSON.stringify({ type: "client:register", clientId: seed.clientId }));
+    await waitForFrame(ws, (m) => (m as { type?: string }).type === "client:registered");
+
+    return ws;
+  }
+
+  beforeAll(async () => {
+    app = await createTestApp();
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const addr = app.server.address();
+    if (!addr || typeof addr === "string") throw new Error("test server has no address");
+    wsUrl = `ws://127.0.0.1:${addr.port}/api/v1/agent/ws/client`;
+  });
+
+  afterAll(async () => {
+    await app?.close();
+  });
+
+  it("pushes agent:pinned when POST /admin/agents creates an agent with a live clientId", async () => {
+    const seed = await seedConnectedClient("create");
+    const ws = await openRegisteredSocket(seed);
+
+    try {
+      const pinnedPromise = waitForFrame(ws, (m) => (m as { type?: string }).type === "agent:pinned");
+
+      const name = `pin-created-${crypto.randomUUID().slice(0, 6)}`;
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/admin/agents",
+        headers: { authorization: `Bearer ${seed.token}` },
+        payload: {
+          name,
+          type: "autonomous_agent",
+          displayName: "Pin Created",
+          clientId: seed.clientId,
+        },
+      });
+      expect(res.statusCode).toBe(201);
+      const body = res.json<{ uuid: string; clientId: string | null }>();
+      expect(body.clientId).toBe(seed.clientId);
+
+      const pinned = await pinnedPromise;
+      expect(pinned.type).toBe("agent:pinned");
+      expect(pinned.agentId).toBe(body.uuid);
+      expect(pinned.name).toBe(name);
+      expect(pinned.displayName).toBe("Pin Created");
+      expect(pinned.agentType).toBe("autonomous_agent");
+    } finally {
+      ws.close();
+      await new Promise<void>((r) => ws.once("close", () => r()));
+    }
+  }, 15000);
+
+  it("pushes agent:pinned when PATCH /admin/agents/:uuid binds a NULL clientId to a live client", async () => {
+    const seed = await seedConnectedClient("bind");
+    const ws = await openRegisteredSocket(seed);
+
+    try {
+      // Create the agent WITHOUT a clientId, then bind it via PATCH — that is
+      // the exact "unbound → pinned" transition that the fix must cover.
+      const unbound = await createAgent(app.db, {
+        name: `pin-bind-${crypto.randomUUID().slice(0, 6)}`,
+        type: "autonomous_agent",
+        displayName: "Pin Bound",
+        source: "admin-api",
+        managerId: seed.memberId,
+        organizationId: seed.organizationId,
+      });
+      expect(unbound.clientId).toBeNull();
+
+      const pinnedPromise = waitForFrame(ws, (m) => (m as { type?: string }).type === "agent:pinned");
+
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/api/v1/admin/agents/${unbound.uuid}`,
+        headers: { authorization: `Bearer ${seed.token}` },
+        payload: { clientId: seed.clientId },
+      });
+      expect(res.statusCode).toBe(200);
+
+      const pinned = await pinnedPromise;
+      expect(pinned.agentId).toBe(unbound.uuid);
+      expect(pinned.name).toBe(unbound.name);
+      expect(pinned.agentType).toBe("autonomous_agent");
+    } finally {
+      ws.close();
+      await new Promise<void>((r) => ws.once("close", () => r()));
+    }
+  }, 15000);
+
+  it("does NOT push agent:pinned when the creating admin uses a different client", async () => {
+    const seed = await seedConnectedClient("noise");
+    const ws = await openRegisteredSocket(seed);
+
+    try {
+      // Seed a second claimed client owned by the same user. The agent will
+      // be pinned to that client, not `seed.clientId` — so the live WS on
+      // `seed.clientId` must stay quiet.
+      const otherClientId = `cli-other-${crypto.randomUUID().slice(0, 6)}`;
+      await app.db.insert(clients).values({ id: otherClientId, userId: seed.userId, status: "connected" });
+
+      let receivedPinned = false;
+      ws.on("message", (raw) => {
+        try {
+          const msg = JSON.parse(raw.toString()) as { type?: string };
+          if (msg.type === "agent:pinned") receivedPinned = true;
+        } catch {
+          // ignore
+        }
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/admin/agents",
+        headers: { authorization: `Bearer ${seed.token}` },
+        payload: {
+          name: `pin-noise-${crypto.randomUUID().slice(0, 6)}`,
+          type: "autonomous_agent",
+          clientId: otherClientId,
+        },
+      });
+      expect(res.statusCode).toBe(201);
+
+      // Give the server a beat to send — if it were going to send.
+      await new Promise((r) => setTimeout(r, 200));
+      expect(receivedPinned).toBe(false);
+    } finally {
+      ws.close();
+      await new Promise<void>((r) => ws.once("close", () => r()));
+    }
+  }, 15000);
+
+  it("does NOT push agent:pinned on PATCHes that don't transition NULL → ID", async () => {
+    const seed = await seedConnectedClient("rename");
+    const ws = await openRegisteredSocket(seed);
+
+    try {
+      const existing = await createAgent(app.db, {
+        name: `pin-existing-${crypto.randomUUID().slice(0, 6)}`,
+        type: "autonomous_agent",
+        displayName: "Existing",
+        source: "admin-api",
+        managerId: seed.memberId,
+        clientId: seed.clientId,
+        organizationId: seed.organizationId,
+      });
+      expect(existing.clientId).toBe(seed.clientId);
+
+      // Drain any create-time pinned frame the previous test block might have
+      // left in-flight for THIS agent (defensive — a fresh seed should be quiet).
+      await new Promise((r) => setTimeout(r, 100));
+
+      let receivedPinnedAfterPatch = false;
+      ws.on("message", (raw) => {
+        try {
+          const msg = JSON.parse(raw.toString()) as { type?: string; agentId?: string };
+          if (msg.type === "agent:pinned" && msg.agentId === existing.uuid) {
+            receivedPinnedAfterPatch = true;
+          }
+        } catch {
+          // ignore
+        }
+      });
+
+      // Touch only displayName — no clientId transition, should stay silent.
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/api/v1/admin/agents/${existing.uuid}`,
+        headers: { authorization: `Bearer ${seed.token}` },
+        payload: { displayName: "Renamed" },
+      });
+      expect(res.statusCode).toBe(200);
+
+      await new Promise((r) => setTimeout(r, 200));
+      expect(receivedPinnedAfterPatch).toBe(false);
+    } finally {
+      ws.close();
+      await new Promise<void>((r) => ws.once("close", () => r()));
+    }
+  }, 15000);
+});

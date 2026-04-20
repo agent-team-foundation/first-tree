@@ -1,4 +1,5 @@
 import {
+  agentPinnedMessageSchema,
   agentTypeSchema,
   createAgentSchema,
   paginationQuerySchema,
@@ -15,10 +16,44 @@ import { assertAgentVisible, assertCanManage, memberScope } from "../../services
 import * as agentService from "../../services/agent.js";
 import { createChat, findOrCreateDirectChat } from "../../services/chat.js";
 import * as clientService from "../../services/client.js";
-import { forceDisconnect, getAgentClientId, hasActiveConnection } from "../../services/connection-manager.js";
+import {
+  forceDisconnect,
+  getAgentClientId,
+  hasActiveConnection,
+  sendToClient,
+} from "../../services/connection-manager.js";
 import { sendMessage } from "../../services/message.js";
 import { notifyRecipients } from "../../services/notifier.js";
 import * as presenceService from "../../services/presence.js";
+
+/**
+ * Push an `agent:pinned` frame to the connected client so it can auto-register
+ * the agent locally without the operator running `first-tree-hub agent add`.
+ *
+ * Best-effort: if the client is not currently connected to this server
+ * instance, the notification is silently dropped — the client will discover
+ * the pinning on its next manual add or via a future sync path.
+ */
+function notifyClientAgentPinned(agent: {
+  uuid: string;
+  name: string | null;
+  displayName: string | null;
+  type: string;
+  clientId: string | null;
+}): void {
+  if (!agent.clientId) return;
+  // Parse through the schema so we get a narrowed, validated frame without
+  // resorting to a hand-written `as` assertion on `agent.type`.
+  const parsed = agentPinnedMessageSchema.safeParse({
+    type: "agent:pinned",
+    agentId: agent.uuid,
+    name: agent.name,
+    displayName: agent.displayName,
+    agentType: agent.type,
+  });
+  if (!parsed.success) return;
+  sendToClient(agent.clientId, parsed.data);
+}
 
 export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
   const listAgentsFilterSchema = z.object({ type: agentTypeSchema.optional() });
@@ -54,6 +89,10 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
       source: body.source ?? "admin-api",
       managerId,
     });
+    // Auto-register on the pinned client: push an `agent:pinned` frame so the
+    // running client writes its local agent config without a manual
+    // `first-tree-hub agent add` step.
+    notifyClientAgentPinned(agent);
     return reply.status(201).send({
       ...agent,
       createdAt: agent.createdAt.toISOString(),
@@ -65,14 +104,20 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
     const scope = memberScope(request);
     await assertCanManage(app.db, scope, request.params.uuid);
     const body = updateAgentSchema.parse(request.body);
-    // Only admins may reassign the manager. clientId is not in the schema at
-    // all, so even an admin cannot move an agent to a different client in
-    // this milestone (proposal M7, M11: immutable).
+    // Only admins may reassign the manager. clientId is NULL → ID one-shot;
+    // see updateAgent service for the immutability rule.
     const member = requireMember(request);
     if (body.managerId !== undefined && member.role !== "admin") {
       throw new ForbiddenError("Only admins can reassign an agent's manager");
     }
+    // Capture pre-state so we only notify when `clientId` was just set
+    // (NULL → ID). Subsequent PATCHes that leave clientId unchanged should
+    // not re-fire the auto-add flow.
+    const before = await agentService.getAgent(app.db, request.params.uuid);
     const agent = await agentService.updateAgent(app.db, request.params.uuid, body);
+    if (before.clientId === null && agent.clientId !== null) {
+      notifyClientAgentPinned(agent);
+    }
     return {
       ...agent,
       createdAt: agent.createdAt.toISOString(),

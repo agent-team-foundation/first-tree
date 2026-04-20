@@ -1,5 +1,7 @@
 import type { FSWatcher } from "node:fs";
-import { existsSync, watch } from "node:fs";
+import { existsSync, mkdirSync, watch, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import type { AgentPinnedMessage } from "@agent-team-foundation/first-tree-hub-shared";
 import type { AgentConfig } from "@agent-team-foundation/first-tree-hub-shared/config";
 import { agentConfigSchema, loadAgents } from "@agent-team-foundation/first-tree-hub-shared/config";
 import { AgentSlot, ClientConnection, getHandlerFactory, registerBuiltinHandlers } from "@first-tree-hub/client";
@@ -27,8 +29,15 @@ export class ClientRuntime {
   private readonly connection: ClientConnection;
   private readonly agents: AgentEntry[] = [];
   private readonly agentNames = new Set<string>();
+  private readonly agentIds = new Set<string>();
   private watcher: FSWatcher | null = null;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Directory we write auto-registered agent configs into (same path that
+   * `first-tree-hub agent add` uses). Set by `watchAgentsDir` so the
+   * `agent:pinned` handler knows where to materialise new configs.
+   */
+  private agentsDir: string | null = null;
 
   constructor(serverUrl: string, clientId: string) {
     this.serverUrl = serverUrl;
@@ -41,6 +50,14 @@ export class ClientRuntime {
 
     this.connection.on("auth:expired", () => {
       process.stderr.write("  \u26A0\uFE0F  Access token expired — reconnecting after refresh...\n");
+    });
+
+    // Server tells us an agent has just been pinned to this client — mirror
+    // what `first-tree-hub agent add` does (write local config) and let the
+    // scanForNewAgents helper start the slot. The fs watcher, when active,
+    // is also a fallback path for the same flow.
+    this.connection.on("agent:pinned", (message) => {
+      this.handleAgentPinned(message);
     });
   }
 
@@ -62,6 +79,7 @@ export class ClientRuntime {
     });
     this.agents.push({ name, slot });
     this.agentNames.add(name);
+    this.agentIds.add(config.agentId);
   }
 
   async start(): Promise<void> {
@@ -95,6 +113,9 @@ export class ClientRuntime {
   }
 
   watchAgentsDir(agentsDir: string): void {
+    // Record the directory even if the watcher bails (e.g. dir missing) so
+    // the `agent:pinned` handler knows where to materialise configs.
+    this.agentsDir = agentsDir;
     if (this.watcher) return;
     if (!existsSync(agentsDir)) return;
 
@@ -129,6 +150,7 @@ export class ClientRuntime {
       const all = loadAgents({ schema: agentConfigSchema, agentsDir });
       for (const [name, config] of all) {
         if (this.agentNames.has(name)) continue;
+        if (this.agentIds.has(config.agentId)) continue;
 
         process.stderr.write(`\n  New agent detected: ${name}\n`);
         this.addAgent(name, config);
@@ -137,6 +159,61 @@ export class ClientRuntime {
     } catch {
       // Ignore transient read errors during file writes
     }
+  }
+
+  /**
+   * React to an `agent:pinned` server push by writing the local config file
+   * (same shape `first-tree-hub agent add` produces) and scheduling the new
+   * slot — so the operator doesn't have to run `agent add` manually after
+   * creating an agent from the admin UI or API.
+   */
+  private handleAgentPinned(message: AgentPinnedMessage): void {
+    // Skip if we already track this agentId — avoids double-registration when
+    // the user also ran `agent add` manually, or when the server re-fires on
+    // reconnect in the future.
+    if (this.agentIds.has(message.agentId)) return;
+
+    if (!this.agentsDir) {
+      process.stderr.write(
+        `  \u26A0\uFE0F  Agent pinned (${message.agentId}) but no agents dir set — cannot auto-register.\n`,
+      );
+      return;
+    }
+
+    const localName = this.pickLocalName(message);
+    const agentDir = join(this.agentsDir, localName);
+    try {
+      mkdirSync(agentDir, { recursive: true, mode: 0o700 });
+      writeFileSync(join(agentDir, "agent.yaml"), `agentId: "${message.agentId}"\nruntime: claude-code\n`, {
+        mode: 0o600,
+      });
+      process.stderr.write(`  \u2713 Auto-added agent "${localName}" (${message.agentId}) from server push.\n`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`  \u2717 Failed to auto-add agent "${localName}": ${msg}\n`);
+      return;
+    }
+
+    // The fs watcher would eventually pick this up with a 500 ms debounce,
+    // but call the scan directly so the new slot starts promptly — especially
+    // important when the watcher is not active (e.g. tests, Docker builds).
+    this.scanForNewAgents(this.agentsDir);
+  }
+
+  /**
+   * Choose the directory name under `agents/<name>/agent.yaml` for an agent
+   * pushed by the server. Prefer the server-side `name` when set and not
+   * already claimed; otherwise fall back to a deterministic UUID-derived name
+   * so collisions with an existing local alias don't silently overwrite.
+   */
+  private pickLocalName(message: AgentPinnedMessage): string {
+    const preferred = message.name;
+    if (preferred && !this.agentNames.has(preferred)) return preferred;
+    const shortId = message.agentId
+      .replace(/[^a-z0-9]/gi, "")
+      .slice(0, 8)
+      .toLowerCase();
+    return `agent-${shortId}`;
   }
 
   private startAgent(name: string): void {
