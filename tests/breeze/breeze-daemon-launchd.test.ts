@@ -6,6 +6,10 @@ import {
   launchdPlistPath,
   renderLaunchdPlist,
 } from "../../src/products/breeze/engine/daemon/launchd.js";
+import {
+  defaultDaemonArgs,
+  resolveSelfCliInvocation,
+} from "../../src/products/breeze/engine/commands/start.js";
 
 describe("launchdLabel", () => {
   it("sanitizes login and profile into a dotted reverse-dns label", () => {
@@ -72,5 +76,28 @@ describe("renderLaunchdPlist", () => {
       env: { PATH: "/a", HOME: "/b" },
     });
     expect(xml).toContain("hello &lt;world&gt; &amp; &apos;friends&apos;");
+  });
+});
+
+describe("start command self-invocation helpers", () => {
+  it("resolves the current node + cli entrypoint pair", () => {
+    const self = resolveSelfCliInvocation("/opt/first-tree/dist/cli.js");
+    expect(self.executable).toBe(process.execPath);
+    expect(self.prefixArgs).toEqual(["/opt/first-tree/dist/cli.js"]);
+  });
+
+  it("prepends the cli entrypoint before breeze daemon args", () => {
+    expect(
+      defaultDaemonArgs(["--allow-repo", "owner/repo"], [
+        "/opt/first-tree/dist/cli.js",
+      ]),
+    ).toEqual([
+      "/opt/first-tree/dist/cli.js",
+      "breeze",
+      "daemon",
+      "--backend=ts",
+      "--allow-repo",
+      "owner/repo",
+    ]);
   });
 });

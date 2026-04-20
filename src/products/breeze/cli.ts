@@ -55,6 +55,76 @@ Environment:
   BREEZE_HOME           Override \`~/.breeze/runner\` (daemon private state)
 `;
 
+const BREEZE_INLINE_HELP: Partial<Record<string, string>> = {
+  run: `usage: first-tree breeze run [options]
+
+  Run the Breeze daemon in the foreground until stopped.
+
+  Common options:
+    --allow-repo <csv>           Restrict work to owner/repo or owner/* patterns
+    --poll-interval-secs <n>     Seconds between poll cycles
+    --task-timeout-secs <n>      Per-task timeout
+    --max-parallel <n>           Max concurrent agent tasks
+    --search-limit <n>           Max search-derived candidates per cycle
+`,
+  daemon: `usage: first-tree breeze daemon [options]
+
+  Alias for \`first-tree breeze run\`.
+`,
+  "run-once": `usage: first-tree breeze run-once [options]
+
+  Run one inbox poll plus one candidate-search cycle, wait for queued
+  agent work to drain, then exit.
+`,
+  watch: `usage: first-tree breeze watch
+
+  Open the interactive TUI status board and activity feed.
+`,
+  statusline: `usage: first-tree breeze statusline
+
+  Print the one-line Claude Code statusline summary.
+`,
+  start: `usage: first-tree breeze start [options]
+
+  Launch the Breeze daemon in the background.
+
+  Options:
+    --home <path>                Override runner home
+    --profile <name>             Override daemon profile
+    --allow-repo <csv>           Restrict work to owner/repo or owner/* patterns
+`,
+  stop: `usage: first-tree breeze stop [options]
+
+  Stop the background Breeze daemon for the active identity.
+
+  Options:
+    --home <path>                Override runner home
+    --profile <name>             Override daemon profile
+`,
+  status: `usage: first-tree breeze status [options]
+
+  Print the current daemon lock and runtime status.
+
+  Options:
+    --home <path>                Override runner home
+    --allow-repo <csv>           Display an explicit repo filter
+`,
+  doctor: `usage: first-tree breeze doctor [options]
+
+  Diagnose the local Breeze install and auth/runtime state.
+
+  Options:
+    --home <path>                Override runner home
+`,
+  cleanup: `usage: first-tree breeze cleanup [options]
+
+  Remove stale workspaces and expired claims.
+
+  Options:
+    --home <path>                Override runner home
+`,
+};
+
 type Output = (text: string) => void;
 
 type TsTarget = {
@@ -134,13 +204,18 @@ export function extractBackendFlag(args: readonly string[]): {
   return { backend: "ts", rest };
 }
 
+function isHelpInvocation(args: readonly string[]): boolean {
+  const first = args[0];
+  return first === "--help" || first === "-h" || first === "help";
+}
+
 export async function runBreeze(
   args: string[],
   output: Output = console.log,
 ): Promise<number> {
   const write = (text: string): void => output(text);
 
-  if (args.length === 0 || args[0] === "--help" || args[0] === "-h" || args[0] === "help") {
+  if (args.length === 0 || isHelpInvocation(args)) {
     write(BREEZE_USAGE);
     return 0;
   }
@@ -153,6 +228,12 @@ export async function runBreeze(
     write(`Unknown breeze command: ${command}`);
     write(BREEZE_USAGE);
     return 1;
+  }
+
+  const inlineHelp = BREEZE_INLINE_HELP[command];
+  if (inlineHelp && isHelpInvocation(rest)) {
+    write(inlineHelp);
+    return 0;
   }
 
   try {

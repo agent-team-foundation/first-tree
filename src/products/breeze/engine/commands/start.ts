@@ -7,7 +7,7 @@
  */
 
 import { mkdirSync, openSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { spawn } from "node:child_process";
 
 import { loadBreezeDaemonConfig } from "../runtime/config.js";
@@ -20,12 +20,29 @@ import { resolveRunnerHome } from "../daemon/runner-skeleton.js";
 
 export interface RunStartOptions {
   write?: (line: string) => void;
+  breezeDir?: string;
   runnerHome?: string;
   profile?: string;
-  /** CLI entrypoint. Defaults to `process.execPath` (node) + first-tree bin. */
+  /** CLI executable. Defaults to the current Node binary. */
   executable?: string;
+  /** CLI script path when re-invoking via `node <script> ...`. */
+  entrypoint?: string;
   /** Args after the executable (forwarded to the daemon). */
   daemonArgs?: readonly string[];
+}
+
+export interface SelfCliInvocation {
+  executable: string;
+  prefixArgs: string[];
+}
+
+export function resolveSelfCliInvocation(
+  entrypoint: string | undefined = process.argv[1],
+): SelfCliInvocation {
+  return {
+    executable: process.execPath,
+    prefixArgs: entrypoint && entrypoint.length > 0 ? [entrypoint] : [],
+  };
 }
 
 export async function runStart(
@@ -34,6 +51,8 @@ export async function runStart(
 ): Promise<number> {
   const write = options.write ?? ((line) => process.stdout.write(`${line}\n`));
   const home = options.runnerHome ?? parseHome(argv) ?? resolveRunnerHome();
+  const breezeDir =
+    options.breezeDir ?? process.env.BREEZE_DIR ?? dirname(home);
   const profile = options.profile ?? parseProfile(argv) ?? "default";
   const config = loadBreezeDaemonConfig();
 
@@ -52,8 +71,11 @@ export async function runStart(
   const nowSec = Math.floor(Date.now() / 1_000);
   const logPath = join(logsDir, `breeze-daemon-${nowSec}.log`);
 
-  const executable = options.executable ?? process.execPath;
-  const daemonArgs = options.daemonArgs ?? defaultDaemonArgs(argv);
+  const self = resolveSelfCliInvocation(options.entrypoint);
+  const executable = options.executable ?? self.executable;
+  const daemonArgs =
+    options.daemonArgs ??
+    defaultDaemonArgs(argv, options.executable ? [] : self.prefixArgs);
 
   if (supportsLaunchd()) {
     try {
@@ -64,6 +86,10 @@ export async function runStart(
         executable,
         arguments: daemonArgs,
         logPath,
+        env: {
+          BREEZE_DIR: breezeDir,
+          BREEZE_HOME: home,
+        },
       });
       write("breeze-daemon started in background via launchd");
       write(`plist: ${result.plistPath}`);
@@ -119,11 +145,11 @@ function parseProfile(argv: readonly string[]): string | undefined {
  * `--home`/`--profile` because those are interpreted by this command
  * and may differ from the daemon's own resolution.
  */
-function defaultDaemonArgs(argv: readonly string[]): string[] {
+export function defaultDaemonArgs(
+  argv: readonly string[],
+  prefixArgs: readonly string[] = [],
+): string[] {
   // The ported daemon entrypoint is `first-tree breeze daemon --backend=ts`.
-  // In the fallback spawn path, executable is process.execPath so we
-  // cannot embed the CLI; we assume the caller set `executable` to the
-  // `first-tree` bin. See RunStartOptions.
   const forwarded: string[] = [];
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
@@ -136,5 +162,5 @@ function defaultDaemonArgs(argv: readonly string[]): string[] {
     if (a.startsWith("--home=") || a.startsWith("--profile=")) continue;
     forwarded.push(a);
   }
-  return ["breeze", "daemon", "--backend=ts", ...forwarded];
+  return [...prefixArgs, "breeze", "daemon", "--backend=ts", ...forwarded];
 }

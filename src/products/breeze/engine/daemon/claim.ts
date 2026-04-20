@@ -60,6 +60,7 @@ export interface LockInfo {
   host: string;
   login: string;
   profile: string;
+  machine?: string;
   heartbeat_epoch: number;
   started_epoch: number;
   active_tasks: number;
@@ -121,6 +122,7 @@ function serialiseLockInfo(info: LockInfo): string {
     `host=${info.host}`,
     `login=${info.login}`,
     `profile=${info.profile}`,
+    `machine=${info.machine ?? ""}`,
     `heartbeat_epoch=${info.heartbeat_epoch}`,
     `started_epoch=${info.started_epoch}`,
     `active_tasks=${info.active_tasks}`,
@@ -146,6 +148,7 @@ function parseLockInfo(contents: string): LockInfo | null {
     host: entries.host ?? "",
     login: entries.login ?? "",
     profile: entries.profile ?? "",
+    machine: entries.machine ? entries.machine : undefined,
     heartbeat_epoch: heartbeat,
     started_epoch: Number.isFinite(started) ? started : heartbeat,
     active_tasks: Number.isFinite(activeTasks) ? activeTasks : 0,
@@ -176,9 +179,9 @@ function processAlive(pid: number): boolean {
 export function isLockStale(info: LockInfo, now: number = currentEpochSec()): boolean {
   const expired = Math.max(0, now - info.heartbeat_epoch) > LOCK_STALE_AFTER_SEC;
   if (expired) return true;
-  if (info.host === hostname()) {
-    // Only trust the liveness probe when the recorded host matches
-    // ours — otherwise `kill -0` would always report "not alive".
+  if (info.machine === undefined || info.machine === hostname()) {
+    // Legacy locks predate the `machine` field. Treat them as local so
+    // we can recover promptly instead of waiting out the heartbeat TTL.
     return !processAlive(info.pid);
   }
   // Different host: we can't probe the pid, so trust the heartbeat.
@@ -284,6 +287,7 @@ export async function acquireServiceLock(
     host: identity.host,
     login: identity.login,
     profile,
+    machine: hostname(),
     heartbeat_epoch: currentEpochSec(),
     started_epoch: currentEpochSec(),
     active_tasks: 0,
@@ -534,4 +538,3 @@ export function cleanupExpiredClaims(
   }
   return removed;
 }
-
