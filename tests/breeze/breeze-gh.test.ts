@@ -7,7 +7,11 @@ import type { SpawnSyncReturns } from "node:child_process";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { GhClient, GhExecError } from "../../src/products/breeze/engine/runtime/gh.js";
+import {
+  DEFAULT_GH_MAX_BUFFER_BYTES,
+  GhClient,
+  GhExecError,
+} from "../../src/products/breeze/engine/runtime/gh.js";
 
 type SpawnFn = ConstructorParameters<typeof GhClient>[0] extends
   | { spawn?: infer S }
@@ -67,6 +71,36 @@ describe("GhClient.run", () => {
       "/opt/gh",
       ["api", "/user"],
       expect.anything(),
+    );
+  });
+
+  it("passes a generous maxBuffer so gh api notifications does not ENOBUFS", () => {
+    // Regression: the default spawnSync maxBuffer (~1 MiB) was silently
+    // blowing up on accounts with a few hundred open notification threads,
+    // because `gh api notifications` returns >1 MiB of JSON. That killed
+    // the entire candidate-poll path and degraded the daemon to
+    // search-only (which caps candidates at 10/poll).
+    const spawn = stubSuccess("[]");
+    const gh = new GhClient({ spawn });
+    gh.run(["api", "notifications"]);
+    expect(spawn).toHaveBeenCalledWith(
+      "gh",
+      ["api", "notifications"],
+      expect.objectContaining({ maxBuffer: DEFAULT_GH_MAX_BUFFER_BYTES }),
+    );
+    expect(DEFAULT_GH_MAX_BUFFER_BYTES).toBeGreaterThanOrEqual(
+      16 * 1024 * 1024,
+    );
+  });
+
+  it("honors a custom maxBufferBytes override", () => {
+    const spawn = stubSuccess();
+    const gh = new GhClient({ spawn, maxBufferBytes: 128 });
+    gh.run(["api", "/user"]);
+    expect(spawn).toHaveBeenCalledWith(
+      "gh",
+      ["api", "/user"],
+      expect.objectContaining({ maxBuffer: 128 }),
     );
   });
 });
