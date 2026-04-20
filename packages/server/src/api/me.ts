@@ -59,7 +59,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     const proto = request.headers["x-forwarded-proto"] ?? request.protocol;
     const host = request.headers["x-forwarded-host"] ?? request.headers.host ?? request.hostname;
     const serverUrl = `${proto}://${host}`;
-    const command = `first-tree-hub connect ${serverUrl} --token ${token}`;
+    const command = `first-tree-hub client connect ${serverUrl} --token ${token}`;
 
     return { token, expiresIn, command };
   });

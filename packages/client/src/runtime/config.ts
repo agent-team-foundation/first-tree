@@ -43,7 +43,7 @@ function warnLegacyFields(agentName: string, raw: unknown): void {
   if (warnedAgents.has(agentName) || typeof raw !== "object" || raw === null) return;
   const r = raw as Record<string, unknown>;
   const legacy: string[] = [];
-  if ("token" in r) legacy.push("token (removed — authenticate via `first-tree-hub connect`)");
+  if ("token" in r) legacy.push("token (removed — authenticate via `first-tree-hub client connect`)");
   if ("concurrency" in r) legacy.push("concurrency");
   if (r.session) {
     const parsed = legacySessionConfigShape.safeParse(r.session);

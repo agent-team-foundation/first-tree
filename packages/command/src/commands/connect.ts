@@ -60,8 +60,8 @@ async function authenticateInteractive(url: string): Promise<{ accessToken: stri
   return (await loginRes.json()) as { accessToken: string; refreshToken: string };
 }
 
-export function registerConnectCommand(program: Command): void {
-  program
+export function registerConnectCommand(parent: Command): void {
+  parent
     .command("connect <server-url>")
     .description("Connect to a Hub server — configure, authenticate, and start client")
     .option("--token <token>", "Connect token (from Hub web console) — skips interactive login")
@@ -94,9 +94,9 @@ export function registerConnectCommand(program: Command): void {
         const agentsDir = join(DEFAULT_CONFIG_DIR, "agents");
         const agents = loadAgents({ schema: agentConfigSchema, agentsDir });
 
-        process.stderr.write(`\n  Starting client...\n`);
+        process.stderr.write(`\n  Starting client (id: ${config.client.id})...\n`);
 
-        const runtime = new ClientRuntime(config.server.url);
+        const runtime = new ClientRuntime(config.server.url, config.client.id);
         for (const [name, agentConfig] of agents) {
           runtime.addAgent(name, agentConfig);
         }

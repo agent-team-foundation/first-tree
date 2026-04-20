@@ -239,7 +239,7 @@ export function AgentFormDialog(props: AgentFormProps) {
                 <p className="text-xs text-muted-foreground">
                   {isAdmin && !formManagerId
                     ? "Pick a manager first to see their clients."
-                    : "No eligible clients. Run `first-tree-hub connect` on the target machine to register one."}
+                    : "No eligible clients. Run `first-tree-hub client connect` on the target machine to register one."}
                 </p>
               )}
               <p className="text-xs text-muted-foreground">
