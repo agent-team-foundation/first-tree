@@ -35,7 +35,12 @@ import { join } from "node:path";
 import { resolveBreezePaths } from "../runtime/paths.js";
 import { loadBreezeDaemonConfig, type DaemonConfig } from "../runtime/config.js";
 
-import { resolveDaemonIdentity, identityHasRequiredScope } from "./identity.js";
+import {
+  resolveDaemonIdentity,
+  identityHasRequiredScope,
+  type DaemonIdentity,
+} from "./identity.js";
+import { acquireServiceLock, type ServiceLockHandle } from "./claim.js";
 import { startHttpServer, type RunningHttpServer } from "./http.js";
 import { pollOnce, runPoller, type PollerLogger } from "./poller.js";
 import { GhClient as CoreGhClient } from "../runtime/gh.js";
@@ -243,8 +248,9 @@ export async function runDaemon(
   // Identity resolution is best-effort at startup. The daemon will still
   // try to poll if identity fails — the poller uses the host-only env,
   // not the login. But we log loudly so operators notice.
+  let identity: DaemonIdentity | null = null;
   try {
-    const identity = resolveDaemonIdentity({ host: config.host });
+    identity = resolveDaemonIdentity({ host: config.host });
     if (!identityHasRequiredScope(identity)) {
       logger.warn(
         `gh token for ${identity.login}@${identity.host} lacks \`repo\`/\`notifications\` scope; poll may return empty results`,
@@ -258,6 +264,31 @@ export async function runDaemon(
     logger.warn(
       `identity resolution failed (continuing): ${err instanceof Error ? err.message : String(err)}`,
     );
+  }
+
+  // Phase 5 singleton: one daemon per (host, login, profile) on this
+  // machine. The previous HTTP-port-only guard let a second daemon
+  // spin up its broker + dispatcher before the port conflict surfaced,
+  // so two dispatchers could briefly race on the same claim dir. This
+  // hard-rejects a racing start before any stateful work begins.
+  //
+  // Skipped when identity resolution failed — that path keeps old
+  // read-only degraded semantics for operators without a gh login.
+  let lockHandle: ServiceLockHandle | null = null;
+  if (identity) {
+    try {
+      lockHandle = await acquireServiceLock({
+        baseDir: join(resolveRunnerHome(), "locks"),
+        identity,
+        profile: "default",
+        note: "daemon starting",
+      });
+    } catch (err) {
+      logger.error(
+        `breeze daemon: refusing to start — ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return 1;
+    }
   }
 
   // Wire abort cascade. Tests may pass a pre-built signal directly.
@@ -496,6 +527,15 @@ export async function runDaemon(
     }
     bus.close();
     if (uninstallHandlers) uninstallHandlers();
+    if (lockHandle) {
+      try {
+        await lockHandle.release();
+      } catch (err) {
+        logger.warn(
+          `service lock release failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
   }
 
   logger.info("breeze daemon: shutdown complete");
