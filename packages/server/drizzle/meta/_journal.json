@@ -155,6 +155,13 @@
       "when": 1777075200000,
       "tag": "0021_drop_agents_profile",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1777161600000,
+      "tag": "0022_session_events",
+      "breakpoints": true
     }
   ]
 }

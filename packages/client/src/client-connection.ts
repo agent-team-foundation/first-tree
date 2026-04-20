@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { hostname as getHostname, platform } from "node:os";
-import type { AgentBindRejectReason, RuntimeState, SessionState } from "@agent-team-foundation/first-tree-hub-shared";
+import type {
+  AgentBindRejectReason,
+  RuntimeState,
+  SessionEvent,
+  SessionState,
+} from "@agent-team-foundation/first-tree-hub-shared";
 import WebSocket from "ws";
 import { type AccessTokenProvider, FirstTreeHubSDK } from "./sdk.js";
 
@@ -174,9 +179,14 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     this.ws.send(JSON.stringify({ type: "runtime:state", agentId, runtimeState }));
   }
 
-  reportSessionOutput(agentId: string, chatId: string, content: string): void {
+  reportSessionEvent(agentId: string, chatId: string, event: SessionEvent): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    this.ws.send(JSON.stringify({ type: "session:output", agentId, chatId, content }));
+    this.ws.send(JSON.stringify({ type: "session:event", agentId, chatId, event }));
+  }
+
+  reportSessionCompletion(agentId: string, chatId: string): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "session:completion", agentId, chatId }));
   }
 
   async disconnect(): Promise<void> {

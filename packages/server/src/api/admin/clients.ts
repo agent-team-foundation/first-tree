@@ -95,6 +95,7 @@ export async function adminActivityRoutes(app: FastifyInstance): Promise<void> {
         activeSessions: a.activeSessions,
         totalSessions: a.totalSessions,
         runtimeUpdatedAt: a.runtimeUpdatedAt?.toISOString() ?? null,
+        type: "type" in a ? a.type : null,
       })),
     };
   });

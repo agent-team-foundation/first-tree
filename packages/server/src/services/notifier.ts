@@ -4,9 +4,16 @@ import type { WebSocket } from "ws";
 const INBOX_CHANNEL = "inbox_notifications";
 const CONFIG_CHANNEL = "config_changes";
 const SESSION_STATE_CHANNEL = "session_state_changes";
+const RUNTIME_STATE_CHANNEL = "runtime_state_changes";
 
 export type ConfigChangeHandler = (channel: string) => void;
-export type SessionStateChangeHandler = (payload: { agentId: string; chatId: string; state: string }) => void;
+export type SessionStateChangeHandler = (payload: {
+  agentId: string;
+  chatId: string;
+  state: string;
+  organizationId: string;
+}) => void;
+export type RuntimeStateChangeHandler = (payload: { agentId: string; state: string; organizationId: string }) => void;
 
 export type Notifier = {
   /** Subscribe a WebSocket connection for an inbox */
@@ -18,11 +25,15 @@ export type Notifier = {
   /** Notify that a config has changed */
   notifyConfigChange(configType: string): Promise<void>;
   /** Notify that a session state has changed */
-  notifySessionStateChange(agentId: string, chatId: string, state: string): Promise<void>;
+  notifySessionStateChange(agentId: string, chatId: string, state: string, organizationId: string): Promise<void>;
+  /** Notify that an agent runtime state has changed (idle/working/error/…). Payload is org-scoped so admin consumers can filter. */
+  notifyRuntimeStateChange(agentId: string, state: string, organizationId: string): Promise<void>;
   /** Register a handler for config change notifications */
   onConfigChange(handler: ConfigChangeHandler): void;
   /** Register a handler for session state change notifications */
   onSessionStateChange(handler: SessionStateChangeHandler): void;
+  /** Register a handler for runtime state change notifications */
+  onRuntimeStateChange(handler: RuntimeStateChangeHandler): void;
   /** Start listening for PG notifications */
   start(): Promise<void>;
   /** Stop listening */
@@ -33,9 +44,11 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
   const subscriptions = new Map<string, Set<WebSocket>>();
   const configChangeHandlers: ConfigChangeHandler[] = [];
   const sessionStateChangeHandlers: SessionStateChangeHandler[] = [];
+  const runtimeStateChangeHandlers: RuntimeStateChangeHandler[] = [];
   let unlistenInboxFn: (() => Promise<void>) | null = null;
   let unlistenConfigFn: (() => Promise<void>) | null = null;
   let unlistenSessionStateFn: (() => Promise<void>) | null = null;
+  let unlistenRuntimeStateFn: (() => Promise<void>) | null = null;
 
   function handleNotification(payload: string) {
     // payload format: "inboxId:messageId"
@@ -91,9 +104,17 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       }
     },
 
-    async notifySessionStateChange(agentId: string, chatId: string, state: string) {
+    async notifySessionStateChange(agentId: string, chatId: string, state: string, organizationId: string) {
       try {
-        await listenClient`SELECT pg_notify(${SESSION_STATE_CHANNEL}, ${`${agentId}:${chatId}:${state}`})`;
+        await listenClient`SELECT pg_notify(${SESSION_STATE_CHANNEL}, ${`${agentId}:${chatId}:${state}:${organizationId}`})`;
+      } catch {
+        // fire-and-forget
+      }
+    },
+
+    async notifyRuntimeStateChange(agentId: string, state: string, organizationId: string) {
+      try {
+        await listenClient`SELECT pg_notify(${RUNTIME_STATE_CHANNEL}, ${`${agentId}:${state}:${organizationId}`})`;
       } catch {
         // fire-and-forget
       }
@@ -105,6 +126,10 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
 
     onSessionStateChange(handler: SessionStateChangeHandler) {
       sessionStateChangeHandlers.push(handler);
+    },
+
+    onRuntimeStateChange(handler: RuntimeStateChangeHandler) {
+      runtimeStateChangeHandlers.push(handler);
     },
 
     async start() {
@@ -124,20 +149,39 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
 
       const sessionStateResult = await listenClient.listen(SESSION_STATE_CHANNEL, (payload) => {
         if (payload) {
-          // payload format: "agentId:chatId:state"
+          // payload format: "agentId:chatId:state:organizationId"
           const firstSep = payload.indexOf(":");
           const secondSep = payload.indexOf(":", firstSep + 1);
-          if (firstSep > 0 && secondSep > firstSep) {
+          const thirdSep = payload.indexOf(":", secondSep + 1);
+          if (firstSep > 0 && secondSep > firstSep && thirdSep > secondSep) {
             const agentId = payload.slice(0, firstSep);
             const chatId = payload.slice(firstSep + 1, secondSep);
-            const state = payload.slice(secondSep + 1);
+            const state = payload.slice(secondSep + 1, thirdSep);
+            const organizationId = payload.slice(thirdSep + 1);
             for (const handler of sessionStateChangeHandlers) {
-              handler({ agentId, chatId, state });
+              handler({ agentId, chatId, state, organizationId });
             }
           }
         }
       });
       unlistenSessionStateFn = sessionStateResult.unlisten;
+
+      const runtimeStateResult = await listenClient.listen(RUNTIME_STATE_CHANNEL, (payload) => {
+        if (payload) {
+          // payload format: "agentId:state:organizationId"
+          const firstSep = payload.indexOf(":");
+          const secondSep = payload.indexOf(":", firstSep + 1);
+          if (firstSep > 0 && secondSep > firstSep) {
+            const agentId = payload.slice(0, firstSep);
+            const state = payload.slice(firstSep + 1, secondSep);
+            const organizationId = payload.slice(secondSep + 1);
+            for (const handler of runtimeStateChangeHandlers) {
+              handler({ agentId, state, organizationId });
+            }
+          }
+        }
+      });
+      unlistenRuntimeStateFn = runtimeStateResult.unlisten;
     },
 
     async stop() {
@@ -152,6 +196,10 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       if (unlistenSessionStateFn) {
         await unlistenSessionStateFn();
         unlistenSessionStateFn = null;
+      }
+      if (unlistenRuntimeStateFn) {
+        await unlistenRuntimeStateFn();
+        unlistenRuntimeStateFn = null;
       }
     },
   };

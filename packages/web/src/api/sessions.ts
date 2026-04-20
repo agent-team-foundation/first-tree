@@ -15,9 +15,56 @@ export type SessionListResponse = {
   nextCursor: string | null;
 };
 
-export type SessionOutput = {
-  content: string;
-  updatedAt: string | null;
+export type ToolCallEventPayload = {
+  toolUseId: string;
+  name: string;
+  args: unknown;
+  status: "pending" | "ok" | "error";
+  durationMs?: number;
+  resultPreview?: string;
+};
+
+export type ErrorEventPayload = {
+  source: "sdk" | "runtime" | "tool";
+  message: string;
+};
+
+export type SessionEventRow = {
+  id: string;
+  agentId: string;
+  chatId: string;
+  seq: number;
+  kind: "tool_call" | "error";
+  payload: unknown;
+  createdAt: string;
+};
+
+export function asToolCallPayload(payload: unknown): ToolCallEventPayload | null {
+  if (typeof payload !== "object" || payload === null) return null;
+  const p = payload as Record<string, unknown>;
+  if (typeof p.toolUseId !== "string" || typeof p.name !== "string") return null;
+  if (p.status !== "pending" && p.status !== "ok" && p.status !== "error") return null;
+  return {
+    toolUseId: p.toolUseId,
+    name: p.name,
+    args: p.args,
+    status: p.status,
+    durationMs: typeof p.durationMs === "number" ? p.durationMs : undefined,
+    resultPreview: typeof p.resultPreview === "string" ? p.resultPreview : undefined,
+  };
+}
+
+export function asErrorPayload(payload: unknown): ErrorEventPayload | null {
+  if (typeof payload !== "object" || payload === null) return null;
+  const p = payload as Record<string, unknown>;
+  if (p.source !== "sdk" && p.source !== "runtime" && p.source !== "tool") return null;
+  if (typeof p.message !== "string") return null;
+  return { source: p.source, message: p.message };
+}
+
+export type SessionEventsResponse = {
+  items: SessionEventRow[];
+  nextCursor: number | null;
 };
 
 export function listSessions(params?: {
@@ -50,8 +97,18 @@ export function getSession(agentId: string, chatId: string): Promise<SessionList
   return api.get<SessionListItem>(`/admin/sessions/agents/${agentId}/${chatId}`);
 }
 
-export function getSessionOutput(agentId: string, chatId: string): Promise<SessionOutput> {
-  return api.get<SessionOutput>(`/admin/sessions/agents/${agentId}/${chatId}/output`);
+export function listSessionEvents(
+  agentId: string,
+  chatId: string,
+  params?: { limit?: number; cursor?: number },
+): Promise<SessionEventsResponse> {
+  const qs = new URLSearchParams();
+  if (params?.limit !== undefined) qs.set("limit", String(params.limit));
+  if (params?.cursor !== undefined) qs.set("cursor", String(params.cursor));
+  const query = qs.toString();
+  return api.get<SessionEventsResponse>(
+    `/admin/sessions/agents/${agentId}/${chatId}/events${query ? `?${query}` : ""}`,
+  );
 }
 
 export function suspendSession(agentId: string, chatId: string): Promise<unknown> {

@@ -8,12 +8,13 @@ import { clients } from "../db/schema/clients.js";
 import { agentVisibilityCondition, type MemberScope } from "./access-control.js";
 import type { Notifier } from "./notifier.js";
 
-/** Upsert a session state and update materialized aggregates on agent_presence. */
+/** Upsert a session state, refresh materialized aggregates on agent_presence, and emit org-scoped NOTIFY. */
 export async function upsertSessionState(
   db: Database,
   agentId: string,
   chatId: string,
   state: SessionState,
+  organizationId: string,
   notifier?: Notifier,
 ) {
   const now = new Date();
@@ -53,7 +54,7 @@ export async function upsertSessionState(
 
   // Fire-and-forget PG NOTIFY for session state changes
   if (notifier) {
-    notifier.notifySessionStateChange(agentId, chatId, state).catch(() => {});
+    notifier.notifySessionStateChange(agentId, chatId, state, organizationId).catch(() => {});
   }
 }
 
@@ -127,6 +128,7 @@ export async function listAgentsWithRuntime(db: Database, scope?: MemberScope) {
       activeSessions: agentPresence.activeSessions,
       totalSessions: agentPresence.totalSessions,
       runtimeUpdatedAt: agentPresence.runtimeUpdatedAt,
+      type: agents.type,
     })
     .from(agentPresence)
     .innerJoin(agents, eq(agentPresence.agentId, agents.uuid))

@@ -1,3 +1,4 @@
+import type { SessionEvent } from "@agent-team-foundation/first-tree-hub-shared";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import type { GitMirrorManager } from "./git-mirror-manager.js";
 
@@ -27,8 +28,16 @@ export type SessionContext = HandlerContext & {
   touch: () => void;
   /** Report per-session runtime state (working/idle/blocked/error). */
   setRuntimeState: (state: "idle" | "working" | "blocked" | "error") => void;
-  /** Append output text to the session's server-side output buffer. */
-  appendOutput: (content: string) => void;
+  /**
+   * Persist a structured session event (tool_call / error) to the server.
+   * Assistant text does NOT go through here — it flows via `sdk.sendMessage`.
+   */
+  emitEvent: (event: SessionEvent) => void;
+  /**
+   * Signal that a query completed end-to-end — fires the per-chat
+   * `session_completed` notification on the server (5-min cooldown).
+   */
+  reportSessionCompletion: () => void;
 };
 
 /** Message content extracted from an inbox entry (no entry metadata). */

@@ -1,5 +1,10 @@
 import { join } from "node:path";
-import type { InboxEntryWithMessage, RuntimeState, SessionState } from "@agent-team-foundation/first-tree-hub-shared";
+import type {
+  InboxEntryWithMessage,
+  RuntimeState,
+  SessionEvent,
+  SessionState,
+} from "@agent-team-foundation/first-tree-hub-shared";
 import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
 import type { ClientConnection } from "../client-connection.js";
 import type { RegisterResult } from "../sdk.js";
@@ -118,7 +123,8 @@ export class AgentSlot {
       agentConfigCache: this.agentConfigCache,
       onStateChange: (chatId, state) => this.reportSessionState(chatId, state),
       onRuntimeStateChange: (state) => this.reportRuntimeState(state),
-      onSessionOutput: (chatId, content) => this.reportSessionOutput(chatId, content),
+      onSessionEvent: (chatId, event) => this.reportSessionEvent(chatId, event),
+      onSessionCompletion: (chatId) => this.reportSessionCompletion(chatId),
     });
 
     const onCommand = (cmd: { agentId: string; chatId: string; type: string }) => {
@@ -160,8 +166,12 @@ export class AgentSlot {
     this.clientConnection.reportRuntimeState(this.config.agentId, state);
   }
 
-  private reportSessionOutput(chatId: string, content: string): void {
-    this.clientConnection.reportSessionOutput(this.config.agentId, chatId, content);
+  private reportSessionEvent(chatId: string, event: SessionEvent): void {
+    this.clientConnection.reportSessionEvent(this.config.agentId, chatId, event);
+  }
+
+  private reportSessionCompletion(chatId: string): void {
+    this.clientConnection.reportSessionCompletion(this.config.agentId, chatId);
   }
 
   private fullStateSync(): void {

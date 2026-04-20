@@ -3,11 +3,11 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { ConflictError } from "../../errors.js";
 import { requireMember } from "../../middleware/require-identity.js";
-import { assertAgentVisible, assertCanManage, memberScope } from "../../services/access-control.js";
+import { assertAgentVisible, assertCanManage, assertChatAccess, memberScope } from "../../services/access-control.js";
 import * as agentService from "../../services/agent.js";
 import { sendToAgent } from "../../services/connection-manager.js";
 import * as sessionService from "../../services/session.js";
-import * as sessionOutputService from "../../services/session-output.js";
+import * as sessionEventService from "../../services/session-event.js";
 
 const sessionFilterSchema = z.object({
   state: z.enum(["active", "suspended", "evicted"]).optional(),
@@ -49,15 +49,27 @@ export async function adminSessionRoutes(app: FastifyInstance): Promise<void> {
 
   /** GET /admin/sessions/agents/:agentId/:chatId — single session detail */
   app.get<{ Params: { agentId: string; chatId: string } }>("/agents/:agentId/:chatId", async (request) => {
-    await assertAgentVisible(app.db, memberScope(request), request.params.agentId);
+    const scope = memberScope(request);
+    await assertAgentVisible(app.db, scope, request.params.agentId);
+    await assertChatAccess(app.db, scope, request.params.chatId);
     return sessionService.getSession(app.db, request.params.agentId, request.params.chatId);
   });
 
-  /** GET /admin/sessions/agents/:agentId/:chatId/output — session output text */
-  app.get<{ Params: { agentId: string; chatId: string } }>("/agents/:agentId/:chatId/output", async (request) => {
-    await assertAgentVisible(app.db, memberScope(request), request.params.agentId);
-    const output = await sessionOutputService.getOutput(app.db, request.params.agentId, request.params.chatId);
-    return output ?? { content: "", updatedAt: null };
+  /** GET /admin/sessions/agents/:agentId/:chatId/events — session event stream, paged by `seq` */
+  app.get<{
+    Params: { agentId: string; chatId: string };
+    Querystring: { limit?: string; cursor?: string };
+  }>("/agents/:agentId/:chatId/events", async (request) => {
+    const scope = memberScope(request);
+    await assertAgentVisible(app.db, scope, request.params.agentId);
+    // Events expose tool args / error text — gate on chat participation, not just agent visibility.
+    await assertChatAccess(app.db, scope, request.params.chatId);
+    const limit = request.query.limit !== undefined ? Number.parseInt(request.query.limit, 10) : undefined;
+    const cursor = request.query.cursor !== undefined ? Number.parseInt(request.query.cursor, 10) : undefined;
+    return sessionEventService.listEvents(app.db, request.params.agentId, request.params.chatId, {
+      limit: Number.isFinite(limit) ? limit : undefined,
+      cursor: Number.isFinite(cursor) ? cursor : undefined,
+    });
   });
 
   /** POST /admin/sessions/agents/:agentId/:chatId/suspend — suspend a session */

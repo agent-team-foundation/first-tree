@@ -1,0 +1,132 @@
+import type { SessionEvent, SessionEventKind } from "@agent-team-foundation/first-tree-hub-shared";
+import { sessionEventSchema } from "@agent-team-foundation/first-tree-hub-shared";
+import { and, asc, eq, gt, sql } from "drizzle-orm";
+import type { Database } from "../db/connection.js";
+import { sessionEvents } from "../db/schema/session-events.js";
+import { uuidv7 } from "../uuid.js";
+
+const DEFAULT_LIMIT = 200;
+const MAX_LIMIT = 1000;
+const MAX_SEQ_RETRIES = 3;
+
+export type SessionEventRow = {
+  id: string;
+  agentId: string;
+  chatId: string;
+  seq: number;
+  kind: SessionEventKind;
+  payload: SessionEvent["payload"];
+  createdAt: string;
+};
+
+function rowToEvent(row: {
+  id: string;
+  agentId: string;
+  chatId: string;
+  seq: number;
+  kind: string;
+  payload: unknown;
+  createdAt: Date;
+}): SessionEventRow {
+  return {
+    id: row.id,
+    agentId: row.agentId,
+    chatId: row.chatId,
+    seq: row.seq,
+    kind: row.kind as SessionEventKind,
+    payload: row.payload as SessionEvent["payload"],
+    createdAt: row.createdAt.toISOString(),
+  };
+}
+
+/** Append one event; throws after MAX_SEQ_RETRIES on persistent seq contention. */
+export async function appendEvent(
+  db: Database,
+  agentId: string,
+  chatId: string,
+  event: SessionEvent,
+): Promise<SessionEventRow> {
+  const validated = sessionEventSchema.parse(event);
+
+  for (let attempt = 0; attempt < MAX_SEQ_RETRIES; attempt++) {
+    const id = uuidv7();
+    const payloadJson = JSON.stringify(validated.payload);
+    const result = await db.execute<{
+      id: string;
+      agent_id: string;
+      chat_id: string;
+      seq: number;
+      kind: string;
+      payload: unknown;
+      created_at: Date;
+    }>(sql`
+      INSERT INTO session_events (id, agent_id, chat_id, seq, kind, payload)
+      SELECT ${id}, ${agentId}, ${chatId},
+             COALESCE(MAX(seq), 0) + 1, ${validated.kind}, ${payloadJson}::jsonb
+        FROM session_events
+       WHERE agent_id = ${agentId} AND chat_id = ${chatId}
+      ON CONFLICT (agent_id, chat_id, seq) DO NOTHING
+      RETURNING id, agent_id, chat_id, seq, kind, payload, created_at
+    `);
+
+    const row = result[0];
+    if (row) {
+      return rowToEvent({
+        id: row.id,
+        agentId: row.agent_id,
+        chatId: row.chat_id,
+        seq: row.seq,
+        kind: row.kind,
+        payload: row.payload,
+        createdAt: row.created_at instanceof Date ? row.created_at : new Date(row.created_at),
+      });
+    }
+  }
+
+  throw new Error(`session_events seq contention on ${agentId}/${chatId}`);
+}
+
+/**
+ * List events for a session in `seq asc` order with cursor pagination.
+ * `cursor` is the last seen `seq`; pass it as-is on the next page.
+ */
+export async function listEvents(
+  db: Database,
+  agentId: string,
+  chatId: string,
+  options?: { limit?: number; cursor?: number },
+): Promise<{ items: SessionEventRow[]; nextCursor: number | null }> {
+  const limit = Math.min(Math.max(options?.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
+
+  const conditions = [eq(sessionEvents.agentId, agentId), eq(sessionEvents.chatId, chatId)];
+  if (options?.cursor !== undefined) {
+    conditions.push(gt(sessionEvents.seq, options.cursor));
+  }
+
+  const rows = await db
+    .select({
+      id: sessionEvents.id,
+      agentId: sessionEvents.agentId,
+      chatId: sessionEvents.chatId,
+      seq: sessionEvents.seq,
+      kind: sessionEvents.kind,
+      payload: sessionEvents.payload,
+      createdAt: sessionEvents.createdAt,
+    })
+    .from(sessionEvents)
+    .where(and(...conditions))
+    .orderBy(asc(sessionEvents.seq))
+    .limit(limit + 1);
+
+  const hasMore = rows.length > limit;
+  const items = (hasMore ? rows.slice(0, limit) : rows).map(rowToEvent);
+  const last = items[items.length - 1];
+  const nextCursor = hasMore && last ? last.seq : null;
+
+  return { items, nextCursor };
+}
+
+/** Delete all events for a session — called on eviction / termination. */
+export async function clearEvents(db: Database, agentId: string, chatId: string): Promise<void> {
+  await db.delete(sessionEvents).where(and(eq(sessionEvents.agentId, agentId), eq(sessionEvents.chatId, chatId)));
+}

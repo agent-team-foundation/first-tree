@@ -4,7 +4,8 @@ import {
   agentBindRequestSchema,
   clientRegisterSchema,
   runtimeStateMessageSchema,
-  sessionOutputMessageSchema,
+  sessionCompletionMessageSchema,
+  sessionEventMessageSchema,
   sessionStateMessageSchema,
   WS_AUTH_FRAME_TIMEOUT_MS,
   wsAuthFrameSchema,
@@ -24,7 +25,7 @@ import * as connectionManager from "../../services/connection-manager.js";
 import * as notificationService from "../../services/notification.js";
 import type { Notifier } from "../../services/notifier.js";
 import * as presenceService from "../../services/presence.js";
-import * as sessionOutputService from "../../services/session-output.js";
+import * as sessionEventService from "../../services/session-event.js";
 
 const wsMessageSchema = z.object({
   type: z.string(),
@@ -41,7 +42,7 @@ const wsMessageSchema = z.object({
  *      Failure ⇒ server sends `auth:rejected` and closes (code 4401).
  *   2. `client:register` — bind the client_id to the authenticated user.
  *   3. `agent:bind` — run Rule R-RUN (no token); populate presence.
- *   4. `session:state` / `runtime:state` / `session:output` / `heartbeat`.
+ *   4. `session:state` / `runtime:state` / `session:event` / `session:completion` / `heartbeat`.
  *   5. `agent:unbind` — stop multiplexing for a specific agent.
  *
  * When the JWT is about to expire the server sends `auth:expired` so the
@@ -86,6 +87,23 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
       let clientId: string | null = null;
       let authExpiryTimer: NodeJS.Timeout | null = null;
       const boundAgents = new Map<string, { agentId: string; inboxId: string }>();
+
+      // FIFO per session so session:event persistence happens before any
+      // subsequent eviction's clearEvents — without this, the message handler
+      // is async and the next message can race the previous one's DB write.
+      const sessionOpQueues = new Map<string, Promise<void>>();
+      function chainSessionOp(agentId: string, chatId: string, op: () => Promise<void>): Promise<void> {
+        const key = `${agentId}:${chatId}`;
+        const prev = sessionOpQueues.get(key) ?? Promise.resolve();
+        const next = prev.then(op, op);
+        sessionOpQueues.set(
+          key,
+          next.finally(() => {
+            if (sessionOpQueues.get(key) === next) sessionOpQueues.delete(key);
+          }),
+        );
+        return next;
+      }
 
       const authTimeout = setTimeout(() => {
         if (!session) {
@@ -332,7 +350,23 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
             }
 
             const payload = sessionStateMessageSchema.parse(msg);
-            await activityService.upsertSessionState(app.db, agentId, payload.chatId, payload.state, notifier);
+
+            // Drop persisted events on eviction. Chained through the per-session FIFO so any
+            // in-flight appendEvent finishes BEFORE clearEvents (otherwise late inserts resurrect rows).
+            if (payload.state === "evicted") {
+              chainSessionOp(agentId, payload.chatId, () =>
+                sessionEventService.clearEvents(app.db, agentId, payload.chatId).catch(() => {}),
+              );
+            }
+
+            await activityService.upsertSessionState(
+              app.db,
+              agentId,
+              payload.chatId,
+              payload.state,
+              session.organizationId,
+              notifier,
+            );
           } else if (type === "runtime:state") {
             const agentId = parsed.data.agentId;
             if (!agentId || !boundAgents.has(agentId)) {
@@ -341,7 +375,10 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
             }
 
             const payload = runtimeStateMessageSchema.parse(msg);
-            await presenceService.setRuntimeState(app.db, agentId, payload.runtimeState);
+            await presenceService.setRuntimeState(app.db, agentId, payload.runtimeState, {
+              organizationId: session.organizationId,
+              notifier,
+            });
 
             if (payload.runtimeState === "error" && shouldNotify(agentId, "agent_error")) {
               notificationService
@@ -352,15 +389,34 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 .notifyAgentEvent(app.db, agentId, "agent_blocked", "medium", `Agent ${agentId} is blocked`)
                 .catch(() => {});
             }
-          } else if (type === "session:output") {
+          } else if (type === "session:event") {
             const agentId = parsed.data.agentId;
             if (!agentId || !boundAgents.has(agentId)) {
               socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
               return;
             }
 
-            const payload = sessionOutputMessageSchema.parse(msg);
-            sessionOutputService.appendOutput(app.db, agentId, payload.chatId, payload.content).catch(() => {});
+            const payload = sessionEventMessageSchema.parse(msg);
+            chainSessionOp(agentId, payload.chatId, async () => {
+              try {
+                await sessionEventService.appendEvent(app.db, agentId, payload.chatId, payload.event);
+              } catch (err) {
+                socket.send(
+                  JSON.stringify({
+                    type: "error",
+                    message: `Failed to persist session event: ${err instanceof Error ? err.message : String(err)}`,
+                  }),
+                );
+              }
+            });
+          } else if (type === "session:completion") {
+            const agentId = parsed.data.agentId;
+            if (!agentId || !boundAgents.has(agentId)) {
+              socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
+              return;
+            }
+
+            const payload = sessionCompletionMessageSchema.parse(msg);
 
             if (shouldNotify(agentId, `session_completed:${payload.chatId}`)) {
               notificationService

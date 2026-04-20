@@ -60,6 +60,21 @@ pnpm --filter @first-tree-hub/server db:studio      # Drizzle Studio
 
 > Full CLI commands and environment variables: [docs/cli-reference.md](docs/cli-reference.md)
 
+## Local Testing Isolation
+
+When exercising the CLI against a live hub on the same machine, always relocate the client home so tests do not clobber the production client's config, agent tokens, workspaces, or cloned Context Tree:
+
+```bash
+export FIRST_TREE_HUB_HOME=/Users/<you>/.first-tree-hub-test
+first-tree-hub connect <server-url>
+first-tree-hub client start
+```
+
+- `FIRST_TREE_HUB_HOME` is read once at module load (`packages/shared/src/config/resolver.ts`). Export it **before** starting the CLI; changing it mid-process has no effect.
+- The repo's `.env` is **not** auto-loaded by the CLI (only by Docker Compose). Use `set -a; source .env; set +a`, `node --env-file=...`, `direnv`, or an `alias` to inject env vars.
+- Use an absolute path — `~` in env files is not reliably expanded and may be taken as a literal directory name.
+- Server port and PostgreSQL are shared with production by design; each isolated home registers as a separate `clientId` on the server, so pinning test agents to it keeps the two clients independent.
+
 ## Repo-Local Skill
 
 - Use `skills/first-tree-hub-cli/SKILL.md` as the source-of-truth skill when the task is about the unified CLI, onboarding, config flows, runtime boundaries, or other behavior spanning `packages/command`, `packages/client`, `packages/server`, and `packages/shared`.

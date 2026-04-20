@@ -8,6 +8,7 @@ import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { notifications } from "../db/schema/notifications.js";
 import { uuidv7 } from "../uuid.js";
+import { broadcastToAdmins } from "./admin-broadcast.js";
 import * as systemConfigService from "./system-config.js";
 
 export type CreateNotificationData = {
@@ -18,17 +19,6 @@ export type CreateNotificationData = {
   chatId?: string | null;
   message: string;
 };
-
-/**
- * Push channels: Admin WS, Webhook, Feishu.
- * Set at app startup via `setAdminWsBroadcast` and reloaded from system_configs.
- */
-let adminWsBroadcast: ((payload: Record<string, unknown>) => void) | null = null;
-
-/** Register the admin WS broadcast function (called once at app startup). */
-export function setAdminWsBroadcast(fn: (payload: Record<string, unknown>) => void): void {
-  adminWsBroadcast = fn;
-}
 
 /** Create a notification, persist it, and fire-and-forget push to all channels. */
 export async function createNotification(db: Database, data: CreateNotificationData) {
@@ -158,12 +148,13 @@ export async function notifyAgentEvent(
 // -- Push channels (fire-and-forget) --
 
 function pushToAdminWs(notification: Record<string, unknown>): void {
-  if (!adminWsBroadcast) return;
-  try {
-    adminWsBroadcast({ type: "notification", data: notification });
-  } catch {
-    // fire-and-forget
-  }
+  // organizationId is hoisted to the top of the envelope so the admin WS route
+  // can filter strictly (no `!orgId` fallback that silently fans out to every org).
+  broadcastToAdmins({
+    type: "notification",
+    organizationId: notification.organizationId as string,
+    data: notification,
+  });
 }
 
 async function pushToWebhook(db: Database, notification: Record<string, unknown>): Promise<void> {

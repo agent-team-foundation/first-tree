@@ -94,7 +94,8 @@ function isTokenExpired(token: string): boolean {
     if (parts.length !== 3 || !parts[1]) return true;
     const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString()) as { exp?: number };
     if (!payload.exp) return false;
-    return payload.exp * 1000 < Date.now() - 30_000;
+    // Refresh 30s before exp so requests never fly with an about-to-expire token.
+    return payload.exp * 1000 < Date.now() + 30_000;
   } catch {
     return true;
   }

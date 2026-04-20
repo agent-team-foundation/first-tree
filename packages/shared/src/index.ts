@@ -211,11 +211,27 @@ export {
   sessionStateSchema,
 } from "./schemas/presence.js";
 export {
-  type SessionOutput,
-  type SessionOutputMessage,
-  sessionOutputMessageSchema,
-  sessionOutputSchema,
-} from "./schemas/session-output.js";
+  type PulseBucket,
+  type PulseTick,
+  pulseBucketSchema,
+  pulseTickSchema,
+} from "./schemas/pulse.js";
+export {
+  type ErrorEventPayload,
+  errorEventPayload,
+  type SessionCompletionMessage,
+  type SessionEvent,
+  type SessionEventKind,
+  type SessionEventMessage,
+  type SessionEventRow,
+  sessionCompletionMessageSchema,
+  sessionEventKind,
+  sessionEventMessageSchema,
+  sessionEventRowSchema,
+  sessionEventSchema,
+  type ToolCallEventPayload,
+  toolCallEventPayload,
+} from "./schemas/session-event.js";
 export {
   type OrgStats,
   orgStatsSchema,
