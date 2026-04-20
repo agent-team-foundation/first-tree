@@ -7,7 +7,7 @@ import type { McpServerConfig, PermissionMode, Query, SDKUserMessage } from "@an
 import { query as claudeQuery } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import { bootstrapWorkspace } from "../runtime/bootstrap.js";
-import type { GitMirrorManager } from "../runtime/git-mirror-manager.js";
+import { deriveSessionBranchName, type GitMirrorManager } from "../runtime/git-mirror-manager.js";
 import type {
   AgentHandler,
   AgentIdentity,
@@ -209,8 +209,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   let appliedConfigVersion = 0;
   let appliedModel = "";
   let appliedPayload: AgentRuntimeConfigPayload | null = null;
-  /** Worktree paths materialised for this session — removed on shutdown. */
-  const ownedWorktrees: string[] = [];
+  /** Worktrees materialised for this session — each entry removed on shutdown. */
+  const ownedWorktrees: Array<{ url: string; path: string; branchName: string }> = [];
 
   function toSDKUserMessage(message: SessionMessage, sessionId: string): SDKUserMessage {
     const rawContent = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
@@ -494,20 +494,27 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       await gitMirrorManager.fetchMirror(repo.url);
 
       // If a prior session left a worktree behind at the same path, reuse it
-      // rather than fighting the `git worktree add` lock.
+      // rather than fighting the `git worktree add` lock. The matching session
+      // branch is re-derived deterministically from (chatId, url) so cleanup
+      // later can still drop it.
       if (existsSync(targetPath) && isHubWorktreeMarker(targetPath)) {
         sessionCtx.log(`Git: reusing existing worktree at ${localPath}`);
-        ownedWorktrees.push(targetPath);
+        ownedWorktrees.push({
+          url: repo.url,
+          path: targetPath,
+          branchName: deriveSessionBranchName(sessionCtx.chatId, repo.url),
+        });
         continue;
       }
 
-      const { headCommit } = await gitMirrorManager.createWorktree({
+      const { headCommit, branchName } = await gitMirrorManager.createWorktree({
         url: repo.url,
         ref: repo.ref,
         targetPath,
+        sessionKey: sessionCtx.chatId,
       });
-      ownedWorktrees.push(targetPath);
-      sessionCtx.log(`Git: worktree at ${localPath} @ ${headCommit.slice(0, 7)}`);
+      ownedWorktrees.push({ url: repo.url, path: targetPath, branchName });
+      sessionCtx.log(`Git: worktree at ${localPath} @ ${headCommit.slice(0, 7)} on ${branchName}`);
     }
   }
 
@@ -515,12 +522,14 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   async function cleanupGitWorktrees(sessionCtx: SessionContext): Promise<void> {
     if (!gitMirrorManager) return;
     while (ownedWorktrees.length > 0) {
-      const path = ownedWorktrees.pop();
-      if (!path) continue;
+      const entry = ownedWorktrees.pop();
+      if (!entry) continue;
       try {
-        await gitMirrorManager.removeWorktree(path);
+        await gitMirrorManager.removeWorktree(entry);
       } catch (err) {
-        sessionCtx.log(`Git: removeWorktree(${path}) failed — ${err instanceof Error ? err.message : String(err)}`);
+        sessionCtx.log(
+          `Git: removeWorktree(${entry.path}) failed — ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     }
   }

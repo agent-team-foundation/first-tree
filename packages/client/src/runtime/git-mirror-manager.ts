@@ -3,29 +3,32 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
-const DEFAULT_CLONE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes — overridable via env
+const DEFAULT_CLONE_TIMEOUT_MS = 5 * 60 * 1000;
+
+const FETCH_REFSPEC = "+refs/heads/*:refs/remotes/origin/*";
+const SESSION_BRANCH_PREFIX = "hub-session";
 
 /**
- * Per-URL bare mirror manager (Step 5).
+ * Per-URL bare mirror manager.
  *
  * Layout:
- *   <dataDir>/git-mirrors/<sha256(url)>/  ← bare clone
+ *   <dataDir>/git-mirrors/<sha256(url)>/  ← bare repo (shared object store)
  *
- * - `ensureMirror` is idempotent: clones only when the directory is absent.
- * - `fetchMirror` runs `git fetch --prune` against an existing mirror.
- * - `createWorktree` allocates a `--detach`'d worktree at `targetPath`.
- * - `removeWorktree` reverses the above.
- * - `gcMirrors` keeps only mirrors whose URL appears in the supplied set —
- *   used by Step 7 on agent unbind / delete.
+ * Isolation model:
+ * - The mirror is configured with `remote.origin.fetch = +refs/heads/*:refs/remotes/origin/*`
+ *   and `remote.origin.mirror` unset. `git fetch` therefore writes only to
+ *   `refs/remotes/origin/*` and never touches `refs/heads/*`.
+ * - Each session owns a dedicated local branch `hub-session-<sessionHash>-<urlHash>`
+ *   in the mirror. Worktrees attach to that branch, not to a remote-tracking ref,
+ *   so two sessions on the same URL get disjoint branch names and cannot
+ *   collide on `git worktree add` or on `git fetch` ref locks.
  *
- * Authentication is delegated to the host Git environment (PRD §D12) — no
- * env vars or credential helpers are injected.
+ * Authentication is delegated to the host Git environment — no env vars or
+ * credential helpers are injected.
  */
 export type GitMirrorManagerOptions = {
   dataDir: string;
-  /** Override clone timeout (ms). Defaults to env `FIRST_TREE_HUB_GIT_CLONE_TIMEOUT_MS` or 5 minutes. */
   cloneTimeoutMs?: number;
-  /** Optional structured logger — see plan §5.5. */
   log?: (event: string, fields: Record<string, unknown>) => void;
 };
 
@@ -36,10 +39,10 @@ export interface GitMirrorManager {
     url: string;
     ref?: string;
     targetPath: string;
-  }): Promise<{ worktreePath: string; headCommit: string }>;
-  removeWorktree(path: string): Promise<void>;
+    sessionKey: string;
+  }): Promise<{ worktreePath: string; headCommit: string; branchName: string }>;
+  removeWorktree(args: { url: string; path: string; branchName: string }): Promise<void>;
   gcMirrors(stillReferencedUrls: Set<string>): Promise<{ removed: string[] }>;
-  /** Internal: directory holding all mirrors (test helper). */
   readonly mirrorsRoot: string;
 }
 
@@ -47,11 +50,51 @@ export function hashUrl(url: string): string {
   return createHash("sha256").update(url).digest("hex").slice(0, 32);
 }
 
+function shortHash(input: string): string {
+  return createHash("sha256").update(input).digest("hex").slice(0, 8);
+}
+
+export function deriveSessionBranchName(sessionKey: string, url: string): string {
+  return `${SESSION_BRANCH_PREFIX}-${shortHash(sessionKey)}-${shortHash(url)}`;
+}
+
+/**
+ * A value is SHA-like when it's a 7–40 character hex string. Used to decide
+ * whether `ref` should be resolved via the remote namespace (branch name) or
+ * used as-is (commit hash).
+ */
+function looksLikeCommitSha(ref: string): boolean {
+  return /^[0-9a-f]{7,40}$/i.test(ref);
+}
+
 export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirrorManager {
   const mirrorsRoot = join(opts.dataDir, "git-mirrors");
   const cloneTimeoutMs =
     opts.cloneTimeoutMs ?? Number(process.env.FIRST_TREE_HUB_GIT_CLONE_TIMEOUT_MS ?? DEFAULT_CLONE_TIMEOUT_MS);
   const log = opts.log ?? (() => {});
+
+  // Per-URL serial queue. Prevents concurrent ensureMirror / fetchMirror /
+  // gcMirrors for the same URL from racing on the same directory.
+  const urlLocks = new Map<string, Promise<unknown>>();
+
+  function withUrlLock<T>(url: string, op: () => Promise<T>): Promise<T> {
+    const key = hashUrl(url);
+    const prev = urlLocks.get(key) ?? Promise.resolve();
+    const next = prev.then(op, op);
+    urlLocks.set(key, next);
+    // Drop the map entry once the tail resolves so a long-lived manager doesn't
+    // leak one entry per URL forever. Silently swallow errors on this side
+    // channel — the real rejection is delivered via the returned `next`.
+    next.then(
+      () => {
+        if (urlLocks.get(key) === next) urlLocks.delete(key);
+      },
+      () => {
+        if (urlLocks.get(key) === next) urlLocks.delete(key);
+      },
+    );
+    return next;
+  }
 
   function mirrorDir(url: string): string {
     return join(mirrorsRoot, hashUrl(url));
@@ -90,98 +133,253 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
     });
   }
 
+  async function gitOk(args: string[], cwd: string, timeoutMs: number): Promise<boolean> {
+    try {
+      await git(args, cwd, timeoutMs);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Bring the mirror's config to the invariant expected by this module:
+   * fetch refspec = `+refs/heads/*:refs/remotes/origin/*`, `remote.origin.mirror`
+   * absent, `refs/remotes/origin/HEAD` resolvable.
+   *
+   * Called from `ensureMirror` on every invocation — both the fresh-clone path
+   * (ensures our own bootstrap wrote the right values) and the pre-existing
+   * mirror path (repairs drift from the legacy `--mirror` config).
+   */
+  async function assertMirrorConfig(mirrorPath: string, url: string): Promise<{ migrated: boolean }> {
+    let migrated = false;
+
+    // Read current fetch spec. `--get-all` returns every value on its own line;
+    // empty stdout means the key is absent.
+    let currentFetch = "";
+    try {
+      const { stdout } = await git(["config", "--get-all", "remote.origin.fetch"], mirrorPath, 10_000);
+      currentFetch = stdout.trim();
+    } catch {
+      currentFetch = "";
+    }
+
+    if (currentFetch !== FETCH_REFSPEC) {
+      // Replace whatever is there with exactly our refspec.
+      await git(["config", "--replace-all", "remote.origin.fetch", FETCH_REFSPEC], mirrorPath, 10_000);
+      migrated = true;
+    }
+
+    // `mirror = true` forces every fetch to prune & force-update every ref —
+    // must be unset for our refspec to behave as intended.
+    const mirrorFlag = await gitOk(["config", "--get", "remote.origin.mirror"], mirrorPath, 10_000);
+    if (mirrorFlag) {
+      await git(["config", "--unset-all", "remote.origin.mirror"], mirrorPath, 10_000);
+      migrated = true;
+    }
+
+    // Ensure origin URL matches (a mismatched URL would make migration silently
+    // pick up from the wrong upstream — refuse).
+    try {
+      const { stdout } = await git(["config", "--get", "remote.origin.url"], mirrorPath, 10_000);
+      const currentUrl = stdout.trim();
+      if (currentUrl !== url) {
+        await git(["config", "--replace-all", "remote.origin.url", url], mirrorPath, 10_000);
+        migrated = true;
+      }
+    } catch {
+      await git(["remote", "add", "origin", url], mirrorPath, 10_000);
+      migrated = true;
+    }
+
+    if (migrated) {
+      // Populate `refs/remotes/origin/*` and set `origin/HEAD`. Without this,
+      // newly-migrated mirrors have no remote-tracking refs to base worktrees on.
+      await git(["fetch", "--prune", "origin"], mirrorPath, cloneTimeoutMs);
+      // Failing `set-head --auto` is non-fatal — callers that pass an explicit
+      // `ref` don't need origin/HEAD, and fallbacks below handle its absence.
+      await gitOk(["remote", "set-head", "origin", "--auto"], mirrorPath, 30_000);
+      log("mirrorConfigMigrated", { gitUrl: url });
+    }
+
+    return { migrated };
+  }
+
+  /**
+   * Bootstrap a fresh mirror at `mirrorPath`. Uses `git init --bare` +
+   * manual remote setup rather than `git clone --mirror` / `git clone --bare`,
+   * so we never transiently have the mirror configured to force-write
+   * `refs/heads/*` on fetch.
+   */
+  async function bootstrapMirror(mirrorPath: string, url: string): Promise<void> {
+    mkdirSync(dirname(mirrorPath), { recursive: true });
+    await git(["init", "--bare", mirrorPath], null, cloneTimeoutMs);
+    await git(["remote", "add", "origin", url], mirrorPath, 10_000);
+    await git(["config", "--replace-all", "remote.origin.fetch", FETCH_REFSPEC], mirrorPath, 10_000);
+    await git(["fetch", "--prune", "origin"], mirrorPath, cloneTimeoutMs);
+    await gitOk(["remote", "set-head", "origin", "--auto"], mirrorPath, 30_000);
+  }
+
+  async function branchExists(mirrorPath: string, branchName: string): Promise<boolean> {
+    return await gitOk(["rev-parse", "--verify", "--quiet", `refs/heads/${branchName}`], mirrorPath, 10_000);
+  }
+
+  /**
+   * Resolve the commit-ish to base a new session branch on.
+   *
+   * - explicit SHA → use as-is
+   * - explicit branch name → prefer `refs/remotes/origin/<ref>`, fall back to
+   *   a literal SHA resolution in case the caller handed us a short commit
+   * - `ref` absent → `refs/remotes/origin/HEAD`
+   */
+  async function resolveBase(mirrorPath: string, ref: string | undefined): Promise<string> {
+    if (!ref) {
+      if (await gitOk(["rev-parse", "--verify", "--quiet", "refs/remotes/origin/HEAD"], mirrorPath, 10_000)) {
+        return "refs/remotes/origin/HEAD";
+      }
+      throw new GitMirrorError(
+        "Cannot resolve default branch: refs/remotes/origin/HEAD is missing. Re-run with an explicit `ref`.",
+      );
+    }
+    if (looksLikeCommitSha(ref)) {
+      if (await gitOk(["cat-file", "-e", ref], mirrorPath, 10_000)) return ref;
+    }
+    const remoteRef = `refs/remotes/origin/${ref}`;
+    if (await gitOk(["rev-parse", "--verify", "--quiet", remoteRef], mirrorPath, 10_000)) {
+      return remoteRef;
+    }
+    // Last resort: let git resolve `ref` against whatever it can find (tags,
+    // local heads, etc.). If this fails the error surfaces to the caller.
+    return ref;
+  }
+
   return {
     get mirrorsRoot() {
       return mirrorsRoot;
     },
 
-    async ensureMirror(url) {
-      mkdirSync(mirrorsRoot, { recursive: true });
-      const path = mirrorDir(url);
-      if (existsSync(join(path, "HEAD"))) {
-        // Already a bare repo — fast return.
-        return { mirrorPath: path, elapsedMs: 0, cloned: false };
-      }
-      try {
-        const { elapsedMs } = await git(["clone", "--mirror", url, path], null, cloneTimeoutMs);
-        log("ensureMirror", { gitUrl: url, elapsedMs, cloned: true });
-        return { mirrorPath: path, elapsedMs, cloned: true };
-      } catch (err) {
-        if (err instanceof GitMirrorTimeoutError) {
-          log("mirrorCloneTimeout", { gitUrl: url, timeoutMs: cloneTimeoutMs, elapsedMs: cloneTimeoutMs });
+    ensureMirror(url) {
+      return withUrlLock(url, async () => {
+        mkdirSync(mirrorsRoot, { recursive: true });
+        const path = mirrorDir(url);
+        if (existsSync(join(path, "HEAD"))) {
+          const { migrated } = await assertMirrorConfig(path, url);
+          if (migrated) {
+            // migration fetched already; report elapsed as 0 to preserve the
+            // existing "cloned === false => fast path" contract.
+          }
+          return { mirrorPath: path, elapsedMs: 0, cloned: false };
         }
-        // Clean up partial clone on failure to keep `ensureMirror` idempotent
-        // on the next attempt.
-        if (existsSync(path)) rmSync(path, { recursive: true, force: true });
-        throw err;
-      }
-    },
-
-    async fetchMirror(url) {
-      const path = mirrorDir(url);
-      if (!existsSync(join(path, "HEAD"))) {
-        throw new GitMirrorError(`Cannot fetch — no mirror exists for "${url}"`);
-      }
-      try {
-        const { elapsedMs } = await git(["fetch", "--prune"], path, cloneTimeoutMs);
-        return { elapsedMs };
-      } catch (err) {
-        log("mirrorFetchFailed", {
-          gitUrl: url,
-          errorCode: err instanceof GitMirrorError ? "git-failed" : "unknown",
-          stderr: err instanceof Error ? err.message.slice(0, 1024) : String(err).slice(0, 1024),
-        });
-        throw err;
-      }
-    },
-
-    async createWorktree({ url, ref, targetPath }) {
-      const mirror = mirrorDir(url);
-      if (!existsSync(join(mirror, "HEAD"))) {
-        throw new GitMirrorError(`Cannot create worktree — no mirror exists for "${url}"`);
-      }
-      const absTarget = resolve(targetPath);
-      // D13: target path must be free OR a Hub-managed worktree we can reuse.
-      if (existsSync(absTarget) && !isHubManagedWorktree(absTarget)) {
-        log("worktreeCreateConflict", {
-          gitUrl: url,
-          targetPath: absTarget,
-          occupantKind: classifyOccupant(absTarget),
-        });
-        throw new GitMirrorWorktreeConflictError(
-          `Worktree target "${absTarget}" is already occupied by ${classifyOccupant(absTarget)} — aborting (D13)`,
-        );
-      }
-      mkdirSync(dirname(absTarget), { recursive: true });
-      const args = ["worktree", "add", "--detach", absTarget];
-      if (ref) args.push(ref);
-      await git(args, mirror, cloneTimeoutMs);
-      const head = await git(["rev-parse", "HEAD"], absTarget, 30_000);
-      return { worktreePath: absTarget, headCommit: head.stdout.trim() };
-    },
-
-    async removeWorktree(path) {
-      const absTarget = resolve(path);
-      if (!existsSync(absTarget)) return;
-      // Find the mirror that owns this worktree by walking each mirror's
-      // `worktree list` — cheap because the set of mirrors is small.
-      if (!existsSync(mirrorsRoot)) return;
-      let removed = false;
-      for (const entry of readdirSync(mirrorsRoot)) {
-        const mirror = join(mirrorsRoot, entry);
-        if (!isBareRepo(mirror)) continue;
+        const start = Date.now();
         try {
-          await git(["worktree", "remove", "--force", absTarget], mirror, 30_000);
-          removed = true;
-          break;
-        } catch {
-          // Try the next mirror — only one will own this worktree path.
+          await bootstrapMirror(path, url);
+          const elapsedMs = Date.now() - start;
+          log("ensureMirror", { gitUrl: url, elapsedMs, cloned: true });
+          return { mirrorPath: path, elapsedMs, cloned: true };
+        } catch (err) {
+          if (err instanceof GitMirrorTimeoutError) {
+            log("mirrorCloneTimeout", { gitUrl: url, timeoutMs: cloneTimeoutMs, elapsedMs: cloneTimeoutMs });
+          }
+          if (existsSync(path)) rmSync(path, { recursive: true, force: true });
+          throw err;
         }
-      }
-      if (!removed && existsSync(absTarget)) {
-        // Worktree was never registered (e.g. orphan); just rm.
-        rmSync(absTarget, { recursive: true, force: true });
-      }
+      });
+    },
+
+    fetchMirror(url) {
+      return withUrlLock(url, async () => {
+        const path = mirrorDir(url);
+        if (!existsSync(join(path, "HEAD"))) {
+          throw new GitMirrorError(`Cannot fetch — no mirror exists for "${url}"`);
+        }
+        try {
+          const { elapsedMs } = await git(["fetch", "--prune", "origin"], path, cloneTimeoutMs);
+          return { elapsedMs };
+        } catch (err) {
+          log("mirrorFetchFailed", {
+            gitUrl: url,
+            errorCode: err instanceof GitMirrorError ? "git-failed" : "unknown",
+            stderr: err instanceof Error ? err.message.slice(0, 1024) : String(err).slice(0, 1024),
+          });
+          throw err;
+        }
+      });
+    },
+
+    createWorktree({ url, ref, targetPath, sessionKey }) {
+      return withUrlLock(url, async () => {
+        const mirror = mirrorDir(url);
+        if (!existsSync(join(mirror, "HEAD"))) {
+          throw new GitMirrorError(`Cannot create worktree — no mirror exists for "${url}"`);
+        }
+        const absTarget = resolve(targetPath);
+        const branchName = deriveSessionBranchName(sessionKey, url);
+
+        // D13: target path must be free OR a Hub-managed worktree we can reuse.
+        if (existsSync(absTarget) && !isHubManagedWorktree(absTarget)) {
+          log("worktreeCreateConflict", {
+            gitUrl: url,
+            targetPath: absTarget,
+            occupantKind: classifyOccupant(absTarget),
+          });
+          throw new GitMirrorWorktreeConflictError(
+            `Worktree target "${absTarget}" is already occupied by ${classifyOccupant(absTarget)} — aborting (D13)`,
+          );
+        }
+
+        const pathExists = existsSync(absTarget);
+        const hasBranch = await branchExists(mirror, branchName);
+
+        mkdirSync(dirname(absTarget), { recursive: true });
+
+        // Crash-recovery matrix (see refactor plan §5.3):
+        //   path + branch    → reuse (short-circuit here even though callers also
+        //                       short-circuit; defensive, cheap)
+        //   !path + !branch  → `worktree add -b <branch> <path> <base>`
+        //   !path + branch   → `worktree add <path> <branch>` (attach existing)
+        //   path + !branch   → corruption; refuse rather than guess
+        if (pathExists && hasBranch) {
+          // Already wired up — treat as successful reuse.
+        } else if (pathExists && !hasBranch) {
+          throw new GitMirrorError(
+            `Worktree directory "${absTarget}" exists as a Hub worktree but the expected session branch "${branchName}" is missing in the mirror — manual cleanup required`,
+          );
+        } else if (!pathExists && hasBranch) {
+          await git(["worktree", "add", absTarget, branchName], mirror, cloneTimeoutMs);
+        } else {
+          const base = await resolveBase(mirror, ref);
+          await git(["worktree", "add", "-b", branchName, absTarget, base], mirror, cloneTimeoutMs);
+        }
+
+        const head = await git(["rev-parse", "HEAD"], absTarget, 30_000);
+        return { worktreePath: absTarget, headCommit: head.stdout.trim(), branchName };
+      });
+    },
+
+    removeWorktree({ url, path, branchName }) {
+      return withUrlLock(url, async () => {
+        const absTarget = resolve(path);
+        const mirror = mirrorDir(url);
+        if (!isBareRepo(mirror)) {
+          // Mirror was already GC'd; just rm the orphan dir if it exists.
+          if (existsSync(absTarget)) rmSync(absTarget, { recursive: true, force: true });
+          return;
+        }
+        if (existsSync(absTarget)) {
+          await gitOk(["worktree", "remove", "--force", absTarget], mirror, 30_000);
+        } else {
+          // Path is already gone — let git prune its bookkeeping so later
+          // worktree-add calls don't hit the stale admin record.
+          await gitOk(["worktree", "prune"], mirror, 30_000);
+        }
+        if (existsSync(absTarget)) {
+          // Worktree wasn't git-registered (orphan dir) — rm for tidiness.
+          rmSync(absTarget, { recursive: true, force: true });
+        }
+        if (await branchExists(mirror, branchName)) {
+          await gitOk(["branch", "-D", branchName], mirror, 10_000);
+        }
+      });
     },
 
     async gcMirrors(stillReferencedUrls) {
@@ -205,8 +403,6 @@ function isBareRepo(p: string): boolean {
 }
 
 function isHubManagedWorktree(p: string): boolean {
-  // A Hub-managed worktree has a `.git` file (not directory) pointing back
-  // into the bare mirror's `worktrees/` dir.
   const gitMarker = join(p, ".git");
   if (!existsSync(gitMarker)) return false;
   try {

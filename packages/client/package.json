@@ -1,6 +1,6 @@
 {
   "name": "@first-tree-hub/client",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "First Tree Hub SDK — programmatic client for First Tree Hub server",
