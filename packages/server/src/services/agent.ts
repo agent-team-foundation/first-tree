@@ -134,13 +134,52 @@ export async function createAgent(db: Database, data: CreateAgent & { managerId?
     );
   }
   const inboxId = `inbox_${uuid}`;
-  const orgId = data.organizationId ?? (await resolveDefaultOrgId(db));
 
-  // managerId is NOT NULL at the DB level. Callers (admin API, onboard) pass
-  // the member id directly; internal system callers (github webhook, task
-  // service) omit it, in which case we fall back to the first admin member
-  // in the org — matches the migration backfill strategy.
-  const managerId = data.managerId ?? (await resolveFallbackManagerId(db, orgId));
+  // Resolve orgId + managerId with a strict "manager owns the org" contract.
+  //
+  // Three branches:
+  //
+  //   1. Admin API / onboard — caller passes `managerId` only. We look up the
+  //      member and derive `orgId` from their `organization_id`. This is the
+  //      M1 fix: previously, when the Web UI POSTed without `organizationId`,
+  //      we silently fell back to the `default` org, stranding agents in the
+  //      wrong tenant.
+  //
+  //   2. Bootstrap (services/member.ts::createMember, test helpers) — caller
+  //      passes BOTH `managerId` and `organizationId` inside the same
+  //      transaction where the member row is being inserted right after the
+  //      agent. The member doesn't exist yet in this tx, so a members lookup
+  //      would fail. We trust the caller and skip the lookup; DB FK still
+  //      enforces the manager_id at commit time.
+  //
+  //   3. System path (github webhook, task service) — caller omits
+  //      `managerId` and passes `organizationId` explicitly. We resolve the
+  //      first admin of that org as the manager.
+  let orgId: string;
+  let managerId: string;
+
+  if (data.managerId && data.organizationId) {
+    // Branch 2: trust explicit pair (bootstrap / tests).
+    orgId = data.organizationId;
+    managerId = data.managerId;
+  } else if (data.managerId) {
+    // Branch 1: derive orgId from the manager's member row.
+    const [manager] = await db
+      .select({ id: members.id, organizationId: members.organizationId })
+      .from(members)
+      .where(eq(members.id, data.managerId))
+      .limit(1);
+    if (!manager) {
+      throw new BadRequestError(`Manager "${data.managerId}" not found`);
+    }
+    orgId = manager.organizationId;
+    managerId = manager.id;
+  } else {
+    // Branch 3: fall back to explicit org (or legacy default org) + its first
+    // admin as the manager.
+    orgId = data.organizationId ?? (await resolveDefaultOrgId(db));
+    managerId = await resolveFallbackManagerId(db, orgId);
+  }
 
   const clientId = await resolveAgentClient(db, {
     clientId: data.clientId,
