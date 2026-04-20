@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { openTreePr } from "#products/tree/engine/open-tree-pr.js";
-import type { ShellResult, ShellRun } from "#products/tree/engine/sync.js";
+import type {
+  ShellResult,
+  ShellRun,
+} from "#products/tree/engine/runtime/shell.js";
 
 type Call = { command: string; args: string[] };
 
