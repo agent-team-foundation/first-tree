@@ -16,10 +16,10 @@ async function promptMissing(args: Record<string, unknown>): Promise<void> {
     }
   }
 
-  // 2. Require that the user has already run `first-tree-hub connect`
+  // 2. Require that the user has already run `first-tree-hub client connect`
   const { loadCredentials } = await import("../core/bootstrap.js");
   if (!loadCredentials()) {
-    throw new Error("No saved credentials. Run `first-tree-hub connect <server-url>` before onboarding.");
+    throw new Error("No saved credentials. Run `first-tree-hub client connect <server-url>` before onboarding.");
   }
 
   if (!args.id) {

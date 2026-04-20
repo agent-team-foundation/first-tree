@@ -42,14 +42,14 @@ export function resolveServerUrl(flagValue?: string): string {
  * Resolve the current member access JWT from persisted credentials.
  *
  * Unified-user-token milestone: the CLI has a single credential store and a
- * single onboarding path (`first-tree-hub connect`). The legacy
+ * single onboarding path (`first-tree-hub client connect`). The legacy
  * `FIRST_TREE_HUB_TOKEN` env var is no longer read — callers get a clear
- * error pointing at `connect` instead.
+ * error pointing at `client connect` instead.
  */
 export function resolveAccessToken(): string {
   const creds = loadCredentials();
   if (!creds) {
-    throw new Error("No credentials found. Run `first-tree-hub connect <server-url>` to sign in.");
+    throw new Error("No credentials found. Run `first-tree-hub client connect <server-url>` to sign in.");
   }
   return creds.accessToken;
 }
@@ -62,7 +62,7 @@ export function resolveAccessToken(): string {
 export async function ensureFreshAccessToken(): Promise<string> {
   const creds = loadCredentials();
   if (!creds) {
-    throw new Error("No credentials found. Run `first-tree-hub connect <server-url>` to sign in.");
+    throw new Error("No credentials found. Run `first-tree-hub client connect <server-url>` to sign in.");
   }
 
   if (!isTokenExpired(creds.accessToken)) {
@@ -77,7 +77,7 @@ export async function ensureFreshAccessToken(): Promise<string> {
   });
 
   if (!res.ok) {
-    throw new Error("Access token expired and refresh failed. Run `first-tree-hub connect <server-url>`.");
+    throw new Error("Access token expired and refresh failed. Run `first-tree-hub client connect <server-url>`.");
   }
 
   const data = (await res.json()) as { accessToken: string };

@@ -30,10 +30,11 @@ export class ClientRuntime {
   private watcher: FSWatcher | null = null;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(serverUrl: string) {
+  constructor(serverUrl: string, clientId: string) {
     this.serverUrl = serverUrl;
     this.connection = new ClientConnection({
       serverUrl,
+      clientId,
       getAccessToken: () => ensureFreshAccessToken(),
     });
     registerBuiltinHandlers();

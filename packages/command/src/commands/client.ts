@@ -22,9 +22,15 @@ import {
   promptMissingFields,
   resolveServerUrl,
 } from "../core/index.js";
+import { registerConnectCommand } from "./connect.js";
 
 export function registerClientCommands(program: Command): void {
   const client = program.command("client").description("Client runtime — connect agents to the server");
+
+  // `client connect` — first-time setup: configure server URL, authenticate,
+  // and start the runtime. Registered here so all machine-level commands live
+  // under a single `client` subcommand group.
+  registerConnectCommand(client);
 
   client
     .command("start")
@@ -48,9 +54,9 @@ export function registerClientCommands(program: Command): void {
         const agentsDir = join(DEFAULT_CONFIG_DIR, "agents");
         const agents = loadAgents({ schema: agentConfigSchema, agentsDir });
 
-        process.stderr.write(`\n  Connecting to ${config.server.url}...\n`);
+        process.stderr.write(`\n  Connecting to ${config.server.url} (client id: ${config.client.id})...\n`);
 
-        const runtime = new ClientRuntime(config.server.url);
+        const runtime = new ClientRuntime(config.server.url, config.client.id);
         for (const [name, agentConfig] of agents) {
           runtime.addAgent(name, agentConfig);
         }

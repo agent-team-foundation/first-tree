@@ -87,7 +87,11 @@ first-tree-hub server admin:create -u admin -p mypassword
 Client runtime — connects all configured agents to the server.
 
 ```bash
-# Start all configured agents
+# First-time setup: authenticate and start (use the command shown in the web
+# "Connect a machine" dialog, which includes a one-time token)
+first-tree-hub client connect <server-url> --token <token>
+
+# Start all configured agents (uses saved credentials)
 first-tree-hub client start
 
 # Check environment readiness

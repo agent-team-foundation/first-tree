@@ -62,7 +62,7 @@ export async function onboardCheck(args: OnboardArgs): Promise<CheckItem[]> {
       key: "connect",
       label: "Signed in",
       status: "missing_required",
-      hint: "Run `first-tree-hub connect <server-url>` first",
+      hint: "Run `first-tree-hub client connect <server-url>` first",
     });
   }
 

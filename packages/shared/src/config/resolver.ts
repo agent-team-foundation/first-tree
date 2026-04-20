@@ -91,6 +91,9 @@ function coerceEnvValue(value: string, schema: z.ZodType): unknown {
 // ── Auto-generation ──────────────────────────────────────────────────
 
 function builtinAutoGenerate(strategy: string): string {
+  if (strategy === "client-id") {
+    return `client_${randomBytes(4).toString("hex")}`;
+  }
   const match = /^random:(\w+):(\d+)$/.exec(strategy);
   if (!match) {
     throw new Error(`Unknown auto-generation strategy: ${strategy}`);

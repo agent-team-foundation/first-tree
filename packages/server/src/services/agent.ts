@@ -92,7 +92,7 @@ async function resolveAgentClient(
   if (!client.userId) {
     throw new BadRequestError(
       `Client "${data.clientId}" has not been claimed by a user yet. Have the operator run ` +
-        "`first-tree-hub connect` on that machine before pinning an agent to it.",
+        "`first-tree-hub client connect` on that machine before pinning an agent to it.",
     );
   }
   if (client.userId !== manager.userId) {
