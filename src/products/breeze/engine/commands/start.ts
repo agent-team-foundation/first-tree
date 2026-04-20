@@ -6,7 +6,7 @@
  * we fall back to `spawn(... detached: true)` with stdout redirected.
  */
 
-import { mkdirSync, openSync } from "node:fs";
+import { mkdirSync, openSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 
@@ -22,7 +22,13 @@ export interface RunStartOptions {
   write?: (line: string) => void;
   runnerHome?: string;
   profile?: string;
-  /** CLI entrypoint. Defaults to `process.execPath` (node) + first-tree bin. */
+  /**
+   * Absolute path to the `first-tree` bin launchd should exec. The bin
+   * carries a `#!/usr/bin/env node` shebang, so we point launchd at it
+   * directly rather than at `node` + a script argument. Defaults to the
+   * currently-running script (`process.argv[1]`, resolved through
+   * `realpath`).
+   */
   executable?: string;
   /** Args after the executable (forwarded to the daemon). */
   daemonArgs?: readonly string[];
@@ -52,7 +58,15 @@ export async function runStart(
   const nowSec = Math.floor(Date.now() / 1_000);
   const logPath = join(logsDir, `breeze-daemon-${nowSec}.log`);
 
-  const executable = options.executable ?? process.execPath;
+  let executable: string;
+  try {
+    executable = options.executable ?? resolveDefaultExecutable();
+  } catch (err) {
+    write(
+      `breeze: start failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return 1;
+  }
   const daemonArgs = options.daemonArgs ?? defaultDaemonArgs(argv);
 
   if (supportsLaunchd()) {
@@ -113,17 +127,41 @@ function parseProfile(argv: readonly string[]): string | undefined {
 }
 
 /**
+ * Resolve the path launchd (or the fallback detached spawn) should exec.
+ * We want the `first-tree` bin itself — it has a `#!/usr/bin/env node`
+ * shebang and knows how to dispatch `breeze daemon`. Using `node` as the
+ * executable with `breeze` as the first argument does not work: node
+ * would try to resolve `breeze` as a script path relative to cwd (which
+ * launchd sets to `/`), producing `Cannot find module '/breeze'`.
+ */
+export function resolveDefaultExecutable(
+  argv1: string | undefined = process.argv[1],
+): string {
+  if (!argv1) {
+    throw new Error(
+      "could not resolve first-tree CLI path (process.argv[1] is unset); pass `executable` explicitly",
+    );
+  }
+  try {
+    return realpathSync(argv1);
+  } catch {
+    return argv1;
+  }
+}
+
+/**
  * Build the forwarded argv for the background daemon. The incoming
  * `start` argv may contain flags like `--allow-repo` that we pass
  * through to the foreground daemon entrypoint. We also drop
  * `--home`/`--profile` because those are interpreted by this command
  * and may differ from the daemon's own resolution.
+ *
+ * Exported for tests.
  */
-function defaultDaemonArgs(argv: readonly string[]): string[] {
+export function defaultDaemonArgs(argv: readonly string[]): string[] {
   // The ported daemon entrypoint is `first-tree breeze daemon --backend=ts`.
-  // In the fallback spawn path, executable is process.execPath so we
-  // cannot embed the CLI; we assume the caller set `executable` to the
-  // `first-tree` bin. See RunStartOptions.
+  // Executable is the `first-tree` bin (see `resolveDefaultExecutable`),
+  // so these are the args *after* the bin — the CLI's own argv[2:].
   const forwarded: string[] = [];
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
