@@ -16,8 +16,25 @@ function parseId(raw: string): number {
 }
 
 export async function adminAdapterMappingRoutes(app: FastifyInstance): Promise<void> {
-  app.get("/", async () => {
-    const rows = await app.db.select().from(adapterAgentMappings).orderBy(desc(adapterAgentMappings.createdAt));
+  app.get("/", async (request) => {
+    // M2 org scope: adapter_agent_mappings has no organization_id column,
+    // so we JOIN agents to filter by the caller's org. Without this JOIN,
+    // a cross-tenant admin could list every other org's mappings.
+    const scope = memberScope(request);
+    const rows = await app.db
+      .select({
+        id: adapterAgentMappings.id,
+        platform: adapterAgentMappings.platform,
+        externalUserId: adapterAgentMappings.externalUserId,
+        agentId: adapterAgentMappings.agentId,
+        boundVia: adapterAgentMappings.boundVia,
+        displayName: adapterAgentMappings.displayName,
+        createdAt: adapterAgentMappings.createdAt,
+      })
+      .from(adapterAgentMappings)
+      .innerJoin(agents, eq(agents.uuid, adapterAgentMappings.agentId))
+      .where(eq(agents.organizationId, scope.organizationId))
+      .orderBy(desc(adapterAgentMappings.createdAt));
     return rows.map((r) => ({
       id: r.id,
       platform: r.platform,
