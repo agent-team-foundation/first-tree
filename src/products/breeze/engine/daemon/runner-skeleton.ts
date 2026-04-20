@@ -274,8 +274,12 @@ export async function runDaemon(
   //
   // Skipped when identity resolution failed — that path keeps old
   // read-only degraded semantics for operators without a gh login.
+  // Skip when signal is already aborted — we'd release immediately
+  // anyway, and touching the durable lock dir risks thrashing a
+  // legitimately-running daemon's state. Matches the HTTP-server
+  // pre-abort guard below.
   let lockHandle: ServiceLockHandle | null = null;
-  if (identity) {
+  if (identity && !(options.signal?.aborted ?? false)) {
     try {
       lockHandle = await acquireServiceLock({
         baseDir: join(resolveRunnerHome(), "locks"),
