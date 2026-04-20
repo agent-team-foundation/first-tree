@@ -318,7 +318,9 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     }
 
     if (type === "auth:rejected" || type === "auth:expired") {
-      this.registered = false;
+      // The close handler reads `this.registered` to decide whether to
+      // reconnect; clearing it here would make that decision see post-close
+      // state and skip the reconnect after a mid-session auth:expired push.
       if (type === "auth:expired") this.emit("auth:expired");
       this.ws?.close(4401, type);
       return;
