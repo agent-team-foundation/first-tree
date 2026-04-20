@@ -47,6 +47,7 @@ require_file "$SKILL_DIR/references/source-workspace-installation.md"
 require_file "$SKILL_DIR/references/principles.md"
 require_file "$SKILL_DIR/references/ownership-and-naming.md"
 require_file "$SKILL_DIR/references/upgrade-contract.md"
+require_file "$SKILL_DIR/references/workflow-mode.md"
 
 # Skill payload must NOT contain engine, assets, tests, scripts, or agents.
 for forbidden in engine assets tests scripts agents; do

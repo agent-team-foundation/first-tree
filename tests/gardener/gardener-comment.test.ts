@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { runCli } from "../../src/cli.js";
 import { GARDENER_USAGE, runGardener } from "#products/gardener/cli.js";
 import {
+  assigneesFromMentions,
   buildCommentBody,
   buildTreeIssueBody,
   codeownersForPath,
@@ -1236,6 +1237,67 @@ describe("gardener comment -- Phase 2a tree-issue primitives", () => {
     expect(body).toContain("no CODEOWNERS match");
     expect(body).not.toContain("cc @");
     expect(body).toContain("(no tree nodes cited)");
+  });
+
+  // ─────────────────── --assign-owners path ───────────────────
+
+  it("buildTreeIssueBody with autoAssigned=true swaps the action line", () => {
+    const body = buildTreeIssueBody({
+      sourceRepo: "alice/cool",
+      sourcePr: 103,
+      sourcePrTitle: "feat: thing",
+      sourceCommentUrl: "https://github.com/alice/cool/pull/103#issuecomment-2",
+      verdict: "NEW_TERRITORY",
+      severity: "medium",
+      summary: "New surface area.",
+      treeNodes: [{ path: "pkg-a", summary: "" }],
+      codeownersMentions: ["@alice", "@bob"],
+      autoAssigned: true,
+    });
+    expect(body).toContain("auto-assigned to the node owners cited above");
+    expect(body).not.toContain("not auto-assigned");
+    expect(body).toContain("cc @alice @bob");
+  });
+
+  it("buildTreeIssueBody with autoAssigned=true but no mentions keeps pull-mode language", () => {
+    const body = buildTreeIssueBody({
+      sourceRepo: "alice/cool",
+      sourcePr: 104,
+      sourcePrTitle: "chore",
+      sourceCommentUrl: "https://github.com/alice/cool/pull/104#issuecomment-3",
+      verdict: "ALIGNED",
+      severity: "low",
+      summary: "No-op.",
+      treeNodes: [],
+      codeownersMentions: [],
+      autoAssigned: true,
+    });
+    // No assignees to honor — fall back to pull-mode phrasing so the
+    // body doesn't lie about what GitHub did.
+    expect(body).toContain("not auto-assigned");
+  });
+
+  describe("assigneesFromMentions", () => {
+    it("strips leading @ and dedupes while preserving order", () => {
+      expect(
+        assigneesFromMentions(["@alice", "@bob", "@alice", "@carol"]),
+      ).toEqual(["alice", "bob", "carol"]);
+    });
+
+    it("drops team mentions (GitHub rejects them for issue assignees)", () => {
+      expect(
+        assigneesFromMentions(["@alice", "@team/frontend", "@bob"]),
+      ).toEqual(["alice", "bob"]);
+    });
+
+    it("caps output at 10 entries", () => {
+      const mentions = Array.from({ length: 15 }, (_, i) => `@u${i}`);
+      expect(assigneesFromMentions(mentions)).toHaveLength(10);
+    });
+
+    it("ignores blank entries", () => {
+      expect(assigneesFromMentions(["@", "", "@alice"])).toEqual(["alice"]);
+    });
   });
 });
 
