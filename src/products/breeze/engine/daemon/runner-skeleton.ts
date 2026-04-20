@@ -276,6 +276,7 @@ export async function runDaemon(
   }
 
   const paths = resolveBreezePaths();
+  const runnerHome = resolveRunnerHome();
 
   // Identity resolution is best-effort at startup. The daemon will still
   // try to poll if identity fails — the poller uses the host-only env,
@@ -314,7 +315,7 @@ export async function runDaemon(
   if (identity && !(options.signal?.aborted ?? false)) {
     try {
       lockHandle = await acquireServiceLock({
-        baseDir: join(resolveRunnerHome(), "locks"),
+        baseDir: join(runnerHome, "locks"),
         identity,
         profile: "default",
         note: "daemon starting",
@@ -355,8 +356,52 @@ export async function runDaemon(
     logger.error(
       `invalid --allow-repo value: ${err instanceof Error ? err.message : String(err)}`,
     );
+    if (lockHandle) await lockHandle.release().catch(() => undefined);
     return 1;
   }
+
+  let dispatcher: Dispatcher | null = null;
+  const runtimeStore = new ThreadStore({ runnerHome });
+  const allowedReposLabel = repoFilter.isEmpty()
+    ? "all"
+    : repoFilter.displayPatterns();
+  const runtimeStatus: Record<string, string> = {
+    last_identity: identity
+      ? `${identity.login}@${identity.host}`
+      : `unknown@${config.host}`,
+    allowed_repos: allowedReposLabel,
+    active_tasks: "0",
+    queued_tasks: "0",
+    last_note: "daemon starting",
+  };
+  const publishRuntimeStatus = (
+    note?: string,
+    extra: Record<string, string | undefined> = {},
+  ): void => {
+    if (note !== undefined) runtimeStatus.last_note = note;
+    runtimeStatus.last_identity = identity
+      ? `${identity.login}@${identity.host}`
+      : `unknown@${config.host}`;
+    runtimeStatus.allowed_repos = allowedReposLabel;
+    runtimeStatus.active_tasks = String(dispatcher?.activeCount() ?? 0);
+    runtimeStatus.queued_tasks = String(dispatcher?.pendingCount() ?? 0);
+    for (const [key, value] of Object.entries(extra)) {
+      if (value === undefined || value.length === 0) delete runtimeStatus[key];
+      else runtimeStatus[key] = value;
+    }
+    runtimeStore.writeRuntimeStatus(runtimeStatus);
+    lockHandle?.refresh(
+      Number.parseInt(runtimeStatus.active_tasks, 10) || 0,
+      runtimeStatus.last_note,
+    );
+  };
+  publishRuntimeStatus();
+  const runtimeRefreshMs = Math.max(
+    1_000,
+    Math.min(config.pollIntervalSec * 1_000, 30_000),
+  );
+  const runtimeTicker = setInterval(() => publishRuntimeStatus(), runtimeRefreshMs);
+  runtimeTicker.unref?.();
 
   logger.info(
     `breeze daemon: poll-interval=${config.pollIntervalSec}s host=${config.host} http-port=${config.httpPort} max-parallel=${config.maxParallel} search-limit=${config.searchLimit} allow-repo=${repoFilter.isEmpty() ? "all" : repoFilter.displayPatterns()}`,
@@ -374,7 +419,6 @@ export async function runDaemon(
   // Absence of codex/claude is non-fatal; the daemon still runs as
   // read-only (poller + http).
   let broker: RunningBroker | null = null;
-  let dispatcher: Dispatcher | null = null;
   let candidateLoopDone: Promise<void> | null = null;
   let candidateRuntime:
     | {
@@ -387,7 +431,6 @@ export async function runDaemon(
     const agents = detectAvailableAgents();
     const realGh = findExecutable("gh");
     if (agents.length > 0 && realGh) {
-      const runnerHome = resolveRunnerHome();
       const brokerDir = join(runnerHome, "broker");
       const identity = resolveDaemonIdentity({ host: config.host });
       const executor = new GhExecutor({
@@ -461,6 +504,12 @@ export async function runDaemon(
           signal: controller.signal,
           logger,
           scheduler,
+          onCycle: () =>
+            publishRuntimeStatus(undefined, {
+              next_search_reconcile_epoch: String(
+                Math.floor(Date.now() / 1_000) + config.pollIntervalSec,
+              ),
+            }),
           recoverableCandidates: () =>
             scheduler.enqueueRecoverableTasks(identity.host),
         }).catch((err) => {
@@ -504,12 +553,15 @@ export async function runDaemon(
       logger.error(
         `failed to start http server: ${err instanceof Error ? err.message : String(err)}`,
       );
+      clearInterval(runtimeTicker);
       if (dispatcher) await dispatcher.stop();
       if (broker) await broker.stop();
       if (uninstallHandlers) uninstallHandlers();
+      if (lockHandle) await lockHandle.release().catch(() => undefined);
       return 1;
     }
   }
+  publishRuntimeStatus("running");
 
   let exitCode = 0;
   try {
@@ -548,6 +600,7 @@ export async function runDaemon(
     );
     exitCode = 1;
   } finally {
+    clearInterval(runtimeTicker);
     // Shutdown order:
     //   SIGTERM -> stop poller (above) -> flush store (poller's atomic
     //   tmp+rename drains in updateInbox) -> stop dispatcher (aborts

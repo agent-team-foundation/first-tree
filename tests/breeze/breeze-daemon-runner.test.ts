@@ -7,13 +7,65 @@
  *   - `daemon --backend=ts` invokes the TS runner; `--backend=rust` bridges
  */
 
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import * as identityModule from "../../src/products/breeze/engine/daemon/identity.js";
+import * as httpModule from "../../src/products/breeze/engine/daemon/http.js";
+import * as pollerModule from "../../src/products/breeze/engine/daemon/poller.js";
 import {
   parseDaemonArgs,
   runDaemon,
 } from "../../src/products/breeze/engine/daemon/runner-skeleton.js";
 import { extractBackendFlag } from "../../src/products/breeze/cli.js";
+
+const tempRoots: string[] = [];
+const ORIGINAL_BREEZE_DIR = process.env.BREEZE_DIR;
+const ORIGINAL_BREEZE_HOME = process.env.BREEZE_HOME;
+const ORIGINAL_PATH = process.env.PATH;
+
+afterEach(() => {
+  while (tempRoots.length > 0) {
+    const root = tempRoots.pop();
+    if (root && existsSync(root)) {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+  if (ORIGINAL_BREEZE_DIR === undefined) delete process.env.BREEZE_DIR;
+  else process.env.BREEZE_DIR = ORIGINAL_BREEZE_DIR;
+  if (ORIGINAL_BREEZE_HOME === undefined) delete process.env.BREEZE_HOME;
+  else process.env.BREEZE_HOME = ORIGINAL_BREEZE_HOME;
+  if (ORIGINAL_PATH === undefined) delete process.env.PATH;
+  else process.env.PATH = ORIGINAL_PATH;
+  vi.useRealTimers();
+});
+
+function makeTempRoot(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), `breeze-daemon-${prefix}-`));
+  tempRoots.push(dir);
+  return dir;
+}
+
+function parseEnvFile(path: string): Record<string, string> {
+  return Object.fromEntries(
+    readFileSync(path, "utf8")
+      .trim()
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => {
+        const idx = line.indexOf("=");
+        return [line.slice(0, idx), line.slice(idx + 1)];
+      }),
+  );
+}
 
 describe("parseDaemonArgs", () => {
   it("parses all recognised flags", () => {
@@ -155,6 +207,84 @@ describe("runDaemon end-to-end skeleton", () => {
     });
     expect(code).toBe(0);
     expect(logs.some((l) => l.includes("shutdown complete"))).toBe(true);
+  });
+
+  it("refreshes the service lock heartbeat and writes runtime status while running", async () => {
+    const breezeDir = makeTempRoot("status");
+    process.env.BREEZE_DIR = breezeDir;
+    delete process.env.BREEZE_HOME;
+    process.env.PATH = "";
+
+    vi.spyOn(identityModule, "resolveDaemonIdentity").mockReturnValue({
+        host: "github.com",
+        login: "tester",
+        gitProtocol: "https",
+        scopes: ["repo", "notifications"],
+      });
+    vi.spyOn(identityModule, "identityHasRequiredScope").mockReturnValue(true);
+    vi.spyOn(httpModule, "startHttpServer").mockImplementation(
+      async ({ signal }: { signal?: AbortSignal }) => ({
+        port: 7878,
+        done: signal?.aborted
+          ? Promise.resolve()
+          : new Promise<void>((resolve) => {
+              signal?.addEventListener("abort", () => resolve(), { once: true });
+            }),
+        stop: async () => undefined,
+      }),
+    );
+    vi.spyOn(pollerModule, "runPoller").mockImplementation(
+      async ({ signal }: { signal?: AbortSignal }) =>
+        await new Promise<void>((resolve) => {
+          if (signal?.aborted) {
+            resolve();
+            return;
+          }
+          signal?.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+
+    const controller = new AbortController();
+    const runPromise = runDaemon([], {
+      cliOverrides: { pollIntervalSec: 1 },
+      installSignalHandlers: false,
+      signal: controller.signal,
+      logger: {
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 2_200));
+
+    const runnerHome = join(breezeDir, "runner");
+    const lockPath = join(
+      runnerHome,
+      "locks",
+      "github.com__tester__default",
+      "lock.env",
+    );
+    const runtimePath = join(runnerHome, "runtime", "status.env");
+
+    expect(existsSync(lockPath)).toBe(true);
+    expect(existsSync(runtimePath)).toBe(true);
+
+    const lock = parseEnvFile(lockPath);
+    expect(Number(lock.heartbeat_epoch)).toBeGreaterThan(
+      Number(lock.started_epoch),
+    );
+    expect(lock.note).toBe("running");
+
+    const runtime = parseEnvFile(runtimePath);
+    expect(runtime.last_note).toBe("running");
+    expect(runtime.last_identity).toBe("tester@github.com");
+    expect(runtime.allowed_repos).toBe("all");
+    expect(runtime.active_tasks).toBe("0");
+    expect(runtime.queued_tasks).toBe("0");
+
+    controller.abort();
+    await expect(runPromise).resolves.toBe(0);
   });
 });
 
