@@ -1,13 +1,11 @@
 import { useLocation, useNavigate } from "react-router";
 import { cn } from "../lib/utils.js";
 import { BindingsPage } from "./bindings.js";
-import { ClientsPage } from "./clients.js";
 import { MembersPage } from "./members.js";
 import { SettingsPage } from "./settings.js";
 
 const tabs = [
   { key: "members", label: "Members" },
-  { key: "clients", label: "Clients" },
   { key: "settings", label: "Settings" },
   { key: "bindings", label: "Bindings" },
 ] as const;
@@ -45,7 +43,6 @@ export function AdminPage() {
         ))}
       </div>
       {active === "members" && <MembersPage />}
-      {active === "clients" && <ClientsPage />}
       {active === "settings" && <SettingsPage />}
       {active === "bindings" && <BindingsPage />}
     </div>

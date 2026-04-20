@@ -1027,12 +1027,13 @@ function BindClientList({
   selected: string;
   onSelect: (id: string) => void;
 }) {
-  const bindable = clients.filter((c) => c.status !== "retired");
+  const bindable = clients.filter((c) => c.status === "connected");
   if (bindable.length === 0) {
     return (
       <div className="rounded border bg-muted/40 px-3 py-4 text-sm text-muted-foreground">
-        No clients available. Run <code className="font-mono text-xs">first-tree-hub client connect &lt;url&gt;</code>{" "}
-        on the machine that should run this agent, then reopen this dialog.
+        No connected clients available. Run{" "}
+        <code className="font-mono text-xs">first-tree-hub client connect &lt;url&gt;</code> on the machine that should
+        run this agent, then reopen this dialog.
       </div>
     );
   }

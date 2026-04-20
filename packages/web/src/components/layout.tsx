@@ -10,9 +10,10 @@ import { ThemeToggle } from "./ui/theme-toggle.js";
 const navTabs = [
   { to: "/", label: "Workspace", end: true, kbd: "⌘1" },
   { to: "/agents", label: "Agents", end: false, kbd: "⌘2" },
+  { to: "/clients", label: "Clients", end: false, kbd: "⌘3" },
 ];
 
-const adminTab = { to: "/admin", label: "Admin", end: false, kbd: "⌘3" };
+const adminTab = { to: "/admin", label: "Admin", end: false, kbd: "⌘4" };
 
 export function Layout() {
   const { role, logout } = useAuth();

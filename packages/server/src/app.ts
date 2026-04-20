@@ -228,7 +228,7 @@ export async function buildApp(config: Config) {
           adminApp.addHook("onRequest", memberAuth);
           await adminApp.register(adminClientRoutes);
         },
-        { prefix: "/admin/clients" },
+        { prefix: "/clients" },
       );
 
       // M1: Agent activity routes
