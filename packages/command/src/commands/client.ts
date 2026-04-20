@@ -18,9 +18,13 @@ import {
   checkServerReachable,
   checkWebSocket,
   ensureFreshAccessToken,
+  getClientServiceStatus,
+  installClientService,
+  isServiceSupported,
   printResults,
   promptMissingFields,
   resolveServerUrl,
+  uninstallClientService,
 } from "../core/index.js";
 import { registerConnectCommand } from "./connect.js";
 
@@ -132,6 +136,72 @@ export function registerClientCommands(program: Command): void {
         process.stderr.write("\n");
       } catch {
         process.stderr.write("  No agents directory found.\n");
+      }
+    });
+
+  // ── Background service (launchd / systemd --user) ─────────────────
+
+  const service = client
+    .command("service")
+    .description("Install/uninstall the background service that keeps this computer online");
+
+  service
+    .command("install")
+    .description("Install as a background service — auto-starts on login/boot")
+    .action(() => {
+      if (!isServiceSupported()) {
+        process.stderr.write(
+          `  Background service is not supported on ${process.platform}.\n` +
+            "  Run `first-tree-hub client start` manually to keep the computer online.\n",
+        );
+        process.exit(1);
+      }
+      try {
+        const info = installClientService();
+        process.stderr.write(`\n  \u2713 Installed as a background service (${info.platform}).\n`);
+        process.stderr.write(`    Unit:  ${info.unitPath}\n`);
+        process.stderr.write(`    Logs:  ${info.logDir}\n`);
+        if (info.state === "active") {
+          process.stderr.write(`    State: running${info.detail ? ` (${info.detail})` : ""}\n`);
+        } else {
+          process.stderr.write(`    State: ${info.state}${info.detail ? ` (${info.detail})` : ""}\n`);
+        }
+        process.stderr.write("\n  You can close this terminal — the computer stays online.\n");
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        fail("SERVICE_INSTALL_ERROR", msg);
+      }
+    });
+
+  service
+    .command("status")
+    .description("Show background service state")
+    .action(() => {
+      const info = getClientServiceStatus();
+      if (info.platform === "unsupported") {
+        process.stderr.write(`  Not supported on ${process.platform}.\n`);
+        return;
+      }
+      process.stderr.write(`\n  ${info.platform}: ${info.label}\n`);
+      process.stderr.write(`  Unit:  ${info.unitPath}\n`);
+      process.stderr.write(`  Logs:  ${info.logDir}\n`);
+      process.stderr.write(`  State: ${info.state}${info.detail ? ` (${info.detail})` : ""}\n\n`);
+    });
+
+  service
+    .command("uninstall")
+    .description("Stop and remove the background service")
+    .action(() => {
+      if (!isServiceSupported()) {
+        process.stderr.write(`  Not supported on ${process.platform}.\n`);
+        return;
+      }
+      try {
+        const info = uninstallClientService();
+        process.stderr.write(`\n  \u2713 Uninstalled background service (${info.platform}).\n\n`);
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        fail("SERVICE_UNINSTALL_ERROR", msg);
       }
     });
 

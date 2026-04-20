@@ -49,3 +49,12 @@ export { blank, status } from "./output.js";
 export { isInteractive, promptAddAgent, promptMissingFields } from "./prompt.js";
 export type { StartOptions } from "./server.js";
 export { startServer } from "./server.js";
+// Background service install (launchd / systemd --user)
+export type { ServiceInfo, ServiceState } from "./service-install.js";
+export {
+  getClientServiceStatus,
+  installClientService,
+  isServiceSupported,
+  resolveCliInvocation,
+  uninstallClientService,
+} from "./service-install.js";
