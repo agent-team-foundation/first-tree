@@ -15,7 +15,6 @@ import {
 } from "#products/tree/engine/dedicated-tree.js";
 import { inspectRepo } from "#products/tree/engine/inspect.js";
 import { Repo } from "#products/tree/engine/repo.js";
-import { ONBOARDING_TEXT } from "#products/tree/engine/onboarding.js";
 import { evaluateAll } from "#products/tree/engine/rules/index.js";
 import type { RuleResult } from "#products/tree/engine/rules/index.js";
 import {
@@ -512,8 +511,14 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
     });
   }
 
-  console.log(ONBOARDING_TEXT);
-  console.log("---\n");
+  // Agents running `first-tree tree init` have already loaded the skill
+  // payload, which includes the full onboarding handbook. Dumping 200+ lines
+  // of the same markdown here is noise. Print a short pointer instead; any
+  // caller that wants the full text can run `first-tree tree help onboarding`.
+  console.log(
+    "Onboarding handbook: run `first-tree tree help onboarding` for the full reference.",
+  );
+  console.log();
 
   const groups = addSeededMemberReviewGroup(
     evaluateAll(r),

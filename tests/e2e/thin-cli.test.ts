@@ -8,7 +8,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { USAGE, isDirectExecution, runCli, stripGlobalFlags } from "../../src/cli.js";
 import { TREE_USAGE } from "../../src/products/tree/cli.js";
 
@@ -66,6 +66,33 @@ describe("thin CLI shell", () => {
     expect(TREE_USAGE).toContain("review");
     expect(TREE_USAGE).toContain("generate-codeowners");
     expect(TREE_USAGE).toContain("inject-context");
+    expect(TREE_USAGE).toContain("status");
+  });
+
+  it("routes `tree status` through inspect", async () => {
+    // `runInspect` writes via console.log directly rather than the output
+    // callback, so we spy on console.log to capture the inspect payload.
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((...args) => {
+      logs.push(args.map(String).join(" "));
+    });
+    try {
+      const discard = (_text: string) => undefined;
+      const code = await runCli(
+        ["--skip-version-check", "tree", "status", "--json"],
+        discard,
+      );
+      expect(code).toBe(0);
+      const combined = logs.join("\n");
+      // `tree inspect --json` emits a JSON payload with classification +
+      // rootKind; `tree status` should produce the same output.
+      expect(combined).toContain("\"classification\"");
+      expect(combined).toContain("\"rootKind\"");
+      // And it should not be the "Unknown command" fallback.
+      expect(combined).not.toContain("Unknown command");
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("treats a symlinked npm bin path as direct execution", () => {

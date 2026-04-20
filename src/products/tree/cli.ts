@@ -13,6 +13,7 @@ export const TREE_USAGE = `usage: first-tree tree <command>
 
 Commands:
   inspect               Classify the current folder before onboarding
+  status                Alias for \`inspect\` (human-friendly name)
   init                  High-level onboarding wrapper for repo/workspace roots
   bootstrap             Low-level tree-repo bootstrap for an explicit tree checkout
   bind                  Bind the current repo/workspace root to an existing tree repo
@@ -76,7 +77,8 @@ export async function runTree(
       );
       return runBootstrap(args.slice(1), write);
     }
-    case "inspect": {
+    case "inspect":
+    case "status": {
       const { runInspect } = await import(
         "#products/tree/engine/commands/inspect.js"
       );
