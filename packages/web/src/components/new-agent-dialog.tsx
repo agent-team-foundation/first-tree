@@ -1,12 +1,43 @@
 import type { Agent } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { type HubClient, listClients } from "../api/activity.js";
 import { createAgent } from "../api/agents.js";
+import { ApiError, type ValidationIssue } from "../api/client.js";
 import { Button } from "./ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog.js";
 import { Input } from "./ui/input.js";
 import { Label } from "./ui/label.js";
+
+/** Mirrors the `createAgentSchema` name regex in `packages/shared/src/schemas/agent.ts`. */
+const NAME_PATTERN = /^[a-z0-9_-]+$/;
+const NAME_MAX = 100;
+
+type FieldKey = "name" | "displayName" | "clientId";
+type FieldErrors = Partial<Record<FieldKey | "_root", string>>;
+
+/**
+ * Map a server-returned validation-issue array (Zod `issues` shape, forwarded
+ * by the server's `setErrorHandler` as `details[]`) to per-field messages.
+ * Issues whose `path` doesn't point at a known form field fall through to
+ * `_root` so they still surface somewhere instead of being silently dropped.
+ */
+function issuesToFieldErrors(issues: ValidationIssue[] | undefined): FieldErrors {
+  if (!issues || issues.length === 0) return {};
+  const out: FieldErrors = {};
+  const known: readonly FieldKey[] = ["name", "displayName", "clientId"];
+  for (const issue of issues) {
+    const head = issue.path[0];
+    if (typeof head === "string" && (known as readonly string[]).includes(head)) {
+      const key = head as FieldKey;
+      // First message for a field wins; later issues are usually less specific.
+      if (!out[key]) out[key] = issue.message;
+    } else {
+      out._root = issue.message;
+    }
+  }
+  return out;
+}
 
 /**
  * Simplified agent creation dialog for the onboarding flow (M5).
@@ -63,6 +94,7 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
   const [candidateClients, setCandidateClients] = useState<HubClient[]>([]);
   const [pickedClientId, setPickedClientId] = useState<string | null>(null);
   const [probing, setProbing] = useState(false);
+  const [clientErrors, setClientErrors] = useState<FieldErrors>({});
 
   useEffect(() => {
     if (open) {
@@ -73,6 +105,7 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
       setCandidateClients([]);
       setPickedClientId(null);
       setProbing(false);
+      setClientErrors({});
     }
   }, [open]);
 
@@ -101,8 +134,55 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
     },
   });
 
+  // Translate a server validation error (Zod `issues[]` emitted by the server
+  // `setErrorHandler` in `app.ts`) into per-field messages. Non-validation
+  // errors fall through to `_root` so they still render as a banner.
+  const serverErrors = useMemo<FieldErrors>(() => {
+    const err = createMut.error;
+    if (!err) return {};
+    if (err instanceof ApiError) {
+      const fromIssues = issuesToFieldErrors(err.issues);
+      if (Object.keys(fromIssues).length > 0) return fromIssues;
+      return { _root: err.message };
+    }
+    if (err instanceof Error) return { _root: err.message };
+    return {};
+  }, [createMut.error]);
+
+  const fieldErrors: FieldErrors = { ...serverErrors, ...clientErrors };
+
+  /**
+   * Client-side mirror of `createAgentSchema` (`name` regex + length) so users
+   * see a specific reason before the network round-trip instead of a generic
+   * "Error" blob. The server still validates authoritatively. Note: `name`
+   * here is the slugified hub ID, not the raw free-text input.
+   */
+  function validateForm(): FieldErrors {
+    const errs: FieldErrors = {};
+    if (slug) {
+      if (slug.length > NAME_MAX) {
+        errs.name = `Hub ID must be at most ${NAME_MAX} characters (got ${slug.length}).`;
+      } else if (!NAME_PATTERN.test(slug)) {
+        // Shouldn't happen because slugify() enforces the charset, but keep
+        // the branch so drift in either direction surfaces clearly instead
+        // of as a generic server error.
+        errs.name = "Hub ID must contain only lowercase letters, digits, hyphens (-), and underscores (_).";
+      }
+    } else if (name.trim().length > 0) {
+      // Raw input had content but slugify() stripped it down to nothing —
+      // e.g. pure-symbol input like "!!!". Server would auto-generate, but
+      // the user probably didn't intend that; surface the issue.
+      errs.name = "Name must contain at least one letter or digit.";
+    }
+    return errs;
+  }
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
+    const errs = validateForm();
+    setClientErrors(errs);
+    if (Object.keys(errs).length > 0) return;
+
     if (runtime !== "claude-code") {
       // Kael (disabled in UI today) wouldn't pin to a local computer anyway.
       createMut.mutate({ clientId: undefined });
@@ -192,8 +272,11 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
                 );
               })}
             </div>
-            {createMut.error instanceof Error && (
-              <div className="text-sm text-destructive">{createMut.error.message}</div>
+            {fieldErrors.clientId && <p className="text-sm text-destructive">{fieldErrors.clientId}</p>}
+            {fieldErrors._root && (
+              <div className="rounded-md border border-destructive/50 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                {fieldErrors._root}
+              </div>
             )}
           </div>
           <DialogFooter>
@@ -224,14 +307,26 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
               onChange={(e) => {
                 setName(e.target.value);
                 setNameDirty(true);
+                if (clientErrors.name) setClientErrors((prev) => ({ ...prev, name: undefined }));
               }}
               placeholder="My Dev Assistant"
               autoFocus
               maxLength={80}
+              aria-invalid={fieldErrors.name ? true : undefined}
+              aria-describedby="new-agent-name-help new-agent-name-error"
             />
+            <p id="new-agent-name-help" className="text-xs text-muted-foreground">
+              Any text — we'll derive a hub ID (lowercase letters, digits, hyphens, underscores; up to {NAME_MAX} chars)
+              automatically.
+            </p>
             {nameDirty && slug && (
               <p className="text-xs text-muted-foreground">
                 ID on hub: <span className="font-mono">{slug}</span>
+              </p>
+            )}
+            {fieldErrors.name && (
+              <p id="new-agent-name-error" className="text-xs text-destructive">
+                {fieldErrors.name}
               </p>
             )}
           </div>
@@ -275,8 +370,10 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
             </div>
           </div>
 
-          {createMut.error instanceof Error && (
-            <div className="text-sm text-destructive">{createMut.error.message}</div>
+          {fieldErrors._root && (
+            <div className="rounded-md border border-destructive/50 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+              {fieldErrors._root}
+            </div>
           )}
 
           <DialogFooter>
