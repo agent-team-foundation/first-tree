@@ -9,7 +9,7 @@ import {
   WS_AUTH_FRAME_TIMEOUT_MS,
   wsAuthFrameSchema,
 } from "@agent-team-foundation/first-tree-hub-shared";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { jwtVerify } from "jose";
 import type { WebSocket } from "ws";
@@ -237,9 +237,11 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 status: agents.status,
                 clientId: agents.clientId,
                 clientUserId: clients.userId,
+                managerUserId: members.userId,
               })
               .from(agents)
               .leftJoin(clients, eq(agents.clientId, clients.id))
+              .leftJoin(members, eq(agents.managerId, members.id))
               .where(and(eq(agents.uuid, bindRequest.agentId)))
               .limit(1);
 
@@ -255,11 +257,31 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.AGENT_SUSPENDED);
               return;
             }
-            if (!agent.clientId || agent.clientId !== clientId) {
+
+            // First-bind path: agent.clientId is NULL (e.g. created before
+            // the operator brought up a client, or migrated from pre-M1 with
+            // no presence record). Claim it for the connecting client iff
+            // the manager and the connecting session belong to the same
+            // user. The race-safe UPDATE returns 0 rows if another bind
+            // claimed it first — surface as WRONG_CLIENT.
+            if (agent.clientId === null) {
+              if (!agent.managerUserId || agent.managerUserId !== session.userId) {
+                sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.NOT_OWNED);
+                return;
+              }
+              const claim = await app.db
+                .update(agents)
+                .set({ clientId, updatedAt: new Date() })
+                .where(and(eq(agents.uuid, agent.id), isNull(agents.clientId)))
+                .returning({ uuid: agents.uuid });
+              if (claim.length === 0) {
+                sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.WRONG_CLIENT);
+                return;
+              }
+            } else if (agent.clientId !== clientId) {
               sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.WRONG_CLIENT);
               return;
-            }
-            if (!agent.clientUserId || agent.clientUserId !== session.userId) {
+            } else if (!agent.clientUserId || agent.clientUserId !== session.userId) {
               sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.NOT_OWNED);
               return;
             }

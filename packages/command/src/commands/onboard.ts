@@ -39,11 +39,11 @@ async function promptMissing(args: Record<string, unknown>): Promise<void> {
     saveOnboardState(args);
   }
 
-  if (args.type !== "human" && !args.clientId) {
+  if (args.type !== "human" && args.clientId === undefined) {
     args.clientId = await input({
-      message: "Client ID (machine that will run this agent — must be owned by you):",
-      validate: (v) => (v.length > 0 ? true : "clientId is required for non-human agents"),
+      message: "Client ID (Enter to leave unbound — first WS connect will claim it):",
     });
+    if (!args.clientId) args.clientId = undefined;
     saveOnboardState(args);
   }
 
@@ -78,11 +78,11 @@ async function promptMissing(args: Record<string, unknown>): Promise<void> {
         message: "Assistant ID:",
         default: `${args.id as string}-assistant`,
       });
-      if (!args.clientId) {
-        args.clientId = await input({
-          message: "Client ID for the assistant (must be owned by you):",
-          validate: (v) => (v.length > 0 ? true : "clientId is required"),
+      if (args.clientId === undefined) {
+        const v = await input({
+          message: "Client ID for the assistant (Enter to leave unbound):",
         });
+        args.clientId = v || undefined;
       }
       saveOnboardState(args);
     }

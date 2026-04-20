@@ -107,13 +107,17 @@ export async function onboardCheck(args: OnboardArgs): Promise<CheckItem[]> {
     items.push({ key: "type", label: "Agent type", status: "missing_required", hint: "Provide via --type" });
   }
 
-  if (args.type && args.type !== "human" && !args.clientId) {
-    items.push({
-      key: "client",
-      label: "Target client",
-      status: "missing_required",
-      hint: "Non-human agents must pin a client via --client-id <id>",
-    });
+  if (args.type && args.type !== "human") {
+    if (args.clientId) {
+      items.push({ key: "client", label: "Target client", status: "ok", value: args.clientId });
+    } else {
+      items.push({
+        key: "client",
+        label: "Target client",
+        status: "ok",
+        value: "(unbound — claimed on first WS connect)",
+      });
+    }
   }
 
   return items;
