@@ -133,7 +133,9 @@ export function StatusBar(inputs: StatusBarInputs) {
       )}
 
       {showOfflineHint && (
-        <p className="mt-1 text-xs text-amber-900">Changes saved here won't take effect until the computer reconnects.</p>
+        <p className="mt-1 text-xs text-amber-900">
+          Changes saved here won't take effect until the computer reconnects.
+        </p>
       )}
       {!isHuman && !clientStatus?.clientId && agent.status === "active" && (
         <p className="mt-1 text-xs text-muted-foreground">

@@ -752,8 +752,8 @@ export function AgentDetailPage() {
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
-              Pick a computer you own to pin this agent to. The bind is one-shot — once set, moving the agent
-              requires deleting and re-creating it on the target computer.
+              Pick a computer you own to pin this agent to. The bind is one-shot — once set, moving the agent requires
+              deleting and re-creating it on the target computer.
             </p>
             {clientsQuery.isLoading ? (
               <div className="text-sm text-muted-foreground">Loading computers…</div>
