@@ -15,50 +15,49 @@
 -- There is no compatibility layer: operators stop SDK/CLI processes, run
 -- `db:migrate`, then re-login via `first-tree-hub connect`. See the proposal
 -- "unified-user-token.20260417" for the full upgrade runbook.
+--
+-- NOTE: Do NOT wrap this file in BEGIN;/COMMIT;. The Drizzle migrator already
+-- runs every pending migration inside a single outer transaction, so a nested
+-- BEGIN raises WARNING 25001 and the inner COMMIT prematurely closes the
+-- outer transaction — which prevents the migration hash from being recorded
+-- and causes the server to loop through the same failure on every restart.
 
-BEGIN;
-
--- ---------------------------------------------------------------------------
--- 1. Drop agent_tokens (FK cascade handles row removal).
--- ---------------------------------------------------------------------------
 DROP TABLE IF EXISTS "agent_tokens";
+--> statement-breakpoint
 
 -- ---------------------------------------------------------------------------
--- 2. clients.user_id — nullable FK to users(id).
---    Nullable so legacy rows (created before handshake auth) keep existing;
---    the WS handshake claims them on first re-register under a JWT.
+-- clients.user_id — nullable FK to users(id).
+-- Nullable so legacy rows (created before handshake auth) keep existing;
+-- the WS handshake claims them on first re-register under a JWT.
 -- ---------------------------------------------------------------------------
 ALTER TABLE "clients"
   ADD COLUMN IF NOT EXISTS "user_id" text REFERENCES "users"("id") ON DELETE SET NULL;
+--> statement-breakpoint
 
 CREATE INDEX IF NOT EXISTS "idx_clients_user" ON "clients" ("user_id");
+--> statement-breakpoint
 
 -- ---------------------------------------------------------------------------
--- 3. agents.client_id — pin an agent to the physical client that runs it.
---    Backfill in two steps:
---      a. Copy the most recent bind from agent_presence, if any.
---      b. For non-human agents with no bind history, attempt to pick the
---         first client in the agent's org. If none exists we intentionally
---         leave the row NULL; the service layer refuses runtime bind while
---         `client_id IS NULL` so operators notice and fix it.
+-- agents.client_id — pin an agent to the physical client that runs it.
 -- ---------------------------------------------------------------------------
 ALTER TABLE "agents"
   ADD COLUMN IF NOT EXISTS "client_id" text REFERENCES "clients"("id") ON DELETE RESTRICT;
+--> statement-breakpoint
 
--- 3a. Copy last-bound client from agent_presence.
+-- Copy last-bound client from agent_presence.
 UPDATE "agents" a
 SET "client_id" = ap."client_id"
 FROM "agent_presence" ap
 WHERE ap."agent_id" = a."uuid"
   AND ap."client_id" IS NOT NULL
   AND a."client_id" IS NULL;
+--> statement-breakpoint
 
--- 3b. Fail loudly if any non-deleted non-human agent is missing a client_id
---     after 3a. These rows would pass migration but surface at runtime as
---     `WRONG_CLIENT` / `assertClientOwner` 404 — which looks like "installed
---     but broken" to the operator. Mirrors 4c's orphan-count pattern. Admins
---     must either soft-delete the orphans or re-register their client via
---     `first-tree-hub connect` and manually UPDATE before retrying.
+-- Fail loudly if any non-deleted non-human agent is missing a client_id.
+-- These rows would pass migration but surface at runtime as `WRONG_CLIENT` /
+-- `assertClientOwner` 404 — which looks like "installed but broken" to the
+-- operator. Admins must either soft-delete the orphans or re-register their
+-- client via `first-tree-hub connect` and manually UPDATE before retrying.
 DO $$
 DECLARE
   unpinned_count integer;
@@ -77,24 +76,27 @@ BEGIN
       unpinned_count;
   END IF;
 END $$;
+--> statement-breakpoint
 
 CREATE INDEX IF NOT EXISTS "idx_agents_client" ON "agents" ("client_id");
+--> statement-breakpoint
 
 -- ---------------------------------------------------------------------------
--- 4. agents.manager_id — backfill then enforce NOT NULL.
---    Human agents own their members row, so self-assign via members.
---    Non-human agents get the first admin member in their org.
+-- agents.manager_id — backfill then enforce NOT NULL.
+-- Human agents own their members row, so self-assign via members.
+-- Non-human agents get the first admin member in their org.
 -- ---------------------------------------------------------------------------
 
--- 4a. Human agents: self-assign to their own member row.
+-- Human agents: self-assign to their own member row.
 UPDATE "agents" a
 SET "manager_id" = m."id"
 FROM "members" m
 WHERE m."agent_id" = a."uuid"
   AND a."manager_id" IS NULL
   AND a."type" = 'human';
+--> statement-breakpoint
 
--- 4b. Non-human agents: first admin in org, ordered by created_at asc.
+-- Non-human agents: first admin in org, ordered by created_at asc.
 UPDATE "agents" a
 SET "manager_id" = m."id"
 FROM (
@@ -107,9 +109,9 @@ FROM (
 ) m
 WHERE a."organization_id" = m."organization_id"
   AND a."manager_id" IS NULL;
+--> statement-breakpoint
 
--- 4c. Fail loudly if any agent still lacks a manager. Admin must intervene
---     before the migration can complete.
+-- Fail loudly if any agent still lacks a manager.
 DO $$
 DECLARE
   orphan_count integer;
@@ -126,23 +128,23 @@ BEGIN
       orphan_count;
   END IF;
 END $$;
+--> statement-breakpoint
 
 ALTER TABLE "agents"
   ALTER COLUMN "manager_id" SET NOT NULL;
+--> statement-breakpoint
 
--- 4d. Recreate the manager_id FK as DEFERRABLE INITIALLY DEFERRED so the
---     bootstrap path for a new human agent + member row can run inside a
---     single transaction. The two rows reference each other (agents.manager_id
---     → members.id, members.agent_id → agents.uuid); without deferred FKs the
---     first INSERT always fails the sibling constraint. Manager reassignment
---     (member.ts::deleteMember) also benefits: we can move every agent in one
---     pass without fighting constraint order.
+-- Recreate the manager_id FK as DEFERRABLE INITIALLY DEFERRED so the
+-- bootstrap path for a new human agent + member row can run inside a
+-- single transaction. The two rows reference each other (agents.manager_id
+-- → members.id, members.agent_id → agents.uuid); without deferred FKs the
+-- first INSERT always fails the sibling constraint.
 ALTER TABLE "agents"
   DROP CONSTRAINT IF EXISTS "agents_manager_id_fkey";
+--> statement-breakpoint
+
 ALTER TABLE "agents"
   ADD CONSTRAINT "agents_manager_id_fkey"
   FOREIGN KEY ("manager_id") REFERENCES "members"("id")
   ON DELETE SET NULL
   DEFERRABLE INITIALLY DEFERRED;
-
-COMMIT;
