@@ -221,7 +221,7 @@ export function AgentContext({ agentId }: { agentId: string }) {
           borderBottom: "1px solid var(--border-faint)",
         }}
       >
-        <SectionLabel>Client · runtime</SectionLabel>
+        <SectionLabel>Computer · runtime</SectionLabel>
         <KV>
           <KVRow label="host">
             <span className="mono" style={{ fontSize: 11 }}>
@@ -265,7 +265,7 @@ export function AgentContext({ agentId }: { agentId: string }) {
           style={{ fontSize: 11, color: "var(--accent)", marginTop: 4 }}
           className="hover:underline"
         >
-          Admin · Clients →
+          Admin · Computers →
         </a>
       </div>
 
