@@ -48,7 +48,7 @@ describe("runDoctor", () => {
     const out = lines.join("\n");
     expect(out).toContain("breeze-runner doctor");
     expect(out).toContain(`home: ${home}`);
-    expect(out).toContain("runners:");
+    expect(out).toContain("agents:");
     expect(out).toMatch(/lock: (absent|stale|present)/);
   });
 });

@@ -11,7 +11,7 @@
  *     across restarts and across this host + laptop.
  *   - Respect `maxParallel` concurrency ceiling.
  *   - Prepare a workspace (`workspace.ts`) and run the agent
- *     (`runner.ts::executeRunner`) with the pool's execution order as
+ *     (`runner.ts::executeAgent`) with the pool's execution order as
  *     fallback chain.
  *   - Publish task-phase events to the bus (`bus.ts`) so SSE
  *     subscribers see `dispatched` / `completed` / `failed` / `timed_out`.
@@ -37,15 +37,15 @@ import {
   tryClaim,
 } from "./claim.js";
 import {
-  RunnerPool,
-  executeRunner,
+  AgentPool,
+  executeAgent,
   runWithTimeout,
   type AgentIdentity,
-  type RunnerOutcome,
-  type RunnerRequest,
-  type RunnerSpec,
-  type RunnerSpawner,
-  type RunnerTask,
+  type AgentOutcome,
+  type AgentRequest,
+  type AgentSpec,
+  type AgentSpawner,
+  type AgentTask,
 } from "./runner.js";
 import {
   WorkspaceManager,
@@ -78,7 +78,7 @@ export interface TaskCandidate {
 export interface DispatcherOptions {
   runnerHome: string;
   identity: AgentIdentity;
-  runners: readonly RunnerSpec[];
+  agents: readonly AgentSpec[];
   workspaceManager: WorkspaceManager;
   bus: Bus;
   ghShimDir: string;
@@ -87,8 +87,8 @@ export interface DispatcherOptions {
   disclosureText: string;
   maxParallel: number;
   taskTimeoutMs: number;
-  /** Inject a runner spawner; tests pass a stub. Production uses default. */
-  spawner?: RunnerSpawner;
+  /** Inject an agent spawner; tests pass a stub. Production uses default. */
+  spawner?: AgentSpawner;
   /** Inject a clock (seconds). */
   nowSec?: () => number;
   /** Hook called once per completion (ok or error). */
@@ -119,8 +119,8 @@ export interface CompletionRecord {
   status?: string;
   summary?: string;
   error?: string;
-  runnerName?: string;
-  runnerOutputPath?: string;
+  agentName?: string;
+  agentOutputPath?: string;
 }
 
 interface ActiveTask {
@@ -146,7 +146,7 @@ const DEFAULT_LOGGER: DispatcherLogger = {
  */
 export class Dispatcher {
   private readonly options: DispatcherOptions;
-  private readonly runnerPool: RunnerPool;
+  private readonly agentPool: AgentPool;
   private readonly logger: DispatcherLogger;
   private readonly pending: TaskCandidate[] = [];
   private readonly queuedThreads = new Set<string>();
@@ -161,7 +161,7 @@ export class Dispatcher {
 
   constructor(options: DispatcherOptions) {
     this.options = options;
-    this.runnerPool = new RunnerPool(options.runners);
+    this.agentPool = new AgentPool(options.agents);
     this.logger = options.logger ?? DEFAULT_LOGGER;
     this.nowSec = options.nowSec ?? (() => Math.floor(Date.now() / 1_000));
     this.claimTtlSec = options.claimTtlSec ?? CLAIM_STALE_AFTER_SEC;
@@ -296,7 +296,7 @@ export class Dispatcher {
         phase: "completed",
         status: "simulated",
         summary: "dry-run scheduled task",
-        runnerOutputPath: join(taskDir, "runner-output.txt"),
+        agentOutputPath: join(taskDir, "runner-output.txt"),
       };
       this.options.onCompletion?.(record);
       this.publishTask(record);
@@ -323,7 +323,7 @@ export class Dispatcher {
       return;
     }
 
-    const request = makeRunnerRequest({
+    const request = makeAgentRequest({
       candidate,
       taskId,
       taskDir,
@@ -335,27 +335,27 @@ export class Dispatcher {
       disclosureText: this.options.disclosureText,
     });
 
-    const runners = this.runnerPool.executionOrder();
+    const agents = this.agentPool.executionOrder();
     const errors: string[] = [];
-    let outcome: RunnerOutcome | undefined;
-    let selectedRunner: RunnerSpec | undefined;
+    let outcome: AgentOutcome | undefined;
+    let selectedAgent: AgentSpec | undefined;
     let timedOut = false;
 
-    for (const spec of runners) {
+    for (const spec of agents) {
       try {
         outcome = await runWithTimeout({
-          run: () => executeRunner(spec, request, {
+          run: () => executeAgent(spec, request, {
             timeoutMs: this.options.taskTimeoutMs,
             spawner: this.options.spawner,
           }),
-          // `executeRunner`'s spawner handles its own kill hook; we use
+          // `executeAgent`'s spawner handles its own kill hook; we use
           // runWithTimeout as an additional safety net and propagate
           // the shutdown signal.
           kill: () => undefined,
           timeoutMs: this.options.taskTimeoutMs,
           signal: this.shutdown.signal,
         });
-        selectedRunner = spec;
+        selectedAgent = spec;
         break;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -388,8 +388,8 @@ export class Dispatcher {
       phase: "completed",
       status: outcome.status,
       summary: outcome.summary,
-      runnerName: selectedRunner?.kind,
-      runnerOutputPath: outcome.outputPath,
+      agentName: selectedAgent?.kind,
+      agentOutputPath: outcome.outputPath,
     };
     this.options.onCompletion?.(record);
     this.publishTask(record);
@@ -423,7 +423,7 @@ function toWorkspaceCandidate(candidate: TaskCandidate): WorkspaceCandidate {
   };
 }
 
-function makeRunnerRequest(args: {
+function makeAgentRequest(args: {
   candidate: TaskCandidate;
   taskId: string;
   taskDir: string;
@@ -433,8 +433,8 @@ function makeRunnerRequest(args: {
   ghShimDir: string;
   ghBrokerDir: string;
   disclosureText: string;
-}): RunnerRequest {
-  const task: RunnerTask = {
+}): AgentRequest {
+  const task: AgentTask = {
     repo: args.candidate.repo,
     workspaceRepo: args.candidate.workspaceRepo ?? args.candidate.repo,
     kind: args.candidate.kind,

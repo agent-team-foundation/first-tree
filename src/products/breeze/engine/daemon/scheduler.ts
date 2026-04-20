@@ -150,9 +150,9 @@ export class Scheduler {
       const status = record.status ?? "handled";
       meta.set("status", status);
       if (record.summary) meta.set("summary", encodeMultiline(record.summary));
-      if (record.runnerOutputPath)
-        meta.set("runner_output_path", record.runnerOutputPath);
-      if (record.runnerName) meta.set("runner", record.runnerName);
+      if (record.agentOutputPath)
+        meta.set("runner_output_path", record.agentOutputPath);
+      if (record.agentName) meta.set("runner", record.agentName);
 
       if (status === "handled" || status === "skipped") {
         threadRecord.lastHandledUpdatedAt = record.candidate.updatedAt;
@@ -269,7 +269,9 @@ export class Scheduler {
   writeRunningMetadata(args: {
     taskId: string;
     candidate: TaskCandidate;
-    runner: string;
+    /** Agent backend (codex/claude) picked by the dispatcher. Written
+     * to the on-disk `runner=` key for back-compat with the Rust port. */
+    agent: string;
     workspacePath?: string;
     mirrorDir?: string;
     repoUrl?: string;
@@ -289,7 +291,7 @@ export class Scheduler {
       started_at: String(now),
       updated_at: args.candidate.updatedAt,
       source: args.candidate.source,
-      runner: args.runner,
+      runner: args.agent,
       ...(args.workspacePath ? { workspace_path: args.workspacePath } : {}),
       ...(args.mirrorDir ? { mirror_dir: args.mirrorDir } : {}),
       ...(args.repoUrl ? { repo_url: args.repoUrl } : {}),

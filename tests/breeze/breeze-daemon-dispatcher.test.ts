@@ -19,7 +19,7 @@ import {
   WorkspaceManager,
   type GitRunner,
 } from "../../src/products/breeze/engine/daemon/workspace.js";
-import type { RunnerSpawner } from "../../src/products/breeze/engine/daemon/runner.js";
+import type { AgentSpawner } from "../../src/products/breeze/engine/daemon/runner.js";
 import { tryClaim } from "../../src/products/breeze/engine/daemon/claim.js";
 
 const tempRoots: string[] = [];
@@ -85,8 +85,8 @@ interface DispatcherEnv {
 }
 
 function setupDispatcher(opts: {
-  spawner?: RunnerSpawner;
-  runners?: Array<{ kind: "codex" | "claude" }>;
+  spawner?: AgentSpawner;
+  agents?: Array<{ kind: "codex" | "claude" }>;
   maxParallel?: number;
   taskTimeoutMs?: number;
   dryRun?: boolean;
@@ -105,7 +105,7 @@ function setupDispatcher(opts: {
   const dispatcher = new Dispatcher({
     runnerHome,
     identity: { host: "github.com", login: "alice" },
-    runners: opts.runners ?? [{ kind: "codex" }],
+    agents: opts.agents ?? [{ kind: "codex" }],
     workspaceManager: makeWorkspaceManager(root),
     bus,
     ghShimDir: join(root, "shim", "bin"),
@@ -147,7 +147,7 @@ function waitForCompletions(
 
 describe("Dispatcher.submit", () => {
   it("dedupes repeated candidates with the same threadKey", () => {
-    const spawner: RunnerSpawner = async ({ outputPath }) => {
+    const spawner: AgentSpawner = async ({ outputPath }) => {
       writeFileSync(
         outputPath,
         "BREEZE_RESULT: status=handled summary=ok",
@@ -167,7 +167,7 @@ describe("Dispatcher.submit", () => {
     // spawn before releasing. This exercises pump() ordering as slots free.
     let resolver: ((v: { statusCode: number }) => void) | undefined;
     const spawnedThreadKeys: string[] = [];
-    const spawner: RunnerSpawner = async ({ outputPath, request }) => {
+    const spawner: AgentSpawner = async ({ outputPath, request }) => {
       spawnedThreadKeys.push(request.task.title);
       return new Promise((resolve) => {
         resolver = (v) => {
@@ -238,7 +238,7 @@ describe("Dispatcher.submit", () => {
 
 describe("Dispatcher claim handling", () => {
   it("skips dispatch when the claim is already held by someone else", async () => {
-    const spawner = vi.fn<RunnerSpawner>();
+    const spawner = vi.fn<AgentSpawner>();
     const env = setupDispatcher({ spawner });
     // Pre-claim the notification as a different owner.
     tryClaim({
@@ -257,7 +257,7 @@ describe("Dispatcher claim handling", () => {
   });
 
   it("releases the claim after task completes", async () => {
-    const spawner: RunnerSpawner = async ({ outputPath }) => {
+    const spawner: AgentSpawner = async ({ outputPath }) => {
       writeFileSync(outputPath, "BREEZE_RESULT: status=handled summary=ok");
       return { statusCode: 0 };
     };
@@ -272,7 +272,7 @@ describe("Dispatcher claim handling", () => {
 describe("Dispatcher execution", () => {
   it("respects maxParallel (holds extras in pending)", async () => {
     const resolvers: Array<(v: { statusCode: number }) => void> = [];
-    const spawner: RunnerSpawner = async ({ outputPath }) =>
+    const spawner: AgentSpawner = async ({ outputPath }) =>
       new Promise((resolve) => {
         resolvers.push((v) => {
           writeFileSync(
@@ -305,7 +305,7 @@ describe("Dispatcher execution", () => {
   });
 
   it("marks completed and publishes task event", async () => {
-    const spawner: RunnerSpawner = async ({ outputPath }) => {
+    const spawner: AgentSpawner = async ({ outputPath }) => {
       writeFileSync(
         outputPath,
         "BREEZE_RESULT: status=handled summary=all done",
@@ -319,7 +319,7 @@ describe("Dispatcher execution", () => {
     expect(record.phase).toBe("completed");
     expect(record.status).toBe("handled");
     expect(record.summary).toBe("all done");
-    expect(record.runnerName).toBe("codex");
+    expect(record.agentName).toBe("codex");
 
     const phases = env.events
       .filter((e) => e.kind === "task")
@@ -329,7 +329,7 @@ describe("Dispatcher execution", () => {
 
   it("falls through to the next runner on non-timeout failure", async () => {
     const calls: string[] = [];
-    const spawner: RunnerSpawner = async ({ spec, outputPath, stdoutPath }) => {
+    const spawner: AgentSpawner = async ({ spec, outputPath, stdoutPath }) => {
       calls.push(spec.kind);
       if (spec.kind === "codex") {
         return { statusCode: 1 };
@@ -343,20 +343,20 @@ describe("Dispatcher execution", () => {
     };
     const env = setupDispatcher({
       spawner,
-      runners: [{ kind: "codex" }, { kind: "claude" }],
+      agents: [{ kind: "codex" }, { kind: "claude" }],
     });
     env.dispatcher.submit(fakeCandidate());
     await waitForCompletions(env, 1);
     expect(calls).toEqual(["codex", "claude"]);
     expect(env.completions[0].phase).toBe("completed");
-    expect(env.completions[0].runnerName).toBe("claude");
+    expect(env.completions[0].agentName).toBe("claude");
   });
 
   it("publishes failed when every runner errors", async () => {
-    const spawner: RunnerSpawner = async () => ({ statusCode: 7 });
+    const spawner: AgentSpawner = async () => ({ statusCode: 7 });
     const env = setupDispatcher({
       spawner,
-      runners: [{ kind: "codex" }, { kind: "claude" }],
+      agents: [{ kind: "codex" }, { kind: "claude" }],
     });
     env.dispatcher.submit(fakeCandidate());
     await waitForCompletions(env, 1);
@@ -371,14 +371,14 @@ describe("Dispatcher execution", () => {
     ).toEqual(["dispatched", "failed"]);
   });
 
-  it("publishes timed_out and stops trying further runners when timeout fires", async () => {
-    const spawner: RunnerSpawner = () =>
+  it("publishes timed_out and stops trying further agents when timeout fires", async () => {
+    const spawner: AgentSpawner = () =>
       new Promise(() => {
         /* never resolves */
       });
     const env = setupDispatcher({
       spawner,
-      runners: [{ kind: "codex" }, { kind: "claude" }],
+      agents: [{ kind: "codex" }, { kind: "claude" }],
       taskTimeoutMs: 40,
     });
     env.dispatcher.submit(fakeCandidate());
@@ -393,7 +393,7 @@ describe("Dispatcher execution", () => {
   });
 
   it("dryRun short-circuits agent execution", async () => {
-    const spawner = vi.fn<RunnerSpawner>();
+    const spawner = vi.fn<AgentSpawner>();
     const env = setupDispatcher({ spawner, dryRun: true });
     env.dispatcher.submit(fakeCandidate());
     await waitForCompletions(env, 1);
@@ -405,7 +405,7 @@ describe("Dispatcher execution", () => {
 
 describe("Dispatcher.stop", () => {
   it("aborts in-flight tasks and drains pending", async () => {
-    const spawner: RunnerSpawner = () =>
+    const spawner: AgentSpawner = () =>
       new Promise(() => {
         /* never resolves */
       });
@@ -456,7 +456,7 @@ describe("Dispatcher workspace failure", () => {
     const dispatcher = new Dispatcher({
       runnerHome,
       identity: { host: "github.com", login: "alice" },
-      runners: [{ kind: "codex" }],
+      agents: [{ kind: "codex" }],
       workspaceManager: new WorkspaceManager({
         reposDir,
         workspacesDir: join(root, "workspaces"),
@@ -470,7 +470,7 @@ describe("Dispatcher workspace failure", () => {
       disclosureText: "n",
       maxParallel: 1,
       taskTimeoutMs: 1_000,
-      spawner: vi.fn<RunnerSpawner>(),
+      spawner: vi.fn<AgentSpawner>(),
       onCompletion: (rec) => completions.push(rec),
       logger: { info: () => {}, warn: () => {}, error: () => {} },
     });

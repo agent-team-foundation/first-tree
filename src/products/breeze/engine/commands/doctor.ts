@@ -21,7 +21,7 @@ import {
 } from "../daemon/claim.js";
 import { RepoFilter } from "../runtime/repo-filter.js";
 import {
-  detectAvailableRunners,
+  detectAvailableAgents,
   findExecutable,
   resolveRunnerHome,
 } from "../daemon/runner-skeleton.js";
@@ -93,7 +93,7 @@ export async function runDoctor(
     "default",
   );
   const store = new ThreadStore({ runnerHome: home });
-  const runners = detectAvailableRunners();
+  const agents = detectAvailableAgents();
 
   write("breeze-runner doctor");
   write(`home: ${home}`);
@@ -106,7 +106,7 @@ export async function runDoctor(
   write(`scopes: ${scopes}`);
   write(`lock: ${formatLockState(lock)}`);
   write(
-    `runners: ${runners.length > 0 ? runners.map((r) => r.kind).join(", ") : "(none)"}`,
+    `agents: ${agents.length > 0 ? agents.map((r) => r.kind).join(", ") : "(none)"}`,
   );
   write(`gh binary: ${findExecutable("gh") ?? "(missing)"}`);
   write(`required auth scope: ${scopeLine}`);

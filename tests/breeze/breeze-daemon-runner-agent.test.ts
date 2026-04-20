@@ -11,15 +11,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
-  RunnerPool,
+  AgentPool,
   buildAgentEnv,
   buildCommand,
   buildPrompt,
-  executeRunner,
+  executeAgent,
   parseResult,
   runWithTimeout,
-  type RunnerRequest,
-  type RunnerSpawner,
+  type AgentRequest,
+  type AgentSpawner,
 } from "../../src/products/breeze/engine/daemon/runner.js";
 
 const tempRoots: string[] = [];
@@ -39,8 +39,8 @@ function makeTempDir(prefix: string): string {
   return dir;
 }
 
-function fakeRequest(overrides: Partial<RunnerRequest> = {}): RunnerRequest {
-  const base: RunnerRequest = {
+function fakeRequest(overrides: Partial<AgentRequest> = {}): AgentRequest {
+  const base: AgentRequest = {
     task: {
       repo: "owner/repo",
       workspaceRepo: "owner/repo",
@@ -175,9 +175,9 @@ describe("buildAgentEnv", () => {
   });
 });
 
-describe("RunnerPool", () => {
+describe("AgentPool", () => {
   it("rotates execution order across calls", () => {
-    const pool = new RunnerPool([
+    const pool = new AgentPool([
       { kind: "codex" },
       { kind: "claude" },
     ]);
@@ -187,27 +187,27 @@ describe("RunnerPool", () => {
     expect(second).toEqual(["claude", "codex"]);
   });
 
-  it("throws when no runners are configured", () => {
-    expect(() => new RunnerPool([])).toThrow(/no configured runner/);
+  it("throws when no agents are configured", () => {
+    expect(() => new AgentPool([])).toThrow(/no configured agent/);
   });
 
   it("exposes available names", () => {
-    const pool = new RunnerPool([{ kind: "claude" }]);
+    const pool = new AgentPool([{ kind: "claude" }]);
     expect(pool.availableNames()).toEqual(["claude"]);
   });
 });
 
-describe("executeRunner", () => {
+describe("executeAgent", () => {
   it("writes prompt, invokes spawner, parses result", async () => {
     const request = fakeRequest();
-    const spawner: RunnerSpawner = async ({ outputPath }) => {
+    const spawner: AgentSpawner = async ({ outputPath }) => {
       writeFileSync(
         outputPath,
         "doing things\nBREEZE_RESULT: status=handled summary=all good",
       );
       return { statusCode: 0 };
     };
-    const outcome = await executeRunner(
+    const outcome = await executeAgent(
       { kind: "codex" },
       request,
       { timeoutMs: 1_000, spawner },
@@ -219,14 +219,14 @@ describe("executeRunner", () => {
 
   it("copies claude stdout into runner-output.txt", async () => {
     const request = fakeRequest();
-    const spawner: RunnerSpawner = async ({ stdoutPath }) => {
+    const spawner: AgentSpawner = async ({ stdoutPath }) => {
       writeFileSync(
         stdoutPath,
         "chatter\nBREEZE_RESULT: status=handled summary=ok",
       );
       return { statusCode: 0 };
     };
-    const outcome = await executeRunner(
+    const outcome = await executeAgent(
       { kind: "claude" },
       request,
       { timeoutMs: 1_000, spawner },
@@ -238,9 +238,9 @@ describe("executeRunner", () => {
   });
 
   it("throws on non-zero exit code", async () => {
-    const spawner: RunnerSpawner = async () => ({ statusCode: 42 });
+    const spawner: AgentSpawner = async () => ({ statusCode: 42 });
     await expect(
-      executeRunner({ kind: "codex" }, fakeRequest(), {
+      executeAgent({ kind: "codex" }, fakeRequest(), {
         timeoutMs: 1_000,
         spawner,
       }),

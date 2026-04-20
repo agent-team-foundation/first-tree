@@ -17,7 +17,7 @@
  *   - The poller observes `signal.aborted`, finishes any in-flight
  *     `pollOnce` (including draining the inbox.json advisory lock),
  *     then resolves.
- *   - Dispatcher.stop() aborts in-flight runner tasks and drains
+ *   - Dispatcher.stop() aborts in-flight agent tasks and drains
  *     pending. Broker.stop() waits for the serve-loop to unwind.
  *   - The daemon exits with code 0 on clean shutdown, 1 on fatal error.
  *
@@ -45,7 +45,7 @@ import { startGhBroker, type RunningBroker } from "./broker.js";
 import { GhExecutor } from "./gh-executor.js";
 import { Dispatcher } from "./dispatcher.js";
 import { WorkspaceManager } from "./workspace.js";
-import type { RunnerSpec } from "./runner.js";
+import type { AgentSpec } from "./runner.js";
 import { GhClient as BrokerGhClient } from "./gh-client.js";
 import { runCandidateLoop } from "./candidate-loop.js";
 import { RepoFilter } from "../runtime/repo-filter.js";
@@ -303,16 +303,16 @@ export async function runDaemon(
       ),
   });
 
-  // Phase 3c: start gh broker + dispatcher if runners are available.
+  // Phase 3c: start gh broker + dispatcher if agents are available.
   // Absence of codex/claude is non-fatal; the daemon still runs as
   // read-only (poller + http).
   let broker: RunningBroker | null = null;
   let dispatcher: Dispatcher | null = null;
   let candidateLoopDone: Promise<void> | null = null;
   try {
-    const runners = detectAvailableRunners();
+    const agents = detectAvailableAgents();
     const realGh = findExecutable("gh");
-    if (runners.length > 0 && realGh) {
+    if (agents.length > 0 && realGh) {
       const runnerHome = resolveRunnerHome();
       const brokerDir = join(runnerHome, "broker");
       const identity = resolveDaemonIdentity({ host: config.host });
@@ -352,7 +352,7 @@ export async function runDaemon(
       dispatcher = new Dispatcher({
         runnerHome,
         identity: { host: identity.host, login: identity.login },
-        runners,
+        agents,
         workspaceManager,
         bus,
         ghShimDir: broker.shimDir,
@@ -366,7 +366,7 @@ export async function runDaemon(
         onCompletion: (record) => scheduler.handleCompletion(record),
       });
       logger.info(
-        `breeze daemon: dispatcher ready (runners=${runners.map((r) => r.kind).join(",")}, broker=${broker.shimDir})`,
+        `breeze daemon: dispatcher ready (agents=${agents.map((r) => r.kind).join(",")}, broker=${broker.shimDir})`,
       );
 
       // Phase 4: candidate loop — feeds the dispatcher from GitHub.
@@ -390,7 +390,7 @@ export async function runDaemon(
       });
     } else {
       const missing: string[] = [];
-      if (runners.length === 0) missing.push("no codex/claude on PATH");
+      if (agents.length === 0) missing.push("no codex/claude on PATH");
       if (!realGh) missing.push("no gh on PATH");
       logger.warn(
         `breeze daemon: skipping broker/dispatcher (${missing.join("; ")})`,
@@ -455,7 +455,7 @@ export async function runDaemon(
     // Shutdown order:
     //   SIGTERM -> stop poller (above) -> flush store (poller's atomic
     //   tmp+rename drains in updateInbox) -> stop dispatcher (aborts
-    //   in-flight runner tasks) -> stop broker (drains serve loop) ->
+    //   in-flight agent tasks) -> stop broker (drains serve loop) ->
     //   stop http -> close bus -> exit.
     if (!controller.signal.aborted) controller.abort();
     if (candidateLoopDone) {
@@ -504,15 +504,15 @@ export async function runDaemon(
 
 /**
  * Walk PATH looking for a best-effort set of agent binaries. Returns
- * the specs in the order we'd prefer as the primary runner. Missing
+ * the specs in the order we'd prefer as the primary agent. Missing
  * binaries are silently omitted — the caller decides whether that is
  * fatal.
  */
-export function detectAvailableRunners(): RunnerSpec[] {
-  const runners: RunnerSpec[] = [];
-  if (findExecutable("codex")) runners.push({ kind: "codex" });
-  if (findExecutable("claude")) runners.push({ kind: "claude" });
-  return runners;
+export function detectAvailableAgents(): AgentSpec[] {
+  const agents: AgentSpec[] = [];
+  if (findExecutable("codex")) agents.push({ kind: "codex" });
+  if (findExecutable("claude")) agents.push({ kind: "claude" });
+  return agents;
 }
 
 /** Return the absolute path to `name` on PATH, or null if not found. */

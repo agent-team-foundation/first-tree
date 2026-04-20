@@ -21,7 +21,7 @@ import {
   WorkspaceManager,
   type GitRunner,
 } from "../../src/products/breeze/engine/daemon/workspace.js";
-import type { RunnerSpawner } from "../../src/products/breeze/engine/daemon/runner.js";
+import type { AgentSpawner } from "../../src/products/breeze/engine/daemon/runner.js";
 import { RepoFilter } from "../../src/products/breeze/engine/runtime/repo-filter.js";
 import { GhExecutor } from "../../src/products/breeze/engine/daemon/gh-executor.js";
 
@@ -77,7 +77,7 @@ function makeDispatcher(): {
   const dispatcher = new Dispatcher({
     runnerHome: join(root, "runner"),
     identity: { host: "github.com", login: "alice" },
-    runners: [{ kind: "codex" }],
+    agents: [{ kind: "codex" }],
     workspaceManager: new WorkspaceManager({
       reposDir,
       workspacesDir: join(root, "workspaces"),

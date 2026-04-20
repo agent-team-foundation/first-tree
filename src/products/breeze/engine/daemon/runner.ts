@@ -1,22 +1,32 @@
 /**
- * Phase 3c: per-task agent runner.
+ * Phase 3c: per-task agent executor.
  *
  * Port of `runner.rs`.
  *
- * Each dispatched task picks one or more runner specs from the pool,
+ * Terminology: within breeze, the daemon (sometimes called "breeze-runner"
+ * for historical reasons) owns a dispatcher which drives multiple
+ * concurrent **agents**. An agent here is a single CLI backend binding
+ * (`codex` or `claude`); the dispatcher picks from an AgentPool and may
+ * fall through the pool's rotation order until one backend succeeds.
+ *
+ * Each dispatched task picks one or more agent specs from the pool,
  * builds a prompt, writes it to `<task-dir>/prompt.txt`, and execs the
- * agent binary (`codex` or `claude`). Stdout/stderr go to
- * `runner-stdout.log` / `runner-stderr.log`; `runner-output.txt`
- * holds the agent's final message (codex writes it via
- * `--output-last-message`, claude's stdout is copied there post-exit).
+ * agent binary. Stdout/stderr go to `runner-stdout.log` /
+ * `runner-stderr.log`; `runner-output.txt` holds the agent's final
+ * message (codex writes it via `--output-last-message`, claude's
+ * stdout is copied there post-exit). These on-disk filenames keep the
+ * "runner-" prefix to preserve the debug-artifact contract across the
+ * Rust → TS port.
  *
- * The dispatcher iterates runners in `executionOrder()` until one
- * returns successfully, mirroring Rust's fallback chain. Only the
- * first runner is recorded as "selected" in task metadata.
+ * The dispatcher iterates the pool in `executionOrder()` until one
+ * agent returns successfully, mirroring Rust's fallback chain. Only
+ * the first agent that succeeds is recorded as "selected" in task
+ * metadata (the on-disk `runner=` key is also preserved for the same
+ * compat reason).
  *
- * Phase 3c adds a per-task timeout (spec doc 4 §11, §8). Rust's
- * runner had no timeout; the TS version always enforces one, with a
- * default in `runtime/config.ts::DAEMON_CONFIG_DEFAULTS.taskTimeoutSec`.
+ * Phase 3c adds a per-task timeout (spec doc 4 §11, §8). Rust's agent
+ * had no timeout; the TS version always enforces one, with a default
+ * in `runtime/config.ts::DAEMON_CONFIG_DEFAULTS.taskTimeoutSec`.
  */
 
 import {
@@ -29,10 +39,10 @@ import {
 import { spawn, type ChildProcess } from "node:child_process";
 import { join } from "node:path";
 
-export type RunnerKind = "codex" | "claude";
+export type AgentKind = "codex" | "claude";
 
-export interface RunnerSpec {
-  kind: RunnerKind;
+export interface AgentSpec {
+  kind: AgentKind;
   model?: string;
 }
 
@@ -41,7 +51,7 @@ export interface AgentIdentity {
   host: string;
 }
 
-export interface RunnerTask {
+export interface AgentTask {
   repo: string;
   workspaceRepo: string;
   kind: string;
@@ -50,8 +60,8 @@ export interface RunnerTask {
   taskUrl: string;
 }
 
-export interface RunnerRequest {
-  task: RunnerTask;
+export interface AgentRequest {
+  task: AgentTask;
   taskId: string;
   taskDir: string;
   workspaceDir: string;
@@ -62,15 +72,15 @@ export interface RunnerRequest {
   disclosureText: string;
 }
 
-export interface RunnerOutcome {
+export interface AgentOutcome {
   status: string;
   summary: string;
   outputPath: string;
 }
 
-export type RunnerSpawner = (args: {
-  spec: RunnerSpec;
-  request: RunnerRequest;
+export type AgentSpawner = (args: {
+  spec: AgentSpec;
+  request: AgentRequest;
   promptPath: string;
   promptText: string;
   outputPath: string;
@@ -81,8 +91,8 @@ export type RunnerSpawner = (args: {
 export interface ExecuteOptions {
   /** Kill the subprocess if it runs longer than this many ms. */
   timeoutMs: number;
-  /** Injected spawner. Production uses `defaultRunnerSpawner`. */
-  spawner?: RunnerSpawner;
+  /** Injected spawner. Production uses `defaultAgentSpawner`. */
+  spawner?: AgentSpawner;
   /** Abort signal. Triggers the same kill path as the timeout. */
   signal?: AbortSignal;
 }
@@ -91,11 +101,11 @@ export interface ExecuteOptions {
  * Execute one runner. Writes the prompt + logs + parses the result.
  * Throws on non-zero exit so the dispatcher can try the next runner.
  */
-export async function executeRunner(
-  spec: RunnerSpec,
-  request: RunnerRequest,
+export async function executeAgent(
+  spec: AgentSpec,
+  request: AgentRequest,
   options: ExecuteOptions,
-): Promise<RunnerOutcome> {
+): Promise<AgentOutcome> {
   const promptText = buildPrompt(request);
   const promptPath = join(request.taskDir, "prompt.txt");
   const outputPath = join(request.taskDir, "runner-output.txt");
@@ -104,7 +114,7 @@ export async function executeRunner(
 
   writeFileSync(promptPath, promptText);
 
-  const spawner = options.spawner ?? defaultRunnerSpawner;
+  const spawner = options.spawner ?? defaultAgentSpawner;
   const { statusCode } = await spawner({
     spec,
     request,
@@ -127,7 +137,7 @@ export async function executeRunner(
 
   if (statusCode !== 0) {
     throw new Error(
-      `${spec.kind} runner exited with status ${statusCode ?? "unknown"}`,
+      `${spec.kind} agent exited with status ${statusCode ?? "unknown"}`,
     );
   }
 
@@ -138,7 +148,7 @@ export async function executeRunner(
   return { status, summary, outputPath };
 }
 
-export function buildPrompt(request: RunnerRequest): string {
+export function buildPrompt(request: AgentRequest): string {
   const task = request.task;
   const workingRepoLine =
     task.workspaceRepo !== task.repo
@@ -228,33 +238,33 @@ export function parseResult(output: string): {
 }
 
 /**
- * Rotate through the runner list, returning the sequence of specs to
+ * Rotate through the agent list, returning the sequence of specs to
  * try for the next task. Subsequent calls rotate by one so codex /
  * claude alternate as primary across tasks.
  */
-export class RunnerPool {
-  private readonly runners: readonly RunnerSpec[];
+export class AgentPool {
+  private readonly agents: readonly AgentSpec[];
   private nextIndex = 0;
 
-  constructor(runners: readonly RunnerSpec[]) {
-    if (runners.length === 0) {
+  constructor(agents: readonly AgentSpec[]) {
+    if (agents.length === 0) {
       throw new Error(
-        "no configured runner binary is available in PATH (need codex and/or claude)",
+        "no configured agent binary is available in PATH (need codex and/or claude)",
       );
     }
-    this.runners = runners;
+    this.agents = agents;
   }
 
-  availableNames(): RunnerKind[] {
-    return this.runners.map((r) => r.kind);
+  availableNames(): AgentKind[] {
+    return this.agents.map((r) => r.kind);
   }
 
-  executionOrder(): RunnerSpec[] {
-    const n = this.runners.length;
+  executionOrder(): AgentSpec[] {
+    const n = this.agents.length;
     const start = this.nextIndex % n;
     this.nextIndex = (this.nextIndex + 1) % n;
     return Array.from({ length: n }, (_, offset) => ({
-      ...this.runners[(start + offset) % n],
+      ...this.agents[(start + offset) % n],
     }));
   }
 }
@@ -264,7 +274,7 @@ export class RunnerPool {
  * `setTimeout(kill, timeoutMs)` and propagates an AbortSignal the same
  * way. Returns the exit status.
  */
-export const defaultRunnerSpawner: RunnerSpawner = async ({
+export const defaultAgentSpawner: AgentSpawner = async ({
   spec,
   request,
   promptPath,
@@ -304,8 +314,8 @@ export const defaultRunnerSpawner: RunnerSpawner = async ({
 };
 
 export function buildCommand(args: {
-  spec: RunnerSpec;
-  request: RunnerRequest;
+  spec: AgentSpec;
+  request: AgentRequest;
   promptPath: string;
   promptText: string;
   outputPath: string;
@@ -332,7 +342,7 @@ export function buildCommand(args: {
 }
 
 export function buildAgentEnv(
-  request: RunnerRequest,
+  request: AgentRequest,
 ): NodeJS.ProcessEnv {
   const existingPath = process.env.PATH ?? "";
   return {
