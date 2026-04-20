@@ -1747,11 +1747,18 @@ export async function runSync(
               let parentContent = readFileSync(parentPath, "utf-8");
               let changed = false;
               for (const { dirName, title } of additions) {
-                const alreadyListed = parentContent.includes(`${dirName}/`)
-                  || parentContent.includes(`${dirName}\\`);
-                if (alreadyListed) continue;
                 const newLine = `- \`${dirName}/\` — ${title}\n`;
                 const subDomainsMatch = parentContent.match(/(##\s*Sub-?domains?[^\n]*\n)([\s\S]*?)(\n##|\n---|\z)/i);
+                // Scope the scan to the ## Sub-domains block so `dirName` in
+                // unrelated prose doesn't false-positive, and require a
+                // word-boundary + trailing `/` so `sidebar/` doesn't match
+                // `sidebar-preferences/` (#195).
+                if (subDomainsMatch) {
+                  const block = subDomainsMatch[2];
+                  const escaped = dirName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+                  const entryRe = new RegExp(`(^|\\n)\\s*-\\s+[^\\n]*\\b${escaped}/`);
+                  if (entryRe.test(block)) continue;
+                }
                 if (subDomainsMatch) {
                   const insertPoint = parentContent.indexOf(subDomainsMatch[0])
                     + subDomainsMatch[1].length
