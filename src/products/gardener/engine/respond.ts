@@ -37,6 +37,11 @@ import {
   isModuleEnabled,
   loadGardenerConfig,
 } from "./runtime/config.js";
+import {
+  orchestrateEdit,
+  type EditPlanner,
+  type OrchestrateEditResult,
+} from "./edit-orchestrator.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -97,6 +102,12 @@ export interface RespondDeps {
   now?: () => Date;
   env?: NodeJS.ProcessEnv;
   write?: (line: string) => void;
+  /**
+   * Optional planner seam. When set, the edit orchestrator will call
+   * this for any feedback pattern its built-in heuristics can't match.
+   * Left unset by default so v1 stays deterministic.
+   */
+  planner?: EditPlanner;
 }
 
 async function defaultShellRun(
@@ -322,7 +333,7 @@ export function latestChangesRequestedAt(reviews: PrReview[]): string | null {
   return latest;
 }
 
-function latestReviewerLogin(reviews: PrReview[]): string | undefined {
+export function latestReviewerLogin(reviews: PrReview[]): string | undefined {
   let latestAt: string | undefined;
   let latestLogin: string | undefined;
   for (const review of reviews) {
@@ -500,12 +511,25 @@ interface RespondSinglePrOpts {
   write: (line: string) => void;
   now: () => Date;
   gardenerLogin: string;
+  treeRoot: string;
+  planner?: EditPlanner;
 }
 
 async function respondSinglePr(
   opts: RespondSinglePrOpts,
 ): Promise<{ status: RespondStatus; summary: string }> {
-  const { repo, pr, dryRun, shell, env, write, now, gardenerLogin } = opts;
+  const {
+    repo,
+    pr,
+    dryRun,
+    shell,
+    env,
+    write,
+    now,
+    gardenerLogin,
+    treeRoot,
+    planner,
+  } = opts;
 
   const snapshotDir = env.BREEZE_SNAPSHOT_DIR;
   const bundle = snapshotDir
@@ -643,15 +667,85 @@ async function respondSinglePr(
     };
   }
 
-  // Step 3b-3e: Read feedback, read source, apply fix, reply.
-  // The TS port delegates the actual edit to a Claude Code session
-  // orchestrated externally — here we record that a fix was attempted,
-  // bump the attempts counter, and emit a reply comment stub. The
-  // runbook's "apply edits" step is a semantic change that lives in the
-  // calling agent; this CLI is the deterministic scaffold around it.
+  // Step 3b-3e: Read feedback, try the edit orchestrator, reply.
+  //
+  // The orchestrator applies a real fix when its built-in heuristic
+  // (or an injected planner) recognizes the pattern. Any other case
+  // returns `deferred` and we fall back to the original placeholder
+  // reply path (which bumps the attempts counter).
   const reviewer = latestReviewerLogin(reviews) ?? "reviewer";
   const sourceInfo = extractSourcePr(prView.body);
 
+  let orchestration: OrchestrateEditResult = {
+    kind: "deferred",
+    reason: "orchestrator_skipped",
+  };
+  try {
+    orchestration = await orchestrateEdit({
+      repo,
+      pr,
+      treeRoot,
+      feedback: {
+        reviews,
+        issueComments,
+        reviewerLogin: reviewer,
+      },
+      prView,
+      shell,
+      dryRun,
+      planner,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    orchestration = { kind: "failed", reason: `orchestrator crash: ${message}` };
+  }
+
+  if (orchestration.kind === "applied") {
+    // Attempts counter unchanged on applied (per signoff on #219).
+    if (!dryRun) {
+      await shell("gh", [
+        "pr",
+        "comment",
+        String(pr),
+        "--repo",
+        repo,
+        "--body",
+        `${orchestration.replyBody}\n\n`
+          + `<!-- gardener:respond-applied=${orchestration.pattern} -->`,
+      ]);
+    }
+    logEvent(env, {
+      kind: "fix",
+      pr_number: pr,
+      pattern: orchestration.pattern,
+      summary: `applied @${orchestration.sha}`,
+    });
+    logEvent(env, { kind: "reply", pr_number: pr, reviewer });
+    write(
+      `\u2713 #${pr}: applied ${orchestration.pattern} @${orchestration.sha.slice(0, 7)}`,
+    );
+    return {
+      status: "handled",
+      summary: `applied ${orchestration.pattern}`,
+    };
+  }
+
+  if (orchestration.kind === "failed") {
+    // Attempts unchanged on failed (per signoff on #219).
+    logEvent(env, {
+      kind: "error",
+      pr_number: pr,
+      message: orchestration.reason,
+    });
+    write(`\u274c #${pr}: orchestrator failed: ${orchestration.reason}`);
+    return {
+      status: "failed",
+      summary: `orchestrator failed: ${orchestration.reason}`,
+    };
+  }
+
+  // Deferred: bump attempts counter and post the placeholder reply.
+  const deferredReason = orchestration.reason;
   if (!dryRun) {
     const nextBody = writeRespondAttempts(prView.body, attempts + 1);
     await shell("gh", [
@@ -679,18 +773,18 @@ async function respondSinglePr(
   logEvent(env, {
     kind: "fix",
     pr_number: pr,
-    pattern: "unclassified",
-    summary: `attempt ${attempts + 1}`,
+    pattern: "deferred",
+    summary: `attempt ${attempts + 1} (${deferredReason})`,
   });
   logEvent(env, { kind: "reply", pr_number: pr, reviewer });
 
   write(
-    `\u2713 #${pr}: acknowledged CHANGES_REQUESTED (attempt ${attempts + 1}/${RESPOND_MAX_ATTEMPTS})`,
+    `\u2713 #${pr}: deferred (${deferredReason}), attempt ${attempts + 1}/${RESPOND_MAX_ATTEMPTS}`,
   );
 
   return {
     status: "handled",
-    summary: `attempt ${attempts + 1}/${RESPOND_MAX_ATTEMPTS} acknowledged`,
+    summary: `deferred ${deferredReason} attempt ${attempts + 1}/${RESPOND_MAX_ATTEMPTS}`,
   };
 }
 
@@ -762,6 +856,8 @@ export async function runRespond(
       write,
       now,
       gardenerLogin,
+      treeRoot,
+      planner: deps.planner,
     });
     emitBreezeResult(write, result.status, result.summary);
     return result.status === "failed" ? 1 : 0;
