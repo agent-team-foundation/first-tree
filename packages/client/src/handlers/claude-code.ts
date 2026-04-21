@@ -136,6 +136,20 @@ export function createToolCallProcessor(emit: (event: SessionEvent) => void): To
               args: block.input,
               startedAt: Date.now(),
             });
+            // Emit a pending row the moment the tool_use appears — otherwise
+            // long-running tools (Bash sleep, network fetches) show nothing
+            // live and the chat jumps straight from silence to `used <tool>`
+            // after completion. Frontend dedupes by toolUseId against the
+            // final ok/error emit (see filterEventsForTimeline).
+            emit({
+              kind: "tool_call",
+              payload: {
+                toolUseId: block.id,
+                name: block.name,
+                args: block.input,
+                status: "pending",
+              },
+            });
           } else if (isTextBlock(block)) {
             const text = block.text.trim();
             if (text.length === 0) continue;
@@ -154,19 +168,10 @@ export function createToolCallProcessor(emit: (event: SessionEvent) => void): To
       }
     },
     flush(): void {
-      if (pending.size === 0) return;
-      for (const entry of pending.values()) {
-        emit({
-          kind: "tool_call",
-          payload: {
-            toolUseId: entry.toolUseId,
-            name: entry.name,
-            args: entry.args,
-            status: "pending",
-            durationMs: Date.now() - entry.startedAt,
-          },
-        });
-      }
+      // `pending` rows were already emitted up-front when each tool_use
+      // arrived, so flush is now just a bookkeeping reset — no second emit.
+      // Unpaired entries stay visible as "pending" in the UI until the next
+      // turn_end collapses them with the rest of the abandoned turn.
       pending.clear();
     },
   };
@@ -413,31 +418,39 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             if (isResultMessage(message)) {
               if (message.subtype === "success") {
                 retryCount = 0;
-                // Auto-bridge: forward result text back to the chat. If the forward fails the text
-                // is otherwise lost (no session_output table since NC2) — surface it via the events
-                // API so admins see both the failure and a snapshot of what would have been sent.
+                // Auto-bridge: forward result text back to the chat and close
+                // the turn. We AWAIT sendMessage (rather than fire-and-forget)
+                // so the turn_end emit is guaranteed to hit the WebSocket
+                // before the for-await pulls the next turn's first event.
+                // Otherwise a slow sendMessage round-trip could let the
+                // server assign a smaller seq to turn N+1's thinking/tool_call
+                // than to turn N's turn_end — which would cause the frontend's
+                // "latest turn_end" filter to retroactively hide turn N+1's
+                // live events. If the forward fails the text is otherwise
+                // lost (no session_output table since NC2) — surface it via
+                // the events API so admins see both the failure and a
+                // snapshot of what would have been sent.
                 if (message.result && sessionCtx.chatId) {
                   const resultText = message.result;
-                  sessionCtx.sdk
-                    .sendMessage(sessionCtx.chatId, { format: "text", content: resultText })
-                    .then(() => {
-                      sessionCtx.log("Result forwarded to chat");
-                      sessionCtx.reportSessionCompletion();
-                      // Emit turn_end AFTER the result message is persisted so the
-                      // frontend never observes "turn ended, no result visible".
-                      sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "success" } });
-                    })
-                    .catch((err) => {
-                      const reason = err instanceof Error ? err.message : String(err);
-                      sessionCtx.log(`Failed to forward result: ${reason}`);
-                      const preview = resultText.slice(0, 1500);
-                      const forwardErrMessage = `Result forward failed: ${reason}\n---\n${preview}`.slice(0, 2000);
-                      sessionCtx.emitEvent({
-                        kind: "error",
-                        payload: { source: "runtime", message: forwardErrMessage },
-                      });
-                      sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
+                  try {
+                    await sessionCtx.sdk.sendMessage(sessionCtx.chatId, {
+                      format: "text",
+                      content: resultText,
                     });
+                    sessionCtx.log("Result forwarded to chat");
+                    sessionCtx.reportSessionCompletion();
+                    sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "success" } });
+                  } catch (err) {
+                    const reason = err instanceof Error ? err.message : String(err);
+                    sessionCtx.log(`Failed to forward result: ${reason}`);
+                    const preview = resultText.slice(0, 1500);
+                    const forwardErrMessage = `Result forward failed: ${reason}\n---\n${preview}`.slice(0, 2000);
+                    sessionCtx.emitEvent({
+                      kind: "error",
+                      payload: { source: "runtime", message: forwardErrMessage },
+                    });
+                    sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
+                  }
                 } else {
                   // No result text to forward (edge case) — still close the turn.
                   sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "success" } });

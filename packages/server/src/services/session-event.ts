@@ -1,6 +1,6 @@
 import type { SessionEvent, SessionEventKind } from "@agent-team-foundation/first-tree-hub-shared";
 import { sessionEventSchema } from "@agent-team-foundation/first-tree-hub-shared";
-import { and, asc, eq, gt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, lt, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { sessionEvents } from "../db/schema/session-events.js";
 import { uuidv7 } from "../uuid.js";
@@ -87,20 +87,29 @@ export async function appendEvent(
 }
 
 /**
- * List events for a session in `seq asc` order with cursor pagination.
- * `cursor` is the last seen `seq`; pass it as-is on the next page.
+ * List events for a session with cursor pagination.
+ *
+ * - `direction: "asc"` (default) walks oldest → newest; cursor is the last
+ *   seq seen on the previous page (next page starts at seq > cursor).
+ * - `direction: "desc"` walks newest → oldest; cursor is the last seq seen
+ *   on the previous page (next page starts at seq < cursor). The chat UI
+ *   uses desc so its turn-grouping filter always sees the most recent
+ *   `turn_end` even when the chat has thousands of events.
  */
 export async function listEvents(
   db: Database,
   agentId: string,
   chatId: string,
-  options?: { limit?: number; cursor?: number },
+  options?: { limit?: number; cursor?: number; direction?: "asc" | "desc" },
 ): Promise<{ items: SessionEventRow[]; nextCursor: number | null }> {
   const limit = Math.min(Math.max(options?.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
+  const direction = options?.direction ?? "asc";
 
   const conditions = [eq(sessionEvents.agentId, agentId), eq(sessionEvents.chatId, chatId)];
   if (options?.cursor !== undefined) {
-    conditions.push(gt(sessionEvents.seq, options.cursor));
+    conditions.push(
+      direction === "desc" ? lt(sessionEvents.seq, options.cursor) : gt(sessionEvents.seq, options.cursor),
+    );
   }
 
   const rows = await db
@@ -115,7 +124,7 @@ export async function listEvents(
     })
     .from(sessionEvents)
     .where(and(...conditions))
-    .orderBy(asc(sessionEvents.seq))
+    .orderBy(direction === "desc" ? desc(sessionEvents.seq) : asc(sessionEvents.seq))
     .limit(limit + 1);
 
   const hasMore = rows.length > limit;

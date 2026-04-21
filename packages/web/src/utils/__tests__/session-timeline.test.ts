@@ -89,4 +89,50 @@ describe("filterEventsForTimeline", () => {
   it("returns an empty array for empty input", () => {
     expect(filterEventsForTimeline([])).toEqual([]);
   });
+
+  it("dedupes tool_call events by toolUseId — keeps the highest-seq emit", () => {
+    // Client emits a `pending` row when tool_use starts, then a final ok/error
+    // row when the tool_result arrives — both share a toolUseId. The active
+    // turn should only render the later row.
+    const events: SessionEventRow[] = [
+      ev(1, "tool_call", { payload: { toolUseId: "tu-1", name: "Bash", args: {}, status: "pending" } }),
+      ev(2, "tool_call", {
+        payload: {
+          toolUseId: "tu-1",
+          name: "Bash",
+          args: {},
+          status: "ok",
+          durationMs: 120,
+          resultPreview: "hello",
+        },
+      }),
+    ];
+    const out = filterEventsForTimeline(events);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.seq).toBe(2);
+  });
+
+  it("dedupes across multiple concurrent tool calls (seq pending ≠ seq final)", () => {
+    // Real-world shape: two tool_use blocks in the same assistant message
+    // emit two pending rows back-to-back, followed by two final rows.
+    const events: SessionEventRow[] = [
+      ev(10, "tool_call", { payload: { toolUseId: "a1", name: "Bash", args: {}, status: "pending" } }),
+      ev(11, "tool_call", { payload: { toolUseId: "a2", name: "Read", args: {}, status: "pending" } }),
+      ev(12, "tool_call", { payload: { toolUseId: "a1", name: "Bash", args: {}, status: "ok" } }),
+      ev(13, "tool_call", { payload: { toolUseId: "a2", name: "Read", args: {}, status: "ok" } }),
+    ];
+    const out = filterEventsForTimeline(events);
+    expect(out.map((e) => e.seq)).toEqual([12, 13]);
+  });
+
+  it("keeps a standalone pending tool_call (no final yet — tool still executing)", () => {
+    // During the live window between tool_use and tool_result, only the
+    // pending row exists; the UI must render it so the user sees "using
+    // Bash…" pulse.
+    const events: SessionEventRow[] = [
+      ev(5, "tool_call", { payload: { toolUseId: "tu-live", name: "Bash", args: {}, status: "pending" } }),
+    ];
+    const out = filterEventsForTimeline(events);
+    expect(out).toEqual(events);
+  });
 });

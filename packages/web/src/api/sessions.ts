@@ -124,11 +124,12 @@ export function getSession(agentId: string, chatId: string): Promise<SessionList
 export function listSessionEvents(
   agentId: string,
   chatId: string,
-  params?: { limit?: number; cursor?: number },
+  params?: { limit?: number; cursor?: number; direction?: "asc" | "desc" },
 ): Promise<SessionEventsResponse> {
   const qs = new URLSearchParams();
   if (params?.limit !== undefined) qs.set("limit", String(params.limit));
   if (params?.cursor !== undefined) qs.set("cursor", String(params.cursor));
+  if (params?.direction) qs.set("direction", params.direction);
   const query = qs.toString();
   return api.get<SessionEventsResponse>(
     `/admin/sessions/agents/${agentId}/${chatId}/events${query ? `?${query}` : ""}`,

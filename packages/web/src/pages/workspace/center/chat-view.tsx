@@ -480,9 +480,13 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
     refetchInterval: 5_000,
   });
 
+  // Fetch newest events first so the turn-grouping filter always sees the
+  // latest `turn_end` even in chats with thousands of total events. The
+  // timeline renderer later sorts by timestamp, so the fetch order is moot
+  // for display — only the contents of the window matter.
   const { data: eventsData } = useQuery({
     queryKey: ["session-events", agentId, chatId],
-    queryFn: () => listSessionEvents(agentId, chatId, { limit: 200 }),
+    queryFn: () => listSessionEvents(agentId, chatId, { limit: 200, direction: "desc" }),
     refetchInterval: 5_000,
   });
 
