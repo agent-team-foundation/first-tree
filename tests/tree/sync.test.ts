@@ -7,9 +7,11 @@ import {
   runSync,
   runSyncCli,
   scanTreeNodes,
-  type ShellResult,
-  type ShellRun,
 } from "#products/tree/engine/sync.js";
+import type {
+  ShellResult,
+  ShellRun,
+} from "#products/tree/engine/runtime/shell.js";
 import {
   readTreeBinding,
   writeTreeBinding,

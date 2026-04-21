@@ -63,17 +63,17 @@ Options:
   --help                Show this help message
 `;
 
-interface CommandRunOptions {
+export interface CommandRunOptions {
   cwd: string;
 }
 
-type CommandRunner = (
+export type CommandRunner = (
   command: string,
   args: string[],
   options: CommandRunOptions,
 ) => string;
 
-function defaultCommandRunner(
+export function defaultCommandRunner(
   command: string,
   args: string[],
   options: CommandRunOptions,
@@ -117,7 +117,7 @@ function commandOutput(
   }
 }
 
-function readGitRemoteUrl(
+export function readGitRemoteUrl(
   runner: CommandRunner,
   root: string,
   remote = "origin",
@@ -140,7 +140,7 @@ function inferTreeRepoNameFromUrl(treeUrl: string): string {
   return scpMatch?.[1] ?? basename(treeUrl).replace(/\.git$/, "");
 }
 
-function inferTreeMode(
+export function inferTreeMode(
   repo: Repo,
   treeRepoName: string,
   explicit?: TreeMode,
@@ -155,7 +155,7 @@ function inferTreeMode(
   return defaultDedicatedNames.has(treeRepoName) ? "dedicated" : "shared";
 }
 
-function inferBindingMode(
+export function inferBindingMode(
   scope: SourceScope,
   treeMode: TreeMode,
   explicit?: SourceBindingMode,
@@ -169,13 +169,13 @@ function inferBindingMode(
   return treeMode === "shared" ? "shared-source" : "standalone-source";
 }
 
-function determineScope(bindingMode: SourceBindingMode): SourceScope {
+export function determineScope(bindingMode: SourceBindingMode): SourceScope {
   return bindingMode === "workspace-root" || bindingMode === "workspace-member"
     ? "workspace"
     : "repo";
 }
 
-function resolveWorkspaceId(
+export function resolveWorkspaceId(
   repo: Repo,
   bindingMode: SourceBindingMode,
   explicit?: string,
@@ -188,7 +188,7 @@ function resolveWorkspaceId(
   return explicit?.trim() || repo.repoName();
 }
 
-function resolveWorkspaceRootPath(
+export function resolveWorkspaceRootPath(
   cwd: string,
   repo: Repo,
   bindingMode: SourceBindingMode,

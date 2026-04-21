@@ -22,6 +22,10 @@ import {
 } from "#products/tree/engine/runtime/binding-state.js";
 import { resolveNodeOwners } from "../../../../assets/tree/helpers/generate-codeowners.js";
 import { openTreePr } from "#products/tree/engine/open-tree-pr.js";
+import type {
+  ShellResult,
+  ShellRun,
+} from "#products/tree/engine/runtime/shell.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -52,17 +56,6 @@ Options:
   --help              Show this help message
 `;
 
-export interface ShellResult {
-  stdout: string;
-  stderr: string;
-  code: number;
-}
-
-export type ShellRun = (
-  command: string,
-  args: string[],
-  options?: { cwd?: string; input?: string; timeout?: number },
-) => Promise<ShellResult>;
 
 export interface SyncDeps {
   shellRun?: ShellRun;

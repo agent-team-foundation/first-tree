@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { runCli } from "../../src/cli.js";
 import { GARDENER_USAGE, runGardener } from "#products/gardener/cli.js";
 import {
+  assigneesFromMentions,
   buildCommentBody,
   buildTreeIssueBody,
   codeownersForPath,
@@ -24,6 +25,9 @@ import {
   runComment,
   shaMatches,
   withTreeIssueCreatedField,
+  withQuietRefreshCid,
+  QUIET_REFRESH_CID_MARKER_RE,
+  QUIET_REFRESH_CID_PLACEHOLDER,
   type Classifier,
   type ShellResult,
   type ShellRun,
@@ -895,6 +899,85 @@ describe("gardener comment -- marker helpers", () => {
       true,
     );
   });
+
+  // ─── #178: quiet_refresh_cid marker parser ───
+  it("parseStateMarker returns quietRefreshCid when populated on separate line", () => {
+    const body = [
+      "<!-- gardener:state · reviewed=abc · verdict=ALIGNED · severity=low · tree_sha=def -->",
+      "<!-- gardener:last_consumed_rereview=none -->",
+      "<!-- gardener:quiet_refresh_cid=4271884496 -->",
+      "body goes here",
+    ].join("\n");
+    const parsed = parseStateMarker(body);
+    expect(parsed?.reviewed).toBe("abc");
+    expect(parsed?.quietRefreshCid).toBe("4271884496");
+  });
+
+  it("parseStateMarker leaves quietRefreshCid undefined when marker line is absent (legacy comments)", () => {
+    const body = [
+      "<!-- gardener:state · reviewed=abc · verdict=ALIGNED · severity=low · tree_sha=def -->",
+      "<!-- gardener:last_consumed_rereview=none -->",
+      "body goes here",
+    ].join("\n");
+    const parsed = parseStateMarker(body);
+    expect(parsed?.reviewed).toBe("abc");
+    expect(parsed?.quietRefreshCid).toBeUndefined();
+  });
+
+  it("parseStateMarker treats the <self> placeholder as cid=undefined (comment was POSTed but not yet PATCHed)", () => {
+    const body = [
+      "<!-- gardener:state · reviewed=abc · verdict=ALIGNED · severity=low · tree_sha=def -->",
+      "<!-- gardener:last_consumed_rereview=none -->",
+      `<!-- gardener:quiet_refresh_cid=${QUIET_REFRESH_CID_PLACEHOLDER} -->`,
+    ].join("\n");
+    const parsed = parseStateMarker(body);
+    expect(parsed?.quietRefreshCid).toBeUndefined();
+  });
+
+  it("parseStateMarker treats an empty-value cid line as undefined", () => {
+    const body = [
+      "<!-- gardener:state · reviewed=abc · verdict=ALIGNED · severity=low · tree_sha=def -->",
+      "<!-- gardener:quiet_refresh_cid= -->",
+    ].join("\n");
+    const parsed = parseStateMarker(body);
+    expect(parsed?.quietRefreshCid).toBeUndefined();
+  });
+
+  // ─── #178: withQuietRefreshCid writer ───
+  it("withQuietRefreshCid replaces placeholder with real comment id", () => {
+    const body = [
+      "<!-- gardener:state · reviewed=abc -->",
+      `<!-- gardener:quiet_refresh_cid=${QUIET_REFRESH_CID_PLACEHOLDER} -->`,
+      "body",
+    ].join("\n");
+    const patched = withQuietRefreshCid(body, 9876);
+    expect(patched).not.toBeNull();
+    expect(patched).toContain("<!-- gardener:quiet_refresh_cid=9876 -->");
+    expect(patched).not.toContain("<self>");
+    expect(parseStateMarker(patched!)?.quietRefreshCid).toBe("9876");
+  });
+
+  it("withQuietRefreshCid is idempotent on an already-patched body (no-op diff)", () => {
+    const body = [
+      "<!-- gardener:state · reviewed=abc -->",
+      "<!-- gardener:quiet_refresh_cid=9876 -->",
+      "body",
+    ].join("\n");
+    const patched = withQuietRefreshCid(body, 9876);
+    expect(patched).toBe(body);
+  });
+
+  it("withQuietRefreshCid returns null when body has no quiet_refresh_cid line (caller logs & skips)", () => {
+    const body = "<!-- gardener:state · reviewed=abc -->\nbody";
+    expect(withQuietRefreshCid(body, 9876)).toBeNull();
+  });
+
+  it("QUIET_REFRESH_CID_MARKER_RE captures the id from a real marker line", () => {
+    const m = "<!-- gardener:quiet_refresh_cid=12345 -->".match(
+      QUIET_REFRESH_CID_MARKER_RE,
+    );
+    expect(m?.[1]).toBe("12345");
+  });
 });
 
 // ─────────────── 10. self-loop guard — first-tree:sync label ───────────────
@@ -1236,6 +1319,67 @@ describe("gardener comment -- Phase 2a tree-issue primitives", () => {
     expect(body).toContain("no CODEOWNERS match");
     expect(body).not.toContain("cc @");
     expect(body).toContain("(no tree nodes cited)");
+  });
+
+  // ─────────────────── --assign-owners path ───────────────────
+
+  it("buildTreeIssueBody with autoAssigned=true swaps the action line", () => {
+    const body = buildTreeIssueBody({
+      sourceRepo: "alice/cool",
+      sourcePr: 103,
+      sourcePrTitle: "feat: thing",
+      sourceCommentUrl: "https://github.com/alice/cool/pull/103#issuecomment-2",
+      verdict: "NEW_TERRITORY",
+      severity: "medium",
+      summary: "New surface area.",
+      treeNodes: [{ path: "pkg-a", summary: "" }],
+      codeownersMentions: ["@alice", "@bob"],
+      autoAssigned: true,
+    });
+    expect(body).toContain("auto-assigned to the node owners cited above");
+    expect(body).not.toContain("not auto-assigned");
+    expect(body).toContain("cc @alice @bob");
+  });
+
+  it("buildTreeIssueBody with autoAssigned=true but no mentions keeps pull-mode language", () => {
+    const body = buildTreeIssueBody({
+      sourceRepo: "alice/cool",
+      sourcePr: 104,
+      sourcePrTitle: "chore",
+      sourceCommentUrl: "https://github.com/alice/cool/pull/104#issuecomment-3",
+      verdict: "ALIGNED",
+      severity: "low",
+      summary: "No-op.",
+      treeNodes: [],
+      codeownersMentions: [],
+      autoAssigned: true,
+    });
+    // No assignees to honor — fall back to pull-mode phrasing so the
+    // body doesn't lie about what GitHub did.
+    expect(body).toContain("not auto-assigned");
+  });
+
+  describe("assigneesFromMentions", () => {
+    it("strips leading @ and dedupes while preserving order", () => {
+      expect(
+        assigneesFromMentions(["@alice", "@bob", "@alice", "@carol"]),
+      ).toEqual(["alice", "bob", "carol"]);
+    });
+
+    it("drops team mentions (GitHub rejects them for issue assignees)", () => {
+      expect(
+        assigneesFromMentions(["@alice", "@team/frontend", "@bob"]),
+      ).toEqual(["alice", "bob"]);
+    });
+
+    it("caps output at 10 entries", () => {
+      const mentions = Array.from({ length: 15 }, (_, i) => `@u${i}`);
+      expect(assigneesFromMentions(mentions)).toHaveLength(10);
+    });
+
+    it("ignores blank entries", () => {
+      expect(assigneesFromMentions(["@", "", "@alice"])).toEqual(["alice"]);
+    });
   });
 });
 

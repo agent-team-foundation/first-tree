@@ -188,15 +188,20 @@ continue to work cleanly for multi-repo workspaces.
 | `first-tree tree bind` | Bind the current repo/workspace root to an existing tree repo |
 | `first-tree tree workspace sync` | Bind discovered child repos to the same shared tree |
 | `first-tree tree publish` | Publish a dedicated tree repo or shared tree repo to GitHub and refresh locally bound source/workspace repos |
+| `first-tree tree sync` | Detect drift between a tree repo and its bound source repos; supports `--propose` and `--apply` |
 | `first-tree tree verify` | Run verification checks against a tree repo |
 | `first-tree tree upgrade` | Refresh installed source/workspace integration or tree metadata from the current package |
 | `first-tree tree generate-codeowners` | Generate `.github/CODEOWNERS` from tree ownership frontmatter |
 | `first-tree tree review` | Run the Claude Code PR review helper for a tree repo in CI |
+| `first-tree tree invite` | Invite a new member to the Context Tree (human, personal_assistant, or autonomous_agent) |
+| `first-tree tree join` | Accept an invite and join a Context Tree |
 | `first-tree tree inject-context` | Output a Claude Code SessionStart hook payload from the root `NODE.md` |
 | `first-tree tree help onboarding` | Print the full onboarding guide |
 | `first-tree skill install` | Install the four shipped skills under `.agents/skills/*` and `.claude/skills/*` |
 | `first-tree skill upgrade` | Wipe and reinstall the four shipped skills from the current package |
+| `first-tree skill list` | Print the four shipped skills with their installed status and version |
 | `first-tree skill doctor` | Diagnose whether the four shipped skills are installed and healthy |
+| `first-tree skill link` | Idempotently repair the `.claude/skills/*` alias symlinks |
 
 ---
 

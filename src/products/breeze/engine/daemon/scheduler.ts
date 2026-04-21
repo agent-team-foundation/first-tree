@@ -113,10 +113,11 @@ export class Scheduler {
         );
       }
       if (
+        record.lastHandledUpdatedAt.length > 0 &&
         shouldIgnoreLatestSelfActivity(
           this.identity.login,
           activity,
-          candidate.updatedAt,
+          record.lastHandledUpdatedAt,
         )
       ) {
         record.lastHandledUpdatedAt = candidate.updatedAt;

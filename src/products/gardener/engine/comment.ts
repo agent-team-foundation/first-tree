@@ -76,6 +76,15 @@ Options:
   --pr <n>              PR number (requires --repo)
   --issue <n>           Issue number (requires --repo)
   --repo <owner/name>   Target repository (requires --pr or --issue)
+  --assign-owners       When creating a tree-repo issue on a MERGED
+                        source PR, also set \`--assignee\` on the issue
+                        using the CODEOWNERS-resolved logins (teams are
+                        skipped; capped at 10). If the GitHub API rejects
+                        the assignees (e.g. not a tree-repo collaborator),
+                        the issue is retried without assignees so the
+                        create still succeeds. Off by default so existing
+                        pull-mode gardener deployments are unchanged; the
+                        push-mode workflow template sets this on.
   --dry-run             Print planned actions; do not POST/PATCH
   --help, -h            Show this help message
 
@@ -158,11 +167,12 @@ interface ParsedFlags {
   issue?: number;
   repo?: string;
   dryRun: boolean;
+  assignOwners: boolean;
   unknown?: string;
 }
 
 function parseFlags(args: string[]): ParsedFlags {
-  const out: ParsedFlags = { help: false, dryRun: false };
+  const out: ParsedFlags = { help: false, dryRun: false, assignOwners: false };
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === "--help" || arg === "-h") {
@@ -171,6 +181,10 @@ function parseFlags(args: string[]): ParsedFlags {
     }
     if (arg === "--dry-run") {
       out.dryRun = true;
+      continue;
+    }
+    if (arg === "--assign-owners") {
+      out.assignOwners = true;
       continue;
     }
     if (arg === "--tree-path") {
@@ -289,6 +303,12 @@ export const SEVERITY_IN_MARKER_RE = /severity=([a-z]+)/;
 export const TREE_SHA_IN_MARKER_RE = /tree_sha=([A-Za-z0-9]+)/;
 export const TREE_ISSUE_CREATED_IN_MARKER_RE =
   /tree_issue_created=(https:\/\/github\.com\/[^\s·>]+)/;
+// Lives on its own `<!-- gardener:quiet_refresh_cid=<id> -->` line, not
+// inside gardener:state. Self-embeds the comment's own ID so rescans can
+// fast-path past quiet-refresh updates (#178, repo-gardener#24).
+export const QUIET_REFRESH_CID_MARKER_RE =
+  /<!--\s*gardener:quiet_refresh_cid=([^\s]*?)\s*-->/;
+export const QUIET_REFRESH_CID_PLACEHOLDER = "self";
 
 /**
  * Recognizes `@gardener <command>` in user comments. Matches the
@@ -373,6 +393,7 @@ export function parseStateMarker(body: string | undefined): {
   severity?: Severity;
   treeSha?: string;
   treeIssueCreated?: string;
+  quietRefreshCid?: string;
 } | null {
   const marker = extractStateMarker(body);
   if (!marker) return null;
@@ -382,6 +403,7 @@ export function parseStateMarker(body: string | undefined): {
     severity?: Severity;
     treeSha?: string;
     treeIssueCreated?: string;
+    quietRefreshCid?: string;
   } = {};
   const reviewed = marker.match(REVIEWED_SHA_RE);
   if (reviewed) out.reviewed = reviewed[1];
@@ -397,7 +419,37 @@ export function parseStateMarker(body: string | undefined): {
   if (treeSha) out.treeSha = treeSha[1];
   const treeIssue = marker.match(TREE_ISSUE_CREATED_IN_MARKER_RE);
   if (treeIssue) out.treeIssueCreated = treeIssue[1];
+  // quiet_refresh_cid lives on a separate HTML comment line — scan the
+  // full body, not just the state marker. Empty or placeholder values
+  // parse as undefined so callers can treat them as "not yet patched."
+  const cidMatch = (body ?? "").match(QUIET_REFRESH_CID_MARKER_RE);
+  if (cidMatch) {
+    const raw = cidMatch[1];
+    if (raw.length > 0 && raw !== QUIET_REFRESH_CID_PLACEHOLDER) {
+      out.quietRefreshCid = raw;
+    }
+  }
   return out;
+}
+
+/**
+ * Rewrite the quiet_refresh_cid marker's value — used after POST to
+ * replace the placeholder with the real comment ID. Idempotent: running
+ * on a body that already has `cid=<realId>` overwrites with the same
+ * value (a retry on an already-patched comment is a no-op diff).
+ *
+ * Returns null if `body` has no quiet_refresh_cid marker line — caller
+ * logs and skips rather than rewriting arbitrary comment bodies.
+ */
+export function withQuietRefreshCid(
+  body: string,
+  commentId: string | number,
+): string | null {
+  if (!QUIET_REFRESH_CID_MARKER_RE.test(body)) return null;
+  return body.replace(
+    QUIET_REFRESH_CID_MARKER_RE,
+    `<!-- gardener:quiet_refresh_cid=${String(commentId)} -->`,
+  );
 }
 
 export function hasIgnoredMarker(body: string | undefined): boolean {
@@ -506,6 +558,15 @@ export interface BuildTreeIssueBodyInput {
   treeNodes: { path: string; summary: string }[];
   /** @-prefixed logins to cc (from CODEOWNERS resolution). May be empty. */
   codeownersMentions: string[];
+  /**
+   * When true, reflect in the body text that gardener attempted to set
+   * assignees on the issue (push/workflow-mode). When false, the body
+   * keeps the original "not auto-assigned — pick it up via CODEOWNERS
+   * routing" phrasing used by pull-mode deployments. Purely cosmetic:
+   * it does not trigger the actual `--assignee` call, which lives in
+   * `handleMergedIssue`.
+   */
+  autoAssigned?: boolean;
 }
 
 export function buildTreeIssueBody(input: BuildTreeIssueBodyInput): string {
@@ -519,6 +580,7 @@ export function buildTreeIssueBody(input: BuildTreeIssueBodyInput): string {
     summary,
     treeNodes,
     codeownersMentions,
+    autoAssigned = false,
   } = input;
   const emoji = VERDICT_EMOJI[verdict];
   const nodeList =
@@ -529,6 +591,9 @@ export function buildTreeIssueBody(input: BuildTreeIssueBodyInput): string {
     codeownersMentions.length > 0
       ? `cc ${codeownersMentions.join(" ")}`
       : "_(no CODEOWNERS match for cited nodes — issue is unassigned)_";
+  const actionLine = autoAssigned && codeownersMentions.length > 0
+    ? `A node owner should decide whether the tree needs an update in response to this merged change. This issue is auto-filed by gardener and auto-assigned to the node owners cited above (teams skipped; logins the tree repo rejects fall through to the cc line).`
+    : `A node owner should decide whether the tree needs an update in response to this merged change. This issue is auto-filed by gardener and not auto-assigned — pick it up via CODEOWNERS routing.`;
   return [
     `## Merged source change needs tree review`,
     "",
@@ -547,7 +612,7 @@ export function buildTreeIssueBody(input: BuildTreeIssueBodyInput): string {
     "",
     `### Action`,
     "",
-    `A node owner should decide whether the tree needs an update in response to this merged change. This issue is auto-filed by gardener and not auto-assigned — pick it up via CODEOWNERS routing.`,
+    actionLine,
     "",
     ccLine,
     "",
@@ -555,6 +620,29 @@ export function buildTreeIssueBody(input: BuildTreeIssueBodyInput): string {
     "",
     `<sub>🌱 Auto-filed by [repo-gardener](https://github.com/agent-team-foundation/repo-gardener) via [First-Tree](https://github.com/agent-team-foundation/first-tree). Close this issue when the tree reflects the source change (or when no change is warranted).</sub>`,
   ].join("\n");
+}
+
+/**
+ * Turn `@alice`, `@team/frontend` mentions into a bare-login assignee
+ * list for `gh issue create --assignee`:
+ *   - strip the leading `@`
+ *   - drop team mentions (contain `/`); GitHub rejects them for issues
+ *   - dedupe
+ *   - cap at 10 (GitHub's per-issue assignee ceiling)
+ */
+export function assigneesFromMentions(mentions: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of mentions) {
+    const stripped = raw.replace(/^@+/, "").trim();
+    if (!stripped) continue;
+    if (stripped.includes("/")) continue;
+    if (seen.has(stripped)) continue;
+    seen.add(stripped);
+    out.push(stripped);
+    if (out.length >= 10) break;
+  }
+  return out;
 }
 
 export function hasPausedMarker(body: string | undefined): boolean {
@@ -857,6 +945,10 @@ export function buildCommentBody(input: BuildCommentInput): string {
       : `- _(no tree nodes cited — tree may be empty or irrelevant to this change)_`;
   const markerLine1 = `<!-- gardener:state · reviewed=${reviewedFull} · verdict=${verdict} · severity=${severity} · tree_sha=${treeSha} -->`;
   const markerLine2 = `<!-- gardener:last_consumed_rereview=${consumedId} -->`;
+  // Placeholder on first POST; comment.ts issues a follow-up PATCH to
+  // replace `<self>` with the newly-created comment's own ID. Old
+  // comments without this line continue to parse as cid=undefined.
+  const markerLine3 = `<!-- gardener:quiet_refresh_cid=${QUIET_REFRESH_CID_PLACEHOLDER} -->`;
 
   const detailsOpen = isMinimalAligned ? "<details>" : "<details open>";
   const closing = isMinimalAligned
@@ -870,6 +962,7 @@ export function buildCommentBody(input: BuildCommentInput): string {
   const lines = [
     markerLine1,
     markerLine2,
+    markerLine3,
     "",
     `🌱 **gardener** · ${emoji} \`${verdict}\` · severity: \`${severity}\` · commit: \`${reviewedShort}\``,
     "",
@@ -1102,6 +1195,14 @@ export interface HandleMergedIssueInput {
   treeNodes: { path: string; summary: string }[];
   /** Resolved CODEOWNERS cc list, already @-prefixed. */
   codeownersMentions: string[];
+  /**
+   * When true, add `--assignee` to the `gh issue create` call using
+   * `assigneesFromMentions(codeownersMentions)`. On rejection (422 or
+   * "assignee"/"collaborator" stderr), retry without `--assignee` so
+   * the issue still opens. Default false preserves current pull-mode
+   * behavior (cc-in-body only).
+   */
+  assignOwners: boolean;
   shell: ShellRun;
   env: NodeJS.ProcessEnv;
   write: (line: string) => void;
@@ -1145,6 +1246,7 @@ export async function handleMergedIssue(
     summary,
     treeNodes,
     codeownersMentions,
+    assignOwners,
     shell,
     env,
     write,
@@ -1159,6 +1261,9 @@ export async function handleMergedIssue(
   const sourceCommentUrl =
     `https://github.com/${sourceRepo}/pull/${sourcePr}#issuecomment-${gardenerCommentId}`;
 
+  const assignees = assignOwners
+    ? assigneesFromMentions(codeownersMentions)
+    : [];
   const body = buildTreeIssueBody({
     sourceRepo,
     sourcePr,
@@ -1169,11 +1274,14 @@ export async function handleMergedIssue(
     summary,
     treeNodes,
     codeownersMentions,
+    autoAssigned: assignOwners,
   });
   const title = `[gardener] tree update needed for ${sourceRepo}#${sourcePr}`;
 
   write(
-    `\u2712 merged ${sourceRepo}#${sourcePr}: creating tree issue on ${treeSlug}`,
+    `\u2712 merged ${sourceRepo}#${sourcePr}: creating tree issue on ${treeSlug}${
+      assignees.length > 0 ? ` (assignees: ${assignees.join(", ")})` : ""
+    }`,
   );
 
   if (dryRun) {
@@ -1182,11 +1290,34 @@ export async function handleMergedIssue(
 
   const tokenEnv: NodeJS.ProcessEnv = { ...env, GH_TOKEN: treeRepoToken };
 
-  const createRes = await shell(
-    "gh",
-    ["issue", "create", "--repo", treeSlug, "--title", title, "--body", body],
-    { env: tokenEnv },
-  );
+  const baseCreateArgs = [
+    "issue",
+    "create",
+    "--repo",
+    treeSlug,
+    "--title",
+    title,
+    "--body",
+    body,
+  ];
+  const firstArgs = assignees.length > 0
+    ? [...baseCreateArgs, "--assignee", assignees.join(",")]
+    : baseCreateArgs;
+
+  let createRes = await shell("gh", firstArgs, { env: tokenEnv });
+  if (createRes.code !== 0 && assignees.length > 0) {
+    // GitHub rejects `--assignee` when any login isn't a tree-repo
+    // collaborator (422). Retry without assignees so the issue still
+    // opens; the cc line in the body preserves owner visibility.
+    const stderr = createRes.stderr || "";
+    const assigneeBad = /assignee|collaborator|422|unprocessable/i.test(stderr);
+    if (assigneeBad) {
+      write(
+        `\u26a0 tree-issue assignment rejected (${stderr.split("\n")[0] || "422"}) — retrying without --assignee`,
+      );
+      createRes = await shell("gh", baseCreateArgs, { env: tokenEnv });
+    }
+  }
   if (createRes.code !== 0) {
     const stderr = createRes.stderr || "";
     const isConfigError = /\b(401|403|404)\b/.test(stderr);
@@ -1257,6 +1388,7 @@ async function tryHandleMergedPr(input: {
   env: NodeJS.ProcessEnv;
   write: (line: string) => void;
   dryRun: boolean;
+  assignOwners: boolean;
 }): Promise<{ status: CommentStatus; summary: string } | null> {
   const {
     sourceRepo,
@@ -1274,6 +1406,7 @@ async function tryHandleMergedPr(input: {
     env,
     write,
     dryRun,
+    assignOwners,
   } = input;
 
   const hasGardenerMarker = (b: string | undefined): boolean =>
@@ -1347,6 +1480,7 @@ async function tryHandleMergedPr(input: {
     summary: classification.summary,
     treeNodes: classification.treeNodes,
     codeownersMentions: Array.from(mentions),
+    assignOwners,
     shell,
     env,
     write,
@@ -1393,6 +1527,7 @@ interface ReviewOneInput {
   treeRepoUrl?: string;
   treeSlug?: string;
   treeSha?: string;
+  assignOwners: boolean;
 }
 
 async function reviewOne(
@@ -1410,6 +1545,7 @@ async function reviewOne(
     classifier,
     treeRepoUrl,
     treeSlug,
+    assignOwners,
   } = opts;
 
   const snapshotDir = env.BREEZE_SNAPSHOT_DIR;
@@ -1486,6 +1622,7 @@ async function reviewOne(
       env,
       write,
       dryRun,
+      assignOwners,
     });
     if (mergedOutcome) {
       logEvent(env, {
@@ -1611,10 +1748,14 @@ async function reviewOne(
   });
 
   if (action.kind === "rereview" && action.commentId > 0) {
-    // PATCH existing comment (Step 4e).
+    // PATCH existing comment (Step 4e). On the same PATCH, fill the
+    // quiet_refresh_cid placeholder with this comment's own ID so
+    // re-reviews keep the cid in sync (covers legacy comments that
+    // never had the cid patched in on first POST).
     write(
       `\u2712 #${number}: re-review → PATCH comment ${action.commentId} (${classification.verdict})`,
     );
+    const patchedBody = withQuietRefreshCid(body, action.commentId) ?? body;
     if (!dryRun) {
       await shell("gh", [
         "api",
@@ -1622,7 +1763,7 @@ async function reviewOne(
         "PATCH",
         `/repos/${repo}/issues/comments/${action.commentId}`,
         "-f",
-        `body=${body}`,
+        `body=${patchedBody}`,
       ]);
     }
     logEvent(env, {
@@ -1640,12 +1781,16 @@ async function reviewOne(
     };
   }
 
-  // First review — POST new comment.
+  // First review — POST new comment, then PATCH to self-embed the
+  // comment's own ID into the quiet_refresh_cid placeholder. Two-step
+  // sequence matches the repo-gardener runbook (#178): POST returns
+  // the new ID, PATCH rewrites `<self>` to the real value so rescans
+  // can fast-path past gardener's own quiet-refresh updates.
   write(
     `\u2713 #${number}: first review → POST (${classification.verdict}/${classification.severity})`,
   );
   if (!dryRun) {
-    await shell("gh", [
+    const postRes = await shell("gh", [
       "api",
       "-X",
       "POST",
@@ -1653,6 +1798,23 @@ async function reviewOne(
       "-f",
       `body=${body}`,
     ]);
+    if (postRes.code === 0) {
+      const parsed = jsonTryParse<{ id?: number | string }>(postRes.stdout);
+      const newId = parsed?.id;
+      if (newId !== undefined && newId !== null) {
+        const patchedBody = withQuietRefreshCid(body, newId);
+        if (patchedBody !== null && patchedBody !== body) {
+          await shell("gh", [
+            "api",
+            "-X",
+            "PATCH",
+            `/repos/${repo}/issues/comments/${newId}`,
+            "-f",
+            `body=${patchedBody}`,
+          ]);
+        }
+      }
+    }
   }
   logEvent(env, {
     kind: "item",
@@ -1682,6 +1844,7 @@ async function runScan(opts: {
   treeRepoUrl?: string;
   treeSlug?: string;
   treeSha?: string;
+  assignOwners: boolean;
 }): Promise<{ status: CommentStatus; summary: string }> {
   const { shell, write, env, targetRepo } = opts;
 
@@ -1751,6 +1914,7 @@ async function runScan(opts: {
       treeRepoUrl: opts.treeRepoUrl,
       treeSlug: opts.treeSlug,
       treeSha: opts.treeSha,
+      assignOwners: opts.assignOwners,
     });
     if (result.status === "handled") handled += 1;
     else if (result.status === "failed") failed += 1;
@@ -1843,6 +2007,7 @@ export async function runComment(
         classifier,
         treeRepoUrl,
         treeSlug,
+        assignOwners: flags.assignOwners,
       });
       emitBreezeResult(write, result.status, result.summary, {
         tree_repo_token: env.TREE_REPO_TOKEN ? "present" : "absent",
@@ -1873,6 +2038,7 @@ export async function runComment(
       targetRepo,
       treeRepoUrl,
       treeSlug,
+      assignOwners: flags.assignOwners,
     });
     emitBreezeResult(write, result.status, result.summary, {
       tree_repo_token: env.TREE_REPO_TOKEN ? "present" : "absent",
