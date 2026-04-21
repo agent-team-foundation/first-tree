@@ -25,6 +25,9 @@ import {
   runComment,
   shaMatches,
   withTreeIssueCreatedField,
+  withQuietRefreshCid,
+  QUIET_REFRESH_CID_MARKER_RE,
+  QUIET_REFRESH_CID_PLACEHOLDER,
   type Classifier,
   type ShellResult,
   type ShellRun,
@@ -895,6 +898,85 @@ describe("gardener comment -- marker helpers", () => {
     expect(GARDENER_IGNORED_MARKER_RE.test("<!-- gardener:ignored -->")).toBe(
       true,
     );
+  });
+
+  // ─── #178: quiet_refresh_cid marker parser ───
+  it("parseStateMarker returns quietRefreshCid when populated on separate line", () => {
+    const body = [
+      "<!-- gardener:state · reviewed=abc · verdict=ALIGNED · severity=low · tree_sha=def -->",
+      "<!-- gardener:last_consumed_rereview=none -->",
+      "<!-- gardener:quiet_refresh_cid=4271884496 -->",
+      "body goes here",
+    ].join("\n");
+    const parsed = parseStateMarker(body);
+    expect(parsed?.reviewed).toBe("abc");
+    expect(parsed?.quietRefreshCid).toBe("4271884496");
+  });
+
+  it("parseStateMarker leaves quietRefreshCid undefined when marker line is absent (legacy comments)", () => {
+    const body = [
+      "<!-- gardener:state · reviewed=abc · verdict=ALIGNED · severity=low · tree_sha=def -->",
+      "<!-- gardener:last_consumed_rereview=none -->",
+      "body goes here",
+    ].join("\n");
+    const parsed = parseStateMarker(body);
+    expect(parsed?.reviewed).toBe("abc");
+    expect(parsed?.quietRefreshCid).toBeUndefined();
+  });
+
+  it("parseStateMarker treats the <self> placeholder as cid=undefined (comment was POSTed but not yet PATCHed)", () => {
+    const body = [
+      "<!-- gardener:state · reviewed=abc · verdict=ALIGNED · severity=low · tree_sha=def -->",
+      "<!-- gardener:last_consumed_rereview=none -->",
+      `<!-- gardener:quiet_refresh_cid=${QUIET_REFRESH_CID_PLACEHOLDER} -->`,
+    ].join("\n");
+    const parsed = parseStateMarker(body);
+    expect(parsed?.quietRefreshCid).toBeUndefined();
+  });
+
+  it("parseStateMarker treats an empty-value cid line as undefined", () => {
+    const body = [
+      "<!-- gardener:state · reviewed=abc · verdict=ALIGNED · severity=low · tree_sha=def -->",
+      "<!-- gardener:quiet_refresh_cid= -->",
+    ].join("\n");
+    const parsed = parseStateMarker(body);
+    expect(parsed?.quietRefreshCid).toBeUndefined();
+  });
+
+  // ─── #178: withQuietRefreshCid writer ───
+  it("withQuietRefreshCid replaces placeholder with real comment id", () => {
+    const body = [
+      "<!-- gardener:state · reviewed=abc -->",
+      `<!-- gardener:quiet_refresh_cid=${QUIET_REFRESH_CID_PLACEHOLDER} -->`,
+      "body",
+    ].join("\n");
+    const patched = withQuietRefreshCid(body, 9876);
+    expect(patched).not.toBeNull();
+    expect(patched).toContain("<!-- gardener:quiet_refresh_cid=9876 -->");
+    expect(patched).not.toContain("<self>");
+    expect(parseStateMarker(patched!)?.quietRefreshCid).toBe("9876");
+  });
+
+  it("withQuietRefreshCid is idempotent on an already-patched body (no-op diff)", () => {
+    const body = [
+      "<!-- gardener:state · reviewed=abc -->",
+      "<!-- gardener:quiet_refresh_cid=9876 -->",
+      "body",
+    ].join("\n");
+    const patched = withQuietRefreshCid(body, 9876);
+    expect(patched).toBe(body);
+  });
+
+  it("withQuietRefreshCid returns null when body has no quiet_refresh_cid line (caller logs & skips)", () => {
+    const body = "<!-- gardener:state · reviewed=abc -->\nbody";
+    expect(withQuietRefreshCid(body, 9876)).toBeNull();
+  });
+
+  it("QUIET_REFRESH_CID_MARKER_RE captures the id from a real marker line", () => {
+    const m = "<!-- gardener:quiet_refresh_cid=12345 -->".match(
+      QUIET_REFRESH_CID_MARKER_RE,
+    );
+    expect(m?.[1]).toBe("12345");
   });
 });
 
