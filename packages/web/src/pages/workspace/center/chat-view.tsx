@@ -499,6 +499,7 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
   const { data: chatDetail } = useQuery({
     queryKey: ["chat-detail", chatId],
     queryFn: () => getChat(chatId),
+    enabled: !!chatId,
   });
 
   const sendMut = useMutation({
@@ -541,7 +542,12 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
   }, [itemCount]);
 
   const participantsLabel = chatDetail?.participants
-    ? chatDetail.participants.map((p) => `@${agentName(p.agentId)}`).join(" ")
+    ? chatDetail.participants
+        .map((p) => {
+          const name = agentName(p.agentId);
+          return `@${name.length > 20 ? `${name.slice(0, 17)}…` : name}`;
+        })
+        .join(" ")
     : `@${agentName(agentId)}`;
   const displayName = agentName(agentId);
   const runtimeLabel = session?.runtimeState ?? "idle";

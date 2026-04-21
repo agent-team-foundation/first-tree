@@ -99,10 +99,10 @@ export async function listAgentSessions(
               WHERE chat_id = ANY(${chatIds})
               ORDER BY chat_id, created_at ASC`,
         )
-      : { rows: [] as { chat_id: string; content: unknown }[] };
+      : ([] as { chat_id: string; content: unknown }[]);
 
   const summaryMap = new Map<string, string>();
-  for (const row of firstMessages.rows) {
+  for (const row of firstMessages) {
     const summary = extractSummary(row.content);
     if (summary) {
       summaryMap.set(row.chat_id, summary);
@@ -159,7 +159,7 @@ export async function getSession(db: Database, agentId: string, chatId: string):
   const firstMsgRows = await db.execute<{ content: unknown }>(
     sql`SELECT content FROM messages WHERE chat_id = ${chatId} ORDER BY created_at ASC LIMIT 1`,
   );
-  const summary = firstMsgRows.rows.length > 0 ? extractSummary(firstMsgRows.rows[0].content) : null;
+  const summary = firstMsgRows.length > 0 ? extractSummary(firstMsgRows[0].content) : null;
 
   return {
     agentId: row.agentId,

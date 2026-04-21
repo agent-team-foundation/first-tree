@@ -209,7 +209,7 @@ export function AgentRoster({
                 >
                   <StateDot state={runtime} size={6} />
                   <span className="truncate" style={{ fontSize: 11, color: s.summary ? "var(--fg-2)" : "var(--fg-4)" }}>
-                    {s.summary || `Chat ${s.chatId.slice(0, 6)}`}
+                    {s.summary || `Chat · ${s.chatId.slice(0, 8)}`}
                   </span>
                 </button>
               );
