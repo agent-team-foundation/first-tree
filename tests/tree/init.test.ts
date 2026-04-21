@@ -543,6 +543,15 @@ describe("parseInitArgs", () => {
     expect(BOOTSTRAP_USAGE).toContain("Initialize the current repo in place as a tree repo");
   });
 
+  it("documents that workspace init syncs discovered child repos by default", () => {
+    expect(INIT_USAGE).toContain(
+      "first-tree tree init --scope workspace --tree-path ../org-context --tree-mode shared",
+    );
+    expect(INIT_USAGE).toContain(
+      "already the default; kept for readability/compatibility",
+    );
+  });
+
   it("parses dedicated repo options", () => {
     expect(parseInitArgs(["--tree-name", "acme-tree"])).toEqual({
       treeName: "acme-tree",

@@ -380,7 +380,8 @@ describe("skill artifacts", () => {
 
     const openaiPrompt = read("agents/openai.yaml");
     expect(openaiPrompt).toContain("first-tree tree inspect --json");
-    expect(openaiPrompt).toContain("first-tree tree bind");
+    expect(openaiPrompt).toContain("Use `first-tree tree init` as the primary onboarding command either way");
+    expect(openaiPrompt).toContain("Drop to `first-tree tree bind` only when explicit `--mode` control is needed");
     expect(openaiPrompt).toContain("first-tree tree workspace sync");
     expect(openaiPrompt).toContain("baseline coverage");
     expect(openaiPrompt).toContain("progress.md");
