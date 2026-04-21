@@ -27,7 +27,7 @@
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, relative, resolve, sep } from "node:path";
 
 import type { PrReview, PrIssueComment, PrView, ShellRun } from "./respond.js";
 
@@ -68,6 +68,30 @@ export type OrchestrateEditResult =
   | { kind: "deferred"; reason: string; replyBody?: string }
   | { kind: "failed"; reason: string };
 
+/**
+ * Resolve a reviewer-supplied relative path against the tree root and
+ * require it to:
+ *   - stay inside the tree checkout (no `..` traversal, no absolute paths)
+ *   - target a file named `NODE.md`
+ *
+ * Returns null on any violation so callers can deferred-fall-back
+ * without touching disk.
+ */
+function resolveInsideTree(treeRoot: string, input: string): string | null {
+  const cleaned = input.replace(/^\.?\/+/, "").trim();
+  if (!cleaned) return null;
+  // Reject absolute paths outright — reviewer text must be tree-relative.
+  if (cleaned.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(cleaned)) return null;
+  const rootAbs = resolve(treeRoot);
+  const target = resolve(rootAbs, cleaned);
+  const rel = relative(rootAbs, target);
+  if (rel.startsWith("..") || rel === "" || rel.split(sep).includes("..")) {
+    return null;
+  }
+  if (basename(target) !== "NODE.md") return null;
+  return target;
+}
+
 const PARENT_SUBDOMAIN_PATTERNS = [
   /not listed in (?:the )?parent\s+NODE\.md/i,
   /missing from (?:the )?(?:parent'?s? )?Sub-?domains/i,
@@ -100,25 +124,37 @@ function detectParentSubdomainMissing(
   //
   // We accept either:
   //   - an explicit `parent: <path>` hint
-  //   - a `<dir>/NODE.md` reference, from which we infer the parent as
-  //     the NODE.md one level up.
+  //   - a `<path>/<dir>/NODE.md` reference, from which we infer the
+  //     parent as the NODE.md one level up. The full relative path is
+  //     preserved so nested nodes (e.g. `engineering/mcp/NODE.md`) resolve
+  //     to the right parent (`engineering/NODE.md`), not the tree root.
   const parentHint = blob.match(/parent(?:\s+NODE\.md)?\s*[:=]\s*([^\s`]+)/i);
-  const childRef = blob.match(/([A-Za-z0-9._-]+)\/NODE\.md/);
+  const childRef = blob.match(/([A-Za-z0-9._\-/]+?)\/NODE\.md/);
   const titleHint = blob.match(/title\s*[:=]\s*["']?([^"'\n]+)["']?/i);
 
   let parentPath: string | null = null;
   let childDir: string | null = null;
+  let childRelative: string | null = null;
 
   if (childRef) {
-    childDir = childRef[1];
+    childRelative = childRef[1].replace(/^\.?\/+/, "");
+    childDir = basename(childRelative);
   }
 
   if (parentHint) {
-    parentPath = resolve(treeRoot, parentHint[1].replace(/^\.\//, ""));
-  } else if (childDir) {
-    // Parent NODE.md is one level up from the child's NODE.md.
-    const childNodePath = resolve(treeRoot, `${childDir}/NODE.md`);
-    parentPath = resolve(dirname(dirname(childNodePath)), "NODE.md");
+    const hinted = resolveInsideTree(treeRoot, parentHint[1]);
+    if (!hinted) return null;
+    parentPath = hinted;
+  } else if (childRelative) {
+    // Parent NODE.md is one level up from the child's NODE.md — preserve
+    // the full relative path so nested children resolve correctly.
+    const parentDir = dirname(childRelative);
+    const parentRel = parentDir === "." || parentDir === ""
+      ? "NODE.md"
+      : `${parentDir}/NODE.md`;
+    const resolved = resolveInsideTree(treeRoot, parentRel);
+    if (!resolved) return null;
+    parentPath = resolved;
   }
 
   if (!parentPath || !childDir) return null;

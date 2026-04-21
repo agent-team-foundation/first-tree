@@ -290,6 +290,132 @@ describe("edit-orchestrator: parent_subdomain_missing heuristic", () => {
     expect(result.reason).toBe("stale_base");
   });
 
+  it("resolves nested child to the correct parent (not tree root) — #229 review", async () => {
+    const tree = useTmpDir().path;
+    // engineering/NODE.md is the correct parent for engineering/mcp/
+    seedParent(
+      tree,
+      "engineering/NODE.md",
+      "# Engineering\n\n## Sub-domains\n\n",
+    );
+    // A tree-root NODE.md also exists — we should NOT write to it.
+    seedParent(tree, "NODE.md", "# Root\n\n## Sub-domains\n\n- `alpha/` — Alpha\n");
+
+    const shell = makeShell((call) => {
+      if (call.command === "git" && call.args[0] === "rev-parse") {
+        return { stdout: "nestedsha\n", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    });
+
+    const result = await orchestrateEdit({
+      repo: "acme/tree",
+      pr: 42,
+      treeRoot: tree,
+      feedback: {
+        reviews: [
+          {
+            state: "CHANGES_REQUESTED",
+            body: "engineering/mcp/NODE.md is not listed in parent NODE.md. title: MCP",
+          },
+        ],
+        issueComments: [],
+      },
+      prView: DEFAULT_PR_VIEW,
+      shell,
+      dryRun: false,
+    });
+
+    expect(result.kind).toBe("applied");
+
+    const engParent = readFileSync(join(tree, "engineering/NODE.md"), "utf-8");
+    expect(engParent).toContain("- `mcp/` — MCP");
+
+    // Root NODE.md should be untouched — no `mcp/` entry written to it.
+    const rootParent = readFileSync(join(tree, "NODE.md"), "utf-8");
+    expect(rootParent).not.toContain("mcp/");
+  });
+
+  it("rejects path-traversal parent hint — #229 review", async () => {
+    const tree = useTmpDir().path;
+    seedParent(tree, "NODE.md", "# Root\n\n## Sub-domains\n\n");
+
+    const shell = makeShell(() => ({ stdout: "", stderr: "", code: 0 }));
+
+    const result = await orchestrateEdit({
+      repo: "acme/tree",
+      pr: 42,
+      treeRoot: tree,
+      feedback: {
+        reviews: [
+          {
+            state: "CHANGES_REQUESTED",
+            body:
+              "parent: ../../../../tmp/pwn/NODE.md — child/NODE.md is not listed in parent NODE.md. title: Child",
+          },
+        ],
+        issueComments: [],
+      },
+      prView: DEFAULT_PR_VIEW,
+      shell,
+      dryRun: false,
+    });
+
+    expect(result.kind).toBe("deferred");
+  });
+
+  it("rejects absolute parent hint — #229 review", async () => {
+    const tree = useTmpDir().path;
+    seedParent(tree, "NODE.md", "# Root\n\n## Sub-domains\n\n");
+
+    const result = await orchestrateEdit({
+      repo: "acme/tree",
+      pr: 42,
+      treeRoot: tree,
+      feedback: {
+        reviews: [
+          {
+            state: "CHANGES_REQUESTED",
+            body:
+              "parent: /etc/NODE.md — child/NODE.md is not listed in parent NODE.md",
+          },
+        ],
+        issueComments: [],
+      },
+      prView: DEFAULT_PR_VIEW,
+      shell: makeShell(() => ({ stdout: "", stderr: "", code: 0 })),
+      dryRun: false,
+    });
+
+    expect(result.kind).toBe("deferred");
+  });
+
+  it("rejects parent hint not targeting NODE.md — #229 review", async () => {
+    const tree = useTmpDir().path;
+    seedParent(tree, "NODE.md", "# Root\n\n## Sub-domains\n\n");
+
+    const result = await orchestrateEdit({
+      repo: "acme/tree",
+      pr: 42,
+      treeRoot: tree,
+      feedback: {
+        reviews: [
+          {
+            state: "CHANGES_REQUESTED",
+            body:
+              "parent: README.md — child/NODE.md is not listed in parent NODE.md",
+          },
+        ],
+        issueComments: [],
+      },
+      prView: DEFAULT_PR_VIEW,
+      shell: makeShell(() => ({ stdout: "", stderr: "", code: 0 })),
+      dryRun: false,
+    });
+
+    expect(result.kind).toBe("deferred");
+  });
+
   it("returns failed when the planner throws", async () => {
     const tree = useTmpDir().path;
     const result = await orchestrateEdit({
