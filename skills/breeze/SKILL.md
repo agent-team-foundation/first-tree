@@ -49,19 +49,30 @@ and safe to re-run.
 | `first-tree breeze watch` | Live TUI: status board + activity feed |
 | `first-tree breeze poll` | Poll GitHub notifications once (no daemon required) |
 
-### Advanced (agents, debugging, internal)
+### Advanced (agents, debugging)
 
-These are the daemon's foreground entrypoints, hook shims, and internal
-helpers. Humans normally only need the primary set above.
+These are the daemon's foreground entrypoints and manual-cleanup helpers.
+Humans normally only need the primary set above; reach for these when
+debugging the pipeline or when `doctor` directs you to.
 
 | Command | Purpose |
 |---|---|
 | `first-tree breeze run` / `first-tree breeze daemon` | Run the broker loop in the foreground. `start` is preferred for humans; `daemon` is invoked by launchd. |
 | `first-tree breeze run-once` | Run one poll cycle, wait for drain, then exit. Useful for debugging the daemon pipeline. |
 | `first-tree breeze cleanup` | Remove stale workspaces and expired claims. Only run if `doctor` suggests it. |
-| `first-tree breeze poll-inbox` | Legacy alias for `poll`. Kept for existing scripts. |
-| `first-tree breeze statusline` | Claude Code statusline hook (single-line output). Wired by `install`; never invoke manually — it runs on a sub-30 ms bundle. |
-| `first-tree breeze status-manager` | Internal: manage per-session status entries. Used by breeze runners; no human use case. |
+
+### Hook / internal entry points (do not invoke directly)
+
+These exist for compatibility or to be called *by other code*. Never
+invoke them manually from a shell or from an agent action — they are
+listed here only so you recognize what they are when you encounter them
+in `ps`, config files, or log lines.
+
+| Command | Why it exists |
+|---|---|
+| `first-tree breeze statusline` | Claude Code statusline hook. Claude Code should be pointed at the pre-bundled `dist/breeze-statusline.js` directly for sub-30 ms cold start (see the Statusline section below). The CLI shim exists for parity. |
+| `first-tree breeze status-manager` | Internal helper used by the breeze runner to manage per-session status entries. Runners call it programmatically; no direct human or agent use. |
+| `first-tree breeze poll-inbox` | Legacy alias for `poll`. Kept so existing scripts keep working; new callers should use `poll`. |
 
 For full options on any command, run `first-tree breeze <command> --help`.
 

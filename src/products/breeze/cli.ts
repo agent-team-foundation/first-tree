@@ -41,11 +41,6 @@ Advanced commands (for agents or debugging):
   run-once              Run one poll cycle, wait for drain, exit.
   cleanup               Remove stale workspaces + expired claims
                         (only run if \`doctor\` suggests it).
-  poll-inbox            Legacy alias for \`poll\`.
-  statusline            Claude Code statusline hook (single-line output).
-                        Wired into Claude Code by \`install\`; do not invoke manually.
-  status-manager        Internal: manage per-session status entries
-                        (used by breeze runners).
 
 Options:
   --help, -h            Show this help message
@@ -53,6 +48,14 @@ Options:
 Environment:
   BREEZE_DIR            Override \`~/.breeze\` (store root)
   BREEZE_HOME           Override \`~/.breeze/runner\` (daemon private state)
+
+Not shown above (hook/internal entry points — do not invoke directly):
+  statusline            Claude Code statusline hook. Called by Claude Code via
+                        the separate \`dist/breeze-statusline.js\` bundle for
+                        sub-30 ms cold start. See the breeze skill for wiring.
+  status-manager        Internal helper used by breeze runners to manage per-
+                        session status entries. No direct human/agent use.
+  poll-inbox            Legacy alias for \`poll\`. Kept for existing scripts.
 `;
 
 const BREEZE_INLINE_HELP: Partial<Record<string, string>> = {
