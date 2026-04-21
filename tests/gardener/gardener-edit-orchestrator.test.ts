@@ -116,6 +116,48 @@ describe("edit-orchestrator: parent_subdomain_missing heuristic", () => {
     expect(result.kind).toBe("deferred");
   });
 
+  it("is not fooled by a hyphen-before sibling entry (#222 follow-up)", async () => {
+    const tree = useTmpDir().path;
+    // `mobile-sidebar/` is listed; `sidebar/` is NOT. Orchestrator must
+    // still add `sidebar/` — the old `\b${dir}/` regex false-matched
+    // because `-` is a word boundary.
+    seedParent(
+      tree,
+      "NODE.md",
+      "# Root\n\n## Sub-domains\n\n- `mobile-sidebar/` — Mobile Sidebar\n",
+    );
+
+    const shell = makeShell((call) => {
+      if (call.command === "git" && call.args[0] === "rev-parse") {
+        return { stdout: "hyphenfix\n", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    });
+
+    const result = await orchestrateEdit({
+      repo: "acme/tree",
+      pr: 42,
+      treeRoot: tree,
+      feedback: {
+        reviews: [
+          {
+            state: "CHANGES_REQUESTED",
+            body: "sidebar/NODE.md is not listed in parent NODE.md. title: Sidebar",
+          },
+        ],
+        issueComments: [],
+      },
+      prView: DEFAULT_PR_VIEW,
+      shell,
+      dryRun: false,
+    });
+
+    expect(result.kind).toBe("applied");
+    const updated = readFileSync(join(tree, "NODE.md"), "utf-8");
+    expect(updated).toContain("- `sidebar/` — Sidebar");
+    expect(updated).toContain("- `mobile-sidebar/` — Mobile Sidebar");
+  });
+
   it("returns deferred rebase_needed on non-fast-forward push", async () => {
     const tree = useTmpDir().path;
     seedParent(tree, "NODE.md", "# Root\n\n## Sub-domains\n\n");
