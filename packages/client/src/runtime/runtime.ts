@@ -39,6 +39,11 @@ export class AgentRuntime {
       getAccessToken: this.getAccessToken,
     });
 
+    // Surface transport-level errors (TLS resets, DNS hiccups, WS handshake
+    // failures) to operators. ClientConnection's own reconnect loop handles
+    // recovery; a process-wide crash guard lives in ClientConnection itself.
+    this.clientConnection.on("error", (err) => this.log(`client connection error: ${err.message}`));
+
     for (const [name, agentConfig] of Object.entries(this.config.agents)) {
       const handlerFactory = getHandlerFactory(agentConfig.type);
       this.slots.push(
@@ -57,8 +62,12 @@ export class AgentRuntime {
     }
   }
 
+  private log(msg: string): void {
+    process.stderr.write(`[runtime] ${msg}\n`);
+  }
+
   async start(): Promise<void> {
-    const log = (msg: string) => process.stderr.write(`[runtime] ${msg}\n`);
+    const log = (msg: string) => this.log(msg);
 
     const contextTreePath = await syncContextTree(this.config.server, this.getAccessToken, log);
     if (!contextTreePath) {

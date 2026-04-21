@@ -91,4 +91,53 @@ describe("ensureFreshAccessToken — safety margin", () => {
     const { ensureFreshAccessToken } = await import("../core/bootstrap.js");
     await expect(ensureFreshAccessToken()).rejects.toThrow(/refresh failed/);
   });
+
+  it("deduplicates concurrent refresh calls into a single HTTP round-trip", async () => {
+    const stale = makeJwt({ exp: Math.floor(Date.now() / 1000) - 5 });
+    const refreshed = makeJwt({ exp: Math.floor(Date.now() / 1000) + 1800 });
+    await writeCredentials(stale);
+
+    // Delay the response so all concurrent callers pile onto the same inflight
+    // promise before the first fetch resolves.
+    let releaseFetch: (res: Response) => void = () => {};
+    fetchMock.mockReturnValue(
+      new Promise<Response>((resolve) => {
+        releaseFetch = resolve;
+      }),
+    );
+
+    const { ensureFreshAccessToken } = await import("../core/bootstrap.js");
+    const calls = Promise.all([
+      ensureFreshAccessToken(),
+      ensureFreshAccessToken(),
+      ensureFreshAccessToken(),
+      ensureFreshAccessToken(),
+      ensureFreshAccessToken(),
+    ]);
+
+    releaseFetch(new Response(JSON.stringify({ accessToken: refreshed })));
+    const results = await calls;
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    for (const r of results) expect(r).toBe(refreshed);
+  });
+
+  it("releases the inflight slot so subsequent expirations can refresh again", async () => {
+    const stale1 = makeJwt({ exp: Math.floor(Date.now() / 1000) - 5 });
+    const refreshed1 = makeJwt({ exp: Math.floor(Date.now() / 1000) + 10 }); // still within 30s lead
+    const refreshed2 = makeJwt({ exp: Math.floor(Date.now() / 1000) + 1800 });
+    await writeCredentials(stale1);
+
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({ accessToken: refreshed1 })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ accessToken: refreshed2 })));
+
+    const { ensureFreshAccessToken } = await import("../core/bootstrap.js");
+    const first = await ensureFreshAccessToken();
+    const second = await ensureFreshAccessToken();
+
+    expect(first).toBe(refreshed1);
+    expect(second).toBe(refreshed2);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 });
