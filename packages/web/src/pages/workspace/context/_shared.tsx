@@ -5,7 +5,7 @@ export function SectionLabel({ children }: { children: ReactNode }) {
     <div
       className="mono uppercase"
       style={{
-        fontSize: 9,
+        fontSize: 11,
         letterSpacing: 0.1,
         color: "var(--fg-4)",
         marginBottom: 8,
@@ -24,7 +24,7 @@ export function KV({ children }: { children: ReactNode }) {
         gridTemplateColumns: "auto 1fr",
         columnGap: 10,
         rowGap: 4,
-        fontSize: 11.5,
+        fontSize: 13.5,
       }}
     >
       {children}

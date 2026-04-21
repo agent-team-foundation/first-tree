@@ -26,7 +26,7 @@ export function SessionContext({ agentId, chatId }: { agentId: string; chatId: s
             <StateChip state={session?.runtimeState ?? session?.state ?? null} />
           </KVRow>
           <KVRow label="chat">
-            <span className="mono" style={{ fontSize: 10.5 }}>
+            <span className="mono" style={{ fontSize: 12.5 }}>
               {chatId.slice(0, 12)}
             </span>
           </KVRow>
