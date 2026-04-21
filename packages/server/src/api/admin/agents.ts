@@ -88,6 +88,36 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
     };
   });
 
+  /**
+   * Admin-only: every agent in the caller's org, skipping the visibility
+   * filter applied on the regular `/agents` list. Private agents owned by
+   * other members show up here so an admin can reassign or troubleshoot.
+   * Role gating is enforced here — the parent route group does NOT add
+   * adminOnly because the member-facing `GET /` is shared.
+   */
+  app.get("/all", async (request) => {
+    const scope = memberScope(request);
+    if (scope.role !== "admin") {
+      throw new ForbiddenError("Admin role required");
+    }
+    const query = paginationQuerySchema.parse(request.query);
+    const result = await agentService.listAgentsForAdmin(app.db, scope, query.limit, query.cursor);
+    return {
+      items: result.items.map((a) => ({
+        ...a,
+        managerId: a.managerId ?? null,
+        presenceStatus: a.presenceStatus ?? "offline",
+        createdAt: a.createdAt.toISOString(),
+        updatedAt: a.updatedAt.toISOString(),
+        clientId: a.clientId ?? null,
+        runtimeType: a.runtimeType ?? null,
+        runtimeState: a.runtimeState ?? null,
+        activeSessions: a.activeSessions ?? null,
+      })),
+      nextCursor: result.nextCursor,
+    };
+  });
+
   app.post("/", async (request, reply) => {
     const scope = memberScope(request);
     const body = createAgentSchema.parse(request.body);

@@ -136,20 +136,40 @@ export async function getMember(db: Database, id: string) {
   return { ...row, createdAt: row.createdAt.toISOString() };
 }
 
-export async function updateMember(db: Database, id: string, data: UpdateMember) {
-  if (!data.role) return getMember(db, id);
-
-  // Prevent demoting the last admin
-  if (data.role === "member") {
-    const member = await getMember(db, id);
-    if (member.role === "admin") {
-      await assertNotLastAdmin(db, member.organizationId, id);
-    }
+export async function updateMember(db: Database, id: string, data: UpdateMember, callerOrgId?: string) {
+  if (data.role === undefined && data.displayName === undefined) {
+    return getMember(db, id);
   }
 
-  const [row] = await db.update(members).set({ role: data.role }).where(eq(members.id, id)).returning();
+  const current = await getMember(db, id);
+  // A cross-org admin should never be able to mutate a member in another
+  // tenant. The route layer supplies its own org id; without a match we
+  // 404 to avoid leaking that the member exists.
+  if (callerOrgId && current.organizationId !== callerOrgId) {
+    throw new NotFoundError(`Member "${id}" not found`);
+  }
 
-  if (!row) throw new NotFoundError(`Member "${id}" not found`);
+  // Prevent demoting the last admin — if the caller is turning the final
+  // admin into a member, the org would be locked out of admin operations.
+  if (data.role === "member" && current.role === "admin") {
+    await assertNotLastAdmin(db, current.organizationId, id);
+  }
+
+  await db.transaction(async (tx) => {
+    if (data.role !== undefined && data.role !== current.role) {
+      await tx.update(members).set({ role: data.role }).where(eq(members.id, id));
+    }
+    // Member displayName is stored on the member's human agent — there is no
+    // `members.display_name` column. Write to the agent directly so the two
+    // views (member list + agent detail) don't drift. `users.display_name`
+    // is treated as the authoritative field the `listMembers` join reads
+    // from, so update it too.
+    if (data.displayName !== undefined && data.displayName !== current.displayName) {
+      await tx.update(users).set({ displayName: data.displayName }).where(eq(users.id, current.userId));
+      await tx.update(agents).set({ displayName: data.displayName }).where(eq(agents.uuid, current.agentId));
+    }
+  });
+
   return getMember(db, id);
 }
 

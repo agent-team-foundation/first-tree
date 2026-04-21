@@ -1,8 +1,9 @@
-import type { Agent, UpdateAgent } from "@agent-team-foundation/first-tree-hub-shared";
+import { AGENT_VISIBILITY, type Agent, type UpdateAgent } from "@agent-team-foundation/first-tree-hub-shared";
 import { useQuery } from "@tanstack/react-query";
 import { Pencil } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import { listAgents } from "../../api/agents.js";
+import { useAuth } from "../../auth/auth-context.js";
 import { Badge } from "../../components/ui/badge.js";
 import { Button } from "../../components/ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
@@ -72,6 +73,10 @@ export function IdentitySection({ agent, onSave }: IdentitySectionProps) {
           <span>
             type <Badge variant="secondary">{agent.type}</Badge>
           </span>
+          <span>
+            visibility{" "}
+            <Badge variant={agent.visibility === "organization" ? "default" : "outline"}>{agent.visibility}</Badge>
+          </span>
           {domains.length > 0 && (
             <span>
               domains{" "}
@@ -100,8 +105,10 @@ type IdentityDialogProps = {
 };
 
 function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialogProps) {
+  const { memberId, role } = useAuth();
   const [displayName, setDisplayName] = useState(agent.displayName ?? "");
   const [delegateMention, setDelegateMention] = useState(agent.delegateMention ?? "");
+  const [visibility, setVisibility] = useState(agent.visibility);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -109,11 +116,16 @@ function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialo
     if (open) {
       setDisplayName(agent.displayName ?? "");
       setDelegateMention(agent.delegateMention ?? "");
+      setVisibility(agent.visibility);
       setError(null);
     }
   }, [open, agent]);
 
   const isHuman = agent.type === "human";
+  // Only the agent's manager or an admin can change visibility. The backend
+  // enforces this via assertCanManage; this mirrors that on the UI so the
+  // field is disabled when the caller can't persist the change anyway.
+  const canChangeVisibility = role === "admin" || agent.managerId === memberId;
   const assistantsQuery = useQuery({
     queryKey: ["agents-for-delegate"],
     queryFn: async () => {
@@ -128,10 +140,14 @@ function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialo
     setError(null);
     setSaving(true);
     try {
-      await onSave({
+      const patch: UpdateAgent = {
         displayName: displayName || null,
         delegateMention: delegateMention || null,
-      });
+      };
+      if (visibility !== agent.visibility) {
+        patch.visibility = visibility;
+      }
+      await onSave(patch);
       onOpenChange(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -161,6 +177,24 @@ function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialo
               placeholder="How teammates see this agent"
               maxLength={200}
             />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="id-visibility">Visibility</Label>
+            <select
+              id="id-visibility"
+              value={visibility}
+              onChange={(e) => setVisibility(e.target.value as typeof visibility)}
+              disabled={!canChangeVisibility}
+              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <option value={AGENT_VISIBILITY.PRIVATE}>Private — only the manager</option>
+              <option value={AGENT_VISIBILITY.ORGANIZATION}>Organization — all members</option>
+            </select>
+            <p className="text-xs text-muted-foreground">
+              {canChangeVisibility
+                ? "Private agents are only visible to their manager; organization agents appear in every member's list."
+                : "Only the manager or an admin can change this agent's visibility."}
+            </p>
           </div>
           {isHuman && (
             <div className="space-y-2">

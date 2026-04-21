@@ -11,9 +11,10 @@ const navTabs = [
   { to: "/", label: "Workspace", end: true, kbd: "⌘1" },
   { to: "/agents", label: "Agents", end: false, kbd: "⌘2" },
   { to: "/clients", label: "Computers", end: false, kbd: "⌘3" },
+  { to: "/settings", label: "Settings", end: false, kbd: "⌘4" },
 ];
 
-const adminTab = { to: "/admin", label: "Admin", end: false, kbd: "⌘4" };
+const adminTab = { to: "/admin", label: "Admin", end: false, kbd: "⌘5" };
 
 export function Layout() {
   const { role, logout } = useAuth();

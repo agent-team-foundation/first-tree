@@ -201,10 +201,14 @@ export async function buildApp(config: Config) {
         { prefix: "/admin/overview" },
       );
 
+      // Adapter bindings are scoped by role inside the handlers:
+      //   - admin: all configs/mappings in the org
+      //   - non-admin: only those bound to agents they manage
+      // That lets the shared /settings page surface each user's own
+      // bindings without an admin flag gating the entire route.
       await api.register(
         async (adminApp) => {
           adminApp.addHook("onRequest", memberAuth);
-          adminApp.addHook("onRequest", adminOnly);
           await adminApp.register(adminAdapterRoutes);
         },
         { prefix: "/admin/adapters" },
@@ -213,7 +217,6 @@ export async function buildApp(config: Config) {
       await api.register(
         async (adminApp) => {
           adminApp.addHook("onRequest", memberAuth);
-          adminApp.addHook("onRequest", adminOnly);
           await adminApp.register(adminAdapterMappingRoutes);
         },
         { prefix: "/admin/adapter-mappings" },
@@ -222,7 +225,6 @@ export async function buildApp(config: Config) {
       await api.register(
         async (adminApp) => {
           adminApp.addHook("onRequest", memberAuth);
-          adminApp.addHook("onRequest", adminOnly);
           await adminApp.register(adminAdapterStatusRoutes);
         },
         { prefix: "/admin/adapters/status" },

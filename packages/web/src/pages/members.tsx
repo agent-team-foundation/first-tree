@@ -1,8 +1,8 @@
 import { MEMBER_ROLES } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Copy, Plus, Trash2 } from "lucide-react";
-import { type FormEvent, useState } from "react";
-import { createMember, deleteMember, listMembers } from "../api/members.js";
+import { Copy, Pencil, Plus, Trash2 } from "lucide-react";
+import { type FormEvent, useEffect, useState } from "react";
+import { createMember, deleteMember, listMembers, updateMember } from "../api/members.js";
 import { Badge } from "../components/ui/badge.js";
 import { Button } from "../components/ui/button.js";
 import {
@@ -20,11 +20,19 @@ import { formatDate } from "../lib/utils.js";
 
 const roleValues = Object.values(MEMBER_ROLES);
 
+type MemberRow = {
+  id: string;
+  username: string;
+  displayName: string;
+  role: string;
+};
+
 export function MembersPage() {
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState({ username: "", displayName: "", role: "member" });
   const [createdPassword, setCreatedPassword] = useState<string | null>(null);
+  const [editTarget, setEditTarget] = useState<MemberRow | null>(null);
 
   const {
     data: members,
@@ -155,6 +163,15 @@ export function MembersPage() {
         </Dialog>
       </div>
 
+      <EditMemberDialog
+        target={editTarget}
+        onClose={() => setEditTarget(null)}
+        onSaved={() => {
+          setEditTarget(null);
+          queryClient.invalidateQueries({ queryKey: ["members"] });
+        }}
+      />
+
       <div className="border rounded-lg">
         <Table>
           <TableHeader>
@@ -195,15 +212,32 @@ export function MembersPage() {
                   </TableCell>
                   <TableCell className="text-muted-foreground">{formatDate(m.createdAt)}</TableCell>
                   <TableCell>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => handleDelete(m.id)}
-                      disabled={deleteMut.isPending}
-                      title="Delete"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                    <div className="flex items-center gap-1 justify-end">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() =>
+                          setEditTarget({
+                            id: m.id,
+                            username: m.username,
+                            displayName: m.displayName,
+                            role: m.role,
+                          })
+                        }
+                        title="Edit"
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => handleDelete(m.id)}
+                        disabled={deleteMut.isPending}
+                        title="Delete"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))
@@ -212,5 +246,112 @@ export function MembersPage() {
         </Table>
       </div>
     </div>
+  );
+}
+
+function EditMemberDialog({
+  target,
+  onClose,
+  onSaved,
+}: {
+  target: MemberRow | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [displayName, setDisplayName] = useState("");
+  const [role, setRole] = useState<string>("member");
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (target) {
+      setDisplayName(target.displayName);
+      setRole(target.role);
+      setError(null);
+    }
+  }, [target]);
+
+  const saveMut = useMutation({
+    mutationFn: async () => {
+      if (!target) throw new Error("No target");
+      const patch: { displayName?: string; role?: "admin" | "member" } = {};
+      if (displayName.trim() && displayName !== target.displayName) {
+        patch.displayName = displayName.trim();
+      }
+      if (role !== target.role) {
+        patch.role = role as "admin" | "member";
+      }
+      if (Object.keys(patch).length === 0) return target;
+      return updateMember(target.id, patch);
+    },
+    onSuccess: () => {
+      setError(null);
+      onSaved();
+    },
+    onError: (err) => {
+      setError(err instanceof Error ? err.message : String(err));
+    },
+  });
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    saveMut.mutate();
+  }
+
+  const open = target !== null;
+
+  return (
+    <Dialog open={open} onOpenChange={(next) => (next ? undefined : onClose())}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Edit Member</DialogTitle>
+        </DialogHeader>
+        {target && (
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="space-y-2">
+              <Label>Username</Label>
+              <Input value={target.username} disabled className="font-mono" />
+              <p className="text-xs text-muted-foreground">Username is permanent after creation.</p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-member-display">Display Name</Label>
+              <Input
+                id="edit-member-display"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                required
+                maxLength={200}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-member-role">Role</Label>
+              <select
+                id="edit-member-role"
+                value={role}
+                onChange={(e) => setRole(e.target.value)}
+                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                {roleValues.map((r) => (
+                  <option key={r} value={r}>
+                    {r}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-muted-foreground">
+                Demoting the last admin is blocked — every org needs at least one admin to manage members.
+              </p>
+            </div>
+            {error && <p className="text-sm text-destructive">{error}</p>}
+            <DialogFooter>
+              <Button type="button" variant="ghost" onClick={onClose} disabled={saveMut.isPending}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={saveMut.isPending}>
+                {saveMut.isPending ? "Saving…" : "Save"}
+              </Button>
+            </DialogFooter>
+          </form>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }

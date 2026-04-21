@@ -9,6 +9,7 @@ import { AgentDetailPage } from "./pages/agent-detail.js";
 import { AgentsPage } from "./pages/agents.js";
 import { ClientsPage } from "./pages/clients.js";
 import { LoginPage } from "./pages/login.js";
+import { SettingsPage } from "./pages/settings.js";
 import { WorkspacePage } from "./pages/workspace/index.js";
 
 const queryClient = new QueryClient({
@@ -39,6 +40,7 @@ export function App() {
                 <Route path="agents" element={<AgentsPage />} />
                 <Route path="agents/:uuid" element={<AgentDetailPage />} />
                 <Route path="clients" element={<ClientsPage />} />
+                <Route path="settings" element={<SettingsPage />} />
                 <Route path="admin" element={<AdminPage />} />
               </Route>
             </Route>

@@ -33,12 +33,9 @@ export function BindingsPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Platform Bindings</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          Overview of all platform bindings. Manage bindings from each Agent's detail page.
-        </p>
-      </div>
+      <p className="text-sm text-muted-foreground">
+        Overview of platform bindings for agents you can manage. Configure each binding from the Agent detail page.
+      </p>
 
       {/* Bot Bindings (non-human agents) */}
       <Card>

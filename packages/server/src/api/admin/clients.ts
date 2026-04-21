@@ -6,13 +6,21 @@ import { forceDisconnectClient } from "../../services/connection-manager.js";
 import { serializeDate } from "../../utils.js";
 
 export async function adminClientRoutes(app: FastifyInstance): Promise<void> {
-  // GET /clients — clients owned by the caller. Every `clients.user_id`
-  // is the authoritative owner (Rule R-RUN); routes are scoped to that user
-  // so a cross-org or cross-user caller can't see or touch clients that
-  // aren't theirs.
+  // GET /clients — clients visible to the caller.
+  //
+  //   - member: only their own (`clients.user_id == scope.userId`). The
+  //     `assertClientOwner` check on per-id routes continues to enforce
+  //     the write path.
+  //   - admin: every client belonging to a member of the caller's org
+  //     plus any legacy unclaimed (user_id NULL) rows. The `/clients` UI
+  //     surfaces the owner so admins can tell whose machine is whose.
   app.get("/", async (request) => {
     const scope = memberScope(request);
-    const clients = await clientService.listClients(app.db, scope.userId);
+    const clients = await clientService.listClients(app.db, {
+      userId: scope.userId,
+      organizationId: scope.organizationId,
+      role: scope.role,
+    });
     return clients.map((c) => ({
       id: c.id,
       userId: c.userId,
@@ -29,7 +37,7 @@ export async function adminClientRoutes(app: FastifyInstance): Promise<void> {
   // GET /clients/:clientId — single client, owner-scoped.
   app.get<{ Params: { clientId: string } }>("/:clientId", async (request) => {
     const scope = memberScope(request);
-    await clientService.assertClientOwner(app.db, request.params.clientId, scope.userId);
+    await clientService.assertClientOwner(app.db, request.params.clientId, scope);
     const client = await clientService.getClient(app.db, request.params.clientId);
     // assertClientOwner already 404'd on missing/not-yours; the row is present.
     if (!client) throw new Error("unreachable: client missing after owner check");
@@ -49,7 +57,7 @@ export async function adminClientRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { clientId: string } }>("/:clientId/disconnect", async (request) => {
     const scope = memberScope(request);
     const { clientId } = request.params;
-    await clientService.assertClientOwner(app.db, clientId, scope.userId);
+    await clientService.assertClientOwner(app.db, clientId, scope);
 
     const agentIds = forceDisconnectClient(clientId);
     await clientService.disconnectClient(app.db, clientId);
@@ -63,7 +71,7 @@ export async function adminClientRoutes(app: FastifyInstance): Promise<void> {
   app.delete<{ Params: { clientId: string } }>("/:clientId", async (request, reply) => {
     const scope = memberScope(request);
     const { clientId } = request.params;
-    await clientService.assertClientOwner(app.db, clientId, scope.userId);
+    await clientService.assertClientOwner(app.db, clientId, scope);
 
     // retireClient verifies no non-deleted agents are pinned before deleting
     // the clients row; a refused retire throws 409 BEFORE we disconnect, so a

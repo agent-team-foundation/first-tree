@@ -318,6 +318,55 @@ export async function listAgents(db: Database, orgId: string, limit: number, cur
 }
 
 /**
+ * Admin-only variant: return every non-deleted agent in the org, ignoring
+ * the visibility filter. Used by the `/admin` "All Agents" view so a team
+ * admin can see and act on private agents owned by other members. The
+ * route layer is responsible for gating this to admin callers — the
+ * service does not enforce role by itself, but it does enforce org scope
+ * and the not-deleted predicate.
+ */
+export async function listAgentsForAdmin(db: Database, scope: MemberScope, limit: number, cursor?: string) {
+  const conditions = [eq(agents.organizationId, scope.organizationId), ne(agents.status, AGENT_STATUSES.DELETED)];
+  if (cursor) conditions.push(lt(agents.createdAt, new Date(cursor)));
+  const where = and(...conditions);
+
+  const rows = await db
+    .select({
+      uuid: agents.uuid,
+      name: agents.name,
+      organizationId: agents.organizationId,
+      type: agents.type,
+      displayName: agents.displayName,
+      delegateMention: agents.delegateMention,
+      inboxId: agents.inboxId,
+      status: agents.status,
+      cloudUserId: agents.cloudUserId,
+      visibility: agents.visibility,
+      metadata: agents.metadata,
+      managerId: agents.managerId,
+      clientId: agents.clientId,
+      createdAt: agents.createdAt,
+      updatedAt: agents.updatedAt,
+      presenceStatus: agentPresence.status,
+      runtimeType: agentPresence.runtimeType,
+      runtimeState: agentPresence.runtimeState,
+      activeSessions: agentPresence.activeSessions,
+    })
+    .from(agents)
+    .leftJoin(agentPresence, eq(agents.uuid, agentPresence.agentId))
+    .where(where)
+    .orderBy(desc(agents.createdAt))
+    .limit(limit + 1);
+
+  const hasMore = rows.length > limit;
+  const items = hasMore ? rows.slice(0, limit) : rows;
+  const last = items[items.length - 1];
+  const nextCursor = hasMore && last ? last.createdAt.toISOString() : null;
+
+  return { items, nextCursor };
+}
+
+/**
  * List agents visible to a specific member.
  * Uses agentVisibilityCondition from access-control (same rules for all roles).
  */
