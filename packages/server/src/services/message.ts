@@ -7,6 +7,7 @@ import { chatParticipants, chats } from "../db/schema/chats.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
 import { ForbiddenError, NotFoundError } from "../errors.js";
+import { messageAttrs, withSpan } from "../observability/index.js";
 import { findOrCreateDirectChat } from "./chat.js";
 
 export type SendMessageResult = {
@@ -16,6 +17,19 @@ export type SendMessageResult = {
 };
 
 export async function sendMessage(
+  db: Database,
+  chatId: string,
+  senderId: string,
+  data: SendMessage,
+): Promise<SendMessageResult> {
+  return withSpan(
+    "inbox.enqueue",
+    messageAttrs({ chatId, senderAgentId: senderId, source: data.source ?? undefined }),
+    () => sendMessageInner(db, chatId, senderId, data),
+  );
+}
+
+async function sendMessageInner(
   db: Database,
   chatId: string,
   senderId: string,

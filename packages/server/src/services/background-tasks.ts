@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { createLogger } from "../observability/index.js";
 import * as activityService from "./activity.js";
 import type { AdapterManager } from "./adapter-manager.js";
 import * as clientService from "./client.js";
@@ -7,6 +8,8 @@ import type { KaelRuntime } from "./kael-runtime.js";
 import * as notificationService from "./notification.js";
 import * as presenceService from "./presence.js";
 import * as systemConfigService from "./system-config.js";
+
+const log = createLogger("BackgroundTasks");
 
 export type BackgroundTasks = {
   start(): void;
@@ -35,7 +38,7 @@ export function createBackgroundTasks(
           const maxRetries = (configs.max_retry_count as number) ?? 3;
           await inboxService.resetTimedOutEntries(app.db, timeoutSeconds, maxRetries);
         } catch (err) {
-          app.log.error(err, "Failed to reset timed-out inbox entries");
+          log.error({ err }, "failed to reset timed-out inbox entries");
         }
       }, 60_000);
 
@@ -50,7 +53,7 @@ export function createBackgroundTasks(
           // M1: per-agent heartbeat staleness detection
           const staleAgents = await presenceService.markStaleAgents(app.db, staleSeconds);
           if (staleAgents.length > 0) {
-            app.log.info(`Marked ${staleAgents.length} agent(s) as stale: ${staleAgents.join(", ")}`);
+            log.info({ count: staleAgents.length, agentIds: staleAgents }, "marked agents as stale");
             // M1: Create notifications for stale agents
             for (const agentId of staleAgents) {
               notificationService
@@ -59,7 +62,7 @@ export function createBackgroundTasks(
             }
           }
         } catch (err) {
-          app.log.error(err, "Failed to heartbeat / cleanup presence");
+          log.error({ err }, "failed to heartbeat / cleanup presence");
         }
       }, 30_000);
 
@@ -68,7 +71,7 @@ export function createBackgroundTasks(
         try {
           await adapterManager.processOutbound();
         } catch (err) {
-          app.log.error(err, "Adapter outbound processing failed");
+          log.error({ err }, "adapter outbound processing failed");
         }
       }, 5_000);
 
@@ -78,7 +81,7 @@ export function createBackgroundTasks(
           try {
             await kaelRuntime.processOutbound();
           } catch (err) {
-            app.log.error(err, "Kael outbound processing failed");
+            log.error({ err }, "kael outbound processing failed");
           }
         }, 5_000);
       }
@@ -88,16 +91,16 @@ export function createBackgroundTasks(
         try {
           const deleted = await activityService.cleanupStaleSessions(app.db);
           if (deleted > 0) {
-            app.log.info(`Cleaned up ${deleted} stale session(s)`);
+            log.info({ count: deleted }, "cleaned up stale sessions");
           }
         } catch (err) {
-          app.log.error(err, "Failed to clean up stale sessions");
+          log.error({ err }, "failed to clean up stale sessions");
         }
       }, 3_600_000);
 
       // Initial heartbeat
       presenceService.heartbeatInstance(app.db, instanceId).catch((err) => {
-        app.log.error(err, "Failed initial heartbeat");
+        log.error({ err }, "failed initial heartbeat");
       });
     },
 

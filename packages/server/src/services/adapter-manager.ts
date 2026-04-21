@@ -6,6 +6,7 @@ import { adapterConfigs } from "../db/schema/adapter-configs.js";
 import { agents } from "../db/schema/agents.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
+import { adapterAttrs, withSpan } from "../observability/index.js";
 import * as mappingService from "./adapter-mapping.js";
 import { decryptCredentials } from "./crypto.js";
 import type { FeishuBotCredentials, InboundEvent } from "./feishu/types.js";
@@ -122,7 +123,15 @@ export function createAdapterManager(
       if (!bot) return;
 
       try {
-        await processInboundMessage(db, event, bot, log, notifier);
+        await withSpan(
+          "adapter.inbound feishu",
+          adapterAttrs({
+            platform: "feishu",
+            externalChatId: event.externalChannelId,
+            agentId: bot.agentId,
+          }),
+          () => processInboundMessage(db, event, bot, log, notifier),
+        );
         bot.lastActiveAt = new Date();
       } catch (err) {
         // Unclaim the event so it can be retried on next delivery
@@ -221,12 +230,14 @@ export function createAdapterManager(
     async processOutbound() {
       if (bots.size === 0) return { sent: 0, errors: 0 };
 
-      try {
-        return await processFeishuOutbound(db, findBotByAgentId, log);
-      } catch (err) {
-        log.error({ err }, "Feishu outbound processing error");
-        return { sent: 0, errors: 1 };
-      }
+      return withSpan("adapter.outbound feishu", adapterAttrs({ platform: "feishu" }), async () => {
+        try {
+          return await processFeishuOutbound(db, findBotByAgentId, log);
+        } catch (err) {
+          log.error({ err }, "Feishu outbound processing error");
+          return { sent: 0, errors: 1 };
+        }
+      });
     },
 
     async editOutboundMessage(messageId: string, format: string, content: unknown): Promise<boolean> {

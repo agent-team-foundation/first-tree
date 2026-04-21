@@ -258,6 +258,17 @@ Resolution order for the agent token:
 | `FEISHU_APP_ID` | Feishu bot App ID alternative to `--feishu-bot-app-id` |
 | `FEISHU_APP_SECRET` | Feishu bot App Secret alternative to `--feishu-bot-app-secret` |
 
+### Observability (server)
+
+| Variable | Purpose | Default |
+|---------|------|--------|
+| `FIRST_TREE_HUB_LOG_LEVEL` | Log level (`trace`/`debug`/`info`/`warn`/`error`/`fatal`) | `info` |
+| `FIRST_TREE_HUB_OTEL_ENDPOINT` | OTLP/HTTP traces endpoint. Non-empty value enables tracing | `""` (disabled) |
+| `FIRST_TREE_HUB_OTEL_HEADERS` | OTLP headers in `key1=val1,key2=val2` format (secret — typically holds the write token) | `""` |
+| `FIRST_TREE_HUB_OTEL_ENVIRONMENT` | Deployment environment label (`development` / `staging` / `production` / …) — emitted as `deployment.environment.name` | `development` |
+
+See [observability.md](observability.md) for the full config reference, backend cheat sheet, and troubleshooting recipes.
+
 ## Directory Structure
 
 ```

@@ -100,15 +100,25 @@ export async function startServer(options: StartOptions): Promise<void> {
     ...serverConfig,
     webDistPath: webDistPath ?? undefined,
     instanceId: `srv_${randomUUID().slice(0, 8)}`,
-    logger: true,
   };
+
+  // Initialize telemetry from resolved config before server bootstrap, so that
+  // spans emitted during migrations / hot-reload are captured. instanceId is
+  // passed as service.instance.id so replicas of the same service are
+  // distinguishable in the trace backend.
+  const { initTelemetry, shutdownTelemetry } = await import("@first-tree-hub/server/observability");
+  await initTelemetry(serverConfig.observability.tracing, config.instanceId);
 
   const app = await buildApp(config);
 
   // Graceful shutdown
   const shutdown = async () => {
     process.stderr.write("\n  Shutting down...\n");
-    await app.close();
+    try {
+      await app.close();
+    } finally {
+      await shutdownTelemetry();
+    }
     process.exit(0);
   };
   process.on("SIGINT", () => void shutdown());

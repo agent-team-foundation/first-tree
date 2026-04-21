@@ -1,8 +1,11 @@
 import { createAdapterConfigSchema, updateAdapterConfigSchema } from "@agent-team-foundation/first-tree-hub-shared";
 import type { FastifyInstance } from "fastify";
 import { BadRequestError } from "../../errors.js";
+import { createLogger } from "../../observability/index.js";
 import { assertCanManage, memberScope } from "../../services/access-control.js";
 import * as adapterService from "../../services/adapter.js";
+
+const log = createLogger("AdminAdapters");
 
 function parseId(raw: string): number {
   const id = Number(raw);
@@ -28,7 +31,7 @@ export async function adminAdapterRoutes(app: FastifyInstance): Promise<void> {
     await assertCanManage(app.db, scope, body.agentId);
     const config = await adapterService.createAdapterConfig(app.db, body, app.config.secrets.encryptionKey);
     // Fire-and-forget: reload local instance + notify others via PG NOTIFY
-    app.adapterManager.reload().catch((err) => app.log.error(err, "Adapter reload failed after create"));
+    app.adapterManager.reload().catch((err) => log.error({ err }, "adapter reload failed after create"));
     app.notifier.notifyConfigChange("adapter_configs").catch(() => {});
     return reply.status(201).send({
       ...config,
@@ -54,7 +57,7 @@ export async function adminAdapterRoutes(app: FastifyInstance): Promise<void> {
     const existing = await adapterService.getAdapterConfig(app.db, id);
     await assertCanManage(app.db, scope, existing.agentId);
     const config = await adapterService.updateAdapterConfig(app.db, id, body, app.config.secrets.encryptionKey);
-    app.adapterManager.reload().catch((err) => app.log.error(err, "Adapter reload failed after update"));
+    app.adapterManager.reload().catch((err) => log.error({ err }, "adapter reload failed after update"));
     app.notifier.notifyConfigChange("adapter_configs").catch(() => {});
     return {
       ...config,
@@ -69,7 +72,7 @@ export async function adminAdapterRoutes(app: FastifyInstance): Promise<void> {
     const existing = await adapterService.getAdapterConfig(app.db, id);
     await assertCanManage(app.db, scope, existing.agentId);
     await adapterService.deleteAdapterConfig(app.db, id);
-    app.adapterManager.reload().catch((err) => app.log.error(err, "Adapter reload failed after delete"));
+    app.adapterManager.reload().catch((err) => log.error({ err }, "adapter reload failed after delete"));
     app.notifier.notifyConfigChange("adapter_configs").catch(() => {});
     return reply.status(204).send();
   });
