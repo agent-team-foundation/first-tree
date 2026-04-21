@@ -188,7 +188,6 @@ continue to work cleanly for multi-repo workspaces.
 | `first-tree tree bind` | Bind the current repo/workspace root to an existing tree repo |
 | `first-tree tree workspace sync` | Bind discovered child repos to the same shared tree |
 | `first-tree tree publish` | Publish a dedicated tree repo or shared tree repo to GitHub and refresh locally bound source/workspace repos |
-| `first-tree tree sync` | Detect drift between a tree repo and its bound source repos; supports `--propose` and `--apply` |
 | `first-tree tree verify` | Run verification checks against a tree repo |
 | `first-tree tree upgrade` | Refresh installed source/workspace integration or tree metadata from the current package |
 | `first-tree tree generate-codeowners` | Generate `.github/CODEOWNERS` from tree ownership frontmatter |
@@ -197,6 +196,10 @@ continue to work cleanly for multi-repo workspaces.
 | `first-tree tree join` | Accept an invite and join a Context Tree |
 | `first-tree tree inject-context` | Output a Claude Code SessionStart hook payload from the root `NODE.md` |
 | `first-tree tree help onboarding` | Print the full onboarding guide |
+| `first-tree gardener sync` | Detect drift between a tree repo and its bound source repos; supports `--propose` and `--apply`. Moved from `first-tree tree sync`. |
+| `first-tree gardener comment` | Review a source-repo PR or issue against the tree and post a structured verdict comment; scan mode sweeps every configured `target_repo` |
+| `first-tree gardener respond` | Fix a tree-repo sync PR based on reviewer feedback |
+| `first-tree gardener install-workflow` | Scaffold the push-mode GitHub Actions workflow in a codebase repo |
 | `first-tree skill install` | Install the four shipped skills under `.agents/skills/*` and `.claude/skills/*` |
 | `first-tree skill upgrade` | Wipe and reinstall the four shipped skills from the current package |
 | `first-tree skill list` | Print the four shipped skills with their installed status and version |

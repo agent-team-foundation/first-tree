@@ -1,4 +1,4 @@
-Stop all first-tree sync automation for this tree repo.
+Stop all gardener sync automation for this tree repo.
 
 ## 1. Stop local loop
 
@@ -20,7 +20,7 @@ later with `/first-tree-sync-start`.
 ## 3. Confirm
 
 Output:
-"🌳 first-tree sync stopped.
+"🌳 gardener sync stopped.
 - Local loop: stopped
 - Cloud schedule: disabled (not deleted)
 - Restart anytime: `/first-tree-sync-start`"

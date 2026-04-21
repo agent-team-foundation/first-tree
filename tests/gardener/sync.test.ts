@@ -7,7 +7,7 @@ import {
   runSync,
   runSyncCli,
   scanTreeNodes,
-} from "#products/tree/engine/sync.js";
+} from "#products/gardener/engine/sync.js";
 import type {
   ShellResult,
   ShellRun,

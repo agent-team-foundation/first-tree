@@ -57,7 +57,6 @@ During `bind` / `init`, the CLI also ensures the tree repo has the bundled
 | `first-tree tree verify` | Validate a tree repo: frontmatter, owners, soft_links, members, progress |
 | `first-tree tree upgrade` | Refresh the installed skill payloads or tree metadata from the bundled package |
 | `first-tree tree publish` | Publish a tree repo to GitHub and refresh locally bound source/workspace repos |
-| `first-tree tree sync` | Detect drift between a tree repo and its bound source repos; supports `--propose` and `--apply` |
 | `first-tree tree review` | CI helper: run Claude Code PR review against tree changes |
 | `first-tree tree generate-codeowners` | Regenerate `.github/CODEOWNERS` from tree ownership |
 | `first-tree tree invite` | Invite a new member to the Context Tree (human, personal_assistant, or autonomous_agent) |
@@ -103,5 +102,7 @@ Ownership model and node-naming rules: see the
 - `first-tree` — entry-point skill: methodology, references, and routing
   between product skills. Load this first.
 - `breeze` — load if the task involves the breeze daemon or notifications.
-- `gardener` — load if the task involves automated responses to tree sync
-  PR feedback.
+- `gardener` — load if the task involves any tree-maintenance runtime:
+  drift sync (`gardener sync`), verdict comments on source-repo PRs
+  (`gardener comment`), or responses to sync-PR review feedback
+  (`gardener respond`).

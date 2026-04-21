@@ -22,7 +22,6 @@ Commands:
   publish               Publish a tree repo to GitHub
   verify                Run verification checks against a tree repo
   upgrade               Refresh source/workspace integration or tree metadata
-  sync                  Detect drift between a tree repo and its bound sources
   review                Run Claude Code PR review (CI helper)
   generate-codeowners   Generate .github/CODEOWNERS from tree ownership
   invite                Invite a new member to the Context Tree
@@ -122,10 +121,22 @@ export async function runTree(
       return runUpgrade(args.slice(1));
     }
     case "sync": {
-      const { runSync } = await import(
-        "#products/tree/engine/commands/sync.js"
+      write(
+        "❌ `first-tree tree sync` has moved to `first-tree gardener sync`.",
       );
-      return runSync(args.slice(1));
+      write(
+        "   The drift-detection command now lives under the gardener product",
+      );
+      write(
+        "   alongside `gardener comment` and `gardener respond`. Run",
+      );
+      write(
+        "   `first-tree gardener sync --help` for usage. Slash commands",
+      );
+      write(
+        "   (/first-tree-sync, /first-tree-sync-loop, …) are unchanged.",
+      );
+      return 1;
     }
     case "review": {
       const { runReview } = await import(

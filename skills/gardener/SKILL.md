@@ -47,7 +47,7 @@ idempotent and guarded against acting on its own prior comments.
 ## Core Concepts
 
 - **Sync PR** — a PR opened against a tree repo by automation (commonly
-  by `first-tree tree sync`) to propagate a decision; gardener's
+  by `first-tree gardener sync`) to propagate a decision; gardener's
   `respond` subcommand fixes these based on reviewer feedback.
 - **Source-repo PR/issue** — a PR or issue opened on an application repo
   that gardener's `comment` subcommand evaluates against the bound
@@ -70,6 +70,7 @@ idempotent and guarded against acting on its own prior comments.
 
 | Command | Purpose |
 |---|---|
+| `first-tree gardener sync` | Detect drift between the tree and its bound source repos. Writes proposals under `.first-tree/proposals/`, edits tree files, commits to a new branch in the tree repo, and opens a PR labeled `first-tree:sync`. Phases: `--propose` detects + writes proposals, `--apply` also writes new tree files and opens the PR, default is detect-only. Moved from `first-tree tree sync`. |
 | `first-tree gardener comment` | Review a source-repo PR or issue against the tree and post a structured verdict comment. Scan mode (no `--pr`/`--issue`) walks every **open** PR and issue. The merge→tree-issue branch only fires on a single MERGED PR with a prior gardener marker (single-item invocation), and requires `TREE_REPO_TOKEN`. Pass `--assign-owners` to auto-assign NODE owners on the tree issue. |
 | `first-tree gardener respond` | Acknowledge reviewer feedback on a sync PR (Phase 5: real edit orchestrator for `parent_subdomain_missing` + planner seam — see [#160](https://github.com/agent-team-foundation/first-tree/issues/160) / [#219](https://github.com/agent-team-foundation/first-tree/issues/219); unsupported patterns fall back to a placeholder reply). |
 | `first-tree gardener install-workflow` | Scaffold `.github/workflows/first-tree-sync.yml` in the caller's codebase repo so per-PR events drive the sync flow — the push-mode entry point. |

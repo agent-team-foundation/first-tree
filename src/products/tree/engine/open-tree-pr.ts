@@ -57,7 +57,7 @@ export async function openTreePr(
     for (const label of labels) {
       await shellRun(
         "gh",
-        ["label", "create", label, "--color", "2ea44f", "--description", `Created by first-tree sync`, "--force"],
+        ["label", "create", label, "--color", "2ea44f", "--description", `Created by gardener sync`, "--force"],
         { cwd: treeRoot },
       );
     }

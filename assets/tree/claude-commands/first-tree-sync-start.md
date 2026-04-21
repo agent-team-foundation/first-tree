@@ -1,6 +1,6 @@
-Start first-tree sync automation for this tree repo.
+Start gardener sync automation for this tree repo.
 
-first-tree sync detects when bound source repos have drifted from the
+gardener sync detects when bound source repos have drifted from the
 tree and opens PRs to update it. It also runs repo-gardener to review
 those PRs for context fit.
 
@@ -9,7 +9,7 @@ those PRs for context fit.
 Check that `.claude/commands/first-tree-sync.md` exists locally.
 
 - If missing → output:
-  "❌ first-tree sync is not installed. Run `first-tree tree upgrade` to
+  "❌ gardener sync is not installed. Run `first-tree tree upgrade` to
   install the sync runbook, then retry."
   STOP.
 
@@ -141,7 +141,7 @@ Start: `/loop 10m /first-tree-sync-loop`
 ## 9. Confirm
 
 Output:
-"🌳 first-tree sync is running.
+"🌳 gardener sync is running.
 - Tree repo: `<this repo>`
 - Bound sources: <list of sourceId → remoteUrl>
 - Cloud schedule: <every hour | SKIPPED>

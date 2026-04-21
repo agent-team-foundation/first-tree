@@ -59,7 +59,7 @@ describe("openTreePr", () => {
     expect(labelCreate.args).toEqual([
       "label", "create", "first-tree:sync",
       "--color", "2ea44f",
-      "--description", "Created by first-tree sync",
+      "--description", "Created by gardener sync",
       "--force",
     ]);
 

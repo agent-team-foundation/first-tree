@@ -349,12 +349,12 @@ describe("skill artifacts", () => {
     expect(sourceMap).toContain("docs/build/distribution.md");
     expect(sourceMap).toContain("docs/testing/overview.md");
     expect(sourceMap).toContain("src/products/tree/engine/publish.ts");
-    expect(sourceMap).toContain("src/products/tree/engine/sync.ts");
+    expect(sourceMap).toContain("src/products/gardener/engine/sync.ts");
     expect(sourceMap).toContain("src/products/tree/engine/inspect.ts");
     expect(sourceMap).toContain("src/products/tree/engine/bind.ts");
     expect(sourceMap).toContain("src/products/tree/engine/workspace-sync.ts");
     expect(sourceMap).toContain("tests/tree/publish.test.ts");
-    expect(sourceMap).toContain("tests/tree/sync.test.ts");
+    expect(sourceMap).toContain("tests/gardener/sync.test.ts");
     expect(sourceMap).toContain("src/products/tree/engine/runtime/binding-state.ts");
     expect(sourceMap).toContain("src/products/tree/engine/runtime/local-tree-config.ts"); // still exists, delegates to source.json
     expect(sourceMap).toContain("src/products/tree/engine/runtime/source-repo-index.ts");
@@ -413,8 +413,9 @@ describe("skill artifacts", () => {
 
     const designSync = read("docs/design/sync.md");
     expect(designSync).toContain("first-tree-skill-cli/sync.md");
-    expect(designSync).toContain("src/products/tree/engine/sync.ts");
-    expect(designSync).toContain("tests/tree/sync.test.ts");
+    expect(designSync).toContain("src/products/gardener/engine/sync.ts");
+    expect(designSync).toContain("tests/gardener/sync.test.ts");
+    expect(designSync).toContain("first-tree gardener sync");
   });
 
   it("keeps public OSS entrypoints and package metadata in place", () => {

@@ -5,9 +5,9 @@
 maintainers.**
 
 These fixtures lock down the external-effects shape of
-`first-tree sync --apply` — the commit message, PR title, PR body,
+`gardener sync --apply` — the commit message, PR title, PR body,
 labels, branch name pattern, and order of `git`/`gh` calls. Repo-gardener
-shells out to `first-tree sync --apply` on a schedule and parses these
+shells out to `gardener sync --apply` on a schedule and parses these
 surfaces. Any drift here silently changes what repo-gardener produces
 in production.
 

@@ -1,11 +1,11 @@
 /**
  * sync.ts golden snapshot — locks the external-effects shape of
- * `first-tree sync --apply` so the Phase 3 refactor (factor out an
+ * `gardener sync --apply` so the Phase 3 refactor (factor out an
  * `openTreePr` primitive for the gardener merge→issue worker path)
  * cannot silently change what repo-gardener depends on.
  *
  * Repo-gardener (`agent-team-foundation/repo-gardener`) shells out to
- * `first-tree sync --apply` on a schedule. If the CLI changes commit
+ * `gardener sync --apply` on a schedule. If the CLI changes commit
  * messages, PR titles, PR bodies, labels, branch names, or the order
  * of git/gh calls, repo-gardener's scheduled runs would produce
  * different PRs — a silent production break.
@@ -24,7 +24,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { runSync } from "#products/tree/engine/sync.js";
+import { runSync } from "#products/gardener/engine/sync.js";
 import type {
   ShellResult,
   ShellRun,

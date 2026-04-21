@@ -5,7 +5,7 @@
 ## What this does
 
 Runs two maintenance steps in sequence:
-1. `first-tree tree sync` -- detect source drift and open tree-update PRs
+1. `first-tree gardener sync` -- detect source drift and open tree-update PRs
 2. `gardener` review -- review open PRs on the tree repo for context fit
 
 ## Step 1: Run sync

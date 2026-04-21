@@ -13,7 +13,7 @@ docs below only for source-repo implementation details.
 | `first-tree-skill-cli/thin-cli-shell.md` | Command-surface contract for the thin CLI shell |
 | `first-tree-skill-cli/build-and-distribution.md` | Packaging and release invariants |
 | `first-tree-skill-cli/validation-surface.md` | Validation philosophy and coverage expectations |
-| `first-tree-skill-cli/sync.md` | Authoritative product/architecture context for `first-tree tree sync` |
+| `first-tree-skill-cli/sync.md` | Authoritative product/architecture context for `first-tree gardener sync` |
 | `src/products/manifest.ts` | Single source of truth for the CLI namespace set: products (`tree`, `breeze`, `gardener`) plus maintenance (`skill`) |
 | `skills/first-tree/SKILL.md` | User-facing entry-point skill: methodology + routing to product skills |
 | `skills/tree/SKILL.md` | Operational handbook for the `first-tree tree` CLI |
@@ -57,7 +57,8 @@ docs below only for source-repo implementation details.
 | `src/meta/skill-tools/cli.ts` | Skill maintenance-namespace dispatcher (lazy-loaded) |
 | `src/meta/skill-tools/README.md` | Maintainer/meta overview for the skill maintenance namespace |
 | `src/products/breeze/engine/` | Breeze business logic: `commands/`, `runtime/`, `daemon/`, `bridge.ts`, `statusline.ts` |
-| `src/products/gardener/engine/` | Gardener business logic: `commands/`, `runtime/`, `comment.ts`, `respond.ts` |
+| `src/products/gardener/engine/` | Gardener business logic: `commands/`, `runtime/`, `sync.ts`, `comment.ts`, `respond.ts` |
+| `src/products/gardener/engine/sync.ts` | Drift detection, proposal generation, and apply flow (moved from tree namespace) |
 | `src/products/tree/engine/init.ts` | High-level onboarding wrapper plus low-level tree bootstrap |
 | `src/products/tree/engine/inspect.ts` | Root classification before onboarding |
 | `src/products/tree/engine/bind.ts` | Binding a source/workspace root to an existing tree |
@@ -65,7 +66,6 @@ docs below only for source-repo implementation details.
 | `src/products/tree/engine/publish.ts` | Tree publish flow and local source refresh |
 | `src/products/tree/engine/upgrade.ts` | Installed-skill / tree upgrade behavior |
 | `src/products/tree/engine/verify.ts` | Tree verification |
-| `src/products/tree/engine/sync.ts` | Drift detection, proposal generation, and apply flow |
 | `src/products/tree/engine/runtime/binding-state.ts` | `source.json`, `tree.json`, and `bindings/` schema |
 | `src/products/tree/engine/runtime/local-tree-config.ts` | Local tree config helpers (delegates to `source.json`) |
 | `src/products/tree/engine/runtime/source-repo-index.ts` | Generated `source-repos.md` index plus root tree repo guidance |
@@ -79,7 +79,8 @@ docs below only for source-repo implementation details.
 | `tests/tree/init.test.ts` | Tree bootstrap and init wrapper behavior |
 | `tests/e2e/cli-e2e.test.ts` | End-to-end CLI smoke coverage across repo, workspace, publish, and review workflows |
 | `tests/tree/publish.test.ts` | Publish orchestration |
-| `tests/tree/sync.test.ts` | Sync behavior and apply flow |
+| `tests/gardener/sync.test.ts` | Sync behavior and apply flow |
+| `tests/gardener/sync-golden-snapshot.test.ts` | Sync golden-snapshot coverage |
 | `tests/e2e/thin-cli.test.ts` | Thin CLI smoke coverage |
 | `tests/tree/skill-artifacts.test.ts` | Skill export and doc integrity |
 | `tests/tree/upgrade.test.ts` | Upgrade behavior |

@@ -242,8 +242,8 @@ examples, not a required sequence — pick what fits the task at hand.
 From the tree repo:
 
 ```bash
-first-tree tree sync                         # detect drift between source + tree
-first-tree tree sync --apply                 # open tree PRs for each drift group
+first-tree gardener sync                         # detect drift between source + tree
+first-tree gardener sync --apply                 # open tree PRs for each drift group
 ```
 
 Runs against the bound source repo, groups changes by affected tree

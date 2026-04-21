@@ -1,4 +1,4 @@
-# `first-tree tree sync`
+# `first-tree gardener sync`
 
 Authoritative decision node: `first-tree-skill-cli/sync.md` in the bound
 Context Tree.
@@ -6,13 +6,21 @@ Context Tree.
 This repo-local file is intentionally thin. It tracks only source-repo
 implementation touchpoints that do not belong in the tree.
 
+> Moved from `first-tree tree sync` so all tree-maintenance runtime
+> commands (`sync`, `comment`, `respond`) live under one product. The
+> CLI at `first-tree tree sync` now prints a migration pointer and exits
+> non-zero; slash commands (`/first-tree-sync*`) are unchanged and call
+> the new entry point internally.
+
 ## Local Implementation Touchpoints
 
-- `src/products/tree/engine/sync.ts` — core detect/propose/apply implementation
-- `src/products/tree/engine/commands/sync.ts` — CLI adapter
-- `tests/tree/sync.test.ts` — sync behavior coverage
+- `src/products/gardener/engine/sync.ts` — core detect/propose/apply implementation
+- `src/products/gardener/engine/commands/sync.ts` — CLI adapter
+- `tests/gardener/sync.test.ts` — sync behavior coverage
+- `tests/gardener/sync-golden-snapshot.test.ts` — golden-snapshot coverage
 - `assets/tree/claude-commands/first-tree-sync*.md` — installed runbooks
-  and schedule payload
+  and schedule payload (file names unchanged; internals call
+  `first-tree gardener sync`)
 
 ## Change Checklist
 
