@@ -49,6 +49,7 @@ During `bind` / `init`, the CLI also ensures the tree repo has the bundled
 | Command | Purpose |
 |---|---|
 | `first-tree tree inspect` | Classify the current folder and report bindings / child repos |
+| `first-tree tree status` | Alias for `inspect` (human-friendly name) |
 | `first-tree tree init` | High-level onboarding wrapper for single repos, shared trees, and workspace roots |
 | `first-tree tree bootstrap` | Low-level tree bootstrap for an explicit tree checkout |
 | `first-tree tree bind` | Bind the current repo/workspace root to an existing tree repo |
@@ -56,8 +57,11 @@ During `bind` / `init`, the CLI also ensures the tree repo has the bundled
 | `first-tree tree verify` | Validate a tree repo: frontmatter, owners, soft_links, members, progress |
 | `first-tree tree upgrade` | Refresh the installed skill payloads or tree metadata from the bundled package |
 | `first-tree tree publish` | Publish a tree repo to GitHub and refresh locally bound source/workspace repos |
+| `first-tree tree sync` | Detect drift between a tree repo and its bound source repos; supports `--propose` and `--apply` |
 | `first-tree tree review` | CI helper: run Claude Code PR review against tree changes |
 | `first-tree tree generate-codeowners` | Regenerate `.github/CODEOWNERS` from tree ownership |
+| `first-tree tree invite` | Invite a new member to the Context Tree (human, personal_assistant, or autonomous_agent) |
+| `first-tree tree join` | Accept an invite and join a Context Tree |
 | `first-tree tree inject-context` | Output a Claude Code SessionStart hook payload from `NODE.md` |
 | `first-tree tree help onboarding` | Show the onboarding narrative |
 

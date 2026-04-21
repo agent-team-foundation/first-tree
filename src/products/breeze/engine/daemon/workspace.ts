@@ -69,6 +69,7 @@ export class WorkspaceManager {
   private readonly workspacesDir: string;
   private readonly identity: WorkspaceIdentity;
   private readonly runGit: GitRunner;
+  private readonly repoLocks = new Map<string, Promise<void>>();
 
   constructor(options: WorkspaceManagerOptions) {
     this.reposDir = options.reposDir;
@@ -88,37 +89,39 @@ export class WorkspaceManager {
     const slug = sanitizeFilename(workspaceRepo.replace(/\//g, "__"));
     const mirrorDir = join(this.reposDir, `${slug}.git`);
     const repoUrl = `https://${this.identity.host}/${workspaceRepo}.git`;
-    await this.ensureMirror(mirrorDir, repoUrl);
-    const checkoutRef = await this.prepareRef(mirrorDir, task);
+    return this.withRepoLock(mirrorDir, async () => {
+      await this.ensureMirror(mirrorDir, repoUrl);
+      const checkoutRef = await this.prepareRef(mirrorDir, task);
 
-    const workspaceDir = join(
-      this.workspacesDir,
-      slug,
-      `${task.kind}-${task.stableId}`,
-    );
-    await this.pruneStaleWorktreeEntry(mirrorDir, workspaceDir);
-    if (existsSync(workspaceDir)) {
-      rmSync(workspaceDir, { recursive: true, force: true });
-    }
-    mkdirSync(dirname(workspaceDir), { recursive: true });
+      const workspaceDir = join(
+        this.workspacesDir,
+        slug,
+        `${task.kind}-${task.stableId}`,
+      );
+      await this.pruneStaleWorktreeEntry(mirrorDir, workspaceDir);
+      if (existsSync(workspaceDir)) {
+        rmSync(workspaceDir, { recursive: true, force: true });
+      }
+      mkdirSync(dirname(workspaceDir), { recursive: true });
 
-    await this.runChecked({
-      args: [
-        "--git-dir",
-        mirrorDir,
-        "worktree",
-        "add",
-        "--force",
-        "--detach",
-        workspaceDir,
-        checkoutRef,
-      ],
-      context: "create task workspace",
+      await this.runChecked({
+        args: [
+          "--git-dir",
+          mirrorDir,
+          "worktree",
+          "add",
+          "--force",
+          "--detach",
+          workspaceDir,
+          checkoutRef,
+        ],
+        context: "create task workspace",
+      });
+
+      await this.seedGitIdentity(workspaceDir);
+
+      return { mirrorDir, workspaceDir, repoUrl };
     });
-
-    await this.seedGitIdentity(workspaceDir);
-
-    return { mirrorDir, workspaceDir, repoUrl };
   }
 
   private async ensureMirror(
@@ -272,6 +275,34 @@ export class WorkspaceManager {
       );
     }
     return result;
+  }
+
+  private async withRepoLock<T>(
+    mirrorDir: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const previous = this.repoLocks.get(mirrorDir) ?? Promise.resolve();
+    let succeeded = false;
+    let value!: T;
+    let failure: unknown;
+
+    const current = previous.then(async () => {
+      try {
+        value = await fn();
+        succeeded = true;
+      } catch (err) {
+        failure = err;
+      }
+    });
+
+    this.repoLocks.set(mirrorDir, current);
+    await current;
+    if (this.repoLocks.get(mirrorDir) === current) {
+      this.repoLocks.delete(mirrorDir);
+    }
+
+    if (!succeeded) throw failure;
+    return value;
   }
 }
 

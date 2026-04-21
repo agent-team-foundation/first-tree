@@ -85,15 +85,6 @@ describe("acquireServiceLock", () => {
       identity: IDENTITY,
       profile: "default",
     });
-    // Simulate another live daemon by writing a different pid into lock.env.
-    // Heartbeat stays recent so staleness does not trigger reclaim.
-    const otherPid = 1; // init is always alive and not us
-    const contents = readFileSync(join(first.dir, "lock.env"), "utf-8");
-    writeFileSync(
-      join(first.dir, "lock.env"),
-      contents.replace(/^pid=\d+/m, `pid=${otherPid}`),
-      "utf-8",
-    );
 
     await expect(
       acquireServiceLock({
@@ -190,7 +181,39 @@ describe("isLockStale", () => {
     const now = Math.floor(Date.now() / 1000);
     const info = {
       pid: process.pid,
-      host: require("node:os").hostname() as string,
+      host: "github.com",
+      login: "tester",
+      profile: "default",
+      machine: require("node:os").hostname() as string,
+      heartbeat_epoch: now,
+      started_epoch: now,
+      active_tasks: 0,
+      note: "",
+    };
+    expect(isLockStale(info, now)).toBe(false);
+  });
+
+  it("returns true when the recorded pid is gone on this machine", () => {
+    const now = Math.floor(Date.now() / 1000);
+    const info = {
+      pid: 999_999,
+      host: "github.com",
+      login: "tester",
+      profile: "default",
+      machine: require("node:os").hostname() as string,
+      heartbeat_epoch: now,
+      started_epoch: now,
+      active_tasks: 0,
+      note: "",
+    };
+    expect(isLockStale(info, now)).toBe(true);
+  });
+
+  it("treats legacy locks without a machine field as local for liveness checks", () => {
+    const now = Math.floor(Date.now() / 1000);
+    const info = {
+      pid: 999_999,
+      host: "github.com",
       login: "tester",
       profile: "default",
       heartbeat_epoch: now,
@@ -198,7 +221,7 @@ describe("isLockStale", () => {
       active_tasks: 0,
       note: "",
     };
-    expect(isLockStale(info, now)).toBe(false);
+    expect(isLockStale(info, now)).toBe(true);
   });
 });
 

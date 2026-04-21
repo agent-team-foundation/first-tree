@@ -67,12 +67,31 @@ export async function runStop(
   }
 
   const code = killProcess(lock);
-  if (code === 0) {
-    write(`stopped breeze-runner pid ${lock.pid}`);
-    return 0;
+  if (code !== 0) {
+    write(`breeze: kill ${lock.pid} failed (exit ${code})`);
+    return 1;
   }
-  write(`breeze: kill ${lock.pid} failed (exit ${code})`);
-  return 1;
+  const stopped = await waitForStop(lock.pid);
+  if (!stopped) {
+    write(`breeze: pid ${lock.pid} did not exit after SIGTERM; forcing stop`);
+    const killCode = killProcess(lock, "-KILL");
+    if (killCode !== 0) {
+      write(`breeze: kill -KILL ${lock.pid} failed (exit ${killCode})`);
+      return 1;
+    }
+    if (!(await waitForStop(lock.pid, 1_000))) {
+      write(`breeze: pid ${lock.pid} is still alive after SIGKILL`);
+      return 1;
+    }
+  }
+  const dir = serviceLockDir(locksDir, identity, profile);
+  try {
+    rmSync(dir, { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
+  write(`stopped breeze-runner pid ${lock.pid}`);
+  return 0;
 }
 
 function parseHome(argv: readonly string[]): string | undefined {
@@ -93,9 +112,28 @@ function parseProfile(argv: readonly string[]): string | undefined {
   return undefined;
 }
 
-function killProcess(lock: LockInfo): number {
-  const result = spawnSync("kill", [String(lock.pid)], {
+function killProcess(lock: LockInfo, signal: "-TERM" | "-KILL" = "-TERM"): number {
+  const result = spawnSync("kill", [signal, String(lock.pid)], {
     stdio: ["ignore", "pipe", "pipe"],
   });
   return result.status ?? 1;
+}
+
+function processAlive(pid: number): boolean {
+  if (!Number.isFinite(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForStop(pid: number, timeoutMs: number = 5_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!processAlive(pid)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return !processAlive(pid);
 }
