@@ -62,7 +62,7 @@ pnpm --filter @first-tree-hub/server db:studio      # Drizzle Studio
 
 ## Local Testing Isolation
 
-When exercising the CLI against a live hub on the same machine, always relocate the client home so tests do not clobber the production client's config, agent tokens, workspaces, or cloned Context Tree:
+When exercising the CLI against a live hub on the same machine, always relocate the client home so tests do not clobber the production client's saved JWT credentials (`credentials.json`), client/agent config, workspaces, or cloned Context Tree:
 
 ```bash
 export FIRST_TREE_HUB_HOME=/Users/<you>/.first-tree-hub-test
@@ -111,10 +111,7 @@ first-tree-hub/
 
 **PostgreSQL only:** No Redis / MQ. PG covers storage, queuing (SKIP LOCKED), and notifications (LISTEN/NOTIFY).
 
-**Dual-track auth isolation:**
-- Agent Token (Bearer) → Agent API — machine credentials
-- Admin JWT → Admin API — human credentials
-- Two auth paths are **completely isolated**; localhost must authenticate too
+**Unified user-JWT auth:** A single member JWT — issued by `first-tree-hub client connect` and stored at `~/.first-tree-hub/config/credentials.json` — authorizes both the Web/Admin API and every agent the signed-in user manages on the Client WebSocket. Per-agent `aghub_*` tokens and the `agent_tokens` table were retired by migration [`0020_unified_user_token`](packages/server/drizzle/0020_unified_user_token.sql) ([#95](https://github.com/agent-team-foundation/first-tree-hub/pull/95)); agents now bind via `agents.client_id` plus a server-pushed `agent:pinned` frame on the first-bind path (auto-pin, [#108](https://github.com/agent-team-foundation/first-tree-hub/pull/108)), and scope is enforced by Rule **R-RUN** in `packages/server/src/services/agent.ts`. No default passwords; localhost must authenticate too.
 
 **Inbox is the Server/Client boundary:** Server writes to Inbox (fan-out on write), Client pulls / receives WebSocket notifications. At-least-once delivery; Client is responsible for deduplication.
 
