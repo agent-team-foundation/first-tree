@@ -6,7 +6,7 @@ import { deriveRepoLocalPath } from "@agent-team-foundation/first-tree-hub-share
 import type { McpServerConfig, PermissionMode, Query, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { query as claudeQuery } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
-import { bootstrapWorkspace } from "../runtime/bootstrap.js";
+import { bootstrapWorkspace, installFirstTreeIntegration } from "../runtime/bootstrap.js";
 import { deriveSessionBranchName, type GitMirrorManager } from "../runtime/git-mirror-manager.js";
 import type {
   AgentHandler,
@@ -544,6 +544,18 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       chatId: sessionCtx.chatId,
     });
     generateClaudeMd(workspace, sessionCtx.agent, contextTreePath);
+
+    // Install the first-tree skill + FIRST-TREE-SOURCE-INTEGRATION block into
+    // the workspace by shelling out to `first-tree tree integrate`. Best-effort:
+    // integrate failures do not abort session start.
+    if (contextTreePath) {
+      installFirstTreeIntegration({
+        workspacePath: workspace,
+        contextTreePath,
+        workspaceId: sessionCtx.chatId,
+        log: (msg) => sessionCtx.log(msg),
+      });
+    }
   }
 
   const handler: AgentHandler = {
