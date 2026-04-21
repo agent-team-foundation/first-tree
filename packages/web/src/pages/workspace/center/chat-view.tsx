@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Leaf, MessageSquare, Pause, Pencil, Play, Send, Square, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Check, Leaf, MessageSquare, Pause, Pencil, Send, Square, X } from "lucide-react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router";
 import {
   getChat,
   listChatMessages,
@@ -9,18 +10,22 @@ import {
   sendChatMessage,
 } from "../../../api/chats.js";
 import {
+  agentSessionsQueryKey,
   asAssistantTextPayload,
   asErrorPayload,
   asToolCallPayload,
   listAgentSessions,
   listSessionEvents,
-  resumeSession,
   type SessionEventRow,
   type SessionListItem,
+  type SessionMutationResponse,
+  sessionQueryKey,
   suspendSession,
   terminateSession,
 } from "../../../api/sessions.js";
 import { useAuth } from "../../../auth/auth-context.js";
+import { Button } from "../../../components/ui/button.js";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog.js";
 import { Markdown } from "../../../components/ui/markdown.js";
 import { StateDot } from "../../../components/ui/state-dot.js";
 import { useAgentNameMap } from "../../../lib/use-agent-name-map.js";
@@ -104,79 +109,131 @@ function SessionControls({
   session: SessionListItem | null;
 }) {
   const queryClient = useQueryClient();
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["session", agentId, chatId] });
+  const [, setSearchParams] = useSearchParams();
+  const [terminateOpen, setTerminateOpen] = useState(false);
+  const [terminateError, setTerminateError] = useState<string | null>(null);
 
-  const suspendMut = useMutation({ mutationFn: () => suspendSession(agentId, chatId), onSuccess: invalidate });
-  const resumeMut = useMutation({ mutationFn: () => resumeSession(agentId, chatId), onSuccess: invalidate });
-  const terminateMut = useMutation({ mutationFn: () => terminateSession(agentId, chatId), onSuccess: invalidate });
+  const sessionKey = sessionQueryKey(agentId, chatId);
+  const agentSessionsKey = agentSessionsQueryKey(agentId);
+
+  const setSessionStateInCaches = (state: SessionListItem["state"]): void => {
+    queryClient.setQueryData<SessionListItem>(sessionKey, (old) => (old ? { ...old, state } : old));
+    queryClient.setQueryData<SessionListItem[]>(agentSessionsKey, (old) =>
+      old ? old.map((s) => (s.chatId === chatId ? { ...s, state } : s)) : old,
+    );
+  };
+
+  const suspendMut = useMutation<
+    SessionMutationResponse,
+    Error,
+    void,
+    { previousSession: SessionListItem | undefined; previousList: SessionListItem[] | undefined }
+  >({
+    mutationFn: () => suspendSession(agentId, chatId),
+    onMutate: async () => {
+      // Cancel both caches — the roster's 10s poller would otherwise clobber
+      // the optimistic `suspended` flip mid-flight.
+      await queryClient.cancelQueries({ queryKey: sessionKey });
+      await queryClient.cancelQueries({ queryKey: agentSessionsKey });
+      const previousSession = queryClient.getQueryData<SessionListItem>(sessionKey);
+      const previousList = queryClient.getQueryData<SessionListItem[]>(agentSessionsKey);
+      setSessionStateInCaches("suspended");
+      return { previousSession, previousList };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.previousSession) queryClient.setQueryData(sessionKey, ctx.previousSession);
+      if (ctx?.previousList) queryClient.setQueryData(agentSessionsKey, ctx.previousList);
+    },
+    onSuccess: (res) => {
+      setSessionStateInCaches(res.state);
+    },
+  });
+
+  const terminateMut = useMutation<
+    SessionMutationResponse,
+    Error,
+    void,
+    { previousSession: SessionListItem | undefined; previousList: SessionListItem[] | undefined }
+  >({
+    mutationFn: () => terminateSession(agentId, chatId),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: sessionKey });
+      await queryClient.cancelQueries({ queryKey: agentSessionsKey });
+      const previousSession = queryClient.getQueryData<SessionListItem>(sessionKey);
+      const previousList = queryClient.getQueryData<SessionListItem[]>(agentSessionsKey);
+      queryClient.setQueryData<SessionListItem[]>(agentSessionsKey, (old) =>
+        old ? old.filter((s) => s.chatId !== chatId) : old,
+      );
+      return { previousSession, previousList };
+    },
+    onError: (err, _vars, ctx) => {
+      if (ctx?.previousSession) queryClient.setQueryData(sessionKey, ctx.previousSession);
+      if (ctx?.previousList) queryClient.setQueryData(agentSessionsKey, ctx.previousList);
+      setTerminateError(err instanceof Error ? err.message : "Terminate failed");
+    },
+    onSuccess: (res, _vars, ctx) => {
+      // The admin API is lenient: a no-op response (e.g. the session was
+      // reactivated between dialog-open and confirm) returns transitioned=false
+      // with the current authoritative state. Only hide + navigate when the
+      // row is actually gone.
+      if (res.state !== "evicted") {
+        if (ctx?.previousList) queryClient.setQueryData(agentSessionsKey, ctx.previousList);
+        setSessionStateInCaches(res.state);
+        setTerminateError(`Session is ${res.state}; terminate only applies to suspended sessions.`);
+        return;
+      }
+      setTerminateError(null);
+      setTerminateOpen(false);
+      setSearchParams({ a: agentId });
+    },
+  });
 
   const isActive = session?.state === "active";
   const isSuspended = session?.state === "suspended";
-  const isEvicted = session?.state === "evicted";
+
+  if (!isActive && !isSuspended) return null;
 
   return (
-    <div
-      className="inline-flex items-center"
-      style={{
-        gap: 4,
-        padding: 4,
-        border: "1px solid var(--border)",
-        borderRadius: 6,
-        background: "var(--bg-sunken)",
-      }}
-    >
-      {isActive && (
-        <button
-          type="button"
-          onClick={() => suspendMut.mutate()}
-          disabled={suspendMut.isPending}
-          className="inline-flex items-center transition-colors"
-          style={{
-            gap: 6,
-            padding: "4px 10px",
-            fontSize: 11,
-            fontWeight: 500,
-            color: "var(--fg-2)",
-            borderRadius: 4,
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
-          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-        >
-          <Pause className="h-3 w-3" /> Suspend
-          <span className="kbd" style={{ marginLeft: 2 }}>
-            ⌘⇧P
-          </span>
-        </button>
-      )}
-      {isSuspended && (
-        <button
-          type="button"
-          onClick={() => resumeMut.mutate()}
-          disabled={resumeMut.isPending}
-          className="inline-flex items-center transition-colors"
-          style={{
-            gap: 6,
-            padding: "4px 10px",
-            fontSize: 11,
-            fontWeight: 500,
-            color: "var(--fg-2)",
-            borderRadius: 4,
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
-          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-        >
-          <Play className="h-3 w-3" /> Resume
-        </button>
-      )}
-      {!isEvicted && (
-        <>
-          <span style={{ width: 1, height: 16, background: "var(--border)" }} />
+    <>
+      <div
+        className="inline-flex items-center"
+        style={{
+          gap: 4,
+          padding: 4,
+          border: "1px solid var(--border)",
+          borderRadius: 6,
+          background: "var(--bg-sunken)",
+        }}
+      >
+        {isActive && (
+          <button
+            type="button"
+            onClick={() => suspendMut.mutate()}
+            disabled={suspendMut.isPending}
+            className="inline-flex items-center transition-colors"
+            style={{
+              gap: 6,
+              padding: "4px 10px",
+              fontSize: 11,
+              fontWeight: 500,
+              color: "var(--fg-2)",
+              borderRadius: 4,
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
+            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+          >
+            <Pause className="h-3 w-3" /> Suspend
+            <span className="kbd" style={{ marginLeft: 2 }}>
+              ⌘⇧P
+            </span>
+          </button>
+        )}
+        {isSuspended && (
           <button
             type="button"
             onClick={() => {
-              if (window.confirm("Terminate this session?")) {
-                terminateMut.mutate();
-              }
+              setTerminateError(null);
+              setTerminateOpen(true);
             }}
             disabled={terminateMut.isPending}
             className="inline-flex items-center transition-colors"
@@ -198,9 +255,86 @@ function SessionControls({
           >
             <Square className="h-3 w-3" /> Terminate
           </button>
-        </>
-      )}
-    </div>
+        )}
+      </div>
+
+      <TerminateSessionDialog
+        open={terminateOpen}
+        onOpenChange={(o) => {
+          if (!terminateMut.isPending) setTerminateOpen(o);
+          if (!o) setTerminateError(null);
+        }}
+        session={session}
+        chatId={chatId}
+        error={terminateError}
+        pending={terminateMut.isPending}
+        onConfirm={() => terminateMut.mutate()}
+      />
+    </>
+  );
+}
+
+function TerminateSessionDialog(props: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  session: SessionListItem | null;
+  chatId: string;
+  pending: boolean;
+  error: string | null;
+  onConfirm: () => void;
+}) {
+  const { open, onOpenChange, session, chatId, pending, error, onConfirm } = props;
+  function submit(e: FormEvent) {
+    e.preventDefault();
+    if (!pending) onConfirm();
+  }
+  const shortId = chatId.slice(0, 8);
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Terminate session?</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={submit} className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Ending this session is permanent. It is removed from the workspace and cannot be resumed. Chat history is
+            preserved; a new message will start a fresh session.
+          </p>
+          <div
+            className="mono"
+            style={{
+              fontSize: 11,
+              padding: "8px 10px",
+              borderRadius: 4,
+              background: "var(--bg-sunken)",
+              border: "1px solid var(--border)",
+              color: "var(--fg-2)",
+              display: "grid",
+              gap: 4,
+            }}
+          >
+            <span>
+              chat: <span className="font-medium">{shortId}…</span>
+            </span>
+            {session?.lastActivityAt && <span>last activity: {formatRelative(session.lastActivityAt)}</span>}
+            {typeof session?.messageCount === "number" && <span>messages: {session.messageCount}</span>}
+          </div>
+          {error && (
+            <p className="mono" style={{ fontSize: 11, color: "var(--state-error)" }}>
+              {error}
+            </p>
+          )}
+          <DialogFooter>
+            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={pending}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="destructive" disabled={pending}>
+              {pending ? "Terminating…" : "Terminate"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -521,7 +655,7 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
   });
 
   const { data: session } = useQuery({
-    queryKey: ["session", agentId, chatId],
+    queryKey: sessionQueryKey(agentId, chatId),
     queryFn: () => listAgentSessions(agentId).then((sessions) => sessions.find((s) => s.chatId === chatId) ?? null),
     refetchInterval: 5_000,
   });

@@ -1,4 +1,5 @@
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import type { SessionState } from "@agent-team-foundation/first-tree-hub-shared";
+import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
@@ -7,6 +8,7 @@ import { chatParticipants, chats } from "../db/schema/chats.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
 import { NotFoundError } from "../errors.js";
+import type { Notifier } from "./notifier.js";
 
 const SUMMARY_MAX_LENGTH = 50;
 
@@ -42,6 +44,9 @@ export async function listAgentSessions(
   const conditions = [eq(agentChatSessions.agentId, agentId)];
   if (filters?.state) {
     conditions.push(eq(agentChatSessions.state, filters.state));
+  } else {
+    // Default: hide archived (evicted) rows from listings.
+    conditions.push(ne(agentChatSessions.state, "evicted"));
   }
 
   const rows = await db
@@ -189,6 +194,9 @@ export async function listAllSessions(
   const conditions = [];
   if (filters?.state) {
     conditions.push(eq(agentChatSessions.state, filters.state));
+  } else {
+    // Default: hide archived (evicted) rows from listings.
+    conditions.push(ne(agentChatSessions.state, "evicted"));
   }
   if (filters?.agentId) {
     conditions.push(eq(agentChatSessions.agentId, filters.agentId));
@@ -246,6 +254,96 @@ export async function listAllSessions(
     })),
     nextCursor,
   };
+}
+
+export type StateTransitionResult = {
+  state: SessionState;
+  transitioned: boolean;
+};
+
+/** Commit `active → suspended`. No-op on suspended/evicted. Throws if row is missing. */
+export async function suspendSession(
+  db: Database,
+  agentId: string,
+  chatId: string,
+  organizationId: string,
+  notifier?: Notifier,
+): Promise<StateTransitionResult> {
+  return transitionSessionState(db, agentId, chatId, "suspended", ["active"], organizationId, notifier);
+}
+
+/** Commit `suspended → evicted` (terminal — listings hide it, revival defense blocks resurrection). */
+export async function archiveSession(
+  db: Database,
+  agentId: string,
+  chatId: string,
+  organizationId: string,
+  notifier?: Notifier,
+): Promise<StateTransitionResult> {
+  return transitionSessionState(db, agentId, chatId, "evicted", ["suspended"], organizationId, notifier);
+}
+
+async function transitionSessionState(
+  db: Database,
+  agentId: string,
+  chatId: string,
+  target: SessionState,
+  from: SessionState[],
+  organizationId: string,
+  notifier: Notifier | undefined,
+): Promise<StateTransitionResult> {
+  const now = new Date();
+  let finalState: SessionState | null = null;
+  let transitioned = false;
+
+  await db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select({ state: agentChatSessions.state })
+      .from(agentChatSessions)
+      .where(and(eq(agentChatSessions.agentId, agentId), eq(agentChatSessions.chatId, chatId)))
+      .for("update");
+
+    if (!existing) return;
+    const current = existing.state as SessionState;
+    finalState = current;
+
+    if (!from.includes(current)) return;
+
+    await tx
+      .update(agentChatSessions)
+      .set({ state: target, updatedAt: now })
+      .where(and(eq(agentChatSessions.agentId, agentId), eq(agentChatSessions.chatId, chatId)));
+
+    const [counts] = await tx
+      .select({
+        active: sql<number>`count(*) FILTER (WHERE ${agentChatSessions.state} = 'active')::int`,
+        total: sql<number>`count(*) FILTER (WHERE ${agentChatSessions.state} != 'evicted')::int`,
+      })
+      .from(agentChatSessions)
+      .where(eq(agentChatSessions.agentId, agentId));
+
+    await tx
+      .update(agentPresence)
+      .set({
+        activeSessions: counts?.active ?? 0,
+        totalSessions: counts?.total ?? 0,
+        lastSeenAt: now,
+      })
+      .where(eq(agentPresence.agentId, agentId));
+
+    finalState = target;
+    transitioned = true;
+  });
+
+  if (finalState === null) {
+    throw new NotFoundError(`Session (${agentId}, ${chatId}) not found`);
+  }
+
+  if (transitioned && notifier) {
+    notifier.notifySessionStateChange(agentId, chatId, target, organizationId).catch(() => {});
+  }
+
+  return { state: finalState, transitioned };
 }
 
 /**

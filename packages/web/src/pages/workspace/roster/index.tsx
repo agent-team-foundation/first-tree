@@ -3,7 +3,7 @@ import { Plus, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import { getActivityOverview, type RuntimeAgent } from "../../../api/activity.js";
 import { createAgentChat } from "../../../api/chats.js";
-import { listAgentSessions } from "../../../api/sessions.js";
+import { agentSessionsQueryKey, listAgentSessions } from "../../../api/sessions.js";
 import { StateDot } from "../../../components/ui/state-dot.js";
 import { usePulse } from "../../../hooks/pulse-context.js";
 import { useAgentNameMap } from "../../../lib/use-agent-name-map.js";
@@ -53,7 +53,7 @@ export function AgentRoster({
   });
 
   const { data: sessions } = useQuery({
-    queryKey: ["agent-sessions", selectedAgentId],
+    queryKey: selectedAgentId ? agentSessionsQueryKey(selectedAgentId) : ["agent-sessions", null],
     queryFn: () => (selectedAgentId ? listAgentSessions(selectedAgentId) : Promise.resolve([])),
     enabled: !!selectedAgentId,
     refetchInterval: 10_000,
@@ -62,7 +62,7 @@ export function AgentRoster({
   const newChatMut = useMutation({
     mutationFn: (agentId: string) => createAgentChat(agentId),
     onSuccess: (result, agentId) => {
-      queryClient.invalidateQueries({ queryKey: ["agent-sessions", agentId] });
+      queryClient.invalidateQueries({ queryKey: agentSessionsQueryKey(agentId) });
       onSelectChat(agentId, result.id);
     },
   });
@@ -185,38 +185,40 @@ export function AgentRoster({
                 No sessions yet
               </div>
             )}
-            {sessions?.map((s) => {
-              const runtime = s.state === "active" ? "working" : s.state === "suspended" ? "idle" : "offline";
-              return (
-                <button
-                  key={s.chatId}
-                  type="button"
-                  onClick={() => onSelectChat(agent.agentId, s.chatId)}
-                  className="w-full grid items-center text-left transition-colors"
-                  style={{
-                    gridTemplateColumns: "14px 1fr",
-                    columnGap: 6,
-                    padding: "4px 10px 4px 28px",
-                    background: selectedChatId === s.chatId ? "var(--bg-hover)" : "transparent",
-                    color: s.state === "active" ? "var(--fg-2)" : "var(--fg-3)",
-                  }}
-                  onMouseEnter={(e) => {
-                    if (selectedChatId !== s.chatId) e.currentTarget.style.background = "var(--bg-hover)";
-                  }}
-                  onMouseLeave={(e) => {
-                    if (selectedChatId !== s.chatId) e.currentTarget.style.background = "transparent";
-                  }}
-                >
-                  <StateDot state={runtime} size={6} />
-                  <span
-                    className="truncate"
-                    style={{ fontSize: 11, color: s.topic || s.summary ? "var(--fg-2)" : "var(--fg-4)" }}
+            {sessions
+              ?.filter((s) => s.state !== "evicted")
+              .map((s) => {
+                const runtime = s.state === "active" ? "working" : "idle";
+                return (
+                  <button
+                    key={s.chatId}
+                    type="button"
+                    onClick={() => onSelectChat(agent.agentId, s.chatId)}
+                    className="w-full grid items-center text-left transition-colors"
+                    style={{
+                      gridTemplateColumns: "14px 1fr",
+                      columnGap: 6,
+                      padding: "4px 10px 4px 28px",
+                      background: selectedChatId === s.chatId ? "var(--bg-hover)" : "transparent",
+                      color: s.state === "active" ? "var(--fg-2)" : "var(--fg-3)",
+                    }}
+                    onMouseEnter={(e) => {
+                      if (selectedChatId !== s.chatId) e.currentTarget.style.background = "var(--bg-hover)";
+                    }}
+                    onMouseLeave={(e) => {
+                      if (selectedChatId !== s.chatId) e.currentTarget.style.background = "transparent";
+                    }}
                   >
-                    {s.topic || s.summary || `Chat · ${s.chatId.slice(0, 8)}`}
-                  </span>
-                </button>
-              );
-            })}
+                    <StateDot state={runtime} size={6} />
+                    <span
+                      className="truncate"
+                      style={{ fontSize: 11, color: s.topic || s.summary ? "var(--fg-2)" : "var(--fg-4)" }}
+                    >
+                      {s.topic || s.summary || `Chat · ${s.chatId.slice(0, 8)}`}
+                    </span>
+                  </button>
+                );
+              })}
             <button
               type="button"
               onClick={() => newChatMut.mutate(agent.agentId)}

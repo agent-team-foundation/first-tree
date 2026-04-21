@@ -1,6 +1,5 @@
 import type { FastifyInstance } from "fastify";
 import { createLogger } from "../observability/index.js";
-import * as activityService from "./activity.js";
 import type { AdapterManager } from "./adapter-manager.js";
 import * as clientService from "./client.js";
 import * as inboxService from "./inbox.js";
@@ -26,7 +25,6 @@ export function createBackgroundTasks(
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let adapterOutboundTimer: ReturnType<typeof setInterval> | null = null;
   let kaelOutboundTimer: ReturnType<typeof setInterval> | null = null;
-  let sessionCleanupTimer: ReturnType<typeof setInterval> | null = null;
 
   return {
     start() {
@@ -86,18 +84,6 @@ export function createBackgroundTasks(
         }, 5_000);
       }
 
-      // Session cleanup — runs every hour, removes evicted/suspended sessions older than 7 days
-      sessionCleanupTimer = setInterval(async () => {
-        try {
-          const deleted = await activityService.cleanupStaleSessions(app.db);
-          if (deleted > 0) {
-            log.info({ count: deleted }, "cleaned up stale sessions");
-          }
-        } catch (err) {
-          log.error({ err }, "failed to clean up stale sessions");
-        }
-      }, 3_600_000);
-
       // Initial heartbeat
       presenceService.heartbeatInstance(app.db, instanceId).catch((err) => {
         log.error({ err }, "failed initial heartbeat");
@@ -120,10 +106,6 @@ export function createBackgroundTasks(
       if (kaelOutboundTimer) {
         clearInterval(kaelOutboundTimer);
         kaelOutboundTimer = null;
-      }
-      if (sessionCleanupTimer) {
-        clearInterval(sessionCleanupTimer);
-        sessionCleanupTimer = null;
       }
     },
   };

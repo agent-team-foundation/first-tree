@@ -222,25 +222,30 @@ describe("Agent WS — session event protocol (S10)", () => {
     }
   }, 15000);
 
-  it("clears events when a `session:state` transition to 'evicted' arrives", async () => {
+  it("rejects an `evicted` session:state frame from a stale client and preserves events", async () => {
     const seed = await seedBoundAgent("evict");
     const ws = await openBoundSocket(seed);
     const chatId = `chat-${crypto.randomUUID()}`;
 
     try {
-      // Pre-populate two events
       await sessionEventService.appendEvent(app.db, seed.agent.uuid, chatId, {
         kind: "error",
-        payload: { source: "sdk", message: "before eviction" },
+        payload: { source: "sdk", message: "before stale evicted frame" },
       });
       await sessionEventService.appendEvent(app.db, seed.agent.uuid, chatId, {
         kind: "tool_call",
         payload: { toolUseId: "t1", name: "Read", args: {}, status: "ok" },
       });
 
-      const beforeCount = (await sessionEventService.listEvents(app.db, seed.agent.uuid, chatId, { limit: 10 })).items
-        .length;
-      expect(beforeCount).toBe(2);
+      const errorMessages: string[] = [];
+      ws.on("message", (raw) => {
+        try {
+          const parsed = JSON.parse(raw.toString()) as { type?: string; message?: string };
+          if (parsed.type === "error" && parsed.message) errorMessages.push(parsed.message);
+        } catch {
+          // ignore
+        }
+      });
 
       ws.send(
         JSON.stringify({
@@ -252,9 +257,12 @@ describe("Agent WS — session event protocol (S10)", () => {
       );
 
       await waitForCondition(async () => {
-        const { items } = await sessionEventService.listEvents(app.db, seed.agent.uuid, chatId, { limit: 10 });
-        return items.length === 0 ? true : null;
+        return errorMessages.some((m) => m.includes("Unsupported session state")) ? true : null;
       });
+
+      // Events were NOT cleared — the stale frame produces an error, not a side effect.
+      const { items } = await sessionEventService.listEvents(app.db, seed.agent.uuid, chatId, { limit: 10 });
+      expect(items).toHaveLength(2);
     } finally {
       ws.close();
       await new Promise<void>((r) => ws.once("close", () => r()));
@@ -291,15 +299,12 @@ describe("Agent WS — session event protocol (S10)", () => {
     }
   }, 15000);
 
-  it("eviction immediately following session:event leaves no resurrected row", async () => {
+  it("rejected `evicted` frame following session:event does not disturb persisted events", async () => {
     const seed = await seedBoundAgent("race");
     const ws = await openBoundSocket(seed);
     const chatId = `chat-${crypto.randomUUID()}`;
 
     try {
-      // Send N events back-to-back, then immediately send eviction. Without the
-      // per-(agent, chat) FIFO guard, the late appendEvent(s) can land AFTER
-      // clearEvents and resurrect rows for a session that was supposed to be wiped.
       const eventCount = 5;
       for (let i = 0; i < eventCount; i += 1) {
         ws.send(
@@ -323,11 +328,11 @@ describe("Agent WS — session event protocol (S10)", () => {
         }),
       );
 
-      // Give the server time to drain the queue and process the eviction.
+      // Give the server time to persist the events and reject the stale frame.
       await new Promise((r) => setTimeout(r, 800));
 
       const { items } = await sessionEventService.listEvents(app.db, seed.agent.uuid, chatId, { limit: 50 });
-      expect(items).toEqual([]);
+      expect(items).toHaveLength(eventCount);
     } finally {
       ws.close();
       await new Promise<void>((r) => ws.once("close", () => r()));
@@ -358,6 +363,57 @@ describe("Agent WS — session event protocol (S10)", () => {
 
       expect(hit.type).toBe("session_completed");
       expect(hit.severity).toBe("low");
+    } finally {
+      ws.close();
+      await new Promise<void>((r) => ws.once("close", () => r()));
+    }
+  }, 15000);
+
+  it("`session:reconcile` returns staleChatIds for evicted or missing rows", async () => {
+    const seed = await seedBoundAgent("recon");
+    const ws = await openBoundSocket(seed);
+
+    try {
+      const { agentChatSessions: table } = await import("../db/schema/agent-chat-sessions.js");
+      const { chats: chatsTable } = await import("../db/schema/chats.js");
+
+      const activeId = `chat-active-${crypto.randomUUID()}`;
+      const suspendedId = `chat-suspended-${crypto.randomUUID()}`;
+      const evictedId = `chat-evicted-${crypto.randomUUID()}`;
+      const missingId = `chat-missing-${crypto.randomUUID()}`;
+
+      await app.db
+        .insert(chatsTable)
+        .values([
+          { id: activeId, organizationId: seed.organizationId },
+          { id: suspendedId, organizationId: seed.organizationId },
+          { id: evictedId, organizationId: seed.organizationId },
+        ])
+        .onConflictDoNothing();
+      await app.db
+        .insert(table)
+        .values([
+          { agentId: seed.agent.uuid, chatId: activeId, state: "active" },
+          { agentId: seed.agent.uuid, chatId: suspendedId, state: "suspended" },
+          { agentId: seed.agent.uuid, chatId: evictedId, state: "evicted" },
+        ])
+        .onConflictDoNothing();
+
+      ws.send(
+        JSON.stringify({
+          type: "session:reconcile",
+          agentId: seed.agent.uuid,
+          chatIds: [activeId, suspendedId, evictedId, missingId],
+        }),
+      );
+
+      const result = (await waitForFrame(ws, (m) => (m as { type?: string }).type === "session:reconcile:result")) as {
+        staleChatIds: string[];
+        agentId: string;
+      };
+
+      expect(result.agentId).toBe(seed.agent.uuid);
+      expect(new Set(result.staleChatIds)).toEqual(new Set([evictedId, missingId]));
     } finally {
       ws.close();
       await new Promise<void>((r) => ws.once("close", () => r()));

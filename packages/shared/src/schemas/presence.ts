@@ -20,7 +20,7 @@ export const RUNTIME_STATES = {
 export const runtimeStateSchema = z.enum(["idle", "working", "blocked", "error"]);
 export type RuntimeState = z.infer<typeof runtimeStateSchema>;
 
-// -- Session State (client → server, per-session) --
+// -- Session State --
 
 export const SESSION_STATES = {
   ACTIVE: "active",
@@ -28,12 +28,17 @@ export const SESSION_STATES = {
   EVICTED: "evicted",
 } as const;
 
+/** DB + admin surface. `evicted` is server-only (admin Terminate); never carried on the wire. */
 export const sessionStateSchema = z.enum(["active", "suspended", "evicted"]);
 export type SessionState = z.infer<typeof sessionStateSchema>;
 
+/** Wire-level states a client may report. `evicted` from a stale client is rejected. */
+export const clientSessionStateSchema = z.enum(["active", "suspended"]);
+export type ClientSessionState = z.infer<typeof clientSessionStateSchema>;
+
 export const sessionStateMessageSchema = z.object({
   chatId: z.string().min(1),
-  state: sessionStateSchema,
+  state: clientSessionStateSchema,
 });
 export type SessionStateMessage = z.infer<typeof sessionStateMessageSchema>;
 

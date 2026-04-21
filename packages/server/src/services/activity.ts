@@ -8,7 +8,12 @@ import { clients } from "../db/schema/clients.js";
 import { agentVisibilityCondition, type MemberScope } from "./access-control.js";
 import type { Notifier } from "./notifier.js";
 
-/** Upsert a session state, refresh materialized aggregates on agent_presence, and emit org-scoped NOTIFY. */
+/**
+ * Upsert session state + refresh presence aggregates + NOTIFY.
+ *
+ * Revival defense: an admin-terminated (`evicted`) row is immutable; a client
+ * report for the same chatId is silently dropped after the FOR UPDATE check.
+ */
 export async function upsertSessionState(
   db: Database,
   agentId: string,
@@ -18,8 +23,16 @@ export async function upsertSessionState(
   notifier?: Notifier,
 ) {
   const now = new Date();
+  let wrote = false;
   await db.transaction(async (tx) => {
-    // 1. Upsert session row
+    const [existing] = await tx
+      .select({ state: agentChatSessions.state })
+      .from(agentChatSessions)
+      .where(and(eq(agentChatSessions.agentId, agentId), eq(agentChatSessions.chatId, chatId)))
+      .for("update");
+
+    if (existing?.state === "evicted") return;
+
     await tx
       .insert(agentChatSessions)
       .values({ agentId, chatId, state, updatedAt: now })
@@ -28,9 +41,8 @@ export async function upsertSessionState(
         set: { state, updatedAt: now },
       });
 
-    // 2. Aggregate session counts and update presence (session counts only).
-    //    runtimeState is NOT written here — the client-reported runtime:state
-    //    message is the single authority for runtimeState to avoid dual-write conflicts.
+    // runtimeState is owned by the client's `runtime:state` frame — do not
+    // write it here to avoid dual-write conflicts.
     const [counts] = await tx
       .select({
         active: sql<number>`count(*) FILTER (WHERE ${agentChatSessions.state} = 'active')::int`,
@@ -50,10 +62,11 @@ export async function upsertSessionState(
         lastSeenAt: now,
       })
       .where(eq(agentPresence.agentId, agentId));
+
+    wrote = true;
   });
 
-  // Fire-and-forget PG NOTIFY for session state changes
-  if (notifier) {
+  if (wrote && notifier) {
     notifier.notifySessionStateChange(agentId, chatId, state, organizationId).catch(() => {});
   }
 }
@@ -133,22 +146,4 @@ export async function listAgentsWithRuntime(db: Database, scope?: MemberScope) {
     .from(agentPresence)
     .innerJoin(agents, eq(agentPresence.agentId, agents.uuid))
     .where(and(isNotNull(agentPresence.runtimeState), agentVisibilityCondition(scope)));
-}
-
-/**
- * Clean up stale session rows from agent_chat_sessions.
- * Removes evicted rows older than staleSeconds and suspended rows older than staleSeconds.
- * Returns the number of rows deleted.
- */
-export async function cleanupStaleSessions(db: Database, staleSeconds = 604_800): Promise<number> {
-  const result = await db.execute<{ cnt: number }>(sql`
-    WITH deleted AS (
-      DELETE FROM agent_chat_sessions
-      WHERE state IN ('evicted', 'suspended')
-      AND updated_at < NOW() - make_interval(secs => ${staleSeconds})
-      RETURNING 1
-    )
-    SELECT count(*)::int AS cnt FROM deleted
-  `);
-  return result[0]?.cnt ?? 0;
 }

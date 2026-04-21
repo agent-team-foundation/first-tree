@@ -200,6 +200,8 @@ export {
   agentBindRejectReasonSchema,
   agentBindRequestSchema,
   agentPresenceSchema,
+  type ClientSessionState,
+  clientSessionStateSchema,
   PRESENCE_STATUSES,
   type PresenceStatus,
   presenceStatusSchema,
@@ -242,6 +244,12 @@ export {
   toolCallEventPayload,
   turnEndEventPayload,
 } from "./schemas/session-event.js";
+export {
+  type SessionReconcileRequest,
+  type SessionReconcileResult,
+  sessionReconcileRequestSchema,
+  sessionReconcileResultSchema,
+} from "./schemas/session-reconcile.js";
 export {
   type OrgStats,
   orgStatsSchema,

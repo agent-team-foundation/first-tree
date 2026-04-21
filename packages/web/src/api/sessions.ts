@@ -1,3 +1,4 @@
+import type { SessionState } from "@agent-team-foundation/first-tree-hub-shared";
 import { api } from "./client.js";
 
 export type SessionListItem = {
@@ -11,6 +12,9 @@ export type SessionListItem = {
   summary: string | null;
   topic: string | null;
 };
+
+export const sessionQueryKey = (agentId: string, chatId: string) => ["session", agentId, chatId] as const;
+export const agentSessionsQueryKey = (agentId: string) => ["agent-sessions", agentId] as const;
 
 export type SessionListResponse = {
   items: SessionListItem[];
@@ -138,14 +142,17 @@ export function listSessionEvents(
   );
 }
 
-export function suspendSession(agentId: string, chatId: string): Promise<unknown> {
-  return api.post(`/admin/sessions/agents/${agentId}/${chatId}/suspend`);
+export type SessionMutationResponse = {
+  agentId: string;
+  chatId: string;
+  state: SessionState;
+  transitioned: boolean;
+};
+
+export function suspendSession(agentId: string, chatId: string): Promise<SessionMutationResponse> {
+  return api.post<SessionMutationResponse>(`/admin/sessions/agents/${agentId}/${chatId}/suspend`);
 }
 
-export function resumeSession(agentId: string, chatId: string): Promise<unknown> {
-  return api.post(`/admin/sessions/agents/${agentId}/${chatId}/resume`);
-}
-
-export function terminateSession(agentId: string, chatId: string): Promise<unknown> {
-  return api.post(`/admin/sessions/agents/${agentId}/${chatId}/terminate`);
+export function terminateSession(agentId: string, chatId: string): Promise<SessionMutationResponse> {
+  return api.post<SessionMutationResponse>(`/admin/sessions/agents/${agentId}/${chatId}/terminate`);
 }

@@ -6,7 +6,7 @@ import type {
   SessionState,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
-import type { ClientConnection } from "../client-connection.js";
+import type { ClientConnection, SessionReconcileResult } from "../client-connection.js";
 import type { RegisterResult } from "../sdk.js";
 import { type AgentConfigCache, createAgentConfigCache } from "./agent-config-cache.js";
 import type { SessionConfig } from "./config.js";
@@ -32,7 +32,8 @@ export type AgentSlotConfig = {
 type ConnectionListener =
   | { event: "agent:message"; fn: (agentId: string, data: unknown) => void }
   | { event: "agent:bound"; fn: (agent: { agentId: string }) => void }
-  | { event: "session:command"; fn: (cmd: { agentId: string; chatId: string; type: string }) => void };
+  | { event: "session:command"; fn: (cmd: { agentId: string; chatId: string; type: string }) => void }
+  | { event: "session:reconcile:result"; fn: (result: SessionReconcileResult) => void };
 
 export class AgentSlot {
   private sessionManager: SessionManager | null = null;
@@ -41,6 +42,7 @@ export class AgentSlot {
   private sdk: import("../sdk.js").FirstTreeHubSDK | null = null;
   private agentConfigCache: AgentConfigCache | null = null;
   private pollingTimer: ReturnType<typeof setInterval> | null = null;
+  private reconcileTimer: ReturnType<typeof setInterval> | null = null;
   private listeners: ConnectionListener[] = [];
 
   constructor(config: AgentSlotConfig) {
@@ -85,11 +87,26 @@ export class AgentSlot {
       if (agentId === this.config.agentId) this.pullAndDispatch();
     };
     const onBound = (boundAgent: { agentId: string }) => {
-      if (boundAgent.agentId === this.config.agentId) this.fullStateSync();
+      if (boundAgent.agentId === this.config.agentId) {
+        this.fullStateSync();
+        // One-shot post-bind reconcile catches operator-terminates that
+        // landed while this client was offline; a duplicate tick is harmless.
+        setTimeout(() => this.reconcileNow(), 5000);
+      }
+    };
+    const onReconcileResult = (result: SessionReconcileResult) => {
+      if (result.agentId === this.config.agentId && this.sessionManager) {
+        this.sessionManager.applyStaleChatIds(result.staleChatIds);
+      }
     };
     this.clientConnection.on("agent:message", onMessage);
     this.clientConnection.on("agent:bound", onBound);
-    this.listeners.push({ event: "agent:message", fn: onMessage }, { event: "agent:bound", fn: onBound });
+    this.clientConnection.on("session:reconcile:result", onReconcileResult);
+    this.listeners.push(
+      { event: "agent:message", fn: onMessage },
+      { event: "agent:bound", fn: onBound },
+      { event: "session:reconcile:result", fn: onReconcileResult },
+    );
 
     const registryPath = join(DEFAULT_DATA_DIR, "sessions", `${this.config.name}.json`);
 
@@ -129,15 +146,18 @@ export class AgentSlot {
 
     const onCommand = (cmd: { agentId: string; chatId: string; type: string }) => {
       if (cmd.agentId === this.config.agentId && this.sessionManager) {
-        this.sessionManager.handleCommand(cmd.chatId, cmd.type as "session:suspend").catch((err) => {
-          this.logFn(`Session command error: ${err instanceof Error ? err.message : String(err)}`);
-        });
+        this.sessionManager
+          .handleCommand(cmd.chatId, cmd.type as "session:suspend" | "session:terminate")
+          .catch((err) => {
+            this.logFn(`Session command error: ${err instanceof Error ? err.message : String(err)}`);
+          });
       }
     };
     this.clientConnection.on("session:command", onCommand);
     this.listeners.push({ event: "session:command", fn: onCommand });
 
     this.startPolling();
+    this.startReconcileLoop();
 
     return agent;
   }
@@ -147,9 +167,14 @@ export class AgentSlot {
       clearInterval(this.pollingTimer);
       this.pollingTimer = null;
     }
+    if (this.reconcileTimer) {
+      clearInterval(this.reconcileTimer);
+      this.reconcileTimer = null;
+    }
     for (const entry of this.listeners) {
       if (entry.event === "agent:message") this.clientConnection.off(entry.event, entry.fn);
       else if (entry.event === "agent:bound") this.clientConnection.off(entry.event, entry.fn);
+      else if (entry.event === "session:reconcile:result") this.clientConnection.off(entry.event, entry.fn);
       else this.clientConnection.off(entry.event, entry.fn);
     }
     this.listeners = [];
@@ -190,6 +215,18 @@ export class AgentSlot {
       this.pullAndDispatch();
     }, 5000);
     this.pullAndDispatch();
+  }
+
+  private startReconcileLoop(): void {
+    const intervalSec = this.config.session.reconcile_interval_seconds ?? 300;
+    this.reconcileTimer = setInterval(() => this.reconcileNow(), intervalSec * 1000);
+  }
+
+  private reconcileNow(): void {
+    if (!this.sessionManager) return;
+    const chatIds = this.sessionManager.getHeldChatIds();
+    if (chatIds.length === 0) return;
+    this.clientConnection.sendSessionReconcile(this.config.agentId, chatIds);
   }
 
   private async pullAndDispatch(): Promise<void> {

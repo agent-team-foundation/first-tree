@@ -31,7 +31,7 @@ function createMockHandler(overrides?: Partial<AgentHandler>): AgentHandler {
 function createSessionManager(opts: {
   sdk?: FirstTreeHubSDK;
   handler?: AgentHandler;
-  session?: { idle_timeout: number; max_sessions: number };
+  session?: { idle_timeout: number; max_sessions: number; reconcile_interval_seconds: number };
   concurrency?: number;
   log?: (msg: string) => void;
 }) {
@@ -40,7 +40,7 @@ function createSessionManager(opts: {
   const sdk = opts.sdk ?? mockSdk();
 
   return new SessionManager({
-    session: opts.session ?? { idle_timeout: 300, max_sessions: 10 },
+    session: opts.session ?? { idle_timeout: 300, max_sessions: 10, reconcile_interval_seconds: 300 },
     concurrency: opts.concurrency ?? 5,
     handlerFactory: factory,
     handlerConfig: { workspaceRoot: "/tmp/test" },
@@ -117,7 +117,7 @@ describe("SessionManager", () => {
 
     const sdk = mockSdk();
     const sm = new SessionManager({
-      session: { idle_timeout: 300, max_sessions: 10 },
+      session: { idle_timeout: 300, max_sessions: 10, reconcile_interval_seconds: 300 },
       concurrency: 5,
       handlerFactory: factory,
       handlerConfig: { workspaceRoot: "/tmp/test" },
@@ -202,7 +202,7 @@ describe("SessionManager", () => {
 
     const sdk = mockSdk();
     const sm = new SessionManager({
-      session: { idle_timeout: 300, max_sessions: 2 },
+      session: { idle_timeout: 300, max_sessions: 2, reconcile_interval_seconds: 300 },
       concurrency: 5,
       handlerFactory: factory,
       handlerConfig: { workspaceRoot: "/tmp/test" },
@@ -245,7 +245,7 @@ describe("SessionManager", () => {
 
     const sdk = mockSdk();
     const sm = new SessionManager({
-      session: { idle_timeout: 300, max_sessions: 2 },
+      session: { idle_timeout: 300, max_sessions: 2, reconcile_interval_seconds: 300 },
       concurrency: 5,
       handlerFactory: factory,
       handlerConfig: { workspaceRoot: "/tmp/test" },
@@ -297,7 +297,7 @@ describe("SessionManager", () => {
 
     const sdk = mockSdk();
     const sm = new SessionManager({
-      session: { idle_timeout: 300, max_sessions: 10 },
+      session: { idle_timeout: 300, max_sessions: 10, reconcile_interval_seconds: 300 },
       concurrency: 2,
       handlerFactory: factory,
       handlerConfig: { workspaceRoot: "/tmp/test" },
