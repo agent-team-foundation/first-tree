@@ -265,13 +265,9 @@ function installLaunchd(): ServiceInfo {
 function uninstallLaunchd(): ServiceInfo {
   const plistPath = launchdPlistPath();
   const target = launchctlDomainTarget();
-  try {
-    execFileSync("launchctl", ["bootout", `${target}/${LAUNCHD_LABEL}`], {
-      stdio: "ignore",
-      timeout: 5000,
-    });
-  } catch {
-    // Already gone.
+  const res = runCapture("launchctl", ["bootout", `${target}/${LAUNCHD_LABEL}`], 15_000);
+  if (!res.ok && !/not find|no such|not loaded/i.test(res.stderr)) {
+    process.stderr.write(`    warning: bootout during uninstall: ${res.stderr || `exit ${res.code ?? "unknown"}`}\n`);
   }
   if (existsSync(plistPath)) rmSync(plistPath);
   return {
@@ -370,19 +366,18 @@ function installSystemd(): ServiceInfo {
 
 function uninstallSystemd(): ServiceInfo {
   const unitPath = systemdUnitPath();
-  try {
-    execFileSync("systemctl", ["--user", "disable", "--now", SYSTEMD_UNIT], {
-      stdio: "ignore",
-      timeout: 10_000,
-    });
-  } catch {
-    // Unit not loaded — fine.
+  const disableRes = runCapture("systemctl", ["--user", "disable", "--now", SYSTEMD_UNIT], 10_000);
+  if (!disableRes.ok && !/not found|no such|not loaded/i.test(disableRes.stderr)) {
+    process.stderr.write(
+      `    warning: systemctl disable during uninstall: ${disableRes.stderr || `exit ${disableRes.code ?? "unknown"}`}\n`,
+    );
   }
   if (existsSync(unitPath)) rmSync(unitPath);
-  try {
-    execFileSync("systemctl", ["--user", "daemon-reload"], { stdio: "ignore", timeout: 5000 });
-  } catch {
-    // systemd may not be reachable — fine for cleanup.
+  const reloadRes = runCapture("systemctl", ["--user", "daemon-reload"], 5_000);
+  if (!reloadRes.ok) {
+    process.stderr.write(
+      `    warning: systemctl daemon-reload during uninstall: ${reloadRes.stderr || `exit ${reloadRes.code ?? "unknown"}`}\n`,
+    );
   }
   return {
     platform: "systemd",

@@ -64,8 +64,8 @@ function decodeJwtPayload(token: string): JwtPayload | null {
  *   - No existing credentials → proceed silently (first-time install).
  *   - Existing credentials, same memberId → proceed silently (reconnect /
  *     token refresh — common + safe).
- *   - Existing credentials, memberId indeterminate → proceed silently (we
- *     can't tell; don't interrupt a flow we might be wrong about).
+ *   - Existing credentials, memberId indeterminate → prompt with
+ *     "unknown account" label so the user can decide.
  *   - Existing credentials, different memberId → prompt [Replace / Cancel].
  *     Cancel prints the isolation guide and returns "cancel".
  */
@@ -253,7 +253,7 @@ export function registerConnectCommand(parent: Command): void {
         });
         process.stderr.write(`  \u2713 Connected as this computer (id: ${config.client.id})\n`);
 
-        // 3. Install background service (default) OR run inline (--no-service).
+        // 5. Install background service (default) OR run inline (--no-service).
         const shouldInstallService = options.service !== false && isServiceSupported();
 
         if (shouldInstallService) {
