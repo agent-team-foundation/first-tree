@@ -96,7 +96,7 @@ if needed, then:
 - install local skill integration in the current repo
 - install the bundled `first-tree` skill in the tree repo if it is missing
 - refresh `AGENTS.md` and `CLAUDE.md`
-- write `.first-tree/source.json` (includes tree localPath)
+- write `.first-tree/source.json` (tree repo identity + published URL when known)
 - write `.first-tree/tree.json` and `.first-tree/bindings/<source-id>.json`
 - refresh the tree repo's `source-repos.md` index plus root repo-discovery guidance
 
@@ -238,9 +238,9 @@ but does not try to open many code PRs automatically.
 
 - Start from `.first-tree/source.json` in the current source/workspace root.
 - If you are starting from the tree repo itself, use `source-repos.md` as the quick index of bound source/workspace repos and their GitHub URLs, while treating `.first-tree/bindings/` as the canonical machine-readable source of truth.
-- Resolve the recorded `localPath`.
-- If the checkout is missing but the tree has been published, create a temporary
-  clone under `.first-tree/tmp/`.
+- First try the sibling checkout named by `tree.treeRepoName`.
+- If that checkout is missing but the tree has been published, create or refresh
+  a temporary clone under `.first-tree/tmp/`.
 - At task close-out, always ask whether the tree needs updating.
 
 ## Sample Tasks After Onboarding
