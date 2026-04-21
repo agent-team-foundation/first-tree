@@ -26,6 +26,7 @@ import {
 import { RepoFilter } from "../../src/products/breeze/engine/runtime/repo-filter.js";
 import {
   buildNotificationCandidate,
+  buildRequiredReviewCandidate,
   buildReviewRequestCandidate,
 } from "../../src/products/breeze/engine/runtime/task.js";
 
@@ -185,6 +186,38 @@ describe("GhClient.reviewRequests / assignedItems", () => {
       "assigned_pull_request",
     ]);
   });
+
+  it("recovers required-review backlog from exact repo scopes", async () => {
+    const { executor, ctl } = makeStubExecutor();
+    ctl.setResponses([
+      {
+        stdout: [
+          "45\tHandle backlog\thttps://github.com/o/r/pull/45\t2026-04-15T12:00:00Z\t0\tREVIEW_REQUIRED",
+          "46\tSkip draft\thttps://github.com/o/r/pull/46\t2026-04-15T12:00:00Z\t1\tREVIEW_REQUIRED",
+          "47\tSkip changes requested\thttps://github.com/o/r/pull/47\t2026-04-15T12:00:00Z\t0\tCHANGES_REQUESTED",
+        ].join("\n"),
+      },
+    ]);
+    const client = new GhClient({
+      host: "github.com",
+      repoFilter: RepoFilter.parseCsv("o/r"),
+      executor,
+    });
+    const tasks = await client.requiredReviewBacklog(10);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toEqual(
+      buildRequiredReviewCandidate({
+        repo: "o/r",
+        number: 45,
+        title: "Handle backlog",
+        webUrl: "https://github.com/o/r/pull/45",
+        updatedAt: "2026-04-15T12:00:00Z",
+      }),
+    );
+    expect(ctl.calls[0].args.slice(0, 2)).toEqual(["pr", "list"]);
+    expect(ctl.calls[0].args).toContain("--repo");
+    expect(ctl.calls[0].args).toContain("o/r");
+  });
 });
 
 describe("GhClient.collectCandidates", () => {
@@ -238,6 +271,50 @@ describe("GhClient.collectCandidates", () => {
       lookbackSecs: 3600,
     });
     expect(poll.searchRateLimited).toBe(true);
+  });
+
+  it("adds required-review backlog when review-requested search is empty", async () => {
+    const { executor, ctl } = makeStubExecutor();
+    ctl.setResponder((spec) => {
+      if (spec.args[0] === "api") return { stdout: "" };
+      if (spec.args[0] === "search" && spec.args.includes("--review-requested=@me")) {
+        return { stdout: "" };
+      }
+      if (spec.args[0] === "pr" && spec.args[1] === "list") {
+        return {
+          stdout:
+            "11\tReview me later\thttps://github.com/o/r/pull/11\t2026-04-15T12:00:00Z\t0\tREVIEW_REQUIRED",
+        };
+      }
+      if (spec.args[0] === "search" && spec.args[1] === "issues") {
+        return { stdout: "" };
+      }
+      return { stdout: "" };
+    });
+    const client = new GhClient({
+      host: "github.com",
+      repoFilter: RepoFilter.parseCsv("o/r"),
+      executor,
+    });
+    const now = Date.UTC(2026, 3, 15, 12, 0, 0) / 1000;
+    const poll = await client.collectCandidates({
+      limit: 5,
+      includeSearch: true,
+      nowEpoch: now,
+      lookbackSecs: 3600,
+    });
+    expect(poll.tasks).toEqual([
+      buildRequiredReviewCandidate({
+        repo: "o/r",
+        number: 11,
+        title: "Review me later",
+        webUrl: "https://github.com/o/r/pull/11",
+        updatedAt: "2026-04-15T12:00:00Z",
+      }),
+    ]);
+    expect(
+      ctl.calls.some((call) => call.args[0] === "pr" && call.args[1] === "list"),
+    ).toBe(true);
   });
 });
 

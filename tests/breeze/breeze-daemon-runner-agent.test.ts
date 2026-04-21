@@ -200,7 +200,9 @@ describe("AgentPool", () => {
 describe("executeAgent", () => {
   it("writes prompt, invokes spawner, parses result", async () => {
     const request = fakeRequest();
+    const finalOutputPath = join(request.taskDir, "runner-output.txt");
     const spawner: AgentSpawner = async ({ outputPath }) => {
+      expect(outputPath).not.toBe(finalOutputPath);
       writeFileSync(
         outputPath,
         "doing things\nBREEZE_RESULT: status=handled summary=all good",
@@ -215,6 +217,8 @@ describe("executeAgent", () => {
     expect(outcome.status).toBe("handled");
     expect(outcome.summary).toBe("all good");
     expect(existsSync(join(request.taskDir, "prompt.txt"))).toBe(true);
+    expect(readFileSync(finalOutputPath, "utf8")).toContain("all good");
+    expect(existsSync(join(request.taskDir, "runner-last-message.txt"))).toBe(false);
   });
 
   it("copies claude stdout into runner-output.txt", async () => {

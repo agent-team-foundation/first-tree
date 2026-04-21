@@ -8,11 +8,11 @@ do not try to collapse them into a single SemVer stream.
 
 | Family | Files | Example | What it represents |
 |--------|-------|---------|--------------------|
-| **npm package** | `package.json#version` | `first-tree@0.2.6` | Released artifact. What `npm install -g first-tree` pins. |
-| **Product** | `src/products/<name>/VERSION` | `tree=0.2.6`, `breeze=0.1.0`, `gardener=0.1.0` | The public surface of a single product CLI. |
-| **Meta command** | `src/meta/skill-tools/VERSION` | `skill=0.2.6` | The public surface of the maintenance namespace. |
+| **npm package** | `package.json#version` | `first-tree@0.2.8` | Released artifact. What `npm install -g first-tree` pins. |
+| **Product** | `src/products/<name>/VERSION` | `tree=0.2.8`, `breeze=0.2.1`, `gardener=0.1.0` | The public surface of a single product CLI. |
+| **Meta command** | `src/meta/skill-tools/VERSION` | `skill=0.2.8` | The public surface of the maintenance namespace. |
 | **Skill payload** | `skills/<name>/VERSION` | `skills/tree/VERSION = 0.2` | The operational handbook an agent reads. |
-| **Runtime asset** | `assets/<name>/VERSION` | `assets/tree/VERSION = 0.2.6` | Installed templates/workflows/helpers for user repos. |
+| **Runtime asset** | `assets/<name>/VERSION` | `assets/tree/VERSION = 0.2.8` | Installed templates/workflows/helpers for user repos. |
 
 ## Why They Are Independent
 
