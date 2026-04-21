@@ -67,10 +67,13 @@ workspace repo, or non-git workspace folder.
 When an agent is asked to install `first-tree`:
 
 1. Run `first-tree tree inspect --json`.
-2. Ask whether an existing Context Tree already exists.
-3. If yes, prefer `first-tree tree bind`.
-4. If no, use `first-tree tree init`.
-5. If the current root is a workspace, follow with `first-tree tree workspace sync`.
+2. Run `first-tree tree init` — it handles both cases:
+   - no existing tree -> creates a sibling tree and binds it
+   - existing tree -> pass `--tree-path <path>` or `--tree-url <url>` and it binds
+3. If the current root is a workspace, pass `--scope workspace --sync-members`
+   so discovered child repos bind to the same shared tree.
+4. Use `first-tree tree bind` directly only when you need explicit `--mode`
+   control (for example `workspace-member` binds).
 
 Do not recreate a new sibling tree repo when the user already has a shared tree
 they want to keep using.
