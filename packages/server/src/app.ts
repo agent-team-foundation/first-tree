@@ -25,7 +25,7 @@ import { adminSessionRoutes } from "./api/admin/sessions.js";
 import { adminStatsRoutes } from "./api/admin/stats.js";
 import { adminSystemConfigRoutes } from "./api/admin/system-config.js";
 import { adminTaskRoutes } from "./api/admin/tasks.js";
-import { adminUploadRoutes } from "./api/admin/uploads.js";
+import { adminUploadRoutes, publicUploadRoutes } from "./api/admin/uploads.js";
 import { adminWsRoutes } from "./api/admin/ws-admin.js";
 import { agentChatRoutes } from "./api/agent/chats.js";
 import { agentConfigRoutes } from "./api/agent/config.js";
@@ -160,6 +160,7 @@ export async function buildApp(config: Config) {
       await api.register(authRoutes, { prefix: "/auth" });
       await api.register(contextTreeInfoRoutes, { prefix: "/context-tree" });
       await api.register(bootstrapConfigRoutes, { prefix: "/bootstrap" });
+      await api.register(publicUploadRoutes, { prefix: "/uploads" });
 
       // Admin routes (JWT protected)
       await api.register(

@@ -36,18 +36,15 @@ describe("Admin Uploads API", () => {
 
     expect(uploadRes.statusCode).toBe(201);
     const result = uploadRes.json();
-    expect(result.url).toMatch(/^\/api\/v1\/admin\/uploads\//);
+    expect(result.url).toMatch(/^\/api\/v1\/uploads\//);
     expect(result.mimeType).toBe("image/png");
     expect(result.filename).toBe("test.png");
     expect(result.size).toBeGreaterThan(0);
 
-    // Retrieve the uploaded file
+    // Retrieve the uploaded file (public route, no auth needed)
     const getRes = await app.inject({
       method: "GET",
       url: result.url,
-      headers: {
-        authorization: `Bearer ${admin.accessToken}`,
-      },
     });
 
     expect(getRes.statusCode).toBe(200);
@@ -81,7 +78,7 @@ describe("Admin Uploads API", () => {
     expect(res.json().error).toContain("Unsupported file type");
   });
 
-  it("rejects unauthenticated requests", async () => {
+  it("rejects unauthenticated upload", async () => {
     const app = getApp();
 
     const res = await app.inject({
@@ -94,14 +91,10 @@ describe("Admin Uploads API", () => {
 
   it("returns 404 for non-existent file", async () => {
     const app = getApp();
-    const admin = await createTestAdmin(app);
 
     const res = await app.inject({
       method: "GET",
-      url: "/api/v1/admin/uploads/nonexistent.png",
-      headers: {
-        authorization: `Bearer ${admin.accessToken}`,
-      },
+      url: "/api/v1/uploads/nonexistent.png",
     });
 
     expect(res.statusCode).toBe(404);
@@ -109,14 +102,10 @@ describe("Admin Uploads API", () => {
 
   it("rejects path traversal in filename", async () => {
     const app = getApp();
-    const admin = await createTestAdmin(app);
 
     const res = await app.inject({
       method: "GET",
-      url: "/api/v1/admin/uploads/..%2F..%2Fetc%2Fpasswd",
-      headers: {
-        authorization: `Bearer ${admin.accessToken}`,
-      },
+      url: "/api/v1/uploads/..%2F..%2Fetc%2Fpasswd",
     });
 
     // Should be 400 or 404, not serve the file

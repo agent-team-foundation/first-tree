@@ -15,6 +15,7 @@ function ensureUploadsDir(): void {
   }
 }
 
+/** Authenticated routes — POST upload */
 export async function adminUploadRoutes(app: FastifyInstance): Promise<void> {
   ensureUploadsDir();
 
@@ -69,7 +70,7 @@ export async function adminUploadRoutes(app: FastifyInstance): Promise<void> {
       throw err;
     }
 
-    const url = `/api/v1/admin/uploads/${uniqueName}`;
+    const url = `/api/v1/uploads/${uniqueName}`;
 
     return reply.status(201).send({
       url,
@@ -79,11 +80,14 @@ export async function adminUploadRoutes(app: FastifyInstance): Promise<void> {
       size: totalSize,
     });
   });
+}
 
-  /** GET /admin/uploads/:filename — serve uploaded file */
+/** Public routes — GET uploaded files (URL contains random UUID, not guessable) */
+export async function publicUploadRoutes(app: FastifyInstance): Promise<void> {
+  ensureUploadsDir();
+
+  /** GET /uploads/:filename — serve uploaded file without auth */
   app.get<{ Params: { filename: string } }>("/:filename", async (request, reply) => {
-    requireMember(request);
-
     const { filename } = request.params;
     if (filename.includes("/") || filename.includes("..")) {
       return reply.status(400).send({ error: "Invalid filename" });
