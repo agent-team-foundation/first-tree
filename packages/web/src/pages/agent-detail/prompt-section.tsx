@@ -1,6 +1,7 @@
 import { Pencil } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "../../components/ui/button.js";
+import { Markdown } from "../../components/ui/markdown.js";
 
 /**
  * Redesign §5.4 System Prompt Append — inline editor, no dialog.
@@ -82,9 +83,13 @@ export function PromptSection({ value, baseline, onChange, onRevert, disabled }:
             </p>
           </div>
         ) : (
-          <pre className="whitespace-pre-wrap break-words rounded bg-muted p-3 text-sm font-mono max-h-64 overflow-auto min-h-8">
-            {value || <span className="text-muted-foreground italic font-sans">No prompt append.</span>}
-          </pre>
+          <div className="rounded bg-muted p-3 text-sm max-h-64 overflow-auto min-h-8">
+            {value ? (
+              <Markdown>{value}</Markdown>
+            ) : (
+              <span className="text-muted-foreground italic">No prompt append.</span>
+            )}
+          </div>
         )}
       </div>
     </section>

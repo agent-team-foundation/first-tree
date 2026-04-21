@@ -9,6 +9,7 @@ export type SessionListItem = {
   lastActivityAt: string;
   messageCount: number;
   summary: string | null;
+  topic: string | null;
 };
 
 export type SessionListResponse = {

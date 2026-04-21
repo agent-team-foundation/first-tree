@@ -42,6 +42,11 @@ export const chatDetailSchema = chatSchema.extend({
 });
 export type ChatDetail = z.infer<typeof chatDetailSchema>;
 
+export const updateChatSchema = z.object({
+  topic: z.string().trim().max(500).nullable(),
+});
+export type UpdateChat = z.infer<typeof updateChatSchema>;
+
 export const addParticipantSchema = z.object({
   agentId: z.string().min(1),
   mode: z.enum(["full", "mention_only"]).default("full"),

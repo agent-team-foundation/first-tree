@@ -1,7 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Leaf, MessageSquare, Pause, Play, Send, Square } from "lucide-react";
+import { Check, Leaf, MessageSquare, Pause, Pencil, Play, Send, Square, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { getChat, listChatMessages, type MessageWithDelivery, sendChatMessage } from "../../../api/chats.js";
+import {
+  getChat,
+  listChatMessages,
+  type MessageWithDelivery,
+  renameChat,
+  sendChatMessage,
+} from "../../../api/chats.js";
 import {
   asAssistantTextPayload,
   asErrorPayload,
@@ -15,6 +21,7 @@ import {
   terminateSession,
 } from "../../../api/sessions.js";
 import { useAuth } from "../../../auth/auth-context.js";
+import { Markdown } from "../../../components/ui/markdown.js";
 import { StateDot } from "../../../components/ui/state-dot.js";
 import { useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { cn } from "../../../lib/utils.js";
@@ -459,17 +466,12 @@ function TextRow({
           style={{
             fontSize: 12.5,
             color: "var(--fg)",
-            whiteSpace: "pre-wrap",
             marginTop: 2,
             lineHeight: 1.55,
           }}
         >
           {msg.format === "text" ? (
-            typeof msg.content === "string" ? (
-              msg.content
-            ) : (
-              JSON.stringify(msg.content)
-            )
+            <Markdown>{typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content)}</Markdown>
           ) : (
             <pre
               className="mono"
@@ -544,6 +546,26 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
     sendMut.mutate(text);
   };
 
+  const [renaming, setRenaming] = useState(false);
+  const [renameDraft, setRenameDraft] = useState("");
+  const renameInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (renaming) renameInputRef.current?.focus();
+  }, [renaming]);
+  const renameMut = useMutation({
+    mutationFn: (topic: string | null) => renameChat(chatId, topic),
+    onSuccess: () => {
+      setRenaming(false);
+      queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] });
+      queryClient.invalidateQueries({ queryKey: ["agent-sessions", agentId] });
+      queryClient.invalidateQueries({ queryKey: ["session", agentId, chatId] });
+    },
+  });
+  const commitRename = () => {
+    const trimmed = renameDraft.trim();
+    renameMut.mutate(trimmed.length > 0 ? trimmed : null);
+  };
+
   /**
    * Timeline composition: messages (real chat rows, including the forwarded
    * final result) are always visible; transient events go through the
@@ -597,9 +619,79 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
         <div className="min-w-0">
           <div className="flex items-center" style={{ gap: 8 }}>
             <StateDot state={runtimeState} size={8} />
-            <span className="truncate" style={{ fontSize: 13, fontWeight: 600, color: "var(--fg)" }}>
-              {session?.summary || `Chat · ${chatId.slice(0, 8)}`}
-            </span>
+            {renaming ? (
+              <>
+                <input
+                  ref={renameInputRef}
+                  value={renameDraft}
+                  onChange={(e) => setRenameDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      commitRename();
+                    } else if (e.key === "Escape") {
+                      e.preventDefault();
+                      setRenaming(false);
+                    }
+                  }}
+                  disabled={renameMut.isPending}
+                  maxLength={500}
+                  placeholder="Chat name"
+                  className="outline-none"
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    fontSize: 13,
+                    fontWeight: 600,
+                    color: "var(--fg)",
+                    background: "var(--bg-sunken)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 4,
+                    padding: "2px 6px",
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={commitRename}
+                  disabled={renameMut.isPending}
+                  title="Save"
+                  className="inline-flex items-center"
+                  style={{ color: "var(--accent)", padding: 2 }}
+                >
+                  <Check className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRenaming(false)}
+                  disabled={renameMut.isPending}
+                  title="Cancel"
+                  className="inline-flex items-center"
+                  style={{ color: "var(--fg-3)", padding: 2 }}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </>
+            ) : (
+              <>
+                <span className="truncate" style={{ fontSize: 13, fontWeight: 600, color: "var(--fg)" }}>
+                  {chatDetail?.topic || session?.summary || `Chat · ${chatId.slice(0, 8)}`}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRenameDraft(chatDetail?.topic ?? "");
+                    setRenaming(true);
+                  }}
+                  title="Rename chat"
+                  className="inline-flex items-center transition-colors"
+                  style={{ color: "var(--fg-4)", padding: 2 }}
+                  onMouseEnter={(e) => (e.currentTarget.style.color = "var(--fg-2)")}
+                  onMouseLeave={(e) => (e.currentTarget.style.color = "var(--fg-4)")}
+                >
+                  <Pencil className="h-3 w-3" />
+                </button>
+              </>
+            )}
             <span
               className="mono"
               style={{

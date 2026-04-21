@@ -30,6 +30,7 @@ export type SessionListItem = {
   lastActivityAt: string;
   messageCount: number;
   summary: string | null;
+  topic: string | null;
 };
 
 /** List sessions for a specific agent, with optional state filters. */
@@ -50,6 +51,7 @@ export async function listAgentSessions(
       state: agentChatSessions.state,
       updatedAt: agentChatSessions.updatedAt,
       chatCreatedAt: chats.createdAt,
+      chatTopic: chats.topic,
     })
     .from(agentChatSessions)
     .innerJoin(chats, eq(agentChatSessions.chatId, chats.id))
@@ -118,6 +120,7 @@ export async function listAgentSessions(
     lastActivityAt: r.updatedAt.toISOString(),
     messageCount: countMap.get(r.chatId) ?? 0,
     summary: summaryMap.get(r.chatId) ?? null,
+    topic: r.chatTopic ?? null,
   }));
 }
 
@@ -130,6 +133,7 @@ export async function getSession(db: Database, agentId: string, chatId: string):
       state: agentChatSessions.state,
       updatedAt: agentChatSessions.updatedAt,
       chatCreatedAt: chats.createdAt,
+      chatTopic: chats.topic,
     })
     .from(agentChatSessions)
     .innerJoin(chats, eq(agentChatSessions.chatId, chats.id))
@@ -171,6 +175,7 @@ export async function getSession(db: Database, agentId: string, chatId: string):
     lastActivityAt: row.updatedAt.toISOString(),
     messageCount: countRow?.count ?? 0,
     summary,
+    topic: row.chatTopic ?? null,
   };
 }
 
@@ -237,6 +242,7 @@ export async function listAllSessions(
       lastActivityAt: r.updatedAt.toISOString(),
       messageCount: 0, // Omit per-session message count in global list for performance
       summary: null, // Omit summary in global list for performance
+      topic: null, // Omit topic in global list for performance
     })),
     nextCursor,
   };

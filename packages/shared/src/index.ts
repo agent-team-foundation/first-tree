@@ -111,6 +111,8 @@ export {
   createChatSchema,
   type RemoveParticipant,
   removeParticipantSchema,
+  type UpdateChat,
+  updateChatSchema,
 } from "./schemas/chat.js";
 export {
   CLIENT_STATUSES,
