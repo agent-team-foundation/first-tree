@@ -3,8 +3,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   bootstrapWorkspace,
-  installFirstTreeIntegration,
   type InstallFirstTreeIntegrationExec,
+  installFirstTreeIntegration,
 } from "../runtime/bootstrap.js";
 import type { AgentIdentity } from "../runtime/handler.js";
 
@@ -215,9 +215,10 @@ type ExecCall = {
   options: { cwd: string; timeout: number };
 };
 
-function makeRecordingExec(
-  impl: (call: ExecCall) => void = () => {},
-): { exec: InstallFirstTreeIntegrationExec; calls: ExecCall[] } {
+function makeRecordingExec(impl: (call: ExecCall) => void = () => {}): {
+  exec: InstallFirstTreeIntegrationExec;
+  calls: ExecCall[];
+} {
   const calls: ExecCall[] = [];
   const exec: InstallFirstTreeIntegrationExec = (command, args, options) => {
     const call: ExecCall = { command, args, options };
@@ -295,11 +296,7 @@ describe("installFirstTreeIntegration", () => {
     expect(result).toBe(true);
     expect(calls).toHaveLength(2);
     expect(calls[1]?.command).toBe("npx");
-    expect(calls[1]?.args.slice(0, 3)).toEqual([
-      "-y",
-      "first-tree@latest",
-      "tree",
-    ]);
+    expect(calls[1]?.args.slice(0, 3)).toEqual(["-y", "first-tree@latest", "tree"]);
     expect(logs.join("\n")).toContain("npx first-tree@latest");
   });
 

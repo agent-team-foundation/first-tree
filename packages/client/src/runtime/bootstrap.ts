@@ -195,11 +195,7 @@ export type InstallFirstTreeIntegrationOptions = {
   exec?: InstallFirstTreeIntegrationExec;
 };
 
-function defaultInstallExec(
-  command: string,
-  args: string[],
-  options: { cwd: string; timeout: number },
-): void {
+function defaultInstallExec(command: string, args: string[], options: { cwd: string; timeout: number }): void {
   execFileSync(command, args, {
     cwd: options.cwd,
     stdio: "pipe",
@@ -219,11 +215,8 @@ function defaultInstallExec(
  * Graceful degradation: returns false on failure and logs. The session still
  * starts; the agent just doesn't have the first-tree skill wired up.
  */
-export function installFirstTreeIntegration(
-  options: InstallFirstTreeIntegrationOptions,
-): boolean {
-  const { workspacePath, contextTreePath, workspaceId, treeRepoUrl, log } =
-    options;
+export function installFirstTreeIntegration(options: InstallFirstTreeIntegrationOptions): boolean {
+  const { workspacePath, contextTreePath, workspaceId, treeRepoUrl, log } = options;
   const exec = options.exec ?? defaultInstallExec;
 
   const integrateArgs = [
@@ -267,9 +260,7 @@ export function installFirstTreeIntegration(
         // Try the next attempt (e.g. `first-tree` not on PATH → try npx).
         continue;
       }
-      log(
-        `First-tree integration skipped (${attempt.label}): ${msg.slice(0, 200)}`,
-      );
+      log(`First-tree integration skipped (${attempt.label}): ${msg.slice(0, 200)}`);
       return false;
     }
   }
