@@ -7,6 +7,19 @@ import { chatParticipants, chats } from "../db/schema/chats.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { NotFoundError } from "../errors.js";
 
+const SUMMARY_MAX_LENGTH = 50;
+
+/** Extract a plain-text summary from a message's JSONB content field. */
+function extractSummary(content: unknown, maxLen = SUMMARY_MAX_LENGTH): string | null {
+  let text = "";
+  if (typeof content === "object" && content !== null && "text" in content) {
+    text = String((content as { text: unknown }).text ?? "");
+  } else if (typeof content === "string") {
+    text = content;
+  }
+  return text ? text.slice(0, maxLen) : null;
+}
+
 export type SessionListItem = {
   agentId: string;
   chatId: string;
@@ -15,6 +28,7 @@ export type SessionListItem = {
   startedAt: string;
   lastActivityAt: string;
   messageCount: number;
+  summary: string | null;
 };
 
 /** List sessions for a specific agent, with optional state filters. */
@@ -76,6 +90,25 @@ export async function listAgentSessions(
 
   const countMap = new Map(messageCounts.map((r) => [r.chatId, r.count]));
 
+  // Get first message content per chat for summary
+  const firstMessages =
+    chatIds.length > 0
+      ? await db.execute<{ chat_id: string; content: unknown }>(
+          sql`SELECT DISTINCT ON (chat_id) chat_id, content
+              FROM messages
+              WHERE chat_id = ANY(${chatIds})
+              ORDER BY chat_id, created_at ASC`,
+        )
+      : ([] as { chat_id: string; content: unknown }[]);
+
+  const summaryMap = new Map<string, string>();
+  for (const row of firstMessages) {
+    const summary = extractSummary(row.content);
+    if (summary) {
+      summaryMap.set(row.chat_id, summary);
+    }
+  }
+
   return rows.map((r) => ({
     agentId: r.agentId,
     chatId: r.chatId,
@@ -84,6 +117,7 @@ export async function listAgentSessions(
     startedAt: r.chatCreatedAt.toISOString(),
     lastActivityAt: r.updatedAt.toISOString(),
     messageCount: countMap.get(r.chatId) ?? 0,
+    summary: summaryMap.get(r.chatId) ?? null,
   }));
 }
 
@@ -121,6 +155,13 @@ export async function getSession(db: Database, agentId: string, chatId: string):
       ),
     );
 
+  // Get first message for summary
+  const firstMsgRows = await db.execute<{ content: unknown }>(
+    sql`SELECT content FROM messages WHERE chat_id = ${chatId} ORDER BY created_at ASC LIMIT 1`,
+  );
+  const firstMsg = firstMsgRows[0];
+  const summary = firstMsg ? extractSummary(firstMsg.content) : null;
+
   return {
     agentId: row.agentId,
     chatId: row.chatId,
@@ -129,6 +170,7 @@ export async function getSession(db: Database, agentId: string, chatId: string):
     startedAt: row.chatCreatedAt.toISOString(),
     lastActivityAt: row.updatedAt.toISOString(),
     messageCount: countRow?.count ?? 0,
+    summary,
   };
 }
 
@@ -194,6 +236,7 @@ export async function listAllSessions(
       startedAt: r.chatCreatedAt.toISOString(),
       lastActivityAt: r.updatedAt.toISOString(),
       messageCount: 0, // Omit per-session message count in global list for performance
+      summary: null, // Omit summary in global list for performance
     })),
     nextCursor,
   };

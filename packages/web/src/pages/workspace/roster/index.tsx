@@ -194,7 +194,7 @@ export function AgentRoster({
                   onClick={() => onSelectChat(agent.agentId, s.chatId)}
                   className="w-full grid items-center text-left transition-colors"
                   style={{
-                    gridTemplateColumns: "14px 1fr auto",
+                    gridTemplateColumns: "14px 1fr",
                     columnGap: 6,
                     padding: "4px 10px 4px 28px",
                     background: selectedChatId === s.chatId ? "var(--bg-hover)" : "transparent",
@@ -208,11 +208,8 @@ export function AgentRoster({
                   }}
                 >
                   <StateDot state={runtime} size={6} />
-                  <span className="truncate" style={{ fontSize: 11 }}>
-                    {s.chatId.slice(0, 8)}
-                  </span>
-                  <span className="mono" style={{ fontSize: 9, color: "var(--fg-4)" }}>
-                    {s.state}
+                  <span className="truncate" style={{ fontSize: 11, color: s.summary ? "var(--fg-2)" : "var(--fg-4)" }}>
+                    {s.summary || `Chat · ${s.chatId.slice(0, 8)}`}
                   </span>
                 </button>
               );
