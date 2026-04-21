@@ -21,31 +21,31 @@ import { join } from "node:path";
 
 export const BREEZE_USAGE = `usage: first-tree breeze <command>
 
-  Breeze is the proposal/inbox agent. Every subcommand runs on the
-  TypeScript daemon (\`~/.breeze/runner\`).
+  Breeze is the proposal/inbox agent. It polls GitHub notifications,
+  keeps a local inbox under \`~/.breeze/\`, and dispatches work to
+  per-task agent runners.
 
-Foreground daemon:
-  run, daemon           Run the broker loop forever (default)
-  run-once              Run one poll cycle, wait for drain, exit
-
-Background lifecycle:
+Primary commands (start here):
+  install               Run the first-run setup (creates config.yaml)
   start                 Launch the daemon in the background (launchd on macOS)
   stop                  Stop the daemon and remove its lock
-
-Diagnostics:
   status                Print daemon lock + runtime/status.env
   doctor                Diagnose the local install
-  cleanup               Remove stale workspaces + expired claims
-  poll-inbox            Alias for \`poll\` (one-shot notification fetch)
-
-One-shot commands (no daemon required):
-  poll                  Poll GitHub notifications once and update the inbox
   watch                 Live TUI: status board + activity feed
-  statusline            Claude Code statusline hook (single-line output)
-  status-manager        Manage per-session status entries
+  poll                  Poll GitHub notifications once (no daemon required)
 
-Installer:
-  install               Run the breeze setup script
+Advanced commands (for agents or debugging):
+  run, daemon           Run the broker loop in the foreground.
+                        Humans should normally use \`start\` instead.
+                        \`daemon\` is an alias invoked by launchd.
+  run-once              Run one poll cycle, wait for drain, exit.
+  cleanup               Remove stale workspaces + expired claims
+                        (only run if \`doctor\` suggests it).
+  poll-inbox            Legacy alias for \`poll\`.
+  statusline            Claude Code statusline hook (single-line output).
+                        Wired into Claude Code by \`install\`; do not invoke manually.
+  status-manager        Internal: manage per-session status entries
+                        (used by breeze runners).
 
 Options:
   --help, -h            Show this help message

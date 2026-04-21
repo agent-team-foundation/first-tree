@@ -37,42 +37,31 @@ and safe to re-run.
 
 ## CLI Commands
 
-### Foreground daemon
+### Primary (start here)
 
 | Command | Purpose |
 |---|---|
-| `first-tree breeze run` (alias `daemon`) | Run the broker loop forever in the foreground |
-| `first-tree breeze run-once` | Run one poll cycle, wait for drain, then exit |
-
-### Background lifecycle
-
-| Command | Purpose |
-|---|---|
-| `first-tree breeze start` | Launch the daemon in the background (via launchd on macOS) |
+| `first-tree breeze install` | First-run setup — writes config and wires the Claude Code statusline hook |
+| `first-tree breeze start` | Launch the daemon in the background (launchd on macOS, detached spawn elsewhere) |
 | `first-tree breeze stop` | Stop the daemon and remove its lock |
-
-### Diagnostics
-
-| Command | Purpose |
-|---|---|
 | `first-tree breeze status` | Print the daemon lock + runtime/status.env |
 | `first-tree breeze doctor` | One-screen diagnostic of the local install |
-| `first-tree breeze cleanup` | Remove stale workspaces and expired claims |
-
-### One-shot commands (no daemon required)
-
-| Command | Purpose |
-|---|---|
-| `first-tree breeze poll` (alias `poll-inbox`) | Poll GitHub notifications once and update the inbox |
 | `first-tree breeze watch` | Live TUI: status board + activity feed |
-| `first-tree breeze statusline` | Claude Code statusline hook (single-line output) |
-| `first-tree breeze status-manager` | Manage per-session status entries |
+| `first-tree breeze poll` | Poll GitHub notifications once (no daemon required) |
 
-### Installer
+### Advanced (agents, debugging, internal)
+
+These are the daemon's foreground entrypoints, hook shims, and internal
+helpers. Humans normally only need the primary set above.
 
 | Command | Purpose |
 |---|---|
-| `first-tree breeze install` | Run the breeze setup script (first-run only) |
+| `first-tree breeze run` / `first-tree breeze daemon` | Run the broker loop in the foreground. `start` is preferred for humans; `daemon` is invoked by launchd. |
+| `first-tree breeze run-once` | Run one poll cycle, wait for drain, then exit. Useful for debugging the daemon pipeline. |
+| `first-tree breeze cleanup` | Remove stale workspaces and expired claims. Only run if `doctor` suggests it. |
+| `first-tree breeze poll-inbox` | Legacy alias for `poll`. Kept for existing scripts. |
+| `first-tree breeze statusline` | Claude Code statusline hook (single-line output). Wired by `install`; never invoke manually — it runs on a sub-30 ms bundle. |
+| `first-tree breeze status-manager` | Internal: manage per-session status entries. Used by breeze runners; no human use case. |
 
 For full options on any command, run `first-tree breeze <command> --help`.
 

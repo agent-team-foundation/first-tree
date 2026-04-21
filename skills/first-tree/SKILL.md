@@ -50,9 +50,14 @@ operational skill — load the one that matches your task:
 
 | Product | Skill to load | Use when you need to… |
 |---|---|---|
-| **tree** | `tree` | Read, write, bind, init, verify, publish, or upgrade a Context Tree repo |
-| **breeze** | `breeze` | Run or inspect the breeze daemon: notifications inbox, statusline, background polling |
-| **gardener** | `gardener` | Have an agent automatically respond to feedback on tree sync PRs or comment on source-repo PRs/issues |
+| **tree** | `tree` | Onboard (`init`) / inspect / publish / verify / upgrade a Context Tree repo, or reach for the lower-level primitives (`bind`, `bootstrap`, `integrate`, `workspace sync`) |
+| **breeze** | `breeze` | Run or inspect the breeze daemon: install, start/stop/status, watch, one-shot poll, diagnose |
+| **gardener** | `gardener` | Install the push-mode workflow, run the pull-mode daemon, or invoke the agent primitives (`sync`, `comment`, `respond`) from CI or breeze |
+
+Each product's `--help` splits its commands into **Primary** (start here) and
+**Advanced / Agent** (primitives invoked by the daemon, breeze dispatch, or CI).
+Humans should normally only need the primary set — load the product skill for
+the full map.
 
 If you do not know which product you need, start here, skim the table above,
 and load whichever skill looks like the closest match. Loading more than one
