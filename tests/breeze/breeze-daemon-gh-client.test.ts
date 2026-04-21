@@ -187,6 +187,40 @@ describe("GhClient.reviewRequests / assignedItems", () => {
     ]);
   });
 
+  it("falls back to issue comments for search-derived PR candidates", async () => {
+    const { executor, ctl } = makeStubExecutor();
+    ctl.setResponder((spec) => {
+      if (spec.args[0] === "api" && String(spec.args[1]).includes("/issues/45/comments")) {
+        return {
+          stdout: "alice\tUser\t2026-04-15T12:00:00Z",
+        };
+      }
+      if (spec.args[0] === "api" && String(spec.args[1]).includes("/pulls/45/reviews")) {
+        return { stdout: "" };
+      }
+      return { stdout: "" };
+    });
+    const client = new GhClient({
+      host: "github.com",
+      repoFilter: RepoFilter.empty(),
+      executor,
+    });
+    const activity = await client.latestVisibleActivity(
+      buildRequiredReviewCandidate({
+        repo: "o/r",
+        number: 45,
+        title: "Handle backlog",
+        webUrl: "https://github.com/o/r/pull/45",
+        updatedAt: "2026-04-15T12:00:00Z",
+      }),
+    );
+    expect(activity).toEqual({
+      login: "alice",
+      userType: "User",
+      updatedAt: "2026-04-15T12:00:00Z",
+    });
+  });
+
   it("recovers required-review backlog from exact repo scopes", async () => {
     const { executor, ctl } = makeStubExecutor();
     ctl.setResponses([
@@ -413,7 +447,7 @@ describe("pure helpers", () => {
     expect(shouldIgnoreSelfAuthored("alice", "bob", "comment")).toBe(false);
   });
 
-  it("shouldIgnoreLatestSelfActivity compares against task updated_at", () => {
+  it("shouldIgnoreLatestSelfActivity compares against the handled watermark", () => {
     const activity = {
       login: "alice",
       userType: "User",

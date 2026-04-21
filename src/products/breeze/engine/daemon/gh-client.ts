@@ -331,6 +331,28 @@ export class GhClient {
     return parseThreadActivity(firstNonEmptyLine(stdout));
   }
 
+  /** Latest issue comment on the thread when we only have repo + number. */
+  async latestIssueCommentActivity(
+    repo: string,
+    issueNumber: number,
+  ): Promise<ThreadActivity | null> {
+    const jq =
+      'if length == 0 then empty else .[-1] | [(.user.login // ""), (.user.type // ""), (.updated_at // .created_at // "")] | @tsv end';
+    const stdout = await this.runChecked(
+      "inspect latest issue comment activity",
+      [
+        "api",
+        `/repos/${repo}/issues/${issueNumber}/comments?per_page=100`,
+        "-H",
+        "X-GitHub-Api-Version: 2022-11-28",
+        "--jq",
+        jq,
+      ],
+      "core",
+    );
+    return parseThreadActivity(firstNonEmptyLine(stdout));
+  }
+
   /** Last review on a PR. */
   async latestReviewActivity(
     repo: string,
@@ -357,7 +379,13 @@ export class GhClient {
   async latestVisibleActivity(
     task: TaskCandidate,
   ): Promise<ThreadActivity | null> {
-    const comment = await this.latestCommentActivity(task.latestCommentApiUrl);
+    const directComment = await this.latestCommentActivity(task.latestCommentApiUrl);
+    const issueNumber = taskIssueNumber(task) ?? taskPrNumber(task);
+    const fallbackComment =
+      directComment === null && issueNumber !== undefined
+        ? await this.latestIssueCommentActivity(task.repo, issueNumber)
+        : null;
+    const comment = pickNewerActivity(directComment, fallbackComment);
     const pr = taskPrNumber(task);
     const review =
       pr !== undefined ? await this.latestReviewActivity(task.repo, pr) : null;

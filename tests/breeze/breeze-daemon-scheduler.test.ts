@@ -131,8 +131,8 @@ describe("Scheduler.shouldSchedule", () => {
     expect(await sched.shouldSchedule(candidate)).toBe(false);
   });
 
-  it("short-circuits when latestVisibleActivity says we already replied", async () => {
-    const store = new ThreadStore({ runnerHome: makeHome("selfact") });
+  it("does not short-circuit self activity before the first handled pass", async () => {
+    const store = new ThreadStore({ runnerHome: makeHome("selfact-first") });
     const ghClient = {
       async latestVisibleActivity() {
         return {
@@ -155,6 +155,44 @@ describe("Scheduler.shouldSchedule", () => {
       title: "t",
       webUrl: "u",
       updatedAt: "2026-04-15T12:00:00Z",
+    });
+    expect(await sched.shouldSchedule(candidate)).toBe(true);
+  });
+
+  it("short-circuits when latestVisibleActivity says we already replied after a handled pass", async () => {
+    const store = new ThreadStore({ runnerHome: makeHome("selfact") });
+    const ghClient = {
+      async latestVisibleActivity() {
+        return {
+          login: "alice",
+          userType: "User",
+          updatedAt: "2026-04-15T12:00:01Z",
+        };
+      },
+    } as never;
+    const candidate = buildReviewRequestCandidate({
+      repo: "o/r",
+      number: 4,
+      title: "t",
+      webUrl: "u",
+      updatedAt: "2026-04-15T12:00:02Z",
+    });
+    store.saveThreadRecord({
+      threadKey: candidate.threadKey,
+      repo: candidate.repo,
+      lastSeenUpdatedAt: "",
+      lastHandledUpdatedAt: "2026-04-15T12:00:00Z",
+      lastResult: "handled",
+      failureCount: 0,
+      nextRetryEpoch: 0,
+      lastTaskId: "",
+    });
+    const sched = new Scheduler({
+      store,
+      ghClient,
+      identity: { host: "github.com", login: "alice" },
+      pollIntervalSec: 60,
+      nowSec: () => 1_000,
     });
     expect(await sched.shouldSchedule(candidate)).toBe(false);
     const record = store.loadThreadRecord(candidate.threadKey);
