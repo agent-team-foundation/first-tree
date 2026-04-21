@@ -57,7 +57,7 @@ These must be set for Docker / CI / `--no-interactive` deployments. Interactive 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `FIRST_TREE_HUB_LOG_LEVEL` | `info` | Log level (`debug` / `info` / `warn` / `error`) |
+| `FIRST_TREE_HUB_LOG_LEVEL` | `info` | Log level (`trace` / `debug` / `info` / `warn` / `error` / `fatal`) |
 
 ## Docker Compose (HTTP)
 

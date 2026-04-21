@@ -10,7 +10,6 @@ export {
   endSpan,
   getFastifyOtelPlugin,
   initTelemetry,
-  isContentCaptureEnabled,
   isTelemetryEnabled,
   normalizeAttrs,
   propagation,
@@ -25,7 +24,6 @@ export {
 } from "./telemetry.js";
 export {
   endWsConnectionSpan,
-  getWsConnectionContext,
   setWsConnectionAttrs,
   startWsConnectionSpan,
   withWsMessageSpan,

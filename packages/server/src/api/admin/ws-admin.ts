@@ -5,6 +5,7 @@ import { jwtVerify } from "jose";
 import type { WebSocket } from "ws";
 import type { Database } from "../../db/connection.js";
 import { agents } from "../../db/schema/agents.js";
+import { endWsConnectionSpan, setWsConnectionAttrs, startWsConnectionSpan } from "../../observability/index.js";
 import { registerAdminBroadcaster } from "../../services/admin-broadcast.js";
 import type { Notifier } from "../../services/notifier.js";
 
@@ -75,10 +76,13 @@ export function adminWsRoutes(notifier: Notifier, jwtSecret: string) {
   return async (app: FastifyInstance): Promise<void> => {
     // See ws-client.ts for why config.otel is disabled on WS upgrade routes.
     app.get("/admin", { websocket: true, config: { otel: false } }, async (socket, request) => {
+      startWsConnectionSpan(socket, { remoteIp: request.ip });
+
       const token = (request.query as Record<string, string>).token;
       if (!token) {
         socket.send(JSON.stringify({ type: "error", message: "Missing token query parameter" }));
         socket.close(4001, "Missing token");
+        endWsConnectionSpan(socket, 4001);
         return;
       }
 
@@ -94,6 +98,7 @@ export function adminWsRoutes(notifier: Notifier, jwtSecret: string) {
         ) {
           socket.send(JSON.stringify({ type: "error", message: "Invalid token type" }));
           socket.close(4001, "Invalid token");
+          endWsConnectionSpan(socket, 4001);
           return;
         }
         organizationId = payload.organizationId;
@@ -101,8 +106,11 @@ export function adminWsRoutes(notifier: Notifier, jwtSecret: string) {
       } catch {
         socket.send(JSON.stringify({ type: "error", message: "Invalid or expired token" }));
         socket.close(4001, "Auth failed");
+        endWsConnectionSpan(socket, 4001);
         return;
       }
+
+      setWsConnectionAttrs(socket, { organizationId, memberId });
 
       // Visibility cached at connect time. New agents added mid-session won't
       // appear in pulses until the dashboard reconnects — acceptable trade-off
@@ -112,8 +120,9 @@ export function adminWsRoutes(notifier: Notifier, jwtSecret: string) {
       adminSockets.set(socket, { organizationId, memberId, visibleAgentIds });
       socket.send(JSON.stringify({ type: "admin:connected" }));
 
-      socket.on("close", () => {
+      socket.on("close", (code) => {
         adminSockets.delete(socket);
+        endWsConnectionSpan(socket, code);
       });
     });
   };

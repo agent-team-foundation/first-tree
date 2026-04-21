@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { createLogger } from "./logger.js";
-import { currentSpanId, currentTraceId } from "./telemetry.js";
+import { currentTraceId } from "./telemetry.js";
 
 /**
  * Fastify plugin that:
@@ -8,18 +8,20 @@ import { currentSpanId, currentTraceId } from "./telemetry.js";
  *    so request logs share the same format / output stream / errorSink.
  * 2. Stamps `x-trace-id` on every response when a trace id is available.
  * 3. Includes traceId in JSON error bodies emitted via `AppError`.
+ *
+ * We deliberately only bind `traceId` (stable for the whole request) — not
+ * `spanId`, which changes when handlers enter `withSpan(...)`. Binding it at
+ * onRequest would freeze it to the HTTP root span, mis-attributing later
+ * logs to the wrong span. Call sites that want the current span id can use
+ * `currentSpanId()` directly.
  */
 export const observabilityPlugin: FastifyPluginAsync = async (app: FastifyInstance) => {
   const log = createLogger("Http");
 
   app.addHook("onRequest", async (request: FastifyRequest, reply: FastifyReply) => {
     const traceId = currentTraceId();
-    const spanId = currentSpanId();
     const bindings: Record<string, unknown> = { requestId: request.id };
     if (traceId) bindings.traceId = traceId;
-    if (spanId) bindings.spanId = spanId;
-    // Replace Fastify's per-request logger with our module-scoped one so
-    // existing call sites (request.log.*) get our format + error sink.
     (request as FastifyRequest & { log: ReturnType<typeof log.child> }).log = log.child(bindings);
 
     if (traceId) {

@@ -1,5 +1,11 @@
-import { describe, expect, it } from "vitest";
-import { normalizeAttrs, parseHeaderString } from "../telemetry.js";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  initTelemetry,
+  isTelemetryEnabled,
+  normalizeAttrs,
+  parseHeaderString,
+  shutdownTelemetry,
+} from "../telemetry.js";
 
 describe("normalizeAttrs", () => {
   describe("sensitive key redaction", () => {
@@ -121,5 +127,67 @@ describe("parseHeaderString", () => {
   it("handles realistic Logfire-style token header", () => {
     const out = parseHeaderString("Authorization=Bearer pylf_v1_us_xyzABC123==");
     expect(out).toEqual({ Authorization: "Bearer pylf_v1_us_xyzABC123==" });
+  });
+});
+
+describe("initTelemetry / shutdownTelemetry lifecycle", () => {
+  afterEach(async () => {
+    // Make sure each test starts from a clean slate regardless of what the
+    // previous one left behind.
+    await shutdownTelemetry();
+  });
+
+  it("stays disabled when endpoint is empty", async () => {
+    await initTelemetry(undefined);
+    expect(isTelemetryEnabled()).toBe(false);
+
+    await initTelemetry({
+      endpoint: "",
+      headers: "",
+      exporter: "otlp-http",
+      serviceName: "test",
+      environment: "test",
+      sampleRate: 1,
+    });
+    expect(isTelemetryEnabled()).toBe(false);
+  });
+
+  it("enables after init and disables after shutdown", async () => {
+    await initTelemetry({
+      endpoint: "http://127.0.0.1:65535/v1/traces",
+      headers: "",
+      exporter: "otlp-http",
+      serviceName: "test",
+      environment: "test",
+      sampleRate: 1,
+    });
+    expect(isTelemetryEnabled()).toBe(true);
+
+    await shutdownTelemetry();
+    expect(isTelemetryEnabled()).toBe(false);
+  });
+
+  it("is idempotent: double-init shuts down the first provider before creating the second", async () => {
+    const cfg = {
+      endpoint: "http://127.0.0.1:65535/v1/traces",
+      headers: "",
+      exporter: "otlp-http" as const,
+      serviceName: "test",
+      environment: "test",
+      sampleRate: 1,
+    };
+
+    await initTelemetry(cfg);
+    expect(isTelemetryEnabled()).toBe(true);
+
+    // Second call must not throw and must leave tracing enabled (not leak
+    // a zombie provider). The implementation tears the old one down first.
+    await expect(initTelemetry(cfg)).resolves.toBeUndefined();
+    expect(isTelemetryEnabled()).toBe(true);
+  });
+
+  it("shutdownTelemetry on a never-initialized SDK is a no-op", async () => {
+    await expect(shutdownTelemetry()).resolves.toBeUndefined();
+    expect(isTelemetryEnabled()).toBe(false);
   });
 });

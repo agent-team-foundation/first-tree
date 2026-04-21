@@ -266,7 +266,6 @@ Resolution order for the agent token:
 | `FIRST_TREE_HUB_OTEL_ENDPOINT` | OTLP/HTTP traces endpoint. Non-empty value enables tracing | `""` (disabled) |
 | `FIRST_TREE_HUB_OTEL_HEADERS` | OTLP headers in `key1=val1,key2=val2` format (secret — typically holds the write token) | `""` |
 | `FIRST_TREE_HUB_OTEL_ENVIRONMENT` | Deployment environment label (`development` / `staging` / `production` / …) — emitted as `deployment.environment.name` | `development` |
-| `FIRST_TREE_HUB_OTEL_CAPTURE_CONTENT` | Whether to include message bodies / prompts in span attrs | `false` |
 
 See [observability.md](observability.md) for the full config reference, backend cheat sheet, and troubleshooting recipes.
 

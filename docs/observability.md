@@ -51,8 +51,6 @@ in the startup log.
 | `observability.tracing.serviceName` | — | `first-tree-hub` | Shown in trace backends |
 | `observability.tracing.environment` | — | `development` | `deployment.environment.name` OTel attr |
 | `observability.tracing.sampleRate` | — | `1.0` | `0.0–1.0`, ratio applied at root |
-| `observability.tracing.captureContent` | `FIRST_TREE_HUB_OTEL_CAPTURE_CONTENT` | `false` | Include message bodies / prompts in span attrs. **Opt-in** for privacy |
-| `observability.tracing.instrumentPostgres` | — | `false` | Wrap postgres queries with spans. Opt-in |
 
 ## Multi-environment setup (one backend, many environments)
 
@@ -312,10 +310,11 @@ Sampling is `ParentBased(TraceIdRatioBased(sampleRate))` — inbound
 - **No client-side tracing.** Client (`@first-tree-hub/client`) emits logs
   only. Agent-side work is observed indirectly via Hub-side spans
   (`ws.connection`, `ws.message`, inbox attrs).
-- **No PG span by default.** PostgreSQL query spans are opt-in via
-  `observability.tracing.instrumentPostgres: true`. For query performance
-  investigation, PostgreSQL's own `log_min_duration_statement` +
-  `pg_stat_statements` is usually sufficient.
+- **No PG span.** PostgreSQL queries are not wrapped in spans — for query
+  performance investigation, PostgreSQL's own `log_min_duration_statement` +
+  `pg_stat_statements` is typically sufficient. If cross-query correlation
+  becomes a need, this should be reconsidered as a dedicated feature, not a
+  flag-gated default.
 - **Server restart loses in-flight trace context.** Messages enqueued but
   not yet delivered keep their business state but lose the original
   request's trace linkage. Attribute search still works.

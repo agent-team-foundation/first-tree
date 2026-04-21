@@ -2,6 +2,7 @@ export type { BoundAgent, ClientConnectionConfig, SessionCommand } from "./clien
 export { ClientConnection } from "./client-connection.js";
 // Handlers
 export { registerBuiltinHandlers } from "./handlers/index.js";
+export { applyClientLoggerConfig, createLogger, rootLogger } from "./observability/index.js";
 // Runtime
 export type { AgentSlotConfig } from "./runtime/agent-slot.js";
 export { AgentSlot } from "./runtime/agent-slot.js";

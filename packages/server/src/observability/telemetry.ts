@@ -35,10 +35,18 @@ const { FastifyOtelInstrumentation } = otelModule as unknown as {
   FastifyOtelInstrumentation: new (opts?: {
     servername?: string;
     requestHook?: (span: Span, request: import("fastify").FastifyRequest) => void;
+    ignoreHeaders?: string[];
   }) => {
     plugin: () => import("fastify").FastifyPluginCallback;
   };
 };
+
+/**
+ * Headers the Fastify instrumentation must never capture. Even if upstream's
+ * default changes to opt-in capture, we want an explicit blocklist so a
+ * dependency bump can't quietly leak credentials into span attributes.
+ */
+const IGNORED_SPAN_HEADERS = ["authorization", "cookie", "set-cookie", "x-admin-token", "x-api-key"];
 
 const log = createLogger("Telemetry");
 
@@ -49,11 +57,9 @@ export type TracingConfig = {
   serviceName: string;
   environment: string;
   sampleRate: number;
-  captureContent: boolean;
 };
 
 let _enabled = false;
-let _captureContent = false;
 let _tracer: Tracer | null = null;
 let _provider: NodeTracerProvider | null = null;
 let _fastifyOtelPlugin: import("fastify").FastifyPluginCallback | null = null;
@@ -89,7 +95,14 @@ export function parseHeaderString(raw: string): Record<string, string> {
  * letting trace backends distinguish replicas of the same service even
  * when they share environment / region / etc.
  */
-export function initTelemetry(config: TracingConfig | undefined, instanceId?: string): void {
+export async function initTelemetry(config: TracingConfig | undefined, instanceId?: string): Promise<void> {
+  if (_provider) {
+    // Second call — tear down old processor first so we don't leak BatchSpanProcessor
+    // timers or pending export queues. Primarily guards tests and hot-reload code paths.
+    log.warn("initTelemetry called twice; shutting down previous provider");
+    await shutdownTelemetry();
+  }
+
   if (!config || !config.endpoint) {
     log.info("tracing disabled (no endpoint configured)");
     return;
@@ -127,7 +140,6 @@ export function initTelemetry(config: TracingConfig | undefined, instanceId?: st
   _provider = provider;
   _tracer = trace.getTracer(TRACER_NAME, TRACER_VERSION);
   _enabled = true;
-  _captureContent = config.captureContent;
 
   // Prepare Fastify HTTP instrumentation plugin; app.ts registers it
   // conditionally via `getFastifyOtelPlugin()`.
@@ -141,6 +153,7 @@ export function initTelemetry(config: TracingConfig | undefined, instanceId?: st
   try {
     const instrumentation = new FastifyOtelInstrumentation({
       servername: config.serviceName,
+      ignoreHeaders: IGNORED_SPAN_HEADERS,
       requestHook: (span, request) => {
         const route = request.routeOptions?.url;
         if (route) {
@@ -171,7 +184,7 @@ export function initTelemetry(config: TracingConfig | undefined, instanceId?: st
   });
 
   log.info(
-    `tracing enabled: exporter=${config.exporter} endpoint=${truncateEndpoint(config.endpoint)} service=${config.serviceName} env=${config.environment}${instanceId ? ` instance=${instanceId}` : ""} sampleRate=${config.sampleRate} captureContent=${config.captureContent}`,
+    `tracing enabled: exporter=${config.exporter} endpoint=${truncateEndpoint(config.endpoint)} service=${config.serviceName} env=${config.environment}${instanceId ? ` instance=${instanceId}` : ""} sampleRate=${config.sampleRate}`,
   );
 }
 
@@ -185,10 +198,6 @@ function truncateEndpoint(url: string): string {
 
 export function isTelemetryEnabled(): boolean {
   return _enabled;
-}
-
-export function isContentCaptureEnabled(): boolean {
-  return _enabled && _captureContent;
 }
 
 /** Flush all pending spans. Call before `process.exit()` in shutdown. */

@@ -28,7 +28,7 @@ async function main() {
   // bootstrap (e.g. notifier.start) will then be captured. instanceId is
   // carried as service.instance.id so replicas are distinguishable in the
   // trace backend.
-  initTelemetry(serverConfig.observability.tracing, config.instanceId);
+  await initTelemetry(serverConfig.observability.tracing, config.instanceId);
 
   const app = await buildApp(config);
   await app.listen({ host: config.server.host, port: config.server.port });

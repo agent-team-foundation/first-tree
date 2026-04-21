@@ -104,12 +104,3 @@ export async function withWsMessageSpan<T>(
     ),
   );
 }
-
-/**
- * Retrieve the OTel context captured at connection time. Useful for cases
- * like `notifier.onInbox(entryId)` dispatching a push that should parent to
- * the connection rather than to whatever was active in the notifier tick.
- */
-export function getWsConnectionContext(socket: WebSocket): Context | undefined {
-  return connections.get(socket)?.context;
-}

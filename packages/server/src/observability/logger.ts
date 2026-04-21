@@ -1,13 +1,18 @@
-import { Writable } from "node:stream";
+import {
+  createLoggerOutputStream,
+  formatLocalTime,
+  type LogFormat,
+  type LogLevel,
+  parseLogLevel,
+  SKIP_KEYS,
+} from "@agent-team-foundation/first-tree-hub-shared/observability";
 import pino from "pino";
 
 // ─── Config (late-initialized) ────────────────────────────────────────
 
-type LogFormat = "pretty" | "json";
-type LogLevel = "trace" | "debug" | "info" | "warn" | "error" | "fatal";
-
+const initialLevel = parseLogLevel(process.env.FIRST_TREE_HUB_LOG_LEVEL);
 let _format: LogFormat = process.env.NODE_ENV === "production" ? "json" : "pretty";
-let _level: LogLevel = ((process.env.FIRST_TREE_HUB_LOG_LEVEL as LogLevel | undefined) ?? "info") as LogLevel;
+let _level: LogLevel = initialLevel.level;
 let _bridgeMinLevel = 50; // error
 
 /**
@@ -28,64 +33,6 @@ export function applyLoggerConfig(options: {
   rootLogger.level = options.level;
 }
 
-// ─── Pretty formatter ─────────────────────────────────────────────────
-
-const LEVEL_LABELS: Record<number, string> = {
-  10: "TRACE",
-  20: "DEBUG",
-  30: "INFO",
-  40: "WARN",
-  50: "ERROR",
-  60: "FATAL",
-};
-
-const LEVEL_COLORS: Record<number, string> = {
-  10: "\x1b[90m",
-  20: "\x1b[36m",
-  30: "\x1b[32m",
-  40: "\x1b[33m",
-  50: "\x1b[31m",
-  60: "\x1b[35m",
-};
-
-const RESET = "\x1b[0m";
-const DIM = "\x1b[2m";
-
-const SKIP_KEYS = new Set(["level", "time", "msg", "module", "pid", "hostname", "v"]);
-
-function formatPrettyEntry(json: string): string {
-  const obj = JSON.parse(json) as Record<string, unknown>;
-  const level = obj.level as number;
-  const label = LEVEL_LABELS[level] ?? "???";
-  const color = LEVEL_COLORS[level] ?? "";
-  const time = (obj.time as string) ?? new Date().toISOString();
-  const module = obj.module ? `[${String(obj.module)}] ` : "";
-  const msg = (obj.msg as string) ?? "";
-
-  const extras: string[] = [];
-  let errStack = "";
-  for (const [k, v] of Object.entries(obj)) {
-    if (SKIP_KEYS.has(k)) continue;
-    if (k === "err" && v && typeof v === "object") {
-      const e = v as Record<string, unknown>;
-      if (e.message) extras.push(`err.message=${String(e.message)}`);
-      if (typeof e.stack === "string") errStack = `\n${DIM}${e.stack}${RESET}`;
-    } else {
-      extras.push(`${k}=${typeof v === "string" ? v : JSON.stringify(v)}`);
-    }
-  }
-
-  const extraStr = extras.length > 0 ? `  ${DIM}${extras.join(" ")}${RESET}` : "";
-  return `${DIM}${time}${RESET} ${color}${label.padEnd(5)}${RESET} ${module}${msg}${extraStr}${errStack}\n`;
-}
-
-function formatLocalTime(): string {
-  const d = new Date();
-  const date = d.toLocaleDateString("sv-SE");
-  const time = d.toLocaleTimeString("en-GB", { hour12: false });
-  return `${date} ${time}`;
-}
-
 // ─── Error sink (bridges error/fatal logs onto active span) ───────────
 
 type ErrorSink = (message: string, err: unknown, context: Record<string, unknown>) => void;
@@ -93,6 +40,32 @@ let _errorSink: ErrorSink | null = null;
 
 export function setErrorSink(sink: ErrorSink | null): void {
   _errorSink = sink;
+}
+
+/**
+ * Truncate values before handing them to the sink. Strings over ~2KB get
+ * clipped with a marker; objects are JSON-stringified then clipped. Prevents
+ * an accidental 10MB log payload from becoming a 10MB span attribute.
+ */
+const MAX_STRING_LEN = 2048;
+const MAX_JSON_LEN = 8192;
+
+function truncateForAttr(value: unknown): unknown {
+  if (value === null || value === undefined) return value;
+  if (typeof value === "string") {
+    if (value.length <= MAX_STRING_LEN) return value;
+    return `${value.slice(0, MAX_STRING_LEN)}...[truncated ${value.length - MAX_STRING_LEN} chars]`;
+  }
+  if (typeof value === "number" || typeof value === "boolean") return value;
+  if (Array.isArray(value) && value.every((x) => typeof x === "string")) return value;
+  try {
+    const json = JSON.stringify(value);
+    if (!json) return undefined;
+    if (json.length <= MAX_JSON_LEN) return json;
+    return `${json.slice(0, MAX_JSON_LEN)}...[truncated ${json.length - MAX_JSON_LEN} chars]`;
+  } catch {
+    return String(value);
+  }
 }
 
 function forwardErrorIfNeeded(obj: Record<string, unknown>): void {
@@ -104,7 +77,8 @@ function forwardErrorIfNeeded(obj: Record<string, unknown>): void {
   const context: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(obj)) {
     if (SKIP_KEYS.has(k) || k === "err") continue;
-    context[k] = v;
+    const truncated = truncateForAttr(v);
+    if (truncated !== undefined) context[k] = truncated;
   }
   if (typeof obj.module === "string") context.module = obj.module;
   try {
@@ -114,31 +88,12 @@ function forwardErrorIfNeeded(obj: Record<string, unknown>): void {
   }
 }
 
-// ─── Output stream ────────────────────────────────────────────────────
-
-const outputStream = new Writable({
-  write(chunk, _, callback) {
-    const text = chunk.toString();
-    try {
-      if (_format === "pretty") {
-        process.stdout.write(formatPrettyEntry(text));
-      } else {
-        process.stdout.write(text);
-      }
-      try {
-        const obj = JSON.parse(text) as Record<string, unknown>;
-        forwardErrorIfNeeded(obj);
-      } catch {
-        // non-JSON line, ignore
-      }
-    } catch {
-      process.stdout.write(text);
-    }
-    callback();
-  },
-});
-
 // ─── Root logger ──────────────────────────────────────────────────────
+
+const outputStream = createLoggerOutputStream({
+  getFormat: () => _format,
+  onJsonEntry: forwardErrorIfNeeded,
+});
 
 export const rootLogger = pino(
   {
@@ -147,6 +102,13 @@ export const rootLogger = pino(
   },
   outputStream,
 );
+
+if (initialLevel.fellBack) {
+  rootLogger.warn(
+    { envValue: process.env.FIRST_TREE_HUB_LOG_LEVEL },
+    "invalid FIRST_TREE_HUB_LOG_LEVEL; falling back to info",
+  );
+}
 
 /** Create a module-scoped child logger. Module name is shown as `[Module]` in pretty output. */
 export function createLogger(module: string): pino.Logger {

@@ -107,7 +107,7 @@ export async function startServer(options: StartOptions): Promise<void> {
   // passed as service.instance.id so replicas of the same service are
   // distinguishable in the trace backend.
   const { initTelemetry, shutdownTelemetry } = await import("@first-tree-hub/server/observability");
-  initTelemetry(serverConfig.observability.tracing, config.instanceId);
+  await initTelemetry(serverConfig.observability.tracing, config.instanceId);
 
   const app = await buildApp(config);
 

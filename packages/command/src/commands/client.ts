@@ -8,6 +8,7 @@ import {
   resetConfig,
   resetConfigMeta,
 } from "@agent-team-foundation/first-tree-hub-shared/config";
+import { applyClientLoggerConfig } from "@first-tree-hub/client";
 import type { Command } from "commander";
 import { fail } from "../cli/output.js";
 import {
@@ -53,6 +54,10 @@ export function registerClientCommands(program: Command): void {
           schema: clientConfigSchema,
           role: "client",
         });
+
+        // Wire the resolved logLevel into the client logger — without this,
+        // `logLevel: debug` in client.yaml is parsed but never reaches pino.
+        applyClientLoggerConfig({ level: config.logLevel });
 
         // Load agents (may be empty — client can start without agents)
         const agentsDir = join(DEFAULT_CONFIG_DIR, "agents");

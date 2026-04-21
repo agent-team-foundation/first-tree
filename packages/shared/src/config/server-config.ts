@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { logFormatSchema, logLevelSchema } from "../observability/logger-core.js";
 import { defineConfig, field, optional } from "./schema.js";
 import { getConfig } from "./singleton.js";
 import type { InferConfig } from "./types.js";
@@ -67,14 +68,14 @@ export const serverConfigSchema = defineConfig({
   }),
   observability: {
     logging: {
-      level: field(z.enum(["trace", "debug", "info", "warn", "error", "fatal"]).default("info"), {
+      level: field(logLevelSchema.default("info"), {
         env: "FIRST_TREE_HUB_LOG_LEVEL",
       }),
       /**
        * Output format. Defaults to `json` in production and `pretty` elsewhere —
        * pretty is for humans, json is for log collectors (Loki, CloudWatch, Vector).
        */
-      format: field(z.enum(["pretty", "json"]).default(process.env.NODE_ENV === "production" ? "json" : "pretty")),
+      format: field(logFormatSchema.default(process.env.NODE_ENV === "production" ? "json" : "pretty")),
       /** Minimum pino level whose records are bridged onto the currently-active span. */
       bridgeToSpanLevel: field(z.enum(["error", "warn", "off"]).default("error")),
     },
@@ -101,10 +102,6 @@ export const serverConfigSchema = defineConfig({
         env: "FIRST_TREE_HUB_OTEL_ENVIRONMENT",
       }),
       sampleRate: field(z.number().min(0).max(1).default(1)),
-      /** Whether to include message bodies / prompts / LLM replies in span attrs. Opt-in. */
-      captureContent: field(z.boolean().default(false), { env: "FIRST_TREE_HUB_OTEL_CAPTURE_CONTENT" }),
-      /** Whether to wrap postgres queries with spans. Opt-in. */
-      instrumentPostgres: field(z.boolean().default(false)),
     }),
   },
 });

@@ -112,6 +112,40 @@ describe("logger ErrorSink bridging", () => {
     expect(() => createLogger("M").error("boom")).not.toThrow();
     setErrorSink(null);
   });
+
+  it("truncates overlong string values before handing them to the sink", () => {
+    silenceStdout();
+    applyLoggerConfig({ level: "trace", format: "json", bridgeToSpanLevel: "error" });
+    const { calls, restore } = installSpySink();
+
+    // 5000-char string — well above MAX_STRING_LEN (2048)
+    const huge = "x".repeat(5000);
+    createLogger("M").error({ payload: huge }, "big error");
+
+    expect(calls).toHaveLength(1);
+    const forwarded = calls[0]?.context.payload;
+    expect(typeof forwarded).toBe("string");
+    // Truncation marker must be appended; length is capped at MAX_STRING_LEN + marker
+    expect(forwarded).toMatch(/\.\.\.\[truncated \d+ chars\]$/);
+    expect((forwarded as string).length).toBeLessThan(huge.length);
+    restore();
+  });
+
+  it("JSON-stringifies and truncates oversized object values", () => {
+    silenceStdout();
+    applyLoggerConfig({ level: "trace", format: "json", bridgeToSpanLevel: "error" });
+    const { calls, restore } = installSpySink();
+
+    // Object whose JSON will exceed MAX_JSON_LEN (8192)
+    const big = { items: Array.from({ length: 1000 }, (_, i) => ({ id: i, data: "x".repeat(50) })) };
+    createLogger("M").error({ state: big }, "bulky state");
+
+    expect(calls).toHaveLength(1);
+    const forwarded = calls[0]?.context.state;
+    expect(typeof forwarded).toBe("string");
+    expect(forwarded).toMatch(/\.\.\.\[truncated \d+ chars\]$/);
+    restore();
+  });
 });
 
 describe("logger output format", () => {
