@@ -16,11 +16,17 @@ export function useAgentNameMap(): (uuid: string | null | undefined) => string {
     staleTime: 30_000,
   });
 
+  // Prefer `displayName` over `name` so chat/roster render friendly
+  // strings (e.g. "Alice Wang") instead of slug-form hub IDs
+  // (e.g. "alice"). The slug stays available as a fallback for agents
+  // with no display name set, and uuid as the last resort for soft-
+  // deleted rows (`name` is cleared on delete) or agents that never had
+  // either field populated.
   return useMemo(() => {
     const map = new Map<string, string>();
     if (data?.items) {
       for (const a of data.items) {
-        map.set(a.uuid, a.name ?? a.displayName ?? a.uuid);
+        map.set(a.uuid, a.displayName ?? a.name ?? a.uuid);
       }
     }
     return (uuid: string | null | undefined) => {

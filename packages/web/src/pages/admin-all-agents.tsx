@@ -16,9 +16,12 @@ export function AdminAllAgentsPage() {
   const navigate = useNavigate();
   const resolveMember = useMemberNameMap();
 
+  // `paginationQuerySchema` caps `limit` at 100 server-side. Stay at the max
+  // here — if the org grows past 100 agents we'll need cursor pagination
+  // (same story as the rest of the admin list views).
   const { data, isLoading, error } = useQuery({
     queryKey: ["admin-all-agents"],
-    queryFn: () => listAllAgentsForAdmin({ limit: 200 }),
+    queryFn: () => listAllAgentsForAdmin({ limit: 100 }),
   });
 
   return (

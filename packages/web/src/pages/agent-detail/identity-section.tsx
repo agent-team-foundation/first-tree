@@ -73,6 +73,10 @@ export function IdentitySection({ agent, onSave }: IdentitySectionProps) {
           <span>
             type <Badge variant="secondary">{agent.type}</Badge>
           </span>
+          <span>
+            visibility{" "}
+            <Badge variant={agent.visibility === "organization" ? "default" : "outline"}>{agent.visibility}</Badge>
+          </span>
           {domains.length > 0 && (
             <span>
               domains{" "}
