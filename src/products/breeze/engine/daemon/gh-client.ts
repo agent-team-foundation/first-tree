@@ -353,6 +353,28 @@ export class GhClient {
     return parseThreadActivity(firstNonEmptyLine(stdout));
   }
 
+  /** Latest issue/PR event (labels, mentions, assignments, etc.). */
+  async latestIssueEventActivity(
+    repo: string,
+    issueNumber: number,
+  ): Promise<ThreadActivity | null> {
+    const jq =
+      'if length == 0 then empty else .[-1] | [(.actor.login // ""), (.actor.type // ""), (.created_at // "")] | @tsv end';
+    const stdout = await this.runChecked(
+      "inspect latest issue event activity",
+      [
+        "api",
+        `/repos/${repo}/issues/${issueNumber}/events?per_page=100`,
+        "-H",
+        "X-GitHub-Api-Version: 2022-11-28",
+        "--jq",
+        jq,
+      ],
+      "core",
+    );
+    return parseThreadActivity(firstNonEmptyLine(stdout));
+  }
+
   /** Last review on a PR. */
   async latestReviewActivity(
     repo: string,
@@ -385,11 +407,16 @@ export class GhClient {
       directComment === null && issueNumber !== undefined
         ? await this.latestIssueCommentActivity(task.repo, issueNumber)
         : null;
+    const latestEvent =
+      issueNumber !== undefined
+        ? await this.latestIssueEventActivity(task.repo, issueNumber)
+        : null;
     const comment = pickNewerActivity(directComment, fallbackComment);
+    const threadActivity = pickNewerActivity(comment, latestEvent);
     const pr = taskPrNumber(task);
     const review =
       pr !== undefined ? await this.latestReviewActivity(task.repo, pr) : null;
-    return pickNewerActivity(comment, review);
+    return pickNewerActivity(threadActivity, review);
   }
 
   /**

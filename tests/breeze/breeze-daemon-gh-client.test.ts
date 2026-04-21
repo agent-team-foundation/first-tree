@@ -221,6 +221,43 @@ describe("GhClient.reviewRequests / assignedItems", () => {
     });
   });
 
+  it("considers issue events when they are newer than comments/reviews", async () => {
+    const { executor, ctl } = makeStubExecutor();
+    ctl.setResponder((spec) => {
+      const path = String(spec.args[1] ?? "");
+      if (spec.args[0] !== "api") return { stdout: "" };
+      if (path.includes("/issues/45/comments")) {
+        return { stdout: "alice\tUser\t2026-04-15T12:00:00Z" };
+      }
+      if (path.includes("/issues/45/events")) {
+        return { stdout: "alice\tUser\t2026-04-15T12:05:00Z" };
+      }
+      if (path.includes("/pulls/45/reviews")) {
+        return { stdout: "" };
+      }
+      return { stdout: "" };
+    });
+    const client = new GhClient({
+      host: "github.com",
+      repoFilter: RepoFilter.empty(),
+      executor,
+    });
+    const activity = await client.latestVisibleActivity(
+      buildRequiredReviewCandidate({
+        repo: "o/r",
+        number: 45,
+        title: "Handle backlog",
+        webUrl: "https://github.com/o/r/pull/45",
+        updatedAt: "2026-04-15T12:00:00Z",
+      }),
+    );
+    expect(activity).toEqual({
+      login: "alice",
+      userType: "User",
+      updatedAt: "2026-04-15T12:05:00Z",
+    });
+  });
+
   it("recovers required-review backlog from exact repo scopes", async () => {
     const { executor, ctl } = makeStubExecutor();
     ctl.setResponses([
