@@ -159,7 +159,8 @@ export async function getSession(db: Database, agentId: string, chatId: string):
   const firstMsgRows = await db.execute<{ content: unknown }>(
     sql`SELECT content FROM messages WHERE chat_id = ${chatId} ORDER BY created_at ASC LIMIT 1`,
   );
-  const summary = firstMsgRows.length > 0 ? extractSummary(firstMsgRows[0].content) : null;
+  const firstMsg = firstMsgRows[0];
+  const summary = firstMsg ? extractSummary(firstMsg.content) : null;
 
   return {
     agentId: row.agentId,
