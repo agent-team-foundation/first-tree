@@ -98,6 +98,21 @@ export const PASSTHROUGH_ENV_VARS: readonly string[] = [
 ];
 
 /**
+ * Agent CLIs may authenticate via a wider provider-specific env surface than
+ * the small Rust-era static allowlist above (for example Azure test slots,
+ * OpenAI-compatible base URLs, Bedrock/Vertex creds). Discover those families
+ * dynamically so background launchd jobs inherit the same auth context as the
+ * interactive shell that started Breeze.
+ */
+export const PASSTHROUGH_ENV_PREFIXES: readonly string[] = [
+  "AZURE_OPENAI_",
+  "OPENAI_",
+  "ANTHROPIC_",
+  "AWS_",
+  "GOOGLE_",
+];
+
+/**
  * Resolve one env var value, falling back to `/bin/zsh -lc` so we pick
  * up variables the GUI session sets in the user's login shell. Mirrors
  * Rust `resolve_launchd_env_var` + `resolve_env_var_from_login_shell`.
@@ -121,6 +136,50 @@ export function resolveLaunchdEnvVar(
   } catch {
     return undefined;
   }
+}
+
+function matchesPassthroughPrefix(variable: string): boolean {
+  return PASSTHROUGH_ENV_PREFIXES.some((prefix) => variable.startsWith(prefix));
+}
+
+function parseEnvVarNames(raw: string): string[] {
+  const names: string[] = [];
+  for (const line of raw.split("\n")) {
+    const match = /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(line.trim());
+    if (match?.[1]) names.push(match[1]);
+  }
+  return names;
+}
+
+function readLoginShellEnvVarNames(): string[] {
+  try {
+    const result = spawnSync("/bin/zsh", ["-lc", "env"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    if (result.status !== 0) return [];
+    return parseEnvVarNames(result.stdout ?? "");
+  } catch {
+    return [];
+  }
+}
+
+export function collectLaunchdPassthroughEnvVars(
+  env: NodeJS.ProcessEnv = process.env,
+  loginShellVars: readonly string[] = readLoginShellEnvVarNames(),
+): string[] {
+  const ordered = [...PASSTHROUGH_ENV_VARS];
+  const seen = new Set<string>(ordered);
+  const candidates = [
+    ...Object.keys(env),
+    ...loginShellVars,
+  ].filter(matchesPassthroughPrefix);
+  for (const variable of candidates.sort()) {
+    if (seen.has(variable)) continue;
+    ordered.push(variable);
+    seen.add(variable);
+  }
+  return ordered;
 }
 
 /** Port of the `escape_xml` helper. */
@@ -157,7 +216,11 @@ export function renderLaunchdPlist(inputs: LaunchdPlistInputs): string {
   for (const [key, value] of Object.entries(inputs.env ?? {})) {
     pushEnv(key, value);
   }
-  for (const variable of PASSTHROUGH_ENV_VARS) {
+  const passthroughVars = collectLaunchdPassthroughEnvVars({
+    ...process.env,
+    ...(inputs.env ?? {}),
+  });
+  for (const variable of passthroughVars) {
     pushEnv(variable, inputs.env?.[variable] ?? resolveLaunchdEnvVar(variable));
   }
 

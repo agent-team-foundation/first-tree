@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  collectLaunchdPassthroughEnvVars,
   escapeXml,
   launchdLabel,
   launchdPlistPath,
@@ -76,6 +77,47 @@ describe("renderLaunchdPlist", () => {
       env: { PATH: "/a", HOME: "/b" },
     });
     expect(xml).toContain("hello &lt;world&gt; &amp; &apos;friends&apos;");
+  });
+
+  it("includes discovered provider auth env vars beyond the static allowlist", () => {
+    const xml = renderLaunchdPlist({
+      login: "alice",
+      profile: "default",
+      executable: "/usr/local/bin/first-tree",
+      arguments: ["breeze", "daemon", "--backend=ts"],
+      logPath: "/tmp/breeze.log",
+      env: {
+        PATH: "/opt/bin",
+        HOME: "/Users/alice",
+        AZURE_OPENAI_API_KEY_TEST: "test-slot-key",
+        AWS_PROFILE: "bedrock-profile",
+      },
+    });
+    expect(xml).toContain("<key>AZURE_OPENAI_API_KEY_TEST</key>");
+    expect(xml).toContain("<string>test-slot-key</string>");
+    expect(xml).toContain("<key>AWS_PROFILE</key>");
+    expect(xml).toContain("<string>bedrock-profile</string>");
+  });
+});
+
+describe("collectLaunchdPassthroughEnvVars", () => {
+  it("preserves the legacy allowlist and appends prefixed provider envs", () => {
+    const vars = collectLaunchdPassthroughEnvVars(
+      {
+        AZURE_OPENAI_API_KEY_TEST: "test",
+        OPENAI_BASE_URL: "https://example.test",
+        AWS_PROFILE: "bedrock",
+        CLAUDE_CODE_USE_BEDROCK: "1",
+        CODEX_THREAD_ID: "thread-123",
+      },
+      ["GOOGLE_APPLICATION_CREDENTIALS"],
+    );
+    expect(vars).toContain("CLAUDE_CODE_USE_BEDROCK");
+    expect(vars).toContain("AZURE_OPENAI_API_KEY_TEST");
+    expect(vars).toContain("OPENAI_BASE_URL");
+    expect(vars).toContain("AWS_PROFILE");
+    expect(vars).toContain("GOOGLE_APPLICATION_CREDENTIALS");
+    expect(vars).not.toContain("CODEX_THREAD_ID");
   });
 });
 
