@@ -52,6 +52,17 @@ function formatDuration(ms: number): string {
   return `${ms}ms`;
 }
 
+function previewArgs(args: unknown): string {
+  if (args === undefined || args === null) return "";
+  if (typeof args === "string") return args.length > 200 ? `${args.slice(0, 200)}…` : args;
+  try {
+    const s = JSON.stringify(args);
+    return s.length > 200 ? `${s.slice(0, 200)}…` : s;
+  } catch {
+    return "…";
+  }
+}
+
 function ReadReceipt({ msg, myAgentId }: { msg: MessageWithDelivery; myAgentId: string | null }) {
   if (!myAgentId || msg.senderId !== myAgentId) return null;
   const status = msg.deliveryStatus ?? "sent";
@@ -219,6 +230,7 @@ function ToolCallStatusRow({ event }: { event: SessionEventRow }) {
             background: color,
             animation: "heartbeat-pulse 1.2s ease-in-out infinite",
             flexShrink: 0,
+            marginTop: 5,
           }}
         />
       ) : (
@@ -226,8 +238,20 @@ function ToolCallStatusRow({ event }: { event: SessionEventRow }) {
           {isErr ? "⚠" : "↳"}
         </span>
       )}
-      <span className="truncate" style={{ color: "var(--fg-3)" }}>
+      <span
+        style={{
+          color: "var(--fg-3)",
+          minWidth: 0,
+          flex: 1,
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-word",
+        }}
+        title={payload.args !== undefined && payload.args !== null ? previewArgs(payload.args) : undefined}
+      >
         {verb} <span style={{ color: "var(--fg-2)" }}>{payload.name}</span>
+        {payload.args !== undefined && payload.args !== null ? (
+          <span style={{ color: "var(--fg-4)" }}>({previewArgs(payload.args)})</span>
+        ) : null}
         {payload.durationMs !== undefined && !isPending ? (
           <span style={{ color: "var(--fg-4)", marginLeft: 6, fontSize: 10 }}>
             · {formatDuration(payload.durationMs)}
