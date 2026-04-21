@@ -66,10 +66,9 @@ function formatDuration(ms: number): string {
 
 function previewArgs(args: unknown): string {
   if (args === undefined || args === null) return "";
-  if (typeof args === "string") return args.length > 200 ? `${args.slice(0, 200)}…` : args;
+  if (typeof args === "string") return args;
   try {
-    const s = JSON.stringify(args);
-    return s.length > 200 ? `${s.slice(0, 200)}…` : s;
+    return JSON.stringify(args);
   } catch {
     return "…";
   }
@@ -380,21 +379,28 @@ function ToolCallStatusRow({ event }: { event: SessionEventRow }) {
         </span>
       )}
       <span
-        style={{
-          color: "var(--fg-3)",
-          minWidth: 0,
-          flex: 1,
-          whiteSpace: "pre-wrap",
-          wordBreak: "break-word",
-        }}
+        className="flex items-baseline"
+        style={{ color: "var(--fg-3)", minWidth: 0, flex: 1 }}
         title={payload.args !== undefined && payload.args !== null ? previewArgs(payload.args) : undefined}
       >
-        {verb} <span style={{ color: "var(--fg-2)" }}>{payload.name}</span>
+        <span style={{ whiteSpace: "nowrap", flexShrink: 0 }}>
+          {verb} <span style={{ color: "var(--fg-2)" }}>{payload.name}</span>
+        </span>
         {payload.args !== undefined && payload.args !== null ? (
-          <span style={{ color: "var(--fg-4)" }}>({previewArgs(payload.args)})</span>
+          <span className="truncate" style={{ color: "var(--fg-4)", minWidth: 0, flex: 1 }}>
+            ({previewArgs(payload.args)})
+          </span>
         ) : null}
         {payload.durationMs !== undefined && !isPending ? (
-          <span style={{ color: "var(--fg-4)", marginLeft: 6, fontSize: 10 }}>
+          <span
+            style={{
+              color: "var(--fg-4)",
+              marginLeft: 6,
+              fontSize: 10,
+              whiteSpace: "nowrap",
+              flexShrink: 0,
+            }}
+          >
             · {formatDuration(payload.durationMs)}
           </span>
         ) : null}

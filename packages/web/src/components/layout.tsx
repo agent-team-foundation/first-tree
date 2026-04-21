@@ -82,7 +82,7 @@ export function Layout() {
                   className="inline-flex items-center"
                   style={{
                     padding: "5px 12px",
-                    fontSize: 12,
+                    fontSize: 16,
                     fontWeight: 500,
                     gap: 6,
                     borderRadius: 5,

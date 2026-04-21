@@ -1,4 +1,3 @@
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
 @import "tailwindcss";
 @plugin "tailwindcss-animate";
 @plugin "@tailwindcss/typography";
@@ -52,8 +51,10 @@
 }
 
 :root {
-  --font-sans-stack: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --font-mono-stack: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --font-sans-stack:
+    "Geist Variable", -apple-system, "Segoe UI Variable", "Segoe UI", "PingFang SC", "Microsoft YaHei UI",
+    "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono-stack: "Geist Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
 
   --accent: oklch(0.72 0.17 150);
   --accent-dim: oklch(0.62 0.14 150);
@@ -124,6 +125,12 @@
     margin: 0;
     padding: 0;
     overscroll-behavior: none;
+  }
+  input,
+  textarea,
+  select,
+  button {
+    font: inherit;
   }
   body {
     @apply bg-background text-foreground;

@@ -133,7 +133,7 @@ export function AgentRoster({
               <span
                 className="mono truncate"
                 style={{
-                  fontSize: 12,
+                  fontSize: 14,
                   fontWeight: 500,
                   color: "var(--fg)",
                   letterSpacing: -0.1,
@@ -145,7 +145,7 @@ export function AgentRoster({
                 <span
                   className="mono"
                   style={{
-                    fontSize: 9,
+                    fontSize: 11,
                     padding: "1px 5px",
                     borderRadius: 2,
                     textTransform: "uppercase",
@@ -158,13 +158,13 @@ export function AgentRoster({
                 </span>
               )}
             </div>
-            <div className="truncate" style={{ fontSize: 10.5, color: "var(--fg-3)" }}>
+            <div className="truncate" style={{ fontSize: 12.5, color: "var(--fg-3)" }}>
               {state === "offline" ? "disconnected" : host || "\u2014"}
             </div>
           </div>
           <div className="flex flex-col items-end gap-0.5">
             {totalSessions > 0 && (
-              <span className="mono tnum" style={{ fontSize: 9, color: "var(--fg-3)" }}>
+              <span className="mono tnum" style={{ fontSize: 11, color: "var(--fg-3)" }}>
                 {activeSessions}
                 <span style={{ color: "var(--fg-4)" }}> / {totalSessions}</span>
               </span>
@@ -178,7 +178,7 @@ export function AgentRoster({
               <div
                 style={{
                   padding: "4px 10px 4px 28px",
-                  fontSize: 10.5,
+                  fontSize: 12.5,
                   color: "var(--fg-4)",
                 }}
               >
@@ -212,7 +212,7 @@ export function AgentRoster({
                     <StateDot state={runtime} size={6} />
                     <span
                       className="truncate"
-                      style={{ fontSize: 11, color: s.topic || s.summary ? "var(--fg-2)" : "var(--fg-4)" }}
+                      style={{ fontSize: 13, color: s.topic || s.summary ? "var(--fg-2)" : "var(--fg-4)" }}
                     >
                       {s.topic || s.summary || `Chat · ${s.chatId.slice(0, 8)}`}
                     </span>
@@ -227,7 +227,7 @@ export function AgentRoster({
               style={{
                 gap: 6,
                 padding: "4px 10px 4px 28px",
-                fontSize: 10.5,
+                fontSize: 12.5,
                 color: "var(--fg-3)",
               }}
               onMouseEnter={(e) => {
@@ -269,7 +269,7 @@ export function AgentRoster({
           <span
             className="mono uppercase"
             style={{
-              fontSize: 10,
+              fontSize: 12,
               color: "var(--fg-3)",
               letterSpacing: 0.08,
             }}
@@ -294,7 +294,7 @@ export function AgentRoster({
             className="w-full outline-none"
             style={{
               padding: "5px 8px 5px 26px",
-              fontSize: 12,
+              fontSize: 14,
               background: "var(--bg-sunken)",
               border: "1px solid var(--border)",
               borderRadius: 4,
@@ -312,7 +312,7 @@ export function AgentRoster({
                 onClick={() => setPill(p.value)}
                 className="inline-flex items-center"
                 style={{
-                  fontSize: 10,
+                  fontSize: 12,
                   padding: "3px 7px",
                   borderRadius: 3,
                   gap: 4,
@@ -347,17 +347,17 @@ export function AgentRoster({
         <div className="flex items-center justify-between" style={{ marginBottom: 4 }}>
           <span
             className="mono uppercase flex items-center gap-1.5"
-            style={{ fontSize: 10, color: "var(--fg-3)", letterSpacing: 0.08 }}
+            style={{ fontSize: 12, color: "var(--fg-3)", letterSpacing: 0.08 }}
           >
             <PulseIcon />
             Pulse · 5m
           </span>
-          <span className="mono" style={{ fontSize: 10, color: "var(--fg-4)" }}>
+          <span className="mono" style={{ fontSize: 12, color: "var(--fg-4)" }}>
             {pulse.stale ? "stale" : "live"}
           </span>
         </div>
         <PulseBar aggregated={pulse.aggregated} stale={pulse.stale} />
-        <div className="flex" style={{ gap: 10, marginTop: 6, fontSize: 10 }}>
+        <div className="flex" style={{ gap: 10, marginTop: 6, fontSize: 12 }}>
           <span className="mono" style={{ color: "var(--state-working)" }}>
             ●{liveCounts.working} working
           </span>
@@ -373,7 +373,7 @@ export function AgentRoster({
       {/* List */}
       <div className="flex-1 overflow-y-auto">
         {totalVisible === 0 && (
-          <div className="text-center" style={{ padding: "24px 12px", fontSize: 12, color: "var(--fg-3)" }}>
+          <div className="text-center" style={{ padding: "24px 12px", fontSize: 14, color: "var(--fg-3)" }}>
             {query || pill !== "all" ? "No matches" : "No agents"}
           </div>
         )}
@@ -400,7 +400,7 @@ function SectionHeader({ label, count }: { label: string; count: number }) {
       className="mono uppercase sticky top-0 z-10"
       style={{
         padding: "5px 12px",
-        fontSize: 9,
+        fontSize: 11,
         letterSpacing: 0.12,
         color: "var(--fg-4)",
         background: "var(--bg-raised)",

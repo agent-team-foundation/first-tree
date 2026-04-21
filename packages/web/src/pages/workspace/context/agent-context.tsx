@@ -40,13 +40,13 @@ function Tile({ label, value, accent }: { label: string; value: string | number;
         borderRadius: 4,
       }}
     >
-      <div className="mono uppercase" style={{ fontSize: 9, color: "var(--fg-4)", letterSpacing: 0.08 }}>
+      <div className="mono uppercase" style={{ fontSize: 11, color: "var(--fg-4)", letterSpacing: 0.08 }}>
         {label}
       </div>
       <div
         className="mono"
         style={{
-          fontSize: 13,
+          fontSize: 15,
           fontWeight: 600,
           color: accent ?? "var(--fg)",
         }}
@@ -102,7 +102,7 @@ function NotificationList({
               background: !n.read ? "var(--bg-sunken)" : "transparent",
               borderLeft: `2px solid ${severityColor}`,
               borderRadius: "0 3px 3px 0",
-              fontSize: 11,
+              fontSize: 13,
             }}
             onMouseEnter={(e) => {
               if (hasChatLink) e.currentTarget.style.background = "var(--bg-hover)";
@@ -121,14 +121,14 @@ function NotificationList({
               <span
                 className="mono uppercase"
                 style={{
-                  fontSize: 9,
+                  fontSize: 11,
                   letterSpacing: 0.08,
                   color: n.severity === "high" ? "var(--state-error)" : "var(--fg-3)",
                 }}
               >
                 {label.replace("_", " ")}
               </span>
-              <span className="mono" style={{ fontSize: 9, color: "var(--fg-4)" }}>
+              <span className="mono" style={{ fontSize: 11, color: "var(--fg-4)" }}>
                 {formatDate(n.createdAt)}
               </span>
             </div>
@@ -185,8 +185,8 @@ export function AgentContext({ agentId }: { agentId: string }) {
             <Leaf className="h-4 w-4" style={{ color: "var(--accent)" }} />
           </div>
           <div className="flex-1 min-w-0">
-            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--fg)" }}>{displayName}</div>
-            <div className="mono truncate" style={{ fontSize: 10, color: "var(--fg-4)" }}>
+            <div style={{ fontSize: 15, fontWeight: 600, color: "var(--fg)" }}>{displayName}</div>
+            <div className="mono truncate" style={{ fontSize: 12, color: "var(--fg-4)" }}>
               {agentId}
             </div>
           </div>
@@ -224,12 +224,12 @@ export function AgentContext({ agentId }: { agentId: string }) {
         <SectionLabel>Computer · runtime</SectionLabel>
         <KV>
           <KVRow label="host">
-            <span className="mono" style={{ fontSize: 11 }}>
+            <span className="mono" style={{ fontSize: 13 }}>
               {client?.hostname ?? "\u2014"}
             </span>
           </KVRow>
           <KVRow label="os">
-            <span className="mono" style={{ fontSize: 11 }}>
+            <span className="mono" style={{ fontSize: 13 }}>
               {client?.os ?? "\u2014"}
             </span>
           </KVRow>
@@ -237,12 +237,12 @@ export function AgentContext({ agentId }: { agentId: string }) {
             <span className="mono">{agent?.runtimeType ?? "\u2014"}</span>
           </KVRow>
           <KVRow label="sdk">
-            <span className="mono" style={{ fontSize: 11 }}>
+            <span className="mono" style={{ fontSize: 13 }}>
               {client?.sdkVersion ?? "\u2014"}
             </span>
           </KVRow>
           <KVRow label="connected">
-            <span className="mono" style={{ fontSize: 11 }}>
+            <span className="mono" style={{ fontSize: 13 }}>
               {formatUptime(client?.connectedAt ?? null)}
             </span>
           </KVRow>
@@ -257,10 +257,10 @@ export function AgentContext({ agentId }: { agentId: string }) {
         }}
         className="flex flex-col"
       >
-        <a href={`/agents/${agentId}`} style={{ fontSize: 11, color: "var(--accent)" }} className="hover:underline">
+        <a href={`/agents/${agentId}`} style={{ fontSize: 13, color: "var(--accent)" }} className="hover:underline">
           Manage agent →
         </a>
-        <a href="/clients" style={{ fontSize: 11, color: "var(--accent)", marginTop: 4 }} className="hover:underline">
+        <a href="/clients" style={{ fontSize: 13, color: "var(--accent)", marginTop: 4 }} className="hover:underline">
           Computers →
         </a>
       </div>
@@ -269,7 +269,7 @@ export function AgentContext({ agentId }: { agentId: string }) {
       <div style={{ padding: "12px 14px" }}>
         <SectionLabel>Notifications</SectionLabel>
         {!notifications?.items || notifications.items.length === 0 ? (
-          <div className="text-center" style={{ fontSize: 11, color: "var(--fg-3)", padding: "12px 0" }}>
+          <div className="text-center" style={{ fontSize: 13, color: "var(--fg-3)", padding: "12px 0" }}>
             No notifications for this agent
           </div>
         ) : (
