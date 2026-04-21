@@ -169,37 +169,41 @@ first-tree tree verify --tree-path ../my-org-tree
 Do not run `first-tree tree verify` in a source/workspace root without pointing it
 at a tree checkout.
 
-## Step 6: Opt In To Modules (Optional)
+## Step 6: Configure Modules (Optional)
 
 `first-tree` ships two optional modules that live on top of the core
 tree toolkit:
 
 - **gardener** — automated review/response on source-repo PRs and sync
-  PRs. Write `.claude/gardener-config.yaml` in the tree repo to enable
-  it:
+  PRs. Gardener subcommands (`gardener comment`, `gardener respond`)
+  are **enabled by default** when invoked. To turn one off, write
+  `.claude/gardener-config.yaml` in the tree repo with an explicit
+  `enabled: false` for the relevant module:
 
   ```yaml
   target_repo: owner/app-repo          # source repo to review
   tree_repo: owner/tree-repo            # this tree repo (for attribution)
   modules:
     comment:
-      enabled: true                     # scan open/merged source PRs + issues
+      enabled: false                    # disable scan/verdict on source PRs
     respond:
-      enabled: true                     # handle reviewer feedback on sync PRs
+      enabled: false                    # disable feedback handling on sync PRs
   ```
 
-  Omit a module or set `enabled: false` to opt out. Without the config
-  file, gardener exits cleanly as disabled — no config is the same as
-  fully opted out.
+  Omitting the file or omitting a `modules.<name>.enabled` key leaves
+  that subcommand enabled — invoking `first-tree gardener <command>`
+  will still run. The opt-out is explicit `enabled: false`.
+
+  **Operational guidance:** the safest way to keep a new tree quiet
+  while it's still skeletal is to simply not invoke `gardener` (and not
+  configure `breeze` to invoke it for you) until the tree has enough
+  content to give useful verdicts. Noisy comments on an empty tree
+  train reviewers to ignore them.
 
 - **breeze** — local notification daemon that dispatches gardener on
   real GitHub events. Only needed if you want gardener to react to
   review requests and assignments in real time. See the `breeze` skill
   for setup.
-
-Both modules are off by default for new trees. Add them only once the
-tree itself is in a useful state — noisy gardener comments on a skeleton
-tree train reviewers to ignore it.
 
 ## Step 7: Publish
 
