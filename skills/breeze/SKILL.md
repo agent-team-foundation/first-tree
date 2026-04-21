@@ -37,42 +37,42 @@ and safe to re-run.
 
 ## CLI Commands
 
-### Foreground daemon
+### Primary (start here)
 
 | Command | Purpose |
 |---|---|
-| `first-tree breeze run` (alias `daemon`) | Run the broker loop forever in the foreground |
-| `first-tree breeze run-once` | Run one poll cycle, wait for drain, then exit |
-
-### Background lifecycle
-
-| Command | Purpose |
-|---|---|
-| `first-tree breeze start` | Launch the daemon in the background (via launchd on macOS) |
+| `first-tree breeze install` | First-run setup — checks `gh`/`jq`/`gh auth`, creates `~/.breeze/config.yaml` with defaults, and starts the daemon. (Wiring the Claude Code statusline is a separate manual step — see the Statusline section.) |
+| `first-tree breeze start` | Launch the daemon in the background (launchd on macOS, detached spawn elsewhere) |
 | `first-tree breeze stop` | Stop the daemon and remove its lock |
-
-### Diagnostics
-
-| Command | Purpose |
-|---|---|
 | `first-tree breeze status` | Print the daemon lock + runtime/status.env |
 | `first-tree breeze doctor` | One-screen diagnostic of the local install |
-| `first-tree breeze cleanup` | Remove stale workspaces and expired claims |
-
-### One-shot commands (no daemon required)
-
-| Command | Purpose |
-|---|---|
-| `first-tree breeze poll` (alias `poll-inbox`) | Poll GitHub notifications once and update the inbox |
 | `first-tree breeze watch` | Live TUI: status board + activity feed |
-| `first-tree breeze statusline` | Claude Code statusline hook (single-line output) |
-| `first-tree breeze status-manager` | Manage per-session status entries |
+| `first-tree breeze poll` | Poll GitHub notifications once (no daemon required) |
 
-### Installer
+### Advanced (agents, debugging)
+
+These are the daemon's foreground entrypoints and manual-cleanup helpers.
+Humans normally only need the primary set above; reach for these when
+debugging the pipeline or when `doctor` directs you to.
 
 | Command | Purpose |
 |---|---|
-| `first-tree breeze install` | Run the breeze setup script (first-run only) |
+| `first-tree breeze run` / `first-tree breeze daemon` | Run the broker loop in the foreground. `start` is preferred for humans; `daemon` is invoked by launchd. |
+| `first-tree breeze run-once` | Run one poll cycle, wait for drain, then exit. Useful for debugging the daemon pipeline. |
+| `first-tree breeze cleanup` | Remove stale workspaces and expired claims. Only run if `doctor` suggests it. |
+
+### Hook / internal entry points (do not invoke directly)
+
+These exist for compatibility or to be called *by other code*. Never
+invoke them manually from a shell or from an agent action — they are
+listed here only so you recognize what they are when you encounter them
+in `ps`, config files, or log lines.
+
+| Command | Why it exists |
+|---|---|
+| `first-tree breeze statusline` | Claude Code statusline hook. Claude Code should be pointed at the pre-bundled `dist/breeze-statusline.js` directly for sub-30 ms cold start (see the Statusline section below). The CLI shim exists for parity. |
+| `first-tree breeze status-manager` | Internal helper used by the breeze runner to manage per-session status entries. Runners call it programmatically; no direct human or agent use. |
+| `first-tree breeze poll-inbox` | Legacy alias for `poll`. Kept so existing scripts keep working; new callers should use `poll`. |
 
 For full options on any command, run `first-tree breeze <command> --help`.
 

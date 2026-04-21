@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { readGitRemoteUrl, runBind } from "#products/tree/engine/bind.js";
+import { runBind } from "#products/tree/engine/bind.js";
 import {
   relativeRepoPath,
   resolveDedicatedTreeRepoForSource,
@@ -98,8 +98,9 @@ Default behavior:
     repo to it.
   - Workspace root (git repo with child repos or a plain folder containing
     child repos): installs local skill integration at the workspace root,
-    creates or reuses one shared tree checkout, then binds discovered local child
-    repos to that same tree.
+    creates or reuses one shared tree checkout, binds discovered child repos
+    to that same tree by default, and lets you rerun \`workspace sync\` later
+    after adding new repos.
   - Existing tree checkout or URL: binds the current repo/workspace root to
     the provided tree instead of creating a new sibling tree repo.
 
@@ -112,7 +113,7 @@ Low-level tree bootstrap:
 Recommended examples:
   first-tree tree init
   first-tree tree init --tree-path ../org-context --tree-mode shared
-  first-tree tree init --scope workspace --tree-path ../org-context --tree-mode shared --sync-members
+  first-tree tree init --scope workspace --tree-path ../org-context --tree-mode shared
   mkdir my-org-tree && cd my-org-tree && git init && first-tree tree bootstrap --here
 
 Options:
@@ -120,11 +121,12 @@ Options:
                              Seed initial \`members/*/NODE.md\` files from contributor history
   --tree-name NAME           Override the default sibling repo name (\`<repo>-tree\`)
   --tree-path PATH           Use an explicit local tree repo path
-  --tree-url URL             Bind to an existing remote tree repo (uses a temporary local checkout when needed)
+  --tree-url URL             Bind to or clone an existing remote tree repo
   --tree-mode MODE           dedicated or shared
   --scope MODE               repo or workspace
   --workspace-id ID          Workspace identifier for shared workspace onboarding
-  --sync-members             After binding a workspace root, bind all discovered child repos too
+  --sync-members             Explicitly request child-repo sync during workspace init
+                             (already the default; kept for readability/compatibility)
   --help                     Show this help message
 `;
 
@@ -145,29 +147,12 @@ const TEMPLATE_MAP: TemplateTarget[] = [
 ];
 
 interface TaskListContext {
-  sourceRepoName?: string;
   sourceRepoPath?: string;
-  sourceRepoRemoteUrl?: string;
+  sourceRepoName?: string;
   treeRepoName?: string;
   dedicatedTreeRepo?: boolean;
   frameworkVersionPath?: string;
   progressPath?: string;
-}
-
-function runInitCommandRunner(
-  command: string,
-  args: string[],
-  options: { cwd: string },
-): string {
-  return execFileSync(command, args, {
-    cwd: options.cwd,
-    encoding: "utf-8",
-    env: {
-      ...process.env,
-      GIT_TERMINAL_PROMPT: "0",
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
 }
 
 function installSkill(source: string, target: string): void {
@@ -217,8 +202,8 @@ export function formatTaskList(
         " in your source repositories.",
       "",
     );
-    if (context.sourceRepoRemoteUrl) {
-      lines.push(`**Bootstrap source repo URL:** \`${context.sourceRepoRemoteUrl}\``, "");
+    if (context.sourceRepoPath) {
+      lines.push(`**Bootstrap source repo:** \`${context.sourceRepoPath}\``, "");
     }
     if (context.sourceRepoName) {
       lines.push(
@@ -227,10 +212,10 @@ export function formatTaskList(
       );
       lines.push("## Source Workspace Workflow");
       lines.push(
-        `- [ ] When this initial tree version is ready, run \`first-tree tree publish --open-pr\` from this dedicated tree repo. It will create or reuse the GitHub \`*-tree\` repo, continue supporting older \`*-context\` repos, record the published tree GitHub URL back in \`${context.sourceRepoName}\`, and open the source/workspace PR when a local checkout is available.`,
+        `- [ ] When this initial tree version is ready, run \`first-tree tree publish --open-pr\` from this dedicated tree repo. It will create or reuse the GitHub \`*-tree\` repo, continue supporting older \`*-context\` repos, record the published tree GitHub URL back in \`${context.sourceRepoName}\`, refresh the local tree checkout config, and open the source/workspace PR.`,
       );
       lines.push(
-        `- [ ] After publish succeeds, treat the tree repo URL recorded in \`${SOURCE_STATE}\` as the canonical source of truth. Local checkouts can live wherever is convenient on each machine.`,
+        `- [ ] After publish succeeds, treat the checkout recorded in \`${SOURCE_STATE}\` as the canonical local working copy for this tree. The bootstrap repo can be deleted when you no longer need it.`,
       );
       lines.push("");
     }
@@ -347,9 +332,7 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
         frameworkVersionPath: r.frameworkVersionPath(),
         progressPath: r.preferredProgressPath(),
         sourceRepoName: sourceRepo.repoName(),
-        sourceRepoRemoteUrl: sourceRepo.isGitRepo()
-          ? readGitRemoteUrl(runInitCommandRunner, sourceRepo.root) ?? undefined
-          : undefined,
+        sourceRepoPath: relativeRepoPath(r.root, sourceRepo.root),
         treeRepoName: initTarget.treeRepoName,
       }
     : {
@@ -525,9 +508,7 @@ export function runInit(repo?: Repo, options?: InitOptions): number {
   if (initTarget.dedicatedTreeRepo) {
     writeBootstrapState(r.root, {
       sourceRepoName: sourceRepo.repoName(),
-      sourceRepoRemoteUrl: sourceRepo.isGitRepo()
-        ? readGitRemoteUrl(runInitCommandRunner, sourceRepo.root) ?? undefined
-        : undefined,
+      sourceRepoPath: relativeRepoPath(r.root, sourceRepo.root),
       treeRepoName: initTarget.treeRepoName,
     });
   }

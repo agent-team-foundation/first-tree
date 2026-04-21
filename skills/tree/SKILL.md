@@ -1,6 +1,6 @@
 ---
 name: tree
-description: Operate the `first-tree tree` CLI — inspect, bind, init, verify, publish, upgrade, sync, workspace, review, generate-codeowners, inject-context. Use whenever you need to read/write a Context Tree repo, onboard a repo or workspace to an existing tree, or manage tree ownership, publishing, and CI integration.
+description: Operate the `first-tree tree` CLI. Primary commands — inspect, init, publish, verify, upgrade. Advanced primitives — bootstrap, bind, integrate, workspace. CI helpers — review, generate-codeowners, inject-context. Use whenever you need to read/write a Context Tree repo, onboard a repo or workspace, or manage tree ownership, publishing, and CI integration. (Drift-detection `sync` lives under the `gardener` product.)
 ---
 
 # Tree — Operational Skill
@@ -35,33 +35,47 @@ Most commands accept or classify one of these three shapes.
 ## Default Onboarding Workflow
 
 1. Run `first-tree tree inspect --json`.
-2. Ask whether the user already has a Context Tree.
-3. If they do, use `first-tree tree bind`.
-4. If they do not, use `first-tree tree init`.
-5. If the current root is a workspace, run `first-tree tree workspace sync` so
-   all discovered local child repos bind to the same shared tree.
+2. Run `first-tree tree init` — it handles both cases:
+   - no existing tree → creates a sibling tree and binds it
+   - existing tree → pass `--tree-path <path>` or `--tree-url <url>` and it binds
+3. If the current root is a workspace, pass `--scope workspace`.
+   `init` syncs currently discovered child repos by default; rerun
+   `first-tree tree workspace sync` after adding new repos.
 
-During `bind` / `init`, the CLI also ensures the tree repo has the bundled
-`first-tree` skill installed and refreshes binding metadata in both locations.
+`init` internally delegates to `bind` (and to `bootstrap` when scaffolding a new
+tree), installs the bundled `first-tree` skill in both the source and the tree
+repo, and refreshes binding metadata in both locations. Use `bind` directly only
+when you need explicit `--mode` control (e.g. `workspace-member` binds).
 
 ## CLI Commands
 
+### Primary (start here)
+
 | Command | Purpose |
 |---|---|
-| `first-tree tree inspect` | Classify the current folder and report bindings / locally discovered child repos |
+| `first-tree tree inspect` | Classify the current folder and report bindings / child repos |
 | `first-tree tree status` | Alias for `inspect` (human-friendly name) |
-| `first-tree tree init` | High-level onboarding wrapper for single repos, shared trees, and workspace roots |
-| `first-tree tree bootstrap` | Low-level tree bootstrap for an explicit tree checkout |
-| `first-tree tree bind` | Bind the current repo/workspace root to an existing tree repo |
-| `first-tree tree workspace sync` | Bind discovered local child repos to the same shared tree |
+| `first-tree tree init` | Onboard a repo or workspace — creates a new tree, or binds to an existing one when given `--tree-path` / `--tree-url` |
 | `first-tree tree verify` | Validate a tree repo: frontmatter, owners, soft_links, members, progress |
 | `first-tree tree upgrade` | Refresh the installed skill payloads or tree metadata from the bundled package |
-| `first-tree tree publish` | Publish a tree repo to GitHub and refresh any explicit or locally discoverable source/workspace repos |
+| `first-tree tree publish` | Publish a tree repo to GitHub and refresh locally bound source/workspace repos |
+
+### Advanced (agent / power-user)
+
+These are primitives `init` composes, plus CI helpers and member-management
+utilities. Reach for them only when the primary commands don't cover the case.
+
+| Command | Purpose |
+|---|---|
+| `first-tree tree bootstrap` | Low-level tree-repo bootstrap for an explicit tree checkout. Use when the current repo itself is the tree (`--here`) or when `init`'s scaffolding default is wrong. |
+| `first-tree tree bind` | Lower-level primitive used by `init --tree-path`. Exposes `--mode standalone-source / shared-source / workspace-root / workspace-member` that `init` normally infers. |
+| `first-tree tree integrate` | Install the first-tree skill + source-integration block in the current repo without touching any tree repo. |
+| `first-tree tree workspace sync` | Bind newly added child repos to the shared tree, or rerun the workspace-member binding step manually. `init --scope workspace` already syncs currently discovered repos by default. |
 | `first-tree tree review` | CI helper: run Claude Code PR review against tree changes |
 | `first-tree tree generate-codeowners` | Regenerate `.github/CODEOWNERS` from tree ownership |
+| `first-tree tree inject-context` | Output a Claude Code SessionStart hook payload from `NODE.md` |
 | `first-tree tree invite` | Invite a new member to the Context Tree (human, personal_assistant, or autonomous_agent) |
 | `first-tree tree join` | Accept an invite and join a Context Tree |
-| `first-tree tree inject-context` | Output a Claude Code SessionStart hook payload from `NODE.md` |
 | `first-tree tree help onboarding` | Show the onboarding narrative |
 
 For full options on any command, run `first-tree tree <command> --help`.

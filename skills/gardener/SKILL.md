@@ -68,21 +68,30 @@ idempotent and guarded against acting on its own prior comments.
 
 ## CLI Commands
 
+### Primary (start here — humans)
+
+These are the commands you invoke directly to set gardener up or check on it.
+Everything else is driven by these, by breeze, or by CI.
+
+| Command | Purpose |
+|---|---|
+| `first-tree gardener install-workflow` | Scaffold `.github/workflows/first-tree-sync.yml` in a codebase repo — the push-mode entry point. Per-PR events drive the sync flow; no daemon required. |
+| `first-tree gardener start` | Launch the pull-mode daemon in the background. Writes `~/.gardener/config.json` from `--tree-path` + repeated `--code-repo` args, then boots a launchd job (macOS) or detached process. Schedules: `--gardener-interval` (default 5m), `--sync-interval` (default 1h). `--assign-owners` and `--sync-apply` wire their downstream flags. |
+| `first-tree gardener stop` | Tear down the launchd job (macOS) or SIGTERM the PID in `~/.gardener/state.json`. Idempotent. |
+| `first-tree gardener status` | Print the recorded PID + uptime, configured schedule, and last outcome + next-due time per sweep. Read-only. |
+| `first-tree gardener run-once` | Run both sweeps inline, no daemon. Useful for cron-style deployments or exercising the pipeline before leaving a daemon running. |
+
+### Agent commands (called by the daemon, breeze, or CI — not normally by humans)
+
+These are the units of work. You can still invoke them manually for one-off
+runs or dry-runs, but the normal trigger is `start`, push-mode workflow, or
+breeze's notification dispatch.
+
 | Command | Purpose |
 |---|---|
 | `first-tree gardener sync` | Detect drift between the tree and its bound source repos. Writes proposals under `.first-tree/proposals/`, edits tree files, commits to a new branch in the tree repo, and opens a PR labeled `first-tree:sync`. Phases: `--propose` detects + writes proposals, `--apply` also writes new tree files and opens the PR, default is detect-only. Moved from `first-tree tree sync`. |
 | `first-tree gardener comment` | Review a source-repo PR or issue against the tree and post a structured verdict comment. Scan mode (no `--pr`/`--issue`) walks every **open** PR and issue. The merge→tree-issue branch only fires on a single MERGED PR with a prior gardener marker (single-item invocation), and requires `TREE_REPO_TOKEN`. Pass `--assign-owners` to auto-assign NODE owners on the tree issue. |
 | `first-tree gardener respond` | Acknowledge reviewer feedback on a sync PR (Phase 5: real edit orchestrator for `parent_subdomain_missing` + planner seam — see [#160](https://github.com/agent-team-foundation/first-tree/issues/160) / [#219](https://github.com/agent-team-foundation/first-tree/issues/219); unsupported patterns fall back to a placeholder reply). |
-| `first-tree gardener install-workflow` | Scaffold `.github/workflows/first-tree-sync.yml` in the caller's codebase repo so per-PR events drive the sync flow — the push-mode entry point. |
-
-**Daemon lifecycle (pull mode):**
-
-| Command | Purpose |
-|---|---|
-| `first-tree gardener start` | Writes `~/.gardener/config.json` from `--tree-path` + repeated `--code-repo` args, then boots a launchd job (macOS) or detached process that runs `first-tree gardener daemon`. Schedules: `--gardener-interval` (default 5m), `--sync-interval` (default 1h). `--assign-owners` and `--sync-apply` wire their downstream flags. |
-| `first-tree gardener stop` | Tears down the launchd job (macOS) or sends SIGTERM to the PID recorded in `~/.gardener/state.json`. Idempotent. |
-| `first-tree gardener status` | Prints the recorded PID + uptime, configured schedule, and last outcome + next-due time per sweep. Read-only. |
-| `first-tree gardener run-once` | Runs both sweeps inline (no daemon). Useful for cron-style deployments or for exercising the pipeline before leaving a daemon running. |
 | `first-tree gardener daemon` | Foreground loop invoked by `start`. Not intended for direct human use. |
 
 For full options on any command, run `first-tree gardener <command> --help`.

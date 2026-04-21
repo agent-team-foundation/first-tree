@@ -617,7 +617,6 @@ describe.sequential("CLI e2e smoke", () => {
       "../org-context",
       "--tree-mode",
       "shared",
-      "--sync-members",
     ]);
     expect(workspaceInit.code).toBe(0);
 
@@ -779,7 +778,6 @@ describe.sequential("CLI e2e smoke", () => {
       "../git-workspace-tree",
       "--tree-mode",
       "shared",
-      "--sync-members",
     ]);
     expect(initWorkspace.code).toBe(0);
     expect(readSourceState(workspaceRoot)?.bindingMode).toBe("workspace-root");

@@ -103,7 +103,7 @@ describe("formatTaskList", () => {
     });
 
     expect(output).toContain("first-tree tree publish --open-pr");
-    expect(output).toContain("canonical source of truth");
+    expect(output).toContain("canonical local working copy");
   });
 });
 
@@ -288,6 +288,7 @@ describe("runInit", () => {
       JSON.parse(readFileSync(join(treeRepo, BOOTSTRAP_STATE), "utf-8")),
     ).toEqual({
       sourceRepoName: basename(sourceRepoDir.path),
+      sourceRepoPath: `../${basename(sourceRepoDir.path)}`,
       treeRepoName: basename(treeRepo),
     });
     expect(existsSync(join(sourceRepoDir.path, "NODE.md"))).toBe(false);
@@ -527,6 +528,7 @@ describe("runInit", () => {
       JSON.parse(readFileSync(join(legacyTreeRepo, BOOTSTRAP_STATE), "utf-8")),
     ).toEqual({
       sourceRepoName: basename(sourceRepoDir.path),
+      sourceRepoPath: `../${basename(sourceRepoDir.path)}`,
       treeRepoName: basename(legacyTreeRepo),
     });
     expect(
@@ -541,6 +543,15 @@ describe("parseInitArgs", () => {
   it("documents that --here is only for dedicated tree repos", () => {
     expect(BOOTSTRAP_USAGE).toContain("first-tree tree bootstrap --here");
     expect(BOOTSTRAP_USAGE).toContain("Initialize the current repo in place as a tree repo");
+  });
+
+  it("documents that workspace init syncs discovered child repos by default", () => {
+    expect(INIT_USAGE).toContain(
+      "first-tree tree init --scope workspace --tree-path ../org-context --tree-mode shared",
+    );
+    expect(INIT_USAGE).toContain(
+      "already the default; kept for readability/compatibility",
+    );
   });
 
   it("parses dedicated repo options", () => {

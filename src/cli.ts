@@ -38,6 +38,10 @@ function buildUsage(): string {
   plus a maintenance namespace (${maintenanceNamespaces}).
   This CLI is designed for agents, not humans. Let your agent handle it.
 
+  Each product's \`--help\` lists a short set of Primary commands for
+  humans; everything else is grouped under Advanced/Agent for the daemon,
+  breeze dispatch, or CI to use.
+
 Products:
 ${productLines}
 
