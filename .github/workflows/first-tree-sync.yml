@@ -1,0 +1,46 @@
+# Managed by `first-tree gardener install-workflow`.
+# Regenerate with that command (re-run with --force) rather than hand-editing —
+# the gardener skill may roll the template forward on upgrades.
+name: First-Tree Sync
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+jobs:
+  tree-sync:
+    # Skip first-tree's own sync PRs so gardener never reviews itself.
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'first-tree:sync') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    env:
+      TREE_REPO_TOKEN: ${{ secrets.TREE_REPO_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout source repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout tree repo
+        uses: actions/checkout@v4
+        with:
+          repository: agent-team-foundation/first-tree-context
+          token: ${{ secrets.TREE_REPO_TOKEN }}
+          path: .first-tree-cache/tree
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Run first-tree gardener
+        run: |
+          npx -p first-tree first-tree gardener comment \
+            --pr ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --tree-path .first-tree-cache/tree \
+            --assign-owners
