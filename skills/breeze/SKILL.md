@@ -41,7 +41,7 @@ and safe to re-run.
 
 | Command | Purpose |
 |---|---|
-| `first-tree breeze install` | First-run setup — writes config and wires the Claude Code statusline hook |
+| `first-tree breeze install` | First-run setup — checks `gh`/`jq`/`gh auth`, creates `~/.breeze/config.yaml` with defaults, and starts the daemon. (Wiring the Claude Code statusline is a separate manual step — see the Statusline section.) |
 | `first-tree breeze start` | Launch the daemon in the background (launchd on macOS, detached spawn elsewhere) |
 | `first-tree breeze stop` | Stop the daemon and remove its lock |
 | `first-tree breeze status` | Print the daemon lock + runtime/status.env |
