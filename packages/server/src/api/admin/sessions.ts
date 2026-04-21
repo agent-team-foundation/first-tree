@@ -55,10 +55,15 @@ export async function adminSessionRoutes(app: FastifyInstance): Promise<void> {
     return sessionService.getSession(app.db, request.params.agentId, request.params.chatId);
   });
 
-  /** GET /admin/sessions/agents/:agentId/:chatId/events — session event stream, paged by `seq` */
+  /**
+   * GET /admin/sessions/agents/:agentId/:chatId/events — session event stream,
+   * paged by `seq`. `direction=desc` returns newest-first; the chat UI uses
+   * this so its turn-grouping filter always sees the latest `turn_end`
+   * regardless of total event count.
+   */
   app.get<{
     Params: { agentId: string; chatId: string };
-    Querystring: { limit?: string; cursor?: string };
+    Querystring: { limit?: string; cursor?: string; direction?: string };
   }>("/agents/:agentId/:chatId/events", async (request) => {
     const scope = memberScope(request);
     await assertAgentVisible(app.db, scope, request.params.agentId);
@@ -66,9 +71,11 @@ export async function adminSessionRoutes(app: FastifyInstance): Promise<void> {
     await assertChatAccess(app.db, scope, request.params.chatId);
     const limit = request.query.limit !== undefined ? Number.parseInt(request.query.limit, 10) : undefined;
     const cursor = request.query.cursor !== undefined ? Number.parseInt(request.query.cursor, 10) : undefined;
+    const direction = request.query.direction === "desc" ? "desc" : "asc";
     return sessionEventService.listEvents(app.db, request.params.agentId, request.params.chatId, {
       limit: Number.isFinite(limit) ? limit : undefined,
       cursor: Number.isFinite(cursor) ? cursor : undefined,
+      direction,
     });
   });
 

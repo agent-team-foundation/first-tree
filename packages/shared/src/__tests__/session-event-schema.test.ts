@@ -119,4 +119,46 @@ describe("sessionEventSchema", () => {
       expect(r.success).toBe(false);
     });
   });
+
+  describe("assistant_text", () => {
+    it("parses a minimal assistant_text event", () => {
+      const r = sessionEventSchema.safeParse({
+        kind: "assistant_text",
+        payload: { text: "I'll check the file." },
+      });
+      expect(r.success).toBe(true);
+    });
+
+    it("rejects text longer than 8000 chars", () => {
+      const r = sessionEventSchema.safeParse({
+        kind: "assistant_text",
+        payload: { text: "x".repeat(8001) },
+      });
+      expect(r.success).toBe(false);
+    });
+  });
+
+  describe("thinking", () => {
+    it("parses a thinking marker with empty payload", () => {
+      const r = sessionEventSchema.safeParse({ kind: "thinking", payload: {} });
+      expect(r.success).toBe(true);
+    });
+  });
+
+  describe("turn_end", () => {
+    it("parses success and error status", () => {
+      for (const status of ["success", "error"] as const) {
+        const r = sessionEventSchema.safeParse({ kind: "turn_end", payload: { status } });
+        expect(r.success).toBe(true);
+      }
+    });
+
+    it("rejects an unknown status", () => {
+      const r = sessionEventSchema.safeParse({
+        kind: "turn_end",
+        payload: { status: "partial" },
+      });
+      expect(r.success).toBe(false);
+    });
+  });
 });

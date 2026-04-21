@@ -219,6 +219,8 @@ export {
   pulseTickSchema,
 } from "./schemas/pulse.js";
 export {
+  type AssistantTextEventPayload,
+  assistantTextEventPayload,
   type ErrorEventPayload,
   errorEventPayload,
   type SessionCompletionMessage,
@@ -231,8 +233,12 @@ export {
   sessionEventMessageSchema,
   sessionEventRowSchema,
   sessionEventSchema,
+  type ThinkingEventPayload,
   type ToolCallEventPayload,
+  type TurnEndEventPayload,
+  thinkingEventPayload,
   toolCallEventPayload,
+  turnEndEventPayload,
 } from "./schemas/session-event.js";
 export {
   type OrgStats,

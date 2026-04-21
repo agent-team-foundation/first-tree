@@ -132,6 +132,69 @@ describe("sessionEventService", () => {
     expect(page3.nextCursor).toBeNull();
   });
 
+  it("listEvents returns newest-first when direction=desc and paginates by seq<cursor", async () => {
+    // Chat-view relies on this to always see the latest turn_end even when
+    // the chat has more events than a single page can hold.
+    const app = getApp();
+    const a = agentId();
+    const c = chatId();
+
+    for (let i = 0; i < 5; i++) {
+      await sessionEventService.appendEvent(app.db, a, c, {
+        kind: "tool_call",
+        payload: { toolUseId: `tu${i}`, name: "Bash", args: {}, status: "ok" },
+      });
+    }
+
+    const page1 = await sessionEventService.listEvents(app.db, a, c, { limit: 2, direction: "desc" });
+    expect(page1.items.map((x) => x.seq)).toEqual([5, 4]);
+    expect(page1.nextCursor).toBe(4);
+    if (page1.nextCursor === null) throw new Error("expected cursor");
+
+    const page2 = await sessionEventService.listEvents(app.db, a, c, {
+      limit: 2,
+      cursor: page1.nextCursor,
+      direction: "desc",
+    });
+    expect(page2.items.map((x) => x.seq)).toEqual([3, 2]);
+    expect(page2.nextCursor).toBe(2);
+    if (page2.nextCursor === null) throw new Error("expected cursor");
+
+    const page3 = await sessionEventService.listEvents(app.db, a, c, {
+      limit: 2,
+      cursor: page2.nextCursor,
+      direction: "desc",
+    });
+    expect(page3.items.map((x) => x.seq)).toEqual([1]);
+    expect(page3.nextCursor).toBeNull();
+  });
+
+  it("listEvents with direction=desc returns the latest turn_end even with >limit events", async () => {
+    // Regression guard for the chat-view's turn-grouping filter: when there
+    // are more events than a single page, fetching desc must include the
+    // most recent turn_end, not stale prefix events.
+    const app = getApp();
+    const a = agentId();
+    const c = chatId();
+
+    // Seed 10 tool_calls, then a turn_end at seq=11.
+    for (let i = 0; i < 10; i++) {
+      await sessionEventService.appendEvent(app.db, a, c, {
+        kind: "tool_call",
+        payload: { toolUseId: `tu${i}`, name: "Bash", args: {}, status: "ok" },
+      });
+    }
+    await sessionEventService.appendEvent(app.db, a, c, {
+      kind: "turn_end",
+      payload: { status: "success" },
+    });
+
+    // Pretend the UI only fetches 3 rows — desc must still surface turn_end.
+    const page = await sessionEventService.listEvents(app.db, a, c, { limit: 3, direction: "desc" });
+    expect(page.items[0]?.kind).toBe("turn_end");
+    expect(page.items[0]?.seq).toBe(11);
+  });
+
   it("clearEvents empties the (agent, chat) rows and leaves siblings untouched", async () => {
     const app = getApp();
     const a = agentId();
