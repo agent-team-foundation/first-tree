@@ -1,13 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Leaf, MessageSquare, Pause, Pencil, Send, Square, X } from "lucide-react";
-import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { Check, Leaf, MessageSquare, Paperclip, Pause, Pencil, Send, Square, X } from "lucide-react";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
 import {
+  type FileMessageContent,
   getChat,
   listChatMessages,
   type MessageWithDelivery,
   renameChat,
   sendChatMessage,
+  sendFileMessage,
+  uploadFile,
 } from "../../../api/chats.js";
 import {
   agentSessionsQueryKey,
@@ -610,7 +613,13 @@ function TextRow({
             lineHeight: 1.55,
           }}
         >
-          {msg.format === "text" ? (
+          {msg.format === "file" && isImageContent(msg.content) ? (
+            <img
+              src={(msg.content as FileMessageContent).url}
+              alt={(msg.content as FileMessageContent).filename ?? "image"}
+              style={{ maxWidth: 320, borderRadius: 6, marginTop: 4 }}
+            />
+          ) : msg.format === "text" ? (
             <Markdown>{typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content)}</Markdown>
           ) : (
             <pre
@@ -633,6 +642,18 @@ function TextRow({
   );
 }
 
+function isImageContent(content: unknown): content is FileMessageContent {
+  if (typeof content !== "object" || content === null) return false;
+  const c = content as Record<string, unknown>;
+  return typeof c.url === "string" && typeof c.mimeType === "string" && (c.mimeType as string).startsWith("image/");
+}
+
+type PendingImage = {
+  id: string;
+  file: File;
+  previewUrl: string;
+};
+
 type TimelineItem =
   | { kind: "message"; at: string; key: string; data: MessageWithDelivery }
   | { kind: "event"; at: string; key: string; data: SessionEventRow };
@@ -642,6 +663,10 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
   const agentName = useAgentNameMap();
   const { agentId: myAgentId } = useAuth();
   const [draft, setDraft] = useState("");
+  const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const { data: messagesData } = useQuery({
@@ -680,9 +705,57 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
     },
   });
 
-  const handleSend = () => {
+  const addImages = useCallback((files: File[]) => {
+    const imageFiles = files.filter((f) => f.type.startsWith("image/"));
+    if (imageFiles.length === 0) return;
+    const newImages: PendingImage[] = imageFiles.map((file) => ({
+      id: crypto.randomUUID(),
+      file,
+      previewUrl: URL.createObjectURL(file),
+    }));
+    setPendingImages((prev) => [...prev, ...newImages]);
+  }, []);
+
+  const removeImage = useCallback((id: string) => {
+    setPendingImages((prev) => {
+      const img = prev.find((i) => i.id === id);
+      if (img) URL.revokeObjectURL(img.previewUrl);
+      return prev.filter((i) => i.id !== id);
+    });
+  }, []);
+
+  const handleSend = async () => {
     const text = draft.trim();
-    if (!text) return;
+    const images = pendingImages;
+    if (!text && images.length === 0) return;
+    if (uploading) return;
+
+    if (images.length > 0) {
+      setUploading(true);
+      setUploadError(null);
+      try {
+        for (const img of images) {
+          const result = await uploadFile(img.file);
+          await sendFileMessage(chatId, {
+            url: result.url,
+            mimeType: result.mimeType,
+            filename: result.filename,
+            size: result.size,
+          });
+          URL.revokeObjectURL(img.previewUrl);
+        }
+        setPendingImages([]);
+        if (text) await sendChatMessage(chatId, text);
+        setDraft("");
+        queryClient.invalidateQueries({ queryKey: ["chat-messages", chatId] });
+      } catch (err) {
+        setUploadError(err instanceof Error ? err.message : "Failed to upload image");
+      } finally {
+        setUploading(false);
+      }
+      return;
+    }
+
     sendMut.mutate(text);
   };
 
@@ -924,6 +997,7 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
           borderTop: "1px solid var(--border)",
         }}
       >
+        {/* biome-ignore lint/a11y/noStaticElementInteractions: drop target for image upload */}
         <div
           style={{
             position: "relative",
@@ -931,10 +1005,67 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
             borderRadius: 6,
             background: "var(--bg-sunken)",
           }}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => {
+            e.preventDefault();
+            addImages(Array.from(e.dataTransfer.files));
+          }}
         >
+          {/* Image preview area — above textarea */}
+          {pendingImages.length > 0 && (
+            <div className="flex items-center" style={{ gap: 6, padding: "6px 10px 0", overflowX: "auto" }}>
+              {pendingImages.map((img) => (
+                <div
+                  key={img.id}
+                  style={{
+                    position: "relative",
+                    flexShrink: 0,
+                    borderRadius: 4,
+                    border: "1px solid var(--border)",
+                    overflow: "hidden",
+                  }}
+                >
+                  <img
+                    src={img.previewUrl}
+                    alt={img.file.name}
+                    style={{ height: 32, width: "auto", display: "block", objectFit: "cover" }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeImage(img.id)}
+                    style={{
+                      position: "absolute",
+                      top: 1,
+                      right: 1,
+                      width: 14,
+                      height: 14,
+                      borderRadius: "50%",
+                      background: "rgba(0,0,0,0.6)",
+                      border: "none",
+                      color: "#fff",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      cursor: "pointer",
+                      padding: 0,
+                    }}
+                  >
+                    <X className="h-2 w-2" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           <textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
+            onPaste={(e) => {
+              const files = Array.from(e.clipboardData.files);
+              if (files.length > 0) {
+                e.preventDefault();
+                addImages(files);
+              }
+            }}
             placeholder={`Message @${displayName}  ·  / for commands  ·  @ to mention`}
             rows={2}
             onKeyDown={(e) => {
@@ -943,7 +1074,7 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
                 handleSend();
               }
             }}
-            disabled={sendMut.isPending}
+            disabled={sendMut.isPending || uploading}
             className="w-full outline-none"
             style={{
               padding: "9px 12px 30px",
@@ -966,23 +1097,58 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
               color: "var(--fg-4)",
             }}
           >
-            <span className="mono flex" style={{ gap: 8 }}>
+            <span className="mono flex items-center" style={{ gap: 8 }}>
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                title="Attach image"
+                style={{
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  color: "var(--fg-3)",
+                  padding: 0,
+                  display: "inline-flex",
+                  alignItems: "center",
+                }}
+              >
+                <Paperclip className="h-3.5 w-3.5" />
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                style={{ display: "none" }}
+                onChange={(e) => {
+                  if (e.target.files) {
+                    addImages(Array.from(e.target.files));
+                    e.target.value = "";
+                  }
+                }}
+              />
               <span>/suspend</span>
               <span>/resume</span>
               <span>/branch</span>
               <span>/promote</span>
             </span>
             <span className="flex items-center" style={{ gap: 8 }}>
+              {uploading && (
+                <span className="mono" style={{ fontSize: 10, color: "var(--accent)" }}>
+                  uploading…
+                </span>
+              )}
               <span>
                 <span className="kbd">⏎</span> send <span className="kbd">⇧⏎</span> new line
               </span>
               <button
                 type="button"
                 onClick={handleSend}
-                disabled={sendMut.isPending || !draft.trim()}
+                disabled={sendMut.isPending || uploading || (!draft.trim() && pendingImages.length === 0)}
                 className={cn(
                   "inline-flex items-center transition-colors",
-                  (sendMut.isPending || !draft.trim()) && "opacity-50 cursor-not-allowed",
+                  (sendMut.isPending || uploading || (!draft.trim() && pendingImages.length === 0)) &&
+                    "opacity-50 cursor-not-allowed",
                 )}
                 style={{
                   gap: 6,
@@ -1000,7 +1166,7 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
             </span>
           </div>
         </div>
-        {sendMut.isError && (
+        {(sendMut.isError || uploadError) && (
           <p
             className="mono"
             style={{
@@ -1009,7 +1175,7 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
               padding: "6px 2px 0",
             }}
           >
-            {sendMut.error instanceof Error ? sendMut.error.message : "Failed to send"}
+            {uploadError ?? (sendMut.error instanceof Error ? sendMut.error.message : "Failed to send")}
           </p>
         )}
       </div>
