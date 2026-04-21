@@ -30,6 +30,22 @@ export interface InstallDeps {
   spawn?: typeof spawnSync;
   checkCommand?: (cmd: string) => boolean;
   checkGhAuth?: () => boolean;
+  startCommand?: {
+    cmd: string;
+    args: string[];
+  };
+}
+
+export function resolveSelfStartCommand(
+  entrypoint: string | undefined = process.argv[1],
+): { cmd: string; args: string[] } {
+  if (entrypoint && entrypoint.length > 0) {
+    return {
+      cmd: process.execPath,
+      args: [entrypoint, "breeze", "start"],
+    };
+  }
+  return { cmd: "first-tree", args: ["breeze", "start"] };
 }
 
 function defaultCheckCommand(cmd: string): boolean {
@@ -70,6 +86,7 @@ export function runInstall(
   const spawn = deps.spawn ?? spawnSync;
   const breezeDir =
     deps.breezeDir ?? process.env.BREEZE_DIR ?? join(homedir(), ".breeze");
+  const startCommand = deps.startCommand ?? resolveSelfStartCommand();
 
   write("=== breeze setup ===");
   write("");
@@ -106,7 +123,7 @@ export function runInstall(
   write("");
 
   write("Starting the breeze daemon...");
-  const result = spawn("first-tree", ["breeze", "start"], { stdio: "inherit" });
+  const result = spawn(startCommand.cmd, startCommand.args, { stdio: "inherit" });
   if (result.status === 0) {
     write("  Daemon started");
   } else {

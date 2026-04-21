@@ -221,6 +221,30 @@ describe("agentInstructions rule", () => {
     const result = agentInstructions.evaluate(repo);
     expect(result.tasks).toEqual([]);
   });
+
+  it("clarifies that the project-specific task targets the tree repo, not source repos", () => {
+    // The `Add your project-specific instructions below the framework
+    // markers...` task only fires on repos that have CONTEXT-TREE FRAMEWORK
+    // markers (tree repos). Source repos use FIRST-TREE-SOURCE-INTEGRATION
+    // markers instead, so the rule can't trip on them today. Still, an agent
+    // reading the checklist needs the task text itself to make clear that the
+    // only AGENTS.md/CLAUDE.md to edit is the tree repo's copy — never the
+    // source repo's managed marker block.
+    const tmp = useTmpDir();
+    makeAgentsMd(tmp.path, { markers: true, userContent: false });
+    makeClaudeMd(tmp.path, { markers: true, userContent: false });
+    const repo = new Repo(tmp.path);
+    const result = agentInstructions.evaluate(repo);
+    const projectTasks = result.tasks.filter((t) =>
+      t.toLowerCase().includes("project-specific"),
+    );
+    expect(projectTasks.length).toBeGreaterThan(0);
+    for (const task of projectTasks) {
+      expect(task).toContain("tree repo");
+      expect(task).toContain("source repo");
+      expect(task).toContain("framework-only");
+    }
+  });
 });
 
 // --- members rule ---

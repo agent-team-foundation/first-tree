@@ -68,7 +68,7 @@ export function evaluate(repo: Repo): RuleResult {
         );
       if (lines.length === 0) {
         tasks.push(
-          `Add your project-specific instructions below the framework markers in ${AGENT_INSTRUCTIONS_FILE}`,
+          `In this tree repo, add your project-specific instructions below the framework markers in ${AGENT_INSTRUCTIONS_FILE} (source repos keep ${AGENT_INSTRUCTIONS_FILE} as framework-only — do not edit the source repo's copy)`,
         );
       }
     }
@@ -99,7 +99,7 @@ export function evaluate(repo: Repo): RuleResult {
           );
         if (lines.length === 0) {
           tasks.push(
-            `Add your project-specific instructions below the framework markers in ${CLAUDE_INSTRUCTIONS_FILE}`,
+            `In this tree repo, add your project-specific instructions below the framework markers in ${CLAUDE_INSTRUCTIONS_FILE} (source repos keep ${CLAUDE_INSTRUCTIONS_FILE} as framework-only — do not edit the source repo's copy)`,
           );
         }
       }

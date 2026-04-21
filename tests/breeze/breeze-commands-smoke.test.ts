@@ -18,6 +18,10 @@ import { join } from "node:path";
 
 import { runCleanup } from "../../src/products/breeze/engine/commands/cleanup.js";
 import { runDoctor } from "../../src/products/breeze/engine/commands/doctor.js";
+import {
+  resolveSelfStartCommand,
+  runInstall,
+} from "../../src/products/breeze/engine/commands/install.js";
 import { runStatus } from "../../src/products/breeze/engine/commands/status.js";
 import { ThreadStore } from "../../src/products/breeze/engine/daemon/thread-store.js";
 
@@ -110,6 +114,38 @@ describe("runCleanup", () => {
     expect(out).toMatch(/removed 1 stale workspaces/);
     expect(out).toContain(ws);
     expect(existsSync(ws)).toBe(false);
+  });
+});
+
+describe("runInstall", () => {
+  it("re-invokes the current CLI for `breeze start` instead of shelling to PATH", () => {
+    const lines: string[] = [];
+    const spawn = vi.fn(() => ({ status: 0 })) as unknown as typeof import("node:child_process").spawnSync;
+    const code = runInstall([], {
+      breezeDir: makeHome("install"),
+      write: (line) => lines.push(line),
+      checkCommand: () => true,
+      checkGhAuth: () => true,
+      spawn,
+      startCommand: {
+        cmd: process.execPath,
+        args: ["/tmp/first-tree/dist/cli.js", "breeze", "start"],
+      },
+    });
+    expect(code).toBe(0);
+    expect(spawn).toHaveBeenCalledWith(
+      process.execPath,
+      ["/tmp/first-tree/dist/cli.js", "breeze", "start"],
+      { stdio: "inherit" },
+    );
+    expect(lines.join("\n")).toContain("Daemon started");
+  });
+
+  it("resolves the current CLI entrypoint for nested self-starts", () => {
+    expect(resolveSelfStartCommand("/tmp/first-tree/dist/cli.js")).toEqual({
+      cmd: process.execPath,
+      args: ["/tmp/first-tree/dist/cli.js", "breeze", "start"],
+    });
   });
 });
 
