@@ -8,6 +8,7 @@ export type SessionListItem = {
   startedAt: string;
   lastActivityAt: string;
   messageCount: number;
+  summary: string | null;
 };
 
 export type SessionListResponse = {

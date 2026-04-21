@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Leaf, MessageSquare, Pause, Play, Send, Square } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { listChatMessages, type MessageWithDelivery, sendChatMessage } from "../../../api/chats.js";
+import { getChat, listChatMessages, type MessageWithDelivery, sendChatMessage } from "../../../api/chats.js";
 import {
   asAssistantTextPayload,
   asErrorPayload,
@@ -496,6 +496,11 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
     refetchInterval: 5_000,
   });
 
+  const { data: chatDetail } = useQuery({
+    queryKey: ["chat-detail", chatId],
+    queryFn: () => getChat(chatId),
+  });
+
   const sendMut = useMutation({
     mutationFn: (content: string) => sendChatMessage(chatId, content),
     onSuccess: () => {
@@ -535,6 +540,9 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
     }
   }, [itemCount]);
 
+  const participantsLabel = chatDetail?.participants
+    ? chatDetail.participants.map((p) => `@${agentName(p.agentId)}`).join(" ")
+    : `@${agentName(agentId)}`;
   const displayName = agentName(agentId);
   const runtimeLabel = session?.runtimeState ?? "idle";
   const runtimeState = resolveAgentState(session?.runtimeState ?? null, agentId ? "connected" : null);
@@ -555,7 +563,9 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
         <div className="min-w-0">
           <div className="flex items-center" style={{ gap: 8 }}>
             <StateDot state={runtimeState} size={8} />
-            <span style={{ fontSize: 13, fontWeight: 600, color: "var(--fg)" }}>Chat · {chatId.slice(0, 8)}</span>
+            <span className="truncate" style={{ fontSize: 13, fontWeight: 600, color: "var(--fg)" }}>
+              {session?.summary || `Chat · ${chatId.slice(0, 8)}`}
+            </span>
             <span
               className="mono"
               style={{
@@ -578,7 +588,7 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
               gap: 10,
             }}
           >
-            <span className="mono">{displayName}</span>
+            <span className="mono">{participantsLabel}</span>
             <span>·</span>
             <span>started {formatRelative(session?.startedAt ?? null)}</span>
             <span>·</span>
