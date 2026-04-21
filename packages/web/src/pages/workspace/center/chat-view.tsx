@@ -1005,6 +1005,51 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
             addImages(Array.from(e.dataTransfer.files));
           }}
         >
+          {/* Image preview area — above textarea */}
+          {pendingImages.length > 0 && (
+            <div className="flex items-center" style={{ gap: 6, padding: "6px 10px 0", overflowX: "auto" }}>
+              {pendingImages.map((img) => (
+                <div
+                  key={img.id}
+                  style={{
+                    position: "relative",
+                    flexShrink: 0,
+                    borderRadius: 4,
+                    border: "1px solid var(--border)",
+                    overflow: "hidden",
+                  }}
+                >
+                  <img
+                    src={img.previewUrl}
+                    alt={img.file.name}
+                    style={{ height: 32, width: "auto", display: "block", objectFit: "cover" }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeImage(img.id)}
+                    style={{
+                      position: "absolute",
+                      top: 1,
+                      right: 1,
+                      width: 14,
+                      height: 14,
+                      borderRadius: "50%",
+                      background: "rgba(0,0,0,0.6)",
+                      border: "none",
+                      color: "#fff",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      cursor: "pointer",
+                      padding: 0,
+                    }}
+                  >
+                    <X className="h-2 w-2" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           <textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
@@ -1035,51 +1080,6 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
               color: "var(--fg)",
             }}
           />
-          {/* Image preview area */}
-          {pendingImages.length > 0 && (
-            <div className="flex items-center" style={{ gap: 6, padding: "4px 10px", overflowX: "auto" }}>
-              {pendingImages.map((img) => (
-                <div
-                  key={img.id}
-                  style={{
-                    position: "relative",
-                    flexShrink: 0,
-                    borderRadius: 4,
-                    border: "1px solid var(--border)",
-                    overflow: "hidden",
-                  }}
-                >
-                  <img
-                    src={img.previewUrl}
-                    alt={img.file.name}
-                    style={{ height: 56, width: "auto", display: "block" }}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => removeImage(img.id)}
-                    style={{
-                      position: "absolute",
-                      top: 2,
-                      right: 2,
-                      width: 16,
-                      height: 16,
-                      borderRadius: "50%",
-                      background: "rgba(0,0,0,0.6)",
-                      border: "none",
-                      color: "#fff",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      cursor: "pointer",
-                      padding: 0,
-                    }}
-                  >
-                    <X className="h-2.5 w-2.5" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
           <div
             className="flex items-center justify-between"
             style={{
@@ -1092,10 +1092,6 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
             }}
           >
             <span className="mono flex items-center" style={{ gap: 8 }}>
-              <span>/suspend</span>
-              <span>/resume</span>
-              <span>/branch</span>
-              <span>/promote</span>
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
@@ -1125,6 +1121,10 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
                   }
                 }}
               />
+              <span>/suspend</span>
+              <span>/resume</span>
+              <span>/branch</span>
+              <span>/promote</span>
             </span>
             <span className="flex items-center" style={{ gap: 8 }}>
               {uploading && (
