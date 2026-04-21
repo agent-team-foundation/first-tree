@@ -176,6 +176,98 @@ export function bootstrapWorkspace(options: BootstrapOptions): void {
   writeFileSync(join(agentDir, "tools.md"), generateToolsDoc(), "utf-8");
 }
 
+export type InstallFirstTreeIntegrationExec = (
+  command: string,
+  args: string[],
+  options: { cwd: string; timeout: number },
+) => void;
+
+export type InstallFirstTreeIntegrationOptions = {
+  workspacePath: string;
+  contextTreePath: string;
+  workspaceId: string;
+  treeRepoUrl?: string;
+  log: (msg: string) => void;
+  /**
+   * Exec backend. Defaults to `execFileSync`. Override in tests to avoid
+   * ESM-module spying limitations.
+   */
+  exec?: InstallFirstTreeIntegrationExec;
+};
+
+function defaultInstallExec(command: string, args: string[], options: { cwd: string; timeout: number }): void {
+  execFileSync(command, args, {
+    cwd: options.cwd,
+    stdio: "pipe",
+    timeout: options.timeout,
+    encoding: "utf-8",
+  });
+}
+
+/**
+ * Install the first-tree skill and FIRST-TREE-SOURCE-INTEGRATION block into
+ * the workspace by shelling out to `first-tree tree integrate`.
+ *
+ * Resolution order for the CLI binary:
+ *   1. `first-tree` on PATH — preferred for runtime images that pre-install it.
+ *   2. `npx -y first-tree@latest` — fallback that downloads on first run.
+ *
+ * Graceful degradation: returns false on failure and logs. The session still
+ * starts; the agent just doesn't have the first-tree skill wired up.
+ */
+export function installFirstTreeIntegration(options: InstallFirstTreeIntegrationOptions): boolean {
+  const { workspacePath, contextTreePath, workspaceId, treeRepoUrl, log } = options;
+  const exec = options.exec ?? defaultInstallExec;
+
+  const integrateArgs = [
+    "tree",
+    "integrate",
+    "--source-path",
+    workspacePath,
+    "--tree-path",
+    contextTreePath,
+    "--mode",
+    "workspace-root",
+    "--workspace-id",
+    workspaceId,
+    ...(treeRepoUrl ? ["--tree-url", treeRepoUrl] : []),
+  ];
+
+  const attempts: Array<{ command: string; args: string[]; label: string }> = [
+    { command: "first-tree", args: integrateArgs, label: "first-tree (PATH)" },
+    {
+      command: "npx",
+      args: ["-y", "first-tree@latest", ...integrateArgs],
+      label: "npx first-tree@latest",
+    },
+  ];
+
+  for (let index = 0; index < attempts.length; index += 1) {
+    const attempt = attempts[index];
+    if (!attempt) continue;
+    try {
+      exec(attempt.command, attempt.args, {
+        cwd: workspacePath,
+        timeout: 120_000,
+      });
+      log(`First-tree integration installed via ${attempt.label}`);
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const binaryMissing = /ENOENT|not found|command not found/i.test(msg);
+      const isLastAttempt = index === attempts.length - 1;
+      if (binaryMissing && !isLastAttempt) {
+        // Try the next attempt (e.g. `first-tree` not on PATH → try npx).
+        continue;
+      }
+      log(`First-tree integration skipped (${attempt.label}): ${msg.slice(0, 200)}`);
+      return false;
+    }
+  }
+
+  return false;
+}
+
 function generateToolsDoc(): string {
   return `# Agent Hub SDK
 

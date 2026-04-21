@@ -23,6 +23,12 @@ RUN pnpm install --frozen-lockfile --prod
 FROM node:24-alpine
 WORKDIR /app
 
+# git is required by syncContextTree (clone/pull) and `first-tree tree integrate`
+# (reading the tree checkout's remote URL). Pre-installing first-tree avoids a
+# per-session `npx` cold-start when bootstrapping workspaces.
+RUN apk add --no-cache git \
+    && npm install -g first-tree@latest
+
 # Production node_modules
 COPY --from=prod-deps /app ./
 
