@@ -4,11 +4,14 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import type { Database } from "../../db/connection.js";
 import { agents } from "../../db/schema/agents.js";
 import { BadRequestError, ConflictError, UnauthorizedError } from "../../errors.js";
+import { createLogger } from "../../observability/index.js";
 import { createAgent } from "../../services/agent.js";
 import { findOrCreateDirectChat } from "../../services/chat.js";
 import { sendMessage } from "../../services/message.js";
 import { notifyRecipients } from "../../services/notifier.js";
 import { resolveDefaultOrgId } from "../../services/organization.js";
+
+const log = createLogger("GithubWebhook");
 
 // ── GitHub payload types ────────────────────────────────────────────
 
@@ -186,7 +189,10 @@ async function routeMentionDelegations(
       .limit(1);
 
     if (!target || target.status !== "active") {
-      app.log.warn(`delegate_mention target "${agent.delegateMention}" for "${agent.name}" is not active, skipping`);
+      log.warn(
+        { targetAgent: agent.delegateMention, sourceAgent: agent.name },
+        "delegate_mention target not active, skipping",
+      );
       continue;
     }
 
@@ -213,7 +219,10 @@ async function routeMentionDelegations(
       notifyRecipients(app.notifier, recipients, msg.id);
       routed++;
     } catch (err) {
-      app.log.error(err, `Failed to route mention delegation from "${agent.name}" to "${agent.delegateMention}"`);
+      log.error(
+        { err, sourceAgent: agent.name, targetAgent: agent.delegateMention },
+        "failed to route mention delegation",
+      );
     }
   }
 
@@ -546,7 +555,7 @@ async function handleIssuesEvent(
   ]);
 
   if (!targetAgentId) {
-    app.log.warn(`No target agent found for GitHub issue event on ${data.repository.full_name}`);
+    log.warn({ repo: data.repository.full_name, event: "issue" }, "no target agent found for GitHub event");
     return reply.status(200).send({ ok: true, event: "issues", action: data.action, routed: false });
   }
 
@@ -607,7 +616,7 @@ async function handleIssueCommentEvent(
   ]);
 
   if (!targetAgentId) {
-    app.log.warn(`No target agent found for GitHub issue_comment event on ${data.repository.full_name}`);
+    log.warn({ repo: data.repository.full_name, event: "issue_comment" }, "no target agent found for GitHub event");
     return reply.status(200).send({ ok: true, event: "issue_comment", action: data.action, routed: false });
   }
 

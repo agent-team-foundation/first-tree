@@ -20,6 +20,12 @@ import { agents } from "../../db/schema/agents.js";
 import { clients } from "../../db/schema/clients.js";
 import { members } from "../../db/schema/members.js";
 import { users } from "../../db/schema/users.js";
+import {
+  endWsConnectionSpan,
+  setWsConnectionAttrs,
+  startWsConnectionSpan,
+  withWsMessageSpan,
+} from "../../observability/index.js";
 import * as activityService from "../../services/activity.js";
 import * as clientService from "../../services/client.js";
 import * as connectionManager from "../../services/connection-manager.js";
@@ -83,7 +89,12 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
   return async (app: FastifyInstance): Promise<void> => {
     const jwtSecretBytes = new TextEncoder().encode(app.config.secrets.jwtSecret);
 
-    app.get("/client", { websocket: true }, async (socket) => {
+    // config.otel=false skips @fastify/otel's HTTP instrumentation for the
+    // upgrade request. We already emit a long-running `ws.connection` span
+    // ourselves via startWsConnectionSpan — a parallel HTTP-style span for a
+    // protocol upgrade would double-report and never finish cleanly.
+    app.get("/client", { websocket: true, config: { otel: false } }, async (socket) => {
+      startWsConnectionSpan(socket);
       let session: AuthenticatedSession | null = null;
       let clientId: string | null = null;
       let authExpiryTimer: NodeJS.Timeout | null = null;
@@ -204,6 +215,10 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               organizationId: member.organizationId,
               role: member.role,
             };
+            setWsConnectionAttrs(socket, {
+              "organization.id": member.organizationId,
+              "member.id": member.id,
+            });
             clearTimeout(authTimeout);
             scheduleAuthExpiry(claims.exp);
             socket.send(JSON.stringify({ type: "auth:ok" }));
@@ -215,268 +230,275 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
           return;
         }
 
-        try {
-          if (type === "client:register") {
-            const data = clientRegisterSchema.parse(msg);
+        const spanAttrs: Record<string, unknown> = ref !== undefined ? { "ws.message.ref": String(ref) } : {};
+        await withWsMessageSpan(socket, type, spanAttrs, async () => {
+          // Re-assert the outer auth-gate narrowing — TS drops it across the async closure boundary.
+          if (!session) return;
+          try {
+            if (type === "client:register") {
+              const data = clientRegisterSchema.parse(msg);
 
-            try {
-              await clientService.registerClient(app.db, {
-                clientId: data.clientId,
-                userId: session.userId,
-                instanceId,
-                hostname: data.hostname,
-                os: data.os,
-                sdkVersion: data.sdkVersion,
-              });
-            } catch (err) {
-              const message = err instanceof Error ? err.message : "client register failed";
-              socket.send(JSON.stringify({ type: "client:register:rejected", message }));
-              socket.close(4403, "client register rejected");
-              return;
-            }
-
-            clientId = data.clientId;
-            connectionManager.setClientConnection(data.clientId, socket);
-            socket.send(JSON.stringify({ type: "client:registered", clientId: data.clientId }));
-
-            // Backfill `agent:pinned` for any agent already bound to this
-            // client at registration time. Without this, an admin who pins an
-            // agent while the client is offline would still need a manual
-            // `first-tree-hub agent add` after restart — the realtime push in
-            // admin/agents.ts only fires for live sockets. The client dedupes
-            // on agentId, so re-firing on every reconnect is safe.
-            try {
-              const pinned = await clientService.listActiveAgentsPinnedToClient(app.db, data.clientId);
-              for (const agent of pinned) {
-                const parsed = agentPinnedMessageSchema.safeParse({
-                  type: "agent:pinned",
-                  agentId: agent.uuid,
-                  name: agent.name,
-                  displayName: agent.displayName,
-                  agentType: agent.type,
+              try {
+                await clientService.registerClient(app.db, {
+                  clientId: data.clientId,
+                  userId: session.userId,
+                  instanceId,
+                  hostname: data.hostname,
+                  os: data.os,
+                  sdkVersion: data.sdkVersion,
                 });
-                if (!parsed.success) {
-                  app.log.warn(
-                    { err: parsed.error.flatten(), agentId: agent.uuid, clientId: data.clientId },
-                    "agent:pinned backfill frame failed schema validation — skipping",
-                  );
-                  continue;
-                }
-                socket.send(JSON.stringify(parsed.data));
+              } catch (err) {
+                const message = err instanceof Error ? err.message : "client register failed";
+                socket.send(JSON.stringify({ type: "client:register:rejected", message }));
+                socket.close(4403, "client register rejected");
+                return;
               }
-            } catch (err) {
-              app.log.error(
-                { err, clientId: data.clientId },
-                "agent:pinned backfill on client:register failed — client may need manual `agent add`",
-              );
-            }
-          } else if (type === "agent:bind") {
-            if (!clientId) {
-              socket.send(JSON.stringify({ type: "error", ref, message: "Must register client first" }));
-              return;
-            }
 
-            const bindRequest = agentBindRequestSchema.parse(msg);
+              clientId = data.clientId;
+              setWsConnectionAttrs(socket, { "client.id": data.clientId });
+              connectionManager.setClientConnection(data.clientId, socket);
+              socket.send(JSON.stringify({ type: "client:registered", clientId: data.clientId }));
 
-            const [agent] = await app.db
-              .select({
-                id: agents.uuid,
-                displayName: agents.displayName,
-                type: agents.type,
-                organizationId: agents.organizationId,
-                inboxId: agents.inboxId,
-                status: agents.status,
-                clientId: agents.clientId,
-                clientUserId: clients.userId,
-                managerUserId: members.userId,
-              })
-              .from(agents)
-              .leftJoin(clients, eq(agents.clientId, clients.id))
-              .leftJoin(members, eq(agents.managerId, members.id))
-              .where(and(eq(agents.uuid, bindRequest.agentId)))
-              .limit(1);
+              // Backfill `agent:pinned` for any agent already bound to this
+              // client at registration time. Without this, an admin who pins an
+              // agent while the client is offline would still need a manual
+              // `first-tree-hub agent add` after restart — the realtime push in
+              // admin/agents.ts only fires for live sockets. The client dedupes
+              // on agentId, so re-firing on every reconnect is safe.
+              try {
+                const pinned = await clientService.listActiveAgentsPinnedToClient(app.db, data.clientId);
+                for (const agent of pinned) {
+                  const parsed = agentPinnedMessageSchema.safeParse({
+                    type: "agent:pinned",
+                    agentId: agent.uuid,
+                    name: agent.name,
+                    displayName: agent.displayName,
+                    agentType: agent.type,
+                  });
+                  if (!parsed.success) {
+                    app.log.warn(
+                      { err: parsed.error.flatten(), agentId: agent.uuid, clientId: data.clientId },
+                      "agent:pinned backfill frame failed schema validation — skipping",
+                    );
+                    continue;
+                  }
+                  socket.send(JSON.stringify(parsed.data));
+                }
+              } catch (err) {
+                app.log.error(
+                  { err, clientId: data.clientId },
+                  "agent:pinned backfill on client:register failed — client may need manual `agent add`",
+                );
+              }
+            } else if (type === "agent:bind") {
+              if (!clientId) {
+                socket.send(JSON.stringify({ type: "error", ref, message: "Must register client first" }));
+                return;
+              }
 
-            if (!agent) {
-              sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.UNKNOWN_AGENT);
-              return;
-            }
-            if (agent.organizationId !== session.organizationId) {
-              sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.WRONG_ORG);
-              return;
-            }
-            if (agent.status !== "active") {
-              sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.AGENT_SUSPENDED);
-              return;
-            }
+              const bindRequest = agentBindRequestSchema.parse(msg);
 
-            // First-bind path: agent.clientId is NULL (e.g. created before
-            // the operator brought up a client, or migrated from pre-M1 with
-            // no presence record). Claim it for the connecting client iff
-            // the manager and the connecting session belong to the same
-            // user. The race-safe UPDATE returns 0 rows if another bind
-            // claimed it first — surface as WRONG_CLIENT.
-            if (agent.clientId === null) {
-              if (!agent.managerUserId || agent.managerUserId !== session.userId) {
+              const [agent] = await app.db
+                .select({
+                  id: agents.uuid,
+                  displayName: agents.displayName,
+                  type: agents.type,
+                  organizationId: agents.organizationId,
+                  inboxId: agents.inboxId,
+                  status: agents.status,
+                  clientId: agents.clientId,
+                  clientUserId: clients.userId,
+                  managerUserId: members.userId,
+                })
+                .from(agents)
+                .leftJoin(clients, eq(agents.clientId, clients.id))
+                .leftJoin(members, eq(agents.managerId, members.id))
+                .where(and(eq(agents.uuid, bindRequest.agentId)))
+                .limit(1);
+
+              if (!agent) {
+                sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.UNKNOWN_AGENT);
+                return;
+              }
+              if (agent.organizationId !== session.organizationId) {
+                sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.WRONG_ORG);
+                return;
+              }
+              if (agent.status !== "active") {
+                sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.AGENT_SUSPENDED);
+                return;
+              }
+
+              // First-bind path: agent.clientId is NULL (e.g. created before
+              // the operator brought up a client, or migrated from pre-M1 with
+              // no presence record). Claim it for the connecting client iff
+              // the manager and the connecting session belong to the same
+              // user. The race-safe UPDATE returns 0 rows if another bind
+              // claimed it first — surface as WRONG_CLIENT.
+              if (agent.clientId === null) {
+                if (!agent.managerUserId || agent.managerUserId !== session.userId) {
+                  sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.NOT_OWNED);
+                  return;
+                }
+                const claim = await app.db
+                  .update(agents)
+                  .set({ clientId, updatedAt: new Date() })
+                  .where(and(eq(agents.uuid, agent.id), isNull(agents.clientId)))
+                  .returning({ uuid: agents.uuid });
+                if (claim.length === 0) {
+                  sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.WRONG_CLIENT);
+                  return;
+                }
+              } else if (agent.clientId !== clientId) {
+                sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.WRONG_CLIENT);
+                return;
+              } else if (!agent.clientUserId || agent.clientUserId !== session.userId) {
                 sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.NOT_OWNED);
                 return;
               }
-              const claim = await app.db
-                .update(agents)
-                .set({ clientId, updatedAt: new Date() })
-                .where(and(eq(agents.uuid, agent.id), isNull(agents.clientId)))
-                .returning({ uuid: agents.uuid });
-              if (claim.length === 0) {
-                sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.WRONG_CLIENT);
+
+              await presenceService.bindAgent(app.db, agent.id, {
+                clientId,
+                instanceId,
+                runtimeType: bindRequest.runtimeType,
+                runtimeVersion: bindRequest.runtimeVersion,
+              });
+
+              connectionManager.bindAgentToClient(clientId, agent.id);
+              boundAgents.set(agent.id, { agentId: agent.id, inboxId: agent.inboxId });
+
+              notifier.subscribe(agent.inboxId, socket);
+
+              socket.send(
+                JSON.stringify({
+                  type: "agent:bound",
+                  ref,
+                  agentId: agent.id,
+                  displayName: agent.displayName,
+                  agentType: agent.type,
+                }),
+              );
+            } else if (type === "agent:unbind") {
+              const agentId = parsed.data.agentId;
+              if (!agentId || !boundAgents.has(agentId)) {
+                socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
                 return;
               }
-            } else if (agent.clientId !== clientId) {
-              sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.WRONG_CLIENT);
-              return;
-            } else if (!agent.clientUserId || agent.clientUserId !== session.userId) {
-              sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.NOT_OWNED);
-              return;
-            }
 
-            await presenceService.bindAgent(app.db, agent.id, {
-              clientId,
-              instanceId,
-              runtimeType: bindRequest.runtimeType,
-              runtimeVersion: bindRequest.runtimeVersion,
-            });
+              const info = boundAgents.get(agentId);
+              if (info) {
+                notifier.unsubscribe(info.inboxId, socket);
+              }
 
-            connectionManager.bindAgentToClient(clientId, agent.id);
-            boundAgents.set(agent.id, { agentId: agent.id, inboxId: agent.inboxId });
+              await presenceService.unbindAgent(app.db, agentId);
+              connectionManager.unbindAgentFromClient(agentId);
+              boundAgents.delete(agentId);
 
-            notifier.subscribe(agent.inboxId, socket);
+              socket.send(JSON.stringify({ type: "agent:unbound", agentId }));
+            } else if (type === "session:state") {
+              const agentId = parsed.data.agentId;
+              if (!agentId || !boundAgents.has(agentId)) {
+                socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
+                return;
+              }
 
-            socket.send(
-              JSON.stringify({
-                type: "agent:bound",
-                ref,
-                agentId: agent.id,
-                displayName: agent.displayName,
-                agentType: agent.type,
-              }),
-            );
-          } else if (type === "agent:unbind") {
-            const agentId = parsed.data.agentId;
-            if (!agentId || !boundAgents.has(agentId)) {
-              socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
-              return;
-            }
+              const payload = sessionStateMessageSchema.parse(msg);
 
-            const info = boundAgents.get(agentId);
-            if (info) {
-              notifier.unsubscribe(info.inboxId, socket);
-            }
-
-            await presenceService.unbindAgent(app.db, agentId);
-            connectionManager.unbindAgentFromClient(agentId);
-            boundAgents.delete(agentId);
-
-            socket.send(JSON.stringify({ type: "agent:unbound", agentId }));
-          } else if (type === "session:state") {
-            const agentId = parsed.data.agentId;
-            if (!agentId || !boundAgents.has(agentId)) {
-              socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
-              return;
-            }
-
-            const payload = sessionStateMessageSchema.parse(msg);
-
-            // Drop persisted events on eviction. Chained through the per-session FIFO so any
-            // in-flight appendEvent finishes BEFORE clearEvents (otherwise late inserts resurrect rows).
-            if (payload.state === "evicted") {
-              chainSessionOp(agentId, payload.chatId, () =>
-                sessionEventService.clearEvents(app.db, agentId, payload.chatId).catch(() => {}),
-              );
-            }
-
-            await activityService.upsertSessionState(
-              app.db,
-              agentId,
-              payload.chatId,
-              payload.state,
-              session.organizationId,
-              notifier,
-            );
-          } else if (type === "runtime:state") {
-            const agentId = parsed.data.agentId;
-            if (!agentId || !boundAgents.has(agentId)) {
-              socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
-              return;
-            }
-
-            const payload = runtimeStateMessageSchema.parse(msg);
-            await presenceService.setRuntimeState(app.db, agentId, payload.runtimeState, {
-              organizationId: session.organizationId,
-              notifier,
-            });
-
-            if (payload.runtimeState === "error" && shouldNotify(agentId, "agent_error")) {
-              notificationService
-                .notifyAgentEvent(app.db, agentId, "agent_error", "high", `Agent ${agentId} entered error state`)
-                .catch(() => {});
-            } else if (payload.runtimeState === "blocked" && shouldNotify(agentId, "agent_blocked")) {
-              notificationService
-                .notifyAgentEvent(app.db, agentId, "agent_blocked", "medium", `Agent ${agentId} is blocked`)
-                .catch(() => {});
-            }
-          } else if (type === "session:event") {
-            const agentId = parsed.data.agentId;
-            if (!agentId || !boundAgents.has(agentId)) {
-              socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
-              return;
-            }
-
-            const payload = sessionEventMessageSchema.parse(msg);
-            chainSessionOp(agentId, payload.chatId, async () => {
-              try {
-                await sessionEventService.appendEvent(app.db, agentId, payload.chatId, payload.event);
-              } catch (err) {
-                socket.send(
-                  JSON.stringify({
-                    type: "error",
-                    message: `Failed to persist session event: ${err instanceof Error ? err.message : String(err)}`,
-                  }),
+              // Drop persisted events on eviction. Chained through the per-session FIFO so any
+              // in-flight appendEvent finishes BEFORE clearEvents (otherwise late inserts resurrect rows).
+              if (payload.state === "evicted") {
+                chainSessionOp(agentId, payload.chatId, () =>
+                  sessionEventService.clearEvents(app.db, agentId, payload.chatId).catch(() => {}),
                 );
               }
-            });
-          } else if (type === "session:completion") {
-            const agentId = parsed.data.agentId;
-            if (!agentId || !boundAgents.has(agentId)) {
-              socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
-              return;
-            }
 
-            const payload = sessionCompletionMessageSchema.parse(msg);
+              await activityService.upsertSessionState(
+                app.db,
+                agentId,
+                payload.chatId,
+                payload.state,
+                session.organizationId,
+                notifier,
+              );
+            } else if (type === "runtime:state") {
+              const agentId = parsed.data.agentId;
+              if (!agentId || !boundAgents.has(agentId)) {
+                socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
+                return;
+              }
 
-            if (shouldNotify(agentId, `session_completed:${payload.chatId}`)) {
-              notificationService
-                .notifyAgentEvent(
-                  app.db,
-                  agentId,
-                  "session_completed",
-                  "low",
-                  `Agent ${agentId} completed a task`,
-                  payload.chatId,
-                )
-                .catch(() => {});
+              const payload = runtimeStateMessageSchema.parse(msg);
+              await presenceService.setRuntimeState(app.db, agentId, payload.runtimeState, {
+                organizationId: session.organizationId,
+                notifier,
+              });
+
+              if (payload.runtimeState === "error" && shouldNotify(agentId, "agent_error")) {
+                notificationService
+                  .notifyAgentEvent(app.db, agentId, "agent_error", "high", `Agent ${agentId} entered error state`)
+                  .catch(() => {});
+              } else if (payload.runtimeState === "blocked" && shouldNotify(agentId, "agent_blocked")) {
+                notificationService
+                  .notifyAgentEvent(app.db, agentId, "agent_blocked", "medium", `Agent ${agentId} is blocked`)
+                  .catch(() => {});
+              }
+            } else if (type === "session:event") {
+              const agentId = parsed.data.agentId;
+              if (!agentId || !boundAgents.has(agentId)) {
+                socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
+                return;
+              }
+
+              const payload = sessionEventMessageSchema.parse(msg);
+              chainSessionOp(agentId, payload.chatId, async () => {
+                try {
+                  await sessionEventService.appendEvent(app.db, agentId, payload.chatId, payload.event);
+                } catch (err) {
+                  socket.send(
+                    JSON.stringify({
+                      type: "error",
+                      message: `Failed to persist session event: ${err instanceof Error ? err.message : String(err)}`,
+                    }),
+                  );
+                }
+              });
+            } else if (type === "session:completion") {
+              const agentId = parsed.data.agentId;
+              if (!agentId || !boundAgents.has(agentId)) {
+                socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
+                return;
+              }
+
+              const payload = sessionCompletionMessageSchema.parse(msg);
+
+              if (shouldNotify(agentId, `session_completed:${payload.chatId}`)) {
+                notificationService
+                  .notifyAgentEvent(
+                    app.db,
+                    agentId,
+                    "session_completed",
+                    "low",
+                    `Agent ${agentId} completed a task`,
+                    payload.chatId,
+                  )
+                  .catch(() => {});
+              }
+            } else if (type === "heartbeat") {
+              if (clientId) {
+                await clientService.heartbeatClient(app.db, clientId);
+                await Promise.all([...boundAgents.keys()].map((id) => presenceService.touchAgent(app.db, id)));
+              }
+              socket.send(JSON.stringify({ type: "heartbeat:ack" }));
             }
-          } else if (type === "heartbeat") {
-            if (clientId) {
-              await clientService.heartbeatClient(app.db, clientId);
-              await Promise.all([...boundAgents.keys()].map((id) => presenceService.touchAgent(app.db, id)));
-            }
-            socket.send(JSON.stringify({ type: "heartbeat:ack" }));
+          } catch (err) {
+            const message = err instanceof Error ? err.message : "Internal error";
+            socket.send(JSON.stringify({ type: "error", message }));
           }
-        } catch (err) {
-          const message = err instanceof Error ? err.message : "Internal error";
-          socket.send(JSON.stringify({ type: "error", message }));
-        }
+        });
       });
 
-      socket.on("close", async () => {
+      socket.on("close", async (closeCode?: number) => {
+        endWsConnectionSpan(socket, closeCode);
         clearTimeout(authTimeout);
         if (authExpiryTimer) clearTimeout(authExpiryTimer);
 

@@ -5,7 +5,7 @@ import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
-import Fastify from "fastify";
+import Fastify, { type FastifyBaseLogger } from "fastify";
 import postgres from "postgres";
 import { ZodError } from "zod";
 import { adminAdapterMappingRoutes } from "./api/admin/adapter-mappings.js";
@@ -48,6 +48,14 @@ import { connectDatabase } from "./db/connection.js";
 import { AppError } from "./errors.js";
 import { agentSelectorHook } from "./middleware/agent-selector.js";
 import { memberAuthHook, requireAdminRoleHook } from "./middleware/member-auth.js";
+import {
+  applyLoggerConfig,
+  createLogger,
+  currentTraceId,
+  getFastifyOtelPlugin,
+  observabilityPlugin,
+  rootLogger,
+} from "./observability/index.js";
 import { type AdapterManager, createAdapterManager } from "./services/adapter-manager.js";
 import { broadcastToAdmins } from "./services/admin-broadcast.js";
 import { type BackgroundTasks, createBackgroundTasks } from "./services/background-tasks.js";
@@ -68,7 +76,26 @@ export type AppContext = {
 };
 
 export async function buildApp(config: Config) {
-  const app = Fastify({ logger: config.logger ?? true });
+  applyLoggerConfig({
+    level: config.observability.logging.level,
+    format: config.observability.logging.format,
+    bridgeToSpanLevel: config.observability.logging.bridgeToSpanLevel,
+  });
+
+  // Cast widens pino.Logger<never, boolean> → FastifyBaseLogger so the
+  // returned FastifyInstance has the default generic and remains assignable
+  // in tests / callers that reference FastifyInstance without type args.
+  const app = Fastify({ loggerInstance: rootLogger as unknown as FastifyBaseLogger });
+
+  // Register @fastify/otel before any route — it wraps each request handler
+  // in an HTTP span that becomes the parent for business spans.
+  const otelPlugin = getFastifyOtelPlugin();
+  if (otelPlugin) {
+    await app.register(otelPlugin);
+  }
+
+  // Request-scoped logger + x-trace-id + error correlation
+  await app.register(observabilityPlugin);
 
   // Decorate with config and db
   const db = connectDatabase(config.database.url);
@@ -101,16 +128,19 @@ export async function buildApp(config: Config) {
   const adminOnly = requireAdminRoleHook();
   const agentSelector = agentSelectorHook(db);
 
-  // Error handler
-  app.setErrorHandler((error, _request, reply) => {
+  // Error handler — enriches error body with traceId so operators can search
+  // the trace backend by `x-trace-id` or body.traceId.
+  app.setErrorHandler((error, request, reply) => {
+    const traceId = currentTraceId();
+    const traceField = traceId ? { traceId } : {};
     if (error instanceof AppError) {
-      return reply.status(error.statusCode).send({ error: error.message });
+      return reply.status(error.statusCode).send({ error: error.message, ...traceField });
     }
     if (error instanceof ZodError) {
-      return reply.status(400).send({ error: "Validation error", details: error.issues });
+      return reply.status(400).send({ error: "Validation error", details: error.issues, ...traceField });
     }
-    app.log.error(error);
-    return reply.status(500).send({ error: "Internal server error" });
+    request.log.error({ err: error }, "unhandled request error");
+    return reply.status(500).send({ error: "Internal server error", ...traceField });
   });
 
   // Root-level health check for container orchestration (outside /api/v1)
@@ -369,10 +399,11 @@ export async function buildApp(config: Config) {
   const pulseAggregator = createPulseAggregator({ notifier, broadcast: broadcastToAdmins });
 
   // Register config change handler for hot reload
+  const hotReloadLog = createLogger("HotReload");
   notifier.onConfigChange((configType) => {
     if (configType === "adapter_configs") {
-      adapterManager.reload().catch((err) => app.log.error(err, "Adapter hot-reload failed (PG NOTIFY)"));
-      kaelRuntime?.reload().catch((err) => app.log.error(err, "Kael hot-reload failed (PG NOTIFY)"));
+      adapterManager.reload().catch((err) => hotReloadLog.error({ err }, "adapter hot-reload failed (PG NOTIFY)"));
+      kaelRuntime?.reload().catch((err) => hotReloadLog.error({ err }, "kael hot-reload failed (PG NOTIFY)"));
     }
   });
 

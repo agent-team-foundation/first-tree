@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { logLevelSchema } from "../observability/logger-core.js";
 import { defineConfig, field } from "./schema.js";
 import { getConfig } from "./singleton.js";
 import type { InferConfig } from "./types.js";
@@ -20,7 +21,7 @@ export const clientConfigSchema = defineConfig({
       env: "FIRST_TREE_HUB_CLIENT_ID",
     }),
   },
-  logLevel: field(z.enum(["debug", "info", "warn", "error"]).default("info"), { env: "FIRST_TREE_HUB_LOG_LEVEL" }),
+  logLevel: field(logLevelSchema.default("info"), { env: "FIRST_TREE_HUB_LOG_LEVEL" }),
 });
 
 export type ClientConfig = InferConfig<typeof clientConfigSchema>;

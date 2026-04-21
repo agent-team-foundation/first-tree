@@ -142,6 +142,12 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     this.serverUrl = config.serverUrl.replace(/\/+$/, "");
     this.sdkVersion = config.sdkVersion;
     this.getAccessToken = config.getAccessToken;
+
+    // Tombstone listener: Node's EventEmitter re-throws `error` events that
+    // have no listener, so a stray ECONNRESET would crash the host. Consumers
+    // (AgentRuntime / ClientRuntime) attach their own listeners for logging —
+    // this one is the fallback for raw-SDK users who don't.
+    this.on("error", () => {});
   }
 
   get isConnected(): boolean {

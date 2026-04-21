@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { logFormatSchema, logLevelSchema } from "../observability/logger-core.js";
 import { defineConfig, field, optional } from "./schema.js";
 import { getConfig } from "./singleton.js";
 import type { InferConfig } from "./types.js";
@@ -65,6 +66,44 @@ export const serverConfigSchema = defineConfig({
     /** Public URL of this Hub server, reachable from Kael for API callbacks */
     hubPublicUrl: field(z.string(), { env: "FIRST_TREE_HUB_PUBLIC_URL" }),
   }),
+  observability: {
+    logging: {
+      level: field(logLevelSchema.default("info"), {
+        env: "FIRST_TREE_HUB_LOG_LEVEL",
+      }),
+      /**
+       * Output format. Defaults to `json` in production and `pretty` elsewhere —
+       * pretty is for humans, json is for log collectors (Loki, CloudWatch, Vector).
+       */
+      format: field(logFormatSchema.default(process.env.NODE_ENV === "production" ? "json" : "pretty")),
+      /** Minimum pino level whose records are bridged onto the currently-active span. */
+      bridgeToSpanLevel: field(z.enum(["error", "warn", "off"]).default("error")),
+    },
+    tracing: optional({
+      /**
+       * OTLP endpoint. Non-empty value enables tracing; empty string disables it.
+       * There is deliberately no separate `enabled` flag — endpoint presence is the switch.
+       */
+      endpoint: field(z.string(), { env: "FIRST_TREE_HUB_OTEL_ENDPOINT" }),
+      /**
+       * Exporter headers, serialized as `key1=value1,key2=value2` (one string — avoids
+       * env-var record coercion issues). Secret because it typically holds the write token.
+       */
+      headers: field(z.string().default(""), { env: "FIRST_TREE_HUB_OTEL_HEADERS", secret: true }),
+      exporter: field(z.enum(["otlp-http", "otlp-grpc"]).default("otlp-http")),
+      serviceName: field(z.string().default("first-tree-hub")),
+      /**
+       * Deployment environment label. Emitted as the OTel resource attribute
+       * `deployment.environment.name` — trace backends (Logfire, Honeycomb, …)
+       * use this to let one project span many environments while still
+       * letting you filter by env in the UI.
+       */
+      environment: field(z.string().default("development"), {
+        env: "FIRST_TREE_HUB_OTEL_ENVIRONMENT",
+      }),
+      sampleRate: field(z.number().min(0).max(1).default(1)),
+    }),
+  },
 });
 
 export type ServerConfig = InferConfig<typeof serverConfigSchema>;
