@@ -13,10 +13,13 @@
  * builds a prompt, writes it to `<task-dir>/prompt.txt`, and execs the
  * agent binary. Stdout/stderr go to `runner-stdout.log` /
  * `runner-stderr.log`; `runner-output.txt` holds the agent's final
- * message (codex writes it via `--output-last-message`, claude's
- * stdout is copied there post-exit). These on-disk filenames keep the
- * "runner-" prefix to preserve the debug-artifact contract across the
- * Rust → TS port.
+ * message. Codex writes its rolling "last assistant message" into a
+ * temporary file during execution, and we only promote that file to
+ * `runner-output.txt` after the child exits so transient reconnect /
+ * auth messages do not look like the final task result mid-flight.
+ * Claude's stdout is copied there post-exit. These on-disk filenames
+ * keep the "runner-" prefix to preserve the debug-artifact contract
+ * across the Rust → TS port.
  *
  * The dispatcher iterates the pool in `executionOrder()` until one
  * agent returns successfully, mirroring Rust's fallback chain. Only
@@ -34,6 +37,7 @@ import {
   readFileSync,
   writeFileSync,
   existsSync,
+  rmSync,
   type WriteStream,
 } from "node:fs";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -109,6 +113,10 @@ export async function executeAgent(
   const promptText = buildPrompt(request);
   const promptPath = join(request.taskDir, "prompt.txt");
   const outputPath = join(request.taskDir, "runner-output.txt");
+  const liveOutputPath =
+    spec.kind === "codex"
+      ? join(request.taskDir, "runner-last-message.txt")
+      : outputPath;
   const stdoutPath = join(request.taskDir, "runner-stdout.log");
   const stderrPath = join(request.taskDir, "runner-stderr.log");
 
@@ -120,10 +128,15 @@ export async function executeAgent(
     request,
     promptPath,
     promptText,
-    outputPath,
+    outputPath: liveOutputPath,
     stdoutPath,
     stderrPath,
   });
+
+  if (spec.kind === "codex" && existsSync(liveOutputPath)) {
+    writeFileSync(outputPath, readFileSync(liveOutputPath, "utf8"));
+    rmSync(liveOutputPath, { force: true });
+  }
 
   // Claude doesn't emit --output-last-message; copy stdout into
   // runner-output.txt so parse_result can find the final BREEZE_RESULT

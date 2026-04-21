@@ -52,7 +52,7 @@ import { Dispatcher } from "./dispatcher.js";
 import { WorkspaceManager } from "./workspace.js";
 import type { AgentSpec } from "./runner.js";
 import { GhClient as BrokerGhClient } from "./gh-client.js";
-import { runCandidateLoop } from "./candidate-loop.js";
+import { runCandidateCycle, runCandidateLoop } from "./candidate-loop.js";
 import { RepoFilter } from "../runtime/repo-filter.js";
 import { Scheduler } from "./scheduler.js";
 import { ThreadStore } from "./thread-store.js";
@@ -64,6 +64,8 @@ export interface DaemonCliOverrides {
   httpPort?: number;
   // taskTimeoutSec is read today but not yet consumed; kept for Phase 3b.
   taskTimeoutSec?: number;
+  maxParallel?: number;
+  searchLimit?: number;
   /**
    * Comma-separated allow-list of repos the daemon should act on.
    * Patterns are `owner/repo` or `owner/*`. An empty or undefined value
@@ -107,11 +109,13 @@ const DEFAULT_LOGGER: PollerLogger = {
  *   --log-level <level>
  *   --http-port <n>
  *   --task-timeout-secs <n>
+ *   --max-parallel <n>
+ *   --search-limit <n>
  *   --allow-repo <csv>            (owner/repo,owner/* — scopes the daemon
  *                                  to the listed repos; empty = all)
  *
  * Both `--flag value` and `--flag=value` forms are accepted for
- * `--allow-repo`.
+ * `--allow-repo`, `--max-parallel`, and `--search-limit`.
  *
  * Unknown flags are dropped silently in Phase 3a — they'll be parsed by
  * the future full-featured daemon in 3b/3c. This keeps the skeleton
@@ -128,6 +132,16 @@ export function parseDaemonArgs(argv: readonly string[]): DaemonCliOverrides {
     if (arg && arg.startsWith("--allow-repo=")) {
       const value = arg.slice("--allow-repo=".length);
       if (value.length > 0) overrides.allowRepo = value;
+      continue;
+    }
+    if (arg && arg.startsWith("--max-parallel=")) {
+      const value = Number.parseInt(arg.slice("--max-parallel=".length), 10);
+      if (Number.isFinite(value) && value > 0) overrides.maxParallel = value;
+      continue;
+    }
+    if (arg && arg.startsWith("--search-limit=")) {
+      const value = Number.parseInt(arg.slice("--search-limit=".length), 10);
+      if (Number.isFinite(value) && value > 0) overrides.searchLimit = value;
       continue;
     }
     switch (arg) {
@@ -182,6 +196,24 @@ export function parseDaemonArgs(argv: readonly string[]): DaemonCliOverrides {
         if (value !== undefined) {
           const n = Number.parseInt(value, 10);
           if (Number.isFinite(n) && n > 0) overrides.taskTimeoutSec = n;
+          advance();
+        }
+        break;
+      }
+      case "--max-parallel": {
+        const value = next();
+        if (value !== undefined) {
+          const n = Number.parseInt(value, 10);
+          if (Number.isFinite(n) && n > 0) overrides.maxParallel = n;
+          advance();
+        }
+        break;
+      }
+      case "--search-limit": {
+        const value = next();
+        if (value !== undefined) {
+          const n = Number.parseInt(value, 10);
+          if (Number.isFinite(n) && n > 0) overrides.searchLimit = n;
           advance();
         }
         break;
@@ -244,6 +276,7 @@ export async function runDaemon(
   }
 
   const paths = resolveBreezePaths();
+  const runnerHome = resolveRunnerHome();
 
   // Identity resolution is best-effort at startup. The daemon will still
   // try to poll if identity fails — the poller uses the host-only env,
@@ -282,7 +315,7 @@ export async function runDaemon(
   if (identity && !(options.signal?.aborted ?? false)) {
     try {
       lockHandle = await acquireServiceLock({
-        baseDir: join(resolveRunnerHome(), "locks"),
+        baseDir: join(runnerHome, "locks"),
         identity,
         profile: "default",
         note: "daemon starting",
@@ -323,8 +356,52 @@ export async function runDaemon(
     logger.error(
       `invalid --allow-repo value: ${err instanceof Error ? err.message : String(err)}`,
     );
+    if (lockHandle) await lockHandle.release().catch(() => undefined);
     return 1;
   }
+
+  let dispatcher: Dispatcher | null = null;
+  const runtimeStore = new ThreadStore({ runnerHome });
+  const allowedReposLabel = repoFilter.isEmpty()
+    ? "all"
+    : repoFilter.displayPatterns();
+  const runtimeStatus: Record<string, string> = {
+    last_identity: identity
+      ? `${identity.login}@${identity.host}`
+      : `unknown@${config.host}`,
+    allowed_repos: allowedReposLabel,
+    active_tasks: "0",
+    queued_tasks: "0",
+    last_note: "daemon starting",
+  };
+  const publishRuntimeStatus = (
+    note?: string,
+    extra: Record<string, string | undefined> = {},
+  ): void => {
+    if (note !== undefined) runtimeStatus.last_note = note;
+    runtimeStatus.last_identity = identity
+      ? `${identity.login}@${identity.host}`
+      : `unknown@${config.host}`;
+    runtimeStatus.allowed_repos = allowedReposLabel;
+    runtimeStatus.active_tasks = String(dispatcher?.activeCount() ?? 0);
+    runtimeStatus.queued_tasks = String(dispatcher?.pendingCount() ?? 0);
+    for (const [key, value] of Object.entries(extra)) {
+      if (value === undefined || value.length === 0) delete runtimeStatus[key];
+      else runtimeStatus[key] = value;
+    }
+    runtimeStore.writeRuntimeStatus(runtimeStatus);
+    lockHandle?.refresh(
+      Number.parseInt(runtimeStatus.active_tasks, 10) || 0,
+      runtimeStatus.last_note,
+    );
+  };
+  publishRuntimeStatus();
+  const runtimeRefreshMs = Math.max(
+    1_000,
+    Math.min(config.pollIntervalSec * 1_000, 30_000),
+  );
+  const runtimeTicker = setInterval(() => publishRuntimeStatus(), runtimeRefreshMs);
+  runtimeTicker.unref?.();
 
   logger.info(
     `breeze daemon: poll-interval=${config.pollIntervalSec}s host=${config.host} http-port=${config.httpPort} max-parallel=${config.maxParallel} search-limit=${config.searchLimit} allow-repo=${repoFilter.isEmpty() ? "all" : repoFilter.displayPatterns()}`,
@@ -342,13 +419,18 @@ export async function runDaemon(
   // Absence of codex/claude is non-fatal; the daemon still runs as
   // read-only (poller + http).
   let broker: RunningBroker | null = null;
-  let dispatcher: Dispatcher | null = null;
   let candidateLoopDone: Promise<void> | null = null;
+  let candidateRuntime:
+    | {
+        client: BrokerGhClient;
+        dispatcher: Dispatcher;
+        scheduler: Scheduler;
+      }
+    | null = null;
   try {
     const agents = detectAvailableAgents();
     const realGh = findExecutable("gh");
     if (agents.length > 0 && realGh) {
-      const runnerHome = resolveRunnerHome();
       const brokerDir = join(runnerHome, "broker");
       const identity = resolveDaemonIdentity({ host: config.host });
       const executor = new GhExecutor({
@@ -404,25 +486,38 @@ export async function runDaemon(
         `breeze daemon: dispatcher ready (agents=${agents.map((r) => r.kind).join(",")}, broker=${broker.shimDir})`,
       );
 
-      // Phase 4: candidate loop — feeds the dispatcher from GitHub.
-      candidateLoopDone = runCandidateLoop({
+      candidateRuntime = {
         client: candidateClient,
         dispatcher,
-        bus,
-        pollIntervalSec: config.pollIntervalSec,
-        searchLimit: config.searchLimit,
-        includeSearch: true,
-        lookbackSecs: 24 * 3_600,
-        signal: controller.signal,
-        logger,
         scheduler,
-        recoverableCandidates: () =>
-          scheduler.enqueueRecoverableTasks(identity.host),
-      }).catch((err) => {
-        logger.error(
-          `candidate loop crashed: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      });
+      };
+      if (!options.once) {
+        // Phase 4: candidate loop — feeds the dispatcher from GitHub.
+        candidateLoopDone = runCandidateLoop({
+          client: candidateClient,
+          dispatcher,
+          bus,
+          pollIntervalSec: config.pollIntervalSec,
+          searchLimit: config.searchLimit,
+          includeSearch: true,
+          lookbackSecs: 24 * 3_600,
+          signal: controller.signal,
+          logger,
+          scheduler,
+          onCycle: () =>
+            publishRuntimeStatus(undefined, {
+              next_search_reconcile_epoch: String(
+                Math.floor(Date.now() / 1_000) + config.pollIntervalSec,
+              ),
+            }),
+          recoverableCandidates: () =>
+            scheduler.enqueueRecoverableTasks(identity.host),
+        }).catch((err) => {
+          logger.error(
+            `candidate loop crashed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
+      }
     } else {
       const missing: string[] = [];
       if (agents.length === 0) missing.push("no codex/claude on PATH");
@@ -458,19 +553,37 @@ export async function runDaemon(
       logger.error(
         `failed to start http server: ${err instanceof Error ? err.message : String(err)}`,
       );
+      clearInterval(runtimeTicker);
       if (dispatcher) await dispatcher.stop();
       if (broker) await broker.stop();
       if (uninstallHandlers) uninstallHandlers();
+      if (lockHandle) await lockHandle.release().catch(() => undefined);
       return 1;
     }
   }
+  publishRuntimeStatus("running");
 
   let exitCode = 0;
   try {
     if (options.once) {
       // One-shot: run a single poll cycle, then wait for the
-      // dispatcher to drain. Mirrors Rust `run_loop(once=true)`.
+      // dispatcher to drain. Also run one candidate-search cycle so
+      // assigned/review-requested work is not lost before shutdown.
       await runPollerOnce(config, paths, controller.signal, logger);
+      if (candidateRuntime) {
+        const outcome = await runCandidateCycle(
+          {
+            client: candidateRuntime.client,
+            dispatcher: candidateRuntime.dispatcher,
+            searchLimit: config.searchLimit,
+            includeSearch: true,
+            lookbackSecs: 24 * 3_600,
+            scheduler: candidateRuntime.scheduler,
+          },
+          () => Math.floor(Date.now() / 1_000),
+        );
+        logCandidateOutcome(outcome, logger, bus);
+      }
       if (dispatcher) await waitForDispatcherDrain(dispatcher, controller.signal);
     } else {
       await runPoller({
@@ -487,6 +600,7 @@ export async function runDaemon(
     );
     exitCode = 1;
   } finally {
+    clearInterval(runtimeTicker);
     // Shutdown order:
     //   SIGTERM -> stop poller (above) -> flush store (poller's atomic
     //   tmp+rename drains in updateInbox) -> stop dispatcher (aborts
@@ -584,6 +698,23 @@ export function resolveRunnerHome(
   const breezeDir = env("BREEZE_DIR");
   if (breezeDir && breezeDir.length > 0) return join(breezeDir, "runner");
   return join(homedir(), ".breeze", "runner");
+}
+
+function logCandidateOutcome(
+  outcome: Awaited<ReturnType<typeof runCandidateCycle>>,
+  logger: PollerLogger,
+  bus: Bus,
+): void {
+  for (const warning of outcome.warnings) {
+    logger.warn(`candidates: ${warning}`);
+    bus.publish({ kind: "activity", line: warning });
+  }
+  if (outcome.rateLimited) {
+    logger.warn("candidate search rate-limited during one-shot cycle");
+  }
+  if (outcome.submitted > 0) {
+    logger.info(`candidates: submitted ${outcome.submitted} task(s)`);
+  }
 }
 
 /**

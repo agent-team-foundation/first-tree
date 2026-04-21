@@ -24,11 +24,11 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  runSync,
-  type ShellResult,
-  type ShellRun,
-} from "#products/tree/engine/sync.js";
+import { runSync } from "#products/tree/engine/sync.js";
+import type {
+  ShellResult,
+  ShellRun,
+} from "#products/tree/engine/runtime/shell.js";
 import { writeTreeBinding } from "#products/tree/engine/runtime/binding-state.js";
 import { makeTreeMetadata, useTmpDir } from "../helpers.js";
 

@@ -1,4 +1,4 @@
-import type { ShellRun } from "#products/tree/engine/sync.js";
+import type { ShellRun } from "#products/tree/engine/runtime/shell.js";
 
 export interface OpenTreePrOpts {
   branch: string;

@@ -26,6 +26,9 @@ export const GARDENER_USAGE = `usage: first-tree gardener <command>
 Commands:
   respond               Fix sync PRs based on reviewer feedback
   comment               Review source-repo PRs/issues against the tree
+  install-workflow      Scaffold .github/workflows/first-tree-sync.yml in
+                        the caller's codebase repo (push mode: replaces
+                        the gardener service with an event-driven flow)
 
 Options:
   --help, -h            Show this help message
@@ -38,6 +41,7 @@ Examples:
   first-tree gardener comment --help
   first-tree gardener comment --pr 42 --repo owner/name
   first-tree gardener comment --issue 7 --repo owner/name
+  first-tree gardener install-workflow --tree-repo owner/tree-repo
 `;
 
 type Output = (text: string) => void;
@@ -76,6 +80,12 @@ export async function runGardener(
         "./engine/commands/comment.js"
       );
       return runComment(args.slice(1), { write });
+    }
+    case "install-workflow": {
+      const { runInstallWorkflow } = await import(
+        "./engine/commands/install-workflow.js"
+      );
+      return runInstallWorkflow(args.slice(1), { write });
     }
     default:
       write(`Unknown gardener command: ${command}`);
