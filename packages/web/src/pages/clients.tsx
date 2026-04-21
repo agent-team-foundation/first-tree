@@ -12,11 +12,13 @@ import {
   retireClient,
 } from "../api/activity.js";
 import { ApiError } from "../api/client.js";
+import { useAuth } from "../auth/auth-context.js";
 import { Badge } from "../components/ui/badge.js";
 import { Button } from "../components/ui/button.js";
 import { StateChip } from "../components/ui/state-chip.js";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.js";
 import { useAgentNameMap } from "../lib/use-agent-name-map.js";
+import { useUserNameMap } from "../lib/use-user-name-map.js";
 import { formatDate } from "../lib/utils.js";
 
 function ConnectCommandBanner() {
@@ -73,6 +75,9 @@ function ConnectCommandBanner() {
 export function ClientsPage() {
   const queryClient = useQueryClient();
   const agentName = useAgentNameMap();
+  const ownerName = useUserNameMap();
+  const { role } = useAuth();
+  const isAdmin = role === "admin";
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [confirmDisconnect, setConfirmDisconnect] = useState<HubClient | null>(null);
   const [confirmRetire, setConfirmRetire] = useState<HubClient | null>(null);
@@ -241,6 +246,7 @@ export function ClientsPage() {
               <TableRow>
                 <TableHead className="w-8" />
                 <TableHead>Hostname</TableHead>
+                {isAdmin && <TableHead>Owner</TableHead>}
                 <TableHead>OS</TableHead>
                 <TableHead>SDK</TableHead>
                 <TableHead>Agents</TableHead>
@@ -260,6 +266,8 @@ export function ClientsPage() {
                     boundAgents={boundAgents}
                     isExpanded={isExpanded}
                     agentName={agentName}
+                    showOwner={isAdmin}
+                    ownerName={ownerName}
                     onToggle={() => setExpandedId(isExpanded ? null : client.id)}
                     onDisconnect={() => setConfirmDisconnect(client)}
                     onRetire={() => {
@@ -282,6 +290,8 @@ function ClientRow({
   boundAgents,
   isExpanded,
   agentName,
+  showOwner,
+  ownerName,
   onToggle,
   onDisconnect,
   onRetire,
@@ -290,6 +300,8 @@ function ClientRow({
   boundAgents: RuntimeAgent[];
   isExpanded: boolean;
   agentName: (uuid: string | null | undefined) => string;
+  showOwner: boolean;
+  ownerName: (userId: string | null | undefined) => string;
   onToggle: () => void;
   onDisconnect: () => void;
   onRetire: () => void;
@@ -301,6 +313,7 @@ function ClientRow({
           {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
         </TableCell>
         <TableCell className="font-medium">{client.hostname ?? "\u2014"}</TableCell>
+        {showOwner && <TableCell className="text-sm">{ownerName(client.userId)}</TableCell>}
         <TableCell className="text-muted-foreground">{client.os ?? "\u2014"}</TableCell>
         <TableCell className="font-mono text-xs text-muted-foreground">{client.sdkVersion ?? "\u2014"}</TableCell>
         <TableCell>{client.agentCount}</TableCell>
@@ -339,7 +352,7 @@ function ClientRow({
       </TableRow>
       {isExpanded && (
         <TableRow>
-          <TableCell colSpan={8} className="bg-muted/30 px-8 py-3">
+          <TableCell colSpan={showOwner ? 9 : 8} className="bg-muted/30 px-8 py-3">
             <div className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
               Bound Agents ({boundAgents.length})
             </div>

@@ -3,24 +3,47 @@ import type { Database } from "../db/connection.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
 import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
+import { members } from "../db/schema/members.js";
 import { ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 import { runtimeFieldsReset } from "./presence.js";
 
 /**
- * Assert the caller's user owns this client. Throws 404 for both "not found"
+ * Assert the caller can act on this client. Throws 404 for both "not found"
  * and "not yours" to prevent UUID enumeration across org/user boundaries.
- * Used by management routes (disconnect, retire, single GET) so a cross-org
- * admin cannot operate on another user's client.
+ *
+ *   - member: owner match (`row.user_id == scope.userId`).
+ *   - admin: any client whose owner is a member of the admin's own org.
+ *
+ * Legacy unclaimed rows (`user_id IS NULL`) have no org association we can
+ * verify — we explicitly refuse to grant admin access to them so a
+ * cross-tenant admin can't operate on another org's orphan rows. These
+ * orphans are surfaced for self-service re-registration only; the owning
+ * operator must claim the row via `first-tree-hub connect` before any
+ * admin action becomes available.
  */
-export async function assertClientOwner(db: Database, clientId: string, userId: string): Promise<void> {
+export async function assertClientOwner(
+  db: Database,
+  clientId: string,
+  scope: { userId: string; organizationId: string; role: string },
+): Promise<void> {
   const [row] = await db
     .select({ id: clients.id, userId: clients.userId })
     .from(clients)
     .where(eq(clients.id, clientId))
     .limit(1);
-  if (!row || row.userId !== userId) {
+  if (!row) {
     throw new NotFoundError(`Client "${clientId}" not found`);
   }
+  if (row.userId === scope.userId) return;
+  if (scope.role === "admin" && row.userId !== null) {
+    const [sibling] = await db
+      .select({ id: members.id })
+      .from(members)
+      .where(and(eq(members.userId, row.userId), eq(members.organizationId, scope.organizationId)))
+      .limit(1);
+    if (sibling) return;
+  }
+  throw new NotFoundError(`Client "${clientId}" not found`);
 }
 
 /**
@@ -129,8 +152,40 @@ export async function listActiveAgentsPinnedToClient(db: Database, clientId: str
     .where(and(eq(agents.clientId, clientId), ne(agents.status, "deleted")));
 }
 
-export async function listClients(db: Database, userId: string) {
-  const rows = await db.select().from(clients).where(eq(clients.userId, userId));
+/**
+ * Scope-aware client listing.
+ *
+ *   - member: only rows where `user_id = scope.userId`.
+ *   - admin: every claimed row whose owner is a member of the caller's
+ *     organization.
+ *
+ * Legacy unclaimed rows (`user_id IS NULL`) are intentionally hidden from
+ * both roles — the `clients` table has no org column, so we cannot verify
+ * which org an orphan belongs to. Exposing them to admin would leak
+ * orphans across tenants. The owning operator reclaims the row via
+ * `first-tree-hub connect`, after which it appears in their list.
+ */
+export async function listClients(db: Database, scope: { userId: string; organizationId: string; role: string }) {
+  const rows =
+    scope.role === "admin"
+      ? await db
+          .selectDistinct({
+            id: clients.id,
+            userId: clients.userId,
+            status: clients.status,
+            sdkVersion: clients.sdkVersion,
+            hostname: clients.hostname,
+            os: clients.os,
+            instanceId: clients.instanceId,
+            connectedAt: clients.connectedAt,
+            lastSeenAt: clients.lastSeenAt,
+            metadata: clients.metadata,
+          })
+          .from(clients)
+          .innerJoin(members, eq(members.userId, clients.userId))
+          .where(eq(members.organizationId, scope.organizationId))
+      : await db.select().from(clients).where(eq(clients.userId, scope.userId));
+
   const counts = await db
     .select({
       clientId: agents.clientId,

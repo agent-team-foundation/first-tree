@@ -16,8 +16,9 @@ function parseId(raw: string): number {
 }
 
 export async function adminAdapterRoutes(app: FastifyInstance): Promise<void> {
-  app.get("/", async () => {
-    const configs = await adapterService.listAdapterConfigs(app.db);
+  app.get("/", async (request) => {
+    const scope = memberScope(request);
+    const configs = await adapterService.listAdapterConfigsForMember(app.db, scope);
     return configs.map((c) => ({
       ...c,
       createdAt: c.createdAt.toISOString(),

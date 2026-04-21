@@ -1,5 +1,5 @@
 import { createAdapterMappingSchema } from "@agent-team-foundation/first-tree-hub-shared";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { adapterAgentMappings } from "../../db/schema/adapter-agent-mappings.js";
 import { agents } from "../../db/schema/agents.js";
@@ -20,7 +20,16 @@ export async function adminAdapterMappingRoutes(app: FastifyInstance): Promise<v
     // M2 org scope: adapter_agent_mappings has no organization_id column,
     // so we JOIN agents to filter by the caller's org. Without this JOIN,
     // a cross-tenant admin could list every other org's mappings.
+    //
+    // Post hub-ui-polish: non-admin callers see only mappings for agents
+    // they manage; admins see every mapping in the org. The backend has to
+    // enforce this even when the UI hides the edit button — admin-only
+    // has been removed from the route hook.
     const scope = memberScope(request);
+    const conditions = [eq(agents.organizationId, scope.organizationId)];
+    if (scope.role !== "admin") {
+      conditions.push(eq(agents.managerId, scope.memberId));
+    }
     const rows = await app.db
       .select({
         id: adapterAgentMappings.id,
@@ -33,7 +42,7 @@ export async function adminAdapterMappingRoutes(app: FastifyInstance): Promise<v
       })
       .from(adapterAgentMappings)
       .innerJoin(agents, eq(agents.uuid, adapterAgentMappings.agentId))
-      .where(eq(agents.organizationId, scope.organizationId))
+      .where(and(...conditions))
       .orderBy(desc(adapterAgentMappings.createdAt));
     return rows.map((r) => ({
       id: r.id,

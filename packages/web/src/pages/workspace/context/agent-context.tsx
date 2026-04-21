@@ -260,12 +260,8 @@ export function AgentContext({ agentId }: { agentId: string }) {
         <a href={`/agents/${agentId}`} style={{ fontSize: 11, color: "var(--accent)" }} className="hover:underline">
           Manage agent →
         </a>
-        <a
-          href="/admin#clients"
-          style={{ fontSize: 11, color: "var(--accent)", marginTop: 4 }}
-          className="hover:underline"
-        >
-          Admin · Computers →
+        <a href="/clients" style={{ fontSize: 11, color: "var(--accent)", marginTop: 4 }} className="hover:underline">
+          Computers →
         </a>
       </div>
 

@@ -28,7 +28,8 @@ export async function memberRoutes(app: FastifyInstance): Promise<void> {
   app.patch<{ Params: { id: string } }>("/:id", async (request) => {
     requireAdmin(request);
     const body = updateMemberSchema.parse(request.body);
-    return memberService.updateMember(app.db, request.params.id, body);
+    const m = requireMember(request);
+    return memberService.updateMember(app.db, request.params.id, body, m.organizationId);
   });
 
   app.delete<{ Params: { id: string } }>("/:id", async (request, reply) => {

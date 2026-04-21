@@ -28,6 +28,8 @@ export type CreateMember = z.infer<typeof createMemberSchema>;
 
 export const updateMemberSchema = z.object({
   role: memberRoleSchema.optional(),
+  /** Friendly display name; stored on the member's human agent (single source of truth). */
+  displayName: z.string().min(1).max(200).optional(),
 });
 export type UpdateMember = z.infer<typeof updateMemberSchema>;
 

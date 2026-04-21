@@ -45,8 +45,14 @@ function issuesToFieldErrors(issues: ValidationIssue[] | undefined): FieldErrors
  * Hidden defaults (see hub-onboarding-mvp proposal §2.2):
  *   - type = "personal_assistant" (Team agents go through a different path)
  *   - manager = current user (admin-assisted creation uses a separate UI)
- *   - displayName = Name, slug derived automatically
  *   - delegateMention, visibility, clientId = not surfaced
+ *
+ * Name vs. display name:
+ *   - `name` is the permanent hub ID (lowercase slug). Format help is shown
+ *     inline so the rule is visible before the user hits Submit.
+ *   - `displayName` is the friendly label and defaults to the user's raw
+ *     text input. We keep the two linked until the user edits `displayName`
+ *     directly — after that, editing `name` no longer touches it.
  *
  * Runtime choice:
  *   - "claude-code" — agent binds to the user's computer on first WS connect.
@@ -86,6 +92,8 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
   const [nameDirty, setNameDirty] = useState(false);
+  const [displayName, setDisplayName] = useState("");
+  const [displayNameDirty, setDisplayNameDirty] = useState(false);
   const [runtime, setRuntime] = useState<Runtime>("claude-code");
 
   // Step 2 state — shown only when the user has multiple connected computers
@@ -100,6 +108,8 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
     if (open) {
       setName("");
       setNameDirty(false);
+      setDisplayName("");
+      setDisplayNameDirty(false);
       setRuntime("claude-code");
       setStep("form");
       setCandidateClients([]);
@@ -113,7 +123,7 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
 
   const createMut = useMutation({
     mutationFn: async (opts: { clientId?: string }) => {
-      const displayName = name.trim() || "Untitled assistant";
+      const effectiveDisplay = displayName.trim() || name.trim() || "Untitled assistant";
       const effectiveName = slug || undefined;
       // When a clientId is provided (scenario B), the server pins the agent
       // on create and emits an `agent:pinned` WebSocket frame to the
@@ -123,7 +133,7 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
       return createAgent({
         name: effectiveName,
         type: "personal_assistant",
-        displayName,
+        displayName: effectiveDisplay,
         clientId: opts.clientId,
       });
     },
@@ -136,13 +146,18 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
 
   // Translate a server validation error (Zod `issues[]` emitted by the server
   // `setErrorHandler` in `app.ts`) into per-field messages. Non-validation
-  // errors fall through to `_root` so they still render as a banner.
+  // errors fall through to `_root` so they still render as a banner —
+  // except the 409 uniqueness conflict, which we attach to the `name` field
+  // because "already exists" is specifically a name collision.
   const serverErrors = useMemo<FieldErrors>(() => {
     const err = createMut.error;
     if (!err) return {};
     if (err instanceof ApiError) {
       const fromIssues = issuesToFieldErrors(err.issues);
       if (Object.keys(fromIssues).length > 0) return fromIssues;
+      if (err.status === 409) {
+        return { name: "That hub ID is already in use in this organization. Pick a different one." };
+      }
       return { _root: err.message };
     }
     if (err instanceof Error) return { _root: err.message };
@@ -172,7 +187,10 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
       // Raw input had content but slugify() stripped it down to nothing —
       // e.g. pure-symbol input like "!!!". Server would auto-generate, but
       // the user probably didn't intend that; surface the issue.
-      errs.name = "Name must contain at least one letter or digit.";
+      errs.name = "Name must contain at least one letter or digit (e.g. a-z, 0-9).";
+    }
+    if (displayName.length > 200) {
+      errs.displayName = `Display name must be at most 200 characters (got ${displayName.length}).`;
     }
     return errs;
   }
@@ -305,19 +323,21 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
               id="new-agent-name"
               value={name}
               onChange={(e) => {
-                setName(e.target.value);
+                const next = e.target.value;
+                setName(next);
                 setNameDirty(true);
+                if (!displayNameDirty) setDisplayName(next);
                 if (clientErrors.name) setClientErrors((prev) => ({ ...prev, name: undefined }));
               }}
               placeholder="My Dev Assistant"
               autoFocus
-              maxLength={80}
+              maxLength={NAME_MAX}
               aria-invalid={fieldErrors.name ? true : undefined}
               aria-describedby="new-agent-name-help new-agent-name-error"
             />
             <p id="new-agent-name-help" className="text-xs text-muted-foreground">
-              Any text — we'll derive a hub ID (lowercase letters, digits, hyphens, underscores; up to {NAME_MAX} chars)
-              automatically.
+              Hub ID: lowercase letters, digits, hyphens (-), and underscores (_). Up to {NAME_MAX} characters.
+              Permanent after creation — you can't rename the agent later.
             </p>
             {nameDirty && slug && (
               <p className="text-xs text-muted-foreground">
@@ -327,6 +347,31 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
             {fieldErrors.name && (
               <p id="new-agent-name-error" className="text-xs text-destructive">
                 {fieldErrors.name}
+              </p>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="new-agent-display-name">Display name</Label>
+            <Input
+              id="new-agent-display-name"
+              value={displayName}
+              onChange={(e) => {
+                setDisplayName(e.target.value);
+                setDisplayNameDirty(true);
+                if (clientErrors.displayName) setClientErrors((prev) => ({ ...prev, displayName: undefined }));
+              }}
+              placeholder="How teammates see this agent"
+              maxLength={200}
+              aria-invalid={fieldErrors.displayName ? true : undefined}
+              aria-describedby="new-agent-display-name-help new-agent-display-name-error"
+            />
+            <p id="new-agent-display-name-help" className="text-xs text-muted-foreground">
+              Shown in chats and lists. Defaults to the Name above; you can change it anytime later.
+            </p>
+            {fieldErrors.displayName && (
+              <p id="new-agent-display-name-error" className="text-xs text-destructive">
+                {fieldErrors.displayName}
               </p>
             )}
           </div>

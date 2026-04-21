@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bell } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { useNavigate } from "react-router";
@@ -29,9 +29,11 @@ function relativeTime(dateStr: string): string {
 
 export function NotificationBell() {
   const [open, setOpen] = useState(false);
+  const [markAllError, setMarkAllError] = useState<string | null>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
   const agentName = useAgentNameMap();
+  const queryClient = useQueryClient();
 
   const { data } = useQuery({
     queryKey: ["notifications", "bell"],
@@ -63,9 +65,22 @@ export function NotificationBell() {
     [navigate],
   );
 
-  const handleMarkAll = useCallback(() => {
-    markAllNotificationsRead().catch(() => {});
-  }, []);
+  // Without an invalidate, the red badge stays up to 10s (refetchInterval)
+  // after the API succeeds — visually indistinguishable from "nothing
+  // happened". Broad-invalidate every `["notifications", …]` key so the
+  // bell list, unread count, and per-agent panels all refresh in lockstep
+  // — targeted invalidates miss any future consumer keyed on
+  // `["notifications", "agent", id]` or a yet-unbuilt list page. Surface
+  // failures inline since we don't have a toast system yet.
+  const handleMarkAll = useCallback(async () => {
+    setMarkAllError(null);
+    try {
+      await markAllNotificationsRead();
+      await queryClient.invalidateQueries({ queryKey: ["notifications"] });
+    } catch (err) {
+      setMarkAllError(err instanceof Error ? err.message : "Failed to mark all as read");
+    }
+  }, [queryClient]);
 
   return (
     <div className="relative">
@@ -101,6 +116,11 @@ export function NotificationBell() {
                 </button>
               )}
             </div>
+            {markAllError && (
+              <div className="border-b border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                {markAllError}
+              </div>
+            )}
             <div className="max-h-80 overflow-y-auto">
               {!data?.items || data.items.length === 0 ? (
                 <div className="py-6 text-center text-sm text-muted-foreground">No notifications</div>
