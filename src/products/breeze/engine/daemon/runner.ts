@@ -120,6 +120,8 @@ export async function executeAgent(
   const stdoutPath = join(request.taskDir, "runner-stdout.log");
   const stderrPath = join(request.taskDir, "runner-stderr.log");
 
+  rmSync(outputPath, { force: true });
+  rmSync(liveOutputPath, { force: true });
   writeFileSync(promptPath, promptText);
 
   const spawner = options.spawner ?? defaultAgentSpawner;
