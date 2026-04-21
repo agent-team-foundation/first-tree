@@ -29,12 +29,22 @@ export type ErrorEventPayload = {
   message: string;
 };
 
+export type AssistantTextEventPayload = {
+  text: string;
+};
+
+export type TurnEndEventPayload = {
+  status: "success" | "error";
+};
+
+export type SessionEventKind = "tool_call" | "error" | "assistant_text" | "thinking" | "turn_end";
+
 export type SessionEventRow = {
   id: string;
   agentId: string;
   chatId: string;
   seq: number;
-  kind: "tool_call" | "error";
+  kind: SessionEventKind;
   payload: unknown;
   createdAt: string;
 };
@@ -60,6 +70,20 @@ export function asErrorPayload(payload: unknown): ErrorEventPayload | null {
   if (p.source !== "sdk" && p.source !== "runtime" && p.source !== "tool") return null;
   if (typeof p.message !== "string") return null;
   return { source: p.source, message: p.message };
+}
+
+export function asAssistantTextPayload(payload: unknown): AssistantTextEventPayload | null {
+  if (typeof payload !== "object" || payload === null) return null;
+  const p = payload as Record<string, unknown>;
+  if (typeof p.text !== "string") return null;
+  return { text: p.text };
+}
+
+export function asTurnEndPayload(payload: unknown): TurnEndEventPayload | null {
+  if (typeof payload !== "object" || payload === null) return null;
+  const p = payload as Record<string, unknown>;
+  if (p.status !== "success" && p.status !== "error") return null;
+  return { status: p.status };
 }
 
 export type SessionEventsResponse = {

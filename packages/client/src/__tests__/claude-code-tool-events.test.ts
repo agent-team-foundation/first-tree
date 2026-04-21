@@ -161,13 +161,17 @@ describe("createToolCallProcessor", () => {
     processor.onMessage(userToolResult("a1", "ok1"));
     processor.onMessage(userToolResult("a2", "ok2"));
 
-    expect(emit).toHaveBeenCalledTimes(2);
-    const ids = emit.mock.calls.map((c) => {
-      const ev = c[0];
-      if (ev.kind !== "tool_call") throw new Error("expected tool_call");
-      return ev.payload.toolUseId;
-    });
-    expect(ids).toEqual(["a1", "a2"]);
+    // 1 assistant_text ("running both") + 2 tool_call pairs = 3 events
+    expect(emit).toHaveBeenCalledTimes(3);
+    const toolIds = emit.mock.calls
+      .map((c) => c[0])
+      .filter((ev) => ev.kind === "tool_call")
+      .map((ev) => (ev.kind === "tool_call" ? ev.payload.toolUseId : ""));
+    expect(toolIds).toEqual(["a1", "a2"]);
+
+    const textEv = emit.mock.calls.map((c) => c[0]).find((ev) => ev.kind === "assistant_text");
+    if (!textEv || textEv.kind !== "assistant_text") throw new Error("expected assistant_text event");
+    expect(textEv.payload.text).toBe("running both");
   });
 
   it("ignores non-relevant SDK message types", () => {
@@ -181,5 +185,61 @@ describe("createToolCallProcessor", () => {
     processor.flush();
 
     expect(emit).not.toHaveBeenCalled();
+  });
+
+  it("emits assistant_text for non-empty text blocks", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit);
+
+    processor.onMessage({
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "  I'll check the file  " },
+          { type: "text", text: "" },
+          { type: "text", text: "   " },
+        ],
+      },
+    });
+
+    // Only the non-empty trimmed text is emitted
+    expect(emit).toHaveBeenCalledTimes(1);
+    const ev = emit.mock.calls[0]?.[0];
+    if (!ev || ev.kind !== "assistant_text") throw new Error("expected assistant_text");
+    expect(ev.payload.text).toBe("I'll check the file");
+  });
+
+  it("truncates assistant_text to 8000 chars", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit);
+
+    processor.onMessage({
+      type: "assistant",
+      message: { role: "assistant", content: [{ type: "text", text: "a".repeat(10_000) }] },
+    });
+
+    const ev = emit.mock.calls[0]?.[0];
+    if (!ev || ev.kind !== "assistant_text") throw new Error("expected assistant_text");
+    expect(ev.payload.text.length).toBe(8000);
+  });
+
+  it("emits a thinking marker (no content) for thinking blocks", () => {
+    const emit = vi.fn<(event: SessionEvent) => void>();
+    const processor = createToolCallProcessor(emit);
+
+    processor.onMessage({
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "private reasoning the UI must not see" }],
+      },
+    });
+
+    expect(emit).toHaveBeenCalledTimes(1);
+    const ev = emit.mock.calls[0]?.[0];
+    if (!ev || ev.kind !== "thinking") throw new Error("expected thinking event");
+    // Payload is intentionally empty — thinking content is never persisted.
+    expect(ev.payload).toEqual({});
   });
 });

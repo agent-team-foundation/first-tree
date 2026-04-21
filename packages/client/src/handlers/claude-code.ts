@@ -21,9 +21,12 @@ import { acquireWorkspace } from "../runtime/workspace.js";
 const MAX_RETRIES = 2;
 
 const TOOL_RESULT_PREVIEW_LIMIT = 400;
+const ASSISTANT_TEXT_EVENT_LIMIT = 8000;
 
 type ToolUseBlock = { type: "tool_use"; id: string; name: string; input: unknown };
 type ToolResultBlock = { type: "tool_result"; tool_use_id: string; content: unknown; is_error?: boolean };
+type TextBlock = { type: "text"; text: string };
+type ThinkingBlock = { type: "thinking"; thinking?: string };
 
 function extractContentBlocks(message: unknown): unknown[] {
   if (!message || typeof message !== "object") return [];
@@ -43,6 +46,18 @@ function isToolResultBlock(block: unknown): block is ToolResultBlock {
   if (!block || typeof block !== "object") return false;
   const b = block as Record<string, unknown>;
   return b.type === "tool_result" && typeof b.tool_use_id === "string";
+}
+
+function isTextBlock(block: unknown): block is TextBlock {
+  if (!block || typeof block !== "object") return false;
+  const b = block as Record<string, unknown>;
+  return b.type === "text" && typeof b.text === "string";
+}
+
+function isThinkingBlock(block: unknown): block is ThinkingBlock {
+  if (!block || typeof block !== "object") return false;
+  const b = block as Record<string, unknown>;
+  return b.type === "thinking";
 }
 
 type ResultMessage = {
@@ -114,13 +129,23 @@ export function createToolCallProcessor(emit: (event: SessionEvent) => void): To
       const type = (message as { type?: unknown }).type;
       if (type === "assistant") {
         for (const block of extractContentBlocks(message)) {
-          if (!isToolUseBlock(block)) continue;
-          pending.set(block.id, {
-            toolUseId: block.id,
-            name: block.name,
-            args: block.input,
-            startedAt: Date.now(),
-          });
+          if (isToolUseBlock(block)) {
+            pending.set(block.id, {
+              toolUseId: block.id,
+              name: block.name,
+              args: block.input,
+              startedAt: Date.now(),
+            });
+          } else if (isTextBlock(block)) {
+            const text = block.text.trim();
+            if (text.length === 0) continue;
+            emit({
+              kind: "assistant_text",
+              payload: { text: text.slice(0, ASSISTANT_TEXT_EVENT_LIMIT) },
+            });
+          } else if (isThinkingBlock(block)) {
+            emit({ kind: "thinking", payload: {} });
+          }
         }
       } else if (type === "user") {
         for (const block of extractContentBlocks(message)) {
@@ -398,20 +423,31 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                     .then(() => {
                       sessionCtx.log("Result forwarded to chat");
                       sessionCtx.reportSessionCompletion();
+                      // Emit turn_end AFTER the result message is persisted so the
+                      // frontend never observes "turn ended, no result visible".
+                      sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "success" } });
                     })
                     .catch((err) => {
                       const reason = err instanceof Error ? err.message : String(err);
                       sessionCtx.log(`Failed to forward result: ${reason}`);
                       const preview = resultText.slice(0, 1500);
-                      const message = `Result forward failed: ${reason}\n---\n${preview}`.slice(0, 2000);
-                      sessionCtx.emitEvent({ kind: "error", payload: { source: "runtime", message } });
+                      const forwardErrMessage = `Result forward failed: ${reason}\n---\n${preview}`.slice(0, 2000);
+                      sessionCtx.emitEvent({
+                        kind: "error",
+                        payload: { source: "runtime", message: forwardErrMessage },
+                      });
+                      sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
                     });
+                } else {
+                  // No result text to forward (edge case) — still close the turn.
+                  sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "success" } });
                 }
               } else {
                 const errors = message.errors ? message.errors.join("; ") : message.subtype;
                 const errorLog = `Query result error: ${errors} (subtype=${message.subtype}, turns=${message.num_turns ?? "?"}, duration=${message.duration_ms ?? "?"}ms)`;
                 sessionCtx.log(errorLog);
                 sessionCtx.emitEvent({ kind: "error", payload: { source: "sdk", message: errors } });
+                sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
               }
               sessionCtx.setRuntimeState("idle");
             }

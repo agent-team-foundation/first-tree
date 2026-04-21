@@ -5,14 +5,12 @@ import type { SessionEvent } from "@agent-team-foundation/first-tree-hub-shared"
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 /**
- * When a Claude `result` arrives but the auto-bridge `sdk.sendMessage` rejects
- * (Hub outage / chat permission etc.), the assistant text would otherwise be
- * lost — the session_output table was retired in NC2. The handler now mirrors
- * the loss as a `runtime` SessionEvent containing a truncated snapshot so it
- * stays visible via the events API.
+ * When the SDK returns a non-success result subtype (e.g. `error_max_turns`,
+ * `error_during_execution`), the handler must still close the turn with a
+ * `turn_end:error` event — otherwise the frontend's turn-grouping filter
+ * keeps the transient `thinking` / `tool_call` / `assistant_text` rows
+ * visible forever, instead of collapsing them around an error.
  */
-
-const RESULT_TEXT = `final answer ${"x".repeat(2200)}`;
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => {
   const fakeQuery = {
@@ -24,7 +22,13 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => {
           if (step === 1) {
             return {
               done: false,
-              value: { type: "result", subtype: "success", result: RESULT_TEXT, num_turns: 1, duration_ms: 5 },
+              value: {
+                type: "result",
+                subtype: "error_max_turns",
+                errors: ["exceeded max turns"],
+                num_turns: 99,
+                duration_ms: 5,
+              },
             };
           }
           return { done: true, value: undefined };
@@ -41,12 +45,12 @@ import { createClaudeCodeHandler } from "../handlers/claude-code.js";
 import { createAgentConfigCache } from "../runtime/agent-config-cache.js";
 import type { SessionContext } from "../runtime/handler.js";
 
-const AGENT_ID = "019d9a97-90b0-716b-8317-a8c0be8430d7";
+const AGENT_ID = "019d9a97-90b0-716b-8317-a8c0be8430d8";
 
 let workspaceRoot: string;
 
 beforeAll(() => {
-  workspaceRoot = mkdtempSync(join(tmpdir(), "ftt-result-fail-"));
+  workspaceRoot = mkdtempSync(join(tmpdir(), "ftt-turn-end-sdk-err-"));
 });
 
 afterAll(() => {
@@ -66,9 +70,9 @@ function buildCache() {
   return createAgentConfigCache({ sdk: stubSdk, log: () => {} });
 }
 
-describe("claude-code handler — sendMessage failure surfaces lost result", () => {
-  it("emits a runtime error event with a snapshot of the dropped text", async () => {
-    const sendMessage = vi.fn().mockRejectedValue(new Error("hub unreachable"));
+describe("claude-code handler — turn_end on SDK-reported subtype error", () => {
+  it("emits error event then turn_end:error when result subtype !== success", async () => {
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
     const emitted: SessionEvent[] = [];
     const reportSessionCompletion = vi.fn();
 
@@ -89,9 +93,7 @@ describe("claude-code handler — sendMessage failure surfaces lost result", () 
       log: () => {},
       touch: () => {},
       setRuntimeState: () => {},
-      emitEvent: (e) => {
-        emitted.push(e);
-      },
+      emitEvent: (e) => emitted.push(e),
       reportSessionCompletion,
     };
 
@@ -99,33 +101,28 @@ describe("claude-code handler — sendMessage failure surfaces lost result", () 
       { id: "m1", chatId: "chat-1", senderId: "u", format: "text", content: "hi", metadata: null },
       ctx,
     );
-
-    // Consumer loop is async; let microtasks (the rejected sendMessage promise) settle.
     await handler.suspend();
     await new Promise((r) => setImmediate(r));
 
-    expect(sendMessage).toHaveBeenCalledTimes(1);
+    // Success path was NOT taken.
+    expect(sendMessage).not.toHaveBeenCalled();
     expect(reportSessionCompletion).not.toHaveBeenCalled();
 
+    // Error event carries the SDK-reported cause.
     const errors = emitted.filter((e) => e.kind === "error");
     expect(errors).toHaveLength(1);
     const err = errors[0];
     if (!err || err.kind !== "error") throw new Error("expected error event");
-    expect(err.payload.source).toBe("runtime");
-    expect(err.payload.message).toContain("Result forward failed: hub unreachable");
-    // snapshot is truncated to keep total message ≤ 2000 chars
-    expect(err.payload.message.length).toBeLessThanOrEqual(2000);
-    expect(err.payload.message).toContain("final answer");
+    expect(err.payload.source).toBe("sdk");
+    expect(err.payload.message).toContain("exceeded max turns");
 
-    // A failed-forward still has to close the turn so the frontend's
-    // turn-grouping filter hides the preceding transient events. Emit order:
-    // error first, then turn_end:error — the chat UI keeps the error visible
-    // while collapsing the rest of the turn's activity.
+    // turn_end:error closes the turn — and comes AFTER the error event.
     const turnEnds = emitted.filter((e) => e.kind === "turn_end");
     expect(turnEnds).toHaveLength(1);
     const te = turnEnds[0];
     if (!te || te.kind !== "turn_end") throw new Error("expected turn_end event");
     expect(te.payload.status).toBe("error");
+
     const errIdx = emitted.findIndex((e) => e.kind === "error");
     const turnEndIdx = emitted.findIndex((e) => e.kind === "turn_end");
     expect(errIdx).toBeLessThan(turnEndIdx);
