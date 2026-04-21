@@ -35,8 +35,11 @@ Load this skill when the task involves any of:
 - Responding to reviewer feedback on a Context Tree sync PR
 - Posting a structured verdict comment on a source-repo PR or issue that
   tests cross-domain alignment with a Context Tree
+- Opening a tree issue from a merged source PR (so the tree catches up
+  with a decision made in code)
 - Running gardener in CI as an automated maintainer
-- Diagnosing why gardener skipped a PR (self-review guard, sync-PR filter)
+- Diagnosing why gardener skipped a PR (self-review guard, sync-PR
+  filter, opt-out config)
 
 Gardener is designed for agents, not humans. Every subcommand is
 idempotent and guarded against acting on its own prior comments.
@@ -49,8 +52,17 @@ idempotent and guarded against acting on its own prior comments.
 - **Source-repo PR/issue** — a PR or issue opened on an application repo
   that gardener's `comment` subcommand evaluates against the bound
   Context Tree and annotates with a structured verdict.
-- **Self-loop guard** — gardener skips any PR where only it has reviewed,
-  so an automated response cannot trigger another automated response.
+- **Merged-PR → tree issue** — when `comment` sees a merged source PR
+  that was never reviewed while open, it can open a tree issue so the
+  tree picks up the decision retroactively. Gated by `TREE_REPO_TOKEN`.
+- **State marker** — gardener embeds state in HTML comments at the top
+  of its reviews: `<!-- gardener:state · reviewed=<sha> · verdict=… · severity=… · tree_sha=… -->`,
+  a sibling `last_consumed_rereview` line, and a sibling
+  `quiet_refresh_cid` line for rescan fast-path. Parsing is additive —
+  legacy comments without newer fields degrade gracefully.
+- **Self-loop guard** — gardener skips any PR where only it has
+  reviewed, so an automated response cannot trigger another automated
+  response.
 - **Sync-PR filter (for `comment`)** — gardener does not comment on
   first-tree sync PRs themselves; use `respond` for those.
 
@@ -58,13 +70,37 @@ idempotent and guarded against acting on its own prior comments.
 
 | Command | Purpose |
 |---|---|
-| `first-tree gardener respond` | Acknowledge reviewer feedback on a sync PR (placeholder reply only — does not yet edit, commit, or push; see [#160](https://github.com/agent-team-foundation/first-tree/issues/160)) |
-| `first-tree gardener comment` | Review a source-repo PR/issue against the tree and post a structured verdict comment. On a MERGED PR with a prior gardener marker, also creates a tree-repo issue; pass `--assign-owners` to auto-assign NODE owners on that issue. |
+| `first-tree gardener comment` | Review a source-repo PR or issue against the tree and post a structured verdict comment. Scan mode (no `--pr`/`--issue`) walks every **open** PR and issue. The merge→tree-issue branch only fires on a single MERGED PR with a prior gardener marker (single-item invocation), and requires `TREE_REPO_TOKEN`. Pass `--assign-owners` to auto-assign NODE owners on the tree issue. |
+| `first-tree gardener respond` | Acknowledge reviewer feedback on a sync PR (Phase 5: real edit orchestrator for `parent_subdomain_missing` + planner seam — see [#160](https://github.com/agent-team-foundation/first-tree/issues/160) / [#219](https://github.com/agent-team-foundation/first-tree/issues/219); unsupported patterns fall back to a placeholder reply). |
 | `first-tree gardener install-workflow` | Scaffold `.github/workflows/first-tree-sync.yml` in the caller's codebase repo so per-PR events drive the sync flow — the push-mode entry point. |
 
 For full options on any command, run `first-tree gardener <command> --help`.
 
 ## Typical Flows
+
+### Scan mode — review every open PR/issue on the bound source repo
+
+```bash
+npx -p first-tree first-tree gardener comment
+```
+
+Run from inside a tree repo. Reads `.claude/gardener-config.yaml` to
+find the bound source repo, then walks every **open** PR and issue on
+it, posting structured verdict comments against the tree. The
+merge→tree-issue branch is a separate, single-item code path — scan
+mode does not open tree issues on its own.
+
+### Single-item mode — one PR or issue
+
+```bash
+npx -p first-tree first-tree gardener comment --pr 42 --repo owner/app-repo
+npx -p first-tree first-tree gardener comment --issue 7 --repo owner/app-repo
+```
+
+The single-item form is what breeze-runner calls when dispatching on a
+notification. Skips the scan; reviews exactly the one item. This is
+also the only mode that can take the merge→tree-issue branch: a single
+MERGED PR with a prior gardener marker and `TREE_REPO_TOKEN` set.
 
 ### Install the push-mode workflow in a codebase repo
 
@@ -89,21 +125,21 @@ the NODE owners.
 npx -p first-tree first-tree gardener respond --pr 123 --repo owner/tree-repo
 ```
 
-Add `--dry-run` to preview the proposed changes without editing the PR.
+Single-PR only. There is no scan mode — discovery for respond lives in
+breeze's notification poller. Add `--dry-run` to preview.
 
 > **Current behavior (placeholder reply only):** `respond` bumps the
 > attempts marker and posts an acknowledgement reply, but does **not**
 > yet edit `NODE.md`, commit, or push. Wiring the real edit orchestrator
 > is tracked in [#160](https://github.com/agent-team-foundation/first-tree/issues/160)
-> and is sequenced after the respond refactor in
-> [#162](https://github.com/agent-team-foundation/first-tree/issues/162).
+> with the Phase 5 scope proposal in
+> [#219](https://github.com/agent-team-foundation/first-tree/issues/219).
 
-### Comment on a source-repo PR or issue (pull-mode invocation)
+### Dry-run everything
 
-```bash
-npx -p first-tree first-tree gardener comment --pr 42 --repo owner/app-repo
-npx -p first-tree first-tree gardener comment --issue 7 --repo owner/app-repo
-```
+Both subcommands accept `--dry-run`, which prints every planned
+`gh`/`git` call without executing it. Use this when introducing gardener
+to a new repo or verifying config before a live run.
 
 Add `--assign-owners` to have merged-PR tree issues auto-assigned to
 the NODE owners resolved from the tree's `CODEOWNERS`. Push-mode
@@ -118,6 +154,36 @@ npx -p first-tree first-tree gardener <command>
 
 This always runs the latest published version.
 
+## Configuration
+
+Gardener reads `.claude/gardener-config.yaml` from the tree repo
+(resolved via `--tree-path`, default cwd):
+
+```yaml
+target_repo: owner/app-repo          # source repo to review
+tree_repo: owner/tree-repo            # this tree repo (for attribution links)
+modules:
+  comment:
+    enabled: true                     # set false to opt the tree out entirely
+  respond:
+    enabled: true
+```
+
+The `modules.<name>.enabled: false` knob is the opt-out: gardener exits
+0 with a `skipped` status without calling `gh`.
+
+## Environment
+
+Gardener reads a small set of env vars. All are optional except
+`TREE_REPO_TOKEN`, which is only needed for the merge→issue branch.
+
+| Variable | Purpose |
+|---|---|
+| `BREEZE_SNAPSHOT_DIR` | Directory with pre-fetched `pr-view.json`, `pr.diff`, `issue-view.json`, `issue-comments.json`, `pr-reviews.json`, `subject.json`. Set by breeze-runner so gardener doesn't re-fetch. Also enables snapshot-mode idempotency checks in `respond` when `pr-commits.json` is present. |
+| `TREE_REPO_TOKEN` | PAT with `repo` scope on the tree repo. Consumed **only** by `comment`'s merge→issue branch, for `gh issue create` and the follow-up marker PATCH. No fallback to `GH_TOKEN`/`GITHUB_TOKEN` — if unset, the merge→issue path silently skips and logs `skipped: token_absent`. |
+| `COMMENT_LOG` | Path for JSONL run events from `comment` (default `$HOME/.gardener/comment-runs.jsonl`; falls back to `$TMPDIR` when `HOME` is unset). |
+| `RESPOND_LOG` | Same shape for `respond` (default `$HOME/.gardener/respond-runs.jsonl`). |
+
 ## Guards And Idempotency
 
 Gardener refuses to act when:
@@ -126,10 +192,15 @@ Gardener refuses to act when:
   response loops
 - The target PR is itself a `first-tree:sync` PR on a tree repo — use
   `respond` there, not `comment`
+- The module is disabled in `.claude/gardener-config.yaml`
 - Required inputs (`--pr`, `--issue`, `--repo`) are missing
+- `TREE_REPO_TOKEN` is unset on the merge→issue branch (skips that
+  branch; other branches continue)
 
-All subcommands are safe to re-run; re-running does not duplicate
-comments or re-trigger edits.
+All subcommands are safe to re-run. Idempotency lives in the state
+marker: the SHA in `reviewed=<sha>` tells gardener whether a PR has
+already been reviewed at this revision, and the `tree_issue_created=<url>`
+field prevents duplicate issue creation on a retry.
 
 ## Related Skills
 
