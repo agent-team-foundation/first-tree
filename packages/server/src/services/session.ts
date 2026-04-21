@@ -5,6 +5,7 @@ import { agentPresence } from "../db/schema/agent-presence.js";
 import { agents } from "../db/schema/agents.js";
 import { chatParticipants, chats } from "../db/schema/chats.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
+import { messages } from "../db/schema/messages.js";
 import { NotFoundError } from "../errors.js";
 
 const SUMMARY_MAX_LENGTH = 50;
@@ -93,19 +94,18 @@ export async function listAgentSessions(
   // Get first message content per chat for summary
   const firstMessages =
     chatIds.length > 0
-      ? await db.execute<{ chat_id: string; content: unknown }>(
-          sql`SELECT DISTINCT ON (chat_id) chat_id, content
-              FROM messages
-              WHERE chat_id = ANY(${chatIds})
-              ORDER BY chat_id, created_at ASC`,
-        )
-      : ([] as { chat_id: string; content: unknown }[]);
+      ? await db
+          .selectDistinctOn([messages.chatId], { chatId: messages.chatId, content: messages.content })
+          .from(messages)
+          .where(inArray(messages.chatId, chatIds))
+          .orderBy(messages.chatId, messages.createdAt)
+      : [];
 
   const summaryMap = new Map<string, string>();
   for (const row of firstMessages) {
     const summary = extractSummary(row.content);
     if (summary) {
-      summaryMap.set(row.chat_id, summary);
+      summaryMap.set(row.chatId, summary);
     }
   }
 
