@@ -166,13 +166,24 @@ function detectParentSubdomainMissing(
     return null;
   }
 
-  // Idempotency: if the child is already listed, nothing to do.
+  // Idempotency: if the child is already listed under ## Sub-domains,
+  // nothing to do. Match the actual entry token (`` `dir/` `` or
+  // `[dir/](dir/NODE.md)`) rather than substring-with-word-boundary,
+  // which false-positives on hyphenated siblings (#195 follow-up).
   const escaped = childDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const entryRe = new RegExp(`(^|\\n)\\s*-\\s+[^\\n]*\\b${escaped}/`);
+  const backtickRe = new RegExp(`\`${escaped}/\``);
+  const linkRe = new RegExp(
+    `\\[${escaped}/\\]\\(${escaped}/NODE\\.md\\)`,
+  );
   const subDomainsMatch = before.match(
     /(##\s*Sub-?domains?[^\n]*\n)([\s\S]*?)(\n##|\n---|$)/i,
   );
-  if (subDomainsMatch && entryRe.test(subDomainsMatch[2])) return null;
+  if (
+    subDomainsMatch &&
+    (backtickRe.test(subDomainsMatch[2]) || linkRe.test(subDomainsMatch[2]))
+  ) {
+    return null;
+  }
 
   const title = (titleHint?.[1] ?? childDir).trim();
   const newLine = `- \`${childDir}/\` — ${title}\n`;

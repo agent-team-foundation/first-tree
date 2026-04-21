@@ -1740,11 +1740,21 @@ export async function runSync(
               let parentContent = readFileSync(parentPath, "utf-8");
               let changed = false;
               for (const { dirName, title } of additions) {
-                const alreadyListed = parentContent.includes(`${dirName}/`)
-                  || parentContent.includes(`${dirName}\\`);
-                if (alreadyListed) continue;
                 const newLine = `- \`${dirName}/\` — ${title}\n`;
                 const subDomainsMatch = parentContent.match(/(##\s*Sub-?domains?[^\n]*\n)([\s\S]*?)(\n##|\n---|\z)/i);
+                // Scope the scan to the ## Sub-domains block and match
+                // the actual entry token — either `` `dir/` `` or
+                // `[dir/](dir/NODE.md)`. Substring-with-word-boundary
+                // still false-positived on hyphenated siblings like
+                // `mobile-sidebar/` matching `sidebar/` because `-` is a
+                // word boundary (#195 follow-up).
+                if (subDomainsMatch) {
+                  const block = subDomainsMatch[2];
+                  const escaped = dirName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+                  const backtickRe = new RegExp(`\`${escaped}/\``);
+                  const linkRe = new RegExp(`\\[${escaped}/\\]\\(${escaped}/NODE\\.md\\)`);
+                  if (backtickRe.test(block) || linkRe.test(block)) continue;
+                }
                 if (subDomainsMatch) {
                   const insertPoint = parentContent.indexOf(subDomainsMatch[0])
                     + subDomainsMatch[1].length

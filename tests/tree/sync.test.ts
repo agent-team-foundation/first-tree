@@ -2114,6 +2114,345 @@ describe("sync -- PR labeling", () => {
     expect(parentText).toContain("`mcp/`");
     expect(parentText).toContain("`router/`");
   });
+
+  it("rolls up a new child even when a prefix-colliding sibling is already listed (#195)", async () => {
+    // Regression for #195: the "already listed" scan used substring on the
+    // whole parent file. A parent pre-seeded with `sidebar-preferences/`
+    // would make `sidebar/` look already-listed, so housekeeping would
+    // silently skip the rollup. Fix: line-anchored regex scoped to the
+    // `## Sub-domains` block, with a word-boundary + trailing `/`.
+    const tmp = useTmpDir();
+    makeTreeShell(tmp.path);
+    mkdirSync(join(tmp.path, "engineering"), { recursive: true });
+    writeFileSync(
+      join(tmp.path, "engineering", "NODE.md"),
+      [
+        "---",
+        "title: Engineering",
+        "owners: [alice]",
+        "---",
+        "# Engineering",
+        "",
+        "## Sub-domains",
+        "",
+        "- [sidebar-preferences/](sidebar-preferences/NODE.md) — Sidebar Preferences",
+        "",
+      ].join("\n"),
+    );
+    const fromSha = "aa".repeat(20);
+    const toSha = "bb".repeat(20);
+    writeTreeBinding(tmp.path, "source-prefix", {
+      bindingMode: "standalone-source",
+      entrypoint: "/repos/source",
+      lastReconciledSourceCommit: fromSha,
+      remoteUrl: "https://github.com/alice/source.git",
+      rootKind: "git-repo",
+      scope: "repo",
+      sourceId: "source-prefix",
+      sourceName: "source",
+      sourceRootPath: "../source",
+      treeMode: "dedicated",
+      treeRepoName: "tree",
+    });
+
+    const classifyResponses = [
+      JSON.stringify([{
+        path: "engineering/sidebar",
+        type: "TREE_MISS",
+        target_node_path: null,
+        rationale: "New sidebar area",
+        suggested_node_title: "Sidebar",
+        suggested_node_body_markdown: "# Sidebar\n",
+      }]),
+    ];
+    let classifyIdx = 0;
+
+    const shellRun: ShellRun = async (command, args) => {
+      if (command === "gh" && args[0] === "auth") return okAuth();
+      if (command === "claude" && args[0] === "--version") return claudeVersionOk();
+      if (command === "gh" && args[0] === "api") {
+        const path = args[1] ?? "";
+        if (path === "/repos/alice/source/commits/HEAD") {
+          return { stdout: `${toSha}\n`, stderr: "", code: 0 };
+        }
+        if (path.startsWith("/repos/alice/source/compare/")) {
+          return {
+            stdout: JSON.stringify({
+              commits: [
+                {
+                  sha: "1".repeat(40),
+                  commit: {
+                    message: "feat(sidebar): add (#301)",
+                    author: { name: "a", date: "2026-04-01T00:00:00Z" },
+                  },
+                  files: [{ filename: "engineering/sidebar/x.ts" }],
+                },
+              ],
+            }),
+            stderr: "",
+            code: 0,
+          };
+        }
+        if (path.startsWith("search/issues")) {
+          return {
+            stdout: JSON.stringify({
+              items: [{
+                number: 301,
+                title: "feat(sidebar): add",
+                pull_request: { merged_at: "2026-04-01T00:00:00Z", merge_commit_sha: "1".repeat(40) },
+              }],
+            }),
+            stderr: "",
+            code: 0,
+          };
+        }
+      }
+      if (command === "claude" && args[0] === "-p") {
+        const resp = classifyResponses[classifyIdx] ?? classifyResponses[0];
+        classifyIdx += 1;
+        return { stdout: resp, stderr: "", code: 0 };
+      }
+      if (command === "gh" && args[0] === "pr" && args[1] === "list") {
+        return { stdout: "[]", stderr: "", code: 0 };
+      }
+      if (command === "gh" && args[0] === "pr" && args[1] === "create") {
+        return { stdout: "https://example/pr/1", stderr: "", code: 0 };
+      }
+      if (command === "gh" && (args[0] === "pr" || args[0] === "label")) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (command === "git") {
+        if (args[0] === "symbolic-ref") return { stdout: "main\n", stderr: "", code: 0 };
+        if (args.includes("diff") && args.includes("--cached") && args.includes("--quiet")) {
+          return { stdout: "", stderr: "", code: 1 };
+        }
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: `no mock for ${command} ${args.join(" ")}`, code: 1 };
+    };
+
+    const code = await runSync(
+      tmp.path,
+      { source: undefined, propose: false, apply: true, dryRun: false },
+      { shellRun, verifyTree: () => 0 },
+    );
+    expect(code).toBe(0);
+
+    const parentText = readFileSync(join(tmp.path, "engineering", "NODE.md"), "utf-8");
+    expect(parentText).toContain("sidebar-preferences/");
+    expect(parentText).toContain("`sidebar/`");
+  });
+
+  it("rolls up a new child even when a hyphen-before sibling shares the tail segment (#195 follow-up)", async () => {
+    // Follow-up to #195: the substring-with-word-boundary fix (`\b${dir}/`)
+    // still matched `mobile-sidebar/` when rolling up `sidebar/`, because
+    // `-` is a word boundary. Match the actual entry token (`` `dir/` ``
+    // or `[dir/](dir/NODE.md)`) instead.
+    const tmp = useTmpDir();
+    makeTreeShell(tmp.path);
+    mkdirSync(join(tmp.path, "engineering"), { recursive: true });
+    writeFileSync(
+      join(tmp.path, "engineering", "NODE.md"),
+      [
+        "---",
+        "title: Engineering",
+        "owners: [alice]",
+        "---",
+        "# Engineering",
+        "",
+        "## Sub-domains",
+        "",
+        "- [mobile-sidebar/](mobile-sidebar/NODE.md) — Mobile Sidebar",
+        "",
+      ].join("\n"),
+    );
+    const fromSha = "aa".repeat(20);
+    const toSha = "bb".repeat(20);
+    writeTreeBinding(tmp.path, "source-hyphen", {
+      bindingMode: "standalone-source",
+      entrypoint: "/repos/source",
+      lastReconciledSourceCommit: fromSha,
+      remoteUrl: "https://github.com/alice/source.git",
+      rootKind: "git-repo",
+      scope: "repo",
+      sourceId: "source-hyphen",
+      sourceName: "source",
+      sourceRootPath: "../source",
+      treeMode: "dedicated",
+      treeRepoName: "tree",
+    });
+
+    const classifyResponses = [
+      JSON.stringify([{
+        path: "engineering/sidebar",
+        type: "TREE_MISS",
+        target_node_path: null,
+        rationale: "New sidebar area",
+        suggested_node_title: "Sidebar",
+        suggested_node_body_markdown: "# Sidebar\n",
+      }]),
+    ];
+    let classifyIdx = 0;
+
+    const shellRun: ShellRun = async (command, args) => {
+      if (command === "gh" && args[0] === "auth") return okAuth();
+      if (command === "claude" && args[0] === "--version") return claudeVersionOk();
+      if (command === "gh" && args[0] === "api") {
+        const path = args[1] ?? "";
+        if (path === "/repos/alice/source/commits/HEAD") {
+          return { stdout: `${toSha}\n`, stderr: "", code: 0 };
+        }
+        if (path.startsWith("/repos/alice/source/compare/")) {
+          return {
+            stdout: JSON.stringify({
+              commits: [
+                {
+                  sha: "1".repeat(40),
+                  commit: {
+                    message: "feat(sidebar): add (#301)",
+                    author: { name: "a", date: "2026-04-01T00:00:00Z" },
+                  },
+                  files: [{ filename: "engineering/sidebar/x.ts" }],
+                },
+              ],
+            }),
+            stderr: "",
+            code: 0,
+          };
+        }
+        if (path.startsWith("search/issues")) {
+          return {
+            stdout: JSON.stringify({
+              items: [{
+                number: 301,
+                title: "feat(sidebar): add",
+                pull_request: { merged_at: "2026-04-01T00:00:00Z", merge_commit_sha: "1".repeat(40) },
+              }],
+            }),
+            stderr: "",
+            code: 0,
+          };
+        }
+      }
+      if (command === "claude" && args[0] === "-p") {
+        const resp = classifyResponses[classifyIdx] ?? classifyResponses[0];
+        classifyIdx += 1;
+        return { stdout: resp, stderr: "", code: 0 };
+      }
+      if (command === "gh" && args[0] === "pr" && args[1] === "list") {
+        return { stdout: "[]", stderr: "", code: 0 };
+      }
+      if (command === "gh" && args[0] === "pr" && args[1] === "create") {
+        return { stdout: "https://example/pr/1", stderr: "", code: 0 };
+      }
+      if (command === "gh" && (args[0] === "pr" || args[0] === "label")) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (command === "git") {
+        if (args[0] === "symbolic-ref") return { stdout: "main\n", stderr: "", code: 0 };
+        if (args.includes("diff") && args.includes("--cached") && args.includes("--quiet")) {
+          return { stdout: "", stderr: "", code: 1 };
+        }
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: `no mock for ${command} ${args.join(" ")}`, code: 1 };
+    };
+
+    const code = await runSync(
+      tmp.path,
+      { source: undefined, propose: false, apply: true, dryRun: false },
+      { shellRun, verifyTree: () => 0 },
+    );
+    expect(code).toBe(0);
+
+    const parentText = readFileSync(join(tmp.path, "engineering", "NODE.md"), "utf-8");
+    expect(parentText).toContain("mobile-sidebar/");
+    // The rollup must add the `sidebar/` entry as a backticked token,
+    // not get suppressed by the hyphen-before sibling.
+    expect(parentText).toContain("`sidebar/`");
+  });
+
+  it("treats an older-style `- [dirName/](dirName/NODE.md)` entry as already listed (#195)", async () => {
+    // Older/hand-edited parents use the link shape; the scan must still
+    // recognize them as already-listed so housekeeping is idempotent.
+    const tmp = useTmpDir();
+    makeTreeShell(tmp.path);
+    mkdirSync(join(tmp.path, "engineering", "sidebar"), { recursive: true });
+    writeFileSync(
+      join(tmp.path, "engineering", "sidebar", "NODE.md"),
+      "---\ntitle: Sidebar\nowners: [alice]\n---\n# Sidebar\n",
+    );
+    writeFileSync(
+      join(tmp.path, "engineering", "NODE.md"),
+      [
+        "---",
+        "title: Engineering",
+        "owners: [alice]",
+        "---",
+        "# Engineering",
+        "",
+        "## Sub-domains",
+        "",
+        "- [sidebar/](sidebar/NODE.md) — Sidebar",
+        "",
+      ].join("\n"),
+    );
+    const fromSha = "aa".repeat(20);
+    const toSha = "bb".repeat(20);
+    writeTreeBinding(tmp.path, "source-existing", {
+      bindingMode: "standalone-source",
+      entrypoint: "/repos/source",
+      lastReconciledSourceCommit: fromSha,
+      remoteUrl: "https://github.com/alice/source.git",
+      rootKind: "git-repo",
+      scope: "repo",
+      sourceId: "source-existing",
+      sourceName: "source",
+      sourceRootPath: "../source",
+      treeMode: "dedicated",
+      treeRepoName: "tree",
+    });
+
+    // No new TREE_MISS children — sync should no-op on rollup and leave
+    // the parent untouched (no duplicate line, no reformatted entry).
+    const shellRun: ShellRun = async (command, args) => {
+      if (command === "gh" && args[0] === "auth") return okAuth();
+      if (command === "claude" && args[0] === "--version") return claudeVersionOk();
+      if (command === "gh" && args[0] === "api") {
+        const path = args[1] ?? "";
+        if (path === "/repos/alice/source/commits/HEAD") {
+          return { stdout: `${toSha}\n`, stderr: "", code: 0 };
+        }
+        if (path.startsWith("/repos/alice/source/compare/")) {
+          return { stdout: JSON.stringify({ commits: [] }), stderr: "", code: 0 };
+        }
+        if (path.startsWith("search/issues")) {
+          return { stdout: JSON.stringify({ items: [] }), stderr: "", code: 0 };
+        }
+      }
+      if (command === "claude" && args[0] === "-p") {
+        return { stdout: "[]", stderr: "", code: 0 };
+      }
+      if (command === "gh") return { stdout: "", stderr: "", code: 0 };
+      if (command === "git") {
+        if (args[0] === "symbolic-ref") return { stdout: "main\n", stderr: "", code: 0 };
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: `no mock for ${command} ${args.join(" ")}`, code: 1 };
+    };
+
+    const code = await runSync(
+      tmp.path,
+      { source: undefined, propose: false, apply: true, dryRun: false },
+      { shellRun, verifyTree: () => 0 },
+    );
+    expect(code).toBe(0);
+
+    const parentText = readFileSync(join(tmp.path, "engineering", "NODE.md"), "utf-8");
+    // Exactly one `sidebar/` rollup line — no duplicate appended.
+    const sidebarLines = parentText.split("\n").filter((l) => /\bsidebar\//.test(l));
+    expect(sidebarLines.length).toBe(1);
+  });
 });
 
 describe("sync CLI", () => {
