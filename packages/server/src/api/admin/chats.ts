@@ -1,4 +1,8 @@
-import { paginationQuerySchema, sendMessageSchema } from "@agent-team-foundation/first-tree-hub-shared";
+import {
+  paginationQuerySchema,
+  sendMessageSchema,
+  updateChatSchema,
+} from "@agent-team-foundation/first-tree-hub-shared";
 import { and, desc, eq, lt, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { chatParticipants, chats } from "../../db/schema/chats.js";
@@ -90,6 +94,27 @@ export async function adminChatRoutes(app: FastifyInstance): Promise<void> {
         mode: p.mode,
         joinedAt: p.joinedAt.toISOString(),
       })),
+    };
+  });
+
+  /** Rename (or clear) a chat's topic. Requires participation or supervision — same gate as reading it. */
+  app.patch<{ Params: { chatId: string } }>("/:chatId", async (request) => {
+    const { chatId } = request.params;
+    const scope = memberScope(request);
+    await assertChatAccess(app.db, scope, chatId);
+    const body = updateChatSchema.parse(request.body);
+    const nextTopic = body.topic && body.topic.length > 0 ? body.topic : null;
+
+    const [updated] = await app.db
+      .update(chats)
+      .set({ topic: nextTopic, updatedAt: new Date() })
+      .where(eq(chats.id, chatId))
+      .returning();
+    if (!updated) throw new Error("Unexpected: chat missing after update");
+    return {
+      ...updated,
+      createdAt: updated.createdAt.toISOString(),
+      updatedAt: updated.updatedAt.toISOString(),
     };
   });
 

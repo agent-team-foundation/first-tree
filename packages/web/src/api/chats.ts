@@ -27,6 +27,10 @@ export function getChat(chatId: string): Promise<ChatDetail> {
   return api.get<ChatDetail>(`/admin/chats/${encodeURIComponent(chatId)}`);
 }
 
+export function renameChat(chatId: string, topic: string | null): Promise<Chat> {
+  return api.patch<Chat>(`/admin/chats/${encodeURIComponent(chatId)}`, { topic });
+}
+
 export function sendChatMessage(chatId: string, content: string): Promise<Message> {
   return api.post<Message>(`/admin/chats/${encodeURIComponent(chatId)}/messages`, {
     format: "text",
