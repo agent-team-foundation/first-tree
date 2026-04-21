@@ -24,10 +24,25 @@ export function clearStoredTokens(): void {
   localStorage.removeItem(TOKEN_KEY);
 }
 
+/**
+ * One entry from a Zod `issues` array. The server's `setErrorHandler`
+ * serializes `ZodError.issues` verbatim under `details` for 400 responses
+ * (see `packages/server/src/app.ts`). Keeping the shape as `unknown` here
+ * would force every caller to re-narrow; surface the minimal contract
+ * instead so form UIs can map `path` → field message without casts.
+ */
+export type ValidationIssue = {
+  path: (string | number)[];
+  message: string;
+  code?: string;
+};
+
 export class ApiError extends Error {
   constructor(
     public readonly status: number,
     message: string,
+    /** Zod validation issues when `status === 400` and the server returned `details`. */
+    public readonly issues?: ValidationIssue[],
   ) {
     super(message);
     this.name = "ApiError";
@@ -98,13 +113,20 @@ async function request<T>(path: string, options?: { method?: string; body?: unkn
     }
     const text = await res.text();
     let message: string;
+    let issues: ValidationIssue[] | undefined;
     try {
-      const json = JSON.parse(text) as { error?: string };
+      const json = JSON.parse(text) as { error?: string; details?: unknown };
       message = json.error ?? text;
+      if (Array.isArray(json.details)) {
+        issues = json.details.filter(
+          (d): d is ValidationIssue =>
+            typeof d === "object" && d !== null && Array.isArray((d as { path?: unknown }).path),
+        );
+      }
     } catch {
       message = text;
     }
-    throw new ApiError(res.status, message);
+    throw new ApiError(res.status, message, issues);
   }
 
   if (res.status === 204) return undefined as T;
