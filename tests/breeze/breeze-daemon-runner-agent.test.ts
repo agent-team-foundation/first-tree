@@ -201,6 +201,7 @@ describe("executeAgent", () => {
   it("writes prompt, invokes spawner, parses result", async () => {
     const request = fakeRequest();
     const finalOutputPath = join(request.taskDir, "runner-output.txt");
+    writeFileSync(finalOutputPath, "stale output");
     const spawner: AgentSpawner = async ({ outputPath }) => {
       expect(outputPath).not.toBe(finalOutputPath);
       writeFileSync(
