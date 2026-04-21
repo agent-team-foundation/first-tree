@@ -1,10 +1,36 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { DEFAULT_HOME_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
 
 export type ServiceState = "active" | "inactive" | "not-installed" | "unknown";
+
+type ShellResult = { ok: true } | { ok: false; stderr: string; code: number | null };
+
+/**
+ * Run a subprocess capturing stderr so failures surface a meaningful error
+ * instead of Node's opaque "Command failed". Used for launchctl/systemctl —
+ * anywhere the stderr message is diagnostically crucial.
+ */
+function runCapture(program: string, args: string[], timeoutMs: number): ShellResult {
+  const res = spawnSync(program, args, {
+    encoding: "utf-8",
+    timeout: timeoutMs,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (res.status === 0) return { ok: true };
+  return {
+    ok: false,
+    stderr: (res.stderr ?? "").trim(),
+    code: res.status,
+  };
+}
+
+function sleepSync(ms: number): void {
+  const shared = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(shared, 0, 0, ms);
+}
 
 export type ServiceInfo = {
   platform: "launchd" | "systemd" | "unsupported";
@@ -127,21 +153,46 @@ function launchctlDomainTarget(): string {
 function launchdState(): { state: ServiceState; detail?: string } {
   const plist = launchdPlistPath();
   if (!existsSync(plist)) return { state: "not-installed" };
-  try {
-    const out = execFileSync("launchctl", ["print", `${launchctlDomainTarget()}/${LAUNCHD_LABEL}`], {
-      encoding: "utf-8",
-      timeout: 5000,
-    });
-    const stateLine = out.split(/\r?\n/).find((l) => l.trim().startsWith("state ="));
-    const pidLine = out.split(/\r?\n/).find((l) => l.trim().startsWith("pid ="));
-    if (stateLine?.includes("running")) {
-      const pid = pidLine?.split("=")[1]?.trim();
-      return { state: "active", detail: pid ? `pid ${pid}` : "running" };
-    }
-    return { state: "inactive", detail: stateLine?.trim() ?? "loaded" };
-  } catch {
+  // Use spawnSync with explicit stderr:"pipe" so launchctl's "Could not
+  // find service" message doesn't leak onto the user's terminal when the
+  // label isn't currently loaded. execFileSync defaults stderr to inherit.
+  const res = spawnSync("launchctl", ["print", `${launchctlDomainTarget()}/${LAUNCHD_LABEL}`], {
+    encoding: "utf-8",
+    timeout: 5000,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (res.status !== 0) {
     return { state: "inactive", detail: "plist present but not loaded" };
   }
+  const out = res.stdout ?? "";
+  const stateLine = out.split(/\r?\n/).find((l) => l.trim().startsWith("state ="));
+  const pidLine = out.split(/\r?\n/).find((l) => l.trim().startsWith("pid ="));
+  if (stateLine?.includes("running")) {
+    const pid = pidLine?.split("=")[1]?.trim();
+    return { state: "active", detail: pid ? `pid ${pid}` : "running" };
+  }
+  return { state: "inactive", detail: stateLine?.trim() ?? "loaded" };
+}
+
+/**
+ * Poll `launchctl print` until the label disappears, confirming launchd has
+ * finished the async eviction kicked off by `bootout`. Required because
+ * `bootout` returns before the actual unload completes when the service has
+ * active WebSocket connections — a follow-up `bootstrap` against a still-
+ * registered label fails with `Bootstrap failed: 5: Input/output error`.
+ */
+function waitForLabelEvicted(target: string, label: string, timeoutMs: number): boolean {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const res = spawnSync("launchctl", ["print", `${target}/${label}`], {
+      encoding: "utf-8",
+      timeout: 2000,
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    if (res.status !== 0) return true;
+    sleepSync(200);
+  }
+  return false;
 }
 
 function installLaunchd(): ServiceInfo {
@@ -152,20 +203,53 @@ function installLaunchd(): ServiceInfo {
   writeFileSync(plistPath, renderPlist(invocation), { mode: 0o644 });
 
   const target = launchctlDomainTarget();
-  // Bootout if already loaded (ignore errors — may not be loaded).
-  try {
-    execFileSync("launchctl", ["bootout", `${target}/${LAUNCHD_LABEL}`], {
-      stdio: "ignore",
-      timeout: 5000,
-    });
-  } catch {
-    // Not loaded — fine.
+
+  // Step 1: bootout any existing registration. Generous timeout because
+  // tearing down an active service (SIGTERM → WS close → process exit)
+  // routinely takes several seconds when there are live connections.
+  const bootoutRes = runCapture("launchctl", ["bootout", `${target}/${LAUNCHD_LABEL}`], 15_000);
+  if (!bootoutRes.ok) {
+    const notLoaded = /not find|no such|not loaded/i.test(bootoutRes.stderr);
+    if (!notLoaded) {
+      // Unexpected bootout error — surface it but don't fail; waitForLabelEvicted
+      // will give it a final chance to clear.
+      process.stderr.write(
+        `    warning: launchctl bootout: ${bootoutRes.stderr || `exit ${bootoutRes.code ?? "unknown"}`}\n`,
+      );
+    }
   }
-  execFileSync("launchctl", ["bootstrap", target, plistPath], { stdio: "ignore", timeout: 5000 });
-  execFileSync("launchctl", ["enable", `${target}/${LAUNCHD_LABEL}`], {
-    stdio: "ignore",
-    timeout: 5000,
-  });
+
+  // Step 2: poll until launchd has actually evicted the label. Without this,
+  // `bootstrap` collides with the still-unloading registration.
+  waitForLabelEvicted(target, LAUNCHD_LABEL, 10_000);
+
+  // Step 3: bootstrap with one retry. If the poll missed a late eviction,
+  // a 1s wait + retry recovers instead of exploding with a cryptic error.
+  let lastBootstrapErr: ShellResult | null = null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const res = runCapture("launchctl", ["bootstrap", target, plistPath], 10_000);
+    if (res.ok) {
+      lastBootstrapErr = null;
+      break;
+    }
+    lastBootstrapErr = res;
+    if (attempt < 2) sleepSync(1_000);
+  }
+  if (lastBootstrapErr) {
+    throw new Error(
+      `launchctl bootstrap failed: ${lastBootstrapErr.stderr || `exit ${lastBootstrapErr.code ?? "unknown"}`}\n` +
+        `    Command: launchctl bootstrap ${target} ${plistPath}\n` +
+        `    Recovery: \`launchctl bootout ${target}/${LAUNCHD_LABEL}\` then \`first-tree-hub service install\`.`,
+    );
+  }
+
+  // Step 4: enable. Non-fatal if it fails (service already bootstrapped).
+  const enableRes = runCapture("launchctl", ["enable", `${target}/${LAUNCHD_LABEL}`], 5_000);
+  if (!enableRes.ok) {
+    process.stderr.write(
+      `    warning: launchctl enable: ${enableRes.stderr || `exit ${enableRes.code ?? "unknown"}`}\n`,
+    );
+  }
 
   const { state, detail } = launchdState();
   return {
@@ -181,13 +265,9 @@ function installLaunchd(): ServiceInfo {
 function uninstallLaunchd(): ServiceInfo {
   const plistPath = launchdPlistPath();
   const target = launchctlDomainTarget();
-  try {
-    execFileSync("launchctl", ["bootout", `${target}/${LAUNCHD_LABEL}`], {
-      stdio: "ignore",
-      timeout: 5000,
-    });
-  } catch {
-    // Already gone.
+  const res = runCapture("launchctl", ["bootout", `${target}/${LAUNCHD_LABEL}`], 15_000);
+  if (!res.ok && !/not find|no such|not loaded/i.test(res.stderr)) {
+    process.stderr.write(`    warning: bootout during uninstall: ${res.stderr || `exit ${res.code ?? "unknown"}`}\n`);
   }
   if (existsSync(plistPath)) rmSync(plistPath);
   return {
@@ -239,20 +319,16 @@ function shellQuote(value: string): string {
 function systemdState(): { state: ServiceState; detail?: string } {
   const unitPath = systemdUnitPath();
   if (!existsSync(unitPath)) return { state: "not-installed" };
-  try {
-    const out = execFileSync("systemctl", ["--user", "is-active", SYSTEMD_UNIT], {
-      encoding: "utf-8",
-      timeout: 5000,
-    }).trim();
-    if (out === "active") return { state: "active", detail: "running" };
-    return { state: "inactive", detail: out };
-  } catch (err) {
-    const stdout =
-      typeof (err as { stdout?: unknown }).stdout === "string"
-        ? ((err as { stdout?: string }).stdout ?? "").trim()
-        : "";
-    return { state: "inactive", detail: stdout || "unit present but not active" };
-  }
+  // Mirror the launchctl fix: keep stderr piped so systemctl's error text
+  // ("Failed to connect to bus..." etc.) doesn't leak to the user's terminal.
+  const res = spawnSync("systemctl", ["--user", "is-active", SYSTEMD_UNIT], {
+    encoding: "utf-8",
+    timeout: 5000,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const out = (res.stdout ?? "").trim();
+  if (res.status === 0 && out === "active") return { state: "active", detail: "running" };
+  return { state: "inactive", detail: out || "unit present but not active" };
 }
 
 function installSystemd(): ServiceInfo {
@@ -262,11 +338,20 @@ function installSystemd(): ServiceInfo {
   mkdirSync(dirname(unitPath), { recursive: true });
   writeFileSync(unitPath, renderSystemdUnit(invocation), { mode: 0o644 });
 
-  execFileSync("systemctl", ["--user", "daemon-reload"], { stdio: "ignore", timeout: 5000 });
-  execFileSync("systemctl", ["--user", "enable", "--now", SYSTEMD_UNIT], {
-    stdio: "ignore",
-    timeout: 10_000,
-  });
+  const reloadRes = runCapture("systemctl", ["--user", "daemon-reload"], 5_000);
+  if (!reloadRes.ok) {
+    throw new Error(
+      `systemctl --user daemon-reload failed: ${reloadRes.stderr || `exit ${reloadRes.code ?? "unknown"}`}`,
+    );
+  }
+
+  const enableRes = runCapture("systemctl", ["--user", "enable", "--now", SYSTEMD_UNIT], 10_000);
+  if (!enableRes.ok) {
+    throw new Error(
+      `systemctl --user enable --now ${SYSTEMD_UNIT} failed: ${enableRes.stderr || `exit ${enableRes.code ?? "unknown"}`}\n` +
+        `    Recovery: \`systemctl --user stop ${SYSTEMD_UNIT}\` then \`first-tree-hub service install\`.`,
+    );
+  }
 
   const { state, detail } = systemdState();
   return {
@@ -281,19 +366,18 @@ function installSystemd(): ServiceInfo {
 
 function uninstallSystemd(): ServiceInfo {
   const unitPath = systemdUnitPath();
-  try {
-    execFileSync("systemctl", ["--user", "disable", "--now", SYSTEMD_UNIT], {
-      stdio: "ignore",
-      timeout: 10_000,
-    });
-  } catch {
-    // Unit not loaded — fine.
+  const disableRes = runCapture("systemctl", ["--user", "disable", "--now", SYSTEMD_UNIT], 10_000);
+  if (!disableRes.ok && !/not found|no such|not loaded/i.test(disableRes.stderr)) {
+    process.stderr.write(
+      `    warning: systemctl disable during uninstall: ${disableRes.stderr || `exit ${disableRes.code ?? "unknown"}`}\n`,
+    );
   }
   if (existsSync(unitPath)) rmSync(unitPath);
-  try {
-    execFileSync("systemctl", ["--user", "daemon-reload"], { stdio: "ignore", timeout: 5000 });
-  } catch {
-    // systemd may not be reachable — fine for cleanup.
+  const reloadRes = runCapture("systemctl", ["--user", "daemon-reload"], 5_000);
+  if (!reloadRes.ok) {
+    process.stderr.write(
+      `    warning: systemctl daemon-reload during uninstall: ${reloadRes.stderr || `exit ${reloadRes.code ?? "unknown"}`}\n`,
+    );
   }
   return {
     platform: "systemd",
