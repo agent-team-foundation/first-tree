@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Leaf, MessageSquare, Pause, Play, Send, Square } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { listChatMessages, type MessageWithDelivery, sendChatMessage } from "../../../api/chats.js";
+import { getChat, listChatMessages, type MessageWithDelivery, sendChatMessage } from "../../../api/chats.js";
 import {
+  asAssistantTextPayload,
   asErrorPayload,
   asToolCallPayload,
   listAgentSessions,
@@ -18,6 +19,7 @@ import { StateDot } from "../../../components/ui/state-dot.js";
 import { useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { cn } from "../../../lib/utils.js";
 import { resolveAgentState } from "../../../utils/agent-state.js";
+import { filterEventsForTimeline } from "../../../utils/session-timeline.js";
 
 function formatClockTime(iso: string): string {
   const d = new Date(iso);
@@ -48,17 +50,6 @@ function formatRelative(iso: string | null): string {
 function formatDuration(ms: number): string {
   if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
   return `${ms}ms`;
-}
-
-function previewArgs(args: unknown): string {
-  if (args === undefined || args === null) return "";
-  if (typeof args === "string") return args.length > 60 ? `${args.slice(0, 60)}…` : args;
-  try {
-    const s = JSON.stringify(args);
-    return s.length > 60 ? `${s.slice(0, 60)}…` : s;
-  } catch {
-    return "…";
-  }
 }
 
 function ReadReceipt({ msg, myAgentId }: { msg: MessageWithDelivery; myAgentId: string | null }) {
@@ -195,47 +186,144 @@ function SessionControls({
   );
 }
 
-function ToolCallRow({ event }: { event: SessionEventRow }) {
+/**
+ * Compact, single-line "status indicator" for a tool call. Per the chat-view
+ * design, we don't show the tool's full args/result — only a "Using <name>…"
+ * pulse while the turn is in progress. When the turn ends, the whole row is
+ * hidden by the turn-grouping filter (see `activeSince` below).
+ */
+function ToolCallStatusRow({ event }: { event: SessionEventRow }) {
   const payload = asToolCallPayload(event.payload);
-  if (!payload) {
-    return (
-      <div
-        className="mono"
-        style={{
-          fontSize: 11,
-          color: "var(--fg-4)",
-          padding: "4px 8px",
-        }}
-      >
-        invalid tool_call
-      </div>
-    );
-  }
+  if (!payload) return null;
   const isErr = payload.status === "error";
   const isPending = payload.status === "pending";
-  const borderColor = isErr ? "var(--state-error)" : isPending ? "var(--state-blocked)" : "var(--accent-dim)";
-  const statusColor = isErr ? "var(--state-error)" : isPending ? "var(--state-blocked)" : "var(--fg-2)";
+  const color = isErr ? "var(--state-error)" : isPending ? "var(--state-blocked)" : "var(--fg-3)";
+  const verb = isErr ? "failed" : isPending ? "using" : "used";
   return (
     <div
-      className="mono grid items-center"
+      className="mono flex items-center"
       style={{
-        gridTemplateColumns: "auto 1fr auto auto",
-        columnGap: 10,
+        gap: 8,
         fontSize: 11,
-        padding: "4px 8px",
-        background: "var(--bg-sunken)",
-        borderLeft: `2px solid ${borderColor}`,
-        borderRadius: "0 4px 4px 0",
+        padding: "2px 8px",
+        color: "var(--fg-3)",
       }}
     >
-      <span style={{ color: "var(--fg-3)" }}>↳</span>
-      <span className="truncate">
-        <span style={{ color: "var(--fg)" }}>{payload.name}</span>
-        <span style={{ color: "var(--fg-3)" }}>({previewArgs(payload.args)})</span>
+      {isPending ? (
+        <span
+          aria-hidden
+          style={{
+            width: 6,
+            height: 6,
+            borderRadius: "50%",
+            background: color,
+            animation: "heartbeat-pulse 1.2s ease-in-out infinite",
+            flexShrink: 0,
+          }}
+        />
+      ) : (
+        <span aria-hidden style={{ color, flexShrink: 0 }}>
+          {isErr ? "⚠" : "↳"}
+        </span>
+      )}
+      <span className="truncate" style={{ color: "var(--fg-3)" }}>
+        {verb} <span style={{ color: "var(--fg-2)" }}>{payload.name}</span>
+        {payload.durationMs !== undefined && !isPending ? (
+          <span style={{ color: "var(--fg-4)", marginLeft: 6, fontSize: 10 }}>
+            · {formatDuration(payload.durationMs)}
+          </span>
+        ) : null}
       </span>
-      <span style={{ color: statusColor, fontSize: 10 }}>{payload.status}</span>
-      <span style={{ color: "var(--fg-4)", fontSize: 10 }}>
-        {payload.durationMs !== undefined ? formatDuration(payload.durationMs) : ""}
+    </div>
+  );
+}
+
+/**
+ * Intermediate assistant reply text surfaced while a turn is still running.
+ * These rows are hidden by the turn-grouping filter once the turn ends —
+ * the final result is delivered as a regular chat message.
+ */
+function AssistantTextRow({
+  event,
+  agentNameFn,
+  agentId,
+}: {
+  event: SessionEventRow;
+  agentNameFn: (id: string) => string;
+  agentId: string;
+}) {
+  const payload = asAssistantTextPayload(event.payload);
+  if (!payload || payload.text.length === 0) return null;
+  const senderName = agentNameFn(agentId);
+  return (
+    <div
+      className="grid"
+      style={{
+        gridTemplateColumns: "20px 1fr",
+        columnGap: 8,
+        padding: "4px 0",
+        opacity: 0.85,
+      }}
+    >
+      <Avatar name={senderName} isSelf={false} />
+      <div className="min-w-0">
+        <div className="flex items-baseline" style={{ gap: 8 }}>
+          <span className="mono" style={{ fontSize: 11, fontWeight: 600, color: "var(--accent)" }}>
+            {senderName}
+          </span>
+          <span className="mono" style={{ fontSize: 10, color: "var(--fg-4)" }}>
+            {formatClockTime(event.createdAt)}
+          </span>
+          <span className="mono" style={{ fontSize: 9, color: "var(--fg-4)" }}>
+            · streaming
+          </span>
+        </div>
+        <div
+          style={{
+            fontSize: 12.5,
+            color: "var(--fg-2)",
+            whiteSpace: "pre-wrap",
+            marginTop: 2,
+            lineHeight: 1.55,
+          }}
+        >
+          {payload.text}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Lightweight "Thinking…" pulse. The actual thinking content is never
+ * transmitted — the backend emits a bare marker and we surface it as a
+ * single-line status. Hidden once the turn ends.
+ */
+function ThinkingRow({ event }: { event: SessionEventRow }) {
+  return (
+    <div
+      className="mono flex items-center"
+      style={{
+        gap: 8,
+        fontSize: 11,
+        padding: "2px 8px",
+        color: "var(--fg-3)",
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: "50%",
+          background: "var(--accent)",
+          animation: "heartbeat-pulse 1.2s ease-in-out infinite",
+          flexShrink: 0,
+        }}
+      />
+      <span style={{ color: "var(--fg-3)" }}>thinking…</span>
+      <span className="mono" style={{ fontSize: 10, color: "var(--fg-4)" }}>
+        {formatClockTime(event.createdAt)}
       </span>
     </div>
   );
@@ -396,9 +484,13 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
     refetchInterval: 5_000,
   });
 
+  // Fetch newest events first so the turn-grouping filter always sees the
+  // latest `turn_end` even in chats with thousands of total events. The
+  // timeline renderer later sorts by timestamp, so the fetch order is moot
+  // for display — only the contents of the window matter.
   const { data: eventsData } = useQuery({
     queryKey: ["session-events", agentId, chatId],
-    queryFn: () => listSessionEvents(agentId, chatId, { limit: 200 }),
+    queryFn: () => listSessionEvents(agentId, chatId, { limit: 200, direction: "desc" }),
     refetchInterval: 5_000,
   });
 
@@ -406,6 +498,12 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
     queryKey: ["session", agentId, chatId],
     queryFn: () => listAgentSessions(agentId).then((sessions) => sessions.find((s) => s.chatId === chatId) ?? null),
     refetchInterval: 5_000,
+  });
+
+  const { data: chatDetail } = useQuery({
+    queryKey: ["chat-detail", chatId],
+    queryFn: () => getChat(chatId),
+    enabled: !!chatId,
   });
 
   const sendMut = useMutation({
@@ -422,12 +520,19 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
     sendMut.mutate(text);
   };
 
+  /**
+   * Timeline composition: messages (real chat rows, including the forwarded
+   * final result) are always visible; transient events go through the
+   * turn-grouping filter so completed turns collapse to just their result
+   * message. See `filterEventsForTimeline` for the full rules.
+   */
   const items: TimelineItem[] = useMemo(() => {
     const msgs = messagesData?.items ?? [];
-    const events = eventsData?.items ?? [];
+    const visibleEvents = filterEventsForTimeline(eventsData?.items ?? []);
+
     const out: TimelineItem[] = [
       ...msgs.map((m) => ({ kind: "message" as const, at: m.createdAt, key: `m-${m.id}`, data: m })),
-      ...events.map((e) => ({ kind: "event" as const, at: e.createdAt, key: `e-${e.id}`, data: e })),
+      ...visibleEvents.map((e) => ({ kind: "event" as const, at: e.createdAt, key: `e-${e.id}`, data: e })),
     ];
     out.sort((a, b) => a.at.localeCompare(b.at));
     return out;
@@ -440,6 +545,14 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
     }
   }, [itemCount]);
 
+  const participantsLabel = chatDetail?.participants
+    ? chatDetail.participants
+        .map((p) => {
+          const name = agentName(p.agentId);
+          return `@${name.length > 20 ? `${name.slice(0, 17)}…` : name}`;
+        })
+        .join(" ")
+    : `@${agentName(agentId)}`;
   const displayName = agentName(agentId);
   const runtimeLabel = session?.runtimeState ?? "idle";
   const runtimeState = resolveAgentState(session?.runtimeState ?? null, agentId ? "connected" : null);
@@ -460,7 +573,9 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
         <div className="min-w-0">
           <div className="flex items-center" style={{ gap: 8 }}>
             <StateDot state={runtimeState} size={8} />
-            <span style={{ fontSize: 13, fontWeight: 600, color: "var(--fg)" }}>Chat · {chatId.slice(0, 8)}</span>
+            <span className="truncate" style={{ fontSize: 13, fontWeight: 600, color: "var(--fg)" }}>
+              {session?.summary || `Chat · ${chatId.slice(0, 8)}`}
+            </span>
             <span
               className="mono"
               style={{
@@ -483,7 +598,7 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
               gap: 10,
             }}
           >
-            <span className="mono">{displayName}</span>
+            <span className="mono">{participantsLabel}</span>
             <span>·</span>
             <span>started {formatRelative(session?.startedAt ?? null)}</span>
             <span>·</span>
@@ -524,11 +639,20 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
         <div className="flex flex-col" style={{ gap: 4 }}>
           {items.map((item) => {
             if (item.kind === "event") {
-              return item.data.kind === "tool_call" ? (
-                <ToolCallRow key={item.key} event={item.data} />
-              ) : (
-                <ErrorRow key={item.key} event={item.data} />
-              );
+              const ev = item.data;
+              switch (ev.kind) {
+                case "tool_call":
+                  return <ToolCallStatusRow key={item.key} event={ev} />;
+                case "assistant_text":
+                  return <AssistantTextRow key={item.key} event={ev} agentId={agentId} agentNameFn={agentName} />;
+                case "thinking":
+                  return <ThinkingRow key={item.key} event={ev} />;
+                case "error":
+                  return <ErrorRow key={item.key} event={ev} />;
+                default:
+                  // turn_end is filtered upstream; any unknown kind is dropped.
+                  return null;
+              }
             }
             return <TextRow key={item.key} msg={item.data} myAgentId={myAgentId} agentNameFn={agentName} />;
           })}

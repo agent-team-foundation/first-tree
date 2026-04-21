@@ -9,10 +9,136 @@ import {
   resetConfigMeta,
   setConfigValue,
 } from "@agent-team-foundation/first-tree-hub-shared/config";
-import { input, password } from "@inquirer/prompts";
+import { input, password, select } from "@inquirer/prompts";
 import type { Command } from "commander";
 import { fail } from "../cli/output.js";
-import { ClientRuntime, installClientService, isServiceSupported, saveCredentials } from "../core/index.js";
+import {
+  ClientRuntime,
+  getClientServiceStatus,
+  installClientService,
+  isServiceSupported,
+  loadCredentials,
+  saveCredentials,
+} from "../core/index.js";
+
+type JwtPayload = {
+  memberId?: unknown;
+  organizationId?: unknown;
+  role?: unknown;
+  iat?: unknown;
+};
+
+/** Decode a JWT payload without signature verification. For UI purposes only. */
+function decodeJwtPayload(token: string): JwtPayload | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3 || !parts[1]) return null;
+    const raw = Buffer.from(parts[1], "base64url").toString();
+    const obj = JSON.parse(raw) as unknown;
+    if (typeof obj !== "object" || obj === null) return null;
+    return obj as JwtPayload;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Detect if the current home already holds a setup for a *different* account,
+ * and give the operator a chance to back out before we overwrite credentials.
+ *
+ * Why this gate exists: running `client connect` implicitly overwrites
+ * `~/.first-tree-hub/config/credentials.json`. Without this prompt, someone
+ * onboarding a second account on their own machine silently logs themselves
+ * out of the first account — they'd only notice when their "main" agents
+ * appeared offline later. We treat single-account-per-machine as the product
+ * default; the `FIRST_TREE_HUB_HOME` env var remains the advanced escape
+ * hatch for power users who want parallel setups.
+ *
+ * The caller passes the *new* memberId directly so this gate can run BEFORE
+ * auth. That matters for the `--token` path: connect tokens are single-use;
+ * if we auth first and the user picks Cancel, the token is burned even
+ * though nothing changed on disk. Decoding the connect token locally lets
+ * us return early without spending it.
+ *
+ * Behavior:
+ *   - No existing credentials → proceed silently (first-time install).
+ *   - Existing credentials, same memberId → proceed silently (reconnect /
+ *     token refresh — common + safe).
+ *   - Existing credentials, memberId indeterminate → prompt with
+ *     "unknown account" label so the user can decide.
+ *   - Existing credentials, different memberId → prompt [Replace / Cancel].
+ *     Cancel prints the isolation guide and returns "cancel".
+ */
+async function promptReplaceOrCancel(newMemberId: string, newServerUrl: string): Promise<"proceed" | "cancel"> {
+  const existing = loadCredentials();
+  if (!existing) return "proceed";
+
+  const existingPayload = decodeJwtPayload(existing.accessToken);
+  const existingMemberId = typeof existingPayload?.memberId === "string" ? existingPayload.memberId : null;
+
+  // Same account reconnecting (token refresh, re-install) — no prompt.
+  if (existingMemberId && existingMemberId === newMemberId) {
+    return "proceed";
+  }
+
+  // Can't identify the existing account (corrupted creds, older schema) —
+  // fall through to prompt with an "unknown" label so the user can still
+  // make the call.
+
+  const existingMember = existingMemberId ? `member ${existingMemberId.slice(0, 8)}` : "unknown account";
+  const existingOrg = typeof existingPayload?.organizationId === "string" ? existingPayload.organizationId : null;
+  const serviceStatus = getClientServiceStatus();
+  const serviceLine =
+    serviceStatus.state === "active"
+      ? `running (${serviceStatus.detail ?? "live"})`
+      : serviceStatus.state === "inactive"
+        ? `installed but not running${serviceStatus.detail ? ` — ${serviceStatus.detail}` : ""}`
+        : "not installed";
+
+  process.stderr.write("\n");
+  process.stderr.write("  \u26a0\ufe0f  This computer is already connected to the Hub under another account.\n\n");
+  process.stderr.write(`       Existing account:  ${existingMember}\n`);
+  if (existingOrg) {
+    process.stderr.write(`       Organization:      ${existingOrg.slice(0, 8)}\n`);
+  }
+  process.stderr.write(`       Server:            ${existing.serverUrl}\n`);
+  process.stderr.write(`       Background service: ${serviceLine}\n\n`);
+  process.stderr.write("     Replacing only affects THIS computer. Your agents, messages, and\n");
+  process.stderr.write("     settings on the Hub itself are untouched.\n\n");
+
+  const choice = await select<"replace" | "cancel">({
+    message: "How would you like to continue?",
+    choices: [
+      {
+        name: "Replace — log out the other account and set up this one",
+        value: "replace",
+      },
+      {
+        name: "Cancel  — keep the existing setup on this computer",
+        value: "cancel",
+      },
+    ],
+  });
+
+  if (choice === "cancel") {
+    printIsolationGuide(newServerUrl);
+    return "cancel";
+  }
+
+  return "proceed";
+}
+
+function printIsolationGuide(newServerUrl: string): void {
+  process.stderr.write("\n  Cancelled. The existing account on this computer is untouched.\n\n");
+  process.stderr.write("  To run this new account alongside it (advanced — no background service):\n\n");
+  process.stderr.write('    export FIRST_TREE_HUB_HOME="$HOME/.first-tree-hub-<label>"\n');
+  process.stderr.write(`    first-tree-hub client connect ${newServerUrl} --token <token>\n`);
+  process.stderr.write("    first-tree-hub client start\n\n");
+  process.stderr.write("  Notes:\n");
+  process.stderr.write("    - Run the commands in a FRESH terminal (the isolated home must be set first).\n");
+  process.stderr.write("    - In isolated mode the client stays online only while that terminal runs.\n");
+  process.stderr.write("    - The main account's background service is not affected.\n\n");
+}
 
 /**
  * Authenticate via connect token — exchange for full JWT credentials.
@@ -70,15 +196,49 @@ export function registerConnectCommand(parent: Command): void {
       try {
         const url = serverUrl.replace(/\/+$/, "");
 
-        // 1. Write server URL to client.yaml
-        const clientConfigPath = join(DEFAULT_CONFIG_DIR, "client.yaml");
-        setConfigValue(clientConfigPath, "server.url", url);
-        process.stderr.write(`\n  \u2713 Server configured: ${url}\n`);
+        // 1. Pre-auth account-switch gate (token path).
+        //
+        // Connect tokens are single-use. If we authed first and the user
+        // picked Cancel, the token would be burned even though nothing
+        // changed on disk — forcing them to re-Generate a new one for a
+        // second attempt. Decoding the connect token's JWT payload locally
+        // lets the prompt run BEFORE we spend the token.
+        //
+        // Interactive login doesn't have this concern (user re-enters
+        // username/password trivially) — we defer that check to after auth.
+        let preAuthDecided = false;
+        if (options.token) {
+          const connectPayload = decodeJwtPayload(options.token);
+          const newMemberId = typeof connectPayload?.memberId === "string" ? connectPayload.memberId : null;
+          if (newMemberId !== null) {
+            const decision = await promptReplaceOrCancel(newMemberId, url);
+            if (decision === "cancel") return;
+            preAuthDecided = true;
+          }
+        }
 
-        // 2. Authenticate — token or interactive
+        // 2. Authenticate — token or interactive.
         const tokens = options.token
           ? await authenticateWithToken(url, options.token)
           : await authenticateInteractive(url);
+
+        // 3. Post-auth fallback gate. Fires only when we couldn't decide in
+        // step 1 (interactive login, or connect token that didn't carry a
+        // memberId claim). Token is already spent here, but creds haven't
+        // hit disk yet so Cancel still leaves the prior setup intact.
+        if (!preAuthDecided) {
+          const newPayload = decodeJwtPayload(tokens.accessToken);
+          const newMemberId = typeof newPayload?.memberId === "string" ? newPayload.memberId : null;
+          if (newMemberId !== null) {
+            const decision = await promptReplaceOrCancel(newMemberId, url);
+            if (decision === "cancel") return;
+          }
+        }
+
+        // 4. Write server URL and credentials.
+        const clientConfigPath = join(DEFAULT_CONFIG_DIR, "client.yaml");
+        setConfigValue(clientConfigPath, "server.url", url);
+        process.stderr.write(`\n  \u2713 Server configured: ${url}\n`);
 
         saveCredentials({ ...tokens, serverUrl: url });
         process.stderr.write("  \u2713 Authenticated\n");
@@ -93,7 +253,7 @@ export function registerConnectCommand(parent: Command): void {
         });
         process.stderr.write(`  \u2713 Connected as this computer (id: ${config.client.id})\n`);
 
-        // 3. Install background service (default) OR run inline (--no-service).
+        // 5. Install background service (default) OR run inline (--no-service).
         const shouldInstallService = options.service !== false && isServiceSupported();
 
         if (shouldInstallService) {

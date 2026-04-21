@@ -8,6 +8,7 @@ export type SessionListItem = {
   startedAt: string;
   lastActivityAt: string;
   messageCount: number;
+  summary: string | null;
 };
 
 export type SessionListResponse = {
@@ -29,12 +30,22 @@ export type ErrorEventPayload = {
   message: string;
 };
 
+export type AssistantTextEventPayload = {
+  text: string;
+};
+
+export type TurnEndEventPayload = {
+  status: "success" | "error";
+};
+
+export type SessionEventKind = "tool_call" | "error" | "assistant_text" | "thinking" | "turn_end";
+
 export type SessionEventRow = {
   id: string;
   agentId: string;
   chatId: string;
   seq: number;
-  kind: "tool_call" | "error";
+  kind: SessionEventKind;
   payload: unknown;
   createdAt: string;
 };
@@ -60,6 +71,20 @@ export function asErrorPayload(payload: unknown): ErrorEventPayload | null {
   if (p.source !== "sdk" && p.source !== "runtime" && p.source !== "tool") return null;
   if (typeof p.message !== "string") return null;
   return { source: p.source, message: p.message };
+}
+
+export function asAssistantTextPayload(payload: unknown): AssistantTextEventPayload | null {
+  if (typeof payload !== "object" || payload === null) return null;
+  const p = payload as Record<string, unknown>;
+  if (typeof p.text !== "string") return null;
+  return { text: p.text };
+}
+
+export function asTurnEndPayload(payload: unknown): TurnEndEventPayload | null {
+  if (typeof payload !== "object" || payload === null) return null;
+  const p = payload as Record<string, unknown>;
+  if (p.status !== "success" && p.status !== "error") return null;
+  return { status: p.status };
 }
 
 export type SessionEventsResponse = {
@@ -100,11 +125,12 @@ export function getSession(agentId: string, chatId: string): Promise<SessionList
 export function listSessionEvents(
   agentId: string,
   chatId: string,
-  params?: { limit?: number; cursor?: number },
+  params?: { limit?: number; cursor?: number; direction?: "asc" | "desc" },
 ): Promise<SessionEventsResponse> {
   const qs = new URLSearchParams();
   if (params?.limit !== undefined) qs.set("limit", String(params.limit));
   if (params?.cursor !== undefined) qs.set("cursor", String(params.cursor));
+  if (params?.direction) qs.set("direction", params.direction);
   const query = qs.toString();
   return api.get<SessionEventsResponse>(
     `/admin/sessions/agents/${agentId}/${chatId}/events${query ? `?${query}` : ""}`,

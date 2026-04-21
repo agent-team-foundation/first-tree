@@ -21,9 +21,12 @@ import { acquireWorkspace } from "../runtime/workspace.js";
 const MAX_RETRIES = 2;
 
 const TOOL_RESULT_PREVIEW_LIMIT = 400;
+const ASSISTANT_TEXT_EVENT_LIMIT = 8000;
 
 type ToolUseBlock = { type: "tool_use"; id: string; name: string; input: unknown };
 type ToolResultBlock = { type: "tool_result"; tool_use_id: string; content: unknown; is_error?: boolean };
+type TextBlock = { type: "text"; text: string };
+type ThinkingBlock = { type: "thinking"; thinking?: string };
 
 function extractContentBlocks(message: unknown): unknown[] {
   if (!message || typeof message !== "object") return [];
@@ -43,6 +46,18 @@ function isToolResultBlock(block: unknown): block is ToolResultBlock {
   if (!block || typeof block !== "object") return false;
   const b = block as Record<string, unknown>;
   return b.type === "tool_result" && typeof b.tool_use_id === "string";
+}
+
+function isTextBlock(block: unknown): block is TextBlock {
+  if (!block || typeof block !== "object") return false;
+  const b = block as Record<string, unknown>;
+  return b.type === "text" && typeof b.text === "string";
+}
+
+function isThinkingBlock(block: unknown): block is ThinkingBlock {
+  if (!block || typeof block !== "object") return false;
+  const b = block as Record<string, unknown>;
+  return b.type === "thinking";
 }
 
 type ResultMessage = {
@@ -114,13 +129,37 @@ export function createToolCallProcessor(emit: (event: SessionEvent) => void): To
       const type = (message as { type?: unknown }).type;
       if (type === "assistant") {
         for (const block of extractContentBlocks(message)) {
-          if (!isToolUseBlock(block)) continue;
-          pending.set(block.id, {
-            toolUseId: block.id,
-            name: block.name,
-            args: block.input,
-            startedAt: Date.now(),
-          });
+          if (isToolUseBlock(block)) {
+            pending.set(block.id, {
+              toolUseId: block.id,
+              name: block.name,
+              args: block.input,
+              startedAt: Date.now(),
+            });
+            // Emit a pending row the moment the tool_use appears — otherwise
+            // long-running tools (Bash sleep, network fetches) show nothing
+            // live and the chat jumps straight from silence to `used <tool>`
+            // after completion. Frontend dedupes by toolUseId against the
+            // final ok/error emit (see filterEventsForTimeline).
+            emit({
+              kind: "tool_call",
+              payload: {
+                toolUseId: block.id,
+                name: block.name,
+                args: block.input,
+                status: "pending",
+              },
+            });
+          } else if (isTextBlock(block)) {
+            const text = block.text.trim();
+            if (text.length === 0) continue;
+            emit({
+              kind: "assistant_text",
+              payload: { text: text.slice(0, ASSISTANT_TEXT_EVENT_LIMIT) },
+            });
+          } else if (isThinkingBlock(block)) {
+            emit({ kind: "thinking", payload: {} });
+          }
         }
       } else if (type === "user") {
         for (const block of extractContentBlocks(message)) {
@@ -129,19 +168,10 @@ export function createToolCallProcessor(emit: (event: SessionEvent) => void): To
       }
     },
     flush(): void {
-      if (pending.size === 0) return;
-      for (const entry of pending.values()) {
-        emit({
-          kind: "tool_call",
-          payload: {
-            toolUseId: entry.toolUseId,
-            name: entry.name,
-            args: entry.args,
-            status: "pending",
-            durationMs: Date.now() - entry.startedAt,
-          },
-        });
-      }
+      // `pending` rows were already emitted up-front when each tool_use
+      // arrived, so flush is now just a bookkeeping reset — no second emit.
+      // Unpaired entries stay visible as "pending" in the UI until the next
+      // turn_end collapses them with the rest of the abandoned turn.
       pending.clear();
     },
   };
@@ -388,30 +418,49 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             if (isResultMessage(message)) {
               if (message.subtype === "success") {
                 retryCount = 0;
-                // Auto-bridge: forward result text back to the chat. If the forward fails the text
-                // is otherwise lost (no session_output table since NC2) — surface it via the events
-                // API so admins see both the failure and a snapshot of what would have been sent.
+                // Auto-bridge: forward result text back to the chat and close
+                // the turn. We AWAIT sendMessage (rather than fire-and-forget)
+                // so the turn_end emit is guaranteed to hit the WebSocket
+                // before the for-await pulls the next turn's first event.
+                // Otherwise a slow sendMessage round-trip could let the
+                // server assign a smaller seq to turn N+1's thinking/tool_call
+                // than to turn N's turn_end — which would cause the frontend's
+                // "latest turn_end" filter to retroactively hide turn N+1's
+                // live events. If the forward fails the text is otherwise
+                // lost (no session_output table since NC2) — surface it via
+                // the events API so admins see both the failure and a
+                // snapshot of what would have been sent.
                 if (message.result && sessionCtx.chatId) {
                   const resultText = message.result;
-                  sessionCtx.sdk
-                    .sendMessage(sessionCtx.chatId, { format: "text", content: resultText })
-                    .then(() => {
-                      sessionCtx.log("Result forwarded to chat");
-                      sessionCtx.reportSessionCompletion();
-                    })
-                    .catch((err) => {
-                      const reason = err instanceof Error ? err.message : String(err);
-                      sessionCtx.log(`Failed to forward result: ${reason}`);
-                      const preview = resultText.slice(0, 1500);
-                      const message = `Result forward failed: ${reason}\n---\n${preview}`.slice(0, 2000);
-                      sessionCtx.emitEvent({ kind: "error", payload: { source: "runtime", message } });
+                  try {
+                    await sessionCtx.sdk.sendMessage(sessionCtx.chatId, {
+                      format: "text",
+                      content: resultText,
                     });
+                    sessionCtx.log("Result forwarded to chat");
+                    sessionCtx.reportSessionCompletion();
+                    sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "success" } });
+                  } catch (err) {
+                    const reason = err instanceof Error ? err.message : String(err);
+                    sessionCtx.log(`Failed to forward result: ${reason}`);
+                    const preview = resultText.slice(0, 1500);
+                    const forwardErrMessage = `Result forward failed: ${reason}\n---\n${preview}`.slice(0, 2000);
+                    sessionCtx.emitEvent({
+                      kind: "error",
+                      payload: { source: "runtime", message: forwardErrMessage },
+                    });
+                    sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
+                  }
+                } else {
+                  // No result text to forward (edge case) — still close the turn.
+                  sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "success" } });
                 }
               } else {
                 const errors = message.errors ? message.errors.join("; ") : message.subtype;
                 const errorLog = `Query result error: ${errors} (subtype=${message.subtype}, turns=${message.num_turns ?? "?"}, duration=${message.duration_ms ?? "?"}ms)`;
                 sessionCtx.log(errorLog);
                 sessionCtx.emitEvent({ kind: "error", payload: { source: "sdk", message: errors } });
+                sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
               }
               sessionCtx.setRuntimeState("idle");
             }
