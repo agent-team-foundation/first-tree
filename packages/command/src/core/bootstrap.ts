@@ -55,6 +55,15 @@ export function resolveAccessToken(): string {
 }
 
 /**
+ * In-flight refresh promise. Multiple callers (WS handshake, proactive
+ * refresh timer, every SDK request) can see an expired token within the same
+ * millisecond — without dedupe each would fire an independent `/auth/refresh`
+ * round-trip and race to write `credentials.json`. Share one in-flight
+ * promise so N concurrent callers resolve from a single HTTP call.
+ */
+let inflightRefresh: Promise<string> | null = null;
+
+/**
  * Ensure the persisted access token is fresh. Call before any API request
  * when using persisted credentials. Returns the (possibly refreshed) access
  * token. Service-user API keys are out of scope for this milestone.
@@ -69,20 +78,32 @@ export async function ensureFreshAccessToken(): Promise<string> {
     return creds.accessToken;
   }
 
-  const res = await fetch(`${creds.serverUrl}/api/v1/auth/refresh`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ refreshToken: creds.refreshToken }),
-    signal: AbortSignal.timeout(10_000),
-  });
-
-  if (!res.ok) {
-    throw new Error("Access token expired and refresh failed. Run `first-tree-hub client connect <server-url>`.");
+  if (inflightRefresh) {
+    return inflightRefresh;
   }
 
-  const data = (await res.json()) as { accessToken: string };
-  saveCredentials({ ...creds, accessToken: data.accessToken });
-  return data.accessToken;
+  inflightRefresh = (async () => {
+    const res = await fetch(`${creds.serverUrl}/api/v1/auth/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refreshToken: creds.refreshToken }),
+      signal: AbortSignal.timeout(10_000),
+    });
+
+    if (!res.ok) {
+      throw new Error("Access token expired and refresh failed. Run `first-tree-hub client connect <server-url>`.");
+    }
+
+    const data = (await res.json()) as { accessToken: string };
+    saveCredentials({ ...creds, accessToken: data.accessToken });
+    return data.accessToken;
+  })();
+
+  try {
+    return await inflightRefresh;
+  } finally {
+    inflightRefresh = null;
+  }
 }
 
 /** Back-compat alias retained so existing call sites keep compiling. */

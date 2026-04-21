@@ -53,6 +53,13 @@ export class ClientRuntime {
       process.stderr.write("  \u26A0\uFE0F  Access token expired — reconnecting after refresh...\n");
     });
 
+    // Surface transport-level errors (TLS resets, DNS hiccups, WS handshake
+    // failures) to the operator. ClientConnection's own reconnect loop handles
+    // recovery; the process-wide crash guard lives in ClientConnection itself.
+    this.connection.on("error", (err) => {
+      process.stderr.write(`  \u26A0\uFE0F  Client connection error: ${err.message}\n`);
+    });
+
     // Server tells us an agent has just been pinned to this client — mirror
     // what `first-tree-hub agent add` does (write local config) and let the
     // scanForNewAgents helper start the slot. The fs watcher, when active,
