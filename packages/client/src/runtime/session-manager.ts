@@ -132,43 +132,58 @@ export class SessionManager {
     await this.routeMessage(chatId, message, entry.id);
   }
 
-  /** Handle a session command from the server (suspend/resume/terminate). */
-  async handleCommand(
-    chatId: string,
-    command: "session:suspend" | "session:resume" | "session:terminate",
-  ): Promise<void> {
-    const session = this.sessions.get(chatId);
-
+  /** Handle a server-issued session command. Terminate drops all local state without reporting back. */
+  async handleCommand(chatId: string, command: "session:suspend" | "session:terminate"): Promise<void> {
     if (command === "session:suspend") {
+      const session = this.sessions.get(chatId);
       if (session?.status === "active") {
         this.config.log(`Session ${chatId}: suspend command received`);
         this.suspendSession(session);
       }
-    } else if (command === "session:resume") {
-      if (session?.status === "suspended") {
-        this.config.log(`Session ${chatId}: resume command received`);
-        // Resume with no new user message — pass null to signal admin-triggered resume
-        await this.resumeSession(session, null);
+      return;
+    }
+
+    if (command === "session:terminate") {
+      const session = this.sessions.get(chatId);
+      const hadMapping = this.evictedMappings.has(chatId);
+      if (!session && !hadMapping) return;
+
+      this.config.log(`Session ${chatId}: terminate command received`);
+      if (session?.status === "active") {
+        this._activeCount--;
+        await session.handler.shutdown().catch(() => {});
       }
-    } else if (command === "session:terminate") {
-      if (session) {
-        this.config.log(`Session ${chatId}: terminate command received`);
-        if (session.status === "active") {
-          this._activeCount--;
-          await session.handler.shutdown();
-        }
-        // Move to evicted
-        this.addEvictedMapping(chatId, {
-          claudeSessionId: session.claudeSessionId,
-          lastActivity: session.lastActivity,
-        });
-        this.sessions.delete(chatId);
-        this.sessionRuntimeStates.delete(chatId);
-        this.recomputeRuntimeState();
-        this.notifySessionState(chatId, "evicted");
-        this.persistRegistry();
-        this.drainPendingQueue();
+
+      this.sessions.delete(chatId);
+      this.evictedMappings.delete(chatId);
+      this.sessionRuntimeStates.delete(chatId);
+      this.lastReportedStates.delete(chatId);
+
+      for (let i = this.pendingQueue.length - 1; i >= 0; i--) {
+        if (this.pendingQueue[i]?.chatId === chatId) this.pendingQueue.splice(i, 1);
       }
+
+      this.recomputeRuntimeState();
+      this.persistRegistry();
+      this.drainPendingQueue();
+    }
+  }
+
+  /** Chat IDs this client still holds locally (sessions + evictedMappings). */
+  getHeldChatIds(): string[] {
+    const ids = new Set<string>();
+    for (const id of this.sessions.keys()) ids.add(id);
+    for (const id of this.evictedMappings.keys()) ids.add(id);
+    return [...ids];
+  }
+
+  /**
+   * Apply a server-declared stale list from `session:reconcile:result` — treat
+   * each chatId as if a `session:terminate` command had arrived.
+   */
+  applyStaleChatIds(staleChatIds: string[]): void {
+    for (const id of staleChatIds) {
+      void this.handleCommand(id, "session:terminate");
     }
   }
 
@@ -448,8 +463,11 @@ export class SessionManager {
         this._activeCount--;
         candidate.session.handler.shutdown().catch(() => {});
       }
-      candidate.session.status = "evicted";
-      this.notifySessionState(candidate.key, "evicted");
+      // LRU eviction is a local memory-management concern, not operator intent
+      // — do NOT emit a wire state. The server row stays as last reported;
+      // the local `evictedMappings` entry keeps resume-on-next-message working.
+      // (`suspended` here would accumulate rows in agent_chat_sessions forever
+      // since the cleanup cron is out of scope for this redesign.)
       this.sessions.delete(candidate.key);
       this.sessionRuntimeStates.delete(candidate.key);
       this.recomputeRuntimeState();

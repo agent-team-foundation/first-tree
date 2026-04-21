@@ -34,9 +34,14 @@ export type BoundAgent = {
 };
 
 export type SessionCommand = {
-  type: "session:suspend" | "session:resume" | "session:terminate";
+  type: "session:suspend" | "session:terminate";
   agentId: string;
   chatId: string;
+};
+
+export type SessionReconcileResult = {
+  agentId: string;
+  staleChatIds: string[];
 };
 
 type ClientConnectionEvents = {
@@ -57,6 +62,7 @@ type ClientConnectionEvents = {
    */
   "agent:pinned": [message: AgentPinnedMessage];
   "session:command": [command: SessionCommand];
+  "session:reconcile:result": [result: SessionReconcileResult];
   "auth:expired": [];
 };
 
@@ -202,6 +208,12 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   reportSessionCompletion(agentId: string, chatId: string): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     this.ws.send(JSON.stringify({ type: "session:completion", agentId, chatId }));
+  }
+
+  /** Ask the server which of the supplied chatIds the client should drop. */
+  sendSessionReconcile(agentId: string, chatIds: string[]): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "session:reconcile", agentId, chatIds }));
   }
 
   async disconnect(): Promise<void> {
@@ -421,11 +433,20 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       return;
     }
 
-    if (type === "session:suspend" || type === "session:resume" || type === "session:terminate") {
+    if (type === "session:suspend" || type === "session:terminate") {
       const agentId = msg.agentId as string;
       const chatId = msg.chatId as string;
       if (agentId && chatId) {
         this.emit("session:command", { type: type as SessionCommand["type"], agentId, chatId });
+      }
+      return;
+    }
+
+    if (type === "session:reconcile:result") {
+      const agentId = msg.agentId as string;
+      const staleChatIds = Array.isArray(msg.staleChatIds) ? (msg.staleChatIds as string[]) : null;
+      if (agentId && staleChatIds) {
+        this.emit("session:reconcile:result", { agentId, staleChatIds });
       }
       return;
     }

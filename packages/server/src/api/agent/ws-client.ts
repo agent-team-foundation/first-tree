@@ -7,15 +7,17 @@ import {
   runtimeStateMessageSchema,
   sessionCompletionMessageSchema,
   sessionEventMessageSchema,
+  sessionReconcileRequestSchema,
   sessionStateMessageSchema,
   WS_AUTH_FRAME_TIMEOUT_MS,
   wsAuthFrameSchema,
 } from "@agent-team-foundation/first-tree-hub-shared";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { jwtVerify } from "jose";
 import type { WebSocket } from "ws";
 import { z } from "zod";
+import { agentChatSessions } from "../../db/schema/agent-chat-sessions.js";
 import { agents } from "../../db/schema/agents.js";
 import { clients } from "../../db/schema/clients.js";
 import { members } from "../../db/schema/members.js";
@@ -402,23 +404,66 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 return;
               }
 
-              const payload = sessionStateMessageSchema.parse(msg);
-
-              // Drop persisted events on eviction. Chained through the per-session FIFO so any
-              // in-flight appendEvent finishes BEFORE clearEvents (otherwise late inserts resurrect rows).
-              if (payload.state === "evicted") {
-                chainSessionOp(agentId, payload.chatId, () =>
-                  sessionEventService.clearEvents(app.db, agentId, payload.chatId).catch(() => {}),
+              const payloadResult = sessionStateMessageSchema.safeParse(msg);
+              if (!payloadResult.success) {
+                // Strict wire contract: the client may only report active/suspended.
+                // A stale client sending `evicted` gets a hard reject; its local state
+                // has already moved, and the next inbound message will re-sync via the
+                // evictedMappings resume path. See proposal §Wire-Level Strictness.
+                socket.send(
+                  JSON.stringify({
+                    type: "error",
+                    message: "Unsupported session state from client; client upgrade required",
+                  }),
                 );
+                const rawState = (msg as { state?: unknown }).state;
+                app.log.warn({ clientId, agentId, rawState }, "session:state rejected — stale client wire");
+                return;
               }
 
               await activityService.upsertSessionState(
                 app.db,
                 agentId,
-                payload.chatId,
-                payload.state,
+                payloadResult.data.chatId,
+                payloadResult.data.state,
                 session.organizationId,
                 notifier,
+              );
+            } else if (type === "session:reconcile") {
+              const agentId = parsed.data.agentId;
+              if (!agentId || !boundAgents.has(agentId)) {
+                socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
+                return;
+              }
+
+              const payloadResult = sessionReconcileRequestSchema.safeParse(msg);
+              if (!payloadResult.success) {
+                socket.send(JSON.stringify({ type: "error", message: "Malformed session:reconcile frame" }));
+                return;
+              }
+
+              const { chatIds } = payloadResult.data;
+              const aliveRows = chatIds.length
+                ? await app.db
+                    .select({ chatId: agentChatSessions.chatId })
+                    .from(agentChatSessions)
+                    .where(
+                      and(
+                        eq(agentChatSessions.agentId, agentId),
+                        inArray(agentChatSessions.chatId, chatIds),
+                        ne(agentChatSessions.state, "evicted"),
+                      ),
+                    )
+                : [];
+              const alive = new Set(aliveRows.map((r) => r.chatId));
+              const staleChatIds = chatIds.filter((id) => !alive.has(id));
+
+              socket.send(
+                JSON.stringify({
+                  type: "session:reconcile:result",
+                  agentId,
+                  staleChatIds,
+                }),
               );
             } else if (type === "runtime:state") {
               const agentId = parsed.data.agentId;

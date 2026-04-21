@@ -1,7 +1,6 @@
 import { paginationQuerySchema } from "@agent-team-foundation/first-tree-hub-shared";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { ConflictError } from "../../errors.js";
 import { requireMember } from "../../middleware/require-identity.js";
 import { assertAgentVisible, assertCanManage, assertChatAccess, memberScope } from "../../services/access-control.js";
 import * as agentService from "../../services/agent.js";
@@ -79,45 +78,34 @@ export async function adminSessionRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
-  /** POST /admin/sessions/agents/:agentId/:chatId/suspend — suspend a session */
+  /** POST /admin/sessions/agents/:agentId/:chatId/suspend — commit first, WS-send best-effort. */
   app.post<{ Params: { agentId: string; chatId: string } }>(
     "/agents/:agentId/:chatId/suspend",
     async (request, reply) => {
       const { agentId, chatId } = request.params;
       await assertCanManage(app.db, memberScope(request), agentId);
-      const sent = sendToAgent(agentId, { type: "session:suspend", chatId });
-      if (!sent) {
-        throw new ConflictError("Agent is not connected — session command requires a live connection");
+      const member = requireMember(request);
+      const result = await sessionService.suspendSession(app.db, agentId, chatId, member.organizationId, app.notifier);
+      if (result.transitioned) {
+        sendToAgent(agentId, { type: "session:suspend", chatId });
       }
-      return reply.status(202).send({ status: "sent", command: "suspend", agentId, chatId });
+      return reply.status(200).send({ agentId, chatId, state: result.state, transitioned: result.transitioned });
     },
   );
 
-  /** POST /admin/sessions/agents/:agentId/:chatId/resume — resume a session */
-  app.post<{ Params: { agentId: string; chatId: string } }>(
-    "/agents/:agentId/:chatId/resume",
-    async (request, reply) => {
-      const { agentId, chatId } = request.params;
-      await assertCanManage(app.db, memberScope(request), agentId);
-      const sent = sendToAgent(agentId, { type: "session:resume", chatId });
-      if (!sent) {
-        throw new ConflictError("Agent is not connected — session command requires a live connection");
-      }
-      return reply.status(202).send({ status: "sent", command: "resume", agentId, chatId });
-    },
-  );
-
-  /** POST /admin/sessions/agents/:agentId/:chatId/terminate — terminate a session */
+  /** POST /admin/sessions/agents/:agentId/:chatId/terminate — archive; clear events + best-effort WS. */
   app.post<{ Params: { agentId: string; chatId: string } }>(
     "/agents/:agentId/:chatId/terminate",
     async (request, reply) => {
       const { agentId, chatId } = request.params;
       await assertCanManage(app.db, memberScope(request), agentId);
-      const sent = sendToAgent(agentId, { type: "session:terminate", chatId });
-      if (!sent) {
-        throw new ConflictError("Agent is not connected — session command requires a live connection");
+      const member = requireMember(request);
+      const result = await sessionService.archiveSession(app.db, agentId, chatId, member.organizationId, app.notifier);
+      if (result.transitioned) {
+        sessionEventService.clearEvents(app.db, agentId, chatId).catch(() => {});
+        sendToAgent(agentId, { type: "session:terminate", chatId });
       }
-      return reply.status(202).send({ status: "sent", command: "terminate", agentId, chatId });
+      return reply.status(200).send({ agentId, chatId, state: result.state, transitioned: result.transitioned });
     },
   );
 }

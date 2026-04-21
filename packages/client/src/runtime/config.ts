@@ -26,6 +26,8 @@ const sessionConfigSchema = z
       .positive()
       .default(IDLE_TIMEOUT_MS / 1000),
     max_sessions: z.number().int().positive().default(MAX_SESSIONS),
+    /** How often the client reconciles its local chatIds with the server. */
+    reconcile_interval_seconds: z.number().int().min(30).max(3600).default(300),
   })
   .passthrough();
 

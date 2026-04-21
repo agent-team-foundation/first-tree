@@ -705,7 +705,6 @@ export function registerAgentCommands(program: Command): void {
 
   for (const [cmd, desc] of [
     ["suspend", "Suspend a session"],
-    ["resume", "Resume a suspended session"],
     ["terminate", "Terminate a session"],
   ] as const) {
     sessionCmd

@@ -46,7 +46,7 @@ function createSessionManager(opts: {
   sdk?: FirstTreeHubSDK;
   handler?: AgentHandler;
   handlerFactory?: HandlerFactory;
-  session?: { idle_timeout: number; max_sessions: number };
+  session?: { idle_timeout: number; max_sessions: number; reconcile_interval_seconds: number };
   concurrency?: number;
   log?: (msg: string) => void;
   onRuntimeStateChange?: (state: "idle" | "working" | "blocked" | "error") => void;
@@ -56,7 +56,7 @@ function createSessionManager(opts: {
   const sdk = opts.sdk ?? mockSdk();
 
   return new SessionManager({
-    session: opts.session ?? { idle_timeout: 300, max_sessions: 10 },
+    session: opts.session ?? { idle_timeout: 300, max_sessions: 10, reconcile_interval_seconds: 300 },
     concurrency: opts.concurrency ?? 5,
     handlerFactory: factory,
     handlerConfig: { workspaceRoot: "/tmp/test" },
@@ -228,7 +228,7 @@ describe("SessionManager: runtime state cleanup on eviction", () => {
       });
 
     const sm = createSessionManager({
-      session: { idle_timeout: 300, max_sessions: 2 },
+      session: { idle_timeout: 300, max_sessions: 2, reconcile_interval_seconds: 300 },
       handlerFactory: factory,
       onRuntimeStateChange: (state) => runtimeChanges.push(state),
     });
@@ -320,39 +320,6 @@ describe("SessionManager: getAggregateRuntimeState()", () => {
 
     defined(capturedCtx, "ctx").setRuntimeState("idle");
     expect(sm.getAggregateRuntimeState()).toBe("idle");
-
-    await sm.shutdown();
-  });
-});
-
-describe("SessionManager: admin resume passes no message to handler", () => {
-  it("handleCommand('session:resume') does not push user content", async () => {
-    const resumeCalls: Array<{ message: unknown; sessionId: string }> = [];
-    const handler = createMockHandler({
-      async start() {
-        return "session-resume-test";
-      },
-      async resume(message, sessionId) {
-        resumeCalls.push({ message, sessionId });
-        return sessionId;
-      },
-    });
-
-    const sm = createSessionManager({ handler, concurrency: 1 });
-
-    // Start a session, then preempt it so it becomes suspended
-    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-a" }));
-    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-b" }));
-    // chat-a is now suspended
-
-    resumeCalls.length = 0;
-
-    // Admin resume — should pass undefined message
-    await sm.handleCommand("chat-a", "session:resume");
-
-    expect(resumeCalls).toHaveLength(1);
-    expect(resumeCalls[0]?.message).toBeUndefined();
-    expect(resumeCalls[0]?.sessionId).toBe("session-resume-test");
 
     await sm.shutdown();
   });

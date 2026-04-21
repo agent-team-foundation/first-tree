@@ -38,11 +38,15 @@ export function WorkspacePage() {
     enabled: !!selectedAgentId && !selectedChatId,
   });
 
-  // Auto-redirect: when an agent is selected but no chat, jump to the most recent chat.
+  // Auto-redirect: when an agent is selected but no chat, jump to the most recent
+  // non-terminated chat. Server already hides `evicted` from this listing; the
+  // local filter is a belt-and-suspenders guard during optimistic-update windows.
   useEffect(() => {
     if (!selectedAgentId || selectedChatId) return;
     if (!agentSessions || agentSessions.length === 0) return;
-    const latest = [...agentSessions].sort((a, b) => (b.lastActivityAt ?? "").localeCompare(a.lastActivityAt ?? ""))[0];
+    const latest = [...agentSessions]
+      .filter((s) => s.state !== "evicted")
+      .sort((a, b) => (b.lastActivityAt ?? "").localeCompare(a.lastActivityAt ?? ""))[0];
     if (latest) {
       setSearchParams({ a: selectedAgentId, c: latest.chatId }, { replace: true });
     }

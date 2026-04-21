@@ -81,6 +81,9 @@ export class ClientRuntime {
       session: {
         idle_timeout: config.session.idle_timeout,
         max_sessions: config.session.max_sessions,
+        // Admin-managed runtime config doesn't carry this field yet; local
+        // `agent.yaml` users can override via the client YAML schema.
+        reconcile_interval_seconds: 300,
       },
       concurrency: config.concurrency,
       clientConnection: this.connection,
