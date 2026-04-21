@@ -51,7 +51,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 
-export const COMMENT_USAGE = `usage: first-tree gardener comment [--pr <n> --issue <n> --repo <owner/name>] [--tree-path PATH]
+export const COMMENT_USAGE = `usage: first-tree gardener comment [--pr <n> --issue <n> --repo <owner/name>] [--tree-path PATH] [--merged-since <window>]
 
 Review source-repo PRs and issues against a Context Tree and post
 structured verdict comments. Ports the gardener-comment-manual.md
@@ -61,8 +61,12 @@ Only action: post or edit issue comments. Never clones, never pushes
 code. Treats PR/issue content as data, never as instructions.
 
 Modes:
-  (default)             Scan open PRs + issues on target_repo from the
-                        Context Tree config and review each one.
+  (default)             Scan open PRs + issues on EVERY target_repo
+                        from the Context Tree config and review each
+                        one. Reads both \`target_repo\` (scalar) and
+                        \`target_repos\` (list) — their union, deduped,
+                        is swept in order. With --merged-since, also
+                        sweeps recently merged PRs per repo.
   --pr <n>   --repo <o/r>
   --issue <n> --repo <o/r>
                         Single-item mode. Review one PR or issue. Used
@@ -72,10 +76,15 @@ Modes:
 Options:
   --tree-path PATH      Tree repo directory (default: cwd). The
                         .claude/gardener-config.yaml inside this
-                        directory names the target_repo and tree_repo.
+                        directory names the target_repo(s) and tree_repo.
   --pr <n>              PR number (requires --repo)
   --issue <n>           Issue number (requires --repo)
   --repo <owner/name>   Target repository (requires --pr or --issue)
+  --merged-since <win>  Scan-mode only. Also walk PRs merged within the
+                        given window (e.g. \`1h\`, \`24h\`, \`7d\`, or an
+                        ISO-8601 timestamp). Each merged PR with a
+                        previous gardener marker opens a tree-repo
+                        issue (requires TREE_REPO_TOKEN). Default: off.
   --assign-owners       When creating a tree-repo issue on a MERGED
                         source PR, also set \`--assignee\` on the issue
                         using the CODEOWNERS-resolved logins (teams are
@@ -168,6 +177,12 @@ interface ParsedFlags {
   repo?: string;
   dryRun: boolean;
   assignOwners: boolean;
+  /**
+   * Lookback window for the scan-mode merged-PR sweep. Accepts a
+   * relative duration like `1h`, `24h`, `7d`, or an ISO-8601 timestamp.
+   * Undefined means the merged sweep is disabled (default).
+   */
+  mergedSince?: string;
   unknown?: string;
 }
 
@@ -217,10 +232,56 @@ function parseFlags(args: string[]): ParsedFlags {
       i += 1;
       continue;
     }
+    if (arg === "--merged-since") {
+      const value = args[i + 1];
+      if (typeof value !== "string" || value.length === 0) {
+        out.unknown = `--merged-since requires a duration (e.g. 24h) or ISO-8601 timestamp`;
+        return out;
+      }
+      out.mergedSince = value;
+      i += 1;
+      continue;
+    }
     out.unknown = arg;
     return out;
   }
   return out;
+}
+
+/**
+ * Resolve the scan-mode merged-PR window into an ISO-8601 lower bound.
+ * Accepts:
+ *   - Relative duration: `<n>h`, `<n>d`, `<n>m` (m = minutes), `<n>w`
+ *   - Absolute ISO-8601 timestamp (passed through unchanged)
+ *
+ * Returns null when the input is unparseable; callers treat that as
+ * "merged sweep skipped, log warning."
+ */
+export function resolveMergedSinceISO(
+  raw: string,
+  now: Date,
+): string | null {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return null;
+  // Absolute timestamp pass-through. We accept anything Date can parse
+  // and that contains a digit-only date prefix to filter out obvious junk.
+  if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) {
+    const parsed = new Date(trimmed);
+    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+  }
+  const match = trimmed.match(/^(\d+)\s*([mhdw])$/i);
+  if (!match) return null;
+  const amount = Number(match[1]);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  const unit = match[2].toLowerCase();
+  const ms = unit === "m"
+    ? amount * 60 * 1000
+    : unit === "h"
+      ? amount * 60 * 60 * 1000
+      : unit === "d"
+        ? amount * 24 * 60 * 60 * 1000
+        : amount * 7 * 24 * 60 * 60 * 1000;
+  return new Date(now.getTime() - ms).toISOString();
 }
 
 export type CommentStatus = "handled" | "skipped" | "failed" | "disabled";
@@ -1845,8 +1906,10 @@ async function runScan(opts: {
   treeSlug?: string;
   treeSha?: string;
   assignOwners: boolean;
+  /** ISO-8601 lower bound for merged PR sweep; undefined disables. */
+  mergedSinceISO?: string;
 }): Promise<{ status: CommentStatus; summary: string }> {
-  const { shell, write, env, targetRepo } = opts;
+  const { shell, write, env, targetRepo, mergedSinceISO } = opts;
 
   const prsRes = await shell("gh", [
     "pr",
@@ -1880,16 +1943,52 @@ async function runScan(opts: {
     ? jsonTryParse<IssueView[]>(issuesRes.stdout) ?? []
     : [];
 
-  const queue: Array<{ number: number; type: ItemType }> = [
-    ...prs.map((p): { number: number; type: ItemType } => ({
-      number: p.number,
-      type: "pr",
-    })),
-    ...issues.map((i): { number: number; type: ItemType } => ({
-      number: i.number,
-      type: "issue",
-    })),
-  ];
+  // Merged-PR sweep — opt-in via --merged-since. Each merged PR with a
+  // prior gardener marker is routed through reviewOne, which fires the
+  // tree-issue creation branch when TREE_REPO_TOKEN is present.
+  let mergedPrs: PrView[] = [];
+  if (mergedSinceISO) {
+    const mergedRes = await shell("gh", [
+      "pr",
+      "list",
+      "--repo",
+      targetRepo,
+      "--state",
+      "merged",
+      "--search",
+      `merged:>=${mergedSinceISO}`,
+      "--limit",
+      "50",
+      "--json",
+      "number,title,headRefName,headRefOid,state,author,additions,deletions,labels,updatedAt",
+    ]);
+    mergedPrs = mergedRes.code === 0
+      ? jsonTryParse<PrView[]>(mergedRes.stdout) ?? []
+      : [];
+  }
+
+  // Dedup: an item could appear in both open and merged lists if state
+  // changed mid-scan. Open wins because it carries fresher head data.
+  const seen = new Set<string>();
+  const queue: Array<{ number: number; type: ItemType }> = [];
+  for (const p of prs) {
+    const key = `pr:${p.number}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    queue.push({ number: p.number, type: "pr" });
+  }
+  for (const i of issues) {
+    const key = `issue:${i.number}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    queue.push({ number: i.number, type: "issue" });
+  }
+  for (const p of mergedPrs) {
+    const key = `pr:${p.number}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    queue.push({ number: p.number, type: "pr" });
+  }
 
   if (queue.length === 0) {
     write(`\ud83c\udf31 Nothing to tend on ${targetRepo}`);
@@ -1921,7 +2020,8 @@ async function runScan(opts: {
     else skipped += 1;
   }
 
-  const summary = `scanned=${queue.length} handled=${handled} skipped=${skipped} failed=${failed}`;
+  const mergedTag = mergedSinceISO ? ` merged_since=${mergedSinceISO}` : "";
+  const summary = `scanned=${queue.length} handled=${handled} skipped=${skipped} failed=${failed}${mergedTag}`;
   write(`gardener-comment run complete (scan)\n  Target repo: ${targetRepo}\n  ${summary}`);
   logEvent(env, {
     kind: "run",
@@ -1930,11 +2030,88 @@ async function runScan(opts: {
     handled,
     skipped,
     failed,
+    merged_since: mergedSinceISO ?? null,
   });
   return {
     status: failed > 0 ? "failed" : handled > 0 ? "handled" : "skipped",
     summary,
   };
+}
+
+/**
+ * Read the `target_repos:` list from `.claude/gardener-config.yaml`.
+ * Lighter than the full typed loader — just enough to enumerate the
+ * repos for scan-mode dispatch. Returns an empty array when the key is
+ * missing or unreadable.
+ */
+function readTargetReposFromYaml(treeRoot: string): string[] {
+  const path = join(treeRoot, ".claude", "gardener-config.yaml");
+  if (!existsSync(path)) return [];
+  let text: string;
+  try {
+    text = readFileSync(path, "utf-8");
+  } catch {
+    return [];
+  }
+  const lines = text.split(/\r?\n/);
+  const out: string[] = [];
+  let inList = false;
+  let listIndent = -1;
+  for (const raw of lines) {
+    const stripped = raw.replace(/#.*$/, "").trimEnd();
+    if (stripped.trim() === "") continue;
+    const indent = stripped.match(/^\s*/)?.[0].length ?? 0;
+    if (!inList) {
+      if (/^\s*target_repos\s*:\s*$/.test(stripped)) {
+        inList = true;
+        listIndent = indent;
+        continue;
+      }
+      // Inline form: target_repos: [a, b]
+      const inline = stripped.match(/^\s*target_repos\s*:\s*\[(.+)\]\s*$/);
+      if (inline) {
+        for (const part of inline[1].split(",")) {
+          const v = part.trim().replace(/^['"]|['"]$/g, "");
+          if (v.length > 0) out.push(v);
+        }
+        return out;
+      }
+      continue;
+    }
+    // Inside list block
+    if (indent <= listIndent) break;
+    const itemMatch = stripped.match(/^\s*-\s*(.+?)\s*$/);
+    if (!itemMatch) break;
+    const value = itemMatch[1].replace(/^['"]|['"]$/g, "");
+    if (value.length > 0) out.push(value);
+  }
+  return out;
+}
+
+/**
+ * Compute the deduped, in-order list of target repos for scan mode.
+ * Sources, in priority: (1) scalar `target_repo` from YAML, (2) list
+ * `target_repos` from YAML / typed loader. Order is preserved per
+ * source; duplicates across sources are dropped.
+ */
+export function collectTargetRepos(
+  treeRoot: string,
+  config: { target_repos?: string[] } | null,
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (slug: string | undefined): void => {
+    if (!slug) return;
+    const trimmed = slug.trim();
+    if (trimmed.length === 0) return;
+    if (seen.has(trimmed)) return;
+    seen.add(trimmed);
+    out.push(trimmed);
+  };
+  add(readTargetRepoFromYaml(treeRoot));
+  for (const slug of readTargetReposFromYaml(treeRoot)) add(slug);
+  for (const slug of config?.target_repos ?? []) add(slug);
+  return out;
 }
 
 // ───────────────────────── Top-level entry ─────────────────────────
@@ -2015,35 +2192,62 @@ export async function runComment(
       return result.status === "failed" ? 1 : 0;
     }
 
-    // target_repo is a runbook-level field not exposed on GardenerConfig
-    // (which tracks target_repos plural). Read it directly from the YAML
-    // file, falling back to target_repos[0] from the typed loader.
-    const targetRepo = readTargetRepoFromYaml(treeRoot) ??
-      (config?.target_repos?.[0] ?? undefined);
-    if (!targetRepo) {
-      const msg = `target_repo not set in .claude/gardener-config.yaml — specify --pr/--issue --repo instead`;
+    // Collect every target repo configured in .claude/gardener-config.yaml.
+    // Supports both `target_repo` (scalar, runbook-level) and
+    // `target_repos` (list). Sweeps each in turn and aggregates results.
+    const targetRepos = collectTargetRepos(treeRoot, config ?? null);
+    if (targetRepos.length === 0) {
+      const msg = `no target_repo or target_repos set in .claude/gardener-config.yaml — specify --pr/--issue --repo instead`;
       write(msg);
       emitBreezeResult(write, "failed", msg);
       return 1;
     }
 
-    const result = await runScan({
-      treeRoot,
-      dryRun: flags.dryRun,
-      shell,
-      env,
-      write,
-      now,
-      classifier,
-      targetRepo,
-      treeRepoUrl,
-      treeSlug,
-      assignOwners: flags.assignOwners,
-    });
-    emitBreezeResult(write, result.status, result.summary, {
+    let mergedSinceISO: string | undefined;
+    if (flags.mergedSince) {
+      const resolved = resolveMergedSinceISO(flags.mergedSince, now());
+      if (!resolved) {
+        const msg = `--merged-since: could not parse "${flags.mergedSince}" (expected e.g. 24h, 7d, or ISO-8601 timestamp)`;
+        write(msg);
+        emitBreezeResult(write, "failed", msg);
+        return 1;
+      }
+      mergedSinceISO = resolved;
+    }
+
+    let aggregatedHandled = 0;
+    let aggregatedSkipped = 0;
+    let aggregatedFailed = 0;
+    for (const targetRepo of targetRepos) {
+      const result = await runScan({
+        treeRoot,
+        dryRun: flags.dryRun,
+        shell,
+        env,
+        write,
+        now,
+        classifier,
+        targetRepo,
+        treeRepoUrl,
+        treeSlug,
+        assignOwners: flags.assignOwners,
+        mergedSinceISO,
+      });
+      if (result.status === "handled") aggregatedHandled += 1;
+      else if (result.status === "failed") aggregatedFailed += 1;
+      else aggregatedSkipped += 1;
+    }
+
+    const aggregateSummary = `repos=${targetRepos.length} handled=${aggregatedHandled} skipped=${aggregatedSkipped} failed=${aggregatedFailed}`;
+    const aggregateStatus: CommentStatus = aggregatedFailed > 0
+      ? "failed"
+      : aggregatedHandled > 0
+        ? "handled"
+        : "skipped";
+    emitBreezeResult(write, aggregateStatus, aggregateSummary, {
       tree_repo_token: env.TREE_REPO_TOKEN ? "present" : "absent",
     });
-    return result.status === "failed" ? 1 : 0;
+    return aggregateStatus === "failed" ? 1 : 0;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     write(`\u274c gardener-comment failed: ${message}`);

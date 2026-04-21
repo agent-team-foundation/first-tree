@@ -8,6 +8,7 @@ import {
   buildCommentBody,
   buildTreeIssueBody,
   codeownersForPath,
+  collectTargetRepos,
   COMMENT_USAGE,
   commentLogPath,
   defaultClassifier,
@@ -21,6 +22,7 @@ import {
   parseStateMarker,
   readLastConsumedRereview,
   readSnapshot,
+  resolveMergedSinceISO,
   resolveState,
   runComment,
   shaMatches,
@@ -1754,5 +1756,192 @@ describe("gardener comment -- MERGED-PR scan branch (#193, Phase 2b of #162)", (
     expect(lines.some((l) => l.includes("MERGED since scan"))).toBe(true);
     expect(calls.some((c) => c.args[0] === "issue" && c.args[1] === "create"))
       .toBe(false);
+  });
+});
+
+describe("gardener comment -- collectTargetRepos", () => {
+  it("returns empty list when no config exists", () => {
+    const tmp = useTmpDir();
+    expect(collectTargetRepos(tmp.path, null)).toEqual([]);
+  });
+
+  it("reads scalar target_repo from YAML", () => {
+    const tmp = useTmpDir();
+    writeConfig(tmp.path, "tree_repo: o/tree\ntarget_repo: o/src\n");
+    expect(collectTargetRepos(tmp.path, null)).toEqual(["o/src"]);
+  });
+
+  it("reads target_repos list from YAML (block form)", () => {
+    const tmp = useTmpDir();
+    writeConfig(
+      tmp.path,
+      "tree_repo: o/tree\ntarget_repos:\n  - o/a\n  - o/b\n",
+    );
+    expect(collectTargetRepos(tmp.path, null)).toEqual(["o/a", "o/b"]);
+  });
+
+  it("reads target_repos list from YAML (inline form)", () => {
+    const tmp = useTmpDir();
+    writeConfig(
+      tmp.path,
+      "tree_repo: o/tree\ntarget_repos: [o/a, 'o/b']\n",
+    );
+    expect(collectTargetRepos(tmp.path, null)).toEqual(["o/a", "o/b"]);
+  });
+
+  it("merges scalar + list + typed-config sources, deduped, in order", () => {
+    const tmp = useTmpDir();
+    writeConfig(
+      tmp.path,
+      "tree_repo: o/tree\ntarget_repo: o/scalar\ntarget_repos:\n  - o/list1\n  - o/scalar\n",
+    );
+    expect(
+      collectTargetRepos(tmp.path, { target_repos: ["o/typed", "o/list1"] }),
+    ).toEqual(["o/scalar", "o/list1", "o/typed"]);
+  });
+});
+
+describe("gardener comment -- resolveMergedSinceISO", () => {
+  const now = new Date("2026-04-21T00:00:00Z");
+
+  it("parses hours", () => {
+    expect(resolveMergedSinceISO("24h", now)).toBe("2026-04-20T00:00:00.000Z");
+    expect(resolveMergedSinceISO("1h", now)).toBe("2026-04-20T23:00:00.000Z");
+  });
+
+  it("parses days and weeks", () => {
+    expect(resolveMergedSinceISO("7d", now)).toBe("2026-04-14T00:00:00.000Z");
+    expect(resolveMergedSinceISO("1w", now)).toBe("2026-04-14T00:00:00.000Z");
+  });
+
+  it("parses minutes", () => {
+    expect(resolveMergedSinceISO("30m", now)).toBe("2026-04-20T23:30:00.000Z");
+  });
+
+  it("passes through ISO-8601", () => {
+    expect(resolveMergedSinceISO("2026-04-15T10:00:00Z", now)).toBe(
+      "2026-04-15T10:00:00.000Z",
+    );
+  });
+
+  it("returns null on junk", () => {
+    expect(resolveMergedSinceISO("yesterday", now)).toBeNull();
+    expect(resolveMergedSinceISO("", now)).toBeNull();
+    expect(resolveMergedSinceISO("0h", now)).toBeNull();
+    expect(resolveMergedSinceISO("-1h", now)).toBeNull();
+  });
+});
+
+describe("gardener comment -- multi target_repos scan", () => {
+  it("iterates each target_repo and aggregates BREEZE_RESULT", async () => {
+    const tmp = useTmpDir();
+    writeConfig(
+      tmp.path,
+      "tree_repo: o/tree\ntarget_repos:\n  - o/a\n  - o/b\n",
+    );
+
+    const calls: ShellCall[] = [];
+    const shell = makeShell(
+      [
+        // Both repos return empty pr/issue lists.
+        () => ({ stdout: "[]", stderr: "", code: 0 }),
+      ],
+      calls,
+    );
+    const { write, lines } = captureWrite();
+
+    const code = await runComment(["--tree-path", tmp.path], {
+      shellRun: shell,
+      write,
+    });
+
+    expect(code).toBe(0);
+    const prListCalls = calls.filter(
+      (c) => c.command === "gh" && c.args[0] === "pr" && c.args[1] === "list",
+    );
+    // One open-pr list per target_repo (no merged sweep without flag).
+    expect(prListCalls).toHaveLength(2);
+    expect(prListCalls[0].args).toContain("o/a");
+    expect(prListCalls[1].args).toContain("o/b");
+    const trailer = lines[lines.length - 1];
+    expect(trailer).toMatch(/^BREEZE_RESULT: status=skipped /);
+    expect(trailer).toContain("repos=2");
+  });
+
+  it("--merged-since adds a merged PR list per repo with search filter", async () => {
+    const tmp = useTmpDir();
+    writeConfig(
+      tmp.path,
+      "tree_repo: o/tree\ntarget_repos:\n  - o/a\n  - o/b\n",
+    );
+
+    const calls: ShellCall[] = [];
+    const shell = makeShell(
+      [() => ({ stdout: "[]", stderr: "", code: 0 })],
+      calls,
+    );
+    const { write } = captureWrite();
+    const fixedNow = new Date("2026-04-21T00:00:00Z");
+
+    const code = await runComment(
+      ["--tree-path", tmp.path, "--merged-since", "24h"],
+      {
+        shellRun: shell,
+        write,
+        now: () => fixedNow,
+      },
+    );
+
+    expect(code).toBe(0);
+    const mergedListCalls = calls.filter(
+      (c) =>
+        c.command === "gh" &&
+        c.args[0] === "pr" &&
+        c.args[1] === "list" &&
+        c.args.includes("merged"),
+    );
+    // One merged-state pr list per target_repo.
+    expect(mergedListCalls).toHaveLength(2);
+    for (const call of mergedListCalls) {
+      const searchIdx = call.args.indexOf("--search");
+      expect(searchIdx).toBeGreaterThan(-1);
+      expect(call.args[searchIdx + 1]).toBe(
+        "merged:>=2026-04-20T00:00:00.000Z",
+      );
+    }
+  });
+
+  it("rejects unparseable --merged-since with failed BREEZE_RESULT", async () => {
+    const tmp = useTmpDir();
+    writeConfig(tmp.path, "tree_repo: o/tree\ntarget_repo: o/a\n");
+
+    const shell = makeShell([() => ({ stdout: "[]", stderr: "", code: 0 })]);
+    const { write, lines } = captureWrite();
+
+    const code = await runComment(
+      ["--tree-path", tmp.path, "--merged-since", "yesterday"],
+      { shellRun: shell, write },
+    );
+
+    expect(code).toBe(1);
+    expect(lines[lines.length - 1]).toMatch(/^BREEZE_RESULT: status=failed /);
+  });
+
+  it("fails cleanly when neither target_repo nor target_repos is set", async () => {
+    const tmp = useTmpDir();
+    writeConfig(tmp.path, "tree_repo: o/tree\n");
+
+    const shell = makeShell([() => ({ stdout: "", stderr: "", code: 0 })]);
+    const { write, lines } = captureWrite();
+
+    const code = await runComment(["--tree-path", tmp.path], {
+      shellRun: shell,
+      write,
+    });
+
+    expect(code).toBe(1);
+    expect(lines[lines.length - 1]).toMatch(/^BREEZE_RESULT: status=failed /);
+    expect(lines.some((l) => l.includes("no target_repo or target_repos")))
+      .toBe(true);
   });
 });

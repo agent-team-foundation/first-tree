@@ -78,17 +78,32 @@ For full options on any command, run `first-tree gardener <command> --help`.
 
 ## Typical Flows
 
-### Scan mode — review every open PR/issue on the bound source repo
+### Scan mode — review every open PR/issue across all bound source repos
 
 ```bash
 npx -p first-tree first-tree gardener comment
 ```
 
-Run from inside a tree repo. Reads `.claude/gardener-config.yaml` to
-find the bound source repo, then walks every **open** PR and issue on
-it, posting structured verdict comments against the tree. The
-merge→tree-issue branch is a separate, single-item code path — scan
-mode does not open tree issues on its own.
+Run from inside a tree repo. Reads `.claude/gardener-config.yaml`, then
+walks every **open** PR and issue on **every** configured source repo
+(`target_repo` scalar + `target_repos` list, deduped), posting structured
+verdict comments against the tree. Results are aggregated into a single
+`BREEZE_RESULT` trailer with `repos=<n>`.
+
+### Scan mode with merged-PR sweep
+
+```bash
+npx -p first-tree first-tree gardener comment --merged-since 24h --assign-owners
+```
+
+Same as scan mode but also fetches PRs merged within the window (e.g.
+`1h`, `24h`, `7d`, or an ISO-8601 timestamp) and routes them through the
+same reviewer. Merged PRs with a prior gardener marker take the
+merge→tree-issue branch when `TREE_REPO_TOKEN` is set — this is how the
+gardener pull-mode daemon catches post-merge events without needing
+GitHub webhooks. Without `--merged-since`, scan mode looks at open items
+only; the merge→tree-issue branch still fires from single-item
+invocations as before.
 
 ### Single-item mode — one PR or issue
 
@@ -98,9 +113,9 @@ npx -p first-tree first-tree gardener comment --issue 7 --repo owner/app-repo
 ```
 
 The single-item form is what breeze-runner calls when dispatching on a
-notification. Skips the scan; reviews exactly the one item. This is
-also the only mode that can take the merge→tree-issue branch: a single
-MERGED PR with a prior gardener marker and `TREE_REPO_TOKEN` set.
+notification. Skips the scan; reviews exactly the one item. Also takes
+the merge→tree-issue branch when pointed at a single MERGED PR with a
+prior gardener marker and `TREE_REPO_TOKEN` set.
 
 ### Install the push-mode workflow in a codebase repo
 
@@ -160,7 +175,13 @@ Gardener reads `.claude/gardener-config.yaml` from the tree repo
 (resolved via `--tree-path`, default cwd):
 
 ```yaml
-target_repo: owner/app-repo          # source repo to review
+# Either form (or both) is accepted. Scan mode sweeps the deduped union
+# in source order: scalar first, then list, then any extras the typed
+# loader adds. Pick scalar when binding one source repo, list for fan-out.
+target_repo: owner/app-repo          # source repo to review (scalar)
+target_repos:                         # source repos to review (list)
+  - owner/app-repo-frontend
+  - owner/app-repo-backend
 tree_repo: owner/tree-repo            # this tree repo (for attribution links)
 modules:
   comment:
