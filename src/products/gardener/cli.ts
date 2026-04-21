@@ -28,14 +28,22 @@ export const GARDENER_USAGE = `usage: first-tree gardener <command>
 Commands:
   sync                  Detect drift between a tree repo and its bound
                         sources. Opens a PR against the tree repo with
-                        proposal files and applied edits. Moved from
-                        \`first-tree tree sync\` so all tree-maintenance
-                        runtime commands live under one product.
+                        proposal files and applied edits.
   comment               Review source-repo PRs/issues against the tree
   respond               Fix sync PRs based on reviewer feedback
   install-workflow      Scaffold .github/workflows/first-tree-sync.yml in
                         the caller's codebase repo (push mode: replaces
                         the gardener service with an event-driven flow)
+
+Daemon lifecycle (pull mode):
+  start                 Bring up the gardener daemon in the background;
+                        writes ~/.gardener/config.json, boots launchd
+                        (macOS) or detached spawn
+  stop                  Tear down the gardener daemon
+  status                Report daemon PID, schedule, and last-run state
+  run-once              Execute both sweeps inline and exit (no daemon)
+  daemon                Foreground loop (invoked by start; not for
+                        direct human use)
 
 Options:
   --help, -h            Show this help message
@@ -45,13 +53,15 @@ Examples:
   first-tree gardener sync --help
   first-tree gardener sync --tree-path ../my-tree --propose
   first-tree gardener sync --apply
-  first-tree gardener respond --help
-  first-tree gardener respond --dry-run
-  first-tree gardener respond --pr 123 --repo owner/name
   first-tree gardener comment --help
   first-tree gardener comment --pr 42 --repo owner/name
-  first-tree gardener comment --issue 7 --repo owner/name
-  first-tree gardener install-workflow --tree-repo owner/tree-repo
+  first-tree gardener respond --pr 123 --repo owner/name
+  first-tree gardener start --tree-path ../my-tree \\
+      --code-repo acme/web --code-repo acme/api \\
+      --gardener-interval 5m --sync-interval 1h --assign-owners
+  first-tree gardener status
+  first-tree gardener run-once
+  first-tree gardener stop
 `;
 
 type Output = (text: string) => void;
@@ -102,6 +112,26 @@ export async function runGardener(
         "./engine/commands/install-workflow.js"
       );
       return runInstallWorkflow(args.slice(1), { write });
+    }
+    case "start": {
+      const { runStart } = await import("./engine/commands/start.js");
+      return runStart(args.slice(1), { write });
+    }
+    case "stop": {
+      const { runStop } = await import("./engine/commands/stop.js");
+      return runStop(args.slice(1), { write });
+    }
+    case "status": {
+      const { runStatus } = await import("./engine/commands/status.js");
+      return runStatus(args.slice(1), { write });
+    }
+    case "run-once": {
+      const { runRunOnce } = await import("./engine/commands/run-once.js");
+      return runRunOnce(args.slice(1), { write });
+    }
+    case "daemon": {
+      const { runDaemon } = await import("./engine/commands/daemon.js");
+      return runDaemon(args.slice(1), { write });
     }
     default:
       write(`Unknown gardener command: ${command}`);

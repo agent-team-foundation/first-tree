@@ -18,7 +18,7 @@ issue-filing logic:
 | Mode | How it runs | When to use |
 |---|---|---|
 | **Push (workflow)** | `.github/workflows/first-tree-sync.yml` in the codebase repo fires per-PR; no daemon. | You (or your agent) can land a workflow file in the codebase. Lowest latency, zero infra. |
-| **Pull (service)** | A `first-tree gardener` process polls target repos from outside. | The codebase repo is third-party or you otherwise can't push workflow files. |
+| **Pull (daemon)** | `first-tree gardener start` launches a long-running daemon that polls every configured source repo on a timer. | The codebase repo is third-party or you otherwise can't push workflow files. Also the right choice when you want drift detection (`gardener sync`) on a schedule. |
 
 Both modes open the same tree-repo issue on merge and post the same
 verdict comment shape on open/updated PRs. The only difference is the
@@ -75,6 +75,16 @@ idempotent and guarded against acting on its own prior comments.
 | `first-tree gardener respond` | Acknowledge reviewer feedback on a sync PR (Phase 5: real edit orchestrator for `parent_subdomain_missing` + planner seam — see [#160](https://github.com/agent-team-foundation/first-tree/issues/160) / [#219](https://github.com/agent-team-foundation/first-tree/issues/219); unsupported patterns fall back to a placeholder reply). |
 | `first-tree gardener install-workflow` | Scaffold `.github/workflows/first-tree-sync.yml` in the caller's codebase repo so per-PR events drive the sync flow — the push-mode entry point. |
 
+**Daemon lifecycle (pull mode):**
+
+| Command | Purpose |
+|---|---|
+| `first-tree gardener start` | Writes `~/.gardener/config.json` from `--tree-path` + repeated `--code-repo` args, then boots a launchd job (macOS) or detached process that runs `first-tree gardener daemon`. Schedules: `--gardener-interval` (default 5m), `--sync-interval` (default 1h). `--assign-owners` and `--sync-apply` wire their downstream flags. |
+| `first-tree gardener stop` | Tears down the launchd job (macOS) or sends SIGTERM to the PID recorded in `~/.gardener/state.json`. Idempotent. |
+| `first-tree gardener status` | Prints the recorded PID + uptime, configured schedule, and last outcome + next-due time per sweep. Read-only. |
+| `first-tree gardener run-once` | Runs both sweeps inline (no daemon). Useful for cron-style deployments or for exercising the pipeline before leaving a daemon running. |
+| `first-tree gardener daemon` | Foreground loop invoked by `start`. Not intended for direct human use. |
+
 For full options on any command, run `first-tree gardener <command> --help`.
 
 ## Typical Flows
@@ -117,6 +127,45 @@ The single-item form is what breeze-runner calls when dispatching on a
 notification. Skips the scan; reviews exactly the one item. Also takes
 the merge→tree-issue branch when pointed at a single MERGED PR with a
 prior gardener marker and `TREE_REPO_TOKEN` set.
+
+### Pull-mode daemon — monitor many code repos on a schedule
+
+Use this when push-mode workflows aren't an option or when you want
+drift detection (`gardener sync`) to run on a timer in addition to
+per-PR verdict comments.
+
+```bash
+# 1. Bind the tree checkout first (if not already): `first-tree tree bind`
+# 2. Start the daemon pointed at the tree + the code repos to watch.
+npx -p first-tree first-tree gardener start \
+  --tree-path ../my-org-tree \
+  --code-repo my-org/web --code-repo my-org/api \
+  --gardener-interval 5m \
+  --sync-interval 1h \
+  --assign-owners
+```
+
+What happens:
+- `~/.gardener/config.json` is written with the supplied schedule.
+- On macOS, a launchd plist `com.first-tree.gardener.<user>.plist`
+  lives at `~/.gardener/launchd/` and is bootstrapped into the user
+  domain. On other platforms, a detached child process is spawned.
+- The daemon ticks every ~30 s. Each tick checks whether
+  `gardener-sweep` or `sync-sweep` is due and runs it as a subprocess
+  (`gardener comment --merged-since 2×interval` and `gardener sync`
+  respectively). Outcomes get written to `~/.gardener/state.json`.
+
+Inspect and tear down:
+
+```bash
+npx -p first-tree first-tree gardener status     # last runs + next due
+npx -p first-tree first-tree gardener run-once   # fire both sweeps inline
+npx -p first-tree first-tree gardener stop       # launchctl bootout + SIGTERM
+```
+
+Set `--sync-apply` on `start` to have `sync-sweep` open tree PRs
+automatically (`gardener sync --apply`); without it, the sweep stays in
+detect-only mode.
 
 ### Install the push-mode workflow in a codebase repo
 
