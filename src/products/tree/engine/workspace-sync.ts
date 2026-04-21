@@ -5,11 +5,12 @@ import {
   readSourceState,
   type SourceBindingMode,
 } from "#products/tree/engine/runtime/binding-state.js";
+import { resolveLocalTreeCheckout } from "#products/tree/engine/runtime/local-tree-config.js";
 import { discoverWorkspaceRepos } from "#products/tree/engine/workspace.js";
 
 export const WORKSPACE_SYNC_USAGE = `usage: first-tree tree workspace sync [--tree-path PATH | --tree-url URL] [--workspace-id ID] [--dry-run]
 
-Bind every discovered child repo / submodule under the current workspace root
+Bind every discovered local child git repo under the current workspace root
 to the same shared Context Tree.
 
 Options:
@@ -66,10 +67,6 @@ export function parseWorkspaceSyncArgs(
     }
   }
 
-  if (!parsed.treePath && !parsed.treeUrl) {
-    return { error: "Missing --tree-path or --tree-url" };
-  }
-
   return parsed;
 }
 
@@ -82,8 +79,11 @@ export function runWorkspaceSync(repo?: Repo, options?: WorkspaceSyncOptions): n
   const members = discoverWorkspaceRepos(workspaceRoot.root);
   const workspaceId = workspaceIdForRoot(workspaceRoot, options?.workspaceId);
   const rootSourceState = readSourceState(workspaceRoot.root);
+  const resolvedLocalTreeCheckout = !options?.treePath
+    ? resolveLocalTreeCheckout(workspaceRoot.root)
+    : null;
   const treePath = options?.treePath
-    ?? rootSourceState?.tree.localPath
+    ?? resolvedLocalTreeCheckout?.path
     ?? undefined;
   const treeUrl = options?.treeUrl
     ?? rootSourceState?.tree.remoteUrl
@@ -102,7 +102,7 @@ export function runWorkspaceSync(repo?: Repo, options?: WorkspaceSyncOptions): n
   console.log(`  Child repos:    ${members.length}\n`);
 
   if (members.length === 0) {
-    console.log("No child repos or submodules were discovered.");
+    console.log("No child git repos were discovered.");
     return 0;
   }
 

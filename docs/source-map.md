@@ -70,7 +70,7 @@ docs below only for source-repo implementation details.
 | `src/products/tree/engine/runtime/local-tree-config.ts` | Local tree config helpers (delegates to `source.json`) |
 | `src/products/tree/engine/runtime/source-repo-index.ts` | Generated `source-repos.md` index plus root tree repo guidance |
 | `src/products/tree/engine/runtime/source-integration.ts` | Managed `AGENTS.md` / `CLAUDE.md` source integration block |
-| `src/products/tree/engine/workspace.ts` | Child repo / submodule discovery |
+| `src/products/tree/engine/workspace.ts` | Local child-repo discovery for workspace roots |
 
 ## Validation
 

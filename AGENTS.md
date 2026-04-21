@@ -141,8 +141,8 @@ FIRST-TREE-SOURCE-STATE: `.first-tree/source.json`
 
 ### Before every task
 
-- Read `.first-tree/source.json` first. If it exists, resolve its `tree.localPath` value from this repo root and treat that checkout as the canonical local tree repo.
-- If that configured checkout exists locally, update it before you read anything else.
+- Read `.first-tree/source.json` first. Use its recorded tree repo URL and tree repo name as the source of truth for which Context Tree this repo belongs to.
+- If you already have that tree repo cloned locally, update it before you read anything else.
 - If the configured checkout is missing, clone a temporary working copy from `https://github.com/agent-team-foundation/first-tree-context` into `.first-tree/tmp/first-tree-context/`, use it for the current task, and delete it before you finish.
 - Never commit anything under `.first-tree/tmp/` to this repo. It is local-only workspace state.
 

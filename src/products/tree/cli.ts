@@ -18,7 +18,7 @@ Commands:
   bootstrap             Low-level tree-repo bootstrap for an explicit tree checkout
   bind                  Bind the current repo/workspace root to an existing tree repo
   integrate             Install the first-tree skill and source-integration block without touching the tree repo
-  workspace             Workspace helpers (currently: sync child repos to a shared tree)
+  workspace             Workspace helpers (currently: sync discovered local child repos to a shared tree)
   publish               Publish a tree repo to GitHub
   verify                Run verification checks against a tree repo
   upgrade               Refresh source/workspace integration or tree metadata

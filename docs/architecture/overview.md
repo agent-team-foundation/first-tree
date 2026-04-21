@@ -72,6 +72,7 @@ ships.
   bound Context Tree repo.
 - Treat `source-repos.md` as generated output; tree-side truth still lives in
   `.first-tree/tree.json` and `.first-tree/bindings/`. Source-side truth
-  lives in `.first-tree/source.json` and `.first-tree/local-tree.json`.
+  lives in `.first-tree/source.json`, while local temporary checkouts stay
+  under `.first-tree/tmp/`.
 - When the binding schema or install contract changes, update the tree node,
   source docs, code, and tests together.

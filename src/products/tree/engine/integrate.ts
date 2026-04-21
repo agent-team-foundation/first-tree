@@ -8,9 +8,7 @@ import {
   inferTreeMode,
   readGitRemoteUrl,
   resolveWorkspaceId,
-  resolveWorkspaceRootPath,
 } from "#products/tree/engine/bind.js";
-import { relativeRepoPath } from "#products/tree/engine/dedicated-tree.js";
 import { Repo } from "#products/tree/engine/repo.js";
 import {
   ensureAgentContextHooks,
@@ -205,24 +203,22 @@ export function runIntegrate(options: IntegrateOptions): number {
     bindingMode,
     options.workspaceId,
   );
-  const workspaceRootPath = resolveWorkspaceRootPath(
-    cwd,
-    sourceRepo,
-    bindingMode,
-    options.workspaceRoot,
-  );
   const rootKind: RootKind = sourceRepo.isGitRepo() ? "git-repo" : "folder";
-  const sourceId = buildStableSourceId(sourceRepo.root, sourceRepo.repoName());
+  const sourceRemoteUrl = sourceRepo.isGitRepo()
+    ? readGitRemoteUrl(runner, sourceRepo.root)
+    : null;
+  const sourceId = buildStableSourceId(sourceRepo.repoName(), {
+    fallbackRoot: sourceRepo.root,
+    remoteUrl: sourceRemoteUrl ?? undefined,
+  });
   const entrypoint = options.entrypoint
     ?? deriveDefaultEntrypoint(
       bindingMode,
       sourceRepo.repoName(),
       workspaceId,
     );
-  const localTreePath = relativeRepoPath(sourceRepo.root, treeRepo.root);
   const treeReference: BoundTreeReference = {
     entrypoint,
-    localPath: localTreePath,
     ...(resolvedTreeUrl ? { remoteUrl: resolvedTreeUrl } : {}),
     treeId: buildTreeId(treeRepoName),
     treeMode,
@@ -266,9 +262,6 @@ export function runIntegrate(options: IntegrateOptions): number {
       sourceName: sourceRepo.repoName(),
       tree: treeReference,
       workspaceId,
-      workspaceRootPath: workspaceRootPath
-        ? relativeRepoPath(sourceRepo.root, workspaceRootPath)
-        : undefined,
     });
 
     if (firstTreeIndex.action === "created") {

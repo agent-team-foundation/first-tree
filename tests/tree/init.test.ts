@@ -103,7 +103,7 @@ describe("formatTaskList", () => {
     });
 
     expect(output).toContain("first-tree tree publish --open-pr");
-    expect(output).toContain("canonical local working copy");
+    expect(output).toContain("canonical source of truth");
   });
 });
 
@@ -288,7 +288,6 @@ describe("runInit", () => {
       JSON.parse(readFileSync(join(treeRepo, BOOTSTRAP_STATE), "utf-8")),
     ).toEqual({
       sourceRepoName: basename(sourceRepoDir.path),
-      sourceRepoPath: `../${basename(sourceRepoDir.path)}`,
       treeRepoName: basename(treeRepo),
     });
     expect(existsSync(join(sourceRepoDir.path, "NODE.md"))).toBe(false);
@@ -528,7 +527,6 @@ describe("runInit", () => {
       JSON.parse(readFileSync(join(legacyTreeRepo, BOOTSTRAP_STATE), "utf-8")),
     ).toEqual({
       sourceRepoName: basename(sourceRepoDir.path),
-      sourceRepoPath: `../${basename(sourceRepoDir.path)}`,
       treeRepoName: basename(legacyTreeRepo),
     });
     expect(

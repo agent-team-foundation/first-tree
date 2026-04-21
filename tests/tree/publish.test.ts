@@ -261,7 +261,6 @@ describe("runPublish", () => {
       readFileSync(join(sourceRoot, AGENT_INSTRUCTIONS_FILE), "utf-8"),
     ).toContain("FIRST-TREE-TREE-REPO-URL: `git@github.com:acme/ADHD-tree.git`");
     const sourceState = JSON.parse(readFileSync(join(sourceRoot, SOURCE_STATE), "utf-8"));
-    expect(sourceState.tree.localPath).toBe("../ADHD-tree");
     expect(sourceState.tree.treeRepoName).toBe("ADHD-tree");
     expect(sourceState.tree.remoteUrl).toBe("git@github.com:acme/ADHD-tree.git");
     expect(readFileSync(join(sourceRoot, ".gitignore"), "utf-8")).toContain(
@@ -269,7 +268,7 @@ describe("runPublish", () => {
     );
   });
 
-  it("creates a sibling local checkout when the published tree repo is elsewhere", () => {
+  it("records the published tree URL without forcing a sibling local checkout", () => {
     const rootDir = useTmpDir();
     const sourceRoot = join(rootDir.path, "ADHD");
     const bootstrapRoot = join(rootDir.path, "bootstrap", "ADHD-tree");
@@ -290,19 +289,17 @@ describe("runPublish", () => {
     });
 
     expect(result).toBe(0);
+    const sourceState = JSON.parse(readFileSync(join(sourceRoot, SOURCE_STATE), "utf-8"));
+    expect(sourceState.tree.treeRepoName).toBe("ADHD-tree");
+    expect(sourceState.tree.remoteUrl).toBe("git@github.com:acme/ADHD-tree.git");
     expect(
       calls.some(
         (call) =>
           call.command === "git"
           && call.args[0] === "clone"
-          && call.args[1] === "git@github.com:acme/ADHD-tree.git"
-          && call.args[2] === join(rootDir.path, "ADHD-tree"),
+          && call.args[1] === "git@github.com:acme/ADHD-tree.git",
       ),
-    ).toBe(true);
-    const sourceState = JSON.parse(readFileSync(join(sourceRoot, SOURCE_STATE), "utf-8"));
-    expect(sourceState.tree.localPath).toBe("../ADHD-tree");
-    expect(sourceState.tree.treeRepoName).toBe("ADHD-tree");
-    expect(sourceState.tree.remoteUrl).toBe("git@github.com:acme/ADHD-tree.git");
+    ).toBe(false);
   });
 
   it("skips source skill artifacts when the source repo ignores /.agents/", () => {

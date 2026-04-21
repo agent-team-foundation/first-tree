@@ -20,7 +20,7 @@ Inspect the current folder and report how first-tree would classify it.
 Output includes:
   - resolved root and whether it is a git repo or plain folder
   - whether the root looks like a tree repo, source repo, or workspace root
-  - discovered child repos / submodules for workspace onboarding
+  - discovered local child git repos for workspace onboarding
   - any existing first-tree binding metadata
   - managed Claude Code / Codex agent context hook health
 
@@ -100,6 +100,9 @@ export function runInspect(repo?: Repo, json = false): number {
   if (inspection.sourceState !== null) {
     console.log(`  Binding mode:   ${inspection.sourceState.bindingMode}`);
     console.log(`  Tree repo:      ${inspection.sourceState.tree.treeRepoName}`);
+    if (inspection.sourceState.tree.remoteUrl) {
+      console.log(`  Tree repo URL:  ${inspection.sourceState.tree.remoteUrl}`);
+    }
   } else if (inspection.treeState !== null) {
     console.log(`  Tree mode:      ${inspection.treeState.treeMode}`);
     console.log(`  Tree repo:      ${inspection.treeState.treeRepoName}`);

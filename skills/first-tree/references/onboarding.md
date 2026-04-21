@@ -22,7 +22,7 @@ That model supports all of these cases cleanly:
 - a single repo with its own dedicated tree
 - a repo that should reuse an existing shared tree
 - a non-git workspace folder containing many repos
-- a git workspace root repo containing many child repos or submodules
+- a git workspace root repo containing many child repos
 
 ## Step 1: Inspect First
 
@@ -39,7 +39,7 @@ This tells the agent whether the current root is:
 - a `workspace-repo`
 - a `workspace-folder`
 
-It also reports discovered child repos / submodules plus any existing
+It also reports discovered local child repos plus any existing
 `.first-tree/source.json`, `.first-tree/tree.json`,
 and `.first-tree/bindings/` state.
 
@@ -93,18 +93,19 @@ If the user gives only a remote URL:
 first-tree tree bind --tree-url git@github.com:acme/org-context.git --tree-mode shared
 ```
 
-`bind` will clone a local checkout if needed, then:
+`bind` will use the tree checkout you pointed at, or clone a temporary local
+checkout under `.first-tree/tmp/` when you provide only a remote URL. Then it will:
 
 - install local skill integration in the current repo
 - install the bundled `first-tree` skill in the tree repo if it is missing
 - refresh `AGENTS.md` and `CLAUDE.md`
-- write `.first-tree/source.json` (includes tree localPath)
+- write `.first-tree/source.json` (tree repo identity + published URL when known)
 - write `.first-tree/tree.json` and `.first-tree/bindings/<source-id>.json`
 - refresh the tree repo's `source-repos.md` index plus root repo-discovery guidance
 
 ### Case C: Workspace Root + Shared Tree
 
-If the current root contains many child repos or submodules, onboard the whole
+If the current root contains many child repos, onboard the whole
 workspace with one shared tree:
 
 ```bash
@@ -217,7 +218,7 @@ first-tree tree publish
 
 - it creates or reuses the GitHub tree remote
 - it pushes the tree commits
-- it refreshes any locally bound source/workspace repos with the published tree URL
+- it refreshes any explicit or locally discoverable source/workspace repos with the published tree URL
 - if exactly one source/workspace repo is being refreshed, it can still open a PR there with `--open-pr`
 
 For shared trees bound to multiple repos, `publish` refreshes all local bindings
@@ -227,9 +228,8 @@ but does not try to open many code PRs automatically.
 
 - Start from `.first-tree/source.json` in the current source/workspace root.
 - If you are starting from the tree repo itself, use `source-repos.md` as the quick index of bound source/workspace repos and their GitHub URLs, while treating `.first-tree/bindings/` as the canonical machine-readable source of truth.
-- Resolve the recorded `localPath`.
-- If the checkout is missing but the tree has been published, create a temporary
-  clone under `.first-tree/tmp/`.
+- Use the recorded tree repo name + GitHub URL as the source of truth for which tree this repo belongs to.
+- If you already have that tree repo cloned locally, use it; otherwise, if the tree has been published, create a temporary clone under `.first-tree/tmp/`.
 - At task close-out, always ask whether the tree needs updating.
 
 ## Sample Tasks After Onboarding

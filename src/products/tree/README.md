@@ -25,8 +25,8 @@ tree/
 | `first-tree tree init` | High-level onboarding wrapper |
 | `first-tree tree bootstrap` | Canonical low-level tree bootstrap for an explicit tree checkout |
 | `first-tree tree bind` | Bind current repo/workspace to an existing tree |
-| `first-tree tree workspace sync` | Bind discovered child repos to a shared tree |
-| `first-tree tree publish` | Push the tree to GitHub and refresh bound sources |
+| `first-tree tree workspace sync` | Bind discovered local child repos to a shared tree |
+| `first-tree tree publish` | Push the tree to GitHub and refresh any explicit or locally discoverable bound sources |
 | `first-tree tree verify` | Run validation checks on a tree repo |
 | `first-tree tree upgrade` | Refresh installed source/tree integration from the package |
 | `first-tree tree generate-codeowners` | Generate `.github/CODEOWNERS` from tree ownership |

@@ -39,7 +39,7 @@ Most commands accept or classify one of these three shapes.
 3. If they do, use `first-tree tree bind`.
 4. If they do not, use `first-tree tree init`.
 5. If the current root is a workspace, run `first-tree tree workspace sync` so
-   all child repos bind to the same shared tree.
+   all discovered local child repos bind to the same shared tree.
 
 During `bind` / `init`, the CLI also ensures the tree repo has the bundled
 `first-tree` skill installed and refreshes binding metadata in both locations.
@@ -48,15 +48,15 @@ During `bind` / `init`, the CLI also ensures the tree repo has the bundled
 
 | Command | Purpose |
 |---|---|
-| `first-tree tree inspect` | Classify the current folder and report bindings / child repos |
+| `first-tree tree inspect` | Classify the current folder and report bindings / locally discovered child repos |
 | `first-tree tree status` | Alias for `inspect` (human-friendly name) |
 | `first-tree tree init` | High-level onboarding wrapper for single repos, shared trees, and workspace roots |
 | `first-tree tree bootstrap` | Low-level tree bootstrap for an explicit tree checkout |
 | `first-tree tree bind` | Bind the current repo/workspace root to an existing tree repo |
-| `first-tree tree workspace sync` | Bind child repos to the same shared tree |
+| `first-tree tree workspace sync` | Bind discovered local child repos to the same shared tree |
 | `first-tree tree verify` | Validate a tree repo: frontmatter, owners, soft_links, members, progress |
 | `first-tree tree upgrade` | Refresh the installed skill payloads or tree metadata from the bundled package |
-| `first-tree tree publish` | Publish a tree repo to GitHub and refresh locally bound source/workspace repos |
+| `first-tree tree publish` | Publish a tree repo to GitHub and refresh any explicit or locally discoverable source/workspace repos |
 | `first-tree tree review` | CI helper: run Claude Code PR review against tree changes |
 | `first-tree tree generate-codeowners` | Regenerate `.github/CODEOWNERS` from tree ownership |
 | `first-tree tree invite` | Invite a new member to the Context Tree (human, personal_assistant, or autonomous_agent) |

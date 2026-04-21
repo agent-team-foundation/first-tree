@@ -76,7 +76,7 @@ Do not recreate a new sibling tree repo when the user already has a shared tree
 they want to keep using.
 
 Whenever a git-backed source/workspace root is bound, keep the binding metadata
-pointing at the tree checkout and published tree URL. The tree repo may also
+pointing at the tree repo name and published tree URL. The tree repo may also
 refresh `source-repos.md` plus lightweight root guidance derived from those
 bindings, but `.first-tree/bindings/` remains the canonical machine-readable
 source of truth. Do not create hidden codebase mirrors in the tree repo by
@@ -84,13 +84,13 @@ default.
 
 ## Workspace Rule
 
-If the current root contains many child repos or submodules:
+If the current root contains many child repos:
 
 - the workspace root should get local first-tree integration
 - all child repos should bind to the same shared tree
 - child repos should not each create their own separate tree repos
 
-Only real child git repos / submodules should be synced automatically. Plain
+Only real child git repos should be synced automatically. Plain
 package folders that are not repos do not get repo-level binding metadata.
 
 ## Verification And Upgrade
@@ -108,7 +108,7 @@ package folders that are not repos do not get repo-level binding metadata.
 `first-tree tree publish` is tree-centric:
 
 - it publishes the tree repo
-- it refreshes locally bound source/workspace repos with the published tree URL
+- it refreshes any explicit or locally discoverable source/workspace repos with the published tree URL
 - it opens a code PR only when exactly one source/workspace repo is being refreshed
 
 That keeps shared trees workable for multi-repo workspaces without forcing
