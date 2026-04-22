@@ -34,7 +34,7 @@ effect on what downstream consumers receive.
 3. Default to **patch** bumps for additive changes, fixes, and internal
    refactors. Reserve **minor** bumps for breaking changes to the CLI's
    public surface (commands, flags, exit codes, on-disk file layouts
-   under `~/.first-tree-hub/`).
+   under `~/.first-tree/hub/`).
 4. Apply the same rule to `shared`: query npm, pick the next available
    patch, prefer patch over minor.
 

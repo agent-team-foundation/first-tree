@@ -126,7 +126,7 @@ first-tree-hub client start
 ```bash
 docker build -f Dockerfile.client -t first-tree-hub-client .
 docker run -e FIRST_TREE_HUB_SERVER_URL=https://hub.example.com \
-           -v ~/.first-tree-hub/config/agents:/root/.first-tree-hub/config/agents \
+           -v ~/.first-tree/hub/config/agents:/root/.first-tree/hub/config/agents \
            first-tree-hub-client
 ```
 

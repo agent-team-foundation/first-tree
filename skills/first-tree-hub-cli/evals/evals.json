@@ -12,7 +12,7 @@
       "id": 1,
       "name": "agent-config",
       "prompt": "I want to switch my 'alice' agent to use claude-opus-4-7 and also add a GitHub MCP server to it. Walk me through it via the first-tree-hub CLI.",
-      "expected_output": "Should use `first-tree-hub agent config set-model alice claude-opus-4-7` and `first-tree-hub agent config add-mcp alice --name <n> --transport stdio --command gh --args mcp`. Must NOT suggest hand-editing ~/.first-tree-hub/config/agents/alice/agent.yaml (that's the local alias, not the runtime config). Bonus: mentions `agent config get alice` to verify, or `agent config dry-run` for preview.",
+      "expected_output": "Should use `first-tree-hub agent config set-model alice claude-opus-4-7` and `first-tree-hub agent config add-mcp alice --name <n> --transport stdio --command gh --args mcp`. Must NOT suggest hand-editing ~/.first-tree/hub/config/agents/alice/agent.yaml (that's the local alias, not the runtime config). Bonus: mentions `agent config get alice` to verify, or `agent config dry-run` for preview.",
       "files": []
     },
     {
