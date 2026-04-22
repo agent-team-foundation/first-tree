@@ -3,12 +3,13 @@ import {
   agentConfigSchema,
   clientConfigSchema,
   DEFAULT_CONFIG_DIR,
+  DEFAULT_HOME_DIR,
   initConfig,
   loadAgents,
   resetConfig,
   resetConfigMeta,
 } from "@agent-team-foundation/first-tree-hub-shared/config";
-import { applyClientLoggerConfig } from "@first-tree-hub/client";
+import { applyClientLoggerConfig, configureClientLoggerForService } from "@first-tree-hub/client";
 import type { Command } from "commander";
 import { fail } from "../cli/output.js";
 import {
@@ -25,12 +26,16 @@ import {
   getClientServiceStatus,
   installClientService,
   isServiceSupported,
+  parseDuration,
   printResults,
   promptMissingFields,
   promptUpdate,
   resolveServerUrl,
+  showServiceLogs,
   uninstallClientService,
+  validateLevel,
 } from "../core/index.js";
+import { print } from "../core/output.js";
 import { registerConnectCommand } from "./connect.js";
 
 export function registerClientCommands(program: Command): void {
@@ -63,11 +68,18 @@ export function registerClientCommands(program: Command): void {
         // `logLevel: debug` in client.yaml is parsed but never reaches pino.
         applyClientLoggerConfig({ level: config.logLevel });
 
+        // Service mode (launchd / systemd): route pino through a rotating
+        // NDJSON file instead of stderr, so the supervisor's stdout/stderr
+        // capture stays empty under normal operation.
+        if (process.env.FIRST_TREE_HUB_SERVICE_MODE === "1") {
+          configureClientLoggerForService(join(DEFAULT_HOME_DIR, "logs"));
+        }
+
         // Load agents (may be empty — client can start without agents)
         const agentsDir = join(DEFAULT_CONFIG_DIR, "agents");
         const agents = loadAgents({ schema: agentConfigSchema, agentsDir });
 
-        process.stderr.write(`\n  Connecting to ${config.server.url} (client id: ${config.client.id})...\n`);
+        print.line(`\n  Connecting to ${config.server.url} (client id: ${config.client.id})...\n`);
 
         // `--no-interactive` is the signal the service units (launchd /
         // systemd) set — we piggy-back on it for two things: (1) suppress
@@ -94,7 +106,7 @@ export function registerClientCommands(program: Command): void {
 
         // Graceful shutdown
         const shutdown = async () => {
-          process.stderr.write("\n  Shutting down...\n");
+          print.line("\n  Shutting down...\n");
           runtime.unwatchAgentsDir();
           await runtime.stop();
           process.exit(0);
@@ -106,7 +118,7 @@ export function registerClientCommands(program: Command): void {
         await new Promise(() => {});
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        process.stderr.write(`  Error: ${msg}\n`);
+        print.line(`  Error: ${msg}\n`);
         process.exit(1);
       } finally {
         // Reset singleton so other commands can reinit
@@ -119,7 +131,7 @@ export function registerClientCommands(program: Command): void {
     .command("doctor")
     .description("Check client environment readiness")
     .action(async () => {
-      process.stderr.write("\n  First Tree Hub Client Doctor\n\n");
+      print.line("\n  First Tree Hub Client Doctor\n\n");
       const results = [
         checkNodeVersion(),
         checkClientConfig(),
@@ -134,8 +146,8 @@ export function registerClientCommands(program: Command): void {
     .command("stop")
     .description("Stop the client (sends SIGTERM to running process)")
     .action(() => {
-      process.stderr.write("  Client stop: use Ctrl+C or `kill` the running process.\n");
-      process.stderr.write("  Daemon mode with PID file is planned for a future release.\n");
+      print.line("  Client stop: use Ctrl+C or `kill` the running process.\n");
+      print.line("  Daemon mode with PID file is planned for a future release.\n");
     });
 
   client
@@ -146,18 +158,16 @@ export function registerClientCommands(program: Command): void {
       try {
         const agents = loadAgents({ schema: agentConfigSchema, agentsDir });
         if (agents.size === 0) {
-          process.stderr.write("  No agents configured.\n");
+          print.line("  No agents configured.\n");
           return;
         }
-        process.stderr.write("\n  Configured agents:\n\n");
+        print.line("\n  Configured agents:\n\n");
         for (const [name, config] of agents) {
-          process.stderr.write(
-            `  ${name.padEnd(20)} runtime: ${config.runtime.padEnd(14)} agentId: ${config.agentId}\n`,
-          );
+          print.line(`  ${name.padEnd(20)} runtime: ${config.runtime.padEnd(14)} agentId: ${config.agentId}\n`);
         }
-        process.stderr.write("\n");
+        print.line("\n");
       } catch {
-        process.stderr.write("  No agents directory found.\n");
+        print.line("  No agents directory found.\n");
       }
     });
 
@@ -172,7 +182,7 @@ export function registerClientCommands(program: Command): void {
     .description("Install as a background service — auto-starts on login/boot")
     .action(() => {
       if (!isServiceSupported()) {
-        process.stderr.write(
+        print.line(
           `  Background service is not supported on ${process.platform}.\n` +
             "  Run `first-tree-hub client start` manually to keep the computer online.\n",
         );
@@ -180,15 +190,15 @@ export function registerClientCommands(program: Command): void {
       }
       try {
         const info = installClientService();
-        process.stderr.write(`\n  \u2713 Installed as a background service (${info.platform}).\n`);
-        process.stderr.write(`    Unit:  ${info.unitPath}\n`);
-        process.stderr.write(`    Logs:  ${info.logDir}\n`);
+        print.line(`\n  \u2713 Installed as a background service (${info.platform}).\n`);
+        print.line(`    Unit:  ${info.unitPath}\n`);
+        print.line(`    Logs:  ${info.logDir}\n`);
         if (info.state === "active") {
-          process.stderr.write(`    State: running${info.detail ? ` (${info.detail})` : ""}\n`);
+          print.line(`    State: running${info.detail ? ` (${info.detail})` : ""}\n`);
         } else {
-          process.stderr.write(`    State: ${info.state}${info.detail ? ` (${info.detail})` : ""}\n`);
+          print.line(`    State: ${info.state}${info.detail ? ` (${info.detail})` : ""}\n`);
         }
-        process.stderr.write("\n  You can close this terminal — the computer stays online.\n");
+        print.line("\n  You can close this terminal — the computer stays online.\n");
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         fail("SERVICE_INSTALL_ERROR", msg);
@@ -201,13 +211,13 @@ export function registerClientCommands(program: Command): void {
     .action(() => {
       const info = getClientServiceStatus();
       if (info.platform === "unsupported") {
-        process.stderr.write(`  Not supported on ${process.platform}.\n`);
+        print.line(`  Not supported on ${process.platform}.\n`);
         return;
       }
-      process.stderr.write(`\n  ${info.platform}: ${info.label}\n`);
-      process.stderr.write(`  Unit:  ${info.unitPath}\n`);
-      process.stderr.write(`  Logs:  ${info.logDir}\n`);
-      process.stderr.write(`  State: ${info.state}${info.detail ? ` (${info.detail})` : ""}\n\n`);
+      print.line(`\n  ${info.platform}: ${info.label}\n`);
+      print.line(`  Unit:  ${info.unitPath}\n`);
+      print.line(`  Logs:  ${info.logDir}\n`);
+      print.line(`  State: ${info.state}${info.detail ? ` (${info.detail})` : ""}\n\n`);
     });
 
   service
@@ -215,15 +225,38 @@ export function registerClientCommands(program: Command): void {
     .description("Stop and remove the background service")
     .action(() => {
       if (!isServiceSupported()) {
-        process.stderr.write(`  Not supported on ${process.platform}.\n`);
+        print.line(`  Not supported on ${process.platform}.\n`);
         return;
       }
       try {
         const info = uninstallClientService();
-        process.stderr.write(`\n  \u2713 Uninstalled background service (${info.platform}).\n\n`);
+        print.line(`\n  \u2713 Uninstalled background service (${info.platform}).\n\n`);
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         fail("SERVICE_UNINSTALL_ERROR", msg);
+      }
+    });
+
+  service
+    .command("logs")
+    .description("Read background-service logs (pretty by default)")
+    .option("-f, --tail", "follow new lines as they arrive (Ctrl+C to stop)", false)
+    .option("--since <duration>", "only show records newer than duration (e.g. 10s, 5m, 2h, 1d)")
+    .option("--level <level>", "minimum level (trace|debug|info|warn|error|fatal)")
+    .option("--json", "emit raw NDJSON lines instead of pretty formatting", false)
+    .action(async (options: { tail?: boolean; since?: string; level?: string; json?: boolean }) => {
+      try {
+        const level = validateLevel(options.level);
+        const sinceMs = options.since ? parseDuration(options.since) : undefined;
+        await showServiceLogs({
+          tail: options.tail === true,
+          level,
+          sinceMs,
+          json: options.json === true,
+        });
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        fail("SERVICE_LOGS_ERROR", msg);
       }
     });
 
@@ -253,21 +286,21 @@ export function registerClientCommands(program: Command): void {
         }>;
 
         if (clients.length === 0) {
-          process.stderr.write("  No clients.\n");
+          print.line("  No clients.\n");
           return;
         }
 
-        process.stderr.write(`\n  Clients: ${clients.length}\n\n`);
+        print.line(`\n  Clients: ${clients.length}\n\n`);
         const header = `  ${"CLIENT".padEnd(20)} ${"HOST".padEnd(25)} ${"AGENTS".padEnd(8)} CONNECTED`;
-        process.stderr.write(`${header}\n`);
-        process.stderr.write(`  ${"─".repeat(header.length - 2)}\n`);
+        print.line(`${header}\n`);
+        print.line(`  ${"─".repeat(header.length - 2)}\n`);
         for (const c of clients) {
           const since = c.connectedAt ? timeSince(c.connectedAt) : "—";
-          process.stderr.write(
+          print.line(
             `  ${c.id.padEnd(20)} ${(c.hostname ?? "—").padEnd(25)} ${String(c.agentCount).padEnd(8)} ${since}\n`,
           );
         }
-        process.stderr.write("\n");
+        print.line("\n");
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         fail("CLIENT_LIST_ERROR", msg);
@@ -290,7 +323,7 @@ export function registerClientCommands(program: Command): void {
         if (!response.ok) {
           fail("DISCONNECT_ERROR", `Server returned ${response.status}`, 1);
         }
-        process.stderr.write(`  Client "${clientId}" disconnected.\n`);
+        print.line(`  Client "${clientId}" disconnected.\n`);
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         fail("DISCONNECT_ERROR", msg);

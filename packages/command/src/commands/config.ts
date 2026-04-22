@@ -10,6 +10,7 @@ import {
 } from "@agent-team-foundation/first-tree-hub-shared/config";
 import type { Command } from "commander";
 import { promptMissingFields } from "../core/index.js";
+import { print } from "../core/output.js";
 
 type ScopeFlags = {
   server?: boolean;
@@ -60,10 +61,10 @@ export function registerConfigCommands(program: Command): void {
           : (serverConfigSchema as Record<string, unknown>);
         const role = flags.client ? "client" : "server";
         await promptMissingFields({ schema, role });
-        process.stderr.write("\n  Configuration saved.\n");
+        print.line("\n  Configuration saved.\n");
       } catch (error) {
         if ((error as { name?: string }).name === "ExitPromptError") {
-          process.stderr.write("\n  Cancelled.\n");
+          print.line("\n  Cancelled.\n");
           return;
         }
         throw error;
@@ -82,7 +83,7 @@ export function registerConfigCommands(program: Command): void {
       else if (/^\d+$/.test(value)) parsed = Number(value);
 
       setConfigValue(path, key, parsed);
-      process.stderr.write(`  Set ${key} in ${path}\n`);
+      print.line(`  Set ${key} in ${path}\n`);
     });
 
   addScopeOptions(config.command("get").description("Get a config value"))
@@ -92,11 +93,11 @@ export function registerConfigCommands(program: Command): void {
       const { path, schema } = resolveConfigPath(flags);
       const value = getConfigValue(path, key);
       if (value === undefined) {
-        process.stderr.write(`  ${key}: (not set)\n`);
+        print.line(`  ${key}: (not set)\n`);
       } else {
         const isSecret = isSecretField(schema, key) && !flags.showSecrets;
         const display = isSecret ? "***" : String(value);
-        process.stderr.write(`  ${key}: ${display}\n`);
+        print.line(`  ${key}: ${display}\n`);
       }
     });
 
@@ -106,12 +107,12 @@ export function registerConfigCommands(program: Command): void {
       const { path, schema } = resolveConfigPath(flags);
       const values = readConfigFile(path);
       if (Object.keys(values).length === 0) {
-        process.stderr.write(`  No config found at ${path}\n`);
+        print.line(`  No config found at ${path}\n`);
         return;
       }
-      process.stderr.write(`\n  Config: ${path}\n\n`);
+      print.line(`\n  Config: ${path}\n\n`);
       printFlat(values, schema, "", flags.showSecrets ?? false);
-      process.stderr.write("\n");
+      print.line("\n");
     });
 }
 
@@ -128,7 +129,7 @@ function printFlat(
     } else {
       const secret = isSecretField(schema, fullKey) && !showSecrets;
       const display = secret ? "***" : String(value);
-      process.stderr.write(`  ${fullKey.padEnd(30)} ${display}\n`);
+      print.line(`  ${fullKey.padEnd(30)} ${display}\n`);
     }
   }
 }

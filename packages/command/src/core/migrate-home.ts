@@ -3,6 +3,7 @@ import {
   type HomeMigrationResult,
   migrateLegacyHome,
 } from "@agent-team-foundation/first-tree-hub-shared/config";
+import { print } from "./output.js";
 import { getClientServiceStatus, installClientService } from "./service-install.js";
 
 /**
@@ -38,7 +39,7 @@ export function runHomeMigration(): void {
     // first successful migration (or for fresh installs / custom homes) —
     // staying silent avoids noise on every CLI call.
     if (result.reason === "failed") {
-      process.stderr.write(
+      print.line(
         `[first-tree-hub] WARNING: failed to auto-migrate legacy home ${result.from} → ${result.to}: ${result.error ?? "unknown error"}\n` +
           `  Resolve manually: cp -R "${result.from}" "${result.to}"\n`,
       );
@@ -46,7 +47,7 @@ export function runHomeMigration(): void {
     return;
   }
 
-  process.stderr.write(
+  print.line(
     `[first-tree-hub] Copied client home to new layout: ${result.from} → ${result.to}\n` +
       `  (Legacy directory preserved as a backup — delete it manually once you've verified the new location works.)\n`,
   );
@@ -57,7 +58,7 @@ export function runHomeMigration(): void {
   // in service-install.ts).
   const runningAsService = process.argv.includes("--no-interactive");
   if (runningAsService) {
-    process.stderr.write(
+    print.line(
       `[first-tree-hub] Note: running as background service — skipped auto re-register to avoid self-termination.\n` +
         `  Run \`first-tree-hub client service install\` from a terminal to refresh log paths.\n`,
     );
@@ -71,10 +72,10 @@ export function runHomeMigration(): void {
 
   try {
     installClientService();
-    process.stderr.write(`[first-tree-hub] Re-registered background service with new home paths.\n`);
+    print.line(`[first-tree-hub] Re-registered background service with new home paths.\n`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(
+    print.line(
       `[first-tree-hub] WARNING: home migration succeeded but re-registering the background service failed: ${msg}\n` +
         `  Run \`first-tree-hub client service install\` to refresh log paths.\n`,
     );

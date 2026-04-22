@@ -1,6 +1,8 @@
 import {
   createLoggerOutputStream,
   formatLocalTime,
+  LOG_REDACT_CENSOR,
+  LOG_REDACT_PATHS,
   type LogFormat,
   type LogLevel,
   parseLogLevel,
@@ -99,6 +101,7 @@ export const rootLogger = pino(
   {
     level: _level,
     timestamp: () => `,"time":"${formatLocalTime()}"`,
+    redact: { paths: [...LOG_REDACT_PATHS], censor: LOG_REDACT_CENSOR },
   },
   outputStream,
 );

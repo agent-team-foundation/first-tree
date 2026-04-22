@@ -14,6 +14,7 @@ import {
 } from "@first-tree-hub/client";
 import { stringify as stringifyYaml } from "yaml";
 import { ensureFreshAccessToken } from "./bootstrap.js";
+import { print } from "./output.js";
 
 type AgentEntry = {
   name: string;
@@ -76,14 +77,14 @@ export class ClientRuntime {
     registerBuiltinHandlers();
 
     this.connection.on("auth:expired", () => {
-      process.stderr.write("  \u26A0\uFE0F  Access token expired — reconnecting after refresh...\n");
+      print.status("⚠️", "access token expired — reconnecting after refresh...");
     });
 
     // Surface transport-level errors (TLS resets, DNS hiccups, WS handshake
     // failures) to the operator. ClientConnection's own reconnect loop handles
     // recovery; the process-wide crash guard lives in ClientConnection itself.
     this.connection.on("error", (err) => {
-      process.stderr.write(`  \u26A0\uFE0F  Client connection error: ${err.message}\n`);
+      print.status("⚠️", `client connection error: ${err.message}`);
     });
 
     // Server tells us an agent has just been pinned to this client — mirror
@@ -127,19 +128,19 @@ export class ClientRuntime {
         currentVersion: this.options.currentVersion,
         ...this.options.update,
         isTTY: Boolean(process.stdout.isTTY),
-        log: (level, msg) => process.stderr.write(`  [update/${level}] ${msg}\n`),
+        log: (level, msg) => print.status(`[update/${level}]`, msg),
         getQuietGateSnapshot: () => this.aggregateQuietGate(),
       });
     }
 
     await this.connection.connect();
-    process.stderr.write(`  \u2713 Client registered: ${this.connection.clientId}\n`);
+    print.check(true, "client registered", this.connection.clientId);
 
     if (this.agents.length === 0) {
-      process.stderr.write("\n  No agents configured yet.\n");
-      process.stderr.write(
-        "  Add one with: first-tree-hub agent create <name> --type claude-code --client-id <id>\n\n",
-      );
+      print.blank();
+      print.status("", "no agents configured yet.");
+      print.status("", "add one with: first-tree-hub agent create <name> --type claude-code --client-id <id>");
+      print.blank();
       return;
     }
 
@@ -147,18 +148,17 @@ export class ClientRuntime {
       this.agents.map(async (agent) => {
         try {
           const identity = await agent.slot.start();
-          process.stderr.write(
-            `  \u2713 ${agent.name}: connected (agent: ${identity.displayName ?? identity.agentId})\n`,
-          );
+          print.check(true, `${agent.name}: connected`, `agent: ${identity.displayName ?? identity.agentId}`);
         } catch (error) {
           const msg = error instanceof Error ? error.message : String(error);
-          process.stderr.write(`  \u2717 ${agent.name}: connection failed \u2014 ${msg}\n`);
+          print.check(false, `${agent.name}: connection failed`, msg);
         }
       }),
     );
 
     const connected = this.agents.length;
-    process.stderr.write(`\n  ${connected} agent(s) running. Press Ctrl+C to stop.\n`);
+    print.blank();
+    print.status("", `${connected} agent(s) running. Press Ctrl+C to stop.`);
   }
 
   watchAgentsDir(agentsDir: string): void {
@@ -214,7 +214,8 @@ export class ClientRuntime {
         if (this.agentNames.has(name)) continue;
         if (this.agentIds.has(config.agentId)) continue;
 
-        process.stderr.write(`\n  New agent detected: ${name}\n`);
+        print.blank();
+        print.status("", `new agent detected: ${name}`);
         this.addAgent(name, config);
         this.startAgent(name);
       }
@@ -236,9 +237,7 @@ export class ClientRuntime {
     if (this.agentIds.has(message.agentId)) return;
 
     if (!this.agentsDir) {
-      process.stderr.write(
-        `  \u26A0\uFE0F  Agent pinned (${message.agentId}) but no agents dir set — cannot auto-register.\n`,
-      );
+      print.status("⚠️", `agent pinned (${message.agentId}) but no agents dir set — cannot auto-register.`);
       return;
     }
 
@@ -248,10 +247,10 @@ export class ClientRuntime {
       mkdirSync(agentDir, { recursive: true, mode: 0o700 });
       const yaml = stringifyYaml({ agentId: message.agentId, runtime: "claude-code" });
       writeFileSync(join(agentDir, "agent.yaml"), yaml, { mode: 0o600 });
-      process.stderr.write(`  \u2713 Auto-added agent "${localName}" (${message.agentId}) from server push.\n`);
+      print.check(true, `auto-added agent "${localName}"`, `${message.agentId} (from server push)`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      process.stderr.write(`  \u2717 Failed to auto-add agent "${localName}": ${msg}\n`);
+      print.check(false, `failed to auto-add agent "${localName}"`, msg);
       return;
     }
 
@@ -298,11 +297,11 @@ export class ClientRuntime {
     entry.slot
       .start()
       .then((identity) => {
-        process.stderr.write(`  \u2713 ${name}: connected (agent: ${identity.displayName ?? identity.agentId})\n`);
+        print.check(true, `${name}: connected`, `agent: ${identity.displayName ?? identity.agentId}`);
       })
       .catch((err) => {
         const msg = err instanceof Error ? err.message : String(err);
-        process.stderr.write(`  \u2717 ${name}: connection failed \u2014 ${msg}\n`);
+        print.check(false, `${name}: connection failed`, msg);
       });
   }
 }

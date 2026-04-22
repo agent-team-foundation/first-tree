@@ -6,6 +6,7 @@ import {
   setConfigValue,
 } from "@agent-team-foundation/first-tree-hub-shared/config";
 import { ensureFreshAccessToken, loadCredentials, resolveServerUrl, saveAgentConfig } from "./bootstrap.js";
+import { print } from "./output.js";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -174,7 +175,7 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
   if (args.role) metadata.role = args.role;
   if (args.domains) metadata.domains = args.domains.split(",").map((d) => d.trim());
 
-  process.stderr.write(`Creating agent "${args.id}"...\n`);
+  print.line(`Creating agent "${args.id}"...\n`);
   const primary = await createAgentViaAdmin(serverUrl, accessToken, {
     name: args.id,
     type: args.type,
@@ -183,7 +184,7 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
     metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
     clientId: args.type === "human" ? undefined : args.clientId,
   });
-  process.stderr.write(`Agent "${args.id}" created (uuid ${primary.uuid}).\n`);
+  print.line(`Agent "${args.id}" created (uuid ${primary.uuid}).\n`);
 
   // For non-human agents, persist the local alias so `client start` can bind.
   if (args.type !== "human") {
@@ -192,7 +193,7 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
 
   let assistantUuid: string | null = null;
   if (args.assistant) {
-    process.stderr.write(`Creating assistant "${args.assistant}"...\n`);
+    print.line(`Creating assistant "${args.assistant}"...\n`);
     try {
       const assistant = await createAgentViaAdmin(serverUrl, accessToken, {
         name: args.assistant,
@@ -203,10 +204,10 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
       });
       assistantUuid = assistant.uuid;
       saveAgentConfig(args.assistant, assistant.uuid, "claude-code");
-      process.stderr.write(`Assistant "${args.assistant}" ready.\n`);
+      print.line(`Assistant "${args.assistant}" ready.\n`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      process.stderr.write(`Warning: Failed to create assistant "${args.assistant}": ${msg}\n`);
+      print.line(`Warning: Failed to create assistant "${args.assistant}": ${msg}\n`);
     }
   }
 
@@ -218,11 +219,11 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
     const { bindFeishuBot } = await import("./feishu.js");
     const targetAgentUuid = args.type === "human" ? assistantUuid : primary.uuid;
     if (!targetAgentUuid) {
-      process.stderr.write(`Warning: Cannot bind Feishu bot — no runtime agent available for "${args.id}".\n`);
+      print.line(`Warning: Cannot bind Feishu bot — no runtime agent available for "${args.id}".\n`);
     } else {
-      process.stderr.write("Binding Feishu bot...\n");
+      print.line("Binding Feishu bot...\n");
       await bindFeishuBot(serverUrl, accessToken, targetAgentUuid, args.feishuBotAppId, args.feishuBotAppSecret);
-      process.stderr.write("Feishu bot bound.\n");
+      print.line("Feishu bot bound.\n");
     }
   }
 
@@ -237,29 +238,29 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
   }
 
   const typeLabel = args.type === "human" ? "Human" : args.type === "autonomous_agent" ? "Agent" : "Assistant";
-  process.stderr.write("\n\u2705 Onboard complete!\n\n");
-  process.stderr.write(`  ${typeLabel}:${" ".repeat(Math.max(1, 10 - typeLabel.length))}${args.id}\n`);
+  print.line("\n\u2705 Onboard complete!\n\n");
+  print.line(`  ${typeLabel}:${" ".repeat(Math.max(1, 10 - typeLabel.length))}${args.id}\n`);
   if (args.assistant) {
-    process.stderr.write(`  Assistant: ${args.assistant}\n`);
+    print.line(`  Assistant: ${args.assistant}\n`);
   }
   if (runtimeAgent) {
-    process.stderr.write(`  Config:    ${DEFAULT_HOME_DIR}/config/agents/${runtimeAgent}/agent.yaml\n`);
+    print.line(`  Config:    ${DEFAULT_HOME_DIR}/config/agents/${runtimeAgent}/agent.yaml\n`);
   }
   if (args.feishuBotAppId) {
-    process.stderr.write(`  Feishu:    bot bound (${args.feishuBotAppId})\n`);
+    print.line(`  Feishu:    bot bound (${args.feishuBotAppId})\n`);
   }
 
   if (args.type === "human") {
-    process.stderr.write("\n  Next step \u2014 bind your Feishu account:\n");
-    process.stderr.write(`    Send this message to the bot in Feishu:  /bind ${args.id}\n`);
+    print.line("\n  Next step \u2014 bind your Feishu account:\n");
+    print.line(`    Send this message to the bot in Feishu:  /bind ${args.id}\n`);
     if (!args.feishuBotAppId) {
-      process.stderr.write("    (requires a Feishu bot to be configured in the system)\n");
+      print.line("    (requires a Feishu bot to be configured in the system)\n");
     }
   }
 
   if (runtimeAgent) {
-    process.stderr.write("\n  Start the agent:\n");
-    process.stderr.write("    first-tree-hub client start\n");
+    print.line("\n  Start the agent:\n");
+    print.line("    first-tree-hub client start\n");
   }
-  process.stderr.write("\n");
+  print.line("\n");
 }

@@ -1,7 +1,9 @@
+import type pino from "pino";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentHandler, HandlerFactory, SessionContext } from "../runtime/handler.js";
 import { SessionManager } from "../runtime/session-manager.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
+import { recordingLogger, silentLogger } from "./_logger-helpers.js";
 import { mockEntry } from "./test-helpers.js";
 
 /** Create a mock SDK that satisfies FirstTreeHubSDK shape. */
@@ -33,7 +35,7 @@ function createSessionManager(opts: {
   handler?: AgentHandler;
   session?: { idle_timeout: number; max_sessions: number; reconcile_interval_seconds: number };
   concurrency?: number;
-  log?: (msg: string) => void;
+  log?: pino.Logger;
 }) {
   const handler = opts.handler ?? createMockHandler();
   const factory: HandlerFactory = () => handler;
@@ -52,7 +54,7 @@ function createSessionManager(opts: {
       metadata: {},
     },
     sdk,
-    log: opts.log ?? (() => {}),
+    log: opts.log ?? silentLogger(),
   });
 }
 
@@ -129,7 +131,7 @@ describe("SessionManager", () => {
         metadata: {},
       },
       sdk,
-      log: () => {},
+      log: silentLogger(),
     });
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-a" }));
@@ -177,17 +179,17 @@ describe("SessionManager", () => {
   });
 
   it("catches handler start errors without crashing", async () => {
-    const logs: string[] = [];
+    const { logger, records } = recordingLogger();
     const handler = createMockHandler({
       async start() {
         throw new Error("start boom");
       },
     });
 
-    const sm = createSessionManager({ handler, log: (msg) => logs.push(msg) });
+    const sm = createSessionManager({ handler, log: logger });
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-1" }));
-    expect(logs.some((l) => l.includes("start failed"))).toBe(true);
+    expect(records.some((r) => typeof r.msg === "string" && r.msg.includes("start/resume failed"))).toBe(true);
 
     await sm.shutdown();
   });
@@ -214,7 +216,7 @@ describe("SessionManager", () => {
         metadata: {},
       },
       sdk,
-      log: () => {},
+      log: silentLogger(),
     });
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-1" }));
@@ -257,7 +259,7 @@ describe("SessionManager", () => {
         metadata: {},
       },
       sdk,
-      log: () => {},
+      log: silentLogger(),
     });
 
     // Fill up max_sessions
@@ -309,7 +311,7 @@ describe("SessionManager", () => {
         metadata: {},
       },
       sdk,
-      log: () => {},
+      log: silentLogger(),
     });
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-1" }));

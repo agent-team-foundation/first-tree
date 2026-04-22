@@ -7,6 +7,8 @@ export {
   LEVEL_LABELS,
   LOG_FORMATS,
   LOG_LEVELS,
+  LOG_REDACT_CENSOR,
+  LOG_REDACT_PATHS,
   type LogFormat,
   type LogLevel,
   logFormatSchema,
@@ -15,6 +17,7 @@ export {
   RESET,
   SKIP_KEYS,
 } from "./logger-core.js";
+export { captureDestination, recordingDestination, silentDestination } from "./testing.js";
 export {
   FIRST_TREE_HUB_ATTR,
   type FirstTreeHubAttrKey,

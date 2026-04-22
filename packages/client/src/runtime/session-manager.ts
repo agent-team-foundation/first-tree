@@ -4,6 +4,7 @@ import type {
   SessionEvent,
   SessionState,
 } from "@agent-team-foundation/first-tree-hub-shared";
+import type { pino } from "../observability/logger.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import type { AgentConfigCache } from "./agent-config-cache.js";
 import type { SessionConfig } from "./config.js";
@@ -41,7 +42,7 @@ type SessionManagerConfig = {
   handlerConfig: HandlerConfig;
   agentIdentity: AgentIdentity;
   sdk: FirstTreeHubSDK;
-  log: (msg: string) => void;
+  log: pino.Logger;
   registryPath?: string;
   /** Step 4: optional config cache for refresh-before-dispatch on configVersion bump. */
   agentConfigCache?: AgentConfigCache;
@@ -103,7 +104,7 @@ export class SessionManager {
 
     // 1. Deduplication
     if (this.deduplicator.isDuplicate(messageId)) {
-      this.config.log(`Session ${chatId}: duplicate message ${messageId}, skipping`);
+      this.config.log.debug({ chatId, messageId }, "duplicate message, skipping");
       return;
     }
 
@@ -119,8 +120,14 @@ export class SessionManager {
           entry.message.configVersion,
         );
       } catch (err) {
-        this.config.log(
-          `[configVersionMismatch] agentId=${this.config.agentIdentity.agentId} chatId=${chatId} incomingVersion=${entry.message.configVersion} action=skip — ${err instanceof Error ? err.message : String(err)}`,
+        this.config.log.warn(
+          {
+            chatId,
+            agentId: this.config.agentIdentity.agentId,
+            incomingVersion: entry.message.configVersion,
+            err,
+          },
+          "config version mismatch — skipping refresh",
         );
       }
     }
@@ -137,7 +144,7 @@ export class SessionManager {
     if (command === "session:suspend") {
       const session = this.sessions.get(chatId);
       if (session?.status === "active") {
-        this.config.log(`Session ${chatId}: suspend command received`);
+        this.config.log.info({ chatId }, "suspend command received");
         this.suspendSession(session);
       }
       return;
@@ -148,7 +155,7 @@ export class SessionManager {
       const hadMapping = this.evictedMappings.has(chatId);
       if (!session && !hadMapping) return;
 
-      this.config.log(`Session ${chatId}: terminate command received`);
+      this.config.log.info({ chatId }, "terminate command received");
       if (session?.status === "active") {
         this._activeCount--;
         await session.handler.shutdown().catch(() => {});
@@ -265,7 +272,7 @@ export class SessionManager {
           await this.ackEntry(entryId, chatId);
           existing.handler.inject(message);
           existing.lastActivity = Date.now();
-          this.config.log(`Session ${chatId}: message injected`);
+          this.config.log.debug({ chatId }, "message injected");
           return;
 
         case "suspended":
@@ -318,18 +325,16 @@ export class SessionManager {
       if (evicted) {
         const sessionId = await handler.resume(message, evicted.claudeSessionId, ctx);
         entry.claudeSessionId = sessionId;
-        this.config.log(`Session ${chatId}: resumed from eviction (${sessionId})`);
+        this.config.log.info({ chatId, sessionId }, "session resumed from eviction");
       } else {
         const sessionId = await handler.start(message, ctx);
         entry.claudeSessionId = sessionId;
-        this.config.log(`Session ${chatId}: created (${sessionId})`);
+        this.config.log.info({ chatId, sessionId }, "session created");
       }
       this.persistRegistry();
       this.notifySessionState(chatId, "active");
     } catch (err) {
-      this.config.log(
-        `Session ${chatId}: ${evicted ? "resume" : "start"} failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      this.config.log.error({ chatId, err, phase: evicted ? "resume" : "start" }, "session start/resume failed");
       this.sessions.delete(chatId);
       this.sessionRuntimeStates.delete(chatId);
       this.recomputeRuntimeState();
@@ -370,11 +375,11 @@ export class SessionManager {
 
     try {
       await entry.handler.resume(message ?? undefined, entry.claudeSessionId, ctx);
-      this.config.log(`Session ${entry.chatId}: resumed (${entry.claudeSessionId})`);
+      this.config.log.info({ chatId: entry.chatId, sessionId: entry.claudeSessionId }, "session resumed");
       this.persistRegistry();
       this.notifySessionState(entry.chatId, "active");
     } catch (err) {
-      this.config.log(`Session ${entry.chatId}: resume failed: ${err instanceof Error ? err.message : String(err)}`);
+      this.config.log.warn({ chatId: entry.chatId, err }, "resume failed");
       entry.status = "suspended";
       this._activeCount--;
     }
@@ -401,13 +406,13 @@ export class SessionManager {
     }
 
     if (oldestActive) {
-      this.config.log(`Session ${oldestActive.chatId}: preempted for concurrency`);
+      this.config.log.info({ chatId: oldestActive.chatId }, "session preempted for concurrency");
       this.suspendSession(oldestActive);
       return true;
     }
 
     // All active sessions are busy — queue (no ACK yet — message stays as delivered)
-    this.config.log(`Session ${chatId}: concurrency limit reached, queuing`);
+    this.config.log.info({ chatId }, "concurrency limit reached, queuing");
     this.pendingQueue.push({ message, chatId, entryId: entryId ?? -1 });
     return false;
   }
@@ -421,7 +426,7 @@ export class SessionManager {
     entry.suspending = entry.handler
       .suspend()
       .catch((err) => {
-        this.config.log(`Session ${entry.chatId}: suspend error: ${err instanceof Error ? err.message : String(err)}`);
+        this.config.log.warn({ chatId: entry.chatId, err }, "suspend error");
       })
       .finally(() => {
         entry.suspending = null;
@@ -441,9 +446,7 @@ export class SessionManager {
     if (!next) return;
     // Route asynchronously — entryId is passed for delayed ACK
     this.routeMessage(next.chatId, next.message, next.entryId > 0 ? next.entryId : undefined).catch((err) => {
-      this.config.log(
-        `Session ${next.chatId}: pending drain error: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      this.config.log.warn({ chatId: next.chatId, err }, "pending drain error");
     });
   }
 
@@ -472,7 +475,7 @@ export class SessionManager {
         lastActivity: candidate.session.lastActivity,
       });
 
-      this.config.log(`Session ${candidate.key}: evicted (max_sessions reached)`);
+      this.config.log.info({ chatId: candidate.key }, "session evicted (max_sessions reached)");
       if (candidate.session.status === "active") {
         this._activeCount--;
         candidate.session.handler.shutdown().catch(() => {});
@@ -500,14 +503,18 @@ export class SessionManager {
       const inactiveMs = now - session.lastActivity;
 
       if (inactiveMs > timeoutMs) {
-        this.config.log(`Session ${session.chatId}: idle ${this.config.session.idle_timeout}s, suspending`);
+        this.config.log.info(
+          { chatId: session.chatId, idleTimeoutSec: this.config.session.idle_timeout },
+          "session idle, suspending",
+        );
         this.suspendSession(session);
       } else if (inactiveMs > blockedThresholdMs) {
         // Only mark blocked if handler was actively working — don't override idle
         const currentState = this.sessionRuntimeStates.get(session.chatId);
         if (currentState === "working") {
-          this.config.log(
-            `Session ${session.chatId}: working but no output for ${Math.round(inactiveMs / 1000)}s, marking blocked`,
+          this.config.log.warn(
+            { chatId: session.chatId, inactiveSec: Math.round(inactiveMs / 1000) },
+            "session working but no output, marking blocked",
           );
           this.setSessionRuntimeState(session.chatId, "blocked");
         }
@@ -539,15 +546,16 @@ export class SessionManager {
     try {
       await this.config.sdk.ack(entryId);
     } catch {
-      this.config.log(`Session ${chatId}: ACK failed for entry ${entryId}, continuing`);
+      this.config.log.warn({ chatId, entryId }, "ACK failed, continuing");
     }
   }
 
   private buildSessionContext(chatId: string): SessionContext {
+    const sessionLog = this.config.log.child({ chatId });
     return {
       agent: this.config.agentIdentity,
       sdk: this.config.sdk,
-      log: (msg) => this.config.log(`Session ${chatId}: ${msg}`),
+      log: (msg) => sessionLog.info(msg),
       chatId,
       touch: () => {
         const entry = this.sessions.get(chatId);
@@ -625,7 +633,7 @@ export class SessionManager {
     }
 
     if (persisted.size > 0) {
-      this.config.log(`Loaded ${persisted.size} persisted session mapping(s)`);
+      this.config.log.info({ count: persisted.size }, "loaded persisted session mappings");
     }
   }
 

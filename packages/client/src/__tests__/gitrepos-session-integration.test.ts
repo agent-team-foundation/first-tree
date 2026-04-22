@@ -77,7 +77,7 @@ function buildCache(gitRepos: AgentRuntimeConfig["payload"]["gitRepos"]) {
         updatedBy: "test",
       }) as unknown as AgentRuntimeConfig,
   } as unknown as Parameters<typeof createAgentConfigCache>[0]["sdk"];
-  return createAgentConfigCache({ sdk: stubSdk, log: () => {} });
+  return createAgentConfigCache({ sdk: stubSdk });
 }
 
 function buildSessionCtx(chatId: string, log: (msg: string) => void): SessionContext {

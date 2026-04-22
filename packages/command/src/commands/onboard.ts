@@ -2,6 +2,7 @@ import { confirm, input, select } from "@inquirer/prompts";
 import type { Command } from "commander";
 import { fail } from "../cli/output.js";
 import { formatCheckReport, loadOnboardState, onboardCheck, onboardCreate, saveOnboardState } from "../core/onboard.js";
+import { print } from "../core/output.js";
 import { isInteractive } from "../core/prompt.js";
 
 async function promptMissing(args: Record<string, unknown>): Promise<void> {
@@ -140,7 +141,7 @@ export function registerOnboardCommand(program: Command): void {
         if (args.check) {
           const items = await onboardCheck(args as Parameters<typeof onboardCheck>[0]);
           const report = formatCheckReport(items);
-          process.stderr.write(`\nOnboard Check: ${(args.id as string) ?? "(no id)"}\n\n${report}\n\n`);
+          print.line(`\nOnboard Check: ${(args.id as string) ?? "(no id)"}\n\n${report}\n\n`);
           const hasErrors = items.some((i) => i.status === "missing_required" || i.status === "error");
           if (hasErrors) {
             process.exit(1);
@@ -156,7 +157,7 @@ export function registerOnboardCommand(program: Command): void {
         const hasErrors = items.some((i) => i.status === "missing_required" || i.status === "error");
         if (hasErrors) {
           const report = formatCheckReport(items);
-          process.stderr.write(`\nOnboard Check: ${(args.id as string) ?? "(no id)"}\n\n${report}\n\n`);
+          print.line(`\nOnboard Check: ${(args.id as string) ?? "(no id)"}\n\n${report}\n\n`);
           fail("MISSING_PARAMS", "Required parameters are missing. See checklist above.");
         }
 
@@ -164,7 +165,7 @@ export function registerOnboardCommand(program: Command): void {
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         if (isInteractive()) {
-          process.stderr.write(`\n\u274C ${msg}\n\n`);
+          print.line(`\n\u274C ${msg}\n\n`);
           process.exit(1);
         }
         fail("ONBOARD_ERROR", msg);

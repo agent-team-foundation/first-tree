@@ -1,10 +1,14 @@
-/** Write a success JSON envelope to stdout. */
+/**
+ * CLI output re-exports. The underlying implementation lives in
+ * `core/output.ts` (the Print layer). Keep these thin wrappers so callers that
+ * only depend on `cli/output.ts` keep working during the migration.
+ */
+import { print } from "../core/output.js";
+
 export function success(data: unknown): void {
-  process.stdout.write(`${JSON.stringify({ ok: true, data })}\n`);
+  print.result(data);
 }
 
-/** Write an error JSON envelope to stderr and exit with the given code. */
 export function fail(code: string, message: string, exitCode = 1): never {
-  process.stderr.write(`${JSON.stringify({ ok: false, error: { code, message } })}\n`);
-  process.exit(exitCode);
+  return print.fail(code, message, exitCode);
 }

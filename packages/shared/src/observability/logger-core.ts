@@ -55,6 +55,41 @@ export const DIM = "\x1b[2m";
 
 export const SKIP_KEYS = new Set(["level", "time", "msg", "module", "pid", "hostname", "v"]);
 
+/**
+ * Pino `redact.paths` entries applied to every root logger in Hub. Keeps the
+ * list short on purpose — pino's redact walks each path on every log call, so
+ * we target obvious sensitive field names plus a narrow set of nested forms
+ * (`*.foo` matches a single nesting level in pino v9).
+ *
+ * Values matching these paths are replaced with the censor string `[REDACTED]`.
+ */
+export const LOG_REDACT_PATHS: readonly string[] = [
+  "password",
+  "*.password",
+  "token",
+  "*.token",
+  "accessToken",
+  "*.accessToken",
+  "refreshToken",
+  "*.refreshToken",
+  "jwt",
+  "*.jwt",
+  "secret",
+  "*.secret",
+  "apiKey",
+  "*.apiKey",
+  "api_key",
+  "*.api_key",
+  "credentials",
+  "*.credentials",
+  "authorization",
+  "*.authorization",
+  "*.headers.cookie",
+  "*.headers.authorization",
+];
+
+export const LOG_REDACT_CENSOR = "[REDACTED]";
+
 export function formatPrettyEntry(json: string): string {
   const obj = JSON.parse(json) as Record<string, unknown>;
   const level = obj.level as number;
@@ -94,6 +129,13 @@ type CreateStreamOptions = {
   /** Getter so the format can change via applyConfig without rebuilding the stream. */
   getFormat: () => LogFormat;
   /**
+   * Getter for the output sink. Called on every log line so the caller can swap
+   * destinations at runtime (e.g. client swaps to a rotating file when running
+   * as a background service). Defaults to `process.stderr` — logs belong on
+   * stderr so stdout stays clean for CLI JSON output.
+   */
+  getDestination?: () => Writable;
+  /**
    * Optional hook invoked once per NDJSON record written by pino. Server uses
    * this to bridge error/fatal logs onto the active OTel span; client leaves
    * it undefined.
@@ -102,14 +144,16 @@ type CreateStreamOptions = {
 };
 
 export function createLoggerOutputStream(options: CreateStreamOptions): Writable {
+  const getDest = options.getDestination ?? (() => process.stderr);
   return new Writable({
     write(chunk, _, callback) {
       const text = chunk.toString();
+      const dest = getDest();
       try {
         if (options.getFormat() === "pretty") {
-          process.stdout.write(formatPrettyEntry(text));
+          dest.write(formatPrettyEntry(text));
         } else {
-          process.stdout.write(text);
+          dest.write(text);
         }
         if (options.onJsonEntry) {
           try {
@@ -120,7 +164,7 @@ export function createLoggerOutputStream(options: CreateStreamOptions): Writable
           }
         }
       } catch {
-        process.stdout.write(text);
+        dest.write(text);
       }
       callback();
     },

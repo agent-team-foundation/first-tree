@@ -7,13 +7,14 @@ import {
   readConfigFile,
 } from "@agent-team-foundation/first-tree-hub-shared/config";
 import type { Command } from "commander";
+import { print } from "../core/output.js";
 
 export function registerStatusCommand(program: Command): void {
   program
     .command("status")
     .description("Global overview — server health + configured agents")
     .action(async () => {
-      process.stderr.write("\n");
+      print.line("\n");
 
       // Server status
       const serverConfig = readConfigFile(join(DEFAULT_CONFIG_DIR, "server.yaml"));
@@ -26,30 +27,30 @@ export function registerStatusCommand(program: Command): void {
         if (res.ok) {
           const data = (await res.json()) as { status: string; version?: string; uptime_seconds?: number };
           const uptime = data.uptime_seconds ? formatUptime(data.uptime_seconds) : "unknown";
-          process.stderr.write(`  Server:     ✓ running (${serverUrl}, uptime: ${uptime})\n`);
+          print.line(`  Server:     ✓ running (${serverUrl}, uptime: ${uptime})\n`);
         } else {
-          process.stderr.write(`  Server:     ✗ unhealthy (${res.status})\n`);
+          print.line(`  Server:     ✗ unhealthy (${res.status})\n`);
         }
       } catch {
-        process.stderr.write(`  Server:     ✗ not running (${serverUrl})\n`);
+        print.line(`  Server:     ✗ not running (${serverUrl})\n`);
       }
 
       // Database status
       const dbProvider = getNestedValue(serverConfig, "database.provider") ?? "unknown";
       const hasDbUrl = getNestedValue(serverConfig, "database.url") !== undefined;
-      process.stderr.write(`  Database:   ${hasDbUrl ? "✓ configured" : "✗ not configured"} (${dbProvider})\n`);
+      print.line(`  Database:   ${hasDbUrl ? "✓ configured" : "✗ not configured"} (${dbProvider})\n`);
 
       // Agents (client side)
       const agentsDir = join(DEFAULT_CONFIG_DIR, "agents");
       if (existsSync(agentsDir)) {
         try {
           const agents = loadAgents({ schema: agentConfigSchema, agentsDir });
-          process.stderr.write(`  Agents:     ${agents.size} configured\n`);
+          print.line(`  Agents:     ${agents.size} configured\n`);
         } catch {
-          process.stderr.write("  Agents:     error reading config\n");
+          print.line("  Agents:     error reading config\n");
         }
       } else {
-        process.stderr.write("  Agents:     0 configured\n");
+        print.line("  Agents:     0 configured\n");
       }
 
       // Client config
@@ -57,12 +58,12 @@ export function registerStatusCommand(program: Command): void {
       if (existsSync(clientConfigPath)) {
         const clientConfig = readConfigFile(clientConfigPath);
         const clientServerUrl = getNestedValue(clientConfig, "server.url");
-        process.stderr.write(`  Client:     configured → ${clientServerUrl}\n`);
+        print.line(`  Client:     configured → ${clientServerUrl}\n`);
       } else {
-        process.stderr.write("  Client:     not configured\n");
+        print.line("  Client:     not configured\n");
       }
 
-      process.stderr.write("\n");
+      print.line("\n");
     });
 }
 

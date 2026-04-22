@@ -14,6 +14,7 @@ import { fail, success } from "../cli/output.js";
 import { ensureFreshAccessToken, resolveServerUrl, saveAgentConfig } from "../core/bootstrap.js";
 import { bindFeishuBot, bindFeishuUser } from "../core/feishu.js";
 import { promptAddAgent } from "../core/index.js";
+import { print } from "../core/output.js";
 import { registerAgentConfigCommands } from "./agent-config.js";
 
 const DEFAULT_WORKSPACE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -169,15 +170,15 @@ export function registerAgentCommands(program: Command): void {
         mkdirSync(agentDir, { recursive: true, mode: 0o700 });
         setConfigValue(join(agentDir, "agent.yaml"), "agentId", agentId);
 
-        process.stderr.write(`  Agent "${agentName}" added.\n`);
-        process.stderr.write(`  Config: ${join(agentDir, "agent.yaml")}\n`);
+        print.line(`  Agent "${agentName}" added.\n`);
+        print.line(`  Config: ${join(agentDir, "agent.yaml")}\n`);
       } catch (error) {
         if ((error as { name?: string }).name === "ExitPromptError") {
-          process.stderr.write("\n  Cancelled.\n");
+          print.line("\n  Cancelled.\n");
           return;
         }
         const msg = error instanceof Error ? error.message : String(error);
-        process.stderr.write(`  Error: ${msg}\n`);
+        print.line(`  Error: ${msg}\n`);
         process.exit(1);
       }
     });
@@ -188,14 +189,14 @@ export function registerAgentCommands(program: Command): void {
     .action((name: string) => {
       const agentDir = join(DEFAULT_CONFIG_DIR, "agents", name);
       if (!existsSync(agentDir)) {
-        process.stderr.write(`  Agent "${name}" not found.\n`);
+        print.line(`  Agent "${name}" not found.\n`);
         process.exit(1);
       }
       rmSync(agentDir, { recursive: true, force: true });
       rmSync(join(DEFAULT_DATA_DIR, "workspaces", name), { recursive: true, force: true });
       rmSync(join(DEFAULT_DATA_DIR, "sessions", `${name}.json`), { force: true });
 
-      process.stderr.write(`  Agent "${name}" removed.\n`);
+      print.line(`  Agent "${name}" removed.\n`);
     });
 
   agent
@@ -206,16 +207,14 @@ export function registerAgentCommands(program: Command): void {
       try {
         const agents = loadAgents({ schema: agentConfigSchema, agentsDir });
         if (agents.size === 0) {
-          process.stderr.write("  No agents configured.\n");
+          print.line("  No agents configured.\n");
           return;
         }
         for (const [name, config] of agents) {
-          process.stderr.write(
-            `  ${name.padEnd(20)} runtime: ${config.runtime.padEnd(14)} agentId: ${config.agentId}\n`,
-          );
+          print.line(`  ${name.padEnd(20)} runtime: ${config.runtime.padEnd(14)} agentId: ${config.agentId}\n`);
         }
       } catch {
-        process.stderr.write("  No agents configured.\n");
+        print.line("  No agents configured.\n");
       }
     });
 
@@ -263,11 +262,11 @@ export function registerAgentCommands(program: Command): void {
             fail("CREATE_ERROR", body.error ?? `Failed to create agent (HTTP ${createRes.status})`, 1);
           }
           const created = (await createRes.json()) as { uuid: string; name: string | null };
-          process.stderr.write(`  \u2713 Agent created: ${created.name ?? created.uuid}\n`);
+          print.line(`  \u2713 Agent created: ${created.name ?? created.uuid}\n`);
 
           const agentDir = saveAgentConfig(name, created.uuid, options.runtime);
-          process.stderr.write(`  \u2713 Config saved: ${agentDir}/agent.yaml\n`);
-          process.stderr.write("  \u2713 Agent ready — start the client on that machine to bind\n");
+          print.line(`  \u2713 Config saved: ${agentDir}/agent.yaml\n`);
+          print.line("  \u2713 Agent ready — start the client on that machine to bind\n");
         } catch (error) {
           const msg = error instanceof Error ? error.message : String(error);
           fail("CREATE_ERROR", msg);
@@ -309,7 +308,7 @@ export function registerAgentCommands(program: Command): void {
           const body = (await patchRes.json().catch(() => ({}))) as { error?: string };
           fail("CLAIM_ERROR", body.error ?? `Claim failed (HTTP ${patchRes.status})`, 1);
         }
-        process.stderr.write(`  Claimed "${target.name ?? target.uuid}" — now managed by you.\n`);
+        print.line(`  Claimed "${target.name ?? target.uuid}" — now managed by you.\n`);
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         fail("CLAIM_ERROR", msg);
@@ -330,7 +329,7 @@ export function registerAgentCommands(program: Command): void {
       const workspacesDir = join(DEFAULT_DATA_DIR, "workspaces");
 
       if (!existsSync(workspacesDir)) {
-        process.stderr.write("  No workspaces found.\n");
+        print.line("  No workspaces found.\n");
         return;
       }
 
@@ -354,11 +353,11 @@ export function registerAgentCommands(program: Command): void {
         const removed = cleanWorkspaces(agentWorkspaceRoot, activeChatIds, ttlMs);
         totalRemoved += removed.length;
         for (const chatId of removed) {
-          process.stderr.write(`  Removed: ${name}/${chatId}\n`);
+          print.line(`  Removed: ${name}/${chatId}\n`);
         }
       }
 
-      process.stderr.write(`  ${totalRemoved} workspace(s) cleaned.\n`);
+      print.line(`  ${totalRemoved} workspace(s) cleaned.\n`);
     });
 
   // ── Bind (client machine / Feishu bot / user) ───────────────────────
@@ -392,7 +391,7 @@ export function registerAgentCommands(program: Command): void {
           const body = (await patchRes.json().catch(() => ({}))) as { error?: string };
           fail("BIND_CLIENT_ERROR", body.error ?? `Bind failed (HTTP ${patchRes.status})`, 1);
         }
-        process.stderr.write(`  \u2713 Bound "${target.name ?? target.uuid}" to client ${options.clientId}.\n`);
+        print.line(`  \u2713 Bound "${target.name ?? target.uuid}" to client ${options.clientId}.\n`);
         success({ agentId: target.uuid, clientId: options.clientId });
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
@@ -419,7 +418,7 @@ export function registerAgentCommands(program: Command): void {
           const { agentId } = resolveLocalAgent(options.agent);
           const accessToken = await ensureFreshAccessToken();
           await bindFeishuBot(serverUrl, accessToken, agentId, options.appId, options.appSecret);
-          process.stderr.write("Feishu bot bound successfully.\n");
+          print.line("Feishu bot bound successfully.\n");
           success({ platform: "feishu", bound: true });
         } catch (error) {
           const msg = error instanceof Error ? error.message : String(error);
@@ -449,7 +448,7 @@ export function registerAgentCommands(program: Command): void {
           const { agentId } = resolveLocalAgent(options.agent);
           const accessToken = await ensureFreshAccessToken();
           await bindFeishuUser(serverUrl, accessToken, agentId, humanAgentId, options.feishuId);
-          process.stderr.write(`Feishu user ${options.feishuId} bound to ${humanAgentId}.\n`);
+          print.line(`Feishu user ${options.feishuId} bound to ${humanAgentId}.\n`);
           success({ platform: "feishu", humanAgentId, feishuUserId: options.feishuId });
         } catch (error) {
           const msg = error instanceof Error ? error.message : String(error);
@@ -591,40 +590,40 @@ export function registerAgentCommands(program: Command): void {
         if (name) {
           const ag = data.agents.find((a) => a.agentId === name);
           if (!ag) {
-            process.stderr.write(`\n  Agent "${name}" is not running.\n\n`);
+            print.line(`\n  Agent "${name}" is not running.\n\n`);
             return;
           }
-          process.stderr.write(`\n  Agent: ${ag.agentId}\n`);
-          process.stderr.write(`  Runtime: ${ag.runtimeType ?? "—"}\n`);
-          process.stderr.write(`  State: ${ag.runtimeState ?? "—"}\n`);
+          print.line(`\n  Agent: ${ag.agentId}\n`);
+          print.line(`  Runtime: ${ag.runtimeType ?? "—"}\n`);
+          print.line(`  State: ${ag.runtimeState ?? "—"}\n`);
           if (ag.activeSessions !== null) {
-            process.stderr.write(`  Sessions: ${ag.activeSessions} active / ${ag.totalSessions ?? 0} total\n`);
+            print.line(`  Sessions: ${ag.activeSessions} active / ${ag.totalSessions ?? 0} total\n`);
           }
           if (ag.clientId) {
-            process.stderr.write(`  Client: ${ag.clientId}\n`);
+            print.line(`  Client: ${ag.clientId}\n`);
           }
-          process.stderr.write("\n");
+          print.line("\n");
           return;
         }
 
-        process.stderr.write(`\n  Hub: ${serverUrl}\n\n`);
-        process.stderr.write(`  Clients: ${data.clients} connected\n`);
-        process.stderr.write(`  Agents: ${data.running} running / ${data.total} total\n`);
-        process.stderr.write(
+        print.line(`\n  Hub: ${serverUrl}\n\n`);
+        print.line(`  Clients: ${data.clients} connected\n`);
+        print.line(`  Agents: ${data.running} running / ${data.total} total\n`);
+        print.line(
           `  Errors: ${data.byState.error} | Blocked: ${data.byState.blocked} | Working: ${data.byState.working} | Idle: ${data.byState.idle}\n\n`,
         );
 
         if (data.agents.length > 0) {
           const header = `  ${"AGENT".padEnd(18)} ${"RUNTIME".padEnd(14)} ${"STATE".padEnd(10)} SESSIONS`;
-          process.stderr.write(`${header}\n`);
-          process.stderr.write(`  ${"─".repeat(header.length - 2)}\n`);
+          print.line(`${header}\n`);
+          print.line(`  ${"─".repeat(header.length - 2)}\n`);
           for (const a of data.agents) {
             const sessions = a.activeSessions !== null ? `${a.activeSessions}/${a.totalSessions ?? 0}` : "—";
-            process.stderr.write(
+            print.line(
               `  ${(a.agentId ?? "").padEnd(18)} ${(a.runtimeType ?? "—").padEnd(14)} ${(a.runtimeState ?? "—").padEnd(10)} ${sessions}\n`,
             );
           }
-          process.stderr.write("\n");
+          print.line("\n");
         }
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
@@ -647,7 +646,7 @@ export function registerAgentCommands(program: Command): void {
         if (!response.ok) {
           fail("RESET_ERROR", `Server returned ${response.status}`, 1);
         }
-        process.stderr.write(`  Agent "${name}" reset to idle.\n`);
+        print.line(`  Agent "${name}" reset to idle.\n`);
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         fail("RESET_ERROR", msg);
@@ -681,20 +680,20 @@ export function registerAgentCommands(program: Command): void {
           lastActivityAt: string;
         }>;
         if (sessions.length === 0) {
-          process.stderr.write(`\n  No sessions for "${agentName}".\n\n`);
+          print.line(`\n  No sessions for "${agentName}".\n\n`);
           return;
         }
-        process.stderr.write(`\n  Sessions for "${agentName}":\n\n`);
+        print.line(`\n  Sessions for "${agentName}":\n\n`);
         const header = `  ${"CHAT".padEnd(40)} ${"STATE".padEnd(12)} ${"RUNTIME".padEnd(10)} LAST ACTIVITY`;
-        process.stderr.write(`${header}\n`);
-        process.stderr.write(`  ${"─".repeat(header.length - 2)}\n`);
+        print.line(`${header}\n`);
+        print.line(`  ${"─".repeat(header.length - 2)}\n`);
         for (const s of sessions) {
           const chatShort = s.chatId.length > 38 ? `${s.chatId.slice(0, 35)}...` : s.chatId;
-          process.stderr.write(
+          print.line(
             `  ${chatShort.padEnd(40)} ${s.state.padEnd(12)} ${(s.runtimeState ?? "—").padEnd(10)} ${s.lastActivityAt}\n`,
           );
         }
-        process.stderr.write("\n");
+        print.line("\n");
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         fail("SESSIONS_ERROR", msg);
@@ -725,7 +724,7 @@ export function registerAgentCommands(program: Command): void {
             const body = await response.text();
             fail("SESSION_CMD_ERROR", `Server returned ${response.status}: ${body}`, 1);
           }
-          process.stderr.write(`  Session ${cmd}: ${chatId} → sent\n`);
+          print.line(`  Session ${cmd}: ${chatId} → sent\n`);
         } catch (error) {
           const msg = error instanceof Error ? error.message : String(error);
           fail("SESSION_CMD_ERROR", msg);
@@ -761,9 +760,9 @@ export function registerAgentCommands(program: Command): void {
         }
         const dm = (await dmRes.json()) as { id: string };
 
-        process.stderr.write(`\n  Chat with ${targetAgent.displayName ?? targetAgent.name ?? targetAgent.uuid}\n`);
-        process.stderr.write(`  Chat ID: ${dm.id}\n`);
-        process.stderr.write(`  Type a message and press Enter. Ctrl+C to exit.\n\n`);
+        print.line(`\n  Chat with ${targetAgent.displayName ?? targetAgent.name ?? targetAgent.uuid}\n`);
+        print.line(`  Chat ID: ${dm.id}\n`);
+        print.line(`  Type a message and press Enter. Ctrl+C to exit.\n\n`);
 
         const readline = await import("node:readline");
         const rl = readline.createInterface({ input: process.stdin, output: process.stderr, prompt: "  > " });
@@ -795,7 +794,7 @@ export function registerAgentCommands(program: Command): void {
             for (const msg of newMessages) {
               const content = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
               const preview = content.length > 500 ? `${content.slice(0, 500)}...` : content;
-              process.stderr.write(`\r  [${targetAgent.displayName ?? targetAgent.name ?? "agent"}] ${preview}\n`);
+              print.line(`\r  [${targetAgent.displayName ?? targetAgent.name ?? "agent"}] ${preview}\n`);
             }
 
             if (msgData.items.length > 0 && msgData.items[0]) {
@@ -833,20 +832,20 @@ export function registerAgentCommands(program: Command): void {
             });
             if (!sendRes.ok) {
               const body = await sendRes.text();
-              process.stderr.write(`  [error] Failed to send: ${sendRes.status} — ${body}\n`);
+              print.line(`  [error] Failed to send: ${sendRes.status} — ${body}\n`);
             } else {
               const sent = (await sendRes.json()) as { createdAt: string };
               lastSeenAt = sent.createdAt;
             }
           } catch (err) {
-            process.stderr.write(`  [error] ${err instanceof Error ? err.message : String(err)}\n`);
+            print.line(`  [error] ${err instanceof Error ? err.message : String(err)}\n`);
           }
           rl.prompt();
         });
 
         rl.on("close", () => {
           clearInterval(pollTimer);
-          process.stderr.write("\n  Chat ended.\n");
+          print.line("\n  Chat ended.\n");
           process.exit(0);
         });
       } catch (error) {

@@ -12,8 +12,8 @@ function installSpySink(): { calls: SinkCall[]; restore: () => void } {
 }
 
 describe("logger ErrorSink bridging", () => {
-  // Silence stdout writes from the logger during tests.
-  // `vi.spyOn` on overloaded signatures (process.stdout.write) resists typing;
+  // Silence stderr writes from the logger during tests.
+  // `vi.spyOn` on overloaded signatures (process.stderr.write) resists typing;
   // the spy is only used to restore the mock so `unknown` is fine.
   let writeSpy: { mockRestore(): void } | undefined;
 
@@ -24,12 +24,12 @@ describe("logger ErrorSink bridging", () => {
     setErrorSink(null);
   });
 
-  function silenceStdout() {
-    writeSpy = vi.spyOn(process.stdout, "write").mockImplementation((() => true) as never);
+  function silenceStderr() {
+    writeSpy = vi.spyOn(process.stderr, "write").mockImplementation((() => true) as never);
   }
 
   it("forwards error-level logs to the registered sink", () => {
-    silenceStdout();
+    silenceStderr();
     applyLoggerConfig({ level: "trace", format: "json", bridgeToSpanLevel: "error" });
     const { calls, restore } = installSpySink();
 
@@ -46,7 +46,7 @@ describe("logger ErrorSink bridging", () => {
   });
 
   it("forwards fatal-level logs to the sink", () => {
-    silenceStdout();
+    silenceStderr();
     applyLoggerConfig({ level: "trace", format: "json", bridgeToSpanLevel: "error" });
     const { calls, restore } = installSpySink();
 
@@ -58,7 +58,7 @@ describe("logger ErrorSink bridging", () => {
   });
 
   it("does NOT forward warn-level logs when bridgeToSpanLevel=error", () => {
-    silenceStdout();
+    silenceStderr();
     applyLoggerConfig({ level: "trace", format: "json", bridgeToSpanLevel: "error" });
     const { calls, restore } = installSpySink();
 
@@ -69,7 +69,7 @@ describe("logger ErrorSink bridging", () => {
   });
 
   it("DOES forward warn-level logs when bridgeToSpanLevel=warn", () => {
-    silenceStdout();
+    silenceStderr();
     applyLoggerConfig({ level: "trace", format: "json", bridgeToSpanLevel: "warn" });
     const { calls, restore } = installSpySink();
 
@@ -81,7 +81,7 @@ describe("logger ErrorSink bridging", () => {
   });
 
   it("does NOT forward any level when bridgeToSpanLevel=off", () => {
-    silenceStdout();
+    silenceStderr();
     applyLoggerConfig({ level: "trace", format: "json", bridgeToSpanLevel: "off" });
     const { calls, restore } = installSpySink();
 
@@ -94,7 +94,7 @@ describe("logger ErrorSink bridging", () => {
   });
 
   it("does nothing when no sink is registered", () => {
-    silenceStdout();
+    silenceStderr();
     applyLoggerConfig({ level: "trace", format: "json", bridgeToSpanLevel: "error" });
     setErrorSink(null);
 
@@ -103,7 +103,7 @@ describe("logger ErrorSink bridging", () => {
   });
 
   it("swallows sink exceptions without breaking the logging path", () => {
-    silenceStdout();
+    silenceStderr();
     applyLoggerConfig({ level: "trace", format: "json", bridgeToSpanLevel: "error" });
     setErrorSink(() => {
       throw new Error("sink blew up");
@@ -114,7 +114,7 @@ describe("logger ErrorSink bridging", () => {
   });
 
   it("truncates overlong string values before handing them to the sink", () => {
-    silenceStdout();
+    silenceStderr();
     applyLoggerConfig({ level: "trace", format: "json", bridgeToSpanLevel: "error" });
     const { calls, restore } = installSpySink();
 
@@ -132,7 +132,7 @@ describe("logger ErrorSink bridging", () => {
   });
 
   it("JSON-stringifies and truncates oversized object values", () => {
-    silenceStdout();
+    silenceStderr();
     applyLoggerConfig({ level: "trace", format: "json", bridgeToSpanLevel: "error" });
     const { calls, restore } = installSpySink();
 
@@ -149,7 +149,7 @@ describe("logger ErrorSink bridging", () => {
 });
 
 describe("logger output format", () => {
-  // `vi.spyOn` on overloaded signatures (process.stdout.write) resists typing;
+  // `vi.spyOn` on overloaded signatures (process.stderr.write) resists typing;
   // the spy is only used to restore the mock so `unknown` is fine.
   let writeSpy: { mockRestore(): void } | undefined;
 
@@ -160,8 +160,8 @@ describe("logger output format", () => {
 
   it("emits NDJSON when format=json", () => {
     const chunks: string[] = [];
-    // process.stdout.write has multiple overloads; cast keeps the mock simple.
-    writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: string | Uint8Array) => {
+    // process.stderr.write has multiple overloads; the cast keeps the mock simple.
+    writeSpy = vi.spyOn(process.stderr, "write").mockImplementation(((chunk: string | Uint8Array) => {
       chunks.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk));
       return true;
     }) as never);
@@ -179,8 +179,8 @@ describe("logger output format", () => {
 
   it("emits human-readable pretty output when format=pretty", () => {
     const chunks: string[] = [];
-    // process.stdout.write has multiple overloads; cast keeps the mock simple.
-    writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: string | Uint8Array) => {
+    // process.stderr.write has multiple overloads; the cast keeps the mock simple.
+    writeSpy = vi.spyOn(process.stderr, "write").mockImplementation(((chunk: string | Uint8Array) => {
       chunks.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk));
       return true;
     }) as never);

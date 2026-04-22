@@ -1,8 +1,10 @@
 import type { SessionState } from "@agent-team-foundation/first-tree-hub-shared";
+import type pino from "pino";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentHandler, HandlerFactory } from "../runtime/handler.js";
 import { SessionManager } from "../runtime/session-manager.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
+import { silentLogger } from "./_logger-helpers.js";
 import { mockEntry } from "./test-helpers.js";
 
 /**
@@ -38,7 +40,7 @@ function createSessionManager(opts: {
   handlerFactory?: HandlerFactory;
   session?: { idle_timeout: number; max_sessions: number; reconcile_interval_seconds: number };
   concurrency?: number;
-  log?: (msg: string) => void;
+  log?: pino.Logger;
   onStateChange?: (chatId: string, state: SessionState) => void;
 }) {
   const handler = opts.handler ?? createMockHandler();
@@ -58,7 +60,7 @@ function createSessionManager(opts: {
       metadata: {},
     },
     sdk,
-    log: opts.log ?? (() => {}),
+    log: opts.log ?? silentLogger(),
     onStateChange: opts.onStateChange,
   });
 }

@@ -1,4 +1,5 @@
 import { ClientConnection } from "../client-connection.js";
+import { createLogger, type pino } from "../observability/logger.js";
 import type { AccessTokenProvider } from "../sdk.js";
 import { AgentSlot } from "./agent-slot.js";
 import { syncContextTree } from "./bootstrap.js";
@@ -44,6 +45,7 @@ export class AgentRuntime {
   private readonly updateHooks: UpdateHooks | undefined;
   private updateManager: UpdateManager | null = null;
   private stopping = false;
+  private logger: pino.Logger;
 
   constructor(options: AgentRuntimeOptions) {
     this.config = options.config;
@@ -51,6 +53,7 @@ export class AgentRuntime {
     this.getAccessToken = options.getAccessToken;
     this.currentVersion = options.currentVersion;
     this.updateHooks = options.update;
+    this.logger = createLogger("runtime");
 
     this.clientConnection = new ClientConnection({
       serverUrl: this.config.server,
@@ -62,7 +65,7 @@ export class AgentRuntime {
     // Surface transport-level errors (TLS resets, DNS hiccups, WS handshake
     // failures) to operators. ClientConnection's own reconnect loop handles
     // recovery; a process-wide crash guard lives in ClientConnection itself.
-    this.clientConnection.on("error", (err) => this.log(`client connection error: ${err.message}`));
+    this.clientConnection.on("error", (err) => this.logger.error({ err }, "client connection error"));
 
     for (const [name, agentConfig] of Object.entries(this.config.agents)) {
       const handlerFactory = getHandlerFactory(agentConfig.type);
@@ -82,10 +85,6 @@ export class AgentRuntime {
     }
   }
 
-  private log(msg: string): void {
-    process.stderr.write(`[runtime] ${msg}\n`);
-  }
-
   private aggregateQuietGate(): { activeCount: number; lastActivityMs: number } {
     let activeCount = 0;
     let lastActivityMs = 0;
@@ -98,38 +97,47 @@ export class AgentRuntime {
   }
 
   async start(): Promise<void> {
-    const log = (msg: string) => this.log(msg);
-
-    const contextTreePath = await syncContextTree(this.config.server, this.getAccessToken, log);
+    const contextTreeLogger = createLogger("context-tree");
+    const contextTreePath = await syncContextTree(this.config.server, this.getAccessToken, (msg) =>
+      contextTreeLogger.info(msg),
+    );
     if (!contextTreePath) {
-      log("Context Tree not configured or sync skipped — agents will start without organizational context");
+      this.logger.info(
+        "context tree not configured or sync skipped — agents will start without organizational context",
+      );
     }
 
     // Attach before connecting so the first welcome frame on a stale Client
     // is acted on rather than missed until the next reconnect.
     if (this.currentVersion && this.updateHooks) {
+      const updateLogger = createLogger("update");
       this.updateManager = UpdateManager.attach(this.clientConnection, {
         currentVersion: this.currentVersion,
         ...this.updateHooks,
         isTTY: Boolean(process.stdout.isTTY),
-        log: (level, msg) => this.log(`[update/${level}] ${msg}`),
+        log: (level, msg) => updateLogger[level](msg),
         getQuietGateSnapshot: () => this.aggregateQuietGate(),
       });
-      log(`Update manager attached (policy=${this.updateHooks.updateConfig.policy}, version=${this.currentVersion})`);
+      this.logger.info(
+        { policy: this.updateHooks.updateConfig.policy, version: this.currentVersion },
+        "update manager attached",
+      );
     }
 
-    log(`Connecting client (${this.clientConnection.clientId})...`);
+    this.logger.info({ clientId: this.clientConnection.clientId }, "connecting client");
     await this.clientConnection.connect();
-    log(`Client connected (${this.clientConnection.clientId})`);
+    // Rebind so downstream lines carry clientId automatically.
+    this.logger = this.logger.child({ clientId: this.clientConnection.clientId });
+    this.logger.info("client connected");
 
-    log(`Starting ${this.slots.length} agent(s)...`);
+    this.logger.info({ count: this.slots.length }, "starting agents");
 
     const results = await Promise.allSettled(this.slots.map((slot) => slot.start(contextTreePath)));
 
     let failed = 0;
     for (const result of results) {
       if (result.status === "rejected") {
-        log(`Failed to start agent: ${result.reason instanceof Error ? result.reason.message : result.reason}`);
+        this.logger.error({ err: result.reason }, "failed to start agent");
         failed++;
       }
     }
@@ -138,22 +146,22 @@ export class AgentRuntime {
       throw new Error("All agents failed to start");
     }
 
-    log("Ready. Press Ctrl+C to stop.");
+    this.logger.info("ready — press Ctrl+C to stop");
 
     await new Promise<void>((resolve) => {
       const shutdown = async () => {
         if (this.stopping) return;
         this.stopping = true;
-        log("Shutting down...");
+        this.logger.info("shutting down");
 
         const timer = setTimeout(() => {
-          log("Shutdown timeout reached, forcing exit");
+          this.logger.warn("shutdown timeout reached, forcing exit");
           process.exit(1);
         }, this.shutdownTimeout);
 
         await this.stop();
         clearTimeout(timer);
-        log("Stopped");
+        this.logger.info("stopped");
         resolve();
       };
 

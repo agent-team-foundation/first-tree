@@ -1,1 +1,1 @@
-export { applyClientLoggerConfig, createLogger, rootLogger } from "./logger.js";
+export { applyClientLoggerConfig, configureClientLoggerForService, createLogger, rootLogger } from "./logger.js";

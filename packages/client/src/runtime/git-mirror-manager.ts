@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import type { pino } from "../observability/logger.js";
 
 const DEFAULT_CLONE_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -29,7 +30,7 @@ const SESSION_BRANCH_PREFIX = "hub-session";
 export type GitMirrorManagerOptions = {
   dataDir: string;
   cloneTimeoutMs?: number;
-  log?: (event: string, fields: Record<string, unknown>) => void;
+  log?: pino.Logger;
 };
 
 export interface GitMirrorManager {
@@ -71,7 +72,7 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
   const mirrorsRoot = join(opts.dataDir, "git-mirrors");
   const cloneTimeoutMs =
     opts.cloneTimeoutMs ?? Number(process.env.FIRST_TREE_HUB_GIT_CLONE_TIMEOUT_MS ?? DEFAULT_CLONE_TIMEOUT_MS);
-  const log = opts.log ?? (() => {});
+  const log = opts.log;
 
   // Per-URL serial queue. Prevents concurrent ensureMirror / fetchMirror /
   // gcMirrors for the same URL from racing on the same directory.
@@ -199,7 +200,7 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
       // Failing `set-head --auto` is non-fatal — callers that pass an explicit
       // `ref` don't need origin/HEAD, and fallbacks below handle its absence.
       await gitOk(["remote", "set-head", "origin", "--auto"], mirrorPath, 30_000);
-      log("mirrorConfigMigrated", { gitUrl: url });
+      log?.info({ gitUrl: url }, "mirror config migrated");
     }
 
     return { migrated };
@@ -274,11 +275,11 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
         try {
           await bootstrapMirror(path, url);
           const elapsedMs = Date.now() - start;
-          log("ensureMirror", { gitUrl: url, elapsedMs, cloned: true });
+          log?.debug({ gitUrl: url, elapsedMs, cloned: true }, "mirror ensured");
           return { mirrorPath: path, elapsedMs, cloned: true };
         } catch (err) {
           if (err instanceof GitMirrorTimeoutError) {
-            log("mirrorCloneTimeout", { gitUrl: url, timeoutMs: cloneTimeoutMs, elapsedMs: cloneTimeoutMs });
+            log?.warn({ gitUrl: url, timeoutMs: cloneTimeoutMs, elapsedMs: cloneTimeoutMs }, "mirror clone timeout");
           }
           if (existsSync(path)) rmSync(path, { recursive: true, force: true });
           throw err;
@@ -296,11 +297,14 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
           const { elapsedMs } = await git(["fetch", "--prune", "origin"], path, cloneTimeoutMs);
           return { elapsedMs };
         } catch (err) {
-          log("mirrorFetchFailed", {
-            gitUrl: url,
-            errorCode: err instanceof GitMirrorError ? "git-failed" : "unknown",
-            stderr: err instanceof Error ? err.message.slice(0, 1024) : String(err).slice(0, 1024),
-          });
+          log?.warn(
+            {
+              gitUrl: url,
+              errorCode: err instanceof GitMirrorError ? "git-failed" : "unknown",
+              stderr: err instanceof Error ? err.message.slice(0, 1024) : String(err).slice(0, 1024),
+            },
+            "mirror fetch failed",
+          );
           throw err;
         }
       });
@@ -317,11 +321,14 @@ export function createGitMirrorManager(opts: GitMirrorManagerOptions): GitMirror
 
         // D13: target path must be free OR a Hub-managed worktree we can reuse.
         if (existsSync(absTarget) && !isHubManagedWorktree(absTarget)) {
-          log("worktreeCreateConflict", {
-            gitUrl: url,
-            targetPath: absTarget,
-            occupantKind: classifyOccupant(absTarget),
-          });
+          log?.warn(
+            {
+              gitUrl: url,
+              targetPath: absTarget,
+              occupantKind: classifyOccupant(absTarget),
+            },
+            "worktree create conflict",
+          );
           throw new GitMirrorWorktreeConflictError(
             `Worktree target "${absTarget}" is already occupied by ${classifyOccupant(absTarget)} — aborting (D13)`,
           );

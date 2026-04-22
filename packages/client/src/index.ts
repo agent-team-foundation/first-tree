@@ -7,7 +7,12 @@ export type {
 export { ClientConnection } from "./client-connection.js";
 // Handlers
 export { registerBuiltinHandlers } from "./handlers/index.js";
-export { applyClientLoggerConfig, createLogger, rootLogger } from "./observability/index.js";
+export {
+  applyClientLoggerConfig,
+  configureClientLoggerForService,
+  createLogger,
+  rootLogger,
+} from "./observability/index.js";
 // Runtime
 export type { AgentSlotConfig } from "./runtime/agent-slot.js";
 export { AgentSlot } from "./runtime/agent-slot.js";

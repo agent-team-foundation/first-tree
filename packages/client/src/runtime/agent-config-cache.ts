@@ -1,4 +1,5 @@
 import type { AgentRuntimeConfig } from "@agent-team-foundation/first-tree-hub-shared";
+import type { pino } from "../observability/logger.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 
 /**
@@ -11,7 +12,7 @@ import type { FirstTreeHubSDK } from "../sdk.js";
  * The prefix `agent-` distinguishes this from `runtime/config.ts` (the local
  * `agent.yaml` parser) — they are unrelated concepts.
  */
-export type AgentConfigCacheLogger = (msg: string) => void;
+export type AgentConfigCacheLogger = pino.Logger;
 
 export interface AgentConfigCache {
   /** Snapshot of the currently cached config, if any. */
@@ -45,7 +46,7 @@ export type AgentConfigCacheOptions = {
 
 export function createAgentConfigCache(opts: AgentConfigCacheOptions): AgentConfigCache {
   const { sdk } = opts;
-  const log: AgentConfigCacheLogger = opts.log ?? (() => {});
+  const log = opts.log;
   const entries = new Map<string, CachedEntry>();
 
   function urlsFromConfig(cfg: AgentRuntimeConfig): Set<string> {
@@ -88,7 +89,7 @@ export function createAgentConfigCache(opts: AgentConfigCacheOptions): AgentConf
       };
       slot.inflight = doFetch(agentId).catch((err) => {
         slot.inflight = null;
-        log(`[agent-config-cache] fetch failed for ${agentId}: ${err instanceof Error ? err.message : String(err)}`);
+        log?.warn({ agentId, err }, "agent config fetch failed");
         throw err;
       });
       entries.set(agentId, slot);

@@ -12,6 +12,7 @@ import {
   serverWelcomeFrameSchema,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import WebSocket from "ws";
+import { createLogger, type pino } from "./observability/logger.js";
 import { type AccessTokenProvider, FirstTreeHubSDK } from "./sdk.js";
 
 export type ClientConnectionConfig = {
@@ -139,6 +140,9 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   /** Count of `server:welcome` frames received; drives `isReconnect` flag. */
   private welcomeFramesReceived = 0;
 
+  private readonly wsLogger: pino.Logger;
+  private readonly authLogger: pino.Logger;
+
   private readonly boundAgents = new Map<string, BoundAgent>();
 
   /** Agents scheduled to rebind automatically on every reconnect. */
@@ -164,6 +168,8 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     this.serverUrl = config.serverUrl.replace(/\/+$/, "");
     this.sdkVersion = config.sdkVersion;
     this.getAccessToken = config.getAccessToken;
+    this.wsLogger = createLogger("ws").child({ clientId: this.clientId });
+    this.authLogger = createLogger("auth").child({ clientId: this.clientId });
 
     // Tombstone listener: Node's EventEmitter re-throws `error` events that
     // have no listener, so a stray ECONNRESET would crash the host. Consumers
@@ -271,6 +277,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   private openWebSocket(): Promise<void> {
     return new Promise((resolve, reject) => {
       const wsUrl = `${this.serverUrl.replace(/^http/, "ws")}/api/v1/agent/ws/client`;
+      this.wsLogger.info({ url: wsUrl }, "connecting");
       const ws = new WebSocket(wsUrl);
       let settled = false;
 
@@ -297,6 +304,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       ws.on("open", async () => {
         this.ws = ws;
         this.reconnectAttempt = 0;
+        this.wsLogger.debug("socket opened, sending auth");
 
         try {
           const token = await this.getAccessToken();
@@ -306,6 +314,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
           // exp itself is already fixed on the token payload.
           this.scheduleProactiveAuthRefresh(token);
         } catch (err) {
+          this.authLogger.error({ err }, "failed to obtain access token");
           settle(reject, err instanceof Error ? err : new Error(String(err)));
           ws.close();
         }
@@ -328,10 +337,12 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
         this.rejectAllPendingBinds("WebSocket closed");
 
         if (!settled) {
+          this.wsLogger.warn({ code }, "closed before ready");
           settle(reject, new Error(`WebSocket closed before ready (code ${code})`));
           return;
         }
 
+        this.wsLogger.warn({ code, wasRegistered }, "disconnected");
         if (!this.closing) {
           this.emit("disconnected");
           if (wasRegistered) this.scheduleReconnect();
@@ -348,6 +359,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     const type = msg.type as string;
 
     if (type === "auth:ok") {
+      this.authLogger.info("auth accepted, registering client");
       this.ws?.send(
         JSON.stringify({
           type: "client:register",
@@ -366,10 +378,9 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
         // Malformed welcome frame from a buggy server build — log and drop.
         // Old clients that never knew about this frame simply fall through,
         // so treating a parse failure the same way keeps behaviour aligned.
-        process.stderr.write(
-          `[ClientConnection] Ignoring malformed server:welcome frame: ${parsed.error.issues
-            .map((i) => i.message)
-            .join(", ")}\n`,
+        this.wsLogger.warn(
+          { issues: parsed.error.issues.map((i) => i.message) },
+          "ignoring malformed server:welcome frame",
         );
         return;
       }
@@ -383,13 +394,19 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       // The close handler reads `this.registered` to decide whether to
       // reconnect; clearing it here would make that decision see post-close
       // state and skip the reconnect after a mid-session auth:expired push.
-      if (type === "auth:expired") this.emit("auth:expired");
+      if (type === "auth:expired") {
+        this.authLogger.info("token expired, reconnecting with fresh token");
+        this.emit("auth:expired");
+      } else {
+        this.authLogger.warn("auth rejected by server");
+      }
       this.ws?.close(4401, type);
       return;
     }
 
     if (type === "client:register:rejected") {
       const err = new Error(`client:register rejected: ${msg.message ?? "unknown"}`);
+      this.wsLogger.error({ message: msg.message }, "client register rejected");
       this.emit("error", err);
       this.ws?.close(4403, "register rejected");
       return;
@@ -399,6 +416,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       const isReconnect = this.boundAgents.size > 0 || this.desiredBindings.size > 0;
       this.registered = true;
       this.startHeartbeat();
+      this.wsLogger.info({ isReconnect }, "registered");
       this.emit("connected");
       connectResolve?.();
 
@@ -528,6 +546,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     this.emit("reconnecting", this.reconnectAttempt);
 
     const delay = Math.min(RECONNECT_BASE_MS * 2 ** (this.reconnectAttempt - 1), RECONNECT_MAX_MS);
+    this.wsLogger.debug({ attempt: this.reconnectAttempt, delayMs: delay }, "scheduling reconnect");
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       if (!this.closing) {
@@ -595,9 +614,11 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     if (!exp) return;
     const delay = exp * 1000 - Date.now() - AUTH_REFRESH_LEAD_MS;
     if (delay <= 0) return;
+    this.authLogger.debug({ delayMs: delay }, "scheduled proactive auth refresh");
     this.authRefreshTimer = setTimeout(() => {
       this.authRefreshTimer = null;
       if (this.closing) return;
+      this.authLogger.info("triggering proactive auth refresh");
       // Silent reconnect: close gracefully, the close handler reconnects and
       // the new connection asks getAccessToken() for a fresh JWT.
       this.ws?.close(1000, "proactive auth refresh");

@@ -7,6 +7,7 @@ import type {
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
 import type { ClientConnection, SessionReconcileResult } from "../client-connection.js";
+import { createLogger, type pino } from "../observability/logger.js";
 import type { RegisterResult } from "../sdk.js";
 import { type AgentConfigCache, createAgentConfigCache } from "./agent-config-cache.js";
 import type { SessionConfig } from "./config.js";
@@ -38,7 +39,7 @@ type ConnectionListener =
 export class AgentSlot {
   private sessionManager: SessionManager | null = null;
   private readonly config: AgentSlotConfig;
-  private readonly logFn: (msg: string) => void;
+  private logger: pino.Logger;
   private sdk: import("../sdk.js").FirstTreeHubSDK | null = null;
   private agentConfigCache: AgentConfigCache | null = null;
   private pollingTimer: ReturnType<typeof setInterval> | null = null;
@@ -47,9 +48,7 @@ export class AgentSlot {
 
   constructor(config: AgentSlotConfig) {
     this.config = config;
-    this.logFn = (msg: string) => {
-      process.stderr.write(`[${config.name}] ${msg}\n`);
-    };
+    this.logger = createLogger("slot").child({ agentName: config.name, agentId: config.agentId });
   }
 
   private get clientConnection(): ClientConnection {
@@ -75,20 +74,20 @@ export class AgentSlot {
     this.sdk = sdk;
     const agent = await sdk.register();
 
-    this.logFn(`Bound as ${agent.displayName ?? agent.agentId} (${agent.agentId})`);
+    this.logger.info({ displayName: agent.displayName ?? agent.agentId }, "agent bound");
 
     if (agent.type === "human") {
-      this.logFn("Server reports type=human — message processing disabled");
+      this.logger.info("server reports type=human — message processing disabled");
       return agent;
     }
 
-    this.agentConfigCache = createAgentConfigCache({ sdk, log: this.logFn });
+    this.agentConfigCache = createAgentConfigCache({ sdk, log: this.logger });
     try {
       const cfg = await this.agentConfigCache.refresh(agent.agentId);
-      this.logFn(`Loaded runtime config v${cfg.version}`);
+      this.logger.info({ version: cfg.version }, "runtime config loaded");
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      this.logFn(`Failed to fetch agent config — bind aborted: ${msg}`);
+      this.logger.error({ err }, "failed to fetch agent config — bind aborted");
       throw new Error(`Hub unreachable while loading agent config: ${msg}`);
     }
 
@@ -124,7 +123,7 @@ export class AgentSlot {
     // reuse the same mirror (PRD §5.1.5).
     const gitMirrorManager = createGitMirrorManager({
       dataDir: DEFAULT_DATA_DIR,
-      log: (event, fields) => this.logFn(`git[${event}] ${JSON.stringify(fields)}`),
+      log: createLogger("git-mirror").child({ agentName: this.config.name, agentId: this.config.agentId }),
     });
 
     this.sessionManager = new SessionManager({
@@ -144,7 +143,7 @@ export class AgentSlot {
         metadata: agent.metadata,
       },
       sdk,
-      log: this.logFn,
+      log: this.logger,
       registryPath,
       agentConfigCache: this.agentConfigCache,
       onStateChange: (chatId, state) => this.reportSessionState(chatId, state),
@@ -158,7 +157,7 @@ export class AgentSlot {
         this.sessionManager
           .handleCommand(cmd.chatId, cmd.type as "session:suspend" | "session:terminate")
           .catch((err) => {
-            this.logFn(`Session command error: ${err instanceof Error ? err.message : String(err)}`);
+            this.logger.error({ err, chatId: cmd.chatId, type: cmd.type }, "session command error");
           });
       }
     };
@@ -189,7 +188,7 @@ export class AgentSlot {
     this.listeners = [];
     await this.clientConnection.unbindAgent(this.config.agentId);
     await this.sessionManager?.shutdown();
-    this.logFn("Stopped");
+    this.logger.info("stopped");
   }
 
   private reportSessionState(chatId: string, state: SessionState): void {
@@ -246,7 +245,7 @@ export class AgentSlot {
         await this.sessionManager.dispatch(entry);
       }
     } catch (err) {
-      this.logFn(`Poll error: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.warn({ err }, "poll error");
     }
   }
 }
