@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Leaf, MessageSquare, Paperclip, Pause, Pencil, Send, Square, X } from "lucide-react";
+import { Check, MessageSquare, Paperclip, Pause, Pencil, Send, Square, X } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
 import {
@@ -27,6 +27,7 @@ import {
   terminateSession,
 } from "../../../api/sessions.js";
 import { useAuth } from "../../../auth/auth-context.js";
+import { FirstTreeLogo } from "../../../components/first-tree-logo.js";
 import { Button } from "../../../components/ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog.js";
 import { Markdown } from "../../../components/ui/markdown.js";
@@ -559,7 +560,7 @@ function Avatar({ name, isSelf }: { name: string; isSelf: boolean }) {
         color: isSelf ? "oklch(0.14 0.01 150)" : "var(--fg-2)",
       }}
     >
-      {isSelf ? initials : <Leaf className="h-3 w-3" style={{ color: "var(--accent)" }} />}
+      {isSelf ? initials : <FirstTreeLogo width={9} height={10} style={{ color: "var(--accent)" }} />}
     </div>
   );
 }

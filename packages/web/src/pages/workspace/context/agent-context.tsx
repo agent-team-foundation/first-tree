@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Leaf } from "lucide-react";
 import { useSearchParams } from "react-router";
 import { getActivityOverview, type RuntimeAgent } from "../../../api/activity.js";
 import { listNotifications, markNotificationRead } from "../../../api/notifications.js";
+import { FirstTreeLogo } from "../../../components/first-tree-logo.js";
 import { StateChip } from "../../../components/ui/state-chip.js";
 import { useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { useClientMap } from "../../../lib/use-client-map.js";
@@ -182,7 +182,7 @@ export function AgentContext({ agentId }: { agentId: string }) {
               border: "1px solid var(--border-strong)",
             }}
           >
-            <Leaf className="h-4 w-4" style={{ color: "var(--accent)" }} />
+            <FirstTreeLogo width={14} height={16} style={{ color: "var(--accent)" }} />
           </div>
           <div className="flex-1 min-w-0">
             <div style={{ fontSize: 15, fontWeight: 600, color: "var(--fg)" }}>{displayName}</div>
