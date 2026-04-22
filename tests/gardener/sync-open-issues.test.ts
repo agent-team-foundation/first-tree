@@ -1,7 +1,11 @@
+import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildSyncProposalBody,
   computeProposalId,
+  runOpenIssuesMode,
   type ClassificationItem,
 } from "#products/gardener/engine/sync.js";
 
@@ -136,5 +140,93 @@ describe("sync --open-issues · buildSyncProposalBody", () => {
     });
     expect(body).toContain(baseProposal.rationale);
     expect(body).toContain(baseProposal.suggested_node_body_markdown);
+  });
+});
+
+describe("sync --open-issues · runOpenIssuesMode", () => {
+  it("finds existing proposal issues even when the repo has no seeded labels", async () => {
+    const previousToken = process.env.TREE_REPO_TOKEN;
+    process.env.TREE_REPO_TOKEN = "tree-token";
+
+    const treeRoot = mkdtempSync(join(tmpdir(), "first-tree-sync-open-issues-"));
+    mkdirSync(join(treeRoot, baseProposal.path), { recursive: true });
+
+    const calls: Array<{
+      command: string;
+      args: string[];
+      envToken?: string;
+    }> = [];
+
+    try {
+      const exitCode = await runOpenIssuesMode({
+        drift: {
+          binding: { sourceId: "acme-web" },
+          ownerRepo: { owner: "acme", repo: "web" },
+        },
+        classifiedPrs: [{
+          pr: {
+            number: 42,
+            title: "Split auth",
+            mergeCommitSha: "deadbeefcafebabe",
+            authorLogin: "octocat",
+          },
+          filtered: [baseProposal],
+        }],
+        treeRoot,
+        shellRun: async (command, args, options = {}) => {
+          calls.push({
+            command,
+            args: [...args],
+            envToken: options.env?.GH_TOKEN,
+          });
+
+          if (command !== "gh") {
+            return { code: 1, stdout: "", stderr: `unexpected command: ${command}` };
+          }
+          if (args[0] === "repo" && args[1] === "view") {
+            return { code: 0, stdout: "agent-team-foundation/first-tree-context\n", stderr: "" };
+          }
+          if (args[0] === "issue" && args[1] === "list") {
+            return {
+              code: 0,
+              stdout: JSON.stringify([
+                { url: "https://github.com/agent-team-foundation/first-tree-context/issues/123" },
+              ]),
+              stderr: "",
+            };
+          }
+          if (args[0] === "issue" && args[1] === "create") {
+            return {
+              code: 0,
+              stdout: "https://github.com/agent-team-foundation/first-tree-context/issues/124\n",
+              stderr: "",
+            };
+          }
+          return { code: 1, stdout: "", stderr: `unexpected gh args: ${args.join(" ")}` };
+        },
+        dryRun: false,
+      });
+
+      expect(exitCode).toBe(0);
+
+      const issueListCall = calls.find((call) =>
+        call.command === "gh" && call.args[0] === "issue" && call.args[1] === "list"
+      );
+      expect(issueListCall).toBeDefined();
+      expect(issueListCall?.args).not.toContain("--label");
+      expect(issueListCall?.envToken).toBe("tree-token");
+
+      const issueCreateCall = calls.find((call) =>
+        call.command === "gh" && call.args[0] === "issue" && call.args[1] === "create"
+      );
+      expect(issueCreateCall).toBeUndefined();
+    } finally {
+      rmSync(treeRoot, { recursive: true, force: true });
+      if (previousToken === undefined) {
+        delete process.env.TREE_REPO_TOKEN;
+      } else {
+        process.env.TREE_REPO_TOKEN = previousToken;
+      }
+    }
   });
 });

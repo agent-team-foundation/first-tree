@@ -1437,8 +1437,6 @@ async function existingProposalIssueUrl(
       treeSlug,
       "--state",
       "open",
-      "--label",
-      "first-tree:sync-proposal",
       "--search",
       `proposal_id=${proposalId} in:body`,
       "--json",
