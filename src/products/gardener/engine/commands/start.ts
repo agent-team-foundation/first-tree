@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { homedir, userInfo } from "node:os";
 import {
   buildDaemonConfig,
+  configPath,
   parseDurationMs,
   resolveGardenerDir,
   writeDaemonConfig,
@@ -155,8 +156,13 @@ export async function runStart(
     syncApply: flags.syncApply,
   });
 
-  const configFilePath = writeDaemonConfig(config, env);
-  write(`gardener daemon config written: ${configFilePath}`);
+  const configFilePath = flags.dryRun
+    ? configPath(env)
+    : writeDaemonConfig(config, env);
+  const header = flags.dryRun
+    ? `gardener daemon config (preview, not written): ${configFilePath}`
+    : `gardener daemon config written: ${configFilePath}`;
+  write(header);
   write(`  tree-path:          ${config.treePath}`);
   write(`  code-repos:         ${config.codeRepos.join(", ")}`);
   write(`  gardener-interval:  ${config.gardenerIntervalMs / 1000}s`);
@@ -166,7 +172,7 @@ export async function runStart(
   write(`  sync-apply:         ${config.syncApply}`);
 
   if (flags.dryRun) {
-    write("--dry-run: not booting daemon");
+    write("--dry-run: not booting daemon (config left untouched)");
     return 0;
   }
 

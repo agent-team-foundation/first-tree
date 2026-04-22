@@ -270,7 +270,7 @@ describe("gardener daemon -- status", () => {
 });
 
 describe("gardener daemon -- start --dry-run", () => {
-  it("writes config without booting daemon", async () => {
+  it("previews config without booting daemon or touching config file", async () => {
     const tmp = useTmpDir();
     const env = makeEnv(tmp.path);
     const { write, lines } = capture();
@@ -292,12 +292,39 @@ describe("gardener daemon -- start --dry-run", () => {
       { env, write },
     );
     expect(code).toBe(0);
-    const config = loadDaemonConfig(env);
-    expect(config?.codeRepos).toEqual(["a/b", "c/d"]);
-    expect(config?.gardenerIntervalMs).toBe(600_000);
-    expect(config?.syncIntervalMs).toBe(7_200_000);
-    expect(config?.assignOwners).toBe(true);
+    expect(loadDaemonConfig(env)).toBeNull();
+    const body = lines.join("\n");
+    expect(body).toContain("preview, not written");
+    expect(body).toContain("code-repos:         a/b, c/d");
+    expect(body).toContain("gardener-interval:  600s");
+    expect(body).toContain("sync-interval:      7200s");
+    expect(body).toContain("assign-owners:      true");
     expect(lines.some((l) => l.includes("not booting"))).toBe(true);
+  });
+
+  it("leaves an existing config untouched", async () => {
+    const tmp = useTmpDir();
+    const env = makeEnv(tmp.path);
+    const existing = buildDaemonConfig({
+      treePath: "/prev/tree",
+      codeRepos: ["prev/repo"],
+    });
+    writeDaemonConfig(existing, env);
+    const { write } = capture();
+    const code = await runStart(
+      [
+        "--tree-path",
+        tmp.path,
+        "--code-repo",
+        "new/repo",
+        "--dry-run",
+      ],
+      { env, write },
+    );
+    expect(code).toBe(0);
+    const after = loadDaemonConfig(env);
+    expect(after?.treePath).toBe("/prev/tree");
+    expect(after?.codeRepos).toEqual(["prev/repo"]);
   });
 
   it("rejects missing --tree-path", async () => {
