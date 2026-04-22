@@ -214,13 +214,17 @@ describe("Admin agent-config API (Step 2)", () => {
     expect(events.some((e) => e === `agent:${agent.uuid}`)).toBe(true);
   });
 
-  it("non-admin member is rejected with 403", async () => {
+  it("non-manager member is rejected with 404 (agent they do not manage)", async () => {
+    // assertCanManage throws NotFoundError — 404 rather than 403, so the
+    // request cannot be used to enumerate agent UUIDs a member cannot see.
     const app = getApp();
     const admin = await createTestAdmin(app, {
-      username: `cfg-non-admin-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      username: `cfg-non-mgr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     });
+    // seedAgentFactory creates its own admin as the manager — so the agent
+    // below is NOT managed by `admin` above.
     const agent = await (await seedAgentFactory(app))({
-      name: `cfg-403-${crypto.randomUUID().slice(0, 8)}`,
+      name: `cfg-404-${crypto.randomUUID().slice(0, 8)}`,
       type: "autonomous_agent",
     });
 
@@ -256,6 +260,75 @@ describe("Admin agent-config API (Step 2)", () => {
       headers: { authorization: `Bearer ${fresh.accessToken}` },
       payload: { expectedVersion: 1, payload: { model: "claude-opus-4-6" } },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("manager (non-admin) can GET and PATCH config on an agent they manage", async () => {
+    // Regression guard: prior to removing the plugin-scoped adminOnly hook on
+    // /admin/agents/:uuid/config, a member editing their own personal_assistant
+    // got "Admin role required" — blocking the documented "manager retains
+    // CRUD" semantics from agents schema.
+    const app = getApp();
+    const { createAgent } = await import("../services/agent.js");
+    const { members } = await import("../db/schema/members.js");
+    const { users } = await import("../db/schema/users.js");
+    const { clients } = await import("../db/schema/clients.js");
+
+    // Create an admin, seed a client owned by them, create an agent managed
+    // by them, then demote the member to "member" role.
+    const admin = await createTestAdmin(app, {
+      username: `cfg-mgr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    });
+    const [member] = await app.db.select().from(members).where(eq(members.id, admin.memberId)).limit(1);
+    if (!member) throw new Error("admin member missing");
+    const clientId = `cli-mgr-${crypto.randomUUID().slice(0, 8)}`;
+    await app.db.insert(clients).values({ id: clientId, userId: member.userId, status: "connected" });
+    const agent = await createAgent(app.db, {
+      name: `cfg-mgr-agent-${crypto.randomUUID().slice(0, 8)}`,
+      type: "personal_assistant",
+      displayName: "My Assistant",
+      managerId: admin.memberId,
+      clientId,
+    });
+
+    // Demote the member who manages this agent.
+    await app.db
+      .update(members)
+      .set({ role: "member" })
+      .where(
+        eq(
+          members.userId,
+          (await app.db.select({ id: users.id }).from(users).where(eq(users.username, admin.username)).limit(1))[0]
+            ?.id ?? "",
+        ),
+      );
+
+    // Fresh JWT so role:"member" replaces the cached role:"admin".
+    const loginRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { username: admin.username, password: admin.password },
+    });
+    const fresh = loginRes.json<{ accessToken: string }>();
+    const auth = { authorization: `Bearer ${fresh.accessToken}` };
+
+    // GET — manager can read config (assertAgentVisible allows any visible viewer).
+    const get = await app.inject({
+      method: "GET",
+      url: `/api/v1/admin/agents/${agent.uuid}/config`,
+      headers: auth,
+    });
+    expect(get.statusCode).toBe(200);
+    expect(get.json().version).toBe(1);
+
+    // PATCH — manager can edit config (assertCanManage allows managerId = self).
+    const patch = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/admin/agents/${agent.uuid}/config`,
+      headers: auth,
+      payload: { expectedVersion: 1, payload: { model: "claude-opus-4-6" } },
+    });
+    expect(patch.statusCode).toBe(200);
+    expect(patch.json().payload.model).toBe("claude-opus-4-6");
   });
 });
