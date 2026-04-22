@@ -6,10 +6,9 @@ type BreadcrumbProps = HTMLAttributes<HTMLDivElement>;
 export function Breadcrumb({ className, style, ...rest }: BreadcrumbProps) {
   return (
     <div
-      className={cn("flex items-center", className)}
+      className={cn("flex items-center text-body", className)}
       style={{
         gap: 6,
-        fontSize: 12,
         color: "var(--fg-3)",
         ...style,
       }}
@@ -48,7 +47,7 @@ export function BreadcrumbSep() {
 
 export function BreadcrumbCurrent({ children, mono }: { children: ReactNode; mono?: boolean }) {
   return (
-    <span className={mono ? "mono" : undefined} style={{ color: "var(--fg)", fontWeight: 500 }}>
+    <span className={cn("font-medium", mono && "mono")} style={{ color: "var(--fg)" }}>
       {children}
     </span>
   );

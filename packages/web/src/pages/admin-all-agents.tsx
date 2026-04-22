@@ -30,7 +30,7 @@ export function AdminAllAgentsPage() {
 
   return (
     <div>
-      <p className="text-label" style={{ color: "var(--fg-3)", padding: "0 2px 10px" }}>
+      <p className="text-label" style={{ color: "var(--fg-3)", padding: "0 var(--sp-0_5) var(--sp-2_5)" }}>
         Every agent in the organization — including private agents owned by other members. Use this view to troubleshoot
         or reassign.
       </p>
@@ -70,9 +70,7 @@ export function AdminAllAgentsPage() {
                   onClick={() => navigate(`/agents/${encodeURIComponent(a.uuid)}`)}
                 >
                   <DenseTableCell>
-                    <span className="mono" style={{ fontWeight: 500 }}>
-                      {a.name ?? a.uuid.slice(0, 8)}
-                    </span>
+                    <span className="mono font-medium">{a.name ?? a.uuid.slice(0, 8)}</span>
                   </DenseTableCell>
                   <DenseTableCell style={{ color: "var(--fg-2)" }}>{a.displayName ?? "—"}</DenseTableCell>
                   <DenseTableCell>

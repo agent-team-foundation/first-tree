@@ -12,8 +12,8 @@ export function PageHeader({ title, subtitle, right, className, style, ...rest }
     <div
       className={cn("flex items-baseline gap-3 shrink-0", className)}
       style={{
-        padding: "12px 20px 10px",
-        borderBottom: "1px solid var(--border-faint)",
+        padding: "var(--sp-3) var(--sp-5) var(--sp-2_5)",
+        borderBottom: "var(--hairline) solid var(--border-faint)",
         background: "var(--bg-raised)",
         ...style,
       }}

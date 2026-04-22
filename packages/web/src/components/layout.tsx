@@ -44,19 +44,22 @@ export function Layout() {
       <header
         className="relative shrink-0 grid items-center"
         style={{
-          height: 40,
+          height: 48,
           gridTemplateColumns: "auto 1fr auto",
-          padding: "0 12px",
-          borderBottom: "1px solid var(--border)",
+          padding: "0 var(--sp-3)",
+          borderBottom: "var(--hairline) solid var(--border)",
           background: "var(--bg-raised)",
         }}
       >
         {/* Brand */}
         <div className="flex items-center" style={{ gap: 10 }}>
-          <FirstTreeLogo width={14} height={16} style={{ color: "var(--fg)" }} />
-          {/* Brand text uses the canonical `text-subtitle` token (13 / 600 / -0.1 letter-spacing). */}
-          <span className="text-subtitle" style={{ color: "var(--fg)" }}>
-            First Tree <span style={{ color: "var(--fg-3)", fontWeight: 400 }}>Hub</span>
+          <FirstTreeLogo width={16} height={18} style={{ color: "var(--fg)" }} />
+          {/* Brand uses the `text-title` token (16 / 600 / -0.2 letter-spacing). */}
+          <span className="text-title" style={{ color: "var(--fg)" }}>
+            First Tree{" "}
+            <span className="font-normal" style={{ color: "var(--fg-3)" }}>
+              Hub
+            </span>
           </span>
         </div>
 
@@ -73,16 +76,10 @@ export function Layout() {
               }
             >
               {({ isActive }) => (
-                // Top-level navigation tabs are intentionally NOT mapped to
-                // `text-title` (16 / 600): nav items warrant a lighter 500
-                // weight than page titles. This is the documented exception
-                // to the typography scale; do not copy this pattern.
                 <span
-                  className="inline-flex items-center"
+                  className="inline-flex items-center text-subtitle font-medium"
                   style={{
-                    padding: "5px 12px",
-                    fontSize: 16,
-                    fontWeight: 500,
+                    padding: "var(--sp-1_5) var(--sp-3)",
                     gap: 6,
                     borderRadius: 5,
                     color: isActive ? "var(--fg)" : "var(--fg-3)",
@@ -103,12 +100,12 @@ export function Layout() {
             type="button"
             onClick={() => setPaletteOpen(true)}
             aria-label="Open command palette"
-            className="inline-flex items-center transition-colors text-label"
+            className="inline-flex items-center transition-colors text-body"
             style={{
               gap: 8,
-              padding: "4px 8px",
+              padding: "var(--sp-1) var(--sp-2)",
               color: "var(--fg-3)",
-              border: "1px solid var(--border)",
+              border: "var(--hairline) solid var(--border)",
               borderRadius: "var(--radius-input)",
               background: "var(--bg-sunken)",
             }}
@@ -119,7 +116,7 @@ export function Layout() {
               e.currentTarget.style.color = "var(--fg-3)";
             }}
           >
-            <Search className="h-3.5 w-3.5" />
+            <Search className="h-4 w-4" />
             <span>Jump to…</span>
             <span className="kbd">⌘K</span>
           </button>
@@ -128,7 +125,7 @@ export function Layout() {
               width: 1,
               height: 18,
               background: "var(--border)",
-              margin: "0 4px",
+              margin: "0 var(--sp-1)",
             }}
           />
           <NotificationBell />
@@ -138,22 +135,22 @@ export function Layout() {
               width: 1,
               height: 18,
               background: "var(--border)",
-              margin: "0 4px",
+              margin: "0 var(--sp-1)",
             }}
           />
           <button
             type="button"
             onClick={logout}
-            className="inline-flex items-center transition-colors hover:text-[var(--fg)] text-label"
+            className="inline-flex items-center transition-colors hover:text-[var(--fg)] text-body"
             style={{
-              padding: "4px 8px",
+              padding: "var(--sp-1) var(--sp-2)",
               color: "var(--fg-3)",
               borderRadius: "var(--radius-input)",
               gap: 6,
             }}
             aria-label="Log out"
           >
-            <LogOut className="h-3.5 w-3.5" />
+            <LogOut className="h-4 w-4" />
           </button>
         </div>
       </header>

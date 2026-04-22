@@ -2,8 +2,8 @@ import { forwardRef, type HTMLAttributes, type TdHTMLAttributes, type ThHTMLAttr
 import { cn } from "../../lib/utils.js";
 
 // Dense table variant aligned with the workspace page redesigns:
-// - 9.5px uppercase mono column headers with letter-spacing
-// - 12px cell body text, 9px vertical padding
+// - text-eyebrow uppercase mono column headers with letter-spacing
+// - text-body cell body, tight vertical padding
 // - Hairline row separators
 // - No outer border (meant to live inside a Panel).
 
@@ -59,10 +59,10 @@ const DenseTableHead = forwardRef<HTMLTableCellElement, ThHTMLAttributes<HTMLTab
       // cleanly. `font-medium` was removed because the token sets 600.
       className={cn("mono text-left uppercase text-eyebrow whitespace-nowrap", className)}
       style={{
-        padding: "8px 12px",
+        padding: "var(--sp-2) var(--sp-3)",
         color: "var(--fg-4)",
         background: "var(--bg-sunken)",
-        borderBottom: "1px solid var(--border)",
+        borderBottom: "var(--hairline) solid var(--border)",
         ...style,
       }}
       {...props}
@@ -77,8 +77,8 @@ const DenseTableCell = forwardRef<HTMLTableCellElement, TdHTMLAttributes<HTMLTab
       ref={ref}
       className={cn("align-middle text-body", className)}
       style={{
-        padding: "9px 12px",
-        borderBottom: "1px solid var(--border-faint)",
+        padding: "var(--sp-2_25) var(--sp-3)",
+        borderBottom: "var(--hairline) solid var(--border-faint)",
         ...style,
       }}
       {...props}

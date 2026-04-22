@@ -33,7 +33,7 @@ export function StateDot({ state, size = 8, className }: StateDotProps) {
             position: "absolute",
             inset: -3,
             borderRadius: "50%",
-            border: "1px solid var(--state-working)",
+            border: "var(--hairline) solid var(--state-working)",
             animation: "ring-pulse 1.8s infinite",
             opacity: 0.6,
           }}
@@ -48,7 +48,7 @@ export function StateDot({ state, size = 8, className }: StateDotProps) {
         className={cn("shrink-0", className)}
         style={{
           ...base,
-          border: "1.5px dashed var(--state-blocked)",
+          border: "var(--hairline-bold) dashed var(--state-blocked)",
           borderRadius: "50%",
           animation: "dash-spin 4s linear infinite",
         }}
@@ -100,7 +100,7 @@ export function StateDot({ state, size = 8, className }: StateDotProps) {
       style={{
         ...base,
         borderRadius: "50%",
-        border: "1px solid var(--state-offline)",
+        border: "var(--hairline) solid var(--state-offline)",
         background: "transparent",
       }}
       role="img"

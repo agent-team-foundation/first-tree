@@ -11,13 +11,11 @@ export function FilterPill({ active, count, warn, className, children, style, ..
   return (
     <button
       type="button"
-      className={cn("mono inline-flex items-center gap-1", className)}
+      className={cn("mono inline-flex items-center gap-1 text-caption leading-[1.6]", className)}
       style={{
-        fontSize: 10,
-        lineHeight: 1.6,
-        padding: "2px 7px",
+        padding: "var(--sp-0_5) var(--sp-1_75)",
         borderRadius: 3,
-        border: `1px solid ${active ? "var(--border-strong)" : "var(--border)"}`,
+        border: `var(--hairline) solid ${active ? "var(--border-strong)" : "var(--border)"}`,
         background: active ? "var(--bg-active)" : "transparent",
         color: active ? "var(--fg)" : "var(--fg-3)",
         cursor: "pointer",

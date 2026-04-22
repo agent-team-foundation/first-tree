@@ -47,7 +47,7 @@ export function AdminPage() {
           </Tab>
         ))}
       </TabBar>
-      <div style={{ padding: "16px 20px 28px" }}>
+      <div style={{ padding: "var(--sp-4) var(--sp-5) var(--sp-7)" }}>
         {active === "members" && <MembersPage />}
         {active === "all-agents" && <AdminAllAgentsPage />}
         {active === "settings" && <OrgSettingsPage />}

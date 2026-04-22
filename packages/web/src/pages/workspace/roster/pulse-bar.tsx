@@ -16,7 +16,7 @@ export function PulseBar({
 
   return (
     <div
-      className={cn("flex items-end gap-[2px]", stale && "opacity-40", className)}
+      className={cn("flex items-end gap-[var(--sp-0_5)]", stale && "opacity-40", className)}
       style={{ height: 22 }}
       aria-hidden
     >

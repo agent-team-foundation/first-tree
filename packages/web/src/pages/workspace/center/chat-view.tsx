@@ -203,7 +203,7 @@ function SessionControls({
         style={{
           gap: 4,
           padding: 4,
-          border: "1px solid var(--border)",
+          border: "var(--hairline) solid var(--border)",
           borderRadius: "var(--radius-panel)",
           background: "var(--bg-sunken)",
         }}
@@ -216,7 +216,7 @@ function SessionControls({
             className="inline-flex items-center transition-colors text-label"
             style={{
               gap: 6,
-              padding: "4px 10px",
+              padding: "var(--sp-1) var(--sp-2_5)",
               color: "var(--fg-2)",
               borderRadius: "var(--radius-input)",
             }}
@@ -237,13 +237,10 @@ function SessionControls({
               setTerminateOpen(true);
             }}
             disabled={terminateMut.isPending}
-            className="inline-flex items-center transition-colors text-label"
+            className="inline-flex items-center transition-colors text-label font-semibold"
             style={{
               gap: 6,
-              padding: "4px 10px",
-              // Terminate button intentionally 600 (heavier than text-label 500)
-              // so it reads as a destructive action.
-              fontWeight: 600,
+              padding: "var(--sp-1) var(--sp-2_5)",
               color: "var(--state-error)",
               background: "color-mix(in oklch, var(--state-error) 18%, transparent)",
               borderRadius: "var(--radius-input)",
@@ -298,17 +295,17 @@ function TerminateSessionDialog(props: {
           <DialogTitle>Terminate session?</DialogTitle>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4">
-          <p className="text-sm text-muted-foreground">
+          <p className="text-body text-muted-foreground">
             Ending this session is permanent. It is removed from the workspace and cannot be resumed. Chat history is
             preserved; a new message will start a fresh session.
           </p>
           <div
             className="mono text-label"
             style={{
-              padding: "8px 10px",
+              padding: "var(--sp-2) var(--sp-2_5)",
               borderRadius: "var(--radius-input)",
               background: "var(--bg-sunken)",
-              border: "1px solid var(--border)",
+              border: "var(--hairline) solid var(--border)",
               color: "var(--fg-2)",
               display: "grid",
               gap: 4,
@@ -357,7 +354,7 @@ function ToolCallStatusRow({ event }: { event: SessionEventRow }) {
       className="mono flex items-center text-label"
       style={{
         gap: 8,
-        padding: "2px 8px",
+        padding: "var(--sp-0_5) var(--sp-2)",
         color: "var(--fg-3)",
       }}
     >
@@ -431,16 +428,16 @@ function AssistantTextRow({
     <div
       className="grid"
       style={{
-        gridTemplateColumns: "20px 1fr",
+        gridTemplateColumns: "var(--sp-5) 1fr",
         columnGap: 8,
-        padding: "4px 0",
+        padding: "var(--sp-1) 0",
         opacity: 0.85,
       }}
     >
       <Avatar name={senderName} isSelf={false} />
       <div className="min-w-0">
         <div className="flex items-baseline" style={{ gap: 8 }}>
-          <span className="mono text-label" style={{ fontWeight: 600, color: "var(--accent)" }}>
+          <span className="mono text-label font-semibold" style={{ color: "var(--accent)" }}>
             {senderName}
           </span>
           <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
@@ -456,9 +453,6 @@ function AssistantTextRow({
             color: "var(--fg-2)",
             whiteSpace: "pre-wrap",
             marginTop: 2,
-            // Slightly taller than body token line-height (1.5) for chat
-            // readability.
-            lineHeight: 1.55,
           }}
         >
           {payload.text}
@@ -479,7 +473,7 @@ function ThinkingRow({ event }: { event: SessionEventRow }) {
       className="mono flex items-center text-label"
       style={{
         gap: 8,
-        padding: "2px 8px",
+        padding: "var(--sp-0_5) var(--sp-2)",
         color: "var(--fg-3)",
       }}
     >
@@ -508,8 +502,8 @@ function ErrorRow({ event }: { event: SessionEventRow }) {
   return (
     <div
       style={{
-        padding: "6px 10px",
-        borderLeft: "2px solid var(--state-error)",
+        padding: "var(--sp-1_5) var(--sp-2_5)",
+        borderLeft: "var(--hairline-bold) solid var(--state-error)",
         background: "color-mix(in oklch, var(--state-error) 6%, transparent)",
         borderRadius: "0 var(--radius-input) var(--radius-input) 0",
       }}
@@ -535,7 +529,7 @@ function Avatar({ name, isSelf }: { name: string; isSelf: boolean }) {
   const initials = name.slice(0, 2).toUpperCase();
   return (
     <div
-      className="mono"
+      className="mono text-eyebrow font-bold"
       style={{
         width: 20,
         height: 20,
@@ -543,13 +537,9 @@ function Avatar({ name, isSelf }: { name: string; isSelf: boolean }) {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        // Avatar initials — intentionally outside the text scale because
-        // the container is 20×20 and we need a very condensed bold letter.
-        fontSize: 9,
-        fontWeight: 700,
         flexShrink: 0,
         background: isSelf ? "linear-gradient(135deg, var(--accent), oklch(0.58 0.14 170))" : "var(--bg-active)",
-        border: isSelf ? "none" : "1px solid var(--border-strong)",
+        border: isSelf ? "none" : "var(--hairline) solid var(--border-strong)",
         color: isSelf ? "oklch(0.14 0.01 150)" : "var(--fg-2)",
       }}
     >
@@ -574,18 +564,17 @@ function TextRow({
     <div
       className="grid"
       style={{
-        gridTemplateColumns: "20px 1fr",
+        gridTemplateColumns: "var(--sp-5) 1fr",
         columnGap: 8,
-        padding: "6px 0",
+        padding: "var(--sp-1_5) 0",
       }}
     >
       <Avatar name={senderName} isSelf={isSelf} />
       <div className="min-w-0">
         <div className="flex items-baseline" style={{ gap: 8 }}>
           <span
-            className="mono text-body"
+            className="mono text-body font-semibold"
             style={{
-              fontWeight: 600,
               color: isSelf ? "var(--fg)" : "var(--accent)",
             }}
           >
@@ -603,8 +592,6 @@ function TextRow({
           style={{
             color: "var(--fg)",
             marginTop: 2,
-            // Slightly taller than the body token line-height for chat prose.
-            lineHeight: 1.55,
           }}
         >
           {msg.format === "file" && isImageContent(msg.content) ? (
@@ -829,8 +816,8 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
         style={{
           gridTemplateColumns: "1fr auto",
           gap: 10,
-          padding: "10px 14px",
-          borderBottom: "1px solid var(--border)",
+          padding: "var(--sp-2_5) var(--sp-3_5)",
+          borderBottom: "var(--hairline) solid var(--border)",
         }}
       >
         <div className="min-w-0">
@@ -860,9 +847,9 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
                     minWidth: 0,
                     color: "var(--fg)",
                     background: "var(--bg-sunken)",
-                    border: "1px solid var(--border)",
+                    border: "var(--hairline) solid var(--border)",
                     borderRadius: "var(--radius-input)",
-                    padding: "2px 6px",
+                    padding: "var(--sp-0_5) var(--sp-1_5)",
                   }}
                 />
                 <button
@@ -911,8 +898,8 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
               className="mono text-caption"
               style={{
                 color: "var(--fg-4)",
-                padding: "1px 5px",
-                border: "1px solid var(--border)",
+                padding: "var(--hairline) var(--sp-1_25)",
+                border: "var(--hairline) solid var(--border)",
                 borderRadius: "var(--radius-chip)",
               }}
             >
@@ -955,11 +942,11 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
       </div>
 
       {/* Timeline */}
-      <div className="flex-1 overflow-y-auto" style={{ padding: "10px 14px" }}>
+      <div className="flex-1 overflow-y-auto relative" style={{ padding: "var(--sp-2_5) var(--sp-3_5)" }}>
         {itemCount === 0 && (
           <div
-            className="flex flex-col items-center"
-            style={{ color: "var(--fg-3)", fontSize: 13, padding: "32px 0", gap: 6 }}
+            className="flex flex-col items-center text-body"
+            style={{ color: "var(--fg-3)", padding: "var(--sp-8) 0", gap: 6 }}
           >
             <MessageSquare className="h-8 w-8" style={{ opacity: 0.3 }} />
             Send a message to start the conversation
@@ -993,15 +980,15 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
       <div
         className="shrink-0"
         style={{
-          padding: "10px 14px",
-          borderTop: "1px solid var(--border)",
+          padding: "var(--sp-2_5) var(--sp-3_5)",
+          borderTop: "var(--hairline) solid var(--border)",
         }}
       >
         {/* biome-ignore lint/a11y/noStaticElementInteractions: drop target for image upload */}
         <div
           style={{
             position: "relative",
-            border: "1px solid var(--border)",
+            border: "var(--hairline) solid var(--border)",
             borderRadius: 6,
             background: "var(--bg-sunken)",
           }}
@@ -1013,7 +1000,10 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
         >
           {/* Image preview area — above textarea */}
           {pendingImages.length > 0 && (
-            <div className="flex items-center" style={{ gap: 6, padding: "6px 10px 0", overflowX: "auto" }}>
+            <div
+              className="flex items-center"
+              style={{ gap: 6, padding: "var(--sp-1_5) var(--sp-2_5) 0", overflowX: "auto" }}
+            >
               {pendingImages.map((img) => (
                 <div
                   key={img.id}
@@ -1021,7 +1011,7 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
                     position: "relative",
                     flexShrink: 0,
                     borderRadius: 4,
-                    border: "1px solid var(--border)",
+                    border: "var(--hairline) solid var(--border)",
                     overflow: "hidden",
                   }}
                 >
@@ -1040,9 +1030,9 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
                       width: 14,
                       height: 14,
                       borderRadius: "50%",
-                      background: "rgba(0,0,0,0.6)",
+                      background: "var(--color-overlay-scrim)",
                       border: "none",
-                      color: "#fff",
+                      color: "var(--bg-raised)",
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
@@ -1075,15 +1065,12 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
               }
             }}
             disabled={sendMut.isPending || uploading}
-            className="w-full outline-none"
+            className="w-full outline-none text-subtitle font-normal"
             style={{
-              padding: "9px 12px 30px",
-              // Slightly larger than body text for the active compose input.
-              fontSize: 13,
+              padding: "var(--sp-2_25) var(--sp-3) var(--sp-7_5)",
               background: "transparent",
               border: "none",
               resize: "none",
-              fontFamily: "var(--font-sans)",
               color: "var(--fg)",
             }}
           />
@@ -1146,19 +1133,16 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
                 onClick={handleSend}
                 disabled={sendMut.isPending || uploading || (!draft.trim() && pendingImages.length === 0)}
                 className={cn(
-                  "inline-flex items-center transition-colors text-label",
+                  "inline-flex items-center transition-colors text-label font-semibold",
                   (sendMut.isPending || uploading || (!draft.trim() && pendingImages.length === 0)) &&
                     "opacity-50 cursor-not-allowed",
                 )}
                 style={{
                   gap: 6,
-                  padding: "4px 10px",
-                  // 600 weight overrides the text-label token (500) for the
-                  // primary "Send" affirmation button.
-                  fontWeight: 600,
+                  padding: "var(--sp-1) var(--sp-2_5)",
                   color: "oklch(0.14 0.01 150)",
                   background: "var(--accent)",
-                  border: "1px solid var(--accent)",
+                  border: "var(--hairline) solid var(--accent)",
                   borderRadius: "var(--radius-input)",
                 }}
               >
@@ -1172,7 +1156,7 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
             className="mono text-label"
             style={{
               color: "var(--state-error)",
-              padding: "6px 2px 0",
+              padding: "var(--sp-1_5) var(--sp-0_5) 0",
             }}
           >
             {uploadError ?? (sendMut.error instanceof Error ? sendMut.error.message : "Failed to send")}

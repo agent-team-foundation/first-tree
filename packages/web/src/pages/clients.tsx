@@ -54,9 +54,9 @@ function ConnectStrip() {
       className="grid items-center gap-2.5 mb-3.5"
       style={{
         gridTemplateColumns: "auto 1fr auto auto",
-        padding: "8px 12px",
+        padding: "var(--sp-2) var(--sp-3)",
         background: "var(--bg-raised)",
-        border: "1px solid var(--border)",
+        border: "var(--hairline) solid var(--border)",
         borderRadius: "var(--radius-panel)",
       }}
     >
@@ -68,9 +68,9 @@ function ConnectStrip() {
         <code
           className="mono whitespace-nowrap overflow-hidden text-ellipsis text-label"
           style={{
-            padding: "5px 10px",
+            padding: "var(--sp-1_25) var(--sp-2_5)",
             background: "var(--bg-sunken)",
-            border: "1px solid var(--border-faint)",
+            border: "var(--hairline) solid var(--border-faint)",
             borderRadius: "var(--radius-input)",
             color: "var(--fg-2)",
           }}
@@ -170,25 +170,25 @@ export function ClientsPage() {
         }
       />
 
-      <div style={{ padding: "14px 20px 28px" }}>
+      <div style={{ padding: "var(--sp-3_5) var(--sp-5) var(--sp-7)" }}>
         <ConnectStrip />
 
         {confirmRetire && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay-scrim">
             <div
               className="max-w-md w-full"
               style={{
                 background: "var(--bg-raised)",
-                border: "1px solid var(--border)",
+                border: "var(--hairline) solid var(--border)",
                 borderRadius: "var(--radius-panel)",
                 padding: 24,
                 boxShadow: "var(--shadow-md)",
               }}
             >
-              <h3 className="text-base font-semibold mb-2">Retire Computer</h3>
-              <p className="text-sm mb-3" style={{ color: "var(--fg-3)" }}>
+              <h3 className="text-subtitle mb-2">Retire Computer</h3>
+              <p className="text-body mb-3" style={{ color: "var(--fg-3)" }}>
                 Permanently remove{" "}
-                <span style={{ color: "var(--fg)", fontWeight: 500 }}>
+                <span className="font-medium" style={{ color: "var(--fg)" }}>
                   {confirmRetire.hostname ?? confirmRetire.id.slice(0, 8)}
                 </span>
                 . Retire refuses if any agent is still pinned to this computer — you must delete those agents first
@@ -199,13 +199,11 @@ export function ClientsPage() {
                   className="mb-3 p-2 rounded"
                   style={{
                     background: "color-mix(in oklch, var(--state-blocked) 12%, transparent)",
-                    border: "1px solid color-mix(in oklch, var(--state-blocked) 28%, transparent)",
+                    border: "var(--hairline) solid color-mix(in oklch, var(--state-blocked) 28%, transparent)",
                   }}
                 >
-                  <div className="text-xs font-medium mb-1">
-                    Agents currently bound to this computer (delete them first):
-                  </div>
-                  <ul className="text-sm space-y-0.5">
+                  <div className="text-label mb-1">Agents currently bound to this computer (delete them first):</div>
+                  <ul className="text-body space-y-0.5">
                     {getClientAgents(confirmRetire.id).map((a) => (
                       <li key={a.agentId} className="font-medium">
                         {agentName(a.agentId)}
@@ -216,10 +214,10 @@ export function ClientsPage() {
               )}
               {retireError && (
                 <div
-                  className="mb-3 p-2 rounded text-sm"
+                  className="mb-3 p-2 rounded text-body"
                   style={{
                     background: "color-mix(in oklch, var(--state-error) 12%, transparent)",
-                    border: "1px solid color-mix(in oklch, var(--state-error) 28%, transparent)",
+                    border: "var(--hairline) solid color-mix(in oklch, var(--state-error) 28%, transparent)",
                     color: "var(--state-error)",
                   }}
                 >
@@ -251,33 +249,33 @@ export function ClientsPage() {
         )}
 
         {confirmDisconnect && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay-scrim">
             <div
               className="max-w-md w-full"
               style={{
                 background: "var(--bg-raised)",
-                border: "1px solid var(--border)",
+                border: "var(--hairline) solid var(--border)",
                 borderRadius: "var(--radius-panel)",
                 padding: 24,
                 boxShadow: "var(--shadow-md)",
               }}
             >
-              <h3 className="text-base font-semibold mb-2">Disconnect Computer</h3>
-              <p className="text-sm mb-3" style={{ color: "var(--fg-3)" }}>
+              <h3 className="text-subtitle mb-2">Disconnect Computer</h3>
+              <p className="text-body mb-3" style={{ color: "var(--fg-3)" }}>
                 This will disconnect{" "}
-                <span style={{ color: "var(--fg)", fontWeight: 500 }}>
+                <span className="font-medium" style={{ color: "var(--fg)" }}>
                   {confirmDisconnect.hostname ?? confirmDisconnect.id.slice(0, 8)}
                 </span>{" "}
                 and affect all bound agents:
               </p>
               <ul className="mb-4 space-y-1">
                 {getClientAgents(confirmDisconnect.id).length === 0 ? (
-                  <li className="text-sm" style={{ color: "var(--fg-3)" }}>
+                  <li className="text-body" style={{ color: "var(--fg-3)" }}>
                     No bound agents
                   </li>
                 ) : (
                   getClientAgents(confirmDisconnect.id).map((a) => (
-                    <li key={a.agentId} className="text-sm flex items-center gap-2">
+                    <li key={a.agentId} className="text-body flex items-center gap-2">
                       <span className="font-medium">{agentName(a.agentId)}</span>
                       <StateChip state={a.runtimeState} />
                     </li>
@@ -314,10 +312,7 @@ export function ClientsPage() {
                 // SectionHeader is uppercased with 0.1em tracking; this helper
                 // text inside its `right` slot overrides back to a plain mono
                 // caption so it reads as prose, not an eyebrow.
-                <span
-                  className="mono text-caption"
-                  style={{ color: "var(--fg-3)", textTransform: "none", letterSpacing: 0 }}
-                >
+                <span className="mono text-caption normal-case tracking-normal" style={{ color: "var(--fg-3)" }}>
                   click a row to expand
                 </span>
               }
@@ -400,7 +395,7 @@ function ClientRow({
             {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
           </span>
         </DenseTableCell>
-        <DenseTableCell style={{ fontWeight: 500 }}>{client.hostname ?? "—"}</DenseTableCell>
+        <DenseTableCell className="font-medium">{client.hostname ?? "—"}</DenseTableCell>
         {showOwner && <DenseTableCell style={{ color: "var(--fg-2)" }}>{ownerName(client.userId)}</DenseTableCell>}
         <DenseTableCell style={{ color: "var(--fg-3)" }}>{client.os ?? "—"}</DenseTableCell>
         <DenseTableCell className="mono text-label" style={{ color: "var(--fg-3)" }}>
@@ -446,7 +441,7 @@ function ClientRow({
       {isExpanded && (
         <tr style={{ background: "var(--bg-sunken)" }}>
           <DenseTableCell />
-          <DenseTableCell colSpan={colSpan - 1} style={{ padding: "10px 12px 14px" }}>
+          <DenseTableCell colSpan={colSpan - 1} style={{ padding: "var(--sp-2_5) var(--sp-3) var(--sp-3_5)" }}>
             <UppercaseLabel style={{ display: "block", marginBottom: 6 }}>
               Bound agents · {boundAgents.length}
             </UppercaseLabel>
@@ -458,7 +453,7 @@ function ClientRow({
               <div className="flex flex-col gap-1">
                 {boundAgents.map((a) => (
                   <div key={a.agentId} className="flex items-center gap-2.5 text-body">
-                    <span className="mono" style={{ fontWeight: 500, minWidth: 180 }}>
+                    <span className="mono font-medium" style={{ minWidth: 180 }}>
                       {agentName(a.agentId)}
                     </span>
                     <StateChip state={a.runtimeState} />

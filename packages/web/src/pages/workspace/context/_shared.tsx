@@ -13,14 +13,11 @@ export function SectionLabel({ children }: { children: ReactNode }) {
 export function KV({ children }: { children: ReactNode }) {
   return (
     <div
-      className="grid"
+      className="grid text-body"
       style={{
         gridTemplateColumns: "auto 1fr",
         columnGap: 10,
         rowGap: 4,
-        // 13px sits between text-body (12) and text-subtitle (13/600).
-        // Kept inline as a deliberate KV-list size — no token match.
-        fontSize: 13,
       }}
     >
       {children}

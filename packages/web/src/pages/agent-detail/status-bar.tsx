@@ -28,26 +28,26 @@ type Tone = "neutral" | "danger" | "warning" | "muted";
 function toneClasses(tone: Tone): string {
   switch (tone) {
     case "danger":
-      return "border-red-300 bg-red-50 text-red-900";
+      return "border-error bg-error-soft text-error";
     case "warning":
-      return "border-amber-300 bg-amber-50 text-amber-900";
+      return "border-warn bg-warn-soft text-warn";
     case "muted":
-      return "border-gray-300 bg-gray-50 text-gray-700";
+      return "border bg-muted text-muted-foreground";
     default:
-      return "border-gray-200 bg-white text-gray-800";
+      return "border bg-card text-foreground";
   }
 }
 
 function dotClasses(tone: Tone): string {
   switch (tone) {
     case "danger":
-      return "bg-red-500";
+      return "bg-state-error";
     case "warning":
-      return "bg-amber-500";
+      return "bg-state-blocked";
     case "muted":
-      return "bg-gray-400";
+      return "bg-fg-4";
     default:
-      return "bg-green-500";
+      return "bg-state-idle";
   }
 }
 
@@ -100,7 +100,7 @@ export function StatusBar(inputs: StatusBarInputs) {
   const showOfflineHint = !isHuman && clientStatus && !clientStatus.online;
 
   return (
-    <div className={cn("rounded-md border px-4 py-3 text-sm space-y-1", toneClasses(primary.tone))}>
+    <div className={cn("rounded-md border px-4 py-3 text-body space-y-1", toneClasses(primary.tone))}>
       <div className="flex items-center gap-2 font-medium">
         <span className={cn("inline-block h-2 w-2 rounded-full", dotClasses(primary.tone))} aria-hidden />
         <span>{primary.symbol === "⚠" ? primary.symbol : null}</span>
@@ -109,7 +109,7 @@ export function StatusBar(inputs: StatusBarInputs) {
       </div>
 
       {!isHuman && (
-        <div className="text-xs text-muted-foreground">
+        <div className="text-caption text-muted-foreground">
           {clientStatus?.clientId ? (
             <>
               Computer <span className="font-mono">{clientStatus.clientId}</span>
@@ -127,18 +127,18 @@ export function StatusBar(inputs: StatusBarInputs) {
       )}
 
       {cfg && (
-        <div className="text-xs text-muted-foreground">
+        <div className="text-caption text-muted-foreground">
           Config updated by <span className="font-medium">{cfg.updatedBy || "—"}</span> · {relative(cfg.updatedAt)}
         </div>
       )}
 
       {showOfflineHint && (
-        <p className="mt-1 text-xs text-amber-900">
+        <p className="mt-1 text-caption text-warn">
           Changes saved here won't take effect until the computer reconnects.
         </p>
       )}
       {!isHuman && !clientStatus?.clientId && agent.status === "active" && (
-        <p className="mt-1 text-xs text-muted-foreground">
+        <p className="mt-1 text-caption text-muted-foreground">
           Configure now; it will apply when a computer claims this agent.
         </p>
       )}

@@ -24,7 +24,7 @@ function Tile({ label, value, accent }: { label: string; value: string | number;
   return (
     <div
       style={{
-        padding: "6px 8px",
+        padding: "var(--sp-1_5) var(--sp-2)",
         background: "var(--bg-sunken)",
         borderRadius: "var(--radius-input)",
       }}
@@ -32,8 +32,7 @@ function Tile({ label, value, accent }: { label: string; value: string | number;
       <div className="mono uppercase text-caption" style={{ color: "var(--fg-4)" }}>
         {label}
       </div>
-      {/* 15px / 600 is a deliberate tile-number size; no token match at 15px. */}
-      <div className="mono" style={{ fontSize: 15, fontWeight: 600, color: accent ?? "var(--fg)" }}>
+      <div className="mono text-subtitle" style={{ color: accent ?? "var(--fg)" }}>
         {value}
       </div>
     </div>
@@ -113,8 +112,8 @@ export function AgentContext({ agentId }: { agentId: string }) {
       {/* Agent card */}
       <div
         style={{
-          padding: "12px 14px",
-          borderBottom: "1px solid var(--border-faint)",
+          padding: "var(--sp-3) var(--sp-3_5)",
+          borderBottom: "var(--hairline) solid var(--border-faint)",
         }}
       >
         <div className="flex items-center" style={{ gap: 10 }}>
@@ -125,14 +124,15 @@ export function AgentContext({ agentId }: { agentId: string }) {
               height: 32,
               borderRadius: 5,
               background: "var(--bg-active)",
-              border: "1px solid var(--border-strong)",
+              border: "var(--hairline) solid var(--border-strong)",
             }}
           >
             <FirstTreeLogo width={14} height={16} style={{ color: "var(--accent)" }} />
           </div>
           <div className="flex-1 min-w-0">
-            {/* 15px / 600 is the workspace agent-card display name; no token match. */}
-            <div style={{ fontSize: 15, fontWeight: 600, color: "var(--fg)" }}>{displayName}</div>
+            <div className="text-subtitle" style={{ color: "var(--fg)" }}>
+              {displayName}
+            </div>
             <div className="mono truncate text-body" style={{ color: "var(--fg-4)" }}>
               {agentId}
             </div>
@@ -164,34 +164,26 @@ export function AgentContext({ agentId }: { agentId: string }) {
       {/* Client / runtime */}
       <div
         style={{
-          padding: "12px 14px",
-          borderBottom: "1px solid var(--border-faint)",
+          padding: "var(--sp-3) var(--sp-3_5)",
+          borderBottom: "var(--hairline) solid var(--border-faint)",
         }}
       >
         <SectionLabel>Computer · runtime</SectionLabel>
         <KV>
           <KVRow label="host">
-            <span className="mono" style={{ fontSize: 13 }}>
-              {client?.hostname ?? "—"}
-            </span>
+            <span className="mono text-label">{client?.hostname ?? "—"}</span>
           </KVRow>
           <KVRow label="os">
-            <span className="mono" style={{ fontSize: 13 }}>
-              {client?.os ?? "—"}
-            </span>
+            <span className="mono text-label">{client?.os ?? "—"}</span>
           </KVRow>
           <KVRow label="runtime">
             <span className="mono">{agent?.runtimeType ?? "—"}</span>
           </KVRow>
           <KVRow label="sdk">
-            <span className="mono" style={{ fontSize: 13 }}>
-              {client?.sdkVersion ?? "—"}
-            </span>
+            <span className="mono text-label">{client?.sdkVersion ?? "—"}</span>
           </KVRow>
           <KVRow label="connected">
-            <span className="mono" style={{ fontSize: 13 }}>
-              {formatUptime(client?.connectedAt ?? null)}
-            </span>
+            <span className="mono text-label">{formatUptime(client?.connectedAt ?? null)}</span>
           </KVRow>
         </KV>
       </div>
@@ -199,24 +191,24 @@ export function AgentContext({ agentId }: { agentId: string }) {
       {/* Links */}
       <div
         style={{
-          padding: "10px 14px",
-          borderBottom: "1px solid var(--border-faint)",
+          padding: "var(--sp-2_5) var(--sp-3_5)",
+          borderBottom: "var(--hairline) solid var(--border-faint)",
         }}
         className="flex flex-col"
       >
-        <a href={`/agents/${agentId}`} style={{ fontSize: 13, color: "var(--accent)" }} className="hover:underline">
+        <a href={`/agents/${agentId}`} style={{ color: "var(--accent)" }} className="hover:underline text-label">
           Manage agent →
         </a>
-        <a href="/clients" style={{ fontSize: 13, color: "var(--accent)", marginTop: 4 }} className="hover:underline">
+        <a href="/clients" style={{ color: "var(--accent)", marginTop: 4 }} className="hover:underline text-label">
           Computers →
         </a>
       </div>
 
       {/* Notifications */}
-      <div style={{ padding: "12px 14px" }}>
+      <div style={{ padding: "var(--sp-3) var(--sp-3_5)" }}>
         <SectionLabel>Notifications</SectionLabel>
         {!notifications?.items || notifications.items.length === 0 ? (
-          <div className="text-center" style={{ fontSize: 13, color: "var(--fg-3)", padding: "12px 0" }}>
+          <div className="text-center text-label" style={{ color: "var(--fg-3)", padding: "var(--sp-3) 0" }}>
             No notifications for this agent
           </div>
         ) : (

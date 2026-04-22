@@ -16,8 +16,8 @@ export function SessionContext({ agentId, chatId }: { agentId: string; chatId: s
       {/* Session KV at top */}
       <div
         style={{
-          padding: "12px 14px",
-          borderBottom: "1px solid var(--border-faint)",
+          padding: "var(--sp-3) var(--sp-3_5)",
+          borderBottom: "var(--hairline) solid var(--border-faint)",
         }}
       >
         <SectionLabel>Session</SectionLabel>

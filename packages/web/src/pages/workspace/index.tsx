@@ -70,7 +70,7 @@ export function WorkspacePage() {
           className="shrink-0 flex flex-col overflow-hidden"
           style={{
             width: 290,
-            borderLeft: "1px solid var(--border)",
+            borderLeft: "var(--hairline) solid var(--border)",
             background: "var(--bg-raised)",
           }}
         >

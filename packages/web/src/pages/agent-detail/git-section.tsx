@@ -31,15 +31,17 @@ export function GitSection(props: GitSectionProps) {
     <section
       style={{
         background: "var(--bg-raised)",
-        border: "1px solid var(--border)",
+        border: "var(--hairline) solid var(--border)",
         borderRadius: 6,
       }}
     >
       <header
         className="flex items-center justify-between"
-        style={{ padding: "10px 14px", borderBottom: "1px solid var(--border-faint)" }}
+        style={{ padding: "var(--sp-2_5) var(--sp-3_5)", borderBottom: "var(--hairline) solid var(--border-faint)" }}
       >
-        <h3 style={{ fontSize: 12, fontWeight: 600, color: "var(--fg)" }}>Git Repositories ({activeCount})</h3>
+        <h3 className="text-body font-semibold" style={{ color: "var(--fg)" }}>
+          Git Repositories ({activeCount})
+        </h3>
         {!props.disabled && (
           <Button size="xs" variant="outline" onClick={() => setDialog({ mode: "add" })}>
             <Plus className="h-3 w-3" /> Add
@@ -48,7 +50,7 @@ export function GitSection(props: GitSectionProps) {
       </header>
       <div className="px-4 py-3 space-y-2">
         {props.items.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No Git repositories.</p>
+          <p className="text-body text-muted-foreground">No Git repositories.</p>
         ) : (
           props.items.map((item) => {
             const path = item.value.localPath ?? deriveRepoLocalPath(item.value.url);
@@ -61,9 +63,9 @@ export function GitSection(props: GitSectionProps) {
                 onUndo={() => props.onUndoDelete(item.key)}
                 disabled={props.disabled}
               >
-                <span className="font-mono text-xs">{item.value.url}</span>
-                {item.value.ref && <span className="text-xs text-muted-foreground">@ {item.value.ref}</span>}
-                <span className="text-xs text-muted-foreground">→ {path || "./"}</span>
+                <span className="font-mono text-caption">{item.value.url}</span>
+                {item.value.ref && <span className="text-caption text-muted-foreground">@ {item.value.ref}</span>}
+                <span className="text-caption text-muted-foreground">→ {path || "./"}</span>
               </ListRow>
             );
           })
@@ -164,11 +166,11 @@ function GitDialog({ open, onOpenChange, initial, forbiddenPaths, onSubmit }: Gi
               placeholder={deriveRepoLocalPath(url) || "repo-name"}
               className="font-mono"
             />
-            <p className="text-xs text-muted-foreground">
+            <p className="text-caption text-muted-foreground">
               Relative to the session working directory. Leave empty to derive from the URL.
             </p>
           </div>
-          {err && <p className="text-sm text-destructive">{err}</p>}
+          {err && <p className="text-body text-destructive">{err}</p>}
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
               Cancel

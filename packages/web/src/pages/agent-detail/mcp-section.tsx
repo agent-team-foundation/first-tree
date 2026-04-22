@@ -33,15 +33,17 @@ export function McpSection(props: McpSectionProps) {
     <section
       style={{
         background: "var(--bg-raised)",
-        border: "1px solid var(--border)",
+        border: "var(--hairline) solid var(--border)",
         borderRadius: 6,
       }}
     >
       <header
         className="flex items-center justify-between"
-        style={{ padding: "10px 14px", borderBottom: "1px solid var(--border-faint)" }}
+        style={{ padding: "var(--sp-2_5) var(--sp-3_5)", borderBottom: "var(--hairline) solid var(--border-faint)" }}
       >
-        <h3 style={{ fontSize: 12, fontWeight: 600, color: "var(--fg)" }}>MCP Servers ({activeCount})</h3>
+        <h3 className="text-body font-semibold" style={{ color: "var(--fg)" }}>
+          MCP Servers ({activeCount})
+        </h3>
         {!props.disabled && (
           <Button size="xs" variant="outline" onClick={() => setDialog({ mode: "add" })}>
             <Plus className="h-3 w-3" /> Add
@@ -50,7 +52,7 @@ export function McpSection(props: McpSectionProps) {
       </header>
       <div className="px-4 py-3 space-y-2">
         {props.items.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No MCP servers. Add one to extend the agent's tools.</p>
+          <p className="text-body text-muted-foreground">No MCP servers. Add one to extend the agent's tools.</p>
         ) : (
           props.items.map((item) => (
             <ListRow
@@ -61,9 +63,9 @@ export function McpSection(props: McpSectionProps) {
               onUndo={() => props.onUndoDelete(item.key)}
               disabled={props.disabled}
             >
-              <span className="text-xs rounded bg-gray-100 px-1.5 py-0.5 font-mono">{item.value.transport}</span>
+              <span className="text-caption rounded bg-muted px-1.5 py-0.5 font-mono">{item.value.transport}</span>
               <span className="font-medium font-mono">{item.value.name}</span>
-              <span className="text-xs text-muted-foreground truncate">{describeMcp(item.value)}</span>
+              <span className="text-caption text-muted-foreground truncate">{describeMcp(item.value)}</span>
             </ListRow>
           ))
         )}
@@ -171,7 +173,7 @@ function McpDialog({ open, onOpenChange, initial, forbiddenNames, onSubmit }: Mc
               id="mcp-transport"
               value={transport}
               onChange={(e) => setTransport(e.target.value as "stdio" | "http" | "sse")}
-              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className="flex h-9 w-full rounded-[var(--radius-input)] border border-input bg-transparent px-3 py-1 text-body shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             >
               <option value="stdio">stdio (local subprocess)</option>
               <option value="http">http</option>
@@ -223,7 +225,7 @@ function McpDialog({ open, onOpenChange, initial, forbiddenNames, onSubmit }: Mc
               />
             </div>
           )}
-          {err && <p className="text-sm text-destructive">{err}</p>}
+          {err && <p className="text-body text-destructive">{err}</p>}
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
               Cancel

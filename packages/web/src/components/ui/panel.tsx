@@ -7,7 +7,7 @@ const Panel = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(({ clas
     className={cn("overflow-hidden", className)}
     style={{
       background: "var(--bg-raised)",
-      border: "1px solid var(--border)",
+      border: "var(--hairline) solid var(--border)",
       borderRadius: "var(--radius-panel)",
     }}
     {...props}
@@ -20,8 +20,8 @@ const PanelHeader = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>((
     ref={ref}
     className={cn("flex items-center justify-between gap-3", className)}
     style={{
-      padding: "10px 14px",
-      borderBottom: "1px solid var(--border-faint)",
+      padding: "var(--sp-2_5) var(--sp-3_5)",
+      borderBottom: "var(--hairline) solid var(--border-faint)",
     }}
     {...props}
   />
@@ -31,17 +31,15 @@ PanelHeader.displayName = "PanelHeader";
 const PanelTitle = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(({ className, ...props }, ref) => (
   <div
     ref={ref}
-    className={cn("inline-flex items-center gap-2 text-body", className)}
-    // Panel titles are explicitly semibold (600) — distinct from body weight.
-    // Kept inline so the intent is obvious alongside the `text-body` token.
-    style={{ color: "var(--fg)", fontWeight: 600 }}
+    className={cn("inline-flex items-center gap-2 text-body font-semibold", className)}
+    style={{ color: "var(--fg)" }}
     {...props}
   />
 ));
 PanelTitle.displayName = "PanelTitle";
 
 const PanelBody = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(({ className, ...props }, ref) => (
-  <div ref={ref} className={cn(className)} style={{ padding: "12px 14px" }} {...props} />
+  <div ref={ref} className={cn(className)} style={{ padding: "var(--sp-3) var(--sp-3_5)" }} {...props} />
 ));
 PanelBody.displayName = "PanelBody";
 

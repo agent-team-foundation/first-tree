@@ -6,10 +6,7 @@ const Label = forwardRef<HTMLLabelElement, ComponentPropsWithoutRef<typeof Label
   ({ className, ...props }, ref) => (
     <LabelPrimitive.Root
       ref={ref}
-      className={cn(
-        "text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70",
-        className,
-      )}
+      className={cn("text-label leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70", className)}
       {...props}
     />
   ),

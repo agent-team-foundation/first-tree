@@ -62,7 +62,7 @@ export function BindingsPage() {
 
   return (
     <>
-      <p className="text-label" style={{ color: "var(--fg-3)", padding: "0 2px 12px" }}>
+      <p className="text-label" style={{ color: "var(--fg-3)", padding: "0 var(--sp-0_5) var(--sp-3)" }}>
         Overview of platform bindings for agents you can manage. Configure each binding from the Agent detail page.
       </p>
 
@@ -74,7 +74,7 @@ export function BindingsPage() {
                 <span aria-hidden>●</span>
                 {onlineBots} online
               </span>
-              <span style={{ color: "var(--fg-4)", margin: "0 6px" }} aria-hidden>
+              <span style={{ color: "var(--fg-4)", margin: "0 var(--sp-1_5)" }} aria-hidden>
                 ·
               </span>
               <span className="mono inline-flex items-center gap-1" style={{ color: "var(--fg-4)" }}>
@@ -112,9 +112,7 @@ export function BindingsPage() {
                 return (
                   <DenseTableRow key={a.id} interactive onClick={() => navigate(`/agents/${a.agentId}`)}>
                     <DenseTableCell>
-                      <span className="mono" style={{ fontWeight: 500 }}>
-                        {resolveAgentName(a.agentId)}
-                      </span>
+                      <span className="mono font-medium">{resolveAgentName(a.agentId)}</span>
                     </DenseTableCell>
                     <DenseTableCell>
                       <DenseBadge>{a.platform}</DenseBadge>
@@ -179,7 +177,7 @@ export function BindingsPage() {
               {mappings.map((m) => (
                 <DenseTableRow key={m.id} interactive onClick={() => navigate(`/agents/${m.agentId}`)}>
                   <DenseTableCell>
-                    <span className="mono" style={{ fontWeight: 500, color: "var(--accent-dim)" }}>
+                    <span className="mono font-medium" style={{ color: "var(--accent-dim)" }}>
                       {resolveAgentName(m.agentId)}
                     </span>
                   </DenseTableCell>

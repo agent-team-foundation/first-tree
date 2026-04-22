@@ -180,13 +180,13 @@ export function AgentsPage() {
         }
       />
 
-      <div style={{ padding: "14px 20px 28px" }}>
+      <div style={{ padding: "var(--sp-3_5) var(--sp-5) var(--sp-7)" }}>
         <div
           className="flex items-center gap-2.5 mb-3.5"
           style={{
-            padding: "8px 10px",
+            padding: "var(--sp-2) var(--sp-2_5)",
             background: "var(--bg-raised)",
-            border: "1px solid var(--border)",
+            border: "var(--hairline) solid var(--border)",
             borderRadius: "var(--radius-panel)",
           }}
         >
@@ -202,9 +202,9 @@ export function AgentsPage() {
               placeholder="Filter by name, delegate, owner…"
               className="w-full outline-none text-body"
               style={{
-                padding: "5px 10px 5px 28px",
+                padding: "var(--sp-1_25) var(--sp-2_5) var(--sp-1_25) var(--sp-7)",
                 background: "var(--bg-sunken)",
-                border: "1px solid var(--border)",
+                border: "var(--hairline) solid var(--border)",
                 borderRadius: "var(--radius-input)",
                 color: "var(--fg)",
               }}
@@ -233,9 +233,9 @@ export function AgentsPage() {
             }}
             className="outline-none text-label"
             style={{
-              padding: "5px 10px",
+              padding: "var(--sp-1_25) var(--sp-2_5)",
               background: "var(--bg-sunken)",
-              border: "1px solid var(--border)",
+              border: "var(--hairline) solid var(--border)",
               borderRadius: "var(--radius-input)",
               color: "var(--fg)",
             }}
@@ -401,7 +401,7 @@ function StateBreakdown({ items }: { items: Array<{ state: string; count: number
       {nonZero.map((item, idx) => (
         <span key={item.state} className="inline-flex items-center">
           {idx > 0 && (
-            <span style={{ color: "var(--fg-4)", margin: "0 6px" }} aria-hidden>
+            <span style={{ color: "var(--fg-4)", margin: "0 var(--sp-1_5)" }} aria-hidden>
               ·
             </span>
           )}
@@ -441,9 +441,7 @@ function AgentRow({
   return (
     <DenseTableRow interactive onClick={() => navigate(`/agents/${agent.uuid}`)}>
       <DenseTableCell>
-        <span className="mono" style={{ fontWeight: 500 }}>
-          {agent.name}
-        </span>
+        <span className="mono font-medium">{agent.name}</span>
       </DenseTableCell>
       <DenseTableCell style={{ color: "var(--fg-2)" }}>{agent.displayName ?? "—"}</DenseTableCell>
       <DenseTableCell>

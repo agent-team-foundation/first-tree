@@ -118,14 +118,14 @@ export function MembersPage() {
                 </DialogHeader>
                 {createdPassword ? (
                   <div className="space-y-4">
-                    <p className="text-sm" style={{ color: "var(--fg-3)" }}>
+                    <p className="text-body" style={{ color: "var(--fg-3)" }}>
                       Member created. Share the password below — it will only be shown once.
                     </p>
                     <div
                       className="flex items-center gap-2 rounded-md p-3"
-                      style={{ background: "var(--bg-sunken)", border: "1px solid var(--border-faint)" }}
+                      style={{ background: "var(--bg-sunken)", border: "var(--hairline) solid var(--border-faint)" }}
                     >
-                      <code className="flex-1 text-sm mono">{createdPassword}</code>
+                      <code className="flex-1 text-body mono">{createdPassword}</code>
                       <Button
                         variant="ghost"
                         size="icon"
@@ -166,7 +166,7 @@ export function MembersPage() {
                         id="member-role"
                         value={form.role}
                         onChange={(e) => setForm({ ...form, role: e.target.value })}
-                        className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        className="flex h-9 w-full rounded-[var(--radius-input)] border border-input bg-transparent px-3 py-1 text-body shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                       >
                         {roleValues.map((r) => (
                           <option key={r} value={r}>
@@ -176,7 +176,7 @@ export function MembersPage() {
                       </select>
                     </div>
                     {createMut.error instanceof Error && (
-                      <div className="text-sm" style={{ color: "var(--state-error)" }}>
+                      <div className="text-body" style={{ color: "var(--state-error)" }}>
                         {createMut.error.message}
                       </div>
                     )}
@@ -225,16 +225,13 @@ export function MembersPage() {
                   <DenseTableRow key={m.id}>
                     <DenseTableCell>
                       <span
-                        // Avatar initials — 10px is intentionally at our min
-                        // floor to fit in a 22×22 square.
-                        className="mono inline-flex items-center justify-center text-caption"
+                        className="mono inline-flex items-center justify-center text-caption font-semibold"
                         style={{
                           width: 22,
                           height: 22,
                           borderRadius: "var(--radius-input)",
                           background: isSelf ? "var(--accent-bg)" : "var(--bg-active)",
-                          border: "1px solid var(--border-strong)",
-                          fontWeight: 600,
+                          border: "var(--hairline) solid var(--border-strong)",
                           color: isSelf ? "var(--accent-dim)" : "var(--fg-2)",
                         }}
                       >
@@ -242,9 +239,7 @@ export function MembersPage() {
                       </span>
                     </DenseTableCell>
                     <DenseTableCell>
-                      <span className="mono" style={{ fontWeight: 500 }}>
-                        {m.username}
-                      </span>
+                      <span className="mono font-medium">{m.username}</span>
                       {isSelf && <UppercaseLabel style={{ marginLeft: 6 }}>you</UppercaseLabel>}
                     </DenseTableCell>
                     <DenseTableCell style={{ color: "var(--fg-2)" }}>{m.displayName}</DenseTableCell>
@@ -366,7 +361,7 @@ function EditMemberDialog({
             <div className="space-y-2">
               <Label>Username</Label>
               <Input value={target.username} disabled className="font-mono" />
-              <p className="text-xs" style={{ color: "var(--fg-3)" }}>
+              <p className="text-caption" style={{ color: "var(--fg-3)" }}>
                 Username is permanent after creation.
               </p>
             </div>
@@ -386,7 +381,7 @@ function EditMemberDialog({
                 id="edit-member-role"
                 value={role}
                 onChange={(e) => setRole(e.target.value)}
-                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                className="flex h-9 w-full rounded-[var(--radius-input)] border border-input bg-transparent px-3 py-1 text-body shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
                 {roleValues.map((r) => (
                   <option key={r} value={r}>
@@ -394,12 +389,12 @@ function EditMemberDialog({
                   </option>
                 ))}
               </select>
-              <p className="text-xs" style={{ color: "var(--fg-3)" }}>
+              <p className="text-caption" style={{ color: "var(--fg-3)" }}>
                 Demoting the last admin is blocked — every org needs at least one admin to manage members.
               </p>
             </div>
             {error && (
-              <p className="text-sm" style={{ color: "var(--state-error)" }}>
+              <p className="text-body" style={{ color: "var(--state-error)" }}>
                 {error}
               </p>
             )}

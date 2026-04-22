@@ -78,13 +78,12 @@ export function NotificationBell() {
         <Bell className="h-4 w-4" />
         {hasUnread && (
           <span
-            className="absolute -top-0.5 -right-0.5 flex items-center justify-center rounded-full px-1 font-medium"
+            className="absolute -top-0.5 -right-0.5 flex items-center justify-center rounded-full px-1 font-medium text-label"
             style={{
               height: 16,
               minWidth: 16,
               background: "var(--state-error)",
               color: "var(--bg)",
-              fontSize: 11,
             }}
           >
             {unreadCount > 99 ? "99+" : unreadCount}
@@ -101,28 +100,28 @@ export function NotificationBell() {
             style={{
               width: 320,
               background: "var(--bg-raised)",
-              border: "1px solid var(--border)",
+              border: "var(--hairline) solid var(--border)",
               borderRadius: 6,
-              boxShadow: "0 8px 24px rgba(0,0,0,0.25)",
+              boxShadow: "var(--shadow-md)",
             }}
           >
             {/* Header — matches workspace SectionLabel cadence */}
             <div
               className="flex items-center justify-between"
               style={{
-                padding: "8px 12px",
-                borderBottom: "1px solid var(--border-faint)",
+                padding: "var(--sp-2) var(--sp-3)",
+                borderBottom: "var(--hairline) solid var(--border-faint)",
               }}
             >
-              <span className="mono uppercase" style={{ fontSize: 11, letterSpacing: 0.1, color: "var(--fg-4)" }}>
+              <span className="mono uppercase text-eyebrow" style={{ color: "var(--fg-4)" }}>
                 Notifications
               </span>
               {hasUnread && (
                 <button
                   type="button"
                   onClick={handleMarkAll}
-                  className="hover:underline"
-                  style={{ fontSize: 12, color: "var(--accent)" }}
+                  className="hover:underline text-body"
+                  style={{ color: "var(--accent)" }}
                 >
                   Mark all read
                 </button>
@@ -131,12 +130,12 @@ export function NotificationBell() {
 
             {markAllError && (
               <div
+                className="text-body"
                 style={{
-                  padding: "6px 12px",
-                  fontSize: 13,
+                  padding: "var(--sp-1_5) var(--sp-3)",
                   color: "var(--state-error)",
                   background: "var(--bg-sunken)",
-                  borderBottom: "1px solid var(--border-faint)",
+                  borderBottom: "var(--hairline) solid var(--border-faint)",
                 }}
               >
                 {markAllError}
@@ -145,7 +144,7 @@ export function NotificationBell() {
 
             <div className="flex flex-col overflow-y-auto" style={{ maxHeight: 360, padding: 8, gap: 4 }}>
               {!data?.items || data.items.length === 0 ? (
-                <div className="text-center" style={{ fontSize: 13, color: "var(--fg-3)", padding: "18px 0" }}>
+                <div className="text-center text-body" style={{ color: "var(--fg-3)", padding: "var(--sp-4_5) 0" }}>
                   No notifications
                 </div>
               ) : (

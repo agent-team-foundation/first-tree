@@ -117,7 +117,7 @@ export function OrgSettingsPage() {
             </Button>
           </div>
         </PanelHeader>
-        <div style={{ padding: "4px 16px 14px" }}>
+        <div style={{ padding: "var(--sp-1) var(--sp-4) var(--sp-3_5)" }}>
           {isLoading ? (
             <div className="py-6 text-body" style={{ color: "var(--fg-3)" }}>
               Loading…
@@ -133,7 +133,7 @@ export function OrgSettingsPage() {
             ))
           )}
           {mutation.error instanceof Error && (
-            <div className="text-sm pt-2" style={{ color: "var(--state-error)" }}>
+            <div className="text-body pt-2" style={{ color: "var(--state-error)" }}>
               {mutation.error.message}
             </div>
           )}
@@ -149,14 +149,14 @@ function ConfigRow({ field, value, onChange }: { field: ConfigMeta; value: strin
     <div
       className="grid items-start gap-5"
       style={{
-        gridTemplateColumns: "1fr 180px",
-        padding: "14px 0",
-        borderTop: "1px solid var(--border-faint)",
+        gridTemplateColumns: "1fr var(--sp-45)",
+        padding: "var(--sp-3_5) 0",
+        borderTop: "var(--hairline) solid var(--border-faint)",
       }}
     >
       <div>
         <div className="flex items-baseline gap-2">
-          <span className="text-body" style={{ fontWeight: 500, color: "var(--fg)" }}>
+          <span className="text-body font-medium" style={{ color: "var(--fg)" }}>
             {field.label}
           </span>
           <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
@@ -168,7 +168,7 @@ function ConfigRow({ field, value, onChange }: { field: ConfigMeta; value: strin
         </div>
         <UppercaseLabel style={{ marginTop: 4, display: "block" }}>
           default{" "}
-          <span className="mono" style={{ color: "var(--fg-3)", textTransform: "none", letterSpacing: 0 }}>
+          <span className="mono normal-case tracking-normal" style={{ color: "var(--fg-3)" }}>
             {def}
           </span>
         </UppercaseLabel>
@@ -179,9 +179,9 @@ function ConfigRow({ field, value, onChange }: { field: ConfigMeta; value: strin
           onChange={(e) => onChange(e.target.value)}
           className="w-full outline-none mono text-body"
           style={{
-            padding: `5px ${field.unit ? 56 : 10}px 5px 10px`,
+            padding: `var(--sp-1_25) ${field.unit ? 56 : 10}px var(--sp-1_25) var(--sp-2_5)`,
             background: "var(--bg-sunken)",
-            border: "1px solid var(--border)",
+            border: "var(--hairline) solid var(--border)",
             borderRadius: "var(--radius-input)",
             color: "var(--fg)",
           }}

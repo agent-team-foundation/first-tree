@@ -11,16 +11,16 @@ export function SectionHeader({ children, right, className, style, ...rest }: Se
     <div
       className={cn(
         // `text-eyebrow` bundles size/weight/letter-spacing/line-height.
-        // Size was bumped from 9px to 10px in the unified scale — Windows
-        // ClearType can't render 9px text cleanly at 125% DPI.
+        // Size was bumped from var(--sp-2_25) to var(--sp-2_5) in the unified scale — Windows
+        // ClearType can't render var(--sp-2_25) text cleanly at 125% DPI.
         "mono flex items-center justify-between uppercase text-eyebrow",
         className,
       )}
       style={{
-        padding: "7px 14px",
+        padding: "var(--sp-1_75) var(--sp-3_5)",
         color: "var(--fg-4)",
         background: "var(--bg-raised)",
-        borderBottom: "1px solid var(--border-faint)",
+        borderBottom: "var(--hairline) solid var(--border-faint)",
         ...style,
       }}
       {...rest}

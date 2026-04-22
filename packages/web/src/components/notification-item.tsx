@@ -68,13 +68,12 @@ export function NotificationItem({
     <button
       type="button"
       onClick={onClick}
-      className={cn("w-full text-left transition-colors", isClickable ? "cursor-pointer" : "cursor-default")}
+      className={cn("w-full text-left transition-colors text-body", isClickable ? "cursor-pointer" : "cursor-default")}
       style={{
-        padding: "6px 8px",
+        padding: "var(--sp-1_5) var(--sp-2)",
         background: !notification.read ? "var(--bg-sunken)" : "transparent",
-        borderLeft: `2px solid ${stripe}`,
-        borderRadius: "0 3px 3px 0",
-        fontSize: 13,
+        borderLeft: `var(--hairline-bold) solid ${stripe}`,
+        borderRadius: "0 var(--sp-0_75) var(--sp-0_75) 0",
       }}
       onMouseEnter={(e) => {
         if (isClickable) e.currentTarget.style.background = "var(--bg-hover)";
@@ -85,16 +84,14 @@ export function NotificationItem({
     >
       <div className="flex items-baseline justify-between" style={{ gap: 8 }}>
         <span
-          className="mono uppercase"
+          className="mono uppercase text-label"
           style={{
-            fontSize: 11,
-            letterSpacing: 0.08,
             color: notification.severity === "high" ? "var(--state-error)" : "var(--fg-3)",
           }}
         >
           {label.replace("_", " ")}
         </span>
-        <span className="mono" style={{ fontSize: 11, color: "var(--fg-4)", whiteSpace: "nowrap" }}>
+        <span className="mono text-label" style={{ color: "var(--fg-4)", whiteSpace: "nowrap" }}>
           {formatDate(notification.createdAt)}
         </span>
       </div>

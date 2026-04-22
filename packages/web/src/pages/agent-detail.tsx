@@ -426,19 +426,21 @@ export function AgentDetailPage() {
   };
 
   return (
-    <div className="-m-6 flex" style={{ minHeight: "calc(100vh - 40px)" }}>
+    <div className="-m-6 flex" style={{ minHeight: "calc(100vh - var(--sp-10))" }}>
       <aside
         className="shrink-0 overflow-auto"
         style={{
           width: 220,
-          borderRight: "1px solid var(--border)",
+          borderRight: "var(--hairline) solid var(--border)",
           background: "var(--bg-raised)",
-          padding: "12px 0",
+          padding: "var(--sp-3) 0",
         }}
       >
         {sidebarGroups.map((group) => (
           <div key={group.label} style={{ marginBottom: 12 }}>
-            <UppercaseLabel style={{ display: "block", padding: "4px 16px" }}>{group.label}</UppercaseLabel>
+            <UppercaseLabel style={{ display: "block", padding: "var(--sp-1) var(--sp-4)" }}>
+              {group.label}
+            </UppercaseLabel>
             {group.items.map((it) => (
               <button
                 key={it.key}
@@ -446,10 +448,10 @@ export function AgentDetailPage() {
                 onClick={() => jumpTo(it.anchor)}
                 className="block w-full text-left bg-transparent text-body"
                 style={{
-                  padding: "5px 16px 5px 14px",
+                  padding: "var(--sp-1_25) var(--sp-4) var(--sp-1_25) var(--sp-3_5)",
                   color: "var(--fg-3)",
                   border: "none",
-                  borderLeft: "2px solid transparent",
+                  borderLeft: "var(--hairline-bold) solid transparent",
                   cursor: "pointer",
                 }}
                 onMouseEnter={(e) => {
@@ -471,8 +473,8 @@ export function AgentDetailPage() {
       <div className="flex-1 min-w-0 overflow-auto" style={{ background: "var(--bg)" }}>
         <div
           style={{
-            padding: "14px 20px",
-            borderBottom: "1px solid var(--border-faint)",
+            padding: "var(--sp-3_5) var(--sp-5)",
+            borderBottom: "var(--hairline) solid var(--border-faint)",
             background: "var(--bg-raised)",
           }}
         >
@@ -489,7 +491,7 @@ export function AgentDetailPage() {
                 height: 36,
                 borderRadius: "var(--radius-panel)",
                 background: "var(--bg-active)",
-                border: "1px solid var(--border-strong)",
+                border: "var(--hairline) solid var(--border-strong)",
               }}
             >
               <FirstTreeLogo width={18} height={20} style={{ color: "var(--accent)" }} />
@@ -541,7 +543,13 @@ export function AgentDetailPage() {
 
         <div
           className="mx-auto"
-          style={{ padding: "14px 20px 28px", maxWidth: 960, display: "flex", flexDirection: "column", gap: 16 }}
+          style={{
+            padding: "var(--sp-3_5) var(--sp-5) var(--sp-7)",
+            maxWidth: 960,
+            display: "flex",
+            flexDirection: "column",
+            gap: 16,
+          }}
         >
           {(testMutation.data || testMutation.error) && (
             <TestResultCard
@@ -555,13 +563,13 @@ export function AgentDetailPage() {
               className="flex items-center justify-between gap-3"
               style={{
                 borderRadius: "var(--radius-panel)",
-                padding: "10px 14px",
+                padding: "var(--sp-2_5) var(--sp-3_5)",
                 background: "color-mix(in oklch, var(--state-blocked) 10%, transparent)",
-                border: "1px solid color-mix(in oklch, var(--state-blocked) 28%, transparent)",
+                border: "var(--hairline) solid color-mix(in oklch, var(--state-blocked) 28%, transparent)",
               }}
             >
               <div className="text-body">
-                <div style={{ fontWeight: 500 }}>No computer bound</div>
+                <div className="font-medium">No computer bound</div>
                 <div className="text-label" style={{ color: "var(--fg-3)" }}>
                   Bind this agent to a computer so it can run. A computer will also claim it on first WebSocket connect.
                 </div>
@@ -648,7 +656,7 @@ export function AgentDetailPage() {
                     padding: 8,
                     borderRadius: "var(--radius-input)",
                     background: "var(--bg-sunken)",
-                    border: "1px solid var(--border-faint)",
+                    border: "var(--hairline) solid var(--border-faint)",
                     color: "var(--fg-2)",
                   }}
                 >
@@ -662,9 +670,12 @@ export function AgentDetailPage() {
             <Panel>
               <div
                 className="flex items-center justify-between"
-                style={{ padding: "10px 14px", borderBottom: "1px solid var(--border-faint)" }}
+                style={{
+                  padding: "var(--sp-2_5) var(--sp-3_5)",
+                  borderBottom: "var(--hairline) solid var(--border-faint)",
+                }}
               >
-                <div className="inline-flex items-center gap-2 text-body" style={{ fontWeight: 600 }}>
+                <div className="inline-flex items-center gap-2 text-body font-semibold">
                   {isHuman ? <Link2 className="h-3.5 w-3.5" /> : <Cable className="h-3.5 w-3.5" />}
                   Platform bindings
                 </div>
@@ -862,16 +873,16 @@ export function AgentDetailPage() {
             <DialogTitle>Bind computer</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            <p className="text-sm" style={{ color: "var(--fg-3)" }}>
+            <p className="text-body" style={{ color: "var(--fg-3)" }}>
               Pick a computer you own to pin this agent to. The bind is one-shot — once set, moving the agent requires
               deleting and re-creating it on the target computer.
             </p>
             {clientsQuery.isLoading ? (
-              <div className="text-sm" style={{ color: "var(--fg-3)" }}>
+              <div className="text-body" style={{ color: "var(--fg-3)" }}>
                 Loading computers…
               </div>
             ) : clientsQuery.error ? (
-              <div className="text-sm" style={{ color: "var(--state-error)" }}>
+              <div className="text-body" style={{ color: "var(--state-error)" }}>
                 Failed to load computers: {clientsQuery.error instanceof Error ? clientsQuery.error.message : "Unknown"}
               </div>
             ) : (
@@ -882,7 +893,7 @@ export function AgentDetailPage() {
               />
             )}
             {bindClientError && (
-              <div className="text-sm" style={{ color: "var(--state-error)" }}>
+              <div className="text-body" style={{ color: "var(--state-error)" }}>
                 {bindClientError}
               </div>
             )}
@@ -922,7 +933,7 @@ export function AgentDetailPage() {
                 value={bindingForm.platform}
                 onChange={(e) => setBindingForm({ ...bindingForm, platform: e.target.value })}
                 disabled={!!bindingEditId}
-                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
+                className="flex h-9 w-full rounded-[var(--radius-input)] border border-input bg-transparent px-3 py-1 text-body shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
               >
                 {platformValues.map((p) => (
                   <option key={p} value={p}>
@@ -1014,7 +1025,7 @@ export function AgentDetailPage() {
                       />
                     </div>
                     {!bindingEditId && (
-                      <p className="text-sm" style={{ color: "var(--fg-3)" }}>
+                      <p className="text-body" style={{ color: "var(--fg-3)" }}>
                         Agent Token will be created automatically when you save.
                       </p>
                     )}
@@ -1029,13 +1040,13 @@ export function AgentDetailPage() {
                       value={bindingForm.credentialsJson}
                       onChange={(e) => setBindingForm({ ...bindingForm, credentialsJson: e.target.value })}
                       rows={4}
-                      className="flex w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm font-mono focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      className="flex w-full rounded-[var(--radius-input)] border border-input bg-transparent px-3 py-2 text-body shadow-sm font-mono focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                       placeholder='{"bot_token": "xoxb-...", "signing_secret": "..."}'
                     />
                   </div>
                 )}
                 {bindingCredError && (
-                  <p className="text-sm" style={{ color: "var(--state-error)" }}>
+                  <p className="text-body" style={{ color: "var(--state-error)" }}>
                     {bindingCredError}
                   </p>
                 )}
@@ -1045,7 +1056,7 @@ export function AgentDetailPage() {
                     id="binding-status"
                     value={bindingForm.status}
                     onChange={(e) => setBindingForm({ ...bindingForm, status: e.target.value })}
-                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    className="flex h-9 w-full rounded-[var(--radius-input)] border border-input bg-transparent px-3 py-1 text-body shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                   >
                     <option value="active">active</option>
                     <option value="inactive">inactive</option>
@@ -1055,7 +1066,7 @@ export function AgentDetailPage() {
             )}
 
             {bindingMutationError instanceof Error && (
-              <div className="text-sm" style={{ color: "var(--state-error)" }}>
+              <div className="text-body" style={{ color: "var(--state-error)" }}>
                 {bindingMutationError.message}
               </div>
             )}
@@ -1168,9 +1179,9 @@ function BindClientList({
         className="text-body"
         style={{
           background: "var(--bg-sunken)",
-          border: "1px solid var(--border-faint)",
+          border: "var(--hairline) solid var(--border-faint)",
           borderRadius: "var(--radius-input)",
-          padding: "10px 12px",
+          padding: "var(--sp-2_5) var(--sp-3)",
           color: "var(--fg-3)",
         }}
       >
@@ -1184,7 +1195,7 @@ function BindClientList({
     <ul
       className="max-h-64 overflow-y-auto"
       style={{
-        border: "1px solid var(--border)",
+        border: "var(--hairline) solid var(--border)",
         borderRadius: "var(--radius-input)",
         margin: 0,
         padding: 0,
@@ -1195,13 +1206,13 @@ function BindClientList({
         const picked = c.id === selected;
         const online = c.status === "online" || c.status === "active";
         return (
-          <li key={c.id} style={{ borderTop: "1px solid var(--border-faint)" }}>
+          <li key={c.id} style={{ borderTop: "var(--hairline) solid var(--border-faint)" }}>
             <button
               type="button"
               onClick={() => onSelect(c.id)}
               className={cn("w-full text-left flex items-center gap-3")}
               style={{
-                padding: "8px 12px",
+                padding: "var(--sp-2) var(--sp-3)",
                 background: picked ? "var(--accent-bg)" : "transparent",
                 border: "none",
                 cursor: "pointer",
@@ -1213,9 +1224,7 @@ function BindClientList({
                 aria-hidden
               />
               <span className="flex-1 min-w-0">
-                <span className="block text-body truncate" style={{ fontWeight: 500 }}>
-                  {c.hostname ?? c.id}
-                </span>
+                <span className="block text-body truncate font-medium">{c.hostname ?? c.id}</span>
                 <span className="block mono truncate text-caption" style={{ color: "var(--fg-4)" }}>
                   {c.id}
                   {c.os ? ` · ${c.os}` : ""}
@@ -1269,10 +1278,10 @@ function TestResultCard({ result, onDismiss }: { result: TestResult; onDismiss: 
     <div
       style={{
         background: "var(--bg-raised)",
-        border: "1px solid var(--border)",
-        borderLeft: `3px solid ${borderColor}`,
+        border: "var(--hairline) solid var(--border)",
+        borderLeft: `var(--sp-0_75) solid ${borderColor}`,
         borderRadius: "var(--radius-panel)",
-        padding: "12px 14px",
+        padding: "var(--sp-3) var(--sp-3_5)",
       }}
     >
       <div className="flex items-start justify-between gap-3">
@@ -1295,7 +1304,7 @@ function TestResultCard({ result, onDismiss }: { result: TestResult; onDismiss: 
               className="text-label"
               style={{
                 color: "var(--fg-3)",
-                borderTop: "1px solid var(--border-faint)",
+                borderTop: "var(--hairline) solid var(--border-faint)",
                 paddingTop: 6,
                 marginTop: 2,
               }}
@@ -1318,7 +1327,7 @@ function TestResultCard({ result, onDismiss }: { result: TestResult; onDismiss: 
               className="mono whitespace-pre-wrap text-label"
               style={{
                 background: "var(--bg-sunken)",
-                border: "1px solid var(--border-faint)",
+                border: "var(--hairline) solid var(--border-faint)",
                 borderRadius: "var(--radius-input)",
                 padding: 8,
                 maxHeight: 160,

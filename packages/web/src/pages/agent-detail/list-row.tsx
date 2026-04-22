@@ -21,9 +21,9 @@ export type ListRowProps = {
 
 const STATUS_BADGES: Record<DraftListStatus, { label: string; tone: string }> = {
   unchanged: { label: "", tone: "" },
-  added: { label: "new", tone: "bg-green-100 text-green-900" },
-  modified: { label: "changed", tone: "bg-amber-100 text-amber-900" },
-  deleted: { label: "will be removed on save", tone: "bg-red-100 text-red-900" },
+  added: { label: "new", tone: "bg-success-soft text-success" },
+  modified: { label: "changed", tone: "bg-warn-soft text-warn" },
+  deleted: { label: "will be removed on save", tone: "bg-error-soft text-error" },
 };
 
 export function ListRow({ status, onEdit, onDelete, onUndo, children, disabled }: ListRowProps) {
@@ -33,13 +33,13 @@ export function ListRow({ status, onEdit, onDelete, onUndo, children, disabled }
   return (
     <div
       className={cn(
-        "flex items-center gap-2 rounded border px-3 py-2 text-sm",
-        isDeleted ? "bg-red-50 border-red-200 text-red-900 line-through decoration-red-300" : "bg-white",
+        "flex items-center gap-2 rounded border px-3 py-2 text-body",
+        isDeleted ? "bg-error-soft border-error text-error line-through decoration-error" : "bg-card",
       )}
     >
       <div className="flex-1 min-w-0 flex items-center gap-2">{children}</div>
       {badge.label && (
-        <span className={cn("text-xs rounded px-1.5 py-0.5 whitespace-nowrap", badge.tone)}>{badge.label}</span>
+        <span className={cn("text-caption rounded px-1.5 py-0.5 whitespace-nowrap", badge.tone)}>{badge.label}</span>
       )}
       {!disabled &&
         (isDeleted ? (
