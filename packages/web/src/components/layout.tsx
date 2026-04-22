@@ -169,7 +169,7 @@ export function Layout() {
         <Outlet />
       ) : (
         <main className="flex-1 overflow-auto">
-          <div className="p-6 max-w-5xl mx-auto">
+          <div className="p-6 mx-auto" style={{ maxWidth: 1280 }}>
             <Outlet />
           </div>
         </main>

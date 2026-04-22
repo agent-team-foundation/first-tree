@@ -1,3 +1,5 @@
+import { PageHeader } from "../components/ui/page-header.js";
+import { Tab, TabBar } from "../components/ui/tab-bar.js";
 import { BindingsPage } from "./bindings.js";
 
 /**
@@ -7,9 +9,14 @@ import { BindingsPage } from "./bindings.js";
  */
 export function SettingsPage() {
   return (
-    <div>
-      <h1 className="text-2xl font-semibold mb-6">Settings</h1>
-      <BindingsPage />
+    <div className="-m-6">
+      <PageHeader title="Settings" subtitle="Per-member controls" />
+      <TabBar>
+        <Tab active>Bindings</Tab>
+      </TabBar>
+      <div style={{ padding: "16px 20px 28px" }}>
+        <BindingsPage />
+      </div>
     </div>
   );
 }

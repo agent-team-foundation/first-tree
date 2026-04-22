@@ -1,7 +1,7 @@
 import { ADAPTER_PLATFORMS } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Cable, Link2, MoreHorizontal, Play, Plus, Trash2 } from "lucide-react";
-import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { Cable, Link2, Play, Plus, Trash2 } from "lucide-react";
+import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { type HubClient, listClients } from "./../api/activity.js";
 import { createAdapterMapping, deleteAdapterMapping, listAdapterMappings } from "./../api/adapter-mappings.js";
@@ -25,13 +25,25 @@ import {
 } from "./../api/agents.js";
 import { ApiError } from "./../api/client.js";
 import { listAgentSessions } from "./../api/sessions.js";
-import { Badge } from "./../components/ui/badge.js";
+import { FirstTreeLogo } from "./../components/first-tree-logo.js";
+import { Breadcrumb, BreadcrumbCurrent, BreadcrumbLink, BreadcrumbSep } from "./../components/ui/breadcrumb.js";
 import { Button } from "./../components/ui/button.js";
-import { Card, CardContent, CardHeader, CardTitle } from "./../components/ui/card.js";
+import { DenseBadge, type DenseBadgeTone } from "./../components/ui/dense-badge.js";
+import {
+  DenseTable,
+  DenseTableBody,
+  DenseTableCell,
+  DenseTableHead,
+  DenseTableHeader,
+  DenseTableRow,
+} from "./../components/ui/dense-table.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./../components/ui/dialog.js";
 import { Input } from "./../components/ui/input.js";
 import { Label } from "./../components/ui/label.js";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./../components/ui/table.js";
+import { Panel } from "./../components/ui/panel.js";
+import { UppercaseLabel } from "./../components/ui/section-header.js";
+import { StateChip } from "./../components/ui/state-chip.js";
+import { Tile } from "./../components/ui/tile.js";
 import { cn, formatDate } from "./../lib/utils.js";
 import { DangerZone } from "./agent-detail/danger-zone.js";
 import { EnvSection } from "./agent-detail/env-section.js";
@@ -41,10 +53,42 @@ import { McpSection } from "./agent-detail/mcp-section.js";
 import { ModelSection } from "./agent-detail/model-section.js";
 import { PromptSection } from "./agent-detail/prompt-section.js";
 import { SaveBar, sectionAnchorId } from "./agent-detail/save-bar.js";
-import { deriveSaveHint, StatusBar } from "./agent-detail/status-bar.js";
-import { type DraftSectionName, useConfigDraft } from "./agent-detail/use-config-draft.js";
+import { deriveSaveHint } from "./agent-detail/status-bar.js";
+import { useConfigDraft } from "./agent-detail/use-config-draft.js";
 
 const platformValues = Object.values(ADAPTER_PLATFORMS);
+
+type SidebarItem = {
+  key: string;
+  label: string;
+  anchor: string;
+};
+
+type SidebarGroup = {
+  label: string;
+  items: SidebarItem[];
+};
+
+function buildSidebar(isHuman: boolean): SidebarGroup[] {
+  const identity: SidebarItem[] = [
+    { key: "identity", label: "Profile", anchor: "ad-identity" },
+    { key: "bindings", label: "Bindings", anchor: "ad-bindings" },
+  ];
+  const runtime: SidebarItem[] = isHuman
+    ? []
+    : [
+        { key: "prompt", label: "Prompt", anchor: sectionAnchorId("prompt") },
+        { key: "model", label: "Model", anchor: sectionAnchorId("model") },
+        { key: "mcp", label: "MCP tools", anchor: sectionAnchorId("mcp") },
+        { key: "env", label: "Environment", anchor: sectionAnchorId("env") },
+        { key: "git", label: "Git", anchor: sectionAnchorId("git") },
+      ];
+  const danger: SidebarItem[] = [{ key: "danger", label: "Danger zone", anchor: "ad-danger" }];
+  const groups: SidebarGroup[] = [{ label: "Identity", items: identity }];
+  if (runtime.length > 0) groups.push({ label: "Runtime", items: runtime });
+  groups.push({ label: "Danger zone", items: danger });
+  return groups;
+}
 
 export function AgentDetailPage() {
   const params = useParams<{ uuid: string }>();
@@ -121,8 +165,8 @@ export function AgentDetailPage() {
     draft.resetAll();
   }, [queryClient, uuid, draft]);
 
-  const jumpTo = useCallback((section: DraftSectionName) => {
-    const el = document.getElementById(sectionAnchorId(section));
+  const jumpTo = useCallback((anchor: string) => {
+    const el = document.getElementById(anchor);
     if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
 
@@ -152,18 +196,6 @@ export function AgentDetailPage() {
   // Test connection
   const testMutation = useMutation({ mutationFn: () => testAgentConnection(uuid) });
 
-  // Header ⋯ menu + binding dialogs
-  const [moreOpen, setMoreOpen] = useState(false);
-  const moreRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!moreOpen) return;
-    function onClickAway(e: MouseEvent) {
-      if (moreRef.current && !moreRef.current.contains(e.target as Node)) setMoreOpen(false);
-    }
-    window.addEventListener("mousedown", onClickAway);
-    return () => window.removeEventListener("mousedown", onClickAway);
-  }, [moreOpen]);
-
   // Bind-client (agent ↔ client first-time binding) dialog state
   const [bindClientOpen, setBindClientOpen] = useState(false);
   const [bindClientSelected, setBindClientSelected] = useState<string>("");
@@ -186,7 +218,6 @@ export function AgentDetailPage() {
     onError: (err) => setBindClientError(err instanceof Error ? err.message : String(err)),
   });
 
-  // Binding dialog state (unchanged from previous)
   const [bindingDialogOpen, setBindingDialogOpen] = useState(false);
   const [bindingEditId, setBindingEditId] = useState<number | null>(null);
   const [bindingForm, setBindingForm] = useState(EMPTY_BINDING_FORM);
@@ -243,7 +274,6 @@ export function AgentDetailPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["adapter-mappings"] }),
   });
 
-  // Dry-run (surfaced via small helper button next to Save)
   const [dryRunText, setDryRunText] = useState<string | null>(null);
   const dryRunMutation = useMutation({
     mutationFn: () => dryRunAgentConfig(uuid, draft.buildPayloadPatch()),
@@ -265,16 +295,33 @@ export function AgentDetailPage() {
     return () => window.removeEventListener("beforeunload", handler);
   }, [draft.summary.anyDirty]);
 
-  if (agentQuery.isLoading) return <div className="text-muted-foreground">Loading...</div>;
+  const isHumanLocal = agentQuery.data?.type === "human";
+  const sidebarGroups = useMemo(() => buildSidebar(isHumanLocal), [isHumanLocal]);
+
+  if (agentQuery.isLoading) {
+    return (
+      <div className="-m-6 flex" style={{ minHeight: "100%" }}>
+        <div className="p-6" style={{ color: "var(--fg-3)", fontSize: 12 }}>
+          Loading…
+        </div>
+      </div>
+    );
+  }
   if (agentQuery.error) {
     return (
-      <div className="text-destructive">
+      <div className="-m-6 p-6" style={{ color: "var(--state-error)", fontSize: 12 }}>
         Failed to load agent: {agentQuery.error instanceof Error ? agentQuery.error.message : "Unknown error"}
       </div>
     );
   }
   const agent = agentQuery.data;
-  if (!agent) return <div className="text-muted-foreground">Agent not found</div>;
+  if (!agent) {
+    return (
+      <div className="-m-6 p-6" style={{ color: "var(--fg-3)", fontSize: 12 }}>
+        Agent not found
+      </div>
+    );
+  }
 
   const isHuman = agent.type === "human";
 
@@ -286,8 +333,10 @@ export function AgentDetailPage() {
   const runtimeExt = agent as Record<string, unknown>;
   const runtimeState = (runtimeExt.runtimeState as string | null) ?? null;
   const runtimeType = (runtimeExt.runtimeType as string | null) ?? null;
+  const totalSessions = (runtimeExt.totalSessions as number | null) ?? null;
 
-  // -- helpers local to this component
+  const shortId = agent.uuid.slice(0, 8);
+
   function closeBindingDialog() {
     setBindingDialogOpen(false);
     setBindingEditId(null);
@@ -369,372 +418,440 @@ export function AgentDetailPage() {
         .filter(Boolean),
     );
 
+  const tileValues = {
+    sessions: totalSessions ?? "—",
+    active: activeSessions,
+    runtime: runtimeType ?? (isHuman ? "human" : "—"),
+    model: cfgQuery.data?.payload.model?.trim() || "—",
+  };
+
   return (
-    <div className="space-y-5 pb-24">
-      {/* Header */}
-      <div className="flex items-center gap-3">
-        <Button variant="ghost" size="icon" onClick={() => navigate("/agents")}>
-          <ArrowLeft className="h-4 w-4" />
-        </Button>
-        <div className="flex-1 min-w-0">
-          <h1 className="text-2xl font-semibold truncate">{agent.displayName ?? agent.name}</h1>
-          <p className="text-xs text-muted-foreground font-mono truncate">
-            @{agent.name ?? agent.uuid} · {agent.type}
-          </p>
+    <div className="-m-6 flex" style={{ minHeight: "calc(100vh - 40px)" }}>
+      <aside
+        className="shrink-0 overflow-auto"
+        style={{
+          width: 220,
+          borderRight: "1px solid var(--border)",
+          background: "var(--bg-raised)",
+          padding: "12px 0",
+        }}
+      >
+        {sidebarGroups.map((group) => (
+          <div key={group.label} style={{ marginBottom: 12 }}>
+            <UppercaseLabel style={{ display: "block", padding: "4px 16px" }}>{group.label}</UppercaseLabel>
+            {group.items.map((it) => (
+              <button
+                key={it.key}
+                type="button"
+                onClick={() => jumpTo(it.anchor)}
+                className="block w-full text-left bg-transparent"
+                style={{
+                  padding: "5px 16px 5px 14px",
+                  fontSize: 12,
+                  color: "var(--fg-3)",
+                  border: "none",
+                  borderLeft: "2px solid transparent",
+                  cursor: "pointer",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = "var(--fg)";
+                  e.currentTarget.style.background = "var(--bg-hover)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = "var(--fg-3)";
+                  e.currentTarget.style.background = "transparent";
+                }}
+              >
+                {it.label}
+              </button>
+            ))}
+          </div>
+        ))}
+      </aside>
+
+      <div className="flex-1 min-w-0 overflow-auto" style={{ background: "var(--bg)" }}>
+        <div
+          style={{
+            padding: "14px 20px",
+            borderBottom: "1px solid var(--border-faint)",
+            background: "var(--bg-raised)",
+          }}
+        >
+          <Breadcrumb style={{ marginBottom: 8 }}>
+            <BreadcrumbLink onClick={() => navigate("/agents")}>Agents</BreadcrumbLink>
+            <BreadcrumbSep />
+            <BreadcrumbCurrent mono>{agent.name ?? shortId}</BreadcrumbCurrent>
+          </Breadcrumb>
+          <div className="flex items-center gap-3">
+            <div
+              className="inline-flex items-center justify-center"
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: 6,
+                background: "var(--bg-active)",
+                border: "1px solid var(--border-strong)",
+              }}
+            >
+              <FirstTreeLogo width={18} height={20} style={{ color: "var(--accent)" }} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-baseline gap-2">
+                <span style={{ fontSize: 16, fontWeight: 600, letterSpacing: -0.2 }}>
+                  {agent.displayName ?? agent.name ?? shortId}
+                </span>
+                <span className="mono" style={{ fontSize: 11, color: "var(--fg-4)" }}>
+                  @{agent.name ?? shortId}
+                </span>
+              </div>
+              <div className="mono" style={{ fontSize: 10.5, color: "var(--fg-4)" }}>
+                agt_{shortId} · {agent.type}
+                {agent.visibility ? ` · ${agent.visibility}` : ""}
+              </div>
+            </div>
+            <StateChip state={runtimeState} />
+            <div className="flex gap-1.5">
+              <Button variant="ghost" size="xs" onClick={() => navigate(`/?a=${agent.uuid}`)}>
+                Open chat →
+              </Button>
+              {!isHuman && agent.status === "active" && (
+                <Button
+                  variant="outline"
+                  size="xs"
+                  onClick={() => {
+                    testMutation.reset();
+                    testMutation.mutate();
+                  }}
+                  disabled={testMutation.isPending}
+                >
+                  <Play className="h-3 w-3" />
+                  {testMutation.isPending ? "Testing…" : "Test"}
+                </Button>
+              )}
+            </div>
+          </div>
+          <div className="grid gap-1.5 mt-3" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
+            <Tile label="sessions" value={tileValues.sessions} />
+            <Tile
+              label="active"
+              value={tileValues.active}
+              accent={typeof tileValues.active === "number" && tileValues.active > 0 ? "var(--accent)" : undefined}
+            />
+            <Tile label="runtime" value={tileValues.runtime} />
+            <Tile label="model" value={tileValues.model} />
+          </div>
         </div>
-        <div className="relative" ref={moreRef}>
-          <Button variant="outline" size="icon" onClick={() => setMoreOpen((v) => !v)} title="More actions">
-            <MoreHorizontal className="h-4 w-4" />
-          </Button>
-          {moreOpen && (
-            <div className="absolute right-0 mt-1 z-40 min-w-48 rounded-md border bg-white shadow-lg text-sm">
-              <ul className="py-1">
-                {!isHuman && agent.status === "active" && (
-                  <li>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMoreOpen(false);
-                        testMutation.reset();
-                        testMutation.mutate();
-                      }}
-                      className="w-full text-left px-3 py-1.5 hover:bg-gray-50 flex items-center gap-2"
-                      disabled={testMutation.isPending}
-                    >
-                      <Play className="h-3.5 w-3.5" />
-                      {testMutation.isPending ? "Testing…" : "Test connection"}
-                    </button>
-                  </li>
-                )}
-                {agent.status === "active" ? (
-                  <li>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMoreOpen(false);
-                        if (confirm("Suspend this agent? All tokens will be revoked.")) {
-                          suspendMutation.mutate();
-                        }
-                      }}
-                      className="w-full text-left px-3 py-1.5 hover:bg-gray-50"
-                    >
-                      Suspend
-                    </button>
-                  </li>
-                ) : (
-                  <li>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMoreOpen(false);
-                        reactivateMutation.mutate();
-                      }}
-                      className="w-full text-left px-3 py-1.5 hover:bg-gray-50"
-                    >
-                      Reactivate
-                    </button>
-                  </li>
-                )}
-                <li className="border-t">
-                  <a
-                    href={`#${sectionAnchorId("prompt")}`}
-                    onClick={() => setMoreOpen(false)}
-                    className="block px-3 py-1.5 text-xs text-muted-foreground hover:bg-gray-50"
-                  >
-                    Jump to Behavior
-                  </a>
-                </li>
-              </ul>
+
+        <div
+          className="mx-auto"
+          style={{ padding: "14px 20px 28px", maxWidth: 960, display: "flex", flexDirection: "column", gap: 16 }}
+        >
+          {(testMutation.data || testMutation.error) && (
+            <TestResultCard
+              result={testMutation.data ?? { status: "error", message: "Failed to reach server" }}
+              onDismiss={() => testMutation.reset()}
+            />
+          )}
+
+          {isUnclaimed && agent.status === "active" && (
+            <div
+              className="flex items-center justify-between gap-3"
+              style={{
+                borderRadius: 6,
+                padding: "10px 14px",
+                background: "color-mix(in oklch, var(--state-blocked) 10%, transparent)",
+                border: "1px solid color-mix(in oklch, var(--state-blocked) 28%, transparent)",
+              }}
+            >
+              <div style={{ fontSize: 12 }}>
+                <div style={{ fontWeight: 500 }}>No computer bound</div>
+                <div style={{ color: "var(--fg-3)", fontSize: 11 }}>
+                  Bind this agent to a computer so it can run. A computer will also claim it on first WebSocket connect.
+                </div>
+              </div>
+              <Button size="xs" variant="outline" onClick={() => setBindClientOpen(true)}>
+                <Link2 className="h-3 w-3" />
+                Bind computer
+              </Button>
             </div>
           )}
-        </div>
-      </div>
 
-      {(testMutation.data || testMutation.error) && (
-        <TestResultCard
-          result={testMutation.data ?? { status: "error", message: "Failed to reach server" }}
-          onDismiss={() => testMutation.reset()}
-        />
-      )}
-
-      {/* Status Bar */}
-      <StatusBar
-        agent={agent}
-        cfg={cfgQuery.data}
-        clientStatus={clientStatus}
-        runtimeState={runtimeState}
-        runtimeType={runtimeType}
-        activeSessions={activeSessions}
-        isHuman={isHuman}
-      />
-
-      {isUnclaimed && agent.status === "active" && (
-        <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 flex items-center justify-between gap-3">
-          <div className="text-sm text-amber-900">
-            <div className="font-medium">No computer bound</div>
-            <div className="text-xs text-amber-800/80">
-              Bind this agent to a computer so it can run. A computer will also claim it on first WebSocket connect.
-            </div>
-          </div>
-          <Button size="sm" variant="outline" onClick={() => setBindClientOpen(true)}>
-            <Link2 className="h-4 w-4 mr-2" />
-            Bind Computer
-          </Button>
-        </div>
-      )}
-
-      {/* Identity */}
-      <IdentitySection
-        agent={agent}
-        onSave={async (patch) => {
-          await identityUpdateMutation.mutateAsync(patch);
-        }}
-      />
-
-      {/* Behavior */}
-      {!isHuman && (
-        <BehaviorSection
-          loaded={!!cfgQuery.data}
-          loading={cfgQuery.isLoading}
-          error={cfgQuery.error ? String(cfgQuery.error) : null}
-          version={cfgQuery.data?.version ?? null}
-          dirty={draft.summary.anyDirty}
-        >
-          <div id={sectionAnchorId("prompt")}>
-            <PromptSection
-              value={draft.draft.promptAppend}
-              baseline={cfgQuery.data?.payload.prompt.append ?? ""}
-              onChange={draft.setPromptAppend}
-              onRevert={draft.revertPrompt}
-              disabled={agent.status !== "active"}
+          <div id="ad-identity">
+            <IdentitySection
+              agent={agent}
+              onSave={async (patch) => {
+                await identityUpdateMutation.mutateAsync(patch);
+              }}
             />
           </div>
-          <div id={sectionAnchorId("model")}>
-            <ModelSection
-              value={draft.draft.model}
-              baseline={cfgQuery.data?.payload.model ?? ""}
-              onChange={draft.setModel}
-              onRevert={draft.revertModel}
-              disabled={agent.status !== "active"}
-            />
-          </div>
-          <div id={sectionAnchorId("mcp")}>
-            <McpSection
-              items={draft.draft.mcp}
-              otherNames={mcpOtherNames}
-              onAdd={draft.addMcp}
-              onUpdate={draft.updateMcp}
-              onDelete={draft.deleteMcp}
-              onUndoDelete={draft.undoDeleteMcp}
-              disabled={agent.status !== "active"}
-            />
-          </div>
-          <div id={sectionAnchorId("env")}>
-            <EnvSection
-              items={draft.draft.env}
-              otherKeys={envOtherKeys}
-              onAdd={draft.addEnv}
-              onUpdate={draft.updateEnv}
-              onDelete={draft.deleteEnv}
-              onUndoDelete={draft.undoDeleteEnv}
-              disabled={agent.status !== "active"}
-            />
-          </div>
-          <div id={sectionAnchorId("git")}>
-            <GitSection
-              items={draft.draft.git}
-              otherPaths={gitOtherPaths}
-              onAdd={draft.addGit}
-              onUpdate={draft.updateGit}
-              onDelete={draft.deleteGit}
-              onUndoDelete={draft.undoDeleteGit}
-              disabled={agent.status !== "active"}
-            />
-          </div>
-          {dryRunText && <pre className="whitespace-pre-wrap rounded border bg-gray-50 p-2 text-xs">{dryRunText}</pre>}
-        </BehaviorSection>
-      )}
 
-      {/* Platform Bindings (secondary) */}
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle className="flex items-center gap-2 text-base">
-            {isHuman ? <Link2 className="h-4 w-4" /> : <Cable className="h-4 w-4" />}
-            Platform Bindings
-          </CardTitle>
-          <Button size="sm" variant="outline" onClick={() => setBindingDialogOpen(true)}>
-            <Plus className="h-4 w-4 mr-2" />
-            {isHuman ? "Bind User" : "Bind Bot"}
-          </Button>
-        </CardHeader>
-        <CardContent>
-          {isHuman ? (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Platform</TableHead>
-                  <TableHead>External User ID</TableHead>
-                  <TableHead>Display Name</TableHead>
-                  <TableHead>Bound Via</TableHead>
-                  <TableHead>Created</TableHead>
-                  <TableHead className="w-16" />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {agentMappings.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={6} className="text-center py-4 text-muted-foreground">
-                      No platform bindings
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  agentMappings.map((m) => (
-                    <TableRow key={m.id}>
-                      <TableCell>
-                        <Badge variant="secondary">{m.platform}</Badge>
-                      </TableCell>
-                      <TableCell className="font-mono text-sm">{m.externalUserId}</TableCell>
-                      <TableCell>{m.displayName ?? "—"}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline">{m.boundVia ?? "—"}</Badge>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">{formatDate(m.createdAt)}</TableCell>
-                      <TableCell>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => {
-                            if (confirm("Remove this binding?")) deleteMappingMutation.mutate(m.id);
-                          }}
-                          disabled={deleteMappingMutation.isPending}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Platform</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Connection</TableHead>
-                  <TableHead>Created</TableHead>
-                  <TableHead className="w-24" />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {agentAdapters.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={5} className="text-center py-4 text-muted-foreground">
-                      No platform bindings
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  agentAdapters.map((a) => {
-                    const status = botStatuses?.find((s) => s.configId === a.id);
-                    const isConnected = a.platform === "kael" ? a.status === "active" : !!status?.connected;
-                    return (
-                      <TableRow key={a.id}>
-                        <TableCell>
-                          <Badge variant="secondary">{a.platform}</Badge>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant={a.status === "active" ? "default" : "destructive"}>{a.status}</Badge>
-                        </TableCell>
-                        <TableCell>
-                          <span className="flex items-center gap-1.5">
-                            <span
-                              className={cn(
-                                "inline-block h-2 w-2 rounded-full",
-                                isConnected ? "bg-green-500" : "bg-gray-300",
-                              )}
-                            />
-                            <span className="text-xs text-muted-foreground">{isConnected ? "Online" : "Offline"}</span>
-                          </span>
-                        </TableCell>
-                        <TableCell className="text-muted-foreground">{formatDate(a.createdAt)}</TableCell>
-                        <TableCell>
-                          <div className="flex gap-1">
-                            <Button variant="ghost" size="icon" onClick={() => openEditAdapter(a)} title="Edit">
-                              …
-                            </Button>
+          {!isHuman && (
+            <BehaviorSection
+              loaded={!!cfgQuery.data}
+              loading={cfgQuery.isLoading}
+              error={cfgQuery.error ? String(cfgQuery.error) : null}
+              version={cfgQuery.data?.version ?? null}
+              dirty={draft.summary.anyDirty}
+            >
+              <div id={sectionAnchorId("prompt")}>
+                <PromptSection
+                  value={draft.draft.promptAppend}
+                  baseline={cfgQuery.data?.payload.prompt.append ?? ""}
+                  onChange={draft.setPromptAppend}
+                  onRevert={draft.revertPrompt}
+                  disabled={agent.status !== "active"}
+                />
+              </div>
+              <div id={sectionAnchorId("model")}>
+                <ModelSection
+                  value={draft.draft.model}
+                  baseline={cfgQuery.data?.payload.model ?? ""}
+                  onChange={draft.setModel}
+                  onRevert={draft.revertModel}
+                  disabled={agent.status !== "active"}
+                />
+              </div>
+              <div id={sectionAnchorId("mcp")}>
+                <McpSection
+                  items={draft.draft.mcp}
+                  otherNames={mcpOtherNames}
+                  onAdd={draft.addMcp}
+                  onUpdate={draft.updateMcp}
+                  onDelete={draft.deleteMcp}
+                  onUndoDelete={draft.undoDeleteMcp}
+                  disabled={agent.status !== "active"}
+                />
+              </div>
+              <div id={sectionAnchorId("env")}>
+                <EnvSection
+                  items={draft.draft.env}
+                  otherKeys={envOtherKeys}
+                  onAdd={draft.addEnv}
+                  onUpdate={draft.updateEnv}
+                  onDelete={draft.deleteEnv}
+                  onUndoDelete={draft.undoDeleteEnv}
+                  disabled={agent.status !== "active"}
+                />
+              </div>
+              <div id={sectionAnchorId("git")}>
+                <GitSection
+                  items={draft.draft.git}
+                  otherPaths={gitOtherPaths}
+                  onAdd={draft.addGit}
+                  onUpdate={draft.updateGit}
+                  onDelete={draft.deleteGit}
+                  onUndoDelete={draft.undoDeleteGit}
+                  disabled={agent.status !== "active"}
+                />
+              </div>
+              {dryRunText && (
+                <pre
+                  className="whitespace-pre-wrap mono"
+                  style={{
+                    padding: 8,
+                    borderRadius: 4,
+                    background: "var(--bg-sunken)",
+                    border: "1px solid var(--border-faint)",
+                    fontSize: 11,
+                    color: "var(--fg-2)",
+                  }}
+                >
+                  {dryRunText}
+                </pre>
+              )}
+            </BehaviorSection>
+          )}
+
+          <div id="ad-bindings">
+            <Panel>
+              <div
+                className="flex items-center justify-between"
+                style={{ padding: "10px 14px", borderBottom: "1px solid var(--border-faint)" }}
+              >
+                <div className="inline-flex items-center gap-2" style={{ fontSize: 12, fontWeight: 600 }}>
+                  {isHuman ? <Link2 className="h-3.5 w-3.5" /> : <Cable className="h-3.5 w-3.5" />}
+                  Platform bindings
+                </div>
+                <Button size="xs" variant="outline" onClick={() => setBindingDialogOpen(true)}>
+                  <Plus className="h-3 w-3" />
+                  {isHuman ? "Bind user" : "Bind bot"}
+                </Button>
+              </div>
+              {isHuman ? (
+                <DenseTable>
+                  <DenseTableHeader>
+                    <DenseTableRow>
+                      <DenseTableHead>Platform</DenseTableHead>
+                      <DenseTableHead>External user ID</DenseTableHead>
+                      <DenseTableHead>Display name</DenseTableHead>
+                      <DenseTableHead>Bound via</DenseTableHead>
+                      <DenseTableHead>Created</DenseTableHead>
+                      <DenseTableHead style={{ width: 32 }} />
+                    </DenseTableRow>
+                  </DenseTableHeader>
+                  <DenseTableBody>
+                    {agentMappings.length === 0 ? (
+                      <DenseTableRow>
+                        <DenseTableCell colSpan={6} style={{ textAlign: "center", color: "var(--fg-3)", padding: 16 }}>
+                          No platform bindings
+                        </DenseTableCell>
+                      </DenseTableRow>
+                    ) : (
+                      agentMappings.map((m) => (
+                        <DenseTableRow key={m.id}>
+                          <DenseTableCell>
+                            <DenseBadge>{m.platform}</DenseBadge>
+                          </DenseTableCell>
+                          <DenseTableCell className="mono" style={{ fontSize: 11 }}>
+                            {m.externalUserId}
+                          </DenseTableCell>
+                          <DenseTableCell>{m.displayName ?? "—"}</DenseTableCell>
+                          <DenseTableCell>
+                            <DenseBadge tone="outline">{m.boundVia ?? "—"}</DenseBadge>
+                          </DenseTableCell>
+                          <DenseTableCell className="mono" style={{ fontSize: 10.5, color: "var(--fg-4)" }}>
+                            {formatDate(m.createdAt)}
+                          </DenseTableCell>
+                          <DenseTableCell>
                             <Button
                               variant="ghost"
                               size="icon"
+                              className="h-7 w-7"
                               onClick={() => {
-                                if (confirm("Remove this bot binding?")) deleteAdapterMutation.mutate(a.id);
+                                if (confirm("Remove this binding?")) deleteMappingMutation.mutate(m.id);
                               }}
-                              disabled={deleteAdapterMutation.isPending}
-                              title="Delete"
+                              disabled={deleteMappingMutation.isPending}
                             >
-                              <Trash2 className="h-4 w-4" />
+                              <Trash2 className="h-3.5 w-3.5" />
                             </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })
-                )}
-              </TableBody>
-            </Table>
+                          </DenseTableCell>
+                        </DenseTableRow>
+                      ))
+                    )}
+                  </DenseTableBody>
+                </DenseTable>
+              ) : (
+                <DenseTable>
+                  <DenseTableHeader>
+                    <DenseTableRow>
+                      <DenseTableHead>Platform</DenseTableHead>
+                      <DenseTableHead>Status</DenseTableHead>
+                      <DenseTableHead>Connection</DenseTableHead>
+                      <DenseTableHead>Created</DenseTableHead>
+                      <DenseTableHead style={{ width: 64 }} />
+                    </DenseTableRow>
+                  </DenseTableHeader>
+                  <DenseTableBody>
+                    {agentAdapters.length === 0 ? (
+                      <DenseTableRow>
+                        <DenseTableCell colSpan={5} style={{ textAlign: "center", color: "var(--fg-3)", padding: 16 }}>
+                          No platform bindings
+                        </DenseTableCell>
+                      </DenseTableRow>
+                    ) : (
+                      agentAdapters.map((a) => {
+                        const status = botStatuses?.find((s) => s.configId === a.id);
+                        const isConnected = a.platform === "kael" ? a.status === "active" : !!status?.connected;
+                        return (
+                          <DenseTableRow key={a.id}>
+                            <DenseTableCell>
+                              <DenseBadge>{a.platform}</DenseBadge>
+                            </DenseTableCell>
+                            <DenseTableCell>
+                              <DenseBadge tone={a.status === "active" ? "accent" : "outline"}>{a.status}</DenseBadge>
+                            </DenseTableCell>
+                            <DenseTableCell>
+                              <StateChip state={isConnected ? "idle" : "offline"} />
+                            </DenseTableCell>
+                            <DenseTableCell className="mono" style={{ fontSize: 10.5, color: "var(--fg-4)" }}>
+                              {formatDate(a.createdAt)}
+                            </DenseTableCell>
+                            <DenseTableCell>
+                              <div className="flex gap-1">
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7"
+                                  onClick={() => openEditAdapter(a)}
+                                  title="Edit"
+                                >
+                                  …
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7"
+                                  onClick={() => {
+                                    if (confirm("Remove this bot binding?")) deleteAdapterMutation.mutate(a.id);
+                                  }}
+                                  disabled={deleteAdapterMutation.isPending}
+                                  title="Delete"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                              </div>
+                            </DenseTableCell>
+                          </DenseTableRow>
+                        );
+                      })
+                    )}
+                  </DenseTableBody>
+                </DenseTable>
+              )}
+            </Panel>
+          </div>
+
+          <div id="ad-danger">
+            <DangerZone
+              agent={agent}
+              suspendPending={suspendMutation.isPending}
+              reactivatePending={reactivateMutation.isPending}
+              deletePending={deleteMutation.isPending}
+              onSuspend={() => {
+                if (confirm("Suspend this agent? Runtime binds and HTTP calls will be refused."))
+                  suspendMutation.mutate();
+              }}
+              onReactivate={() => reactivateMutation.mutate()}
+              onDelete={() => deleteMutation.mutate()}
+            />
+          </div>
+
+          {!isHuman && draft.summary.anyDirty && (
+            <div style={{ fontSize: 11, color: "var(--fg-3)" }}>
+              <button
+                type="button"
+                onClick={() => dryRunMutation.mutate()}
+                className="underline bg-transparent border-0 cursor-pointer"
+                style={{ color: "var(--fg-3)" }}
+                disabled={dryRunMutation.isPending}
+              >
+                {dryRunMutation.isPending ? "Computing dry-run…" : "Preview server-side diff"}
+              </button>
+            </div>
           )}
-        </CardContent>
-      </Card>
-
-      {/* Danger Zone */}
-      <DangerZone
-        agent={agent}
-        suspendPending={suspendMutation.isPending}
-        reactivatePending={reactivateMutation.isPending}
-        deletePending={deleteMutation.isPending}
-        onSuspend={() => {
-          if (confirm("Suspend this agent? Runtime binds and HTTP calls will be refused.")) suspendMutation.mutate();
-        }}
-        onReactivate={() => reactivateMutation.mutate()}
-        onDelete={() => deleteMutation.mutate()}
-      />
-
-      {/* Save Bar */}
-      {!isHuman && (
-        <SaveBar
-          summary={draft.summary}
-          saveHint={saveHint}
-          conflictMessage={conflictMsg}
-          errorMessage={saveError}
-          saving={saveMutation.isPending}
-          onSave={() => saveMutation.mutate()}
-          onDiscard={() => {
-            if (!draft.summary.anyDirty || confirm("Discard all unsaved changes?")) {
-              draft.resetAll();
-              setSaveError(null);
-              setConflictMsg(null);
-            }
-          }}
-          onReloadRemote={reloadRemote}
-          onJumpTo={jumpTo}
-        />
-      )}
-
-      {/* Dry-run helper (below Save Bar to avoid clutter) */}
-      {!isHuman && draft.summary.anyDirty && (
-        <div className="text-xs text-muted-foreground">
-          <button
-            type="button"
-            onClick={() => dryRunMutation.mutate()}
-            className="underline hover:text-gray-900"
-            disabled={dryRunMutation.isPending}
-          >
-            {dryRunMutation.isPending ? "Computing dry-run…" : "Preview server-side diff"}
-          </button>
         </div>
-      )}
 
-      {/* Bind Computer Dialog — first-time NULL → ID bind only */}
+        {!isHuman && (
+          <SaveBar
+            summary={draft.summary}
+            saveHint={saveHint}
+            conflictMessage={conflictMsg}
+            errorMessage={saveError}
+            saving={saveMutation.isPending}
+            onSave={() => saveMutation.mutate()}
+            onDiscard={() => {
+              if (!draft.summary.anyDirty || confirm("Discard all unsaved changes?")) {
+                draft.resetAll();
+                setSaveError(null);
+                setConflictMsg(null);
+              }
+            }}
+            onReloadRemote={reloadRemote}
+            onJumpTo={(section) => jumpTo(sectionAnchorId(section))}
+          />
+        )}
+      </div>
+
       <Dialog
         open={bindClientOpen}
         onOpenChange={(open) => {
@@ -751,14 +868,16 @@ export function AgentDetailPage() {
             <DialogTitle>Bind computer</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            <p className="text-sm text-muted-foreground">
+            <p className="text-sm" style={{ color: "var(--fg-3)" }}>
               Pick a computer you own to pin this agent to. The bind is one-shot — once set, moving the agent requires
               deleting and re-creating it on the target computer.
             </p>
             {clientsQuery.isLoading ? (
-              <div className="text-sm text-muted-foreground">Loading computers…</div>
+              <div className="text-sm" style={{ color: "var(--fg-3)" }}>
+                Loading computers…
+              </div>
             ) : clientsQuery.error ? (
-              <div className="text-sm text-destructive">
+              <div className="text-sm" style={{ color: "var(--state-error)" }}>
                 Failed to load computers: {clientsQuery.error instanceof Error ? clientsQuery.error.message : "Unknown"}
               </div>
             ) : (
@@ -768,7 +887,11 @@ export function AgentDetailPage() {
                 onSelect={setBindClientSelected}
               />
             )}
-            {bindClientError && <div className="text-sm text-destructive">{bindClientError}</div>}
+            {bindClientError && (
+              <div className="text-sm" style={{ color: "var(--state-error)" }}>
+                {bindClientError}
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setBindClientOpen(false)}>
@@ -787,7 +910,6 @@ export function AgentDetailPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Binding Dialog */}
       <Dialog
         open={bindingDialogOpen}
         onOpenChange={(open) => (open ? setBindingDialogOpen(true) : closeBindingDialog())}
@@ -898,7 +1020,7 @@ export function AgentDetailPage() {
                       />
                     </div>
                     {!bindingEditId && (
-                      <p className="text-sm text-muted-foreground">
+                      <p className="text-sm" style={{ color: "var(--fg-3)" }}>
                         Agent Token will be created automatically when you save.
                       </p>
                     )}
@@ -918,7 +1040,11 @@ export function AgentDetailPage() {
                     />
                   </div>
                 )}
-                {bindingCredError && <p className="text-sm text-destructive">{bindingCredError}</p>}
+                {bindingCredError && (
+                  <p className="text-sm" style={{ color: "var(--state-error)" }}>
+                    {bindingCredError}
+                  </p>
+                )}
                 <div className="space-y-2">
                   <Label htmlFor="binding-status">Status</Label>
                   <select
@@ -935,7 +1061,9 @@ export function AgentDetailPage() {
             )}
 
             {bindingMutationError instanceof Error && (
-              <div className="text-sm text-destructive">{bindingMutationError.message}</div>
+              <div className="text-sm" style={{ color: "var(--state-error)" }}>
+                {bindingMutationError.message}
+              </div>
             )}
             <DialogFooter>
               <Button type="submit" disabled={bindingIsPending}>
@@ -960,14 +1088,20 @@ function BehaviorSection(props: {
   return (
     <section className="space-y-3">
       <div className="flex items-center justify-between">
-        <h2 className="text-base font-semibold">Behavior</h2>
-        <div className="text-xs text-muted-foreground">
-          {props.version != null && <span>v{props.version}</span>}
-          {props.dirty && <span className="ml-2 text-amber-700">· draft</span>}
+        <div className="inline-flex items-baseline gap-2">
+          <h2 style={{ fontSize: 13, fontWeight: 600 }}>Behavior</h2>
+          {props.version != null && (
+            <span className="mono" style={{ fontSize: 10.5, color: "var(--fg-4)" }}>
+              v{props.version}
+            </span>
+          )}
+          {props.dirty && <UppercaseLabel style={{ color: "var(--state-blocked)" }}>draft</UppercaseLabel>}
         </div>
       </div>
-      {props.loading && <div className="text-sm text-muted-foreground">Loading configuration…</div>}
-      {props.error && <div className="text-sm text-destructive">Failed to load configuration: {props.error}</div>}
+      {props.loading && <div style={{ fontSize: 12, color: "var(--fg-3)" }}>Loading configuration…</div>}
+      {props.error && (
+        <div style={{ fontSize: 12, color: "var(--state-error)" }}>Failed to load configuration: {props.error}</div>
+      )}
       {props.loaded && <div className="space-y-3">{props.children}</div>}
     </section>
   );
@@ -1030,41 +1164,59 @@ function BindClientList({
   const bindable = clients.filter((c) => c.status === "connected");
   if (bindable.length === 0) {
     return (
-      <div className="rounded border bg-muted/40 px-3 py-4 text-sm text-muted-foreground">
+      <div
+        className="text-sm"
+        style={{
+          background: "var(--bg-sunken)",
+          border: "1px solid var(--border-faint)",
+          borderRadius: 4,
+          padding: "10px 12px",
+          color: "var(--fg-3)",
+        }}
+      >
         No connected computers available. Run{" "}
-        <code className="font-mono text-xs">first-tree-hub client connect &lt;url&gt;</code> on the computer that should
-        run this agent, then reopen this dialog.
+        <code className="mono" style={{ fontSize: 11 }}>
+          first-tree-hub client connect &lt;url&gt;
+        </code>{" "}
+        on the computer that should run this agent, then reopen this dialog.
       </div>
     );
   }
   return (
-    <ul className="divide-y rounded border max-h-64 overflow-y-auto">
+    <ul
+      className="max-h-64 overflow-y-auto"
+      style={{ border: "1px solid var(--border)", borderRadius: 4, margin: 0, padding: 0, listStyle: "none" }}
+    >
       {bindable.map((c) => {
         const picked = c.id === selected;
         const online = c.status === "online" || c.status === "active";
         return (
-          <li key={c.id}>
+          <li key={c.id} style={{ borderTop: "1px solid var(--border-faint)" }}>
             <button
               type="button"
               onClick={() => onSelect(c.id)}
-              className={cn(
-                "w-full text-left px-3 py-2 flex items-center gap-3 hover:bg-gray-50",
-                picked && "bg-blue-50",
-              )}
+              className={cn("w-full text-left flex items-center gap-3")}
+              style={{
+                padding: "8px 12px",
+                background: picked ? "var(--accent-bg)" : "transparent",
+                border: "none",
+                cursor: "pointer",
+              }}
             >
               <span
-                className={cn("inline-block h-2 w-2 rounded-full", online ? "bg-green-500" : "bg-gray-400")}
+                className={cn("inline-block h-2 w-2 rounded-full shrink-0")}
+                style={{ background: online ? "var(--state-idle)" : "var(--fg-4)" }}
                 aria-hidden
               />
               <span className="flex-1 min-w-0">
                 <span className="block text-sm font-medium truncate">{c.hostname ?? c.id}</span>
-                <span className="block text-xs text-muted-foreground font-mono truncate">
+                <span className="block mono truncate" style={{ fontSize: 10.5, color: "var(--fg-4)" }}>
                   {c.id}
                   {c.os ? ` · ${c.os}` : ""}
                   {c.sdkVersion ? ` · SDK ${c.sdkVersion}` : ""}
                 </span>
               </span>
-              <span className="text-xs text-muted-foreground">{c.status}</span>
+              <span style={{ fontSize: 11, color: "var(--fg-3)" }}>{c.status}</span>
             </button>
           </li>
         );
@@ -1083,78 +1235,93 @@ const STATUS_LABELS: Record<TestResult["status"], string> = {
   error: "Error",
 };
 
-const HEALTH_INDICATOR: Record<string, { icon: string; color: string; label: string }> = {
-  connected: { icon: "●", color: "text-green-500", label: "Connected" },
-  stale: { icon: "◐", color: "text-yellow-500", label: "Stale" },
-  disconnected: { icon: "○", color: "text-gray-400", label: "Disconnected" },
+const TEST_RESULT_BORDER: Record<TestResult["status"], string> = {
+  success: "var(--state-idle)",
+  timeout: "var(--state-blocked)",
+  offline: "var(--state-offline)",
+  stale: "var(--state-blocked)",
+  error: "var(--state-error)",
+};
+
+const TEST_RESULT_TONE: Record<TestResult["status"], DenseBadgeTone> = {
+  success: "accent",
+  timeout: "warn",
+  stale: "warn",
+  error: "error",
+  offline: "neutral",
 };
 
 function TestResultCard({ result, onDismiss }: { result: TestResult; onDismiss: () => void }) {
-  const borderColor = {
-    success: "border-l-green-500",
-    timeout: "border-l-yellow-500",
-    offline: "border-l-gray-400",
-    stale: "border-l-yellow-500",
-    error: "border-l-red-500",
-  }[result.status];
-
-  const badgeVariant =
-    result.status === "success"
-      ? "default"
-      : result.status === "timeout" || result.status === "stale"
-        ? "secondary"
-        : "destructive";
+  const borderColor = TEST_RESULT_BORDER[result.status];
+  const badgeTone = TEST_RESULT_TONE[result.status];
 
   const conn = result.connection;
-  const healthInfo = conn ? HEALTH_INDICATOR[conn.health] : null;
 
   return (
-    <Card className={cn("border-l-4", borderColor)}>
-      <CardContent className="pt-4">
-        <div className="flex items-start justify-between">
-          <div className="space-y-2">
-            <div className="flex items-center gap-2">
-              <Badge variant={badgeVariant}>{STATUS_LABELS[result.status]}</Badge>
-              {result.responseTime != null && (
-                <span className="text-xs text-muted-foreground">{(result.responseTime / 1000).toFixed(1)}s</span>
-              )}
-            </div>
-            {result.message && <p className="text-sm text-muted-foreground">{result.message}</p>}
-            {conn && (
-              <div className="text-xs space-y-1 border-t pt-2 mt-1">
-                <div className="flex items-center gap-2">
-                  {healthInfo && (
-                    <span className={healthInfo.color}>
-                      {healthInfo.icon} {healthInfo.label}
-                    </span>
-                  )}
-                  {conn.runtimeState && <span className="text-muted-foreground">runtime: {conn.runtimeState}</span>}
-                </div>
-                {conn.client ? (
-                  <div className="text-muted-foreground">
-                    Computer: {conn.client.hostname ?? conn.client.id}
-                    {conn.client.os && ` (${conn.client.os})`}
-                    {conn.client.sdkVersion && ` · SDK ${conn.client.sdkVersion}`}
-                  </div>
-                ) : (
-                  <div className="text-muted-foreground">No computer bound</div>
-                )}
-                {conn.lastSeenAt && (
-                  <div className="text-muted-foreground">Last seen: {new Date(conn.lastSeenAt).toLocaleString()}</div>
-                )}
-              </div>
-            )}
-            {result.responseContent && (
-              <p className="text-sm mt-2 whitespace-pre-wrap bg-muted rounded p-2 max-h-40 overflow-auto">
-                {result.responseContent}
-              </p>
+    <div
+      style={{
+        background: "var(--bg-raised)",
+        border: "1px solid var(--border)",
+        borderLeft: `3px solid ${borderColor}`,
+        borderRadius: 6,
+        padding: "12px 14px",
+      }}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-2">
+            <DenseBadge tone={badgeTone}>{STATUS_LABELS[result.status]}</DenseBadge>
+            {result.responseTime != null && (
+              <span className="mono" style={{ fontSize: 11, color: "var(--fg-4)" }}>
+                {(result.responseTime / 1000).toFixed(1)}s
+              </span>
             )}
           </div>
-          <Button variant="ghost" size="sm" onClick={onDismiss}>
-            Dismiss
-          </Button>
+          {result.message && <p style={{ fontSize: 12, color: "var(--fg-3)" }}>{result.message}</p>}
+          {conn && (
+            <div
+              style={{
+                fontSize: 11,
+                color: "var(--fg-3)",
+                borderTop: "1px solid var(--border-faint)",
+                paddingTop: 6,
+                marginTop: 2,
+              }}
+            >
+              <div>{conn.runtimeState && <span className="mono">runtime: {conn.runtimeState}</span>}</div>
+              {conn.client ? (
+                <div>
+                  Computer: {conn.client.hostname ?? conn.client.id}
+                  {conn.client.os && ` (${conn.client.os})`}
+                  {conn.client.sdkVersion && ` · SDK ${conn.client.sdkVersion}`}
+                </div>
+              ) : (
+                <div>No computer bound</div>
+              )}
+              {conn.lastSeenAt && <div>Last seen: {new Date(conn.lastSeenAt).toLocaleString()}</div>}
+            </div>
+          )}
+          {result.responseContent && (
+            <p
+              className="mono whitespace-pre-wrap"
+              style={{
+                background: "var(--bg-sunken)",
+                border: "1px solid var(--border-faint)",
+                borderRadius: 4,
+                padding: 8,
+                fontSize: 11,
+                maxHeight: 160,
+                overflow: "auto",
+              }}
+            >
+              {result.responseContent}
+            </p>
+          )}
         </div>
-      </CardContent>
-    </Card>
+        <Button variant="ghost" size="sm" onClick={onDismiss}>
+          Dismiss
+        </Button>
+      </div>
+    </div>
   );
 }
