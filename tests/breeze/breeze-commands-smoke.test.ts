@@ -118,10 +118,25 @@ describe("runCleanup", () => {
 });
 
 describe("runInstall", () => {
-  it("re-invokes the current CLI for `breeze start` instead of shelling to PATH", () => {
+  it("refuses to install-start without an explicit repo scope", () => {
     const lines: string[] = [];
     const spawn = vi.fn(() => ({ status: 0 })) as unknown as typeof import("node:child_process").spawnSync;
     const code = runInstall([], {
+      breezeDir: makeHome("install-missing-scope"),
+      write: (line) => lines.push(line),
+      checkCommand: () => true,
+      checkGhAuth: () => true,
+      spawn,
+    });
+    expect(code).toBe(1);
+    expect(spawn).not.toHaveBeenCalled();
+    expect(lines.join("\n")).toContain("missing required --allow-repo");
+  });
+
+  it("re-invokes the current CLI for `breeze start` instead of shelling to PATH", () => {
+    const lines: string[] = [];
+    const spawn = vi.fn(() => ({ status: 0 })) as unknown as typeof import("node:child_process").spawnSync;
+    const code = runInstall(["--allow-repo", "owner/repo"], {
       breezeDir: makeHome("install"),
       write: (line) => lines.push(line),
       checkCommand: () => true,
@@ -135,7 +150,13 @@ describe("runInstall", () => {
     expect(code).toBe(0);
     expect(spawn).toHaveBeenCalledWith(
       process.execPath,
-      ["/tmp/first-tree/dist/cli.js", "breeze", "start"],
+      [
+        "/tmp/first-tree/dist/cli.js",
+        "breeze",
+        "start",
+        "--allow-repo",
+        "owner/repo",
+      ],
       { stdio: "inherit" },
     );
     expect(lines.join("\n")).toContain("Daemon started");

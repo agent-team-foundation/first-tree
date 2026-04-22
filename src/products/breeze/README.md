@@ -46,6 +46,10 @@ breeze/
 
 Run `first-tree breeze --help` for the authoritative list.
 
+Daemon-starting commands (`install`, `start`, `run`, `daemon`, `run-once`)
+must be given `--allow-repo <owner/repo[,owner/*,...]>` so breeze never
+falls back to scanning every notification on the account.
+
 ## Runtime Constraints
 
 `engine/statusline.ts` is bundled separately (`dist/breeze-statusline.js`) and

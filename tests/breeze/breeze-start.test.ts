@@ -10,6 +10,20 @@ describe("runStart", () => {
     vi.restoreAllMocks();
   });
 
+  it("refuses to start without an explicit repo scope", async () => {
+    const { runStart } = await import(
+      "../../src/products/breeze/engine/commands/start.js"
+    );
+
+    const lines: string[] = [];
+    const code = await runStart([], {
+      write: (line) => lines.push(line),
+    });
+
+    expect(code).toBe(1);
+    expect(lines.join("\n")).toContain("missing required --allow-repo");
+  });
+
   it("passes BREEZE_DIR/BREEZE_HOME plus the cli entrypoint to launchd", async () => {
     const bootstrapLaunchdJob = vi.fn(() => ({
       label: "com.breeze.runner.test.default",

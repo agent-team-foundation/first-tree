@@ -56,6 +56,7 @@ import { runCandidateCycle, runCandidateLoop } from "./candidate-loop.js";
 import { RepoFilter } from "../runtime/repo-filter.js";
 import { Scheduler } from "./scheduler.js";
 import { ThreadStore } from "./thread-store.js";
+import { requireExplicitRepoFilter } from "../runtime/allow-repo.js";
 
 export interface DaemonCliOverrides {
   pollIntervalSec?: number;
@@ -67,9 +68,8 @@ export interface DaemonCliOverrides {
   maxParallel?: number;
   searchLimit?: number;
   /**
-   * Comma-separated allow-list of repos the daemon should act on.
-   * Patterns are `owner/repo` or `owner/*`. An empty or undefined value
-   * means "match everything" (the prior default).
+   * Required comma-separated allow-list of repos the daemon may act on.
+   * Patterns are `owner/repo` or `owner/*`.
    */
   allowRepo?: string;
 }
@@ -103,7 +103,7 @@ const DEFAULT_LOGGER: PollerLogger = {
  * daemon accepts. Very small on purpose; breeze-runner has ~20 flags
  * but Phase 3a only needs a handful for the read path.
  *
- * Recognised flags (all optional):
+ * Recognised flags:
  *   --poll-interval-secs <n>
  *   --host <host>
  *   --log-level <level>
@@ -111,8 +111,8 @@ const DEFAULT_LOGGER: PollerLogger = {
  *   --task-timeout-secs <n>
  *   --max-parallel <n>
  *   --search-limit <n>
- *   --allow-repo <csv>            (owner/repo,owner/* — scopes the daemon
- *                                  to the listed repos; empty = all)
+ *   --allow-repo <csv>            (owner/repo,owner/* — required for daemon
+ *                                  startup; scopes the daemon to listed repos)
  *
  * Both `--flag value` and `--flag=value` forms are accepted for
  * `--allow-repo`, `--max-parallel`, and `--search-limit`.
@@ -264,6 +264,13 @@ export async function runDaemon(
 ): Promise<number> {
   const logger = options.logger ?? DEFAULT_LOGGER;
   const cliOverrides = options.cliOverrides ?? parseDaemonArgs(argv);
+  let repoFilter: RepoFilter;
+  try {
+    repoFilter = requireExplicitRepoFilter(cliOverrides.allowRepo);
+  } catch (err) {
+    logger.error(err instanceof Error ? err.message : String(err));
+    return 1;
+  }
 
   let config: DaemonConfig;
   try {
@@ -340,24 +347,6 @@ export async function runDaemon(
     else options.signal.addEventListener("abort", () => controller.abort(), {
       once: true,
     });
-  }
-
-  // Scope filter: empty = all repos (prior default). Construct once so we
-  // can both log it and pass it to the broker gh-client below. Parse
-  // failures (invalid patterns) are fatal — better to refuse to start than
-  // silently act on every repo.
-  let repoFilter: RepoFilter;
-  try {
-    repoFilter =
-      cliOverrides.allowRepo && cliOverrides.allowRepo.length > 0
-        ? RepoFilter.parseCsv(cliOverrides.allowRepo)
-        : RepoFilter.empty();
-  } catch (err) {
-    logger.error(
-      `invalid --allow-repo value: ${err instanceof Error ? err.message : String(err)}`,
-    );
-    if (lockHandle) await lockHandle.release().catch(() => undefined);
-    return 1;
   }
 
   let dispatcher: Dispatcher | null = null;

@@ -16,6 +16,12 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import {
+  parseAllowRepoArg,
+  requireExplicitRepoFilter,
+  REQUIRED_ALLOW_REPO_USAGE,
+} from "../runtime/allow-repo.js";
+
 const DEFAULT_CONFIG = `# breeze configuration
 poll_interval_sec: 60
 task_timeout_sec: 1800
@@ -74,6 +80,9 @@ export function runInstall(
     2. Creates \`~/.breeze/config.yaml\` with defaults (if absent)
     3. Starts the daemon via \`first-tree breeze start\`
 
+  Required:
+    ${REQUIRED_ALLOW_REPO_USAGE}   Explicit repo scope for the daemon startup
+
   Environment:
     BREEZE_DIR            Override \`~/.breeze\` (store root)
 `);
@@ -87,6 +96,14 @@ export function runInstall(
   const breezeDir =
     deps.breezeDir ?? process.env.BREEZE_DIR ?? join(homedir(), ".breeze");
   const startCommand = deps.startCommand ?? resolveSelfStartCommand();
+  try {
+    requireExplicitRepoFilter(parseAllowRepoArg(args));
+  } catch (err) {
+    write(
+      `ERROR: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return 1;
+  }
 
   write("=== breeze setup ===");
   write("");
@@ -123,11 +140,15 @@ export function runInstall(
   write("");
 
   write("Starting the breeze daemon...");
-  const result = spawn(startCommand.cmd, startCommand.args, { stdio: "inherit" });
+  const result = spawn(startCommand.cmd, [...startCommand.args, ...args], {
+    stdio: "inherit",
+  });
   if (result.status === 0) {
     write("  Daemon started");
   } else {
-    write("  WARN: daemon start failed; run `first-tree breeze start` manually");
+    write(
+      "  WARN: daemon start failed; rerun `first-tree breeze start --allow-repo owner/repo` manually",
+    );
   }
   write("");
 

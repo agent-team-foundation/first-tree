@@ -41,8 +41,8 @@ and safe to re-run.
 
 | Command | Purpose |
 |---|---|
-| `first-tree breeze install` | First-run setup — checks `gh`/`jq`/`gh auth`, creates `~/.breeze/config.yaml` with defaults, and starts the daemon. (Wiring the Claude Code statusline is a separate manual step — see the Statusline section.) |
-| `first-tree breeze start` | Launch the daemon in the background (launchd on macOS, detached spawn elsewhere) |
+| `first-tree breeze install --allow-repo owner/repo` | First-run setup — checks `gh`/`jq`/`gh auth`, creates `~/.breeze/config.yaml` with defaults, and starts the daemon. The repo scope is required so breeze never falls back to scanning the whole account. (Wiring the Claude Code statusline is a separate manual step — see the Statusline section.) |
+| `first-tree breeze start --allow-repo owner/repo` | Launch the daemon in the background (launchd on macOS, detached spawn elsewhere) |
 | `first-tree breeze stop` | Stop the daemon and remove its lock |
 | `first-tree breeze status` | Print the daemon lock + runtime/status.env |
 | `first-tree breeze doctor` | One-screen diagnostic of the local install |
@@ -57,8 +57,8 @@ debugging the pipeline or when `doctor` directs you to.
 
 | Command | Purpose |
 |---|---|
-| `first-tree breeze run` / `first-tree breeze daemon` | Run the broker loop in the foreground. `start` is preferred for humans; `daemon` is invoked by launchd. |
-| `first-tree breeze run-once` | Run one poll cycle, wait for drain, then exit. Useful for debugging the daemon pipeline. |
+| `first-tree breeze run --allow-repo owner/repo` / `first-tree breeze daemon --allow-repo owner/repo` | Run the broker loop in the foreground. `start` is preferred for humans; `daemon` is invoked by launchd. |
+| `first-tree breeze run-once --allow-repo owner/repo` | Run one poll cycle, wait for drain, then exit. Useful for debugging the daemon pipeline. |
 | `first-tree breeze cleanup` | Remove stale workspaces and expired claims. Only run if `doctor` suggests it. |
 
 ### Hook / internal entry points (do not invoke directly)
@@ -75,6 +75,9 @@ in `ps`, config files, or log lines.
 | `first-tree breeze poll-inbox` | Legacy alias for `poll`. Kept so existing scripts keep working; new callers should use `poll`. |
 
 For full options on any command, run `first-tree breeze <command> --help`.
+
+Any command that starts the daemon now requires an explicit `--allow-repo`
+scope. Use exact repos (`owner/repo`) and/or owner globs (`owner/*`).
 
 ## Recommended Invocation
 
@@ -106,14 +109,15 @@ live inbox summary in your session UI.
 **First-time setup on a fresh machine:**
 
 ```bash
-npx -p first-tree first-tree breeze install
+npx -p first-tree first-tree breeze install --allow-repo owner/repo
+npx -p first-tree first-tree breeze start --allow-repo owner/repo
 npx -p first-tree first-tree breeze status
 ```
 
 If the daemon did not come up during install, run:
 
 ```bash
-npx -p first-tree first-tree breeze start
+npx -p first-tree first-tree breeze start --allow-repo owner/repo
 ```
 
 **Something looks wrong:**

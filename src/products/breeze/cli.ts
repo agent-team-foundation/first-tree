@@ -26,8 +26,10 @@ export const BREEZE_USAGE = `usage: first-tree breeze <command>
   per-task agent runners.
 
 Primary commands (start here):
-  install               Run the first-run setup (creates config.yaml)
-  start                 Launch the daemon in the background (launchd on macOS)
+  install               Run the first-run setup (creates config.yaml, then
+                        starts the daemon; requires \`--allow-repo\`)
+  start                 Launch the daemon in the background (launchd on macOS;
+                        requires \`--allow-repo\`)
   stop                  Stop the daemon and remove its lock
   status                Print daemon lock + runtime/status.env
   doctor                Diagnose the local install
@@ -36,9 +38,10 @@ Primary commands (start here):
 
 Advanced commands (for agents or debugging):
   run, daemon           Run the broker loop in the foreground.
-                        Humans should normally use \`start\` instead.
-                        \`daemon\` is an alias invoked by launchd.
-  run-once              Run one poll cycle, wait for drain, exit.
+                        Humans should normally use \`start\` instead; requires
+                        \`--allow-repo\`. \`daemon\` is an alias invoked by launchd.
+  run-once              Run one poll cycle, wait for drain, exit. Requires
+                        \`--allow-repo\`.
   cleanup               Remove stale workspaces + expired claims
                         (only run if \`doctor\` suggests it).
 
@@ -64,7 +67,7 @@ const BREEZE_INLINE_HELP: Partial<Record<string, string>> = {
   Run the Breeze daemon in the foreground until stopped.
 
   Common options:
-    --allow-repo <csv>           Restrict work to owner/repo or owner/* patterns
+    --allow-repo <csv>           Required: restrict work to owner/repo or owner/* patterns
     --poll-interval-secs <n>     Seconds between poll cycles
     --task-timeout-secs <n>      Per-task timeout
     --max-parallel <n>           Max concurrent agent tasks
@@ -72,12 +75,15 @@ const BREEZE_INLINE_HELP: Partial<Record<string, string>> = {
 `,
   daemon: `usage: first-tree breeze daemon [options]
 
-  Alias for \`first-tree breeze run\`.
+  Alias for \`first-tree breeze run\`. Still requires \`--allow-repo\`.
 `,
   "run-once": `usage: first-tree breeze run-once [options]
 
   Run one inbox poll plus one candidate-search cycle, wait for queued
   agent work to drain, then exit.
+
+  Options:
+    --allow-repo <csv>           Required: restrict work to owner/repo or owner/* patterns
 `,
   watch: `usage: first-tree breeze watch
 
@@ -94,7 +100,7 @@ const BREEZE_INLINE_HELP: Partial<Record<string, string>> = {
   Options:
     --home <path>                Override runner home
     --profile <name>             Override daemon profile
-    --allow-repo <csv>           Restrict work to owner/repo or owner/* patterns
+    --allow-repo <csv>           Required: restrict work to owner/repo or owner/* patterns
 `,
   stop: `usage: first-tree breeze stop [options]
 
