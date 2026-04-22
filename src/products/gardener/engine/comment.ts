@@ -324,6 +324,7 @@ export interface PrView {
   body?: string;
   headRefName?: string;
   headRefOid?: string;
+  mergeCommit?: { oid?: string | null } | null;
   state?: string;
   author?: { login?: string } | string;
   additions?: number;
@@ -1189,7 +1190,7 @@ async function fetchPrBundle(
     "--repo",
     repo,
     "--json",
-    "number,title,body,headRefName,headRefOid,state,author,additions,deletions,labels,updatedAt",
+    "number,title,body,headRefName,headRefOid,mergeCommit,state,author,additions,deletions,labels,updatedAt",
   ]);
   if (viewRes.code !== 0) return null;
   const prView = jsonTryParse<PrView>(viewRes.stdout);
@@ -1606,6 +1607,9 @@ async function tryHandleMergedPr(input: {
     treeNodes: classification.treeNodes,
     codeownersMentions: Array.from(mentions),
     assignOwners,
+    sourceSha:
+      sourcePrView?.mergeCommit?.oid?.slice(0, 7) ??
+      sourcePrView?.headRefOid?.slice(0, 7),
     shell,
     env,
     write,

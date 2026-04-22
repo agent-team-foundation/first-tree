@@ -1706,6 +1706,7 @@ describe("gardener comment -- MERGED-PR scan branch (#193, Phase 2b of #162)", (
         number: 42,
         title: "feat: add thing",
         headRefOid: "dead1234",
+        mergeCommit: { oid: "cafebabe1234567890" },
         state: "MERGED",
         author: { login: "someone" },
         additions: 10,
@@ -1858,6 +1859,8 @@ describe("gardener comment -- MERGED-PR scan branch (#193, Phase 2b of #162)", (
     expect(issueCreate!.args[titleIdx + 1]).toBe(
       "[gardener] tree update needed for o/src#42",
     );
+    const bodyIdx = issueCreate!.args.indexOf("--body");
+    expect(issueCreate!.args[bodyIdx + 1]).toContain("source_sha=cafebab");
 
     const patch = calls.find(
       (c) => c.args[0] === "api" && c.args[1] === "-X" && c.args[2] === "PATCH",
