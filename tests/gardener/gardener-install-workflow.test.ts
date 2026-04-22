@@ -129,6 +129,7 @@ describe("gardener install-workflow — runInstallWorkflow", () => {
     expect(body).toContain("repository: acme/tree");
     expect(lines.some((l) => l.includes("wrote"))).toBe(true);
     expect(lines.some((l) => l.includes("TREE_REPO_TOKEN"))).toBe(true);
+    expect(lines.some((l) => l.includes("ANTHROPIC_API_KEY"))).toBe(true);
   });
 
   it("refuses to overwrite without --force", async () => {

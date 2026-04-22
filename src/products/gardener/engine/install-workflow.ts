@@ -46,8 +46,8 @@ Options:
   --help, -h                 Show this help message.
 
 Next steps after install:
-  1. Set the TREE_REPO_TOKEN secret on this repo (see
-     skills/first-tree/references/workflow-mode.md for the
+  1. Set the TREE_REPO_TOKEN and ANTHROPIC_API_KEY secrets on this
+     repo (see skills/first-tree/references/workflow-mode.md for the
      gh-auth-based quick path and the caveats).
   2. Set the ANTHROPIC_API_KEY secret on this repo. Without it,
      gardener comment refuses to post (PR #255) — this is the
@@ -173,6 +173,7 @@ jobs:
       pull-requests: write
     env:
       TREE_REPO_TOKEN: \${{ secrets.TREE_REPO_TOKEN }}
+      ANTHROPIC_API_KEY: \${{ secrets.ANTHROPIC_API_KEY }}
       GH_TOKEN: \${{ github.token }}
       # Optional: when set, gardener comment posts an AI-classified verdict.
       # When unset, gardener comment refuses to post (see PR #255). Set
@@ -287,16 +288,19 @@ export async function runInstallWorkflow(
   write("");
   write("Next steps:");
   write(
-    "  1. Set the TREE_REPO_TOKEN secret on this repo. Quick path via",
+    "  1. Set the TREE_REPO_TOKEN and ANTHROPIC_API_KEY secrets on this",
   );
   write(
-    "     your local gh login (review the caveats in",
+    "     repo. Quick path via your local gh login (review the caveats in",
   );
   write(
     "     skills/first-tree/references/workflow-mode.md first):",
   );
   write(
     `       gh auth token | gh secret set TREE_REPO_TOKEN --repo <codebase-owner>/<repo> --body -`,
+  );
+  write(
+    `       printf '%s' \"$ANTHROPIC_API_KEY\" | gh secret set ANTHROPIC_API_KEY --repo <codebase-owner>/<repo> --body -`,
   );
   write(
     `     The token needs \`issues:write\` and \`contents:read\` on ${flags.treeRepo}.`,
@@ -318,4 +322,3 @@ export async function runInstallWorkflow(
 
   return 0;
 }
-
