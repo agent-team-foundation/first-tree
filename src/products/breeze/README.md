@@ -26,8 +26,9 @@ breeze/
 
 | Command | Role |
 |---------|------|
-| `first-tree breeze install` | Check `gh` / `jq` / auth, create `~/.breeze/config.yaml`, and start the daemon. Statusline hook wiring is a separate manual step. |
-| `first-tree breeze start/stop` | Control the daemon lifecycle |
+| `first-tree breeze install --allow-repo owner/repo` | Check `gh` / `jq` / auth, create `~/.breeze/config.yaml`, and start the daemon. Statusline hook wiring is a separate manual step. |
+| `first-tree breeze start --allow-repo owner/repo` | Launch the daemon in the background |
+| `first-tree breeze stop` | Stop the daemon and remove its lock |
 | `first-tree breeze status` | Print current daemon/runtime status |
 | `first-tree breeze doctor` | Diagnose daemon / gh login / runtime health |
 | `first-tree breeze watch` | Interactive TUI inbox (Ink) |
@@ -37,8 +38,8 @@ breeze/
 
 | Command | Role |
 |---------|------|
-| `first-tree breeze run` / `first-tree breeze daemon` | Run the broker loop in the foreground |
-| `first-tree breeze run-once` | Run one poll cycle, wait for drain, then exit |
+| `first-tree breeze run --allow-repo owner/repo` / `first-tree breeze daemon --allow-repo owner/repo` | Run the broker loop in the foreground |
+| `first-tree breeze run-once --allow-repo owner/repo` | Run one poll cycle, wait for drain, then exit |
 | `first-tree breeze cleanup` | Clear stale state |
 | `first-tree breeze statusline` | CLI shim that executes the pre-bundled `dist/breeze-statusline.js` hook |
 | `first-tree breeze status-manager` | Internal helper used by breeze runners |

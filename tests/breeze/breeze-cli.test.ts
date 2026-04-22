@@ -124,12 +124,18 @@ describe("runBreeze dispatcher", () => {
     const runCode = await freshRun(["run", "--help"], runOutput.write);
     expect(runCode).toBe(0);
     expect(runOutput.lines.join("\n")).toContain("usage: first-tree breeze run");
+    expect(runOutput.lines.join("\n")).toContain(
+      "Required: restrict work to owner/repo or owner/* patterns",
+    );
     expect(runDaemonSpy).not.toHaveBeenCalled();
 
     const startOutput = captureOutput();
     const startCode = await freshRun(["start", "--help"], startOutput.write);
     expect(startCode).toBe(0);
     expect(startOutput.lines.join("\n")).toContain("usage: first-tree breeze start");
+    expect(startOutput.lines.join("\n")).toContain(
+      "Required: restrict work to owner/repo or owner/* patterns",
+    );
     expect(runStartSpy).not.toHaveBeenCalled();
   });
 

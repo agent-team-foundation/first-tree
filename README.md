@@ -207,8 +207,8 @@ continue to work cleanly for multi-repo workspaces.
 | `first-tree gardener status` | Report gardener daemon PID, schedule, and last-run state |
 | `first-tree gardener run-once` | Execute both gardener sweeps inline and exit |
 | `first-tree gardener stop` | Stop the pull-mode gardener daemon |
-| `first-tree breeze install` | Check prerequisites, create `~/.breeze/config.yaml`, and start the daemon |
-| `first-tree breeze start` | Launch the breeze daemon in the background |
+| `first-tree breeze install --allow-repo owner/repo` | Check prerequisites, create `~/.breeze/config.yaml`, and start the daemon |
+| `first-tree breeze start --allow-repo owner/repo` | Launch the breeze daemon in the background |
 | `first-tree breeze status` | Print daemon/runtime status for the current breeze profile |
 | `first-tree breeze watch` | Open the live TUI inbox and activity feed |
 | `first-tree breeze poll` | Poll GitHub notifications once without requiring the daemon |
