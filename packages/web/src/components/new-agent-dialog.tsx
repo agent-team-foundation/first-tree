@@ -258,7 +258,7 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
             <DialogTitle>Choose a computer</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            <p className="text-sm text-muted-foreground">
+            <p className="text-body text-muted-foreground">
               Multiple computers are online. Pick where <span className="font-medium">{name}</span> should run:
             </p>
             <div className="space-y-2">
@@ -281,8 +281,8 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
                       className="mt-1"
                     />
                     <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium truncate">{client.hostname ?? client.id}</div>
-                      <div className="text-xs text-muted-foreground">
+                      <div className="text-body font-medium truncate">{client.hostname ?? client.id}</div>
+                      <div className="text-caption text-muted-foreground">
                         {client.os ?? "unknown OS"} · last seen {new Date(client.lastSeenAt).toLocaleString()}
                       </div>
                     </div>
@@ -290,9 +290,9 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
                 );
               })}
             </div>
-            {fieldErrors.clientId && <p className="text-sm text-destructive">{fieldErrors.clientId}</p>}
+            {fieldErrors.clientId && <p className="text-body text-destructive">{fieldErrors.clientId}</p>}
             {fieldErrors._root && (
-              <div className="rounded-md border border-destructive/50 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+              <div className="rounded-md border border-destructive/50 bg-destructive/5 px-3 py-2 text-body text-destructive">
                 {fieldErrors._root}
               </div>
             )}
@@ -335,17 +335,17 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
               aria-invalid={fieldErrors.name ? true : undefined}
               aria-describedby="new-agent-name-help new-agent-name-error"
             />
-            <p id="new-agent-name-help" className="text-xs text-muted-foreground">
+            <p id="new-agent-name-help" className="text-caption text-muted-foreground">
               Hub ID: lowercase letters, digits, hyphens (-), and underscores (_). Up to {NAME_MAX} characters.
               Permanent after creation — you can't rename the agent later.
             </p>
             {nameDirty && slug && (
-              <p className="text-xs text-muted-foreground">
+              <p className="text-caption text-muted-foreground">
                 ID on hub: <span className="font-mono">{slug}</span>
               </p>
             )}
             {fieldErrors.name && (
-              <p id="new-agent-name-error" className="text-xs text-destructive">
+              <p id="new-agent-name-error" className="text-caption text-destructive">
                 {fieldErrors.name}
               </p>
             )}
@@ -366,11 +366,11 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
               aria-invalid={fieldErrors.displayName ? true : undefined}
               aria-describedby="new-agent-display-name-help new-agent-display-name-error"
             />
-            <p id="new-agent-display-name-help" className="text-xs text-muted-foreground">
+            <p id="new-agent-display-name-help" className="text-caption text-muted-foreground">
               Shown in chats and lists. Defaults to the Name above; you can change it anytime later.
             </p>
             {fieldErrors.displayName && (
-              <p id="new-agent-display-name-error" className="text-xs text-destructive">
+              <p id="new-agent-display-name-error" className="text-caption text-destructive">
                 {fieldErrors.displayName}
               </p>
             )}
@@ -394,8 +394,8 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
                   className="mt-1"
                 />
                 <div>
-                  <div className="text-sm font-medium">Claude Code</div>
-                  <div className="text-xs text-muted-foreground">
+                  <div className="text-body font-medium">Claude Code</div>
+                  <div className="text-caption text-muted-foreground">
                     Runs on your computer, can access your local files. (default)
                   </div>
                 </div>
@@ -406,17 +406,17 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
               >
                 <input type="radio" name="runtime" disabled className="mt-1" />
                 <div>
-                  <div className="text-sm font-medium">
-                    Kael <span className="ml-1 text-xs font-normal text-muted-foreground">— coming soon</span>
+                  <div className="text-body font-medium">
+                    Kael <span className="ml-1 text-caption font-normal text-muted-foreground">— coming soon</span>
                   </div>
-                  <div className="text-xs text-muted-foreground">Ready to go, runs in the cloud.</div>
+                  <div className="text-caption text-muted-foreground">Ready to go, runs in the cloud.</div>
                 </div>
               </label>
             </div>
           </div>
 
           {fieldErrors._root && (
-            <div className="rounded-md border border-destructive/50 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            <div className="rounded-md border border-destructive/50 bg-destructive/5 px-3 py-2 text-body text-destructive">
               {fieldErrors._root}
             </div>
           )}

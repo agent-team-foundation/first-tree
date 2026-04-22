@@ -45,7 +45,7 @@ const CommandInput = forwardRef<HTMLInputElement, ComponentPropsWithoutRef<typeo
       <CommandPrimitive.Input
         ref={ref}
         className={cn(
-          "flex h-11 w-full rounded-md bg-transparent py-3 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50",
+          "flex h-11 w-full rounded-md bg-transparent py-3 text-body outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50",
           className,
         )}
         {...props}
@@ -59,7 +59,7 @@ const CommandList = forwardRef<HTMLDivElement, ComponentPropsWithoutRef<typeof C
   ({ className, ...props }, ref) => (
     <CommandPrimitive.List
       ref={ref}
-      className={cn("max-h-[300px] overflow-y-auto overflow-x-hidden", className)}
+      className={cn("max-h-[var(--sp-75)] overflow-y-auto overflow-x-hidden", className)}
       {...props}
     />
   ),
@@ -67,7 +67,7 @@ const CommandList = forwardRef<HTMLDivElement, ComponentPropsWithoutRef<typeof C
 CommandList.displayName = CommandPrimitive.List.displayName;
 
 const CommandEmpty = forwardRef<HTMLDivElement, ComponentPropsWithoutRef<typeof CommandPrimitive.Empty>>(
-  (props, ref) => <CommandPrimitive.Empty ref={ref} className="py-6 text-center text-sm" {...props} />,
+  (props, ref) => <CommandPrimitive.Empty ref={ref} className="py-6 text-center text-body" {...props} />,
 );
 CommandEmpty.displayName = CommandPrimitive.Empty.displayName;
 
@@ -76,7 +76,7 @@ const CommandGroup = forwardRef<HTMLDivElement, ComponentPropsWithoutRef<typeof 
     <CommandPrimitive.Group
       ref={ref}
       className={cn(
-        "overflow-hidden p-1 text-foreground [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground",
+        "overflow-hidden p-1 text-foreground [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-caption [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground",
         className,
       )}
       {...props}
@@ -97,7 +97,7 @@ const CommandItem = forwardRef<HTMLDivElement, ComponentPropsWithoutRef<typeof C
     <CommandPrimitive.Item
       ref={ref}
       className={cn(
-        "relative flex cursor-default select-none items-center rounded-sm px-2 py-1.5 text-sm outline-none aria-selected:bg-accent aria-selected:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+        "relative flex cursor-default select-none items-center rounded-sm px-2 py-1.5 text-body outline-none aria-selected:bg-accent aria-selected:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
         className,
       )}
       {...props}

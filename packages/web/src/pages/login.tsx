@@ -34,12 +34,12 @@ export function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-background">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
-          <CardTitle className="text-2xl">First Tree</CardTitle>
+          <CardTitle className="text-title">First Tree</CardTitle>
           <CardDescription>Sign in to your workspace</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
-            {error && <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
+            {error && <div className="rounded-md bg-destructive/10 p-3 text-body text-destructive">{error}</div>}
             <div className="space-y-2">
               <Label htmlFor="username">Username</Label>
               <Input id="username" value={username} onChange={(e) => setUsername(e.target.value)} required autoFocus />

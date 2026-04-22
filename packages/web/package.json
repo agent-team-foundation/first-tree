@@ -8,15 +8,14 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
-    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit && pnpm run lint:tokens && vite build",
+    "typecheck": "tsc --noEmit && pnpm run lint:tokens",
+    "lint:tokens": "bash scripts/check-design-tokens.sh",
     "preview": "vite preview",
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "@agent-team-foundation/first-tree-hub-shared": "workspace:*",
-    "@fontsource-variable/geist": "^5.2.8",
-    "@fontsource-variable/geist-mono": "^5.2.7",
     "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-label": "^2.1.8",
     "@radix-ui/react-slot": "^1.2.4",

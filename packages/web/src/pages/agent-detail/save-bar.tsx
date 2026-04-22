@@ -30,9 +30,9 @@ export function SaveBar(props: SaveBarProps) {
   if (!props.summary.anyDirty && !props.conflictMessage && !props.errorMessage) return null;
 
   return (
-    <div className="sticky bottom-0 z-30 -mx-6 border-t bg-yellow-50/95 px-6 py-3 backdrop-blur">
+    <div className="sticky bottom-0 z-30 -mx-6 border-t bg-warn-soft/95 px-6 py-3 backdrop-blur">
       <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-        <div className="flex flex-col gap-1 text-sm">
+        <div className="flex flex-col gap-1 text-body">
           {props.summary.anyDirty && (
             <div className="flex items-center gap-2">
               <span aria-hidden>🟡</span>
@@ -46,7 +46,7 @@ export function SaveBar(props: SaveBarProps) {
                   <button
                     key={s}
                     type="button"
-                    className="rounded bg-white px-2 py-0.5 text-xs border hover:bg-amber-100"
+                    className="rounded bg-card px-2 py-0.5 text-caption border hover:bg-warn-soft"
                     onClick={() => props.onJumpTo(s)}
                   >
                     {SECTION_LABELS[s]}
@@ -55,9 +55,9 @@ export function SaveBar(props: SaveBarProps) {
               </span>
             </div>
           )}
-          <p className="text-xs text-muted-foreground">{props.saveHint}</p>
-          {props.conflictMessage && <p className="text-xs text-amber-900 font-medium">{props.conflictMessage}</p>}
-          {props.errorMessage && <p className="text-xs text-red-800 font-medium">{props.errorMessage}</p>}
+          <p className="text-caption text-muted-foreground">{props.saveHint}</p>
+          {props.conflictMessage && <p className="text-caption text-warn font-medium">{props.conflictMessage}</p>}
+          {props.errorMessage && <p className="text-caption text-error font-medium">{props.errorMessage}</p>}
         </div>
         <div className="flex gap-2">
           {props.conflictMessage && (

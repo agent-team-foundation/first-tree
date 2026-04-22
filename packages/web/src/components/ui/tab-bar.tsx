@@ -18,8 +18,8 @@ export function TabBar({ className, style, ...rest }: TabBarProps) {
       style={{
         gap: 2,
         height: 34,
-        padding: "0 20px",
-        borderBottom: "1px solid var(--border)",
+        padding: "0 var(--sp-5)",
+        borderBottom: "var(--hairline) solid var(--border)",
         background: "var(--bg-raised)",
         ...style,
       }}
@@ -39,13 +39,11 @@ export function Tab({ active, onClick, children }: TabProps) {
     <button
       type="button"
       onClick={onClick}
-      className="inline-flex items-center gap-1.5 bg-transparent"
+      className="inline-flex items-center gap-1.5 bg-transparent text-body font-medium"
       style={{
-        padding: "7px 12px",
+        padding: "var(--sp-1_75) var(--sp-3)",
         marginBottom: -1,
-        borderBottom: `2px solid ${active ? "var(--accent)" : "transparent"}`,
-        fontSize: 12,
-        fontWeight: 500,
+        borderBottom: `var(--hairline-bold) solid ${active ? "var(--accent)" : "transparent"}`,
         color: active ? "var(--fg)" : "var(--fg-3)",
         cursor: "pointer",
         transition: "color 0.12s",
@@ -64,7 +62,7 @@ export function Tab({ active, onClick, children }: TabProps) {
 
 export function TabBadge({ children }: { children: ReactNode }) {
   return (
-    <span className="mono" style={{ fontSize: 10, color: "var(--fg-4)" }}>
+    <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
       {children}
     </span>
   );

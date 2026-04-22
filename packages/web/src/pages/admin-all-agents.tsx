@@ -30,7 +30,7 @@ export function AdminAllAgentsPage() {
 
   return (
     <div>
-      <p style={{ fontSize: 11.5, color: "var(--fg-3)", padding: "0 2px 10px" }}>
+      <p className="text-label" style={{ color: "var(--fg-3)", padding: "0 var(--sp-0_5) var(--sp-2_5)" }}>
         Every agent in the organization — including private agents owned by other members. Use this view to troubleshoot
         or reassign.
       </p>
@@ -38,15 +38,15 @@ export function AdminAllAgentsPage() {
       <Panel>
         <SectionHeader>All agents · {data?.items.length ?? 0}</SectionHeader>
         {isLoading ? (
-          <div className="text-center py-8" style={{ color: "var(--fg-3)", fontSize: 12 }}>
+          <div className="text-center py-8 text-body" style={{ color: "var(--fg-3)" }}>
             Loading…
           </div>
         ) : error ? (
-          <div className="text-center py-8" style={{ color: "var(--state-error)", fontSize: 12 }}>
+          <div className="text-center py-8 text-body" style={{ color: "var(--state-error)" }}>
             Failed to load agents: {error instanceof Error ? error.message : "Unknown error"}
           </div>
         ) : !data || data.items.length === 0 ? (
-          <div className="text-center py-8" style={{ color: "var(--fg-3)", fontSize: 12 }}>
+          <div className="text-center py-8 text-body" style={{ color: "var(--fg-3)" }}>
             No agents
           </div>
         ) : (
@@ -70,9 +70,7 @@ export function AdminAllAgentsPage() {
                   onClick={() => navigate(`/agents/${encodeURIComponent(a.uuid)}`)}
                 >
                   <DenseTableCell>
-                    <span className="mono" style={{ fontSize: 12, fontWeight: 500 }}>
-                      {a.name ?? a.uuid.slice(0, 8)}
-                    </span>
+                    <span className="mono font-medium">{a.name ?? a.uuid.slice(0, 8)}</span>
                   </DenseTableCell>
                   <DenseTableCell style={{ color: "var(--fg-2)" }}>{a.displayName ?? "—"}</DenseTableCell>
                   <DenseTableCell>
@@ -83,13 +81,13 @@ export function AdminAllAgentsPage() {
                       {a.visibility}
                     </DenseBadge>
                   </DenseTableCell>
-                  <DenseTableCell style={{ fontSize: 11.5, color: "var(--fg-2)" }}>
+                  <DenseTableCell className="text-label" style={{ color: "var(--fg-2)" }}>
                     {a.managerId ? resolveMember(a.managerId) : "—"}
                   </DenseTableCell>
                   <DenseTableCell>
                     <DenseBadge tone={a.status === "active" ? "accent" : "neutral"}>{a.status}</DenseBadge>
                   </DenseTableCell>
-                  <DenseTableCell className="mono" style={{ fontSize: 10.5, color: "var(--fg-4)" }}>
+                  <DenseTableCell className="mono text-caption" style={{ color: "var(--fg-4)" }}>
                     {formatDate(a.createdAt)}
                   </DenseTableCell>
                 </DenseTableRow>

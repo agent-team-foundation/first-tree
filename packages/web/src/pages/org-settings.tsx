@@ -104,7 +104,7 @@ export function OrgSettingsPage() {
           <PanelTitle>System configuration</PanelTitle>
           <div className="flex items-center gap-1.5">
             {saved && (
-              <span className="mono" style={{ fontSize: 10.5, color: "var(--accent-dim)" }}>
+              <span className="mono text-caption" style={{ color: "var(--accent-dim)" }}>
                 saved
               </span>
             )}
@@ -117,9 +117,9 @@ export function OrgSettingsPage() {
             </Button>
           </div>
         </PanelHeader>
-        <div style={{ padding: "4px 16px 14px" }}>
+        <div style={{ padding: "var(--sp-1) var(--sp-4) var(--sp-3_5)" }}>
           {isLoading ? (
-            <div className="py-6" style={{ color: "var(--fg-3)", fontSize: 12 }}>
+            <div className="py-6 text-body" style={{ color: "var(--fg-3)" }}>
               Loading…
             </div>
           ) : (
@@ -133,7 +133,7 @@ export function OrgSettingsPage() {
             ))
           )}
           {mutation.error instanceof Error && (
-            <div className="text-sm pt-2" style={{ color: "var(--state-error)" }}>
+            <div className="text-body pt-2" style={{ color: "var(--state-error)" }}>
               {mutation.error.message}
             </div>
           )}
@@ -149,22 +149,26 @@ function ConfigRow({ field, value, onChange }: { field: ConfigMeta; value: strin
     <div
       className="grid items-start gap-5"
       style={{
-        gridTemplateColumns: "1fr 180px",
-        padding: "14px 0",
-        borderTop: "1px solid var(--border-faint)",
+        gridTemplateColumns: "1fr var(--sp-45)",
+        padding: "var(--sp-3_5) 0",
+        borderTop: "var(--hairline) solid var(--border-faint)",
       }}
     >
       <div>
         <div className="flex items-baseline gap-2">
-          <span style={{ fontSize: 12.5, fontWeight: 500, color: "var(--fg)" }}>{field.label}</span>
-          <span className="mono" style={{ fontSize: 10.5, color: "var(--fg-4)" }}>
+          <span className="text-body font-medium" style={{ color: "var(--fg)" }}>
+            {field.label}
+          </span>
+          <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
             {field.key}
           </span>
         </div>
-        <div style={{ fontSize: 11, color: "var(--fg-3)", marginTop: 2 }}>{field.description}</div>
+        <div className="text-label" style={{ color: "var(--fg-3)", marginTop: 2 }}>
+          {field.description}
+        </div>
         <UppercaseLabel style={{ marginTop: 4, display: "block" }}>
           default{" "}
-          <span className="mono" style={{ color: "var(--fg-3)", textTransform: "none", letterSpacing: 0 }}>
+          <span className="mono normal-case tracking-normal" style={{ color: "var(--fg-3)" }}>
             {def}
           </span>
         </UppercaseLabel>
@@ -173,25 +177,23 @@ function ConfigRow({ field, value, onChange }: { field: ConfigMeta; value: strin
         <input
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className="w-full outline-none mono"
+          className="w-full outline-none mono text-body"
           style={{
-            padding: `5px ${field.unit ? 56 : 10}px 5px 10px`,
-            fontSize: 12,
+            padding: `var(--sp-1_25) ${field.unit ? 56 : 10}px var(--sp-1_25) var(--sp-2_5)`,
             background: "var(--bg-sunken)",
-            border: "1px solid var(--border)",
-            borderRadius: 4,
+            border: "var(--hairline) solid var(--border)",
+            borderRadius: "var(--radius-input)",
             color: "var(--fg)",
           }}
         />
         {field.unit && (
           <span
-            className="mono"
+            className="mono text-caption"
             style={{
               position: "absolute",
               right: 8,
               top: "50%",
               transform: "translateY(-50%)",
-              fontSize: 10,
               color: "var(--fg-4)",
               pointerEvents: "none",
             }}

@@ -78,7 +78,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                 >
                   <Bot className="mr-2 h-4 w-4 shrink-0 opacity-70" />
                   <span className="flex-1 truncate">{name}</span>
-                  <span className="text-xs text-muted-foreground font-mono ml-2">{a.agentId.slice(0, 8)}</span>
+                  <span className="text-caption text-muted-foreground font-mono ml-2">{a.agentId.slice(0, 8)}</span>
                 </CommandItem>
               );
             })}
@@ -99,7 +99,9 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                   >
                     <MessageSquare className="mr-2 h-4 w-4 shrink-0 opacity-70" />
                     <span className="flex-1 truncate">{name}</span>
-                    <span className="text-xs text-muted-foreground font-mono ml-2">{session.chatId.slice(0, 8)}</span>
+                    <span className="text-caption text-muted-foreground font-mono ml-2">
+                      {session.chatId.slice(0, 8)}
+                    </span>
                   </CommandItem>
                 );
               })}

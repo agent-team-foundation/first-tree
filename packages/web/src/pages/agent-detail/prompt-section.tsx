@@ -30,23 +30,21 @@ export function PromptSection({ value, baseline, onChange, onRevert, disabled }:
     <section
       style={{
         background: "var(--bg-raised)",
-        border: `1px solid ${dirty ? "color-mix(in oklch, var(--state-blocked) 40%, transparent)" : "var(--border)"}`,
+        border: `var(--hairline) solid ${dirty ? "color-mix(in oklch, var(--state-blocked) 40%, transparent)" : "var(--border)"}`,
         borderRadius: 6,
       }}
     >
       <header
         className="flex items-center justify-between"
-        style={{ padding: "10px 14px", borderBottom: "1px solid var(--border-faint)" }}
+        style={{ padding: "var(--sp-2_5) var(--sp-3_5)", borderBottom: "var(--hairline) solid var(--border-faint)" }}
       >
-        <h3 className="inline-flex items-center gap-2" style={{ fontSize: 12, fontWeight: 600, color: "var(--fg)" }}>
+        <h3 className="inline-flex items-center gap-2 text-body font-semibold" style={{ color: "var(--fg)" }}>
           System Prompt Append
           {dirty && (
             <span
-              className="mono uppercase"
+              className="mono uppercase text-caption"
               style={{
-                fontSize: 10,
-                letterSpacing: "0.06em",
-                padding: "1px 6px",
+                padding: "var(--hairline) var(--sp-1_5)",
                 borderRadius: 3,
                 background: "color-mix(in oklch, var(--state-blocked) 16%, transparent)",
                 color: "color-mix(in oklch, var(--state-blocked) 50%, var(--fg))",
@@ -79,7 +77,7 @@ export function PromptSection({ value, baseline, onChange, onRevert, disabled }:
                 }
               }}
               rows={10}
-              className="w-full rounded border bg-transparent p-2 font-mono text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
+              className="w-full rounded border bg-transparent p-2 font-mono text-body shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
               placeholder="Appended to Claude Code's default system prompt."
               maxLength={32_000}
               spellCheck={false}
@@ -100,13 +98,13 @@ export function PromptSection({ value, baseline, onChange, onRevert, disabled }:
                 Done
               </Button>
             </div>
-            <p className="text-xs text-muted-foreground">
+            <p className="text-caption text-muted-foreground">
               `Done` collapses this editor. The change is saved only when you click Save in the bar at the bottom of the
               page.
             </p>
           </div>
         ) : (
-          <div className="rounded bg-muted p-3 text-sm max-h-64 overflow-auto min-h-8">
+          <div className="rounded bg-muted p-3 text-body max-h-64 overflow-auto min-h-8">
             {value ? (
               <Markdown>{value}</Markdown>
             ) : (

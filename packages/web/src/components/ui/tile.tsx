@@ -10,26 +10,17 @@ export function Tile({ label, value, accent }: TileProps) {
   return (
     <div
       style={{
-        padding: "8px 10px",
+        padding: "var(--sp-2) var(--sp-2_5)",
         background: "var(--bg-sunken)",
         borderRadius: 4,
       }}
     >
-      <div
-        className="mono uppercase"
-        style={{
-          fontSize: 9,
-          letterSpacing: "0.08em",
-          color: "var(--fg-4)",
-        }}
-      >
+      <div className="mono uppercase text-eyebrow" style={{ color: "var(--fg-4)" }}>
         {label}
       </div>
       <div
-        className="mono"
+        className="mono text-subtitle font-semibold"
         style={{
-          fontSize: 15,
-          fontWeight: 600,
           color: accent ?? "var(--fg)",
           marginTop: 1,
         }}

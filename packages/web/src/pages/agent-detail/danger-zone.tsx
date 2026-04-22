@@ -29,13 +29,15 @@ export function DangerZone(props: DangerZoneProps) {
     <section
       style={{
         background: "color-mix(in oklch, var(--state-error) 6%, var(--bg-raised))",
-        border: "1px solid color-mix(in oklch, var(--state-error) 28%, transparent)",
+        border: "var(--hairline) solid color-mix(in oklch, var(--state-error) 28%, transparent)",
         borderRadius: 6,
       }}
     >
-      <header className="flex items-center gap-2" style={{ padding: "10px 14px" }}>
+      <header className="flex items-center gap-2" style={{ padding: "var(--sp-2_5) var(--sp-3_5)" }}>
         <AlertTriangle className="h-3.5 w-3.5" style={{ color: "var(--state-error)" }} />
-        <h3 style={{ fontSize: 12, fontWeight: 600, color: "var(--state-error)" }}>Danger zone</h3>
+        <h3 className="text-body font-semibold" style={{ color: "var(--state-error)" }}>
+          Danger zone
+        </h3>
       </header>
       <div>
         {agent.status === "active" ? (
@@ -88,16 +90,19 @@ export function DangerZone(props: DangerZoneProps) {
 function DangerRow(props: { title: string; body: string; action: React.ReactNode }) {
   return (
     <div
-      className="flex items-start justify-between gap-4"
+      className="flex items-start justify-between gap-4 text-body"
       style={{
-        padding: "10px 14px",
-        borderTop: "1px solid color-mix(in oklch, var(--state-error) 14%, transparent)",
-        fontSize: 12,
+        padding: "var(--sp-2_5) var(--sp-3_5)",
+        borderTop: "var(--hairline) solid color-mix(in oklch, var(--state-error) 14%, transparent)",
       }}
     >
       <div>
-        <p style={{ fontWeight: 500, color: "var(--fg)" }}>{props.title}</p>
-        <p style={{ fontSize: 11, color: "var(--fg-3)" }}>{props.body}</p>
+        <p className="font-medium" style={{ color: "var(--fg)" }}>
+          {props.title}
+        </p>
+        <p className="text-label font-normal" style={{ color: "var(--fg-3)" }}>
+          {props.body}
+        </p>
       </div>
       <div>{props.action}</div>
     </div>
@@ -131,8 +136,8 @@ function DeleteConfirmDialog({ open, onOpenChange, expected, onDelete, deleting 
           <DialogTitle>Delete "{expected}"?</DialogTitle>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            This action cannot be undone. Type <span className="font-mono font-medium text-gray-900">{expected}</span>{" "}
+          <p className="text-body text-muted-foreground">
+            This action cannot be undone. Type <span className="font-mono font-medium text-foreground">{expected}</span>{" "}
             to confirm.
           </p>
           <Input

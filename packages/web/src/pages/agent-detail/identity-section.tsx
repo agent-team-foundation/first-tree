@@ -41,25 +41,27 @@ export function IdentitySection({ agent, onSave }: IdentitySectionProps) {
     <section
       style={{
         background: "var(--bg-raised)",
-        border: "1px solid var(--border)",
+        border: "var(--hairline) solid var(--border)",
         borderRadius: 6,
       }}
     >
       <header
         className="flex items-center justify-between"
         style={{
-          padding: "10px 14px",
-          borderBottom: "1px solid var(--border-faint)",
+          padding: "var(--sp-2_5) var(--sp-3_5)",
+          borderBottom: "var(--hairline) solid var(--border-faint)",
         }}
       >
-        <h2 style={{ fontSize: 12, fontWeight: 600, color: "var(--fg)" }}>Profile</h2>
+        <h2 className="text-body font-semibold" style={{ color: "var(--fg)" }}>
+          Profile
+        </h2>
         {agent.status === "active" && (
           <Button size="xs" variant="outline" onClick={() => setOpen(true)}>
             <Pencil className="h-3 w-3" /> Edit
           </Button>
         )}
       </header>
-      <div className="px-4 py-3 text-sm space-y-1">
+      <div className="px-4 py-3 text-body space-y-1">
         <div>
           <span className="font-mono">{agent.name ?? agent.uuid}</span>
           <span className="mx-2 text-muted-foreground">·</span>
@@ -73,13 +75,13 @@ export function IdentitySection({ agent, onSave }: IdentitySectionProps) {
             </>
           )}
         </div>
-        <div className="text-xs text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-1">
+        <div className="text-caption text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-1">
           <span>
-            owner <span className="text-gray-900">{ownerName ?? "—"}</span>
+            owner <span className="text-foreground">{ownerName ?? "—"}</span>
           </span>
           {role && (
             <span>
-              role <span className="text-gray-900">{role}</span>
+              role <span className="text-foreground">{role}</span>
             </span>
           )}
           <span>
@@ -180,7 +182,7 @@ function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialo
           <div className="space-y-2">
             <Label>Name (mention)</Label>
             <Input value={agent.name ?? ""} disabled className="font-mono" />
-            <p className="text-xs text-muted-foreground">Name is permanent after creation.</p>
+            <p className="text-caption text-muted-foreground">Name is permanent after creation.</p>
           </div>
           <div className="space-y-2">
             <Label htmlFor="id-display">Display Name</Label>
@@ -199,12 +201,12 @@ function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialo
               value={visibility}
               onChange={(e) => setVisibility(e.target.value as typeof visibility)}
               disabled={!canChangeVisibility}
-              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+              className="flex h-9 w-full rounded-[var(--radius-input)] border border-input bg-transparent px-3 py-1 text-body shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
             >
               <option value={AGENT_VISIBILITY.PRIVATE}>Private — only the manager</option>
               <option value={AGENT_VISIBILITY.ORGANIZATION}>Organization — all members</option>
             </select>
-            <p className="text-xs text-muted-foreground">
+            <p className="text-caption text-muted-foreground">
               {canChangeVisibility
                 ? "Private agents are only visible to their manager; organization agents appear in every member's list."
                 : "Only the manager or an admin can change this agent's visibility."}
@@ -217,7 +219,7 @@ function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialo
                 id="id-delegate"
                 value={delegateMention}
                 onChange={(e) => setDelegateMention(e.target.value)}
-                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                className="flex h-9 w-full rounded-[var(--radius-input)] border border-input bg-transparent px-3 py-1 text-body shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
                 <option value="">None</option>
                 {assistantsQuery.data?.map((a) => (
@@ -226,10 +228,10 @@ function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialo
                   </option>
                 ))}
               </select>
-              <p className="text-xs text-muted-foreground">Assistant that acts on behalf of this agent.</p>
+              <p className="text-caption text-muted-foreground">Assistant that acts on behalf of this agent.</p>
             </div>
           )}
-          {error && <p className="text-sm text-destructive">{error}</p>}
+          {error && <p className="text-body text-destructive">{error}</p>}
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={saving}>
               Cancel

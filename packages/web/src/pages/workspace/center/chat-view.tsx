@@ -83,20 +83,20 @@ function ReadReceipt({ msg, myAgentId }: { msg: MessageWithDelivery; myAgentId: 
   const status = msg.deliveryStatus ?? "sent";
   if (status === "acked") {
     return (
-      <span className="mono" style={{ fontSize: 9, color: "var(--accent)" }} title="Agent has started processing">
+      <span className="mono text-caption" style={{ color: "var(--accent)" }} title="Agent has started processing">
         ✓✓ read
       </span>
     );
   }
   if (status === "delivered") {
     return (
-      <span className="mono" style={{ fontSize: 9, color: "var(--fg-3)" }} title="Delivered to agent inbox">
+      <span className="mono text-caption" style={{ color: "var(--fg-3)" }} title="Delivered to agent inbox">
         ✓✓
       </span>
     );
   }
   return (
-    <span className="mono" style={{ fontSize: 9, color: "var(--fg-4)" }} title="Sent">
+    <span className="mono text-caption" style={{ color: "var(--fg-4)" }} title="Sent">
       ✓ sent
     </span>
   );
@@ -203,8 +203,8 @@ function SessionControls({
         style={{
           gap: 4,
           padding: 4,
-          border: "1px solid var(--border)",
-          borderRadius: 6,
+          border: "var(--hairline) solid var(--border)",
+          borderRadius: "var(--radius-panel)",
           background: "var(--bg-sunken)",
         }}
       >
@@ -213,14 +213,12 @@ function SessionControls({
             type="button"
             onClick={() => suspendMut.mutate()}
             disabled={suspendMut.isPending}
-            className="inline-flex items-center transition-colors"
+            className="inline-flex items-center transition-colors text-label"
             style={{
               gap: 6,
-              padding: "4px 10px",
-              fontSize: 11,
-              fontWeight: 500,
+              padding: "var(--sp-1) var(--sp-2_5)",
               color: "var(--fg-2)",
-              borderRadius: 4,
+              borderRadius: "var(--radius-input)",
             }}
             onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
             onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
@@ -239,15 +237,13 @@ function SessionControls({
               setTerminateOpen(true);
             }}
             disabled={terminateMut.isPending}
-            className="inline-flex items-center transition-colors"
+            className="inline-flex items-center transition-colors text-label font-semibold"
             style={{
               gap: 6,
-              padding: "4px 10px",
-              fontSize: 11,
-              fontWeight: 600,
+              padding: "var(--sp-1) var(--sp-2_5)",
               color: "var(--state-error)",
               background: "color-mix(in oklch, var(--state-error) 18%, transparent)",
-              borderRadius: 4,
+              borderRadius: "var(--radius-input)",
             }}
             onMouseEnter={(e) =>
               (e.currentTarget.style.background = "color-mix(in oklch, var(--state-error) 28%, transparent)")
@@ -299,18 +295,17 @@ function TerminateSessionDialog(props: {
           <DialogTitle>Terminate session?</DialogTitle>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4">
-          <p className="text-sm text-muted-foreground">
+          <p className="text-body text-muted-foreground">
             Ending this session is permanent. It is removed from the workspace and cannot be resumed. Chat history is
             preserved; a new message will start a fresh session.
           </p>
           <div
-            className="mono"
+            className="mono text-label"
             style={{
-              fontSize: 11,
-              padding: "8px 10px",
-              borderRadius: 4,
+              padding: "var(--sp-2) var(--sp-2_5)",
+              borderRadius: "var(--radius-input)",
               background: "var(--bg-sunken)",
-              border: "1px solid var(--border)",
+              border: "var(--hairline) solid var(--border)",
               color: "var(--fg-2)",
               display: "grid",
               gap: 4,
@@ -323,7 +318,7 @@ function TerminateSessionDialog(props: {
             {typeof session?.messageCount === "number" && <span>messages: {session.messageCount}</span>}
           </div>
           {error && (
-            <p className="mono" style={{ fontSize: 11, color: "var(--state-error)" }}>
+            <p className="mono text-label" style={{ color: "var(--state-error)" }}>
               {error}
             </p>
           )}
@@ -356,11 +351,10 @@ function ToolCallStatusRow({ event }: { event: SessionEventRow }) {
   const verb = isErr ? "failed" : isPending ? "using" : "used";
   return (
     <div
-      className="mono flex items-center"
+      className="mono flex items-center text-label"
       style={{
         gap: 8,
-        fontSize: 11,
-        padding: "2px 8px",
+        padding: "var(--sp-0_5) var(--sp-2)",
         color: "var(--fg-3)",
       }}
     >
@@ -397,10 +391,10 @@ function ToolCallStatusRow({ event }: { event: SessionEventRow }) {
         ) : null}
         {payload.durationMs !== undefined && !isPending ? (
           <span
+            className="text-caption"
             style={{
               color: "var(--fg-4)",
               marginLeft: 6,
-              fontSize: 10,
               whiteSpace: "nowrap",
               flexShrink: 0,
             }}
@@ -434,32 +428,31 @@ function AssistantTextRow({
     <div
       className="grid"
       style={{
-        gridTemplateColumns: "20px 1fr",
+        gridTemplateColumns: "var(--sp-5) 1fr",
         columnGap: 8,
-        padding: "4px 0",
+        padding: "var(--sp-1) 0",
         opacity: 0.85,
       }}
     >
       <Avatar name={senderName} isSelf={false} />
       <div className="min-w-0">
         <div className="flex items-baseline" style={{ gap: 8 }}>
-          <span className="mono" style={{ fontSize: 11, fontWeight: 600, color: "var(--accent)" }}>
+          <span className="mono text-label font-semibold" style={{ color: "var(--accent)" }}>
             {senderName}
           </span>
-          <span className="mono" style={{ fontSize: 10, color: "var(--fg-4)" }}>
+          <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
             {formatClockTime(event.createdAt)}
           </span>
-          <span className="mono" style={{ fontSize: 9, color: "var(--fg-4)" }}>
+          <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
             · streaming
           </span>
         </div>
         <div
+          className="text-body"
           style={{
-            fontSize: 12.5,
             color: "var(--fg-2)",
             whiteSpace: "pre-wrap",
             marginTop: 2,
-            lineHeight: 1.55,
           }}
         >
           {payload.text}
@@ -477,11 +470,10 @@ function AssistantTextRow({
 function ThinkingRow({ event }: { event: SessionEventRow }) {
   return (
     <div
-      className="mono flex items-center"
+      className="mono flex items-center text-label"
       style={{
         gap: 8,
-        fontSize: 11,
-        padding: "2px 8px",
+        padding: "var(--sp-0_5) var(--sp-2)",
         color: "var(--fg-3)",
       }}
     >
@@ -497,7 +489,7 @@ function ThinkingRow({ event }: { event: SessionEventRow }) {
         }}
       />
       <span style={{ color: "var(--fg-3)" }}>thinking…</span>
-      <span className="mono" style={{ fontSize: 10, color: "var(--fg-4)" }}>
+      <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
         {formatClockTime(event.createdAt)}
       </span>
     </div>
@@ -510,26 +502,19 @@ function ErrorRow({ event }: { event: SessionEventRow }) {
   return (
     <div
       style={{
-        padding: "6px 10px",
-        borderLeft: "2px solid var(--state-error)",
+        padding: "var(--sp-1_5) var(--sp-2_5)",
+        borderLeft: "var(--hairline-bold) solid var(--state-error)",
         background: "color-mix(in oklch, var(--state-error) 6%, transparent)",
-        borderRadius: "0 4px 4px 0",
+        borderRadius: "0 var(--radius-input) var(--radius-input) 0",
       }}
     >
-      <div
-        className="mono uppercase"
-        style={{
-          fontSize: 10,
-          letterSpacing: 0.08,
-          color: "var(--state-error)",
-        }}
-      >
+      <div className="mono uppercase text-caption" style={{ color: "var(--state-error)" }}>
         error · {payload?.source ?? "unknown"} · {ts}
       </div>
       <div
+        className="text-label"
         style={{
           marginTop: 2,
-          fontSize: 11.5,
           color: "var(--fg-2)",
           whiteSpace: "pre-wrap",
         }}
@@ -544,19 +529,17 @@ function Avatar({ name, isSelf }: { name: string; isSelf: boolean }) {
   const initials = name.slice(0, 2).toUpperCase();
   return (
     <div
-      className="mono"
+      className="mono text-eyebrow font-bold"
       style={{
         width: 20,
         height: 20,
-        borderRadius: 4,
+        borderRadius: "var(--radius-input)",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        fontSize: 9,
-        fontWeight: 700,
         flexShrink: 0,
         background: isSelf ? "linear-gradient(135deg, var(--accent), oklch(0.58 0.14 170))" : "var(--bg-active)",
-        border: isSelf ? "none" : "1px solid var(--border-strong)",
+        border: isSelf ? "none" : "var(--hairline) solid var(--border-strong)",
         color: isSelf ? "oklch(0.14 0.01 150)" : "var(--fg-2)",
       }}
     >
@@ -581,25 +564,23 @@ function TextRow({
     <div
       className="grid"
       style={{
-        gridTemplateColumns: "20px 1fr",
+        gridTemplateColumns: "var(--sp-5) 1fr",
         columnGap: 8,
-        padding: "6px 0",
+        padding: "var(--sp-1_5) 0",
       }}
     >
       <Avatar name={senderName} isSelf={isSelf} />
       <div className="min-w-0">
         <div className="flex items-baseline" style={{ gap: 8 }}>
           <span
-            className="mono"
+            className="mono text-body font-semibold"
             style={{
-              fontSize: 12,
-              fontWeight: 600,
               color: isSelf ? "var(--fg)" : "var(--accent)",
             }}
           >
             {senderName}
           </span>
-          <span className="mono" style={{ fontSize: 10, color: "var(--fg-4)" }}>
+          <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
             {formatClockTime(msg.createdAt)}
           </span>
           <span style={{ marginLeft: "auto" }}>
@@ -607,29 +588,27 @@ function TextRow({
           </span>
         </div>
         <div
+          className="text-body"
           style={{
-            fontSize: 12.5,
             color: "var(--fg)",
             marginTop: 2,
-            lineHeight: 1.55,
           }}
         >
           {msg.format === "file" && isImageContent(msg.content) ? (
             <img
               src={`data:${(msg.content as FileMessageContent).mimeType};base64,${(msg.content as FileMessageContent).data}`}
               alt={(msg.content as FileMessageContent).filename ?? "image"}
-              style={{ maxWidth: 320, borderRadius: 6, marginTop: 4 }}
+              style={{ maxWidth: 320, borderRadius: "var(--radius-panel)", marginTop: 4 }}
             />
           ) : msg.format === "text" ? (
             <Markdown>{typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content)}</Markdown>
           ) : (
             <pre
-              className="mono"
+              className="mono text-label"
               style={{
-                fontSize: 11,
                 background: "var(--bg-sunken)",
                 padding: 8,
-                borderRadius: 4,
+                borderRadius: "var(--radius-input)",
                 overflow: "auto",
                 maxHeight: 160,
               }}
@@ -837,8 +816,8 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
         style={{
           gridTemplateColumns: "1fr auto",
           gap: 10,
-          padding: "10px 14px",
-          borderBottom: "1px solid var(--border)",
+          padding: "var(--sp-2_5) var(--sp-3_5)",
+          borderBottom: "var(--hairline) solid var(--border)",
         }}
       >
         <div className="min-w-0">
@@ -862,17 +841,15 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
                   disabled={renameMut.isPending}
                   maxLength={500}
                   placeholder="Chat name"
-                  className="outline-none"
+                  className="outline-none text-subtitle"
                   style={{
                     flex: 1,
                     minWidth: 0,
-                    fontSize: 13,
-                    fontWeight: 600,
                     color: "var(--fg)",
                     background: "var(--bg-sunken)",
-                    border: "1px solid var(--border)",
-                    borderRadius: 4,
-                    padding: "2px 6px",
+                    border: "var(--hairline) solid var(--border)",
+                    borderRadius: "var(--radius-input)",
+                    padding: "var(--sp-0_5) var(--sp-1_5)",
                   }}
                 />
                 <button
@@ -898,7 +875,7 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
               </>
             ) : (
               <>
-                <span className="truncate" style={{ fontSize: 13, fontWeight: 600, color: "var(--fg)" }}>
+                <span className="truncate text-subtitle" style={{ color: "var(--fg)" }}>
                   {chatDetail?.topic || session?.summary || `Chat · ${chatId.slice(0, 8)}`}
                 </span>
                 <button
@@ -918,22 +895,20 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
               </>
             )}
             <span
-              className="mono"
+              className="mono text-caption"
               style={{
-                fontSize: 10,
                 color: "var(--fg-4)",
-                padding: "1px 5px",
-                border: "1px solid var(--border)",
-                borderRadius: 2,
+                padding: "var(--hairline) var(--sp-1_25)",
+                border: "var(--hairline) solid var(--border)",
+                borderRadius: "var(--radius-chip)",
               }}
             >
               {chatId}
             </span>
           </div>
           <div
-            className="flex items-center"
+            className="flex items-center text-caption"
             style={{
-              fontSize: 10.5,
               color: "var(--fg-3)",
               marginTop: 4,
               gap: 10,
@@ -967,11 +942,11 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
       </div>
 
       {/* Timeline */}
-      <div className="flex-1 overflow-y-auto" style={{ padding: "10px 14px" }}>
+      <div className="flex-1 overflow-y-auto relative" style={{ padding: "var(--sp-2_5) var(--sp-3_5)" }}>
         {itemCount === 0 && (
           <div
-            className="flex flex-col items-center"
-            style={{ color: "var(--fg-3)", fontSize: 13, padding: "32px 0", gap: 6 }}
+            className="flex flex-col items-center text-body"
+            style={{ color: "var(--fg-3)", padding: "var(--sp-8) 0", gap: 6 }}
           >
             <MessageSquare className="h-8 w-8" style={{ opacity: 0.3 }} />
             Send a message to start the conversation
@@ -1005,15 +980,15 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
       <div
         className="shrink-0"
         style={{
-          padding: "10px 14px",
-          borderTop: "1px solid var(--border)",
+          padding: "var(--sp-2_5) var(--sp-3_5)",
+          borderTop: "var(--hairline) solid var(--border)",
         }}
       >
         {/* biome-ignore lint/a11y/noStaticElementInteractions: drop target for image upload */}
         <div
           style={{
             position: "relative",
-            border: "1px solid var(--border)",
+            border: "var(--hairline) solid var(--border)",
             borderRadius: 6,
             background: "var(--bg-sunken)",
           }}
@@ -1025,7 +1000,10 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
         >
           {/* Image preview area — above textarea */}
           {pendingImages.length > 0 && (
-            <div className="flex items-center" style={{ gap: 6, padding: "6px 10px 0", overflowX: "auto" }}>
+            <div
+              className="flex items-center"
+              style={{ gap: 6, padding: "var(--sp-1_5) var(--sp-2_5) 0", overflowX: "auto" }}
+            >
               {pendingImages.map((img) => (
                 <div
                   key={img.id}
@@ -1033,7 +1011,7 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
                     position: "relative",
                     flexShrink: 0,
                     borderRadius: 4,
-                    border: "1px solid var(--border)",
+                    border: "var(--hairline) solid var(--border)",
                     overflow: "hidden",
                   }}
                 >
@@ -1052,9 +1030,9 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
                       width: 14,
                       height: 14,
                       borderRadius: "50%",
-                      background: "rgba(0,0,0,0.6)",
+                      background: "var(--color-overlay-scrim)",
                       border: "none",
-                      color: "#fff",
+                      color: "var(--bg-raised)",
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
@@ -1087,25 +1065,22 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
               }
             }}
             disabled={sendMut.isPending || uploading}
-            className="w-full outline-none"
+            className="w-full outline-none text-subtitle font-normal"
             style={{
-              padding: "9px 12px 30px",
-              fontSize: 12.5,
+              padding: "var(--sp-2_25) var(--sp-3) var(--sp-7_5)",
               background: "transparent",
               border: "none",
               resize: "none",
-              fontFamily: "var(--font-sans)",
               color: "var(--fg)",
             }}
           />
           <div
-            className="flex items-center justify-between"
+            className="flex items-center justify-between text-caption"
             style={{
               position: "absolute",
               bottom: 6,
               left: 10,
               right: 10,
-              fontSize: 10,
               color: "var(--fg-4)",
             }}
           >
@@ -1146,7 +1121,7 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
             </span>
             <span className="flex items-center" style={{ gap: 8 }}>
               {uploading && (
-                <span className="mono" style={{ fontSize: 10, color: "var(--accent)" }}>
+                <span className="mono text-caption" style={{ color: "var(--accent)" }}>
                   uploading…
                 </span>
               )}
@@ -1158,19 +1133,17 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
                 onClick={handleSend}
                 disabled={sendMut.isPending || uploading || (!draft.trim() && pendingImages.length === 0)}
                 className={cn(
-                  "inline-flex items-center transition-colors",
+                  "inline-flex items-center transition-colors text-label font-semibold",
                   (sendMut.isPending || uploading || (!draft.trim() && pendingImages.length === 0)) &&
                     "opacity-50 cursor-not-allowed",
                 )}
                 style={{
                   gap: 6,
-                  padding: "4px 10px",
-                  fontSize: 11,
-                  fontWeight: 600,
+                  padding: "var(--sp-1) var(--sp-2_5)",
                   color: "oklch(0.14 0.01 150)",
                   background: "var(--accent)",
-                  border: "1px solid var(--accent)",
-                  borderRadius: 5,
+                  border: "var(--hairline) solid var(--accent)",
+                  borderRadius: "var(--radius-input)",
                 }}
               >
                 <Send className="h-3 w-3" /> Send
@@ -1180,11 +1153,10 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
         </div>
         {(sendMut.isError || uploadError) && (
           <p
-            className="mono"
+            className="mono text-label"
             style={{
-              fontSize: 11,
               color: "var(--state-error)",
-              padding: "6px 2px 0",
+              padding: "var(--sp-1_5) var(--sp-0_5) 0",
             }}
           >
             {uploadError ?? (sendMut.error instanceof Error ? sendMut.error.message : "Failed to send")}

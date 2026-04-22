@@ -95,12 +95,14 @@ export function LastStepModal({ agent, open, onClose, onBound }: Props) {
           <DialogTitle>Last step — connect your computer</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
-          <p className="text-sm text-muted-foreground">
+          <p className="text-body text-muted-foreground">
             Open a terminal on your computer and run this command. It installs the First Tree Hub CLI, signs your
             computer in, and keeps it online in the background.
           </p>
           <div className="flex items-start gap-2 rounded-md border border-border bg-muted p-3">
-            <code className="flex-1 text-xs font-mono break-all select-all">{command || "Generating command…"}</code>
+            <code className="flex-1 text-caption font-mono break-all select-all">
+              {command || "Generating command…"}
+            </code>
             <Button variant="outline" size="icon" className="shrink-0" onClick={handleCopy} disabled={!command}>
               {copied ? (
                 <Check className="h-4 w-4" style={{ color: "var(--state-idle)" }} />
@@ -109,11 +111,11 @@ export function LastStepModal({ agent, open, onClose, onBound }: Props) {
               )}
             </Button>
           </div>
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <div className="flex items-center gap-2 text-body text-muted-foreground">
             <StateDot state="working" size={8} />
             <span>Waiting for your computer to connect…</span>
           </div>
-          <p className="text-xs text-muted-foreground">
+          <p className="text-caption text-muted-foreground">
             The command is good for 10 minutes. After it runs once, your computer stays online automatically — no need
             to keep this terminal open.
           </p>

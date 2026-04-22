@@ -180,14 +180,14 @@ export function AgentsPage() {
         }
       />
 
-      <div style={{ padding: "14px 20px 28px" }}>
+      <div style={{ padding: "var(--sp-3_5) var(--sp-5) var(--sp-7)" }}>
         <div
           className="flex items-center gap-2.5 mb-3.5"
           style={{
-            padding: "8px 10px",
+            padding: "var(--sp-2) var(--sp-2_5)",
             background: "var(--bg-raised)",
-            border: "1px solid var(--border)",
-            borderRadius: 6,
+            border: "var(--hairline) solid var(--border)",
+            borderRadius: "var(--radius-panel)",
           }}
         >
           <div className="relative" style={{ width: 240 }}>
@@ -200,13 +200,12 @@ export function AgentsPage() {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Filter by name, delegate, owner…"
-              className="w-full outline-none"
+              className="w-full outline-none text-body"
               style={{
-                padding: "5px 10px 5px 28px",
-                fontSize: 12,
+                padding: "var(--sp-1_25) var(--sp-2_5) var(--sp-1_25) var(--sp-7)",
                 background: "var(--bg-sunken)",
-                border: "1px solid var(--border)",
-                borderRadius: 4,
+                border: "var(--hairline) solid var(--border)",
+                borderRadius: "var(--radius-input)",
                 color: "var(--fg)",
               }}
             />
@@ -232,13 +231,12 @@ export function AgentsPage() {
               setTypeFilter(e.target.value);
               setCursor(undefined);
             }}
-            className="outline-none"
+            className="outline-none text-label"
             style={{
-              padding: "5px 10px",
-              fontSize: 11,
+              padding: "var(--sp-1_25) var(--sp-2_5)",
               background: "var(--bg-sunken)",
-              border: "1px solid var(--border)",
-              borderRadius: 4,
+              border: "var(--hairline) solid var(--border)",
+              borderRadius: "var(--radius-input)",
               color: "var(--fg)",
             }}
           >
@@ -249,7 +247,7 @@ export function AgentsPage() {
               </option>
             ))}
           </select>
-          <Button variant="ghost" size="xs" className="text-[11px]">
+          <Button variant="ghost" size="xs" className="text-label">
             <Filter className="h-3 w-3" /> Columns
           </Button>
         </div>
@@ -359,7 +357,7 @@ function AgentsPanel({
     <Panel className={className}>
       <SectionHeader right={breakdown}>{title}</SectionHeader>
       {agents.length === 0 ? (
-        <div className="text-center py-8" style={{ color: "var(--fg-3)", fontSize: 12 }}>
+        <div className="text-center py-8 text-body" style={{ color: "var(--fg-3)" }}>
           {emptyLabel}
         </div>
       ) : (
@@ -403,13 +401,13 @@ function StateBreakdown({ items }: { items: Array<{ state: string; count: number
       {nonZero.map((item, idx) => (
         <span key={item.state} className="inline-flex items-center">
           {idx > 0 && (
-            <span style={{ color: "var(--fg-4)", margin: "0 6px" }} aria-hidden>
+            <span style={{ color: "var(--fg-4)", margin: "0 var(--sp-1_5)" }} aria-hidden>
               ·
             </span>
           )}
           <span
-            className="mono inline-flex items-center gap-1"
-            style={{ fontSize: 10.5, color: `var(--state-${item.state})` }}
+            className="mono inline-flex items-center gap-1 text-caption"
+            style={{ color: `var(--state-${item.state})` }}
           >
             <span aria-hidden>●</span>
             {item.count} {item.label ?? item.state}
@@ -443,44 +441,42 @@ function AgentRow({
   return (
     <DenseTableRow interactive onClick={() => navigate(`/agents/${agent.uuid}`)}>
       <DenseTableCell>
-        <span className="mono" style={{ fontSize: 12, fontWeight: 500 }}>
-          {agent.name}
-        </span>
+        <span className="mono font-medium">{agent.name}</span>
       </DenseTableCell>
       <DenseTableCell style={{ color: "var(--fg-2)" }}>{agent.displayName ?? "—"}</DenseTableCell>
       <DenseTableCell>
         <DenseBadge tone={agent.type === "autonomous_agent" ? "accent" : "neutral"}>{agent.type}</DenseBadge>
       </DenseTableCell>
       <DenseTableCell
-        className="mono"
-        style={{ fontSize: 11, color: agent.delegateMention ? "var(--accent-dim)" : "var(--fg-4)" }}
+        className="mono text-label"
+        style={{ color: agent.delegateMention ? "var(--accent-dim)" : "var(--fg-4)" }}
       >
         {agent.delegateMention ? resolveAgentName(agent.delegateMention) : "—"}
       </DenseTableCell>
-      <DenseTableCell style={{ fontSize: 11.5, color: "var(--fg-2)" }}>
+      <DenseTableCell className="text-label" style={{ color: "var(--fg-2)" }}>
         {resolveMemberName(agent.managerId)}
       </DenseTableCell>
       <DenseTableCell>
         {runtimeState && isKnownState ? (
           <span className="inline-flex items-center gap-1.5">
             <StateDot state={runtimeState} size={7} />
-            <span className="mono" style={{ fontSize: 10.5, color: "var(--fg-3)" }}>
+            <span className="mono text-caption" style={{ color: "var(--fg-3)" }}>
               {runtimeState}
             </span>
           </span>
         ) : (
-          <span className="mono" style={{ fontSize: 10.5, color: "var(--fg-4)" }}>
+          <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
             —
           </span>
         )}
       </DenseTableCell>
       <DenseTableCell>
         {activeSessions === null && totalSessions === null ? (
-          <span className="mono" style={{ fontSize: 11, color: "var(--fg-4)" }}>
+          <span className="mono text-label" style={{ color: "var(--fg-4)" }}>
             —
           </span>
         ) : (
-          <span className="mono tnum" style={{ fontSize: 11 }}>
+          <span className="mono tnum text-label">
             <span style={{ color: "var(--fg-2)" }}>{activeSessions ?? 0}</span>
             <span style={{ color: "var(--fg-4)" }}> / {totalSessions ?? 0}</span>
           </span>
@@ -489,7 +485,7 @@ function AgentRow({
       <DenseTableCell>
         <DenseBadge tone={agent.status === "active" ? "accent" : "outline"}>{agent.status}</DenseBadge>
       </DenseTableCell>
-      <DenseTableCell className="mono" style={{ fontSize: 10.5, color: "var(--fg-4)" }}>
+      <DenseTableCell className="mono text-caption" style={{ color: "var(--fg-4)" }}>
         {formatDate(agent.createdAt)}
       </DenseTableCell>
     </DenseTableRow>

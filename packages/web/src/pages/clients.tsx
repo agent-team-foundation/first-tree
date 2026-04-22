@@ -54,25 +54,24 @@ function ConnectStrip() {
       className="grid items-center gap-2.5 mb-3.5"
       style={{
         gridTemplateColumns: "auto 1fr auto auto",
-        padding: "8px 12px",
+        padding: "var(--sp-2) var(--sp-3)",
         background: "var(--bg-raised)",
-        border: "1px solid var(--border)",
-        borderRadius: 6,
+        border: "var(--hairline) solid var(--border)",
+        borderRadius: "var(--radius-panel)",
       }}
     >
-      <span className="inline-flex items-center gap-2" style={{ color: "var(--fg-2)", fontSize: 12 }}>
+      <span className="inline-flex items-center gap-2 text-body" style={{ color: "var(--fg-2)" }}>
         <Terminal className="h-3.5 w-3.5" />
         Connect a computer
       </span>
       {connectData ? (
         <code
-          className="mono whitespace-nowrap overflow-hidden text-ellipsis"
+          className="mono whitespace-nowrap overflow-hidden text-ellipsis text-label"
           style={{
-            fontSize: 11,
-            padding: "5px 10px",
+            padding: "var(--sp-1_25) var(--sp-2_5)",
             background: "var(--bg-sunken)",
-            border: "1px solid var(--border-faint)",
-            borderRadius: 4,
+            border: "var(--hairline) solid var(--border-faint)",
+            borderRadius: "var(--radius-input)",
             color: "var(--fg-2)",
           }}
           title={connectData.command}
@@ -81,7 +80,7 @@ function ConnectStrip() {
           <span style={{ color: "var(--fg-4)" }}># expires in {Math.round(connectData.expiresIn / 60)}m</span>
         </code>
       ) : (
-        <span className="mono" style={{ fontSize: 11, color: "var(--fg-4)" }}>
+        <span className="mono text-label" style={{ color: "var(--fg-4)" }}>
           Generate a single-use command to pair a new machine with this Hub.
         </span>
       )}
@@ -171,25 +170,25 @@ export function ClientsPage() {
         }
       />
 
-      <div style={{ padding: "14px 20px 28px" }}>
+      <div style={{ padding: "var(--sp-3_5) var(--sp-5) var(--sp-7)" }}>
         <ConnectStrip />
 
         {confirmRetire && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay-scrim">
             <div
               className="max-w-md w-full"
               style={{
                 background: "var(--bg-raised)",
-                border: "1px solid var(--border)",
-                borderRadius: 6,
+                border: "var(--hairline) solid var(--border)",
+                borderRadius: "var(--radius-panel)",
                 padding: 24,
                 boxShadow: "var(--shadow-md)",
               }}
             >
-              <h3 className="text-base font-semibold mb-2">Retire Computer</h3>
-              <p className="text-sm mb-3" style={{ color: "var(--fg-3)" }}>
+              <h3 className="text-subtitle mb-2">Retire Computer</h3>
+              <p className="text-body mb-3" style={{ color: "var(--fg-3)" }}>
                 Permanently remove{" "}
-                <span style={{ color: "var(--fg)", fontWeight: 500 }}>
+                <span className="font-medium" style={{ color: "var(--fg)" }}>
                   {confirmRetire.hostname ?? confirmRetire.id.slice(0, 8)}
                 </span>
                 . Retire refuses if any agent is still pinned to this computer — you must delete those agents first
@@ -200,13 +199,11 @@ export function ClientsPage() {
                   className="mb-3 p-2 rounded"
                   style={{
                     background: "color-mix(in oklch, var(--state-blocked) 12%, transparent)",
-                    border: "1px solid color-mix(in oklch, var(--state-blocked) 28%, transparent)",
+                    border: "var(--hairline) solid color-mix(in oklch, var(--state-blocked) 28%, transparent)",
                   }}
                 >
-                  <div className="text-xs font-medium mb-1">
-                    Agents currently bound to this computer (delete them first):
-                  </div>
-                  <ul className="text-sm space-y-0.5">
+                  <div className="text-label mb-1">Agents currently bound to this computer (delete them first):</div>
+                  <ul className="text-body space-y-0.5">
                     {getClientAgents(confirmRetire.id).map((a) => (
                       <li key={a.agentId} className="font-medium">
                         {agentName(a.agentId)}
@@ -217,10 +214,10 @@ export function ClientsPage() {
               )}
               {retireError && (
                 <div
-                  className="mb-3 p-2 rounded text-sm"
+                  className="mb-3 p-2 rounded text-body"
                   style={{
                     background: "color-mix(in oklch, var(--state-error) 12%, transparent)",
-                    border: "1px solid color-mix(in oklch, var(--state-error) 28%, transparent)",
+                    border: "var(--hairline) solid color-mix(in oklch, var(--state-error) 28%, transparent)",
                     color: "var(--state-error)",
                   }}
                 >
@@ -252,33 +249,33 @@ export function ClientsPage() {
         )}
 
         {confirmDisconnect && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay-scrim">
             <div
               className="max-w-md w-full"
               style={{
                 background: "var(--bg-raised)",
-                border: "1px solid var(--border)",
-                borderRadius: 6,
+                border: "var(--hairline) solid var(--border)",
+                borderRadius: "var(--radius-panel)",
                 padding: 24,
                 boxShadow: "var(--shadow-md)",
               }}
             >
-              <h3 className="text-base font-semibold mb-2">Disconnect Computer</h3>
-              <p className="text-sm mb-3" style={{ color: "var(--fg-3)" }}>
+              <h3 className="text-subtitle mb-2">Disconnect Computer</h3>
+              <p className="text-body mb-3" style={{ color: "var(--fg-3)" }}>
                 This will disconnect{" "}
-                <span style={{ color: "var(--fg)", fontWeight: 500 }}>
+                <span className="font-medium" style={{ color: "var(--fg)" }}>
                   {confirmDisconnect.hostname ?? confirmDisconnect.id.slice(0, 8)}
                 </span>{" "}
                 and affect all bound agents:
               </p>
               <ul className="mb-4 space-y-1">
                 {getClientAgents(confirmDisconnect.id).length === 0 ? (
-                  <li className="text-sm" style={{ color: "var(--fg-3)" }}>
+                  <li className="text-body" style={{ color: "var(--fg-3)" }}>
                     No bound agents
                   </li>
                 ) : (
                   getClientAgents(confirmDisconnect.id).map((a) => (
-                    <li key={a.agentId} className="text-sm flex items-center gap-2">
+                    <li key={a.agentId} className="text-body flex items-center gap-2">
                       <span className="font-medium">{agentName(a.agentId)}</span>
                       <StateChip state={a.runtimeState} />
                     </li>
@@ -304,7 +301,7 @@ export function ClientsPage() {
 
         {!clients || clients.length === 0 ? (
           <Panel>
-            <div className="text-center py-10" style={{ color: "var(--fg-3)", fontSize: 12 }}>
+            <div className="text-center py-10 text-body" style={{ color: "var(--fg-3)" }}>
               No computers. Use the button above to generate a connect command.
             </div>
           </Panel>
@@ -312,7 +309,10 @@ export function ClientsPage() {
           <Panel>
             <SectionHeader
               right={
-                <span className="mono" style={{ color: "var(--fg-3)", textTransform: "none", letterSpacing: 0 }}>
+                // SectionHeader is uppercased with 0.1em tracking; this helper
+                // text inside its `right` slot overrides back to a plain mono
+                // caption so it reads as prose, not an eyebrow.
+                <span className="mono text-caption normal-case tracking-normal" style={{ color: "var(--fg-3)" }}>
                   click a row to expand
                 </span>
               }
@@ -395,18 +395,16 @@ function ClientRow({
             {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
           </span>
         </DenseTableCell>
-        <DenseTableCell style={{ fontWeight: 500 }}>{client.hostname ?? "—"}</DenseTableCell>
+        <DenseTableCell className="font-medium">{client.hostname ?? "—"}</DenseTableCell>
         {showOwner && <DenseTableCell style={{ color: "var(--fg-2)" }}>{ownerName(client.userId)}</DenseTableCell>}
         <DenseTableCell style={{ color: "var(--fg-3)" }}>{client.os ?? "—"}</DenseTableCell>
-        <DenseTableCell className="mono" style={{ fontSize: 11, color: "var(--fg-3)" }}>
+        <DenseTableCell className="mono text-label" style={{ color: "var(--fg-3)" }}>
           {client.sdkVersion ?? "—"}
         </DenseTableCell>
         <DenseTableCell>
-          <span className="mono tnum" style={{ fontSize: 11.5 }}>
-            {client.agentCount}
-          </span>
+          <span className="mono tnum text-label">{client.agentCount}</span>
         </DenseTableCell>
-        <DenseTableCell className="mono" style={{ fontSize: 10.5, color: "var(--fg-4)" }}>
+        <DenseTableCell className="mono text-caption" style={{ color: "var(--fg-4)" }}>
           {client.connectedAt ? formatDate(client.connectedAt) : "—"}
         </DenseTableCell>
         <DenseTableCell>
@@ -417,7 +415,7 @@ function ClientRow({
             <Button
               variant="ghost"
               size="xs"
-              className="text-[11px]"
+              className="text-label"
               onClick={(e) => {
                 e.stopPropagation();
                 onDisconnect();
@@ -428,7 +426,7 @@ function ClientRow({
             <Button
               variant="ghost"
               size="xs"
-              className="text-[11px]"
+              className="text-label"
               style={{ color: "var(--fg-4)" }}
               onClick={(e) => {
                 e.stopPropagation();
@@ -443,24 +441,24 @@ function ClientRow({
       {isExpanded && (
         <tr style={{ background: "var(--bg-sunken)" }}>
           <DenseTableCell />
-          <DenseTableCell colSpan={colSpan - 1} style={{ padding: "10px 12px 14px" }}>
+          <DenseTableCell colSpan={colSpan - 1} style={{ padding: "var(--sp-2_5) var(--sp-3) var(--sp-3_5)" }}>
             <UppercaseLabel style={{ display: "block", marginBottom: 6 }}>
               Bound agents · {boundAgents.length}
             </UppercaseLabel>
             {boundAgents.length === 0 ? (
-              <div className="text-sm" style={{ color: "var(--fg-3)", fontSize: 12 }}>
+              <div className="text-body" style={{ color: "var(--fg-3)" }}>
                 No agents bound to this computer
               </div>
             ) : (
               <div className="flex flex-col gap-1">
                 {boundAgents.map((a) => (
-                  <div key={a.agentId} className="flex items-center gap-2.5" style={{ fontSize: 12 }}>
-                    <span className="mono" style={{ fontWeight: 500, minWidth: 180 }}>
+                  <div key={a.agentId} className="flex items-center gap-2.5 text-body">
+                    <span className="mono font-medium" style={{ minWidth: 180 }}>
                       {agentName(a.agentId)}
                     </span>
                     <StateChip state={a.runtimeState} />
                     {a.activeSessions !== null && (
-                      <span className="mono tnum" style={{ fontSize: 10.5, color: "var(--fg-3)" }}>
+                      <span className="mono tnum text-caption" style={{ color: "var(--fg-3)" }}>
                         {a.activeSessions} / {a.totalSessions ?? 0} sessions
                       </span>
                     )}

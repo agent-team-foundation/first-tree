@@ -32,15 +32,17 @@ export function EnvSection(props: EnvSectionProps) {
     <section
       style={{
         background: "var(--bg-raised)",
-        border: "1px solid var(--border)",
+        border: "var(--hairline) solid var(--border)",
         borderRadius: 6,
       }}
     >
       <header
         className="flex items-center justify-between"
-        style={{ padding: "10px 14px", borderBottom: "1px solid var(--border-faint)" }}
+        style={{ padding: "var(--sp-2_5) var(--sp-3_5)", borderBottom: "var(--hairline) solid var(--border-faint)" }}
       >
-        <h3 style={{ fontSize: 12, fontWeight: 600, color: "var(--fg)" }}>Environment Variables ({activeCount})</h3>
+        <h3 className="text-body font-semibold" style={{ color: "var(--fg)" }}>
+          Environment Variables ({activeCount})
+        </h3>
         {!props.disabled && (
           <Button size="xs" variant="outline" onClick={() => setDialog({ mode: "add" })}>
             <Plus className="h-3 w-3" /> Add
@@ -49,7 +51,7 @@ export function EnvSection(props: EnvSectionProps) {
       </header>
       <div className="px-4 py-3 space-y-2">
         {props.items.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No environment variables.</p>
+          <p className="text-body text-muted-foreground">No environment variables.</p>
         ) : (
           props.items.map((item) => (
             <ListRow
@@ -61,7 +63,7 @@ export function EnvSection(props: EnvSectionProps) {
               disabled={props.disabled}
             >
               <span className="font-mono font-medium">{item.value.key}</span>
-              <span className="font-mono text-xs text-muted-foreground truncate max-w-xs">
+              <span className="font-mono text-caption text-muted-foreground truncate max-w-xs">
                 {item.value.sensitive ? "••••••" : item.value.value || <em>(empty)</em>}
               </span>
               {item.value.sensitive && <Lock className="h-3 w-3 text-muted-foreground" />}
@@ -147,7 +149,7 @@ function EnvDialog({ open, onOpenChange, initial, forbiddenKeys, onSubmit }: Env
               className="font-mono"
               disabled={!!initial}
             />
-            {initial && <p className="text-xs text-muted-foreground">Key can't be renamed — delete and re-add.</p>}
+            {initial && <p className="text-caption text-muted-foreground">Key can't be renamed — delete and re-add.</p>}
           </div>
           <div className="space-y-2">
             <Label htmlFor="env-value">Value</Label>
@@ -163,7 +165,7 @@ function EnvDialog({ open, onOpenChange, initial, forbiddenKeys, onSubmit }: Env
               className="font-mono"
             />
           </div>
-          <label className="flex items-center gap-2 text-sm">
+          <label className="flex items-center gap-2 text-body">
             <input
               type="checkbox"
               checked={sensitive}
@@ -173,10 +175,10 @@ function EnvDialog({ open, onOpenChange, initial, forbiddenKeys, onSubmit }: Env
             />
             Mark as sensitive (encrypted at rest, never displayed again)
           </label>
-          <p className="text-xs text-muted-foreground">
+          <p className="text-caption text-muted-foreground">
             Sensitive values cannot be viewed after saving. If you need to verify, save a new value.
           </p>
-          {err && <p className="text-sm text-destructive">{err}</p>}
+          {err && <p className="text-body text-destructive">{err}</p>}
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
               Cancel
