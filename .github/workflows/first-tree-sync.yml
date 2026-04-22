@@ -54,6 +54,10 @@ jobs:
       - name: Run first-tree gardener
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Bypass gardener's `gh api user` self-identification call —
+          # GITHUB_TOKEN can't resolve /user reliably. Hardcoding the
+          # bot identity is enough for the self-loop guard.
+          GARDENER_USER: github-actions[bot]
         run: |
           first-tree gardener comment \
             --pr ${{ github.event.pull_request.number }} \
