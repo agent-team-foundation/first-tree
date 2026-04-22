@@ -28,7 +28,6 @@
   "dependencies": {
     "@agent-team-foundation/first-tree-hub-shared": "workspace:*",
     "@fastify/cors": "^11.2.0",
-    "@fastify/multipart": "^10.0.0",
     "@fastify/otel": "^0.9.0",
     "@fastify/rate-limit": "^10.3.0",
     "@fastify/static": "^9.0.0",

@@ -1,5 +1,5 @@
 import type { Chat, ChatDetail, Message } from "@agent-team-foundation/first-tree-hub-shared";
-import { api, getStoredTokens } from "./client.js";
+import { api } from "./client.js";
 
 type PaginatedChats = {
   items: (Chat & { participantCount: number })[];
@@ -38,73 +38,42 @@ export function sendChatMessage(chatId: string, content: string): Promise<Messag
   });
 }
 
-export type UploadResult = {
-  url: string;
-  filename: string;
-  storedName: string;
-  mimeType: string;
-  size: number;
-};
-
+/**
+ * File message content — embedded directly in the message (no server-side storage).
+ * `data` is a base64-encoded string (without the `data:...;base64,` prefix).
+ * This keeps messages self-contained so they can be forwarded to any agent (local
+ * Claude client, Kael cloud, Feishu, etc.) without requiring URL access.
+ */
 export type FileMessageContent = {
-  url: string;
+  data: string; // base64 (no prefix)
   mimeType: string;
   filename: string;
   size: number;
 };
-
-export async function uploadFile(file: File): Promise<UploadResult> {
-  const formData = new FormData();
-  formData.append("file", file);
-
-  const doFetch = (token?: string) => {
-    const headers: Record<string, string> = {};
-    if (token) headers.Authorization = `Bearer ${token}`;
-    return fetch("/api/v1/admin/uploads", { method: "POST", headers, body: formData });
-  };
-
-  const tokens = getStoredTokens();
-  let res = await doFetch(tokens?.accessToken);
-
-  // Retry with refreshed token on 401
-  if (res.status === 401 && tokens?.refreshToken) {
-    const refreshRes = await fetch("/api/v1/auth/refresh", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refreshToken: tokens.refreshToken }),
-    });
-    if (refreshRes.ok) {
-      const body = (await refreshRes.json()) as { accessToken: string; refreshToken?: string };
-      const updated = { accessToken: body.accessToken, refreshToken: body.refreshToken ?? tokens.refreshToken };
-      // Re-create FormData since the previous body was consumed
-      const retryData = new FormData();
-      retryData.append("file", file);
-      res = await fetch("/api/v1/admin/uploads", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${updated.accessToken}` },
-        body: retryData,
-      });
-    }
-  }
-
-  if (!res.ok) {
-    const text = await res.text();
-    let msg: string;
-    try {
-      msg = (JSON.parse(text) as { error?: string }).error ?? text;
-    } catch {
-      msg = text;
-    }
-    throw new Error(msg);
-  }
-
-  return (await res.json()) as UploadResult;
-}
 
 export function sendFileMessage(chatId: string, content: FileMessageContent): Promise<Message> {
   return api.post<Message>(`/admin/chats/${encodeURIComponent(chatId)}/messages`, {
     format: "file",
     content,
+  });
+}
+
+/** Read a File into a base64 string (without the `data:...;base64,` prefix). */
+export function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result !== "string") {
+        reject(new Error("Unexpected FileReader result"));
+        return;
+      }
+      // Strip the data URL prefix: "data:image/png;base64,xxx" -> "xxx"
+      const comma = result.indexOf(",");
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("FileReader error"));
+    reader.readAsDataURL(file);
   });
 }
 
