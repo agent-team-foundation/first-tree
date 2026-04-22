@@ -202,6 +202,16 @@ export async function runStart(
           HOME: homedir(),
           PATH: env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
           GARDENER_DIR: gardenerDir,
+          // Passthrough the classifier credentials when the caller has
+          // them in their shell env. Without ANTHROPIC_API_KEY, gardener
+          // comment refuses to post (PR #255). We add the vars only when
+          // present so launchd doesn't record empty strings.
+          ...(env.ANTHROPIC_API_KEY
+            ? { ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY }
+            : {}),
+          ...(env.GARDENER_CLASSIFIER_MODEL
+            ? { GARDENER_CLASSIFIER_MODEL: env.GARDENER_CLASSIFIER_MODEL }
+            : {}),
         },
         workingDirectory: config.treePath,
         plistPath,

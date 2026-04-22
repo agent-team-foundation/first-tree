@@ -120,10 +120,10 @@ broad, user prefers a dedicated token), create a new fine-grained PAT:
 
 ## Step 3 — set the `ANTHROPIC_API_KEY` secret
 
-The workflow also needs an Anthropic API key in the Actions runtime.
-Without it, `first-tree gardener comment` still runs, but it falls back
-to the default no-classifier path and only posts a low-signal
-`INSUFFICIENT_CONTEXT` review instead of a useful judgment.
+`gardener comment` needs a classifier to produce a verdict. When
+`ANTHROPIC_API_KEY` is unset, the CLI **refuses to post** (see PR #255)
+rather than silently degrading to a hard-coded template. This is the
+intended fail-closed behaviour for push mode.
 
 If your shell already has `ANTHROPIC_API_KEY` exported, pipe it directly
 into the repo secret without echoing it or pasting it into chat:
@@ -146,6 +146,10 @@ unset TOKEN
 
 Never print the key, never write it to a file, and never paste it into
 chat.
+
+The generated workflow also reads an optional `GARDENER_CLASSIFIER_MODEL`
+secret if you need to pin a specific Anthropic model; omit it to use the
+built-in default.
 
 ## Step 4 — commit and open a PR
 

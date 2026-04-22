@@ -106,6 +106,7 @@ describe("gardener comment -- config opt-out", () => {
         write,
         env: {},
         now: () => new Date("2026-04-16T00:00:00Z"),
+        classifier: alignedClassifier,
       },
     );
     expect(code).toBe(0);
@@ -113,6 +114,53 @@ describe("gardener comment -- config opt-out", () => {
     const joined = lines.join("\n");
     expect(joined).toContain("gardener-comment is disabled via .claude/gardener-config.yaml");
     expect(lines[lines.length - 1]).toMatch(/^BREEZE_RESULT: status=skipped /);
+  });
+});
+
+// ─────────────────── 1b. no classifier injected ───────────────────
+describe("gardener comment -- no classifier injected", () => {
+  it("skips with a clear message instead of posting INSUFFICIENT_CONTEXT spam", async () => {
+    const tmp = useTmpDir();
+    writeConfig(tmp.path, "tree_repo: o/tree\ntarget_repo: o/src\n");
+    const calls: ShellCall[] = [];
+    const shell = makeShell([], calls);
+    const { write, lines } = captureWrite();
+    const code = await runComment(
+      ["--pr", "1", "--repo", "o/src", "--tree-path", tmp.path],
+      {
+        shellRun: shell,
+        write,
+        env: {},
+        // no classifier — simulate the stock CLI path
+      },
+    );
+    expect(code).toBe(0);
+    expect(calls).toHaveLength(0);
+    const joined = lines.join("\n");
+    expect(joined).toContain("no classifier injected");
+    expect(lines[lines.length - 1]).toMatch(
+      /^BREEZE_RESULT: status=skipped summary=no classifier injected/,
+    );
+  });
+
+  it("also skips the scan path (no target_repo hits gh)", async () => {
+    const tmp = useTmpDir();
+    writeConfig(
+      tmp.path,
+      "tree_repo: o/tree\ntarget_repos:\n  - o/a\n  - o/b\n",
+    );
+    const calls: ShellCall[] = [];
+    const shell = makeShell([], calls);
+    const { write, lines } = captureWrite();
+    const code = await runComment(["--tree-path", tmp.path], {
+      shellRun: shell,
+      write,
+    });
+    expect(code).toBe(0);
+    expect(calls).toHaveLength(0);
+    expect(lines[lines.length - 1]).toMatch(
+      /^BREEZE_RESULT: status=skipped summary=no classifier injected/,
+    );
   });
 });
 
@@ -223,6 +271,91 @@ describe("gardener CLI dispatch -- comment subcommand", () => {
       expect(lines[lines.length - 1]).toMatch(/^BREEZE_RESULT: /);
       const parsed = JSON.parse(seen.body ?? "{}");
       expect(parsed.model).toBe("claude-sonnet-4-6");
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalApiKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = originalApiKey;
+      if (originalModel === undefined) delete process.env.GARDENER_CLASSIFIER_MODEL;
+      else process.env.GARDENER_CLASSIFIER_MODEL = originalModel;
+      if (originalSnapshotDir === undefined) delete process.env.BREEZE_SNAPSHOT_DIR;
+      else process.env.BREEZE_SNAPSHOT_DIR = originalSnapshotDir;
+    }
+  });
+
+  it("runGardener treats blank GARDENER_CLASSIFIER_MODEL as unset", async () => {
+    const tmp = useTmpDir();
+    const snapshotDir = join(tmp.path, "snap");
+    mkdirSync(snapshotDir, { recursive: true });
+    writeFileSync(join(tmp.path, "NODE.md"), "---\ndescription: Root\n---\n");
+    writeFileSync(
+      join(snapshotDir, "pr-view.json"),
+      JSON.stringify({
+        number: 1,
+        title: "t",
+        headRefOid: "abcd",
+        state: "OPEN",
+        author: { login: "u" },
+        additions: 1,
+        deletions: 0,
+        updatedAt: "2026-04-16T00:00:00Z",
+      }),
+    );
+    writeFileSync(join(snapshotDir, "issue-comments.json"), JSON.stringify([]));
+    writeFileSync(
+      join(snapshotDir, "subject.json"),
+      JSON.stringify({ gardenerUser: "repo-gardener", treeSha: "tsha1234" }),
+    );
+    writeFileSync(join(snapshotDir, "pr.diff"), "");
+
+    const originalFetch = globalThis.fetch;
+    const originalApiKey = process.env.ANTHROPIC_API_KEY;
+    const originalModel = process.env.GARDENER_CLASSIFIER_MODEL;
+    const originalSnapshotDir = process.env.BREEZE_SNAPSHOT_DIR;
+    const seen: { body?: string } = {};
+
+    try {
+      globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+        seen.body = init?.body as string;
+        return new Response(
+          JSON.stringify({
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  verdict: "ALIGNED",
+                  severity: "low",
+                  summary: "ok",
+                  treeNodes: [],
+                }),
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      }) as typeof fetch;
+      process.env.ANTHROPIC_API_KEY = "sk-test";
+      process.env.GARDENER_CLASSIFIER_MODEL = "   ";
+      process.env.BREEZE_SNAPSHOT_DIR = snapshotDir;
+
+      const { write, lines } = captureWrite();
+      const code = await runGardener(
+        [
+          "comment",
+          "--pr",
+          "1",
+          "--repo",
+          "o/r",
+          "--tree-path",
+          tmp.path,
+          "--dry-run",
+        ],
+        write,
+      );
+
+      expect(code).toBe(0);
+      expect(lines[lines.length - 1]).toMatch(/^BREEZE_RESULT: /);
+      const parsed = JSON.parse(seen.body ?? "{}");
+      expect(parsed.model).toBe("claude-haiku-4-5");
     } finally {
       globalThis.fetch = originalFetch;
       if (originalApiKey === undefined) delete process.env.ANTHROPIC_API_KEY;
@@ -775,6 +908,7 @@ describe("gardener comment -- BREEZE_RESULT trailer", () => {
         write,
         env: {},
         shellRun: makeShell([]),
+        classifier: alignedClassifier,
       },
     );
     expect(code).toBe(1);
@@ -1938,6 +2072,7 @@ describe("gardener comment -- multi target_repos scan", () => {
     const code = await runComment(["--tree-path", tmp.path], {
       shellRun: shell,
       write,
+      classifier: alignedClassifier,
     });
 
     expect(code).toBe(0);
@@ -1974,6 +2109,7 @@ describe("gardener comment -- multi target_repos scan", () => {
         shellRun: shell,
         write,
         now: () => fixedNow,
+        classifier: alignedClassifier,
       },
     );
 
@@ -2005,7 +2141,7 @@ describe("gardener comment -- multi target_repos scan", () => {
 
     const code = await runComment(
       ["--tree-path", tmp.path, "--merged-since", "yesterday"],
-      { shellRun: shell, write },
+      { shellRun: shell, write, classifier: alignedClassifier },
     );
 
     expect(code).toBe(1);
@@ -2022,6 +2158,7 @@ describe("gardener comment -- multi target_repos scan", () => {
     const code = await runComment(["--tree-path", tmp.path], {
       shellRun: shell,
       write,
+      classifier: alignedClassifier,
     });
 
     expect(code).toBe(1);

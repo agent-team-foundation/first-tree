@@ -2152,6 +2152,21 @@ export async function runComment(
     return 1;
   }
 
+  // No injected classifier → the stock CLI path. The default classifier
+  // cannot produce a real verdict, only the INSUFFICIENT_CONTEXT sentinel,
+  // so running the full review pipeline would just post spam. Bail out
+  // early with a clear message. Callers that embed runComment must inject
+  // a real classifier to opt in to posting.
+  if (!deps.classifier) {
+    const msg =
+      "gardener-comment: no classifier injected — refusing to post. " +
+      "The stock CLI does not ship a judgment engine; embed runComment with " +
+      "a classifier (see RunCommentOptions) or wait for a release that bundles one.";
+    write(msg);
+    emitBreezeResult(write, "skipped", "no classifier injected");
+    return 0;
+  }
+
   const treeRoot = flags.treePath
     ? resolve(process.cwd(), flags.treePath)
     : process.cwd();

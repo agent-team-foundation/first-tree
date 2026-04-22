@@ -9,8 +9,11 @@ on:
 
 jobs:
   tree-sync:
-    # Skip first-tree's own sync PRs so gardener never reviews itself.
-    if: ${{ !contains(github.event.pull_request.labels.*.name, 'first-tree:sync') }}
+    # Skip fork PRs: GitHub withholds secrets (TREE_REPO_TOKEN,
+    # CLAUDE_CODE_OAUTH_TOKEN) from fork workflows, so the job can't do
+    # its work. A skipped check is less misleading than a failed one.
+    # Also skip first-tree's own sync PRs so gardener never reviews itself.
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository && !contains(github.event.pull_request.labels.*.name, 'first-tree:sync') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -25,12 +28,34 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Checkout tree repo
-        uses: actions/checkout@v4
-        with:
-          repository: agent-team-foundation/first-tree-context
-          token: ${{ secrets.TREE_REPO_TOKEN }}
-          path: .first-tree-cache/tree
+      - name: Clone tree repo
+        shell: bash
+        run: |
+          set -euo pipefail
+          tree_repo_url="https://github.com/agent-team-foundation/first-tree-context.git"
+          tree_repo_dir=".first-tree-cache/tree"
+          mkdir -p "$(dirname "$tree_repo_dir")"
+          if git clone --depth 1 "$tree_repo_url" "$tree_repo_dir"; then
+            exit 0
+          fi
+
+          if [ -z "${TREE_REPO_TOKEN:-}" ]; then
+            echo "Anonymous tree clone failed and TREE_REPO_TOKEN is unset." >&2
+            exit 1
+          fi
+
+          rm -rf "$tree_repo_dir"
+          askpass_script="$RUNNER_TEMP/first-tree-git-askpass.sh"
+          cat >"$askpass_script" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' 'x-access-token' ;;
+            *Password*) printf '%s\n' "$TREE_REPO_TOKEN" ;;
+          esac
+          EOF
+          chmod 700 "$askpass_script"
+          GIT_ASKPASS="$askpass_script" git clone --depth 1 "$tree_repo_url" "$tree_repo_dir"
+          rm -f "$askpass_script"
 
       - name: Setup Node
         uses: actions/setup-node@v4

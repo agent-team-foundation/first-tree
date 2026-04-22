@@ -34,7 +34,7 @@ skills/first-tree/references/workflow-mode.md).
 
 Options:
   --tree-repo <owner/name>   Tree repo slug (required). Written into the
-                             workflow's actions/checkout step.
+                             workflow's tree clone step.
   --tree-path <dir>          Path inside the runner where the tree is
                              checked out. Default: .first-tree-cache/tree
   --output <file>            Destination path for the workflow. Default:
@@ -49,8 +49,11 @@ Next steps after install:
   1. Set the TREE_REPO_TOKEN and ANTHROPIC_API_KEY secrets on this
      repo (see skills/first-tree/references/workflow-mode.md for the
      gh-auth-based quick path and the caveats).
-  2. Commit and open a PR for the new workflow file.
-  3. Verify the workflow runs once the PR is merged.
+  2. Set the ANTHROPIC_API_KEY secret on this repo. Without it,
+     gardener comment refuses to post (PR #255) — this is the
+     intended fail-closed behaviour when no classifier is wired.
+  3. Commit and open a PR for the new workflow file.
+  4. Verify the workflow runs once the PR is merged.
 `;
 
 export interface InstallWorkflowDeps {
@@ -161,8 +164,11 @@ on:
 
 jobs:
   tree-sync:
-    # Skip first-tree's own sync PRs so gardener never reviews itself.
-    if: \${{ !contains(github.event.pull_request.labels.*.name, 'first-tree:sync') }}
+    # Skip fork PRs: GitHub withholds secrets (TREE_REPO_TOKEN,
+    # ANTHROPIC_API_KEY) from fork workflows, so the job can't do its
+    # work. A skipped check is less misleading than a failed one.
+    # Also skip first-tree's own sync PRs so gardener never reviews itself.
+    if: \${{ github.event.pull_request.head.repo.full_name == github.repository && !contains(github.event.pull_request.labels.*.name, 'first-tree:sync') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -172,18 +178,45 @@ jobs:
       TREE_REPO_TOKEN: \${{ secrets.TREE_REPO_TOKEN }}
       ANTHROPIC_API_KEY: \${{ secrets.ANTHROPIC_API_KEY }}
       GH_TOKEN: \${{ github.token }}
+      # Optional: when set, gardener comment posts an AI-classified verdict.
+      # When unset, gardener comment refuses to post (see PR #255). Set
+      # ANTHROPIC_API_KEY as a repo secret to enable posting.
+      ANTHROPIC_API_KEY: \${{ secrets.ANTHROPIC_API_KEY }}
+      GARDENER_CLASSIFIER_MODEL: \${{ secrets.GARDENER_CLASSIFIER_MODEL }}
     steps:
       - name: Checkout source repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Checkout tree repo
-        uses: actions/checkout@v4
-        with:
-          repository: ${treeRepo}
-          token: \${{ secrets.TREE_REPO_TOKEN }}
-          path: ${treePath}
+      - name: Clone tree repo
+        shell: bash
+        run: |
+          set -euo pipefail
+          tree_repo_url="https://github.com/${treeRepo}.git"
+          tree_repo_dir="${treePath}"
+          mkdir -p "$(dirname "$tree_repo_dir")"
+          if git clone --depth 1 "$tree_repo_url" "$tree_repo_dir"; then
+            exit 0
+          fi
+
+          if [ -z "\${TREE_REPO_TOKEN:-}" ]; then
+            echo "Anonymous tree clone failed and TREE_REPO_TOKEN is unset." >&2
+            exit 1
+          fi
+
+          rm -rf "$tree_repo_dir"
+          askpass_script="$RUNNER_TEMP/first-tree-git-askpass.sh"
+          cat >"$askpass_script" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\\n' 'x-access-token' ;;
+            *Password*) printf '%s\\n' "$TREE_REPO_TOKEN" ;;
+          esac
+          EOF
+          chmod 700 "$askpass_script"
+          GIT_ASKPASS="$askpass_script" git clone --depth 1 "$tree_repo_url" "$tree_repo_dir"
+          rm -f "$askpass_script"
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -297,9 +330,18 @@ export async function runInstallWorkflow(
   write(
     `     The token needs \`issues:write\` and \`contents:read\` on ${flags.treeRepo}.`,
   );
-  write("  2. Commit and open a PR for the new workflow file.");
   write(
-    "  3. Merge a test PR on the codebase and confirm an issue opens on",
+    "  2. Set ANTHROPIC_API_KEY on this repo. Without it, gardener comment",
+  );
+  write(
+    "     refuses to post (PR #255 fail-closed). Quick path:",
+  );
+  write(
+    `       gh secret set ANTHROPIC_API_KEY --repo <codebase-owner>/<repo>`,
+  );
+  write("  3. Commit and open a PR for the new workflow file.");
+  write(
+    "  4. Merge a test PR on the codebase and confirm an issue opens on",
   );
   write(`     https://github.com/${flags.treeRepo}/issues`);
 
