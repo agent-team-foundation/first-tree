@@ -568,7 +568,7 @@ export function AgentDetailPage() {
             />
           )}
 
-          {isUnclaimed && agent.status === "active" && (
+          {isUnclaimed && agent.status === "active" && canManage && (
             <div
               className="flex items-center justify-between gap-3"
               style={{

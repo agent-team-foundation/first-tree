@@ -25,8 +25,14 @@ export type IdentitySectionProps = {
 
 export function IdentitySection({ agent, onSave }: IdentitySectionProps) {
   const [open, setOpen] = useState(false);
+  const { memberId, role: authRole } = useAuth();
   const resolveAgent = useAgentNameMap();
   const resolveMember = useMemberNameMap();
+
+  // Mirror the backend PATCH /admin/agents/:uuid guard (assertCanManage).
+  // Without this the Edit button surfaces to non-managers and Save would
+  // 404 from the server — a confusing "Agent not found" in the dialog.
+  const canManage = authRole === "admin" || agent.managerId === memberId;
 
   const metadata = agent.metadata as Record<string, unknown> | undefined;
   const treeMeta = metadata?.tree as Record<string, unknown> | undefined;
@@ -53,7 +59,7 @@ export function IdentitySection({ agent, onSave }: IdentitySectionProps) {
         }}
       >
         <h2 style={{ fontSize: 12, fontWeight: 600, color: "var(--fg)" }}>Profile</h2>
-        {agent.status === "active" && (
+        {agent.status === "active" && canManage && (
           <Button size="xs" variant="outline" onClick={() => setOpen(true)}>
             <Pencil className="h-3 w-3" /> Edit
           </Button>
