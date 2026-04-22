@@ -7,10 +7,10 @@ import {
   getChat,
   listChatMessages,
   type MessageWithDelivery,
+  readFileAsBase64,
   renameChat,
   sendChatMessage,
   sendFileMessage,
-  uploadFile,
 } from "../../../api/chats.js";
 import {
   agentSessionsQueryKey,
@@ -616,7 +616,7 @@ function TextRow({
         >
           {msg.format === "file" && isImageContent(msg.content) ? (
             <img
-              src={(msg.content as FileMessageContent).url}
+              src={`data:${(msg.content as FileMessageContent).mimeType};base64,${(msg.content as FileMessageContent).data}`}
               alt={(msg.content as FileMessageContent).filename ?? "image"}
               style={{ maxWidth: 320, borderRadius: 6, marginTop: 4 }}
             />
@@ -646,7 +646,7 @@ function TextRow({
 function isImageContent(content: unknown): content is FileMessageContent {
   if (typeof content !== "object" || content === null) return false;
   const c = content as Record<string, unknown>;
-  return typeof c.url === "string" && typeof c.mimeType === "string" && (c.mimeType as string).startsWith("image/");
+  return typeof c.data === "string" && typeof c.mimeType === "string" && (c.mimeType as string).startsWith("image/");
 }
 
 type PendingImage = {
@@ -707,14 +707,25 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
   });
 
   const addImages = useCallback((files: File[]) => {
+    const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // Claude API per-image limit
     const imageFiles = files.filter((f) => f.type.startsWith("image/"));
     if (imageFiles.length === 0) return;
+
+    const oversized = imageFiles.find((f) => f.size > MAX_IMAGE_SIZE);
+    if (oversized) {
+      setUploadError(
+        `Image too large (${(oversized.size / 1024 / 1024).toFixed(1)}MB). Maximum ${MAX_IMAGE_SIZE / 1024 / 1024}MB per image.`,
+      );
+      return;
+    }
+
     const newImages: PendingImage[] = imageFiles.map((file) => ({
       id: crypto.randomUUID(),
       file,
       previewUrl: URL.createObjectURL(file),
     }));
     setPendingImages((prev) => [...prev, ...newImages]);
+    setUploadError(null);
   }, []);
 
   const removeImage = useCallback((id: string) => {
@@ -736,12 +747,12 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
       setUploadError(null);
       try {
         for (const img of images) {
-          const result = await uploadFile(img.file);
+          const data = await readFileAsBase64(img.file);
           await sendFileMessage(chatId, {
-            url: result.url,
-            mimeType: result.mimeType,
-            filename: result.filename,
-            size: result.size,
+            data,
+            mimeType: img.file.type,
+            filename: img.file.name,
+            size: img.file.size,
           });
           URL.revokeObjectURL(img.previewUrl);
         }
@@ -750,7 +761,7 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
         setDraft("");
         queryClient.invalidateQueries({ queryKey: ["chat-messages", chatId] });
       } catch (err) {
-        setUploadError(err instanceof Error ? err.message : "Failed to upload image");
+        setUploadError(err instanceof Error ? err.message : "Failed to send image");
       } finally {
         setUploading(false);
       }

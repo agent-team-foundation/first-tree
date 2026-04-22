@@ -3,7 +3,6 @@ import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
 import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
 import cors from "@fastify/cors";
-import multipart from "@fastify/multipart";
 import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
@@ -26,7 +25,6 @@ import { adminSessionRoutes } from "./api/admin/sessions.js";
 import { adminStatsRoutes } from "./api/admin/stats.js";
 import { adminSystemConfigRoutes } from "./api/admin/system-config.js";
 import { adminTaskRoutes } from "./api/admin/tasks.js";
-import { adminUploadRoutes, publicUploadRoutes } from "./api/admin/uploads.js";
 import { adminWsRoutes } from "./api/admin/ws-admin.js";
 import { agentChatRoutes } from "./api/agent/chats.js";
 import { agentConfigRoutes } from "./api/agent/config.js";
@@ -137,9 +135,6 @@ export async function buildApp(config: Config) {
   // WebSocket plugin
   await app.register(websocket);
 
-  // Multipart support for file uploads
-  await app.register(multipart, { limits: { fileSize: 10 * 1024 * 1024 } });
-
   // CORS — explicit origins if configured; allow all in dev; same-origin in production
   const corsOrigin = config.cors?.origin;
   const isDev = process.env.NODE_ENV !== "production";
@@ -186,7 +181,6 @@ export async function buildApp(config: Config) {
       await api.register(authRoutes, { prefix: "/auth" });
       await api.register(contextTreeInfoRoutes, { prefix: "/context-tree" });
       await api.register(bootstrapConfigRoutes, { prefix: "/bootstrap" });
-      await api.register(publicUploadRoutes, { prefix: "/uploads" });
 
       // Admin routes (JWT protected)
       await api.register(
@@ -284,15 +278,6 @@ export async function buildApp(config: Config) {
           await adminApp.register(adminChatRoutes);
         },
         { prefix: "/admin/chats" },
-      );
-
-      // File uploads (images etc.)
-      await api.register(
-        async (adminApp) => {
-          adminApp.addHook("onRequest", memberAuth);
-          await adminApp.register(adminUploadRoutes);
-        },
-        { prefix: "/admin/uploads" },
       );
 
       // M1: Client management routes

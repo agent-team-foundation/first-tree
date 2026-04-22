@@ -28,6 +28,34 @@ type ToolResultBlock = { type: "tool_result"; tool_use_id: string; content: unkn
 type TextBlock = { type: "text"; text: string };
 type ThinkingBlock = { type: "thinking"; thinking?: string };
 
+/** MIME types supported by Claude's vision API. */
+type SupportedImageMime = "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+const SUPPORTED_IMAGE_MIMES: ReadonlySet<SupportedImageMime> = new Set<SupportedImageMime>([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+]);
+
+/** Shape of a `format: "file"` image message's content (base64-encoded). */
+type ImageFileContent = {
+  data: string; // base64 (no prefix)
+  mimeType: SupportedImageMime;
+  filename: string;
+  size?: number;
+};
+
+function isImageFileContent(content: unknown): content is ImageFileContent {
+  if (!content || typeof content !== "object") return false;
+  const c = content as Record<string, unknown>;
+  return (
+    typeof c.data === "string" &&
+    typeof c.mimeType === "string" &&
+    typeof c.filename === "string" &&
+    SUPPORTED_IMAGE_MIMES.has(c.mimeType as SupportedImageMime)
+  );
+}
+
 function extractContentBlocks(message: unknown): unknown[] {
   if (!message || typeof message !== "object") return [];
   const inner = (message as { message?: unknown }).message;
@@ -243,6 +271,36 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   const ownedWorktrees: Array<{ url: string; path: string; branchName: string }> = [];
 
   function toSDKUserMessage(message: SessionMessage, sessionId: string): SDKUserMessage {
+    // Image file message → multimodal content blocks (text + image)
+    if (message.format === "file" && isImageFileContent(message.content)) {
+      const { data, mimeType, filename } = message.content;
+      const prefix = message.senderId ? `[From: ${message.senderId}]\n\n` : "";
+      const content = [
+        {
+          type: "text" as const,
+          text: `${prefix}[Attached image: ${filename}]`,
+        },
+        {
+          type: "image" as const,
+          source: {
+            type: "base64" as const,
+            media_type: mimeType,
+            data,
+          },
+        },
+      ];
+      return {
+        type: "user",
+        message: {
+          role: "user",
+          content,
+        },
+        parent_tool_use_id: null,
+        session_id: sessionId,
+      };
+    }
+
+    // Default: text content
     const rawContent = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
     const content = message.senderId ? `[From: ${message.senderId}]\n\n${rawContent}` : rawContent;
     return {
