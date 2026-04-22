@@ -108,6 +108,17 @@ export async function runGardener(
       const { runComment } = await import(
         "./engine/commands/comment.js"
       );
+      const apiKey = process.env.ANTHROPIC_API_KEY;
+      if (apiKey) {
+        const { createAnthropicClassifier } = await import(
+          "./engine/classifiers/anthropic.js"
+        );
+        const model = process.env.GARDENER_CLASSIFIER_MODEL;
+        return runComment(args.slice(1), {
+          write,
+          classifier: createAnthropicClassifier({ apiKey, model }),
+        });
+      }
       return runComment(args.slice(1), { write });
     }
     case "install-workflow": {

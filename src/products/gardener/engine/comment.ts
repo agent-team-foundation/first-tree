@@ -98,6 +98,15 @@ Options:
   --help, -h            Show this help message
 
 Environment:
+  ANTHROPIC_API_KEY     When set, the CLI wires a built-in Anthropic
+                        classifier into runComment. When unset, the CLI
+                        refuses to post (it would only produce the
+                        INSUFFICIENT_CONTEXT sentinel) and exits with a
+                        skip trailer. Required for this command to do
+                        anything useful.
+  GARDENER_CLASSIFIER_MODEL
+                        Override the Claude model used by the built-in
+                        classifier (default: claude-haiku-4-5).
   BREEZE_SNAPSHOT_DIR   Directory containing pre-fetched pr-view.json,
                         pr.diff, issue-view.json, issue-comments.json,
                         and subject.json. When set, those files are

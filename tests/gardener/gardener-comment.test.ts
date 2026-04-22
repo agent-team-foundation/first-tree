@@ -148,6 +148,91 @@ describe("gardener CLI dispatch -- comment subcommand", () => {
     expect(GARDENER_USAGE).toContain("comment");
     expect(GARDENER_USAGE).toContain("respond");
   });
+
+  it("runGardener wires GARDENER_CLASSIFIER_MODEL into the built-in classifier", async () => {
+    const tmp = useTmpDir();
+    const snapshotDir = join(tmp.path, "snap");
+    mkdirSync(snapshotDir, { recursive: true });
+    writeFileSync(join(tmp.path, "NODE.md"), "---\ndescription: Root\n---\n");
+    writeFileSync(
+      join(snapshotDir, "pr-view.json"),
+      JSON.stringify({
+        number: 1,
+        title: "t",
+        headRefOid: "abcd",
+        state: "OPEN",
+        author: { login: "u" },
+        additions: 1,
+        deletions: 0,
+        updatedAt: "2026-04-16T00:00:00Z",
+      }),
+    );
+    writeFileSync(join(snapshotDir, "issue-comments.json"), JSON.stringify([]));
+    writeFileSync(
+      join(snapshotDir, "subject.json"),
+      JSON.stringify({ gardenerUser: "repo-gardener", treeSha: "tsha1234" }),
+    );
+    writeFileSync(join(snapshotDir, "pr.diff"), "");
+
+    const originalFetch = globalThis.fetch;
+    const originalApiKey = process.env.ANTHROPIC_API_KEY;
+    const originalModel = process.env.GARDENER_CLASSIFIER_MODEL;
+    const originalSnapshotDir = process.env.BREEZE_SNAPSHOT_DIR;
+    const seen: { body?: string } = {};
+
+    try {
+      globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+        seen.body = init?.body as string;
+        return new Response(
+          JSON.stringify({
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  verdict: "ALIGNED",
+                  severity: "low",
+                  summary: "ok",
+                  treeNodes: [],
+                }),
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      }) as typeof fetch;
+      process.env.ANTHROPIC_API_KEY = "sk-test";
+      process.env.GARDENER_CLASSIFIER_MODEL = "claude-sonnet-4-6";
+      process.env.BREEZE_SNAPSHOT_DIR = snapshotDir;
+
+      const { write, lines } = captureWrite();
+      const code = await runGardener(
+        [
+          "comment",
+          "--pr",
+          "1",
+          "--repo",
+          "o/r",
+          "--tree-path",
+          tmp.path,
+          "--dry-run",
+        ],
+        write,
+      );
+
+      expect(code).toBe(0);
+      expect(lines[lines.length - 1]).toMatch(/^BREEZE_RESULT: /);
+      const parsed = JSON.parse(seen.body ?? "{}");
+      expect(parsed.model).toBe("claude-sonnet-4-6");
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalApiKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = originalApiKey;
+      if (originalModel === undefined) delete process.env.GARDENER_CLASSIFIER_MODEL;
+      else process.env.GARDENER_CLASSIFIER_MODEL = originalModel;
+      if (originalSnapshotDir === undefined) delete process.env.BREEZE_SNAPSHOT_DIR;
+      else process.env.BREEZE_SNAPSHOT_DIR = originalSnapshotDir;
+    }
+  });
 });
 
 // ─────────────────── 4. state resolution ───────────────────

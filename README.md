@@ -200,7 +200,7 @@ continue to work cleanly for multi-repo workspaces.
 | `first-tree tree inject-context` | Output a Claude Code SessionStart hook payload from the root `NODE.md` |
 | `first-tree tree help onboarding` | Print the full onboarding guide |
 | `first-tree gardener sync` | Detect drift between a tree repo and its bound source repos; supports `--propose` and `--apply`. Moved from `first-tree tree sync`. |
-| `first-tree gardener comment` | Review a source-repo PR or issue against the tree and post a structured verdict comment; scan mode sweeps every configured `target_repo` |
+| `first-tree gardener comment` | Review a source-repo PR or issue against the tree and post a structured verdict comment; scan mode sweeps every configured `target_repo`. Requires `ANTHROPIC_API_KEY` in the environment — without it the CLI skips without posting. Override the model with `GARDENER_CLASSIFIER_MODEL` (default: `claude-haiku-4-5`). |
 | `first-tree gardener respond` | Fix a tree-repo sync PR based on reviewer feedback |
 | `first-tree gardener install-workflow` | Scaffold the push-mode GitHub Actions workflow in a codebase repo |
 | `first-tree gardener start` | Launch the pull-mode gardener daemon in the background |
