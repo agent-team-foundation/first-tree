@@ -34,7 +34,7 @@ skills/first-tree/references/workflow-mode.md).
 
 Options:
   --tree-repo <owner/name>   Tree repo slug (required). Written into the
-                             workflow's actions/checkout step.
+                             workflow's tree clone step.
   --tree-path <dir>          Path inside the runner where the tree is
                              checked out. Default: .first-tree-cache/tree
   --output <file>            Destination path for the workflow. Default:
@@ -186,12 +186,16 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Checkout tree repo
-        uses: actions/checkout@v4
-        with:
-          repository: ${treeRepo}
-          token: \${{ secrets.TREE_REPO_TOKEN }}
-          path: ${treePath}
+      - name: Clone tree repo
+        shell: bash
+        run: |
+          set -euo pipefail
+          tree_repo_url="https://github.com/${treeRepo}.git"
+          tree_repo_dir="${treePath}"
+          auth_header="$(printf 'x-access-token:%s' "$TREE_REPO_TOKEN" | base64 | tr -d '\\n')"
+          mkdir -p "$(dirname "$tree_repo_dir")"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth_header" \\
+            clone --depth 1 "$tree_repo_url" "$tree_repo_dir"
 
       - name: Setup Node
         uses: actions/setup-node@v4
