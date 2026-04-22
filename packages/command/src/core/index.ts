@@ -13,6 +13,7 @@ export {
   saveAgentConfig,
   saveCredentials,
 } from "./bootstrap.js";
+export type { ClientRuntimeOptions } from "./client-runtime.js";
 // Client runtime
 export { ClientRuntime } from "./client-runtime.js";
 // Docker PostgreSQL
@@ -58,3 +59,10 @@ export {
   resolveCliInvocation,
   uninstallClientService,
 } from "./service-install.js";
+export type { ExecuteUpdateResult, InstallMode } from "./update.js";
+// Self-update glue — exported so both `client start` and `client connect`
+// can pass identical prompt / install callbacks to the ClientRuntime.
+export { detectInstallMode, installGlobalLatest } from "./update.js";
+export { createExecuteUpdate, declineUpdate, promptUpdate, SELF_RESTART_EXIT_CODE } from "./update-glue.js";
+// Command package version (bundle self-identification)
+export { COMMAND_VERSION } from "./version.js";

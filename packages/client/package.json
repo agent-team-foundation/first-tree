@@ -25,6 +25,7 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.84",
     "pino": "^9.5.0",
+    "semver": "^7.6.3",
     "ws": "^8.20.0",
     "yaml": "^2.8.3",
     "zod": "^4.0.0"
@@ -32,6 +33,7 @@
   "devDependencies": {
     "@agent-team-foundation/first-tree-hub-shared": "workspace:*",
     "@types/node": "^22.16.0",
+    "@types/semver": "^7.5.8",
     "@types/ws": "^8.18.1",
     "tsdown": "^0.21.4",
     "vitest": "^3.2.0"

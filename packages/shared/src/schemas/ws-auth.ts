@@ -13,3 +13,19 @@ export type WsAuthFrame = z.infer<typeof wsAuthFrameSchema>;
 
 /** How long the server waits for the first `auth` frame before closing the WS. */
 export const WS_AUTH_FRAME_TIMEOUT_MS = 5_000;
+
+/**
+ * Advisory frame sent server → client immediately after `auth:ok`. It carries
+ * the Command-package version the server was bundled with, so the client can
+ * detect version drift on startup and on each reconnect. `.passthrough()` so
+ * future server versions may add fields without breaking older clients that
+ * validate this frame.
+ */
+export const serverWelcomeFrameSchema = z
+  .object({
+    type: z.literal("server:welcome"),
+    serverCommandVersion: z.string().min(1),
+    serverTimeMs: z.number().int().nonnegative(),
+  })
+  .passthrough();
+export type ServerWelcomeFrame = z.infer<typeof serverWelcomeFrameSchema>;

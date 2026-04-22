@@ -1,4 +1,9 @@
-export type { BoundAgent, ClientConnectionConfig, SessionCommand } from "./client-connection.js";
+export type {
+  BoundAgent,
+  ClientConnectionConfig,
+  ServerWelcome,
+  SessionCommand,
+} from "./client-connection.js";
 export { ClientConnection } from "./client-connection.js";
 // Handlers
 export { registerBuiltinHandlers } from "./handlers/index.js";
@@ -23,6 +28,17 @@ export type { AgentRuntimeOptions } from "./runtime/runtime.js";
 export { AgentRuntime } from "./runtime/runtime.js";
 export { SessionManager } from "./runtime/session-manager.js";
 export { SessionRegistry } from "./runtime/session-registry.js";
+export type {
+  ExecuteUpdateFn,
+  ExecuteUpdateResult,
+  QuietGateSnapshot,
+  UpdateHooks,
+  UpdateLogger,
+  UpdateLogLevel,
+  UpdateManagerOptions,
+  UpdatePromptFn,
+} from "./runtime/update-manager.js";
+export { UpdateManager } from "./runtime/update-manager.js";
 export { acquireWorkspace, cleanWorkspaces, DEFAULT_WORKSPACE_TTL_MS } from "./runtime/workspace.js";
 export type { AccessTokenProvider, PaginatedResult, PullResult, RegisterResult, SdkConfig } from "./sdk.js";
 export { FirstTreeHubSDK, SdkError } from "./sdk.js";

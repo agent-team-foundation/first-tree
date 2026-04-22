@@ -13,17 +13,21 @@ import type { Command } from "commander";
 import { fail } from "../cli/output.js";
 import {
   ClientRuntime,
+  COMMAND_VERSION,
   checkAgentConfigs,
   checkClientConfig,
   checkNodeVersion,
   checkServerReachable,
   checkWebSocket,
+  createExecuteUpdate,
+  declineUpdate,
   ensureFreshAccessToken,
   getClientServiceStatus,
   installClientService,
   isServiceSupported,
   printResults,
   promptMissingFields,
+  promptUpdate,
   resolveServerUrl,
   uninstallClientService,
 } from "../core/index.js";
@@ -65,7 +69,20 @@ export function registerClientCommands(program: Command): void {
 
         process.stderr.write(`\n  Connecting to ${config.server.url} (client id: ${config.client.id})...\n`);
 
-        const runtime = new ClientRuntime(config.server.url, config.client.id);
+        // `--no-interactive` is the signal the service units (launchd /
+        // systemd) set — we piggy-back on it for two things: (1) suppress
+        // the update-confirm prompt so policy=prompt doesn't block a
+        // supervised run, (2) enable exit-for-restart since the supervisor
+        // will relaunch us on the new binary.
+        const managed = options.interactive === false;
+        const runtime = new ClientRuntime(config.server.url, config.client.id, {
+          currentVersion: COMMAND_VERSION,
+          update: {
+            updateConfig: config.update,
+            prompt: managed ? declineUpdate : promptUpdate,
+            executeUpdate: createExecuteUpdate({ managed }),
+          },
+        });
         for (const [name, agentConfig] of agents) {
           runtime.addAgent(name, agentConfig);
         }

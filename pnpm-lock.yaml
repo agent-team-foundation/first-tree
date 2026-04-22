@@ -26,6 +26,9 @@ importers:
       pino:
         specifier: ^9.5.0
         version: 9.14.0
+      semver:
+        specifier: ^7.6.3
+        version: 7.7.4
       ws:
         specifier: ^8.20.0
         version: 8.20.0
@@ -42,6 +45,9 @@ importers:
       '@types/node':
         specifier: ^22.16.0
         version: 22.19.15
+      '@types/semver':
+        specifier: ^7.5.8
+        version: 7.7.1
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1
@@ -96,6 +102,9 @@ importers:
       postgres:
         specifier: ^3.4.0
         version: 3.4.8
+      semver:
+        specifier: ^7.6.3
+        version: 7.7.4
       ws:
         specifier: ^8.20.0
         version: 8.20.0
@@ -124,6 +133,9 @@ importers:
       '@types/node':
         specifier: ^22.16.0
         version: 22.19.15
+      '@types/semver':
+        specifier: ^7.5.8
+        version: 7.7.1
       tsdown:
         specifier: ^0.21.4
         version: 0.21.4(typescript@5.9.3)
@@ -2050,6 +2062,9 @@ packages:
 
   '@types/react@19.2.14':
     resolution: {integrity: sha512-ilcTH/UniCkMdtexkoCN0bI7pMcJDvmQFPvuPvmEaYA/NSfFTAgdUSLAoVjaRJm7+6PvcM+q1zYOwS4wTYMF9w==}
+
+  '@types/semver@7.7.1':
+    resolution: {integrity: sha512-FmgJfu+MOcQ370SD0ev7EI8TlCAfKYU+B4m5T3yXc1CiRN94g/SZPtsCkk506aUDtlMnFZvasDwHHUcZUEaYuA==}
 
   '@types/ssh2-streams@0.1.13':
     resolution: {integrity: sha512-faHyY3brO9oLEA0QlcO8N2wT7R0+1sHWZvQ+y3rMLwdY1ZyS1z0W3t65j9PqT4HmQ6ALzNe7RZlNuCNE0wBSWA==}
@@ -5495,6 +5510,8 @@ snapshots:
   '@types/react@19.2.14':
     dependencies:
       csstype: 3.2.3
+
+  '@types/semver@7.7.1': {}
 
   '@types/ssh2-streams@0.1.13':
     dependencies:

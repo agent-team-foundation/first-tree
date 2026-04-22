@@ -224,6 +224,15 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
             clearTimeout(authTimeout);
             scheduleAuthExpiry(claims.exp);
             socket.send(JSON.stringify({ type: "auth:ok" }));
+            // Wire-additive: older clients drop the unknown type; newer ones
+            // use it to detect version drift.
+            socket.send(
+              JSON.stringify({
+                type: "server:welcome",
+                serverCommandVersion: app.commandVersion,
+                serverTimeMs: Date.now(),
+              }),
+            );
           } catch (err) {
             const message = err instanceof Error ? err.message : "auth failure";
             socket.send(JSON.stringify({ type: "auth:rejected", reason: message }));

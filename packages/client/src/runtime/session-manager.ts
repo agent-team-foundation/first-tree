@@ -226,6 +226,20 @@ export class SessionManager {
     return this.sessions.size;
   }
 
+  /**
+   * Snapshot used by the UpdateManager's quiet gate to decide whether it is
+   * safe to exit the process for a self-update. `activeCount` is the number of
+   * sessions currently handling a message; `lastActivityMs` is the most recent
+   * activity timestamp across all tracked sessions (0 when there are none).
+   */
+  getQuietGateSnapshot(): { activeCount: number; lastActivityMs: number } {
+    let lastActivityMs = 0;
+    for (const entry of this.sessions.values()) {
+      if (entry.lastActivity > lastActivityMs) lastActivityMs = entry.lastActivity;
+    }
+    return { activeCount: this._activeCount, lastActivityMs };
+  }
+
   /** Return the current aggregate runtime state, or null if no sessions have reported. */
   getAggregateRuntimeState(): RuntimeState | null {
     return this.lastReportedRuntimeState;
