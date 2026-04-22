@@ -20,10 +20,58 @@ repo and a tree repo, e.g.:
 > first, set up gardener + breeze for this scope, the rest of the check
 > are after the onboarding
 
-From that one line, branch on the five scenarios below. Do **not** pepper
-the user with config questions up front — infer what you can, ask only
-when the inference is genuinely ambiguous. Always finish by restarting
-the breeze daemon with the new `--allow-repo` list so notifications flow.
+From that one line, branch on scenarios A–E below to pick the right
+setup path, then run **Scenario F** to smoke-test the full pipeline end
+to end. Do **not** pepper the user with config questions up front —
+infer what you can, ask only when the inference is genuinely ambiguous.
+Always finish by restarting the breeze daemon with the new
+`--allow-repo` list so notifications flow.
+
+### The end-to-end pipeline (what onboarding is actually wiring)
+
+Gardener + breeze together form a routing pipeline. Scenarios A–E below
+each set up some subset of it; this overview is the target state every
+scenario points at so you can tell the user what they're getting:
+
+```
+source-repo activity  (PR merges, new PRs)
+        │
+        ▼
+gardener sync  ──►  detects drift between source and tree
+        │
+        ▼ (--open-issues mode, preferred for multi-owner trees)
+one tree-repo issue per proposal, assigned to that node's owners
+        │
+        ▼
+GitHub notification fires for each assignee
+        │
+        ▼
+the assignee's breeze (on their own laptop) sees the notification
+        │
+        ▼
+breeze dispatches to the right agent (gardener draft-node)
+        │
+        ▼
+agent opens a tree PR  ──►  gardener-respond handles review feedback
+```
+
+**Key shape — GitHub assignment is the routing table.** If gardener
+assigns `@bingran-you`, bingran's breeze picks it up. If it assigns
+`@serenakeyitan`, her breeze does. No central queue, no shared server.
+Each person runs their own breeze against their own notifications.
+
+**Two handshake points the onboarding must actually verify:**
+
+1. **NODE.md has `owners:` frontmatter** — without it, `sync --open-issues`
+   falls back to the tree-repo default owner and labels the issue
+   `needs-owner`. Fine for demos; not for steady-state routing.
+2. **Each owner has breeze running locally with the tree repo in their
+   `--allow-repo` list** — without it, the assignment notification fires
+   and dies in the void. This is the "connect the pipes" step: you are
+   not done with onboarding until breeze has surfaced at least one real
+   gardener notification.
+
+See **Scenario F — try it end-to-end** below for the smoke test.
 
 ### Scenario A — fresh: no tree repo yet
 
@@ -77,6 +125,46 @@ User describes missing comments or stale notifications.
    (`plutil -p ~/.gardener/launchd/com.first-tree.gardener.<user>.plist`).
 3. `gardener stop && gardener start ...` with the same args. Restart
    breeze with `breeze start --allow-repo ...` after.
+
+### Scenario F — try it end-to-end (the "connect the pipes" step)
+
+Runs after A/B/C/D so the user can watch one drift-detected → issue-filed
+→ breeze-picks-it-up cycle land. Don't skip this on the first onboarding
+— it's the only way to verify routing actually works before the user
+walks away thinking it does.
+
+1. **Preconditions** — `TREE_REPO_TOKEN` set on the shell; at least one
+   NODE.md in the tree has `owners:` frontmatter naming a GitHub login;
+   breeze is installed on the laptop owned by that login; that breeze
+   has the tree repo in its `--allow-repo` list.
+2. **Seed a synthetic drift** — if no real drift exists, make a small
+   change in the codebase and land it (a merged PR with a commit
+   message that mentions something not yet in the tree is enough).
+3. **Dry-run the sync in the tree repo**:
+   ```bash
+   cd <tree-path>
+   first-tree gardener sync --open-issues --dry-run
+   ```
+   Confirm the output shows `would open issue on <tree-slug>: "[gardener]
+   <title>"` with the right assignees listed. If it says `[needs-owner]`,
+   the affected node's `owners:` frontmatter is empty — fix that first.
+4. **Run it for real**:
+   ```bash
+   first-tree gardener sync --open-issues
+   ```
+   Expect `✒ opened issue on <tree-slug>: <url> (assignees: @<login>)`.
+   Open the URL in the browser and confirm the assignees match the
+   NODE.md frontmatter.
+5. **Watch breeze pick it up** — on the assignee's laptop, breeze's
+   statusline should announce the new notification within its poll
+   interval (default 30s). If nothing appears: check `breeze status`,
+   confirm the `--allow-repo` list, confirm the logged-in `gh auth
+   status` user matches the assignee.
+6. **Let the dispatch run** — breeze dispatches `gardener draft-node`
+   (gap #2, once shipped) or prints the dispatch intent for now.
+
+If any step fails, the pipeline isn't connected — fix that step before
+telling the user onboarding is done.
 
 ### Always: restart breeze last
 
