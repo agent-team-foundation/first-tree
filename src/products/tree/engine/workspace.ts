@@ -1,4 +1,10 @@
-import { existsSync, readdirSync, readFileSync, type Dirent } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  readdirSync,
+  readFileSync,
+  type Dirent,
+} from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { Repo } from "#products/tree/engine/repo.js";
 import { TREE_SUBMODULES_DIR } from "#products/tree/engine/runtime/asset-loader.js";
@@ -36,6 +42,33 @@ const IGNORED_DIRS = new Set([
 
 const TREE_SUBMODULES_PREFIX = `${TREE_SUBMODULES_DIR.split(/[\\/]/).join("/")}/`;
 
+function isTraversableDirectory(current: string, entry: Dirent): boolean {
+  if (entry.isSymbolicLink()) {
+    return false;
+  }
+  if (entry.isDirectory()) {
+    return true;
+  }
+  if (
+    entry.isFile() ||
+    entry.isBlockDevice() ||
+    entry.isCharacterDevice() ||
+    entry.isFIFO() ||
+    entry.isSocket()
+  ) {
+    return false;
+  }
+
+  // Some filesystems report an unknown dirent type; fall back to lstat so
+  // nested repos on network/FUSE mounts are still discovered.
+  try {
+    const stats = lstatSync(join(current, entry.name));
+    return !stats.isSymbolicLink() && stats.isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 function parseGitmodules(root: string): string[] {
   try {
     const text = readFileSync(join(root, ".gitmodules"), "utf-8");
@@ -68,7 +101,7 @@ function discoverNestedRepos(
     }
     // Skip symlinks to avoid recursion cycles (repo pointing into itself,
     // shared toolchain dirs, etc.).
-    if (entry.isSymbolicLink() || !entry.isDirectory()) {
+    if (!isTraversableDirectory(current, entry)) {
       continue;
     }
     const child = join(current, entry.name);
