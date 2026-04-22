@@ -106,6 +106,7 @@ describe("gardener comment -- config opt-out", () => {
         write,
         env: {},
         now: () => new Date("2026-04-16T00:00:00Z"),
+        classifier: alignedClassifier,
       },
     );
     expect(code).toBe(0);
@@ -113,6 +114,53 @@ describe("gardener comment -- config opt-out", () => {
     const joined = lines.join("\n");
     expect(joined).toContain("gardener-comment is disabled via .claude/gardener-config.yaml");
     expect(lines[lines.length - 1]).toMatch(/^BREEZE_RESULT: status=skipped /);
+  });
+});
+
+// ─────────────────── 1b. no classifier injected ───────────────────
+describe("gardener comment -- no classifier injected", () => {
+  it("skips with a clear message instead of posting INSUFFICIENT_CONTEXT spam", async () => {
+    const tmp = useTmpDir();
+    writeConfig(tmp.path, "tree_repo: o/tree\ntarget_repo: o/src\n");
+    const calls: ShellCall[] = [];
+    const shell = makeShell([], calls);
+    const { write, lines } = captureWrite();
+    const code = await runComment(
+      ["--pr", "1", "--repo", "o/src", "--tree-path", tmp.path],
+      {
+        shellRun: shell,
+        write,
+        env: {},
+        // no classifier — simulate the stock CLI path
+      },
+    );
+    expect(code).toBe(0);
+    expect(calls).toHaveLength(0);
+    const joined = lines.join("\n");
+    expect(joined).toContain("no classifier injected");
+    expect(lines[lines.length - 1]).toMatch(
+      /^BREEZE_RESULT: status=skipped summary=no classifier injected/,
+    );
+  });
+
+  it("also skips the scan path (no target_repo hits gh)", async () => {
+    const tmp = useTmpDir();
+    writeConfig(
+      tmp.path,
+      "tree_repo: o/tree\ntarget_repos:\n  - o/a\n  - o/b\n",
+    );
+    const calls: ShellCall[] = [];
+    const shell = makeShell([], calls);
+    const { write, lines } = captureWrite();
+    const code = await runComment(["--tree-path", tmp.path], {
+      shellRun: shell,
+      write,
+    });
+    expect(code).toBe(0);
+    expect(calls).toHaveLength(0);
+    expect(lines[lines.length - 1]).toMatch(
+      /^BREEZE_RESULT: status=skipped summary=no classifier injected/,
+    );
   });
 });
 
@@ -775,6 +823,7 @@ describe("gardener comment -- BREEZE_RESULT trailer", () => {
         write,
         env: {},
         shellRun: makeShell([]),
+        classifier: alignedClassifier,
       },
     );
     expect(code).toBe(1);
@@ -1938,6 +1987,7 @@ describe("gardener comment -- multi target_repos scan", () => {
     const code = await runComment(["--tree-path", tmp.path], {
       shellRun: shell,
       write,
+      classifier: alignedClassifier,
     });
 
     expect(code).toBe(0);
@@ -1974,6 +2024,7 @@ describe("gardener comment -- multi target_repos scan", () => {
         shellRun: shell,
         write,
         now: () => fixedNow,
+        classifier: alignedClassifier,
       },
     );
 
@@ -2005,7 +2056,7 @@ describe("gardener comment -- multi target_repos scan", () => {
 
     const code = await runComment(
       ["--tree-path", tmp.path, "--merged-since", "yesterday"],
-      { shellRun: shell, write },
+      { shellRun: shell, write, classifier: alignedClassifier },
     );
 
     expect(code).toBe(1);
@@ -2022,6 +2073,7 @@ describe("gardener comment -- multi target_repos scan", () => {
     const code = await runComment(["--tree-path", tmp.path], {
       shellRun: shell,
       write,
+      classifier: alignedClassifier,
     });
 
     expect(code).toBe(1);
