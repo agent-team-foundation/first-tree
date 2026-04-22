@@ -140,6 +140,19 @@ describe("parseVerdictJson", () => {
     );
     expect(out?.treeNodes).toEqual([{ path: "a", summary: "b" }]);
   });
+
+  it("truncates overlong summaries to the prompt cap", () => {
+    const out = parseVerdictJson(
+      JSON.stringify({
+        verdict: "ALIGNED",
+        severity: "low",
+        summary: "x".repeat(250),
+        treeNodes: [],
+      }),
+    );
+    expect(out?.summary).toHaveLength(200);
+    expect(out?.summary.endsWith("…")).toBe(true);
+  });
 });
 
 describe("validateAndGroundNodes", () => {
@@ -157,6 +170,31 @@ describe("validateAndGroundNodes", () => {
         ],
       },
       tmp.path,
+    );
+    expect(grounded.treeNodes).toEqual([
+      { path: "product/NODE.md", summary: "real" },
+    ]);
+  });
+
+  it("drops absolute and tree-escaping cited paths", () => {
+    const tmp = useTmpDir();
+    const treeRoot = join(tmp.path, "tree");
+    const outsideRoot = join(tmp.path, "outside");
+    seedTree(treeRoot);
+    mkdirSync(outsideRoot, { recursive: true });
+    writeFileSync(join(outsideRoot, "NODE.md"), "outside");
+    const grounded = validateAndGroundNodes(
+      {
+        verdict: "ALIGNED",
+        severity: "low",
+        summary: "x",
+        treeNodes: [
+          { path: "product/NODE.md", summary: "real" },
+          { path: "../outside/NODE.md", summary: "escape" },
+          { path: join(outsideRoot, "NODE.md"), summary: "absolute" },
+        ],
+      },
+      treeRoot,
     );
     expect(grounded.treeNodes).toEqual([
       { path: "product/NODE.md", summary: "real" },
@@ -253,11 +291,17 @@ describe("createAnthropicClassifier", () => {
   it("sends the expected API headers and model", async () => {
     const tmp = useTmpDir();
     seedTree(tmp.path);
-    const seen: { url?: string; headers?: Record<string, string>; body?: string } = {};
+    const seen: {
+      url?: string;
+      headers?: Record<string, string>;
+      body?: string;
+      signal?: AbortSignal | null;
+    } = {};
     const captureFetch: typeof fetch = (async (url: string, init: RequestInit) => {
       seen.url = url;
       seen.headers = init.headers as Record<string, string>;
       seen.body = init.body as string;
+      seen.signal = init.signal;
       return new Response(
         JSON.stringify({
           content: [
@@ -284,6 +328,7 @@ describe("createAnthropicClassifier", () => {
     expect(seen.url).toBe("https://api.anthropic.com/v1/messages");
     expect(seen.headers?.["x-api-key"]).toBe("sk-live");
     expect(seen.headers?.["anthropic-version"]).toBe("2023-06-01");
+    expect(seen.signal).toBeTruthy();
     const parsed = JSON.parse(seen.body ?? "{}");
     expect(parsed.model).toBe("claude-sonnet-4-6");
     expect(parsed.messages[0].content).toContain("Add payment module");

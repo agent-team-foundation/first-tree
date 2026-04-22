@@ -19,7 +19,7 @@
  */
 
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import type {
   Classifier,
   ClassifyInput,
@@ -34,6 +34,8 @@ const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
 const MAX_TOKENS = 1024;
 const DIFF_CAP = 20_000;
+const FETCH_TIMEOUT_MS = 60_000;
+const MODEL_SUMMARY_CAP = 200;
 
 const VALID_VERDICTS: ReadonlySet<Verdict> = new Set<Verdict>([
   "ALIGNED",
@@ -67,6 +69,7 @@ export function createAnthropicClassifier(
     try {
       const res = await doFetch(ANTHROPIC_URL, {
         method: "POST",
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
         headers: {
           "content-type": "application/json",
           "x-api-key": opts.apiKey,
@@ -177,7 +180,7 @@ function shapeToClassifyOutput(obj: unknown): ClassifyOutput | null {
   return {
     verdict: verdict as Verdict,
     severity: severity as Severity,
-    summary,
+    summary: clampSummary(summary),
     treeNodes,
   };
 }
@@ -191,10 +194,39 @@ export function validateAndGroundNodes(
   out: ClassifyOutput,
   treeRoot: string,
 ): ClassifyOutput {
-  const grounded = out.treeNodes.filter((n) =>
-    existsSync(join(treeRoot, n.path))
-  );
+  const grounded = out.treeNodes.flatMap((n) => {
+    const normalized = normalizeGroundedPath(treeRoot, n.path);
+    if (!normalized || !existsSync(normalized.absolute)) return [];
+    return [{ ...n, path: normalized.relative }];
+  });
   return { ...out, treeNodes: grounded };
+}
+
+function clampSummary(summary: string): string {
+  if (summary.length <= MODEL_SUMMARY_CAP) return summary;
+  return summary.slice(0, MODEL_SUMMARY_CAP - 1) + "…";
+}
+
+function normalizeGroundedPath(
+  treeRoot: string,
+  citedPath: string,
+): { absolute: string; relative: string } | null {
+  if (isAbsolute(citedPath)) return null;
+  const root = resolve(treeRoot);
+  const absolute = resolve(root, citedPath);
+  const relativePath = relative(root, absolute);
+  if (
+    relativePath.length === 0 ||
+    relativePath.startsWith(`..${sep}`) ||
+    relativePath === ".." ||
+    isAbsolute(relativePath)
+  ) {
+    return null;
+  }
+  return {
+    absolute,
+    relative: relativePath.split(sep).join("/"),
+  };
 }
 
 function fallback(reason: string): ClassifyOutput {

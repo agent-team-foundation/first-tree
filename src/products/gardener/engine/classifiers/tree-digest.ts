@@ -38,7 +38,9 @@ const SKIP_DIRS = new Set([
 export function collectTreeDigest(treeRoot: string): TreeNodeEntry[] {
   const out: TreeNodeEntry[] = [];
   let bytes = 0;
+  let exhausted = false;
   const walk = (dir: string): void => {
+    if (exhausted) return;
     let entries: string[];
     try {
       entries = readdirSync(dir);
@@ -46,6 +48,7 @@ export function collectTreeDigest(treeRoot: string): TreeNodeEntry[] {
       return;
     }
     for (const name of entries) {
+      if (exhausted) return;
       if (SKIP_DIRS.has(name)) continue;
       const full = join(dir, name);
       let st;
@@ -62,7 +65,10 @@ export function collectTreeDigest(treeRoot: string): TreeNodeEntry[] {
       const entry = readNodeFile(full, treeRoot);
       if (!entry) continue;
       const cost = entry.path.length + entry.summary.length + 4;
-      if (bytes + cost > DIGEST_BUDGET_BYTES) return;
+      if (bytes + cost > DIGEST_BUDGET_BYTES) {
+        exhausted = true;
+        return;
+      }
       bytes += cost;
       out.push(entry);
     }
