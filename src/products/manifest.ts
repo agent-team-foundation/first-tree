@@ -69,7 +69,8 @@ export const PRODUCTS: readonly ProductDefinition[] = [
   {
     name: "gardener",
     kind: "product",
-    description: "Context Tree maintenance agent (respond, comment, ...)",
+    description:
+      "Context Tree maintenance agent (sync, comment, respond, install-workflow, ...)",
     load: async () => {
       const mod = await import("./gardener/cli.js");
       return { run: (args, output) => mod.runGardener(args, output) };

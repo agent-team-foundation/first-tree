@@ -9,10 +9,11 @@ The `first-tree` npm package ships two things:
 
 1. **CLI tools** — engine, runtime, validators, helpers, templates, and
    workflows. Users invoke them with `npx -p first-tree first-tree <command>`.
-2. **Skill payload** — `SKILL.md`, `references/`, and `VERSION`. This is copied
-   into user repos and refreshed by `first-tree tree upgrade`.
+2. **Skill payloads** — the entry-point `first-tree` skill plus the per-product
+   `tree`, `breeze`, and `gardener` handbooks. These are copied into user repos
+   and refreshed by `first-tree skill upgrade` / `first-tree tree upgrade`.
 
-The skill payload contains knowledge only. Executable behavior stays in the CLI.
+The skill payloads contain knowledge only. Executable behavior stays in the CLI.
 
 ## Versioning
 
@@ -22,15 +23,15 @@ Three-level: `major.minor.patch`.
 - `minor` — shipped skill payload changes
 - `patch` — CLI/runtime behavior changes
 
-The installed skill `VERSION` tracks `major.minor`.
+Each installed skill `VERSION` tracks `major.minor`.
 
 ## Installed Layout
 
 In a source/workspace root, `first-tree tree init` / `first-tree tree bind` produce:
 
 ```text
-.agents/skills/first-tree/
-.claude/skills/first-tree
+.agents/skills/{first-tree,tree,breeze,gardener}/
+.claude/skills/{first-tree,tree,breeze,gardener}
 WHITEPAPER.md
 AGENTS.md
 CLAUDE.md
@@ -41,8 +42,8 @@ CLAUDE.md
 In a tree repo, `first-tree tree bootstrap` produces:
 
 ```text
-.agents/skills/first-tree/
-.claude/skills/first-tree
+.agents/skills/{first-tree,tree,breeze,gardener}/
+.claude/skills/{first-tree,tree,breeze,gardener}
 .first-tree/
   VERSION
   progress.md
@@ -62,10 +63,9 @@ members/
 `first-tree skill upgrade` in any repo/workspace root:
 
 1. wipes previous installed skill locations
-2. reinstalls `.agents/skills/first-tree/`
-3. recreates the `.claude/skills/first-tree` symlink
-4. also installs the product skills under `.agents/skills/{tree,breeze,gardener}/`
-5. preserves everything outside the skill directories
+2. reinstalls `.agents/skills/{first-tree,tree,breeze,gardener}/`
+3. recreates the matching `.claude/skills/<name>` symlinks
+4. preserves everything outside the skill directories
 
 `first-tree tree upgrade` in a source/workspace root additionally refreshes
 `WHITEPAPER.md`, the managed `FIRST-TREE-SOURCE-INTEGRATION:` block, and other
@@ -109,7 +109,7 @@ metadata such as `.first-tree/VERSION` plus the installed tree-repo skill.
 
 ## Invariants
 
-- the installed skill is read-only knowledge and may be overwritten on upgrade
+- the installed skill payloads are read-only knowledge and may be overwritten on upgrade
 - tree content remains decision-focused
 - workspace child repos should share one tree, not create many parallel trees
 - shared tree bindings should live in `.first-tree/bindings/`, not in a single

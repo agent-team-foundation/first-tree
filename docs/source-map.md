@@ -57,7 +57,7 @@ docs below only for source-repo implementation details.
 | `src/meta/skill-tools/cli.ts` | Skill maintenance-namespace dispatcher (lazy-loaded) |
 | `src/meta/skill-tools/README.md` | Maintainer/meta overview for the skill maintenance namespace |
 | `src/products/breeze/engine/` | Breeze business logic: `commands/`, `runtime/`, `daemon/`, `bridge.ts`, `statusline.ts` |
-| `src/products/gardener/engine/` | Gardener business logic: `commands/`, `runtime/`, `sync.ts`, `comment.ts`, `respond.ts` |
+| `src/products/gardener/engine/` | Gardener business logic: `commands/`, `runtime/`, `daemon/`, `sync.ts`, `comment.ts`, `respond.ts`, `install-workflow.ts` |
 | `src/products/gardener/engine/sync.ts` | Drift detection, proposal generation, and apply flow (moved from tree namespace) |
 | `src/products/tree/engine/init.ts` | High-level onboarding wrapper plus low-level tree bootstrap |
 | `src/products/tree/engine/inspect.ts` | Root classification before onboarding |

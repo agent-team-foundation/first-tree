@@ -22,15 +22,27 @@ breeze/
 
 ## Commands
 
+### Primary
+
 | Command | Role |
 |---------|------|
-| `first-tree breeze install` | Set up the daemon (launchd on macOS) and Claude Code hooks |
+| `first-tree breeze install` | Check `gh` / `jq` / auth, create `~/.breeze/config.yaml`, and start the daemon. Statusline hook wiring is a separate manual step. |
 | `first-tree breeze start/stop` | Control the daemon lifecycle |
-| `first-tree breeze run-once` | One-shot poll for scripting |
-| `first-tree breeze status` | Print current inbox status |
+| `first-tree breeze status` | Print current daemon/runtime status |
+| `first-tree breeze doctor` | Diagnose daemon / gh login / runtime health |
 | `first-tree breeze watch` | Interactive TUI inbox (Ink) |
-| `first-tree breeze doctor` | Diagnose daemon / gh login / hook health |
+| `first-tree breeze poll` | One-shot inbox poll without requiring the daemon |
+
+### Advanced / internal
+
+| Command | Role |
+|---------|------|
+| `first-tree breeze run` / `first-tree breeze daemon` | Run the broker loop in the foreground |
+| `first-tree breeze run-once` | Run one poll cycle, wait for drain, then exit |
 | `first-tree breeze cleanup` | Clear stale state |
+| `first-tree breeze statusline` | CLI shim that executes the pre-bundled `dist/breeze-statusline.js` hook |
+| `first-tree breeze status-manager` | Internal helper used by breeze runners |
+| `first-tree breeze poll-inbox` | Legacy alias for `poll` |
 
 Run `first-tree breeze --help` for the authoritative list.
 

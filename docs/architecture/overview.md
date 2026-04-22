@@ -10,9 +10,9 @@ the files maintainers edit in this repo.
 
 `first-tree` is an umbrella CLI that dispatches into three products:
 
-- **`tree`** — Context Tree tooling (inspect / init / bind / verify / publish / upgrade / sync / ...)
+- **`tree`** — Context Tree tooling (inspect / status / init / bind / integrate / verify / publish / upgrade / ...)
 - **`breeze`** — Proposal / inbox daemon with a GitHub notifications statusline
-- **`gardener`** — Automated maintenance agent for tree sync PRs and source-repo review comments
+- **`gardener`** — Automated maintenance agent for drift sync, source-repo review comments, sync-PR responses, and workflow/daemon orchestration
 
 It also exposes one maintenance namespace:
 
@@ -45,9 +45,9 @@ ships.
 | `src/cli.ts` | Top-level umbrella dispatcher for `first-tree <namespace> <command>`; iterates the namespace manifest |
 | `src/products/manifest.ts` | Single source of truth for the CLI namespace set; add a new namespace by adding one entry here |
 | `src/products/tree/` | Tree product root (CLI dispatcher + `VERSION`) |
-| `src/products/tree/engine/` | Tree business logic: `commands/`, `runtime/`, `rules/`, `validators/`, plus `bind.ts`, `init.ts`, `verify.ts`, `publish.ts`, `sync.ts`, `workspace.ts`, `upgrade.ts`, `inspect.ts`, etc. |
+| `src/products/tree/engine/` | Tree business logic: `commands/`, `runtime/`, `rules/`, `validators/`, plus `bind.ts`, `init.ts`, `integrate.ts`, `verify.ts`, `publish.ts`, `workspace.ts`, `upgrade.ts`, `inspect.ts`, etc. |
 | `src/products/breeze/` | Breeze product: CLI dispatcher + `engine/` (commands, runtime, daemon, bridge, statusline) |
-| `src/products/gardener/` | Gardener product: CLI dispatcher + `engine/` (commands, runtime, comment, respond) |
+| `src/products/gardener/` | Gardener product: CLI dispatcher + `engine/` (commands, runtime, daemon, sync, comment, respond, install-workflow) |
 | `src/meta/skill-tools/` | Maintenance namespace: skill inventory, diagnosis, installation, and symlink repair |
 | `skills/first-tree/` | Entry-point skill payload that ships verbatim to user repos |
 | `skills/tree/`, `skills/breeze/`, `skills/gardener/` | Per-product operational skill payloads |

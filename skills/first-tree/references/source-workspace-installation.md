@@ -12,16 +12,16 @@ workspace repo, or non-git workspace folder.
 
 - The current source/workspace root is **not** the Context Tree.
 - The current source/workspace root carries only:
-  - `.agents/skills/first-tree/` and `.claude/skills/first-tree/`
+  - the four installed skills under `.agents/skills/<name>/` and
+    `.claude/skills/<name>/` (`first-tree`, `tree`, `breeze`, `gardener`)
   - `WHITEPAPER.md`
   - a managed `FIRST-TREE-SOURCE-INTEGRATION:` block in `AGENTS.md` and `CLAUDE.md`
   - `.first-tree/source.json` (includes workspace members for workspace roots)
 - `NODE.md`, `members/`, and tree-scoped `AGENTS.md` / `CLAUDE.md` belong only
   in the tree repo.
-- The tree repo keeps its own installed skill under `.agents/skills/first-tree/`
-  and `.claude/skills/first-tree`, plus tree metadata under `.first-tree/tree.json`
-  and `.first-tree/bindings/`, plus a generated `source-repos.md` index at the
-  tree root.
+- The tree repo keeps the same four installed skills, plus tree metadata under
+  `.first-tree/tree.json` and `.first-tree/bindings/`, plus a generated
+  `source-repos.md` index at the tree root.
 
 ## Binding Modes
 
@@ -36,8 +36,8 @@ workspace repo, or non-git workspace folder.
 
 ```text
 <source-or-workspace-root>/
-  .agents/skills/first-tree/
-  .claude/skills/first-tree
+  .agents/skills/{first-tree,tree,breeze,gardener}/
+  .claude/skills/{first-tree,tree,breeze,gardener}
   WHITEPAPER.md
   AGENTS.md
   CLAUDE.md
@@ -45,8 +45,8 @@ workspace repo, or non-git workspace folder.
     source.json             # includes workspace members for workspace roots
 
 <tree-repo>/
-  .agents/skills/first-tree/
-  .claude/skills/first-tree
+  .agents/skills/{first-tree,tree,breeze,gardener}/
+  .claude/skills/{first-tree,tree,breeze,gardener}
   .first-tree/
     VERSION
     progress.md

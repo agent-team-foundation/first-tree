@@ -83,7 +83,7 @@ pnpm test:e2e
 pnpm test -- tests/tree/skill-artifacts.test.ts
 pnpm test -- tests/e2e/thin-cli.test.ts
 pnpm test -- tests/tree/verify.test.ts
-pnpm test -- tests/tree/sync.test.ts
+pnpm test -- tests/gardener/sync.test.ts
 ```
 
 If a future refactor changes these paths again, keep the command semantics and
@@ -139,7 +139,7 @@ tier skips cleanly.
   dedicated-tree vs workspace contexts.
 - `tests/agent-e2e/anti-hallucination.test.ts` — three negative tests
   that assert the agent does **not** fabricate plausible-but-fake verbs
-  (`tree owner-set`, `tree status`, `breeze ack`, etc.).
+  (`tree owner-set`, `tree stats`, `breeze ack`, etc.).
 - `tests/agent-e2e/help-self-sufficiency.test.ts` — LLM judge on
   `first-tree <ns> --help` for all four namespaces (baseline in
   `baselines/help-quality.json`).

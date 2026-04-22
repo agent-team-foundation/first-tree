@@ -68,11 +68,12 @@ first-tree tree init
 
 The CLI will:
 
-- install `.agents/skills/first-tree/` and `.claude/skills/first-tree/` in the source/workspace root
+- install the four shipped skills (`first-tree`, `tree`, `breeze`, `gardener`)
+  under `.agents/skills/*` and `.claude/skills/*` in the source/workspace root
 - create `WHITEPAPER.md`
 - refresh `AGENTS.md` and `CLAUDE.md`
 - create or reuse a sibling `<repo>-tree` checkout
-- install the bundled `first-tree` skill in that tree repo if it is missing
+- install the bundled first-tree skills in that tree repo if they are missing
 - scaffold the tree repo there
 - write binding metadata in both the source repo and the tree repo
 
@@ -94,7 +95,7 @@ first-tree tree init --tree-url git@github.com:acme/org-context.git --tree-mode 
 if needed, then:
 
 - install local skill integration in the current repo
-- install the bundled `first-tree` skill in the tree repo if it is missing
+- install the bundled first-tree skills in the tree repo if they are missing
 - refresh `AGENTS.md` and `CLAUDE.md`
 - write `.first-tree/source.json` (tree repo identity + published URL when known)
 - write `.first-tree/tree.json` and `.first-tree/bindings/<source-id>.json`

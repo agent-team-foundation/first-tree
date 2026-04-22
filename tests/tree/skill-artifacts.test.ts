@@ -249,8 +249,13 @@ describe("skill artifacts", () => {
     expect(read("README.md")).toContain("maintenance namespace");
     expect(read("README.md")).toContain("dedicated tree repo");
     expect(read("README.md")).toContain("first-tree tree inspect");
+    expect(read("README.md")).toContain("first-tree tree status");
+    expect(read("README.md")).toContain("first-tree tree integrate");
     expect(read("README.md")).toContain("first-tree tree bind");
     expect(read("README.md")).toContain("first-tree tree workspace sync");
+    expect(read("README.md")).toContain("first-tree gardener start");
+    expect(read("README.md")).toContain("first-tree gardener run-once");
+    expect(read("README.md")).toContain("first-tree breeze install");
     expect(read("README.md")).toContain(".first-tree/source.json");
     expect(read("README.md")).toContain(".first-tree/tree.json");
     expect(read("README.md")).toContain(".first-tree/bindings/");
@@ -370,6 +375,9 @@ describe("skill artifacts", () => {
     expect(sourceWorkspaceInstall).toContain(".first-tree/tree.json");
     expect(sourceWorkspaceInstall).toContain(".first-tree/bindings/");
     expect(sourceWorkspaceInstall).toContain("source-repos.md");
+    expect(sourceWorkspaceInstall).toContain(
+      ".agents/skills/{first-tree,tree,breeze,gardener}/",
+    );
     expect(sourceWorkspaceInstall).not.toContain(".first-tree/submodules/");
     expect(sourceWorkspaceInstall).toContain("workspace-member");
     expect(sourceWorkspaceInstall).toContain("first-tree tree workspace sync");
@@ -395,6 +403,8 @@ describe("skill artifacts", () => {
     expect(maintainerArchitecture).toContain("skills/first-tree/");
     expect(maintainerArchitecture).toContain("assets/tree/");
     expect(maintainerArchitecture).toContain("src/products/tree/engine/");
+    expect(maintainerArchitecture).toContain("integrate.ts");
+    expect(maintainerArchitecture).toContain("install-workflow");
     expect(maintainerArchitecture).toContain("tests/");
     expect(maintainerArchitecture).toContain(".first-tree/bindings/");
     expect(maintainerArchitecture).toContain("source-repos.md");
@@ -402,6 +412,9 @@ describe("skill artifacts", () => {
 
     const upgradeContract = read(
       "skills/first-tree/references/upgrade-contract.md",
+    );
+    expect(upgradeContract).toContain(
+      ".agents/skills/{first-tree,tree,breeze,gardener}/",
     );
     expect(upgradeContract).not.toContain(".first-tree/submodules/");
 
@@ -417,6 +430,11 @@ describe("skill artifacts", () => {
     expect(designSync).toContain("src/products/gardener/engine/sync.ts");
     expect(designSync).toContain("tests/gardener/sync.test.ts");
     expect(designSync).toContain("first-tree gardener sync");
+
+    const testingOverview = read("docs/testing/overview.md");
+    expect(testingOverview).toContain("tests/gardener/sync.test.ts");
+    expect(testingOverview).not.toContain("tests/tree/sync.test.ts");
+    expect(testingOverview).toContain("`tree stats`");
   });
 
   it("keeps public OSS entrypoints and package metadata in place", () => {

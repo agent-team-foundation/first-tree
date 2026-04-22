@@ -91,8 +91,9 @@ pre-bundled minimal entry point for sub-30 ms cold starts:
 node /path/to/first-tree/dist/breeze-statusline.js
 ```
 
-The `first-tree breeze install` command wires this up into the local
-Claude Code config.
+`first-tree breeze install` does **not** wire this up into Claude Code for
+you. Configure the statusline hook manually after install if you want the
+live inbox summary in your session UI.
 
 ## Environment
 
@@ -106,8 +107,13 @@ Claude Code config.
 
 ```bash
 npx -p first-tree first-tree breeze install
-npx -p first-tree first-tree breeze start
 npx -p first-tree first-tree breeze status
+```
+
+If the daemon did not come up during install, run:
+
+```bash
+npx -p first-tree first-tree breeze start
 ```
 
 **Something looks wrong:**

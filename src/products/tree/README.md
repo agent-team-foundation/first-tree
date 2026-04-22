@@ -14,7 +14,7 @@ tree/
     ├── rules/             # tree validation rules
     ├── runtime/           # asset loader, installer, upgrader, source integration
     ├── validators/        # node + member validators
-    └── (domain modules)   # bind.ts, init.ts, sync.ts, publish.ts, …
+    └── (domain modules)   # bind.ts, init.ts, integrate.ts, publish.ts, …
 ```
 
 ## Commands
@@ -22,9 +22,11 @@ tree/
 | Command | Role |
 |---------|------|
 | `first-tree tree inspect` | Classify the current folder (source / workspace / tree) |
+| `first-tree tree status` | Human-friendly alias for `inspect` |
 | `first-tree tree init` | Primary onboarding wrapper for new trees or existing shared trees |
 | `first-tree tree bootstrap` | Canonical low-level tree bootstrap for an explicit tree checkout |
 | `first-tree tree bind` | Lower-level binding primitive when you need explicit binding-mode control |
+| `first-tree tree integrate` | Install local skill integration and source-integration files without mutating the tree repo |
 | `first-tree tree workspace sync` | Bind newly added child repos to a shared tree, or rerun workspace-member binding manually |
 | `first-tree tree publish` | Push the tree to GitHub and refresh bound sources |
 | `first-tree tree verify` | Run validation checks on a tree repo |
@@ -32,7 +34,10 @@ tree/
 | `first-tree tree generate-codeowners` | Generate `.github/CODEOWNERS` from tree ownership |
 | `first-tree tree review` | PR review helper for tree repos in CI |
 | `first-tree tree inject-context` | Claude Code SessionStart payload from root `NODE.md` |
+| `first-tree tree invite` | Invite a new member to the Context Tree |
+| `first-tree tree join` | Accept an invite and join a Context Tree |
 | `first-tree tree help onboarding` | Print the full onboarding guide |
+| `first-tree gardener sync` | Drift-detection command for bound source repos (moved out of the tree namespace) |
 
 Run `first-tree tree --help` for the authoritative list.
 
