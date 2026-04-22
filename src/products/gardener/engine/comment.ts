@@ -34,6 +34,7 @@
  */
 
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   appendFileSync,
   existsSync,
@@ -648,6 +649,29 @@ export interface BuildTreeIssueBodyInput {
    * `handleMergedIssue`.
    */
   autoAssigned?: boolean;
+  /**
+   * Optional source-PR head SHA. When set, embedded in the
+   * `gardener:sync-proposal` dispatch marker so the merged-PR path
+   * carries the same `source_sha=<sha>` field sync's per-proposal
+   * issues do. Absent → marker records `source_sha=unknown` (still
+   * dispatchable; just less useful for deep-linking).
+   */
+  sourceSha?: string;
+}
+
+/**
+ * Deterministic 12-char proposal_id for the merged-PR issue path, so
+ * breeze's dispatch marker can treat sync-proposal issues and
+ * merged-PR issues uniformly. Derived from `sourceRepo#sourcePr` — a
+ * merged PR is a single proposal-equivalent unit, even when it cites
+ * multiple tree nodes.
+ */
+export function computeMergedProposalId(
+  sourceRepo: string,
+  sourcePr: number,
+): string {
+  const input = `merged\n${sourceRepo}#${sourcePr}`;
+  return createHash("sha256").update(input).digest("hex").slice(0, 12);
 }
 
 export function buildTreeIssueBody(input: BuildTreeIssueBodyInput): string {
@@ -662,7 +686,18 @@ export function buildTreeIssueBody(input: BuildTreeIssueBodyInput): string {
     treeNodes,
     codeownersMentions,
     autoAssigned = false,
+    sourceSha,
   } = input;
+  const proposalId = computeMergedProposalId(sourceRepo, sourcePr);
+  // Primary node for the dispatch marker: pick the first cited tree
+  // node if any, else "unknown". A merged PR can cite N nodes but the
+  // marker shape is single-node (aligned with sync-proposal); node
+  // owners for the other nodes are reached via the body's cc line.
+  const markerNode = treeNodes[0]?.path ?? "unknown";
+  const dispatchMarker =
+    `<!-- gardener:sync-proposal \u00B7 proposal_id=${proposalId} \u00B7 ` +
+    `source_sha=${sourceSha ?? "unknown"} \u00B7 node=${markerNode} \u00B7 ` +
+    `source=merged-pr \u00B7 source_pr=${sourceRepo}#${sourcePr} -->`;
   const emoji = VERDICT_EMOJI[verdict];
   const nodeList =
     treeNodes.length > 0
@@ -676,6 +711,8 @@ export function buildTreeIssueBody(input: BuildTreeIssueBodyInput): string {
     ? `A node owner should decide whether the tree needs an update in response to this merged change. This issue is auto-filed by gardener and auto-assigned to the node owners cited above (teams skipped; logins the tree repo rejects fall through to the cc line).`
     : `A node owner should decide whether the tree needs an update in response to this merged change. This issue is auto-filed by gardener and not auto-assigned — pick it up via CODEOWNERS routing.`;
   return [
+    dispatchMarker,
+    "",
     `## Merged source change needs tree review`,
     "",
     `${emoji} **verdict:** \`${verdict}\` · **severity:** \`${severity}\``,
@@ -1284,6 +1321,12 @@ export interface HandleMergedIssueInput {
    * behavior (cc-in-body only).
    */
   assignOwners: boolean;
+  /**
+   * Optional source-PR head SHA. Threaded into the tree issue body's
+   * `gardener:sync-proposal` dispatch marker. When absent, marker
+   * records `source_sha=unknown` — still dispatchable.
+   */
+  sourceSha?: string;
   shell: ShellRun;
   env: NodeJS.ProcessEnv;
   write: (line: string) => void;
@@ -1356,6 +1399,7 @@ export async function handleMergedIssue(
     treeNodes,
     codeownersMentions,
     autoAssigned: assignOwners,
+    sourceSha: input.sourceSha,
   });
   const title = `[gardener] tree update needed for ${sourceRepo}#${sourcePr}`;
 

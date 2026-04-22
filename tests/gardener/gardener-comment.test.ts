@@ -1572,6 +1572,82 @@ describe("gardener comment -- Phase 2a tree-issue primitives", () => {
     expect(body).toContain("cc @alice @bob");
   });
 
+  // ─────────── gardener:sync-proposal dispatch marker ───────────
+  it("buildTreeIssueBody emits a gardener:sync-proposal marker as the first line", () => {
+    const body = buildTreeIssueBody({
+      sourceRepo: "alice/cool",
+      sourcePr: 207,
+      sourcePrTitle: "feat: x",
+      sourceCommentUrl: "https://example.test/c",
+      verdict: "NEW_TERRITORY",
+      severity: "medium",
+      summary: "s",
+      treeNodes: [{ path: "pkg-a", summary: "" }],
+      codeownersMentions: [],
+      sourceSha: "abc123def456",
+    });
+    const firstLine = body.split("\n")[0];
+    expect(firstLine).toMatch(/^<!-- gardener:sync-proposal/);
+    expect(firstLine).toContain("proposal_id=");
+    expect(firstLine).toContain("source_sha=abc123def456");
+    expect(firstLine).toContain("node=pkg-a");
+    expect(firstLine).toContain("source=merged-pr");
+    expect(firstLine).toContain("source_pr=alice/cool#207");
+  });
+
+  it("buildTreeIssueBody marker records source_sha=unknown when sourceSha omitted", () => {
+    const body = buildTreeIssueBody({
+      sourceRepo: "alice/cool",
+      sourcePr: 208,
+      sourcePrTitle: "feat: y",
+      sourceCommentUrl: "https://example.test/c",
+      verdict: "ALIGNED",
+      severity: "low",
+      summary: "s",
+      treeNodes: [],
+      codeownersMentions: [],
+    });
+    expect(body.split("\n")[0]).toContain("source_sha=unknown");
+    expect(body.split("\n")[0]).toContain("node=unknown");
+  });
+
+  it("buildTreeIssueBody marker uses first tree node when multiple are cited", () => {
+    const body = buildTreeIssueBody({
+      sourceRepo: "alice/cool",
+      sourcePr: 209,
+      sourcePrTitle: "feat: z",
+      sourceCommentUrl: "https://example.test/c",
+      verdict: "NEW_TERRITORY",
+      severity: "medium",
+      summary: "s",
+      treeNodes: [
+        { path: "pkg-a", summary: "" },
+        { path: "pkg-b", summary: "" },
+      ],
+      codeownersMentions: [],
+    });
+    expect(body.split("\n")[0]).toContain("node=pkg-a");
+  });
+
+  it("buildTreeIssueBody marker proposal_id is deterministic for same sourceRepo+sourcePr", () => {
+    const base = {
+      sourceRepo: "alice/cool",
+      sourcePr: 210,
+      sourcePrTitle: "t",
+      sourceCommentUrl: "u",
+      verdict: "ALIGNED" as const,
+      severity: "low" as const,
+      summary: "s",
+      treeNodes: [],
+      codeownersMentions: [],
+    };
+    const a = buildTreeIssueBody(base).split("\n")[0];
+    const b = buildTreeIssueBody(base).split("\n")[0];
+    expect(a).toBe(b);
+    const c = buildTreeIssueBody({ ...base, sourcePr: 211 }).split("\n")[0];
+    expect(a).not.toBe(c);
+  });
+
   it("buildTreeIssueBody with autoAssigned=true but no mentions keeps pull-mode language", () => {
     const body = buildTreeIssueBody({
       sourceRepo: "alice/cool",
