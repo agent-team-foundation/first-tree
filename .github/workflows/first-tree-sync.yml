@@ -25,12 +25,16 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Checkout tree repo
-        uses: actions/checkout@v4
-        with:
-          repository: agent-team-foundation/first-tree-context
-          token: ${{ secrets.TREE_REPO_TOKEN }}
-          path: .first-tree-cache/tree
+      - name: Clone tree repo
+        shell: bash
+        run: |
+          set -euo pipefail
+          tree_repo_url="https://github.com/agent-team-foundation/first-tree-context.git"
+          tree_repo_dir=".first-tree-cache/tree"
+          auth_header="$(printf 'x-access-token:%s' "$TREE_REPO_TOKEN" | base64 | tr -d '\n')"
+          mkdir -p "$(dirname "$tree_repo_dir")"
+          git -c http.extraHeader="AUTHORIZATION: basic $auth_header" \
+            clone --depth 1 "$tree_repo_url" "$tree_repo_dir"
 
       - name: Setup Node
         uses: actions/setup-node@v4
