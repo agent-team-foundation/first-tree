@@ -255,7 +255,12 @@ describe("skill artifacts", () => {
     expect(read("README.md")).toContain("first-tree tree workspace sync");
     expect(read("README.md")).toContain("first-tree gardener start");
     expect(read("README.md")).toContain("first-tree gardener run-once");
-    expect(read("README.md")).toContain("first-tree breeze install");
+    expect(read("README.md")).toContain(
+      "first-tree breeze install --allow-repo owner/repo",
+    );
+    expect(read("README.md")).toContain(
+      "first-tree breeze start --allow-repo owner/repo",
+    );
     expect(read("README.md")).toContain(".first-tree/source.json");
     expect(read("README.md")).toContain(".first-tree/tree.json");
     expect(read("README.md")).toContain(".first-tree/bindings/");
@@ -276,6 +281,19 @@ describe("skill artifacts", () => {
     expect(read("AGENTS.md")).not.toContain("### Running evals");
     expect(read("AGENTS.md")).not.toContain("EVALS_TREE_REPO");
     expect(read("src/cli.ts")).not.toContain("from upstream");
+
+    const breezeReadme = read("src/products/breeze/README.md");
+    expect(breezeReadme).toContain(
+      "first-tree breeze install --allow-repo owner/repo",
+    );
+    expect(breezeReadme).toContain(
+      "first-tree breeze run --allow-repo owner/repo",
+    );
+
+    const breezeSkill = read("skills/breeze/SKILL.md");
+    expect(breezeSkill).toContain(
+      "Any command that starts the daemon now requires an explicit `--allow-repo`",
+    );
     // Note: #evals/* import alias is in package.json but evals/ is excluded from "files" so it won't ship to npm
 
     const onboarding = read("skills/first-tree/references/onboarding.md");
