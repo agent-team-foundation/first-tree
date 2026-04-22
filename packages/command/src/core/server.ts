@@ -10,6 +10,7 @@ import { ensurePostgres, isDockerAvailable } from "./docker-postgres.js";
 import { runMigrations } from "./migrate.js";
 import { blank, status } from "./output.js";
 import { promptMissingFields } from "./prompt.js";
+import { COMMAND_VERSION } from "./version.js";
 
 export type StartOptions = {
   port?: number;
@@ -29,7 +30,7 @@ export type StartOptions = {
  * 7. Start Fastify server
  */
 export async function startServer(options: StartOptions): Promise<void> {
-  process.stderr.write("\n  First Tree Hub v0.1.0\n\n");
+  process.stderr.write(`\n  First Tree Hub v${COMMAND_VERSION}\n\n`);
 
   // 1. Build CLI args
   const cliArgs: Record<string, unknown> = {};
@@ -100,6 +101,7 @@ export async function startServer(options: StartOptions): Promise<void> {
     ...serverConfig,
     webDistPath: webDistPath ?? undefined,
     instanceId: `srv_${randomUUID().slice(0, 8)}`,
+    commandVersion: COMMAND_VERSION,
   };
 
   // Initialize telemetry from resolved config before server bootstrap, so that

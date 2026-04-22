@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
 import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
 import cors from "@fastify/cors";
@@ -77,6 +78,25 @@ export type AppContext = {
   kaelRuntime: KaelRuntime | undefined;
 };
 
+/**
+ * Resolve the Command-package version advertised to clients. Prefers the
+ * value the Command CLI explicitly injected; otherwise falls back to the
+ * server workspace's own package.json (dev mode, `pnpm --filter … dev`).
+ * Returning a string (rather than undefined) keeps the welcome frame well-
+ * formed — the client treats the value advisorily.
+ */
+function resolveCommandVersion(injected: string | undefined): string {
+  if (injected && injected.trim().length > 0) return injected;
+  try {
+    const req = createRequire(import.meta.url);
+    const pkg = req("../package.json") as { version?: string };
+    if (typeof pkg.version === "string" && pkg.version.length > 0) return pkg.version;
+  } catch {
+    // fall through
+  }
+  return "0.0.0";
+}
+
 export async function buildApp(config: Config) {
   applyLoggerConfig({
     level: config.observability.logging.level,
@@ -103,6 +123,12 @@ export async function buildApp(config: Config) {
   const db = connectDatabase(config.database.url);
   app.decorate("db", db);
   app.decorate("config", config);
+
+  // Advisory Command-package version broadcast to every Client via the
+  // `server:welcome` WS frame — lets clients detect version drift.
+  const commandVersion = resolveCommandVersion(config.commandVersion);
+  app.decorate("commandVersion", commandVersion);
+  app.log.info({ commandVersion }, "Hub server advertising command version");
 
   // Notifier: dedicated PG connection for LISTEN/NOTIFY
   const listenClient = postgres(config.database.url, { max: 1 });

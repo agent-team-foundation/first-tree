@@ -25,6 +25,8 @@ declare module "fastify" {
     adapterManager: AdapterManager;
     notifier: Notifier;
     configService: ConfigService;
+    /** Command-package version advertised via the `server:welcome` WS frame. */
+    commandVersion: string;
   }
   interface FastifyRequest {
     agent?: AgentIdentity;

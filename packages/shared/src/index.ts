@@ -312,6 +312,6 @@ export {
   userSchema,
   userStatusSchema,
 } from "./schemas/user.js";
-export type { WsAuthFrame } from "./schemas/ws-auth.js";
-// -- WebSocket auth frame (client → server on connect) --
-export { WS_AUTH_FRAME_TIMEOUT_MS, wsAuthFrameSchema } from "./schemas/ws-auth.js";
+export type { ServerWelcomeFrame, WsAuthFrame } from "./schemas/ws-auth.js";
+// -- WebSocket handshake frames --
+export { serverWelcomeFrameSchema, WS_AUTH_FRAME_TIMEOUT_MS, wsAuthFrameSchema } from "./schemas/ws-auth.js";

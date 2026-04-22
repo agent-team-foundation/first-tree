@@ -4,13 +4,35 @@ import { join } from "node:path";
 import type { AgentPinnedMessage } from "@agent-team-foundation/first-tree-hub-shared";
 import type { AgentConfig } from "@agent-team-foundation/first-tree-hub-shared/config";
 import { agentConfigSchema, loadAgents } from "@agent-team-foundation/first-tree-hub-shared/config";
-import { AgentSlot, ClientConnection, getHandlerFactory, registerBuiltinHandlers } from "@first-tree-hub/client";
+import {
+  AgentSlot,
+  ClientConnection,
+  getHandlerFactory,
+  registerBuiltinHandlers,
+  type UpdateHooks,
+  UpdateManager,
+} from "@first-tree-hub/client";
 import { stringify as stringifyYaml } from "yaml";
 import { ensureFreshAccessToken } from "./bootstrap.js";
 
 type AgentEntry = {
   name: string;
   slot: AgentSlot;
+};
+
+export type ClientRuntimeOptions = {
+  /**
+   * Version of the Command package this process was launched from. Passed to
+   * the server as `sdkVersion` on `client:register` and compared against the
+   * version the server advertises in `server:welcome`. Required to engage
+   * self-update.
+   */
+  currentVersion?: string;
+  /**
+   * Self-update config + command-layer callbacks. All-or-nothing: the
+   * UpdateManager attaches only when this and `currentVersion` are both set.
+   */
+  update?: UpdateHooks;
 };
 
 /**
@@ -31,6 +53,8 @@ export class ClientRuntime {
   private readonly agents: AgentEntry[] = [];
   private readonly agentNames = new Set<string>();
   private readonly agentIds = new Set<string>();
+  private readonly options: ClientRuntimeOptions;
+  private updateManager: UpdateManager | null = null;
   private watcher: FSWatcher | null = null;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   /**
@@ -40,11 +64,13 @@ export class ClientRuntime {
    */
   private agentsDir: string | null = null;
 
-  constructor(serverUrl: string, clientId: string) {
+  constructor(serverUrl: string, clientId: string, options: ClientRuntimeOptions = {}) {
     this.serverUrl = serverUrl;
+    this.options = options;
     this.connection = new ClientConnection({
       serverUrl,
       clientId,
+      sdkVersion: options.currentVersion,
       getAccessToken: () => ensureFreshAccessToken(),
     });
     registerBuiltinHandlers();
@@ -94,6 +120,18 @@ export class ClientRuntime {
   }
 
   async start(): Promise<void> {
+    // Attach before connecting so the first welcome frame on a stale client
+    // is acted on rather than missed until the next reconnect.
+    if (this.options.currentVersion && this.options.update) {
+      this.updateManager = UpdateManager.attach(this.connection, {
+        currentVersion: this.options.currentVersion,
+        ...this.options.update,
+        isTTY: Boolean(process.stdout.isTTY),
+        log: (level, msg) => process.stderr.write(`  [update/${level}] ${msg}\n`),
+        getQuietGateSnapshot: () => this.aggregateQuietGate(),
+      });
+    }
+
     await this.connection.connect();
     process.stderr.write(`  \u2713 Client registered: ${this.connection.clientId}\n`);
 
@@ -152,8 +190,21 @@ export class ClientRuntime {
 
   async stop(): Promise<void> {
     this.unwatchAgentsDir();
+    this.updateManager?.dispose();
+    this.updateManager = null;
     await Promise.allSettled(this.agents.map((a) => a.slot.stop()));
     await this.connection.disconnect();
+  }
+
+  private aggregateQuietGate(): { activeCount: number; lastActivityMs: number } {
+    let activeCount = 0;
+    let lastActivityMs = 0;
+    for (const entry of this.agents) {
+      const snap = entry.slot.getQuietGateSnapshot();
+      activeCount += snap.activeCount;
+      if (snap.lastActivityMs > lastActivityMs) lastActivityMs = snap.lastActivityMs;
+    }
+    return { activeCount, lastActivityMs };
   }
 
   private scanForNewAgents(agentsDir: string): void {

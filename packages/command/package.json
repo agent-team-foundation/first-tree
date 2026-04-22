@@ -48,6 +48,7 @@
     "gray-matter": "^4.0.3",
     "jose": "^6.0.0",
     "postgres": "^3.4.0",
+    "semver": "^7.6.3",
     "ws": "^8.20.0",
     "yaml": "^2.8.3",
     "zod": "^4.0.0"
@@ -59,6 +60,7 @@
     "@first-tree-hub/web": "workspace:*",
     "@types/bcrypt": "^5.0.0",
     "@types/node": "^22.16.0",
+    "@types/semver": "^7.5.8",
     "tsdown": "^0.21.4",
     "tsx": "^4.21.0",
     "vitest": "^3.2.0"

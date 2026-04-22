@@ -14,10 +14,13 @@ import type { Command } from "commander";
 import { fail } from "../cli/output.js";
 import {
   ClientRuntime,
+  COMMAND_VERSION,
+  createExecuteUpdate,
   getClientServiceStatus,
   installClientService,
   isServiceSupported,
   loadCredentials,
+  promptUpdate,
   saveCredentials,
 } from "../core/index.js";
 
@@ -279,7 +282,17 @@ export function registerConnectCommand(parent: Command): void {
         const agentsDir = join(DEFAULT_CONFIG_DIR, "agents");
         const agents = loadAgents({ schema: agentConfigSchema, agentsDir });
 
-        const runtime = new ClientRuntime(config.server.url, config.client.id);
+        // `connect --no-service` runs inline until Ctrl+C — no supervisor,
+        // so managed=false: self-update stays alive and prints a restart
+        // hint instead of exiting.
+        const runtime = new ClientRuntime(config.server.url, config.client.id, {
+          currentVersion: COMMAND_VERSION,
+          update: {
+            updateConfig: config.update,
+            prompt: promptUpdate,
+            executeUpdate: createExecuteUpdate({ managed: false }),
+          },
+        });
         for (const [name, agentConfig] of agents) {
           runtime.addAgent(name, agentConfig);
         }

@@ -4,6 +4,7 @@ import { AgentSlot } from "./agent-slot.js";
 import { syncContextTree } from "./bootstrap.js";
 import type { RuntimeConfig } from "./config.js";
 import { getHandlerFactory } from "./handler.js";
+import { type UpdateHooks, UpdateManager } from "./update-manager.js";
 
 export type AgentRuntimeOptions = {
   config: RuntimeConfig;
@@ -16,6 +17,19 @@ export type AgentRuntimeOptions = {
   /** Stable per-machine client identifier. Generated if omitted. */
   clientId?: string;
   shutdownTimeout?: number;
+  /**
+   * Version of the consumer-facing Command package this runtime was bundled
+   * with. Advertised to the server as `sdkVersion` at `client:register`, and
+   * compared by the UpdateManager against the server-advertised version.
+   * The UpdateManager only engages when both this and `update` are set.
+   */
+  currentVersion?: string;
+  /**
+   * Self-update config + command-layer callbacks. Grouped so half-wired
+   * configurations (e.g. config without prompt) can't silently disable the
+   * manager.
+   */
+  update?: UpdateHooks;
 };
 
 const DEFAULT_SHUTDOWN_TIMEOUT = 30_000;
@@ -26,16 +40,22 @@ export class AgentRuntime {
   private readonly shutdownTimeout: number;
   private readonly clientConnection: ClientConnection;
   private readonly getAccessToken: AccessTokenProvider;
+  private readonly currentVersion: string | undefined;
+  private readonly updateHooks: UpdateHooks | undefined;
+  private updateManager: UpdateManager | null = null;
   private stopping = false;
 
   constructor(options: AgentRuntimeOptions) {
     this.config = options.config;
     this.shutdownTimeout = options.shutdownTimeout ?? DEFAULT_SHUTDOWN_TIMEOUT;
     this.getAccessToken = options.getAccessToken;
+    this.currentVersion = options.currentVersion;
+    this.updateHooks = options.update;
 
     this.clientConnection = new ClientConnection({
       serverUrl: this.config.server,
       clientId: options.clientId,
+      sdkVersion: options.currentVersion,
       getAccessToken: this.getAccessToken,
     });
 
@@ -66,12 +86,36 @@ export class AgentRuntime {
     process.stderr.write(`[runtime] ${msg}\n`);
   }
 
+  private aggregateQuietGate(): { activeCount: number; lastActivityMs: number } {
+    let activeCount = 0;
+    let lastActivityMs = 0;
+    for (const slot of this.slots) {
+      const snap = slot.getQuietGateSnapshot();
+      activeCount += snap.activeCount;
+      if (snap.lastActivityMs > lastActivityMs) lastActivityMs = snap.lastActivityMs;
+    }
+    return { activeCount, lastActivityMs };
+  }
+
   async start(): Promise<void> {
     const log = (msg: string) => this.log(msg);
 
     const contextTreePath = await syncContextTree(this.config.server, this.getAccessToken, log);
     if (!contextTreePath) {
       log("Context Tree not configured or sync skipped — agents will start without organizational context");
+    }
+
+    // Attach before connecting so the first welcome frame on a stale Client
+    // is acted on rather than missed until the next reconnect.
+    if (this.currentVersion && this.updateHooks) {
+      this.updateManager = UpdateManager.attach(this.clientConnection, {
+        currentVersion: this.currentVersion,
+        ...this.updateHooks,
+        isTTY: Boolean(process.stdout.isTTY),
+        log: (level, msg) => this.log(`[update/${level}] ${msg}`),
+        getQuietGateSnapshot: () => this.aggregateQuietGate(),
+      });
+      log(`Update manager attached (policy=${this.updateHooks.updateConfig.policy}, version=${this.currentVersion})`);
     }
 
     log(`Connecting client (${this.clientConnection.clientId})...`);
@@ -119,6 +163,8 @@ export class AgentRuntime {
   }
 
   async stop(): Promise<void> {
+    this.updateManager?.dispose();
+    this.updateManager = null;
     await Promise.allSettled(this.slots.map((slot) => slot.stop()));
     await this.clientConnection.disconnect();
   }

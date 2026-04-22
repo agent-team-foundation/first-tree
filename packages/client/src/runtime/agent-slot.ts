@@ -56,6 +56,15 @@ export class AgentSlot {
     return this.config.clientConnection;
   }
 
+  /**
+   * Snapshot of this slot's busy/idle state used by the UpdateManager's
+   * quiet gate. Returns zeros before `start()` has built the session manager,
+   * which is the same semantics: idle.
+   */
+  getQuietGateSnapshot(): { activeCount: number; lastActivityMs: number } {
+    return this.sessionManager?.getQuietGateSnapshot() ?? { activeCount: 0, lastActivityMs: 0 };
+  }
+
   async start(contextTreePath?: string | null): Promise<RegisterResult> {
     const bound = await this.clientConnection.bindAgent(
       this.config.agentId,

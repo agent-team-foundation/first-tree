@@ -6,8 +6,10 @@ import {
   type AgentPinnedMessage,
   agentPinnedMessageSchema,
   type RuntimeState,
+  type ServerWelcomeFrame,
   type SessionEvent,
   type SessionState,
+  serverWelcomeFrameSchema,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import WebSocket from "ws";
 import { type AccessTokenProvider, FirstTreeHubSDK } from "./sdk.js";
@@ -44,6 +46,17 @@ export type SessionReconcileResult = {
   staleChatIds: string[];
 };
 
+/**
+ * Welcome frame received after `auth:ok`. `isReconnect` is true for every
+ * occurrence after the first welcome in the lifetime of this `ClientConnection`
+ * — lets consumers (UpdateManager) distinguish a cold-start install from a
+ * reconnect into a newer Server.
+ */
+export type ServerWelcome = {
+  frame: ServerWelcomeFrame;
+  isReconnect: boolean;
+};
+
 type ClientConnectionEvents = {
   connected: [];
   disconnected: [];
@@ -64,6 +77,7 @@ type ClientConnectionEvents = {
   "session:command": [command: SessionCommand];
   "session:reconcile:result": [result: SessionReconcileResult];
   "auth:expired": [];
+  "server:welcome": [welcome: ServerWelcome];
 };
 
 const RECONNECT_BASE_MS = 1000;
@@ -122,6 +136,8 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   private reconnectAttempt = 0;
   private closing = false;
   private registered = false;
+  /** Count of `server:welcome` frames received; drives `isReconnect` flag. */
+  private welcomeFramesReceived = 0;
 
   private readonly boundAgents = new Map<string, BoundAgent>();
 
@@ -341,6 +357,25 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
           sdkVersion: this.sdkVersion,
         }),
       );
+      return;
+    }
+
+    if (type === "server:welcome") {
+      const parsed = serverWelcomeFrameSchema.safeParse(msg);
+      if (!parsed.success) {
+        // Malformed welcome frame from a buggy server build — log and drop.
+        // Old clients that never knew about this frame simply fall through,
+        // so treating a parse failure the same way keeps behaviour aligned.
+        process.stderr.write(
+          `[ClientConnection] Ignoring malformed server:welcome frame: ${parsed.error.issues
+            .map((i) => i.message)
+            .join(", ")}\n`,
+        );
+        return;
+      }
+      const isReconnect = this.welcomeFramesReceived > 0;
+      this.welcomeFramesReceived++;
+      this.emit("server:welcome", { frame: parsed.data, isReconnect });
       return;
     }
 
