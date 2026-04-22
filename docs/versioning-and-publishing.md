@@ -16,7 +16,7 @@ effect on what downstream consumers receive.
 
 | Package | Path | Published | Bump rule |
 |---|---|---|---|
-| `@agent-team-foundation/first-tree-hub` | `packages/command` | Yes (`publishConfig.access: public`) | **Bump on every PR that changes any source file in `command`, `client`, `server`, `web`, or `shared`.** This tarball is the unified CLI consumers install; without a new version the bundled change cannot reach `npm ci`. |
+| `@agent-team-foundation/first-tree-hub` | `packages/command` | Yes (`publishConfig.access: public`) | **Bump on every PR that changes any source file in `command`, `client`, or `shared`.** This tarball is the unified CLI consumers install; without a new version the bundled change cannot reach `npm ci`. |
 | `@agent-team-foundation/first-tree-hub-shared` | `packages/shared` | Yes | **Bump when the externally-importable surface of `shared` changes** — exported Zod schemas, types, or constants that another npm package could consume. Internal-only edits to `shared` still require the `command` bump above; they do not require a `shared` bump. |
 | `@first-tree-hub/client` | `packages/client` | No (`private: true`) | Do not bump — version is inert. Bump `command` instead. |
 | `@first-tree-hub/server` | `packages/server` | No (`private: true`) | Do not bump — version is inert. Bump `command` instead. |
