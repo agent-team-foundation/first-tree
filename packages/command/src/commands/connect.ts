@@ -23,6 +23,7 @@ import {
   promptUpdate,
   saveCredentials,
 } from "../core/index.js";
+import { print } from "../core/output.js";
 
 type JwtPayload = {
   memberId?: unknown;
@@ -98,16 +99,16 @@ async function promptReplaceOrCancel(newMemberId: string, newServerUrl: string):
         ? `installed but not running${serviceStatus.detail ? ` — ${serviceStatus.detail}` : ""}`
         : "not installed";
 
-  process.stderr.write("\n");
-  process.stderr.write("  \u26a0\ufe0f  This computer is already connected to the Hub under another account.\n\n");
-  process.stderr.write(`       Existing account:  ${existingMember}\n`);
+  print.line("\n");
+  print.line("  \u26a0\ufe0f  This computer is already connected to the Hub under another account.\n\n");
+  print.line(`       Existing account:  ${existingMember}\n`);
   if (existingOrg) {
-    process.stderr.write(`       Organization:      ${existingOrg.slice(0, 8)}\n`);
+    print.line(`       Organization:      ${existingOrg.slice(0, 8)}\n`);
   }
-  process.stderr.write(`       Server:            ${existing.serverUrl}\n`);
-  process.stderr.write(`       Background service: ${serviceLine}\n\n`);
-  process.stderr.write("     Replacing only affects THIS computer. Your agents, messages, and\n");
-  process.stderr.write("     settings on the Hub itself are untouched.\n\n");
+  print.line(`       Server:            ${existing.serverUrl}\n`);
+  print.line(`       Background service: ${serviceLine}\n\n`);
+  print.line("     Replacing only affects THIS computer. Your agents, messages, and\n");
+  print.line("     settings on the Hub itself are untouched.\n\n");
 
   const choice = await select<"replace" | "cancel">({
     message: "How would you like to continue?",
@@ -132,15 +133,15 @@ async function promptReplaceOrCancel(newMemberId: string, newServerUrl: string):
 }
 
 function printIsolationGuide(newServerUrl: string): void {
-  process.stderr.write("\n  Cancelled. The existing account on this computer is untouched.\n\n");
-  process.stderr.write("  To run this new account alongside it (advanced — no background service):\n\n");
-  process.stderr.write('    export FIRST_TREE_HUB_HOME="$HOME/.first-tree/hub-<label>"\n');
-  process.stderr.write(`    first-tree-hub client connect ${newServerUrl} --token <token>\n`);
-  process.stderr.write("    first-tree-hub client start\n\n");
-  process.stderr.write("  Notes:\n");
-  process.stderr.write("    - Run the commands in a FRESH terminal (the isolated home must be set first).\n");
-  process.stderr.write("    - In isolated mode the client stays online only while that terminal runs.\n");
-  process.stderr.write("    - The main account's background service is not affected.\n\n");
+  print.line("\n  Cancelled. The existing account on this computer is untouched.\n\n");
+  print.line("  To run this new account alongside it (advanced — no background service):\n\n");
+  print.line('    export FIRST_TREE_HUB_HOME="$HOME/.first-tree/hub-<label>"\n');
+  print.line(`    first-tree-hub client connect ${newServerUrl} --token <token>\n`);
+  print.line("    first-tree-hub client start\n\n");
+  print.line("  Notes:\n");
+  print.line("    - Run the commands in a FRESH terminal (the isolated home must be set first).\n");
+  print.line("    - In isolated mode the client stays online only while that terminal runs.\n");
+  print.line("    - The main account's background service is not affected.\n\n");
 }
 
 /**
@@ -169,7 +170,7 @@ async function authenticateWithToken(
  * Authenticate via interactive username/password login.
  */
 async function authenticateInteractive(url: string): Promise<{ accessToken: string; refreshToken: string }> {
-  process.stderr.write("\n  Log in to Hub:\n");
+  print.line("\n  Log in to Hub:\n");
 
   const username = await input({ message: "  Username:" });
   const pw = await password({ message: "  Password:" });
@@ -241,10 +242,10 @@ export function registerConnectCommand(parent: Command): void {
         // 4. Write server URL and credentials.
         const clientConfigPath = join(DEFAULT_CONFIG_DIR, "client.yaml");
         setConfigValue(clientConfigPath, "server.url", url);
-        process.stderr.write(`\n  \u2713 Server configured: ${url}\n`);
+        print.line(`\n  \u2713 Server configured: ${url}\n`);
 
         saveCredentials({ ...tokens, serverUrl: url });
-        process.stderr.write("  \u2713 Authenticated\n");
+        print.line("  \u2713 Authenticated\n");
 
         // Touch config + client.id so the background service picks up the
         // persisted clientId on its first launch (see #99).
@@ -254,29 +255,27 @@ export function registerConnectCommand(parent: Command): void {
           schema: clientConfigSchema,
           role: "client",
         });
-        process.stderr.write(`  \u2713 Connected as this computer (id: ${config.client.id})\n`);
+        print.line(`  \u2713 Connected as this computer (id: ${config.client.id})\n`);
 
         // 5. Install background service (default) OR run inline (--no-service).
         const shouldInstallService = options.service !== false && isServiceSupported();
 
         if (shouldInstallService) {
           const info = installClientService();
-          process.stderr.write(
-            `  \u2713 Installed as a background service (${info.platform}) — you can close this terminal\n\n`,
-          );
-          process.stderr.write(`    Unit:  ${info.unitPath}\n`);
-          process.stderr.write(`    Logs:  ${info.logDir}\n`);
+          print.line(`  \u2713 Installed as a background service (${info.platform}) — you can close this terminal\n\n`);
+          print.line(`    Unit:  ${info.unitPath}\n`);
+          print.line(`    Logs:  ${info.logDir}\n`);
           if (info.state === "active" && info.detail) {
-            process.stderr.write(`    State: running (${info.detail})\n`);
+            print.line(`    State: running (${info.detail})\n`);
           }
-          process.stderr.write("\n");
+          print.line("\n");
           return;
         }
 
         if (options.service === false) {
-          process.stderr.write("  (--no-service) running inline — Ctrl+C to stop\n");
+          print.line("  (--no-service) running inline — Ctrl+C to stop\n");
         } else {
-          process.stderr.write(`  Background service not supported on ${process.platform}; running inline.\n`);
+          print.line(`  Background service not supported on ${process.platform}; running inline.\n`);
         }
 
         const agentsDir = join(DEFAULT_CONFIG_DIR, "agents");
@@ -302,7 +301,7 @@ export function registerConnectCommand(parent: Command): void {
 
         // Graceful shutdown
         const shutdown = async () => {
-          process.stderr.write("\n  Shutting down...\n");
+          print.line("\n  Shutting down...\n");
           runtime.unwatchAgentsDir();
           await runtime.stop();
           process.exit(0);
@@ -314,11 +313,11 @@ export function registerConnectCommand(parent: Command): void {
         await new Promise(() => {});
       } catch (error) {
         if ((error as { name?: string }).name === "ExitPromptError") {
-          process.stderr.write("\n  Cancelled.\n");
+          print.line("\n  Cancelled.\n");
           return;
         }
         const msg = error instanceof Error ? error.message : String(error);
-        process.stderr.write(`  Error: ${msg}\n`);
+        print.line(`  Error: ${msg}\n`);
         process.exit(1);
       } finally {
         resetConfig();

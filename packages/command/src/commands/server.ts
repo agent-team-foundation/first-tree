@@ -12,6 +12,7 @@ import {
   startServer,
   stopPostgres,
 } from "../core/index.js";
+import { print } from "../core/output.js";
 
 export function registerServerCommands(program: Command): void {
   const server = program.command("server").description("Manage First Tree Hub server");
@@ -28,7 +29,7 @@ export function registerServerCommands(program: Command): void {
         await startServer({ ...options, noInteractive: options.interactive === false });
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        process.stderr.write(`\n  Error: ${msg}\n\n`);
+        print.line(`\n  Error: ${msg}\n\n`);
         process.exit(1);
       }
     });
@@ -40,13 +41,13 @@ export function registerServerCommands(program: Command): void {
       try {
         const stopped = stopPostgres();
         if (stopped) {
-          process.stderr.write("  PostgreSQL container stopped.\n");
+          print.line("  PostgreSQL container stopped.\n");
         } else {
-          process.stderr.write("  No managed PostgreSQL container found.\n");
+          print.line("  No managed PostgreSQL container found.\n");
         }
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        process.stderr.write(`  Error stopping PostgreSQL: ${msg}\n`);
+        print.line(`  Error stopping PostgreSQL: ${msg}\n`);
         process.exit(1);
       }
     });
@@ -55,7 +56,7 @@ export function registerServerCommands(program: Command): void {
     .command("doctor")
     .description("Check server environment readiness")
     .action(async () => {
-      process.stderr.write("\n  First Tree Hub Server Doctor\n\n");
+      print.line("\n  First Tree Hub Server Doctor\n\n");
       const results = [
         checkNodeVersion(),
         checkDocker(),
@@ -76,13 +77,17 @@ export function registerServerCommands(program: Command): void {
         const res = await fetch(`${url}/api/v1/health`);
         if (res.ok) {
           const data = await res.json();
-          console.log(JSON.stringify(data, null, 2));
+          // Emit the raw /api/v1/health payload — existing scripts consume
+          // `first-tree-hub server status | jq '.status'` and would break if
+          // we wrapped it in the `{ok, data}` envelope. The body is already
+          // JSON, so this is safe for both human and `--json` consumers.
+          process.stdout.write(`${JSON.stringify(data, null, 2)}\n`);
         } else {
-          process.stderr.write(`  Server returned ${res.status}\n`);
+          print.line(`  Server returned ${res.status}\n`);
           process.exit(1);
         }
       } catch {
-        process.stderr.write(`  Cannot connect to ${url}\n`);
+        print.line(`  Cannot connect to ${url}\n`);
         process.exit(1);
       }
     });
@@ -96,10 +101,10 @@ export function registerServerCommands(program: Command): void {
       try {
         const config = await initConfig({ schema: serverConfigSchema, role: "server" });
         const tableCount = await runMigrations(config.database.url);
-        process.stderr.write(`  Migrations complete (${tableCount} tables)\n`);
+        print.line(`  Migrations complete (${tableCount} tables)\n`);
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        process.stderr.write(`  Error: ${msg}\n`);
+        print.line(`  Error: ${msg}\n`);
         process.exit(1);
       }
     });
@@ -124,13 +129,13 @@ export function registerServerCommands(program: Command): void {
           options.password,
         );
 
-        process.stderr.write(`  Admin user "${result.username}" created.\n`);
+        print.line(`  Admin user "${result.username}" created.\n`);
         if (!options.password) {
-          process.stderr.write(`  Password: ${result.password}  (save this — shown only once)\n`);
+          print.line(`  Password: ${result.password}  (save this — shown only once)\n`);
         }
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        process.stderr.write(`  Error: ${msg}\n`);
+        print.line(`  Error: ${msg}\n`);
         process.exit(1);
       }
     });

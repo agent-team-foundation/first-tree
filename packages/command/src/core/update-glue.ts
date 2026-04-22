@@ -1,5 +1,6 @@
 import type { ExecuteUpdateFn, UpdatePromptFn } from "@first-tree-hub/client";
 import { confirm } from "@inquirer/prompts";
+import { print } from "./output.js";
 import { detectInstallMode, installGlobalLatest } from "./update.js";
 
 /** Reserved exit code that means "clean self-restart, service manager please bring me back". */
@@ -48,29 +49,29 @@ export function createExecuteUpdate({ managed }: { managed: boolean }): ExecuteU
   return async () => {
     const mode = detectInstallMode();
     if (mode === "source") {
-      process.stderr.write("  [update] Running from source checkout — self-update skipped. Use `git pull` instead.\n");
+      print.line("  [update] Running from source checkout — self-update skipped. Use `git pull` instead.\n");
       return { installed: false };
     }
     if (mode === "npx") {
-      process.stderr.write(
+      print.line(
         "  [update] Cannot self-update — not launched from a global npm install.\n  Run `npm i -g @agent-team-foundation/first-tree-hub` manually.\n",
       );
       return { installed: false };
     }
 
-    process.stderr.write("  [update] Running `npm install -g @agent-team-foundation/first-tree-hub@latest`...\n");
+    print.line("  [update] Running `npm install -g @agent-team-foundation/first-tree-hub@latest`...\n");
     const result = await installGlobalLatest();
     if (!result.ok) {
-      process.stderr.write(`  [update] Install failed: ${result.reason}\n`);
+      print.line(`  [update] Install failed: ${result.reason}\n`);
       return { installed: false };
     }
 
     const installed = result.installedVersion ?? "latest";
     if (managed) {
-      process.stderr.write(`  [update] Installed ${installed}. Restarting (exit ${SELF_RESTART_EXIT_CODE}).\n`);
+      print.line(`  [update] Installed ${installed}. Restarting (exit ${SELF_RESTART_EXIT_CODE}).\n`);
       process.exit(SELF_RESTART_EXIT_CODE);
     }
-    process.stderr.write(
+    print.line(
       `  [update] Installed ${installed}. Restart the client manually (Ctrl+C then \`first-tree-hub client start\`) to pick up the new version.\n`,
     );
     return { installed: true };

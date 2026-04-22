@@ -1,7 +1,9 @@
+import type pino from "pino";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentHandler, HandlerFactory, SessionContext } from "../runtime/handler.js";
 import { SessionManager } from "../runtime/session-manager.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
+import { silentLogger } from "./_logger-helpers.js";
 import { mockEntry } from "./test-helpers.js";
 
 /** Assert value is defined and return it (avoids non-null assertions). */
@@ -48,7 +50,7 @@ function createSessionManager(opts: {
   handlerFactory?: HandlerFactory;
   session?: { idle_timeout: number; max_sessions: number; reconcile_interval_seconds: number };
   concurrency?: number;
-  log?: (msg: string) => void;
+  log?: pino.Logger;
   onRuntimeStateChange?: (state: "idle" | "working" | "blocked" | "error") => void;
 }) {
   const handler = opts.handler ?? createMockHandler();
@@ -68,7 +70,7 @@ function createSessionManager(opts: {
       metadata: {},
     },
     sdk,
-    log: opts.log ?? (() => {}),
+    log: opts.log ?? silentLogger(),
     onRuntimeStateChange: opts.onRuntimeStateChange,
   });
 }
@@ -272,7 +274,7 @@ describe("SessionManager: runtime state cleanup on start failure", () => {
     const sm = createSessionManager({
       handlerFactory: factory,
       onRuntimeStateChange: (state) => runtimeChanges.push(state),
-      log: () => {},
+      log: silentLogger(),
     });
 
     // First session starts fine

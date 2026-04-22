@@ -9,7 +9,7 @@ import {
   resolveConfigReadonly,
   serverConfigSchema,
 } from "@agent-team-foundation/first-tree-hub-shared/config";
-import { blank } from "./output.js";
+import { blank, print } from "./output.js";
 
 export type CheckResult = {
   label: string;
@@ -200,16 +200,16 @@ export async function checkWebSocket(): Promise<CheckResult> {
 export function printResults(results: CheckResult[]): void {
   for (const r of results) {
     const icon = r.ok ? "\u2713" : "\u2717";
-    process.stderr.write(`  ${icon} ${r.label.padEnd(22)} ${r.detail}\n`);
+    print.line(`  ${icon} ${r.label.padEnd(22)} ${r.detail}\n`);
   }
 
   blank();
 
   const failures = results.filter((r) => !r.ok);
   if (failures.length === 0) {
-    process.stderr.write("  All checks passed.\n");
+    print.line("  All checks passed.\n");
   } else {
-    process.stderr.write(`  ${failures.length} issue(s) found.\n`);
+    print.line(`  ${failures.length} issue(s) found.\n`);
   }
   blank();
 }

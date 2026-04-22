@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node
 import { homedir, userInfo } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { DEFAULT_HOME_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
+import { print } from "./output.js";
 
 export type ServiceState = "active" | "inactive" | "not-installed" | "unknown";
 
@@ -106,8 +107,13 @@ function renderPlist(invocation: ResolvedBinary): string {
       : [invocation.program, ...invocation.args, "client", "start", "--no-interactive"];
 
   const argsXml = programArgs.map((a) => `    <string>${escapeXml(a)}</string>`).join("\n");
-  const outLog = join(LOG_DIR, "client.out.log");
-  const errLog = join(LOG_DIR, "client.err.log");
+  // launchd's StandardOutPath / StandardErrorPath are the fallback sink — they
+  // only catch bare stdout/stderr (crash messages, third-party spam) because
+  // the client's own logger writes a rotating NDJSON file at `client.log`
+  // via FIRST_TREE_HUB_SERVICE_MODE. Naming these `.stdout.log` / `.stderr.log`
+  // keeps that role explicit for anyone inspecting the logs dir.
+  const stdoutFallback = join(LOG_DIR, "client.stdout.log");
+  const stderrFallback = join(LOG_DIR, "client.stderr.log");
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTD/PropertyList-1.0.dtd">
@@ -123,6 +129,8 @@ ${argsXml}
   <dict>
     <key>PATH</key>
     <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+    <key>FIRST_TREE_HUB_SERVICE_MODE</key>
+    <string>1</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>
@@ -134,9 +142,9 @@ ${argsXml}
   <key>ThrottleInterval</key>
   <integer>10</integer>
   <key>StandardOutPath</key>
-  <string>${escapeXml(outLog)}</string>
+  <string>${escapeXml(stdoutFallback)}</string>
   <key>StandardErrorPath</key>
-  <string>${escapeXml(errLog)}</string>
+  <string>${escapeXml(stderrFallback)}</string>
 </dict>
 </plist>
 `;
@@ -213,9 +221,7 @@ function installLaunchd(): ServiceInfo {
     if (!notLoaded) {
       // Unexpected bootout error — surface it but don't fail; waitForLabelEvicted
       // will give it a final chance to clear.
-      process.stderr.write(
-        `    warning: launchctl bootout: ${bootoutRes.stderr || `exit ${bootoutRes.code ?? "unknown"}`}\n`,
-      );
+      print.line(`    warning: launchctl bootout: ${bootoutRes.stderr || `exit ${bootoutRes.code ?? "unknown"}`}\n`);
     }
   }
 
@@ -246,9 +252,7 @@ function installLaunchd(): ServiceInfo {
   // Step 4: enable. Non-fatal if it fails (service already bootstrapped).
   const enableRes = runCapture("launchctl", ["enable", `${target}/${LAUNCHD_LABEL}`], 5_000);
   if (!enableRes.ok) {
-    process.stderr.write(
-      `    warning: launchctl enable: ${enableRes.stderr || `exit ${enableRes.code ?? "unknown"}`}\n`,
-    );
+    print.line(`    warning: launchctl enable: ${enableRes.stderr || `exit ${enableRes.code ?? "unknown"}`}\n`);
   }
 
   const { state, detail } = launchdState();
@@ -267,7 +271,7 @@ function uninstallLaunchd(): ServiceInfo {
   const target = launchctlDomainTarget();
   const res = runCapture("launchctl", ["bootout", `${target}/${LAUNCHD_LABEL}`], 15_000);
   if (!res.ok && !/not find|no such|not loaded/i.test(res.stderr)) {
-    process.stderr.write(`    warning: bootout during uninstall: ${res.stderr || `exit ${res.code ?? "unknown"}`}\n`);
+    print.line(`    warning: bootout during uninstall: ${res.stderr || `exit ${res.code ?? "unknown"}`}\n`);
   }
   if (existsSync(plistPath)) rmSync(plistPath);
   return {
@@ -292,6 +296,9 @@ function renderSystemdUnit(invocation: ResolvedBinary): string {
       ? `${shellQuote(invocation.program)} client start --no-interactive`
       : `${shellQuote(invocation.program)} ${invocation.args.map(shellQuote).join(" ")} client start --no-interactive`;
 
+  // StandardOutput / StandardError are fallback sinks — the client itself
+  // writes a rotating NDJSON file at `client.log` when FIRST_TREE_HUB_SERVICE_MODE=1,
+  // so these only capture bare stdout/stderr (crashes, third-party spam).
   return `[Unit]
 Description=First Tree Hub Client
 After=network-online.target
@@ -302,9 +309,10 @@ Type=simple
 ExecStart=${execStart}
 Restart=always
 RestartSec=10
-StandardOutput=append:${join(LOG_DIR, "client.out.log")}
-StandardError=append:${join(LOG_DIR, "client.err.log")}
+StandardOutput=append:${join(LOG_DIR, "client.stdout.log")}
+StandardError=append:${join(LOG_DIR, "client.stderr.log")}
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=FIRST_TREE_HUB_SERVICE_MODE=1
 
 [Install]
 WantedBy=default.target
@@ -368,14 +376,14 @@ function uninstallSystemd(): ServiceInfo {
   const unitPath = systemdUnitPath();
   const disableRes = runCapture("systemctl", ["--user", "disable", "--now", SYSTEMD_UNIT], 10_000);
   if (!disableRes.ok && !/not found|no such|not loaded/i.test(disableRes.stderr)) {
-    process.stderr.write(
+    print.line(
       `    warning: systemctl disable during uninstall: ${disableRes.stderr || `exit ${disableRes.code ?? "unknown"}`}\n`,
     );
   }
   if (existsSync(unitPath)) rmSync(unitPath);
   const reloadRes = runCapture("systemctl", ["--user", "daemon-reload"], 5_000);
   if (!reloadRes.ok) {
-    process.stderr.write(
+    print.line(
       `    warning: systemctl daemon-reload during uninstall: ${reloadRes.stderr || `exit ${reloadRes.code ?? "unknown"}`}\n`,
     );
   }

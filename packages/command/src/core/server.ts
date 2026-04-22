@@ -8,7 +8,7 @@ import { buildApp } from "@first-tree-hub/server";
 import type { Config } from "@first-tree-hub/server/config";
 import { ensurePostgres, isDockerAvailable } from "./docker-postgres.js";
 import { runMigrations } from "./migrate.js";
-import { blank, status } from "./output.js";
+import { blank, print, status } from "./output.js";
 import { promptMissingFields } from "./prompt.js";
 import { COMMAND_VERSION } from "./version.js";
 
@@ -30,7 +30,7 @@ export type StartOptions = {
  * 7. Start Fastify server
  */
 export async function startServer(options: StartOptions): Promise<void> {
-  process.stderr.write(`\n  First Tree Hub v${COMMAND_VERSION}\n\n`);
+  print.line(`\n  First Tree Hub v${COMMAND_VERSION}\n\n`);
 
   // 1. Build CLI args
   const cliArgs: Record<string, unknown> = {};
@@ -115,7 +115,7 @@ export async function startServer(options: StartOptions): Promise<void> {
 
   // Graceful shutdown
   const shutdown = async () => {
-    process.stderr.write("\n  Shutting down...\n");
+    print.line("\n  Shutting down...\n");
     try {
       await app.close();
     } finally {
@@ -131,8 +131,8 @@ export async function startServer(options: StartOptions): Promise<void> {
   blank();
   status("Server", `running at http://${config.server.host}:${config.server.port}`);
   blank();
-  process.stderr.write("  Open the URL above in your browser to get started.\n");
-  process.stderr.write("  Press Ctrl+C to stop.\n\n");
+  print.line("  Open the URL above in your browser to get started.\n");
+  print.line("  Press Ctrl+C to stop.\n\n");
 }
 
 /**

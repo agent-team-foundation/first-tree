@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { print } from "./output.js";
 
 /**
  * Version of the consumer-facing `@agent-team-foundation/first-tree-hub`
@@ -55,7 +56,7 @@ export function resolveCommandVersion(moduleUrl: string = import.meta.url): stri
       const code = (err as NodeJS.ErrnoException).code;
       if (code !== "ENOENT" && code !== "ENOTDIR") {
         const message = err instanceof Error ? err.message : String(err);
-        process.stderr.write(`[first-tree-hub] warning: could not read ${dir}/package.json: ${message}\n`);
+        print.line(`[first-tree-hub] warning: could not read ${dir}/package.json: ${message}\n`);
       }
     }
     const parent = dirname(dir);

@@ -61,6 +61,13 @@ export {
   resolveCliInvocation,
   uninstallClientService,
 } from "./service-install.js";
+export type { ServiceLogsOptions } from "./service-logs.js";
+export {
+  listLogFilesNewestFirst,
+  parseDuration,
+  showServiceLogs,
+  validateLevel,
+} from "./service-logs.js";
 export type { ExecuteUpdateResult, InstallMode } from "./update.js";
 // Self-update glue — exported so both `client start` and `client connect`
 // can pass identical prompt / install callbacks to the ClientRuntime.

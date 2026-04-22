@@ -89,7 +89,7 @@ function buildCache() {
       updatedBy: "test",
     }),
   } as unknown as Parameters<typeof createAgentConfigCache>[0]["sdk"];
-  return createAgentConfigCache({ sdk: stubSdk, log: () => {} });
+  return createAgentConfigCache({ sdk: stubSdk });
 }
 
 describe("claude-code handler — turn_end serialization (race guard)", () => {

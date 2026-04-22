@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import * as semver from "semver";
+import { print } from "./output.js";
 
 export type InstallMode = "global" | "npx" | "source";
 
@@ -86,7 +87,7 @@ export async function installGlobalLatest(): Promise<ExecuteUpdateResult> {
     child.stdout.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
     child.stderr.on("data", (chunk: Buffer) => {
       stderrChunks.push(chunk);
-      process.stderr.write(chunk);
+      print.line(chunk.toString("utf8"));
     });
 
     child.on("error", (err) => {
