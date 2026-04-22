@@ -1,0 +1,66 @@
+# Managed by `first-tree gardener install-workflow`.
+# Regenerate with that command (re-run with --force) rather than hand-editing —
+# the gardener skill may roll the template forward on upgrades.
+name: First-Tree Sync
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+jobs:
+  tree-sync:
+    # Skip first-tree's own sync PRs so gardener never reviews itself.
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'first-tree:sync') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    env:
+      TREE_REPO_TOKEN: ${{ secrets.TREE_REPO_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout source repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout tree repo
+        uses: actions/checkout@v4
+        with:
+          repository: agent-team-foundation/first-tree-context
+          token: ${{ secrets.TREE_REPO_TOKEN }}
+          path: .first-tree-cache/tree
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install CLIs (first-tree + claude)
+        # `npx -p first-tree first-tree …` (the gardener-install-workflow
+        # template's default) is flaky on Node 22 / newer npm — it
+        # fails with `first-tree: not found` after install. Install both
+        # globally instead.
+        #
+        # Gardener's verdict classifier is designed to shell out to the
+        # `claude` CLI (see first-tree sync.ts). Pre-install
+        # @anthropic-ai/claude-code so any future upstream CLI upgrade
+        # that wires a real classifier into `gardener comment` will
+        # authenticate via CLAUDE_CODE_OAUTH_TOKEN below without another
+        # workflow change.
+        run: npm install -g first-tree @anthropic-ai/claude-code
+
+      - name: Run first-tree gardener
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Bypass gardener's `gh api user` self-identification call —
+          # GITHUB_TOKEN can't resolve /user reliably. Hardcoding the
+          # bot identity is enough for the self-loop guard.
+          GARDENER_USER: github-actions[bot]
+        run: |
+          first-tree gardener comment \
+            --pr ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --tree-path .first-tree-cache/tree \
+            --assign-owners
