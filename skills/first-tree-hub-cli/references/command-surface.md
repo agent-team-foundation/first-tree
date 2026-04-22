@@ -8,7 +8,7 @@
 | Bring up a full local Hub quickly | `first-tree-hub server start` | Interactive on first run; auto-provisions PostgreSQL with Docker, runs migrations, creates the default admin, and serves the web UI |
 | Check whether a machine is ready for Hub | `first-tree-hub server doctor` / `client doctor` | `doctor` = readiness; top-level `status` = current state summary |
 | See if the server is alive | `first-tree-hub server status` | Hits `/api/v1/health`; defaults to `http://localhost:8000` unless `FIRST_TREE_HUB_SERVER_URL` is set |
-| Sign this computer into a Hub server | `first-tree-hub client connect <server-url> [--token <t>] [--no-service]` | Stores a member JWT at `~/.first-tree-hub/credentials.json`, writes `client.yaml`, and (by default) installs the background service |
+| Sign this computer into a Hub server | `first-tree-hub client connect <server-url> [--token <t>] [--no-service]` | Stores a member JWT at `~/.first-tree/hub/credentials.json`, writes `client.yaml`, and (by default) installs the background service |
 | Run the client inline instead of via service | `first-tree-hub client start` | Loads credentials written by `connect`; fails if there are none or if no agents are pinned to this client |
 | Keep the computer online across reboots | `first-tree-hub client service install` | launchd on macOS, `systemd --user` on Linux; Windows unsupported |
 | List machines the Hub currently sees | `first-tree-hub client hub-list` | Server-side inventory of connected clients |
@@ -25,7 +25,7 @@
 
 ## The Credential Model
 
-Every CLI command that talks to the Hub reaches for `~/.first-tree-hub/credentials.json`. The file is written by `client connect` and contains `{ accessToken, refreshToken, serverUrl }` (mode `0600`). `ensureFreshAccessToken()` auto-refreshes against `/api/v1/auth/refresh` when the token is within 30 seconds of expiry, silently re-persists the result, and then returns the fresh access token.
+Every CLI command that talks to the Hub reaches for `~/.first-tree/hub/credentials.json`. The file is written by `client connect` and contains `{ accessToken, refreshToken, serverUrl }` (mode `0600`). `ensureFreshAccessToken()` auto-refreshes against `/api/v1/auth/refresh` when the token is within 30 seconds of expiry, silently re-persists the result, and then returns the fresh access token.
 
 There are no separate admin or agent tokens. The member's JWT is used for every authenticated call — admin endpoints, Feishu binding, agent creation, agent config, messaging, SDK debugging, everything. The old `FIRST_TREE_HUB_AGENT_TOKEN` / `FIRST_TREE_HUB_AGENT` environment variables and the `agent token bootstrap` subcommand have been removed.
 
@@ -53,7 +53,7 @@ Everything that is "this computer and its relationship to a Hub server".
 - `client stop` — currently informational; prints the right Ctrl+C / `kill` hint. No daemon PID management yet.
 - `client status` — lists locally configured agent aliases with their runtime and agent UUID.
 - `client doctor` — Node version, client config, server reachability, agent configs, credential validity, WebSocket reachability.
-- `client service install` / `status` / `uninstall` — user-level launchd (macOS) or systemd (Linux) unit that runs `first-tree-hub client start --no-interactive` in the background. Logs go to `~/.first-tree-hub/logs/`. Use `isServiceSupported()` semantics — platform is `unsupported` on Windows and other OSes.
+- `client service install` / `status` / `uninstall` — user-level launchd (macOS) or systemd (Linux) unit that runs `first-tree-hub client start --no-interactive` in the background. Logs go to `~/.first-tree/hub/logs/`. Use `isServiceSupported()` semantics — platform is `unsupported` on Windows and other OSes.
 - `client hub-list [--server <url>]` — enumerates clients currently known to the Hub server (`GET /api/v1/clients`), with hostname, agent count, and last-seen timestamp.
 - `client hub-disconnect <clientId> [--server <url>]` — POSTs `/api/v1/clients/:id/disconnect` to force-drop a WebSocket connection on the server side.
 
@@ -63,7 +63,7 @@ Everything that is "about one or more agent records". Subcommands split into sev
 
 **Local aliases**
 
-- `agent add [name] [--agent-id <uuid>]` — writes `~/.first-tree-hub/config/agents/<name>/agent.yaml`. Prompts interactively when arguments are missing. Local-only; does not create an agent on the Hub.
+- `agent add [name] [--agent-id <uuid>]` — writes `~/.first-tree/hub/config/agents/<name>/agent.yaml`. Prompts interactively when arguments are missing. Local-only; does not create an agent on the Hub.
 - `agent remove <name>` — deletes the local alias, its workspaces under `data/workspaces/<name>/`, and its session registry file.
 - `agent list` — prints every locally configured alias.
 
@@ -86,7 +86,7 @@ All `agent config` subcommands call `GET`/`PATCH`/`POST dry-run` on `/api/v1/adm
 
 **Workspaces**
 
-- `agent workspace clean [agent-name] [--ttl <days>]` — removes workspace directories under `~/.first-tree-hub/data/workspaces/<name>/` that are older than TTL (default 7 days) and not currently referenced by an active session in the registry.
+- `agent workspace clean [agent-name] [--ttl <days>]` — removes workspace directories under `~/.first-tree/hub/data/workspaces/<name>/` that are older than TTL (default 7 days) and not currently referenced by an active session in the registry.
 
 **Bindings**
 
@@ -141,7 +141,7 @@ Use this for a fast "is my machine connected and does the server answer" check; 
 
 ### `onboard`
 
-High-level guided onboarding flow. Composes agent creation, optional assistant creation, and optional Feishu bot binding into one command. Supports a `--check` dry-run that prints the readiness checklist, and persists partial state to `~/.first-tree-hub/.onboard-state.json` so interactive re-runs pick up where they left off.
+High-level guided onboarding flow. Composes agent creation, optional assistant creation, and optional Feishu bot binding into one command. Supports a `--check` dry-run that prints the readiness checklist, and persists partial state to `~/.first-tree/hub/.onboard-state.json` so interactive re-runs pick up where they left off.
 
 Important: `onboard` depends on a valid credential file. If `loadCredentials()` returns null, the command errors out and points at `first-tree-hub client connect <server-url>`. It does **not** try to log the user in itself.
 
@@ -157,7 +157,7 @@ Important: `onboard` depends on a valid credential file. If `loadCredentials()` 
 
 ### Paths
 
-- Home: `~/.first-tree-hub` by default; override with `FIRST_TREE_HUB_HOME`.
+- Home: `~/.first-tree/hub` by default; override with `FIRST_TREE_HUB_HOME`.
 - `$HOME/credentials.json` — member JWT + refresh token.
 - `$HOME/config/server.yaml`
 - `$HOME/config/client.yaml`

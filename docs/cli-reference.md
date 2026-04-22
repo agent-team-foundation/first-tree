@@ -183,9 +183,9 @@ first-tree-hub config list -s
 first-tree-hub config list -s --show-secrets
 
 # Scope flags
-#   -s / --server    → ~/.first-tree-hub/config/server.yaml
-#   -c / --client    → ~/.first-tree-hub/config/client.yaml
-#   -a <name>        → ~/.first-tree-hub/config/agents/<name>/agent.yaml
+#   -s / --server    → ~/.first-tree/hub/config/server.yaml
+#   -c / --client    → ~/.first-tree/hub/config/client.yaml
+#   -a <name>        → ~/.first-tree/hub/config/agents/<name>/agent.yaml
 ```
 
 ## onboard
@@ -214,7 +214,7 @@ Most environment variables use the `FIRST_TREE_HUB_` prefix. `onboard` also acce
 
 | Variable | Purpose | Default |
 |---------|------|--------|
-| `FIRST_TREE_HUB_HOME` | Override the CLI home directory for config, data, cloned Context Tree, and onboard resume state | `~/.first-tree-hub` |
+| `FIRST_TREE_HUB_HOME` | Override the CLI home directory for config, data, cloned Context Tree, and onboard resume state | `~/.first-tree/hub` |
 
 ### Server
 
@@ -241,13 +241,13 @@ Most environment variables use the `FIRST_TREE_HUB_` prefix. `onboard` also acce
 | Variable | Purpose |
 |---------|------|
 | `FIRST_TREE_HUB_AGENT_TOKEN` | Agent bearer token. Highest priority. Injected automatically when running inside a Hub agent runtime. |
-| `FIRST_TREE_HUB_AGENT` | Agent name. CLI looks up the token from `~/.first-tree-hub/agents/<name>/agent.yaml`. Used when token is not set explicitly. |
+| `FIRST_TREE_HUB_AGENT` | Agent name. CLI looks up the token from `~/.first-tree/hub/agents/<name>/agent.yaml`. Used when token is not set explicitly. |
 | `FIRST_TREE_HUB_SERVER_URL` | Server URL override for messaging commands. Falls back to client config. |
 
 Resolution order for the agent token:
 
 1. `FIRST_TREE_HUB_AGENT_TOKEN` — explicit value
-2. `FIRST_TREE_HUB_AGENT` → lookup in `~/.first-tree-hub/agents/<name>/agent.yaml`
+2. `FIRST_TREE_HUB_AGENT` → lookup in `~/.first-tree/hub/agents/<name>/agent.yaml`
 3. Error
 
 ### Onboard
@@ -272,7 +272,7 @@ See [observability.md](observability.md) for the full config reference, backend 
 ## Directory Structure
 
 ```
-~/.first-tree-hub/
+~/.first-tree/hub/
 ├── .onboard-state.json           # Saved args for onboard resume
 ├── context-tree/                 # Auto-managed clone (optional, for organizational context)
 ├── config/                      # Configuration (human-edited)
@@ -289,7 +289,7 @@ See [observability.md](observability.md) for the full config reference, backend 
     └── postgres/                # Docker PG data
 ```
 
-If `FIRST_TREE_HUB_HOME` is set, replace `~/.first-tree-hub/` with that location.
+If `FIRST_TREE_HUB_HOME` is set, replace `~/.first-tree/hub/` with that location.
 
 ## Config Resolution Order
 
@@ -297,6 +297,6 @@ Priority from high to low:
 
 1. CLI arguments (`--port 9000`)
 2. Environment variables (`FIRST_TREE_HUB_PORT=9000`)
-3. Config files (`~/.first-tree-hub/config/server.yaml`)
+3. Config files (`~/.first-tree/hub/config/server.yaml`)
 4. Auto-generated (secrets, Docker PG URL)
 5. Built-in defaults (`port: 8000`)

@@ -48,7 +48,7 @@ This shape drives almost every command: `server` targets the deployment, `client
 
 ## The Credential Model (read this once)
 
-The CLI stores a single **member access JWT + refresh token** at `~/.first-tree-hub/credentials.json` (mode `0600`). Every command that talks to the Hub runs through `ensureFreshAccessToken()`, which refreshes 30s before expiry via `/api/v1/auth/refresh` and re-persists the token silently.
+The CLI stores a single **member access JWT + refresh token** at `~/.first-tree/hub/credentials.json` (mode `0600`). Every command that talks to the Hub runs through `ensureFreshAccessToken()`, which refreshes 30s before expiry via `/api/v1/auth/refresh` and re-persists the token silently.
 
 Implications:
 
@@ -73,8 +73,8 @@ If the user does not have a one-time connect token, omit `--token` and the comma
 
 After `client connect` succeeds:
 
-- `~/.first-tree-hub/credentials.json` exists
-- `~/.first-tree-hub/config/client.yaml` has `server.url` and a generated `client.id`
+- `~/.first-tree/hub/credentials.json` exists
+- `~/.first-tree/hub/config/client.yaml` has `server.url` and a generated `client.id`
 - On macOS/Linux, the background service is installed and already running
 - Any agent pinned to this client (via the Hub UI or `agent create --client-id ...`) is automatically picked up by the running service
 
@@ -88,7 +88,7 @@ first-tree-hub client service status       # running? installed?
 first-tree-hub client service uninstall
 ```
 
-`client connect` installs the service automatically unless `--no-service` is passed. Logs land in `~/.first-tree-hub/logs/`. Windows is currently unsupported — on Windows, fall back to running `first-tree-hub client start` manually or inside a user-managed process supervisor.
+`client connect` installs the service automatically unless `--no-service` is passed. Logs land in `~/.first-tree/hub/logs/`. Windows is currently unsupported — on Windows, fall back to running `first-tree-hub client start` manually or inside a user-managed process supervisor.
 
 ## Operating Rules
 
@@ -102,7 +102,7 @@ first-tree-hub client service uninstall
 - **Distinguish `agent config` (server-side runtime) from `config -a <name>` (local YAML).** `agent config set-model` or `append-prompt` mutates the Hub database via the admin API and affects the running agent everywhere. `config -a <name> set` edits the local `agent.yaml`, which only names the agent locally and tells the client which `agentId` to load.
 - **Respect config layering.** CLI args override env vars → env vars override YAML → YAML overrides auto-generated → auto-generated overrides defaults.
 - **Distinguish config scopes and paths.**
-  - Home defaults to `~/.first-tree-hub`; `FIRST_TREE_HUB_HOME` relocates it.
+  - Home defaults to `~/.first-tree/hub`; `FIRST_TREE_HUB_HOME` relocates it.
   - Server config: `$FIRST_TREE_HUB_HOME/config/server.yaml`
   - Client config: `$FIRST_TREE_HUB_HOME/config/client.yaml`
   - Per-agent local alias: `$FIRST_TREE_HUB_HOME/config/agents/<name>/agent.yaml`

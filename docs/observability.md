@@ -17,7 +17,7 @@ Configure an OTLP/HTTP endpoint and matching headers — any backend that
 speaks OTLP works (Logfire, Honeycomb, Jaeger, Tempo, SigNoz, Axiom, …).
 
 ```yaml
-# ~/.first-tree-hub/config/server.yaml
+# ~/.first-tree/hub/config/server.yaml
 observability:
   tracing:
     endpoint: https://<your-otlp-endpoint>/v1/traces
