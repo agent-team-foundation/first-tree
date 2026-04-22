@@ -33,7 +33,7 @@ const execFileAsync = promisify(execFile);
 export const SYNC_USAGE = `usage: first-tree gardener sync [--tree-path PATH] [--source ID] [--propose] [--apply | --open-issues] [--dry-run]
 
 Detect drift between a Context Tree and the source repo(s) it describes.
-Runs in three terminal modes controlled by flags:
+Runs in four terminal modes controlled by flags:
 
   default         Detect drift only. Prints a summary. Exits 0.
   --propose       Detect + write proposal files under .first-tree/proposals/.
@@ -2213,7 +2213,7 @@ export async function runSyncCli(
   if (flags.conflict) {
     console.error(`\u274C ${flags.conflict}`);
     console.log(SYNC_USAGE);
-    return 2;
+    return 1;
   }
   const treeRoot = flags.treePath
     ? resolve(process.cwd(), flags.treePath)
