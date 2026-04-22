@@ -1,9 +1,10 @@
-import { Leaf, LogOut, Search } from "lucide-react";
+import { LogOut, Search } from "lucide-react";
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router";
 import { useAuth } from "../auth/auth-context.js";
 import { cn } from "../lib/utils.js";
 import { CommandPalette } from "../pages/workspace/palette/command-palette.js";
+import { FirstTreeLogo } from "./first-tree-logo.js";
 import { NotificationBell } from "./notification-bell.js";
 import { ThemeToggle } from "./ui/theme-toggle.js";
 
@@ -52,7 +53,7 @@ export function Layout() {
       >
         {/* Brand */}
         <div className="flex items-center" style={{ gap: 10 }}>
-          <Leaf className="h-4 w-4" style={{ color: "var(--accent)" }} />
+          <FirstTreeLogo width={14} height={16} style={{ color: "var(--fg)" }} />
           <span
             style={{
               fontWeight: 600,

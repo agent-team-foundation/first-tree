@@ -1,21 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
-  <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#6366f1"/>
-      <stop offset="100%" stop-color="#06b6d4"/>
-    </linearGradient>
-  </defs>
-  <!-- Connection lines -->
-  <line x1="32" y1="32" x2="14" y2="14" stroke="url(#g)" stroke-width="2.5" stroke-linecap="round" opacity="0.6"/>
-  <line x1="32" y1="32" x2="50" y2="14" stroke="url(#g)" stroke-width="2.5" stroke-linecap="round" opacity="0.6"/>
-  <line x1="32" y1="32" x2="14" y2="50" stroke="url(#g)" stroke-width="2.5" stroke-linecap="round" opacity="0.6"/>
-  <line x1="32" y1="32" x2="50" y2="50" stroke="url(#g)" stroke-width="2.5" stroke-linecap="round" opacity="0.6"/>
-  <!-- Outer agent nodes -->
-  <circle cx="14" cy="14" r="6" fill="url(#g)" opacity="0.85"/>
-  <circle cx="50" cy="14" r="6" fill="url(#g)" opacity="0.85"/>
-  <circle cx="14" cy="50" r="6" fill="url(#g)" opacity="0.85"/>
-  <circle cx="50" cy="50" r="6" fill="url(#g)" opacity="0.85"/>
-  <!-- Central hub node -->
-  <circle cx="32" cy="32" r="10" fill="url(#g)"/>
-  <circle cx="32" cy="32" r="5" fill="white" opacity="0.9"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<style>
+  path { fill: #ffffff; }
+  @media (prefers-color-scheme: light) {
+    path { fill: #1a1a1a; }
+  }
+</style>
+<path d="M256 48c-8 0-15 4-20 10L140 186c-6 8-8 18-4 27s13 15 23 15h30l-69 100c-6 8-7 18-3 27s13 14 23 14h36l-80 107c-5 7-6 16-2 24s12 12 21 12h282c9 0 17-5 21-12s3-17-2-24l-80-107h36c10 0 18-5 23-14s3-19-3-27l-69-100h30c10 0 19-6 23-15s2-19-4-27L276 58c-5-6-12-10-20-10z"/>
 </svg>
