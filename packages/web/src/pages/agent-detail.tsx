@@ -25,6 +25,7 @@ import {
 } from "./../api/agents.js";
 import { ApiError } from "./../api/client.js";
 import { listAgentSessions } from "./../api/sessions.js";
+import { useAuth } from "./../auth/auth-context.js";
 import { FirstTreeLogo } from "./../components/first-tree-logo.js";
 import { Breadcrumb, BreadcrumbCurrent, BreadcrumbLink, BreadcrumbSep } from "./../components/ui/breadcrumb.js";
 import { Button } from "./../components/ui/button.js";
@@ -69,24 +70,31 @@ type SidebarGroup = {
   items: SidebarItem[];
 };
 
-function buildSidebar(isHuman: boolean): SidebarGroup[] {
-  const identity: SidebarItem[] = [
-    { key: "identity", label: "Profile", anchor: "ad-identity" },
-    { key: "bindings", label: "Bindings", anchor: "ad-bindings" },
-  ];
-  const runtime: SidebarItem[] = isHuman
-    ? []
-    : [
-        { key: "prompt", label: "Prompt", anchor: sectionAnchorId("prompt") },
-        { key: "model", label: "Model", anchor: sectionAnchorId("model") },
-        { key: "mcp", label: "MCP tools", anchor: sectionAnchorId("mcp") },
-        { key: "env", label: "Environment", anchor: sectionAnchorId("env") },
-        { key: "git", label: "Git", anchor: sectionAnchorId("git") },
-      ];
-  const danger: SidebarItem[] = [{ key: "danger", label: "Danger zone", anchor: "ad-danger" }];
+function buildSidebar(isHuman: boolean, isManager: boolean): SidebarGroup[] {
+  // Non-managers see only the profile card — Runtime (behavior config) and
+  // Danger zone are manager-only per the backend guard `assertCanManage`.
+  // Bindings are also filtered server-side for non-managers, so we drop
+  // the anchor rather than showing a no-op section.
+  const identity: SidebarItem[] = [{ key: "identity", label: "Profile", anchor: "ad-identity" }];
+  if (isManager) identity.push({ key: "bindings", label: "Bindings", anchor: "ad-bindings" });
+  const runtime: SidebarItem[] =
+    !isHuman && isManager
+      ? [
+          { key: "prompt", label: "Prompt", anchor: sectionAnchorId("prompt") },
+          { key: "model", label: "Model", anchor: sectionAnchorId("model") },
+          { key: "mcp", label: "MCP tools", anchor: sectionAnchorId("mcp") },
+          { key: "env", label: "Environment", anchor: sectionAnchorId("env") },
+          { key: "git", label: "Git", anchor: sectionAnchorId("git") },
+        ]
+      : [];
   const groups: SidebarGroup[] = [{ label: "Identity", items: identity }];
   if (runtime.length > 0) groups.push({ label: "Runtime", items: runtime });
-  groups.push({ label: "Danger zone", items: danger });
+  if (isManager) {
+    groups.push({
+      label: "Danger zone",
+      items: [{ key: "danger", label: "Danger zone", anchor: "ad-danger" }],
+    });
+  }
   return groups;
 }
 
@@ -95,6 +103,7 @@ export function AgentDetailPage() {
   const uuid = params.uuid ?? "";
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { memberId, role } = useAuth();
 
   // Agent identity data
   const agentQuery = useQuery({
@@ -103,10 +112,16 @@ export function AgentDetailPage() {
     enabled: !!uuid,
   });
 
+  // Manager-only gating — matches the backend `assertCanManage` guard on
+  // /admin/agents/:uuid/config. Non-managers see a read-only profile card
+  // and nothing that would 404 on fetch. Admins implicitly manage every
+  // agent in their org.
+  const canManage = agentQuery.data != null && (role === "admin" || agentQuery.data.managerId === memberId);
+
   const cfgQuery = useQuery({
     queryKey: ["agent-config", uuid],
     queryFn: () => getAgentConfig(uuid),
-    enabled: !!uuid && agentQuery.data?.type !== "human",
+    enabled: !!uuid && agentQuery.data?.type !== "human" && canManage,
   });
 
   const clientStatusQuery = useQuery({
@@ -296,7 +311,7 @@ export function AgentDetailPage() {
   }, [draft.summary.anyDirty]);
 
   const isHumanLocal = agentQuery.data?.type === "human";
-  const sidebarGroups = useMemo(() => buildSidebar(isHumanLocal), [isHumanLocal]);
+  const sidebarGroups = useMemo(() => buildSidebar(isHumanLocal, canManage), [isHumanLocal, canManage]);
 
   if (agentQuery.isLoading) {
     return (
@@ -514,7 +529,7 @@ export function AgentDetailPage() {
               <Button variant="ghost" size="xs" onClick={() => navigate(`/?a=${agent.uuid}`)}>
                 Open chat →
               </Button>
-              {!isHuman && agent.status === "active" && (
+              {!isHuman && agent.status === "active" && canManage && (
                 <Button
                   variant="outline"
                   size="xs"
@@ -585,7 +600,7 @@ export function AgentDetailPage() {
             />
           </div>
 
-          {!isHuman && (
+          {!isHuman && canManage && (
             <BehaviorSection
               loaded={!!cfgQuery.data}
               loading={cfgQuery.isLoading}
@@ -662,161 +677,171 @@ export function AgentDetailPage() {
             </BehaviorSection>
           )}
 
-          <div id="ad-bindings">
-            <Panel>
-              <div
-                className="flex items-center justify-between"
-                style={{ padding: "10px 14px", borderBottom: "1px solid var(--border-faint)" }}
-              >
-                <div className="inline-flex items-center gap-2" style={{ fontSize: 12, fontWeight: 600 }}>
-                  {isHuman ? <Link2 className="h-3.5 w-3.5" /> : <Cable className="h-3.5 w-3.5" />}
-                  Platform bindings
+          {canManage && (
+            <div id="ad-bindings">
+              <Panel>
+                <div
+                  className="flex items-center justify-between"
+                  style={{ padding: "10px 14px", borderBottom: "1px solid var(--border-faint)" }}
+                >
+                  <div className="inline-flex items-center gap-2" style={{ fontSize: 12, fontWeight: 600 }}>
+                    {isHuman ? <Link2 className="h-3.5 w-3.5" /> : <Cable className="h-3.5 w-3.5" />}
+                    Platform bindings
+                  </div>
+                  <Button size="xs" variant="outline" onClick={() => setBindingDialogOpen(true)}>
+                    <Plus className="h-3 w-3" />
+                    {isHuman ? "Bind user" : "Bind bot"}
+                  </Button>
                 </div>
-                <Button size="xs" variant="outline" onClick={() => setBindingDialogOpen(true)}>
-                  <Plus className="h-3 w-3" />
-                  {isHuman ? "Bind user" : "Bind bot"}
-                </Button>
-              </div>
-              {isHuman ? (
-                <DenseTable>
-                  <DenseTableHeader>
-                    <DenseTableRow>
-                      <DenseTableHead>Platform</DenseTableHead>
-                      <DenseTableHead>External user ID</DenseTableHead>
-                      <DenseTableHead>Display name</DenseTableHead>
-                      <DenseTableHead>Bound via</DenseTableHead>
-                      <DenseTableHead>Created</DenseTableHead>
-                      <DenseTableHead style={{ width: 32 }} />
-                    </DenseTableRow>
-                  </DenseTableHeader>
-                  <DenseTableBody>
-                    {agentMappings.length === 0 ? (
+                {isHuman ? (
+                  <DenseTable>
+                    <DenseTableHeader>
                       <DenseTableRow>
-                        <DenseTableCell colSpan={6} style={{ textAlign: "center", color: "var(--fg-3)", padding: 16 }}>
-                          No platform bindings
-                        </DenseTableCell>
+                        <DenseTableHead>Platform</DenseTableHead>
+                        <DenseTableHead>External user ID</DenseTableHead>
+                        <DenseTableHead>Display name</DenseTableHead>
+                        <DenseTableHead>Bound via</DenseTableHead>
+                        <DenseTableHead>Created</DenseTableHead>
+                        <DenseTableHead style={{ width: 32 }} />
                       </DenseTableRow>
-                    ) : (
-                      agentMappings.map((m) => (
-                        <DenseTableRow key={m.id}>
-                          <DenseTableCell>
-                            <DenseBadge>{m.platform}</DenseBadge>
-                          </DenseTableCell>
-                          <DenseTableCell className="mono" style={{ fontSize: 11 }}>
-                            {m.externalUserId}
-                          </DenseTableCell>
-                          <DenseTableCell>{m.displayName ?? "—"}</DenseTableCell>
-                          <DenseTableCell>
-                            <DenseBadge tone="outline">{m.boundVia ?? "—"}</DenseBadge>
-                          </DenseTableCell>
-                          <DenseTableCell className="mono" style={{ fontSize: 10.5, color: "var(--fg-4)" }}>
-                            {formatDate(m.createdAt)}
-                          </DenseTableCell>
-                          <DenseTableCell>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-7 w-7"
-                              onClick={() => {
-                                if (confirm("Remove this binding?")) deleteMappingMutation.mutate(m.id);
-                              }}
-                              disabled={deleteMappingMutation.isPending}
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
+                    </DenseTableHeader>
+                    <DenseTableBody>
+                      {agentMappings.length === 0 ? (
+                        <DenseTableRow>
+                          <DenseTableCell
+                            colSpan={6}
+                            style={{ textAlign: "center", color: "var(--fg-3)", padding: 16 }}
+                          >
+                            No platform bindings
                           </DenseTableCell>
                         </DenseTableRow>
-                      ))
-                    )}
-                  </DenseTableBody>
-                </DenseTable>
-              ) : (
-                <DenseTable>
-                  <DenseTableHeader>
-                    <DenseTableRow>
-                      <DenseTableHead>Platform</DenseTableHead>
-                      <DenseTableHead>Status</DenseTableHead>
-                      <DenseTableHead>Connection</DenseTableHead>
-                      <DenseTableHead>Created</DenseTableHead>
-                      <DenseTableHead style={{ width: 64 }} />
-                    </DenseTableRow>
-                  </DenseTableHeader>
-                  <DenseTableBody>
-                    {agentAdapters.length === 0 ? (
-                      <DenseTableRow>
-                        <DenseTableCell colSpan={5} style={{ textAlign: "center", color: "var(--fg-3)", padding: 16 }}>
-                          No platform bindings
-                        </DenseTableCell>
-                      </DenseTableRow>
-                    ) : (
-                      agentAdapters.map((a) => {
-                        const status = botStatuses?.find((s) => s.configId === a.id);
-                        const isConnected = a.platform === "kael" ? a.status === "active" : !!status?.connected;
-                        return (
-                          <DenseTableRow key={a.id}>
+                      ) : (
+                        agentMappings.map((m) => (
+                          <DenseTableRow key={m.id}>
                             <DenseTableCell>
-                              <DenseBadge>{a.platform}</DenseBadge>
+                              <DenseBadge>{m.platform}</DenseBadge>
                             </DenseTableCell>
-                            <DenseTableCell>
-                              <DenseBadge tone={a.status === "active" ? "accent" : "outline"}>{a.status}</DenseBadge>
+                            <DenseTableCell className="mono" style={{ fontSize: 11 }}>
+                              {m.externalUserId}
                             </DenseTableCell>
+                            <DenseTableCell>{m.displayName ?? "—"}</DenseTableCell>
                             <DenseTableCell>
-                              <StateChip state={isConnected ? "idle" : "offline"} />
+                              <DenseBadge tone="outline">{m.boundVia ?? "—"}</DenseBadge>
                             </DenseTableCell>
                             <DenseTableCell className="mono" style={{ fontSize: 10.5, color: "var(--fg-4)" }}>
-                              {formatDate(a.createdAt)}
+                              {formatDate(m.createdAt)}
                             </DenseTableCell>
                             <DenseTableCell>
-                              <div className="flex gap-1">
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-7 w-7"
-                                  onClick={() => openEditAdapter(a)}
-                                  title="Edit"
-                                >
-                                  …
-                                </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-7 w-7"
-                                  onClick={() => {
-                                    if (confirm("Remove this bot binding?")) deleteAdapterMutation.mutate(a.id);
-                                  }}
-                                  disabled={deleteAdapterMutation.isPending}
-                                  title="Delete"
-                                >
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                </Button>
-                              </div>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7"
+                                onClick={() => {
+                                  if (confirm("Remove this binding?")) deleteMappingMutation.mutate(m.id);
+                                }}
+                                disabled={deleteMappingMutation.isPending}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </Button>
                             </DenseTableCell>
                           </DenseTableRow>
-                        );
-                      })
-                    )}
-                  </DenseTableBody>
-                </DenseTable>
-              )}
-            </Panel>
-          </div>
+                        ))
+                      )}
+                    </DenseTableBody>
+                  </DenseTable>
+                ) : (
+                  <DenseTable>
+                    <DenseTableHeader>
+                      <DenseTableRow>
+                        <DenseTableHead>Platform</DenseTableHead>
+                        <DenseTableHead>Status</DenseTableHead>
+                        <DenseTableHead>Connection</DenseTableHead>
+                        <DenseTableHead>Created</DenseTableHead>
+                        <DenseTableHead style={{ width: 64 }} />
+                      </DenseTableRow>
+                    </DenseTableHeader>
+                    <DenseTableBody>
+                      {agentAdapters.length === 0 ? (
+                        <DenseTableRow>
+                          <DenseTableCell
+                            colSpan={5}
+                            style={{ textAlign: "center", color: "var(--fg-3)", padding: 16 }}
+                          >
+                            No platform bindings
+                          </DenseTableCell>
+                        </DenseTableRow>
+                      ) : (
+                        agentAdapters.map((a) => {
+                          const status = botStatuses?.find((s) => s.configId === a.id);
+                          const isConnected = a.platform === "kael" ? a.status === "active" : !!status?.connected;
+                          return (
+                            <DenseTableRow key={a.id}>
+                              <DenseTableCell>
+                                <DenseBadge>{a.platform}</DenseBadge>
+                              </DenseTableCell>
+                              <DenseTableCell>
+                                <DenseBadge tone={a.status === "active" ? "accent" : "outline"}>{a.status}</DenseBadge>
+                              </DenseTableCell>
+                              <DenseTableCell>
+                                <StateChip state={isConnected ? "idle" : "offline"} />
+                              </DenseTableCell>
+                              <DenseTableCell className="mono" style={{ fontSize: 10.5, color: "var(--fg-4)" }}>
+                                {formatDate(a.createdAt)}
+                              </DenseTableCell>
+                              <DenseTableCell>
+                                <div className="flex gap-1">
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-7 w-7"
+                                    onClick={() => openEditAdapter(a)}
+                                    title="Edit"
+                                  >
+                                    …
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-7 w-7"
+                                    onClick={() => {
+                                      if (confirm("Remove this bot binding?")) deleteAdapterMutation.mutate(a.id);
+                                    }}
+                                    disabled={deleteAdapterMutation.isPending}
+                                    title="Delete"
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </Button>
+                                </div>
+                              </DenseTableCell>
+                            </DenseTableRow>
+                          );
+                        })
+                      )}
+                    </DenseTableBody>
+                  </DenseTable>
+                )}
+              </Panel>
+            </div>
+          )}
 
-          <div id="ad-danger">
-            <DangerZone
-              agent={agent}
-              suspendPending={suspendMutation.isPending}
-              reactivatePending={reactivateMutation.isPending}
-              deletePending={deleteMutation.isPending}
-              onSuspend={() => {
-                if (confirm("Suspend this agent? Runtime binds and HTTP calls will be refused."))
-                  suspendMutation.mutate();
-              }}
-              onReactivate={() => reactivateMutation.mutate()}
-              onDelete={() => deleteMutation.mutate()}
-            />
-          </div>
+          {canManage && (
+            <div id="ad-danger">
+              <DangerZone
+                agent={agent}
+                suspendPending={suspendMutation.isPending}
+                reactivatePending={reactivateMutation.isPending}
+                deletePending={deleteMutation.isPending}
+                onSuspend={() => {
+                  if (confirm("Suspend this agent? Runtime binds and HTTP calls will be refused."))
+                    suspendMutation.mutate();
+                }}
+                onReactivate={() => reactivateMutation.mutate()}
+                onDelete={() => deleteMutation.mutate()}
+              />
+            </div>
+          )}
 
-          {!isHuman && draft.summary.anyDirty && (
+          {!isHuman && canManage && draft.summary.anyDirty && (
             <div style={{ fontSize: 11, color: "var(--fg-3)" }}>
               <button
                 type="button"
@@ -831,7 +856,7 @@ export function AgentDetailPage() {
           )}
         </div>
 
-        {!isHuman && (
+        {!isHuman && canManage && (
           <SaveBar
             summary={draft.summary}
             saveHint={saveHint}
