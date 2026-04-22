@@ -20,7 +20,11 @@ export function AdminPage() {
   const navigate = useNavigate();
 
   if (role === null) {
-    return <div style={{ padding: 20, color: "var(--fg-3)", fontSize: 12 }}>Loading…</div>;
+    return (
+      <div className="text-body" style={{ padding: 20, color: "var(--fg-3)" }}>
+        Loading…
+      </div>
+    );
   }
   if (role !== "admin") {
     return <Navigate to="/settings" replace />;

@@ -1,7 +1,12 @@
 import type { CSSProperties, HTMLAttributes } from "react";
+import { TONE_STYLES, type Tone } from "../../lib/tones.js";
 import { cn } from "../../lib/utils.js";
 
-export type DenseBadgeTone = "neutral" | "accent" | "warn" | "error" | "outline";
+/**
+ * DenseBadge tone subset. Limited to the tones that make sense inside a
+ * dense chip (no state-specific tones — use StateChip for those).
+ */
+export type DenseBadgeTone = Extract<Tone, "neutral" | "accent" | "warn" | "error" | "outline">;
 
 type DenseBadgeProps = HTMLAttributes<HTMLSpanElement> & {
   tone?: DenseBadgeTone;
@@ -10,6 +15,8 @@ type DenseBadgeProps = HTMLAttributes<HTMLSpanElement> & {
 // Mirrors the Badge atom in design-canvas/atoms.jsx:
 //   mono / 10px / uppercase / padding 1px 7px / radius 3 / 1px border.
 // shadcn Badge is 12px + rounded-md and reads as "chunky" in dense panels.
+// Typography is bound to the `text-caption` token from index.css; tones are
+// resolved via the shared tones map so chips stay in sync with state chips.
 export function DenseBadge({ tone = "neutral", className, style, ...rest }: DenseBadgeProps) {
   const t = TONE_STYLES[tone];
   const merged: CSSProperties = {
@@ -20,12 +27,12 @@ export function DenseBadge({ tone = "neutral", className, style, ...rest }: Dens
   };
   return (
     <span
-      className={cn("mono inline-flex items-center uppercase", className)}
+      className={cn("mono inline-flex items-center uppercase text-caption", className)}
       style={{
-        fontSize: 10,
         padding: "1px 7px",
-        borderRadius: 3,
-        letterSpacing: "0.06em",
+        borderRadius: "var(--radius-chip)",
+        // Override token line-height (1.4) with a taller 1.6 so dense badges
+        // stay visually balanced against adjacent text in row cells.
         lineHeight: 1.6,
         ...merged,
       }}
@@ -33,23 +40,3 @@ export function DenseBadge({ tone = "neutral", className, style, ...rest }: Dens
     />
   );
 }
-
-const TONE_STYLES: Record<DenseBadgeTone, { bg: string; fg: string; bd: string }> = {
-  neutral: { bg: "var(--bg-sunken)", fg: "var(--fg-2)", bd: "var(--border)" },
-  accent: {
-    bg: "var(--accent-bg)",
-    fg: "var(--accent-dim)",
-    bd: "color-mix(in oklch, var(--accent) 30%, transparent)",
-  },
-  warn: {
-    bg: "color-mix(in oklch, var(--state-blocked) 16%, transparent)",
-    fg: "color-mix(in oklch, var(--state-blocked) 50%, var(--fg))",
-    bd: "color-mix(in oklch, var(--state-blocked) 30%, transparent)",
-  },
-  error: {
-    bg: "color-mix(in oklch, var(--state-error) 14%, transparent)",
-    fg: "var(--state-error)",
-    bd: "color-mix(in oklch, var(--state-error) 30%, transparent)",
-  },
-  outline: { bg: "transparent", fg: "var(--fg-3)", bd: "var(--border)" },
-};

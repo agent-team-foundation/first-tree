@@ -57,22 +57,21 @@ function ConnectStrip() {
         padding: "8px 12px",
         background: "var(--bg-raised)",
         border: "1px solid var(--border)",
-        borderRadius: 6,
+        borderRadius: "var(--radius-panel)",
       }}
     >
-      <span className="inline-flex items-center gap-2" style={{ color: "var(--fg-2)", fontSize: 12 }}>
+      <span className="inline-flex items-center gap-2 text-body" style={{ color: "var(--fg-2)" }}>
         <Terminal className="h-3.5 w-3.5" />
         Connect a computer
       </span>
       {connectData ? (
         <code
-          className="mono whitespace-nowrap overflow-hidden text-ellipsis"
+          className="mono whitespace-nowrap overflow-hidden text-ellipsis text-label"
           style={{
-            fontSize: 11,
             padding: "5px 10px",
             background: "var(--bg-sunken)",
             border: "1px solid var(--border-faint)",
-            borderRadius: 4,
+            borderRadius: "var(--radius-input)",
             color: "var(--fg-2)",
           }}
           title={connectData.command}
@@ -81,7 +80,7 @@ function ConnectStrip() {
           <span style={{ color: "var(--fg-4)" }}># expires in {Math.round(connectData.expiresIn / 60)}m</span>
         </code>
       ) : (
-        <span className="mono" style={{ fontSize: 11, color: "var(--fg-4)" }}>
+        <span className="mono text-label" style={{ color: "var(--fg-4)" }}>
           Generate a single-use command to pair a new machine with this Hub.
         </span>
       )}
@@ -181,7 +180,7 @@ export function ClientsPage() {
               style={{
                 background: "var(--bg-raised)",
                 border: "1px solid var(--border)",
-                borderRadius: 6,
+                borderRadius: "var(--radius-panel)",
                 padding: 24,
                 boxShadow: "var(--shadow-md)",
               }}
@@ -258,7 +257,7 @@ export function ClientsPage() {
               style={{
                 background: "var(--bg-raised)",
                 border: "1px solid var(--border)",
-                borderRadius: 6,
+                borderRadius: "var(--radius-panel)",
                 padding: 24,
                 boxShadow: "var(--shadow-md)",
               }}
@@ -304,7 +303,7 @@ export function ClientsPage() {
 
         {!clients || clients.length === 0 ? (
           <Panel>
-            <div className="text-center py-10" style={{ color: "var(--fg-3)", fontSize: 12 }}>
+            <div className="text-center py-10 text-body" style={{ color: "var(--fg-3)" }}>
               No computers. Use the button above to generate a connect command.
             </div>
           </Panel>
@@ -312,7 +311,13 @@ export function ClientsPage() {
           <Panel>
             <SectionHeader
               right={
-                <span className="mono" style={{ color: "var(--fg-3)", textTransform: "none", letterSpacing: 0 }}>
+                // SectionHeader is uppercased with 0.1em tracking; this helper
+                // text inside its `right` slot overrides back to a plain mono
+                // caption so it reads as prose, not an eyebrow.
+                <span
+                  className="mono text-caption"
+                  style={{ color: "var(--fg-3)", textTransform: "none", letterSpacing: 0 }}
+                >
                   click a row to expand
                 </span>
               }
@@ -398,15 +403,13 @@ function ClientRow({
         <DenseTableCell style={{ fontWeight: 500 }}>{client.hostname ?? "—"}</DenseTableCell>
         {showOwner && <DenseTableCell style={{ color: "var(--fg-2)" }}>{ownerName(client.userId)}</DenseTableCell>}
         <DenseTableCell style={{ color: "var(--fg-3)" }}>{client.os ?? "—"}</DenseTableCell>
-        <DenseTableCell className="mono" style={{ fontSize: 11, color: "var(--fg-3)" }}>
+        <DenseTableCell className="mono text-label" style={{ color: "var(--fg-3)" }}>
           {client.sdkVersion ?? "—"}
         </DenseTableCell>
         <DenseTableCell>
-          <span className="mono tnum" style={{ fontSize: 11.5 }}>
-            {client.agentCount}
-          </span>
+          <span className="mono tnum text-label">{client.agentCount}</span>
         </DenseTableCell>
-        <DenseTableCell className="mono" style={{ fontSize: 10.5, color: "var(--fg-4)" }}>
+        <DenseTableCell className="mono text-caption" style={{ color: "var(--fg-4)" }}>
           {client.connectedAt ? formatDate(client.connectedAt) : "—"}
         </DenseTableCell>
         <DenseTableCell>
@@ -417,7 +420,7 @@ function ClientRow({
             <Button
               variant="ghost"
               size="xs"
-              className="text-[11px]"
+              className="text-label"
               onClick={(e) => {
                 e.stopPropagation();
                 onDisconnect();
@@ -428,7 +431,7 @@ function ClientRow({
             <Button
               variant="ghost"
               size="xs"
-              className="text-[11px]"
+              className="text-label"
               style={{ color: "var(--fg-4)" }}
               onClick={(e) => {
                 e.stopPropagation();
@@ -448,19 +451,19 @@ function ClientRow({
               Bound agents · {boundAgents.length}
             </UppercaseLabel>
             {boundAgents.length === 0 ? (
-              <div className="text-sm" style={{ color: "var(--fg-3)", fontSize: 12 }}>
+              <div className="text-body" style={{ color: "var(--fg-3)" }}>
                 No agents bound to this computer
               </div>
             ) : (
               <div className="flex flex-col gap-1">
                 {boundAgents.map((a) => (
-                  <div key={a.agentId} className="flex items-center gap-2.5" style={{ fontSize: 12 }}>
+                  <div key={a.agentId} className="flex items-center gap-2.5 text-body">
                     <span className="mono" style={{ fontWeight: 500, minWidth: 180 }}>
                       {agentName(a.agentId)}
                     </span>
                     <StateChip state={a.runtimeState} />
                     {a.activeSessions !== null && (
-                      <span className="mono tnum" style={{ fontSize: 10.5, color: "var(--fg-3)" }}>
+                      <span className="mono tnum text-caption" style={{ color: "var(--fg-3)" }}>
                         {a.activeSessions} / {a.totalSessions ?? 0} sessions
                       </span>
                     )}

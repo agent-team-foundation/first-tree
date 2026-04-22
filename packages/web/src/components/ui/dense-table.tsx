@@ -54,11 +54,12 @@ const DenseTableHead = forwardRef<HTMLTableCellElement, ThHTMLAttributes<HTMLTab
   ({ className, style, ...props }, ref) => (
     <th
       ref={ref}
-      className={cn("mono text-left uppercase font-medium whitespace-nowrap", className)}
+      // `text-eyebrow` bundles 10 / 600 / 0.1em — size was bumped from 9.5
+      // to 10 in the unified scale so Windows ClearType renders headers
+      // cleanly. `font-medium` was removed because the token sets 600.
+      className={cn("mono text-left uppercase text-eyebrow whitespace-nowrap", className)}
       style={{
         padding: "8px 12px",
-        fontSize: 9.5,
-        letterSpacing: "0.09em",
         color: "var(--fg-4)",
         background: "var(--bg-sunken)",
         borderBottom: "1px solid var(--border)",
@@ -74,11 +75,10 @@ const DenseTableCell = forwardRef<HTMLTableCellElement, TdHTMLAttributes<HTMLTab
   ({ className, style, ...props }, ref) => (
     <td
       ref={ref}
-      className={cn("align-middle", className)}
+      className={cn("align-middle text-body", className)}
       style={{
         padding: "9px 12px",
         borderBottom: "1px solid var(--border-faint)",
-        fontSize: 12,
         ...style,
       }}
       {...props}

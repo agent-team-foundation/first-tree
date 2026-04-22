@@ -26,20 +26,14 @@ function Tile({ label, value, accent }: { label: string; value: string | number;
       style={{
         padding: "6px 8px",
         background: "var(--bg-sunken)",
-        borderRadius: 4,
+        borderRadius: "var(--radius-input)",
       }}
     >
-      <div className="mono uppercase" style={{ fontSize: 11, color: "var(--fg-4)", letterSpacing: 0.08 }}>
+      <div className="mono uppercase text-caption" style={{ color: "var(--fg-4)" }}>
         {label}
       </div>
-      <div
-        className="mono"
-        style={{
-          fontSize: 15,
-          fontWeight: 600,
-          color: accent ?? "var(--fg)",
-        }}
-      >
+      {/* 15px / 600 is a deliberate tile-number size; no token match at 15px. */}
+      <div className="mono" style={{ fontSize: 15, fontWeight: 600, color: accent ?? "var(--fg)" }}>
         {value}
       </div>
     </div>
@@ -137,8 +131,9 @@ export function AgentContext({ agentId }: { agentId: string }) {
             <FirstTreeLogo width={14} height={16} style={{ color: "var(--accent)" }} />
           </div>
           <div className="flex-1 min-w-0">
+            {/* 15px / 600 is the workspace agent-card display name; no token match. */}
             <div style={{ fontSize: 15, fontWeight: 600, color: "var(--fg)" }}>{displayName}</div>
-            <div className="mono truncate" style={{ fontSize: 12, color: "var(--fg-4)" }}>
+            <div className="mono truncate text-body" style={{ color: "var(--fg-4)" }}>
               {agentId}
             </div>
           </div>

@@ -2,15 +2,9 @@ import type { ReactNode } from "react";
 
 export function SectionLabel({ children }: { children: ReactNode }) {
   return (
-    <div
-      className="mono uppercase"
-      style={{
-        fontSize: 11,
-        letterSpacing: 0.1,
-        color: "var(--fg-4)",
-        marginBottom: 8,
-      }}
-    >
+    // `text-eyebrow` (10 / 600 / 0.1em) bundles the uppercased section-label
+    // typography, shared with the global SectionHeader in ui/section-header.tsx.
+    <div className="mono uppercase text-eyebrow" style={{ color: "var(--fg-4)", marginBottom: 8 }}>
       {children}
     </div>
   );
@@ -24,7 +18,9 @@ export function KV({ children }: { children: ReactNode }) {
         gridTemplateColumns: "auto 1fr",
         columnGap: 10,
         rowGap: 4,
-        fontSize: 13.5,
+        // 13px sits between text-body (12) and text-subtitle (13/600).
+        // Kept inline as a deliberate KV-list size — no token match.
+        fontSize: 13,
       }}
     >
       {children}

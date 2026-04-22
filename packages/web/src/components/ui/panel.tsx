@@ -8,7 +8,7 @@ const Panel = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(({ clas
     style={{
       background: "var(--bg-raised)",
       border: "1px solid var(--border)",
-      borderRadius: 6,
+      borderRadius: "var(--radius-panel)",
     }}
     {...props}
   />
@@ -31,8 +31,10 @@ PanelHeader.displayName = "PanelHeader";
 const PanelTitle = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(({ className, ...props }, ref) => (
   <div
     ref={ref}
-    className={cn("inline-flex items-center gap-2 font-semibold text-[12px]", className)}
-    style={{ color: "var(--fg)" }}
+    className={cn("inline-flex items-center gap-2 text-body", className)}
+    // Panel titles are explicitly semibold (600) — distinct from body weight.
+    // Kept inline so the intent is obvious alongside the `text-body` token.
+    style={{ color: "var(--fg)", fontWeight: 600 }}
     {...props}
   />
 ));

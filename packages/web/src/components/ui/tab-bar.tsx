@@ -39,12 +39,13 @@ export function Tab({ active, onClick, children }: TabProps) {
     <button
       type="button"
       onClick={onClick}
-      className="inline-flex items-center gap-1.5 bg-transparent"
+      className="inline-flex items-center gap-1.5 bg-transparent text-body"
       style={{
         padding: "7px 12px",
         marginBottom: -1,
         borderBottom: `2px solid ${active ? "var(--accent)" : "transparent"}`,
-        fontSize: 12,
+        // Tabs use 500 weight — one step heavier than body text — to read as
+        // controls. Overrides the `text-body` token weight.
         fontWeight: 500,
         color: active ? "var(--fg)" : "var(--fg-3)",
         cursor: "pointer",
@@ -64,7 +65,7 @@ export function Tab({ active, onClick, children }: TabProps) {
 
 export function TabBadge({ children }: { children: ReactNode }) {
   return (
-    <span className="mono" style={{ fontSize: 10, color: "var(--fg-4)" }}>
+    <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
       {children}
     </span>
   );

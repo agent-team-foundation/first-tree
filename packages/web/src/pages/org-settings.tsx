@@ -104,7 +104,7 @@ export function OrgSettingsPage() {
           <PanelTitle>System configuration</PanelTitle>
           <div className="flex items-center gap-1.5">
             {saved && (
-              <span className="mono" style={{ fontSize: 10.5, color: "var(--accent-dim)" }}>
+              <span className="mono text-caption" style={{ color: "var(--accent-dim)" }}>
                 saved
               </span>
             )}
@@ -119,7 +119,7 @@ export function OrgSettingsPage() {
         </PanelHeader>
         <div style={{ padding: "4px 16px 14px" }}>
           {isLoading ? (
-            <div className="py-6" style={{ color: "var(--fg-3)", fontSize: 12 }}>
+            <div className="py-6 text-body" style={{ color: "var(--fg-3)" }}>
               Loading…
             </div>
           ) : (
@@ -156,12 +156,16 @@ function ConfigRow({ field, value, onChange }: { field: ConfigMeta; value: strin
     >
       <div>
         <div className="flex items-baseline gap-2">
-          <span style={{ fontSize: 12.5, fontWeight: 500, color: "var(--fg)" }}>{field.label}</span>
-          <span className="mono" style={{ fontSize: 10.5, color: "var(--fg-4)" }}>
+          <span className="text-body" style={{ fontWeight: 500, color: "var(--fg)" }}>
+            {field.label}
+          </span>
+          <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
             {field.key}
           </span>
         </div>
-        <div style={{ fontSize: 11, color: "var(--fg-3)", marginTop: 2 }}>{field.description}</div>
+        <div className="text-label" style={{ color: "var(--fg-3)", marginTop: 2 }}>
+          {field.description}
+        </div>
         <UppercaseLabel style={{ marginTop: 4, display: "block" }}>
           default{" "}
           <span className="mono" style={{ color: "var(--fg-3)", textTransform: "none", letterSpacing: 0 }}>
@@ -173,25 +177,23 @@ function ConfigRow({ field, value, onChange }: { field: ConfigMeta; value: strin
         <input
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className="w-full outline-none mono"
+          className="w-full outline-none mono text-body"
           style={{
             padding: `5px ${field.unit ? 56 : 10}px 5px 10px`,
-            fontSize: 12,
             background: "var(--bg-sunken)",
             border: "1px solid var(--border)",
-            borderRadius: 4,
+            borderRadius: "var(--radius-input)",
             color: "var(--fg)",
           }}
         />
         {field.unit && (
           <span
-            className="mono"
+            className="mono text-caption"
             style={{
               position: "absolute",
               right: 8,
               top: "50%",
               transform: "translateY(-50%)",
-              fontSize: 10,
               color: "var(--fg-4)",
               pointerEvents: "none",
             }}

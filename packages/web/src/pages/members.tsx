@@ -195,15 +195,15 @@ export function MembersPage() {
         </SectionHeader>
 
         {isLoading ? (
-          <div className="text-center py-8" style={{ color: "var(--fg-3)", fontSize: 12 }}>
+          <div className="text-center py-8 text-body" style={{ color: "var(--fg-3)" }}>
             Loading…
           </div>
         ) : error ? (
-          <div className="text-center py-8" style={{ color: "var(--state-error)", fontSize: 12 }}>
+          <div className="text-center py-8 text-body" style={{ color: "var(--state-error)" }}>
             Failed to load members: {error instanceof Error ? error.message : "Unknown error"}
           </div>
         ) : members?.length === 0 ? (
-          <div className="text-center py-8" style={{ color: "var(--fg-3)", fontSize: 12 }}>
+          <div className="text-center py-8 text-body" style={{ color: "var(--fg-3)" }}>
             No members
           </div>
         ) : (
@@ -225,14 +225,15 @@ export function MembersPage() {
                   <DenseTableRow key={m.id}>
                     <DenseTableCell>
                       <span
-                        className="mono inline-flex items-center justify-center"
+                        // Avatar initials — 10px is intentionally at our min
+                        // floor to fit in a 22×22 square.
+                        className="mono inline-flex items-center justify-center text-caption"
                         style={{
                           width: 22,
                           height: 22,
-                          borderRadius: 4,
+                          borderRadius: "var(--radius-input)",
                           background: isSelf ? "var(--accent-bg)" : "var(--bg-active)",
                           border: "1px solid var(--border-strong)",
-                          fontSize: 9.5,
                           fontWeight: 600,
                           color: isSelf ? "var(--accent-dim)" : "var(--fg-2)",
                         }}
@@ -241,7 +242,7 @@ export function MembersPage() {
                       </span>
                     </DenseTableCell>
                     <DenseTableCell>
-                      <span className="mono" style={{ fontSize: 12, fontWeight: 500 }}>
+                      <span className="mono" style={{ fontWeight: 500 }}>
                         {m.username}
                       </span>
                       {isSelf && <UppercaseLabel style={{ marginLeft: 6 }}>you</UppercaseLabel>}
@@ -250,7 +251,7 @@ export function MembersPage() {
                     <DenseTableCell>
                       <DenseBadge tone={m.role === "admin" ? "accent" : "neutral"}>{m.role}</DenseBadge>
                     </DenseTableCell>
-                    <DenseTableCell className="mono" style={{ fontSize: 10.5, color: "var(--fg-4)" }}>
+                    <DenseTableCell className="mono text-caption" style={{ color: "var(--fg-4)" }}>
                       {formatDate(m.createdAt)}
                     </DenseTableCell>
                     <DenseTableCell style={{ whiteSpace: "nowrap" }}>

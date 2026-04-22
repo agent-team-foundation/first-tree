@@ -62,7 +62,7 @@ export function BindingsPage() {
 
   return (
     <>
-      <p style={{ fontSize: 11.5, color: "var(--fg-3)", padding: "0 2px 12px" }}>
+      <p className="text-label" style={{ color: "var(--fg-3)", padding: "0 2px 12px" }}>
         Overview of platform bindings for agents you can manage. Configure each binding from the Agent detail page.
       </p>
 
@@ -87,11 +87,11 @@ export function BindingsPage() {
           Bot bindings · {adapters?.length ?? 0}
         </SectionHeader>
         {isLoading ? (
-          <div className="text-center py-6" style={{ color: "var(--fg-3)", fontSize: 12 }}>
+          <div className="text-center py-6 text-body" style={{ color: "var(--fg-3)" }}>
             Loading…
           </div>
         ) : !adapters?.length ? (
-          <div className="text-center py-6" style={{ color: "var(--fg-3)", fontSize: 12 }}>
+          <div className="text-center py-6 text-body" style={{ color: "var(--fg-3)" }}>
             No bot bindings
           </div>
         ) : (
@@ -112,7 +112,7 @@ export function BindingsPage() {
                 return (
                   <DenseTableRow key={a.id} interactive onClick={() => navigate(`/agents/${a.agentId}`)}>
                     <DenseTableCell>
-                      <span className="mono" style={{ fontSize: 12, fontWeight: 500 }}>
+                      <span className="mono" style={{ fontWeight: 500 }}>
                         {resolveAgentName(a.agentId)}
                       </span>
                     </DenseTableCell>
@@ -123,19 +123,19 @@ export function BindingsPage() {
                       <DenseBadge tone={a.status === "active" ? "accent" : "outline"}>{a.status}</DenseBadge>
                     </DenseTableCell>
                     <DenseTableCell>
-                      <span className="inline-flex items-center gap-1.5" style={{ fontSize: 11 }}>
+                      <span className="inline-flex items-center gap-1.5 text-label">
                         <StateDot state={connected ? "idle" : "offline"} size={7} />
                         <span style={{ color: "var(--fg-3)" }}>{connected ? "Online" : "Offline"}</span>
                       </span>
                     </DenseTableCell>
-                    <DenseTableCell className="mono" style={{ fontSize: 10.5, color: "var(--fg-4)" }}>
+                    <DenseTableCell className="mono text-caption" style={{ color: "var(--fg-4)" }}>
                       {formatDate(a.createdAt)}
                     </DenseTableCell>
                     <DenseTableCell style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                       <Button
                         variant="ghost"
                         size="xs"
-                        className="text-[11px]"
+                        className="text-label"
                         onClick={(e) => {
                           e.stopPropagation();
                           navigate(`/agents/${a.agentId}`);
@@ -156,11 +156,11 @@ export function BindingsPage() {
       <Panel>
         <SectionHeader>User bindings · {mappings?.length ?? 0}</SectionHeader>
         {isLoading ? (
-          <div className="text-center py-6" style={{ color: "var(--fg-3)", fontSize: 12 }}>
+          <div className="text-center py-6 text-body" style={{ color: "var(--fg-3)" }}>
             Loading…
           </div>
         ) : !mappings?.length ? (
-          <div className="text-center py-6" style={{ color: "var(--fg-3)", fontSize: 12 }}>
+          <div className="text-center py-6 text-body" style={{ color: "var(--fg-3)" }}>
             No user bindings
           </div>
         ) : (
@@ -179,7 +179,7 @@ export function BindingsPage() {
               {mappings.map((m) => (
                 <DenseTableRow key={m.id} interactive onClick={() => navigate(`/agents/${m.agentId}`)}>
                   <DenseTableCell>
-                    <span className="mono" style={{ fontSize: 12, fontWeight: 500, color: "var(--accent-dim)" }}>
+                    <span className="mono" style={{ fontWeight: 500, color: "var(--accent-dim)" }}>
                       {resolveAgentName(m.agentId)}
                     </span>
                   </DenseTableCell>
@@ -187,7 +187,7 @@ export function BindingsPage() {
                     <DenseBadge>{m.platform}</DenseBadge>
                   </DenseTableCell>
                   <DenseTableCell>
-                    <span className="mono" style={{ fontSize: 11, color: "var(--fg-2)" }}>
+                    <span className="mono text-label" style={{ color: "var(--fg-2)" }}>
                       {m.externalUserId}
                     </span>
                   </DenseTableCell>
@@ -195,7 +195,7 @@ export function BindingsPage() {
                   <DenseTableCell>
                     <DenseBadge tone="outline">{m.boundVia ?? "—"}</DenseBadge>
                   </DenseTableCell>
-                  <DenseTableCell className="mono" style={{ fontSize: 10.5, color: "var(--fg-4)" }}>
+                  <DenseTableCell className="mono text-caption" style={{ color: "var(--fg-4)" }}>
                     {formatDate(m.createdAt)}
                   </DenseTableCell>
                 </DenseTableRow>

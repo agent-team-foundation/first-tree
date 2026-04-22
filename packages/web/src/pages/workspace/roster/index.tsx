@@ -158,13 +158,13 @@ export function AgentRoster({
                 </span>
               )}
             </div>
-            <div className="truncate" style={{ fontSize: 12.5, color: "var(--fg-3)" }}>
+            <div className="truncate text-body" style={{ color: "var(--fg-3)" }}>
               {state === "offline" ? "disconnected" : host || "\u2014"}
             </div>
           </div>
           <div className="flex flex-col items-end gap-0.5">
             {totalSessions > 0 && (
-              <span className="mono tnum" style={{ fontSize: 11, color: "var(--fg-3)" }}>
+              <span className="mono tnum text-label" style={{ color: "var(--fg-3)" }}>
                 {activeSessions}
                 <span style={{ color: "var(--fg-4)" }}> / {totalSessions}</span>
               </span>
@@ -175,13 +175,7 @@ export function AgentRoster({
         {isSelected && (
           <div style={{ background: "var(--bg-sunken)", paddingBottom: 4 }}>
             {(!sessions || sessions.length === 0) && (
-              <div
-                style={{
-                  padding: "4px 10px 4px 28px",
-                  fontSize: 12.5,
-                  color: "var(--fg-4)",
-                }}
-              >
+              <div className="text-body" style={{ padding: "4px 10px 4px 28px", color: "var(--fg-4)" }}>
                 No sessions yet
               </div>
             )}
@@ -223,11 +217,10 @@ export function AgentRoster({
               type="button"
               onClick={() => newChatMut.mutate(agent.agentId)}
               disabled={newChatMut.isPending}
-              className="w-full flex items-center text-left transition-colors"
+              className="w-full flex items-center text-left transition-colors text-body"
               style={{
                 gap: 6,
                 padding: "4px 10px 4px 28px",
-                fontSize: 12.5,
                 color: "var(--fg-3)",
               }}
               onMouseEnter={(e) => {
@@ -294,10 +287,12 @@ export function AgentRoster({
             className="w-full outline-none"
             style={{
               padding: "5px 8px 5px 26px",
+              // 14px is the form-input size — deliberate exception to the
+              // 6-tier text scale so controls read as interactive targets.
               fontSize: 14,
               background: "var(--bg-sunken)",
               border: "1px solid var(--border)",
-              borderRadius: 4,
+              borderRadius: "var(--radius-input)",
               color: "var(--fg)",
             }}
           />
@@ -310,11 +305,10 @@ export function AgentRoster({
                 key={p.value}
                 type="button"
                 onClick={() => setPill(p.value)}
-                className="inline-flex items-center"
+                className="inline-flex items-center text-body"
                 style={{
-                  fontSize: 12,
                   padding: "3px 7px",
-                  borderRadius: 3,
+                  borderRadius: "var(--radius-chip)",
                   gap: 4,
                   color: active ? "var(--fg)" : "var(--fg-3)",
                   background: active ? "var(--bg-active)" : "transparent",
@@ -352,12 +346,12 @@ export function AgentRoster({
             <PulseIcon />
             Pulse · 5m
           </span>
-          <span className="mono" style={{ fontSize: 12, color: "var(--fg-4)" }}>
+          <span className="mono text-body" style={{ color: "var(--fg-4)" }}>
             {pulse.stale ? "stale" : "live"}
           </span>
         </div>
         <PulseBar aggregated={pulse.aggregated} stale={pulse.stale} />
-        <div className="flex" style={{ gap: 10, marginTop: 6, fontSize: 12 }}>
+        <div className="flex text-body" style={{ gap: 10, marginTop: 6 }}>
           <span className="mono" style={{ color: "var(--state-working)" }}>
             ●{liveCounts.working} working
           </span>
@@ -396,12 +390,13 @@ export function AgentRoster({
 
 function SectionHeader({ label, count }: { label: string; count: number }) {
   return (
+    // Inner roster group header (Agents / Humans) — unified with the global
+    // SectionHeader via the shared `text-eyebrow` token. Kept as a local
+    // component because the sticky-top / background behavior is roster-specific.
     <div
-      className="mono uppercase sticky top-0 z-10"
+      className="mono uppercase sticky top-0 z-10 text-eyebrow"
       style={{
         padding: "5px 12px",
-        fontSize: 11,
-        letterSpacing: 0.12,
         color: "var(--fg-4)",
         background: "var(--bg-raised)",
         borderBottom: "1px solid var(--border-faint)",

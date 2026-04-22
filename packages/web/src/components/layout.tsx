@@ -54,14 +54,8 @@ export function Layout() {
         {/* Brand */}
         <div className="flex items-center" style={{ gap: 10 }}>
           <FirstTreeLogo width={14} height={16} style={{ color: "var(--fg)" }} />
-          <span
-            style={{
-              fontWeight: 600,
-              fontSize: 13,
-              letterSpacing: -0.1,
-              color: "var(--fg)",
-            }}
-          >
+          {/* Brand text uses the canonical `text-subtitle` token (13 / 600 / -0.1 letter-spacing). */}
+          <span className="text-subtitle" style={{ color: "var(--fg)" }}>
             First Tree <span style={{ color: "var(--fg-3)", fontWeight: 400 }}>Hub</span>
           </span>
         </div>
@@ -79,6 +73,10 @@ export function Layout() {
               }
             >
               {({ isActive }) => (
+                // Top-level navigation tabs are intentionally NOT mapped to
+                // `text-title` (16 / 600): nav items warrant a lighter 500
+                // weight than page titles. This is the documented exception
+                // to the typography scale; do not copy this pattern.
                 <span
                   className="inline-flex items-center"
                   style={{
@@ -105,14 +103,13 @@ export function Layout() {
             type="button"
             onClick={() => setPaletteOpen(true)}
             aria-label="Open command palette"
-            className="inline-flex items-center transition-colors"
+            className="inline-flex items-center transition-colors text-label"
             style={{
               gap: 8,
               padding: "4px 8px",
-              fontSize: 11,
               color: "var(--fg-3)",
               border: "1px solid var(--border)",
-              borderRadius: 4,
+              borderRadius: "var(--radius-input)",
               background: "var(--bg-sunken)",
             }}
             onMouseEnter={(e) => {
@@ -147,13 +144,12 @@ export function Layout() {
           <button
             type="button"
             onClick={logout}
-            className="inline-flex items-center transition-colors hover:text-[var(--fg)]"
+            className="inline-flex items-center transition-colors hover:text-[var(--fg)] text-label"
             style={{
               padding: "4px 8px",
               color: "var(--fg-3)",
-              borderRadius: 4,
+              borderRadius: "var(--radius-input)",
               gap: 6,
-              fontSize: 11,
             }}
             aria-label="Log out"
           >

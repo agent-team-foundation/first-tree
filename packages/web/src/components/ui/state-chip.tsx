@@ -13,11 +13,10 @@ function isAgentState(state: string): state is AgentState {
 export function StateChip({ state, className }: StateChipProps) {
   const normalized: AgentState = state !== null && isAgentState(state) ? state : "offline";
   const color = normalized === "offline" ? "var(--fg-3)" : `var(--state-${normalized})`;
+  // Typography (size / weight / letter-spacing) comes from the `text-caption`
+  // token — shared with DenseBadge so state and neutral chips stay aligned.
   return (
-    <span
-      className={cn("mono inline-flex items-center gap-1.5 uppercase tracking-wider", className)}
-      style={{ fontSize: 10, letterSpacing: 0.06, color }}
-    >
+    <span className={cn("mono inline-flex items-center gap-1.5 uppercase text-caption", className)} style={{ color }}>
       <StateDot state={normalized} size={7} />
       {normalized}
     </span>

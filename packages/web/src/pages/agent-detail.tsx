@@ -301,7 +301,7 @@ export function AgentDetailPage() {
   if (agentQuery.isLoading) {
     return (
       <div className="-m-6 flex" style={{ minHeight: "100%" }}>
-        <div className="p-6" style={{ color: "var(--fg-3)", fontSize: 12 }}>
+        <div className="p-6 text-body" style={{ color: "var(--fg-3)" }}>
           Loading…
         </div>
       </div>
@@ -309,7 +309,7 @@ export function AgentDetailPage() {
   }
   if (agentQuery.error) {
     return (
-      <div className="-m-6 p-6" style={{ color: "var(--state-error)", fontSize: 12 }}>
+      <div className="-m-6 p-6 text-body" style={{ color: "var(--state-error)" }}>
         Failed to load agent: {agentQuery.error instanceof Error ? agentQuery.error.message : "Unknown error"}
       </div>
     );
@@ -317,7 +317,7 @@ export function AgentDetailPage() {
   const agent = agentQuery.data;
   if (!agent) {
     return (
-      <div className="-m-6 p-6" style={{ color: "var(--fg-3)", fontSize: 12 }}>
+      <div className="-m-6 p-6 text-body" style={{ color: "var(--fg-3)" }}>
         Agent not found
       </div>
     );
@@ -444,10 +444,9 @@ export function AgentDetailPage() {
                 key={it.key}
                 type="button"
                 onClick={() => jumpTo(it.anchor)}
-                className="block w-full text-left bg-transparent"
+                className="block w-full text-left bg-transparent text-body"
                 style={{
                   padding: "5px 16px 5px 14px",
-                  fontSize: 12,
                   color: "var(--fg-3)",
                   border: "none",
                   borderLeft: "2px solid transparent",
@@ -488,7 +487,7 @@ export function AgentDetailPage() {
               style={{
                 width: 36,
                 height: 36,
-                borderRadius: 6,
+                borderRadius: "var(--radius-panel)",
                 background: "var(--bg-active)",
                 border: "1px solid var(--border-strong)",
               }}
@@ -497,14 +496,12 @@ export function AgentDetailPage() {
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-baseline gap-2">
-                <span style={{ fontSize: 16, fontWeight: 600, letterSpacing: -0.2 }}>
-                  {agent.displayName ?? agent.name ?? shortId}
-                </span>
-                <span className="mono" style={{ fontSize: 11, color: "var(--fg-4)" }}>
+                <span className="text-title">{agent.displayName ?? agent.name ?? shortId}</span>
+                <span className="mono text-label" style={{ color: "var(--fg-4)" }}>
                   @{agent.name ?? shortId}
                 </span>
               </div>
-              <div className="mono" style={{ fontSize: 10.5, color: "var(--fg-4)" }}>
+              <div className="mono text-caption" style={{ color: "var(--fg-4)" }}>
                 agt_{shortId} · {agent.type}
                 {agent.visibility ? ` · ${agent.visibility}` : ""}
               </div>
@@ -557,15 +554,15 @@ export function AgentDetailPage() {
             <div
               className="flex items-center justify-between gap-3"
               style={{
-                borderRadius: 6,
+                borderRadius: "var(--radius-panel)",
                 padding: "10px 14px",
                 background: "color-mix(in oklch, var(--state-blocked) 10%, transparent)",
                 border: "1px solid color-mix(in oklch, var(--state-blocked) 28%, transparent)",
               }}
             >
-              <div style={{ fontSize: 12 }}>
+              <div className="text-body">
                 <div style={{ fontWeight: 500 }}>No computer bound</div>
-                <div style={{ color: "var(--fg-3)", fontSize: 11 }}>
+                <div className="text-label" style={{ color: "var(--fg-3)" }}>
                   Bind this agent to a computer so it can run. A computer will also claim it on first WebSocket connect.
                 </div>
               </div>
@@ -646,13 +643,12 @@ export function AgentDetailPage() {
               </div>
               {dryRunText && (
                 <pre
-                  className="whitespace-pre-wrap mono"
+                  className="whitespace-pre-wrap mono text-label"
                   style={{
                     padding: 8,
-                    borderRadius: 4,
+                    borderRadius: "var(--radius-input)",
                     background: "var(--bg-sunken)",
                     border: "1px solid var(--border-faint)",
-                    fontSize: 11,
                     color: "var(--fg-2)",
                   }}
                 >
@@ -668,7 +664,7 @@ export function AgentDetailPage() {
                 className="flex items-center justify-between"
                 style={{ padding: "10px 14px", borderBottom: "1px solid var(--border-faint)" }}
               >
-                <div className="inline-flex items-center gap-2" style={{ fontSize: 12, fontWeight: 600 }}>
+                <div className="inline-flex items-center gap-2 text-body" style={{ fontWeight: 600 }}>
                   {isHuman ? <Link2 className="h-3.5 w-3.5" /> : <Cable className="h-3.5 w-3.5" />}
                   Platform bindings
                 </div>
@@ -702,14 +698,12 @@ export function AgentDetailPage() {
                           <DenseTableCell>
                             <DenseBadge>{m.platform}</DenseBadge>
                           </DenseTableCell>
-                          <DenseTableCell className="mono" style={{ fontSize: 11 }}>
-                            {m.externalUserId}
-                          </DenseTableCell>
+                          <DenseTableCell className="mono text-label">{m.externalUserId}</DenseTableCell>
                           <DenseTableCell>{m.displayName ?? "—"}</DenseTableCell>
                           <DenseTableCell>
                             <DenseBadge tone="outline">{m.boundVia ?? "—"}</DenseBadge>
                           </DenseTableCell>
-                          <DenseTableCell className="mono" style={{ fontSize: 10.5, color: "var(--fg-4)" }}>
+                          <DenseTableCell className="mono text-caption" style={{ color: "var(--fg-4)" }}>
                             {formatDate(m.createdAt)}
                           </DenseTableCell>
                           <DenseTableCell>
@@ -763,7 +757,7 @@ export function AgentDetailPage() {
                             <DenseTableCell>
                               <StateChip state={isConnected ? "idle" : "offline"} />
                             </DenseTableCell>
-                            <DenseTableCell className="mono" style={{ fontSize: 10.5, color: "var(--fg-4)" }}>
+                            <DenseTableCell className="mono text-caption" style={{ color: "var(--fg-4)" }}>
                               {formatDate(a.createdAt)}
                             </DenseTableCell>
                             <DenseTableCell>
@@ -817,7 +811,7 @@ export function AgentDetailPage() {
           </div>
 
           {!isHuman && draft.summary.anyDirty && (
-            <div style={{ fontSize: 11, color: "var(--fg-3)" }}>
+            <div className="text-label" style={{ color: "var(--fg-3)" }}>
               <button
                 type="button"
                 onClick={() => dryRunMutation.mutate()}
@@ -1089,18 +1083,24 @@ function BehaviorSection(props: {
     <section className="space-y-3">
       <div className="flex items-center justify-between">
         <div className="inline-flex items-baseline gap-2">
-          <h2 style={{ fontSize: 13, fontWeight: 600 }}>Behavior</h2>
+          <h2 className="text-subtitle">Behavior</h2>
           {props.version != null && (
-            <span className="mono" style={{ fontSize: 10.5, color: "var(--fg-4)" }}>
+            <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
               v{props.version}
             </span>
           )}
           {props.dirty && <UppercaseLabel style={{ color: "var(--state-blocked)" }}>draft</UppercaseLabel>}
         </div>
       </div>
-      {props.loading && <div style={{ fontSize: 12, color: "var(--fg-3)" }}>Loading configuration…</div>}
+      {props.loading && (
+        <div className="text-body" style={{ color: "var(--fg-3)" }}>
+          Loading configuration…
+        </div>
+      )}
       {props.error && (
-        <div style={{ fontSize: 12, color: "var(--state-error)" }}>Failed to load configuration: {props.error}</div>
+        <div className="text-body" style={{ color: "var(--state-error)" }}>
+          Failed to load configuration: {props.error}
+        </div>
       )}
       {props.loaded && <div className="space-y-3">{props.children}</div>}
     </section>
@@ -1165,27 +1165,31 @@ function BindClientList({
   if (bindable.length === 0) {
     return (
       <div
-        className="text-sm"
+        className="text-body"
         style={{
           background: "var(--bg-sunken)",
           border: "1px solid var(--border-faint)",
-          borderRadius: 4,
+          borderRadius: "var(--radius-input)",
           padding: "10px 12px",
           color: "var(--fg-3)",
         }}
       >
         No connected computers available. Run{" "}
-        <code className="mono" style={{ fontSize: 11 }}>
-          first-tree-hub client connect &lt;url&gt;
-        </code>{" "}
-        on the computer that should run this agent, then reopen this dialog.
+        <code className="mono text-label">first-tree-hub client connect &lt;url&gt;</code> on the computer that should
+        run this agent, then reopen this dialog.
       </div>
     );
   }
   return (
     <ul
       className="max-h-64 overflow-y-auto"
-      style={{ border: "1px solid var(--border)", borderRadius: 4, margin: 0, padding: 0, listStyle: "none" }}
+      style={{
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius-input)",
+        margin: 0,
+        padding: 0,
+        listStyle: "none",
+      }}
     >
       {bindable.map((c) => {
         const picked = c.id === selected;
@@ -1209,14 +1213,18 @@ function BindClientList({
                 aria-hidden
               />
               <span className="flex-1 min-w-0">
-                <span className="block text-sm font-medium truncate">{c.hostname ?? c.id}</span>
-                <span className="block mono truncate" style={{ fontSize: 10.5, color: "var(--fg-4)" }}>
+                <span className="block text-body truncate" style={{ fontWeight: 500 }}>
+                  {c.hostname ?? c.id}
+                </span>
+                <span className="block mono truncate text-caption" style={{ color: "var(--fg-4)" }}>
                   {c.id}
                   {c.os ? ` · ${c.os}` : ""}
                   {c.sdkVersion ? ` · SDK ${c.sdkVersion}` : ""}
                 </span>
               </span>
-              <span style={{ fontSize: 11, color: "var(--fg-3)" }}>{c.status}</span>
+              <span className="text-label" style={{ color: "var(--fg-3)" }}>
+                {c.status}
+              </span>
             </button>
           </li>
         );
@@ -1263,7 +1271,7 @@ function TestResultCard({ result, onDismiss }: { result: TestResult; onDismiss: 
         background: "var(--bg-raised)",
         border: "1px solid var(--border)",
         borderLeft: `3px solid ${borderColor}`,
-        borderRadius: 6,
+        borderRadius: "var(--radius-panel)",
         padding: "12px 14px",
       }}
     >
@@ -1272,16 +1280,20 @@ function TestResultCard({ result, onDismiss }: { result: TestResult; onDismiss: 
           <div className="flex items-center gap-2">
             <DenseBadge tone={badgeTone}>{STATUS_LABELS[result.status]}</DenseBadge>
             {result.responseTime != null && (
-              <span className="mono" style={{ fontSize: 11, color: "var(--fg-4)" }}>
+              <span className="mono text-label" style={{ color: "var(--fg-4)" }}>
                 {(result.responseTime / 1000).toFixed(1)}s
               </span>
             )}
           </div>
-          {result.message && <p style={{ fontSize: 12, color: "var(--fg-3)" }}>{result.message}</p>}
+          {result.message && (
+            <p className="text-body" style={{ color: "var(--fg-3)" }}>
+              {result.message}
+            </p>
+          )}
           {conn && (
             <div
+              className="text-label"
               style={{
-                fontSize: 11,
                 color: "var(--fg-3)",
                 borderTop: "1px solid var(--border-faint)",
                 paddingTop: 6,
@@ -1303,13 +1315,12 @@ function TestResultCard({ result, onDismiss }: { result: TestResult; onDismiss: 
           )}
           {result.responseContent && (
             <p
-              className="mono whitespace-pre-wrap"
+              className="mono whitespace-pre-wrap text-label"
               style={{
                 background: "var(--bg-sunken)",
                 border: "1px solid var(--border-faint)",
-                borderRadius: 4,
+                borderRadius: "var(--radius-input)",
                 padding: 8,
-                fontSize: 11,
                 maxHeight: 160,
                 overflow: "auto",
               }}
