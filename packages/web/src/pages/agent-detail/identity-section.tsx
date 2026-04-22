@@ -32,7 +32,9 @@ export function IdentitySection({ agent, onSave }: IdentitySectionProps) {
   // Mirror the backend PATCH /admin/agents/:uuid guard (assertCanManage).
   // Without this the Edit button surfaces to non-managers and Save would
   // 404 from the server — a confusing "Agent not found" in the dialog.
-  const canManage = authRole === "admin" || agent.managerId === memberId;
+  // null-is-permissive so a transient /me failure doesn't lock a real
+  // manager out of their own agent (see agent-detail.tsx for details).
+  const canManage = memberId == null || authRole === "admin" || agent.managerId === memberId;
 
   const metadata = agent.metadata as Record<string, unknown> | undefined;
   const treeMeta = metadata?.tree as Record<string, unknown> | undefined;

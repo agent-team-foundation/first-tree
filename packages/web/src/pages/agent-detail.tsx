@@ -112,11 +112,19 @@ export function AgentDetailPage() {
     enabled: !!uuid,
   });
 
-  // Manager-only gating — matches the backend `assertCanManage` guard on
-  // /admin/agents/:uuid/config. Non-managers see a read-only profile card
-  // and nothing that would 404 on fetch. Admins implicitly manage every
-  // agent in their org.
-  const canManage = agentQuery.data != null && (role === "admin" || agentQuery.data.managerId === memberId);
+  // Manager-only gating — mirrors the backend `assertCanManage` guard on
+  // /admin/agents/:uuid/config. The backend is the authoritative check; this
+  // UI gate just avoids no-op fetches and confusing error states.
+  //
+  // IMPORTANT — null-is-permissive: `useAuth()` leaves `memberId`/`role` null
+  // when the initial /me call transiently fails (non-401 errors are swallowed
+  // in auth-context.tsx without retry). Treating null as "can't manage" would
+  // lock real managers out of their own agent for the rest of the session
+  // whenever /me flaked once. Default to permissive when auth is unresolved —
+  // a non-manager seeing transient edit UI is a cosmetic bug the backend
+  // rejects; a manager locked out is a regression.
+  const canManage =
+    agentQuery.data != null && (memberId == null || role === "admin" || agentQuery.data.managerId === memberId);
 
   const cfgQuery = useQuery({
     queryKey: ["agent-config", uuid],
