@@ -191,11 +191,17 @@ export async function buildApp(config: Config) {
         { prefix: "/admin/agents" },
       );
 
-      // Step 2: per-agent runtime config (admin role required)
+      // Step 2: per-agent runtime config.
+      // Per-route guards in agent-config.ts enforce the real rule:
+      //   GET    /:uuid/config          → assertAgentVisible (any visible viewer may read)
+      //   PATCH  /:uuid/config          → assertCanManage   (manager or admin may edit)
+      //   POST   /:uuid/config/dry-run  → assertCanManage   (manager or admin may preview)
+      // This mirrors agents.managerId's documented "manager retains CRUD" semantics;
+      // the previous plugin-scoped adminOnly hook short-circuited that, blocking
+      // non-admin managers from editing behavior on agents they own.
       await api.register(
         async (adminApp) => {
           adminApp.addHook("onRequest", memberAuth);
-          adminApp.addHook("onRequest", adminOnly);
           await adminApp.register(adminAgentConfigRoutes);
         },
         { prefix: "/admin/agents" },
