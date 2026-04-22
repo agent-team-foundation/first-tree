@@ -36,6 +36,8 @@ export {
 export { bindFeishuBot, bindFeishuUser } from "./feishu.js";
 // Database
 export { runMigrations } from "./migrate.js";
+// Legacy home auto-migration (pre-v0.9 `~/.first-tree-hub` → `~/.first-tree/hub`)
+export { runHomeMigration } from "./migrate-home.js";
 // Onboard
 export {
   formatCheckReport,
