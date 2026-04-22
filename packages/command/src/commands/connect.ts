@@ -50,7 +50,7 @@ function decodeJwtPayload(token: string): JwtPayload | null {
  * and give the operator a chance to back out before we overwrite credentials.
  *
  * Why this gate exists: running `client connect` implicitly overwrites
- * `~/.first-tree-hub/config/credentials.json`. Without this prompt, someone
+ * `~/.first-tree/hub/config/credentials.json`. Without this prompt, someone
  * onboarding a second account on their own machine silently logs themselves
  * out of the first account — they'd only notice when their "main" agents
  * appeared offline later. We treat single-account-per-machine as the product
@@ -134,7 +134,7 @@ async function promptReplaceOrCancel(newMemberId: string, newServerUrl: string):
 function printIsolationGuide(newServerUrl: string): void {
   process.stderr.write("\n  Cancelled. The existing account on this computer is untouched.\n\n");
   process.stderr.write("  To run this new account alongside it (advanced — no background service):\n\n");
-  process.stderr.write('    export FIRST_TREE_HUB_HOME="$HOME/.first-tree-hub-<label>"\n');
+  process.stderr.write('    export FIRST_TREE_HUB_HOME="$HOME/.first-tree/hub-<label>"\n');
   process.stderr.write(`    first-tree-hub client connect ${newServerUrl} --token <token>\n`);
   process.stderr.write("    first-tree-hub client start\n\n");
   process.stderr.write("  Notes:\n");

@@ -7,7 +7,14 @@ import { registerConfigCommands } from "../commands/config.js";
 import { registerOnboardCommand } from "../commands/onboard.js";
 import { registerServerCommands } from "../commands/server.js";
 import { registerStatusCommand } from "../commands/status.js";
+import { runHomeMigration } from "../core/migrate-home.js";
 import { COMMAND_VERSION } from "../core/version.js";
+
+// Run once at startup, BEFORE any command touches config/credentials so the
+// very first CLI invocation on an upgraded install transparently picks up
+// the renamed `~/.first-tree/hub` home. Never throws — failures degrade to
+// a stderr warning and the CLI still runs.
+runHomeMigration();
 
 const program = new Command();
 

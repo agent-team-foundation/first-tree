@@ -38,6 +38,7 @@ export {
   resolveAccessToken,
   resolveCliInvocation,
   resolveServerUrl,
+  runHomeMigration,
   runMigrations,
   startServer,
   status,

@@ -3,7 +3,7 @@ import { defineConfig, field } from "./schema.js";
 import type { InferConfig } from "./types.js";
 
 /**
- * Agent config layout on disk: `~/.first-tree-hub/config/agents/<name>/agent.yaml`.
+ * Agent config layout on disk: `~/.first-tree/hub/config/agents/<name>/agent.yaml`.
  *
  * After the unified-user-token milestone the local config no longer stores an
  * agent bearer; authentication comes from the user's member JWT in
