@@ -197,7 +197,10 @@ jobs:
           tree_repo_url="https://github.com/${treeRepo}.git"
           tree_repo_dir="${treePath}"
           mkdir -p "$(dirname "$tree_repo_dir")"
-          if git clone --depth 1 "$tree_repo_url" "$tree_repo_dir"; then
+          if GIT_TERMINAL_PROMPT=0 GIT_ASKPASS= SSH_ASKPASS= git \
+            -c credential.helper= \
+            -c http.https://github.com/.extraheader= \
+            clone --depth 1 "$tree_repo_url" "$tree_repo_dir"; then
             exit 0
           fi
 
@@ -216,7 +219,7 @@ jobs:
           esac
           EOF
           chmod 700 "$askpass_script"
-          GIT_ASKPASS="$askpass_script" git clone --depth 1 "$tree_repo_url" "$tree_repo_dir"
+          GIT_ASKPASS="$askpass_script" git -c credential.helper= clone --depth 1 "$tree_repo_url" "$tree_repo_dir"
           rm -f "$askpass_script"
 
       - name: Setup Node
