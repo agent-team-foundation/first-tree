@@ -312,7 +312,7 @@ describe("Admin agent-config API (Step 2)", () => {
     const fresh = loginRes.json<{ accessToken: string }>();
     const auth = { authorization: `Bearer ${fresh.accessToken}` };
 
-    // GET — manager can read config (assertAgentVisible allows any visible viewer).
+    // GET — manager can read config (assertCanManage allows managerId = self).
     const get = await app.inject({
       method: "GET",
       url: `/api/v1/admin/agents/${agent.uuid}/config`,
@@ -330,5 +330,73 @@ describe("Admin agent-config API (Step 2)", () => {
     });
     expect(patch.statusCode).toBe(200);
     expect(patch.json().payload.model).toBe("claude-opus-4-6");
+  });
+
+  it("non-manager member cannot GET config even when agent is org-visible", async () => {
+    // Behavior (system prompt, tools, env) is manager-only — visibility only
+    // grants card-view access (GET /admin/agents/:uuid), not internal config.
+    // This mirrors ChatGPT Custom GPTs / Poe / Slack bots: "usable by org ≠
+    // prompt readable by org".
+    const app = getApp();
+    const { createAgent } = await import("../services/agent.js");
+    const { members } = await import("../db/schema/members.js");
+    const { users } = await import("../db/schema/users.js");
+    const { clients } = await import("../db/schema/clients.js");
+
+    // Manager admin creates an org-visible agent.
+    const manager = await createTestAdmin(app, {
+      username: `cfg-vis-mgr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    });
+    const [mgrMember] = await app.db.select().from(members).where(eq(members.id, manager.memberId)).limit(1);
+    if (!mgrMember) throw new Error("manager member missing");
+    const clientId = `cli-vis-${crypto.randomUUID().slice(0, 8)}`;
+    await app.db.insert(clients).values({ id: clientId, userId: mgrMember.userId, status: "connected" });
+    const agent = await createAgent(app.db, {
+      name: `cfg-vis-agent-${crypto.randomUUID().slice(0, 8)}`,
+      type: "autonomous_agent",
+      displayName: "Shared Agent",
+      managerId: manager.memberId,
+      clientId,
+      visibility: "organization",
+    });
+
+    // A different member in the same org — has visibility but is not manager.
+    const viewer = await createTestAdmin(app, {
+      username: `cfg-vis-viewer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    });
+    await app.db
+      .update(members)
+      .set({ role: "member" })
+      .where(
+        eq(
+          members.userId,
+          (await app.db.select({ id: users.id }).from(users).where(eq(users.username, viewer.username)).limit(1))[0]
+            ?.id ?? "",
+        ),
+      );
+    const loginRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { username: viewer.username, password: viewer.password },
+    });
+    const fresh = loginRes.json<{ accessToken: string }>();
+    const auth = { authorization: `Bearer ${fresh.accessToken}` };
+
+    // Card view works — agent IS visible to this member.
+    const card = await app.inject({
+      method: "GET",
+      url: `/api/v1/admin/agents/${agent.uuid}`,
+      headers: auth,
+    });
+    expect(card.statusCode).toBe(200);
+    expect(card.json().uuid).toBe(agent.uuid);
+
+    // But config (behavior) is not readable — manager-only.
+    const cfg = await app.inject({
+      method: "GET",
+      url: `/api/v1/admin/agents/${agent.uuid}/config`,
+      headers: auth,
+    });
+    expect(cfg.statusCode).toBe(404);
   });
 });

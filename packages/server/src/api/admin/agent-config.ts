@@ -4,12 +4,18 @@ import {
 } from "@agent-team-foundation/first-tree-hub-shared";
 import type { FastifyInstance } from "fastify";
 import { requireMember } from "../../middleware/require-identity.js";
-import { assertAgentVisible, assertCanManage, memberScope } from "../../services/access-control.js";
+import { assertCanManage, memberScope } from "../../services/access-control.js";
 
 export async function adminAgentConfigRoutes(app: FastifyInstance): Promise<void> {
+  // Runtime config is behavior-sensitive (system prompt, tools, env — the
+  // agent's "soul"). Visibility controls whether a member sees the agent
+  // exists; manageability controls whether they can inspect its behavior.
+  // This mirrors how public GPTs / bots across the industry expose a card
+  // view but keep the prompt private.
+  //   GET  /:uuid         → assertAgentVisible (card view in agents.ts)
+  //   GET  /:uuid/config  → assertCanManage    (this file, all three routes)
   app.get<{ Params: { uuid: string } }>("/:uuid/config", async (request) => {
-    const scope = memberScope(request);
-    await assertAgentVisible(app.db, scope, request.params.uuid);
+    await assertCanManage(app.db, memberScope(request), request.params.uuid);
     const cfg = await app.configService.get(request.params.uuid);
     return cfg;
   });
