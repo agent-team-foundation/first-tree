@@ -62,6 +62,26 @@ export interface RunStartOptions {
   dryRun?: boolean;
 }
 
+export function buildLaunchdEnvironment(
+  gardenerDir: string,
+  env: NodeJS.ProcessEnv,
+): Record<string, string> {
+  return {
+    HOME: homedir(),
+    PATH: env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+    GARDENER_DIR: gardenerDir,
+    ...(env.ANTHROPIC_API_KEY
+      ? { ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY }
+      : {}),
+    ...(env.GARDENER_CLASSIFIER
+      ? { GARDENER_CLASSIFIER: env.GARDENER_CLASSIFIER }
+      : {}),
+    ...(env.GARDENER_CLASSIFIER_MODEL
+      ? { GARDENER_CLASSIFIER_MODEL: env.GARDENER_CLASSIFIER_MODEL }
+      : {}),
+  };
+}
+
 interface ParsedStartFlags {
   help: boolean;
   treePath?: string;
@@ -198,21 +218,7 @@ export async function runStart(
         executable: process.execPath,
         arguments: programArgs,
         logPath,
-        env: {
-          HOME: homedir(),
-          PATH: env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
-          GARDENER_DIR: gardenerDir,
-          // Passthrough the classifier credentials when the caller has
-          // them in their shell env. Without ANTHROPIC_API_KEY, gardener
-          // comment refuses to post (PR #255). We add the vars only when
-          // present so launchd doesn't record empty strings.
-          ...(env.ANTHROPIC_API_KEY
-            ? { ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY }
-            : {}),
-          ...(env.GARDENER_CLASSIFIER_MODEL
-            ? { GARDENER_CLASSIFIER_MODEL: env.GARDENER_CLASSIFIER_MODEL }
-            : {}),
-        },
+        env: buildLaunchdEnvironment(gardenerDir, env),
         workingDirectory: config.treePath,
         plistPath,
       });

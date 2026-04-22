@@ -27,7 +27,10 @@ import {
   sanitizeLabelSegment,
 } from "#products/gardener/engine/daemon/launchd.js";
 import { runStatus } from "#products/gardener/engine/commands/status.js";
-import { runStart } from "#products/gardener/engine/commands/start.js";
+import {
+  buildLaunchdEnvironment,
+  runStart,
+} from "#products/gardener/engine/commands/start.js";
 import { runStop } from "#products/gardener/engine/commands/stop.js";
 import { useTmpDir } from "../helpers.js";
 
@@ -422,6 +425,26 @@ describe("gardener daemon -- stop idempotency", () => {
 });
 
 describe("gardener daemon -- launchd helpers", () => {
+  it("includes classifier override in the launchd environment payload", () => {
+    const env = buildLaunchdEnvironment("/tmp/gardener", {
+      PATH: "/usr/bin:/bin",
+      ANTHROPIC_API_KEY: "sk-test",
+      GARDENER_CLASSIFIER: "none",
+      GARDENER_CLASSIFIER_MODEL: "claude-sonnet-4-6",
+    });
+    const plist = renderLaunchdPlist({
+      label: "com.first-tree.gardener.alice",
+      executable: "/usr/bin/node",
+      arguments: ["/cli.js", "gardener", "daemon"],
+      logPath: "/tmp/log.log",
+      env,
+      workingDirectory: "/Users/alice/tree",
+    });
+    expect(plist).toContain("<key>GARDENER_CLASSIFIER</key>");
+    expect(plist).toContain("<string>none</string>");
+    expect(plist).toContain("<key>GARDENER_CLASSIFIER_MODEL</key>");
+  });
+
   it("sanitizes label segments", () => {
     expect(sanitizeLabelSegment("alice")).toBe("alice");
     expect(sanitizeLabelSegment("alice/bob")).toBe("alice_bob");
