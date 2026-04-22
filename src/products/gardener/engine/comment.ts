@@ -1400,6 +1400,8 @@ export async function handleMergedIssue(
     treeNodes,
     codeownersMentions,
     autoAssigned: assignOwners,
+    // TODO(#277): thread source-PR head SHA from reviewOne callers so
+    // the dispatch marker records source_sha=<sha> instead of "unknown".
     sourceSha: input.sourceSha,
   });
   const title = `[gardener] tree update needed for ${sourceRepo}#${sourcePr}`;
