@@ -85,8 +85,13 @@ describe("gardener install-workflow — yaml builder", () => {
       nodeVersion: "22",
     });
     expect(yaml).toContain("name: First-Tree Sync");
-    expect(yaml).toContain("repository: acme/tree");
-    expect(yaml).toContain("path: .first-tree-cache/tree");
+    expect(yaml).toContain('tree_repo_url="https://github.com/acme/tree.git"');
+    expect(yaml).toContain('tree_repo_dir=".first-tree-cache/tree"');
+    expect(yaml).toContain("clone --depth 1");
+    expect(yaml).toContain('if git clone --depth 1 "$tree_repo_url" "$tree_repo_dir"; then');
+    expect(yaml).toContain('if [ -z "${TREE_REPO_TOKEN:-}" ]; then');
+    expect(yaml).toContain('askpass_script="$RUNNER_TEMP/first-tree-git-askpass.sh"');
+    expect(yaml).toContain("GIT_ASKPASS=\"$askpass_script\" git clone --depth 1");
     expect(yaml).toContain('node-version: "22"');
     expect(yaml).toContain("--assign-owners");
     expect(yaml).toContain(
@@ -111,7 +116,7 @@ describe("gardener install-workflow — yaml builder", () => {
       treePath: "tree-checkout",
       nodeVersion: "20",
     });
-    expect(yaml).toContain("path: tree-checkout");
+    expect(yaml).toContain('tree_repo_dir="tree-checkout"');
     expect(yaml).toContain("--tree-path tree-checkout");
     expect(yaml).toContain('node-version: "20"');
   });
@@ -129,7 +134,9 @@ describe("gardener install-workflow — runInstallWorkflow", () => {
     const target = join(tmp.path, ".github/workflows/first-tree-sync.yml");
     expect(existsSync(target)).toBe(true);
     const body = readFileSync(target, "utf-8");
-    expect(body).toContain("repository: acme/tree");
+    expect(body).toContain('tree_repo_url="https://github.com/acme/tree.git"');
+    expect(body).toContain('if git clone --depth 1 "$tree_repo_url" "$tree_repo_dir"; then');
+    expect(body).toContain('askpass_script="$RUNNER_TEMP/first-tree-git-askpass.sh"');
     expect(lines.some((l) => l.includes("wrote"))).toBe(true);
     expect(lines.some((l) => l.includes("TREE_REPO_TOKEN"))).toBe(true);
     expect(lines.some((l) => l.includes("ANTHROPIC_API_KEY"))).toBe(true);
@@ -168,7 +175,7 @@ describe("gardener install-workflow — runInstallWorkflow", () => {
       join(tmp.path, ".github/workflows/first-tree-sync.yml"),
       "utf-8",
     );
-    expect(body).toContain("repository: other/tree");
+    expect(body).toContain('tree_repo_url="https://github.com/other/tree.git"');
   });
 
   it("prints yaml to stdout and does not write in --dry-run", async () => {
@@ -181,7 +188,8 @@ describe("gardener install-workflow — runInstallWorkflow", () => {
     expect(code).toBe(0);
     expect(existsSync(join(tmp.path, ".github/workflows/first-tree-sync.yml")))
       .toBe(false);
-    expect(lines.some((l) => l.includes("repository: acme/tree"))).toBe(true);
+    expect(lines.some((l) => l.includes("https://github.com/acme/tree.git")))
+      .toBe(true);
     expect(lines.some((l) => l.includes("dry-run"))).toBe(true);
   });
 

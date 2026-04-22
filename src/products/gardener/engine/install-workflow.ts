@@ -34,7 +34,7 @@ skills/first-tree/references/workflow-mode.md).
 
 Options:
   --tree-repo <owner/name>   Tree repo slug (required). Written into the
-                             workflow's actions/checkout step.
+                             workflow's tree clone step.
   --tree-path <dir>          Path inside the runner where the tree is
                              checked out. Default: .first-tree-cache/tree
   --output <file>            Destination path for the workflow. Default:
@@ -189,12 +189,34 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Checkout tree repo
-        uses: actions/checkout@v4
-        with:
-          repository: ${treeRepo}
-          token: \${{ secrets.TREE_REPO_TOKEN }}
-          path: ${treePath}
+      - name: Clone tree repo
+        shell: bash
+        run: |
+          set -euo pipefail
+          tree_repo_url="https://github.com/${treeRepo}.git"
+          tree_repo_dir="${treePath}"
+          mkdir -p "$(dirname "$tree_repo_dir")"
+          if git clone --depth 1 "$tree_repo_url" "$tree_repo_dir"; then
+            exit 0
+          fi
+
+          if [ -z "\${TREE_REPO_TOKEN:-}" ]; then
+            echo "Anonymous tree clone failed and TREE_REPO_TOKEN is unset." >&2
+            exit 1
+          fi
+
+          rm -rf "$tree_repo_dir"
+          askpass_script="$RUNNER_TEMP/first-tree-git-askpass.sh"
+          cat >"$askpass_script" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\\n' 'x-access-token' ;;
+            *Password*) printf '%s\\n' "$TREE_REPO_TOKEN" ;;
+          esac
+          EOF
+          chmod 700 "$askpass_script"
+          GIT_ASKPASS="$askpass_script" git clone --depth 1 "$tree_repo_url" "$tree_repo_dir"
+          rm -f "$askpass_script"
 
       - name: Setup Node
         uses: actions/setup-node@v4
