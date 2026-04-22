@@ -118,7 +118,36 @@ broad, user prefers a dedicated token), create a new fine-grained PAT:
    unset TOKEN
    ```
 
-## Step 3 — commit and open a PR
+## Step 3 — set the `ANTHROPIC_API_KEY` secret
+
+The workflow also needs an Anthropic API key in the Actions runtime.
+Without it, `first-tree gardener comment` still runs, but it falls back
+to the default no-classifier path and only posts a low-signal
+`INSUFFICIENT_CONTEXT` review instead of a useful judgment.
+
+If your shell already has `ANTHROPIC_API_KEY` exported, pipe it directly
+into the repo secret without echoing it or pasting it into chat:
+
+```bash
+printf '%s' "$ANTHROPIC_API_KEY" | gh secret set ANTHROPIC_API_KEY \
+  --repo <CODEBASE_OWNER>/<CODEBASE_NAME> \
+  --body -
+```
+
+If the variable is not already exported locally, ask the user to paste
+it privately into your terminal, then run:
+
+```bash
+printf '%s' "$TOKEN" | gh secret set ANTHROPIC_API_KEY \
+  --repo <CODEBASE_OWNER>/<CODEBASE_NAME> \
+  --body -
+unset TOKEN
+```
+
+Never print the key, never write it to a file, and never paste it into
+chat.
+
+## Step 4 — commit and open a PR
 
 Stage the new workflow file and open a PR for review:
 
@@ -132,7 +161,7 @@ gh pr create --fill
 Let a human reviewer approve the workflow addition — CI changes
 deserve a second set of eyes.
 
-## Step 4 — verify on the next merge
+## Step 5 — verify on the next merge
 
 After the workflow PR merges:
 
@@ -151,6 +180,10 @@ After the workflow PR merges:
 
 - **`TREE_REPO_TOKEN unset`** — secret not installed or scoped to a
   different repo. Re-run Step 2 with the correct `--repo`.
+- **Low-signal `INSUFFICIENT_CONTEXT` review** — `ANTHROPIC_API_KEY` is
+  not available to the workflow job, so gardener fell back to the
+  default no-classifier path. Re-run Step 3 with the correct `--repo`,
+  or add the secret at the org/environment level used by this repo.
 - **`tree-repo auth/access error (401/403/404)`** — PAT lacks
   `issues:write` or `contents:read` on the tree repo, or points at the
   wrong repo. Regenerate with the scopes in Step 2.
