@@ -94,6 +94,7 @@ describe("gardener install-workflow — yaml builder", () => {
     );
     expect(yaml).toContain("first-tree:sync");
     expect(yaml).toContain("TREE_REPO_TOKEN: ${{ secrets.TREE_REPO_TOKEN }}");
+    expect(yaml).toContain("ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}");
   });
 
   it("honors a custom tree-path override", () => {
@@ -123,6 +124,7 @@ describe("gardener install-workflow — runInstallWorkflow", () => {
     expect(body).toContain("repository: acme/tree");
     expect(lines.some((l) => l.includes("wrote"))).toBe(true);
     expect(lines.some((l) => l.includes("TREE_REPO_TOKEN"))).toBe(true);
+    expect(lines.some((l) => l.includes("ANTHROPIC_API_KEY"))).toBe(true);
   });
 
   it("refuses to overwrite without --force", async () => {
