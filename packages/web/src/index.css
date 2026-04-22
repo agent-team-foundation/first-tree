@@ -235,3 +235,8 @@
 .fade-in {
   animation: subtle-fade 180ms ease-out;
 }
+
+/* Dense table row hover — used by DenseTableRow[data-interactive] */
+tr[data-interactive]:hover {
+  background: var(--bg-hover);
+}

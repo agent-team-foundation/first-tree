@@ -26,14 +26,37 @@ export function ModelSection({ value, baseline, onChange, onRevert, disabled }: 
   const hasExtra = !CLAUDE_MODEL_OPTIONS.some((o) => o.value === value) && value !== "";
 
   return (
-    <section className={`rounded-md border bg-white ${dirty ? "border-amber-300" : "border-gray-200"}`}>
-      <header className="flex items-center justify-between border-b px-4 py-2">
-        <h3 className="text-sm font-medium flex items-center gap-2">
+    <section
+      style={{
+        background: "var(--bg-raised)",
+        border: `1px solid ${dirty ? "color-mix(in oklch, var(--state-blocked) 40%, transparent)" : "var(--border)"}`,
+        borderRadius: 6,
+      }}
+    >
+      <header
+        className="flex items-center justify-between"
+        style={{ padding: "10px 14px", borderBottom: "1px solid var(--border-faint)" }}
+      >
+        <h3 className="inline-flex items-center gap-2" style={{ fontSize: 12, fontWeight: 600, color: "var(--fg)" }}>
           Model
-          {dirty && <span className="text-xs rounded bg-amber-100 px-1.5 py-0.5 text-amber-900">changed</span>}
+          {dirty && (
+            <span
+              className="mono uppercase"
+              style={{
+                fontSize: 10,
+                letterSpacing: "0.06em",
+                padding: "1px 6px",
+                borderRadius: 3,
+                background: "color-mix(in oklch, var(--state-blocked) 16%, transparent)",
+                color: "color-mix(in oklch, var(--state-blocked) 50%, var(--fg))",
+              }}
+            >
+              changed
+            </span>
+          )}
         </h3>
         {dirty && (
-          <Button size="sm" variant="ghost" onClick={onRevert} disabled={disabled}>
+          <Button size="xs" variant="ghost" onClick={onRevert} disabled={disabled}>
             Revert
           </Button>
         )}

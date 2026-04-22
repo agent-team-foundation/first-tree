@@ -30,12 +30,21 @@ export function McpSection(props: McpSectionProps) {
   const activeCount = props.items.filter((i) => i.status !== "deleted").length;
 
   return (
-    <section className="rounded-md border bg-white">
-      <header className="flex items-center justify-between border-b px-4 py-2">
-        <h3 className="text-sm font-medium">MCP Servers ({activeCount})</h3>
+    <section
+      style={{
+        background: "var(--bg-raised)",
+        border: "1px solid var(--border)",
+        borderRadius: 6,
+      }}
+    >
+      <header
+        className="flex items-center justify-between"
+        style={{ padding: "10px 14px", borderBottom: "1px solid var(--border-faint)" }}
+      >
+        <h3 style={{ fontSize: 12, fontWeight: 600, color: "var(--fg)" }}>MCP Servers ({activeCount})</h3>
         {!props.disabled && (
-          <Button size="sm" variant="outline" onClick={() => setDialog({ mode: "add" })}>
-            <Plus className="h-3.5 w-3.5 mr-1.5" /> Add
+          <Button size="xs" variant="outline" onClick={() => setDialog({ mode: "add" })}>
+            <Plus className="h-3 w-3" /> Add
           </Button>
         )}
       </header>

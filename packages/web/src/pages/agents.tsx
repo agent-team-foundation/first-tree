@@ -1,21 +1,40 @@
 import type { Agent } from "@agent-team-foundation/first-tree-hub-shared";
 import { AGENT_TYPES } from "@agent-team-foundation/first-tree-hub-shared";
 import { useQuery } from "@tanstack/react-query";
-import { Plus } from "lucide-react";
-import { useMemo, useState } from "react";
+import { Filter, Plus, Search } from "lucide-react";
+import { type ReactNode, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
+import { getActivityOverview, type RuntimeAgent } from "../api/activity.js";
 import { listAgents } from "../api/agents.js";
 import { useAuth } from "../auth/auth-context.js";
 import { LastStepModal } from "../components/last-step-modal.js";
 import { NewAgentDialog } from "../components/new-agent-dialog.js";
-import { Badge } from "../components/ui/badge.js";
 import { Button } from "../components/ui/button.js";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.js";
+import { DenseBadge } from "../components/ui/dense-badge.js";
+import {
+  DenseTable,
+  DenseTableBody,
+  DenseTableCell,
+  DenseTableHead,
+  DenseTableHeader,
+  DenseTableRow,
+} from "../components/ui/dense-table.js";
+import { FilterPill } from "../components/ui/filter-pill.js";
+import { PageHeader } from "../components/ui/page-header.js";
+import { Panel } from "../components/ui/panel.js";
+import { SectionHeader } from "../components/ui/section-header.js";
+import { StateDot } from "../components/ui/state-dot.js";
 import { useAgentNameMap } from "../lib/use-agent-name-map.js";
 import { useMemberNameMap } from "../lib/use-member-name-map.js";
-import { cn, formatDate } from "../lib/utils.js";
+import { formatDate } from "../lib/utils.js";
 
 const agentTypeValues = Object.values(AGENT_TYPES);
+
+type RuntimeInfo = {
+  runtimeState: string | null;
+  activeSessions: number | null;
+  totalSessions: number | null;
+};
 
 function sortByName(agents: Agent[]): Agent[] {
   return [...agents].sort((a, b) => {
@@ -25,15 +44,34 @@ function sortByName(agents: Agent[]): Agent[] {
   });
 }
 
+function pickRuntime(agent: Agent, map: Map<string, RuntimeAgent>): RuntimeInfo {
+  const r = map.get(agent.uuid);
+  return {
+    runtimeState: r?.runtimeState ?? null,
+    activeSessions: r?.activeSessions ?? null,
+    totalSessions: r?.totalSessions ?? null,
+  };
+}
+
+function countByRuntime(agents: Agent[], map: Map<string, RuntimeAgent>, state: string): number {
+  let n = 0;
+  for (const a of agents) {
+    if (map.get(a.uuid)?.runtimeState === state) n++;
+  }
+  return n;
+}
+
+type PillKey = "all" | "mine" | "running" | "attn";
+
 export function AgentsPage() {
   const navigate = useNavigate();
   const { memberId } = useAuth();
   const [cursor, setCursor] = useState<string | undefined>();
   const [typeFilter, setTypeFilter] = useState<string>("");
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
-  // After create: Claude Code → show Last-step modal; Kael → skip straight
-  // to the Workspace. `lastStepAgent` non-null means the modal is visible.
   const [lastStepAgent, setLastStepAgent] = useState<Agent | null>(null);
+  const [pill, setPill] = useState<PillKey>("all");
+  const [search, setSearch] = useState("");
   const resolveAgentName = useAgentNameMap();
   const resolveMemberName = useMemberNameMap();
 
@@ -42,37 +80,75 @@ export function AgentsPage() {
     queryFn: () => listAgents({ limit: 100, cursor, type: typeFilter || undefined }),
   });
 
+  const { data: activity } = useQuery({
+    queryKey: ["activity"],
+    queryFn: getActivityOverview,
+    refetchInterval: 10_000,
+  });
+
+  const runtimeMap = useMemo(() => {
+    const map = new Map<string, RuntimeAgent>();
+    for (const r of activity?.agents ?? []) map.set(r.agentId, r);
+    return map;
+  }, [activity?.agents]);
+
   const { myAgents, teamAgents } = useMemo(() => {
     if (!data?.items) return { myAgents: [], teamAgents: [] };
     const my: Agent[] = [];
     const team: Agent[] = [];
     for (const agent of data.items) {
-      if (memberId && agent.managerId === memberId) {
-        my.push(agent);
-      } else {
-        team.push(agent);
-      }
+      if (memberId && agent.managerId === memberId) my.push(agent);
+      else team.push(agent);
     }
     return { myAgents: sortByName(my), teamAgents: sortByName(team) };
   }, [data, memberId]);
 
+  const totalCount = data?.items.length ?? 0;
+  const mineCount = myAgents.length;
+  const teamCount = teamAgents.length;
+  const runningCount = useMemo(
+    () => (data?.items ?? []).filter((a) => runtimeMap.get(a.uuid)?.runtimeState === "working").length,
+    [data?.items, runtimeMap],
+  );
+  const attnCount = useMemo(
+    () =>
+      (data?.items ?? []).filter((a) => {
+        const s = runtimeMap.get(a.uuid)?.runtimeState;
+        return s === "blocked" || s === "error";
+      }).length,
+    [data?.items, runtimeMap],
+  );
+
+  function matchesPill(agent: Agent): boolean {
+    const s = runtimeMap.get(agent.uuid)?.runtimeState;
+    if (pill === "mine") return memberId != null && agent.managerId === memberId;
+    if (pill === "running") return s === "working";
+    if (pill === "attn") return s === "blocked" || s === "error";
+    return true;
+  }
+
+  function matchesSearch(agent: Agent): boolean {
+    if (!search.trim()) return true;
+    const q = search.toLowerCase();
+    const delegate = agent.delegateMention ? resolveAgentName(agent.delegateMention) : "";
+    const owner = resolveMemberName(agent.managerId);
+    return (
+      (agent.name ?? "").toLowerCase().includes(q) ||
+      (agent.displayName ?? "").toLowerCase().includes(q) ||
+      delegate.toLowerCase().includes(q) ||
+      owner.toLowerCase().includes(q)
+    );
+  }
+
+  const filteredMy = myAgents.filter((a) => matchesPill(a) && matchesSearch(a));
+  const filteredTeam = teamAgents.filter((a) => matchesPill(a) && matchesSearch(a));
+
   function handleCreated(agent: Agent, runtime: "claude-code" | "kael") {
     setCreateDialogOpen(false);
-
-    // Scenario B (server already pinned the agent to one of the caller's
-    // connected computers). The server has emitted an `agent:pinned` frame
-    // to that client; its runtime auto-registers the local alias and opens
-    // the agent WS within ~1-2s. Skip the Last-step terminal flow entirely
-    // and jump to the Workspace — the agent will light up green shortly.
     if (agent.clientId) {
       navigate(`/?a=${agent.uuid}`);
       return;
     }
-
-    // Scenario A (no connected computer yet, or the caller explicitly
-    // chose not to pin). Claude Code needs a computer — hand off to the
-    // Last-step modal so the user can paste the install/add/connect
-    // command. Kael is cloud-hosted — just jump straight to the chat.
     if (runtime === "claude-code") {
       setLastStepAgent(agent);
       return;
@@ -80,142 +156,160 @@ export function AgentsPage() {
     navigate(`/?a=${agent.uuid}`);
   }
 
-  function renderAgentRow(agent: Agent) {
-    const ext = agent as Record<string, unknown>;
-    const runtimeState = ext.runtimeState as string | null;
-    const runtimeColors: Record<string, string> = {
-      idle: "bg-green-500",
-      working: "bg-blue-500",
-      error: "bg-red-500",
-    };
-
-    return (
-      <TableRow key={agent.uuid} className="cursor-pointer" onClick={() => navigate(`/agents/${agent.uuid}`)}>
-        <TableCell className="font-mono text-sm">{agent.name}</TableCell>
-        <TableCell>{agent.displayName ?? "\u2014"}</TableCell>
-        <TableCell>
-          <Badge variant="secondary">{agent.type}</Badge>
-        </TableCell>
-        <TableCell className="font-mono text-sm text-muted-foreground">
-          {agent.delegateMention ? resolveAgentName(agent.delegateMention) : "\u2014"}
-        </TableCell>
-        <TableCell className="text-sm text-muted-foreground">{resolveMemberName(agent.managerId)}</TableCell>
-        <TableCell>
-          {runtimeState ? (
-            <span className="flex items-center gap-1.5">
-              <span className={cn("inline-block h-2 w-2 rounded-full", runtimeColors[runtimeState] ?? "bg-gray-300")} />
-              <span className="text-xs text-muted-foreground">{runtimeState}</span>
-            </span>
-          ) : (
-            <span className="inline-block h-2 w-2 rounded-full bg-gray-300" title="not running" />
-          )}
-        </TableCell>
-        <TableCell>
-          <Badge variant={agent.status === "active" ? "default" : "destructive"}>{agent.status}</Badge>
-        </TableCell>
-        <TableCell className="text-muted-foreground">{formatDate(agent.createdAt)}</TableCell>
-      </TableRow>
-    );
-  }
-
   return (
-    <div className="space-y-8">
-      <div className="flex items-center gap-4">
-        <h1 className="text-2xl font-semibold">Agents</h1>
-        <select
-          value={typeFilter}
-          onChange={(e) => {
-            setTypeFilter(e.target.value);
-            setCursor(undefined);
+    <div className="-m-6">
+      <PageHeader
+        title="Agents"
+        subtitle={
+          totalCount > 0 ? (
+            <>
+              {totalCount} total · {mineCount} mine · {teamCount} team
+            </>
+          ) : null
+        }
+        right={
+          <div className="flex items-center gap-1.5">
+            <Button variant="outline" size="xs">
+              Import
+            </Button>
+            <Button size="xs" onClick={() => setCreateDialogOpen(true)}>
+              <Plus className="h-3 w-3" />
+              New agent
+            </Button>
+          </div>
+        }
+      />
+
+      <div style={{ padding: "14px 20px 28px" }}>
+        <div
+          className="flex items-center gap-2.5 mb-3.5"
+          style={{
+            padding: "8px 10px",
+            background: "var(--bg-raised)",
+            border: "1px solid var(--border)",
+            borderRadius: 6,
           }}
-          className="h-8 rounded-md border border-input bg-transparent px-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
-          <option value="">All types</option>
-          {agentTypeValues.map((t) => (
-            <option key={t} value={t}>
-              {t}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {isLoading ? (
-        <div className="text-center py-8 text-muted-foreground">Loading...</div>
-      ) : error ? (
-        <div className="text-center py-8 text-destructive">
-          Failed to load agents: {error instanceof Error ? error.message : "Unknown error"}
-        </div>
-      ) : (
-        <>
-          <section>
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-lg font-medium">My Agents</h2>
-              <Button size="sm" onClick={() => setCreateDialogOpen(true)}>
-                <Plus className="h-4 w-4 mr-2" />
-                New Agent
-              </Button>
-            </div>
-            <div className="border rounded-lg">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Display Name</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Delegate</TableHead>
-                    <TableHead>Owner</TableHead>
-                    <TableHead>Runtime</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Created</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {myAgents.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
-                        No agents yet — create one to get started
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    myAgents.map((agent) => renderAgentRow(agent))
-                  )}
-                </TableBody>
-              </Table>
-            </div>
-          </section>
-
-          {teamAgents.length > 0 && (
-            <section>
-              <h2 className="text-lg font-medium mb-3">Team Agents</h2>
-              <div className="border rounded-lg">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Name</TableHead>
-                      <TableHead>Display Name</TableHead>
-                      <TableHead>Type</TableHead>
-                      <TableHead>Delegate</TableHead>
-                      <TableHead>Owner</TableHead>
-                      <TableHead>Runtime</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Created</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>{teamAgents.map((agent) => renderAgentRow(agent))}</TableBody>
-                </Table>
-              </div>
-            </section>
-          )}
-        </>
-      )}
-
-      {data?.nextCursor && (
-        <div className="flex justify-end">
-          <Button variant="outline" onClick={() => setCursor(data.nextCursor ?? undefined)}>
-            Next Page
+          <div className="relative" style={{ width: 240 }}>
+            <Search
+              className="absolute pointer-events-none"
+              style={{ left: 8, top: "50%", transform: "translateY(-50%)", color: "var(--fg-4)" }}
+              size={13}
+            />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Filter by name, delegate, owner…"
+              className="w-full outline-none"
+              style={{
+                padding: "5px 10px 5px 28px",
+                fontSize: 12,
+                background: "var(--bg-sunken)",
+                border: "1px solid var(--border)",
+                borderRadius: 4,
+                color: "var(--fg)",
+              }}
+            />
+          </div>
+          <div className="flex gap-1">
+            <FilterPill active={pill === "all"} count={totalCount} onClick={() => setPill("all")}>
+              all
+            </FilterPill>
+            <FilterPill active={pill === "mine"} count={mineCount} onClick={() => setPill("mine")}>
+              mine
+            </FilterPill>
+            <FilterPill active={pill === "running"} count={runningCount} onClick={() => setPill("running")}>
+              running
+            </FilterPill>
+            <FilterPill active={pill === "attn"} count={attnCount} warn onClick={() => setPill("attn")}>
+              attn
+            </FilterPill>
+          </div>
+          <div style={{ flex: 1 }} />
+          <select
+            value={typeFilter}
+            onChange={(e) => {
+              setTypeFilter(e.target.value);
+              setCursor(undefined);
+            }}
+            className="outline-none"
+            style={{
+              padding: "5px 10px",
+              fontSize: 11,
+              background: "var(--bg-sunken)",
+              border: "1px solid var(--border)",
+              borderRadius: 4,
+              color: "var(--fg)",
+            }}
+          >
+            <option value="">all types</option>
+            {agentTypeValues.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+          <Button variant="ghost" size="xs" className="text-[11px]">
+            <Filter className="h-3 w-3" /> Columns
           </Button>
         </div>
-      )}
+
+        {isLoading ? (
+          <div className="text-center py-8" style={{ color: "var(--fg-3)" }}>
+            Loading…
+          </div>
+        ) : error ? (
+          <div className="text-center py-8" style={{ color: "var(--state-error)" }}>
+            Failed to load agents: {error instanceof Error ? error.message : "Unknown error"}
+          </div>
+        ) : (
+          <>
+            <AgentsPanel
+              title={`My agents · ${filteredMy.length}`}
+              agents={filteredMy}
+              runtimeMap={runtimeMap}
+              resolveAgentName={resolveAgentName}
+              resolveMemberName={resolveMemberName}
+              navigate={navigate}
+              emptyLabel={
+                myAgents.length === 0
+                  ? "No agents yet — create one to get started"
+                  : "No agents match the current filter"
+              }
+              breakdown={
+                <StateBreakdown
+                  items={[
+                    { state: "working", count: countByRuntime(myAgents, runtimeMap, "working") },
+                    { state: "blocked", count: countByRuntime(myAgents, runtimeMap, "blocked") },
+                    { state: "error", count: countByRuntime(myAgents, runtimeMap, "error") },
+                  ]}
+                />
+              }
+              className="mb-4"
+            />
+
+            {teamAgents.length > 0 && (
+              <AgentsPanel
+                title={`Team agents · ${filteredTeam.length}`}
+                agents={filteredTeam}
+                runtimeMap={runtimeMap}
+                resolveAgentName={resolveAgentName}
+                resolveMemberName={resolveMemberName}
+                navigate={navigate}
+                emptyLabel="No agents match the current filter"
+              />
+            )}
+          </>
+        )}
+
+        {data?.nextCursor && (
+          <div className="flex justify-end mt-4">
+            <Button variant="outline" size="xs" onClick={() => setCursor(data.nextCursor ?? undefined)}>
+              Next page
+            </Button>
+          </div>
+        )}
+      </div>
 
       <NewAgentDialog open={createDialogOpen} onOpenChange={setCreateDialogOpen} onCreated={handleCreated} />
 
@@ -224,18 +318,180 @@ export function AgentsPage() {
           agent={lastStepAgent}
           open={lastStepAgent !== null}
           onClose={() => {
-            // "Skip for now" — user can still chat; Workspace shows Offline.
             const uuid = lastStepAgent.uuid;
             setLastStepAgent(null);
             navigate(`/?a=${uuid}`);
           }}
           onBound={(bound) => {
-            // Computer claimed the agent — land in Workspace with it selected.
             setLastStepAgent(null);
             navigate(`/?a=${bound.uuid}`);
           }}
         />
       )}
     </div>
+  );
+}
+
+type NavigateFn = ReturnType<typeof useNavigate>;
+
+function AgentsPanel({
+  title,
+  agents,
+  runtimeMap,
+  resolveAgentName,
+  resolveMemberName,
+  navigate,
+  emptyLabel,
+  breakdown,
+  className,
+}: {
+  title: string;
+  agents: Agent[];
+  runtimeMap: Map<string, RuntimeAgent>;
+  resolveAgentName: (mention: string | null | undefined) => string;
+  resolveMemberName: (id: string | null | undefined) => string;
+  navigate: NavigateFn;
+  emptyLabel: string;
+  breakdown?: ReactNode;
+  className?: string;
+}) {
+  return (
+    <Panel className={className}>
+      <SectionHeader right={breakdown}>{title}</SectionHeader>
+      {agents.length === 0 ? (
+        <div className="text-center py-8" style={{ color: "var(--fg-3)", fontSize: 12 }}>
+          {emptyLabel}
+        </div>
+      ) : (
+        <DenseTable>
+          <DenseTableHeader>
+            <DenseTableRow>
+              <DenseTableHead>Name</DenseTableHead>
+              <DenseTableHead>Display</DenseTableHead>
+              <DenseTableHead>Type</DenseTableHead>
+              <DenseTableHead>Delegate</DenseTableHead>
+              <DenseTableHead>Owner</DenseTableHead>
+              <DenseTableHead>Runtime</DenseTableHead>
+              <DenseTableHead>Sessions</DenseTableHead>
+              <DenseTableHead>Status</DenseTableHead>
+              <DenseTableHead>Created</DenseTableHead>
+            </DenseTableRow>
+          </DenseTableHeader>
+          <DenseTableBody>
+            {agents.map((agent) => (
+              <AgentRow
+                key={agent.uuid}
+                agent={agent}
+                runtime={pickRuntime(agent, runtimeMap)}
+                resolveAgentName={resolveAgentName}
+                resolveMemberName={resolveMemberName}
+                navigate={navigate}
+              />
+            ))}
+          </DenseTableBody>
+        </DenseTable>
+      )}
+    </Panel>
+  );
+}
+
+function StateBreakdown({ items }: { items: Array<{ state: string; count: number; label?: string }> }) {
+  const nonZero = items.filter((i) => i.count > 0);
+  if (nonZero.length === 0) return null;
+  return (
+    <span className="inline-flex items-center">
+      {nonZero.map((item, idx) => (
+        <span key={item.state} className="inline-flex items-center">
+          {idx > 0 && (
+            <span style={{ color: "var(--fg-4)", margin: "0 6px" }} aria-hidden>
+              ·
+            </span>
+          )}
+          <span
+            className="mono inline-flex items-center gap-1"
+            style={{ fontSize: 10.5, color: `var(--state-${item.state})` }}
+          >
+            <span aria-hidden>●</span>
+            {item.count} {item.label ?? item.state}
+          </span>
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function AgentRow({
+  agent,
+  runtime,
+  resolveAgentName,
+  resolveMemberName,
+  navigate,
+}: {
+  agent: Agent;
+  runtime: RuntimeInfo;
+  resolveAgentName: (mention: string | null | undefined) => string;
+  resolveMemberName: (id: string | null | undefined) => string;
+  navigate: NavigateFn;
+}) {
+  const { runtimeState, activeSessions, totalSessions } = runtime;
+  const isKnownState =
+    runtimeState === "idle" ||
+    runtimeState === "working" ||
+    runtimeState === "blocked" ||
+    runtimeState === "error" ||
+    runtimeState === "offline";
+  return (
+    <DenseTableRow interactive onClick={() => navigate(`/agents/${agent.uuid}`)}>
+      <DenseTableCell>
+        <span className="mono" style={{ fontSize: 12, fontWeight: 500 }}>
+          {agent.name}
+        </span>
+      </DenseTableCell>
+      <DenseTableCell style={{ color: "var(--fg-2)" }}>{agent.displayName ?? "—"}</DenseTableCell>
+      <DenseTableCell>
+        <DenseBadge tone={agent.type === "autonomous_agent" ? "accent" : "neutral"}>{agent.type}</DenseBadge>
+      </DenseTableCell>
+      <DenseTableCell
+        className="mono"
+        style={{ fontSize: 11, color: agent.delegateMention ? "var(--accent-dim)" : "var(--fg-4)" }}
+      >
+        {agent.delegateMention ? resolveAgentName(agent.delegateMention) : "—"}
+      </DenseTableCell>
+      <DenseTableCell style={{ fontSize: 11.5, color: "var(--fg-2)" }}>
+        {resolveMemberName(agent.managerId)}
+      </DenseTableCell>
+      <DenseTableCell>
+        {runtimeState && isKnownState ? (
+          <span className="inline-flex items-center gap-1.5">
+            <StateDot state={runtimeState} size={7} />
+            <span className="mono" style={{ fontSize: 10.5, color: "var(--fg-3)" }}>
+              {runtimeState}
+            </span>
+          </span>
+        ) : (
+          <span className="mono" style={{ fontSize: 10.5, color: "var(--fg-4)" }}>
+            —
+          </span>
+        )}
+      </DenseTableCell>
+      <DenseTableCell>
+        {activeSessions === null && totalSessions === null ? (
+          <span className="mono" style={{ fontSize: 11, color: "var(--fg-4)" }}>
+            —
+          </span>
+        ) : (
+          <span className="mono tnum" style={{ fontSize: 11 }}>
+            <span style={{ color: "var(--fg-2)" }}>{activeSessions ?? 0}</span>
+            <span style={{ color: "var(--fg-4)" }}> / {totalSessions ?? 0}</span>
+          </span>
+        )}
+      </DenseTableCell>
+      <DenseTableCell>
+        <DenseBadge tone={agent.status === "active" ? "accent" : "outline"}>{agent.status}</DenseBadge>
+      </DenseTableCell>
+      <DenseTableCell className="mono" style={{ fontSize: 10.5, color: "var(--fg-4)" }}>
+        {formatDate(agent.createdAt)}
+      </DenseTableCell>
+    </DenseTableRow>
   );
 }

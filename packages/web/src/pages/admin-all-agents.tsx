@@ -1,94 +1,103 @@
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router";
 import { listAllAgentsForAdmin } from "../api/agents.js";
-import { Badge } from "../components/ui/badge.js";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.js";
+import { DenseBadge } from "../components/ui/dense-badge.js";
+import {
+  DenseTable,
+  DenseTableBody,
+  DenseTableCell,
+  DenseTableHead,
+  DenseTableHeader,
+  DenseTableRow,
+} from "../components/ui/dense-table.js";
+import { Panel } from "../components/ui/panel.js";
+import { SectionHeader } from "../components/ui/section-header.js";
 import { useMemberNameMap } from "../lib/use-member-name-map.js";
 import { formatDate } from "../lib/utils.js";
 
 /**
  * Admin-only view of every agent in the organization, including private ones
- * owned by other members. The default `/agents` list still applies the
- * visibility filter (Rule: visibility != manageability); this page is the
- * manageability-oriented view used to troubleshoot or reassign.
+ * owned by other members.
  */
 export function AdminAllAgentsPage() {
   const navigate = useNavigate();
   const resolveMember = useMemberNameMap();
 
-  // `paginationQuerySchema` caps `limit` at 100 server-side. Stay at the max
-  // here — if the org grows past 100 agents we'll need cursor pagination
-  // (same story as the rest of the admin list views).
   const { data, isLoading, error } = useQuery({
     queryKey: ["admin-all-agents"],
     queryFn: () => listAllAgentsForAdmin({ limit: 100 }),
   });
 
   return (
-    <div className="space-y-4">
-      <p className="text-sm text-muted-foreground">
-        Every agent in the organization, including private agents owned by other members. Use this view to troubleshoot
-        or reassign — the regular Agents page still hides private agents you don't manage.
+    <div>
+      <p style={{ fontSize: 11.5, color: "var(--fg-3)", padding: "0 2px 10px" }}>
+        Every agent in the organization — including private agents owned by other members. Use this view to troubleshoot
+        or reassign.
       </p>
 
-      <div className="border rounded-lg">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Name</TableHead>
-              <TableHead>Display Name</TableHead>
-              <TableHead>Type</TableHead>
-              <TableHead>Visibility</TableHead>
-              <TableHead>Owner</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Created</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {isLoading ? (
-              <TableRow>
-                <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
-                  Loading...
-                </TableCell>
-              </TableRow>
-            ) : error ? (
-              <TableRow>
-                <TableCell colSpan={7} className="text-center py-8 text-destructive">
-                  Failed to load agents: {error instanceof Error ? error.message : "Unknown error"}
-                </TableCell>
-              </TableRow>
-            ) : !data || data.items.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
-                  No agents
-                </TableCell>
-              </TableRow>
-            ) : (
-              data.items.map((a) => (
-                <TableRow
+      <Panel>
+        <SectionHeader>All agents · {data?.items.length ?? 0}</SectionHeader>
+        {isLoading ? (
+          <div className="text-center py-8" style={{ color: "var(--fg-3)", fontSize: 12 }}>
+            Loading…
+          </div>
+        ) : error ? (
+          <div className="text-center py-8" style={{ color: "var(--state-error)", fontSize: 12 }}>
+            Failed to load agents: {error instanceof Error ? error.message : "Unknown error"}
+          </div>
+        ) : !data || data.items.length === 0 ? (
+          <div className="text-center py-8" style={{ color: "var(--fg-3)", fontSize: 12 }}>
+            No agents
+          </div>
+        ) : (
+          <DenseTable>
+            <DenseTableHeader>
+              <DenseTableRow>
+                <DenseTableHead>Name</DenseTableHead>
+                <DenseTableHead>Display</DenseTableHead>
+                <DenseTableHead>Type</DenseTableHead>
+                <DenseTableHead>Visibility</DenseTableHead>
+                <DenseTableHead>Owner</DenseTableHead>
+                <DenseTableHead>Status</DenseTableHead>
+                <DenseTableHead>Created</DenseTableHead>
+              </DenseTableRow>
+            </DenseTableHeader>
+            <DenseTableBody>
+              {data.items.map((a) => (
+                <DenseTableRow
                   key={a.uuid}
-                  className="cursor-pointer"
+                  interactive
                   onClick={() => navigate(`/agents/${encodeURIComponent(a.uuid)}`)}
                 >
-                  <TableCell className="font-mono text-sm">{a.name ?? a.uuid.slice(0, 8)}</TableCell>
-                  <TableCell>{a.displayName ?? "—"}</TableCell>
-                  <TableCell>
-                    <Badge variant="secondary">{a.type}</Badge>
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant={a.visibility === "organization" ? "default" : "outline"}>{a.visibility}</Badge>
-                  </TableCell>
-                  <TableCell className="text-sm">{a.managerId ? resolveMember(a.managerId) : "—"}</TableCell>
-                  <TableCell>
-                    <Badge variant={a.status === "active" ? "default" : "secondary"}>{a.status}</Badge>
-                  </TableCell>
-                  <TableCell className="text-muted-foreground text-sm">{formatDate(a.createdAt)}</TableCell>
-                </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </div>
+                  <DenseTableCell>
+                    <span className="mono" style={{ fontSize: 12, fontWeight: 500 }}>
+                      {a.name ?? a.uuid.slice(0, 8)}
+                    </span>
+                  </DenseTableCell>
+                  <DenseTableCell style={{ color: "var(--fg-2)" }}>{a.displayName ?? "—"}</DenseTableCell>
+                  <DenseTableCell>
+                    <DenseBadge tone={a.type === "autonomous_agent" ? "accent" : "neutral"}>{a.type}</DenseBadge>
+                  </DenseTableCell>
+                  <DenseTableCell>
+                    <DenseBadge tone={a.visibility === "organization" ? "accent" : "outline"}>
+                      {a.visibility}
+                    </DenseBadge>
+                  </DenseTableCell>
+                  <DenseTableCell style={{ fontSize: 11.5, color: "var(--fg-2)" }}>
+                    {a.managerId ? resolveMember(a.managerId) : "—"}
+                  </DenseTableCell>
+                  <DenseTableCell>
+                    <DenseBadge tone={a.status === "active" ? "accent" : "neutral"}>{a.status}</DenseBadge>
+                  </DenseTableCell>
+                  <DenseTableCell className="mono" style={{ fontSize: 10.5, color: "var(--fg-4)" }}>
+                    {formatDate(a.createdAt)}
+                  </DenseTableCell>
+                </DenseTableRow>
+              ))}
+            </DenseTableBody>
+          </DenseTable>
+        )}
+      </Panel>
     </div>
   );
 }
