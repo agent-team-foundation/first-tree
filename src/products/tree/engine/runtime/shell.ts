@@ -5,9 +5,9 @@
  * `open-tree-pr.ts`, future extractions) can depend on the shape
  * without creating circular imports.
  *
- * Gardener has its own locally-defined `ShellRun` / `ShellResult` that
- * carries an `env?: NodeJS.ProcessEnv` option tree's runner doesn't
- * need — intentionally not unified here.
+ * `env?: NodeJS.ProcessEnv` is an optional passthrough; tree's runner
+ * never sets it, but gardener's sync `--open-issues` mode needs to
+ * thread `GH_TOKEN=TREE_REPO_TOKEN` into `gh issue create`.
  */
 
 export interface ShellResult {
@@ -19,5 +19,5 @@ export interface ShellResult {
 export type ShellRun = (
   command: string,
   args: string[],
-  options?: { cwd?: string; input?: string; timeout?: number },
+  options?: { cwd?: string; input?: string; timeout?: number; env?: NodeJS.ProcessEnv },
 ) => Promise<ShellResult>;
