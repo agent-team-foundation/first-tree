@@ -132,6 +132,21 @@ async function defaultRunSweep(
   return invokeCli(args, config.treePath);
 }
 
+/**
+ * Format a lookback in seconds into a duration string that
+ * `gardener comment --merged-since` accepts. The comment parser only
+ * supports `m/h/d/w` suffixes, so bare seconds (e.g. `600s`) are
+ * rejected. Round up to the nearest minute so we never shrink the
+ * window below what the operator configured.
+ */
+export function formatMergedSince(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "1m";
+  if (seconds < 60) return "1m";
+  if (seconds % 86400 === 0) return `${seconds / 86400}d`;
+  if (seconds % 3600 === 0) return `${seconds / 3600}h`;
+  return `${Math.ceil(seconds / 60)}m`;
+}
+
 export function buildGardenerSweepArgs(
   config: GardenerDaemonConfig,
 ): string[] {
@@ -141,7 +156,7 @@ export function buildGardenerSweepArgs(
     "--tree-path",
     config.treePath,
     "--merged-since",
-    `${config.mergedLookbackSeconds}s`,
+    formatMergedSince(config.mergedLookbackSeconds),
   ];
   if (config.assignOwners) args.push("--assign-owners");
   return args;
