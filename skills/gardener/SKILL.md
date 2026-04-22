@@ -10,6 +10,81 @@ have not yet loaded the `first-tree` entry-point skill, load that first —
 it explains the toolkit layout and how the four skills relate. This skill
 covers *how* to drive the `first-tree gardener` CLI.
 
+## Onboarding — short user prompts
+
+The expected user onboarding shape is one short message naming a codebase
+repo and a tree repo, e.g.:
+
+> 监听 `https://github.com/<codebase-repo>` 这个 repo, tree 是
+> `https://github.com/<tree-repo>`. update the latest first-tree CLI
+> first, set up gardener + breeze for this scope, the rest of the check
+> are after the onboarding
+
+From that one line, branch on the five scenarios below. Do **not** pepper
+the user with config questions up front — infer what you can, ask only
+when the inference is genuinely ambiguous. Always finish by restarting
+the breeze daemon with the new `--allow-repo` list so notifications flow.
+
+### Scenario A — fresh: no tree repo yet
+
+Detected when the user hasn't given a tree slug, or the slug 404s.
+
+1. `first-tree tree init` — scaffold a new tree in cwd.
+2. Create a GitHub repo (`gh repo create ...`), push, bind locally.
+3. Populate `.claude/gardener-config.yaml` with the codebase slug under
+   `target_repos`.
+4. Continue with Scenario B or C depending on push access.
+
+### Scenario B — user owns the codebase (push mode, preferred)
+
+`gh api repos/<codebase> -q '.permissions.push'` returns true.
+
+1. Confirm `ANTHROPIC_API_KEY` is available (ask user to paste into their
+   shell env if not already exported).
+2. `gardener install-workflow --tree-repo <tree>` inside the codebase repo.
+3. Walk through `skills/first-tree/references/workflow-mode.md` for
+   `TREE_REPO_TOKEN` + `ANTHROPIC_API_KEY` secret setup (audit-log
+   caveats must be surfaced before `gh secret set`).
+4. Open the workflow PR for human review.
+
+### Scenario C — user does not own the codebase (pull mode)
+
+Push permission check fails, or the user explicitly says they can't push.
+
+1. `export ANTHROPIC_API_KEY=...` in the shell that will start the daemon
+   (launchd inherits env at bootstrap time, not at run time).
+2. `gardener start --tree-path . --code-repo <codebase> --assign-owners`
+   from inside the tree repo.
+3. `gardener status` to confirm schedules are live.
+
+### Scenario D — add a repo to an existing setup
+
+Detected when `~/.gardener/config.json` already exists or `target_repos`
+in the tree's gardener-config.yaml is non-empty.
+
+1. Append the new slug to `target_repos` in
+   `.claude/gardener-config.yaml`.
+2. Push mode: run `install-workflow` in the new codebase if the user
+   owns it; pull mode: `gardener stop && gardener start` with the added
+   `--code-repo`.
+
+### Scenario E — reset / something broken
+
+User describes missing comments or stale notifications.
+
+1. `gardener status` + tail the latest log under `~/.gardener/logs/`.
+2. Verify `ANTHROPIC_API_KEY` is in the launchd plist
+   (`plutil -p ~/.gardener/launchd/com.first-tree.gardener.<user>.plist`).
+3. `gardener stop && gardener start ...` with the same args. Restart
+   breeze with `breeze start --allow-repo ...` after.
+
+### Always: restart breeze last
+
+After any scenario, restart breeze with the full `--allow-repo` list so
+gardener-filed tree issues and PR comments surface in the Claude Code
+statusline. **Never use `--allow-repo all`** — it reopens the
+2026-04-21 stranger-repo incident.
+
 ## Two Operating Modes
 
 Gardener supports two deployment shapes that share the same verdict and
