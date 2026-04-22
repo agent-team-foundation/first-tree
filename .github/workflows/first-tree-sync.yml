@@ -37,7 +37,17 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Install Claude Code CLI
+        # Gardener's verdict classifier is designed to shell out to the
+        # `claude` CLI (see first-tree sync.ts). Install it here so any
+        # future CLI upgrade that wires a real classifier into
+        # `gardener comment` will authenticate via CLAUDE_CODE_OAUTH_TOKEN
+        # below without another workflow change.
+        run: npm install -g @anthropic-ai/claude-code
+
       - name: Run first-tree gardener
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
           npx -p first-tree first-tree gardener comment \
             --pr ${{ github.event.pull_request.number }} \
