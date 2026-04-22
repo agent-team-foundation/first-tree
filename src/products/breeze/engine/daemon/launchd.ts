@@ -31,6 +31,19 @@ export interface LaunchdPlistInputs {
   logPath: string;
   /** Extra env variables (HOME / PATH are added automatically). */
   env?: Record<string, string | undefined>;
+  /**
+   * How to fetch a passthrough env var that isn't already in `env`.
+   * Defaults to `resolveLaunchdEnvVar`, which shells out to
+   * `/bin/zsh -lc` — fine in production, but kills test perf on slow
+   * login shells. Pass a no-op or a stub in tests.
+   */
+  resolveEnvVar?: (variable: string) => string | undefined;
+  /**
+   * How to enumerate env vars from the user's login shell. Defaults to
+   * `readLoginShellEnvVarNames`, which shells out once. Tests pass an
+   * explicit list (or `[]`) to avoid the subshell.
+   */
+  loginShellVars?: readonly string[];
 }
 
 /** True on darwin with `launchctl` available. */
@@ -216,12 +229,16 @@ export function renderLaunchdPlist(inputs: LaunchdPlistInputs): string {
   for (const [key, value] of Object.entries(inputs.env ?? {})) {
     pushEnv(key, value);
   }
-  const passthroughVars = collectLaunchdPassthroughEnvVars({
-    ...process.env,
-    ...(inputs.env ?? {}),
-  });
+  const resolveVar = inputs.resolveEnvVar ?? resolveLaunchdEnvVar;
+  const passthroughVars = collectLaunchdPassthroughEnvVars(
+    { ...process.env, ...(inputs.env ?? {}) },
+    inputs.loginShellVars ?? readLoginShellEnvVarNames(),
+  );
   for (const variable of passthroughVars) {
-    pushEnv(variable, inputs.env?.[variable] ?? resolveLaunchdEnvVar(variable));
+    // Only fall back to the resolver for vars not already supplied;
+    // keeps tests and deterministic callers subprocess-free.
+    const supplied = inputs.env?.[variable];
+    pushEnv(variable, supplied ?? resolveVar(variable));
   }
 
   const environmentXml = envPairs
