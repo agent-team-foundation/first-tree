@@ -68,9 +68,15 @@ When an agent is asked to install `first-tree`:
 
 1. Run `first-tree tree inspect --json`.
 2. Ask whether an existing Context Tree already exists.
-3. If yes, prefer `first-tree tree bind`.
-4. If no, use `first-tree tree init`.
-5. If the current root is a workspace, follow with `first-tree tree workspace sync`.
+3. Run `first-tree tree init` — it handles both cases:
+   - no existing tree -> creates a sibling tree and binds it
+   - existing tree -> pass `--tree-path <path>` or `--tree-url <url>` and it binds
+4. If the current root is a workspace, pass `--scope workspace`.
+   `init` syncs currently discovered child repos by default.
+5. Use `first-tree tree bind` directly only when you need explicit `--mode`
+   control (for example `workspace-member` binds).
+6. Use `first-tree tree workspace sync` later after adding new child repos, or
+   when you want to rerun workspace-member binding manually.
 
 Do not recreate a new sibling tree repo when the user already has a shared tree
 they want to keep using.
@@ -90,8 +96,10 @@ If the current root contains many child repos or submodules:
 - all child repos should bind to the same shared tree
 - child repos should not each create their own separate tree repos
 
-Only real child git repos / submodules should be synced automatically. Plain
-package folders that are not repos do not get repo-level binding metadata.
+`first-tree tree init --scope workspace` syncs all currently discovered child
+git repos / submodules by default. Plain package folders that are not repos do
+not get repo-level binding metadata. When new child repos appear later, rerun
+`first-tree tree workspace sync`.
 
 ## Verification And Upgrade
 

@@ -86,16 +86,16 @@ const CASES: Case[] = [
     hint: "agent should call `first-tree tree init` to create a dedicated tree",
   },
   {
-    label: "tree bind for an existing shared tree",
+    label: "tree init for an existing shared tree",
     intent:
-      "Bind this repository to the existing shared Context Tree at agent-team-foundation/example-context. Do not init a new tree.",
+      "Onboard this repository to the existing shared Context Tree at agent-team-foundation/example-context. Do not create a new sibling tree repo.",
     seed: {
       "README.md": "# source-repo\n",
       "src/index.ts": "export const ready = true;\n",
     },
     skills: ["skills/first-tree/SKILL.md", "skills/tree/SKILL.md"],
-    expectPattern: /first-tree\s+tree\s+bind\b/,
-    hint: "agent should call `first-tree tree bind` (not tree init)",
+    expectPattern: /first-tree\s+tree\s+init\b/,
+    hint: "agent should call `first-tree tree init` and point it at the existing shared tree",
   },
   {
     label: "breeze poll for notifications",

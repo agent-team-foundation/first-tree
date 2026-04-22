@@ -79,7 +79,7 @@ metadata such as `.first-tree/VERSION` plus the installed tree-repo skill.
 - tree content: `NODE.md`, domains, members, leaf nodes
 - user-authored content outside the managed framework markers
 - source/workspace binding metadata
-- local checkout guidance in `.first-tree/source.json`
+- tree repo identity metadata in `.first-tree/source.json`
 
 ## Command Intent
 
@@ -94,10 +94,10 @@ metadata such as `.first-tree/VERSION` plus the installed tree-repo skill.
 - `first-tree tree bind`
   - connect a source/workspace root to an existing tree repo
 - `first-tree tree workspace sync`
-  - bind child repos to the same shared tree
+  - bind discovered local child repos to the same shared tree
 - `first-tree tree publish`
   - publish the tree repo
-  - refresh locally bound source/workspace repos with the published URL
+  - refresh any explicit or locally discoverable source/workspace repos with the published URL
 - `first-tree tree verify`
   - validate the tree repo
 - `first-tree tree upgrade`

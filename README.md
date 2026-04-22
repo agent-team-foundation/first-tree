@@ -19,7 +19,7 @@ cross-domain relationships that humans and agents maintain together —
 │  toolkit     │    local daemon           │     local daemon          │
 ├──────────────┼───────────────────────────┼───────────────────────────┤
 │  init, bind, │ watches source repos →    │ watches gh notifications  │
-│  sync,       │ opens issues on the tree  │ → labels / routes / drafts│
+│  workspace,  │ opens issues on the tree  │ → labels / routes / drafts│
 │  publish,    │ repo & assigns owners;    │ replies for PRs, issues,  │
 │  verify, ... │ responds to sync-PR       │ discussions, reviews.     │
 │              │ review feedback.          │                           │
@@ -34,7 +34,7 @@ cross-domain relationships that humans and agents maintain together —
 
 | Tool | What it is | When to reach for it |
 |------|------------|----------------------|
-| **[tree](src/products/tree)** | CLI toolkit for `first-tree tree init/bind/sync/publish/verify/upgrade/workspace/review/generate-codeowners/inject-context/bootstrap` | You want an agent to create, maintain, or bind a Context Tree repo. |
+| **[tree](src/products/tree)** | CLI toolkit for `first-tree tree init/bind/workspace/publish/verify/upgrade/review/generate-codeowners/inject-context/bootstrap` | You want an agent to create, maintain, or bind a Context Tree repo. |
 | **[gardener](src/products/gardener)** | Local maintenance daemon that watches source repos, opens/assigns tree issues, and responds to sync-PR review feedback | You want the tree to stay coherent as code changes without asking a human to drive it. |
 | **[breeze](src/products/breeze)** | Local inbox daemon that takes over your `gh` login and turns GitHub notifications into a triaged, optionally auto-handled queue | You want an agent sitting on your GitHub notifications so you don't have to. |
 
@@ -106,8 +106,8 @@ the skill and onboard this repo or workspace by creating a new Context Tree.
 
 ```text
 Use the latest first-tree CLI (https://github.com/agent-team-foundation/first-tree).
-Run `first-tree tree inspect --json`, install the skill, and bind this repo or
-workspace to the existing shared tree at
+Run `first-tree tree inspect --json`, install the skill, and onboard this repo
+or workspace to the existing shared tree at
 https://github.com/<your-org>/<your-tree-repo>.
 ```
 
@@ -126,13 +126,15 @@ Four first-class paths:
 | Scenario | Command |
 |----------|---------|
 | Single repo + new dedicated tree | `first-tree tree init` |
-| Bind to existing shared tree | `first-tree tree bind --tree-path ../org-context --tree-mode shared` |
-| Workspace root + shared tree | `first-tree tree init --scope workspace --sync-members` (then `first-tree tree workspace sync`) |
+| Single repo + existing shared tree | `first-tree tree init --tree-path ../org-context --tree-mode shared` |
+| Workspace root + shared tree | `first-tree tree init --scope workspace` (pass `--tree-path` / `--tree-url` to reuse an existing shared tree; run `first-tree tree workspace sync` later after adding new repos) |
 | You're inside the tree repo itself | `first-tree tree bootstrap --here` |
 
 When the current root is a workspace, the workspace root gets local integration
-plus `.first-tree/source.json` (with workspace members), and discovered child
-repos become `workspace-member`s bound to the same shared tree.
+plus `.first-tree/source.json` (with workspace members), and
+`first-tree tree init --scope workspace` binds currently discovered child repos
+as `workspace-member`s to the same shared tree by default. Run
+`first-tree tree workspace sync` later after adding new child repos.
 
 See [`skills/first-tree/references/onboarding.md`](skills/first-tree/references/onboarding.md)
 for the full guide, and run `first-tree tree help onboarding` to print it.
@@ -185,8 +187,8 @@ continue to work cleanly for multi-repo workspaces.
 | `first-tree tree inspect` | Classify the current folder and report existing bindings / child repos |
 | `first-tree tree init` | High-level onboarding wrapper for single repos, shared trees, and workspace roots |
 | `first-tree tree bootstrap` | Canonical low-level tree bootstrap for an explicit tree checkout |
-| `first-tree tree bind` | Bind the current repo/workspace root to an existing tree repo |
-| `first-tree tree workspace sync` | Bind discovered child repos to the same shared tree |
+| `first-tree tree bind` | Lower-level binding primitive for cases where you need explicit `--mode` control |
+| `first-tree tree workspace sync` | Bind newly added child repos to the same shared tree, or rerun workspace-member binding manually |
 | `first-tree tree publish` | Publish a dedicated tree repo or shared tree repo to GitHub and refresh locally bound source/workspace repos |
 | `first-tree tree verify` | Run verification checks against a tree repo |
 | `first-tree tree upgrade` | Refresh installed source/workspace integration or tree metadata from the current package |

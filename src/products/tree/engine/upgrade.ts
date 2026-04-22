@@ -3,7 +3,6 @@ import { dirname, join, resolve } from "node:path";
 import {
   buildDefaultTreeRepoName,
   formatDedicatedTreePathExample,
-  relativeRepoPath,
   resolveDedicatedTreeRepoForSource,
 } from "#products/tree/engine/dedicated-tree.js";
 import { Repo } from "#products/tree/engine/repo.js";
@@ -124,7 +123,6 @@ function writeProgress(repo: Repo, content: string): void {
 function syncLocalSourceWorkspaceState(
   sourceRepo: Repo,
   treeRepoName: string,
-  treeRoot: string,
 ): {
   gitIgnoreAction: "created" | "updated" | "unchanged";
   sourceStateAction: "created" | "updated" | "unchanged";
@@ -137,7 +135,6 @@ function syncLocalSourceWorkspaceState(
       ...existingSourceState,
       tree: {
         ...existingSourceState.tree,
-        localPath: relativeRepoPath(sourceRepo.root, treeRoot),
         treeRepoName,
       },
     });
@@ -179,15 +176,15 @@ function logLocalSourceWorkspaceState(
   state: ReturnType<typeof syncLocalSourceWorkspaceState>,
 ): void {
   if (state.gitIgnoreAction === "created") {
-    console.log("Created `.gitignore` entries for local tree checkout state.");
+    console.log("Created `.gitignore` entries for local tree working state.");
   } else if (state.gitIgnoreAction === "updated") {
-    console.log("Updated `.gitignore` for local tree checkout state.");
+    console.log("Updated `.gitignore` for local tree working state.");
   }
 
   if (state.sourceStateAction === "created") {
-    console.log("Created `.first-tree/source.json` for the local tree checkout.");
+    console.log("Created `.first-tree/source.json` for the local tree binding.");
   } else if (state.sourceStateAction === "updated") {
-    console.log("Updated `.first-tree/source.json` for the local tree checkout.");
+    console.log("Updated `.first-tree/source.json` for the local tree binding.");
   }
 }
 
@@ -391,7 +388,6 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
       const localSourceWorkspaceState = syncLocalSourceWorkspaceState(
         workingRepo,
         treeRepoName,
-        sourceRepoTreeRoot,
       );
       const sourceIntegrationOptions = sourceIntegrationOptionsForUpgrade(
         workingRepo,
@@ -462,7 +458,6 @@ export function runUpgrade(repo?: Repo, options?: UpgradeOptions): number {
     const localSourceWorkspaceState = syncLocalSourceWorkspaceState(
       workingRepo,
       treeRepoName,
-      sourceRepoTreeRoot,
     );
     const sourceIntegrationOptions = sourceIntegrationOptionsForUpgrade(
       workingRepo,

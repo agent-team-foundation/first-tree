@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
-import { runBind } from "#products/tree/engine/bind.js";
+import { BIND_USAGE, runBind } from "#products/tree/engine/bind.js";
 import { Repo } from "#products/tree/engine/repo.js";
 import {
   readSourceState,
@@ -13,6 +13,11 @@ import {
 import { makeAgentsMd, makeGitRepo, makeSourceRepo, makeSourceSkill, makeTreeMetadata, useTmpDir } from "../helpers.js";
 
 describe("runBind", () => {
+  it("documents bind as a lower-level primitive without submodule mirroring", () => {
+    expect(BIND_USAGE).toContain("For most onboarding flows, prefer `first-tree tree init`.");
+    expect(BIND_USAGE).not.toContain(".first-tree/submodules/");
+  });
+
   it("installs the tree-repo skill without creating a codebase submodule", () => {
     const sandbox = useTmpDir();
     const sourceBundle = useTmpDir();

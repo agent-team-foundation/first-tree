@@ -62,6 +62,7 @@ describe("runInjectContext", () => {
     const treeRoot = join(tmpDir, "org-context");
     mkdirSync(sourceRoot, { recursive: true });
     mkdirSync(treeRoot, { recursive: true });
+    mkdirSync(join(treeRoot, ".git"), { recursive: true });
     writeFileSync(
       join(treeRoot, "NODE.md"),
       [
@@ -89,8 +90,6 @@ describe("runInjectContext", () => {
       sourceName: "product-repo",
       tree: {
         entrypoint: "/workspaces/product-repo",
-        localPath: relative(sourceRoot, treeRoot),
-        remoteUrl: "https://github.com/acme/org-context.git",
         treeId: "org-context",
         treeMode: "shared",
         treeRepoName: "org-context",

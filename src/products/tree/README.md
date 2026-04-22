@@ -22,10 +22,10 @@ tree/
 | Command | Role |
 |---------|------|
 | `first-tree tree inspect` | Classify the current folder (source / workspace / tree) |
-| `first-tree tree init` | High-level onboarding wrapper |
+| `first-tree tree init` | Primary onboarding wrapper for new trees or existing shared trees |
 | `first-tree tree bootstrap` | Canonical low-level tree bootstrap for an explicit tree checkout |
-| `first-tree tree bind` | Bind current repo/workspace to an existing tree |
-| `first-tree tree workspace sync` | Bind discovered child repos to a shared tree |
+| `first-tree tree bind` | Lower-level binding primitive when you need explicit binding-mode control |
+| `first-tree tree workspace sync` | Bind newly added child repos to a shared tree, or rerun workspace-member binding manually |
 | `first-tree tree publish` | Push the tree to GitHub and refresh bound sources |
 | `first-tree tree verify` | Run validation checks on a tree repo |
 | `first-tree tree upgrade` | Refresh installed source/tree integration from the package |

@@ -5,7 +5,7 @@ import { readBootstrapState } from "#products/tree/engine/runtime/bootstrap.js";
 import { readSourceState } from "#products/tree/engine/runtime/binding-state.js";
 import {
   readLocalTreeConfig,
-  resolveConfiguredLocalTreePath,
+  resolveLocalTreeCheckout,
 } from "#products/tree/engine/runtime/local-tree-config.js";
 
 import {
@@ -277,9 +277,12 @@ export function resolveDedicatedTreeRepoForSource(
 
 function localCandidatePaths(sourceRepo: Repo, extraNames: string[] = []): string[] {
   const paths = new Set<string>();
-  const configuredLocalPath = resolveConfiguredLocalTreePath(sourceRepo.root);
-  if (configuredLocalPath !== null && isGitRepoPath(configuredLocalPath)) {
-    paths.add(configuredLocalPath);
+  const resolvedCheckout = resolveLocalTreeCheckout(sourceRepo.root, undefined, {
+    materialize: false,
+    refresh: false,
+  });
+  if (resolvedCheckout !== null && isGitRepoPath(resolvedCheckout.path)) {
+    paths.add(resolvedCheckout.path);
   }
   for (const treeRepoName of [
     ...extraNames,
@@ -333,10 +336,12 @@ function inspectExistingCandidate(
     const bootstrap = readBootstrapState(path);
     if (bootstrap !== null) {
       bootstrapTreeRepoName = bootstrap.treeRepoName;
-      const resolvedSourceRoot = resolve(path, bootstrap.sourceRepoPath);
-      bootstrapMatchesSource =
-        resolvedSourceRoot === sourceRepo.root
-        || bootstrap.sourceRepoName === sourceRepo.repoName();
+      bootstrapMatchesSource = bootstrap.sourceRepoName === sourceRepo.repoName();
+      if (bootstrap.sourceRepoPath) {
+        const resolvedSourceRoot = resolve(path, bootstrap.sourceRepoPath);
+        bootstrapMatchesSource = bootstrapMatchesSource
+          || resolvedSourceRoot === sourceRepo.root;
+      }
     }
   }
 

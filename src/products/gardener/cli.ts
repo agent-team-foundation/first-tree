@@ -25,43 +25,46 @@ export const GARDENER_USAGE = `usage: first-tree gardener <command>
   on source-repo PRs/issues, and responding to reviewer feedback on
   sync PRs. This CLI is designed for agents, not humans.
 
-Commands:
-  sync                  Detect drift between a tree repo and its bound
-                        sources. Opens a PR against the tree repo with
-                        proposal files and applied edits.
-  comment               Review source-repo PRs/issues against the tree
-  respond               Fix sync PRs based on reviewer feedback
+Primary commands (start here):
   install-workflow      Scaffold .github/workflows/first-tree-sync.yml in
-                        the caller's codebase repo (push mode: replaces
-                        the gardener service with an event-driven flow)
+                        a codebase repo (push mode: replaces the long-
+                        running daemon with event-driven per-PR sync).
+  start                 Launch the pull-mode daemon in the background
+                        (writes ~/.gardener/config.json; launchd on macOS
+                        or detached spawn otherwise).
+  stop                  Stop the pull-mode daemon.
+  status                Report daemon PID, schedule, and last-run state.
+  run-once              Execute both sweeps inline and exit (useful for
+                        cron or CI-style deployments).
 
-Daemon lifecycle (pull mode):
-  start                 Bring up the gardener daemon in the background;
-                        writes ~/.gardener/config.json, boots launchd
-                        (macOS) or detached spawn
-  stop                  Tear down the gardener daemon
-  status                Report daemon PID, schedule, and last-run state
-  run-once              Execute both sweeps inline and exit (no daemon)
-  daemon                Foreground loop (invoked by start; not for
-                        direct human use)
+Agent commands (invoked by the daemon, breeze, or CI — not normally by humans):
+  sync                  Detect drift between a tree repo and its bound
+                        sources. Writes proposals and optionally opens a
+                        PR against the tree repo with applied edits.
+  comment               Review source-repo PRs/issues against the tree
+                        and post structured verdict comments.
+  respond               Fix sync PRs based on reviewer feedback.
+  daemon                Foreground loop invoked by \`start\`; not for
+                        direct human use.
 
 Options:
   --help, -h            Show this help message
   --version, -v         Show gardener product version
 
-Examples:
-  first-tree gardener sync --help
-  first-tree gardener sync --tree-path ../my-tree --propose
-  first-tree gardener sync --apply
-  first-tree gardener comment --help
-  first-tree gardener comment --pr 42 --repo owner/name
-  first-tree gardener respond --pr 123 --repo owner/name
+Examples (humans):
+  first-tree gardener install-workflow --tree-repo owner/tree-repo
   first-tree gardener start --tree-path ../my-tree \\
       --code-repo acme/web --code-repo acme/api \\
       --gardener-interval 5m --sync-interval 1h --assign-owners
   first-tree gardener status
   first-tree gardener run-once
   first-tree gardener stop
+
+Examples (agent / CI):
+  first-tree gardener sync --tree-path ../my-tree --propose
+  first-tree gardener sync --apply
+  first-tree gardener comment --pr 42 --repo owner/name
+  first-tree gardener respond --pr 123 --repo owner/name
 `;
 
 type Output = (text: string) => void;

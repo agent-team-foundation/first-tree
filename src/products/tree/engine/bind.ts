@@ -32,11 +32,14 @@ import {
   upsertLocalTreeGitIgnore,
 } from "#products/tree/engine/runtime/local-tree-config.js";
 import { upsertFirstTreeIndexFile, upsertSourceIntegrationFiles } from "#products/tree/engine/runtime/source-integration.js";
-import { relativeRepoPath } from "#products/tree/engine/dedicated-tree.js";
 
 export const BIND_USAGE = `usage: first-tree tree bind [--tree-path PATH | --tree-url URL] [--tree-mode dedicated|shared] [--mode standalone-source|shared-source|workspace-root|workspace-member] [--workspace-id ID] [--workspace-root PATH] [--entrypoint PATH]
 
 Bind the current source/workspace root to an existing Context Tree repo.
+
+For most onboarding flows, prefer \`first-tree tree init\`. Use \`bind\`
+directly when you need explicit \`--mode\` control or want to target an
+already-existing tree without the higher-level onboarding wrapper.
 
 What it does:
   1. Installs or refreshes the lightweight first-tree skill locally
@@ -45,7 +48,7 @@ What it does:
   4. Writes .first-tree/tree.json and .first-tree/bindings/<source-id>.json
      in the target tree repo, and refreshes source-repos.md plus root guidance
   5. Ensures the target tree repo also has the first-tree skill installed
-  6. Syncs the bound codebase repo into the tree repo under .first-tree/submodules/
+  6. Refreshes workspace membership metadata when binding a workspace root/member
 
 Typical examples:
   first-tree tree bind --tree-path ../org-context --tree-mode shared
@@ -385,14 +388,18 @@ export function runBind(repo?: Repo, options?: BindOptions): number {
     options?.workspaceRoot,
   );
   const rootKind: RootKind = sourceRepo.isGitRepo() ? "git-repo" : "folder";
-  const sourceId = buildStableSourceId(sourceRepo.root, sourceRepo.repoName());
+  const sourceRemoteUrl = sourceRepo.isGitRepo()
+    ? readGitRemoteUrl(runner, sourceRepo.root)
+    : null;
+  const sourceId = buildStableSourceId(sourceRepo.repoName(), {
+    fallbackRoot: sourceRepo.root,
+    remoteUrl: sourceRemoteUrl ?? undefined,
+  });
   const entrypoint = options?.entrypoint
     ?? deriveDefaultEntrypoint(bindingMode, sourceRepo.repoName(), workspaceId);
-  const localTreePath = relativeRepoPath(sourceRepo.root, treeResolution.treeRepo.root);
   const remoteUrl = treeResolution.treeUrl;
   const treeReference: BoundTreeReference = {
     entrypoint,
-    localPath: localTreePath,
     ...(remoteUrl ? { remoteUrl } : {}),
     treeId: buildTreeId(treeResolution.treeRepoName),
     treeMode,
@@ -434,9 +441,6 @@ export function runBind(repo?: Repo, options?: BindOptions): number {
       sourceName: sourceRepo.repoName(),
       tree: treeReference,
       workspaceId,
-      workspaceRootPath: workspaceRootPath
-        ? relativeRepoPath(sourceRepo.root, workspaceRootPath)
-        : undefined,
     });
 
     const existingTreeState = readTreeState(treeResolution.treeRepo.root);
@@ -448,9 +452,6 @@ export function runBind(repo?: Repo, options?: BindOptions): number {
       treeMode,
       treeRepoName: treeResolution.treeRepoName,
     });
-    const sourceRemoteUrl = sourceRepo.isGitRepo()
-      ? readGitRemoteUrl(runner, sourceRepo.root)
-      : null;
     writeTreeBinding(treeResolution.treeRepo.root, sourceId, {
       bindingMode,
       entrypoint,
@@ -459,13 +460,9 @@ export function runBind(repo?: Repo, options?: BindOptions): number {
       scope,
       sourceId,
       sourceName: sourceRepo.repoName(),
-      sourceRootPath: relativeRepoPath(treeResolution.treeRepo.root, sourceRepo.root),
       treeMode,
       treeRepoName: treeResolution.treeRepoName,
       workspaceId,
-      workspaceRootPath: workspaceRootPath
-        ? relativeRepoPath(treeResolution.treeRepo.root, workspaceRootPath)
-        : undefined,
     });
     const treeAgentHooks = ensureAgentContextHooks(treeResolution.treeRepo.root);
     const sourceRepoIndex = syncTreeSourceRepoIndex(treeResolution.treeRepo.root);
@@ -475,13 +472,11 @@ export function runBind(repo?: Repo, options?: BindOptions): number {
         workspaceRootPath,
         workspaceId,
         new Repo(workspaceRootPath).isGitRepo() ? "git-repo" : "folder",
-        {
-          ...treeReference,
-          localPath: relativeRepoPath(workspaceRootPath, treeResolution.treeRepo.root),
-        },
+        treeReference,
         {
           bindingMode: "workspace-member",
-          relativePath: relativeRepoPath(workspaceRootPath, sourceRepo.root),
+          entrypoint,
+          remoteUrl: sourceRemoteUrl ?? undefined,
           rootKind,
           sourceId,
           sourceName: sourceRepo.repoName(),

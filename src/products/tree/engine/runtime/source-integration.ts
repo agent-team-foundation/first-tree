@@ -77,8 +77,8 @@ export function buildSourceIntegrationBlock(
   const description = describeBinding(bindingMode, treeMode, treeRepoName);
   const scopeText = describeScope(bindingMode, treeMode, treeRepoName, workspaceId);
   const fallbackInstruction = treeRepoUrl === null
-    ? `- If the tree has not been published yet, work from the local checkout recorded in \`${sourceStatePathValue}\` or the tree path you just bound until \`first-tree tree publish\` records the GitHub repo URL.`
-    : `- If the configured checkout is missing, clone a temporary working copy from \`${treeRepoUrl}\` into \`${temporaryCheckoutPath}/\`, use it for the current task, and delete it before you finish.`;
+    ? `- If the tree has not been published yet, work from the local checkout you just bound (or pass \`--tree-path\` explicitly) until \`first-tree tree publish\` records the GitHub repo URL.`
+    : `- If you do not already have that tree repo cloned locally, clone a temporary working copy from \`${treeRepoUrl}\` into \`${temporaryCheckoutPath}/\`, use it for the current task, and delete it before you finish.`;
 
   const treeRepoUrlDisplay = treeRepoUrl === null
     ? "_pending publish_"
@@ -114,8 +114,8 @@ export function buildSourceIntegrationBlock(
     "",
     "### Before every task",
     "",
-    `- Read \`${sourceStatePathValue}\` first. If it exists, resolve its \`tree.localPath\` value from this repo root and treat that checkout as the canonical local tree repo.`,
-    "- If that configured checkout exists locally, update it before you read anything else.",
+    `- Read \`${sourceStatePathValue}\` first. Use its recorded tree repo URL and tree repo name as the source of truth for which Context Tree this repo belongs to.`,
+    "- If you already have that tree repo cloned locally, update it before you read anything else.",
     fallbackInstruction,
     `- Never commit anything under \`${LOCAL_TREE_TEMP_ROOT}/\` to this repo. It is local-only workspace state.`,
     "",

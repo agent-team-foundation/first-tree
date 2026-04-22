@@ -50,8 +50,11 @@ Before creating anything new, ask:
 - do you already have a Context Tree?
 - if yes, is it a local checkout path or a remote URL?
 
-If the answer is yes, prefer `first-tree tree bind` over creating a new sibling tree
-repo.
+Either way the primary command is `first-tree tree init`. With no flags, `init`
+creates a new sibling tree. With `--tree-path <path>` or `--tree-url <url>` it
+binds to that existing tree instead. `init` delegates to `bind` and `bootstrap`
+under the hood; reach for those primitives directly only when you need
+explicit `--mode` control (e.g. binding a `workspace-member`).
 
 ## Step 3: Choose The Right Flow
 
@@ -78,29 +81,32 @@ The CLI will:
 Reuse the existing tree instead of creating a new sibling repo:
 
 ```bash
-first-tree tree bind --tree-path ../org-context --tree-mode shared
-```
-
-Or:
-
-```bash
 first-tree tree init --tree-path ../org-context --tree-mode shared
 ```
 
 If the user gives only a remote URL:
 
 ```bash
-first-tree tree bind --tree-url git@github.com:acme/org-context.git --tree-mode shared
+first-tree tree init --tree-url git@github.com:acme/org-context.git --tree-mode shared
 ```
 
-`bind` will clone a local checkout if needed, then:
+`init` delegates to `bind` under the hood, which will clone a local checkout
+if needed, then:
 
 - install local skill integration in the current repo
 - install the bundled `first-tree` skill in the tree repo if it is missing
 - refresh `AGENTS.md` and `CLAUDE.md`
-- write `.first-tree/source.json` (includes tree localPath)
+- write `.first-tree/source.json` (tree repo identity + published URL when known)
 - write `.first-tree/tree.json` and `.first-tree/bindings/<source-id>.json`
 - refresh the tree repo's `source-repos.md` index plus root repo-discovery guidance
+
+If you need explicit `--mode` control (e.g. `standalone-source`,
+`workspace-member`) that `init` normally infers, invoke the primitive
+directly:
+
+```bash
+first-tree tree bind --tree-path ../org-context --tree-mode shared --mode standalone-source
+```
 
 ### Case C: Workspace Root + Shared Tree
 
@@ -108,18 +114,23 @@ If the current root contains many child repos or submodules, onboard the whole
 workspace with one shared tree:
 
 ```bash
-first-tree tree init --scope workspace --sync-members
+first-tree tree init --scope workspace
 ```
 
 Or bind to an existing shared tree:
 
 ```bash
-first-tree tree init --scope workspace --tree-path ../org-context --tree-mode shared --sync-members
+first-tree tree init --scope workspace --tree-path ../org-context --tree-mode shared
 ```
 
-The workspace root gets local integration plus `.first-tree/source.json` (with workspace members).
-Then `first-tree tree workspace sync` binds every discovered child repo as a
-`workspace-member` to that same shared tree.
+The workspace root gets local integration plus `.first-tree/source.json` (with
+workspace members). `first-tree tree init --scope workspace` also binds every
+currently discovered child repo as a `workspace-member` to that same shared
+tree by default. If new child repos appear later, rerun:
+
+```bash
+first-tree tree workspace sync
+```
 
 ### Case D: Explicit Tree Bootstrap
 
@@ -227,9 +238,9 @@ but does not try to open many code PRs automatically.
 
 - Start from `.first-tree/source.json` in the current source/workspace root.
 - If you are starting from the tree repo itself, use `source-repos.md` as the quick index of bound source/workspace repos and their GitHub URLs, while treating `.first-tree/bindings/` as the canonical machine-readable source of truth.
-- Resolve the recorded `localPath`.
-- If the checkout is missing but the tree has been published, create a temporary
-  clone under `.first-tree/tmp/`.
+- First try the sibling checkout named by `tree.treeRepoName`.
+- If that checkout is missing but the tree has been published, create or refresh
+  a temporary clone under `.first-tree/tmp/`.
 - At task close-out, always ask whether the tree needs updating.
 
 ## Sample Tasks After Onboarding
