@@ -98,12 +98,23 @@ Options:
   --help, -h            Show this help message
 
 Environment:
-  ANTHROPIC_API_KEY     When set, the CLI wires a built-in Anthropic
-                        classifier into runComment. When unset, the CLI
-                        refuses to post (it would only produce the
-                        INSUFFICIENT_CONTEXT sentinel) and exits with a
-                        skip trailer. Required for this command to do
-                        anything useful.
+  Classifier selection  The CLI picks a classifier in this order:
+                        1. GARDENER_CLASSIFIER override
+                           (claude-cli | anthropic-api | none)
+                        2. \`claude\` binary on PATH → claude-cli
+                           (uses your local session auth; typical
+                           local-dev path, no API key needed)
+                        3. ANTHROPIC_API_KEY set → anthropic-api
+                           (typical CI path)
+                        4. Neither available → fail-closed; CLI skips
+                           posting and exits with a skip trailer.
+                        If claude-cli is selected but its auth fails
+                        and ANTHROPIC_API_KEY is set, the CLI
+                        transparently retries on the api-key path.
+  ANTHROPIC_API_KEY     API key for the anthropic-api classifier path.
+                        Required in CI where \`claude\` is not on PATH.
+  GARDENER_CLASSIFIER   Override auto-selection
+                        (claude-cli | anthropic-api | none).
   GARDENER_CLASSIFIER_MODEL
                         Override the Claude model used by the built-in
                         classifier (default: claude-haiku-4-5).
