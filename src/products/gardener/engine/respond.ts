@@ -94,7 +94,7 @@ export interface ShellResult {
 export type ShellRun = (
   command: string,
   args: string[],
-  options?: { cwd?: string; input?: string; timeout?: number },
+  options?: { cwd?: string; input?: string; timeout?: number; env?: NodeJS.ProcessEnv },
 ) => Promise<ShellResult>;
 
 export interface RespondDeps {

@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -29,15 +30,21 @@ import type {
 
 const execFileAsync = promisify(execFile);
 
-export const SYNC_USAGE = `usage: first-tree gardener sync [--tree-path PATH] [--source ID] [--propose] [--apply] [--dry-run]
+export const SYNC_USAGE = `usage: first-tree gardener sync [--tree-path PATH] [--source ID] [--propose] [--apply | --open-issues] [--dry-run]
 
 Detect drift between a Context Tree and the source repo(s) it describes.
-Runs in three phases controlled by flags:
+Runs in four terminal modes controlled by flags:
 
-  default        Detect drift only. Prints a summary. Exits 0.
-  --propose      Detect + write proposal files under .first-tree/proposals/.
-  --apply        Detect + propose + write new tree files, commit, push,
-                 and open a PR labeled \`first-tree:sync\`.
+  default         Detect drift only. Prints a summary. Exits 0.
+  --propose       Detect + write proposal files under .first-tree/proposals/.
+  --apply         Detect + propose + write new tree files, commit, push,
+                  and open a PR labeled \`first-tree:sync\`.
+  --open-issues   Detect + propose + open ONE tree-repo issue per
+                  proposal, assigned to the affected node's owners. The
+                  issue carries a \`first-tree:sync-proposal\` label and a
+                  state marker so re-runs skip proposals that already
+                  have an open issue. Mutually exclusive with --apply.
+                  Requires TREE_REPO_TOKEN.
 
 First-run policy: if a binding has no \`lastReconciledSourceCommit\`, the
 command traces history back to the initial commit (capped at 500 commits
@@ -52,7 +59,10 @@ Options:
   --source ID         Only sync a single bound source by sourceId
   --propose           Write proposal files under .first-tree/proposals/
   --apply             Apply proposals, open PR (implies --propose)
-  --dry-run           With --apply, skip \`git push\` and \`gh pr create\`
+  --open-issues       Open one tree-repo issue per proposal instead of
+                      one bundled PR (implies --propose). Conflicts with --apply.
+  --dry-run           With --apply / --open-issues, skip network writes
+                      (\`git push\`, \`gh pr create\`, \`gh issue create\`)
   --help              Show this help message
 `;
 
@@ -66,7 +76,7 @@ export interface SyncDeps {
 async function defaultShellRun(
   command: string,
   args: string[],
-  options: { cwd?: string; input?: string; timeout?: number } = {},
+  options: { cwd?: string; input?: string; timeout?: number; env?: NodeJS.ProcessEnv } = {},
 ): Promise<ShellResult> {
   try {
     const { stdout, stderr } = await execFileAsync(command, args, {
@@ -74,6 +84,7 @@ async function defaultShellRun(
       encoding: "utf-8",
       maxBuffer: 32 * 1024 * 1024,
       timeout: options.timeout,
+      env: options.env,
     });
     return { stdout: String(stdout), stderr: String(stderr), code: 0 };
   } catch (err) {
@@ -323,7 +334,7 @@ interface DriftReport {
   truncated: boolean;
 }
 
-interface ClassificationItem {
+export interface ClassificationItem {
   path: string;
   type: "TREE_MISS" | "TREE_OK";
   rationale: string;
@@ -359,8 +370,10 @@ interface ParsedFlags {
   source: string | undefined;
   propose: boolean;
   apply: boolean;
+  openIssues: boolean;
   dryRun: boolean;
   unknown: string | undefined;
+  conflict: string | undefined;
 }
 
 function parseFlags(args: string[]): ParsedFlags {
@@ -370,8 +383,10 @@ function parseFlags(args: string[]): ParsedFlags {
     source: undefined,
     propose: false,
     apply: false,
+    openIssues: false,
     dryRun: false,
     unknown: undefined,
+    conflict: undefined,
   };
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -408,12 +423,20 @@ function parseFlags(args: string[]): ParsedFlags {
       result.propose = true;
       continue;
     }
+    if (arg === "--open-issues") {
+      result.openIssues = true;
+      result.propose = true;
+      continue;
+    }
     if (arg === "--dry-run") {
       result.dryRun = true;
       continue;
     }
     result.unknown = arg;
     return result;
+  }
+  if (result.apply && result.openIssues) {
+    result.conflict = "--apply and --open-issues are mutually exclusive";
   }
   return result;
 }
@@ -1289,9 +1312,337 @@ async function pushAndCreatePrsParallel(
   return { successes, failures, prUrls };
 }
 
+interface DriftReportLike {
+  binding: { sourceId: string };
+  ownerRepo: OwnerRepo;
+}
+
+interface ClassifiedPrLike {
+  pr: {
+    number: number | null;
+    title: string | null;
+    mergeCommitSha: string | null;
+    authorLogin: string | null;
+  };
+  filtered: ClassificationItem[];
+}
+
+interface RunOpenIssuesInput {
+  drift: DriftReportLike;
+  classifiedPrs: ClassifiedPrLike[];
+  treeRoot: string;
+  shellRun: ShellRun;
+  dryRun: boolean;
+}
+
+/**
+ * Hash of node path + proposed body. Deterministic so re-runs hit the
+ * same id for the same proposal content, enabling idempotency via the
+ * `proposal_id=` field on the state marker.
+ */
+export function computeProposalId(proposal: ClassificationItem): string {
+  const input = `${proposal.path}\n${proposal.suggested_node_body_markdown}`;
+  return createHash("sha256").update(input).digest("hex").slice(0, 12);
+}
+
+export function buildSyncProposalBody(params: {
+  proposal: ClassificationItem;
+  proposalId: string;
+  sourceRepo: string;
+  sourcePr: number | null;
+  sourcePrTitle: string | null;
+  sourceSha: string | null;
+  autoAssigned: boolean;
+  needsOwner: boolean;
+}): string {
+  const {
+    proposal,
+    proposalId,
+    sourceRepo,
+    sourcePr,
+    sourcePrTitle,
+    sourceSha,
+    autoAssigned,
+    needsOwner,
+  } = params;
+  const marker =
+    `<!-- gardener:sync-proposal \u00B7 proposal_id=${proposalId} \u00B7 ` +
+    `source_sha=${sourceSha ?? "unknown"} \u00B7 node=${proposal.path} -->`;
+  const sourceLine = sourcePr
+    ? `**Source PR:** ${sourceRepo}#${sourcePr}${sourcePrTitle ? ` \u2014 ${sourcePrTitle}` : ""}`
+    : `**Source:** ${sourceRepo} (unlinked commits)`;
+  const ownerNote = needsOwner
+    ? `_No \`owners:\` on the affected node — assigned the tree-repo default as a fallback. Label \`needs-owner\` flags this for triage._\n\n`
+    : autoAssigned
+      ? `_Assigned to node owners from the affected NODE.md. First assignee to pick this up drafts a tree PR and links it back in a comment._\n\n`
+      : "";
+  return [
+    marker,
+    "",
+    `Proposed tree update for \`${proposal.path}\`.`,
+    "",
+    sourceLine,
+    "",
+    "### Rationale",
+    proposal.rationale,
+    "",
+    "### Proposed node content",
+    proposal.suggested_node_body_markdown,
+    "",
+    "---",
+    ownerNote + "Filed by `first-tree gardener sync --open-issues` (#277).",
+  ].join("\n");
+}
+
+async function resolveTreeSlug(
+  shellRun: ShellRun,
+  treeRoot: string,
+): Promise<string | null> {
+  const res = await shellRun(
+    "gh",
+    ["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
+    { cwd: treeRoot },
+  );
+  if (res.code !== 0) return null;
+  const slug = res.stdout.trim();
+  return slug.length > 0 ? slug : null;
+}
+
+async function resolveTreeDefaultOwner(
+  shellRun: ShellRun,
+  treeSlug: string,
+): Promise<string | null> {
+  const res = await shellRun(
+    "gh",
+    ["api", `/repos/${treeSlug}`, "-q", ".owner.login"],
+    {},
+  );
+  if (res.code !== 0) return null;
+  const login = res.stdout.trim();
+  return login.length > 0 ? login : null;
+}
+
+async function existingProposalIssueUrl(
+  shellRun: ShellRun,
+  treeSlug: string,
+  proposalId: string,
+  env: NodeJS.ProcessEnv,
+): Promise<string | null> {
+  const res = await shellRun(
+    "gh",
+    [
+      "issue",
+      "list",
+      "--repo",
+      treeSlug,
+      "--state",
+      "open",
+      "--search",
+      `proposal_id=${proposalId} in:body`,
+      "--json",
+      "url",
+    ],
+    { env },
+  );
+  if (res.code !== 0) return null;
+  try {
+    const parsed = JSON.parse(res.stdout || "[]") as Array<{ url?: string }>;
+    return parsed[0]?.url ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function runOpenIssuesMode(
+  input: RunOpenIssuesInput,
+): Promise<number> {
+  const { drift, classifiedPrs, treeRoot, shellRun, dryRun } = input;
+  const treeRepoToken = process.env.TREE_REPO_TOKEN;
+  if (!treeRepoToken) {
+    console.error(
+      "\u274C --open-issues requires TREE_REPO_TOKEN to be set (same as --apply's tree-repo writes)",
+    );
+    return 1;
+  }
+  const treeSlug = await resolveTreeSlug(shellRun, treeRoot);
+  if (!treeSlug) {
+    console.error(
+      "\u274C could not resolve tree-repo slug via `gh repo view` \u2014 is this directory a GitHub-backed tree repo?",
+    );
+    return 1;
+  }
+  const sourceRepo = `${drift.ownerRepo.owner}/${drift.ownerRepo.repo}`;
+  const tokenEnv: NodeJS.ProcessEnv = { ...process.env, GH_TOKEN: treeRepoToken };
+  let cachedDefaultOwner: string | null | undefined;
+  const resolveDefaultOwner = async (): Promise<string | null> => {
+    if (cachedDefaultOwner !== undefined) return cachedDefaultOwner;
+    cachedDefaultOwner = await resolveTreeDefaultOwner(shellRun, treeSlug);
+    return cachedDefaultOwner;
+  };
+
+  let created = 0;
+  let skipped = 0;
+  let failed = 0;
+  for (const classified of classifiedPrs) {
+    for (const proposal of classified.filtered) {
+      if (proposal.type !== "TREE_MISS") continue;
+      const proposalId = computeProposalId(proposal);
+      const existing = await existingProposalIssueUrl(
+        shellRun,
+        treeSlug,
+        proposalId,
+        tokenEnv,
+      );
+      if (existing) {
+        console.log(
+          `\u2713 skip proposal ${proposalId} (${proposal.path}): existing issue ${existing}`,
+        );
+        skipped += 1;
+        continue;
+      }
+      const absDir = join(treeRoot, proposal.path);
+      const owners = resolveProposalOwners(
+        treeRoot,
+        absDir,
+        classified.pr.authorLogin,
+      );
+      let assignees = owners;
+      let needsOwner = false;
+      if (assignees.length === 0) {
+        const defaultOwner = await resolveDefaultOwner();
+        if (defaultOwner) {
+          assignees = [defaultOwner];
+          needsOwner = true;
+        }
+      }
+
+      const body = buildSyncProposalBody({
+        proposal,
+        proposalId,
+        sourceRepo,
+        sourcePr: classified.pr.number,
+        sourcePrTitle: classified.pr.title,
+        sourceSha: classified.pr.mergeCommitSha
+          ? classified.pr.mergeCommitSha.slice(0, 7)
+          : null,
+        autoAssigned: assignees.length > 0,
+        needsOwner,
+      });
+      const title = `[gardener] ${proposal.suggested_node_title || proposal.path}`;
+
+      if (dryRun) {
+        console.log(
+          `\u2712 [dry-run] would open issue on ${treeSlug}: "${title}"` +
+            (assignees.length > 0 ? ` (assignees: ${assignees.join(", ")})` : "") +
+            (needsOwner ? " [needs-owner]" : ""),
+        );
+        created += 1;
+        continue;
+      }
+
+      const labels = ["first-tree:sync-proposal", "gardener"];
+      if (needsOwner) labels.push("needs-owner");
+      const baseArgs = [
+        "issue",
+        "create",
+        "--repo",
+        treeSlug,
+        "--title",
+        title,
+        "--body",
+        body,
+      ];
+      const buildArgs = (opts: {
+        withAssignees: boolean;
+        withLabels: boolean;
+      }): string[] => {
+        const out = [...baseArgs];
+        if (opts.withAssignees && assignees.length > 0) {
+          out.push("--assignee", assignees.join(","));
+        }
+        if (opts.withLabels) {
+          out.push("--label", labels.join(","));
+        }
+        return out;
+      };
+
+      let res = await shellRun(
+        "gh",
+        buildArgs({ withAssignees: true, withLabels: true }),
+        { env: tokenEnv },
+      );
+      if (res.code !== 0) {
+        // `gh` 422 on unknown labels — retry without labels so the
+        // issue still lands; tree repo may not have seeded labels yet.
+        const stderr = res.stderr || "";
+        if (/label|422|unprocessable/i.test(stderr)) {
+          console.log(
+            `\u26A0 label rejected on ${treeSlug} (${stderr.split("\n")[0] || "422"}) \u2014 retrying without --label`,
+          );
+          res = await shellRun(
+            "gh",
+            buildArgs({ withAssignees: true, withLabels: false }),
+            { env: tokenEnv },
+          );
+        }
+      }
+      if (res.code !== 0 && assignees.length > 0) {
+        // `gh` 422 when assignee isn't a collaborator; preserve the issue
+        // but flag for triage since we're landing it unassigned.
+        const stderr = res.stderr || "";
+        if (/assignee|collaborator|422|unprocessable/i.test(stderr)) {
+          console.log(
+            `\u26A0 assignee rejected on ${treeSlug} (${stderr.split("\n")[0] || "422"}) \u2014 retrying without --assignee, adding needs-owner`,
+          );
+          assignees = [];
+          needsOwner = true;
+          if (!labels.includes("needs-owner")) labels.push("needs-owner");
+          res = await shellRun(
+            "gh",
+            buildArgs({ withAssignees: false, withLabels: true }),
+            { env: tokenEnv },
+          );
+          if (res.code !== 0) {
+            const stderr2 = res.stderr || "";
+            if (/label|422|unprocessable/i.test(stderr2)) {
+              console.log(
+                `\u26A0 label rejected on ${treeSlug} after assignee retry \u2014 retrying without --label`,
+              );
+              res = await shellRun(
+                "gh",
+                buildArgs({ withAssignees: false, withLabels: false }),
+                { env: tokenEnv },
+              );
+            }
+          }
+        }
+      }
+      if (res.code !== 0) {
+        console.error(
+          `\u274C failed to open issue for proposal ${proposalId} (${proposal.path}): ${res.stderr.split("\n")[0] || "unknown error"}`,
+        );
+        failed += 1;
+        continue;
+      }
+      const issueUrl = res.stdout.trim().split("\n").pop()?.trim() ?? "";
+      console.log(
+        `\u2712 opened issue on ${treeSlug}: ${issueUrl}` +
+          (assignees.length > 0 ? ` (assignees: ${assignees.join(", ")})` : "") +
+          (needsOwner ? " [needs-owner]" : ""),
+      );
+      created += 1;
+    }
+  }
+
+  console.log(
+    `\n\u2713 --open-issues ${drift.binding.sourceId}: ${created} created, ${skipped} skipped${failed > 0 ? `, ${failed} failed` : ""}`,
+  );
+  return failed > 0 ? 1 : 0;
+}
+
 export async function runSync(
   treeRoot: string,
-  flags: Omit<ParsedFlags, "help" | "unknown" | "treePath">,
+  flags: Omit<ParsedFlags, "help" | "unknown" | "treePath" | "conflict" | "openIssues"> & { openIssues?: boolean },
   deps: SyncDeps = {},
 ): Promise<number> {
   const shellRun = deps.shellRun ?? defaultShellRun;
@@ -1620,6 +1971,22 @@ export async function runSync(
       `\u2713 ${drift.binding.sourceId}: ${totalProposals} total proposal(s) across ${prsToClassify.length} source PR(s)`,
     );
 
+    // Phase 2-alt: Open one tree-repo issue per proposal (#277 gap 1).
+    // Terminal: does not fall through to --apply. First handshake point
+    // for the gardener → breeze dispatch pipeline — the assignee's
+    // breeze picks up the notification and drafts a tree PR.
+    if (flags.openIssues) {
+      const openIssuesResult = await runOpenIssuesMode({
+        drift,
+        classifiedPrs,
+        treeRoot,
+        shellRun,
+        dryRun: flags.dryRun,
+      });
+      if (openIssuesResult !== 0) return openIssuesResult;
+      continue;
+    }
+
     // Phase 2: Apply with parallelized push + PR creation
     // Branch creation and commits must be sequential, but push and PR create can be parallel.
     if (flags.apply) {
@@ -1841,6 +2208,11 @@ export async function runSyncCli(
     console.log(SYNC_USAGE);
     return 1;
   }
+  if (flags.conflict) {
+    console.error(`\u274C ${flags.conflict}`);
+    console.log(SYNC_USAGE);
+    return 1;
+  }
   const treeRoot = flags.treePath
     ? resolve(process.cwd(), flags.treePath)
     : process.cwd();
@@ -1851,6 +2223,7 @@ export async function runSyncCli(
         source: flags.source,
         propose: flags.propose,
         apply: flags.apply,
+        openIssues: flags.openIssues,
         dryRun: flags.dryRun,
       },
       deps,
