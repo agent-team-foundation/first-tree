@@ -93,6 +93,9 @@ describe("gardener install-workflow — yaml builder", () => {
       "first-tree gardener install-workflow",
     );
     expect(yaml).toContain("first-tree:sync");
+    expect(yaml).toContain(
+      "github.event.pull_request.head.repo.full_name == github.repository",
+    );
     expect(yaml).toContain("TREE_REPO_TOKEN: ${{ secrets.TREE_REPO_TOKEN }}");
   });
 
