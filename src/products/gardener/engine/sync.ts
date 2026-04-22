@@ -1589,17 +1589,34 @@ export async function runOpenIssuesMode(
         }
       }
       if (res.code !== 0 && assignees.length > 0) {
-        // `gh` 422 when assignee isn't a collaborator; preserve the issue.
+        // `gh` 422 when assignee isn't a collaborator; preserve the issue
+        // but flag for triage since we're landing it unassigned.
         const stderr = res.stderr || "";
         if (/assignee|collaborator|422|unprocessable/i.test(stderr)) {
           console.log(
-            `\u26A0 assignee rejected on ${treeSlug} (${stderr.split("\n")[0] || "422"}) \u2014 retrying without --assignee`,
+            `\u26A0 assignee rejected on ${treeSlug} (${stderr.split("\n")[0] || "422"}) \u2014 retrying without --assignee, adding needs-owner`,
           );
+          assignees = [];
+          needsOwner = true;
+          if (!labels.includes("needs-owner")) labels.push("needs-owner");
           res = await shellRun(
             "gh",
             buildArgs({ withAssignees: false, withLabels: true }),
             { env: tokenEnv },
           );
+          if (res.code !== 0) {
+            const stderr2 = res.stderr || "";
+            if (/label|422|unprocessable/i.test(stderr2)) {
+              console.log(
+                `\u26A0 label rejected on ${treeSlug} after assignee retry \u2014 retrying without --label`,
+              );
+              res = await shellRun(
+                "gh",
+                buildArgs({ withAssignees: false, withLabels: false }),
+                { env: tokenEnv },
+              );
+            }
+          }
         }
       }
       if (res.code !== 0) {
