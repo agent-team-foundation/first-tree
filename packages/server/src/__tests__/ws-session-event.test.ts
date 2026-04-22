@@ -102,7 +102,7 @@ describe("Agent WS — session event protocol (S10)", () => {
     });
 
     const token = await signMemberJwt(userId, memberId, orgId, role);
-    return { agent, token, clientId, organizationId: orgId };
+    return { agent, token, clientId, organizationId: orgId, memberId };
   }
 
   function waitForFrame(ws: WebSocket, match: (m: unknown) => boolean, timeoutMs = 5000): Promise<unknown> {
@@ -354,7 +354,9 @@ describe("Agent WS — session event protocol (S10)", () => {
       );
 
       const hit = await waitForCondition(async () => {
-        const { items } = await notificationService.listNotifications(app.db, seed.organizationId, { limit: 50 });
+        const { items } = await notificationService.listNotifications(app.db, seed.organizationId, seed.memberId, {
+          limit: 50,
+        });
         const found = items.find(
           (n) => n.type === "session_completed" && n.agentId === seed.agent.uuid && n.chatId === chatId,
         );

@@ -488,13 +488,9 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               });
 
               if (payload.runtimeState === "error" && shouldNotify(agentId, "agent_error")) {
-                notificationService
-                  .notifyAgentEvent(app.db, agentId, "agent_error", "high", `Agent ${agentId} entered error state`)
-                  .catch(() => {});
+                notificationService.notifyAgentEvent(app.db, agentId, "agent_error", "high").catch(() => {});
               } else if (payload.runtimeState === "blocked" && shouldNotify(agentId, "agent_blocked")) {
-                notificationService
-                  .notifyAgentEvent(app.db, agentId, "agent_blocked", "medium", `Agent ${agentId} is blocked`)
-                  .catch(() => {});
+                notificationService.notifyAgentEvent(app.db, agentId, "agent_blocked", "medium").catch(() => {});
               }
             } else if (type === "session:event") {
               const agentId = parsed.data.agentId;
@@ -527,14 +523,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
 
               if (shouldNotify(agentId, `session_completed:${payload.chatId}`)) {
                 notificationService
-                  .notifyAgentEvent(
-                    app.db,
-                    agentId,
-                    "session_completed",
-                    "low",
-                    `Agent ${agentId} completed a task`,
-                    payload.chatId,
-                  )
+                  .notifyAgentEvent(app.db, agentId, "session_completed", "low", payload.chatId)
                   .catch(() => {});
               }
             } else if (type === "heartbeat") {
@@ -563,9 +552,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
             try {
               await presenceService.unbindAgent(app.db, agentId);
               if (shouldNotify(agentId, "agent_disconnected")) {
-                notificationService
-                  .notifyAgentEvent(app.db, agentId, "agent_disconnected", "medium", `Agent ${agentId} disconnected`)
-                  .catch(() => {});
+                notificationService.notifyAgentEvent(app.db, agentId, "agent_disconnected", "medium").catch(() => {});
               }
             } catch {
               // best-effort

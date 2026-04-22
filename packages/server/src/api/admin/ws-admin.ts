@@ -53,6 +53,12 @@ export function adminWsRoutes(notifier: Notifier, jwtSecret: string) {
     if (typeof orgId !== "string" || orgId.length === 0) return;
 
     const isPulseTick = payload.type === "pulse:tick" && typeof payload.agents === "object" && payload.agents !== null;
+    // Agent-scoped notifications carry `agentId` on the envelope — suppress
+    // the push for any socket whose member can't see that agent via REST.
+    // Notifications with null agentId are org-wide and fan out unrestricted.
+    const isNotification = payload.type === "notification";
+    const notificationAgentId =
+      isNotification && typeof payload.agentId === "string" && payload.agentId.length > 0 ? payload.agentId : null;
     const sharedData = isPulseTick ? null : JSON.stringify(payload);
 
     for (const [ws, meta] of adminSockets) {
@@ -62,6 +68,12 @@ export function adminWsRoutes(notifier: Notifier, jwtSecret: string) {
         const filtered = filterPulseAgents(payload.agents as Record<string, unknown>, meta.visibleAgentIds);
         ws.send(JSON.stringify({ ...payload, agents: filtered }));
       } else {
+        if (isNotification && notificationAgentId && !meta.visibleAgentIds.has(notificationAgentId)) {
+          // This member cannot see the agent — skip the push. The REST list
+          // endpoint also filters them out so the bell's unread count stays
+          // consistent with the data the dashboard actually shows.
+          continue;
+        }
         ws.send(sharedData as string);
       }
     }
