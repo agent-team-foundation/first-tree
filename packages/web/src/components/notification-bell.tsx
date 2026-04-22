@@ -3,41 +3,23 @@ import { Bell } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { listNotifications, markAllNotificationsRead, markNotificationRead } from "../api/notifications.js";
-import { useAgentNameMap } from "../lib/use-agent-name-map.js";
-import { cn } from "../lib/utils.js";
+import { NotificationItem, type NotificationRow } from "./notification-item.js";
 
-function severityDot(severity: string) {
-  switch (severity) {
-    case "high":
-      return "bg-red-500";
-    case "medium":
-      return "bg-yellow-500";
-    default:
-      return "bg-gray-400";
-  }
-}
-
-function relativeTime(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h`;
-  return `${Math.floor(hrs / 24)}d`;
-}
-
+/**
+ * Topbar notification bell. Visually aligned with the workspace right-rail
+ * Notifications panel (same row styling via {@link NotificationItem}) so the
+ * two surfaces feel like one feature rendered in two places, not two forks.
+ */
 export function NotificationBell() {
   const [open, setOpen] = useState(false);
   const [markAllError, setMarkAllError] = useState<string | null>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
-  const agentName = useAgentNameMap();
   const queryClient = useQueryClient();
 
   const { data } = useQuery({
     queryKey: ["notifications", "bell"],
-    queryFn: () => listNotifications({ limit: 5 }),
+    queryFn: () => listNotifications({ limit: 8 }),
     refetchInterval: 10_000,
   });
 
@@ -51,9 +33,13 @@ export function NotificationBell() {
   const hasUnread = unreadCount > 0;
 
   const handleClickNotification = useCallback(
-    async (n: { id: string; agentId: string | null; chatId: string | null; read: boolean }) => {
+    async (n: NotificationRow & { agentId: string | null }) => {
       if (!n.read) {
         markNotificationRead(n.id).catch(() => {});
+        // Local optimism so the unread count + row background update before
+        // the refetch lands. Broad invalidate follows to keep everything
+        // eventually-consistent with server state.
+        queryClient.invalidateQueries({ queryKey: ["notifications"] });
       }
       setOpen(false);
       if (n.agentId && n.chatId) {
@@ -62,7 +48,7 @@ export function NotificationBell() {
         navigate(`/?a=${n.agentId}`);
       }
     },
-    [navigate],
+    [navigate, queryClient],
   );
 
   // Without an invalidate, the red badge stays up to 10s (refetchInterval)
@@ -91,7 +77,16 @@ export function NotificationBell() {
       >
         <Bell className="h-4 w-4" />
         {hasUnread && (
-          <span className="absolute -top-0.5 -right-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-medium text-white">
+          <span
+            className="absolute -top-0.5 -right-0.5 flex items-center justify-center rounded-full px-1 font-medium"
+            style={{
+              height: 16,
+              minWidth: 16,
+              background: "var(--state-error)",
+              color: "var(--bg)",
+              fontSize: 11,
+            }}
+          >
             {unreadCount > 99 ? "99+" : unreadCount}
           </span>
         )}
@@ -102,47 +97,65 @@ export function NotificationBell() {
           <button type="button" className="fixed inset-0 z-40 cursor-default" onClick={() => setOpen(false)} />
           <div
             ref={popoverRef}
-            className="absolute right-0 top-full mt-1 z-50 w-80 rounded-md border border-border bg-card shadow-lg"
+            className="absolute right-0 top-full mt-1 z-50"
+            style={{
+              width: 320,
+              background: "var(--bg-raised)",
+              border: "1px solid var(--border)",
+              borderRadius: 6,
+              boxShadow: "0 8px 24px rgba(0,0,0,0.25)",
+            }}
           >
-            <div className="flex items-center justify-between px-3 py-2 border-b border-border">
-              <span className="text-sm font-medium">Notifications</span>
+            {/* Header — matches workspace SectionLabel cadence */}
+            <div
+              className="flex items-center justify-between"
+              style={{
+                padding: "8px 12px",
+                borderBottom: "1px solid var(--border-faint)",
+              }}
+            >
+              <span className="mono uppercase" style={{ fontSize: 11, letterSpacing: 0.1, color: "var(--fg-4)" }}>
+                Notifications
+              </span>
               {hasUnread && (
                 <button
                   type="button"
                   onClick={handleMarkAll}
-                  className="text-xs text-muted-foreground hover:text-foreground"
+                  className="hover:underline"
+                  style={{ fontSize: 12, color: "var(--accent)" }}
                 >
-                  Mark all
+                  Mark all read
                 </button>
               )}
             </div>
+
             {markAllError && (
-              <div className="border-b border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              <div
+                style={{
+                  padding: "6px 12px",
+                  fontSize: 13,
+                  color: "var(--state-error)",
+                  background: "var(--bg-sunken)",
+                  borderBottom: "1px solid var(--border-faint)",
+                }}
+              >
                 {markAllError}
               </div>
             )}
-            <div className="max-h-80 overflow-y-auto">
+
+            <div className="flex flex-col overflow-y-auto" style={{ maxHeight: 360, padding: 8, gap: 4 }}>
               {!data?.items || data.items.length === 0 ? (
-                <div className="py-6 text-center text-sm text-muted-foreground">No notifications</div>
+                <div className="text-center" style={{ fontSize: 13, color: "var(--fg-3)", padding: "18px 0" }}>
+                  No notifications
+                </div>
               ) : (
                 data.items.map((n) => (
-                  <button
-                    type="button"
+                  <NotificationItem
                     key={n.id}
+                    notification={n}
+                    clickable={!!n.agentId}
                     onClick={() => handleClickNotification(n)}
-                    className={cn(
-                      "w-full flex items-start gap-2 px-3 py-2 text-left hover:bg-accent/50 transition-colors",
-                      !n.read && "bg-accent/20",
-                    )}
-                  >
-                    <span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", severityDot(n.severity))} />
-                    <div className="min-w-0 flex-1">
-                      <p className={cn("text-sm truncate", !n.read && "font-medium")}>{n.message}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {n.agentId ? agentName(n.agentId) : ""} {relativeTime(n.createdAt)}
-                      </p>
-                    </div>
-                  </button>
+                  />
                 ))
               )}
             </div>

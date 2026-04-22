@@ -52,11 +52,11 @@ export function createBackgroundTasks(
           const staleAgents = await presenceService.markStaleAgents(app.db, staleSeconds);
           if (staleAgents.length > 0) {
             log.info({ count: staleAgents.length, agentIds: staleAgents }, "marked agents as stale");
-            // M1: Create notifications for stale agents
+            // M1: Create notifications for stale agents. Message text is
+            // composed inside notifyAgentEvent so phrasing (computer hostname
+            // vs agent name) stays consistent across event sources.
             for (const agentId of staleAgents) {
-              notificationService
-                .notifyAgentEvent(app.db, agentId, "agent_stale", "medium", `Agent ${agentId} is unresponsive`)
-                .catch(() => {});
+              notificationService.notifyAgentEvent(app.db, agentId, "agent_stale", "medium").catch(() => {});
             }
           }
         } catch (err) {
