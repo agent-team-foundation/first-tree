@@ -11,6 +11,10 @@ import { dirname, join } from "node:path";
 import { spawn } from "node:child_process";
 
 import { loadBreezeDaemonConfig } from "../runtime/config.js";
+import {
+  parseAllowRepoArg,
+  requireExplicitRepoFilter,
+} from "../runtime/allow-repo.js";
 import { resolveDaemonIdentity } from "../daemon/identity.js";
 import {
   bootstrapLaunchdJob,
@@ -50,6 +54,14 @@ export async function runStart(
   options: RunStartOptions = {},
 ): Promise<number> {
   const write = options.write ?? ((line) => process.stdout.write(`${line}\n`));
+  try {
+    requireExplicitRepoFilter(parseAllowRepoArg(argv));
+  } catch (err) {
+    write(
+      `breeze: start failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return 1;
+  }
   const home = options.runnerHome ?? parseHome(argv) ?? resolveRunnerHome();
   const breezeDir =
     options.breezeDir ?? process.env.BREEZE_DIR ?? dirname(home);

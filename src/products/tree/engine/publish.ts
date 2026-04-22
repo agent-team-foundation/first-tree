@@ -4,7 +4,6 @@ import { dirname, join, resolve } from "node:path";
 import {
   formatDedicatedTreePathExample,
   inferSourceRepoNameFromTreeRepoName,
-  relativeRepoPath,
 } from "#products/tree/engine/dedicated-tree.js";
 import { Repo } from "#products/tree/engine/repo.js";
 import {
@@ -38,8 +37,8 @@ import {
 
 export const PUBLISH_USAGE = `usage: first-tree tree publish [--open-pr] [--tree-path PATH] [--source-repo PATH] [--source-remote NAME]
 
-Publish a Context Tree repo to GitHub and refresh any bound source/workspace
-repos with the published tree URL. This is the networked second-stage command
+Publish a Context Tree repo to GitHub and refresh any explicit or locally
+discoverable bound source/workspace repos with the published tree URL. This is the networked second-stage command
 after \`first-tree tree init\` / \`first-tree tree bind\`, run from the tree repo (or
 pointed at one with --tree-path).
 
@@ -49,18 +48,19 @@ What it does:
   2. Creates the GitHub tree repo if it doesn't exist (reuses an existing
      remote when already bound)
   3. Pushes the local tree commits via the \`gh\` CLI
-  4. Refreshes each bound source/workspace repo's
+  4. Refreshes each explicit or locally discoverable source/workspace repo's
      \`FIRST-TREE-SOURCE-INTEGRATION:\` block and \`.first-tree/source.json\`
      when that source/workspace repo is available locally
   5. Optionally opens a PR in the source repo when exactly one source repo is
      being refreshed
 
 Requires the \`gh\` CLI installed and authenticated. Requires the source repo
-to be discoverable (bound locally, sibling directory, or --source-repo PATH).
+to be discoverable locally (for example via --source-repo PATH or a sibling
+checkout that matches the binding metadata).
 
-After publish succeeds, the canonical local working copy of the tree is the
-checkout recorded in \`.first-tree/source.json\` inside the source repo.
-The temporary sibling bootstrap checkout can be deleted.
+After publish succeeds, the canonical shared identity is the published tree URL
+recorded in each bound source repo. Local checkouts can live wherever is
+convenient on each machine.
 
 Options:
   --open-pr               Open a PR in the source/workspace repo after pushing the branch
@@ -197,6 +197,18 @@ function parseGitHubRemote(url: string): GitHubRemote | null {
   };
 }
 
+function remoteUrlsMatch(left: string | null, right: string | undefined): boolean {
+  if (!left || !right) {
+    return false;
+  }
+  const leftGitHub = parseGitHubRemote(left);
+  const rightGitHub = parseGitHubRemote(right);
+  if (leftGitHub && rightGitHub) {
+    return leftGitHub.slug.toLowerCase() === rightGitHub.slug.toLowerCase();
+  }
+  return left.trim().replace(/\.git$/u, "") === right.trim().replace(/\.git$/u, "");
+}
+
 function visibilityFlag(
   visibility: GitHubRepoMetadata["visibility"],
 ): "--internal" | "--private" | "--public" {
@@ -297,6 +309,7 @@ function commitTreeState(
 
 function resolveBoundSourceRepoRoots(
   treeRepo: Repo,
+  runner: CommandRunner,
   options?: PublishOptions,
 ): string[] {
   const cwd = options?.currentCwd ?? process.cwd();
@@ -307,24 +320,57 @@ function resolveBoundSourceRepoRoots(
 
   const bindings = listTreeBindings(treeRepo.root);
   if (bindings.length > 0) {
-    return [...new Set(bindings.map((binding) =>
-      resolve(treeRepo.root, binding.sourceRootPath)
-    ))];
+    const candidates = bindings
+      .map((binding) => {
+        const siblingRoot = join(dirname(treeRepo.root), binding.sourceName);
+        const siblingRepo = new Repo(siblingRoot);
+        if (!siblingRepo.isGitRepo()) {
+          return null;
+        }
+        if (
+          binding.remoteUrl
+          && !remoteUrlsMatch(getGitRemoteUrl(runner, siblingRoot, "origin"), binding.remoteUrl)
+        ) {
+          return null;
+        }
+        return siblingRoot;
+      })
+      .filter((candidate): candidate is string => candidate !== null);
+    return [...new Set(candidates)];
   }
 
   const bootstrap = readBootstrapState(treeRepo.root);
-  if (bootstrap !== null) {
+  if (bootstrap?.sourceRepoPath) {
     return [resolve(treeRepo.root, bootstrap.sourceRepoPath)];
+  }
+  if (bootstrap !== null) {
+    const siblingRoot = join(dirname(treeRepo.root), bootstrap.sourceRepoName);
+    const siblingRepo = new Repo(siblingRoot);
+    if (
+      siblingRepo.isGitRepo()
+      && (
+        !bootstrap.sourceRepoRemoteUrl
+        || remoteUrlsMatch(
+          getGitRemoteUrl(runner, siblingRoot, "origin"),
+          bootstrap.sourceRepoRemoteUrl,
+        )
+      )
+    ) {
+      return [siblingRoot];
+    }
   }
 
   const inferredSourceRepoName = inferSourceRepoNameFromTreeRepoName(
     treeRepo.repoName(),
   );
   if (inferredSourceRepoName !== null) {
-    return [join(
+    const siblingRoot = join(
       dirname(treeRepo.root),
       inferredSourceRepoName,
-    )];
+    );
+    if (new Repo(siblingRoot).isGitRepo()) {
+      return [siblingRoot];
+    }
   }
 
   return [];
@@ -332,9 +378,10 @@ function resolveBoundSourceRepoRoots(
 
 function resolvePrimarySourceRepoRoot(
   treeRepo: Repo,
+  runner: CommandRunner,
   options?: PublishOptions,
 ): string | null {
-  const resolvedRoots = resolveBoundSourceRepoRoots(treeRepo, options);
+  const resolvedRoots = resolveBoundSourceRepoRoots(treeRepo, runner, options);
   return resolvedRoots[0] ?? null;
 }
 
@@ -421,59 +468,10 @@ function ensureSourceBranch(
   return branch;
 }
 
-function defaultLocalTreeRoot(
-  sourceRepo: Repo,
-  treeRepoName: string,
-): string {
-  return join(dirname(sourceRepo.root), treeRepoName);
-}
-
-function ensureLocalTreeCheckout(
-  runner: CommandRunner,
-  sourceRepo: Repo,
-  treeRepo: Repo,
-  remoteUrl: string,
-): string {
-  const localTreeRoot = defaultLocalTreeRoot(sourceRepo, treeRepo.repoName());
-  if (localTreeRoot === treeRepo.root) {
-    return localTreeRoot;
-  }
-
-  if (!existsSync(localTreeRoot)) {
-    runner("git", ["clone", remoteUrl, localTreeRoot], {
-      cwd: dirname(sourceRepo.root),
-    });
-    return localTreeRoot;
-  }
-
-  const localTreeRepo = new Repo(localTreeRoot);
-  if (!localTreeRepo.isGitRepo()) {
-    throw new Error(
-      `Cannot use ${localTreeRoot} as the local tree checkout because that path already exists and is not a git repository.`,
-    );
-  }
-
-  const localOrigin = getGitRemoteUrl(runner, localTreeRoot, "origin");
-  if (localOrigin === null) {
-    throw new Error(
-      `Cannot reuse ${localTreeRoot} as the local tree checkout because it does not have an \`origin\` remote.`,
-    );
-  }
-  if (localOrigin !== remoteUrl) {
-    throw new Error(
-      `Cannot reuse ${localTreeRoot} as the local tree checkout because its \`origin\` remote does not match ${remoteUrl}.`,
-    );
-  }
-
-  runner("git", ["fetch", "origin"], { cwd: localTreeRoot });
-  return localTreeRoot;
-}
-
 function updateSourceWorkspaceIntegration(
   sourceRepo: Repo,
   treeRepo: Repo,
   treeRepoUrl: string,
-  localTreeRoot: string,
 ): {
   agentHookActions: ReturnType<typeof ensureAgentContextHooks>;
   gitIgnoreAction: "created" | "updated" | "unchanged";
@@ -484,7 +482,6 @@ function updateSourceWorkspaceIntegration(
   if (sourceState !== null) {
     const updatedTree = {
       ...sourceState.tree,
-      localPath: relativeRepoPath(sourceRepo.root, localTreeRoot),
       remoteUrl: treeRepoUrl,
       treeRepoName: treeRepo.repoName(),
     };
@@ -760,40 +757,46 @@ export function runPublish(repo?: Repo, options?: PublishOptions): number {
     return 1;
   }
 
-  const sourceRepoRoots = resolveBoundSourceRepoRoots(treeRepo, options);
-  if (sourceRepoRoots.length === 0) {
-    console.error(
-      "Error: could not determine any bound source/workspace repo for this tree. Re-run `first-tree tree bind` or `first-tree tree init` first, or pass `--source-repo PATH`.",
-    );
-    return 1;
+  const sourceRepoRoots = resolveBoundSourceRepoRoots(treeRepo, runner, options);
+  const primarySourceRepoRoot = resolvePrimarySourceRepoRoot(treeRepo, runner, options);
+  const bindings = listTreeBindings(treeRepo.root);
+  const bootstrap = readBootstrapState(treeRepo.root);
+  const primaryBoundRemoteUrl = bindings
+    .map((binding) => binding.remoteUrl)
+    .find((remoteUrl): remoteUrl is string => typeof remoteUrl === "string")
+    ?? bootstrap?.sourceRepoRemoteUrl
+    ?? undefined;
+
+  let sourceRepo: Repo | null = null;
+  if (primarySourceRepoRoot !== null) {
+    const candidate = new Repo(primarySourceRepoRoot);
+    if (!candidate.isGitRepo()) {
+      if (options?.sourceRepoPath) {
+        console.error(
+          `Error: the resolved primary source/workspace repo is not a git repository: ${primarySourceRepoRoot}`,
+        );
+        return 1;
+      }
+    } else if (candidate.root === treeRepo.root) {
+      console.error(
+        "Error: the source/workspace repo and dedicated tree repo resolved to the same path. `first-tree tree publish` expects two separate repos.",
+      );
+      return 1;
+    } else if (options?.sourceRepoPath && (
+      !candidate.hasCurrentInstalledSkill() || !candidate.hasSourceWorkspaceIntegration()
+    )) {
+      console.error(
+        "Error: the source/workspace repo does not have the first-tree source integration installed. Run `first-tree tree init` from the source/workspace repo first.",
+      );
+      return 1;
+    } else {
+      sourceRepo = candidate;
+    }
   }
 
-  const primarySourceRepoRoot = resolvePrimarySourceRepoRoot(treeRepo, options);
-  if (primarySourceRepoRoot === null) {
+  if (sourceRepoRoots.length === 0 && !primaryBoundRemoteUrl) {
     console.error(
-      "Error: could not resolve a primary source/workspace repo for publishing.",
-    );
-    return 1;
-  }
-
-  const sourceRepo = new Repo(primarySourceRepoRoot);
-  if (!sourceRepo.isGitRepo()) {
-    console.error(
-      `Error: the resolved primary source/workspace repo is not a git repository: ${primarySourceRepoRoot}`,
-    );
-    return 1;
-  }
-
-  if (sourceRepo.root === treeRepo.root) {
-    console.error(
-      "Error: the source/workspace repo and dedicated tree repo resolved to the same path. `first-tree tree publish` expects two separate repos.",
-    );
-    return 1;
-  }
-
-  if (!sourceRepo.hasCurrentInstalledSkill() || !sourceRepo.hasSourceWorkspaceIntegration()) {
-    console.error(
-      "Error: the source/workspace repo does not have the first-tree source integration installed. Run `first-tree tree init` from the source/workspace repo first.",
+      "Error: could not determine any bound source/workspace repo metadata for this tree. Re-run `first-tree tree bind` or `first-tree tree init` first, or pass `--source-repo PATH`.",
     );
     return 1;
   }
@@ -803,27 +806,31 @@ export function runPublish(repo?: Repo, options?: PublishOptions): number {
   try {
     console.log("Context Tree Publish\n");
     console.log(`  Tree repo:   ${treeRepo.root}`);
-    console.log(`  Primary source repo: ${sourceRepo.root}`);
-    console.log(`  Bound source roots:  ${sourceRepoRoots.length}\n`);
+    console.log(
+      `  Primary source repo: ${sourceRepo?.root ?? "(using binding metadata only)"}`,
+    );
+    console.log(`  Local bound source roots: ${sourceRepoRoots.length}\n`);
 
-    const sourceRemoteUrl = getGitRemoteUrl(runner, sourceRepo.root, sourceRemoteName);
+    const sourceRemoteUrl = sourceRepo
+      ? getGitRemoteUrl(runner, sourceRepo.root, sourceRemoteName)
+      : primaryBoundRemoteUrl ?? null;
     if (sourceRemoteUrl === null) {
       throw new Error(
-        `Could not read git remote \`${sourceRemoteName}\` from the source/workspace repo.`,
+        `Could not determine a GitHub remote for the source/workspace repo from either local checkout metadata or tree bindings.`,
       );
     }
 
     const sourceGitHub = parseGitHubRemote(sourceRemoteUrl);
     if (sourceGitHub === null) {
       throw new Error(
-        `The source/workspace remote \`${sourceRemoteName}\` is not a GitHub remote: ${sourceRemoteUrl}`,
+        `The source/workspace remote is not a GitHub remote: ${sourceRemoteUrl}`,
       );
     }
 
     const sourceMetadata = readGitHubRepoMetadata(
       runner,
       sourceGitHub.slug,
-      sourceRepo.root,
+      sourceRepo?.root ?? treeRepo.root,
     );
     const treeSlug = `${sourceGitHub.owner}/${treeRepo.repoName()}`;
     const treeAgentHooks = ensureAgentContextHooks(treeRepo.root);
@@ -863,39 +870,32 @@ export function runPublish(repo?: Repo, options?: PublishOptions): number {
         continue;
       }
 
-      const localTreeRoot = ensureLocalTreeCheckout(
-        runner,
-        boundSourceRepo,
-        treeRepo,
-        treeRemote.remoteUrl,
-      );
       const sourceIntegrationState = updateSourceWorkspaceIntegration(
         boundSourceRepo,
         treeRepo,
         treeRemote.remoteUrl,
-        localTreeRoot,
       );
       console.log(
         `  Recorded \`${treeRemote.remoteUrl}\` for ${boundSourceRepo.root}.`,
       );
       if (sourceIntegrationState.gitIgnoreAction === "created") {
-        console.log("    Created `.gitignore` entries for local tree checkout state.");
+        console.log("    Created `.gitignore` entries for local tree working state.");
       } else if (sourceIntegrationState.gitIgnoreAction === "updated") {
-        console.log("    Updated `.gitignore` for local tree checkout state.");
+        console.log("    Updated `.gitignore` for local tree working state.");
       }
       console.log(
         sourceIntegrationState.sourceStateAction === "created"
-          ? `    Created \`${SOURCE_STATE}\` for \`${relativeRepoPath(boundSourceRepo.root, localTreeRoot)}\`.`
+          ? `    Created \`${SOURCE_STATE}\` for \`${boundSourceRepo.root}\`.`
           : sourceIntegrationState.sourceStateAction === "updated"
-          ? `    Updated \`${SOURCE_STATE}\` for \`${relativeRepoPath(boundSourceRepo.root, localTreeRoot)}\`.`
-          : `    Reused the existing \`${SOURCE_STATE}\` entry for \`${relativeRepoPath(boundSourceRepo.root, localTreeRoot)}\`.`,
+          ? `    Updated \`${SOURCE_STATE}\` for \`${boundSourceRepo.root}\`.`
+          : `    Reused the existing \`${SOURCE_STATE}\` entry for \`${boundSourceRepo.root}\`.`,
       );
       for (const message of formatAgentContextHookMessages(sourceIntegrationState.agentHookActions)) {
         console.log(`    ${message}`);
       }
     }
 
-    if (sourceRepoRoots.length === 1) {
+    if (sourceRepoRoots.length === 1 && sourceRepo !== null) {
       const sourceBranch = ensureSourceBranch(
         runner,
         sourceRepo,
@@ -950,7 +950,9 @@ export function runPublish(repo?: Repo, options?: PublishOptions): number {
       }
     } else if (options?.openPr) {
       console.log(
-        "  Skipped `--open-pr` because this shared tree is bound to multiple source/workspace roots.",
+        sourceRepo === null
+          ? "  Skipped `--open-pr` because no local source/workspace checkout was available."
+          : "  Skipped `--open-pr` because this shared tree is bound to multiple source/workspace roots.",
       );
     }
 

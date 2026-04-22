@@ -52,7 +52,6 @@ const EMPTY_REPO_ENTRY_ALLOWLIST = new Set([
   "README.txt",
 ]);
 const SOURCE_FILE_HINTS = new Set([
-  ".gitmodules",
   "Cargo.toml",
   "Dockerfile",
   "Gemfile",

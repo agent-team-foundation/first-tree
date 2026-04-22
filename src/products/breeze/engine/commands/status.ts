@@ -13,6 +13,7 @@ import {
 } from "../daemon/claim.js";
 import { resolveDaemonIdentity } from "../daemon/identity.js";
 import { RepoFilter } from "../runtime/repo-filter.js";
+import { parseAllowRepoArg } from "../runtime/allow-repo.js";
 import { resolveRunnerHome } from "../daemon/runner-skeleton.js";
 import { ThreadStore } from "../daemon/thread-store.js";
 
@@ -39,7 +40,7 @@ export async function runStatus(
   const write = options.write ?? ((line) => process.stdout.write(`${line}\n`));
   const home = options.runnerHome ?? parseHome(argv) ?? resolveRunnerHome();
   const config = loadBreezeDaemonConfig();
-  const repoFilterArg = options.allowRepo ?? parseAllowRepo(argv);
+  const repoFilterArg = options.allowRepo ?? parseAllowRepoArg(argv);
   const filter =
     repoFilterArg && repoFilterArg.length > 0
       ? RepoFilter.parseCsv(repoFilterArg)
@@ -84,15 +85,6 @@ function parseHome(argv: readonly string[]): string | undefined {
     const a = argv[i];
     if (a === "--home") return argv[i + 1];
     if (a?.startsWith("--home=")) return a.slice("--home=".length);
-  }
-  return undefined;
-}
-
-function parseAllowRepo(argv: readonly string[]): string | undefined {
-  for (let i = 0; i < argv.length; i += 1) {
-    const a = argv[i];
-    if (a === "--allow-repo") return argv[i + 1];
-    if (a?.startsWith("--allow-repo=")) return a.slice("--allow-repo=".length);
   }
   return undefined;
 }

@@ -42,7 +42,7 @@ export const PRODUCTS: readonly ProductDefinition[] = [
   {
     name: "tree",
     kind: "product",
-    description: "Context Tree tooling (init, bind, sync, publish, ...)",
+    description: "Context Tree tooling (inspect, init, publish, verify, upgrade, ...)",
     load: async () => {
       const mod = await import("./tree/cli.js");
       return { run: (args, output) => mod.runTree(args, output) };
@@ -56,7 +56,7 @@ export const PRODUCTS: readonly ProductDefinition[] = [
     name: "breeze",
     kind: "product",
     description:
-      "Breeze proposal/inbox agent (install, run, status, watch, ...)",
+      "Breeze proposal/inbox agent (install, start, stop, status, watch, ...)",
     load: async () => {
       const mod = await import("./breeze/cli.js");
       return { run: (args, output) => mod.runBreeze(args, output) };
@@ -69,7 +69,8 @@ export const PRODUCTS: readonly ProductDefinition[] = [
   {
     name: "gardener",
     kind: "product",
-    description: "Context Tree maintenance agent (respond, comment, ...)",
+    description:
+      "Context Tree maintenance agent (sync, comment, respond, install-workflow, ...)",
     load: async () => {
       const mod = await import("./gardener/cli.js");
       return { run: (args, output) => mod.runGardener(args, output) };

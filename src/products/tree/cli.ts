@@ -11,23 +11,30 @@ export const TREE_USAGE = `usage: first-tree tree <command>
   This CLI is designed for agents, not humans. Let your agent handle it.
   New to first-tree? Run \`first-tree tree help onboarding\` first.
 
-Commands:
+Primary commands (start here):
   inspect               Classify the current folder before onboarding
-  status                Alias for \`inspect\` (human-friendly name)
-  init                  High-level onboarding wrapper for repo/workspace roots
-  bootstrap             Low-level tree-repo bootstrap for an explicit tree checkout
-  bind                  Bind the current repo/workspace root to an existing tree repo
-  integrate             Install the first-tree skill and source-integration block without touching the tree repo
-  workspace             Workspace helpers (currently: sync child repos to a shared tree)
+  init                  Onboard a repo or workspace to a Context Tree
+                        (creates a sibling tree, or binds to an existing
+                        one when given --tree-path / --tree-url)
   publish               Publish a tree repo to GitHub
   verify                Run verification checks against a tree repo
   upgrade               Refresh source/workspace integration or tree metadata
-  review                Run Claude Code PR review (CI helper)
-  generate-codeowners   Generate .github/CODEOWNERS from tree ownership
-  invite                Invite a new member to the Context Tree
-  join                  Accept an invite and join a Context Tree
-  inject-context        Output Claude Code SessionStart hook payload from NODE.md
-  help                  Show help for a topic (e.g. \`help onboarding\`)
+  status                Alias for \`inspect\` (human-friendly name)
+
+Advanced commands (for agents or power users):
+  bootstrap             Low-level tree-repo bootstrap for an explicit tree checkout.
+                        Use \`init\` unless the current repo itself is the tree.
+  bind                  Lower-level primitive used by \`init --tree-path\`.
+                        Use \`init\` unless you need explicit --mode control.
+  integrate             Install the first-tree skill and source-integration block
+                        without touching the tree repo.
+  workspace             Workspace helpers (currently: sync child repos to a shared tree).
+  review                Run Claude Code PR review (CI helper).
+  generate-codeowners   Generate .github/CODEOWNERS from tree ownership.
+  inject-context        Output Claude Code SessionStart hook payload from NODE.md.
+  invite                Invite a new member to the Context Tree.
+  join                  Accept an invite and join a Context Tree.
+  help                  Show help for a topic (e.g. \`help onboarding\`).
 
 Options:
   --help                Show this help message
@@ -36,15 +43,23 @@ Common examples:
   first-tree tree inspect --json
   first-tree tree init
   first-tree tree init --tree-path ../org-context --tree-mode shared
-  first-tree tree init --scope workspace --tree-path ../org-context --tree-mode shared --sync-members
-  first-tree tree bootstrap --here
-  first-tree tree bind --tree-path ../org-context --tree-mode shared
+  first-tree tree init --scope workspace --tree-path ../org-context --tree-mode shared
   first-tree tree publish --tree-path ../org-context
-  mkdir my-org-tree && cd my-org-tree && git init && first-tree tree bootstrap --here
   first-tree tree verify --tree-path ../my-org-tree
   first-tree tree upgrade --tree-path ../my-org-tree
 
-Note:
+Advanced examples:
+  first-tree tree bootstrap --here
+  first-tree tree bind --tree-path ../org-context --tree-mode shared
+  first-tree tree workspace sync --tree-path ../org-context
+  mkdir my-org-tree && cd my-org-tree && git init && first-tree tree bootstrap --here
+
+Notes:
+  Prefer \`first-tree tree init\` — it creates a new tree or binds to an
+  existing one in a single flow. \`bind\` / \`bootstrap\` are primitives that
+  \`init\` calls internally.
+  \`first-tree tree init --scope workspace\` syncs currently discovered child
+  repos by default. Rerun \`first-tree tree workspace sync\` after adding new repos.
   \`first-tree tree bootstrap --here\` is for when the current repo is already the tree repo.
   Legacy alias: \`first-tree tree init tree ...\`
 `;

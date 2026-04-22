@@ -21,31 +21,29 @@ import { join } from "node:path";
 
 export const BREEZE_USAGE = `usage: first-tree breeze <command>
 
-  Breeze is the proposal/inbox agent. Every subcommand runs on the
-  TypeScript daemon (\`~/.breeze/runner\`).
+  Breeze is the proposal/inbox agent. It polls GitHub notifications,
+  keeps a local inbox under \`~/.breeze/\`, and dispatches work to
+  per-task agent runners.
 
-Foreground daemon:
-  run, daemon           Run the broker loop forever (default)
-  run-once              Run one poll cycle, wait for drain, exit
-
-Background lifecycle:
-  start                 Launch the daemon in the background (launchd on macOS)
+Primary commands (start here):
+  install               Run the first-run setup (creates config.yaml, then
+                        starts the daemon; requires \`--allow-repo\`)
+  start                 Launch the daemon in the background (launchd on macOS;
+                        requires \`--allow-repo\`)
   stop                  Stop the daemon and remove its lock
-
-Diagnostics:
   status                Print daemon lock + runtime/status.env
   doctor                Diagnose the local install
-  cleanup               Remove stale workspaces + expired claims
-  poll-inbox            Alias for \`poll\` (one-shot notification fetch)
-
-One-shot commands (no daemon required):
-  poll                  Poll GitHub notifications once and update the inbox
   watch                 Live TUI: status board + activity feed
-  statusline            Claude Code statusline hook (single-line output)
-  status-manager        Manage per-session status entries
+  poll                  Poll GitHub notifications once (no daemon required)
 
-Installer:
-  install               Run the breeze setup script
+Advanced commands (for agents or debugging):
+  run, daemon           Run the broker loop in the foreground.
+                        Humans should normally use \`start\` instead; requires
+                        \`--allow-repo\`. \`daemon\` is an alias invoked by launchd.
+  run-once              Run one poll cycle, wait for drain, exit. Requires
+                        \`--allow-repo\`.
+  cleanup               Remove stale workspaces + expired claims
+                        (only run if \`doctor\` suggests it).
 
 Options:
   --help, -h            Show this help message
@@ -53,6 +51,14 @@ Options:
 Environment:
   BREEZE_DIR            Override \`~/.breeze\` (store root)
   BREEZE_HOME           Override \`~/.breeze/runner\` (daemon private state)
+
+Not shown above (hook/internal entry points — do not invoke directly):
+  statusline            Claude Code statusline hook. Called by Claude Code via
+                        the separate \`dist/breeze-statusline.js\` bundle for
+                        sub-30 ms cold start. See the breeze skill for wiring.
+  status-manager        Internal helper used by breeze runners to manage per-
+                        session status entries. No direct human/agent use.
+  poll-inbox            Legacy alias for \`poll\`. Kept for existing scripts.
 `;
 
 const BREEZE_INLINE_HELP: Partial<Record<string, string>> = {
@@ -61,7 +67,7 @@ const BREEZE_INLINE_HELP: Partial<Record<string, string>> = {
   Run the Breeze daemon in the foreground until stopped.
 
   Common options:
-    --allow-repo <csv>           Restrict work to owner/repo or owner/* patterns
+    --allow-repo <csv>           Required: restrict work to owner/repo or owner/* patterns
     --poll-interval-secs <n>     Seconds between poll cycles
     --task-timeout-secs <n>      Per-task timeout
     --max-parallel <n>           Max concurrent agent tasks
@@ -69,12 +75,15 @@ const BREEZE_INLINE_HELP: Partial<Record<string, string>> = {
 `,
   daemon: `usage: first-tree breeze daemon [options]
 
-  Alias for \`first-tree breeze run\`.
+  Alias for \`first-tree breeze run\`. Still requires \`--allow-repo\`.
 `,
   "run-once": `usage: first-tree breeze run-once [options]
 
   Run one inbox poll plus one candidate-search cycle, wait for queued
   agent work to drain, then exit.
+
+  Options:
+    --allow-repo <csv>           Required: restrict work to owner/repo or owner/* patterns
 `,
   watch: `usage: first-tree breeze watch
 
@@ -91,7 +100,7 @@ const BREEZE_INLINE_HELP: Partial<Record<string, string>> = {
   Options:
     --home <path>                Override runner home
     --profile <name>             Override daemon profile
-    --allow-repo <csv>           Restrict work to owner/repo or owner/* patterns
+    --allow-repo <csv>           Required: restrict work to owner/repo or owner/* patterns
 `,
   stop: `usage: first-tree breeze stop [options]
 

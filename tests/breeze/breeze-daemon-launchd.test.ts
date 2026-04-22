@@ -42,6 +42,12 @@ describe("escapeXml", () => {
 });
 
 describe("renderLaunchdPlist", () => {
+  // Shared stubs so tests don't spawn /bin/zsh -lc for every passthrough
+  // var (that was timing out the suite on machines with slow login
+  // shells). See issue #258.
+  const noResolve = (): undefined => undefined;
+  const noLoginShell: readonly string[] = [];
+
   it("produces a well-formed plist with KeepAlive and RunAtLoad", () => {
     const xml = renderLaunchdPlist({
       login: "alice",
@@ -50,6 +56,8 @@ describe("renderLaunchdPlist", () => {
       arguments: ["breeze", "daemon", "--backend=ts"],
       logPath: "/tmp/breeze.log",
       env: { PATH: "/opt/bin", HOME: "/Users/alice" },
+      resolveEnvVar: noResolve,
+      loginShellVars: noLoginShell,
     });
     expect(xml).toContain("<string>com.breeze.runner.alice.default</string>");
     expect(xml).toContain("<key>KeepAlive</key>");
@@ -75,6 +83,8 @@ describe("renderLaunchdPlist", () => {
       arguments: ["--note", "hello <world> & 'friends'"],
       logPath: "/tmp/x",
       env: { PATH: "/a", HOME: "/b" },
+      resolveEnvVar: noResolve,
+      loginShellVars: noLoginShell,
     });
     expect(xml).toContain("hello &lt;world&gt; &amp; &apos;friends&apos;");
   });
@@ -92,6 +102,8 @@ describe("renderLaunchdPlist", () => {
         AZURE_OPENAI_API_KEY_TEST: "test-slot-key",
         AWS_PROFILE: "bedrock-profile",
       },
+      resolveEnvVar: noResolve,
+      loginShellVars: noLoginShell,
     });
     expect(xml).toContain("<key>AZURE_OPENAI_API_KEY_TEST</key>");
     expect(xml).toContain("<string>test-slot-key</string>");

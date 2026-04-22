@@ -98,8 +98,9 @@ Default behavior:
     repo to it.
   - Workspace root (git repo with child repos or a plain folder containing
     child repos): installs local skill integration at the workspace root,
-    creates or reuses one shared tree checkout, then binds discovered child
-    repos to that same tree.
+    creates or reuses one shared tree checkout, binds discovered child repos
+    to that same tree by default, and lets you rerun \`workspace sync\` later
+    after adding new repos.
   - Existing tree checkout or URL: binds the current repo/workspace root to
     the provided tree instead of creating a new sibling tree repo.
 
@@ -112,7 +113,7 @@ Low-level tree bootstrap:
 Recommended examples:
   first-tree tree init
   first-tree tree init --tree-path ../org-context --tree-mode shared
-  first-tree tree init --scope workspace --tree-path ../org-context --tree-mode shared --sync-members
+  first-tree tree init --scope workspace --tree-path ../org-context --tree-mode shared
   mkdir my-org-tree && cd my-org-tree && git init && first-tree tree bootstrap --here
 
 Options:
@@ -124,7 +125,8 @@ Options:
   --tree-mode MODE           dedicated or shared
   --scope MODE               repo or workspace
   --workspace-id ID          Workspace identifier for shared workspace onboarding
-  --sync-members             After binding a workspace root, bind all discovered child repos too
+  --sync-members             Explicitly request child-repo sync during workspace init
+                             (already the default; kept for readability/compatibility)
   --help                     Show this help message
 `;
 

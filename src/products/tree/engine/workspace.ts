@@ -1,9 +1,8 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { Repo } from "#products/tree/engine/repo.js";
-import { TREE_SUBMODULES_DIR } from "#products/tree/engine/runtime/asset-loader.js";
 
-export type WorkspaceRepoKind = "git-submodule" | "nested-git-repo";
+export type WorkspaceRepoKind = "nested-git-repo";
 
 export interface WorkspaceRepoCandidate {
   kind: WorkspaceRepoKind;
@@ -29,20 +28,6 @@ function isDirectory(path: string): boolean {
     return statSync(path).isDirectory();
   } catch {
     return false;
-  }
-}
-
-function parseGitmodules(root: string): string[] {
-  try {
-    const text = readFileSync(join(root, ".gitmodules"), "utf-8");
-    return [...text.matchAll(/^\s*path\s*=\s*(.+?)\s*$/gm)]
-      .map((match) => match[1]?.trim())
-      .filter(
-        (value): value is string =>
-          Boolean(value) && !value.startsWith(`${TREE_SUBMODULES_DIR}/`),
-      );
-  } catch {
-    return [];
   }
 }
 
@@ -87,20 +72,6 @@ function discoverNestedRepos(
 
 export function discoverWorkspaceRepos(root: string): WorkspaceRepoCandidate[] {
   const results = new Map<string, WorkspaceRepoCandidate>();
-
-  for (const submodulePath of parseGitmodules(root)) {
-    const submoduleRoot = resolve(root, submodulePath);
-    const repo = new Repo(submoduleRoot);
-    if (!repo.isGitRepo()) {
-      continue;
-    }
-    results.set(submodulePath, {
-      kind: "git-submodule",
-      name: repo.repoName(),
-      relativePath: submodulePath,
-      root: submoduleRoot,
-    });
-  }
 
   if (existsSync(root)) {
     discoverNestedRepos(root, root, results);

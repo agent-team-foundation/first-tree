@@ -11,6 +11,7 @@ import {
 import {
   buildGardenerSweepArgs,
   buildSyncSweepArgs,
+  formatMergedSince,
   parseBreezeResult,
   runOnce,
 } from "#products/gardener/engine/daemon/loop.js";
@@ -138,6 +139,41 @@ describe("gardener daemon -- state helpers", () => {
   });
 });
 
+describe("gardener daemon -- formatMergedSince", () => {
+  it("formats minutes when no larger unit divides cleanly", () => {
+    expect(formatMergedSince(600)).toBe("10m");
+    expect(formatMergedSince(120)).toBe("2m");
+  });
+
+  it("prefers hours when the duration is a whole number of hours", () => {
+    expect(formatMergedSince(3600)).toBe("1h");
+    expect(formatMergedSince(7200)).toBe("2h");
+  });
+
+  it("prefers days when the duration is a whole number of days", () => {
+    expect(formatMergedSince(86400)).toBe("1d");
+    expect(formatMergedSince(172800)).toBe("2d");
+  });
+
+  it("rounds sub-minute durations up to the parser's minimum (1m)", () => {
+    expect(formatMergedSince(1)).toBe("1m");
+    expect(formatMergedSince(59)).toBe("1m");
+  });
+
+  it("handles non-positive/NaN inputs safely", () => {
+    expect(formatMergedSince(0)).toBe("1m");
+    expect(formatMergedSince(-5)).toBe("1m");
+    expect(formatMergedSince(Number.NaN)).toBe("1m");
+  });
+
+  it("never emits an `s` suffix (rejected by `gardener comment --merged-since`)", () => {
+    for (const seconds of [1, 59, 60, 120, 600, 3599, 3600, 86399, 86400]) {
+      expect(formatMergedSince(seconds)).not.toMatch(/s$/);
+      expect(formatMergedSince(seconds)).toMatch(/^\d+[mhdw]$/);
+    }
+  });
+});
+
 describe("gardener daemon -- sweep arg builders", () => {
   it("gardener sweep passes --merged-since and assign-owners when enabled", () => {
     const config = buildDaemonConfig({
@@ -151,7 +187,8 @@ describe("gardener daemon -- sweep arg builders", () => {
     expect(args).toContain("comment");
     expect(args).toContain("--merged-since");
     const idx = args.indexOf("--merged-since");
-    expect(args[idx + 1]).toMatch(/^\d+s$/);
+    // Must be m/h/d/w — `gardener comment --merged-since` rejects `s`.
+    expect(args[idx + 1]).toMatch(/^\d+[mhdw]$/);
     expect(args).toContain("--assign-owners");
   });
 

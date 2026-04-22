@@ -1,11 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { TREE_SOURCE_REPOS_FILE } from "#products/tree/engine/runtime/asset-loader.js";
 import {
   listTreeBindings,
   readTreeState,
 } from "#products/tree/engine/runtime/binding-state.js";
-import { readLocalTreeConfig } from "#products/tree/engine/runtime/local-tree-config.js";
+import { readLocalTreeConfig, resolveLocalTreeCheckout } from "#products/tree/engine/runtime/local-tree-config.js";
 import { buildSourceRepoIndexTable } from "#products/tree/engine/runtime/source-repo-index.js";
 
 const ROOT_NODE_FILE = "NODE.md";
@@ -67,15 +67,15 @@ function resolveTreeContextRoot(currentRoot: string): ResolvedTreeContextRoot | 
     return null;
   }
 
-  const treeRoot = resolve(currentRoot, localTreeConfig.localPath);
-  if (!existsSync(treeRoot)) {
+  const resolvedCheckout = resolveLocalTreeCheckout(currentRoot);
+  if (resolvedCheckout === null || !existsSync(resolvedCheckout.path)) {
     return null;
   }
 
   return {
     currentEntrypoint: localTreeConfig.entrypoint,
     entrypointLabel: "bound source/workspace root",
-    treeRoot,
+    treeRoot: resolvedCheckout.path,
   };
 }
 

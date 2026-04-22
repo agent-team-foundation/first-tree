@@ -617,7 +617,6 @@ describe.sequential("CLI e2e smoke", () => {
       "../org-context",
       "--tree-mode",
       "shared",
-      "--sync-members",
     ]);
     expect(workspaceInit.code).toBe(0);
 
@@ -722,8 +721,8 @@ describe.sequential("CLI e2e smoke", () => {
       "git@github.com:acme/ADHD-tree.git",
     );
     expect(
-      JSON.parse(readFileSync(join(sourceRoot, SOURCE_STATE), "utf-8")).tree.localPath,
-    ).toBe("../ADHD-tree");
+      JSON.parse(readFileSync(join(sourceRoot, SOURCE_STATE), "utf-8")).tree.remoteUrl,
+    ).toBe("git@github.com:acme/ADHD-tree.git");
 
     const diffPath = join(sandbox.path, "pr.diff");
     const outputPath = join(sandbox.path, "review.json");
@@ -779,7 +778,6 @@ describe.sequential("CLI e2e smoke", () => {
       "../git-workspace-tree",
       "--tree-mode",
       "shared",
-      "--sync-members",
     ]);
     expect(initWorkspace.code).toBe(0);
     expect(readSourceState(workspaceRoot)?.bindingMode).toBe("workspace-root");

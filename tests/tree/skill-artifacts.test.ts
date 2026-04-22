@@ -249,8 +249,18 @@ describe("skill artifacts", () => {
     expect(read("README.md")).toContain("maintenance namespace");
     expect(read("README.md")).toContain("dedicated tree repo");
     expect(read("README.md")).toContain("first-tree tree inspect");
+    expect(read("README.md")).toContain("first-tree tree status");
+    expect(read("README.md")).toContain("first-tree tree integrate");
     expect(read("README.md")).toContain("first-tree tree bind");
     expect(read("README.md")).toContain("first-tree tree workspace sync");
+    expect(read("README.md")).toContain("first-tree gardener start");
+    expect(read("README.md")).toContain("first-tree gardener run-once");
+    expect(read("README.md")).toContain(
+      "first-tree breeze install --allow-repo owner/repo",
+    );
+    expect(read("README.md")).toContain(
+      "first-tree breeze start --allow-repo owner/repo",
+    );
     expect(read("README.md")).toContain(".first-tree/source.json");
     expect(read("README.md")).toContain(".first-tree/tree.json");
     expect(read("README.md")).toContain(".first-tree/bindings/");
@@ -271,6 +281,19 @@ describe("skill artifacts", () => {
     expect(read("AGENTS.md")).not.toContain("### Running evals");
     expect(read("AGENTS.md")).not.toContain("EVALS_TREE_REPO");
     expect(read("src/cli.ts")).not.toContain("from upstream");
+
+    const breezeReadme = read("src/products/breeze/README.md");
+    expect(breezeReadme).toContain(
+      "first-tree breeze install --allow-repo owner/repo",
+    );
+    expect(breezeReadme).toContain(
+      "first-tree breeze run --allow-repo owner/repo",
+    );
+
+    const breezeSkill = read("skills/breeze/SKILL.md");
+    expect(breezeSkill).toContain(
+      "Any command that starts the daemon now requires an explicit `--allow-repo`",
+    );
     // Note: #evals/* import alias is in package.json but evals/ is excluded from "files" so it won't ship to npm
 
     const onboarding = read("skills/first-tree/references/onboarding.md");
@@ -370,6 +393,9 @@ describe("skill artifacts", () => {
     expect(sourceWorkspaceInstall).toContain(".first-tree/tree.json");
     expect(sourceWorkspaceInstall).toContain(".first-tree/bindings/");
     expect(sourceWorkspaceInstall).toContain("source-repos.md");
+    expect(sourceWorkspaceInstall).toContain(
+      ".agents/skills/{first-tree,tree,breeze,gardener}/",
+    );
     expect(sourceWorkspaceInstall).not.toContain(".first-tree/submodules/");
     expect(sourceWorkspaceInstall).toContain("workspace-member");
     expect(sourceWorkspaceInstall).toContain("first-tree tree workspace sync");
@@ -380,7 +406,8 @@ describe("skill artifacts", () => {
 
     const openaiPrompt = read("agents/openai.yaml");
     expect(openaiPrompt).toContain("first-tree tree inspect --json");
-    expect(openaiPrompt).toContain("first-tree tree bind");
+    expect(openaiPrompt).toContain("Use `first-tree tree init` as the primary onboarding command either way");
+    expect(openaiPrompt).toContain("Drop to `first-tree tree bind` only when explicit `--mode` control is needed");
     expect(openaiPrompt).toContain("first-tree tree workspace sync");
     expect(openaiPrompt).toContain("baseline coverage");
     expect(openaiPrompt).toContain("progress.md");
@@ -394,6 +421,8 @@ describe("skill artifacts", () => {
     expect(maintainerArchitecture).toContain("skills/first-tree/");
     expect(maintainerArchitecture).toContain("assets/tree/");
     expect(maintainerArchitecture).toContain("src/products/tree/engine/");
+    expect(maintainerArchitecture).toContain("integrate.ts");
+    expect(maintainerArchitecture).toContain("install-workflow");
     expect(maintainerArchitecture).toContain("tests/");
     expect(maintainerArchitecture).toContain(".first-tree/bindings/");
     expect(maintainerArchitecture).toContain("source-repos.md");
@@ -401,6 +430,9 @@ describe("skill artifacts", () => {
 
     const upgradeContract = read(
       "skills/first-tree/references/upgrade-contract.md",
+    );
+    expect(upgradeContract).toContain(
+      ".agents/skills/{first-tree,tree,breeze,gardener}/",
     );
     expect(upgradeContract).not.toContain(".first-tree/submodules/");
 
@@ -416,6 +448,11 @@ describe("skill artifacts", () => {
     expect(designSync).toContain("src/products/gardener/engine/sync.ts");
     expect(designSync).toContain("tests/gardener/sync.test.ts");
     expect(designSync).toContain("first-tree gardener sync");
+
+    const testingOverview = read("docs/testing/overview.md");
+    expect(testingOverview).toContain("tests/gardener/sync.test.ts");
+    expect(testingOverview).not.toContain("tests/tree/sync.test.ts");
+    expect(testingOverview).toContain("`tree stats`");
   });
 
   it("keeps public OSS entrypoints and package metadata in place", () => {

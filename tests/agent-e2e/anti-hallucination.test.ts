@@ -101,13 +101,13 @@ d("anti-hallucination (real Claude subprocess)", () => {
   );
 
   it(
-    "does not invent a `tree status` / `tree stats` command for a status request",
+    "does not invent unsupported `tree stats` / `tree state` / `tree summary` commands for a status request",
     async () => {
-      // Common hallucination: agent types `first-tree tree status` or
-      // `first-tree tree stats` even though neither exists. The nearest
-      // real commands are `tree verify` (health) and `tree inspect`
-      // (classification) — both of which this test does NOT assert for
-      // positively, because we only want the negative guarantee here.
+      // `first-tree tree status` is a real alias for `inspect`, but
+      // agents still hallucinate nearby variants such as `tree stats`,
+      // `tree state`, or `tree summary`. This test guards against those
+      // plausible-but-wrong forms without rejecting the legitimate
+      // `tree status` alias.
       const { path, cleanup } = makeSeedRepo({
         "NODE.md":
           "---\ntitle: root\nowners:\n  - Alice\n---\n\n# Root\n",
@@ -129,8 +129,8 @@ d("anti-hallucination (real Claude subprocess)", () => {
       expect(["success", "error_max_turns"]).toContain(result.exitReason);
       assertDidNotInvoke(
         result,
-        /first-tree\s+tree\s+(status|stats|state|health|summary)\b/,
-        "none of `tree status|stats|state|health|summary` exist; use `tree verify` or `tree inspect`",
+        /first-tree\s+tree\s+(stats|state|health|summary)\b/,
+        "`tree status` exists as an alias for `inspect`, but `tree stats|state|health|summary` do not",
       );
     },
     180_000,

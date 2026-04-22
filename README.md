@@ -16,13 +16,12 @@ cross-domain relationships that humans and agents maintain together —
 │                         first-tree (umbrella CLI)                    │
 ├──────────────┬───────────────────────────┬───────────────────────────┤
 │    tree      │        gardener           │          breeze           │
-│  toolkit     │    local daemon           │     local daemon          │
+│  toolkit     │     maint. agent          │     local daemon          │
 ├──────────────┼───────────────────────────┼───────────────────────────┤
-│  init, bind, │ watches source repos →    │ watches gh notifications  │
-│  sync,       │ opens issues on the tree  │ → labels / routes / drafts│
-│  publish,    │ repo & assigns owners;    │ replies for PRs, issues,  │
-│  verify, ... │ responds to sync-PR       │ discussions, reviews.     │
-│              │ review feedback.          │                           │
+│  init, bind, │ reviews source PRs/issues │ watches gh notifications  │
+│  workspace,  │ and sync PRs; can run as  │ → labels / routes / drafts│
+│  publish,    │ a workflow or daemon.     │ replies for PRs, issues,  │
+│  verify, ... │                           │ discussions, reviews.     │
 └──────────────┴───────────────────────────┴───────────────────────────┘
                            │
                    ┌───────┴────────┐
@@ -34,8 +33,8 @@ cross-domain relationships that humans and agents maintain together —
 
 | Tool | What it is | When to reach for it |
 |------|------------|----------------------|
-| **[tree](src/products/tree)** | CLI toolkit for `first-tree tree init/bind/sync/publish/verify/upgrade/workspace/review/generate-codeowners/inject-context/bootstrap` | You want an agent to create, maintain, or bind a Context Tree repo. |
-| **[gardener](src/products/gardener)** | Local maintenance daemon that watches source repos, opens/assigns tree issues, and responds to sync-PR review feedback | You want the tree to stay coherent as code changes without asking a human to drive it. |
+| **[tree](src/products/tree)** | CLI toolkit for `first-tree tree inspect/status/init/bootstrap/bind/integrate/workspace/publish/verify/upgrade/...` | You want an agent to create, maintain, or bind a Context Tree repo. |
+| **[gardener](src/products/gardener)** | Maintenance agent for drift sync, source-repo verdict comments, sync-PR review responses, and optional push-mode workflow / pull-mode daemon orchestration | You want the tree to stay coherent as code changes without asking a human to drive it. |
 | **[breeze](src/products/breeze)** | Local inbox daemon that takes over your `gh` login and turns GitHub notifications into a triaged, optionally auto-handled queue | You want an agent sitting on your GitHub notifications so you don't have to. |
 
 Every product ships:
@@ -106,8 +105,8 @@ the skill and onboard this repo or workspace by creating a new Context Tree.
 
 ```text
 Use the latest first-tree CLI (https://github.com/agent-team-foundation/first-tree).
-Run `first-tree tree inspect --json`, install the skill, and bind this repo or
-workspace to the existing shared tree at
+Run `first-tree tree inspect --json`, install the skill, and onboard this repo
+or workspace to the existing shared tree at
 https://github.com/<your-org>/<your-tree-repo>.
 ```
 
@@ -126,13 +125,15 @@ Four first-class paths:
 | Scenario | Command |
 |----------|---------|
 | Single repo + new dedicated tree | `first-tree tree init` |
-| Bind to existing shared tree | `first-tree tree bind --tree-path ../org-context --tree-mode shared` |
-| Workspace root + shared tree | `first-tree tree init --scope workspace --sync-members` (then `first-tree tree workspace sync`) |
+| Single repo + existing shared tree | `first-tree tree init --tree-path ../org-context --tree-mode shared` |
+| Workspace root + shared tree | `first-tree tree init --scope workspace` (pass `--tree-path` / `--tree-url` to reuse an existing shared tree; run `first-tree tree workspace sync` later after adding new repos) |
 | You're inside the tree repo itself | `first-tree tree bootstrap --here` |
 
 When the current root is a workspace, the workspace root gets local integration
-plus `.first-tree/source.json` (with workspace members), and discovered child
-repos become `workspace-member`s bound to the same shared tree.
+plus `.first-tree/source.json` (with workspace members), and
+`first-tree tree init --scope workspace` binds currently discovered child repos
+as `workspace-member`s to the same shared tree by default. Run
+`first-tree tree workspace sync` later after adding new child repos.
 
 See [`skills/first-tree/references/onboarding.md`](skills/first-tree/references/onboarding.md)
 for the full guide, and run `first-tree tree help onboarding` to print it.
@@ -143,8 +144,8 @@ for the full guide, and run `first-tree tree help onboarding` to print it.
 
 ```text
 <source-repo-or-workspace>/
-  .agents/skills/first-tree/
-  .claude/skills/first-tree
+  .agents/skills/{first-tree,tree,breeze,gardener}/
+  .claude/skills/{first-tree,tree,breeze,gardener}
   WHITEPAPER.md
   AGENTS.md
   CLAUDE.md
@@ -153,8 +154,8 @@ for the full guide, and run `first-tree tree help onboarding` to print it.
   … your code …
 
 <tree-repo>/
-  .agents/skills/first-tree/
-  .claude/skills/first-tree
+  .agents/skills/{first-tree,tree,breeze,gardener}/
+  .claude/skills/{first-tree,tree,breeze,gardener}
   .first-tree/
     VERSION
     progress.md
@@ -183,10 +184,12 @@ continue to work cleanly for multi-repo workspaces.
 | Command | What it does |
 | --- | --- |
 | `first-tree tree inspect` | Classify the current folder and report existing bindings / child repos |
+| `first-tree tree status` | Human-friendly alias for `inspect` |
 | `first-tree tree init` | High-level onboarding wrapper for single repos, shared trees, and workspace roots |
 | `first-tree tree bootstrap` | Canonical low-level tree bootstrap for an explicit tree checkout |
-| `first-tree tree bind` | Bind the current repo/workspace root to an existing tree repo |
-| `first-tree tree workspace sync` | Bind discovered child repos to the same shared tree |
+| `first-tree tree bind` | Lower-level binding primitive for cases where you need explicit `--mode` control |
+| `first-tree tree integrate` | Install local skill integration and source-integration files without mutating the tree repo |
+| `first-tree tree workspace sync` | Bind newly added child repos to the same shared tree, or rerun workspace-member binding manually |
 | `first-tree tree publish` | Publish a dedicated tree repo or shared tree repo to GitHub and refresh locally bound source/workspace repos |
 | `first-tree tree verify` | Run verification checks against a tree repo |
 | `first-tree tree upgrade` | Refresh installed source/workspace integration or tree metadata from the current package |
@@ -197,9 +200,18 @@ continue to work cleanly for multi-repo workspaces.
 | `first-tree tree inject-context` | Output a Claude Code SessionStart hook payload from the root `NODE.md` |
 | `first-tree tree help onboarding` | Print the full onboarding guide |
 | `first-tree gardener sync` | Detect drift between a tree repo and its bound source repos; supports `--propose` and `--apply`. Moved from `first-tree tree sync`. |
-| `first-tree gardener comment` | Review a source-repo PR or issue against the tree and post a structured verdict comment; scan mode sweeps every configured `target_repo` |
+| `first-tree gardener comment` | Review a source-repo PR or issue against the tree and post a structured verdict comment; scan mode sweeps every configured `target_repo`. Requires `ANTHROPIC_API_KEY` in the environment — without it the CLI skips without posting. Override the model with `GARDENER_CLASSIFIER_MODEL` (default: `claude-haiku-4-5`). |
 | `first-tree gardener respond` | Fix a tree-repo sync PR based on reviewer feedback |
 | `first-tree gardener install-workflow` | Scaffold the push-mode GitHub Actions workflow in a codebase repo |
+| `first-tree gardener start` | Launch the pull-mode gardener daemon in the background |
+| `first-tree gardener status` | Report gardener daemon PID, schedule, and last-run state |
+| `first-tree gardener run-once` | Execute both gardener sweeps inline and exit |
+| `first-tree gardener stop` | Stop the pull-mode gardener daemon |
+| `first-tree breeze install --allow-repo owner/repo` | Check prerequisites, create `~/.breeze/config.yaml`, and start the daemon |
+| `first-tree breeze start --allow-repo owner/repo` | Launch the breeze daemon in the background |
+| `first-tree breeze status` | Print daemon/runtime status for the current breeze profile |
+| `first-tree breeze watch` | Open the live TUI inbox and activity feed |
+| `first-tree breeze poll` | Poll GitHub notifications once without requiring the daemon |
 | `first-tree skill install` | Install the four shipped skills under `.agents/skills/*` and `.claude/skills/*` |
 | `first-tree skill upgrade` | Wipe and reinstall the four shipped skills from the current package |
 | `first-tree skill list` | Print the four shipped skills with their installed status and version |

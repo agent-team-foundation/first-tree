@@ -6,6 +6,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { parseGitHubRemoteUrl } from "#products/tree/engine/member-seeding.js";
 import {
   SOURCE_STATE,
   TREE_BINDINGS_DIR,
@@ -21,12 +22,14 @@ export type SourceBindingMode =
 export type RootKind = "git-repo" | "folder";
 export type SourceScope = "repo" | "workspace";
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 export interface BoundTreeReference {
   entrypoint: string;
   lastReconciledAt?: string;
   lastReconciledSourceCommit?: string;
+  // Legacy compatibility: older installs persisted a shared local checkout path.
+  // New writes should omit this field.
   localPath?: string;
   remoteUrl?: string;
   treeId: string;
@@ -44,12 +47,16 @@ export interface SourceState {
   sourceName: string;
   tree: BoundTreeReference;
   workspaceId?: string;
+  // Legacy compatibility only. New writes should omit this field.
   workspaceRootPath?: string;
 }
 
 export interface WorkspaceMember {
   bindingMode: "workspace-member";
-  relativePath: string;
+  entrypoint: string;
+  // Legacy compatibility only. New writes should omit this field.
+  relativePath?: string;
+  remoteUrl?: string;
   rootKind: RootKind;
   sourceId: string;
   sourceName: string;
@@ -84,7 +91,8 @@ export interface TreeBindingState {
   scope: SourceScope;
   sourceId: string;
   sourceName: string;
-  sourceRootPath: string;
+  // Legacy compatibility only. New writes should omit these fields.
+  sourceRootPath?: string;
   treeMode: TreeMode;
   treeRepoName: string;
   workspaceId?: string;
@@ -120,9 +128,6 @@ function parseTreeReference(value: unknown): BoundTreeReference | null {
   ) {
     return null;
   }
-  if (value.localPath !== undefined && typeof value.localPath !== "string") {
-    return null;
-  }
   if (value.remoteUrl !== undefined && typeof value.remoteUrl !== "string") {
     return null;
   }
@@ -146,7 +151,6 @@ function parseTreeReference(value: unknown): BoundTreeReference | null {
       typeof value.lastReconciledSourceCommit === "string"
         ? value.lastReconciledSourceCommit
         : undefined,
-    localPath: value.localPath,
     remoteUrl: value.remoteUrl,
     treeId: value.treeId,
     treeMode: value.treeMode,
@@ -184,12 +188,6 @@ export function readSourceState(root: string): SourceState | null {
   if (parsed.workspaceId !== undefined && typeof parsed.workspaceId !== "string") {
     return null;
   }
-  if (
-    parsed.workspaceRootPath !== undefined
-    && typeof parsed.workspaceRootPath !== "string"
-  ) {
-    return null;
-  }
   let members: WorkspaceMember[] | undefined;
   if (Array.isArray(parsed.members)) {
     const parsedMembers: WorkspaceMember[] = [];
@@ -197,16 +195,27 @@ export function readSourceState(root: string): SourceState | null {
       if (
         !isObject(candidate)
         || candidate.bindingMode !== "workspace-member"
-        || typeof candidate.relativePath !== "string"
         || (candidate.rootKind !== "git-repo" && candidate.rootKind !== "folder")
         || typeof candidate.sourceId !== "string"
         || typeof candidate.sourceName !== "string"
       ) {
         return null;
       }
+      const entrypoint = typeof candidate.entrypoint === "string"
+        ? candidate.entrypoint
+        : deriveDefaultEntrypoint(
+          "workspace-member",
+          candidate.sourceName,
+          typeof parsed.workspaceId === "string" ? parsed.workspaceId : undefined,
+        );
+      if (candidate.remoteUrl !== undefined && typeof candidate.remoteUrl !== "string") {
+        return null;
+      }
       parsedMembers.push({
         bindingMode: "workspace-member",
-        relativePath: candidate.relativePath,
+        entrypoint,
+        remoteUrl:
+          typeof candidate.remoteUrl === "string" ? candidate.remoteUrl : undefined,
         rootKind: candidate.rootKind,
         sourceId: candidate.sourceId,
         sourceName: candidate.sourceName,
@@ -226,7 +235,6 @@ export function readSourceState(root: string): SourceState | null {
     sourceName: parsed.sourceName,
     tree,
     workspaceId: parsed.workspaceId,
-    workspaceRootPath: parsed.workspaceRootPath,
   };
 }
 
@@ -283,7 +291,12 @@ export function upsertWorkspaceMember(
       (candidate) => candidate.sourceId !== member.sourceId,
     ),
     member,
-  ].sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+  ].sort((left, right) => {
+    const nameOrder = left.sourceName.localeCompare(right.sourceName);
+    return nameOrder === 0
+      ? left.sourceId.localeCompare(right.sourceId)
+      : nameOrder;
+  });
   const existing = readSourceState(root);
   if (existing === null) {
     throw new Error("Cannot upsert workspace member without an existing source state");
@@ -354,7 +367,6 @@ export function readTreeBinding(
   if (
     typeof parsed.sourceId !== "string"
     || typeof parsed.sourceName !== "string"
-    || typeof parsed.sourceRootPath !== "string"
     || typeof parsed.entrypoint !== "string"
     || typeof parsed.treeRepoName !== "string"
     || (parsed.rootKind !== "git-repo" && parsed.rootKind !== "folder")
@@ -373,12 +385,6 @@ export function readTreeBinding(
     return null;
   }
   if (parsed.workspaceId !== undefined && typeof parsed.workspaceId !== "string") {
-    return null;
-  }
-  if (
-    parsed.workspaceRootPath !== undefined
-    && typeof parsed.workspaceRootPath !== "string"
-  ) {
     return null;
   }
   if (
@@ -409,11 +415,9 @@ export function readTreeBinding(
     scope: parsed.scope,
     sourceId: parsed.sourceId,
     sourceName: parsed.sourceName,
-    sourceRootPath: parsed.sourceRootPath,
     treeMode: parsed.treeMode,
     treeRepoName: parsed.treeRepoName,
     workspaceId: parsed.workspaceId,
-    workspaceRootPath: parsed.workspaceRootPath,
   };
 }
 
@@ -449,9 +453,41 @@ export function slugifyToken(text: string): string {
   return normalized === "" ? "workspace" : normalized;
 }
 
-export function buildStableSourceId(root: string, label?: string): string {
-  const base = slugifyToken(label ?? basename(root));
-  const digest = createHash("sha1").update(root).digest("hex").slice(0, 8);
+function normalizeRemoteForId(remoteUrl: string): string {
+  const parsed = parseGitHubRemoteUrl(remoteUrl);
+  if (parsed !== null) {
+    return [
+      parsed.host.toLowerCase(),
+      parsed.owner.toLowerCase(),
+      parsed.repo.toLowerCase(),
+    ].join("/");
+  }
+  return remoteUrl.trim().replace(/\.git$/u, "");
+}
+
+export function buildStableSourceId(
+  sourceName: string,
+  options?: {
+    fallbackRoot?: string;
+    remoteUrl?: string;
+  },
+): string {
+  if (options?.remoteUrl?.trim()) {
+    const normalizedRemote = normalizeRemoteForId(options.remoteUrl);
+    const parsed = parseGitHubRemoteUrl(options.remoteUrl);
+    if (parsed !== null) {
+      return slugifyToken(`${parsed.host}-${parsed.owner}-${parsed.repo}`);
+    }
+    const base = slugifyToken(sourceName);
+    const digest = createHash("sha1").update(normalizedRemote).digest("hex").slice(0, 8);
+    return `${base}-${digest}`;
+  }
+
+  const base = slugifyToken(sourceName || basename(options?.fallbackRoot ?? ""));
+  const digest = createHash("sha1")
+    .update(options?.fallbackRoot ?? sourceName)
+    .digest("hex")
+    .slice(0, 8);
   return `${base}-${digest}`;
 }
 

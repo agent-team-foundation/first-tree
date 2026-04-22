@@ -7,7 +7,8 @@ import {
 
 export interface BootstrapState {
   sourceRepoName: string;
-  sourceRepoPath: string;
+  sourceRepoPath?: string;
+  sourceRepoRemoteUrl?: string;
   treeRepoName: string;
 }
 
@@ -23,14 +24,22 @@ export function readBootstrapState(root: string): BootstrapState | null {
       ) as Partial<BootstrapState>;
       if (
         typeof parsed.sourceRepoName !== "string"
-        || typeof parsed.sourceRepoPath !== "string"
         || typeof parsed.treeRepoName !== "string"
+        || (
+          parsed.sourceRepoPath !== undefined
+          && typeof parsed.sourceRepoPath !== "string"
+        )
+        || (
+          parsed.sourceRepoRemoteUrl !== undefined
+          && typeof parsed.sourceRepoRemoteUrl !== "string"
+        )
       ) {
         continue;
       }
       return {
         sourceRepoName: parsed.sourceRepoName,
         sourceRepoPath: parsed.sourceRepoPath,
+        sourceRepoRemoteUrl: parsed.sourceRepoRemoteUrl,
         treeRepoName: parsed.treeRepoName,
       };
     } catch {

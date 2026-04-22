@@ -165,8 +165,8 @@ d("path disambiguation (real Claude subprocess)", () => {
     "uses the workspace flow when invoked at a workspace root with member repos",
     async () => {
       // Workspace root with two member-repo directories already present.
-      // The correct onboarding path is `first-tree tree workspace` (not a
-      // per-repo bind inside one of the members).
+      // The correct onboarding path is workspace `tree init`, which binds the
+      // workspace root and syncs currently discovered member repos in one flow.
       const { path, cleanup } = makeSeedRepo({
         "README.md": "# workspace root\n",
         "repo-a/README.md": "# member repo a\n",
@@ -190,12 +190,12 @@ d("path disambiguation (real Claude subprocess)", () => {
 
       expect(["success", "error_max_turns"]).toContain(result.exitReason);
       const commands = bashInvocations(result);
-      const usedWorkspace = commands.some((c) =>
-        /first-tree\s+tree\s+workspace\b/.test(c),
+      const usedWorkspaceInit = commands.some((c) =>
+        /first-tree\s+tree\s+init\b/.test(c) && /--scope\s+workspace\b/.test(c),
       );
       expect(
-        usedWorkspace,
-        `agent did not invoke \`first-tree tree workspace\` for a workspace root.\n${commands.map((c) => `  - ${c.slice(0, 200)}`).join("\n")}`,
+        usedWorkspaceInit,
+        `agent did not invoke workspace \`first-tree tree init\` for a workspace root.\n${commands.map((c) => `  - ${c.slice(0, 200)}`).join("\n")}`,
       ).toBe(true);
     },
     240_000,

@@ -182,6 +182,22 @@ describe("runDaemon end-to-end skeleton", () => {
     vi.restoreAllMocks();
   });
 
+  it("refuses to start without an explicit repo scope", async () => {
+    const logs: string[] = [];
+    const code = await runDaemon([], {
+      installSignalHandlers: false,
+      logger: {
+        info: (line: string) => logs.push(`INFO ${line}`),
+        warn: (line: string) => logs.push(`WARN ${line}`),
+        error: (line: string) => logs.push(`ERROR ${line}`),
+      },
+    });
+    expect(code).toBe(1);
+    expect(logs.some((line) => line.includes("missing required --allow-repo"))).toBe(
+      true,
+    );
+  });
+
   it("exits cleanly when the injected AbortSignal is pre-aborted", async () => {
     // Signal is already aborted → the poller loop runs zero iterations
     // and runDaemon returns 0. We stub out identity resolution failure
@@ -200,7 +216,7 @@ describe("runDaemon end-to-end skeleton", () => {
     // should continue and the poller should exit immediately because
     // the signal is pre-aborted.
     const code = await runDaemon([], {
-      cliOverrides: { pollIntervalSec: 1 },
+      cliOverrides: { pollIntervalSec: 1, allowRepo: "owner/repo" },
       installSignalHandlers: false,
       signal: controller.signal,
       logger,
@@ -246,7 +262,7 @@ describe("runDaemon end-to-end skeleton", () => {
 
     const controller = new AbortController();
     const runPromise = runDaemon([], {
-      cliOverrides: { pollIntervalSec: 1 },
+      cliOverrides: { pollIntervalSec: 1, allowRepo: "owner/repo" },
       installSignalHandlers: false,
       signal: controller.signal,
       logger: {
@@ -279,7 +295,7 @@ describe("runDaemon end-to-end skeleton", () => {
     const runtime = parseEnvFile(runtimePath);
     expect(runtime.last_note).toBe("running");
     expect(runtime.last_identity).toBe("tester@github.com");
-    expect(runtime.allowed_repos).toBe("all");
+    expect(runtime.allowed_repos).toBe("owner/repo");
     expect(runtime.active_tasks).toBe("0");
     expect(runtime.queued_tasks).toBe("0");
 
