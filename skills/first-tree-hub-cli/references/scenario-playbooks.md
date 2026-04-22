@@ -86,7 +86,7 @@ If something breaks, `client doctor` usually points at the culprit (no credentia
 ### What to remember
 
 - `client connect` is the **only** supported way to sign in. There is no separate `login`, `token`, or manual credential setup.
-- It writes `~/.first-tree-hub/credentials.json` and a generated `client.id` in `client.yaml`.
+- It writes `~/.first-tree/hub/credentials.json` and a generated `client.id` in `client.yaml`.
 - Agents are not registered by this command. Admins pin agents to this machine's `client.id` from the Hub UI (or via `agent create --client-id ...`). A running client auto-picks them up.
 
 ## 3. "Keep this machine online across reboots"
@@ -103,7 +103,7 @@ first-tree-hub client service uninstall    # when decommissioning the machine
 
 `client connect` installs the service by default. Only re-run `service install` when the user ran `connect --no-service` initially, or when re-installing after `uninstall`.
 
-Logs: `~/.first-tree-hub/logs/`.
+Logs: `~/.first-tree/hub/logs/`.
 
 ### What to remember
 

@@ -26,18 +26,24 @@ export function DangerZone(props: DangerZoneProps) {
   const displayLabel = agent.displayName || agent.name || agent.uuid;
 
   return (
-    <section className="rounded-md border border-red-200 bg-red-50/40">
-      <header className="flex items-center gap-2 border-b border-red-200 px-4 py-2">
-        <AlertTriangle className="h-4 w-4 text-red-700" />
-        <h3 className="text-sm font-medium text-red-800">Danger Zone</h3>
+    <section
+      style={{
+        background: "color-mix(in oklch, var(--state-error) 6%, var(--bg-raised))",
+        border: "1px solid color-mix(in oklch, var(--state-error) 28%, transparent)",
+        borderRadius: 6,
+      }}
+    >
+      <header className="flex items-center gap-2" style={{ padding: "10px 14px" }}>
+        <AlertTriangle className="h-3.5 w-3.5" style={{ color: "var(--state-error)" }} />
+        <h3 style={{ fontSize: 12, fontWeight: 600, color: "var(--state-error)" }}>Danger zone</h3>
       </header>
-      <div className="divide-y divide-red-200">
+      <div>
         {agent.status === "active" ? (
           <DangerRow
             title="Suspend agent"
             body="Pause all active sessions. You can reactivate later; tokens stay revoked until then."
             action={
-              <Button variant="outline" size="sm" onClick={props.onSuspend} disabled={props.suspendPending}>
+              <Button variant="outline" size="xs" onClick={props.onSuspend} disabled={props.suspendPending}>
                 {props.suspendPending ? "Suspending…" : "Suspend"}
               </Button>
             }
@@ -47,7 +53,7 @@ export function DangerZone(props: DangerZoneProps) {
             title="Reactivate agent"
             body="Resume sessions. Tokens must be recreated — they are not restored."
             action={
-              <Button variant="outline" size="sm" onClick={props.onReactivate} disabled={props.reactivatePending}>
+              <Button variant="outline" size="xs" onClick={props.onReactivate} disabled={props.reactivatePending}>
                 {props.reactivatePending ? "Reactivating…" : "Reactivate"}
               </Button>
             }
@@ -57,8 +63,8 @@ export function DangerZone(props: DangerZoneProps) {
           title="Delete agent"
           body="Permanent. Configuration, bindings, tokens, and session history are all dropped."
           action={
-            <Button variant="destructive" size="sm" onClick={() => setDeleteOpen(true)} disabled={props.deletePending}>
-              <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+            <Button variant="destructive" size="xs" onClick={() => setDeleteOpen(true)} disabled={props.deletePending}>
+              <Trash2 className="h-3 w-3" />
               Delete
             </Button>
           }
@@ -81,10 +87,17 @@ export function DangerZone(props: DangerZoneProps) {
 
 function DangerRow(props: { title: string; body: string; action: React.ReactNode }) {
   return (
-    <div className="flex items-start justify-between gap-4 px-4 py-3 text-sm">
+    <div
+      className="flex items-start justify-between gap-4"
+      style={{
+        padding: "10px 14px",
+        borderTop: "1px solid color-mix(in oklch, var(--state-error) 14%, transparent)",
+        fontSize: 12,
+      }}
+    >
       <div>
-        <p className="font-medium text-red-900">{props.title}</p>
-        <p className="text-xs text-red-800/80">{props.body}</p>
+        <p style={{ fontWeight: 500, color: "var(--fg)" }}>{props.title}</p>
+        <p style={{ fontSize: 11, color: "var(--fg-3)" }}>{props.body}</p>
       </div>
       <div>{props.action}</div>
     </div>

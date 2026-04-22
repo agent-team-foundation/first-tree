@@ -41,7 +41,7 @@ pnpm --filter @first-tree-hub/server db:migrate     # Apply migrations
 When exercising the CLI against a live hub on the same machine, always relocate the client home so tests do not clobber the production client's saved JWT credentials (`credentials.json`), client/agent config, workspaces, or cloned Context Tree:
 
 ```bash
-export FIRST_TREE_HUB_HOME=/Users/<you>/.first-tree-hub-test
+export FIRST_TREE_HUB_HOME=/Users/<you>/.first-tree/hub-test
 first-tree-hub connect <server-url>
 first-tree-hub client start
 ```
@@ -73,7 +73,7 @@ first-tree-hub client start
 
 **PostgreSQL only:** No Redis / MQ. PG covers storage, queuing (SKIP LOCKED), and notifications (LISTEN/NOTIFY).
 
-**Unified user-JWT auth:** Single member JWT (issued by `client connect`, stored at `~/.first-tree-hub/config/credentials.json`) authorizes both Web/Admin API and every agent the user manages on the Client WebSocket. Agents bind via `agents.client_id` + a server-pushed `agent:pinned` frame; scope enforced by Rule **R-RUN** in `packages/server/src/services/agent.ts`. Per-agent `aghub_*` tokens retired by migration `0020` (PRs [#95](https://github.com/agent-team-foundation/first-tree-hub/pull/95), [#108](https://github.com/agent-team-foundation/first-tree-hub/pull/108)). No default passwords; localhost must authenticate too.
+**Unified user-JWT auth:** Single member JWT (issued by `client connect`, stored at `~/.first-tree/hub/config/credentials.json`) authorizes both Web/Admin API and every agent the user manages on the Client WebSocket. Agents bind via `agents.client_id` + a server-pushed `agent:pinned` frame; scope enforced by Rule **R-RUN** in `packages/server/src/services/agent.ts`. Per-agent `aghub_*` tokens retired by migration `0020` (PRs [#95](https://github.com/agent-team-foundation/first-tree-hub/pull/95), [#108](https://github.com/agent-team-foundation/first-tree-hub/pull/108)). No default passwords; localhost must authenticate too.
 
 **Inbox is the Server/Client boundary:** Server writes to Inbox (fan-out on write), Client pulls / receives WebSocket notifications. At-least-once delivery; Client is responsible for deduplication.
 

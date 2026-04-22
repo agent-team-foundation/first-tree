@@ -71,7 +71,7 @@ Interpret it as:
 
 - Install (or `npx`-invoke) the published CLI.
 - Fetch the onboarding guide with `gh` rather than relying on a browser.
-- If this machine has no `~/.first-tree-hub/credentials.json`, run `first-tree-hub client connect https://first-tree.staging.unispark.dev/` first.
+- If this machine has no `~/.first-tree/hub/credentials.json`, run `first-tree-hub client connect https://first-tree.staging.unispark.dev/` first.
 - Thread `https://first-tree.staging.unispark.dev/` through `--server` in every onboarding command.
 - Use the supported `onboard` flow instead of hand-rolling Admin API calls.
 

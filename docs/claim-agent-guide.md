@@ -29,7 +29,7 @@ first-tree-hub agent token bootstrap <your-agent-id>
 This uses your current GitHub identity to request a token from the Hub bootstrap endpoint. By default it saves the token to:
 
 ```text
-~/.first-tree-hub/config/agents/<your-agent-id>/agent.yaml
+~/.first-tree/hub/config/agents/<your-agent-id>/agent.yaml
 ```
 
 Use `--server <url>` if the Hub URL is not already configured, or `--save-to <path>` if you want the raw token written somewhere else.
@@ -61,7 +61,7 @@ export FIRST_TREE_HUB_SERVER_URL=http://localhost:8000   # optional, defaults to
 
 For persistent configuration, add these to your shell profile or `.env` file.
 
-Alternatively, if you have multiple local agents, set `FIRST_TREE_HUB_AGENT=<agentName>` and the CLI will look up the token from `~/.first-tree-hub/agents/<agentName>/agent.yaml`.
+Alternatively, if you have multiple local agents, set `FIRST_TREE_HUB_AGENT=<agentName>` and the CLI will look up the token from `~/.first-tree/hub/agents/<agentName>/agent.yaml`.
 
 ## Step 4 — Verify Your Identity
 

@@ -45,7 +45,7 @@ The command package depends on server and client packages, but it is still an en
 
 ### Auth uses one credential, everywhere
 
-- Clients sign in once via `client connect`, which persists a member access JWT + refresh token in `~/.first-tree-hub/credentials.json`.
+- Clients sign in once via `client connect`, which persists a member access JWT + refresh token in `~/.first-tree/hub/credentials.json`.
 - Every subsequent CLI call runs through `ensureFreshAccessToken()`, which auto-refreshes 30s before expiry via `/api/v1/auth/refresh`.
 - Admin actions, agent-owner actions, Feishu binding, `agent config` mutations, and SDK debug calls all use the same member JWT. Server enforcement is role-based.
 - There is no separate admin JWT or per-agent bearer token in the current model. The legacy `FIRST_TREE_HUB_AGENT_TOKEN` / `FIRST_TREE_HUB_AGENT` env vars and `agent token bootstrap` command are gone.
@@ -76,7 +76,7 @@ It can:
 
 The client runtime:
 
-- loads `~/.first-tree-hub/credentials.json` (member JWT + refresh)
+- loads `~/.first-tree/hub/credentials.json` (member JWT + refresh)
 - reads `client.yaml` for `server.url` and `client.id`
 - reads every agent's local alias YAML to resolve `name → agentId`
 - establishes WebSocket and HTTP communication, refreshing the access token on demand
@@ -84,7 +84,7 @@ The client runtime:
 - manages session state and isolated chat workspaces
 - optionally syncs a shared Context Tree clone for organizational context
 
-The **background service** (`client service install`, typically triggered automatically by `client connect`) runs `client start --no-interactive` under launchd (macOS) or `systemd --user` (Linux), with logs at `~/.first-tree-hub/logs/`. This is how a machine stays online across reboots without a terminal.
+The **background service** (`client service install`, typically triggered automatically by `client connect`) runs `client start --no-interactive` under launchd (macOS) or `systemd --user` (Linux), with logs at `~/.first-tree/hub/logs/`. This is how a machine stays online across reboots without a terminal.
 
 ### Workspace bootstrap
 

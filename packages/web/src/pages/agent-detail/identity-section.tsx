@@ -4,8 +4,8 @@ import { Pencil } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import { listAgents } from "../../api/agents.js";
 import { useAuth } from "../../auth/auth-context.js";
-import { Badge } from "../../components/ui/badge.js";
 import { Button } from "../../components/ui/button.js";
+import { DenseBadge } from "../../components/ui/dense-badge.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
@@ -38,12 +38,24 @@ export function IdentitySection({ agent, onSave }: IdentitySectionProps) {
   const delegateLabel = agent.delegateMention ? resolveAgent(agent.delegateMention) : null;
 
   return (
-    <section className="rounded-md border bg-white">
-      <header className="flex items-center justify-between border-b px-4 py-2">
-        <h2 className="text-sm font-medium">Identity</h2>
+    <section
+      style={{
+        background: "var(--bg-raised)",
+        border: "1px solid var(--border)",
+        borderRadius: 6,
+      }}
+    >
+      <header
+        className="flex items-center justify-between"
+        style={{
+          padding: "10px 14px",
+          borderBottom: "1px solid var(--border-faint)",
+        }}
+      >
+        <h2 style={{ fontSize: 12, fontWeight: 600, color: "var(--fg)" }}>Profile</h2>
         {agent.status === "active" && (
-          <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
-            <Pencil className="h-3.5 w-3.5 mr-1.5" /> Edit
+          <Button size="xs" variant="outline" onClick={() => setOpen(true)}>
+            <Pencil className="h-3 w-3" /> Edit
           </Button>
         )}
       </header>
@@ -71,20 +83,22 @@ export function IdentitySection({ agent, onSave }: IdentitySectionProps) {
             </span>
           )}
           <span>
-            type <Badge variant="secondary">{agent.type}</Badge>
+            type <DenseBadge tone={agent.type === "autonomous_agent" ? "accent" : "neutral"}>{agent.type}</DenseBadge>
           </span>
           <span>
             visibility{" "}
-            <Badge variant={agent.visibility === "organization" ? "default" : "outline"}>{agent.visibility}</Badge>
+            <DenseBadge tone={agent.visibility === "organization" ? "accent" : "outline"}>
+              {agent.visibility}
+            </DenseBadge>
           </span>
           {domains.length > 0 && (
             <span>
               domains{" "}
               <span className="inline-flex flex-wrap gap-1 align-middle">
                 {domains.map((d) => (
-                  <Badge key={d} variant="outline">
+                  <DenseBadge key={d} tone="outline">
                     {d}
-                  </Badge>
+                  </DenseBadge>
                 ))}
               </span>
             </span>
