@@ -20,7 +20,10 @@ function extractSummary(content: unknown, maxLen = SUMMARY_MAX_LENGTH): string |
   } else if (typeof content === "string") {
     text = content;
   }
-  return text ? text.slice(0, maxLen) : null;
+  if (!text) return null;
+  // Slice by code points, not UTF-16 units, to avoid splitting surrogate pairs
+  // (emoji, etc.) which would render as garbled characters in the UI.
+  return Array.from(text).slice(0, maxLen).join("");
 }
 
 export type SessionListItem = {
@@ -215,6 +218,7 @@ export async function listAllSessions(
       state: agentChatSessions.state,
       updatedAt: agentChatSessions.updatedAt,
       chatCreatedAt: chats.createdAt,
+      chatTopic: chats.topic,
     })
     .from(agentChatSessions)
     .innerJoin(chats, eq(agentChatSessions.chatId, chats.id))
@@ -237,6 +241,22 @@ export async function listAllSessions(
       : [];
   const runtimeMap = new Map(presenceRows.map((r) => [r.agentId, r.runtimeState]));
 
+  // Batch-fetch first message per chat for summary (parity with listAgentSessions)
+  const chatIds = [...new Set(items.map((r) => r.chatId))];
+  const firstMessages =
+    chatIds.length > 0
+      ? await db
+          .selectDistinctOn([messages.chatId], { chatId: messages.chatId, content: messages.content })
+          .from(messages)
+          .where(inArray(messages.chatId, chatIds))
+          .orderBy(messages.chatId, messages.createdAt)
+      : [];
+  const summaryMap = new Map<string, string>();
+  for (const row of firstMessages) {
+    const summary = extractSummary(row.content);
+    if (summary) summaryMap.set(row.chatId, summary);
+  }
+
   const last = items[items.length - 1];
   const nextCursor = hasMore && last ? last.updatedAt.toISOString() : null;
 
@@ -249,8 +269,8 @@ export async function listAllSessions(
       startedAt: r.chatCreatedAt.toISOString(),
       lastActivityAt: r.updatedAt.toISOString(),
       messageCount: 0, // Omit per-session message count in global list for performance
-      summary: null, // Omit summary in global list for performance
-      topic: null, // Omit topic in global list for performance
+      summary: summaryMap.get(r.chatId) ?? null,
+      topic: r.chatTopic ?? null,
     })),
     nextCursor,
   };
