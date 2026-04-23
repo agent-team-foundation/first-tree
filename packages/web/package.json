@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && pnpm run lint:tokens && vite build",
+    "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit && pnpm run lint:tokens",
     "lint:tokens": "bash scripts/check-design-tokens.sh",
     "preview": "vite preview",
