@@ -123,13 +123,15 @@ GitHub notifications).
 
 Latest release: https://github.com/agent-team-foundation/first-tree/releases/latest
 
-Install the CLI, then follow the onboarding skill at
-`.agents/skills/first-tree/references/onboarding.md`. Before running any
-setup command, ask me which source repo (owner/name) and which tree repo
-(owner/name) to target, and wait for my answers — do not infer from the
-current working directory. Once I've confirmed both, walk me through
-setup, then trigger one drift event end-to-end so I can watch: source PR
-→ tree issue → breeze pickup → draft-node PR.
+Install the CLI, then run `first-tree tree help onboarding` to load the
+onboarding narrative. Before running any setup command, ask me which
+source repo (owner/name) and which tree repo (owner/name) to target, and
+wait for my answers — do not infer from the current working directory.
+Once I've confirmed both, walk me through setup (which includes
+`first-tree skill install`, at which point the full skill reference also
+becomes available at `.agents/skills/first-tree/references/onboarding.md`),
+then trigger one drift event end-to-end so I can watch: source PR → tree
+issue → breeze pickup → draft-node PR.
 ```
 
 ---
