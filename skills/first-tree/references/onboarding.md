@@ -181,41 +181,114 @@ first-tree tree verify --tree-path ../my-org-tree
 Do not run `first-tree tree verify` in a source/workspace root without pointing it
 at a tree checkout.
 
-## Step 6: Configure Modules (Optional)
+## Step 6: Set Up Gardener And Breeze
 
-`first-tree` ships two optional modules that live on top of the core
-tree toolkit:
+Once the tree is bound (Steps 1–5), set up the two agents that keep it
+alive:
 
-- **gardener** — automated review/response on source-repo PRs and sync
-  PRs. Gardener subcommands (`gardener comment`, `gardener respond`)
-  are **enabled by default** when invoked. To turn one off, write
-  `.claude/gardener-config.yaml` in the tree repo with an explicit
-  `enabled: false` for the relevant module:
+- **gardener** — detects drift between source code and the tree,
+  posts verdicts on source-repo PRs, and drafts tree updates.
+- **breeze** — a local daemon that polls your GitHub notifications
+  and dispatches gardener when something relevant happens.
 
-  ```yaml
-  target_repo: owner/app-repo          # source repo to review
-  tree_repo: owner/tree-repo            # this tree repo (for attribution)
-  modules:
-    comment:
-      enabled: false                    # disable scan/verdict on source PRs
-    respond:
-      enabled: false                    # disable feedback handling on sync PRs
-  ```
+Drive this agent-led, not user-led: ask the user the questions
+below, verify, then install.
 
-  Omitting the file or omitting a `modules.<name>.enabled` key leaves
-  that subcommand enabled — invoking `first-tree gardener <command>`
-  will still run. The opt-out is explicit `enabled: false`.
+**Prerequisites** — confirm before starting:
+- `gh` CLI authed (`gh auth status`)
+- `jq` installed
+- Node ≥ 22
+- `ANTHROPIC_API_KEY` exported locally (gardener's classifier)
 
-  **Operational guidance:** the safest way to keep a new tree quiet
-  while it's still skeletal is to simply not invoke `gardener` (and not
-  configure `breeze` to invoke it for you) until the tree has enough
-  content to give useful verdicts. Noisy comments on an empty tree
-  train reviewers to ignore them.
+### 6.1 Ask The User
 
-- **breeze** — local notification daemon that dispatches gardener on
-  real GitHub events. Only needed if you want gardener to react to
-  review requests and assignments in real time. See the `breeze` skill
-  for setup.
+1. What source repo should gardener track? (`owner/name`)
+2. What tree repo stores `NODE.md`? (`owner/name`) — this is usually
+   the repo the user just bound in Steps 1–5, but confirm, don't assume.
+3. Are they watching the source repo on GitHub? (required — breeze polls
+   notifications; no watch means no notifications means nothing
+   dispatches)
+
+Do not infer any of these from the current working directory. If any
+answer is missing or ambiguous, stop and re-ask.
+
+### 6.2 Verify Watch Status
+
+```bash
+gh api /repos/<source-repo>/subscription
+# 200 → watching
+# 404 → not watching
+```
+
+If 404: tell the user to open `https://github.com/<source-repo>` and
+click **Watch → All Activity**. Do not proceed until confirmed.
+
+### 6.3 Install
+
+```bash
+first-tree breeze install --allow-repo <source-repo>,<tree-repo>
+```
+
+This creates `~/.breeze/config.yaml` (if absent) and starts the breeze
+daemon. Breeze will now watch notifications on those repos and invoke
+gardener as needed.
+
+### 6.4 Verify End-To-End
+
+Trigger one drift event:
+
+```bash
+TREE_REPO_TOKEN=$(gh auth token) \
+  first-tree gardener sync --tree-path <tree-path> \
+    --open-issues --assignee <your-gh-login>
+```
+
+Expect, in order:
+
+1. Tree issue filed on the tree repo (labeled
+   `first-tree:sync-proposal`).
+2. Breeze activity log records the pickup
+   (`first-tree breeze status`).
+3. Draft-node PR opened against the tree repo.
+
+Report each step to the user as it happens. If any step is silent for
+more than a couple of minutes, check `first-tree breeze doctor`.
+
+### Opting Modules Out (Rare)
+
+Gardener's `comment` and `respond` subcommands are **enabled by
+default** once invoked. To silence one while the tree is still
+skeletal, write `.claude/gardener-config.yaml` in the tree repo:
+
+```yaml
+target_repo: owner/app-repo          # source repo to review
+tree_repo: owner/tree-repo            # this tree repo (for attribution)
+modules:
+  comment:
+    enabled: false
+  respond:
+    enabled: false
+```
+
+Only explicit `enabled: false` disables a module; missing keys leave
+it on.
+
+The safest way to keep a new tree quiet while it's still skeletal is
+simply not to invoke gardener until the tree has enough content for
+useful verdicts. Noisy comments on an empty tree train reviewers to
+ignore them.
+
+### Pitfalls
+
+- `gardener install` is **not** a command. Use `breeze install` to run
+  gardener locally via breeze, or see `workflow-mode.md` if you want
+  to run gardener as a GitHub Actions workflow on the source repo
+  (requires write access and extra secrets — not recommended for
+  first-time setup).
+- Pull-based dispatch silently no-ops without a GitHub watch
+  subscription. Verify before claiming setup is complete.
+- `TREE_REPO_TOKEN` must be in the environment for every `gardener`
+  invocation, not just at setup.
 
 ## Step 7: Publish
 

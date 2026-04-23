@@ -112,41 +112,24 @@ https://github.com/<your-org>/<your-tree-repo>.
 
 **Driving one full gardener → breeze cycle end-to-end:**
 
-Paste this as-is — the agent asks you for the source repo and tree repo
-before running anything, so there's nothing to fill in up front.
+Paste this as-is — the agent will ask you which repos to target before
+running anything, so there's nothing to fill in up front.
 
 ```text
-Use the latest first-tree CLI (https://github.com/agent-team-foundation/first-tree).
+I want to set up first-tree — a Context Tree that tracks decisions across
+my source repos. It ships two agents: gardener (detects drift and drafts
+tree updates) and breeze (a local daemon that dispatches gardener on
+GitHub notifications).
 
-Before running any command, ask me two questions and wait for my answers:
+Latest release: https://github.com/agent-team-foundation/first-tree/releases/latest
 
-1. "What is the source repo you ship from?" (owner/name on GitHub)
-2. "What is the tree repo that stores NODE.md?" (owner/name on GitHub)
-
-Do not assume, guess, or infer either from the current working directory.
-If either answer is missing or ambiguous, stop and re-ask. Only after I've
-confirmed both, proceed.
-
-Prerequisites: `gh` CLI authed (`gh auth status`), `jq` installed,
-Node ≥ 22, and `ANTHROPIC_API_KEY` exported locally.
-
-Then, using those two values:
-
-1. Clone both repos locally if they aren't already, and `cd` into the
-   source repo checkout before running anything else.
-2. Run `first-tree tree inspect --json` in the source repo to confirm
-   classification, then run `first-tree skill install` to install the
-   first-tree skill, and bind to the tree repo with
-   `first-tree tree bind --tree-path <path-to-tree-repo-checkout>`.
-3. From inside the source repo checkout, install the gardener push-mode
-   workflow: `first-tree gardener install-workflow --tree-repo <tree-repo>`.
-   Walk me through the required `ANTHROPIC_API_KEY` and `TREE_REPO_TOKEN`
-   secrets.
-4. Start breeze so notifications route back to me:
-   `first-tree breeze install --allow-repo <source-repo>,<tree-repo>`.
-5. Trigger one drift event end-to-end: source PR → tree issue →
-   breeze pickup → draft-node PR. Monitor both repos I gave you via
-   `gh pr list` / `gh issue list` on each.
+Install the CLI, then follow the onboarding skill at
+`.agents/skills/first-tree/references/onboarding.md`. Before running any
+setup command, ask me which source repo (owner/name) and which tree repo
+(owner/name) to target, and wait for my answers — do not infer from the
+current working directory. Once I've confirmed both, walk me through
+setup, then trigger one drift event end-to-end so I can watch: source PR
+→ tree issue → breeze pickup → draft-node PR.
 ```
 
 ---
