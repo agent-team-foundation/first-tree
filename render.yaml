@@ -36,3 +36,14 @@ services:
         generateValue: true
       - key: FIRST_TREE_HUB_ENCRYPTION_KEY
         generateValue: true
+      # Feedback widget (hearback). Leave unset to disable.
+      - key: HEARBACK_FEEDBACK_REPO
+        sync: false
+      - key: HEARBACK_GITHUB_TOKEN
+        sync: false
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_BASE_URL
+        sync: false
+      - key: LLM_MODEL
+        sync: false
