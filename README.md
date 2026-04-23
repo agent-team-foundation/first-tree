@@ -110,6 +110,18 @@ or workspace to the existing shared tree at
 https://github.com/<your-org>/<your-tree-repo>.
 ```
 
+**Driving one full gardener → breeze cycle end-to-end:**
+
+```text
+Install the first-tree CLI from https://github.com/agent-team-foundation/first-tree/releases,
+then run `gardener install` to bind a tree to my source repo and `breeze install` to
+route notifications back to me. Trigger one drift event end-to-end: source PR → tree
+issue → breeze pickup → draft-node PR.
+
+Monitor: https://github.com/paperclipai/paperclip (source) and
+https://github.com/serenakeyitan/paperclip-tree (tree).
+```
+
 ---
 
 ## Onboarding Modes
