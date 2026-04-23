@@ -1372,7 +1372,7 @@ export function buildSyncProposalBody(params: {
     ? `**Source PR:** ${sourceRepo}#${sourcePr}${sourcePrTitle ? ` \u2014 ${sourcePrTitle}` : ""}`
     : `**Source:** ${sourceRepo} (unlinked commits)`;
   const ownerNote = needsOwner
-    ? `_No \`owners:\` on the affected node — assigned the tree-repo default as a fallback. Label \`needs-owner\` flags this for triage._\n\n`
+    ? `_No \`owners:\` on the affected node — filing unassigned. Label \`needs-owner\` flags this for manual triage; add owners to the NODE.md frontmatter and re-run sync for auto-routing._\n\n`
     : autoAssigned
       ? `_Assigned to node owners from the affected NODE.md. First assignee to pick this up drafts a tree PR and links it back in a comment._\n\n`
       : "";
@@ -1406,20 +1406,6 @@ async function resolveTreeSlug(
   if (res.code !== 0) return null;
   const slug = res.stdout.trim();
   return slug.length > 0 ? slug : null;
-}
-
-async function resolveTreeDefaultOwner(
-  shellRun: ShellRun,
-  treeSlug: string,
-): Promise<string | null> {
-  const res = await shellRun(
-    "gh",
-    ["api", `/repos/${treeSlug}`, "-q", ".owner.login"],
-    {},
-  );
-  if (res.code !== 0) return null;
-  const login = res.stdout.trim();
-  return login.length > 0 ? login : null;
 }
 
 async function existingProposalIssueUrl(
@@ -1473,12 +1459,6 @@ export async function runOpenIssuesMode(
   }
   const sourceRepo = `${drift.ownerRepo.owner}/${drift.ownerRepo.repo}`;
   const tokenEnv: NodeJS.ProcessEnv = { ...process.env, GH_TOKEN: treeRepoToken };
-  let cachedDefaultOwner: string | null | undefined;
-  const resolveDefaultOwner = async (): Promise<string | null> => {
-    if (cachedDefaultOwner !== undefined) return cachedDefaultOwner;
-    cachedDefaultOwner = await resolveTreeDefaultOwner(shellRun, treeSlug);
-    return cachedDefaultOwner;
-  };
 
   let created = 0;
   let skipped = 0;
@@ -1507,14 +1487,7 @@ export async function runOpenIssuesMode(
         classified.pr.authorLogin,
       );
       let assignees = owners;
-      let needsOwner = false;
-      if (assignees.length === 0) {
-        const defaultOwner = await resolveDefaultOwner();
-        if (defaultOwner) {
-          assignees = [defaultOwner];
-          needsOwner = true;
-        }
-      }
+      let needsOwner = assignees.length === 0;
 
       const body = buildSyncProposalBody({
         proposal,
