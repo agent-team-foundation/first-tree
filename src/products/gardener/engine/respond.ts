@@ -1,9 +1,10 @@
 /**
  * gardener-respond — port of `gardener-respond-manual.md` runbook.
  *
- * Reads review feedback on sync PRs (branches prefixed `first-tree/sync-`
- * or label `first-tree:sync`), classifies it, applies fixes, replies to
- * reviewers, and records learnings for gardener-sync.
+ * Reads review feedback on gardener-authored tree PRs (branches prefixed
+ * `first-tree/sync-` or `first-tree/draft-node-`, or label `first-tree:sync`),
+ * classifies it, applies fixes, replies to reviewers, and records learnings
+ * for gardener-sync.
  *
  * This TypeScript port preserves the runbook's hard rules byte-for-byte
  * where the runbook is specific. Output text, labels, commit messages,
@@ -50,9 +51,10 @@ export const RESPOND_USAGE = `usage: first-tree gardener respond --pr <n> --repo
 Fix a single sync PR based on reviewer feedback. Ports the
 gardener-respond-manual.md runbook into a deterministic CLI.
 
-Only acts on PRs whose branch starts with \`first-tree/sync-\` or whose
-label set contains \`first-tree:sync\`. Never force-pushes, never creates
-new PRs, never merges (that is the reviewer agent's job).
+Only acts on PRs whose branch starts with \`first-tree/sync-\` or
+\`first-tree/draft-node-\`, or whose label set contains \`first-tree:sync\`.
+Never force-pushes, never creates new PRs, never merges (that is the
+reviewer agent's job).
 
 Invocation is single-PR only. The trigger is breeze-runner dispatching
 on a \`review_requested\`/reviewer-feedback notification, which supplies
@@ -292,9 +294,28 @@ export function hasSyncLabel(view: PrView): boolean {
   return false;
 }
 
+/**
+ * Branch prefixes gardener authors on tree repos and accepts for respond.
+ *
+ *   - `first-tree/sync-` — batched-PR sweeps from `sync --apply` /
+ *     `start --sync-apply`.
+ *   - `first-tree/draft-node-` — per-issue PRs from `draft-node`, which
+ *     is dispatched by breeze after `sync --open-issues`.
+ *
+ * Both are gardener-authored tree updates and share the same review →
+ * respond → fix → re-push loop; respond has no reason to treat them
+ * differently. Fixes #307.
+ */
+const RESPOND_BRANCH_PREFIXES = [
+  "first-tree/sync-",
+  "first-tree/draft-node-",
+] as const;
+
 export function isSyncPr(view: PrView): boolean {
-  if (view.headRefName && view.headRefName.startsWith("first-tree/sync-")) {
-    return true;
+  if (view.headRefName) {
+    for (const prefix of RESPOND_BRANCH_PREFIXES) {
+      if (view.headRefName.startsWith(prefix)) return true;
+    }
   }
   return hasSyncLabel(view);
 }
