@@ -8,7 +8,6 @@
  *
  * Supported shape:
  *   tree_repo: owner/name
- *   installed_version: 0.1.0
  *   target_repos:
  *     - owner/repo-one
  *     - owner/repo-two
@@ -33,7 +32,6 @@ export interface ModuleToggle {
 
 export interface GardenerConfig {
   tree_repo?: string;
-  installed_version?: string;
   target_repos?: string[];
   modules?: {
     sync?: ModuleToggle;
@@ -209,9 +207,6 @@ function coerceModuleToggle(value: unknown): ModuleToggle | undefined {
 function coerceConfig(raw: Record<string, unknown>): GardenerConfig {
   const config: GardenerConfig = {};
   if (typeof raw.tree_repo === "string") config.tree_repo = raw.tree_repo;
-  if (typeof raw.installed_version === "string") {
-    config.installed_version = raw.installed_version;
-  }
   const targets = coerceStringArray(raw.target_repos);
   if (targets) config.target_repos = targets;
 

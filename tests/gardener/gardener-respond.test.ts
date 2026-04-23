@@ -97,7 +97,6 @@ describe("gardener config -- loadGardenerConfig / isModuleEnabled", () => {
       tmp.path,
       [
         "tree_repo: agent-team-foundation/first-tree",
-        "installed_version: 0.1.0",
         "target_repos:",
         "  - paperclipai/paperclip",
         "  - example/repo",
@@ -109,12 +108,30 @@ describe("gardener config -- loadGardenerConfig / isModuleEnabled", () => {
     );
     const config = loadGardenerConfig(tmp.path);
     expect(config?.tree_repo).toBe("agent-team-foundation/first-tree");
-    expect(config?.installed_version).toBe("0.1.0");
     expect(config?.target_repos).toEqual([
       "paperclipai/paperclip",
       "example/repo",
     ]);
     expect(isModuleEnabled(config, "respond")).toBe(true);
+  });
+
+  it("ignores a legacy installed_version field without erroring (#296)", () => {
+    const tmp = useTmpDir();
+    writeConfig(
+      tmp.path,
+      [
+        "tree_repo: agent-team-foundation/first-tree",
+        "installed_version: v2.4.1",
+        "target_repos:",
+        "  - example/repo",
+        "",
+      ].join("\n"),
+    );
+    const config = loadGardenerConfig(tmp.path);
+    expect(config).not.toBeNull();
+    expect(config?.tree_repo).toBe("agent-team-foundation/first-tree");
+    expect(config?.target_repos).toEqual(["example/repo"]);
+    expect((config as Record<string, unknown>).installed_version).toBeUndefined();
   });
 });
 
