@@ -283,6 +283,22 @@ function findExistingMemberDirByAuthorLogin(
   return matches[0] ?? null;
 }
 
+function dedupeOwners(owners: Iterable<string>): string[] {
+  const seen = new Set<string>();
+  const resolved: string[] = [];
+  for (const owner of owners) {
+    const cleaned = owner.replace(/^@+/, "").trim();
+    if (cleaned === "") continue;
+    const normalized = normalizeGitHubLogin(cleaned);
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    resolved.push(cleaned);
+  }
+  return resolved;
+}
+
+// Apply path (writing a new NODE.md): use node owners and fall back to the
+// PR author so the newly drafted node isn't ownerless.
 function resolveProposalOwners(
   treeRoot: string,
   targetDir: string,
@@ -292,18 +308,18 @@ function resolveProposalOwners(
   if (authorLogin) {
     combined.push(authorLogin);
   }
+  return dedupeOwners(combined);
+}
 
-  const seen = new Set<string>();
-  const resolved: string[] = [];
-  for (const owner of combined) {
-    const cleaned = owner.replace(/^@+/, "").trim();
-    if (cleaned === "") continue;
-    const normalized = normalizeGitHubLogin(cleaned);
-    if (seen.has(normalized)) continue;
-    seen.add(normalized);
-    resolved.push(cleaned);
-  }
-  return resolved;
+// --open-issues path: assignees must come from NODE.md owners only. If the
+// node has no `owners:`, we want `needs-owner` to fire — we must not silently
+// fall back to the PR author (that would mask the signal that #280 aims to
+// surface).
+function resolveIssueAssignees(
+  treeRoot: string,
+  targetDir: string,
+): string[] {
+  return dedupeOwners(resolveNodeOwners(targetDir, treeRoot, new Map()));
 }
 
 interface CommitSummary {
@@ -1481,12 +1497,7 @@ export async function runOpenIssuesMode(
         continue;
       }
       const absDir = join(treeRoot, proposal.path);
-      const owners = resolveProposalOwners(
-        treeRoot,
-        absDir,
-        classified.pr.authorLogin,
-      );
-      let assignees = owners;
+      let assignees = resolveIssueAssignees(treeRoot, absDir);
       let needsOwner = assignees.length === 0;
 
       const body = buildSyncProposalBody({

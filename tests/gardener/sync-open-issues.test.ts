@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -220,6 +220,88 @@ describe("sync --open-issues · runOpenIssuesMode", () => {
         call.command === "gh" && call.args[0] === "issue" && call.args[1] === "create"
       );
       expect(issueCreateCall).toBeUndefined();
+    } finally {
+      rmSync(treeRoot, { recursive: true, force: true });
+      if (previousToken === undefined) {
+        delete process.env.TREE_REPO_TOKEN;
+      } else {
+        process.env.TREE_REPO_TOKEN = previousToken;
+      }
+    }
+  });
+
+  it("files the issue unassigned with needs-owner when the node's owners: is empty, even when the PR author exists (#280)", async () => {
+    const previousToken = process.env.TREE_REPO_TOKEN;
+    process.env.TREE_REPO_TOKEN = "tree-token";
+
+    const treeRoot = mkdtempSync(join(tmpdir(), "first-tree-sync-open-issues-needs-owner-"));
+    const nodeDir = join(treeRoot, baseProposal.path);
+    mkdirSync(nodeDir, { recursive: true });
+    // NODE.md exists with an empty owners: list — this is the case #280 targets.
+    writeFileSync(
+      join(nodeDir, "NODE.md"),
+      "---\ntitle: \"Auth service\"\nowners: []\n---\n\nBody.\n",
+    );
+
+    const calls: Array<{ command: string; args: string[] }> = [];
+
+    try {
+      const exitCode = await runOpenIssuesMode({
+        drift: {
+          binding: { sourceId: "acme-web" },
+          ownerRepo: { owner: "acme", repo: "web" },
+        },
+        classifiedPrs: [{
+          pr: {
+            number: 42,
+            title: "Split auth",
+            mergeCommitSha: "deadbeefcafebabe",
+            // PR author is set — previous behaviour would have assigned them.
+            authorLogin: "octocat",
+          },
+          filtered: [baseProposal],
+        }],
+        treeRoot,
+        shellRun: async (command, args) => {
+          calls.push({ command, args: [...args] });
+          if (command !== "gh") {
+            return { code: 1, stdout: "", stderr: `unexpected command: ${command}` };
+          }
+          if (args[0] === "repo" && args[1] === "view") {
+            return { code: 0, stdout: "agent-team-foundation/first-tree-context\n", stderr: "" };
+          }
+          if (args[0] === "issue" && args[1] === "list") {
+            return { code: 0, stdout: "[]", stderr: "" };
+          }
+          if (args[0] === "issue" && args[1] === "create") {
+            return {
+              code: 0,
+              stdout: "https://github.com/agent-team-foundation/first-tree-context/issues/777\n",
+              stderr: "",
+            };
+          }
+          return { code: 1, stdout: "", stderr: `unexpected gh args: ${args.join(" ")}` };
+        },
+        dryRun: false,
+      });
+
+      expect(exitCode).toBe(0);
+
+      const createCall = calls.find(
+        (c) => c.command === "gh" && c.args[0] === "issue" && c.args[1] === "create",
+      );
+      expect(createCall).toBeDefined();
+      // No PR-author fallback: --assignee must not be set.
+      expect(createCall?.args).not.toContain("--assignee");
+      expect(createCall?.args.some((a) => a.includes("octocat"))).toBe(false);
+      // The needs-owner label must be applied instead.
+      const labelIdx = createCall?.args.indexOf("--label") ?? -1;
+      expect(labelIdx).toBeGreaterThanOrEqual(0);
+      expect(createCall?.args[labelIdx + 1]).toContain("needs-owner");
+      // And the body should surface the needs-owner copy.
+      const bodyIdx = createCall?.args.indexOf("--body") ?? -1;
+      expect(bodyIdx).toBeGreaterThanOrEqual(0);
+      expect(createCall?.args[bodyIdx + 1].toLowerCase()).toContain("needs-owner");
     } finally {
       rmSync(treeRoot, { recursive: true, force: true });
       if (previousToken === undefined) {
