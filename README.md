@@ -112,18 +112,25 @@ https://github.com/<your-org>/<your-tree-repo>.
 
 **Driving one full gardener → breeze cycle end-to-end:**
 
+Pick the source repo (the codebase you ship from) and the tree repo (where
+`NODE.md` lives) before pasting. The agent asks for both up front and won't
+assume either.
+
 ```text
 Use the latest first-tree CLI (https://github.com/agent-team-foundation/first-tree).
-Run `first-tree tree inspect --json`, install the skill, and bind this repo to a
-tree. Then install the gardener push-mode workflow
+
+Source repo: <owner/source-repo>
+Tree repo:   <owner/tree-repo>
+
+Run `first-tree tree inspect --json` in the source repo, install the skill, and
+bind it to the tree repo above. Then install the gardener push-mode workflow
 (`first-tree gardener install-workflow --tree-repo <owner/tree-repo>`) — the agent
 will walk you through the required `ANTHROPIC_API_KEY` and `TREE_REPO_TOKEN`
 secrets — and start breeze (`first-tree breeze install`) so notifications route
 back to me. Trigger one drift event end-to-end: source PR → tree issue →
 breeze pickup → draft-node PR.
 
-Monitor: https://github.com/paperclipai/paperclip (source) and
-https://github.com/serenakeyitan/paperclip-tree (tree).
+Monitor the two repos above.
 ```
 
 ---
