@@ -66,5 +66,15 @@ export async function openTreePr(
     await shellRun("gh", ["pr", "edit", prUrl, ...labelArgs], { cwd: treeRoot, env });
   }
 
+  // Queue GitHub's native auto-merge. No-ops silently when the target
+  // repo has "Allow auto-merge" disabled (the default), so behavior is
+  // unchanged for every repo that hasn't opted in via its Settings page.
+  // See #321.
+  await shellRun(
+    "gh",
+    ["pr", "merge", prUrl, "--auto", "--squash", "--delete-branch"],
+    { cwd: treeRoot, env },
+  );
+
   return { success: true, prUrl };
 }
