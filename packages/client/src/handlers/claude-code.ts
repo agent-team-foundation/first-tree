@@ -3,8 +3,15 @@ import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentRuntimeConfigPayload, SessionEvent } from "@agent-team-foundation/first-tree-hub-shared";
-import { deriveRepoLocalPath } from "@agent-team-foundation/first-tree-hub-shared";
+import type {
+  AgentRuntimeConfigPayload,
+  SessionEvent,
+  SupportedImageMime,
+} from "@agent-team-foundation/first-tree-hub-shared";
+import {
+  deriveRepoLocalPath,
+  SUPPORTED_IMAGE_MIMES as SHARED_SUPPORTED_IMAGE_MIMES,
+} from "@agent-team-foundation/first-tree-hub-shared";
 import type { McpServerConfig, PermissionMode, Query, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { query as claudeQuery } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
@@ -17,6 +24,7 @@ import type {
   SessionContext,
   SessionMessage,
 } from "../runtime/handler.js";
+import { findImagePath } from "../runtime/image-store.js";
 import { InputController } from "../runtime/input-controller.js";
 import { acquireWorkspace } from "../runtime/workspace.js";
 
@@ -30,14 +38,9 @@ type ToolResultBlock = { type: "tool_result"; tool_use_id: string; content: unkn
 type TextBlock = { type: "text"; text: string };
 type ThinkingBlock = { type: "thinking"; thinking?: string };
 
-/** MIME types supported by Claude's vision API. */
-type SupportedImageMime = "image/png" | "image/jpeg" | "image/gif" | "image/webp";
-const SUPPORTED_IMAGE_MIMES: ReadonlySet<SupportedImageMime> = new Set<SupportedImageMime>([
-  "image/png",
-  "image/jpeg",
-  "image/gif",
-  "image/webp",
-]);
+const SUPPORTED_IMAGE_MIMES: ReadonlySet<SupportedImageMime> = new Set<SupportedImageMime>(
+  SHARED_SUPPORTED_IMAGE_MIMES,
+);
 
 const MIME_TO_EXT: Record<SupportedImageMime, string> = {
   "image/png": "png",
@@ -46,15 +49,38 @@ const MIME_TO_EXT: Record<SupportedImageMime, string> = {
   "image/webp": "webp",
 };
 
-/** Shape of a `format: "file"` image message's content (base64-encoded). */
-type ImageFileContent = {
-  data: string; // base64 (no prefix)
+/** Post-refactor image message shape in `messages.content`: a reference only.
+ * The bytes arrive via the separate `image_payload` WS push and live on
+ * this client's local disk under `<dataDir>/chats/<chatId>/images/`. */
+type ImageRefContent = {
+  imageId: string;
   mimeType: SupportedImageMime;
   filename: string;
   size?: number;
 };
 
-function isImageFileContent(content: unknown): content is ImageFileContent {
+function isImageRefContent(content: unknown): content is ImageRefContent {
+  if (!content || typeof content !== "object") return false;
+  const c = content as Record<string, unknown>;
+  return (
+    typeof c.imageId === "string" &&
+    typeof c.mimeType === "string" &&
+    typeof c.filename === "string" &&
+    SUPPORTED_IMAGE_MIMES.has(c.mimeType as SupportedImageMime)
+  );
+}
+
+/** Legacy pre-refactor image content with base64 inlined into the message.
+ * Only exercised by messages that pre-date the image-out-of-messages PR —
+ * kept so a client upgraded mid-backlog can still read them. */
+type LegacyImageFileContent = {
+  data: string;
+  mimeType: SupportedImageMime;
+  filename: string;
+  size?: number;
+};
+
+function isLegacyImageFileContent(content: unknown): content is LegacyImageFileContent {
   if (!content || typeof content !== "object") return false;
   const c = content as Record<string, unknown>;
   return (
@@ -72,16 +98,11 @@ function sanitizeChatId(chatId: string): string {
 }
 
 /**
- * Write an inline base64 image to a temp file so Claude Code's native Read tool
- * can pick it up. Claude Code loads image files as multimodal content blocks —
- * going through the filesystem is more reliable than trying to feed an
- * `{ type: "image" }` block through the SDK, which does not consistently
- * forward multimodal arrays to the underlying model.
- *
- * The temp directory is per-chat so files are discoverable during the session;
- * the OS reclaims them on restart.
+ * Write a legacy inline-base64 image to a temp file so Claude Code's Read
+ * tool can pick it up. Only the legacy path — new messages go through the
+ * image_payload WS push which pre-writes to the data dir before delivery.
  */
-async function writeImageToTempFile(content: ImageFileContent, chatId: string): Promise<string> {
+async function writeLegacyImageToTempFile(content: LegacyImageFileContent, chatId: string): Promise<string> {
   const dir = join(tmpdir(), "first-tree-hub", "images", sanitizeChatId(chatId));
   await mkdir(dir, { recursive: true });
   const ext = MIME_TO_EXT[content.mimeType];
@@ -305,39 +326,66 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   const ownedWorktrees: Array<{ url: string; path: string; branchName: string }> = [];
 
   async function toSDKUserMessage(message: SessionMessage, sessionId: string): Promise<SDKUserMessage> {
-    // Image file message: write to a temp file and ask the model to open it
-    // with its Read tool. Read loads image files as multimodal content blocks
-    // — this is the reliable path; sending `{ type: "image" }` blocks through
-    // the SDK does not forward images to the underlying model in practice.
-    if (message.format === "file" && isImageFileContent(message.content)) {
-      const { filename } = message.content;
-      try {
-        const imagePath = await writeImageToTempFile(message.content, message.chatId);
-        const prefix = message.senderId ? `[From: ${message.senderId}]\n\n` : "";
-        const text = `${prefix}An image was shared in this chat. Please use the Read tool to read it, then respond based on what you see.\n\nFilename: ${filename}\nPath: ${imagePath}`;
+    // Image messages — two supported shapes:
+    //   1. imageRef: `{imageId, mimeType, filename, size}` — new path. Bytes
+    //      live on local disk, delivered via the `image_payload` WS push.
+    //   2. legacy inline: `{data, mimeType, filename, size}` — pre-refactor
+    //      messages still pending at rollout time. Decode once and drop the
+    //      temp path into the prompt.
+    //
+    // Either way we direct the model at a real file path because Claude Code's
+    // native Read tool loads images as multimodal content blocks — the SDK
+    // does not reliably forward `{ type: "image" }` blocks to the underlying
+    // model.
+    if (message.format === "file") {
+      const prefix = message.senderId ? `[From: ${message.senderId}]\n\n` : "";
+
+      if (isImageRefContent(message.content)) {
+        const { imageId, mimeType, filename } = message.content;
+        const imagePath = findImagePath(message.chatId, imageId, mimeType);
+        if (imagePath) {
+          const text = `${prefix}An image was shared in this chat. Please use the Read tool to read it, then respond based on what you see.\n\nFilename: ${filename}\nPath: ${imagePath}`;
+          return {
+            type: "user",
+            message: { role: "user", content: text },
+            parent_tool_use_id: null,
+            session_id: sessionId,
+          };
+        }
+        // Bytes never reached this client (offline during the image_payload
+        // push, or sending server lived on another instance). Treat as the
+        // "not available on this device" case so the session keeps moving.
+        const fallbackText = `[Image "${filename}" not available on this device]`;
         return {
           type: "user",
-          message: {
-            role: "user",
-            content: text,
-          },
+          message: { role: "user", content: `${prefix}${fallbackText}` },
           parent_tool_use_id: null,
           session_id: sessionId,
         };
-      } catch (err) {
-        // Fall through to text fallback on filesystem error. Avoid leaking
-        // raw fs error messages (they contain absolute paths).
-        const fallbackText = `[Image attachment "${filename}" failed to materialise]`;
-        ctx?.log(`Failed to write image to temp file: ${err instanceof Error ? err.message : String(err)}`);
-        return {
-          type: "user",
-          message: {
-            role: "user",
-            content: message.senderId ? `[From: ${message.senderId}]\n\n${fallbackText}` : fallbackText,
-          },
-          parent_tool_use_id: null,
-          session_id: sessionId,
-        };
+      }
+
+      if (isLegacyImageFileContent(message.content)) {
+        const { filename } = message.content;
+        try {
+          const imagePath = await writeLegacyImageToTempFile(message.content, message.chatId);
+          const text = `${prefix}An image was shared in this chat. Please use the Read tool to read it, then respond based on what you see.\n\nFilename: ${filename}\nPath: ${imagePath}`;
+          return {
+            type: "user",
+            message: { role: "user", content: text },
+            parent_tool_use_id: null,
+            session_id: sessionId,
+          };
+        } catch (err) {
+          // Avoid leaking raw fs error messages (they contain absolute paths).
+          const fallbackText = `[Image attachment "${filename}" failed to materialise]`;
+          ctx?.log(`Failed to write image to temp file: ${err instanceof Error ? err.message : String(err)}`);
+          return {
+            type: "user",
+            message: { role: "user", content: `${prefix}${fallbackText}` },
+            parent_tool_use_id: null,
+            session_id: sessionId,
+          };
+        }
       }
     }
 

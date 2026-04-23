@@ -5,6 +5,7 @@ import {
   type AgentBindRejectReason,
   type AgentPinnedMessage,
   agentPinnedMessageSchema,
+  imagePayloadFrameSchema,
   type RuntimeState,
   type ServerWelcomeFrame,
   type SessionEvent,
@@ -13,6 +14,7 @@ import {
 } from "@agent-team-foundation/first-tree-hub-shared";
 import WebSocket from "ws";
 import { createLogger, type pino } from "./observability/logger.js";
+import { writeImage } from "./runtime/image-store.js";
 import { type AccessTokenProvider, FirstTreeHubSDK } from "./sdk.js";
 
 export type ClientConnectionConfig = {
@@ -161,6 +163,15 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       reject: (err: Error) => void;
     }
   >();
+
+  /**
+   * In-flight image writes from recent `image_payload` frames. The server
+   * pushes `image_payload` immediately before firing the `new_message`
+   * notification, but WS message handlers run through EventEmitter (sync
+   * dispatch, no await), so the disk write can still race the HTTP poll
+   * that follows. Defer `new_message` emission until these settle.
+   */
+  private readonly pendingImageWrites = new Set<Promise<void>>();
 
   constructor(config: ClientConnectionConfig) {
     super();
@@ -504,9 +515,34 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       return;
     }
 
+    if (type === "image_payload") {
+      const parsed = imagePayloadFrameSchema.safeParse(msg);
+      if (!parsed.success) {
+        this.wsLogger.warn({ err: parsed.error.flatten() }, "malformed image_payload frame — dropping");
+        return;
+      }
+      const { imageId, chatId, mimeType, base64 } = parsed.data;
+      const write = writeImage({ chatId, imageId, mimeType, base64 })
+        .then(() => {})
+        .catch((err: unknown) => {
+          this.wsLogger.warn({ err, imageId, chatId }, "image_payload write failed");
+        });
+      this.pendingImageWrites.add(write);
+      write.finally(() => this.pendingImageWrites.delete(write));
+      return;
+    }
+
     if (type === "new_message") {
       const inboxId = msg.inboxId as string | undefined;
-      if (inboxId) {
+      if (!inboxId) return;
+      if (this.pendingImageWrites.size > 0) {
+        // Defer until recent image writes flush — the HTTP poll for this
+        // message would otherwise race the disk write and surface the
+        // "not available on this device" placeholder.
+        Promise.all([...this.pendingImageWrites]).finally(() => {
+          this.emit("agent:message", inboxId, msg);
+        });
+      } else {
         this.emit("agent:message", inboxId, msg);
       }
       return;

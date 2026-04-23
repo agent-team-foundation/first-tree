@@ -129,6 +129,18 @@ export {
   paginationQuerySchema,
 } from "./schemas/common.js";
 export {
+  IMAGE_MIME_TO_EXT,
+  type ImageInlineContent,
+  type ImagePayloadFrame,
+  type ImageRefContent,
+  imageInlineContentSchema,
+  imagePayloadFrameSchema,
+  imageRefContentSchema,
+  SUPPORTED_IMAGE_MIMES,
+  type SupportedImageMime,
+  supportedImageMimeSchema,
+} from "./schemas/image-payload.js";
+export {
   INBOX_ENTRY_STATUSES,
   type InboxEntry,
   type InboxEntryStatus,
