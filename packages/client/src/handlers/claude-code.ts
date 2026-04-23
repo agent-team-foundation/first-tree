@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentRuntimeConfigPayload, SessionEvent } from "@agent-team-foundation/first-tree-hub-shared";
@@ -64,6 +65,12 @@ function isImageFileContent(content: unknown): content is ImageFileContent {
   );
 }
 
+/** chat_id values are DB-generated UUIDs; reject anything else so we never
+ * traverse out of the images dir if the field is ever tampered with. */
+function sanitizeChatId(chatId: string): string {
+  return /^[a-zA-Z0-9-]+$/.test(chatId) ? chatId : "unknown";
+}
+
 /**
  * Write an inline base64 image to a temp file so Claude Code's native Read tool
  * can pick it up. Claude Code loads image files as multimodal content blocks —
@@ -74,12 +81,12 @@ function isImageFileContent(content: unknown): content is ImageFileContent {
  * The temp directory is per-chat so files are discoverable during the session;
  * the OS reclaims them on restart.
  */
-function writeImageToTempFile(content: ImageFileContent, chatId: string): string {
-  const dir = join(tmpdir(), "first-tree-hub", "images", chatId);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+async function writeImageToTempFile(content: ImageFileContent, chatId: string): Promise<string> {
+  const dir = join(tmpdir(), "first-tree-hub", "images", sanitizeChatId(chatId));
+  await mkdir(dir, { recursive: true });
   const ext = MIME_TO_EXT[content.mimeType];
   const path = join(dir, `${Date.now()}-${randomUUID().slice(0, 8)}.${ext}`);
-  writeFileSync(path, Buffer.from(content.data, "base64"));
+  await writeFile(path, Buffer.from(content.data, "base64"));
   return path;
 }
 
@@ -297,16 +304,17 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   /** Worktrees materialised for this session — each entry removed on shutdown. */
   const ownedWorktrees: Array<{ url: string; path: string; branchName: string }> = [];
 
-  function toSDKUserMessage(message: SessionMessage, sessionId: string): SDKUserMessage {
-    // Image file message: write to temp file and reference by path so Claude
-    // Code's native Read tool reads it as multimodal input. The `@path` syntax
-    // asks the model to auto-read the file when starting the turn.
+  async function toSDKUserMessage(message: SessionMessage, sessionId: string): Promise<SDKUserMessage> {
+    // Image file message: write to a temp file and ask the model to open it
+    // with its Read tool. Read loads image files as multimodal content blocks
+    // — this is the reliable path; sending `{ type: "image" }` blocks through
+    // the SDK does not forward images to the underlying model in practice.
     if (message.format === "file" && isImageFileContent(message.content)) {
       const { filename } = message.content;
       try {
-        const imagePath = writeImageToTempFile(message.content, message.chatId);
+        const imagePath = await writeImageToTempFile(message.content, message.chatId);
         const prefix = message.senderId ? `[From: ${message.senderId}]\n\n` : "";
-        const text = `${prefix}Attached image (filename: ${filename}). Please read it: @${imagePath}`;
+        const text = `${prefix}An image was shared in this chat. Please use the Read tool to read it, then respond based on what you see.\n\nFilename: ${filename}\nPath: ${imagePath}`;
         return {
           type: "user",
           message: {
@@ -317,8 +325,10 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
           session_id: sessionId,
         };
       } catch (err) {
-        // Fall through to text fallback on filesystem error.
-        const fallbackText = `[Image attachment "${filename}" failed to materialise: ${err instanceof Error ? err.message : String(err)}]`;
+        // Fall through to text fallback on filesystem error. Avoid leaking
+        // raw fs error messages (they contain absolute paths).
+        const fallbackText = `[Image attachment "${filename}" failed to materialise]`;
+        ctx?.log(`Failed to write image to temp file: ${err instanceof Error ? err.message : String(err)}`);
         return {
           type: "user",
           message: {
@@ -714,7 +724,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         `Starting session (${claudeSessionId}), cwd=${cwd}, permissionMode=${config.permissionMode ?? "bypassPermissions"}`,
       );
       spawnQuery(claudeSessionId, sessionCtx);
-      const sdkMsg = toSDKUserMessage(message, claudeSessionId);
+      const sdkMsg = await toSDKUserMessage(message, claudeSessionId);
       inputController?.push(sdkMsg);
 
       sessionCtx.log(`Session started (${claudeSessionId})`);
@@ -741,7 +751,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       sessionCtx.log(`Resuming session (${sessionId}), cwd=${cwd}`);
       spawnQuery(sessionId, sessionCtx, sessionId);
       if (message) {
-        inputController?.push(toSDKUserMessage(message, sessionId));
+        inputController?.push(await toSDKUserMessage(message, sessionId));
       }
 
       sessionCtx.log(`Session resumed (${sessionId})`);
@@ -763,8 +773,13 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         .catch((err) => {
           sessionCtx.log(`maybeSwitchConfig errored: ${err instanceof Error ? err.message : String(err)}`);
         })
-        .finally(() => {
-          inputController?.push(toSDKUserMessage(message, sid));
+        .finally(async () => {
+          try {
+            const sdkMsg = await toSDKUserMessage(message, sid);
+            inputController?.push(sdkMsg);
+          } catch (err) {
+            sessionCtx.log(`toSDKUserMessage errored: ${err instanceof Error ? err.message : String(err)}`);
+          }
         });
     },
 
