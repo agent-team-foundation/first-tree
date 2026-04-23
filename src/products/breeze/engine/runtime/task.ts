@@ -29,7 +29,7 @@ import {
 } from "./task-util.js";
 
 export interface TaskCandidate {
-  /** Origin: `notifications` | `review-search` | `review-backlog` | `assigned-search` | `recovered-running`. */
+  /** Origin: `notifications` | `review-search` | `recovered-running`. */
   source: string;
   /** Source repo (`owner/repo`). */
   repo: string;
@@ -178,20 +178,6 @@ export function buildReviewRequestCandidate(args: {
   });
 }
 
-export function buildRequiredReviewCandidate(args: {
-  repo: string;
-  number: number;
-  title: string;
-  webUrl: string;
-  updatedAt: string;
-}): TaskCandidate {
-  return buildReviewCandidate({
-    ...args,
-    source: "review-backlog",
-    reason: "review_required",
-  });
-}
-
 function buildReviewCandidate(args: {
   repo: string;
   number: number;
@@ -214,34 +200,6 @@ function buildReviewCandidate(args: {
     latestCommentApiUrl: "",
     updatedAt: args.updatedAt,
     priority: priorityFor("review_request", args.reason),
-  };
-}
-
-export function buildAssignedCandidate(args: {
-  repo: string;
-  number: number;
-  title: string;
-  webUrl: string;
-  updatedAt: string;
-  isPullRequest: boolean;
-}): TaskCandidate {
-  const kind: TaskKind = args.isPullRequest
-    ? "assigned_pull_request"
-    : "assigned_issue";
-  const suffix = args.isPullRequest ? "pulls" : "issues";
-  return {
-    source: "assigned-search",
-    repo: args.repo,
-    workspaceRepo: args.repo,
-    threadKey: `/repos/${args.repo}/${suffix}/${args.number}`,
-    kind,
-    reason: "assigned",
-    title: args.title,
-    webUrl: args.webUrl,
-    apiUrl: `https://api.github.com/repos/${args.repo}/${suffix}/${args.number}`,
-    latestCommentApiUrl: "",
-    updatedAt: args.updatedAt,
-    priority: priorityFor(kind, "assigned"),
   };
 }
 
