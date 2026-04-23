@@ -12,6 +12,7 @@ import { requireAdminRoleHook } from "../../middleware/member-auth.js";
 import { requireMember } from "../../middleware/require-identity.js";
 import { assertChatAccess, memberScope } from "../../services/access-control.js";
 import { ensureParticipant, joinChat, leaveChat, listChatsForMember } from "../../services/chat.js";
+import { prepareImageOutbound } from "../../services/image-broadcast.js";
 import { sendMessage } from "../../services/message.js";
 import { notifyRecipients } from "../../services/notifier.js";
 import { resolveDefaultOrgId, resolveOrganization } from "../../services/organization.js";
@@ -240,11 +241,13 @@ export async function adminChatRoutes(app: FastifyInstance): Promise<void> {
     await assertChatAccess(app.db, scope, chatId);
     await ensureParticipant(app.db, chatId, member.agentId);
 
+    // Image messages: push the bytes to participant clients over WS and
+    // rewrite `content` to a reference before it reaches the DB. Non-image
+    // messages fall through unchanged.
+    const prepared = await prepareImageOutbound(app.db, app.notifier, chatId, { ...body, source: "hub_ui" });
+
     // Send message as the member's linked agent, always with source=hub_ui
-    const result = await sendMessage(app.db, chatId, member.agentId, {
-      ...body,
-      source: "hub_ui",
-    });
+    const result = await sendMessage(app.db, chatId, member.agentId, prepared);
 
     // Notify recipients via PG NOTIFY
     notifyRecipients(app.notifier, result.recipients, result.message.id);

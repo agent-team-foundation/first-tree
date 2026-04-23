@@ -39,10 +39,9 @@ export function sendChatMessage(chatId: string, content: string): Promise<Messag
 }
 
 /**
- * File message content — embedded directly in the message (no server-side storage).
- * `data` is a base64-encoded string (without the `data:...;base64,` prefix).
- * This keeps messages self-contained so they can be forwarded to any agent (local
- * Claude client, Kael cloud, Feishu, etc.) without requiring URL access.
+ * Legacy inline shape — historical messages persisted before the
+ * image-out-of-messages refactor. Still understood by the renderer but no
+ * longer produced on send.
  */
 export type FileMessageContent = {
   data: string; // base64 (no prefix)
@@ -51,7 +50,25 @@ export type FileMessageContent = {
   size: number;
 };
 
-export function sendFileMessage(chatId: string, content: FileMessageContent): Promise<Message> {
+/**
+ * Post-refactor persisted shape. Bytes live in the sender's IndexedDB + on
+ * each online agent client's local disk — never in the server DB.
+ */
+export type ImageRefContent = {
+  imageId: string;
+  mimeType: string;
+  filename: string;
+  size?: number;
+};
+
+/**
+ * Inline shape sent over the wire. Server accepts the optional `imageId`
+ * (so the sender can write to IndexedDB ahead of the POST round-trip) and
+ * rewrites `content` to {@link ImageRefContent} before the DB insert.
+ */
+type SendFileMessageBody = FileMessageContent & { imageId?: string };
+
+export function sendFileMessage(chatId: string, content: SendFileMessageBody): Promise<Message> {
   return api.post<Message>(`/admin/chats/${encodeURIComponent(chatId)}/messages`, {
     format: "file",
     content,

@@ -5,6 +5,7 @@ import { useSearchParams } from "react-router";
 import {
   type FileMessageContent,
   getChat,
+  type ImageRefContent,
   listChatMessages,
   type MessageWithDelivery,
   readFileAsBase64,
@@ -12,6 +13,7 @@ import {
   sendChatMessage,
   sendFileMessage,
 } from "../../../api/chats.js";
+import { getImage, putImage } from "../../../api/image-store.js";
 import {
   agentSessionsQueryKey,
   asAssistantTextPayload,
@@ -594,12 +596,14 @@ function TextRow({
             marginTop: 2,
           }}
         >
-          {msg.format === "file" && isImageContent(msg.content) ? (
+          {msg.format === "file" && isInlineImageContent(msg.content) ? (
             <img
-              src={`data:${(msg.content as FileMessageContent).mimeType};base64,${(msg.content as FileMessageContent).data}`}
-              alt={(msg.content as FileMessageContent).filename ?? "image"}
+              src={`data:${msg.content.mimeType};base64,${msg.content.data}`}
+              alt={msg.content.filename ?? "image"}
               style={{ maxWidth: 320, borderRadius: "var(--radius-panel)", marginTop: 4 }}
             />
+          ) : msg.format === "file" && isImageRefContent(msg.content) ? (
+            <ImageFromRef content={msg.content} />
           ) : msg.format === "text" ? (
             <Markdown>{typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content)}</Markdown>
           ) : (
@@ -622,10 +626,68 @@ function TextRow({
   );
 }
 
-function isImageContent(content: unknown): content is FileMessageContent {
+function isInlineImageContent(content: unknown): content is FileMessageContent {
   if (typeof content !== "object" || content === null) return false;
   const c = content as Record<string, unknown>;
   return typeof c.data === "string" && typeof c.mimeType === "string" && (c.mimeType as string).startsWith("image/");
+}
+
+function isImageRefContent(content: unknown): content is ImageRefContent {
+  if (typeof content !== "object" || content === null) return false;
+  const c = content as Record<string, unknown>;
+  return (
+    typeof c.imageId === "string" &&
+    typeof c.mimeType === "string" &&
+    (c.mimeType as string).startsWith("image/") &&
+    typeof c.filename === "string"
+  );
+}
+
+/**
+ * Render an image whose bytes live in per-browser IndexedDB. Cache hit →
+ * inline preview; miss → placeholder text (cross-device or cleared cache).
+ */
+function ImageFromRef({ content }: { content: ImageRefContent }) {
+  const [state, setState] = useState<{ kind: "loading" } | { kind: "hit"; src: string } | { kind: "miss" }>({
+    kind: "loading",
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    getImage(content.imageId).then((hit) => {
+      if (cancelled) return;
+      if (hit) {
+        setState({ kind: "hit", src: `data:${hit.mimeType};base64,${hit.base64}` });
+      } else {
+        setState({ kind: "miss" });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [content.imageId]);
+
+  if (state.kind === "hit") {
+    return (
+      <img
+        src={state.src}
+        alt={content.filename}
+        style={{ maxWidth: 320, borderRadius: "var(--radius-panel)", marginTop: 4 }}
+      />
+    );
+  }
+  if (state.kind === "miss") {
+    return (
+      <span className="text-label" style={{ color: "var(--fg-3)", fontStyle: "italic" }}>
+        [Image "{content.filename}" not available on this device]
+      </span>
+    );
+  }
+  return (
+    <span className="text-label" style={{ color: "var(--fg-4)" }}>
+      …
+    </span>
+  );
 }
 
 type PendingImage = {
@@ -727,11 +789,17 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
       try {
         for (const img of images) {
           const data = await readFileAsBase64(img.file);
+          const imageId = crypto.randomUUID();
+          // Write to IndexedDB before the POST so the sending tab can render
+          // its own message via the imageRef shape immediately on refetch,
+          // even if the server write races ahead of the response.
+          await putImage({ imageId, base64: data, mimeType: img.file.type });
           await sendFileMessage(chatId, {
             data,
             mimeType: img.file.type,
             filename: img.file.name,
             size: img.file.size,
+            imageId,
           });
           URL.revokeObjectURL(img.previewUrl);
         }

@@ -28,6 +28,14 @@ export type Notifier = {
   notifySessionStateChange(agentId: string, chatId: string, state: string, organizationId: string): Promise<void>;
   /** Notify that an agent runtime state has changed (idle/working/error/…). Payload is org-scoped so admin consumers can filter. */
   notifyRuntimeStateChange(agentId: string, state: string, organizationId: string): Promise<void>;
+  /**
+   * Push a raw JSON frame to every socket currently subscribed to `inboxId`
+   * on **this server instance only**. Unlike `notify`, does not fan out
+   * across PG NOTIFY — used for payloads that are too large for NOTIFY
+   * (image bytes) and where cross-instance loss is acceptable. Returns the
+   * number of sockets the frame was queued to.
+   */
+  pushFrameToInbox(inboxId: string, frame: string): Promise<number>;
   /** Register a handler for config change notifications */
   onConfigChange(handler: ConfigChangeHandler): void;
   /** Register a handler for session state change notifications */
@@ -118,6 +126,26 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       } catch {
         // fire-and-forget
       }
+    },
+
+    async pushFrameToInbox(inboxId: string, frame: string): Promise<number> {
+      const sockets = subscriptions.get(inboxId);
+      if (!sockets) return 0;
+      let queued = 0;
+      const pending: Promise<void>[] = [];
+      for (const ws of sockets) {
+        if (ws.readyState !== ws.OPEN) continue;
+        pending.push(
+          new Promise<void>((resolve) => {
+            ws.send(frame, (err) => {
+              if (!err) queued += 1;
+              resolve();
+            });
+          }),
+        );
+      }
+      await Promise.all(pending);
+      return queued;
     },
 
     onConfigChange(handler: ConfigChangeHandler) {
