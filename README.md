@@ -112,25 +112,30 @@ https://github.com/<your-org>/<your-tree-repo>.
 
 **Driving one full gardener → breeze cycle end-to-end:**
 
-Pick the source repo (the codebase you ship from) and the tree repo (where
-`NODE.md` lives) before pasting. The agent asks for both up front and won't
-assume either.
+Paste this as-is — the agent asks you for the source repo and tree repo
+before running anything, so there's nothing to fill in up front.
 
 ```text
 Use the latest first-tree CLI (https://github.com/agent-team-foundation/first-tree).
 
-Source repo: <owner/source-repo>
-Tree repo:   <owner/tree-repo>
+Before running any command, ask me two questions and wait for my answers:
 
-Run `first-tree tree inspect --json` in the source repo, install the skill, and
-bind it to the tree repo above. Then install the gardener push-mode workflow
-(`first-tree gardener install-workflow --tree-repo <owner/tree-repo>`) — the agent
-will walk you through the required `ANTHROPIC_API_KEY` and `TREE_REPO_TOKEN`
-secrets — and start breeze (`first-tree breeze install`) so notifications route
-back to me. Trigger one drift event end-to-end: source PR → tree issue →
-breeze pickup → draft-node PR.
+1. "What is the source repo you ship from?" (owner/name on GitHub)
+2. "What is the tree repo that stores NODE.md?" (owner/name on GitHub)
 
-Monitor the two repos above.
+Do not assume, guess, or infer either from the current working directory.
+If either answer is missing or ambiguous, stop and re-ask. Only after I've
+confirmed both, proceed.
+
+Then, using those two values:
+
+Run `first-tree tree inspect --json` in the source repo, install the skill,
+and bind it to the tree repo. Install the gardener push-mode workflow
+(`first-tree gardener install-workflow --tree-repo <tree-repo>`) — you will
+walk me through the required `ANTHROPIC_API_KEY` and `TREE_REPO_TOKEN`
+secrets — and start breeze (`first-tree breeze install`) so notifications
+route back to me. Trigger one drift event end-to-end: source PR → tree
+issue → breeze pickup → draft-node PR. Monitor both repos I gave you.
 ```
 
 ---
