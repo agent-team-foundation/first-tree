@@ -44,6 +44,10 @@ Agent commands (invoked by the daemon, breeze, or CI — not normally by humans)
   comment               Review source-repo PRs/issues against the tree
                         and post structured verdict comments.
   respond               Fix sync PRs based on reviewer feedback.
+  draft-node            Draft a tree-node update from a sync-proposal
+                        issue and open a tree PR. Invoked by breeze
+                        when the user is assigned on a tree-repo issue
+                        carrying the \`gardener:sync-proposal\` marker.
   daemon                Foreground loop invoked by \`start\`; not for
                         direct human use.
 
@@ -119,6 +123,12 @@ export async function runGardener(
         });
       }
       return runComment(args.slice(1), { write });
+    }
+    case "draft-node": {
+      const { runDraftNode } = await import(
+        "./engine/commands/draft-node.js"
+      );
+      return runDraftNode(args.slice(1), { write });
     }
     case "install-workflow": {
       const { runInstallWorkflow } = await import(

@@ -117,6 +117,14 @@ describe("buildPrompt", () => {
     );
     expect(differ).toContain("Working repository: alice/self");
   });
+
+  it("includes the gardener sync-proposal dispatch rule", () => {
+    const prompt = buildPrompt(fakeRequest());
+    expect(prompt).toContain("gardener:sync-proposal");
+    expect(prompt).toContain("first-tree gardener draft-node");
+    expect(prompt).toContain("--issue");
+    expect(prompt).toContain("--tree-repo");
+  });
 });
 
 describe("buildCommand", () => {

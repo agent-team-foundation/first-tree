@@ -197,6 +197,11 @@ export function buildPrompt(request: AgentRequest): string {
     `\n` +
     `Read the local snapshot files first. Only call \`gh\` when you need fresh data or to publish the final result.\n` +
     `\n` +
+    `Dispatch rule — gardener sync-proposal issues (REQUIRED CHECK):\n` +
+    `If the task Type is \`assigned_issue\` AND the issue body contains the marker \`<!-- gardener:sync-proposal\`, this is a Context Tree update request filed by \`first-tree gardener sync\`. Do NOT draft the tree change by hand. Instead, run:\n` +
+    `  first-tree gardener draft-node --issue <issue-number> --tree-repo <owner/repo>\n` +
+    `The CLI fetches the issue, parses the marker, copies the proposed NODE.md content onto a deterministic branch, and opens a tree PR for human review. Use \`--dry-run\` first if you want to preview the plan. After the CLI exits, its own BREEZE_RESULT line is the authoritative result — do not invent a new one; set the \`breeze:*\` label per the rule below and stop.\n` +
+    `\n` +
     `Status labeling rule (REQUIRED): label the issue / pull request with your current status using exactly one of:\n` +
     `- \`breeze:wip\` — you are actively working on it\n` +
     `- \`breeze:human\` — you need human input or judgment to proceed\n` +
