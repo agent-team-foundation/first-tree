@@ -95,6 +95,10 @@ export async function runStart(
     profile,
   );
   if (existingLock && !isLockStale(existingLock)) {
+    const stopCmd = formatStopCommand({
+      home: options.runnerHome ?? parseHome(argv),
+      profile: options.profile ?? parseProfile(argv),
+    });
     write(
       `breeze: daemon already running (pid ${existingLock.pid}).`,
     );
@@ -105,7 +109,7 @@ export async function runStart(
       "  will not update if you edit ~/.breeze/config.yaml or re-run `start`.",
     );
     write(
-      "  Run `first-tree breeze stop` first, then re-run `start` with the",
+      `  Run \`${stopCmd}\` first, then re-run \`start\` with the`,
     );
     write("  full --allow-repo csv.");
     return 1;
@@ -163,6 +167,29 @@ export async function runStart(
   write(`pid: ${child.pid}`);
   write(`log: ${logPath}`);
   return 0;
+}
+
+/**
+ * Build the `breeze stop` suggestion shown when we refuse to start
+ * because a live daemon is already running. If the current invocation
+ * resolved a non-default `--home`/`--profile`, surface those flags so
+ * the user targets the same runner instead of silently stopping the
+ * default one.
+ */
+function formatStopCommand(opts: {
+  home?: string;
+  profile?: string;
+}): string {
+  const parts = ["first-tree breeze stop"];
+  if (opts.home) parts.push(`--home ${shellQuote(opts.home)}`);
+  if (opts.profile && opts.profile !== "default") {
+    parts.push(`--profile ${shellQuote(opts.profile)}`);
+  }
+  return parts.join(" ");
+}
+
+function shellQuote(v: string): string {
+  return /^[\w@%+=:,./-]+$/.test(v) ? v : `'${v.replace(/'/g, `'\\''`)}'`;
 }
 
 function parseHome(argv: readonly string[]): string | undefined {
