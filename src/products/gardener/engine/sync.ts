@@ -721,12 +721,61 @@ function formatPrDiffForPrompt(
   return parts.join("\n");
 }
 
+/**
+ * Fixes #305. Classification results are cached on disk keyed by
+ * sha256(prompt) so re-runs (including `--dry-run` → real run) produce
+ * the same proposal set. The prompt already encodes source commits,
+ * tree-node state, changed files, and the prompt template itself, so
+ * hashing the prompt captures every input that should invalidate the
+ * cache. Set FIRST_TREE_NO_CLASSIFIER_CACHE=1 to bypass.
+ */
+export const CLASSIFIER_CACHE_DIR = ".first-tree/classification-cache";
+
+export function classifierCachePath(treeRoot: string, promptHash: string): string {
+  return join(treeRoot, CLASSIFIER_CACHE_DIR, `${promptHash}.json`);
+}
+
+export function readClassifierCache(
+  treeRoot: string,
+  promptHash: string,
+): ClassificationItem[] | null {
+  const path = classifierCachePath(treeRoot, promptHash);
+  if (!existsSync(path)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    if (!parsed || typeof parsed !== "object") return null;
+    const entry = parsed as { proposals?: unknown };
+    if (!Array.isArray(entry.proposals)) return null;
+    return entry.proposals as ClassificationItem[];
+  } catch {
+    return null;
+  }
+}
+
+export function writeClassifierCache(
+  treeRoot: string,
+  promptHash: string,
+  proposals: ClassificationItem[],
+): void {
+  const path = classifierCachePath(treeRoot, promptHash);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(
+    path,
+    JSON.stringify(
+      { version: 1, promptHash, createdAt: new Date().toISOString(), proposals },
+      null,
+      2,
+    ),
+  );
+}
+
 async function classifyDriftViaClaude(
   shellRun: ShellRun,
   drift: DriftReport,
   treeNodes: TreeNodeSummary[],
-  changedFiles?: string[],
-  diffSummary?: string,
+  changedFiles: string[] | undefined,
+  diffSummary: string | undefined,
+  treeRoot: string,
 ): Promise<ClassificationItem[]> {
   // Build keywords from the PR for relevance matching
   const driftText = [
@@ -814,6 +863,19 @@ IMPORTANT:
 - \`suggested_soft_links\` must list every tree path the body cross-references (other domains, governance, backend, etc.) so the new node shows up in the tree graph. Use paths from the "Current tree nodes" list above. Omit or use [] when the body does not reference other domains.
 
 Return a JSON array only, no prose.`;
+
+  const promptHash = createHash("sha256").update(prompt).digest("hex");
+  const cacheBypass = process.env.FIRST_TREE_NO_CLASSIFIER_CACHE === "1";
+  if (!cacheBypass) {
+    const cached = readClassifierCache(treeRoot, promptHash);
+    if (cached) {
+      if (process.env.FIRST_TREE_DEBUG) {
+        console.error(`[DEBUG] classifier cache hit: ${promptHash.slice(0, 12)}`);
+      }
+      return cached;
+    }
+  }
+
   const CLAUDE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes per classification
   const MAX_RETRIES = 2;
   let result: ShellResult | null = null;
@@ -903,15 +965,30 @@ Return a JSON array only, no prose.`;
     }
     return null;
   };
+  const persist = (proposals: ClassificationItem[]): ClassificationItem[] => {
+    if (!cacheBypass && proposals.length > 0) {
+      try {
+        writeClassifierCache(treeRoot, promptHash, proposals);
+      } catch (err) {
+        // Cache writes are best-effort — don't fail the sync on disk
+        // errors (read-only fs, permissions, etc.).
+        if (process.env.FIRST_TREE_DEBUG) {
+          console.error(`[DEBUG] classifier cache write failed: ${String(err)}`);
+        }
+      }
+    }
+    return proposals;
+  };
+
   const direct = tryParseArray(raw);
-  if (direct) return direct;
+  if (direct) return persist(direct);
   // Last resort: extract first [...] block from the text
   const match = raw.match(/\[[\s\S]*\]/);
   if (match) {
     const extracted = tryParseArray(match[0]);
-    if (extracted) return extracted;
+    if (extracted) return persist(extracted);
   }
-  return [];
+  return persist([]);
 }
 
 function slugifyProposalPath(value: string): string {
@@ -1928,6 +2005,7 @@ export async function runSync(
             treeNodes,
             prFiles,
             diffSummary,
+            treeRoot,
           );
 
           if (proposals.length === 0) {
