@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentRuntimeConfigPayload, SessionEvent } from "@agent-team-foundation/first-tree-hub-shared";
 import { deriveRepoLocalPath } from "@agent-team-foundation/first-tree-hub-shared";
@@ -37,6 +38,13 @@ const SUPPORTED_IMAGE_MIMES: ReadonlySet<SupportedImageMime> = new Set<Supported
   "image/webp",
 ]);
 
+const MIME_TO_EXT: Record<SupportedImageMime, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/gif": "gif",
+  "image/webp": "webp",
+};
+
 /** Shape of a `format: "file"` image message's content (base64-encoded). */
 type ImageFileContent = {
   data: string; // base64 (no prefix)
@@ -54,6 +62,25 @@ function isImageFileContent(content: unknown): content is ImageFileContent {
     typeof c.filename === "string" &&
     SUPPORTED_IMAGE_MIMES.has(c.mimeType as SupportedImageMime)
   );
+}
+
+/**
+ * Write an inline base64 image to a temp file so Claude Code's native Read tool
+ * can pick it up. Claude Code loads image files as multimodal content blocks —
+ * going through the filesystem is more reliable than trying to feed an
+ * `{ type: "image" }` block through the SDK, which does not consistently
+ * forward multimodal arrays to the underlying model.
+ *
+ * The temp directory is per-chat so files are discoverable during the session;
+ * the OS reclaims them on restart.
+ */
+function writeImageToTempFile(content: ImageFileContent, chatId: string): string {
+  const dir = join(tmpdir(), "first-tree-hub", "images", chatId);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const ext = MIME_TO_EXT[content.mimeType];
+  const path = join(dir, `${Date.now()}-${randomUUID().slice(0, 8)}.${ext}`);
+  writeFileSync(path, Buffer.from(content.data, "base64"));
+  return path;
 }
 
 function extractContentBlocks(message: unknown): unknown[] {
@@ -271,33 +298,37 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   const ownedWorktrees: Array<{ url: string; path: string; branchName: string }> = [];
 
   function toSDKUserMessage(message: SessionMessage, sessionId: string): SDKUserMessage {
-    // Image file message → multimodal content blocks (text + image)
+    // Image file message: write to temp file and reference by path so Claude
+    // Code's native Read tool reads it as multimodal input. The `@path` syntax
+    // asks the model to auto-read the file when starting the turn.
     if (message.format === "file" && isImageFileContent(message.content)) {
-      const { data, mimeType, filename } = message.content;
-      const prefix = message.senderId ? `[From: ${message.senderId}]\n\n` : "";
-      const content = [
-        {
-          type: "text" as const,
-          text: `${prefix}[Attached image: ${filename}]`,
-        },
-        {
-          type: "image" as const,
-          source: {
-            type: "base64" as const,
-            media_type: mimeType,
-            data,
+      const { filename } = message.content;
+      try {
+        const imagePath = writeImageToTempFile(message.content, message.chatId);
+        const prefix = message.senderId ? `[From: ${message.senderId}]\n\n` : "";
+        const text = `${prefix}Attached image (filename: ${filename}). Please read it: @${imagePath}`;
+        return {
+          type: "user",
+          message: {
+            role: "user",
+            content: text,
           },
-        },
-      ];
-      return {
-        type: "user",
-        message: {
-          role: "user",
-          content,
-        },
-        parent_tool_use_id: null,
-        session_id: sessionId,
-      };
+          parent_tool_use_id: null,
+          session_id: sessionId,
+        };
+      } catch (err) {
+        // Fall through to text fallback on filesystem error.
+        const fallbackText = `[Image attachment "${filename}" failed to materialise: ${err instanceof Error ? err.message : String(err)}]`;
+        return {
+          type: "user",
+          message: {
+            role: "user",
+            content: message.senderId ? `[From: ${message.senderId}]\n\n${fallbackText}` : fallbackText,
+          },
+          parent_tool_use_id: null,
+          session_id: sessionId,
+        };
+      }
     }
 
     // Default: text content
