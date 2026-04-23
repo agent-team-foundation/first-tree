@@ -432,7 +432,7 @@ describe("sync --open-issues · runOpenIssuesMode", () => {
     mkdirSync(nodeDir, { recursive: true });
     writeFileSync(
       join(nodeDir, "NODE.md"),
-      "---\ntitle: \"Auth\"\nowners: [\"alice\"]\n---\n\nBody.\n",
+      "---\ntitle: \"Auth\"\nowners: [alice]\n---\n\nBody.\n",
     );
     const calls: Array<{ command: string; args: string[]; envToken?: string }> = [];
     try {
@@ -498,6 +498,11 @@ describe("sync --open-issues · runOpenIssuesMode", () => {
     expect(bodyIdx).toBeGreaterThan(-1);
     expect(createCall.args[bodyIdx + 1]).toContain("proposal_id=");
     expect(createCall.args).toContain("first-tree:sync-proposal,gardener");
+    // Prove the assignee-routing path: --assignee must be threaded as the
+    // unquoted login from NODE.md, not the literal quoted form.
+    const assigneeIdx = createCall.args.indexOf("--assignee");
+    expect(assigneeIdx).toBeGreaterThan(-1);
+    expect(createCall.args[assigneeIdx + 1]).toBe("alice");
   });
 
   it("retries without --label when gh rejects unknown labels (422)", async () => {
@@ -525,6 +530,12 @@ describe("sync --open-issues · runOpenIssuesMode", () => {
     expect(createCalls).toHaveLength(2);
     expect(createCalls[0].args).toContain("--label");
     expect(createCalls[1].args).not.toContain("--label");
+    // Assignee-routing is preserved across the label-strip retry.
+    for (const call of createCalls) {
+      const idx = call.args.indexOf("--assignee");
+      expect(idx).toBeGreaterThan(-1);
+      expect(call.args[idx + 1]).toBe("alice");
+    }
   });
 
   it("retries without --assignee and adds needs-owner when assignee is rejected (422)", async () => {
