@@ -5,6 +5,7 @@ export interface OpenTreePrOpts {
   title: string;
   body: string;
   labels?: string[];
+  env?: NodeJS.ProcessEnv;
 }
 
 export interface OpenTreePrResult {
@@ -27,7 +28,7 @@ export async function openTreePr(
   treeRoot: string,
   opts: OpenTreePrOpts,
 ): Promise<OpenTreePrResult> {
-  const { branch, title, body, labels } = opts;
+  const { branch, title, body, labels, env } = opts;
 
   const pushResult = await shellRun("git", ["push", "origin", branch], {
     cwd: treeRoot,
@@ -39,7 +40,7 @@ export async function openTreePr(
   const prCreate = await shellRun(
     "gh",
     ["pr", "create", "--head", branch, "--title", title, "--body", body],
-    { cwd: treeRoot },
+    { cwd: treeRoot, env },
   );
   if (prCreate.code !== 0) {
     const stderr = prCreate.stderr.trim();
@@ -58,11 +59,11 @@ export async function openTreePr(
       await shellRun(
         "gh",
         ["label", "create", label, "--color", "2ea44f", "--description", `Created by gardener sync`, "--force"],
-        { cwd: treeRoot },
+        { cwd: treeRoot, env },
       );
     }
     const labelArgs = labels.flatMap((l) => ["--add-label", l]);
-    await shellRun("gh", ["pr", "edit", prUrl, ...labelArgs], { cwd: treeRoot });
+    await shellRun("gh", ["pr", "edit", prUrl, ...labelArgs], { cwd: treeRoot, env });
   }
 
   return { success: true, prUrl };

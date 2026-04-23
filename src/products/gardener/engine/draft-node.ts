@@ -320,15 +320,66 @@ async function fetchIssueBody(
 async function resolveTreeSlug(
   shell: ShellRun,
   treeRoot: string,
+  env?: NodeJS.ProcessEnv,
 ): Promise<string | null> {
   const res = await shell(
     "gh",
     ["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
-    { cwd: treeRoot },
+    { cwd: treeRoot, env },
   );
   if (res.code !== 0) return null;
   const slug = res.stdout.trim();
   return slug.length > 0 ? slug : null;
+}
+
+async function checkoutDraftBranch(
+  shell: ShellRun,
+  treeRoot: string,
+  branch: string,
+): Promise<{ error?: string }> {
+  const localBranch = await shell("git", ["rev-parse", "--verify", branch], {
+    cwd: treeRoot,
+  });
+  if (localBranch.code === 0) {
+    const checkoutLocal = await shell("git", ["checkout", branch], {
+      cwd: treeRoot,
+    });
+    if (checkoutLocal.code !== 0) {
+      return { error: checkoutLocal.stderr.trim() || "git checkout failed" };
+    }
+    return {};
+  }
+
+  const fetchRemote = await shell("git", ["fetch", "origin", branch], {
+    cwd: treeRoot,
+  });
+  if (fetchRemote.code === 0) {
+    const checkoutRemote = await shell(
+      "git",
+      ["checkout", "-B", branch, "FETCH_HEAD"],
+      { cwd: treeRoot },
+    );
+    if (checkoutRemote.code !== 0) {
+      return { error: checkoutRemote.stderr.trim() || "git checkout failed" };
+    }
+    return {};
+  }
+
+  if (
+    !/couldn't find remote ref|could not find remote branch|remote ref does not exist/i.test(
+      fetchRemote.stderr,
+    )
+  ) {
+    return { error: fetchRemote.stderr.trim() || "git fetch failed" };
+  }
+
+  const checkoutNew = await shell("git", ["checkout", "-B", branch], {
+    cwd: treeRoot,
+  });
+  if (checkoutNew.code !== 0) {
+    return { error: checkoutNew.stderr.trim() || "git checkout failed" };
+  }
+  return {};
 }
 
 export async function runDraftNode(
@@ -369,7 +420,7 @@ export async function runDraftNode(
   }
   const tokenEnv: NodeJS.ProcessEnv = { ...env, GH_TOKEN: token };
 
-  const treeRepo = flags.treeRepo ?? (await resolveTreeSlug(shell, treeRoot));
+  const treeRepo = flags.treeRepo ?? (await resolveTreeSlug(shell, treeRoot, tokenEnv));
   if (!treeRepo) {
     write(`\u274C could not resolve tree repo slug (pass --tree-repo)`);
     emitBreezeResult(write, "failed", "tree-repo unresolved");
@@ -414,9 +465,9 @@ export async function runDraftNode(
     return 0;
   }
 
-  const checkoutRes = await shell("git", ["checkout", "-B", branch], { cwd: treeRoot });
-  if (checkoutRes.code !== 0) {
-    write(`\u274C git checkout failed: ${checkoutRes.stderr.trim()}`);
+  const checkoutRes = await checkoutDraftBranch(shell, treeRoot, branch);
+  if (checkoutRes.error) {
+    write(`\u274C git checkout failed: ${checkoutRes.error}`);
     emitBreezeResult(write, "failed", "git checkout");
     return 1;
   }
@@ -463,6 +514,7 @@ export async function runDraftNode(
       marker,
     }),
     labels: ["first-tree:draft-node"],
+    env: tokenEnv,
   });
   if (!prResult.success) {
     write(`\u274C openTreePr failed: ${prResult.error ?? "unknown"}`);
@@ -477,4 +529,3 @@ export async function runDraftNode(
   );
   return 0;
 }
-

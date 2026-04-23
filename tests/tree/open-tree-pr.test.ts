@@ -5,15 +5,20 @@ import type {
   ShellRun,
 } from "#products/tree/engine/runtime/shell.js";
 
-type Call = { command: string; args: string[] };
+type Call = {
+  command: string;
+  args: string[];
+  env?: NodeJS.ProcessEnv;
+};
 
 function recordingShell(
   handler: (c: Call) => ShellResult,
 ): { shell: ShellRun; calls: Call[] } {
   const calls: Call[] = [];
-  const shell: ShellRun = async (command, args) => {
-    calls.push({ command, args });
-    return handler({ command, args });
+  const shell: ShellRun = async (command, args, options) => {
+    const call = { command, args, env: options?.env };
+    calls.push(call);
+    return handler(call);
   };
   return { shell, calls };
 }
@@ -146,5 +151,30 @@ describe("openTreePr", () => {
       "--add-label", "label-a",
       "--add-label", "label-b",
     ]);
+  });
+
+  it("passes env through to gh calls only", async () => {
+    const { shell, calls } = recordingShell((c) => {
+      if (c.command === "git") return { stdout: "", stderr: "", code: 0 };
+      if (c.args[1] === "create") return { stdout: "https://x/pr/1", stderr: "", code: 0 };
+      return { stdout: "", stderr: "", code: 0 };
+    });
+
+    await openTreePr(shell, "/tree", {
+      branch: "b",
+      title: "t",
+      body: "y",
+      labels: ["label-a"],
+      env: { GH_TOKEN: "secret-token" },
+    });
+
+    const gitPush = calls.find((c) => c.command === "git")!;
+    expect(gitPush.env).toBe(undefined);
+
+    const ghCalls = calls.filter((c) => c.command === "gh");
+    expect(ghCalls).toHaveLength(3);
+    for (const call of ghCalls) {
+      expect(call.env?.GH_TOKEN).toBe("secret-token");
+    }
   });
 });

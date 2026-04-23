@@ -12,6 +12,12 @@ import {
   runDraftNode,
 } from "#products/gardener/engine/draft-node.js";
 
+type ShellCall = {
+  command: string;
+  args: string[];
+  options?: { cwd?: string; env?: NodeJS.ProcessEnv };
+};
+
 describe("gardener draft-node · parseFlags", () => {
   it("parses --issue --tree-repo --tree-path --dry-run", () => {
     const flags = parseFlags([
@@ -294,6 +300,76 @@ describe("gardener draft-node · runDraftNode integration (mocked shell)", () =>
     expect(lines.some((l) => l.includes("would branch: first-tree/draft-node-aa11bb22"))).toBe(true);
     expect(lines.some((l) => l.includes("BREEZE_RESULT: status=skipped"))).toBe(true);
     expect(lines.some((l) => l.includes("dry-run"))).toBe(true);
+  });
+
+  it("reuses an existing remote draft branch before checking for staged changes", async () => {
+    const calls: ShellCall[] = [];
+    const lines: string[] = [];
+    const issueBody = [
+      "<!-- gardener:sync-proposal · proposal_id=aa11bb22 · source_sha=dead · node=pkg-a -->",
+      "",
+      "### Proposed node content",
+      "# Pkg A",
+      "",
+      "Body.",
+      "",
+      "---",
+      "Filed.",
+    ].join("\n");
+    const shell = vi.fn(async (command: string, args: string[], options?: ShellCall["options"]) => {
+      calls.push({ command, args, options });
+      if (command === "gh" && args[0] === "issue") {
+        return { stdout: issueBody, stderr: "", code: 0 };
+      }
+      if (command === "git" && args[0] === "rev-parse") {
+        return { stdout: "", stderr: "unknown revision", code: 1 };
+      }
+      if (command === "git" && args[0] === "fetch") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (command === "git" && args[0] === "checkout") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (command === "git" && args[0] === "add") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (command === "git" && args[0] === "diff") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      throw new Error(`unexpected call: ${command} ${args.join(" ")}`);
+    });
+
+    const code = await runDraftNode(
+      ["--issue", "7", "--tree-repo", "org/tree"],
+      {
+        write: (line) => lines.push(line),
+        env: { TREE_REPO_TOKEN: "secret-token" },
+        cwd: "/tmp",
+        shell,
+      },
+    );
+
+    expect(code).toBe(0);
+
+    const issueView = calls.find((call) => call.command === "gh" && call.args[0] === "issue");
+    expect(issueView?.options?.env?.GH_TOKEN).toBe("secret-token");
+
+    const fetchIndex = calls.findIndex(
+      (call) => call.command === "git" && call.args[0] === "fetch",
+    );
+    const checkoutIndex = calls.findIndex(
+      (call) => call.command === "git" && call.args[0] === "checkout",
+    );
+    expect(fetchIndex).toBeGreaterThan(-1);
+    expect(checkoutIndex).toBeGreaterThan(fetchIndex);
+    expect(calls[checkoutIndex]?.args).toEqual([
+      "checkout",
+      "-B",
+      "first-tree/draft-node-aa11bb22",
+      "FETCH_HEAD",
+    ]);
+    expect(lines.some((line) => line.includes("already applied"))).toBe(true);
+    expect(lines.some((line) => line.includes("BREEZE_RESULT: status=skipped"))).toBe(true);
   });
 
   it("DRAFT_NODE_USAGE mentions --issue and TREE_REPO_TOKEN", () => {
