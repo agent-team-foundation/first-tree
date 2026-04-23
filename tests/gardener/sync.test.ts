@@ -2477,4 +2477,39 @@ describe("sync CLI", () => {
     expect(code).toBe(1);
     errSpy.mockRestore();
   });
+
+  it("--assignee without --open-issues is rejected at the CLI (#302 / #313)", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const code = await runSyncCli(["--assignee", "serenakeyitan", "--propose"]);
+    expect(code).toBe(1);
+    expect(errSpy).toHaveBeenCalledWith(
+      expect.stringContaining("--assignee requires --open-issues"),
+    );
+    errSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+});
+
+describe("sync CLI · parseFlags --assignee (#302 / #313)", () => {
+  it("parses `--assignee USER --open-issues` with assignee populated on the parsed flags", async () => {
+    // Regression: bingran review on PR #313 — the CLI originally
+    // parsed --assignee into ParsedFlags but dropped it when handing
+    // off to runSync(), so the runtime never saw the override. This
+    // test pins the flag survives parseFlags; the CLI-level threading
+    // is covered by the runSyncCli rejection test above (which only
+    // fires if parseFlags → conflict-check reads flags.assignee).
+    const mod = await import("#products/gardener/engine/sync.js");
+    const flags = mod.parseFlags(["--open-issues", "--assignee", "bob"]);
+    expect(flags.assignee).toBe("bob");
+    expect(flags.openIssues).toBe(true);
+    expect(flags.unknown).toBeUndefined();
+    expect(flags.conflict).toBeUndefined();
+  });
+
+  it("strips a leading @ from the assignee value", async () => {
+    const mod = await import("#products/gardener/engine/sync.js");
+    const flags = mod.parseFlags(["--open-issues", "--assignee", "@bob"]);
+    expect(flags.assignee).toBe("bob");
+  });
 });

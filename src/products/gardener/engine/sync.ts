@@ -384,7 +384,7 @@ interface ProposalGroup {
   proposalPaths: string[];
 }
 
-interface ParsedFlags {
+export interface ParsedFlags {
   help: boolean;
   treePath: string | undefined;
   source: string | undefined;
@@ -397,7 +397,7 @@ interface ParsedFlags {
   conflict: string | undefined;
 }
 
-function parseFlags(args: string[]): ParsedFlags {
+export function parseFlags(args: string[]): ParsedFlags {
   const result: ParsedFlags = {
     help: false,
     treePath: undefined,
@@ -2237,6 +2237,7 @@ export async function runSyncCli(
         apply: flags.apply,
         openIssues: flags.openIssues,
         dryRun: flags.dryRun,
+        assignee: flags.assignee,
       },
       deps,
     );
