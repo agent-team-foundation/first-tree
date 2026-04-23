@@ -950,6 +950,77 @@ async function ghAuthOk(shellRun: ShellRun): Promise<boolean> {
   return result.code === 0;
 }
 
+/**
+ * Labels gardener applies to its sync-proposal issues. Kept in one place
+ * so `ensureTreeLabels` and the issue-create block agree.
+ */
+export const GARDENER_SYNC_LABELS: ReadonlyArray<{
+  name: string;
+  color: string;
+  description: string;
+}> = [
+  {
+    name: "first-tree:sync-proposal",
+    color: "0e8a16",
+    description: "Gardener-proposed tree update awaiting owner review",
+  },
+  {
+    name: "gardener",
+    color: "c5def5",
+    description: "Authored by the gardener automation",
+  },
+  {
+    name: "needs-owner",
+    color: "d93f0b",
+    description: "No NODE.md owner resolved — triage required",
+  },
+];
+
+/**
+ * Best-effort seed gardener's labels on the tree repo before we start
+ * opening issues. `gh label create` returns a 422 with "already exists"
+ * when the label is present — we treat that as success. Creation failures
+ * are non-fatal: the issue-create loop still has its legacy
+ * retry-without-label fallback so we degrade gracefully.
+ *
+ * Fixes #303: previously the first `gh issue create` call would fail with
+ * "label not found", we'd silently drop the label, and breeze's
+ * draft-node dispatcher (which filters on `first-tree:sync-proposal`)
+ * would skip every issue.
+ */
+export async function ensureTreeLabels(
+  shellRun: ShellRun,
+  treeSlug: string,
+  tokenEnv: NodeJS.ProcessEnv,
+): Promise<void> {
+  for (const label of GARDENER_SYNC_LABELS) {
+    const res = await shellRun(
+      "gh",
+      [
+        "label",
+        "create",
+        label.name,
+        "--repo",
+        treeSlug,
+        "--color",
+        label.color,
+        "--description",
+        label.description,
+      ],
+      { env: tokenEnv },
+    );
+    if (res.code === 0) {
+      console.log(`\u2713 seeded label on ${treeSlug}: ${label.name}`);
+      continue;
+    }
+    const stderr = res.stderr || "";
+    if (/already exists/i.test(stderr)) continue;
+    console.log(
+      `\u26A0 could not seed label ${label.name} on ${treeSlug} (${stderr.split("\n")[0] || "unknown"}) \u2014 will retry per-issue`,
+    );
+  }
+}
+
 function logDriftTable(reports: DriftReport[]): void {
   console.log("\nSync summary:");
   for (const report of reports) {
@@ -1475,6 +1546,10 @@ export async function runOpenIssuesMode(
   }
   const sourceRepo = `${drift.ownerRepo.owner}/${drift.ownerRepo.repo}`;
   const tokenEnv: NodeJS.ProcessEnv = { ...process.env, GH_TOKEN: treeRepoToken };
+
+  if (!dryRun) {
+    await ensureTreeLabels(shellRun, treeSlug, tokenEnv);
+  }
 
   let created = 0;
   let skipped = 0;
