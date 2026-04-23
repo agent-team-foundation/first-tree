@@ -88,7 +88,10 @@ export class GhClient {
       "read recent notifications",
       [
         "api",
-        "/notifications?all=true&participating=false&per_page=100",
+        // See #251: `all=true&participating=false` bypassed GitHub's server-side
+        // spam filter and let breeze act on mention-then-delete notifications.
+        // `participating=true` restricts to direct-participation notifications.
+        "/notifications?participating=true&per_page=100",
         "--paginate",
         "-H",
         "X-GitHub-Api-Version: 2022-11-28",

@@ -37,7 +37,7 @@ interface ResponseMatcher {
   stderr?: string;
 }
 
-function makeStubGh(matchers: ResponseMatcher[]): GhClient {
+function makeStubGh(matchers: ResponseMatcher[]): GhClient & { calls: string[][] } {
   const calls: string[][] = [];
   const spawn = vi
     .fn()
@@ -64,7 +64,8 @@ function makeStubGh(matchers: ResponseMatcher[]): GhClient {
         output: [],
       };
     });
-  return new GhClient({ spawn });
+  const client = new GhClient({ spawn });
+  return Object.assign(client, { calls });
 }
 
 function mkBreezeDir(): { dir: string; inbox: string; activity: string } {
@@ -180,6 +181,14 @@ describe("pollOnce parity with Rust fetcher", () => {
     expect(outcome.newCount).toBe(1);
     expect(outcome.warnings).toEqual([]);
     expect(outcome.rateLimited).toBe(false);
+
+    // #251: must hit /notifications?participating=true (not ?all=true),
+    // which respects GitHub's server-side spam filter.
+    const notifCall = gh.calls.find(
+      (argv) => argv[0] === "api" && argv[1]?.startsWith("/notifications"),
+    );
+    expect(notifCall).toBeDefined();
+    expect(notifCall?.[1]).toBe("/notifications?participating=true");
 
     const parsed = JSON.parse(readFileSync(ctx.inbox, "utf-8")) as {
       last_poll: string;

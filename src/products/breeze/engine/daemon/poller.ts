@@ -174,7 +174,12 @@ export async function pollOnce(deps: PollOnceDeps): Promise<PollOutcome> {
   try {
     const stdout = gh.runChecked("fetch notifications", [
       "api",
-      "/notifications?all=true",
+      // `participating=true` restricts to notifications where the user is a
+      // direct participant (author, assignee, mention, review_requested) and
+      // respects GitHub's server-side spam filter. `?all=true` was previously
+      // used here but bypassed the filter, causing breeze to act on
+      // mention-then-delete spam surfaced to no one in the UI (#251).
+      "/notifications?participating=true",
       "--paginate",
       "-H",
       "X-GitHub-Api-Version: 2022-11-28",

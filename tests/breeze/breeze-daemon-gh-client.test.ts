@@ -119,7 +119,7 @@ describe("GhClient.recentNotifications", () => {
     expect(tasks[0].kind).toBe("mention");
     // Assert the argv sent to gh contains the paginate + notifications endpoint.
     expect(ctl.calls[0].args).toContain("--paginate");
-    expect(ctl.calls[0].args).toContain("/notifications?all=true&participating=false&per_page=100");
+    expect(ctl.calls[0].args).toContain("/notifications?participating=true&per_page=100");
   });
 
   it("drops lines that predate the lookback window", async () => {
