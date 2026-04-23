@@ -15,6 +15,7 @@ import {
   parseAllowRepoArg,
   requireExplicitRepoFilter,
 } from "../runtime/allow-repo.js";
+import { findServiceLock, isLockStale } from "../daemon/claim.js";
 import { resolveDaemonIdentity } from "../daemon/identity.js";
 import {
   bootstrapLaunchdJob,
@@ -75,6 +76,38 @@ export async function runStart(
     write(
       `breeze: start failed: ${err instanceof Error ? err.message : String(err)}`,
     );
+    return 1;
+  }
+
+  // #293: detect a live daemon and refuse to silently no-op. The bootstrap
+  // path below is idempotent at the launchd level, but it doesn't update
+  // the running process's allow-list — users kept running `breeze start`
+  // with a new --allow-repo and seeing no effect. Fail loudly so the user
+  // knows to stop first.
+  const existingLock = findServiceLock(
+    `${home}/locks`,
+    {
+      host: config.host,
+      login: identity.login,
+      scopes: [],
+      gitProtocol: "",
+    },
+    profile,
+  );
+  if (existingLock && !isLockStale(existingLock)) {
+    write(
+      `breeze: daemon already running (pid ${existingLock.pid}).`,
+    );
+    write(
+      "  The live daemon's --allow-repo list is baked in at start time and",
+    );
+    write(
+      "  will not update if you edit ~/.breeze/config.yaml or re-run `start`.",
+    );
+    write(
+      "  Run `first-tree breeze stop` first, then re-run `start` with the",
+    );
+    write("  full --allow-repo csv.");
     return 1;
   }
 

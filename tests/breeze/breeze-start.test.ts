@@ -41,6 +41,10 @@ describe("runStart", () => {
     vi.doMock("../../src/products/breeze/engine/runtime/config.js", () => ({
       loadBreezeDaemonConfig: () => ({ host: "github.com" }),
     }));
+    vi.doMock("../../src/products/breeze/engine/daemon/claim.js", () => ({
+      findServiceLock: () => null,
+      isLockStale: () => false,
+    }));
 
     const { runStart } = await import(
       "../../src/products/breeze/engine/commands/start.js"
@@ -73,5 +77,46 @@ describe("runStart", () => {
       }),
     );
     expect(lines).toContain("breeze-daemon started in background via launchd");
+  });
+
+  it("refuses to start and points to `breeze stop` when a live daemon is detected (#293)", async () => {
+    const bootstrapLaunchdJob = vi.fn();
+
+    vi.doMock("../../src/products/breeze/engine/daemon/launchd.js", () => ({
+      supportsLaunchd: () => true,
+      bootstrapLaunchdJob,
+    }));
+    vi.doMock("../../src/products/breeze/engine/daemon/identity.js", () => ({
+      resolveDaemonIdentity: () => ({ login: "alice", host: "github.com" }),
+    }));
+    vi.doMock("../../src/products/breeze/engine/runtime/config.js", () => ({
+      loadBreezeDaemonConfig: () => ({ host: "github.com" }),
+    }));
+    vi.doMock("../../src/products/breeze/engine/daemon/claim.js", () => ({
+      findServiceLock: () => ({
+        pid: 97184,
+        heartbeat_epoch: Math.floor(Date.now() / 1000),
+        active_tasks: 0,
+        note: "",
+      }),
+      isLockStale: () => false,
+    }));
+
+    const { runStart } = await import(
+      "../../src/products/breeze/engine/commands/start.js"
+    );
+
+    const lines: string[] = [];
+    const code = await runStart(["--allow-repo", "owner/repo"], {
+      runnerHome: "/tmp/breeze-home/runner",
+      entrypoint: "/tmp/first-tree/dist/cli.js",
+      write: (line) => lines.push(line),
+    });
+
+    expect(code).toBe(1);
+    expect(bootstrapLaunchdJob).not.toHaveBeenCalled();
+    const output = lines.join("\n");
+    expect(output).toContain("daemon already running (pid 97184)");
+    expect(output).toContain("first-tree breeze stop");
   });
 });
