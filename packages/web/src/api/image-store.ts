@@ -43,10 +43,20 @@ function openDb(): Promise<IDBDatabase | null> {
   return dbPromise;
 }
 
+/**
+ * Persist image bytes keyed by imageId. Rejects when IndexedDB is unavailable
+ * (incognito, disabled) or the write itself fails (quota, aborted). Since
+ * the server stores only a reference to these bytes, callers MUST treat a
+ * rejection as a send-blocking error — posting the reference without a local
+ * cache entry means the sender's own tab will immediately render the
+ * "not available on this device" placeholder for the image it just sent.
+ */
 export async function putImage(params: { imageId: string; base64: string; mimeType: string }): Promise<void> {
   const db = await openDb();
-  if (!db) return;
-  await new Promise<void>((resolve) => {
+  if (!db) {
+    throw new Error("Image storage unavailable (IndexedDB disabled or blocked)");
+  }
+  await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE, "readwrite");
     const store = tx.objectStore(STORE);
     const entry: Stored = {
@@ -57,8 +67,8 @@ export async function putImage(params: { imageId: string; base64: string; mimeTy
     };
     store.put(entry);
     tx.oncomplete = () => resolve();
-    tx.onerror = () => resolve();
-    tx.onabort = () => resolve();
+    tx.onerror = () => reject(tx.error ?? new Error("Image storage write failed"));
+    tx.onabort = () => reject(tx.error ?? new Error("Image storage write aborted"));
   });
 }
 
