@@ -30,7 +30,7 @@ import type {
 
 const execFileAsync = promisify(execFile);
 
-export const SYNC_USAGE = `usage: first-tree gardener sync [--tree-path PATH] [--source ID] [--propose] [--apply | --open-issues] [--dry-run]
+export const SYNC_USAGE = `usage: first-tree gardener sync [--tree-path PATH] [--source ID] [--propose] [--apply | --open-issues] [--assignee USER] [--dry-run]
 
 Detect drift between a Context Tree and the source repo(s) it describes.
 Runs in four terminal modes controlled by flags:
@@ -61,6 +61,10 @@ Options:
   --apply             Apply proposals, open PR (implies --propose)
   --open-issues       Open one tree-repo issue per proposal instead of
                       one bundled PR (implies --propose). Conflicts with --apply.
+  --assignee USER     With --open-issues, force every opened issue to be
+                      assigned to USER instead of the NODE.md-resolved owners.
+                      Bypasses the needs-owner label. Intended for E2E testing
+                      and manual dispatches — do not use in scheduled runs.
   --dry-run           With --apply / --open-issues, skip network writes
                       (\`git push\`, \`gh pr create\`, \`gh issue create\`)
   --help              Show this help message
@@ -380,7 +384,7 @@ interface ProposalGroup {
   proposalPaths: string[];
 }
 
-interface ParsedFlags {
+export interface ParsedFlags {
   help: boolean;
   treePath: string | undefined;
   source: string | undefined;
@@ -388,11 +392,12 @@ interface ParsedFlags {
   apply: boolean;
   openIssues: boolean;
   dryRun: boolean;
+  assignee: string | undefined;
   unknown: string | undefined;
   conflict: string | undefined;
 }
 
-function parseFlags(args: string[]): ParsedFlags {
+export function parseFlags(args: string[]): ParsedFlags {
   const result: ParsedFlags = {
     help: false,
     treePath: undefined,
@@ -401,6 +406,7 @@ function parseFlags(args: string[]): ParsedFlags {
     apply: false,
     openIssues: false,
     dryRun: false,
+    assignee: undefined,
     unknown: undefined,
     conflict: undefined,
   };
@@ -448,11 +454,24 @@ function parseFlags(args: string[]): ParsedFlags {
       result.dryRun = true;
       continue;
     }
+    if (arg === "--assignee") {
+      const value = args[index + 1];
+      if (!value) {
+        result.unknown = "--assignee (missing value)";
+        return result;
+      }
+      result.assignee = value.replace(/^@/, "");
+      index += 1;
+      continue;
+    }
     result.unknown = arg;
     return result;
   }
   if (result.apply && result.openIssues) {
     result.conflict = "--apply and --open-issues are mutually exclusive";
+  }
+  if (result.assignee && !result.openIssues) {
+    result.conflict = "--assignee requires --open-issues";
   }
   return result;
 }
@@ -1497,6 +1516,7 @@ export interface RunOpenIssuesInput {
   treeRoot: string;
   shellRun: ShellRun;
   dryRun: boolean;
+  assigneeOverride?: string;
 }
 
 /**
@@ -1654,7 +1674,12 @@ export async function runWithRateLimitBackoff(
 export async function runOpenIssuesMode(
   input: RunOpenIssuesInput,
 ): Promise<number> {
-  const { drift, classifiedPrs, treeRoot, shellRun, dryRun } = input;
+  const { drift, classifiedPrs, treeRoot, shellRun, dryRun, assigneeOverride } = input;
+  if (assigneeOverride) {
+    console.log(
+      `⚠ --assignee override active: every opened issue will be assigned to @${assigneeOverride} regardless of NODE.md owners. Do not use in scheduled runs.`,
+    );
+  }
   const treeRepoToken = process.env.TREE_REPO_TOKEN;
   if (!treeRepoToken) {
     console.error(
@@ -1697,8 +1722,10 @@ export async function runOpenIssuesMode(
         continue;
       }
       const absDir = join(treeRoot, proposal.path);
-      let assignees = resolveIssueAssignees(treeRoot, absDir);
-      let needsOwner = assignees.length === 0;
+      let assignees = assigneeOverride
+        ? [assigneeOverride]
+        : resolveIssueAssignees(treeRoot, absDir);
+      let needsOwner = assigneeOverride ? false : assignees.length === 0;
 
       const title = `[gardener] ${proposal.suggested_node_title || proposal.path}`;
       const currentBody = (): string =>
@@ -1826,7 +1853,7 @@ export async function runOpenIssuesMode(
 
 export async function runSync(
   treeRoot: string,
-  flags: Omit<ParsedFlags, "help" | "unknown" | "treePath" | "conflict" | "openIssues"> & { openIssues?: boolean },
+  flags: Omit<ParsedFlags, "help" | "unknown" | "treePath" | "conflict" | "openIssues" | "assignee"> & { openIssues?: boolean; assignee?: string },
   deps: SyncDeps = {},
 ): Promise<number> {
   const shellRun = deps.shellRun ?? defaultShellRun;
@@ -2167,6 +2194,7 @@ export async function runSync(
         treeRoot,
         shellRun,
         dryRun: flags.dryRun,
+        assigneeOverride: flags.assignee,
       });
       if (openIssuesResult !== 0) return openIssuesResult;
       continue;
@@ -2410,6 +2438,7 @@ export async function runSyncCli(
         apply: flags.apply,
         openIssues: flags.openIssues,
         dryRun: flags.dryRun,
+        assignee: flags.assignee,
       },
       deps,
     );
