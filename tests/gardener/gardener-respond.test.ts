@@ -763,6 +763,18 @@ describe("gardener respond -- helpers", () => {
     expect(isSyncPr({ number: 1, headRefName: "feature/x" })).toBe(false);
   });
 
+  it("also recognises draft-node PRs as respondable (#307)", () => {
+    // draft-node writes branches like `first-tree/draft-node-<proposal_id>`.
+    // respond needs to accept them so the issue → draft-node → PR → respond
+    // chain actually connects.
+    expect(
+      isSyncPr({
+        number: 1,
+        headRefName: "first-tree/draft-node-19aeb0ab73f4",
+      }),
+    ).toBe(true);
+  });
+
   it("extracts source PR metadata from the body marker", () => {
     const body =
       "<!-- gardener:sync · source_pr=3001 · source_repo=paperclipai/paperclip -->";

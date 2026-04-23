@@ -5,7 +5,9 @@ import { describe, expect, it } from "vitest";
 import {
   buildSyncProposalBody,
   computeProposalId,
+  isRateLimitError,
   runOpenIssuesMode,
+  runWithRateLimitBackoff,
   type ClassificationItem,
   type ClassifiedPrLike,
   type DriftReportLike,
@@ -662,6 +664,241 @@ describe("sync --open-issues · runOpenIssuesMode", () => {
     expect(createCall!.args[assigneeIdx + 1]).toBe("serenakeyitan");
     const labelIdx = createCall!.args.indexOf("--label");
     expect(createCall!.args[labelIdx + 1]).not.toContain("needs-owner");
+  });
+
+  it("seeds gardener labels on the tree repo before the first issue create (#303)", async () => {
+    const previousToken = process.env.TREE_REPO_TOKEN;
+    process.env.TREE_REPO_TOKEN = "tree-token";
+
+    const treeRoot = mkdtempSync(
+      join(tmpdir(), "first-tree-sync-open-issues-label-seed-"),
+    );
+    mkdirSync(join(treeRoot, baseProposal.path), { recursive: true });
+
+    const labelCreateCalls: string[][] = [];
+    const issueCreateCalls: string[][] = [];
+
+    try {
+      const exitCode = await runOpenIssuesMode({
+        drift: {
+          binding: { sourceId: "acme-web" },
+          ownerRepo: { owner: "acme", repo: "web" },
+        },
+        classifiedPrs: [{
+          pr: {
+            number: 42,
+            title: "Split auth",
+            mergeCommitSha: "deadbeefcafebabe",
+            authorLogin: "octocat",
+          },
+          filtered: [baseProposal],
+        }],
+        treeRoot,
+        shellRun: async (command, args) => {
+          if (command !== "gh") {
+            return { code: 1, stdout: "", stderr: `unexpected command: ${command}` };
+          }
+          if (args[0] === "repo" && args[1] === "view") {
+            return { code: 0, stdout: "agent-team-foundation/first-tree-context\n", stderr: "" };
+          }
+          if (args[0] === "label" && args[1] === "create") {
+            labelCreateCalls.push([...args]);
+            return { code: 0, stdout: "", stderr: "" };
+          }
+          if (args[0] === "issue" && args[1] === "list") {
+            return { code: 0, stdout: "[]", stderr: "" };
+          }
+          if (args[0] === "issue" && args[1] === "create") {
+            issueCreateCalls.push([...args]);
+            return {
+              code: 0,
+              stdout: "https://github.com/agent-team-foundation/first-tree-context/issues/999\n",
+              stderr: "",
+            };
+          }
+          return { code: 1, stdout: "", stderr: `unexpected gh args: ${args.join(" ")}` };
+        },
+        dryRun: false,
+      });
+
+      expect(exitCode).toBe(0);
+
+      const seededLabelNames = labelCreateCalls.map((args) => args[2]);
+      expect(seededLabelNames).toContain("first-tree:sync-proposal");
+      expect(seededLabelNames).toContain("gardener");
+      expect(seededLabelNames).toContain("needs-owner");
+
+      expect(issueCreateCalls).toHaveLength(1);
+      const issueArgs = issueCreateCalls[0];
+      const labelIdx = issueArgs.indexOf("--label");
+      expect(labelIdx).toBeGreaterThanOrEqual(0);
+      expect(issueArgs[labelIdx + 1]).toContain("first-tree:sync-proposal");
+    } finally {
+      rmSync(treeRoot, { recursive: true, force: true });
+      if (previousToken === undefined) {
+        delete process.env.TREE_REPO_TOKEN;
+      } else {
+        process.env.TREE_REPO_TOKEN = previousToken;
+      }
+    }
+  });
+
+  it("treats 'label already exists' on seed as success and still applies labels on issue create (#303)", async () => {
+    const previousToken = process.env.TREE_REPO_TOKEN;
+    process.env.TREE_REPO_TOKEN = "tree-token";
+
+    const treeRoot = mkdtempSync(
+      join(tmpdir(), "first-tree-sync-open-issues-label-exists-"),
+    );
+    mkdirSync(join(treeRoot, baseProposal.path), { recursive: true });
+
+    const issueCreateCalls: string[][] = [];
+
+    try {
+      const exitCode = await runOpenIssuesMode({
+        drift: {
+          binding: { sourceId: "acme-web" },
+          ownerRepo: { owner: "acme", repo: "web" },
+        },
+        classifiedPrs: [{
+          pr: {
+            number: 42,
+            title: "Split auth",
+            mergeCommitSha: "deadbeefcafebabe",
+            authorLogin: "octocat",
+          },
+          filtered: [baseProposal],
+        }],
+        treeRoot,
+        shellRun: async (command, args) => {
+          if (command !== "gh") {
+            return { code: 1, stdout: "", stderr: `unexpected command: ${command}` };
+          }
+          if (args[0] === "repo" && args[1] === "view") {
+            return { code: 0, stdout: "agent-team-foundation/first-tree-context\n", stderr: "" };
+          }
+          if (args[0] === "label" && args[1] === "create") {
+            return {
+              code: 1,
+              stdout: "",
+              stderr: "HTTP 422: Validation Failed (already exists)",
+            };
+          }
+          if (args[0] === "issue" && args[1] === "list") {
+            return { code: 0, stdout: "[]", stderr: "" };
+          }
+          if (args[0] === "issue" && args[1] === "create") {
+            issueCreateCalls.push([...args]);
+            return {
+              code: 0,
+              stdout: "https://github.com/agent-team-foundation/first-tree-context/issues/1000\n",
+              stderr: "",
+            };
+          }
+          return { code: 1, stdout: "", stderr: `unexpected gh args: ${args.join(" ")}` };
+        },
+        dryRun: false,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(issueCreateCalls).toHaveLength(1);
+      const issueArgs = issueCreateCalls[0];
+      expect(issueArgs).toContain("--label");
+      // First attempt should carry the label — no retry-without-label was needed.
+      const labelIdx = issueArgs.indexOf("--label");
+      expect(issueArgs[labelIdx + 1]).toContain("first-tree:sync-proposal");
+    } finally {
+      rmSync(treeRoot, { recursive: true, force: true });
+      if (previousToken === undefined) {
+        delete process.env.TREE_REPO_TOKEN;
+      } else {
+        process.env.TREE_REPO_TOKEN = previousToken;
+      }
+    }
+  });
+});
+
+describe("sync --open-issues · rate-limit backoff (#304)", () => {
+  it("recognises GraphQL 'API rate limit already exceeded' as a rate-limit error", () => {
+    expect(
+      isRateLimitError(
+        "GraphQL: API rate limit already exceeded for user ID 94026305.",
+      ),
+    ).toBe(true);
+  });
+
+  it("recognises 'secondary rate limit' and 429 as rate-limit errors", () => {
+    expect(isRateLimitError("You have exceeded a secondary rate limit")).toBe(true);
+    expect(isRateLimitError("HTTP 429: Too Many Requests")).toBe(true);
+  });
+
+  it("does not misclassify non-rate-limit errors (422, network)", () => {
+    expect(isRateLimitError("422 Unprocessable: label not found")).toBe(false);
+    expect(isRateLimitError("network unreachable")).toBe(false);
+    expect(isRateLimitError("")).toBe(false);
+  });
+
+  it("runWithRateLimitBackoff retries on rate-limit then succeeds (#304)", async () => {
+    const calls: Array<{ args: string[] }> = [];
+    const sleeps: number[] = [];
+    let attempt = 0;
+    const res = await runWithRateLimitBackoff(
+      async (_cmd, args) => {
+        calls.push({ args: [...args] });
+        attempt += 1;
+        if (attempt <= 2) {
+          return {
+            code: 1,
+            stdout: "",
+            stderr: "GraphQL: API rate limit already exceeded for user ID 1.",
+          };
+        }
+        return { code: 0, stdout: "https://x/issues/1\n", stderr: "" };
+      },
+      ["issue", "create", "--repo", "org/tree", "--title", "T", "--body", "B"],
+      {},
+      {
+        baseDelayMs: 1,
+        sleep: async (ms) => {
+          sleeps.push(ms);
+        },
+      },
+    );
+    expect(res.code).toBe(0);
+    expect(calls).toHaveLength(3);
+    // Exponential: 1ms, 2ms between the 3 attempts.
+    expect(sleeps).toEqual([1, 2]);
+  });
+
+  it("runWithRateLimitBackoff returns non-rate-limit errors immediately (no retry)", async () => {
+    let attempts = 0;
+    const res = await runWithRateLimitBackoff(
+      async () => {
+        attempts += 1;
+        return { code: 1, stdout: "", stderr: "422 Unprocessable: label not found" };
+      },
+      ["issue", "create"],
+      {},
+      { baseDelayMs: 1, sleep: async () => {} },
+    );
+    expect(res.code).toBe(1);
+    expect(attempts).toBe(1);
+  });
+
+  it("runWithRateLimitBackoff gives up after maxRetries on persistent rate-limit", async () => {
+    let attempts = 0;
+    const res = await runWithRateLimitBackoff(
+      async () => {
+        attempts += 1;
+        return { code: 1, stdout: "", stderr: "API rate limit already exceeded" };
+      },
+      ["issue", "create"],
+      {},
+      { maxRetries: 2, baseDelayMs: 1, sleep: async () => {} },
+    );
+    expect(res.code).toBe(1);
+    // initial attempt + 2 retries = 3.
+    expect(attempts).toBe(3);
   });
 });
 
