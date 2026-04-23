@@ -176,9 +176,9 @@ After Scenario F lands, a tree PR branch named
 `first-tree/draft-node-<proposal_id>` appears on the tree repo. This is
 where the human reviews the machine-drafted NODE.md before it merges.
 
-1. **Open the PR** — the breeze task comment links to it; or
-   `gh pr list --repo <tree-slug> --head first-tree/draft-node-` will
-   find it.
+1. **Open the PR** — the breeze task comment links to it; otherwise list
+   the tree repo's open PRs and look for a `[gardener] draft <node>`
+   title or a `first-tree/draft-node-<proposal_id>` head branch.
 2. **Read the diff** — the PR body links back to the source issue
    (`Closes <tree-slug>#<n> on merge.`) and shows the source SHA or
    source PR. The NODE.md content was copied verbatim from the issue
@@ -193,9 +193,9 @@ where the human reviews the machine-drafted NODE.md before it merges.
    drift on that node. If it still does, the proposal didn't address
    all drift spans; open a fresh proposal rather than amending.
 
-If `draft-node` reported `status=skipped` with "defer to human", the
-issue was a merged-PR variant without a proposed-content section — hand-
-edit the tree from the issue's summary links instead.
+If `draft-node` skips because the issue body has no `### Proposed node
+content` section (common on merged-PR variants), hand-edit the tree
+from the issue's summary links instead.
 
 ### Always: restart breeze last
 
