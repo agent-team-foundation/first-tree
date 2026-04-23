@@ -164,8 +164,9 @@ walks away thinking it does.
 6. **Let the dispatch run** — breeze reads the issue body, sees the
    `<!-- gardener:sync-proposal` marker, and invokes `first-tree gardener
    draft-node --issue <n> --tree-repo <slug>`. The CLI opens a tree PR
-   with the proposed NODE.md and labels the issue `breeze:done`. See
-   Scenario G for what that PR looks like and how to review it.
+   with the proposed NODE.md. If it succeeds, breeze then labels the
+   tree-repo issue `breeze:done` from the CLI's `BREEZE_RESULT` line.
+   See Scenario G for what that PR looks like and how to review it.
 
 If any step fails, the pipeline isn't connected — fix that step before
 telling the user onboarding is done.
