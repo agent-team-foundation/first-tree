@@ -211,7 +211,7 @@ describe("openTreePr", () => {
     expect(calls.some((c) => c.command === "gh" && c.args[1] === "merge")).toBe(false);
   });
 
-  it("ignores non-zero exit from gh pr merge (e.g. auto-merge disabled on repo)", async () => {
+  it("treats the 'auto-merge not allowed' error as success (repo hasn't opted in)", async () => {
     const { shell, calls } = recordingShell((c) => {
       if (c.command === "git") return { stdout: "", stderr: "", code: 0 };
       if (c.args[1] === "create") return { stdout: "https://x/pr/9", stderr: "", code: 0 };
@@ -225,5 +225,23 @@ describe("openTreePr", () => {
 
     expect(result).toEqual({ success: true, prUrl: "https://x/pr/9" });
     expect(calls.some((c) => c.command === "gh" && c.args[1] === "merge")).toBe(true);
+  });
+
+  it("surfaces non-disabled gh pr merge failures instead of silently swallowing", async () => {
+    const { shell } = recordingShell((c) => {
+      if (c.command === "git") return { stdout: "", stderr: "", code: 0 };
+      if (c.args[1] === "create") return { stdout: "https://x/pr/11", stderr: "", code: 0 };
+      if (c.args[1] === "merge") {
+        return { stdout: "", stderr: "HTTP 401: Bad credentials", code: 1 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    });
+
+    const result = await openTreePr(shell, "/tree", { branch: "b", title: "t", body: "y" });
+
+    expect(result.success).toBe(false);
+    expect(result.prUrl).toBe("https://x/pr/11");
+    expect(result.error).toContain("gh pr merge --auto failed");
+    expect(result.error).toContain("Bad credentials");
   });
 });

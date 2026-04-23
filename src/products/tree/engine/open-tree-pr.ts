@@ -66,15 +66,45 @@ export async function openTreePr(
     await shellRun("gh", ["pr", "edit", prUrl, ...labelArgs], { cwd: treeRoot, env });
   }
 
-  // Queue GitHub's native auto-merge. No-ops silently when the target
-  // repo has "Allow auto-merge" disabled (the default), so behavior is
-  // unchanged for every repo that hasn't opted in via its Settings page.
+  // Queue GitHub's native auto-merge. Treated as best-effort: repos with
+  // "Allow auto-merge" disabled (the default) emit a specific error
+  // string which we swallow so behavior is unchanged for every repo that
+  // hasn't opted in via its Settings page. Any other failure (auth,
+  // transport, unexpected gh output) is surfaced — otherwise gardener
+  // would report the PR as handled while auto-merge was never queued.
   // See #321.
-  await shellRun(
+  const autoMerge = await shellRun(
     "gh",
     ["pr", "merge", prUrl, "--auto", "--squash", "--delete-branch"],
     { cwd: treeRoot, env },
   );
+  if (autoMerge.code !== 0 && !isAutoMergeDisabledError(autoMerge.stderr)) {
+    return {
+      success: false,
+      prUrl,
+      error: `gh pr merge --auto failed: ${autoMerge.stderr.trim()}`,
+    };
+  }
 
   return { success: true, prUrl };
+}
+
+/**
+ * Recognize the specific gh error surface for "this repo has not
+ * enabled auto-merge." Anything else is a real failure.
+ *
+ * gh/GitHub have used a handful of phrasings across versions. We match
+ * on the narrow set known to indicate disabled-on-repo, not on any
+ * stderr mentioning "auto-merge" — an auth failure message could also
+ * contain the word.
+ */
+function isAutoMergeDisabledError(stderr: string): boolean {
+  const lower = stderr.toLowerCase();
+  return (
+    lower.includes("auto-merge is not allowed")
+    || lower.includes("auto merge is not allowed")
+    || lower.includes("does not allow auto-merge")
+    || lower.includes("pull request auto merge is not allowed")
+    || lower.includes("auto-merge is not enabled")
+  );
 }
