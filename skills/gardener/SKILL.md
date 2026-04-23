@@ -125,15 +125,16 @@ explicitly said they can't push.
 
 | Command | What it does | When to use |
 |---|---|---|
-| `gardener sync --open-issues` | Opens one **issue** per drift proposal on the tree repo, assigned to that node's owners. Breeze on the owner's laptop picks it up → dispatches to `gardener draft-node` → draft-node opens the fix PR. | **Default for multi-owner trees.** This is the routing path — it uses GitHub assignment as the queue and lets each owner's breeze work their own notifications. |
-| `gardener sync --apply` | Opens one **PR** directly on the tree repo with all drift fixes batched together. No issue, no assignment step. | Solo trees, quick-sync demos, or when you want drift fixed without routing. |
+| `gardener sync --open-issues` | Opens one **issue** per drift proposal on the tree repo, assigned to that node's owners. Breeze on the owner's laptop picks it up → dispatches to `gardener draft-node` → draft-node opens the fix PR. Today this is an **operator-run/manual** routing step, not a `gardener start` mode. | **Default for multi-owner trees.** This is the issue-first routing path — use it when you want GitHub assignment to act as the queue, and run it again in **Scenario F** to prove the route end to end. |
+| `gardener start --sync-apply` | Tells the pull-mode daemon's scheduled sync sweep to open one **PR** directly on the tree repo with all drift fixes batched together. No issue, no assignment step. | Solo trees, quick-sync demos, or when you want drift fixed automatically without the issue-first routing hop. |
 
 Once you've picked a routing mode:
 
 1. `export ANTHROPIC_API_KEY=...` in the shell that will start the daemon
    (launchd inherits env at bootstrap time, not at run time).
-2. `gardener start --tree-path . --code-repo <source> --assign-owners`
-   from inside the tree repo — this starts the scheduled drift poller.
+2. Start the gardener daemon from inside the tree repo:
+   - issue-first routing: `gardener start --tree-path . --code-repo <source> --assign-owners`
+   - batched PR routing: `gardener start --tree-path . --code-repo <source> --assign-owners --sync-apply`
 3. **Start breeze with the full allow-list:**
    ```bash
    first-tree breeze start --allow-repo <tree-slug>,<source-slug>
@@ -143,11 +144,12 @@ Once you've picked a routing mode:
    allowlist, stop it first (`first-tree breeze stop`) then start with
    the merged csv; editing `~/.breeze/config.yaml` alone does not update
    the live daemon.
-4. **Verify the source repo is watched on GitHub.** Pull mode relies on
-   GitHub notifications, which only fire if the user is watching the
-   source repo. Open `https://github.com/<source-slug>/subscription` in
-   a browser and confirm "Watching" is selected. Without this, the
-   poller returns empty and nothing ever happens.
+4. **Verify the tree-repo notification path.** The issue-first route in
+   **Scenario F** depends on the assignee receiving GitHub notifications
+   for the tree repo issue that `gardener sync --open-issues` creates.
+   Open `https://github.com/<tree-slug>/subscription` in a browser and
+   confirm the assignee's notification settings will surface that issue
+   on their account.
 5. `gardener status` + `first-tree breeze status` to confirm both are
    live, then run **Scenario F** to watch the full chain execute on a
    real (or synthetic) drift.
@@ -195,8 +197,8 @@ below names the checkpoint so you know exactly where the break is.
    NODE.md in the tree has `owners:` frontmatter naming a GitHub login;
    breeze is installed on the laptop owned by that login; that breeze
    has both the tree and source repos in its `--allow-repo` list; the
-   assignee is watching the tree repo on GitHub (subscription URL
-   above).
+   assignee can receive GitHub notifications for the tree repo issue
+   (subscription URL above).
 2. **Seed a synthetic drift** — if no real drift exists, make a small
    change in the source repo and land it (a merged PR with a commit
    message that mentions something not yet in the tree is enough).
@@ -224,7 +226,8 @@ below names the checkpoint so you know exactly where the break is.
    it. **Checkpoint:** `first-tree breeze inbox` lists the new issue.
    If nothing appears: check `first-tree breeze status`, confirm the
    `--allow-repo` list, confirm `gh auth status` user matches the
-   assignee, confirm the assignee is watching the tree repo.
+   assignee, confirm the tree repo's notification settings are routing
+   the issue to that account.
 6. **Let the draft-node dispatch run** — breeze reads the issue body,
    sees the `<!-- gardener:sync-proposal` marker, and invokes
    ```bash
@@ -240,8 +243,9 @@ below names the checkpoint so you know exactly where the break is.
 
 If any step fails, the pipeline isn't connected — fix that step before
 telling the user onboarding is done. The most common breaks are (a) the
-assignee isn't watching the tree repo, (b) breeze isn't running with
-the tree repo in `--allow-repo`, or (c) the NODE.md has no `owners:`.
+tree repo issue notification never reaches the assignee, (b) breeze
+isn't running with the tree repo in `--allow-repo`, or (c) the NODE.md
+has no `owners:`.
 
 ### Scenario G — review the draft-node PR (close the loop)
 
