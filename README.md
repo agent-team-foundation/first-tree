@@ -127,15 +127,26 @@ Do not assume, guess, or infer either from the current working directory.
 If either answer is missing or ambiguous, stop and re-ask. Only after I've
 confirmed both, proceed.
 
+Prerequisites: `gh` CLI authed (`gh auth status`), `jq` installed,
+Node ≥ 22, and `ANTHROPIC_API_KEY` exported locally.
+
 Then, using those two values:
 
-Run `first-tree tree inspect --json` in the source repo, install the skill,
-and bind it to the tree repo. Install the gardener push-mode workflow
-(`first-tree gardener install-workflow --tree-repo <tree-repo>`) — you will
-walk me through the required `ANTHROPIC_API_KEY` and `TREE_REPO_TOKEN`
-secrets — and start breeze (`first-tree breeze install`) so notifications
-route back to me. Trigger one drift event end-to-end: source PR → tree
-issue → breeze pickup → draft-node PR. Monitor both repos I gave you.
+1. Clone both repos locally if they aren't already, and `cd` into the
+   source repo checkout before running anything else.
+2. Run `first-tree tree inspect --json` in the source repo to confirm
+   classification, then run `first-tree skill install` to install the
+   first-tree skill, and bind to the tree repo with
+   `first-tree tree bind --tree-path <path-to-tree-repo-checkout>`.
+3. From inside the source repo checkout, install the gardener push-mode
+   workflow: `first-tree gardener install-workflow --tree-repo <tree-repo>`.
+   Walk me through the required `ANTHROPIC_API_KEY` and `TREE_REPO_TOKEN`
+   secrets.
+4. Start breeze so notifications route back to me:
+   `first-tree breeze install --allow-repo <source-repo>,<tree-repo>`.
+5. Trigger one drift event end-to-end: source PR → tree issue →
+   breeze pickup → draft-node PR. Monitor both repos I gave you via
+   `gh pr list` / `gh issue list` on each.
 ```
 
 ---
