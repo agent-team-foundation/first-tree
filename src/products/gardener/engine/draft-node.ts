@@ -153,6 +153,36 @@ const MARKER_RE =
   /<!--\s*gardener:sync-proposal\s+([^>]+?)\s*-->/;
 
 /**
+ * Normalize the `node=<path>` field from a sync-proposal marker.
+ *
+ * Earlier gardener versions wrote the marker's `node=` as the tree
+ * directory path (`product/task-system/stale-execution-lock-recovery`),
+ * but a later change started emitting the trailing `/NODE.md`
+ * (`…/stale-execution-lock-recovery/NODE.md`). draft-node always appends
+ * `NODE.md` before writing, which silently produced the doubled
+ * `…/NODE.md/NODE.md` path seen on paperclip-tree#336.
+ *
+ * Treat both forms as equivalent: the marker names a node directory,
+ * and draft-node is the single authority on where `NODE.md` lives
+ * inside it. Strips optional trailing `/NODE.md` (case-insensitive on
+ * the filename). Also trims trailing slashes so `join()` behaves.
+ *
+ * Fixes #306.
+ */
+export function normalizeMarkerNode(raw: string | undefined): string {
+  if (!raw) return "";
+  let out = raw.trim();
+  // Strip a trailing `/NODE.md` (case-insensitive on the basename).
+  const withoutNodeMd = out.replace(/\/NODE\.md\/*$/iu, "");
+  if (withoutNodeMd !== out) {
+    out = withoutNodeMd;
+  }
+  // Trim any remaining trailing slashes.
+  out = out.replace(/\/+$/u, "");
+  return out;
+}
+
+/**
  * Parse the `<!-- gardener:sync-proposal · k=v · k=v … -->` marker.
  * Returns null when no marker is present or required fields are
  * missing. Field order-insensitive; accepts the middle-dot separator
@@ -172,7 +202,7 @@ export function parseProposalMarker(body: string): ProposalMarker | null {
   }
   const proposalId = fields.proposal_id;
   const sourceSha = fields.source_sha;
-  const node = fields.node;
+  const node = normalizeMarkerNode(fields.node);
   if (!proposalId || !node) return null;
   return {
     proposalId,
