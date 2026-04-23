@@ -221,6 +221,15 @@ function makeRecordingShell(
     if (command === "gh" && args[0] === "pr" && args[1] === "edit") {
       return { stdout: "", stderr: "", code: 0 };
     }
+    if (command === "gh" && args[0] === "pr" && args[1] === "merge") {
+      // Simulate a repo without auto-merge enabled (#321). openTreePr
+      // swallows this specific error and reports success.
+      return {
+        stdout: "",
+        stderr: "auto-merge is not allowed for this repository",
+        code: 1,
+      };
+    }
     if (command === "gh" && args[0] === "label") {
       return { stdout: "", stderr: "", code: 0 };
     }

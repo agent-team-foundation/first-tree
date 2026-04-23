@@ -543,6 +543,11 @@ describe("sync -- PR labeling", () => {
         }
         return { stdout: "", stderr: "", code: 0 };
       }
+      if (command === "gh" && args[0] === "pr" && args[1] === "merge") {
+        // Simulate a repo without auto-merge enabled (#321). openTreePr
+        // swallows this specific error and reports success.
+        return { stdout: "", stderr: "auto-merge is not allowed for this repository", code: 1 };
+      }
       return { stdout: "", stderr: `no mock for ${command} ${args.join(" ")}`, code: 1 };
     };
     const code = await runSync(
@@ -698,6 +703,11 @@ describe("sync -- PR labeling", () => {
         }
         return { stdout: "", stderr: "", code: 0 };
       }
+      if (command === "gh" && args[0] === "pr" && args[1] === "merge") {
+        // Simulate a repo without auto-merge enabled (#321). openTreePr
+        // swallows this specific error and reports success.
+        return { stdout: "", stderr: "auto-merge is not allowed for this repository", code: 1 };
+      }
       return { stdout: "", stderr: `no mock for ${command} ${args.join(" ")}`, code: 1 };
     };
 
@@ -793,6 +803,11 @@ describe("sync -- PR labeling", () => {
         labelArgsCaptured = [...args];
         return { stdout: "", stderr: "", code: 0 };
       }
+      if (command === "gh" && args[0] === "pr" && args[1] === "merge") {
+        // Simulate a repo without auto-merge enabled (#321). openTreePr
+        // swallows this specific error and reports success.
+        return { stdout: "", stderr: "auto-merge is not allowed for this repository", code: 1 };
+      }
       return { stdout: "", stderr: `no mock for ${command} ${args.join(" ")}`, code: 1 };
     };
     const code = await runSync(
@@ -885,6 +900,11 @@ describe("sync -- PR labeling", () => {
           return { stdout: "", stderr: "", code: 1 };
         }
         return { stdout: "", stderr: "", code: 0 };
+      }
+      if (command === "gh" && args[0] === "pr" && args[1] === "merge") {
+        // Simulate a repo without auto-merge enabled (#321). openTreePr
+        // swallows this specific error and reports success.
+        return { stdout: "", stderr: "auto-merge is not allowed for this repository", code: 1 };
       }
       return { stdout: "", stderr: `no mock for ${command} ${args.join(" ")}`, code: 1 };
     };
@@ -993,6 +1013,11 @@ describe("sync -- PR labeling", () => {
         }
         return { stdout: "", stderr: "", code: 0 };
       }
+      if (command === "gh" && args[0] === "pr" && args[1] === "merge") {
+        // Simulate a repo without auto-merge enabled (#321). openTreePr
+        // swallows this specific error and reports success.
+        return { stdout: "", stderr: "auto-merge is not allowed for this repository", code: 1 };
+      }
       return { stdout: "", stderr: `no mock for ${command} ${args.join(" ")}`, code: 1 };
     };
     const code = await runSync(
@@ -1093,6 +1118,11 @@ describe("sync -- PR labeling", () => {
           stderr: "",
           code: 0,
         };
+      }
+      if (command === "gh" && args[0] === "pr" && args[1] === "merge") {
+        // Simulate a repo without auto-merge enabled (#321). openTreePr
+        // swallows this specific error and reports success.
+        return { stdout: "", stderr: "auto-merge is not allowed for this repository", code: 1 };
       }
       return { stdout: "", stderr: `no mock for ${command} ${args.join(" ")}`, code: 1 };
     };
@@ -1225,6 +1255,11 @@ describe("sync -- PR labeling", () => {
         }
         return { stdout: "", stderr: "", code: 0 };
       }
+      if (command === "gh" && args[0] === "pr" && args[1] === "merge") {
+        // Simulate a repo without auto-merge enabled (#321). openTreePr
+        // swallows this specific error and reports success.
+        return { stdout: "", stderr: "auto-merge is not allowed for this repository", code: 1 };
+      }
       return { stdout: "", stderr: `no mock for ${command} ${args.join(" ")}`, code: 1 };
     };
     const code = await runSync(
@@ -1342,6 +1377,11 @@ describe("sync -- PR labeling", () => {
           return { stdout: "", stderr: "", code: 1 };
         }
         return { stdout: "", stderr: "", code: 0 };
+      }
+      if (command === "gh" && args[0] === "pr" && args[1] === "merge") {
+        // Simulate a repo without auto-merge enabled (#321). openTreePr
+        // swallows this specific error and reports success.
+        return { stdout: "", stderr: "auto-merge is not allowed for this repository", code: 1 };
       }
       return { stdout: "", stderr: `no mock for ${command} ${args.join(" ")}`, code: 1 };
     };
@@ -1471,6 +1511,11 @@ describe("sync -- PR labeling", () => {
         }
         return { stdout: "", stderr: "", code: 0 };
       }
+      if (command === "gh" && args[0] === "pr" && args[1] === "merge") {
+        // Simulate a repo without auto-merge enabled (#321). openTreePr
+        // swallows this specific error and reports success.
+        return { stdout: "", stderr: "auto-merge is not allowed for this repository", code: 1 };
+      }
       return { stdout: "", stderr: `no mock for ${command} ${args.join(" ")}`, code: 1 };
     };
     const code = await runSync(
@@ -1570,6 +1615,11 @@ describe("sync -- PR labeling", () => {
           stderr: "",
           code: 0,
         };
+      }
+      if (command === "gh" && args[0] === "pr" && args[1] === "merge") {
+        // Simulate a repo without auto-merge enabled (#321). openTreePr
+        // swallows this specific error and reports success.
+        return { stdout: "", stderr: "auto-merge is not allowed for this repository", code: 1 };
       }
       return { stdout: "", stderr: `no mock for ${command} ${args.join(" ")}`, code: 1 };
     };
@@ -1686,6 +1736,11 @@ describe("sync -- PR labeling", () => {
           return { stdout: "", stderr: "", code: 1 };
         }
         return { stdout: "", stderr: "", code: 0 };
+      }
+      if (command === "gh" && args[0] === "pr" && args[1] === "merge") {
+        // Simulate a repo without auto-merge enabled (#321). openTreePr
+        // swallows this specific error and reports success.
+        return { stdout: "", stderr: "auto-merge is not allowed for this repository", code: 1 };
       }
       return { stdout: "", stderr: `no mock for ${command} ${args.join(" ")}`, code: 1 };
     };
@@ -1812,6 +1867,11 @@ describe("sync -- PR labeling", () => {
         }
         return { stdout: "", stderr: "", code: 0 };
       }
+      if (command === "gh" && args[0] === "pr" && args[1] === "merge") {
+        // Simulate a repo without auto-merge enabled (#321). openTreePr
+        // swallows this specific error and reports success.
+        return { stdout: "", stderr: "auto-merge is not allowed for this repository", code: 1 };
+      }
       return { stdout: "", stderr: `no mock for ${command} ${args.join(" ")}`, code: 1 };
     };
 
@@ -1919,6 +1979,11 @@ describe("sync -- PR labeling", () => {
           return { stdout: "", stderr: "", code: 1 };
         }
         return { stdout: "", stderr: "", code: 0 };
+      }
+      if (command === "gh" && args[0] === "pr" && args[1] === "merge") {
+        // Simulate a repo without auto-merge enabled (#321). openTreePr
+        // swallows this specific error and reports success.
+        return { stdout: "", stderr: "auto-merge is not allowed for this repository", code: 1 };
       }
       return { stdout: "", stderr: `no mock for ${command} ${args.join(" ")}`, code: 1 };
     };
@@ -2077,6 +2142,11 @@ describe("sync -- PR labeling", () => {
         }
         return { stdout: "", stderr: "", code: 0 };
       }
+      if (command === "gh" && args[0] === "pr" && args[1] === "merge") {
+        // Simulate a repo without auto-merge enabled (#321). openTreePr
+        // swallows this specific error and reports success.
+        return { stdout: "", stderr: "auto-merge is not allowed for this repository", code: 1 };
+      }
       return { stdout: "", stderr: `no mock for ${command} ${args.join(" ")}`, code: 1 };
     };
 
@@ -2228,6 +2298,11 @@ describe("sync -- PR labeling", () => {
         }
         return { stdout: "", stderr: "", code: 0 };
       }
+      if (command === "gh" && args[0] === "pr" && args[1] === "merge") {
+        // Simulate a repo without auto-merge enabled (#321). openTreePr
+        // swallows this specific error and reports success.
+        return { stdout: "", stderr: "auto-merge is not allowed for this repository", code: 1 };
+      }
       return { stdout: "", stderr: `no mock for ${command} ${args.join(" ")}`, code: 1 };
     };
 
@@ -2355,6 +2430,11 @@ describe("sync -- PR labeling", () => {
         }
         return { stdout: "", stderr: "", code: 0 };
       }
+      if (command === "gh" && args[0] === "pr" && args[1] === "merge") {
+        // Simulate a repo without auto-merge enabled (#321). openTreePr
+        // swallows this specific error and reports success.
+        return { stdout: "", stderr: "auto-merge is not allowed for this repository", code: 1 };
+      }
       return { stdout: "", stderr: `no mock for ${command} ${args.join(" ")}`, code: 1 };
     };
 
@@ -2437,6 +2517,11 @@ describe("sync -- PR labeling", () => {
       if (command === "git") {
         if (args[0] === "symbolic-ref") return { stdout: "main\n", stderr: "", code: 0 };
         return { stdout: "", stderr: "", code: 0 };
+      }
+      if (command === "gh" && args[0] === "pr" && args[1] === "merge") {
+        // Simulate a repo without auto-merge enabled (#321). openTreePr
+        // swallows this specific error and reports success.
+        return { stdout: "", stderr: "auto-merge is not allowed for this repository", code: 1 };
       }
       return { stdout: "", stderr: `no mock for ${command} ${args.join(" ")}`, code: 1 };
     };
