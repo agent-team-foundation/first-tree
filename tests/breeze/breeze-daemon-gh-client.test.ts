@@ -102,8 +102,8 @@ describe("GhClient.recentNotifications", () => {
     ctl.setResponses([
       {
         stdout: [
-          "owner/repo\tPullRequest\tmention\tHello\thttps://api.github.com/repos/owner/repo/pulls/7\t\t2026-04-15T12:00:00Z",
-          "other/repo\tIssue\tmention\tSkip\thttps://api.github.com/repos/other/repo/issues/3\t\t2026-04-15T12:00:00Z",
+          "owner/repo\tPullRequest\tmention\tHello\thttps://api.github.com/repos/owner/repo/pulls/7\t\t2026-04-15T12:00:00Z\t1",
+          "other/repo\tIssue\tmention\tSkip\thttps://api.github.com/repos/other/repo/issues/3\t\t2026-04-15T12:00:00Z\t1",
         ].join("\n"),
       },
     ]);
@@ -119,7 +119,7 @@ describe("GhClient.recentNotifications", () => {
     expect(tasks[0].kind).toBe("mention");
     // Assert the argv sent to gh contains the paginate + notifications endpoint.
     expect(ctl.calls[0].args).toContain("--paginate");
-    expect(ctl.calls[0].args).toContain("/notifications?participating=true&per_page=100");
+    expect(ctl.calls[0].args).toContain("/notifications?all=true&participating=false&per_page=100");
   });
 
   it("drops lines that predate the lookback window", async () => {
@@ -127,7 +127,7 @@ describe("GhClient.recentNotifications", () => {
     ctl.setResponses([
       {
         stdout:
-          "owner/repo\tPullRequest\tmention\tOld\thttps://api.github.com/repos/owner/repo/pulls/7\t\t2026-04-01T00:00:00Z",
+          "owner/repo\tPullRequest\tmention\tOld\thttps://api.github.com/repos/owner/repo/pulls/7\t\t2026-04-01T00:00:00Z\t1",
       },
     ]);
     const client = new GhClient({
@@ -138,6 +138,28 @@ describe("GhClient.recentNotifications", () => {
     const now = Date.UTC(2026, 3, 15, 12, 0, 0) / 1000;
     const tasks = await client.recentNotifications(now, 60);
     expect(tasks).toEqual([]);
+  });
+
+  it("drops hidden notifications but keeps read actionable threads with a subject type", async () => {
+    const { executor, ctl } = makeStubExecutor();
+    ctl.setResponses([
+      {
+        stdout: [
+          "owner/repo\t\tmention\tFiltered\t\t\t2026-04-15T12:00:00Z\t0",
+          "owner/repo\tPullRequest\tmanual\tKeep\thttps://api.github.com/repos/owner/repo/pulls/9\t\t2026-04-15T12:00:00Z\t0",
+        ].join("\n"),
+      },
+    ]);
+    const client = new GhClient({
+      host: "github.com",
+      repoFilter: RepoFilter.empty(),
+      executor,
+    });
+    const now = Date.UTC(2026, 3, 15, 12, 0, 0) / 1000;
+    const tasks = await client.recentNotifications(now, 120);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].reason).toBe("manual");
+    expect(tasks[0].threadKey).toBe("/repos/owner/repo/pulls/9");
   });
 });
 

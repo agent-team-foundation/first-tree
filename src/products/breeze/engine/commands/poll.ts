@@ -41,6 +41,7 @@ import { loadBreezeConfig } from "../runtime/config.js";
 import { GhClient, GhExecError } from "../runtime/gh.js";
 import { resolveBreezePaths } from "../runtime/paths.js";
 import { updateInbox } from "../runtime/store.js";
+import { isServerFilteredNotification } from "../runtime/task-util.js";
 import {
   type GhState,
   type Inbox,
@@ -74,7 +75,7 @@ function formatUtcIso(date: Date): string {
   return `${date.toISOString().slice(0, 19)}Z`;
 }
 
-/** Raw GitHub notification as returned by `/notifications?participating=true`. */
+/** Raw GitHub notification as returned by `/notifications?all=true`. */
 interface RawNotification {
   id?: string;
   reason?: string;
@@ -158,6 +159,8 @@ export function parseNotifications(
       if (typeof id !== "string" || id.length === 0) continue;
       if (seenIds.has(id)) continue;
       const subjectType = item.subject?.type ?? "";
+      const unread = Boolean(item.unread);
+      if (isServerFilteredNotification(unread, subjectType)) continue;
       if (subjectType === "CheckSuite" || subjectType === "Commit") continue;
       const repo = item.repository?.full_name ?? "";
       if (!repo) continue;
@@ -166,7 +169,6 @@ export function parseNotifications(
       const url = item.subject?.url ?? "";
       const lastActor = item.subject?.latest_comment_url ?? url ?? "";
       const updatedAt = item.updated_at ?? "";
-      const unread = Boolean(item.unread);
       const number =
         typeof url === "string" ? extractTrailingNumber(url) : null;
       const htmlUrl = htmlUrlFor(host, repo, subjectType, number);
@@ -554,9 +556,10 @@ export async function runPoll(
   try {
     const stdout = gh.runChecked("fetch notifications", [
       "api",
-      // See #251: `all=true` bypassed GitHub's spam filter. `participating=true`
-      // restricts to direct-participation notifications.
-      "/notifications?participating=true",
+      // Keep the broad feed so breeze still sees recent actionable read
+      // notifications; `parseNotifications` drops only the hidden-thread
+      // signature from #251 (`unread=false` with no `subject.type`).
+      "/notifications?all=true",
       "--paginate",
       "-H",
       "X-GitHub-Api-Version: 2022-11-28",

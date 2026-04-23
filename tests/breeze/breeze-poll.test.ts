@@ -199,6 +199,31 @@ describe("parseNotifications", () => {
     expect(entries[0].number).toBe(null);
     expect(entries[0].priority).toBe(5);
   });
+
+  it("drops hidden notifications but keeps read actionable threads with a subject type", () => {
+    const raw = `[
+      {
+        "id": "30",
+        "subject": { "title": "filtered", "url": null },
+        "repository": { "full_name": "o/r" },
+        "reason": "mention",
+        "updated_at": "2026-04-16T10:00:00Z",
+        "unread": false
+      },
+      {
+        "id": "31",
+        "subject": { "type": "PullRequest", "title": "keep", "url": "https://api.github.com/repos/o/r/pulls/9" },
+        "repository": { "full_name": "o/r" },
+        "reason": "manual",
+        "updated_at": "2026-04-16T10:01:00Z",
+        "unread": false
+      }
+    ]`;
+    const entries = parseNotifications([raw], "github.com");
+    expect(entries.map((entry) => entry.id)).toEqual(["31"]);
+    expect(entries[0].reason).toBe("manual");
+    expect(entries[0].html_url).toBe("https://github.com/o/r/pull/9");
+  });
 });
 
 describe("sortEntries", () => {

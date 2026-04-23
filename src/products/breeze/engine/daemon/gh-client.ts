@@ -38,6 +38,7 @@ import {
 } from "../runtime/task.js";
 import {
   canonicalApiPath,
+  isServerFilteredNotification,
   isRecentGithubTimestamp,
   parseTsvLine,
   shellQuote,
@@ -83,15 +84,15 @@ export class GhClient {
     lookbackSecs: number,
   ): Promise<TaskCandidate[]> {
     const jq =
-      '.[] | [(.repository.full_name // ""), (.subject.type // ""), (.reason // ""), (.subject.title // ""), (.subject.url // ""), (.latest_comment_url // ""), (.updated_at // "")] | @tsv';
+      '.[] | [(.repository.full_name // ""), (.subject.type // ""), (.reason // ""), (.subject.title // ""), (.subject.url // ""), (.latest_comment_url // ""), (.updated_at // ""), (if .unread then "1" else "0" end)] | @tsv';
     const stdout = await this.runChecked(
       "read recent notifications",
       [
         "api",
-        // See #251: `all=true&participating=false` bypassed GitHub's server-side
-        // spam filter and let breeze act on mention-then-delete notifications.
-        // `participating=true` restricts to direct-participation notifications.
-        "/notifications?participating=true&per_page=100",
+        // Keep the broader feed so breeze still sees recent actionable read
+        // notifications; drop only the hidden-thread signature from #251 in
+        // the client-side parser instead of narrowing the whole reason set.
+        "/notifications?all=true&participating=false&per_page=100",
         "--paginate",
         "-H",
         "X-GitHub-Api-Version: 2022-11-28",
@@ -104,11 +105,14 @@ export class GhClient {
     for (const line of stdout.split("\n")) {
       if (line.trim().length === 0) continue;
       const fields = parseTsvLine(line);
-      if (fields.length < 7) continue;
+      if (fields.length < 8) continue;
+      const subjectType = fields[1];
+      const unread = fields[7] === "1";
+      if (isServerFilteredNotification(unread, subjectType)) continue;
       const candidate = buildNotificationCandidate({
         host: this.host,
         repo: fields[0],
-        subjectType: fields[1],
+        subjectType,
         reason: fields[2],
         title: fields[3],
         apiUrl: fields[4],

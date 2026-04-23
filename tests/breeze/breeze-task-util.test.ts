@@ -5,6 +5,7 @@ import {
   decodeMultiline,
   encodeMultiline,
   fnv1a64,
+  isServerFilteredNotification,
   isRecentGithubTimestamp,
   parseGithubTimestampEpoch,
   parseKvLines,
@@ -108,5 +109,17 @@ describe("parseGithubTimestampEpoch / isRecentGithubTimestamp", () => {
     expect(
       isRecentGithubTimestamp("2026-04-15T11:57:00Z", now, 120),
     ).toBe(false);
+  });
+});
+
+describe("isServerFilteredNotification", () => {
+  it("drops the hidden-thread signature from #251", () => {
+    expect(isServerFilteredNotification(false, "")).toBe(true);
+    expect(isServerFilteredNotification(false, "   ")).toBe(true);
+  });
+
+  it("keeps normal read and unread notifications with a subject type", () => {
+    expect(isServerFilteredNotification(false, "PullRequest")).toBe(false);
+    expect(isServerFilteredNotification(true, "")).toBe(false);
   });
 });

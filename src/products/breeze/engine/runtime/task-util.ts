@@ -192,6 +192,18 @@ export function isRecentGithubTimestamp(
   return ts >= Math.max(0, nowEpoch - lookbackSecs);
 }
 
+/**
+ * #251: `GET /notifications?all=true` can surface notifications GitHub already
+ * hid from the inbox UI. Keep normal read threads, and only drop the
+ * conservative hidden-thread signature observed in the incident data.
+ */
+export function isServerFilteredNotification(
+  unread: boolean,
+  subjectType: string,
+): boolean {
+  return !unread && subjectType.trim().length === 0;
+}
+
 function isLeapYear(year: number): boolean {
   return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
 }
