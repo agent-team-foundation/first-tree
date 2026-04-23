@@ -119,6 +119,27 @@ describe("gardener draft-node · parseProposalMarker", () => {
     const marker = parseProposalMarker(body);
     expect(marker?.sourceSha).toBe("unknown");
   });
+
+  it("strips a trailing /NODE.md from node= so draft-node does not write the doubled path (#306)", () => {
+    const body =
+      "<!-- gardener:sync-proposal · proposal_id=19aeb0ab73f4 · source_sha=unknown · node=product/task-system/stale-execution-lock-recovery/NODE.md -->";
+    const marker = parseProposalMarker(body);
+    expect(marker?.node).toBe("product/task-system/stale-execution-lock-recovery");
+  });
+
+  it("leaves node= unchanged when it does not end in /NODE.md", () => {
+    const body =
+      "<!-- gardener:sync-proposal · proposal_id=ab · source_sha=cd · node=engineering/backend/auth -->";
+    const marker = parseProposalMarker(body);
+    expect(marker?.node).toBe("engineering/backend/auth");
+  });
+
+  it("strips trailing slashes too", () => {
+    const body =
+      "<!-- gardener:sync-proposal · proposal_id=ab · source_sha=cd · node=engineering/backend/auth/ -->";
+    const marker = parseProposalMarker(body);
+    expect(marker?.node).toBe("engineering/backend/auth");
+  });
 });
 
 describe("gardener draft-node · extractProposedContent", () => {
