@@ -235,7 +235,12 @@ gardener as needed.
 
 ### 6.4 Verify End-To-End
 
-Trigger one drift event:
+Do the short manual trigger first, then optionally run a real source-PR
+trigger to prove the full automatic chain.
+
+**6.4.a — Manual trigger (fast, ~1 min).** Fires gardener directly, so
+you can confirm credentials and the tree side of the chain without
+waiting on GitHub's notification delivery:
 
 ```bash
 TREE_REPO_TOKEN=$(gh auth token) \
@@ -253,6 +258,70 @@ Expect, in order:
 
 Report each step to the user as it happens. If any step is silent for
 more than a couple of minutes, check `first-tree breeze doctor`.
+
+**6.4.b — Real source-PR trigger (optional, ~5 min).** This is what the
+end-to-end pitch promises: a source-repo PR flows through breeze into a
+draft-node PR on the tree repo, no manual gardener invocation. Only do
+this once 6.4.a is green — it adds GitHub's notification latency on top
+of everything else, so if 6.4.a is broken, this step will just look
+silent.
+
+1. Run the whole block from inside the source-repo checkout so every
+   command hits the smoke repo, not your current cwd:
+
+   ```bash
+   cd <source-repo-checkout>
+   git checkout -b first-tree-smoke/drift-demo
+   echo "# drift demo $(date -u +%FT%TZ)" >> README.md
+   git commit -am "chore: first-tree drift-demo smoke"
+   git push -u origin first-tree-smoke/drift-demo
+   gh pr create --repo <source-repo> --fill --head first-tree-smoke/drift-demo
+   ```
+
+2. Watch breeze pick it up:
+
+   ```bash
+   first-tree breeze watch        # live TUI: status board + activity feed
+   # or: first-tree breeze status # one-shot snapshot
+   ```
+
+   Within one GitHub polling cycle (default 60 s), a new entry for the
+   smoke PR should appear. Breeze classifies it under its task-kind
+   taxonomy (`review_request`, `comment`, `mention`, `assigned_*`, etc.)
+   — which kind depends on how the PR notifies you (self-authored PRs
+   come in via the participation channel, not as a review request).
+   What matters is that a row for the new PR shows up; the exact kind
+   is informational.
+
+3. Confirm gardener responded on the source PR:
+
+   ```bash
+   gh pr view <pr-url> --repo <source-repo> --comments
+   ```
+
+   A gardener verdict comment should be present (or a
+   `first-tree:skipped` label if the classifier deemed the PR off-topic
+   — still a successful chain).
+
+4. Merge or close the smoke PR to clean up. If the PR was merged, a
+   draft-node PR will appear on the tree repo; reviewing it is Scenario
+   G in the gardener skill.
+
+If breeze never picks up the PR, walk the real gates in order:
+
+- **No source-PR notification at all.** `gh api /notifications` should
+  list the smoke PR. If it doesn't, the gh auth context isn't seeing it
+  — check `gh auth status` and confirm you're authed as the user who
+  opened the PR. Breeze polls `/notifications?participating=true`, so
+  the notification has to exist on the user's timeline for breeze to
+  see it. (Source-repo watch subscription is *not* the gate here: PR
+  authorship alone triggers participation.)
+- **Notification exists, breeze shows nothing.** The source repo is
+  probably outside the breeze allowlist. `first-tree breeze status`
+  prints the active `--allow-repo` scope; re-run `breeze install
+  --allow-repo <source>,<tree>` if it's missing.
+- **Breeze picked it up but no gardener action.** Check
+  `first-tree breeze doctor` for runtime + auth errors.
 
 ### Opting Modules Out (Rare)
 
