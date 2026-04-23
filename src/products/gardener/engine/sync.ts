@@ -1312,12 +1312,12 @@ async function pushAndCreatePrsParallel(
   return { successes, failures, prUrls };
 }
 
-interface DriftReportLike {
+export interface DriftReportLike {
   binding: { sourceId: string };
   ownerRepo: OwnerRepo;
 }
 
-interface ClassifiedPrLike {
+export interface ClassifiedPrLike {
   pr: {
     number: number | null;
     title: string | null;
@@ -1327,7 +1327,7 @@ interface ClassifiedPrLike {
   filtered: ClassificationItem[];
 }
 
-interface RunOpenIssuesInput {
+export interface RunOpenIssuesInput {
   drift: DriftReportLike;
   classifiedPrs: ClassifiedPrLike[];
   treeRoot: string;
