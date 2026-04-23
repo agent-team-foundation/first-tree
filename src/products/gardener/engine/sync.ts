@@ -283,6 +283,22 @@ function findExistingMemberDirByAuthorLogin(
   return matches[0] ?? null;
 }
 
+function dedupeOwners(owners: Iterable<string>): string[] {
+  const seen = new Set<string>();
+  const resolved: string[] = [];
+  for (const owner of owners) {
+    const cleaned = owner.replace(/^@+/, "").trim();
+    if (cleaned === "") continue;
+    const normalized = normalizeGitHubLogin(cleaned);
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    resolved.push(cleaned);
+  }
+  return resolved;
+}
+
+// Apply path (writing a new NODE.md): use node owners and fall back to the
+// PR author so the newly drafted node isn't ownerless.
 function resolveProposalOwners(
   treeRoot: string,
   targetDir: string,
@@ -292,18 +308,18 @@ function resolveProposalOwners(
   if (authorLogin) {
     combined.push(authorLogin);
   }
+  return dedupeOwners(combined);
+}
 
-  const seen = new Set<string>();
-  const resolved: string[] = [];
-  for (const owner of combined) {
-    const cleaned = owner.replace(/^@+/, "").trim();
-    if (cleaned === "") continue;
-    const normalized = normalizeGitHubLogin(cleaned);
-    if (seen.has(normalized)) continue;
-    seen.add(normalized);
-    resolved.push(cleaned);
-  }
-  return resolved;
+// --open-issues path: assignees must come from NODE.md owners only. If the
+// node has no `owners:`, we want `needs-owner` to fire — we must not silently
+// fall back to the PR author (that would mask the signal that #280 aims to
+// surface).
+function resolveIssueAssignees(
+  treeRoot: string,
+  targetDir: string,
+): string[] {
+  return dedupeOwners(resolveNodeOwners(targetDir, treeRoot, new Map()));
 }
 
 interface CommitSummary {
@@ -1372,7 +1388,7 @@ export function buildSyncProposalBody(params: {
     ? `**Source PR:** ${sourceRepo}#${sourcePr}${sourcePrTitle ? ` \u2014 ${sourcePrTitle}` : ""}`
     : `**Source:** ${sourceRepo} (unlinked commits)`;
   const ownerNote = needsOwner
-    ? `_No \`owners:\` on the affected node — assigned the tree-repo default as a fallback. Label \`needs-owner\` flags this for triage._\n\n`
+    ? `_No \`owners:\` on the affected node — filing unassigned. Label \`needs-owner\` flags this for manual triage; add owners to the NODE.md frontmatter and re-run sync for auto-routing._\n\n`
     : autoAssigned
       ? `_Assigned to node owners from the affected NODE.md. First assignee to pick this up drafts a tree PR and links it back in a comment._\n\n`
       : "";
@@ -1406,20 +1422,6 @@ async function resolveTreeSlug(
   if (res.code !== 0) return null;
   const slug = res.stdout.trim();
   return slug.length > 0 ? slug : null;
-}
-
-async function resolveTreeDefaultOwner(
-  shellRun: ShellRun,
-  treeSlug: string,
-): Promise<string | null> {
-  const res = await shellRun(
-    "gh",
-    ["api", `/repos/${treeSlug}`, "-q", ".owner.login"],
-    {},
-  );
-  if (res.code !== 0) return null;
-  const login = res.stdout.trim();
-  return login.length > 0 ? login : null;
 }
 
 async function existingProposalIssueUrl(
@@ -1473,12 +1475,6 @@ export async function runOpenIssuesMode(
   }
   const sourceRepo = `${drift.ownerRepo.owner}/${drift.ownerRepo.repo}`;
   const tokenEnv: NodeJS.ProcessEnv = { ...process.env, GH_TOKEN: treeRepoToken };
-  let cachedDefaultOwner: string | null | undefined;
-  const resolveDefaultOwner = async (): Promise<string | null> => {
-    if (cachedDefaultOwner !== undefined) return cachedDefaultOwner;
-    cachedDefaultOwner = await resolveTreeDefaultOwner(shellRun, treeSlug);
-    return cachedDefaultOwner;
-  };
 
   let created = 0;
   let skipped = 0;
@@ -1501,34 +1497,23 @@ export async function runOpenIssuesMode(
         continue;
       }
       const absDir = join(treeRoot, proposal.path);
-      const owners = resolveProposalOwners(
-        treeRoot,
-        absDir,
-        classified.pr.authorLogin,
-      );
-      let assignees = owners;
-      let needsOwner = false;
-      if (assignees.length === 0) {
-        const defaultOwner = await resolveDefaultOwner();
-        if (defaultOwner) {
-          assignees = [defaultOwner];
-          needsOwner = true;
-        }
-      }
+      let assignees = resolveIssueAssignees(treeRoot, absDir);
+      let needsOwner = assignees.length === 0;
 
-      const body = buildSyncProposalBody({
-        proposal,
-        proposalId,
-        sourceRepo,
-        sourcePr: classified.pr.number,
-        sourcePrTitle: classified.pr.title,
-        sourceSha: classified.pr.mergeCommitSha
-          ? classified.pr.mergeCommitSha.slice(0, 7)
-          : null,
-        autoAssigned: assignees.length > 0,
-        needsOwner,
-      });
       const title = `[gardener] ${proposal.suggested_node_title || proposal.path}`;
+      const currentBody = (): string =>
+        buildSyncProposalBody({
+          proposal,
+          proposalId,
+          sourceRepo,
+          sourcePr: classified.pr.number,
+          sourcePrTitle: classified.pr.title,
+          sourceSha: classified.pr.mergeCommitSha
+            ? classified.pr.mergeCommitSha.slice(0, 7)
+            : null,
+          autoAssigned: assignees.length > 0,
+          needsOwner,
+        });
 
       if (dryRun) {
         console.log(
@@ -1542,21 +1527,20 @@ export async function runOpenIssuesMode(
 
       const labels = ["first-tree:sync-proposal", "gardener"];
       if (needsOwner) labels.push("needs-owner");
-      const baseArgs = [
-        "issue",
-        "create",
-        "--repo",
-        treeSlug,
-        "--title",
-        title,
-        "--body",
-        body,
-      ];
       const buildArgs = (opts: {
         withAssignees: boolean;
         withLabels: boolean;
       }): string[] => {
-        const out = [...baseArgs];
+        const out = [
+          "issue",
+          "create",
+          "--repo",
+          treeSlug,
+          "--title",
+          title,
+          "--body",
+          currentBody(),
+        ];
         if (opts.withAssignees && assignees.length > 0) {
           out.push("--assignee", assignees.join(","));
         }

@@ -71,7 +71,8 @@ Each person runs their own breeze against their own notifications.
    not done with onboarding until breeze has surfaced at least one real
    gardener notification.
 
-See **Scenario F — try it end-to-end** below for the smoke test.
+See **Scenario F — try it end-to-end** below for the smoke test, then
+**Scenario G — review the draft-node PR** for closing the loop.
 
 ### Scenario A — fresh: no tree repo yet
 
@@ -160,11 +161,42 @@ walks away thinking it does.
    interval (default 30s). If nothing appears: check `breeze status`,
    confirm the `--allow-repo` list, confirm the logged-in `gh auth
    status` user matches the assignee.
-6. **Let the dispatch run** — breeze dispatches `gardener draft-node`
-   (gap #2, once shipped) or prints the dispatch intent for now.
+6. **Let the dispatch run** — breeze reads the issue body, sees the
+   `<!-- gardener:sync-proposal` marker, and invokes `first-tree gardener
+   draft-node --issue <n> --tree-repo <slug>`. The CLI opens a tree PR
+   with the proposed NODE.md. If it succeeds, breeze then labels the
+   tree-repo issue `breeze:done` from the CLI's `BREEZE_RESULT` line.
+   See Scenario G for what that PR looks like and how to review it.
 
 If any step fails, the pipeline isn't connected — fix that step before
 telling the user onboarding is done.
+
+### Scenario G — review the draft-node PR (close the loop)
+
+After Scenario F lands, a tree PR branch named
+`first-tree/draft-node-<proposal_id>` appears on the tree repo. This is
+where the human reviews the machine-drafted NODE.md before it merges.
+
+1. **Open the PR** — the breeze task comment links to it; otherwise list
+   the tree repo's open PRs and look for a `[gardener] draft <node>`
+   title or a `first-tree/draft-node-<proposal_id>` head branch.
+2. **Read the diff** — the PR body links back to the source issue
+   (`Closes <tree-slug>#<n> on merge.`) and shows the source SHA or
+   source PR. The NODE.md content was copied verbatim from the issue
+   body; draft-node does not synthesize or summarize.
+3. **Edit in-place** — push fixups to the same branch if the proposal
+   needs correction; do **not** rewrite the tree by hand in a separate
+   PR. Keeping edits on the draft-node branch preserves the link to the
+   original proposal for later audits.
+4. **Merge** — squash-merge via `gh pr merge --squash`. The tree issue
+   closes automatically via the `Closes` directive.
+5. **Re-run sync** — next sync of that source SHA should report no
+   drift on that node. If it still does, the proposal didn't address
+   all drift spans; open a fresh proposal rather than amending.
+
+If `draft-node` skips because the issue body has no `### Proposed node
+content` section (common on merged-PR variants), hand-edit the tree
+from the issue's summary links instead.
 
 ### Always: restart breeze last
 
@@ -255,6 +287,7 @@ breeze's notification dispatch.
 | `first-tree gardener sync` | Detect drift between the tree and its bound source repos. Writes proposals under `.first-tree/proposals/`, edits tree files, commits to a new branch in the tree repo, and opens a PR labeled `first-tree:sync`. Phases: `--propose` detects + writes proposals, `--apply` also writes new tree files and opens the PR, default is detect-only. Moved from `first-tree tree sync`. |
 | `first-tree gardener comment` | Review a source-repo PR or issue against the tree and post a structured verdict comment. Scan mode (no `--pr`/`--issue`) walks every **open** PR and issue. The merge→tree-issue branch only fires on a single MERGED PR with a prior gardener marker (single-item invocation), and requires `TREE_REPO_TOKEN`. Pass `--assign-owners` to auto-assign NODE owners on the tree issue. |
 | `first-tree gardener respond` | Acknowledge reviewer feedback on a sync PR (Phase 5: real edit orchestrator for `parent_subdomain_missing` + planner seam — see [#160](https://github.com/agent-team-foundation/first-tree/issues/160) / [#219](https://github.com/agent-team-foundation/first-tree/issues/219); unsupported patterns fall back to a placeholder reply). |
+| `first-tree gardener draft-node` | Consume a tree-repo issue carrying the `gardener:sync-proposal` marker (filed by `sync --open-issues` or `comment` on a merged PR), copy the proposed NODE.md onto a deterministic `first-tree/draft-node-<proposal_id>` branch, and open a tree PR for human review. Invoked by breeze when the assignee is the breeze identity; not typically run by hand. Requires `TREE_REPO_TOKEN`. |
 | `first-tree gardener daemon` | Foreground loop invoked by `start`. Not intended for direct human use. |
 
 For full options on any command, run `first-tree gardener <command> --help`.
