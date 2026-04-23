@@ -418,9 +418,17 @@ describe("sync --open-issues · runOpenIssuesMode", () => {
     ) => Promise<{ code: number; stdout: string; stderr: string }>;
     dryRun?: boolean;
     token?: string | null;
+    assigneeOverride?: string;
+    nodeOwners?: string;
   }
 
-  async function runWithHarness({ shell, dryRun = false, token = "tree-token" }: RunArgs) {
+  async function runWithHarness({
+    shell,
+    dryRun = false,
+    token = "tree-token",
+    assigneeOverride,
+    nodeOwners = "owners: [alice]",
+  }: RunArgs) {
     const previousToken = process.env.TREE_REPO_TOKEN;
     if (token === null) {
       delete process.env.TREE_REPO_TOKEN;
@@ -432,7 +440,7 @@ describe("sync --open-issues · runOpenIssuesMode", () => {
     mkdirSync(nodeDir, { recursive: true });
     writeFileSync(
       join(nodeDir, "NODE.md"),
-      "---\ntitle: \"Auth\"\nowners: [alice]\n---\n\nBody.\n",
+      `---\ntitle: "Auth"\n${nodeOwners}\n---\n\nBody.\n`,
     );
     const calls: Array<{ command: string; args: string[]; envToken?: string }> = [];
     try {
@@ -462,6 +470,7 @@ describe("sync --open-issues · runOpenIssuesMode", () => {
           return shell(command, args, options);
         },
         dryRun,
+        assigneeOverride,
       });
       return { exitCode, calls };
     } finally {
@@ -601,4 +610,58 @@ describe("sync --open-issues · runOpenIssuesMode", () => {
     expect(exitCode).toBe(1);
     expect(calls).toHaveLength(0);
   });
+
+  it("--assignee override replaces NODE.md owners and drops needs-owner (#302)", async () => {
+    const { exitCode, calls } = await runWithHarness({
+      assigneeOverride: "serenakeyitan",
+      shell: async (_cmd, args) => {
+        if (args[0] === "repo" && args[1] === "view") {
+          return { code: 0, stdout: "org/tree\n", stderr: "" };
+        }
+        if (args[0] === "issue" && args[1] === "list") {
+          return { code: 0, stdout: "[]", stderr: "" };
+        }
+        if (args[0] === "issue" && args[1] === "create") {
+          return { code: 0, stdout: "https://github.com/org/tree/issues/1\n", stderr: "" };
+        }
+        return { code: 1, stdout: "", stderr: `unexpected: ${args.join(" ")}` };
+      },
+    });
+    expect(exitCode).toBe(0);
+    const createCall = calls.find((c) => c.args[0] === "issue" && c.args[1] === "create");
+    expect(createCall).toBeDefined();
+    const assigneeIdx = createCall!.args.indexOf("--assignee");
+    expect(assigneeIdx).toBeGreaterThan(-1);
+    expect(createCall!.args[assigneeIdx + 1]).toBe("serenakeyitan");
+    const labelIdx = createCall!.args.indexOf("--label");
+    expect(labelIdx).toBeGreaterThan(-1);
+    expect(createCall!.args[labelIdx + 1]).not.toContain("needs-owner");
+  });
+
+  it("--assignee override applies even when NODE.md has no owners (#302)", async () => {
+    const { exitCode, calls } = await runWithHarness({
+      assigneeOverride: "serenakeyitan",
+      nodeOwners: "owners: []",
+      shell: async (_cmd, args) => {
+        if (args[0] === "repo" && args[1] === "view") {
+          return { code: 0, stdout: "org/tree\n", stderr: "" };
+        }
+        if (args[0] === "issue" && args[1] === "list") {
+          return { code: 0, stdout: "[]", stderr: "" };
+        }
+        if (args[0] === "issue" && args[1] === "create") {
+          return { code: 0, stdout: "https://github.com/org/tree/issues/1\n", stderr: "" };
+        }
+        return { code: 1, stdout: "", stderr: `unexpected: ${args.join(" ")}` };
+      },
+    });
+    expect(exitCode).toBe(0);
+    const createCall = calls.find((c) => c.args[0] === "issue" && c.args[1] === "create");
+    expect(createCall).toBeDefined();
+    const assigneeIdx = createCall!.args.indexOf("--assignee");
+    expect(createCall!.args[assigneeIdx + 1]).toBe("serenakeyitan");
+    const labelIdx = createCall!.args.indexOf("--label");
+    expect(createCall!.args[labelIdx + 1]).not.toContain("needs-owner");
+  });
 });
+
