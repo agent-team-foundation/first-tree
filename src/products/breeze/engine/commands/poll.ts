@@ -74,7 +74,7 @@ function formatUtcIso(date: Date): string {
   return `${date.toISOString().slice(0, 19)}Z`;
 }
 
-/** Raw GitHub notification as returned by `/notifications?all=true`. */
+/** Raw GitHub notification as returned by `/notifications?participating=true`. */
 interface RawNotification {
   id?: string;
   reason?: string;
@@ -554,7 +554,9 @@ export async function runPoll(
   try {
     const stdout = gh.runChecked("fetch notifications", [
       "api",
-      "/notifications?all=true",
+      // See #251: `all=true` bypassed GitHub's spam filter. `participating=true`
+      // restricts to direct-participation notifications.
+      "/notifications?participating=true",
       "--paginate",
       "-H",
       "X-GitHub-Api-Version: 2022-11-28",
