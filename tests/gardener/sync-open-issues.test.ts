@@ -601,4 +601,155 @@ describe("sync --open-issues · runOpenIssuesMode", () => {
     expect(exitCode).toBe(1);
     expect(calls).toHaveLength(0);
   });
+
+  it("seeds gardener labels on the tree repo before the first issue create (#303)", async () => {
+    const previousToken = process.env.TREE_REPO_TOKEN;
+    process.env.TREE_REPO_TOKEN = "tree-token";
+
+    const treeRoot = mkdtempSync(
+      join(tmpdir(), "first-tree-sync-open-issues-label-seed-"),
+    );
+    mkdirSync(join(treeRoot, baseProposal.path), { recursive: true });
+
+    const labelCreateCalls: string[][] = [];
+    const issueCreateCalls: string[][] = [];
+
+    try {
+      const exitCode = await runOpenIssuesMode({
+        drift: {
+          binding: { sourceId: "acme-web" },
+          ownerRepo: { owner: "acme", repo: "web" },
+        },
+        classifiedPrs: [{
+          pr: {
+            number: 42,
+            title: "Split auth",
+            mergeCommitSha: "deadbeefcafebabe",
+            authorLogin: "octocat",
+          },
+          filtered: [baseProposal],
+        }],
+        treeRoot,
+        shellRun: async (command, args) => {
+          if (command !== "gh") {
+            return { code: 1, stdout: "", stderr: `unexpected command: ${command}` };
+          }
+          if (args[0] === "repo" && args[1] === "view") {
+            return { code: 0, stdout: "agent-team-foundation/first-tree-context\n", stderr: "" };
+          }
+          if (args[0] === "label" && args[1] === "create") {
+            labelCreateCalls.push([...args]);
+            return { code: 0, stdout: "", stderr: "" };
+          }
+          if (args[0] === "issue" && args[1] === "list") {
+            return { code: 0, stdout: "[]", stderr: "" };
+          }
+          if (args[0] === "issue" && args[1] === "create") {
+            issueCreateCalls.push([...args]);
+            return {
+              code: 0,
+              stdout: "https://github.com/agent-team-foundation/first-tree-context/issues/999\n",
+              stderr: "",
+            };
+          }
+          return { code: 1, stdout: "", stderr: `unexpected gh args: ${args.join(" ")}` };
+        },
+        dryRun: false,
+      });
+
+      expect(exitCode).toBe(0);
+
+      const seededLabelNames = labelCreateCalls.map((args) => args[2]);
+      expect(seededLabelNames).toContain("first-tree:sync-proposal");
+      expect(seededLabelNames).toContain("gardener");
+      expect(seededLabelNames).toContain("needs-owner");
+
+      expect(issueCreateCalls).toHaveLength(1);
+      const issueArgs = issueCreateCalls[0];
+      const labelIdx = issueArgs.indexOf("--label");
+      expect(labelIdx).toBeGreaterThanOrEqual(0);
+      expect(issueArgs[labelIdx + 1]).toContain("first-tree:sync-proposal");
+    } finally {
+      rmSync(treeRoot, { recursive: true, force: true });
+      if (previousToken === undefined) {
+        delete process.env.TREE_REPO_TOKEN;
+      } else {
+        process.env.TREE_REPO_TOKEN = previousToken;
+      }
+    }
+  });
+
+  it("treats 'label already exists' on seed as success and still applies labels on issue create (#303)", async () => {
+    const previousToken = process.env.TREE_REPO_TOKEN;
+    process.env.TREE_REPO_TOKEN = "tree-token";
+
+    const treeRoot = mkdtempSync(
+      join(tmpdir(), "first-tree-sync-open-issues-label-exists-"),
+    );
+    mkdirSync(join(treeRoot, baseProposal.path), { recursive: true });
+
+    const issueCreateCalls: string[][] = [];
+
+    try {
+      const exitCode = await runOpenIssuesMode({
+        drift: {
+          binding: { sourceId: "acme-web" },
+          ownerRepo: { owner: "acme", repo: "web" },
+        },
+        classifiedPrs: [{
+          pr: {
+            number: 42,
+            title: "Split auth",
+            mergeCommitSha: "deadbeefcafebabe",
+            authorLogin: "octocat",
+          },
+          filtered: [baseProposal],
+        }],
+        treeRoot,
+        shellRun: async (command, args) => {
+          if (command !== "gh") {
+            return { code: 1, stdout: "", stderr: `unexpected command: ${command}` };
+          }
+          if (args[0] === "repo" && args[1] === "view") {
+            return { code: 0, stdout: "agent-team-foundation/first-tree-context\n", stderr: "" };
+          }
+          if (args[0] === "label" && args[1] === "create") {
+            return {
+              code: 1,
+              stdout: "",
+              stderr: "HTTP 422: Validation Failed (already exists)",
+            };
+          }
+          if (args[0] === "issue" && args[1] === "list") {
+            return { code: 0, stdout: "[]", stderr: "" };
+          }
+          if (args[0] === "issue" && args[1] === "create") {
+            issueCreateCalls.push([...args]);
+            return {
+              code: 0,
+              stdout: "https://github.com/agent-team-foundation/first-tree-context/issues/1000\n",
+              stderr: "",
+            };
+          }
+          return { code: 1, stdout: "", stderr: `unexpected gh args: ${args.join(" ")}` };
+        },
+        dryRun: false,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(issueCreateCalls).toHaveLength(1);
+      const issueArgs = issueCreateCalls[0];
+      expect(issueArgs).toContain("--label");
+      // First attempt should carry the label — no retry-without-label was needed.
+      const labelIdx = issueArgs.indexOf("--label");
+      expect(issueArgs[labelIdx + 1]).toContain("first-tree:sync-proposal");
+    } finally {
+      rmSync(treeRoot, { recursive: true, force: true });
+      if (previousToken === undefined) {
+        delete process.env.TREE_REPO_TOKEN;
+      } else {
+        process.env.TREE_REPO_TOKEN = previousToken;
+      }
+    }
+  });
 });
