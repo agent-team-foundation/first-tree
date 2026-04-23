@@ -1500,19 +1500,20 @@ export async function runOpenIssuesMode(
       let assignees = resolveIssueAssignees(treeRoot, absDir);
       let needsOwner = assignees.length === 0;
 
-      const body = buildSyncProposalBody({
-        proposal,
-        proposalId,
-        sourceRepo,
-        sourcePr: classified.pr.number,
-        sourcePrTitle: classified.pr.title,
-        sourceSha: classified.pr.mergeCommitSha
-          ? classified.pr.mergeCommitSha.slice(0, 7)
-          : null,
-        autoAssigned: assignees.length > 0,
-        needsOwner,
-      });
       const title = `[gardener] ${proposal.suggested_node_title || proposal.path}`;
+      const currentBody = (): string =>
+        buildSyncProposalBody({
+          proposal,
+          proposalId,
+          sourceRepo,
+          sourcePr: classified.pr.number,
+          sourcePrTitle: classified.pr.title,
+          sourceSha: classified.pr.mergeCommitSha
+            ? classified.pr.mergeCommitSha.slice(0, 7)
+            : null,
+          autoAssigned: assignees.length > 0,
+          needsOwner,
+        });
 
       if (dryRun) {
         console.log(
@@ -1526,21 +1527,20 @@ export async function runOpenIssuesMode(
 
       const labels = ["first-tree:sync-proposal", "gardener"];
       if (needsOwner) labels.push("needs-owner");
-      const baseArgs = [
-        "issue",
-        "create",
-        "--repo",
-        treeSlug,
-        "--title",
-        title,
-        "--body",
-        body,
-      ];
       const buildArgs = (opts: {
         withAssignees: boolean;
         withLabels: boolean;
       }): string[] => {
-        const out = [...baseArgs];
+        const out = [
+          "issue",
+          "create",
+          "--repo",
+          treeSlug,
+          "--title",
+          title,
+          "--body",
+          currentBody(),
+        ];
         if (opts.withAssignees && assignees.length > 0) {
           out.push("--assignee", assignees.join(","));
         }

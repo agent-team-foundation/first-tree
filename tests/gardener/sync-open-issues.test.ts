@@ -311,4 +311,99 @@ describe("sync --open-issues · runOpenIssuesMode", () => {
       }
     }
   });
+
+  it("rebuilds the issue body after the assignee-strip retry so needs-owner is reflected in body copy too", async () => {
+    const previousToken = process.env.TREE_REPO_TOKEN;
+    process.env.TREE_REPO_TOKEN = "tree-token";
+
+    const treeRoot = mkdtempSync(join(tmpdir(), "first-tree-sync-open-issues-body-rebuild-"));
+    const nodeDir = join(treeRoot, baseProposal.path);
+    mkdirSync(nodeDir, { recursive: true });
+    // NODE.md has a real owner — initial create will attempt --assignee.
+    writeFileSync(
+      join(nodeDir, "NODE.md"),
+      "---\ntitle: \"Auth service\"\nowners: [not-a-collaborator]\n---\n\nBody.\n",
+    );
+
+    const createCalls: string[][] = [];
+
+    try {
+      const exitCode = await runOpenIssuesMode({
+        drift: {
+          binding: { sourceId: "acme-web" },
+          ownerRepo: { owner: "acme", repo: "web" },
+        },
+        classifiedPrs: [{
+          pr: {
+            number: 42,
+            title: "Split auth",
+            mergeCommitSha: "deadbeefcafebabe",
+            authorLogin: "octocat",
+          },
+          filtered: [baseProposal],
+        }],
+        treeRoot,
+        shellRun: async (command, args) => {
+          if (command !== "gh") {
+            return { code: 1, stdout: "", stderr: `unexpected command: ${command}` };
+          }
+          if (args[0] === "repo" && args[1] === "view") {
+            return { code: 0, stdout: "agent-team-foundation/first-tree-context\n", stderr: "" };
+          }
+          if (args[0] === "issue" && args[1] === "list") {
+            return { code: 0, stdout: "[]", stderr: "" };
+          }
+          if (args[0] === "issue" && args[1] === "create") {
+            createCalls.push([...args]);
+            // First attempt: 422 because assignee isn't a collaborator.
+            if (createCalls.length === 1) {
+              return {
+                code: 1,
+                stdout: "",
+                stderr: "Validation Failed: assignee not-a-collaborator is not a collaborator",
+              };
+            }
+            // Retry without --assignee succeeds.
+            return {
+              code: 0,
+              stdout: "https://github.com/agent-team-foundation/first-tree-context/issues/888\n",
+              stderr: "",
+            };
+          }
+          return { code: 1, stdout: "", stderr: `unexpected gh args: ${args.join(" ")}` };
+        },
+        dryRun: false,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(createCalls.length).toBe(2);
+
+      // Initial attempt carried --assignee and a body claiming auto-assignment.
+      const firstArgs = createCalls[0];
+      expect(firstArgs).toContain("--assignee");
+      const firstBody = firstArgs[firstArgs.indexOf("--body") + 1];
+      expect(firstBody.toLowerCase()).toContain("assigned to node owners");
+      expect(firstBody.toLowerCase()).not.toContain("no `owners:`");
+
+      // Retry: --assignee gone, --label includes needs-owner, body rebuilt to
+      // match the final (unassigned / needs-owner) state — no lingering
+      // "assigned to node owners" copy.
+      const retryArgs = createCalls[1];
+      expect(retryArgs).not.toContain("--assignee");
+      const labelIdx = retryArgs.indexOf("--label");
+      expect(labelIdx).toBeGreaterThanOrEqual(0);
+      expect(retryArgs[labelIdx + 1]).toContain("needs-owner");
+      const retryBody = retryArgs[retryArgs.indexOf("--body") + 1];
+      expect(retryBody.toLowerCase()).toContain("no `owners:`");
+      expect(retryBody.toLowerCase()).toContain("filing unassigned");
+      expect(retryBody.toLowerCase()).not.toContain("assigned to node owners");
+    } finally {
+      rmSync(treeRoot, { recursive: true, force: true });
+      if (previousToken === undefined) {
+        delete process.env.TREE_REPO_TOKEN;
+      } else {
+        process.env.TREE_REPO_TOKEN = previousToken;
+      }
+    }
+  });
 });
