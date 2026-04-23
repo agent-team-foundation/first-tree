@@ -235,7 +235,12 @@ gardener as needed.
 
 ### 6.4 Verify End-To-End
 
-Trigger one drift event:
+Do the short manual trigger first, then optionally run a real source-PR
+trigger to prove the full automatic chain.
+
+**6.4.a — Manual trigger (fast, ~1 min).** Fires gardener directly, so
+you can confirm credentials and the tree side of the chain without
+waiting on GitHub's notification delivery:
 
 ```bash
 TREE_REPO_TOKEN=$(gh auth token) \
@@ -253,6 +258,53 @@ Expect, in order:
 
 Report each step to the user as it happens. If any step is silent for
 more than a couple of minutes, check `first-tree breeze doctor`.
+
+**6.4.b — Real source-PR trigger (optional, ~5 min).** This is what the
+end-to-end pitch promises: a source-repo PR flows through breeze into a
+draft-node PR on the tree repo, no manual gardener invocation. Only do
+this once 6.4.a is green — it adds GitHub's notification latency on top
+of everything else, so if 6.4.a is broken, this step will just look
+silent.
+
+1. In the source repo checkout, open a trivial drift-inducing PR:
+
+   ```bash
+   git -C <source-repo-checkout> checkout -b first-tree-smoke/drift-demo
+   echo "# drift demo $(date -u +%FT%TZ)" >> README.md
+   git -C <source-repo-checkout> commit -am "chore: first-tree drift-demo smoke"
+   git -C <source-repo-checkout> push -u origin first-tree-smoke/drift-demo
+   gh pr create --repo <source-repo> --fill --head first-tree-smoke/drift-demo
+   ```
+
+2. Watch breeze pick it up:
+
+   ```bash
+   first-tree breeze watch        # live TUI: status board + activity feed
+   # or: first-tree breeze status # one-shot snapshot
+   ```
+
+   Expect a `source-pr:<N>` entry within one GitHub polling cycle
+   (default 60 s; `first-tree breeze doctor` reports the live interval
+   and auth state if nothing shows up).
+
+3. Confirm gardener responded on the source PR:
+
+   ```bash
+   gh pr view <pr-url> --repo <source-repo> --comments
+   ```
+
+   A gardener verdict comment should be present (or a
+   `first-tree:skipped` label if the classifier deemed the PR off-topic
+   — still a successful chain).
+
+4. Merge or close the smoke PR to clean up. If the PR was merged, a
+   draft-node PR will appear on the tree repo; reviewing it is Scenario
+   G in the gardener skill.
+
+Report each observed step. If breeze never picks up the PR, the two
+common causes are (a) GitHub watch subscription missing on the source
+repo (Step 6.2), or (b) the breeze allowlist did not include this
+source repo — check `first-tree breeze status`.
 
 ### Opting Modules Out (Rare)
 
