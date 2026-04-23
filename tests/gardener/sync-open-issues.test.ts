@@ -7,6 +7,9 @@ import {
   computeProposalId,
   runOpenIssuesMode,
   type ClassificationItem,
+  type ClassifiedPrLike,
+  type DriftReportLike,
+  type RunOpenIssuesInput,
 } from "#products/gardener/engine/sync.js";
 
 const baseProposal: ClassificationItem = {
@@ -405,5 +408,186 @@ describe("sync --open-issues · runOpenIssuesMode", () => {
         process.env.TREE_REPO_TOKEN = previousToken;
       }
     }
+  });
+
+  interface RunArgs {
+    shell: (
+      command: string,
+      args: string[],
+      options: { env?: NodeJS.ProcessEnv },
+    ) => Promise<{ code: number; stdout: string; stderr: string }>;
+    dryRun?: boolean;
+    token?: string | null;
+  }
+
+  async function runWithHarness({ shell, dryRun = false, token = "tree-token" }: RunArgs) {
+    const previousToken = process.env.TREE_REPO_TOKEN;
+    if (token === null) {
+      delete process.env.TREE_REPO_TOKEN;
+    } else {
+      process.env.TREE_REPO_TOKEN = token;
+    }
+    const treeRoot = mkdtempSync(join(tmpdir(), "first-tree-sync-open-issues-"));
+    const nodeDir = join(treeRoot, baseProposal.path);
+    mkdirSync(nodeDir, { recursive: true });
+    writeFileSync(
+      join(nodeDir, "NODE.md"),
+      "---\ntitle: \"Auth\"\nowners: [\"alice\"]\n---\n\nBody.\n",
+    );
+    const calls: Array<{ command: string; args: string[]; envToken?: string }> = [];
+    try {
+      const exitCode = await runOpenIssuesMode({
+        drift: {
+          binding: { sourceId: "acme-web" },
+          ownerRepo: { owner: "acme", repo: "web" },
+        },
+        classifiedPrs: [
+          {
+            pr: {
+              number: 42,
+              title: "Split auth",
+              mergeCommitSha: "deadbeefcafebabe",
+              authorLogin: "octocat",
+            },
+            filtered: [baseProposal],
+          },
+        ],
+        treeRoot,
+        shellRun: async (command, args, options = {}) => {
+          calls.push({
+            command,
+            args: [...args],
+            envToken: options.env?.GH_TOKEN,
+          });
+          return shell(command, args, options);
+        },
+        dryRun,
+      });
+      return { exitCode, calls };
+    } finally {
+      rmSync(treeRoot, { recursive: true, force: true });
+      if (previousToken === undefined) {
+        delete process.env.TREE_REPO_TOKEN;
+      } else {
+        process.env.TREE_REPO_TOKEN = previousToken;
+      }
+    }
+  }
+
+  it("happy path: one `gh issue create` call with proposal_id in body and GH_TOKEN threaded", async () => {
+    const { exitCode, calls } = await runWithHarness({
+      shell: async (_cmd, args) => {
+        if (args[0] === "repo" && args[1] === "view") {
+          return { code: 0, stdout: "agent-team-foundation/tree\n", stderr: "" };
+        }
+        if (args[0] === "issue" && args[1] === "list") {
+          return { code: 0, stdout: "[]", stderr: "" };
+        }
+        if (args[0] === "issue" && args[1] === "create") {
+          return { code: 0, stdout: "https://github.com/org/tree/issues/1\n", stderr: "" };
+        }
+        return { code: 1, stdout: "", stderr: `unexpected: ${args.join(" ")}` };
+      },
+    });
+    expect(exitCode).toBe(0);
+    const createCalls = calls.filter((c) => c.args[0] === "issue" && c.args[1] === "create");
+    expect(createCalls).toHaveLength(1);
+    const createCall = createCalls[0];
+    expect(createCall.envToken).toBe("tree-token");
+    const bodyIdx = createCall.args.indexOf("--body");
+    expect(bodyIdx).toBeGreaterThan(-1);
+    expect(createCall.args[bodyIdx + 1]).toContain("proposal_id=");
+    expect(createCall.args).toContain("first-tree:sync-proposal,gardener");
+  });
+
+  it("retries without --label when gh rejects unknown labels (422)", async () => {
+    let createAttempts = 0;
+    const { exitCode, calls } = await runWithHarness({
+      shell: async (_cmd, args) => {
+        if (args[0] === "repo" && args[1] === "view") {
+          return { code: 0, stdout: "org/tree\n", stderr: "" };
+        }
+        if (args[0] === "issue" && args[1] === "list") {
+          return { code: 0, stdout: "[]", stderr: "" };
+        }
+        if (args[0] === "issue" && args[1] === "create") {
+          createAttempts += 1;
+          if (createAttempts === 1) {
+            return { code: 1, stdout: "", stderr: "422 Unprocessable: label not found" };
+          }
+          return { code: 0, stdout: "https://github.com/org/tree/issues/1\n", stderr: "" };
+        }
+        return { code: 1, stdout: "", stderr: `unexpected: ${args.join(" ")}` };
+      },
+    });
+    expect(exitCode).toBe(0);
+    const createCalls = calls.filter((c) => c.args[0] === "issue" && c.args[1] === "create");
+    expect(createCalls).toHaveLength(2);
+    expect(createCalls[0].args).toContain("--label");
+    expect(createCalls[1].args).not.toContain("--label");
+  });
+
+  it("retries without --assignee and adds needs-owner when assignee is rejected (422)", async () => {
+    // Attempt 1 (with --label + --assignee) fails 422 → code tries label-strip first.
+    // Attempt 2 (with --assignee, no --label) still fails 422 on assignee → code strips assignee.
+    // Attempt 3 (no --assignee, with --label including needs-owner) succeeds.
+    let createAttempts = 0;
+    const { exitCode, calls } = await runWithHarness({
+      shell: async (_cmd, args) => {
+        if (args[0] === "repo" && args[1] === "view") {
+          return { code: 0, stdout: "org/tree\n", stderr: "" };
+        }
+        if (args[0] === "issue" && args[1] === "list") {
+          return { code: 0, stdout: "[]", stderr: "" };
+        }
+        if (args[0] === "issue" && args[1] === "create") {
+          createAttempts += 1;
+          if (createAttempts <= 2) {
+            return {
+              code: 1,
+              stdout: "",
+              stderr: "422 Unprocessable: assignee not a collaborator",
+            };
+          }
+          return { code: 0, stdout: "https://github.com/org/tree/issues/1\n", stderr: "" };
+        }
+        return { code: 1, stdout: "", stderr: `unexpected: ${args.join(" ")}` };
+      },
+    });
+    expect(exitCode).toBe(0);
+    const createCalls = calls.filter((c) => c.args[0] === "issue" && c.args[1] === "create");
+    expect(createCalls).toHaveLength(3);
+    const retry = createCalls[2];
+    expect(retry.args).not.toContain("--assignee");
+    const labelIdx = retry.args.indexOf("--label");
+    expect(labelIdx).toBeGreaterThan(-1);
+    expect(retry.args[labelIdx + 1]).toContain("needs-owner");
+  });
+
+  it("dry-run skips `gh issue create` but still resolves the tree slug", async () => {
+    const { exitCode, calls } = await runWithHarness({
+      dryRun: true,
+      shell: async (_cmd, args) => {
+        if (args[0] === "repo" && args[1] === "view") {
+          return { code: 0, stdout: "org/tree\n", stderr: "" };
+        }
+        if (args[0] === "issue" && args[1] === "list") {
+          return { code: 0, stdout: "[]", stderr: "" };
+        }
+        return { code: 1, stdout: "", stderr: `unexpected: ${args.join(" ")}` };
+      },
+    });
+    expect(exitCode).toBe(0);
+    expect(calls.some((c) => c.args[0] === "repo" && c.args[1] === "view")).toBe(true);
+    expect(calls.some((c) => c.args[0] === "issue" && c.args[1] === "create")).toBe(false);
+  });
+
+  it("fails fast when TREE_REPO_TOKEN is unset", async () => {
+    const { exitCode, calls } = await runWithHarness({
+      token: null,
+      shell: async () => ({ code: 1, stdout: "", stderr: "should not be called" }),
+    });
+    expect(exitCode).toBe(1);
+    expect(calls).toHaveLength(0);
   });
 });
