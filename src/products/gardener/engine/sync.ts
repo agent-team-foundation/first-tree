@@ -1526,6 +1526,54 @@ async function existingProposalIssueUrl(
   }
 }
 
+/**
+ * Detect GitHub rate-limit errors surfaced by `gh`. Covers both the
+ * REST "rate limit exceeded" wording and the GraphQL "API rate limit
+ * already exceeded" wording reported in #304.
+ */
+export function isRateLimitError(stderr: string): boolean {
+  if (!stderr) return false;
+  const s = stderr.toLowerCase();
+  return (
+    s.includes("rate limit") ||
+    s.includes("api rate limit") ||
+    s.includes("secondary rate limit") ||
+    s.includes("abuse detection") ||
+    s.includes("429")
+  );
+}
+
+/**
+ * Fixes #304: run a single `gh issue create` invocation with
+ * exponential backoff on GitHub rate-limit errors. A 44-proposal run
+ * was losing 35 of 44 issues to back-to-back 429s with no recovery;
+ * per-call backoff keeps the run alive long enough for the existing
+ * proposal_id idempotency to handle any true failures on re-run.
+ */
+export async function runWithRateLimitBackoff(
+  shellRun: ShellRun,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  opts: { maxRetries?: number; baseDelayMs?: number; sleep?: (ms: number) => Promise<void> } = {},
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  const maxRetries = opts.maxRetries ?? 4;
+  const baseDelayMs = opts.baseDelayMs ?? 30_000;
+  const sleep =
+    opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  let res = await shellRun("gh", args, { env });
+  for (let attempt = 0; attempt < maxRetries; attempt += 1) {
+    if (res.code === 0) return res;
+    if (!isRateLimitError(res.stderr || "")) return res;
+    const waitMs = baseDelayMs * Math.pow(2, attempt);
+    console.log(
+      `⚠ rate-limited by GitHub (${(res.stderr || "").split("\n")[0] || "no stderr"}). Sleeping ${Math.round(waitMs / 1000)}s before retry ${attempt + 1}/${maxRetries}.`,
+    );
+    await sleep(waitMs);
+    res = await shellRun("gh", args, { env });
+  }
+  return res;
+}
+
 export async function runOpenIssuesMode(
   input: RunOpenIssuesInput,
 ): Promise<number> {
@@ -1625,10 +1673,10 @@ export async function runOpenIssuesMode(
         return out;
       };
 
-      let res = await shellRun(
-        "gh",
+      let res = await runWithRateLimitBackoff(
+        shellRun,
         buildArgs({ withAssignees: true, withLabels: true }),
-        { env: tokenEnv },
+        tokenEnv,
       );
       if (res.code !== 0) {
         // `gh` 422 on unknown labels — retry without labels so the
@@ -1638,10 +1686,10 @@ export async function runOpenIssuesMode(
           console.log(
             `\u26A0 label rejected on ${treeSlug} (${stderr.split("\n")[0] || "422"}) \u2014 retrying without --label`,
           );
-          res = await shellRun(
-            "gh",
+          res = await runWithRateLimitBackoff(
+            shellRun,
             buildArgs({ withAssignees: true, withLabels: false }),
-            { env: tokenEnv },
+            tokenEnv,
           );
         }
       }
@@ -1656,10 +1704,10 @@ export async function runOpenIssuesMode(
           assignees = [];
           needsOwner = true;
           if (!labels.includes("needs-owner")) labels.push("needs-owner");
-          res = await shellRun(
-            "gh",
+          res = await runWithRateLimitBackoff(
+            shellRun,
             buildArgs({ withAssignees: false, withLabels: true }),
-            { env: tokenEnv },
+            tokenEnv,
           );
           if (res.code !== 0) {
             const stderr2 = res.stderr || "";
@@ -1667,10 +1715,10 @@ export async function runOpenIssuesMode(
               console.log(
                 `\u26A0 label rejected on ${treeSlug} after assignee retry \u2014 retrying without --label`,
               );
-              res = await shellRun(
-                "gh",
+              res = await runWithRateLimitBackoff(
+                shellRun,
                 buildArgs({ withAssignees: false, withLabels: false }),
-                { env: tokenEnv },
+                tokenEnv,
               );
             }
           }

@@ -5,7 +5,9 @@ import { describe, expect, it } from "vitest";
 import {
   buildSyncProposalBody,
   computeProposalId,
+  isRateLimitError,
   runOpenIssuesMode,
+  runWithRateLimitBackoff,
   type ClassificationItem,
   type ClassifiedPrLike,
   type DriftReportLike,
@@ -751,5 +753,89 @@ describe("sync --open-issues · runOpenIssuesMode", () => {
         process.env.TREE_REPO_TOKEN = previousToken;
       }
     }
+  });
+});
+
+describe("sync --open-issues · rate-limit backoff (#304)", () => {
+  it("recognises GraphQL 'API rate limit already exceeded' as a rate-limit error", () => {
+    expect(
+      isRateLimitError(
+        "GraphQL: API rate limit already exceeded for user ID 94026305.",
+      ),
+    ).toBe(true);
+  });
+
+  it("recognises 'secondary rate limit' and 429 as rate-limit errors", () => {
+    expect(isRateLimitError("You have exceeded a secondary rate limit")).toBe(true);
+    expect(isRateLimitError("HTTP 429: Too Many Requests")).toBe(true);
+  });
+
+  it("does not misclassify non-rate-limit errors (422, network)", () => {
+    expect(isRateLimitError("422 Unprocessable: label not found")).toBe(false);
+    expect(isRateLimitError("network unreachable")).toBe(false);
+    expect(isRateLimitError("")).toBe(false);
+  });
+
+  it("runWithRateLimitBackoff retries on rate-limit then succeeds (#304)", async () => {
+    const calls: Array<{ args: string[] }> = [];
+    const sleeps: number[] = [];
+    let attempt = 0;
+    const res = await runWithRateLimitBackoff(
+      async (_cmd, args) => {
+        calls.push({ args: [...args] });
+        attempt += 1;
+        if (attempt <= 2) {
+          return {
+            code: 1,
+            stdout: "",
+            stderr: "GraphQL: API rate limit already exceeded for user ID 1.",
+          };
+        }
+        return { code: 0, stdout: "https://x/issues/1\n", stderr: "" };
+      },
+      ["issue", "create", "--repo", "org/tree", "--title", "T", "--body", "B"],
+      {},
+      {
+        baseDelayMs: 1,
+        sleep: async (ms) => {
+          sleeps.push(ms);
+        },
+      },
+    );
+    expect(res.code).toBe(0);
+    expect(calls).toHaveLength(3);
+    // Exponential: 1ms, 2ms between the 3 attempts.
+    expect(sleeps).toEqual([1, 2]);
+  });
+
+  it("runWithRateLimitBackoff returns non-rate-limit errors immediately (no retry)", async () => {
+    let attempts = 0;
+    const res = await runWithRateLimitBackoff(
+      async () => {
+        attempts += 1;
+        return { code: 1, stdout: "", stderr: "422 Unprocessable: label not found" };
+      },
+      ["issue", "create"],
+      {},
+      { baseDelayMs: 1, sleep: async () => {} },
+    );
+    expect(res.code).toBe(1);
+    expect(attempts).toBe(1);
+  });
+
+  it("runWithRateLimitBackoff gives up after maxRetries on persistent rate-limit", async () => {
+    let attempts = 0;
+    const res = await runWithRateLimitBackoff(
+      async () => {
+        attempts += 1;
+        return { code: 1, stdout: "", stderr: "API rate limit already exceeded" };
+      },
+      ["issue", "create"],
+      {},
+      { maxRetries: 2, baseDelayMs: 1, sleep: async () => {} },
+    );
+    expect(res.code).toBe(1);
+    // initial attempt + 2 retries = 3.
+    expect(attempts).toBe(3);
   });
 });
