@@ -2,8 +2,7 @@
  * Phase 4: TS port of `gh.rs`.
  *
  * `GhClient` wraps a `GhExecutor` with the GitHub-specific query set
- * (notifications, direct review requests, required-review backlog,
- * assigned issues/PRs) and the snapshot-hydration path
+ * (notifications, direct review requests) and the snapshot-hydration path
  * (`writeTaskSnapshot`). Rate limiting + write-cooldown are handled
  * entirely by the executor; this module only builds argv.
  *
@@ -424,7 +423,7 @@ export class GhClient {
 
   /**
    * Top-level candidate producer used by the dispatcher. Runs the
-   * notification poll and (optionally) the three search/list queries,
+   * notification poll and (optionally) the direct review-request search,
    * aggregates, de-dups by thread_key, sorts.
    */
   async collectCandidates(options: {
@@ -464,23 +463,6 @@ export class GhClient {
         poll.warnings.push(`review search: ${message.trim()}`);
       }
 
-      try {
-        const tasks = await this.requiredReviewBacklog(options.limit);
-        poll.tasks.push(...tasks);
-      } catch (err) {
-        const message = errMessage(err);
-        if (isRateLimitError(message)) poll.searchRateLimited = true;
-        poll.warnings.push(`review backlog: ${message.trim()}`);
-      }
-
-      try {
-        const tasks = await this.assignedItems(options.limit);
-        poll.tasks.push(...tasks);
-      } catch (err) {
-        const message = errMessage(err);
-        if (isRateLimitError(message)) poll.searchRateLimited = true;
-        poll.warnings.push(`assignment search: ${message.trim()}`);
-      }
     }
 
     poll.tasks = poll.tasks.filter(

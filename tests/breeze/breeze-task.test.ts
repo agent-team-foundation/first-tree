@@ -88,7 +88,7 @@ describe("buildNotificationCandidate", () => {
       host: "github.com",
       repo: "o/r",
       subjectType: "Issue",
-      reason: "comment",
+      reason: "mention",
       title: "t",
       apiUrl: "https://api.github.com/repos/o/r/issues/7",
       latestCommentApiUrl: "",

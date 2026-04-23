@@ -139,6 +139,27 @@ describe("GhClient.recentNotifications", () => {
     const tasks = await client.recentNotifications(now, 60);
     expect(tasks).toEqual([]);
   });
+
+  it("drops notification reasons that are not explicit mentions or review requests", async () => {
+    const { executor, ctl } = makeStubExecutor();
+    ctl.setResponses([
+      {
+        stdout: [
+          "owner/repo\tPullRequest\tcomment\tHello\thttps://api.github.com/repos/owner/repo/pulls/7\t\t2026-04-15T12:00:00Z",
+          "owner/repo\tIssue\tauthor\tMine\thttps://api.github.com/repos/owner/repo/issues/3\t\t2026-04-15T12:00:00Z",
+          "owner/repo\tIssue\tassign\tAssigned\thttps://api.github.com/repos/owner/repo/issues/4\t\t2026-04-15T12:00:00Z",
+        ].join("\n"),
+      },
+    ]);
+    const client = new GhClient({
+      host: "github.com",
+      repoFilter: RepoFilter.parseCsv("owner/*"),
+      executor,
+    });
+    const now = Date.UTC(2026, 3, 15, 12, 0, 0) / 1000;
+    const tasks = await client.recentNotifications(now, 120);
+    expect(tasks).toEqual([]);
+  });
 });
 
 describe("GhClient.reviewRequests / assignedItems", () => {
@@ -344,7 +365,7 @@ describe("GhClient.collectCandidates", () => {
     expect(poll.searchRateLimited).toBe(true);
   });
 
-  it("adds required-review backlog when review-requested search is empty", async () => {
+  it("does not add review backlog or assigned-search tasks when direct review search is empty", async () => {
     const { executor, ctl } = makeStubExecutor();
     ctl.setResponder((spec) => {
       if (spec.args[0] === "api") return { stdout: "" };
@@ -374,18 +395,13 @@ describe("GhClient.collectCandidates", () => {
       nowEpoch: now,
       lookbackSecs: 3600,
     });
-    expect(poll.tasks).toEqual([
-      buildRequiredReviewCandidate({
-        repo: "o/r",
-        number: 11,
-        title: "Review me later",
-        webUrl: "https://github.com/o/r/pull/11",
-        updatedAt: "2026-04-15T12:00:00Z",
-      }),
-    ]);
+    expect(poll.tasks).toEqual([]);
     expect(
       ctl.calls.some((call) => call.args[0] === "pr" && call.args[1] === "list"),
-    ).toBe(true);
+    ).toBe(false);
+    expect(
+      ctl.calls.some((call) => call.args[0] === "search" && call.args[1] === "issues"),
+    ).toBe(false);
   });
 });
 
