@@ -11,6 +11,7 @@ import {
 import { cleanWorkspaces, FirstTreeHubSDK, SdkError, SessionRegistry } from "@first-tree-hub/client";
 import type { Command } from "commander";
 import { fail, success } from "../cli/output.js";
+import { resolveReplyToFromEnv } from "../core/agent-messaging.js";
 import { ensureFreshAccessToken, resolveServerUrl, saveAgentConfig } from "../core/bootstrap.js";
 import { bindFeishuBot, bindFeishuUser } from "../core/feishu.js";
 import { promptAddAgent } from "../core/index.js";
@@ -211,7 +212,11 @@ export function registerAgentCommands(program: Command): void {
           return;
         }
         for (const [name, config] of agents) {
-          print.line(`  ${name.padEnd(20)} runtime: ${config.runtime.padEnd(14)} agentId: ${config.agentId}\n`);
+          // Label the UUID column as `uuid` — NOT `agentId` — to discourage
+          // agents from copy-pasting the uuid into `agent send <target>`,
+          // which expects the agent name. See the Agent Hub SDK section of
+          // the bootstrap-generated CLAUDE.md.
+          print.line(`  ${name.padEnd(20)} runtime: ${config.runtime.padEnd(14)} uuid: ${config.agentId}\n`);
         }
       } catch {
         print.line("  No agents configured.\n");
@@ -495,6 +500,11 @@ export function registerAgentCommands(program: Command): void {
           }
         }
 
+        const { replyToInbox, replyToChat } = resolveReplyToFromEnv(process.env, {
+          replyToInbox: options.replyToInbox,
+          replyToChat: options.replyToChat,
+        });
+
         const sdk = createSdk(options.agent);
 
         if (options.chat) {
@@ -503,8 +513,8 @@ export function registerAgentCommands(program: Command): void {
             content,
             metadata,
             inReplyTo: options.replyTo,
-            replyToInbox: options.replyToInbox,
-            replyToChat: options.replyToChat,
+            replyToInbox,
+            replyToChat,
           });
           success(result);
         } else {
@@ -512,8 +522,8 @@ export function registerAgentCommands(program: Command): void {
             format: options.format,
             content,
             metadata,
-            replyToInbox: options.replyToInbox,
-            replyToChat: options.replyToChat,
+            replyToInbox,
+            replyToChat,
           });
           success(result);
         }

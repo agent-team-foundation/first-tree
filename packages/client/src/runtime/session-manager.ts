@@ -7,6 +7,7 @@ import type {
 import type { pino } from "../observability/logger.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import type { AgentConfigCache } from "./agent-config-cache.js";
+import { buildAgentEnv, formatInboundContent } from "./agent-io.js";
 import type { SessionConfig } from "./config.js";
 import { Deduplicator } from "./deduplicator.js";
 import type {
@@ -17,6 +18,7 @@ import type {
   SessionContext,
   SessionMessage,
 } from "./handler.js";
+import { createResultSink, type Trigger } from "./result-sink.js";
 import { SessionRegistry } from "./session-registry.js";
 
 type SessionEntry = {
@@ -74,6 +76,14 @@ export class SessionManager {
   private readonly evictedMappings = new Map<string, { claudeSessionId: string; lastActivity: number }>();
   private readonly config: SessionManagerConfig;
   private readonly deduplicator = new Deduplicator(1000);
+  /**
+   * Current trigger (messageId + senderId) per chat — the message that kicked
+   * off the current or most-recent turn. Read by `forwardResult` (via the
+   * resultSink closure) to attach `inReplyTo` and default mentions to the
+   * outbound reply. Maintained entirely by the runtime: handlers never touch
+   * this map, which keeps adding a new handler trivial.
+   */
+  private readonly currentTrigger = new Map<string, Trigger>();
   private readonly registry: SessionRegistry | null;
   private readonly pendingQueue: PendingMessage[] = [];
   private readonly lastReportedStates = new Map<string, SessionState>();
@@ -97,13 +107,31 @@ export class SessionManager {
    * Delayed ACK: messages are ACKed when the handler begins processing,
    * not on pull. `delivered` = pulled but not yet processing,
    * `acked` = handler has started processing (read receipt).
+   *
+   * One routing guard fires before any session lookup (see
+   * proposals/hub-agent-messaging-reply-and-mentions §3.5):
+   *
+   * - **Echo suppression** — in direct chats, a peer's reply to a message
+   *   *we* sent here but whose `replyTo` points elsewhere would otherwise
+   *   bounce our session back on. Suppress it so the reply routes only to
+   *   the external chat where we're actually waiting.
+   *
+   * The mention filter used to live here too, but it moved server-side to
+   * the fan-out step — see `services/message.ts sendMessage`. Anything
+   * reaching dispatch has already passed that check.
    */
   async dispatch(entry: InboxEntryWithMessage): Promise<void> {
     const chatId = entry.chatId ?? entry.message.chatId;
     const messageId = entry.message.id;
 
-    // 1. Deduplication
-    if (this.deduplicator.isDuplicate(messageId)) {
+    // 1. Deduplication — key by (chatId, messageId), not messageId alone.
+    // replyTo cross-chat routing legitimately fan-outs the same message into
+    // two inbox_entries with different chatIds (one in the original chat,
+    // one in the replyTo target chat); server-side identity is (inboxId,
+    // messageId, chatId) and client dedup must mirror that, otherwise the
+    // second entry is silently dropped.
+    const dedupKey = `${chatId}:${messageId}`;
+    if (this.deduplicator.isDuplicate(dedupKey)) {
       this.config.log.debug({ chatId, messageId }, "duplicate message, skipping");
       return;
     }
@@ -132,10 +160,25 @@ export class SessionManager {
       }
     }
 
-    // 3. Extract message content (handler does not see inbox metadata)
+    // 3. Routing guards — do not start a session for messages we must not answer.
+    if (shouldSuppressEcho(entry, this.config.agentIdentity.agentId)) {
+      this.config.log.info(
+        { chatId, messageId },
+        "suppressing echo — message replies to our own send whose replyTo points elsewhere",
+      );
+      await this.ackEntry(entry.id, chatId);
+      return;
+    }
+
+    // Note: the "mention_only" filter now lives on the server (see
+    // services/message.ts sendMessage fan-out). If an entry reaches dispatch
+    // we assume server already decided we should handle it — this avoids a
+    // double-guard that drifted between server / client in early M1.
+
+    // 4. Extract message content (handler does not see inbox metadata)
     const message = this.extractMessage(entry);
 
-    // 4. Route by session state — ACK happens inside route when handler starts
+    // 5. Route by session state — ACK happens inside route when handler starts
     await this.routeMessage(chatId, message, entry.id);
   }
 
@@ -165,6 +208,7 @@ export class SessionManager {
       this.evictedMappings.delete(chatId);
       this.sessionRuntimeStates.delete(chatId);
       this.lastReportedStates.delete(chatId);
+      this.currentTrigger.delete(chatId);
 
       for (let i = this.pendingQueue.length - 1; i >= 0; i--) {
         if (this.pendingQueue[i]?.chatId === chatId) this.pendingQueue.splice(i, 1);
@@ -263,6 +307,15 @@ export class SessionManager {
   // ---- Internal -----------------------------------------------------------
 
   private async routeMessage(chatId: string, message: SessionMessage, entryId?: number): Promise<void> {
+    // Record the trigger BEFORE dispatching to any handler path (start /
+    // resume / inject) so the resultSink constructed in buildSessionContext
+    // sees the right messageId+senderId when this turn eventually produces a
+    // reply. The sink clears it on forward so an intervening inject() can
+    // overwrite it without the in-flight reply stealing the new trigger.
+    if (message.id) {
+      this.currentTrigger.set(chatId, { messageId: message.id, senderId: message.senderId });
+    }
+
     const existing = this.sessions.get(chatId);
 
     if (existing) {
@@ -552,10 +605,28 @@ export class SessionManager {
 
   private buildSessionContext(chatId: string): SessionContext {
     const sessionLog = this.config.log.child({ chatId });
+    // Runtime-facing string log (handler + result-sink expect a simple
+    // `(msg: string) => void` signature). The child pino logger still goes
+    // to other places that want structured fields.
+    const log = (msg: string) => sessionLog.info(msg);
+
+    const forwardResult = createResultSink({
+      sdk: this.config.sdk,
+      agent: this.config.agentIdentity,
+      chatId,
+      getTrigger: () => this.currentTrigger.get(chatId) ?? null,
+      clearTrigger: () => {
+        this.currentTrigger.delete(chatId);
+      },
+      log,
+    });
+
+    const envCtx = { sdk: this.config.sdk, agent: this.config.agentIdentity, chatId };
+
     return {
       agent: this.config.agentIdentity,
       sdk: this.config.sdk,
-      log: (msg) => sessionLog.info(msg),
+      log,
       chatId,
       touch: () => {
         const entry = this.sessions.get(chatId);
@@ -572,6 +643,9 @@ export class SessionManager {
       reportSessionCompletion: () => {
         this.config.onSessionCompletion?.(chatId);
       },
+      forwardResult,
+      buildAgentEnv: (parentEnv) => buildAgentEnv(parentEnv, envCtx),
+      formatInboundContent,
     };
   }
 
@@ -658,4 +732,21 @@ export class SessionManager {
     }
     this.registry.save(entries);
   }
+}
+
+/**
+ * Core echo rule: a reply to a message *we* sent in this same chat, whose
+ * original carried a `replyTo` pointing to a *different* chat, must not wake
+ * our session on this side. Server-side replyTo routing already delivers a
+ * second entry in the target chat, so suppressing the fan-out copy here
+ * leaves exactly one path from peer's reply to our waiting session.
+ */
+export function shouldSuppressEcho(entry: InboxEntryWithMessage, myAgentId: string): boolean {
+  const snapshot = entry.message.inReplyToSnapshot;
+  if (!snapshot) return false;
+  const entryChatId = entry.chatId ?? entry.message.chatId;
+  if (snapshot.senderId !== myAgentId) return false;
+  if (snapshot.chatId !== entryChatId) return false;
+  if (snapshot.replyToChat === null) return false;
+  return snapshot.replyToChat !== entryChatId;
 }

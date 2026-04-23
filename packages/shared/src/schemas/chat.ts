@@ -25,6 +25,18 @@ export const chatParticipantSchema = z.object({
 });
 export type ChatParticipant = z.infer<typeof chatParticipantSchema>;
 
+/**
+ * Participant row with the agent's public-ish metadata resolved — used by the
+ * client runtime for `@<name>` mention extraction against the authoritative
+ * participant set (see proposals/hub-agent-messaging-reply-and-mentions §4).
+ */
+export const chatParticipantDetailSchema = chatParticipantSchema.extend({
+  name: z.string().nullable(),
+  displayName: z.string().nullable(),
+  type: z.string(),
+});
+export type ChatParticipantDetail = z.infer<typeof chatParticipantDetailSchema>;
+
 export const chatSchema = z.object({
   id: z.string(),
   organizationId: z.string(),

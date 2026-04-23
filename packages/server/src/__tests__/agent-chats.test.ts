@@ -63,4 +63,54 @@ describe("Agent Chats API", () => {
     const res = await a1.request("GET", `/api/v1/agent/chats/${chatId}`);
     expect(res.statusCode).toBe(403);
   });
+
+  it("GET /chats/:id/participants returns agent names for mention resolution", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const a1 = await createTestAgent(app, { name: `parts-a1-${uid}`, displayName: "Alice" });
+    const { agent: a2 } = await createTestAgent(app, { name: `parts-a2-${uid}`, displayName: "Bob" });
+
+    const createRes = await a1.request("POST", "/api/v1/agent/chats", {
+      type: "direct",
+      participantIds: [a2.uuid],
+    });
+    const chatId = createRes.json().id;
+
+    const res = await a1.request("GET", `/api/v1/agent/chats/${chatId}/participants`);
+    expect(res.statusCode).toBe(200);
+    const rows = res.json() as Array<{
+      agentId: string;
+      name: string | null;
+      displayName: string | null;
+      mode: string;
+      type: string;
+    }>;
+
+    expect(rows).toHaveLength(2);
+    const byId = new Map(rows.map((r) => [r.agentId, r]));
+    expect(byId.get(a1.agent.uuid)?.name).toBe(`parts-a1-${uid}`);
+    expect(byId.get(a2.uuid)?.displayName).toBe("Bob");
+    for (const r of rows) {
+      // Direct chat → both start in full mode.
+      expect(r.mode).toBe("full");
+      expect(r.type).toBe("autonomous_agent");
+    }
+  });
+
+  it("GET /chats/:id/participants rejects non-participants with 403", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const a1 = await createTestAgent(app, { name: `secret-a1-${uid}` });
+    const { agent: a2 } = await createTestAgent(app, { name: `secret-a2-${uid}` });
+    const a3 = await createTestAgent(app, { name: `secret-a3-${uid}` });
+
+    const createRes = await a1.request("POST", "/api/v1/agent/chats", {
+      type: "direct",
+      participantIds: [a2.uuid],
+    });
+    const chatId = createRes.json().id;
+
+    const res = await a3.request("GET", `/api/v1/agent/chats/${chatId}/participants`);
+    expect(res.statusCode).toBe(403);
+  });
 });

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { SendMessage, SendToAgent } from "@agent-team-foundation/first-tree-hub-shared";
+import { extractMentions, type SendMessage, type SendToAgent } from "@agent-team-foundation/first-tree-hub-shared";
 import { and, desc, eq, lt, ne } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
@@ -36,7 +36,35 @@ async function sendMessageInner(
   data: SendMessage,
 ): Promise<SendMessageResult> {
   return db.transaction(async (tx) => {
-    // 1. Store message
+    // 1. Load participants once — we use them both to resolve `@name`
+    //    mentions and to fan-out inbox entries.
+    const participants = await tx
+      .select({
+        agentId: chatParticipants.agentId,
+        inboxId: agents.inboxId,
+        mode: chatParticipants.mode,
+        name: agents.name,
+      })
+      .from(chatParticipants)
+      .innerJoin(agents, eq(chatParticipants.agentId, agents.uuid))
+      .where(eq(chatParticipants.chatId, chatId));
+
+    // 2. Resolve `@<name>` tokens in the content against the participant
+    //    list. Merge the result into `metadata.mentions` so mention_only
+    //    participants get fanned out on step 4. Explicit mentions passed
+    //    by the caller are preserved verbatim — server resolution is
+    //    additive, not authoritative.
+    const incomingMeta = (data.metadata ?? {}) as Record<string, unknown>;
+    const explicitMentionsRaw = incomingMeta.mentions;
+    const explicitMentions = Array.isArray(explicitMentionsRaw)
+      ? explicitMentionsRaw.filter((m): m is string => typeof m === "string")
+      : [];
+    const contentText = typeof data.content === "string" ? data.content : "";
+    const resolved = contentText ? extractMentions(contentText, participants) : [];
+    const mergedMentions = [...new Set([...explicitMentions, ...resolved])];
+    const metadataToStore = mergedMentions.length > 0 ? { ...incomingMeta, mentions: mergedMentions } : incomingMeta;
+
+    // 3. Store the message (with merged metadata).
     const messageId = randomUUID();
     const [msg] = await tx
       .insert(messages)
@@ -46,7 +74,7 @@ async function sendMessageInner(
         senderId,
         format: data.format,
         content: data.content,
-        metadata: data.metadata ?? {},
+        metadata: metadataToStore,
         replyToInbox: data.replyToInbox ?? null,
         replyToChat: data.replyToChat ?? null,
         inReplyTo: data.inReplyTo ?? null,
@@ -54,19 +82,18 @@ async function sendMessageInner(
       })
       .returning();
 
-    // 2. Get all participants' inbox IDs
-    const participants = await tx
-      .select({
-        agentId: chatParticipants.agentId,
-        inboxId: agents.inboxId,
-      })
-      .from(chatParticipants)
-      .innerJoin(agents, eq(chatParticipants.agentId, agents.uuid))
-      .where(eq(chatParticipants.chatId, chatId));
-
-    // 3. Fan-out: create inbox entries for all participants (except sender)
+    // 4. Fan-out: create inbox entries for participants who should see this
+    //    message. Rules:
+    //    - sender is always filtered out (no self-delivery).
+    //    - `full` mode participants always receive.
+    //    - `mention_only` participants receive only when in `mentions`.
+    //    See proposals/hub-agent-messaging-reply-and-mentions §3.5. Filtering
+    //    server-side means mention_only agents don't wake their session over
+    //    irrelevant chatter and the client runtime never has to double-guard.
+    const mentionSet = new Set(mergedMentions);
     const entries = participants
       .filter((p) => p.agentId !== senderId)
+      .filter((p) => p.mode !== "mention_only" || mentionSet.has(p.agentId))
       .map((p) => ({
         inboxId: p.inboxId,
         messageId,
@@ -141,7 +168,16 @@ export async function sendToAgent(
     )
     .limit(1);
 
-  if (!target) throw new NotFoundError(`Agent "${targetName}" not found`);
+  if (!target) {
+    // Agents routinely pick up uuids from `agent chats` / chat participant
+    // lists and mistakenly paste them as the send target. Give the hint in
+    // the error so the next LLM attempt self-corrects.
+    const looksLikeUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetName);
+    const hint = looksLikeUuid
+      ? " — `agent send` expects an agent NAME, not a uuid. Run `first-tree-hub agent list` to see available names."
+      : "";
+    throw new NotFoundError(`Agent "${targetName}" not found${hint}`);
+  }
 
   // Find or create direct chat
   const chat = await findOrCreateDirectChat(db, senderUuid, target.uuid);

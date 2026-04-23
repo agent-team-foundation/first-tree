@@ -11,8 +11,14 @@ import type { Notifier } from "./notifier.js";
 /**
  * Upsert session state + refresh presence aggregates + NOTIFY.
  *
- * Revival defense: an admin-terminated (`evicted`) row is immutable; a client
- * report for the same chatId is silently dropped after the FOR UPDATE check.
+ * `agent_chat_sessions.(agent_id, chat_id)` is a single-row "current session
+ * state" cache, not a session history log. A new runtime session starting on
+ * the same (agent, chat) pair MUST overwrite whatever ended before — including
+ * an `evicted` row left by a previous terminate. The previous "revival
+ * defense" conflated two concerns: "this runtime session ended" (which is
+ * what `evicted` actually means) and "this chat is permanently archived for
+ * this agent" (a chat-level decision that should live on `chats`, not here).
+ * See proposals/hub-agent-messaging-reply-and-mentions §M2-session-lifecycle.
  */
 export async function upsertSessionState(
   db: Database,
@@ -25,14 +31,6 @@ export async function upsertSessionState(
   const now = new Date();
   let wrote = false;
   await db.transaction(async (tx) => {
-    const [existing] = await tx
-      .select({ state: agentChatSessions.state })
-      .from(agentChatSessions)
-      .where(and(eq(agentChatSessions.agentId, agentId), eq(agentChatSessions.chatId, chatId)))
-      .for("update");
-
-    if (existing?.state === "evicted") return;
-
     await tx
       .insert(agentChatSessions)
       .values({ agentId, chatId, state, updatedAt: now })

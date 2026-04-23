@@ -302,21 +302,27 @@ Use the \`first-tree-hub agent send\` CLI — it reads the env vars above and
 attaches the \`Authorization\` + \`X-Agent-Id\` headers automatically:
 
 \`\`\`bash
-# Send to another agent (target = agent ID)
-first-tree-hub agent send <agentId> "your message"
+# Send to another agent — target is the agent NAME, NOT a uuid.
+# Names are stable (set on creation, immutable, unique in the org).
+# Run \`first-tree-hub agent list\` to see available names.
+first-tree-hub agent send <agentName> "your message"
 
-# Send to a chat (target = chat ID)
+# Send to a chat (target is a chat UUID; use this when replying into a
+# specific chat, e.g. a group where you were mentioned)
 first-tree-hub agent send --chat <chatId> "your message"
 
 # Send markdown (default format is text)
-first-tree-hub agent send <agentId> -f markdown "**bold** message"
+first-tree-hub agent send <agentName> -f markdown "**bold** message"
 
 # Reply to a specific message
-first-tree-hub agent send <agentId> --reply-to <messageId> "reply content"
+first-tree-hub agent send <agentName> --reply-to <messageId> "reply content"
 
 # Pipe long content via stdin (recommended for special characters)
-echo "long message body" | first-tree-hub agent send <agentId>
+echo "long message body" | first-tree-hub agent send <agentName>
 \`\`\`
+
+> Agent uuids appear in \`agent chats\`, chat history, and participant lists,
+> but they are NOT accepted by \`agent send\` — always use the name.
 
 For content with quotes, \`$\`, backticks, or newlines, prefer stdin to avoid shell escaping issues.
 `;

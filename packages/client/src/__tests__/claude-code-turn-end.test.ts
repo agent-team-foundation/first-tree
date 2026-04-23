@@ -40,6 +40,7 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => {
 import { createClaudeCodeHandler } from "../handlers/claude-code.js";
 import { createAgentConfigCache } from "../runtime/agent-config-cache.js";
 import type { SessionContext } from "../runtime/handler.js";
+import { mockCtxPlumbing } from "./test-helpers.js";
 
 const AGENT_ID = "019d9a97-90b0-716b-8317-a8c0be8430d7";
 
@@ -80,6 +81,7 @@ describe("claude-code handler — turn_end emission", () => {
     const ctx: SessionContext = {
       agent: {
         agentId: AGENT_ID,
+        inboxId: "inbox-test",
         displayName: "test",
         type: "autonomous_agent",
         delegateMention: null,
@@ -90,6 +92,7 @@ describe("claude-code handler — turn_end emission", () => {
       log: () => {},
       touch: () => {},
       setRuntimeState: () => {},
+      ...mockCtxPlumbing({ sendMessage }, "chat-1"),
       emitEvent: (e) => emitted.push(e),
       reportSessionCompletion: () => {},
     };
@@ -120,6 +123,7 @@ describe("claude-code handler — turn_end emission", () => {
     const ctx: SessionContext = {
       agent: {
         agentId: AGENT_ID,
+        inboxId: "inbox-test",
         displayName: "test",
         type: "autonomous_agent",
         delegateMention: null,
@@ -130,6 +134,7 @@ describe("claude-code handler — turn_end emission", () => {
       log: () => {},
       touch: () => {},
       setRuntimeState: () => {},
+      ...mockCtxPlumbing({ sendMessage }, "chat-1"),
       emitEvent: (e) => {
         if (e.kind === "turn_end") order.push(`turn_end:${e.payload.status}`);
         emitted.push(e);

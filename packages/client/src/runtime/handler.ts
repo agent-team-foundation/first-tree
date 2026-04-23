@@ -5,6 +5,11 @@ import type { GitMirrorManager } from "./git-mirror-manager.js";
 /** Agent identity fields flowing from Server through the runtime pipeline. */
 export type AgentIdentity = {
   agentId: string;
+  /**
+   * Agent's inbox ID. Threaded into the handler so child processes can build
+   * cross-chat `replyTo` envelopes without a per-call server round-trip.
+   */
+  inboxId: string;
   displayName: string | null;
   type: string;
   delegateMention: string | null;
@@ -30,7 +35,7 @@ export type SessionContext = HandlerContext & {
   setRuntimeState: (state: "idle" | "working" | "blocked" | "error") => void;
   /**
    * Persist a structured session event (tool_call / error) to the server.
-   * Assistant text does NOT go through here — it flows via `sdk.sendMessage`.
+   * Assistant text does NOT go through here — it flows via `forwardResult`.
    */
   emitEvent: (event: SessionEvent) => void;
   /**
@@ -38,6 +43,28 @@ export type SessionContext = HandlerContext & {
    * `session_completed` notification on the server (5-min cooldown).
    */
   reportSessionCompletion: () => void;
+
+  /**
+   * Forward the handler's final text to the chat. Runtime handles mention
+   * extraction, `inReplyTo`, participants lookup, and transport — handlers
+   * just pass the raw output text.
+   */
+  forwardResult: (text: string) => Promise<void>;
+
+  /**
+   * Build env for CLI sub-processes that shell out to the `first-tree-hub`
+   * CLI. Layers Agent-Hub envelope vars (server/agent/inbox/chat IDs) on
+   * top of the parent env. Handlers pass their own cleaned `process.env`.
+   */
+  buildAgentEnv: (parentEnv: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
+
+  /**
+   * Format an inbound message's content for handoff to an LLM — prefixes a
+   * `[From: sender-id]` attribution line when the sender is known. Handler
+   * implementations should wrap whatever LLM-specific message envelope they
+   * build around the string this returns.
+   */
+  formatInboundContent: (message: SessionMessage) => string;
 };
 
 /** Message content extracted from an inbox entry (no entry metadata). */

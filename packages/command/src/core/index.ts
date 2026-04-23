@@ -2,6 +2,8 @@
 
 // Admin management
 export { createOwner, hasUser } from "./admin.js";
+// Agent messaging helpers
+export { resolveReplyToFromEnv } from "./agent-messaging.js";
 // Bootstrap / credentials
 export {
   ensureFreshAccessToken,
