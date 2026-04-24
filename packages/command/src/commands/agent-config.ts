@@ -110,7 +110,7 @@ export function registerAgentConfigCommands(parent: Command): void {
 
   config
     .command("set-model <agent> <model>")
-    .description("Replace the model field (e.g. claude-opus-4-6)")
+    .description("Replace the model field (alias: opus, sonnet, haiku — or a full id like claude-opus-4-7)")
     .action(async (agentName: string, model: string) => {
       const serverUrl = resolveServerUrl(process.env.FIRST_TREE_HUB_SERVER_URL);
       const adminToken = await ensureFreshAdminToken();

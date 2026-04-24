@@ -86,11 +86,11 @@ describe("Admin agent-config API (Step 2)", () => {
     });
     expect(dry.statusCode).toBe(200);
     const body = dry.json();
-    expect(body.diff).toEqual([{ path: "model", op: "replace", before: "", after: "claude-opus-4-6" }]);
+    expect(body.diff).toEqual([{ path: "model", op: "replace", before: "opus", after: "claude-opus-4-6" }]);
     expect(body.next.model).toBe("claude-opus-4-6");
 
     const get = await req("GET", `/api/v1/admin/agents/${agent.uuid}/config`);
-    expect(get.json().payload.model).toBe(""); // unchanged
+    expect(get.json().payload.model).toBe("opus"); // unchanged — matches new default
   });
 
   it("sensitive env value is encrypted at rest, masked in GET, decrypted via getDecrypted", async () => {
