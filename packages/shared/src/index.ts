@@ -1,7 +1,7 @@
 // Schemas
 
 // -- Mention extraction (shared by server fan-out resolver and client auto-forward) --
-export { extractMentions, type MentionParticipant, scanMentionTokens } from "./mentions.js";
+export { extractMentions, MENTION_REGEX, type MentionParticipant, scanMentionTokens } from "./mentions.js";
 export {
   ADAPTER_BIND_METHODS,
   ADAPTER_PLATFORMS,
@@ -34,6 +34,8 @@ export {
   adapterBotStatusSchema,
 } from "./schemas/adapter-status.js";
 export {
+  AGENT_NAME_MAX_LENGTH,
+  AGENT_NAME_REGEX,
   AGENT_SOURCES,
   AGENT_STATUSES,
   AGENT_TYPES,
@@ -54,6 +56,8 @@ export {
   type CreateAgent,
   contextTreeInfoSchema,
   createAgentSchema,
+  isReservedAgentName,
+  RESERVED_AGENT_NAMES,
   type UpdateAgent,
   updateAgentSchema,
 } from "./schemas/agent.js";

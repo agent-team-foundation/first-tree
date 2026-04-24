@@ -1,27 +1,24 @@
-import type { Agent } from "@agent-team-foundation/first-tree-hub-shared";
+import {
+  AGENT_NAME_MAX_LENGTH,
+  AGENT_NAME_REGEX,
+  type Agent,
+  isReservedAgentName,
+} from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { type HubClient, listClients } from "../api/activity.js";
-import { createAgent } from "../api/agents.js";
+import { type AgentNameAvailability, checkAgentNameAvailability, createAgent } from "../api/agents.js";
 import { ApiError, type ValidationIssue } from "../api/client.js";
 import { Button } from "./ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog.js";
 import { Input } from "./ui/input.js";
 import { Label } from "./ui/label.js";
 
-/** Mirrors the `createAgentSchema` name regex in `packages/shared/src/schemas/agent.ts`. */
-const NAME_PATTERN = /^[a-z0-9_-]+$/;
-const NAME_MAX = 100;
+const DISPLAY_NAME_MAX = 200;
 
 type FieldKey = "name" | "displayName" | "clientId";
 type FieldErrors = Partial<Record<FieldKey | "_root", string>>;
 
-/**
- * Map a server-returned validation-issue array (Zod `issues` shape, forwarded
- * by the server's `setErrorHandler` as `details[]`) to per-field messages.
- * Issues whose `path` doesn't point at a known form field fall through to
- * `_root` so they still surface somewhere instead of being silently dropped.
- */
 function issuesToFieldErrors(issues: ValidationIssue[] | undefined): FieldErrors {
   if (!issues || issues.length === 0) return {};
   const out: FieldErrors = {};
@@ -30,7 +27,6 @@ function issuesToFieldErrors(issues: ValidationIssue[] | undefined): FieldErrors
     const head = issue.path[0];
     if (typeof head === "string" && (known as readonly string[]).includes(head)) {
       const key = head as FieldKey;
-      // First message for a field wins; later issues are usually less specific.
       if (!out[key]) out[key] = issue.message;
     } else {
       out._root = issue.message;
@@ -40,96 +36,146 @@ function issuesToFieldErrors(issues: ValidationIssue[] | undefined): FieldErrors
 }
 
 /**
- * Simplified agent creation dialog for the onboarding flow (M5).
+ * Simplified agent creation dialog for the onboarding flow.
  *
- * Hidden defaults (see hub-onboarding-mvp proposal §2.2):
- *   - type = "personal_assistant" (Team agents go through a different path)
- *   - manager = current user (admin-assisted creation uses a separate UI)
+ * Display-name-first layout (see docs/agent-naming-design.md §3.6):
+ *   - "Display name" is the primary input at the top (required-feeling, unicode).
+ *   - "Agent name" auto-slugifies from display name and carries the immutable
+ *     `@` prefix adornment. Editing it severs the slug-follows-display-name
+ *     link so the user stays in control.
+ *   - A debounced availability probe calls the server so collisions and
+ *     reserved words surface inline before submit.
+ *
+ * Hidden defaults:
+ *   - type = "personal_assistant"
+ *   - manager = current user
  *   - delegateMention, visibility, clientId = not surfaced
- *
- * Name vs. display name:
- *   - `name` is the permanent hub ID (lowercase slug). Format help is shown
- *     inline so the rule is visible before the user hits Submit.
- *   - `displayName` is the friendly label and defaults to the user's raw
- *     text input. We keep the two linked until the user edits `displayName`
- *     directly — after that, editing `name` no longer touches it.
- *
- * Runtime choice:
- *   - "claude-code" — agent binds to the user's computer on first WS connect.
- *     After create, we hand the dialog off to `LastStepModal` for the
- *     `curl | sh … --token` command + polling.
- *   - "kael" — agent runs in the hub's managed runtime. Disabled for
- *     Pre-MVP until adapter_configs provisioning lands (#86).
- *
- * Prompt is intentionally not asked here — users edit it on the agent detail
- * page after creation. Keeps onboarding focused on identity + location.
  */
 
 type Runtime = "claude-code" | "kael";
 
+/**
+ * Slugify a free-text label into an agent name. Output always starts with
+ * `[a-z0-9]` (stripping leading hyphens/underscores), uses lowercase ASCII
+ * only, and is clamped to the max length so server validation never rejects
+ * for length alone.
+ */
 function slugify(raw: string): string {
   return raw
     .toLowerCase()
     .replace(/[^a-z0-9_-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 100);
+    .replace(/^[-_]+|[-_]+$/g, "")
+    .slice(0, AGENT_NAME_MAX_LENGTH);
+}
+
+function availabilityReasonMessage(reason: "invalid" | "reserved" | "taken"): string {
+  switch (reason) {
+    case "taken":
+      return "That agent name is already in use in this organization. Pick a different one.";
+    case "reserved":
+      return "That agent name is reserved — pick a different one.";
+    case "invalid":
+      return "Agent name must start with a letter or digit and contain only lowercase letters, digits, hyphens (-), and underscores (_).";
+  }
 }
 
 type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /**
-   * Called after the agent row is created. Receives the new agent and the
-   * chosen runtime so the caller can decide what to do next (e.g. open the
-   * Last-step modal for Claude Code, or redirect to the Workspace for Kael).
-   */
   onCreated: (agent: Agent, runtime: Runtime) => void;
 };
 
 type Step = "form" | "pick-computer";
+type AvailabilityState =
+  | { status: "idle" }
+  | { status: "checking" }
+  | { status: "ok" }
+  | { status: "bad"; reason: "invalid" | "reserved" | "taken" };
 
 export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
   const queryClient = useQueryClient();
+  const [displayName, setDisplayName] = useState("");
   const [name, setName] = useState("");
   const [nameDirty, setNameDirty] = useState(false);
-  const [displayName, setDisplayName] = useState("");
-  const [displayNameDirty, setDisplayNameDirty] = useState(false);
   const [runtime, setRuntime] = useState<Runtime>("claude-code");
 
-  // Step 2 state — shown only when the user has multiple connected computers
-  // and we need them to pick one for the new agent to pin to.
   const [step, setStep] = useState<Step>("form");
   const [candidateClients, setCandidateClients] = useState<HubClient[]>([]);
   const [pickedClientId, setPickedClientId] = useState<string | null>(null);
   const [probing, setProbing] = useState(false);
   const [clientErrors, setClientErrors] = useState<FieldErrors>({});
+  const [availability, setAvailability] = useState<AvailabilityState>({ status: "idle" });
 
   useEffect(() => {
     if (open) {
+      setDisplayName("");
       setName("");
       setNameDirty(false);
-      setDisplayName("");
-      setDisplayNameDirty(false);
       setRuntime("claude-code");
       setStep("form");
       setCandidateClients([]);
       setPickedClientId(null);
       setProbing(false);
       setClientErrors({});
+      setAvailability({ status: "idle" });
     }
   }, [open]);
 
-  const slug = slugify(name);
+  // Keep the agent name following the display name until the user
+  // explicitly edits the agent name. After `nameDirty = true`, changes to
+  // display name no longer rewrite the slug.
+  useEffect(() => {
+    if (nameDirty) return;
+    setName(slugify(displayName));
+  }, [displayName, nameDirty]);
+
+  // Debounced availability probe. Mirrors the client-side format check so
+  // we don't waste a round-trip when the slug can't possibly be valid; once
+  // it passes the local check, a 300ms debounce gates the network call so
+  // typing a full name doesn't fan out into per-keystroke requests.
+  const latestProbeIdRef = useRef(0);
+  useEffect(() => {
+    if (!open || !name) {
+      setAvailability({ status: "idle" });
+      return;
+    }
+    if (!AGENT_NAME_REGEX.test(name)) {
+      setAvailability({ status: "bad", reason: "invalid" });
+      return;
+    }
+    if (isReservedAgentName(name)) {
+      setAvailability({ status: "bad", reason: "reserved" });
+      return;
+    }
+    const probeId = ++latestProbeIdRef.current;
+    setAvailability({ status: "checking" });
+    const timer = window.setTimeout(() => {
+      checkAgentNameAvailability(name)
+        .then((res: AgentNameAvailability) => {
+          // Ignore stale responses: the user may have typed more characters
+          // while the in-flight request was pending, in which case this
+          // handler no longer speaks for the current input.
+          if (probeId !== latestProbeIdRef.current) return;
+          if (res.available) {
+            setAvailability({ status: "ok" });
+          } else {
+            setAvailability({ status: "bad", reason: res.reason });
+          }
+        })
+        .catch(() => {
+          if (probeId !== latestProbeIdRef.current) return;
+          // Network-level failure shouldn't block submission — the server
+          // validates authoritatively on POST. Fall back to idle.
+          setAvailability({ status: "idle" });
+        });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [name, open]);
 
   const createMut = useMutation({
     mutationFn: async (opts: { clientId?: string }) => {
       const effectiveDisplay = displayName.trim() || name.trim() || "Untitled assistant";
-      const effectiveName = slug || undefined;
-      // When a clientId is provided (scenario B), the server pins the agent
-      // on create and emits an `agent:pinned` WebSocket frame to the
-      // matching client; its runtime then writes the local agent.yaml and
-      // opens the agent WS on its own. The caller can skip the Last-step
-      // modal and jump straight to the Workspace.
+      const effectiveName = name || undefined;
       return createAgent({
         name: effectiveName,
         type: "personal_assistant",
@@ -144,11 +190,6 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
     },
   });
 
-  // Translate a server validation error (Zod `issues[]` emitted by the server
-  // `setErrorHandler` in `app.ts`) into per-field messages. Non-validation
-  // errors fall through to `_root` so they still render as a banner —
-  // except the 409 uniqueness conflict, which we attach to the `name` field
-  // because "already exists" is specifically a name collision.
   const serverErrors = useMemo<FieldErrors>(() => {
     const err = createMut.error;
     if (!err) return {};
@@ -156,7 +197,7 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
       const fromIssues = issuesToFieldErrors(err.issues);
       if (Object.keys(fromIssues).length > 0) return fromIssues;
       if (err.status === 409) {
-        return { name: "That hub ID is already in use in this organization. Pick a different one." };
+        return { name: "That agent name is already in use in this organization. Pick a different one." };
       }
       return { _root: err.message };
     }
@@ -164,33 +205,32 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
     return {};
   }, [createMut.error]);
 
-  const fieldErrors: FieldErrors = { ...serverErrors, ...clientErrors };
+  const availabilityError = availability.status === "bad" ? availabilityReasonMessage(availability.reason) : undefined;
+  const fieldErrors: FieldErrors = {
+    ...(availabilityError ? { name: availabilityError } : {}),
+    ...serverErrors,
+    ...clientErrors,
+  };
 
-  /**
-   * Client-side mirror of `createAgentSchema` (`name` regex + length) so users
-   * see a specific reason before the network round-trip instead of a generic
-   * "Error" blob. The server still validates authoritatively. Note: `name`
-   * here is the slugified hub ID, not the raw free-text input.
-   */
   function validateForm(): FieldErrors {
     const errs: FieldErrors = {};
-    if (slug) {
-      if (slug.length > NAME_MAX) {
-        errs.name = `Hub ID must be at most ${NAME_MAX} characters (got ${slug.length}).`;
-      } else if (!NAME_PATTERN.test(slug)) {
-        // Shouldn't happen because slugify() enforces the charset, but keep
-        // the branch so drift in either direction surfaces clearly instead
-        // of as a generic server error.
-        errs.name = "Hub ID must contain only lowercase letters, digits, hyphens (-), and underscores (_).";
+    if (name) {
+      if (name.length > AGENT_NAME_MAX_LENGTH) {
+        errs.name = `Agent name must be at most ${AGENT_NAME_MAX_LENGTH} characters (got ${name.length}).`;
+      } else if (!AGENT_NAME_REGEX.test(name)) {
+        errs.name =
+          "Agent name must start with a letter or digit and contain only lowercase letters, digits, hyphens (-), and underscores (_).";
+      } else if (isReservedAgentName(name)) {
+        errs.name = "That agent name is reserved — pick a different one.";
       }
-    } else if (name.trim().length > 0) {
-      // Raw input had content but slugify() stripped it down to nothing —
-      // e.g. pure-symbol input like "!!!". Server would auto-generate, but
-      // the user probably didn't intend that; surface the issue.
-      errs.name = "Name must contain at least one letter or digit (e.g. a-z, 0-9).";
+    } else if (displayName.trim().length > 0) {
+      // Display name had content but slugify collapsed it to nothing (e.g.
+      // pure-symbol or pure-CJK input). Server would auto-generate a name,
+      // but the user probably didn't intend that — surface it.
+      errs.name = "Agent name must contain at least one letter or digit (e.g. a-z, 0-9).";
     }
-    if (displayName.length > 200) {
-      errs.displayName = `Display name must be at most 200 characters (got ${displayName.length}).`;
+    if (displayName.length > DISPLAY_NAME_MAX) {
+      errs.displayName = `Display name must be at most ${DISPLAY_NAME_MAX} characters (got ${displayName.length}).`;
     }
     return errs;
   }
@@ -200,18 +240,13 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
     const errs = validateForm();
     setClientErrors(errs);
     if (Object.keys(errs).length > 0) return;
+    if (availability.status === "bad") return;
 
     if (runtime !== "claude-code") {
-      // Kael (disabled in UI today) wouldn't pin to a local computer anyway.
       createMut.mutate({ clientId: undefined });
       return;
     }
 
-    // Probe the caller's connected computers. If exactly one is online, pin
-    // the new agent there so the server emits `agent:pinned` and the client
-    // runtime auto-registers — no Last-step terminal step needed. If multiple
-    // are online, flip to the pick-computer step and let the user choose.
-    // If none or the probe itself fails, fall through to the Last-step modal.
     setProbing(true);
     try {
       const clients = await listClients();
@@ -227,16 +262,11 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
         return;
       }
 
-      // Sort most-recent-seen first so the default selection is the computer
-      // the user is most likely currently using.
       const sorted = [...connected].sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
       setCandidateClients(sorted);
       setPickedClientId(sorted[0]?.id ?? null);
       setStep("pick-computer");
     } catch {
-      // Probe failure (network blip, stale token) shouldn't block the user —
-      // fall back to the Last-step modal so they can finish onboarding via
-      // the terminal path.
       createMut.mutate({ clientId: undefined });
     } finally {
       setProbing(false);
@@ -248,7 +278,8 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
     createMut.mutate({ clientId: pickedClientId });
   }
 
-  const canSubmit = name.trim().length > 0 && !createMut.isPending && !probing;
+  const hasBlockingAvailability = availability.status === "bad";
+  const canSubmit = displayName.trim().length > 0 && !hasBlockingAvailability && !createMut.isPending && !probing;
 
   if (step === "pick-computer") {
     return (
@@ -259,7 +290,8 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-body text-muted-foreground">
-              Multiple computers are online. Pick where <span className="font-medium">{name}</span> should run:
+              Multiple computers are online. Pick where <span className="font-medium">{displayName || name}</span>{" "}
+              should run:
             </p>
             <div className="space-y-2">
               {candidateClients.map((client) => {
@@ -318,60 +350,80 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-5">
           <div className="space-y-2">
-            <Label htmlFor="new-agent-name">Name</Label>
-            <Input
-              id="new-agent-name"
-              value={name}
-              onChange={(e) => {
-                const next = e.target.value;
-                setName(next);
-                setNameDirty(true);
-                if (!displayNameDirty) setDisplayName(next);
-                if (clientErrors.name) setClientErrors((prev) => ({ ...prev, name: undefined }));
-              }}
-              placeholder="My Dev Assistant"
-              autoFocus
-              maxLength={NAME_MAX}
-              aria-invalid={fieldErrors.name ? true : undefined}
-              aria-describedby="new-agent-name-help new-agent-name-error"
-            />
-            <p id="new-agent-name-help" className="text-caption text-muted-foreground">
-              Hub ID: lowercase letters, digits, hyphens (-), and underscores (_). Up to {NAME_MAX} characters.
-              Permanent after creation — you can't rename the agent later.
-            </p>
-            {nameDirty && slug && (
-              <p className="text-caption text-muted-foreground">
-                ID on hub: <span className="font-mono">{slug}</span>
-              </p>
-            )}
-            {fieldErrors.name && (
-              <p id="new-agent-name-error" className="text-caption text-destructive">
-                {fieldErrors.name}
-              </p>
-            )}
-          </div>
-
-          <div className="space-y-2">
             <Label htmlFor="new-agent-display-name">Display name</Label>
             <Input
               id="new-agent-display-name"
               value={displayName}
               onChange={(e) => {
                 setDisplayName(e.target.value);
-                setDisplayNameDirty(true);
                 if (clientErrors.displayName) setClientErrors((prev) => ({ ...prev, displayName: undefined }));
               }}
-              placeholder="How teammates see this agent"
-              maxLength={200}
+              placeholder="My Dev Assistant"
+              autoFocus
+              maxLength={DISPLAY_NAME_MAX}
               aria-invalid={fieldErrors.displayName ? true : undefined}
               aria-describedby="new-agent-display-name-help new-agent-display-name-error"
             />
             <p id="new-agent-display-name-help" className="text-caption text-muted-foreground">
-              Shown in chats and lists. Defaults to the Name above; you can change it anytime later.
+              How teammates see this agent in chats and lists. Can be changed anytime.
             </p>
             {fieldErrors.displayName && (
               <p id="new-agent-display-name-error" className="text-caption text-destructive">
                 {fieldErrors.displayName}
+              </p>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="new-agent-name">Agent name</Label>
+            <div className="flex items-stretch">
+              <span
+                aria-hidden
+                className="inline-flex items-center px-2 font-mono text-body text-muted-foreground border border-r-0 border-input rounded-l-[var(--radius-input)] bg-muted/40"
+              >
+                @
+              </span>
+              <Input
+                id="new-agent-name"
+                value={name}
+                onChange={(e) => {
+                  const next = slugify(e.target.value);
+                  setName(next);
+                  setNameDirty(true);
+                  if (clientErrors.name) setClientErrors((prev) => ({ ...prev, name: undefined }));
+                }}
+                placeholder="my-dev-assistant"
+                className="rounded-l-none font-mono"
+                maxLength={AGENT_NAME_MAX_LENGTH}
+                aria-invalid={fieldErrors.name ? true : undefined}
+                aria-describedby="new-agent-name-help new-agent-name-error new-agent-name-status"
+              />
+            </div>
+            <p id="new-agent-name-help" className="text-caption text-muted-foreground">
+              Used in @mentions and CLI commands. Lowercase letters, digits, hyphens (-), and underscores (_). Up to{" "}
+              {AGENT_NAME_MAX_LENGTH} characters. Permanent after creation.
+            </p>
+            {/* availability chip — only renders when we actually have a name */}
+            {name && !fieldErrors.name && (
+              <p
+                id="new-agent-name-status"
+                className="text-caption"
+                style={{
+                  color:
+                    availability.status === "ok"
+                      ? "var(--state-idle)"
+                      : availability.status === "checking"
+                        ? "var(--fg-3)"
+                        : "var(--fg-4)",
+                }}
+              >
+                {availability.status === "checking" && "Checking availability…"}
+                {availability.status === "ok" && "Available."}
+              </p>
+            )}
+            {fieldErrors.name && (
+              <p id="new-agent-name-error" className="text-caption text-destructive">
+                {fieldErrors.name}
               </p>
             )}
           </div>

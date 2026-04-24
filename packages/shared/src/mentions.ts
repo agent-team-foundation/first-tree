@@ -24,7 +24,11 @@ export type MentionParticipant = {
 // `@` is in the lookbehind so `@@alice` doesn't match `@alice` — the leading
 // `@` already consumed a char that isn't part of the name, but without this
 // the engine still accepts the second `@` as a mention start.
-const MENTION_REGEX = /(?<![A-Za-z0-9_.@-])@([A-Za-z0-9_-]{1,64})\b/g;
+//
+// First char must be alphanumeric, matching `AGENT_NAME_REGEX` in
+// `schemas/agent.js`. An `@-foo` or `@_foo` token is not a valid mention
+// (`-foo` can never be a legal new agent name under the tightened rule).
+export const MENTION_REGEX = /(?<![A-Za-z0-9_.@-])@([A-Za-z0-9][A-Za-z0-9_-]{0,63})\b/g;
 
 function stripCode(content: string): string {
   return content
