@@ -218,21 +218,37 @@ name := lowercase(input)
 
 ## 4. 分阶段实施
 
-### Phase 1 —— UI 收敛（单 PR，无 schema 改动）
+### Phase 1 —— 术语与创建 UX 收敛（单 PR，无 DB migration / 无 API breaking change）
 
-**改动**
+> 主要工作量在前端，**但不是"纯前端"**：需要共享 schema 改正则 + 服务端加一个新端点。两者都是加法式改动，不影响现有数据和契约。
 
-- 收紧 `createAgentSchema` 正则，与 `MENTION_REGEX` 对齐
-- **UI 术语统一为 "Agent name"**：
+**改动（按层次）**
+
+**① 共享 schema** — `packages/shared`
+- 收紧 `createAgentSchema.name` 正则为 `^[a-z0-9][a-z0-9_-]{0,63}$`，与 `MENTION_REGEX` 对齐
+- 追加 `RESERVED_AGENT_NAMES` 黑名单常量并在 Zod 校验里应用
+- `MENTION_REGEX` 加首字符 alnum 约束，保持 `{1,64}` 长度
+
+**② 服务端** — `packages/server`（仅两处加法，零 schema 改动）
+- 新增端点 `GET /api/v1/admin/agents/names/:name/availability` —— 给创建表单做 debounced 预检，返回 `{ available: boolean, reason?: "taken" | "reserved" | "invalid" }`
+- 对应新增 service 函数 `checkAgentNameAvailability(orgId, name)`
+- 共享 schema 收紧后，服务端 Zod 校验自动受益，无需额外改
+
+**③ 前端** — `packages/web`（大头工作）
+- UI 术语统一为 **"Agent name"**：
   - 清理 `new-agent-dialog.tsx` 里 3 处 "Hub ID" 漂移（helper 文字 + 2 条错误文案）
   - 列表列头 "Name" → "Agent name"（`agents.tsx`、`admin-all-agents.tsx`）
   - 详情页、identity edit 统一用 "Agent name"
 - 所有 agent name 输入与只读展示加 `@` 前缀视觉（等宽字体 + 灰色 `@`）
 - 新增 `<AgentChip>` 组件；替换列表 delegate 列、identity profile、identity edit dropdown 的 delegate 渲染
-- 创建表单：display-name-first 布局、自动 slug、粘连覆盖、实时唯一性校验
+- 创建表单：display-name-first 布局、自动 slug、粘连覆盖、实时调用 availability 端点
 - 聊天输入框的 mention 自动补全（按 display name 和 agent name 双向匹配，插入 `@<name>`）
 
-**风险：** 低。无 DB、无 API break。回滚 = revert PR
+**风险：** 低
+- 无 DB migration
+- 新端点是**加法**，不影响现有 API 消费者
+- 正则收紧对**新建**生效，旧 `name` 数据 grandfathered
+- 回滚 = revert PR
 
 ### Phase 2 —— `displayName` 必填（单 PR + migration）
 
@@ -305,25 +321,27 @@ name := lowercase(input)
 
 ## 7. 涉及文件清单
 
-**Shared / schema**
-- `packages/shared/src/schemas/agent.ts` —— Zod create / update schema，正则收紧
-- `packages/shared/src/mentions.ts` —— `MENTION_REGEX`，可选辅助函数统一
-- `packages/shared/src/config/agent-config.ts` —— 本地 agent 配置（Phase 3）
+每行末尾 `[P1]` / `[P2]` / `[P3]` 标注该文件在哪个 Phase 被触及（同一文件可能跨多个 Phase）。
 
-**Server**
-- `packages/server/src/services/agent.ts` —— `createAgent` 默认 `displayName`（Phase 2）；name availability 端点
-- `packages/server/src/api/admin/agents.ts` —— 新增 `GET /agents/names/:name/availability`
-- `packages/server/drizzle/` —— Phase 2 migration（回填 + NOT NULL）
+**Shared** — `packages/shared`
+- `src/schemas/agent.ts` —— Zod create/update schema 正则收紧；追加 `RESERVED_AGENT_NAMES` 黑名单 `[P1]`
+- `src/mentions.ts` —— `MENTION_REGEX` 首字符 alnum 约束，对齐 schema `[P1]`
+- `src/config/agent-config.ts` —— 本地 agent 配置结构调整 `[P3]`
 
-**Web**
-- `packages/web/src/components/new-agent-dialog.tsx` —— UI 术语统一为 "Agent name"、清理 "Hub ID" 漂移、display-name-first 布局、自动 slug、实时校验
-- `packages/web/src/pages/agents.tsx` —— 列头改名 "Name" → "Agent name"，使用 `<AgentChip>`
-- `packages/web/src/pages/admin-all-agents.tsx` —— 同上
-- `packages/web/src/pages/agent-detail/identity-section.tsx` —— 详情页术语 "Agent name"、标题样式、编辑 dropdown
-- `packages/web/src/components/agent-chip.tsx` —— **新建**
-- `packages/web/src/components/mention-autocomplete.tsx` —— **新建**（Phase 1）
-- `packages/web/src/lib/use-agent-name-map.ts` —— 简化 / 移除 fallback（Phase 2）
+**Server** — `packages/server`
+- `src/services/agent.ts` —— 新增 `checkAgentNameAvailability(orgId, name)` `[P1]`；`createAgent` 默认 `displayName` `[P2]`
+- `src/api/admin/agents.ts` —— 新增 `GET /agents/names/:name/availability` `[P1]`
+- `drizzle/` —— migration（回填 `display_name` + 设 `NOT NULL`） `[P2]`
 
-**CLI**
-- `packages/command/src/commands/agent.ts` —— `agent add` / `agent list` / `--agent` 调整（Phase 3）
-- `packages/command/src/core/` —— 启动时的本地状态迁移（Phase 3）
+**Web** — `packages/web`
+- `src/components/new-agent-dialog.tsx` —— UI 术语统一为 "Agent name"、清理 "Hub ID" 漂移、display-name-first 布局、自动 slug、实时校验 `[P1]`
+- `src/pages/agents.tsx` —— 列头改名 "Name" → "Agent name"，使用 `<AgentChip>` `[P1]`
+- `src/pages/admin-all-agents.tsx` —— 同上 `[P1]`
+- `src/pages/agent-detail/identity-section.tsx` —— 详情页术语 "Agent name"、标题样式、编辑 dropdown `[P1]`
+- `src/components/agent-chip.tsx` —— **新建** `[P1]`
+- `src/components/mention-autocomplete.tsx` —— **新建** `[P1]`
+- `src/lib/use-agent-name-map.ts` —— 简化 / 移除 fallback `[P2]`
+
+**CLI** — `packages/command`
+- `src/commands/agent.ts` —— `agent add` / `agent list` / `--agent` 调整 `[P3]`
+- `src/core/` —— 启动时的本地状态迁移 `[P3]`
