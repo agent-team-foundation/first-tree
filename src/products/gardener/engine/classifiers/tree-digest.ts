@@ -22,7 +22,7 @@ export interface TreeNodeEntry {
   summary: string;
 }
 
-const DIGEST_BUDGET_BYTES = 30_000;
+const DIGEST_BUDGET_BYTES = 100_000;
 const PER_NODE_SUMMARY_CAP = 400;
 const SKIP_DIRS = new Set([
   ".git",
