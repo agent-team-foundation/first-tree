@@ -83,6 +83,8 @@ jobs:
       - name: Run first-tree gardener
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GARDENER_CLASSIFIER_MODEL: ${{ secrets.GARDENER_CLASSIFIER_MODEL }}
           # Bypass gardener's `gh api user` self-identification call —
           # GITHUB_TOKEN can't resolve /user reliably. Hardcoding the
           # bot identity is enough for the self-loop guard.
