@@ -72,7 +72,7 @@ async function resolveAgentClient(
   }
 
   const [manager] = await db
-    .select({ userId: members.userId })
+    .select({ userId: members.userId, organizationId: members.organizationId })
     .from(members)
     .where(eq(members.id, data.managerId))
     .limit(1);
@@ -81,7 +81,7 @@ async function resolveAgentClient(
   }
 
   const [client] = await db
-    .select({ id: clients.id, userId: clients.userId })
+    .select({ id: clients.id, userId: clients.userId, organizationId: clients.organizationId })
     .from(clients)
     .where(eq(clients.id, data.clientId))
     .limit(1);
@@ -93,6 +93,11 @@ async function resolveAgentClient(
     throw new BadRequestError(
       `Client "${data.clientId}" has not been claimed by a user yet. Have the operator run ` +
         "`first-tree-hub client connect` on that machine before pinning an agent to it.",
+    );
+  }
+  if (client.organizationId !== manager.organizationId) {
+    throw new ForbiddenError(
+      `Client "${data.clientId}" belongs to a different organization — pick a client registered in the manager's org.`,
     );
   }
   if (client.userId !== manager.userId) {
@@ -289,7 +294,6 @@ export async function listAgents(db: Database, orgId: string, limit: number, cur
       delegateMention: agents.delegateMention,
       inboxId: agents.inboxId,
       status: agents.status,
-      cloudUserId: agents.cloudUserId,
       visibility: agents.visibility,
       metadata: agents.metadata,
       managerId: agents.managerId,
@@ -340,7 +344,6 @@ export async function listAgentsForAdmin(db: Database, scope: MemberScope, limit
       delegateMention: agents.delegateMention,
       inboxId: agents.inboxId,
       status: agents.status,
-      cloudUserId: agents.cloudUserId,
       visibility: agents.visibility,
       metadata: agents.metadata,
       managerId: agents.managerId,
@@ -394,7 +397,6 @@ export async function listAgentsForMember(
       delegateMention: agents.delegateMention,
       inboxId: agents.inboxId,
       status: agents.status,
-      cloudUserId: agents.cloudUserId,
       visibility: agents.visibility,
       metadata: agents.metadata,
       managerId: agents.managerId,

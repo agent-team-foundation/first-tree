@@ -21,12 +21,17 @@ describe("registerClient — legacy user_id NULL claim + conflict rejection", ()
     const admin = await createTestAdmin(app, { username: `claim-${crypto.randomUUID().slice(0, 8)}` });
 
     const clientId = `legacy-${crypto.randomUUID().slice(0, 8)}`;
-    // Simulate a legacy pre-handshake-auth row.
-    await app.db.insert(clients).values({ id: clientId, userId: null, status: "disconnected" });
+    // Simulate a legacy pre-handshake-auth row. `organizationId` is populated
+    // by migration 0023 on existing DBs, so new inserts need it even when
+    // `user_id` is still NULL.
+    await app.db
+      .insert(clients)
+      .values({ id: clientId, userId: null, organizationId: admin.organizationId, status: "disconnected" });
 
     await registerClient(app.db, {
       clientId,
       userId: admin.userId,
+      organizationId: admin.organizationId,
       instanceId: "test-instance",
       hostname: "host-1",
       os: "darwin",
@@ -44,10 +49,22 @@ describe("registerClient — legacy user_id NULL claim + conflict rejection", ()
     const bob = await createTestAdmin(app, { username: `bob-${crypto.randomUUID().slice(0, 8)}` });
 
     const clientId = `shared-${crypto.randomUUID().slice(0, 8)}`;
-    await registerClient(app.db, { clientId, userId: alice.userId, instanceId: "test-instance" });
+    await registerClient(app.db, {
+      clientId,
+      userId: alice.userId,
+      organizationId: alice.organizationId,
+      instanceId: "test-instance",
+    });
 
+    // Both admins live in the default org, so the conflict surfaces as
+    // ForbiddenError (same org, different user) rather than CLIENT_ORG_MISMATCH.
     await expect(
-      registerClient(app.db, { clientId, userId: bob.userId, instanceId: "test-instance" }),
+      registerClient(app.db, {
+        clientId,
+        userId: bob.userId,
+        organizationId: bob.organizationId,
+        instanceId: "test-instance",
+      }),
     ).rejects.toBeInstanceOf(ForbiddenError);
 
     // Owner unchanged.
@@ -60,8 +77,20 @@ describe("registerClient — legacy user_id NULL claim + conflict rejection", ()
     const admin = await createTestAdmin(app, { username: `idem-${crypto.randomUUID().slice(0, 8)}` });
 
     const clientId = `idem-${crypto.randomUUID().slice(0, 8)}`;
-    await registerClient(app.db, { clientId, userId: admin.userId, instanceId: "i1", hostname: "h1" });
-    await registerClient(app.db, { clientId, userId: admin.userId, instanceId: "i2", hostname: "h2" });
+    await registerClient(app.db, {
+      clientId,
+      userId: admin.userId,
+      organizationId: admin.organizationId,
+      instanceId: "i1",
+      hostname: "h1",
+    });
+    await registerClient(app.db, {
+      clientId,
+      userId: admin.userId,
+      organizationId: admin.organizationId,
+      instanceId: "i2",
+      hostname: "h2",
+    });
 
     const [row] = await app.db.select().from(clients).where(eq(clients.id, clientId)).limit(1);
     expect(row?.userId).toBe(admin.userId);

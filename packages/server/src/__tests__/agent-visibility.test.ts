@@ -68,9 +68,13 @@ let fallback: { memberId: string; clientId: string };
 async function seedClientForMember(app: FastifyInstance, memberId: string): Promise<string> {
   const { members } = await import("../db/schema/members.js");
   const { eq } = await import("drizzle-orm");
-  const [row] = await app.db.select({ userId: members.userId }).from(members).where(eq(members.id, memberId)).limit(1);
+  const [row] = await app.db
+    .select({ userId: members.userId, organizationId: members.organizationId })
+    .from(members)
+    .where(eq(members.id, memberId))
+    .limit(1);
   if (!row) throw new Error(`member "${memberId}" not found`);
-  return seedClient(app, row.userId);
+  return seedClient(app, row.userId, row.organizationId);
 }
 
 async function seedAgent(app: FastifyInstance, data: Parameters<typeof createAgent>[1]) {

@@ -58,7 +58,7 @@ first-tree-hub client start
 
 ## Monorepo Structure
 
-- `packages/shared/` — `@agent-team-foundation/first-tree-hub-shared` — Zod schemas + types + config system (published)
+- `packages/shared/` — `@agent-team-foundation/first-tree-hub-shared` — Zod schemas + types + config system (internal, not published)
 - `packages/server/` — `@first-tree-hub/server` — Fastify API server (private, bundled)
 - `packages/client/` — `@first-tree-hub/client` — Agent SDK + Runtime (private, bundled)
 - `packages/command/` — `@agent-team-foundation/first-tree-hub` — Unified CLI (**published**, the consumer-facing tarball)
@@ -131,8 +131,7 @@ External projects (e.g. context-tree) import core via `import { startServer, che
 ### Versioning
 
 - **Bump `packages/command`** on every PR that touches `command` / `client` / `server` / `web` / `shared` — this is the consumer-facing tarball.
-- **Bump `packages/shared`** only when its externally-importable surface (exported Zod schemas, types, constants) changes.
-- **Never bump** `private: true` packages (`client` / `server` / `web`) — `tsdown` inlines them into the `command` tarball; their `version` is inert.
+- **Never bump** `private: true` packages (`shared` / `client` / `server` / `web`) — `tsdown` inlines them into the `command` tarball; their `version` is inert.
 
 Full policy (how to pick the next version, anti-patterns, bash recipes): [docs/versioning-and-publishing.md](docs/versioning-and-publishing.md).
 

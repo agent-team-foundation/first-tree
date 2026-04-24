@@ -77,6 +77,7 @@ describe("Agent WS — agent:pinned push on create/bind", () => {
       await tx.insert(clients).values({
         id: clientId,
         userId,
+        organizationId: orgId,
         status: "connected",
       });
     });
@@ -220,7 +221,12 @@ describe("Agent WS — agent:pinned push on create/bind", () => {
       // be pinned to that client, not `seed.clientId` — so the live WS on
       // `seed.clientId` must stay quiet.
       const otherClientId = `cli-other-${crypto.randomUUID().slice(0, 6)}`;
-      await app.db.insert(clients).values({ id: otherClientId, userId: seed.userId, status: "connected" });
+      await app.db.insert(clients).values({
+        id: otherClientId,
+        userId: seed.userId,
+        organizationId: seed.organizationId,
+        status: "connected",
+      });
 
       let receivedPinned = false;
       ws.on("message", (raw) => {

@@ -87,6 +87,7 @@ describe("Agent WS — session event protocol (S10)", () => {
       await tx.insert(clients).values({
         id: clientId,
         userId,
+        organizationId: orgId,
         status: "connected",
       });
 

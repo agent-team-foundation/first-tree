@@ -90,8 +90,6 @@ export const agentSchema = z.object({
   status: z.string(),
   /** How this agent was created */
   source: z.string().nullable().optional(),
-  /** Control-plane user association (nullable, cloud-only) */
-  cloudUserId: z.string().nullable().optional(),
   /** Agent visibility: "private" (manager only) or "organization" (all members) */
   visibility: agentVisibilitySchema,
   metadata: z.record(z.string(), z.unknown()),

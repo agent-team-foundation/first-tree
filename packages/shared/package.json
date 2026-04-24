@@ -1,21 +1,15 @@
 {
   "name": "@agent-team-foundation/first-tree-hub-shared",
+  "private": true,
   "version": "0.2.1",
   "type": "module",
-  "description": "First Tree Hub shared schemas, types, and configuration",
+  "description": "First Tree Hub shared schemas, types, and configuration (internal to the monorepo)",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/agent-team-foundation/first-tree-hub.git",
     "directory": "packages/shared"
   },
-  "publishConfig": {
-    "access": "public"
-  },
-  "files": [
-    "dist",
-    "src"
-  ],
   "exports": {
     ".": {
       "types": "./src/index.ts",
