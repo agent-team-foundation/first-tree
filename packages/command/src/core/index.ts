@@ -41,6 +41,10 @@ export {
 export { bindFeishuBot, bindFeishuUser } from "./feishu.js";
 // Database
 export { runMigrations } from "./migrate.js";
+// Phase 3 of the agent-naming refactor — renames local agent dirs whose
+// name drifted from the server-authoritative `agent.name` slug.
+export type { AgentDirMigrationResult, NameResolver } from "./migrate-agent-dirs.js";
+export { createApiNameResolver, migrateLocalAgentDirs } from "./migrate-agent-dirs.js";
 // Legacy home auto-migration (pre-v0.9 `~/.first-tree-hub` → `~/.first-tree/hub`)
 export { runHomeMigration } from "./migrate-home.js";
 // Onboard

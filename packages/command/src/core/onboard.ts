@@ -186,7 +186,11 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
   });
   print.line(`Agent "${args.id}" created (uuid ${primary.uuid}).\n`);
 
-  // For non-human agents, persist the local alias so `client start` can bind.
+  // For non-human agents, persist the local config under the hub agent
+  // name so `client start` can bind (Phase 3 of the agent-naming refactor:
+  // the local dir is always keyed by the server-authoritative
+  // `agent.name`; `args.id` is the same value that was POSTed as `name`
+  // to the create endpoint, so this is already the canonical key).
   if (args.type !== "human") {
     saveAgentConfig(args.id, primary.uuid, "claude-code");
   }

@@ -7,6 +7,7 @@ import {
   setConfigValue,
 } from "@agent-team-foundation/first-tree-hub-shared/config";
 import { input, password, select } from "@inquirer/prompts";
+import { ensureFreshAccessToken, resolveServerUrl } from "./bootstrap.js";
 
 /**
  * Check if interactive mode is available.
@@ -71,18 +72,40 @@ export async function promptMissingFields(options: {
 }
 
 /**
- * Interactive add agent — simple two-field prompt.
+ * Interactive / scripted "add this agent to the local client".
+ *
+ * Phase 3 of the agent-naming refactor removed the free-form local
+ * alias — the local config dir is keyed by the server-authoritative
+ * `agent.name` slug. This helper only asks the user for the agent UUID
+ * (or takes it via `opts.agentId`), then fetches the canonical name
+ * from the Hub. A `name` comes back null only if the agent was
+ * tombstoned server-side, in which case the caller must refuse the
+ * add (there's nothing sensible to key the local dir on).
  */
-export async function promptAddAgent(): Promise<{ name: string; agentId: string }> {
-  const name = await input({
-    message: "Local alias:",
-    validate: (v) => (/^[a-z0-9][a-z0-9-]*$/.test(v) ? true : "Lowercase alphanumeric and hyphens only"),
+export async function promptAddAgent(opts: { agentId?: string } = {}): Promise<{ name: string; agentId: string }> {
+  const agentId =
+    opts.agentId ??
+    (await input({
+      message: "Agent UUID on the Hub:",
+      validate: (v) => (v.length > 0 ? true : "Agent UUID is required"),
+    }));
+
+  const serverUrl = resolveServerUrl(process.env.FIRST_TREE_HUB_SERVER_URL);
+  const token = await ensureFreshAccessToken();
+  const res = await fetch(`${serverUrl}/api/v1/admin/agents/${encodeURIComponent(agentId)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(10_000),
   });
-  const agentId = await input({
-    message: "Agent UUID on the Hub:",
-    validate: (v) => (v.length > 0 ? true : "Agent UUID is required"),
-  });
-  return { name, agentId };
+  if (!res.ok) {
+    throw new Error(`Failed to look up agent ${agentId}: HTTP ${res.status}`);
+  }
+  const body = (await res.json()) as { name: string | null };
+  if (!body.name) {
+    throw new Error(
+      `Agent ${agentId} has no hub name (tombstoned or never named). Cannot add a local config without a name.`,
+    );
+  }
+  return { name: body.name, agentId };
 }
 
 // ── Internal ─────────────────────────────────────────────────────────
