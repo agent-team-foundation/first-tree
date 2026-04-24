@@ -1,7 +1,7 @@
 import { ADAPTER_PLATFORMS } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Cable, Link2, Plus, Trash2 } from "lucide-react";
-import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { type HubClient, listClients } from "./../api/activity.js";
 import { createAdapterMapping, deleteAdapterMapping, listAdapterMappings } from "./../api/adapter-mappings.js";
@@ -339,6 +339,29 @@ export function AgentDetailPage() {
 
   const isHumanLocal = agentQuery.data?.type === "human";
   const sidebarItems = useMemo(() => buildSidebar(isHumanLocal), [isHumanLocal]);
+
+  // Sticky ContextBar visibility: hide while the Overview section is on screen
+  // (its Status & Health card already shows runtime/computer/model), show once
+  // the operator has scrolled past it. Driven by an IntersectionObserver on a
+  // zero-height sentinel placed at the bottom of the Overview section.
+  const overviewSentinelRef = useRef<HTMLDivElement | null>(null);
+  const [contextBarVisible, setContextBarVisible] = useState(false);
+  useEffect(() => {
+    if (isHumanLocal) return;
+    const el = overviewSentinelRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        if (!entry) return;
+        // Show the bar only after the sentinel has scrolled *above* the viewport.
+        setContextBarVisible(!entry.isIntersecting && entry.boundingClientRect.top < 0);
+      },
+      { threshold: 0 },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [isHumanLocal]);
 
   if (agentQuery.isLoading) {
     return (
@@ -729,6 +752,7 @@ export function AgentDetailPage() {
             runtimeLabel={contextRuntimeLabel}
             computerLabel={boundClientLabel}
             modelLabel={tileValues.model}
+            visible={contextBarVisible}
           />
         )}
 
@@ -764,12 +788,10 @@ export function AgentDetailPage() {
               bindingsSlot={bindingsPanel}
               health={{
                 runtimeState,
-                runtimeKind: runtimeType,
-                computerLabel: boundClientLabel,
                 model: tileValues.model,
                 activeSessions,
                 totalSessions: tileValues.sessions,
-                lastActiveAt: clientStatus?.offlineSince ?? null,
+                offlineSince: clientStatus?.offlineSince ?? null,
               }}
               onOpenChat={() => navigate(`/?a=${agent.uuid}`)}
               onTest={() => {
@@ -779,6 +801,8 @@ export function AgentDetailPage() {
               testPending={testMutation.isPending}
             />
           </SectionShell>
+          {/* Sentinel observed by the ContextBar IntersectionObserver above. */}
+          <div ref={overviewSentinelRef} aria-hidden style={{ height: 0 }} />
 
           {!isHuman && (
             <>

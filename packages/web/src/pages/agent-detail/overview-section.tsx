@@ -11,6 +11,10 @@ import { formatDate } from "../../lib/utils.js";
  * controls below. Identity editing keeps its own Dialog (IdentitySection) so
  * the SaveBar stays config-only; this component renders both the Profile card
  * and the Status & Health card side by side.
+ *
+ * Note: runtime + bound-computer labels are shown by the sticky ContextBar at
+ * the top of the page, so Status & Health here intentionally omits a "Runs on"
+ * row to avoid first-screen duplication.
  */
 
 export type OverviewSectionProps = {
@@ -28,13 +32,15 @@ export type OverviewSectionProps = {
 
 export type OverviewHealth = {
   runtimeState: string | null;
-  runtimeKind: string | null;
-  computerLabel: string | null;
   model: string;
   activeSessions: number;
   totalSessions: number | string;
-  /** ISO timestamp or null. */
-  lastActiveAt: string | null;
+  /**
+   * ISO timestamp marking when the bound client last went offline, or null
+   * while the client is currently online / has never connected. Surfaced as
+   * the "Offline since" row — NOT a generic "last active" timestamp.
+   */
+  offlineSince: string | null;
 };
 
 export function OverviewSection(props: OverviewSectionProps) {
@@ -47,12 +53,10 @@ export function OverviewSection(props: OverviewSectionProps) {
 
       <StatusHealthCard
         state={props.health.runtimeState}
-        runtimeKind={props.health.runtimeKind ?? (isHuman ? "human" : "—")}
-        computerLabel={props.health.computerLabel}
         model={props.health.model}
         activeSessions={props.health.activeSessions}
         totalSessions={props.health.totalSessions}
-        lastActiveAt={props.health.lastActiveAt}
+        offlineSince={props.health.offlineSince}
         agentActive={agent.status === "active"}
         isHuman={isHuman}
         onOpenChat={props.onOpenChat}
@@ -65,12 +69,10 @@ export function OverviewSection(props: OverviewSectionProps) {
 
 function StatusHealthCard(props: {
   state: string | null;
-  runtimeKind: string;
-  computerLabel: string | null;
   model: string;
   activeSessions: number;
   totalSessions: number | string;
-  lastActiveAt: string | null;
+  offlineSince: string | null;
   agentActive: boolean;
   isHuman: boolean;
   onOpenChat: () => void;
@@ -90,7 +92,7 @@ function StatusHealthCard(props: {
         style={{ padding: "var(--sp-2_5) var(--sp-3_5)", borderBottom: "var(--hairline) solid var(--border-faint)" }}
       >
         <h3 className="inline-flex items-center gap-2 text-body font-semibold" style={{ color: "var(--fg)" }}>
-          Status &amp; health
+          Status & health
           <StateChip state={props.state} />
         </h3>
         <div className="flex gap-1.5">
@@ -106,7 +108,6 @@ function StatusHealthCard(props: {
         </div>
       </header>
       <div className="px-4 py-3 text-body grid gap-2" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
-        <HealthRow label="Runs on" value={formatRunsOn(props.runtimeKind, props.computerLabel)} />
         <HealthRow label="Model" value={<span className="mono">{props.model}</span>} />
         <HealthRow
           label="Sessions"
@@ -121,13 +122,13 @@ function StatusHealthCard(props: {
           }
         />
         <HealthRow
-          label="Last active"
+          label="Offline since"
           value={
-            props.lastActiveAt ? (
-              <span className="mono text-label">{formatDate(props.lastActiveAt)}</span>
+            props.offlineSince ? (
+              <span className="mono text-label">{formatDate(props.offlineSince)}</span>
             ) : (
               <span className="text-caption" style={{ color: "var(--fg-4)" }}>
-                —
+                — (online)
               </span>
             )
           }
@@ -145,27 +146,5 @@ function HealthRow({ label, value }: { label: string; value: ReactNode }) {
       </span>
       <span className="min-w-0 truncate">{value}</span>
     </div>
-  );
-}
-
-function formatRunsOn(runtimeKind: string, computerLabel: string | null): ReactNode {
-  if (!computerLabel) {
-    return (
-      <span>
-        <span className="mono">{runtimeKind}</span>{" "}
-        <span className="text-caption" style={{ color: "var(--fg-4)" }}>
-          (no computer bound)
-        </span>
-      </span>
-    );
-  }
-  return (
-    <span>
-      <span className="mono">{runtimeKind}</span>{" "}
-      <span className="text-caption" style={{ color: "var(--fg-4)" }}>
-        @
-      </span>{" "}
-      <span className="mono">{computerLabel}</span>
-    </span>
   );
 }

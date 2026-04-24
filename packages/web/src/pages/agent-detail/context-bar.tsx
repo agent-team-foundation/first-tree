@@ -1,22 +1,30 @@
-import type { ReactNode } from "react";
-
 /**
  * Sticky context bar for the agent detail page. Renders the fixed
  * "Runs on <runtime> @ <computer> · <model>" strap so the operator always knows
- * which runtime/binding/model the page is editing, regardless of scroll depth.
+ * which runtime/binding/model the page is editing once they've scrolled past
+ * the Overview section (which already surfaces the same facts in a card).
  *
  * The bar sits **inside** the scrollable main column directly under the page
  * header, so the breadcrumb+title stays at the top (only this bar sticks).
+ *
+ * Visibility is driven by the parent (see `AgentDetailPage`): an
+ * IntersectionObserver on a sentinel at the bottom of Overview toggles
+ * `visible`, avoiding first-screen duplication with the Status & Health card.
  */
 
 export type ContextBarProps = {
   runtimeLabel: string;
   computerLabel: string | null;
   modelLabel: string;
-  right?: ReactNode;
+  /**
+   * When false, the bar is not rendered at all. Defaults to true so callers
+   * that don't want visibility control get the always-on behaviour.
+   */
+  visible?: boolean;
 };
 
-export function ContextBar({ runtimeLabel, computerLabel, modelLabel, right }: ContextBarProps) {
+export function ContextBar({ runtimeLabel, computerLabel, modelLabel, visible = true }: ContextBarProps) {
+  if (!visible) return null;
   return (
     <div
       className="sticky z-20 flex items-center justify-between gap-3 backdrop-blur"
@@ -46,7 +54,6 @@ export function ContextBar({ runtimeLabel, computerLabel, modelLabel, right }: C
           model <span style={{ color: "var(--fg-2)" }}>{modelLabel}</span>
         </span>
       </div>
-      {right}
     </div>
   );
 }

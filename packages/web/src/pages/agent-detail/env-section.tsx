@@ -1,6 +1,6 @@
 import { ENV_REDACTED_PLACEHOLDER, type EnvEntry } from "@agent-team-foundation/first-tree-hub-shared";
 import { Eye, EyeOff, Lock, Plus } from "lucide-react";
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import { Button } from "../../components/ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Input } from "../../components/ui/input.js";
@@ -70,7 +70,7 @@ export function EnvSection(props: EnvSectionProps) {
             const isPlaceholder = item.value.value === ENV_REDACTED_PLACEHOLDER;
             const canReveal = isSensitive && !isPlaceholder && !!item.value.value;
             const isRevealed = revealed.has(item.key);
-            let rendered: React.ReactNode;
+            let rendered: ReactNode;
             if (!isSensitive) {
               rendered = item.value.value || <em>(empty)</em>;
             } else if (canReveal && isRevealed) {
