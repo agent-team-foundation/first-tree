@@ -7,7 +7,7 @@ import type {
 import type { pino } from "../observability/logger.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import type { AgentConfigCache } from "./agent-config-cache.js";
-import { buildAgentEnv, formatInboundContent } from "./agent-io.js";
+import { buildAgentEnv, createParticipantCache, formatInboundContent, resolveSenderLabel } from "./agent-io.js";
 import type { SessionConfig } from "./config.js";
 import { Deduplicator } from "./deduplicator.js";
 import type {
@@ -540,6 +540,12 @@ export class SessionManager {
       // since the cleanup cron is out of scope for this redesign.)
       this.sessions.delete(candidate.key);
       this.sessionRuntimeStates.delete(candidate.key);
+      // Drop the trigger alongside the session — the next message routed to
+      // this chat will set a fresh one. Leaving stale entries here would
+      // only burn memory (wrong replies are not a risk since `routeMessage`
+      // overwrites before the handler runs), but since `terminate` already
+      // cleans the same maps we keep the two paths symmetric.
+      this.currentTrigger.delete(candidate.key);
       this.recomputeRuntimeState();
       this.persistRegistry();
     }
@@ -610,6 +616,12 @@ export class SessionManager {
     // to other places that want structured fields.
     const log = (msg: string) => sessionLog.info(msg);
 
+    // One participant cache per session — shared by result-sink (for the
+    // direct-vs-group default-mention decision) and formatInboundContent
+    // (for resolving `[From: <name>]`). First use triggers a fetch;
+    // subsequent calls in either consumer hit memory.
+    const participants = createParticipantCache(this.config.sdk, chatId, log);
+
     const forwardResult = createResultSink({
       sdk: this.config.sdk,
       agent: this.config.agentIdentity,
@@ -619,6 +631,7 @@ export class SessionManager {
         this.currentTrigger.delete(chatId);
       },
       log,
+      participants,
     });
 
     const envCtx = { sdk: this.config.sdk, agent: this.config.agentIdentity, chatId };
@@ -645,7 +658,8 @@ export class SessionManager {
       },
       forwardResult,
       buildAgentEnv: (parentEnv) => buildAgentEnv(parentEnv, envCtx),
-      formatInboundContent,
+      formatInboundContent: (message) => formatInboundContent(message, participants),
+      resolveSenderLabel: async (senderId) => resolveSenderLabel(senderId, await participants.get()),
     };
   }
 
@@ -740,6 +754,19 @@ export class SessionManager {
  * our session on this side. Server-side replyTo routing already delivers a
  * second entry in the target chat, so suppressing the fan-out copy here
  * leaves exactly one path from peer's reply to our waiting session.
+ *
+ * The four early-returns spell out "when this is NOT an echo":
+ *  - no snapshot        → just a regular message, not a reply
+ *  - sender isn't us    → replying to someone else's message, clearly not an echo
+ *  - original chat != this chat
+ *       → the reply arrived in a chat where we never sent the original;
+ *         could only happen via replyTo fan-out of a different thread, so
+ *         suppressing would silence a legit cross-chat handoff
+ *  - original had no replyTo → sender didn't ask replies to route away, so
+ *                              the peer's reply here is the canonical path
+ *
+ * Only when all four are satisfied AND the replyTo target is a different
+ * chat do we suppress — that's exactly proposal §3.5 Case A.
  */
 export function shouldSuppressEcho(entry: InboxEntryWithMessage, myAgentId: string): boolean {
   const snapshot = entry.message.inReplyToSnapshot;

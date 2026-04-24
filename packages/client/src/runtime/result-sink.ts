@@ -1,5 +1,5 @@
-import type { ChatParticipantDetail } from "@agent-team-foundation/first-tree-hub-shared";
 import type { FirstTreeHubSDK } from "../sdk.js";
+import type { ParticipantCache } from "./agent-io.js";
 import type { AgentIdentity } from "./handler.js";
 
 /**
@@ -37,43 +37,28 @@ export type ResultSinkDeps = {
    *  reply consuming it. */
   clearTrigger: () => void;
   log: (msg: string) => void;
+  /**
+   * Shared participant cache (also consumed by formatInboundContent) — the
+   * runtime owns a single fetch per session so both "is this a group?"
+   * and "what's the sender's name?" questions share one round-trip.
+   */
+  participants: ParticipantCache;
 };
 
 export type ResultSink = (text: string) => Promise<void>;
 
 export function createResultSink(deps: ResultSinkDeps): ResultSink {
-  // Lazy participants cache scoped to this session. We only need it to
-  // decide "is this chat a group?" (default-mention rule applies) — the
-  // server handles `@name` resolution from the content itself.
-  let participantsCache: ChatParticipantDetail[] | null = null;
-  let participantsFetch: Promise<ChatParticipantDetail[]> | null = null;
-
-  async function getParticipants(): Promise<ChatParticipantDetail[]> {
-    if (participantsCache) return participantsCache;
-    if (!participantsFetch) {
-      // Wrap in async IIFE so sync throws from SDK mocks without
-      // `listChatParticipants` resolve to [] rather than break auto-forward.
-      participantsFetch = (async () => {
-        try {
-          const rows = await deps.sdk.listChatParticipants(deps.chatId);
-          participantsCache = rows;
-          return rows;
-        } catch (err) {
-          deps.log(`listChatParticipants failed: ${err instanceof Error ? err.message : String(err)}`);
-          return [];
-        } finally {
-          participantsFetch = null;
-        }
-      })();
-    }
-    return participantsFetch;
-  }
-
   async function buildMetadata(trigger: Trigger | null): Promise<Record<string, unknown> | undefined> {
     // Direct chats (2 participants) never need a default mention — the peer
-    // sits in `full` mode so fan-out reaches them regardless.
+    // sits in `full` mode so fan-out reaches them regardless. We key on
+    // participant count (not chat type) because the upgrade rule in
+    // services/chat.ts is one-directional: direct → group on the third
+    // join, and groups never shrink back to 2. If that ever changes (e.g.
+    // `removeParticipant` starts down-grading) this branch must switch to
+    // reading chat.type, or groups that transiently shrink will miss the
+    // default @trigger.sender mention.
     if (!trigger || trigger.senderId === deps.agent.agentId) return undefined;
-    const participants = await getParticipants();
+    const participants = await deps.participants.get();
     if (participants.length <= 2) return undefined;
     return { mentions: [trigger.senderId] };
   }

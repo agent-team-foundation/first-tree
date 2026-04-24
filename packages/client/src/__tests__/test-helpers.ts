@@ -2,16 +2,20 @@ import type { InboxEntryWithMessage, InReplyToSnapshot } from "@agent-team-found
 import type { SessionMessage } from "../runtime/handler.js";
 
 /**
- * Minimal stub for the three runtime-provided `SessionContext` plumbing
- * fields (forwardResult / buildAgentEnv / formatInboundContent). Keeps legacy
- * tests — which pre-date the runtime migration and still assert directly on
- * `sdk.sendMessage` — green without duplicating the stub in every file.
+ * Minimal stub for the runtime-provided `SessionContext` plumbing fields
+ * (forwardResult / buildAgentEnv / formatInboundContent / resolveSenderLabel).
+ * Keeps legacy tests — which pre-date the runtime migration and still assert
+ * directly on `sdk.sendMessage` — green without duplicating the stub in every
+ * file.
  *
  * The stubbed `forwardResult` just proxies to `sdk.sendMessage` with no
  * enrichment — it's deliberately not a faithful copy of the real result-sink
  * (mentions / inReplyTo / trigger lookup live in the runtime). Tests that
  * need enrichment coverage should exercise the real sink in
  * `result-sink.test.ts` instead of going through the handler.
+ *
+ * The stubbed name-resolution path returns the raw senderId — the production
+ * `[From: <name>]` path is covered separately in `agent-io.test.ts`.
  */
 export function mockCtxPlumbing(
   sdk: { sendMessage: (chatId: string, body: Record<string, unknown>) => Promise<unknown> },
@@ -19,17 +23,19 @@ export function mockCtxPlumbing(
 ): {
   forwardResult: (text: string) => Promise<void>;
   buildAgentEnv: (env: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
-  formatInboundContent: (msg: SessionMessage) => string;
+  formatInboundContent: (msg: SessionMessage) => Promise<string>;
+  resolveSenderLabel: (senderId: string) => Promise<string>;
 } {
   return {
     forwardResult: async (text: string) => {
       await sdk.sendMessage(chatId, { format: "text", content: text });
     },
     buildAgentEnv: (env) => env,
-    formatInboundContent: (msg) => {
+    formatInboundContent: async (msg) => {
       const raw = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
       return msg.senderId ? `[From: ${msg.senderId}]\n\n${raw}` : raw;
     },
+    resolveSenderLabel: async (senderId) => senderId,
   };
 }
 

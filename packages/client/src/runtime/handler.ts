@@ -60,11 +60,23 @@ export type SessionContext = HandlerContext & {
 
   /**
    * Format an inbound message's content for handoff to an LLM — prefixes a
-   * `[From: sender-id]` attribution line when the sender is known. Handler
-   * implementations should wrap whatever LLM-specific message envelope they
-   * build around the string this returns.
+   * `[From: <name>]` attribution line when the sender is a participant of
+   * this chat. Handler implementations should wrap whatever LLM-specific
+   * message envelope they build around the string this returns.
+   *
+   * Async because resolving the name may require a one-time participant
+   * fetch; the runtime caches the result for the lifetime of the session.
    */
-  formatInboundContent: (message: SessionMessage) => string;
+  formatInboundContent: (message: SessionMessage) => Promise<string>;
+
+  /**
+   * Resolve a senderId to its chat-local name (the `@<name>` mention token).
+   * Falls back to displayName, then to the raw senderId. Share the same
+   * participant cache as `formatInboundContent`. Handlers that synthesise
+   * content (e.g. the image path's "An image was shared" prompt) call this
+   * to keep `[From: ...]` attribution consistent with the text path.
+   */
+  resolveSenderLabel: (senderId: string) => Promise<string>;
 };
 
 /** Message content extracted from an inbox entry (no entry metadata). */

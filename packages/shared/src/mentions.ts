@@ -21,7 +21,10 @@ export type MentionParticipant = {
   name: string | null;
 };
 
-const MENTION_REGEX = /(?<![A-Za-z0-9_.-])@([A-Za-z0-9_-]{1,64})\b/g;
+// `@` is in the lookbehind so `@@alice` doesn't match `@alice` — the leading
+// `@` already consumed a char that isn't part of the name, but without this
+// the engine still accepts the second `@` as a mention start.
+const MENTION_REGEX = /(?<![A-Za-z0-9_.@-])@([A-Za-z0-9_-]{1,64})\b/g;
 
 function stripCode(content: string): string {
   return content

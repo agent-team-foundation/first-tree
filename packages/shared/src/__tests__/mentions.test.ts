@@ -80,6 +80,10 @@ describe("extractMentions", () => {
     expect(extractMentions(content, participants)).toEqual(["agent-bob"]);
   });
 
+  it("does not match @@name (double-@ prefix — not a real mention)", () => {
+    expect(extractMentions("@@alice was here", participants)).toEqual([]);
+  });
+
   it("handles hyphen-containing participant names", () => {
     expect(extractMentions("@charlie-07 check stats", participants)).toEqual(["agent-charlie"]);
   });

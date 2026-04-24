@@ -1,5 +1,6 @@
 import type { ChatParticipantDetail } from "@agent-team-foundation/first-tree-hub-shared";
 import { describe, expect, it, vi } from "vitest";
+import { createParticipantCache } from "../runtime/agent-io.js";
 import { createResultSink, type Trigger } from "../runtime/result-sink.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 
@@ -60,6 +61,7 @@ function buildSink(fx: SinkFixtures) {
       trigger = null;
     },
     log: (msg) => logs.push(msg),
+    participants: createParticipantCache(sdk, "chat-1", (msg) => logs.push(msg)),
   });
 
   return { sink, sendMessage, listChatParticipants, logs };
@@ -162,12 +164,13 @@ describe("createResultSink — forwardResult enrichment", () => {
       observedTriggers.push(trigger);
     });
 
+    const sdkForRace = {
+      serverUrl: "http://test",
+      sendMessage,
+      listChatParticipants: vi.fn().mockResolvedValue([mkParticipant(ME, "me")]),
+    } as unknown as FirstTreeHubSDK;
     const sink = createResultSink({
-      sdk: {
-        serverUrl: "http://test",
-        sendMessage,
-        listChatParticipants: vi.fn().mockResolvedValue([mkParticipant(ME, "me")]),
-      } as unknown as FirstTreeHubSDK,
+      sdk: sdkForRace,
       agent: {
         agentId: ME,
         inboxId: "inbox-me",
@@ -182,6 +185,7 @@ describe("createResultSink — forwardResult enrichment", () => {
         trigger = null;
       },
       log: () => {},
+      participants: createParticipantCache(sdkForRace, "chat-1", () => {}),
     });
 
     const done = sink("reply text");

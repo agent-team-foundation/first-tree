@@ -317,10 +317,11 @@ describe("messaging E2E — proposal §六 scenarios", () => {
     const b3All = await pollInbox(app.db, b3.inboxId, 10);
     const a1All = await pollInbox(app.db, a1.inboxId, 10);
 
-    // b2 must skip BOTH messages (never mentioned).
-    for (const e of b2All) {
-      expect(skipForMode(e, b2.uuid)).toBe(true);
-    }
+    // b2 must not receive EITHER message — server-authoritative fan-out
+    // withholds inbox_entries from mention_only participants not in the
+    // mention set. Assert length explicitly so a regression that starts
+    // delivering to b2 doesn't pass vacuously through an empty for-loop.
+    expect(b2All).toHaveLength(0);
     // b3 receives b1's reply mentioning him — must NOT skip that one.
     const b3Reply = b3All.find((e) => e.message.inReplyTo === ping.message.id);
     expect(b3Reply).toBeDefined();
@@ -329,5 +330,59 @@ describe("messaging E2E — proposal §六 scenarios", () => {
     for (const e of a1All) {
       expect(skipForMode(e, a1.uuid)).toBe(false);
     }
+  });
+
+  it("Message-immutability invariant: edits do not re-route or re-fan out", async () => {
+    // Proposal §八 invariant 4: messages are immutable (UUID v7 ordering +
+    // append-only fan-out). `editMessage` is only supposed to patch content
+    // in-place; it must NOT trigger a second fan-out or a second replyTo
+    // routing, and it must NOT change replyTo fields. This test pins that.
+    const app = getApp();
+    const ctx = await createAdminContext(app, { username: `e2eimm-${Date.now()}` });
+    const b1 = await createAgent(app.db, {
+      name: `e2eimm-b1-${Date.now()}`,
+      type: "autonomous_agent",
+      managerId: ctx.memberId,
+      clientId: ctx.clientId,
+    });
+    const b2 = await createAgent(app.db, {
+      name: `e2eimm-b2-${Date.now()}`,
+      type: "autonomous_agent",
+      managerId: ctx.memberId,
+      clientId: ctx.clientId,
+    });
+    const c1 = await findOrCreateDirectChat(app.db, b1.uuid, b2.uuid);
+
+    // Send M1 from b1 with a replyTo envelope.
+    const m1 = await sendMessage(app.db, c1.id, b1.uuid, {
+      format: "text",
+      content: "first cut",
+      replyToInbox: b1.inboxId,
+      replyToChat: c1.id,
+    });
+
+    // b2 drains so we observe the PRE-edit fan-out count (1 entry).
+    const b2Before = await pollInbox(app.db, b2.inboxId, 10);
+    expect(b2Before).toHaveLength(1);
+    await ackAll(app, b2Before, b2.inboxId);
+
+    // Edit M1's content. We import editMessage inline so the suite's import
+    // block stays focused on the happy-path messaging primitives.
+    const { editMessage } = await import("../services/message.js");
+    await editMessage(app.db, c1.id, m1.message.id, b1.uuid, { content: "first cut — revised" });
+
+    // No new inbox entries should have been written — b2 pulls nothing.
+    const b2After = await pollInbox(app.db, b2.inboxId, 10);
+    expect(b2After).toHaveLength(0);
+
+    // The on-disk message row retains its original replyTo envelope, and
+    // `metadata.editedAt` is the only observable trace of the edit.
+    const msgs = await listMessages(app.db, c1.id, 10);
+    const edited = msgs.items.find((m) => m.id === m1.message.id);
+    if (!edited) throw new Error("edited message missing");
+    expect(edited.content).toBe("first cut — revised");
+    expect(edited.replyToInbox).toBe(b1.inboxId);
+    expect(edited.replyToChat).toBe(c1.id);
+    expect((edited.metadata as { editedAt?: string }).editedAt).toBeTypeOf("string");
   });
 });

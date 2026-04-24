@@ -348,7 +348,10 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     // does not reliably forward `{ type: "image" }` blocks to the underlying
     // model.
     if (message.format === "file") {
-      const prefix = message.senderId ? `[From: ${message.senderId}]\n\n` : "";
+      // Resolve the sender's chat-local name once up front so both branches
+      // emit the same `[From: <name>]` header as the default text path.
+      const senderLabel = message.senderId ? await sessionCtx.resolveSenderLabel(message.senderId) : "";
+      const prefix = senderLabel ? `[From: ${senderLabel}]\n\n` : "";
 
       if (isImageRefContent(message.content)) {
         const { imageId, mimeType, filename } = message.content;
@@ -403,7 +406,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     // handler frames `[From: ...]` the same way. See runtime/agent-io.ts.
     return {
       type: "user",
-      message: { role: "user", content: sessionCtx.formatInboundContent(message) },
+      message: { role: "user", content: await sessionCtx.formatInboundContent(message) },
       parent_tool_use_id: null,
       session_id: sessionId,
     };

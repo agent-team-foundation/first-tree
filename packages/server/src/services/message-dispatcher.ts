@@ -47,6 +47,12 @@ function normaliseMode(mode: string | null | undefined): ParticipantMode {
  * — often equal to `message.chatId`, but in `replyTo` routing the original
  * sender may be notified in a *different* chat (see services/message.ts).
  * It drives `recipientMode` lookup from `chat_participants`.
+ *
+ * Production code should prefer `buildClientMessagePayloadsForInbox` — the
+ * single-message variant is kept only because it simplifies the dispatcher
+ * unit tests. Each call here issues up to three independent queries
+ * (agent-config, participant mode, inReplyTo snapshot), so batching matters
+ * for any fan-out sized path.
  */
 export type ClientMessagePayloadSource = { kind: "inboxId"; inboxId: string } | { kind: "agentId"; agentId: string };
 

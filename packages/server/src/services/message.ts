@@ -6,7 +6,7 @@ import { agents } from "../db/schema/agents.js";
 import { chatParticipants, chats } from "../db/schema/chats.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
-import { ForbiddenError, NotFoundError } from "../errors.js";
+import { BadRequestError, ForbiddenError, NotFoundError } from "../errors.js";
 import { messageAttrs, withSpan } from "../observability/index.js";
 import { findOrCreateDirectChat } from "./chat.js";
 
@@ -48,6 +48,26 @@ async function sendMessageInner(
       .from(chatParticipants)
       .innerJoin(agents, eq(chatParticipants.agentId, agents.uuid))
       .where(eq(chatParticipants.chatId, chatId));
+
+    // `replyTo` is a sender-declared routing promise — the sender is saying
+    // "when someone replies to this, also deliver a copy to my own inbox in
+    // this other chat". Letting a caller put somebody else's inboxId here
+    // would let an agent spam a third party's inbox by baiting replies.
+    // Enforce that replyToInbox belongs to the sender. replyToChat is not
+    // validated against membership intentionally: cross-workspace reply
+    // routing would already require the sender to be a participant of the
+    // target chat when they *read* that reply, and we don't want to block
+    // legit "I'll come back to this later" envelopes.
+    if (data.replyToInbox !== undefined && data.replyToInbox !== null) {
+      const [senderRow] = await tx
+        .select({ inboxId: agents.inboxId })
+        .from(agents)
+        .where(eq(agents.uuid, senderId))
+        .limit(1);
+      if (!senderRow || senderRow.inboxId !== data.replyToInbox) {
+        throw new BadRequestError("replyToInbox must reference the sender's own inbox");
+      }
+    }
 
     // 2. Resolve `@<name>` tokens in the content against the participant
     //    list. Merge the result into `metadata.mentions` so mention_only
