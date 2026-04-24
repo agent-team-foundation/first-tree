@@ -20,7 +20,9 @@ function mkParticipant(
     mode: extras.mode ?? "full",
     joinedAt: extras.joinedAt ?? new Date().toISOString(),
     name,
-    displayName: extras.displayName ?? null,
+    // ChatParticipantDetail.displayName is non-null post-Phase 2, so fall
+    // back to a synthetic label when the extras don't provide one.
+    displayName: extras.displayName ?? `agent-${agentId}`,
     type: extras.type ?? "autonomous_agent",
   };
 }

@@ -32,7 +32,12 @@ export type ChatParticipant = z.infer<typeof chatParticipantSchema>;
  */
 export const chatParticipantDetailSchema = chatParticipantSchema.extend({
   name: z.string().nullable(),
-  displayName: z.string().nullable(),
+  /**
+   * Non-null after Phase 2 of the agent-naming refactor — migration 0024
+   * enforces `agents.display_name NOT NULL`, so every participant resolves
+   * to a real label the client can render.
+   */
+  displayName: z.string(),
   type: z.string(),
 });
 export type ChatParticipantDetail = z.infer<typeof chatParticipantDetailSchema>;

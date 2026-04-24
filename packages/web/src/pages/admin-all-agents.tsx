@@ -70,9 +70,7 @@ export function AdminAllAgentsPage() {
                   onClick={() => navigate(`/agents/${encodeURIComponent(a.uuid)}`)}
                 >
                   <DenseTableCell>
-                    <span className="font-medium">
-                      {a.displayName ?? <span style={{ color: "var(--fg-4)" }}>—</span>}
-                    </span>
+                    <span className="font-medium">{a.displayName}</span>
                   </DenseTableCell>
                   <DenseTableCell>
                     {a.name ? (

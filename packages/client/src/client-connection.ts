@@ -33,7 +33,11 @@ export type ClientConnectionConfig = {
 
 export type BoundAgent = {
   agentId: string;
-  displayName: string | null;
+  /**
+   * Always populated post-Phase 2 of the agent-naming refactor — the
+   * `agent:pinned` WebSocket frame resolves the label server-side.
+   */
+  displayName: string;
   agentType: string;
   sdk: FirstTreeHubSDK;
 };
@@ -484,7 +488,10 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
         });
         const agent: BoundAgent = {
           agentId,
-          displayName: (msg.displayName as string) ?? null,
+          // Phase 2: server always sends a non-null displayName; fall back to
+          // the agentId defensively so a schema-mismatched frame from an
+          // older server doesn't crash the runtime.
+          displayName: (msg.displayName as string | null) ?? agentId,
           agentType: (msg.agentType as string) ?? "personal_assistant",
           sdk,
         };

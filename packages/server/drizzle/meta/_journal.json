@@ -169,6 +169,13 @@
       "when": 1777248000000,
       "tag": "0023_clients_org_scoping",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1777334400000,
+      "tag": "0024_display_name_not_null",
+      "breakpoints": true
     }
   ]
 }

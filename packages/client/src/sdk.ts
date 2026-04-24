@@ -34,7 +34,12 @@ export type RegisterResult = {
   agentId: string;
   inboxId: string;
   status: string;
-  displayName: string | null;
+  /**
+   * Always populated post-Phase 2 of the agent-naming refactor — the server
+   * guarantees `agents.display_name` is non-null (migration 0024 + service
+   * default) so the client doesn't need a fallback anymore.
+   */
+  displayName: string;
   type: string;
   delegateMention: string | null;
   metadata: Record<string, unknown>;

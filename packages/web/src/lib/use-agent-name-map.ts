@@ -16,17 +16,17 @@ export function useAgentNameMap(): (uuid: string | null | undefined) => string {
     staleTime: 30_000,
   });
 
-  // Prefer `displayName` over `name` so chat/roster render friendly
-  // strings (e.g. "Alice Wang") instead of slug-form agent names
-  // (e.g. "alice"). The slug stays available as a fallback for agents
-  // with no display name set, and uuid as the last resort for soft-
-  // deleted rows (`name` is cleared on delete) or agents that never had
-  // either field populated.
+  // Post-Phase 2 of the agent-naming refactor, `displayName` is guaranteed
+  // non-null by the DB (migration 0024) and the service-level default.
+  // The old `a.displayName ?? a.name ?? a.uuid` fallback chain is gone \u2014
+  // any missing label now means the UUID isn't in the cached page (e.g.
+  // soft-deleted, org changed mid-session), which we surface as the raw
+  // uuid so the caller can at least render something stable.
   return useMemo(() => {
     const map = new Map<string, string>();
     if (data?.items) {
       for (const a of data.items) {
-        map.set(a.uuid, a.displayName ?? a.name ?? a.uuid);
+        map.set(a.uuid, a.displayName);
       }
     }
     return (uuid: string | null | undefined) => {
@@ -39,10 +39,12 @@ export function useAgentNameMap(): (uuid: string | null | undefined) => string {
 /**
  * Minimal identity pair surfaced to components that want to render the
  * full `<AgentChip>` (display name + `@name`) instead of a single string.
+ * `displayName` is non-null post-Phase 2 of the agent-naming refactor;
+ * `name` stays nullable because soft-deleted rows have it cleared.
  */
 export type AgentIdentity = {
   name: string | null;
-  displayName: string | null;
+  displayName: string;
 };
 
 /**

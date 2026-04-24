@@ -218,6 +218,15 @@ export async function createAgent(db: Database, data: CreateAgent & { managerId?
     }
   }
 
+  // Phase 2 of the agent-naming refactor promoted `display_name` to NOT NULL
+  // and standardized the fallback here so every surface (CLI, server logs,
+  // IM bridge, chat roster) sees a populated label without the web-only
+  // `useAgentNameMap` cascade. Precedence: explicit non-empty displayName →
+  // the agent name → a generic "Unnamed Agent" literal (only reached when
+  // the caller omitted both fields, which only happens for bootstrap /
+  // system-created agents).
+  const resolvedDisplayName = data.displayName?.trim() || name || "Unnamed Agent";
+
   try {
     const [agent] = await db
       .insert(agents)
@@ -226,7 +235,7 @@ export async function createAgent(db: Database, data: CreateAgent & { managerId?
         name,
         organizationId: orgId,
         type: data.type,
-        displayName: data.displayName ?? null,
+        displayName: resolvedDisplayName,
         delegateMention: data.delegateMention ?? null,
         inboxId,
         source: data.source ?? null,
