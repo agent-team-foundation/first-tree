@@ -141,6 +141,11 @@ function runClaude(
         "text",
         "--model",
         model,
+        "--disable-slash-commands",
+        "--setting-sources",
+        "user",
+        "--tools",
+        "",
       ], {
         stdio: ["pipe", "pipe", "pipe"],
         env,

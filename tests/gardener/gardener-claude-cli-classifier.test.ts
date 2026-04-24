@@ -148,7 +148,7 @@ describe("createClaudeCliClassifier", () => {
   });
 
   it("scrubs ANTHROPIC_API_KEY from injected env", async () => {
-    const calls: Array<{ env?: NodeJS.ProcessEnv }> = [];
+    const calls: Array<{ env?: NodeJS.ProcessEnv; args?: string[] }> = [];
     const classifier = createClaudeCliClassifier({
       env: {
         PATH: "/usr/bin:/bin",
@@ -157,10 +157,10 @@ describe("createClaudeCliClassifier", () => {
       },
       spawnImpl: ((
         _command: string,
-        _args: string[],
+        args: string[],
         options?: { env?: NodeJS.ProcessEnv },
       ) => {
-        calls.push(options ?? {});
+        calls.push({ ...(options ?? {}), args });
         return makeFakeChild({
           stdout: JSON.stringify({
             verdict: "ALIGNED",
@@ -176,6 +176,13 @@ describe("createClaudeCliClassifier", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.env?.ANTHROPIC_API_KEY).toBeUndefined();
     expect(calls[0]?.env?.GARDENER_DIR).toBe("/tmp/gardener");
+    expect(calls[0]?.args).toEqual(expect.arrayContaining([
+      "--disable-slash-commands",
+      "--setting-sources",
+      "user",
+      "--tools",
+      "",
+    ]));
   });
 
   it("ClaudeCliClassifierError carries kind and stderr", () => {
