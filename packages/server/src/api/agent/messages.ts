@@ -8,6 +8,7 @@ import { z } from "zod";
 import { requireAgent } from "../../middleware/require-identity.js";
 import { createLogger } from "../../observability/index.js";
 import * as chatService from "../../services/chat.js";
+import { prepareImageOutbound } from "../../services/image-broadcast.js";
 import * as messageService from "../../services/message.js";
 import { notifyRecipients } from "../../services/notifier.js";
 
@@ -23,11 +24,12 @@ export async function agentMessageRoutes(app: FastifyInstance): Promise<void> {
     const identity = requireAgent(request);
     await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
     const body = sendMessageSchema.parse(request.body);
+    const prepared = await prepareImageOutbound(app.db, app.notifier, request.params.chatId, body);
     const { message: msg, recipients } = await messageService.sendMessage(
       app.db,
       request.params.chatId,
       identity.uuid,
-      body,
+      prepared,
     );
 
     notifyRecipients(app.notifier, recipients, msg.id);
