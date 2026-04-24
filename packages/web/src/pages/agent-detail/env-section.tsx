@@ -1,5 +1,5 @@
 import { ENV_REDACTED_PLACEHOLDER, type EnvEntry } from "@agent-team-foundation/first-tree-hub-shared";
-import { Lock, Plus } from "lucide-react";
+import { Eye, EyeOff, Lock, Plus } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import { Button } from "../../components/ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
@@ -26,6 +26,18 @@ export type EnvSectionProps = {
 
 export function EnvSection(props: EnvSectionProps) {
   const [dialog, setDialog] = useState<{ mode: "add" } | { mode: "edit"; key: string; initial: EnvEntry } | null>(null);
+  // Per-row reveal of sensitive values. Only works for values that still live
+  // in the draft as plaintext (newly added or explicitly re-entered). Persisted
+  // sensitive values are stored as ENV_REDACTED_PLACEHOLDER and cannot be
+  // revealed — we show a tooltip instead.
+  const [revealed, setRevealed] = useState<ReadonlySet<string>>(() => new Set());
+  const toggleReveal = (key: string) =>
+    setRevealed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   const activeCount = props.items.filter((i) => i.status !== "deleted").length;
 
   return (
@@ -53,22 +65,53 @@ export function EnvSection(props: EnvSectionProps) {
         {props.items.length === 0 ? (
           <p className="text-body text-muted-foreground">No environment variables.</p>
         ) : (
-          props.items.map((item) => (
-            <ListRow
-              key={item.key}
-              status={item.status}
-              onEdit={() => setDialog({ mode: "edit", key: item.key, initial: item.value })}
-              onDelete={() => props.onDelete(item.key)}
-              onUndo={() => props.onUndoDelete(item.key)}
-              disabled={props.disabled}
-            >
-              <span className="font-mono font-medium">{item.value.key}</span>
-              <span className="font-mono text-caption text-muted-foreground truncate max-w-xs">
-                {item.value.sensitive ? "••••••" : item.value.value || <em>(empty)</em>}
-              </span>
-              {item.value.sensitive && <Lock className="h-3 w-3 text-muted-foreground" />}
-            </ListRow>
-          ))
+          props.items.map((item) => {
+            const isSensitive = item.value.sensitive;
+            const isPlaceholder = item.value.value === ENV_REDACTED_PLACEHOLDER;
+            const canReveal = isSensitive && !isPlaceholder && !!item.value.value;
+            const isRevealed = revealed.has(item.key);
+            let rendered: React.ReactNode;
+            if (!isSensitive) {
+              rendered = item.value.value || <em>(empty)</em>;
+            } else if (canReveal && isRevealed) {
+              rendered = item.value.value;
+            } else {
+              rendered = "••••••";
+            }
+            return (
+              <ListRow
+                key={item.key}
+                status={item.status}
+                onEdit={() => setDialog({ mode: "edit", key: item.key, initial: item.value })}
+                onDelete={() => props.onDelete(item.key)}
+                onUndo={() => props.onUndoDelete(item.key)}
+                disabled={props.disabled}
+              >
+                <span className="font-mono font-medium">{item.value.key}</span>
+                <span className="font-mono text-caption text-muted-foreground truncate max-w-xs">{rendered}</span>
+                {isSensitive && <Lock className="h-3 w-3 text-muted-foreground" aria-hidden />}
+                {isSensitive && (
+                  <button
+                    type="button"
+                    onClick={() => canReveal && toggleReveal(item.key)}
+                    className="bg-transparent border-0 cursor-pointer inline-flex items-center text-muted-foreground"
+                    title={
+                      canReveal
+                        ? isRevealed
+                          ? "Hide value"
+                          : "Reveal value"
+                        : "Saved sensitive values can't be revealed. Edit to set a new value."
+                    }
+                    aria-label={isRevealed ? "Hide value" : "Reveal value"}
+                    disabled={!canReveal}
+                    style={{ padding: 0, opacity: canReveal ? 1 : 0.4 }}
+                  >
+                    {isRevealed ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                  </button>
+                )}
+              </ListRow>
+            );
+          })
         )}
       </div>
       {dialog && (

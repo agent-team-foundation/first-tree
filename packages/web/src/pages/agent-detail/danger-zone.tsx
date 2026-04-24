@@ -7,6 +7,7 @@ import { Input } from "../../components/ui/input.js";
 
 /**
  * Redesign §5.8 Danger Zone — visually isolated, GitHub-style confirm for delete.
+ * Suspend also uses a proper Dialog (no native window.confirm).
  */
 
 export type DangerZoneProps = {
@@ -22,11 +23,13 @@ export type DangerZoneProps = {
 export function DangerZone(props: DangerZoneProps) {
   const { agent } = props;
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [suspendOpen, setSuspendOpen] = useState(false);
 
   const displayLabel = agent.displayName || agent.name || agent.uuid;
 
   return (
     <section
+      id="ad-danger"
       style={{
         background: "color-mix(in oklch, var(--state-error) 6%, var(--bg-raised))",
         border: "var(--hairline) solid color-mix(in oklch, var(--state-error) 28%, transparent)",
@@ -45,7 +48,7 @@ export function DangerZone(props: DangerZoneProps) {
             title="Suspend agent"
             body="Pause all active sessions. You can reactivate later; tokens stay revoked until then."
             action={
-              <Button variant="outline" size="xs" onClick={props.onSuspend} disabled={props.suspendPending}>
+              <Button variant="outline" size="xs" onClick={() => setSuspendOpen(true)} disabled={props.suspendPending}>
                 {props.suspendPending ? "Suspending…" : "Suspend"}
               </Button>
             }
@@ -73,6 +76,16 @@ export function DangerZone(props: DangerZoneProps) {
         />
       </div>
 
+      <SuspendConfirmDialog
+        open={suspendOpen}
+        onOpenChange={setSuspendOpen}
+        label={displayLabel}
+        onConfirm={() => {
+          setSuspendOpen(false);
+          props.onSuspend();
+        }}
+        pending={props.suspendPending}
+      />
       <DeleteConfirmDialog
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
@@ -116,6 +129,40 @@ type DeleteConfirmProps = {
   onDelete: () => void;
   deleting: boolean;
 };
+
+type SuspendConfirmProps = {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  label: string;
+  onConfirm: () => void;
+  pending: boolean;
+};
+
+function SuspendConfirmDialog({ open, onOpenChange, label, onConfirm, pending }: SuspendConfirmProps) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Suspend "{label}"?</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <p className="text-body" style={{ color: "var(--fg-2)" }}>
+            Runtime binds and HTTP calls will be refused while the agent is suspended. Active sessions end on their next
+            message. You can reactivate later from this same page.
+          </p>
+        </div>
+        <DialogFooter>
+          <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={pending}>
+            Cancel
+          </Button>
+          <Button type="button" variant="destructive" onClick={onConfirm} disabled={pending}>
+            {pending ? "Suspending…" : "Suspend"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 function DeleteConfirmDialog({ open, onOpenChange, expected, onDelete, deleting }: DeleteConfirmProps) {
   const [typed, setTyped] = useState("");
