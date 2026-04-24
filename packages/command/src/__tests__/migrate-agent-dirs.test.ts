@@ -146,4 +146,51 @@ describe("migrateLocalAgentDirs", () => {
     expect(second.renamed).toBe(0);
     expect(readdirSync(dirs({ root }).agentsDir)).toEqual(["alice"]);
   });
+
+  it("renames the config dir even when workspaces and sessions dirs don't exist (fresh client)", async () => {
+    writeAgentYaml(root, "old-alias", "uuid-1");
+    // Deliberately skip writeWorkspace / writeSessionFile.
+    const res = await migrateLocalAgentDirs({
+      ...dirs({ root }),
+      resolver: mkResolver({ "uuid-1": "alice" }),
+    });
+    expect(res.renamed).toBe(1);
+    expect(res.errors).toBe(0);
+    expect(readdirSync(dirs({ root }).agentsDir)).toEqual(["alice"]);
+  });
+
+  it("leaves old workspace in place and logs when the new workspace target already exists (partial failure)", async () => {
+    writeAgentYaml(root, "old-alias", "uuid-1");
+    writeWorkspace(root, "old-alias");
+    writeWorkspace(root, "alice"); // pre-existing target — rename would clobber
+    writeSessionFile(root, "old-alias");
+    const res = await migrateLocalAgentDirs({
+      ...dirs({ root }),
+      resolver: mkResolver({ "uuid-1": "alice" }),
+    });
+    // Config dir renamed; workspace left alone; sessions file renamed.
+    expect(res.renamed).toBe(1);
+    expect(readdirSync(dirs({ root }).agentsDir)).toEqual(["alice"]);
+    // Both workspaces should still exist.
+    const wsNames = readdirSync(dirs({ root }).workspacesDir).sort();
+    expect(wsNames).toEqual(["alice", "old-alias"]);
+  });
+
+  it("skips and logs when agent.yaml is malformed (does not abort migration for healthy siblings)", async () => {
+    writeAgentYaml(root, "alice", "uuid-1");
+    // Write an "agent" dir with a broken yaml.
+    const brokenDir = join(root, "config", "agents", "broken");
+    mkdirSync(brokenDir, { recursive: true });
+    writeFileSync(join(brokenDir, "agent.yaml"), "this: is: : not yaml\n");
+    writeAgentYaml(root, "bob", "uuid-2");
+    const res = await migrateLocalAgentDirs({
+      ...dirs({ root }),
+      resolver: mkResolver({ "uuid-1": "alice", "uuid-2": "bob" }),
+    });
+    // alice + bob scanned (2), broken dir errored but didn't stop the walk.
+    expect(res.scanned).toBe(2);
+    expect(res.errors).toBe(1);
+    // All three dirs still present — broken one left for operator to fix.
+    expect(readdirSync(dirs({ root }).agentsDir).sort()).toEqual(["alice", "bob", "broken"]);
+  });
 });

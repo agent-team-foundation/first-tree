@@ -114,8 +114,8 @@ npm install -g @agent-team-foundation/first-tree-hub
 # Configure server URL
 first-tree-hub config set -c server.url https://hub.example.com
 
-# Add agents
-first-tree-hub agent add my-agent --token aghub_xxxxxxxxxxxx
+# Add an existing Hub agent to this client (dir keyed by its hub name).
+first-tree-hub agent add --agent-id <agent-uuid>
 
 # Start
 first-tree-hub client start
@@ -143,7 +143,7 @@ jobs:
       - run: npm install -g @agent-team-foundation/first-tree-hub
       - run: |
           first-tree-hub config set -c server.url ${{ secrets.HUB_URL }}
-          first-tree-hub agent add ci-agent --token ${{ secrets.AGENT_TOKEN }}
+          first-tree-hub agent add --agent-id ${{ secrets.AGENT_UUID }}
           first-tree-hub client start
 ```
 
