@@ -15,6 +15,21 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
+/**
+ * What the sync-sweep should do on each tick.
+ *
+ * - `detect` (default): run `gardener sync` only; report drift, no writes.
+ * - `apply`: run `gardener sync --apply`; open one aggregated tree PR.
+ * - `open-issues`: run `gardener sync --open-issues`; open one tree
+ *   issue per drift proposal, assignees resolved from NODE.md owners
+ *   unless overridden by `syncAssignee`.
+ *
+ * Modes are mutually exclusive by construction. The legacy boolean
+ * `syncApply` is kept in the on-disk schema as a deprecated alias
+ * that coerces to `syncMode: 'apply'`.
+ */
+export type SyncMode = "detect" | "apply" | "open-issues";
+
 export interface GardenerDaemonConfig {
   /** Absolute path to the bound tree repo checkout. */
   treePath: string;
@@ -36,10 +51,19 @@ export interface GardenerDaemonConfig {
    */
   assignOwners: boolean;
   /**
-   * When true, `sync-sweep` invokes `gardener sync --apply` (open tree
-   * PRs). When false, it stays in detect-only mode.
+   * How the sync-sweep runs — see {@link SyncMode}. Replaces the older
+   * `syncApply: boolean` which is retained only as a read-time alias
+   * for back-compat with configs written by earlier versions.
    */
-  syncApply: boolean;
+  syncMode: SyncMode;
+  /**
+   * Optional override for every issue opened in `syncMode: "open-issues"`.
+   * When set, all issues are assigned to this user instead of NODE.md
+   * owners. Intended for testing against third-party repos where you
+   * don't want to ping real domain owners. Ignored unless
+   * `syncMode === "open-issues"`.
+   */
+  syncAssignee?: string;
 }
 
 export function resolveGardenerDir(env: NodeJS.ProcessEnv = process.env): string {
@@ -95,7 +119,11 @@ function coerceDaemonConfig(raw: Record<string, unknown>): GardenerDaemonConfig 
       ? raw.mergedLookbackSeconds
       : Math.max(60, Math.round((gardenerIntervalMs * 2) / 1000));
   const assignOwners = raw.assignOwners === true;
-  const syncApply = raw.syncApply === true;
+  const syncMode = coerceSyncMode(raw);
+  const syncAssignee =
+    typeof raw.syncAssignee === "string" && raw.syncAssignee.length > 0
+      ? raw.syncAssignee
+      : undefined;
   return {
     treePath,
     codeRepos,
@@ -103,8 +131,23 @@ function coerceDaemonConfig(raw: Record<string, unknown>): GardenerDaemonConfig 
     syncIntervalMs,
     mergedLookbackSeconds,
     assignOwners,
-    syncApply,
+    syncMode,
+    ...(syncAssignee ? { syncAssignee } : {}),
   };
+}
+
+/**
+ * Read `syncMode` from raw config, falling back to the legacy
+ * `syncApply: boolean` alias for configs written by pre-enum versions.
+ * Unknown string values collapse to `"detect"` (safe default).
+ */
+function coerceSyncMode(raw: Record<string, unknown>): SyncMode {
+  const mode = raw.syncMode;
+  if (mode === "detect" || mode === "apply" || mode === "open-issues") {
+    return mode;
+  }
+  if (raw.syncApply === true) return "apply";
+  return "detect";
 }
 
 /**
@@ -135,11 +178,29 @@ export function buildDaemonConfig(opts: {
   syncIntervalMs?: number;
   mergedLookbackSeconds?: number;
   assignOwners?: boolean;
+  /**
+   * New enum-shaped selector for the sync-sweep mode. Prefer this over
+   * the legacy `syncApply` boolean.
+   */
+  syncMode?: SyncMode;
+  /** Optional assignee override, applied only when `syncMode === "open-issues"`. */
+  syncAssignee?: string;
+  /**
+   * @deprecated Pass `syncMode: "apply"` instead. When set to true and
+   * `syncMode` is omitted, coerces to `syncMode: "apply"`. When both
+   * are set, `syncMode` wins.
+   */
   syncApply?: boolean;
 }): GardenerDaemonConfig {
   const gardenerIntervalMs = opts.gardenerIntervalMs ?? DEFAULT_GARDENER_INTERVAL_MS;
   const syncIntervalMs = opts.syncIntervalMs ?? DEFAULT_SYNC_INTERVAL_MS;
   const resolvedTree = resolve(opts.treePath);
+  const syncMode: SyncMode =
+    opts.syncMode ?? (opts.syncApply === true ? "apply" : "detect");
+  const syncAssignee =
+    syncMode === "open-issues" && opts.syncAssignee && opts.syncAssignee.length > 0
+      ? opts.syncAssignee
+      : undefined;
   return {
     treePath: resolvedTree,
     codeRepos: [...opts.codeRepos],
@@ -149,6 +210,7 @@ export function buildDaemonConfig(opts: {
       opts.mergedLookbackSeconds ??
       Math.max(60, Math.round((gardenerIntervalMs * 2) / 1000)),
     assignOwners: opts.assignOwners ?? false,
-    syncApply: opts.syncApply ?? false,
+    syncMode,
+    ...(syncAssignee ? { syncAssignee } : {}),
   };
 }

@@ -81,7 +81,7 @@ describe("gardener daemon -- config I/O", () => {
       gardenerIntervalMs: 60_000,
       syncIntervalMs: 3_600_000,
       assignOwners: true,
-      syncApply: false,
+      syncMode: "detect",
     });
     writeDaemonConfig(config, env);
     const loaded = loadDaemonConfig(env);
@@ -89,6 +89,58 @@ describe("gardener daemon -- config I/O", () => {
     expect(loaded?.codeRepos).toEqual(["a/b", "c/d"]);
     expect(loaded?.assignOwners).toBe(true);
     expect(loaded?.mergedLookbackSeconds).toBe(120); // 2× 60_000 ms → 120 s
+    expect(loaded?.syncMode).toBe("detect");
+    expect(loaded?.syncAssignee).toBeUndefined();
+  });
+
+  it("round-trips open-issues mode with assignee", () => {
+    const tmp = useTmpDir();
+    const env = makeEnv(tmp.path);
+    writeDaemonConfig(
+      buildDaemonConfig({
+        treePath: "/tmp/tree",
+        codeRepos: ["a/b"],
+        syncMode: "open-issues",
+        syncAssignee: "alice",
+      }),
+      env,
+    );
+    const loaded = loadDaemonConfig(env);
+    expect(loaded?.syncMode).toBe("open-issues");
+    expect(loaded?.syncAssignee).toBe("alice");
+  });
+
+  it("coerces legacy syncApply=true in on-disk config to syncMode='apply'", () => {
+    const tmp = useTmpDir();
+    const env = makeEnv(tmp.path);
+    // Simulate a config file written by a pre-enum version by writing
+    // the raw JSON directly (bypasses writeDaemonConfig's strict types).
+    const legacyJson = {
+      treePath: "/tmp/legacy",
+      codeRepos: ["a/b"],
+      gardenerIntervalMs: 60_000,
+      syncIntervalMs: 3_600_000,
+      mergedLookbackSeconds: 120,
+      assignOwners: false,
+      syncApply: true,
+    };
+    const { writeFileSync, mkdirSync } = require("node:fs") as typeof import("node:fs");
+    const { dirname } = require("node:path") as typeof import("node:path");
+    const path = `${tmp.path}/config.json`;
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify(legacyJson, null, 2) + "\n");
+    const loaded = loadDaemonConfig(env);
+    expect(loaded?.syncMode).toBe("apply");
+  });
+
+  it("drops syncAssignee when syncMode is not open-issues", () => {
+    const config = buildDaemonConfig({
+      treePath: "/x",
+      codeRepos: ["a/b"],
+      syncMode: "detect",
+      syncAssignee: "alice",
+    });
+    expect(config.syncAssignee).toBeUndefined();
   });
 
   it("returns null when no config file exists", () => {
@@ -195,15 +247,58 @@ describe("gardener daemon -- sweep arg builders", () => {
     expect(args).toContain("--assign-owners");
   });
 
-  it("sync sweep passes --apply only when syncApply=true", () => {
+  it("sync sweep in detect mode passes neither --apply nor --open-issues", () => {
     const base = buildDaemonConfig({ treePath: "/x", codeRepos: ["a/b"] });
-    expect(buildSyncSweepArgs(base)).not.toContain("--apply");
+    const args = buildSyncSweepArgs(base);
+    expect(args).not.toContain("--apply");
+    expect(args).not.toContain("--open-issues");
+  });
+
+  it("sync sweep in apply mode passes --apply", () => {
     const applied = buildDaemonConfig({
       treePath: "/x",
       codeRepos: ["a/b"],
-      syncApply: true,
+      syncMode: "apply",
     });
-    expect(buildSyncSweepArgs(applied)).toContain("--apply");
+    const args = buildSyncSweepArgs(applied);
+    expect(args).toContain("--apply");
+    expect(args).not.toContain("--open-issues");
+  });
+
+  it("sync sweep in open-issues mode passes --open-issues", () => {
+    const opened = buildDaemonConfig({
+      treePath: "/x",
+      codeRepos: ["a/b"],
+      syncMode: "open-issues",
+    });
+    const args = buildSyncSweepArgs(opened);
+    expect(args).toContain("--open-issues");
+    expect(args).not.toContain("--apply");
+    expect(args).not.toContain("--assignee");
+  });
+
+  it("sync sweep in open-issues mode forwards --assignee when configured", () => {
+    const opened = buildDaemonConfig({
+      treePath: "/x",
+      codeRepos: ["a/b"],
+      syncMode: "open-issues",
+      syncAssignee: "alice",
+    });
+    const args = buildSyncSweepArgs(opened);
+    expect(args).toContain("--open-issues");
+    const idx = args.indexOf("--assignee");
+    expect(idx).toBeGreaterThan(-1);
+    expect(args[idx + 1]).toBe("alice");
+  });
+
+  it("sync sweep back-compat: legacy syncApply=true boolean still produces --apply", () => {
+    const legacy = buildDaemonConfig({
+      treePath: "/x",
+      codeRepos: ["a/b"],
+      syncApply: true, // legacy path, no syncMode
+    });
+    expect(legacy.syncMode).toBe("apply");
+    expect(buildSyncSweepArgs(legacy)).toContain("--apply");
   });
 });
 
@@ -397,6 +492,117 @@ describe("gardener daemon -- start --dry-run", () => {
     );
     expect(code).toBe(1);
     expect(lines.some((l) => l.includes("--gardener-interval"))).toBe(true);
+  });
+
+  it("accepts --sync-mode open-issues and previews syncMode + syncAssignee", async () => {
+    const tmp = useTmpDir();
+    const env = makeEnv(tmp.path);
+    const { write, lines } = capture();
+    const code = await runStart(
+      [
+        "--tree-path",
+        tmp.path,
+        "--code-repo",
+        "a/b",
+        "--sync-mode",
+        "open-issues",
+        "--sync-assignee",
+        "alice",
+        "--dry-run",
+      ],
+      { env, write },
+    );
+    expect(code).toBe(0);
+    const body = lines.join("\n");
+    expect(body).toContain("sync-mode:          open-issues");
+    expect(body).toContain("sync-assignee:      alice");
+  });
+
+  it("rejects --sync-mode with an invalid value", async () => {
+    const tmp = useTmpDir();
+    const env = makeEnv(tmp.path);
+    const { write, lines } = capture();
+    const code = await runStart(
+      [
+        "--tree-path",
+        tmp.path,
+        "--code-repo",
+        "a/b",
+        "--sync-mode",
+        "bogus",
+        "--dry-run",
+      ],
+      { env, write },
+    );
+    expect(code).toBe(1);
+    expect(lines.some((l) => l.includes("--sync-mode"))).toBe(true);
+    expect(lines.some((l) => l.includes("detect|apply|open-issues"))).toBe(true);
+  });
+
+  it("rejects --sync-assignee outside --sync-mode open-issues", async () => {
+    const tmp = useTmpDir();
+    const env = makeEnv(tmp.path);
+    const { write, lines } = capture();
+    const code = await runStart(
+      [
+        "--tree-path",
+        tmp.path,
+        "--code-repo",
+        "a/b",
+        "--sync-mode",
+        "apply",
+        "--sync-assignee",
+        "alice",
+        "--dry-run",
+      ],
+      { env, write },
+    );
+    expect(code).toBe(1);
+    expect(
+      lines.some((l) => l.includes("--sync-assignee is only valid with --sync-mode open-issues")),
+    ).toBe(true);
+  });
+
+  it("rejects using --sync-apply and --sync-mode together", async () => {
+    const tmp = useTmpDir();
+    const env = makeEnv(tmp.path);
+    const { write, lines } = capture();
+    const code = await runStart(
+      [
+        "--tree-path",
+        tmp.path,
+        "--code-repo",
+        "a/b",
+        "--sync-apply",
+        "--sync-mode",
+        "apply",
+        "--dry-run",
+      ],
+      { env, write },
+    );
+    expect(code).toBe(1);
+    expect(lines.some((l) => l.includes("mutually exclusive"))).toBe(true);
+  });
+
+  it("accepts deprecated --sync-apply, warns, and maps to syncMode=apply", async () => {
+    const tmp = useTmpDir();
+    const env = makeEnv(tmp.path);
+    const { write, lines } = capture();
+    const code = await runStart(
+      [
+        "--tree-path",
+        tmp.path,
+        "--code-repo",
+        "a/b",
+        "--sync-apply",
+        "--dry-run",
+      ],
+      { env, write },
+    );
+    expect(code).toBe(0);
+    const body = lines.join("\n");
+    expect(body).toContain("--sync-apply is deprecated");
+    expect(body).toContain("sync-mode:          apply");
   });
 });
 
