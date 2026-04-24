@@ -24,6 +24,7 @@ import type {
   ClassifyOutput,
 } from "../comment.js";
 import { collectTreeDigest, formatDigest } from "./tree-digest.js";
+import { filterDiffNoise } from "./diff-filter.js";
 import {
   parseVerdictJson,
   validateAndGroundNodes,
@@ -37,7 +38,7 @@ const DEFAULT_MODEL = "claude-haiku-4-5";
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
 const MAX_TOKENS = 1024;
-const DIFF_CAP = 20_000;
+const DIFF_CAP = 200_000;
 const FETCH_TIMEOUT_MS = 60_000;
 
 export interface AnthropicClassifierOptions {
@@ -160,14 +161,17 @@ function buildUserPrompt(input: ClassifyInput, digest: string): string {
       parts.push(input.prView.body);
     }
     if (input.diff) {
-      parts.push("");
-      parts.push("## Diff");
-      parts.push("```diff");
-      parts.push(input.diff.slice(0, DIFF_CAP));
-      if (input.diff.length > DIFF_CAP) {
-        parts.push(`... (truncated, ${input.diff.length - DIFF_CAP} bytes omitted)`);
+      const filtered = filterDiffNoise(input.diff);
+      if (filtered.length > 0) {
+        parts.push("");
+        parts.push("## Diff");
+        parts.push("```diff");
+        parts.push(filtered.slice(0, DIFF_CAP));
+        if (filtered.length > DIFF_CAP) {
+          parts.push(`... (truncated, ${filtered.length - DIFF_CAP} bytes omitted)`);
+        }
+        parts.push("```");
       }
-      parts.push("```");
     }
   } else if (input.type === "issue" && input.issueView) {
     parts.push(`## Issue #${input.issueView.number ?? "?"}: ${input.issueView.title ?? ""}`);
