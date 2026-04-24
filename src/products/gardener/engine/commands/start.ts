@@ -15,6 +15,7 @@ import {
   parseDurationMs,
   resolveGardenerDir,
   writeDaemonConfig,
+  type SyncMode,
 } from "../daemon/config.js";
 import {
   bootstrapLaunchdJob,
@@ -23,7 +24,7 @@ import {
   supportsLaunchd,
 } from "../daemon/launchd.js";
 
-export const START_USAGE = `usage: first-tree gardener start --tree-path <path> --code-repo <owner/repo> [--code-repo …] [--gardener-interval 5m] [--sync-interval 1h] [--assign-owners] [--sync-apply]
+export const START_USAGE = `usage: first-tree gardener start --tree-path <path> --code-repo <owner/repo> [--code-repo …] [--gardener-interval 5m] [--sync-interval 1h] [--assign-owners] [--sync-mode <detect|apply|open-issues>] [--sync-assignee USER]
 
 Bring up the gardener daemon in the background.
 
@@ -32,9 +33,15 @@ The daemon runs two schedules:
                   against the tree path; handles open PR verdicts and
                   merge→tree-issue creation across all configured code
                   repos.
-  sync-sweep      invokes \`gardener sync\` (or \`gardener sync --apply\`
-                  when --sync-apply is set) against the tree path;
-                  detects drift and optionally opens tree PRs.
+  sync-sweep      invokes \`gardener sync\` against the tree path. Its
+                  behavior is controlled by --sync-mode:
+                    detect       (default) report drift only, no writes.
+                    apply        run \`gardener sync --apply\`; opens one
+                                 aggregated tree PR per sweep.
+                    open-issues  run \`gardener sync --open-issues\`; opens
+                                 one tree issue per drift proposal so
+                                 breeze + draft-node can handle each
+                                 autonomously.
 
 Options:
   --tree-path <path>          Required. Local checkout of the bound tree repo.
@@ -47,8 +54,17 @@ Options:
   --assign-owners             Pass --assign-owners to gardener comment
                               so merge→tree-issue creations auto-assign
                               NODE owners.
-  --sync-apply                Run the sync sweep in --apply mode
-                              (opens tree PRs). Default: detect only.
+  --sync-mode <mode>          Sync-sweep behavior: detect | apply |
+                              open-issues. Default: detect.
+  --sync-assignee <user>      With --sync-mode open-issues: override
+                              NODE.md-resolved owners and assign every
+                              opened issue to this user. Intended for
+                              testing against third-party repos where
+                              you don't want to ping real owners. Ignored
+                              in other modes.
+  --sync-apply                Deprecated alias for --sync-mode apply.
+                              Prints a warning and maps to apply mode.
+                              Will be removed in a future minor.
   --help, -h                  Show this help.
 
 Environment:
@@ -89,7 +105,17 @@ interface ParsedStartFlags {
   gardenerInterval?: string;
   syncInterval?: string;
   assignOwners: boolean;
-  syncApply: boolean;
+  /**
+   * Explicit `--sync-mode` value, if provided. When both this and
+   * `syncApply` are set, `--sync-mode` wins (and we emit a conflict
+   * error in `runStart`).
+   */
+  syncMode?: SyncMode;
+  /** Raw string for surfacing "invalid value" errors to the user. */
+  syncModeRaw?: string;
+  /** Tracks `--sync-apply` for deprecation warning + conflict detection. */
+  syncApplyLegacy: boolean;
+  syncAssignee?: string;
   dryRun: boolean;
   unknown?: string;
 }
@@ -99,7 +125,7 @@ function parseStartFlags(args: readonly string[]): ParsedStartFlags {
     help: false,
     codeRepos: [],
     assignOwners: false,
-    syncApply: false,
+    syncApplyLegacy: false,
     dryRun: false,
   };
   for (let i = 0; i < args.length; i += 1) {
@@ -107,7 +133,27 @@ function parseStartFlags(args: readonly string[]): ParsedStartFlags {
     if (a === "--help" || a === "-h") { out.help = true; continue; }
     if (a === "--dry-run") { out.dryRun = true; continue; }
     if (a === "--assign-owners") { out.assignOwners = true; continue; }
-    if (a === "--sync-apply") { out.syncApply = true; continue; }
+    if (a === "--sync-apply") { out.syncApplyLegacy = true; continue; }
+    if (a === "--sync-mode") {
+      const val = args[++i];
+      out.syncModeRaw = val;
+      if (val === "detect" || val === "apply" || val === "open-issues") {
+        out.syncMode = val;
+      } else {
+        out.unknown = `--sync-mode: expected one of detect|apply|open-issues (got "${val ?? ""}")`;
+        return out;
+      }
+      continue;
+    }
+    if (a === "--sync-assignee") {
+      const val = args[++i];
+      if (typeof val !== "string" || val.length === 0) {
+        out.unknown = "--sync-assignee requires a GitHub login";
+        return out;
+      }
+      out.syncAssignee = val;
+      continue;
+    }
     if (a === "--tree-path") { out.treePath = args[++i]; continue; }
     if (a === "--code-repo") {
       const val = args[++i];
@@ -167,13 +213,38 @@ export async function runStart(
     return 1;
   }
 
+  // Resolve --sync-mode vs --sync-apply. --sync-mode is authoritative;
+  // --sync-apply is a deprecated alias. Reject conflicting combinations
+  // rather than guessing.
+  if (flags.syncMode && flags.syncApplyLegacy) {
+    write(
+      "--sync-apply and --sync-mode are mutually exclusive (--sync-apply is the deprecated alias).",
+    );
+    return 1;
+  }
+  if (flags.syncApplyLegacy) {
+    write(
+      "warning: --sync-apply is deprecated. Use --sync-mode apply instead (will be removed in a future minor).",
+    );
+  }
+  const syncMode: SyncMode =
+    flags.syncMode ?? (flags.syncApplyLegacy ? "apply" : "detect");
+
+  if (flags.syncAssignee && syncMode !== "open-issues") {
+    write(
+      `--sync-assignee is only valid with --sync-mode open-issues (got --sync-mode ${syncMode}).`,
+    );
+    return 1;
+  }
+
   const config = buildDaemonConfig({
     treePath: flags.treePath,
     codeRepos: flags.codeRepos,
     gardenerIntervalMs: gardenerIntervalMs ?? undefined,
     syncIntervalMs: syncIntervalMs ?? undefined,
     assignOwners: flags.assignOwners,
-    syncApply: flags.syncApply,
+    syncMode,
+    syncAssignee: flags.syncAssignee,
   });
 
   const configFilePath = flags.dryRun
@@ -189,7 +260,10 @@ export async function runStart(
   write(`  sync-interval:      ${config.syncIntervalMs / 1000}s`);
   write(`  merged-lookback:    ${config.mergedLookbackSeconds}s`);
   write(`  assign-owners:      ${config.assignOwners}`);
-  write(`  sync-apply:         ${config.syncApply}`);
+  write(`  sync-mode:          ${config.syncMode}`);
+  if (config.syncAssignee) {
+    write(`  sync-assignee:      ${config.syncAssignee}`);
+  }
 
   if (flags.dryRun) {
     write("--dry-run: not booting daemon (config left untouched)");

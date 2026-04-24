@@ -166,7 +166,14 @@ export function buildSyncSweepArgs(
   config: GardenerDaemonConfig,
 ): string[] {
   const args = ["gardener", "sync", "--tree-path", config.treePath];
-  if (config.syncApply) args.push("--apply");
+  if (config.syncMode === "apply") {
+    args.push("--apply");
+  } else if (config.syncMode === "open-issues") {
+    args.push("--open-issues");
+    if (config.syncAssignee) {
+      args.push("--assignee", config.syncAssignee);
+    }
+  }
   return args;
 }
 
