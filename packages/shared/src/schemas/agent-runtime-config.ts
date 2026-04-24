@@ -74,8 +74,12 @@ export type GitRepo = z.infer<typeof gitRepoSchema>;
  */
 export const agentRuntimeConfigPayloadShape = z.object({
   prompt: promptConfigSchema.default({ append: "" }),
-  /** Model id; allow any non-empty string — the SDK validates the actual id at query time. */
-  model: z.string().default(""),
+  /**
+   * Model identifier. Accepts either an alias (`opus` / `sonnet` / `haiku`) or
+   * a full model id (`claude-opus-4-7`). Alias follows the SDK's latest-in-family
+   * mapping and may shift across CLI releases; pin a full id if you need stability.
+   */
+  model: z.string().default("opus"),
   mcpServers: z.array(mcpServerSchema).default([]),
   env: z.array(envEntrySchema).default([]),
   gitRepos: z.array(gitRepoSchema).default([]),
@@ -128,7 +132,7 @@ export type AgentRuntimeConfigPayload = z.infer<typeof agentRuntimeConfigPayload
 /** Default payload used when creating a fresh agent. */
 export const DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = {
   prompt: { append: "" },
-  model: "",
+  model: "opus",
   mcpServers: [],
   env: [],
   gitRepos: [],

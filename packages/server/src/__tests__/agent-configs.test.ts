@@ -19,7 +19,7 @@ afterAll(async () => {
 });
 
 describe("agent_configs schema + initial seed", () => {
-  it("seeds version=1 with empty payload on agent create", async () => {
+  it("seeds version=1 with default payload on agent create", async () => {
     const seed = await seedAgentFactory(app);
     const agent = await seed({
       name: `cfg-seed-${crypto.randomUUID().slice(0, 8)}`,

@@ -8,9 +8,9 @@ import { Button } from "../../components/ui/button.js";
 export type ModelOption = { value: string; label: string; hint?: string };
 
 export const CLAUDE_MODEL_OPTIONS: ModelOption[] = [
-  { value: "claude-opus-4-6", label: "claude-opus-4-6", hint: "most capable" },
-  { value: "claude-sonnet-4-6", label: "claude-sonnet-4-6", hint: "default" },
-  { value: "claude-haiku-4-5", label: "claude-haiku-4-5", hint: "fastest" },
+  { value: "opus", label: "opus", hint: "most capable" },
+  { value: "sonnet", label: "sonnet", hint: "balanced" },
+  { value: "haiku", label: "haiku", hint: "fastest" },
 ];
 
 export type ModelSectionProps = {
@@ -66,7 +66,7 @@ export function ModelSection({ value, baseline, onChange, onRevert, disabled }: 
           disabled={disabled}
           className="flex h-9 w-full max-w-md rounded-[var(--radius-input)] border border-input bg-transparent px-3 py-1 text-body shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
         >
-          <option value="">(agent default)</option>
+          {value === "" && <option value="">(unset — SDK default)</option>}
           {CLAUDE_MODEL_OPTIONS.map((o) => (
             <option key={o.value} value={o.value}>
               {o.label}
@@ -76,8 +76,10 @@ export function ModelSection({ value, baseline, onChange, onRevert, disabled }: 
           {hasExtra && <option value={value}>{value} — custom</option>}
         </select>
         <p className="text-caption text-muted-foreground">
-          Choose which Claude model powers this agent. Applies to new sessions immediately; active sessions switch on
-          their next message.
+          Choose which Claude model powers this agent. Aliases (opus / sonnet / haiku) follow the CLI's latest-in-family
+          mapping and may shift across releases. Applies to new sessions immediately; active sessions switch on their
+          next message. Unset falls back to the operator's local <code>~/.claude/settings.json</code> model preference,
+          then the CLI default.
         </p>
       </div>
     </section>

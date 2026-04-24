@@ -69,7 +69,7 @@ export async function createOwner(
 
       await tx.execute(sql`
         INSERT INTO agent_configs (agent_id, version, payload, updated_by)
-        VALUES (${agentId}, 1, ${sql`'{"prompt":{"append":""},"model":"","mcpServers":[],"env":[],"gitRepos":[]}'::jsonb`}, 'system')
+        VALUES (${agentId}, 1, ${sql`'{"prompt":{"append":""},"model":"opus","mcpServers":[],"env":[],"gitRepos":[]}'::jsonb`}, 'system')
         ON CONFLICT (agent_id) DO NOTHING
       `);
     });
