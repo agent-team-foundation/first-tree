@@ -119,7 +119,7 @@ describe("SessionManager", () => {
       agentIdentity: {
         agentId: "agent-1",
         inboxId: "inbox-agent-1",
-        displayName: null,
+        displayName: "test-agent",
         type: "autonomous_agent",
         delegateMention: null,
         metadata: {},
@@ -185,7 +185,7 @@ describe("SessionManager", () => {
       agentIdentity: {
         agentId: "agent-1",
         inboxId: "inbox-agent-1",
-        displayName: null,
+        displayName: "test-agent",
         type: "autonomous_agent",
         delegateMention: null,
         metadata: {},
@@ -271,7 +271,7 @@ describe("SessionManager", () => {
       agentIdentity: {
         agentId: "agent-1",
         inboxId: "inbox-agent-1",
-        displayName: null,
+        displayName: "test-agent",
         type: "autonomous_agent",
         delegateMention: null,
         metadata: {},
@@ -315,7 +315,7 @@ describe("SessionManager", () => {
       agentIdentity: {
         agentId: "agent-1",
         inboxId: "inbox-agent-1",
-        displayName: null,
+        displayName: "test-agent",
         type: "autonomous_agent",
         delegateMention: null,
         metadata: {},
@@ -368,7 +368,7 @@ describe("SessionManager", () => {
       agentIdentity: {
         agentId: "agent-1",
         inboxId: "inbox-agent-1",
-        displayName: null,
+        displayName: "test-agent",
         type: "autonomous_agent",
         delegateMention: null,
         metadata: {},

@@ -9,14 +9,16 @@ import {
 import type { SessionMessage } from "../runtime/handler.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 
-function mkParticipant(agentId: string, name: string | null, displayName: string | null = null): ChatParticipantDetail {
+function mkParticipant(agentId: string, name: string | null, displayName?: string): ChatParticipantDetail {
   return {
     agentId,
     role: "member",
     mode: "full",
     joinedAt: new Date().toISOString(),
     name,
-    displayName,
+    // Post-Phase 2 the wire shape requires a non-null display name; fall
+    // back to a synthetic label when the caller doesn't provide one.
+    displayName: displayName ?? `agent-${agentId}`,
     type: "autonomous_agent",
   };
 }
@@ -33,7 +35,7 @@ describe("resolveSenderLabel", () => {
   const ps = [
     mkParticipant("agent-a", "alice", "Alice Smith"),
     mkParticipant("agent-b", null, "Bob Only"),
-    mkParticipant("agent-c", null, null),
+    mkParticipant("agent-c", null),
   ];
 
   it("returns the participant name when available", () => {
@@ -44,8 +46,13 @@ describe("resolveSenderLabel", () => {
     expect(resolveSenderLabel("agent-b", ps)).toBe("Bob Only");
   });
 
-  it("falls back to the raw senderId when name and displayName are both null", () => {
-    expect(resolveSenderLabel("agent-c", ps)).toBe("agent-c");
+  it("falls back to the raw senderId when the name is null (displayName post-Phase 2 is non-null but may be synthetic)", () => {
+    // Post-Phase 2 displayName is guaranteed non-null at the DB level, so
+    // the prior "both null" case is unreachable. The next best fallback
+    // `resolveSenderLabel` covers is still the raw senderId for rows whose
+    // displayName was synthesised from the agentId; the `mkParticipant`
+    // helper mirrors that (`agent-${agentId}`).
+    expect(resolveSenderLabel("agent-c", ps)).toBe("agent-agent-c");
   });
 
   it("returns the raw senderId when not present among participants (stale cache / ex-member)", () => {
@@ -156,7 +163,7 @@ describe("buildAgentEnv", () => {
       agent: {
         agentId: "agent-a",
         inboxId: "inbox-a",
-        displayName: null,
+        displayName: "agent-a",
         type: "autonomous_agent",
         delegateMention: null,
         metadata: {},
@@ -178,7 +185,7 @@ describe("buildAgentEnv", () => {
       agent: {
         agentId: "agent-a",
         inboxId: "inbox-a",
-        displayName: null,
+        displayName: "agent-a",
         type: "autonomous_agent",
         delegateMention: null,
         metadata: {},

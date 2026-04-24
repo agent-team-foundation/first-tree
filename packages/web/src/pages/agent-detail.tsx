@@ -498,7 +498,7 @@ export function AgentDetailPage() {
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-baseline gap-2">
-                <span className="text-title">{agent.displayName ?? agent.name ?? shortId}</span>
+                <span className="text-title">{agent.displayName}</span>
                 <span className="mono text-label" style={{ color: "var(--fg-4)" }}>
                   @{agent.name ?? shortId}
                 </span>

@@ -38,9 +38,12 @@ type RuntimeInfo = {
 };
 
 function sortByName(agents: Agent[]): Agent[] {
+  // Sort on displayName (the human label shown in every visible column)
+  // rather than the slug; falling back to name only when displayName is
+  // somehow empty (shouldn't happen post-Phase 2 but trivially cheap).
   return [...agents].sort((a, b) => {
-    const nameA = (a.name ?? a.displayName ?? "").toLowerCase();
-    const nameB = (b.name ?? b.displayName ?? "").toLowerCase();
+    const nameA = (a.displayName || a.name || "").toLowerCase();
+    const nameB = (b.displayName || b.name || "").toLowerCase();
     return nameA.localeCompare(nameB);
   });
 }
@@ -136,7 +139,7 @@ export function AgentsPage() {
     const owner = resolveMemberName(agent.managerId);
     return (
       (agent.name ?? "").toLowerCase().includes(q) ||
-      (agent.displayName ?? "").toLowerCase().includes(q) ||
+      agent.displayName.toLowerCase().includes(q) ||
       delegate.toLowerCase().includes(q) ||
       owner.toLowerCase().includes(q)
     );
@@ -444,7 +447,7 @@ function AgentRow({
   return (
     <DenseTableRow interactive onClick={() => navigate(`/agents/${agent.uuid}`)}>
       <DenseTableCell>
-        <span className="font-medium">{agent.displayName ?? <span style={{ color: "var(--fg-4)" }}>—</span>}</span>
+        <span className="font-medium">{agent.displayName}</span>
       </DenseTableCell>
       <DenseTableCell>
         {agent.name ? (
@@ -462,6 +465,9 @@ function AgentRow({
       </DenseTableCell>
       <DenseTableCell>
         {agent.delegateMention ? (
+          // AgentChip still accepts a nullable displayName so it can render
+          // a partial chip for soft-deleted delegate targets missing from
+          // the cached agents page — the cache lookup can genuinely miss.
           <AgentChip name={delegate?.name ?? null} displayName={delegate?.displayName ?? null} tone="accent" />
         ) : (
           <span style={{ color: "var(--fg-4)" }}>—</span>

@@ -105,7 +105,14 @@ export type CreateAgent = z.infer<typeof createAgentSchema>;
 
 export const updateAgentSchema = z.object({
   type: agentTypeSchema.optional(),
-  displayName: z.string().max(200).nullable().optional(),
+  /**
+   * Phase 2 of the agent-naming refactor promoted `displayName` to NOT NULL
+   * at the DB level, so null is no longer an accepted update — clearing the
+   * label would violate the constraint. Callers that used to PATCH
+   * `{ displayName: null }` must omit the field (leaves the row untouched)
+   * or send a real string.
+   */
+  displayName: z.string().min(1).max(200).optional(),
   delegateMention: z.string().max(100).nullable().optional(),
   visibility: agentVisibilitySchema.optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
@@ -125,7 +132,12 @@ export const agentSchema = z.object({
   name: z.string().nullable(),
   organizationId: z.string(),
   type: agentTypeSchema,
-  displayName: z.string().nullable(),
+  /**
+   * Always populated post-Phase 2 (migration 0024 backfilled + `NOT NULL`).
+   * The shared type used to be nullable; old row-shape consumers were
+   * retired alongside the server service default.
+   */
+  displayName: z.string(),
   delegateMention: z.string().nullable(),
   inboxId: z.string(),
   status: z.string(),
@@ -160,7 +172,12 @@ export const agentPinnedMessageSchema = z.object({
   type: z.literal("agent:pinned"),
   agentId: z.string(),
   name: z.string().nullable(),
-  displayName: z.string().nullable(),
+  /**
+   * Always populated post-Phase 2 (agents.display_name is NOT NULL). Old
+   * clients that parsed the previous `nullable` variant still accept a
+   * non-null string, so tightening this here is wire-compatible.
+   */
+  displayName: z.string(),
   agentType: agentTypeSchema,
 });
 export type AgentPinnedMessage = z.infer<typeof agentPinnedMessageSchema>;
