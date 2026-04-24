@@ -37,12 +37,12 @@ describe("Admin sessions — chat-level access control", () => {
     const { members } = await import("../db/schema/members.js");
     const { eq } = await import("drizzle-orm");
     const [row] = await app.db
-      .select({ userId: members.userId })
+      .select({ userId: members.userId, organizationId: members.organizationId })
       .from(members)
       .where(eq(members.id, created.id))
       .limit(1);
     if (!row) throw new Error("member missing after creation");
-    const clientId = await seedClient(app, row.userId);
+    const clientId = await seedClient(app, row.userId, row.organizationId);
     return { memberId: created.id, humanAgentId: created.agentId, accessToken, clientId };
   }
 

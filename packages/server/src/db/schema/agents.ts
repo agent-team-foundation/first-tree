@@ -24,8 +24,6 @@ export const agents = pgTable(
     status: text("status").notNull().default("active"),
     /** How this agent was created: "admin-api" | "portal" */
     source: text("source"),
-    /** Control-plane user association (nullable, cloud-only) */
-    cloudUserId: text("cloud_user_id"),
     /** Agent visibility: "private" (manager only) or "organization" (all members) */
     visibility: text("visibility").notNull().default("private"),
     metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),

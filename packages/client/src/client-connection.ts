@@ -83,6 +83,20 @@ type ClientConnectionEvents = {
   "server:welcome": [welcome: ServerWelcome];
 };
 
+/**
+ * Thrown (emitted on `error` and rejected from `connect()`) when the server
+ * refuses a `client:register` because the local clientId is bound to a
+ * different organization. The CLI layer detects this via `instanceof` and
+ * prompts the user before rotating the local clientId.
+ */
+export class ClientOrgMismatchError extends Error {
+  readonly code = "CLIENT_ORG_MISMATCH";
+  constructor(message = "Client belongs to a different organization") {
+    super(message);
+    this.name = "ClientOrgMismatchError";
+  }
+}
+
 const RECONNECT_BASE_MS = 1000;
 const RECONNECT_MAX_MS = 30_000;
 const WS_CONNECT_TIMEOUT_MS = 10_000;
@@ -141,6 +155,12 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   private registered = false;
   /** Count of `server:welcome` frames received; drives `isReconnect` flag. */
   private welcomeFramesReceived = 0;
+  /**
+   * Last handshake error, stashed for the `close` handler to surface a typed
+   * reason (e.g. {@link ClientOrgMismatchError}) instead of a generic
+   * "closed before ready" when `connect()` is pending.
+   */
+  private lastHandshakeError: Error | null = null;
 
   private readonly wsLogger: pino.Logger;
   private readonly authLogger: pino.Logger;
@@ -349,7 +369,9 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
 
         if (!settled) {
           this.wsLogger.warn({ code }, "closed before ready");
-          settle(reject, new Error(`WebSocket closed before ready (code ${code})`));
+          const typedErr = this.lastHandshakeError;
+          this.lastHandshakeError = null;
+          settle(reject, typedErr ?? new Error(`WebSocket closed before ready (code ${code})`));
           return;
         }
 
@@ -416,8 +438,20 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     }
 
     if (type === "client:register:rejected") {
-      const err = new Error(`client:register rejected: ${msg.message ?? "unknown"}`);
-      this.wsLogger.error({ message: msg.message }, "client register rejected");
+      const code = typeof msg.code === "string" ? msg.code : undefined;
+      const message = typeof msg.message === "string" ? msg.message : "unknown";
+      // Mark closing so the WS `close` handler does not auto-reconnect — a
+      // reconnect with the same clientId would just re-trigger the rejection.
+      // The caller (CLI) is expected to surface the mismatch to the user,
+      // abandon the local clientId, and start a fresh connection with a new
+      // one. See docs/multi-tenancy-hardening-design.md (B4).
+      this.closing = true;
+      const err =
+        code === "CLIENT_ORG_MISMATCH"
+          ? new ClientOrgMismatchError(message)
+          : new Error(`client:register rejected: ${message}`);
+      this.lastHandshakeError = err;
+      this.wsLogger.error({ code, message }, "client register rejected");
       this.emit("error", err);
       this.ws?.close(4403, "register rejected");
       return;

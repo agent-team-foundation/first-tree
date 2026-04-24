@@ -72,7 +72,12 @@ export async function createTestAgent(
   const [member] = await app.db.select().from(members).where(eq(members.id, admin.memberId)).limit(1);
   if (!member) throw new Error("admin member missing after setup");
   const clientId = `cli-${crypto.randomUUID().slice(0, 8)}`;
-  await app.db.insert(clients).values({ id: clientId, userId: member.userId, status: "connected" });
+  await app.db.insert(clients).values({
+    id: clientId,
+    userId: member.userId,
+    organizationId: member.organizationId,
+    status: "connected",
+  });
 
   const { createAgent } = await import("../services/agent.js");
   const type = opts.type ?? "autonomous_agent";
@@ -95,6 +100,7 @@ export async function createTestAgent(
     clientId,
     memberId: admin.memberId,
     userId: member.userId,
+    organizationId: member.organizationId,
     /** Agent-scoped request — adds `Authorization` + `x-agent-id` headers. */
     request: ((method, url, payload, extraHeaders) =>
       app.inject({
@@ -139,7 +145,12 @@ export async function seedAgentFactory(app: FastifyInstance) {
   const [member] = await app.db.select().from(members).where(eq(members.id, admin.memberId)).limit(1);
   if (!member) throw new Error("seed admin member missing");
   const clientId = `cli-seed-${crypto.randomUUID().slice(0, 8)}`;
-  await app.db.insert(clients).values({ id: clientId, userId: member.userId, status: "connected" });
+  await app.db.insert(clients).values({
+    id: clientId,
+    userId: member.userId,
+    organizationId: member.organizationId,
+    status: "connected",
+  });
 
   const { createAgent } = await import("../services/agent.js");
   return async (opts: { name?: string; type?: AgentType; displayName?: string } = {}) => {
@@ -153,11 +164,11 @@ export async function seedAgentFactory(app: FastifyInstance) {
   };
 }
 
-/** Seed a claimed, connected `clients` row owned by `userId`. Returns the id. */
-export async function seedClient(app: FastifyInstance, userId: string): Promise<string> {
+/** Seed a claimed, connected `clients` row owned by `userId` within `organizationId`. Returns the id. */
+export async function seedClient(app: FastifyInstance, userId: string, organizationId: string): Promise<string> {
   const { clients } = await import("../db/schema/clients.js");
   const id = `cli-${crypto.randomUUID().slice(0, 8)}`;
-  await app.db.insert(clients).values({ id, userId, status: "connected" });
+  await app.db.insert(clients).values({ id, userId, organizationId, status: "connected" });
   return id;
 }
 
@@ -173,8 +184,8 @@ export async function createAdminContext(app: FastifyInstance, opts: { username?
   const { eq } = await import("drizzle-orm");
   const [member] = await app.db.select().from(members).where(eq(members.id, admin.memberId)).limit(1);
   if (!member) throw new Error("admin member missing after setup");
-  const clientId = await seedClient(app, member.userId);
-  return { ...admin, clientId, userId: member.userId };
+  const clientId = await seedClient(app, member.userId, member.organizationId);
+  return { ...admin, clientId, userId: member.userId, organizationId: member.organizationId };
 }
 
 /** Create a user + admin member + human agent and return JWT + memberId. */
@@ -231,5 +242,5 @@ export async function createTestAdmin(app: FastifyInstance, opts: { username?: s
     payload: { username, password },
   });
   const body = loginRes.json<{ accessToken: string; refreshToken: string }>();
-  return { username, password, userId, memberId, humanAgentUuid: agent.uuid, ...body };
+  return { username, password, userId, memberId, organizationId: orgId, humanAgentUuid: agent.uuid, ...body };
 }

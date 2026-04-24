@@ -15,6 +15,8 @@ export {
   saveAgentConfig,
   saveCredentials,
 } from "./bootstrap.js";
+// Local client identity rotation (on CLIENT_ORG_MISMATCH)
+export { handleClientOrgMismatch, rotateClientIdWithBackup } from "./client-reidentify.js";
 export type { ClientRuntimeOptions } from "./client-runtime.js";
 // Client runtime
 export { ClientRuntime } from "./client-runtime.js";

@@ -42,3 +42,18 @@ export class BadRequestError extends AppError {
     this.name = "BadRequestError";
   }
 }
+
+/**
+ * Thrown when an operation targets a client whose organization does not match
+ * the caller's authenticated organization. A client is bound to exactly one
+ * org for its lifetime; re-registering or operating under a different org's
+ * credentials is refused. CLI consumers recognize the `code` field and
+ * respond by abandoning the local clientId to register a fresh one.
+ */
+export class ClientOrgMismatchError extends AppError {
+  readonly code = "CLIENT_ORG_MISMATCH";
+  constructor(message = "Client belongs to a different organization") {
+    super(403, message);
+    this.name = "ClientOrgMismatchError";
+  }
+}

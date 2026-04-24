@@ -4,22 +4,21 @@ import { agentPresence } from "../db/schema/agent-presence.js";
 import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
-import { ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
+import { ClientOrgMismatchError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 import { runtimeFieldsReset } from "./presence.js";
 
 /**
  * Assert the caller can act on this client. Throws 404 for both "not found"
  * and "not yours" to prevent UUID enumeration across org/user boundaries.
  *
- *   - member: owner match (`row.user_id == scope.userId`).
- *   - admin: any client whose owner is a member of the admin's own org.
+ * A client is bound to exactly one organization (`clients.organization_id`).
+ * Access is granted when:
+ *   - member: row.user_id == scope.userId AND row.organization_id == scope.organizationId.
+ *   - admin: row.organization_id == scope.organizationId AND the owner is a
+ *     member of that same org (defense in depth).
  *
- * Legacy unclaimed rows (`user_id IS NULL`) have no org association we can
- * verify — we explicitly refuse to grant admin access to them so a
- * cross-tenant admin can't operate on another org's orphan rows. These
- * orphans are surfaced for self-service re-registration only; the owning
- * operator must claim the row via `first-tree-hub connect` before any
- * admin action becomes available.
+ * Same user across two orgs has two distinct client rows; operating on one
+ * while logged into the other is refused by the org filter.
  */
 export async function assertClientOwner(
   db: Database,
@@ -27,11 +26,14 @@ export async function assertClientOwner(
   scope: { userId: string; organizationId: string; role: string },
 ): Promise<void> {
   const [row] = await db
-    .select({ id: clients.id, userId: clients.userId })
+    .select({ id: clients.id, userId: clients.userId, organizationId: clients.organizationId })
     .from(clients)
     .where(eq(clients.id, clientId))
     .limit(1);
   if (!row) {
+    throw new NotFoundError(`Client "${clientId}" not found`);
+  }
+  if (row.organizationId !== scope.organizationId) {
     throw new NotFoundError(`Client "${clientId}" not found`);
   }
   if (row.userId === scope.userId) return;
@@ -49,19 +51,22 @@ export async function assertClientOwner(
 /**
  * Upsert the clients row for a given `client_id` under an authenticated user.
  *
- * Claim semantics (see proposal M13):
- *   - New client_id → INSERT with the authenticated user_id.
- *   - Existing row with `user_id IS NULL` → claim it (set user_id).
- *   - Existing row with a different user_id → {@link ForbiddenError}; the
- *     operator must pick a different clientId. This is a hard conflict rather
- *     than a silent override because the pinned agents under that client
- *     belong to the original owner.
+ * Claim semantics (see proposal M13 + multi-tenancy hardening):
+ *   - New client_id → INSERT with the authenticated user_id and org_id.
+ *   - Existing row with the same user_id + org_id → refresh runtime columns.
+ *   - Existing row in a different org → {@link ClientOrgMismatchError}. A
+ *     client is bound to one org for its lifetime; the CLI reacts by
+ *     abandoning the local clientId and registering a new one.
+ *   - Existing row with a different user_id (same org) → {@link ForbiddenError};
+ *     the operator must pick a different clientId. Hard conflict because
+ *     pinned agents under that client belong to the original owner.
  */
 export async function registerClient(
   db: Database,
   data: {
     clientId: string;
     userId: string;
+    organizationId: string;
     instanceId: string;
     hostname?: string;
     os?: string;
@@ -71,10 +76,16 @@ export async function registerClient(
   const now = new Date();
 
   const [existing] = await db
-    .select({ id: clients.id, userId: clients.userId })
+    .select({ id: clients.id, userId: clients.userId, organizationId: clients.organizationId })
     .from(clients)
     .where(eq(clients.id, data.clientId))
     .limit(1);
+
+  if (existing && existing.organizationId !== data.organizationId) {
+    throw new ClientOrgMismatchError(
+      `Client "${data.clientId}" is bound to a different organization. Re-register as a new client under the current org.`,
+    );
+  }
 
   if (existing?.userId && existing.userId !== data.userId) {
     throw new ForbiddenError(
@@ -87,6 +98,7 @@ export async function registerClient(
     .values({
       id: data.clientId,
       userId: data.userId,
+      organizationId: data.organizationId,
       status: "connected",
       instanceId: data.instanceId,
       hostname: data.hostname ?? null,
@@ -155,21 +167,16 @@ export async function listActiveAgentsPinnedToClient(db: Database, clientId: str
 /**
  * Scope-aware client listing.
  *
- *   - member: only rows where `user_id = scope.userId`.
- *   - admin: every claimed row whose owner is a member of the caller's
- *     organization.
- *
- * Legacy unclaimed rows (`user_id IS NULL`) are intentionally hidden from
- * both roles — the `clients` table has no org column, so we cannot verify
- * which org an orphan belongs to. Exposing them to admin would leak
- * orphans across tenants. The owning operator reclaims the row via
- * `first-tree-hub connect`, after which it appears in their list.
+ *   - member: rows where `user_id = scope.userId` AND `organization_id = scope.organizationId`
+ *     — protects against a user listing their own clients registered under a
+ *     different org when they're logged into this one.
+ *   - admin: every row in `scope.organizationId`, regardless of owner.
  */
 export async function listClients(db: Database, scope: { userId: string; organizationId: string; role: string }) {
   const rows =
     scope.role === "admin"
       ? await db
-          .selectDistinct({
+          .select({
             id: clients.id,
             userId: clients.userId,
             status: clients.status,
@@ -182,9 +189,11 @@ export async function listClients(db: Database, scope: { userId: string; organiz
             metadata: clients.metadata,
           })
           .from(clients)
-          .innerJoin(members, eq(members.userId, clients.userId))
-          .where(eq(members.organizationId, scope.organizationId))
-      : await db.select().from(clients).where(eq(clients.userId, scope.userId));
+          .where(eq(clients.organizationId, scope.organizationId))
+      : await db
+          .select()
+          .from(clients)
+          .where(and(eq(clients.userId, scope.userId), eq(clients.organizationId, scope.organizationId)));
 
   const counts = await db
     .select({
@@ -246,6 +255,14 @@ export async function retireClient(db: Database, clientId: string): Promise<void
   });
 }
 
+/**
+ * System-scope sweep: mark clients as disconnected when their last-seen
+ * server instance stopped sending heartbeats. Runs globally across all orgs
+ * by design — it is invoked only by internal timers, never from a
+ * user-scoped request, so the per-org filter the read paths enforce does not
+ * apply. Org isolation on the data these clients belong to is still
+ * enforced at the read paths (see `assertClientOwner` / `listClients`).
+ */
 export async function cleanupStaleClients(db: Database, staleSeconds = 60): Promise<number> {
   const result = await db.execute<{ id: string }>(sql`
     UPDATE clients SET status = 'disconnected'

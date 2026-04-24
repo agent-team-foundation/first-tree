@@ -52,7 +52,7 @@ describe("Admin WS — pulse:tick visibility filtering", () => {
       await tx.insert(members).values({ id: memberId, userId, organizationId, agentId: human.uuid, role: "member" });
       return human;
     });
-    const clientId = await seedClient(app, userId);
+    const clientId = await seedClient(app, userId, organizationId);
     return { userId, memberId, humanAgent: agent, clientId, token: await signJwt(userId, memberId, organizationId) };
   }
 

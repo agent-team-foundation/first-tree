@@ -9,7 +9,11 @@ import {
   resetConfig,
   resetConfigMeta,
 } from "@agent-team-foundation/first-tree-hub-shared/config";
-import { applyClientLoggerConfig, configureClientLoggerForService } from "@first-tree-hub/client";
+import {
+  applyClientLoggerConfig,
+  ClientOrgMismatchError,
+  configureClientLoggerForService,
+} from "@first-tree-hub/client";
 import type { Command } from "commander";
 import { fail } from "../cli/output.js";
 import {
@@ -24,6 +28,7 @@ import {
   declineUpdate,
   ensureFreshAccessToken,
   getClientServiceStatus,
+  handleClientOrgMismatch,
   installClientService,
   isServiceSupported,
   parseDuration,
@@ -117,6 +122,13 @@ export function registerClientCommands(program: Command): void {
         // Keep process alive
         await new Promise(() => {});
       } catch (error) {
+        if (error instanceof ClientOrgMismatchError) {
+          await handleClientOrgMismatch(error, {
+            managed: options.interactive === false,
+            configDir: DEFAULT_CONFIG_DIR,
+            rerunCommand: "first-tree-hub client start",
+          });
+        }
         const msg = error instanceof Error ? error.message : String(error);
         print.line(`  Error: ${msg}\n`);
         process.exit(1);

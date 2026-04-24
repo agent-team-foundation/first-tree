@@ -9,6 +9,7 @@ import {
   resetConfigMeta,
   setConfigValue,
 } from "@agent-team-foundation/first-tree-hub-shared/config";
+import { ClientOrgMismatchError } from "@first-tree-hub/client";
 import { input, password, select } from "@inquirer/prompts";
 import type { Command } from "commander";
 import { fail } from "../cli/output.js";
@@ -17,6 +18,7 @@ import {
   COMMAND_VERSION,
   createExecuteUpdate,
   getClientServiceStatus,
+  handleClientOrgMismatch,
   installClientService,
   isServiceSupported,
   loadCredentials,
@@ -315,6 +317,17 @@ export function registerConnectCommand(parent: Command): void {
         if ((error as { name?: string }).name === "ExitPromptError") {
           print.line("\n  Cancelled.\n");
           return;
+        }
+        if (error instanceof ClientOrgMismatchError) {
+          // --no-service path lands here when the credentials we just saved
+          // belong to a different org than the local clientId. Reuse the
+          // same rotate-and-guide flow as `client start` — interactive mode
+          // so the operator can decline if they prefer to keep the old id.
+          await handleClientOrgMismatch(error, {
+            managed: false,
+            configDir: DEFAULT_CONFIG_DIR,
+            rerunCommand: `first-tree-hub client connect ${serverUrl}${options.token ? " --token <token>" : ""}${options.service === false ? " --no-service" : ""}`,
+          });
         }
         const msg = error instanceof Error ? error.message : String(error);
         print.line(`  Error: ${msg}\n`);

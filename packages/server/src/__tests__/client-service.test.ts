@@ -17,10 +17,12 @@ describe("client service: disconnectClient", () => {
 
   it("sets agents with matching clientId to offline", async () => {
     const app = getApp();
-    const { agent, userId } = await createTestAgent(app, { name: `cs-dc-1-${crypto.randomUUID().slice(0, 6)}` });
+    const { agent, userId, organizationId } = await createTestAgent(app, {
+      name: `cs-dc-1-${crypto.randomUUID().slice(0, 6)}`,
+    });
 
     const clientId = `client-dc-1-${Date.now()}`;
-    await clientService.registerClient(app.db, { clientId, userId, instanceId: "test" });
+    await clientService.registerClient(app.db, { clientId, userId, organizationId, instanceId: "test" });
     await presenceService.bindAgent(app.db, agent.uuid, {
       clientId,
       instanceId: "test",
@@ -37,12 +39,14 @@ describe("client service: disconnectClient", () => {
 
   it("does not affect agents re-bound to a different client", async () => {
     const app = getApp();
-    const { agent, userId } = await createTestAgent(app, { name: `cs-dc-2-${crypto.randomUUID().slice(0, 6)}` });
+    const { agent, userId, organizationId } = await createTestAgent(app, {
+      name: `cs-dc-2-${crypto.randomUUID().slice(0, 6)}`,
+    });
 
     const oldClient = `client-dc-old-${Date.now()}`;
     const newClient = `client-dc-new-${Date.now()}`;
-    await clientService.registerClient(app.db, { clientId: oldClient, userId, instanceId: "test" });
-    await clientService.registerClient(app.db, { clientId: newClient, userId, instanceId: "test" });
+    await clientService.registerClient(app.db, { clientId: oldClient, userId, organizationId, instanceId: "test" });
+    await clientService.registerClient(app.db, { clientId: newClient, userId, organizationId, instanceId: "test" });
 
     // Bind to old client first
     await presenceService.bindAgent(app.db, agent.uuid, {
@@ -69,15 +73,19 @@ describe("client service: disconnectClient", () => {
 
   it("only affects agents of the disconnected client, not others", async () => {
     const app = getApp();
-    const { agent: agentA, userId } = await createTestAgent(app, {
+    const {
+      agent: agentA,
+      userId,
+      organizationId,
+    } = await createTestAgent(app, {
       name: `cs-dc-3a-${crypto.randomUUID().slice(0, 6)}`,
     });
     const { agent: agentB } = await createTestAgent(app, { name: `cs-dc-3b-${crypto.randomUUID().slice(0, 6)}` });
 
     const clientX = `client-dc-x-${Date.now()}`;
     const clientY = `client-dc-y-${Date.now()}`;
-    await clientService.registerClient(app.db, { clientId: clientX, userId, instanceId: "test" });
-    await clientService.registerClient(app.db, { clientId: clientY, userId, instanceId: "test" });
+    await clientService.registerClient(app.db, { clientId: clientX, userId, organizationId, instanceId: "test" });
+    await clientService.registerClient(app.db, { clientId: clientY, userId, organizationId, instanceId: "test" });
 
     await presenceService.bindAgent(app.db, agentA.uuid, {
       clientId: clientX,

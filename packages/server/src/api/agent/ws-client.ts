@@ -22,6 +22,7 @@ import { agents } from "../../db/schema/agents.js";
 import { clients } from "../../db/schema/clients.js";
 import { members } from "../../db/schema/members.js";
 import { users } from "../../db/schema/users.js";
+import { ClientOrgMismatchError } from "../../errors.js";
 import {
   endWsConnectionSpan,
   setWsConnectionAttrs,
@@ -76,6 +77,16 @@ function shouldNotify(agentId: string, notificationType: string): boolean {
   return true;
 }
 
+/**
+ * Authenticated WS session state.
+ *
+ * Invariant: `organizationId` is sourced from the `members` row keyed by the
+ * JWT's `memberId`, not from the JWT's own `organizationId` claim. The
+ * server never trusts the JWT payload directly for org scope — a revoked or
+ * re-scoped membership takes effect the moment the DB row changes, not on
+ * the token's next refresh. This is a deliberate defense-in-depth choice
+ * paired with R-RUN and `clients.organization_id`.
+ */
 type AuthenticatedSession = {
   userId: string;
   memberId: string;
@@ -253,6 +264,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 await clientService.registerClient(app.db, {
                   clientId: data.clientId,
                   userId: session.userId,
+                  organizationId: session.organizationId,
                   instanceId,
                   hostname: data.hostname,
                   os: data.os,
@@ -260,7 +272,14 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 });
               } catch (err) {
                 const message = err instanceof Error ? err.message : "client register failed";
-                socket.send(JSON.stringify({ type: "client:register:rejected", message }));
+                const code = err instanceof ClientOrgMismatchError ? err.code : undefined;
+                socket.send(
+                  JSON.stringify({
+                    type: "client:register:rejected",
+                    message,
+                    ...(code ? { code } : {}),
+                  }),
+                );
                 socket.close(4403, "client register rejected");
                 return;
               }

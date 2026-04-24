@@ -282,7 +282,9 @@ describe("Admin agent-config API (Step 2)", () => {
     const [member] = await app.db.select().from(members).where(eq(members.id, admin.memberId)).limit(1);
     if (!member) throw new Error("admin member missing");
     const clientId = `cli-mgr-${crypto.randomUUID().slice(0, 8)}`;
-    await app.db.insert(clients).values({ id: clientId, userId: member.userId, status: "connected" });
+    await app.db
+      .insert(clients)
+      .values({ id: clientId, userId: member.userId, organizationId: member.organizationId, status: "connected" });
     const agent = await createAgent(app.db, {
       name: `cfg-mgr-agent-${crypto.randomUUID().slice(0, 8)}`,
       type: "personal_assistant",
@@ -350,7 +352,12 @@ describe("Admin agent-config API (Step 2)", () => {
     const [mgrMember] = await app.db.select().from(members).where(eq(members.id, manager.memberId)).limit(1);
     if (!mgrMember) throw new Error("manager member missing");
     const clientId = `cli-vis-${crypto.randomUUID().slice(0, 8)}`;
-    await app.db.insert(clients).values({ id: clientId, userId: mgrMember.userId, status: "connected" });
+    await app.db.insert(clients).values({
+      id: clientId,
+      userId: mgrMember.userId,
+      organizationId: mgrMember.organizationId,
+      status: "connected",
+    });
     const agent = await createAgent(app.db, {
       name: `cfg-vis-agent-${crypto.randomUUID().slice(0, 8)}`,
       type: "autonomous_agent",
