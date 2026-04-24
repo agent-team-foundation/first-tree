@@ -43,7 +43,7 @@ export interface CandidateLoopOptions {
   pollIntervalSec: number;
   /** Max items per `gh search` call. Rust default: 10. */
   searchLimit: number;
-  /** Include the search-bucket queries (review_requests / assigned). */
+  /** Include the search-bucket query for direct review requests. */
   includeSearch: boolean;
   /** Lookback window for notifications, seconds. Rust default: 24h. */
   lookbackSecs: number;

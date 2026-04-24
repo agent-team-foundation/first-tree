@@ -41,6 +41,7 @@ import { loadBreezeConfig } from "../runtime/config.js";
 import { GhClient, GhExecError } from "../runtime/gh.js";
 import { resolveBreezePaths } from "../runtime/paths.js";
 import { updateInbox } from "../runtime/store.js";
+import { shouldProcessReason } from "../runtime/task-kind.js";
 import {
   type GhState,
   type Inbox,
@@ -96,11 +97,8 @@ function priorityForReason(reason: string): number {
     case "review_requested":
       return 1;
     case "mention":
+    case "team_mention":
       return 2;
-    case "assign":
-      return 3;
-    case "participating":
-      return 4;
     default:
       return 5;
   }
@@ -135,7 +133,8 @@ function htmlUrlFor(
 /**
  * Parse raw `gh api /notifications` JSON response (array of notifications,
  * or concatenated arrays when `--paginate` is used) into unclassified entries.
- * Filters out CheckSuite / Commit subjects (fetcher.rs:15).
+ * Filters out CheckSuite / Commit subjects and any notification reason that
+ * is not an explicit mention or review request.
  */
 export function parseNotifications(
   rawJsonPages: readonly string[],
@@ -162,6 +161,7 @@ export function parseNotifications(
       const repo = item.repository?.full_name ?? "";
       if (!repo) continue;
       const reason = item.reason ?? "";
+      if (!shouldProcessReason(reason)) continue;
       const title = item.subject?.title ?? "";
       const url = item.subject?.url ?? "";
       const lastActor = item.subject?.latest_comment_url ?? url ?? "";

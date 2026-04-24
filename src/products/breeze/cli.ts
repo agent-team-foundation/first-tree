@@ -21,9 +21,9 @@ import { join } from "node:path";
 
 export const BREEZE_USAGE = `usage: first-tree breeze <command>
 
-  Breeze is the proposal/inbox agent. It polls GitHub notifications,
-  keeps a local inbox under \`~/.breeze/\`, and dispatches work to
-  per-task agent runners.
+  Breeze is the proposal/inbox agent. It polls explicit GitHub review
+  requests and direct mentions, keeps a local inbox under \`~/.breeze/\`,
+  and dispatches work to per-task agent runners.
 
 Primary commands (start here):
   install               Run the first-run setup (creates config.yaml, then
@@ -34,7 +34,8 @@ Primary commands (start here):
   status                Print daemon lock + runtime/status.env
   doctor                Diagnose the local install
   watch                 Live TUI: status board + activity feed
-  poll                  Poll GitHub notifications once (no daemon required)
+  poll                  Poll explicit GitHub review requests and mentions
+                        once (no daemon required)
 
 Advanced commands (for agents or debugging):
   run, daemon           Run the broker loop in the foreground.

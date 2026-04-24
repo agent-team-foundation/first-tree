@@ -170,34 +170,56 @@ describe("parseNotifications", () => {
     expect(entries[0].number).toBe(12);
   });
 
-  it("builds issue html_url for Issue subjects", () => {
+  it("builds issue html_url for explicit mention notifications on issues", () => {
     const raw = `[{
       "id": "10",
       "subject": { "type": "Issue", "title": "bug", "url": "https://api.github.com/repos/o/r/issues/42" },
       "repository": { "full_name": "o/r" },
-      "reason": "assign",
+      "reason": "mention",
       "updated_at": "2026-04-16T10:00:00Z",
       "unread": false
     }]`;
     const entries = parseNotifications([raw], "github.com");
     expect(entries[0].html_url).toBe("https://github.com/o/r/issues/42");
     expect(entries[0].number).toBe(42);
-    expect(entries[0].priority).toBe(3);
+    expect(entries[0].priority).toBe(2);
   });
 
-  it("falls back to repo base for Discussion (no number)", () => {
+  it("drops non-explicit notification reasons from the inbox view", () => {
+    const raw = `[
+      {
+        "id": "10",
+        "subject": { "type": "Issue", "title": "bug", "url": "https://api.github.com/repos/o/r/issues/42" },
+        "repository": { "full_name": "o/r" },
+        "reason": "assign",
+        "updated_at": "2026-04-16T10:00:00Z",
+        "unread": false
+      },
+      {
+        "id": "11",
+        "subject": { "type": "Issue", "title": "mine", "url": "https://api.github.com/repos/o/r/issues/43" },
+        "repository": { "full_name": "o/r" },
+        "reason": "author",
+        "updated_at": "2026-04-16T10:00:00Z",
+        "unread": false
+      }
+    ]`;
+    expect(parseNotifications([raw], "github.com")).toEqual([]);
+  });
+
+  it("falls back to repo base for explicit Discussion mentions (no number)", () => {
     const raw = `[{
       "id": "20",
       "subject": { "type": "Discussion", "title": "chat", "url": "https://github.com/o/r/discussions/5" },
       "repository": { "full_name": "o/r" },
-      "reason": "subscribed",
+      "reason": "mention",
       "updated_at": "2026-04-16T10:00:00Z",
       "unread": false
     }]`;
     const entries = parseNotifications([raw], "github.com");
     expect(entries[0].html_url).toBe("https://github.com/o/r");
     expect(entries[0].number).toBe(null);
-    expect(entries[0].priority).toBe(5);
+    expect(entries[0].priority).toBe(2);
   });
 });
 

@@ -3,7 +3,8 @@
  *
  * `TaskKind` classifies a GitHub notification subject + reason into the
  * breeze task taxonomy. `priority_for` returns the dispatcher priority;
- * `should_process_reason` gates which notification reasons get a task.
+ * `should_process_reason` gates which notification reasons the daemon and
+ * inbox treat as actionable.
  *
  * Pure. No I/O. Safe to import from anywhere.
  */
@@ -34,19 +35,16 @@ export function taskKindFromString(value: string): TaskKind | undefined {
 }
 
 /**
- * Whitelist of notification `reason`s that merit dispatch. Mirrors
- * `should_process_reason` in Rust — anything outside this list is
- * ignored (ci_activity, subscribed, state_change, etc.).
+ * Whitelist of explicit GitHub signals that merit dispatch. Breeze only
+ * acts on direct review requests and direct mentions; other participation
+ * reasons (author, assign, comment, manual, etc.) stay visible on GitHub
+ * itself but are not treated as breeze work items.
  */
 export function shouldProcessReason(reason: string): boolean {
   switch (reason) {
     case "review_requested":
-    case "comment":
     case "mention":
     case "team_mention":
-    case "assign":
-    case "author":
-    case "manual":
       return true;
     default:
       return false;

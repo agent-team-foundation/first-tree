@@ -113,18 +113,18 @@ describe("pollOnce parity with Rust fetcher", () => {
   afterEach(() => rmSync(ctx.dir, { recursive: true, force: true }));
 
   it("writes an inbox.json whose single entry matches the canonical schema", async () => {
-    // Canonical shape (redacted) copied from the inbox schema migration doc §1.2:
+    // Canonical shape for an explicit review request:
     //   {
     //     "id": "23576674030",
     //     "type": "PullRequest",
-    //     "reason": "author",
+    //     "reason": "review_requested",
     //     "repo": "serenakeyitan/paperclip-tree",
     //     "title": "fix(tree): salvage nya1 member node from closed sync PR 282",
     //     "url": "https://api.github.com/.../pulls/290",
     //     "last_actor": "https://api.github.com/.../issues/comments/4258143984",
     //     "updated_at": "2026-04-16T07:24:28Z",
     //     "unread": false,
-    //     "priority": 5,
+    //     "priority": 1,
     //     "number": 290,
     //     "html_url": "https://github.com/.../pull/290",
     //     "gh_state": "OPEN",
@@ -142,7 +142,7 @@ describe("pollOnce parity with Rust fetcher", () => {
             "https://api.github.com/repos/serenakeyitan/paperclip-tree/issues/comments/4258143984",
         },
         repository: { full_name: "serenakeyitan/paperclip-tree" },
-        reason: "author",
+        reason: "review_requested",
         updated_at: "2026-04-16T07:24:28Z",
         unread: false,
       },
@@ -202,7 +202,7 @@ describe("pollOnce parity with Rust fetcher", () => {
     expect(entry).toMatchObject({
       id: "23576674030",
       type: "PullRequest",
-      reason: "author",
+      reason: "review_requested",
       repo: "serenakeyitan/paperclip-tree",
       title: "fix(tree): salvage nya1 member node from closed sync PR 282",
       url: "https://api.github.com/repos/serenakeyitan/paperclip-tree/pulls/290",
@@ -210,7 +210,7 @@ describe("pollOnce parity with Rust fetcher", () => {
         "https://api.github.com/repos/serenakeyitan/paperclip-tree/issues/comments/4258143984",
       updated_at: "2026-04-16T07:24:28Z",
       unread: false,
-      priority: 5,
+      priority: 1,
       number: 290,
       html_url: "https://github.com/serenakeyitan/paperclip-tree/pull/290",
       gh_state: "OPEN",
@@ -264,7 +264,7 @@ describe("pollOnce parity with Rust fetcher", () => {
         id: "disc-1",
         subject: { type: "Discussion", title: "chat", url: null },
         repository: { full_name: "o/r" },
-        reason: "subscribed",
+        reason: "mention",
         updated_at: "2026-04-16T10:00:00Z",
         unread: false,
       },

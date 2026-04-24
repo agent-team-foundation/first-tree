@@ -1,14 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  buildAssignedCandidate,
   buildNotificationCandidate,
   buildReviewRequestCandidate,
   candidateFromTaskMetadata,
   displayUrl,
   effectiveWorkspaceRepo,
   stableIdFor,
-  taskIssueNumber,
   taskPrNumber,
   taskUrl,
   threadRecordFromKv,
@@ -88,7 +86,7 @@ describe("buildNotificationCandidate", () => {
       host: "github.com",
       repo: "o/r",
       subjectType: "Issue",
-      reason: "comment",
+      reason: "mention",
       title: "t",
       apiUrl: "https://api.github.com/repos/o/r/issues/7",
       latestCommentApiUrl: "",
@@ -98,7 +96,7 @@ describe("buildNotificationCandidate", () => {
   });
 });
 
-describe("buildReviewRequestCandidate / buildAssignedCandidate", () => {
+describe("buildReviewRequestCandidate", () => {
   it("review request builds with pulls thread key + priority 100", () => {
     const c = buildReviewRequestCandidate({
       repo: "o/r",
@@ -110,30 +108,6 @@ describe("buildReviewRequestCandidate / buildAssignedCandidate", () => {
     expect(c.threadKey).toBe("/repos/o/r/pulls/45");
     expect(c.priority).toBe(100);
     expect(taskPrNumber(c)).toBe(45);
-  });
-
-  it("assigned issue vs pr is driven by isPullRequest", () => {
-    const issue = buildAssignedCandidate({
-      repo: "o/r",
-      number: 3,
-      title: "t",
-      webUrl: "u",
-      updatedAt: "u",
-      isPullRequest: false,
-    });
-    expect(issue.kind).toBe("assigned_issue");
-    expect(taskIssueNumber(issue)).toBe(3);
-
-    const pr = buildAssignedCandidate({
-      repo: "o/r",
-      number: 4,
-      title: "t",
-      webUrl: "u",
-      updatedAt: "u",
-      isPullRequest: true,
-    });
-    expect(pr.kind).toBe("assigned_pull_request");
-    expect(taskPrNumber(pr)).toBe(4);
   });
 });
 

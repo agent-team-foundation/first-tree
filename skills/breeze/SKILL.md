@@ -1,6 +1,6 @@
 ---
 name: breeze
-description: Operate the `first-tree breeze` CLI — a proposal/inbox agent that turns GitHub notifications into a live Claude Code statusline, a browsable inbox, an activity feed, and scheduled background work. Use whenever you need to run, start, stop, inspect, poll, or debug the breeze daemon; view or respond to GitHub notifications from the terminal; or wire up the breeze statusline hook.
+description: Operate the `first-tree breeze` CLI — a proposal/inbox agent that turns explicit GitHub mentions and review requests into a live Claude Code statusline, a browsable inbox, an activity feed, and scheduled background work. Use whenever you need to run, start, stop, inspect, poll, or debug the breeze daemon; view or respond to GitHub-triggered breeze work from the terminal; or wire up the breeze statusline hook.
 ---
 
 # Breeze — Operational Skill
@@ -26,7 +26,7 @@ and safe to re-run.
 
 ## Core Concepts
 
-- **Inbox** — the local store of GitHub notifications, under `~/.breeze/`.
+- **Inbox** — the local store of explicit GitHub mentions and review requests, under `~/.breeze/`.
 - **Daemon** — a long-running broker process that polls GitHub, keeps the
   inbox fresh, dispatches work to per-task agent runners, and serves a
   local HTTP/SSE endpoint on `127.0.0.1:7878` for the dashboard.
@@ -47,7 +47,7 @@ and safe to re-run.
 | `first-tree breeze status` | Print the daemon lock + runtime/status.env |
 | `first-tree breeze doctor` | One-screen diagnostic of the local install |
 | `first-tree breeze watch` | Live TUI: status board + activity feed |
-| `first-tree breeze poll` | Poll GitHub notifications once (no daemon required) |
+| `first-tree breeze poll` | Poll explicit GitHub mentions and review requests once (no daemon required) |
 
 ### Advanced (agents, debugging)
 

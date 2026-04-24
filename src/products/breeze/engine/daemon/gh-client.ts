@@ -2,8 +2,7 @@
  * Phase 4: TS port of `gh.rs`.
  *
  * `GhClient` wraps a `GhExecutor` with the GitHub-specific query set
- * (notifications, direct review requests, required-review backlog,
- * assigned issues/PRs) and the snapshot-hydration path
+ * (notifications, direct review requests) and the snapshot-hydration path
  * (`writeTaskSnapshot`). Rate limiting + write-cooldown are handled
  * entirely by the executor; this module only builds argv.
  *
@@ -27,9 +26,7 @@ import {
   type SearchScope,
 } from "../runtime/repo-filter.js";
 import {
-  buildAssignedCandidate,
   buildNotificationCandidate,
-  buildRequiredReviewCandidate,
   buildReviewRequestCandidate,
   taskIssueNumber,
   taskPrNumber,
@@ -170,157 +167,6 @@ export class GhClient {
     return deduplicate(tasks);
   }
 
-  /** `gh search issues --assignee=@me --include-prs`. */
-  async assignedItems(limit: number): Promise<TaskCandidate[]> {
-    const jq =
-      '.[] | [(.repository.nameWithOwner // ""), ((.number | tostring) // "0"), (.title // ""), (.url // ""), (.updatedAt // ""), (if .isPullRequest then "1" else "0" end)] | @tsv';
-    const tasks: TaskCandidate[] = [];
-    for (const scope of searchScopesFor(this.repoFilter)) {
-      const stdout = await this.runChecked(
-        "search assigned items",
-        withSearchScope(
-          [
-            "search",
-            "issues",
-            "--assignee=@me",
-            "--state",
-            "open",
-            "--include-prs",
-            "--limit",
-            String(limit),
-            "--json",
-            "number,title,url,updatedAt,repository,isPullRequest",
-            "--jq",
-            jq,
-          ],
-          scope,
-        ),
-        "search",
-      );
-      for (const line of stdout.split("\n")) {
-        if (line.trim().length === 0) continue;
-        const fields = parseTsvLine(line);
-        if (fields.length < 6) continue;
-        const number = Number.parseInt(fields[1], 10) || 0;
-        tasks.push(
-          buildAssignedCandidate({
-            repo: fields[0],
-            number,
-            title: fields[2],
-            webUrl: fields[3],
-            updatedAt: fields[4],
-            isPullRequest: fields[5] === "1",
-          }),
-        );
-      }
-    }
-    return deduplicate(tasks);
-  }
-
-  /**
-   * Recovery path for review backlog. This complements
-   * `--review-requested=@me`: when breeze was offline, a PR may still be
-   * awaiting review even though the explicit reviewer-request signal is no
-   * longer visible. Exact repo scopes use `gh pr list` for fresher data;
-   * owner/all scopes fall back to `gh search prs --review required`.
-   */
-  async requiredReviewBacklog(limit: number): Promise<TaskCandidate[]> {
-    const tasks: TaskCandidate[] = [];
-    const repoListJq =
-      '.[] | [((.number | tostring) // "0"), (.title // ""), (.url // ""), (.updatedAt // ""), (if .isDraft then "1" else "0" end), (.reviewDecision // "")] | @tsv';
-    for (const repo of this.repoFilter.repos()) {
-      const stdout = await this.runChecked(
-        "list required-review backlog",
-        [
-          "pr",
-          "list",
-          "--repo",
-          repo,
-          "--state",
-          "open",
-          "--search",
-          "review:required sort:updated-desc",
-          "--limit",
-          String(limit),
-          "--json",
-          "number,title,url,updatedAt,isDraft,reviewDecision",
-          "--jq",
-          repoListJq,
-        ],
-        "core",
-      );
-      for (const line of stdout.split("\n")) {
-        if (line.trim().length === 0) continue;
-        const fields = parseTsvLine(line);
-        if (fields.length < 6) continue;
-        const number = Number.parseInt(fields[0], 10) || 0;
-        if (fields[4] === "1") continue;
-        if (fields[5] !== "REVIEW_REQUIRED") continue;
-        tasks.push(
-          buildRequiredReviewCandidate({
-            repo,
-            number,
-            title: fields[1],
-            webUrl: fields[2],
-            updatedAt: fields[3],
-          }),
-        );
-      }
-    }
-
-    const searchScopes: SearchScope[] = this.repoFilter.isEmpty()
-      ? [{ kind: "all" }]
-      : this.repoFilter.owners().map((owner) => ({ kind: "owner", owner }));
-    const searchJq =
-      '.[] | [(.repository.nameWithOwner // ""), ((.number | tostring) // "0"), (.title // ""), (.url // ""), (.updatedAt // ""), (if .isDraft then "1" else "0" end)] | @tsv';
-    for (const scope of searchScopes) {
-      const stdout = await this.runChecked(
-        "search required-review backlog",
-        withSearchScope(
-          [
-            "search",
-            "prs",
-            "--review",
-            "required",
-            "--state",
-            "open",
-            "--sort",
-            "updated",
-            "--order",
-            "desc",
-            "--limit",
-            String(limit),
-            "--json",
-            "number,title,url,updatedAt,repository,isDraft",
-            "--jq",
-            searchJq,
-          ],
-          scope,
-        ),
-        "search",
-      );
-      for (const line of stdout.split("\n")) {
-        if (line.trim().length === 0) continue;
-        const fields = parseTsvLine(line);
-        if (fields.length < 6) continue;
-        const repo = fields[0];
-        const number = Number.parseInt(fields[1], 10) || 0;
-        if (fields[5] === "1") continue;
-        tasks.push(
-          buildRequiredReviewCandidate({
-            repo,
-            number,
-            title: fields[2],
-            webUrl: fields[3],
-            updatedAt: fields[4],
-          }),
-        );
-      }
-    }
-
-    return deduplicate(tasks);
-  }
-
   /** Last comment on `api_url`'s thread (empty api_url → null). */
   async latestCommentActivity(apiUrl: string): Promise<ThreadActivity | null> {
     if (apiUrl.trim().length === 0) return null;
@@ -424,7 +270,7 @@ export class GhClient {
 
   /**
    * Top-level candidate producer used by the dispatcher. Runs the
-   * notification poll and (optionally) the three search/list queries,
+   * notification poll and (optionally) the direct review-request search,
    * aggregates, de-dups by thread_key, sorts.
    */
   async collectCandidates(options: {
@@ -462,24 +308,6 @@ export class GhClient {
         const message = errMessage(err);
         if (isRateLimitError(message)) poll.searchRateLimited = true;
         poll.warnings.push(`review search: ${message.trim()}`);
-      }
-
-      try {
-        const tasks = await this.requiredReviewBacklog(options.limit);
-        poll.tasks.push(...tasks);
-      } catch (err) {
-        const message = errMessage(err);
-        if (isRateLimitError(message)) poll.searchRateLimited = true;
-        poll.warnings.push(`review backlog: ${message.trim()}`);
-      }
-
-      try {
-        const tasks = await this.assignedItems(options.limit);
-        poll.tasks.push(...tasks);
-      } catch (err) {
-        const message = errMessage(err);
-        if (isRateLimitError(message)) poll.searchRateLimited = true;
-        poll.warnings.push(`assignment search: ${message.trim()}`);
       }
     }
 

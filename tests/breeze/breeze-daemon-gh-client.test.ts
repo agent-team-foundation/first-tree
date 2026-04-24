@@ -26,7 +26,6 @@ import {
 import { RepoFilter } from "../../src/products/breeze/engine/runtime/repo-filter.js";
 import {
   buildNotificationCandidate,
-  buildRequiredReviewCandidate,
   buildReviewRequestCandidate,
 } from "../../src/products/breeze/engine/runtime/task.js";
 
@@ -139,9 +138,30 @@ describe("GhClient.recentNotifications", () => {
     const tasks = await client.recentNotifications(now, 60);
     expect(tasks).toEqual([]);
   });
+
+  it("drops notification reasons that are not explicit mentions or review requests", async () => {
+    const { executor, ctl } = makeStubExecutor();
+    ctl.setResponses([
+      {
+        stdout: [
+          "owner/repo\tPullRequest\tcomment\tHello\thttps://api.github.com/repos/owner/repo/pulls/7\t\t2026-04-15T12:00:00Z",
+          "owner/repo\tIssue\tauthor\tMine\thttps://api.github.com/repos/owner/repo/issues/3\t\t2026-04-15T12:00:00Z",
+          "owner/repo\tIssue\tassign\tAssigned\thttps://api.github.com/repos/owner/repo/issues/4\t\t2026-04-15T12:00:00Z",
+        ].join("\n"),
+      },
+    ]);
+    const client = new GhClient({
+      host: "github.com",
+      repoFilter: RepoFilter.parseCsv("owner/*"),
+      executor,
+    });
+    const now = Date.UTC(2026, 3, 15, 12, 0, 0) / 1000;
+    const tasks = await client.recentNotifications(now, 120);
+    expect(tasks).toEqual([]);
+  });
 });
 
-describe("GhClient.reviewRequests / assignedItems", () => {
+describe("GhClient.reviewRequests", () => {
   it("fans out one call per search scope", async () => {
     const { executor, ctl } = makeStubExecutor();
     ctl.setResponder((spec) => {
@@ -165,28 +185,6 @@ describe("GhClient.reviewRequests / assignedItems", () => {
     expect(tasks[0].kind).toBe("review_request");
   });
 
-  it("parses the isPullRequest flag for assigned items", async () => {
-    const { executor, ctl } = makeStubExecutor();
-    ctl.setResponses([
-      {
-        stdout: [
-          "o/r\t3\tBug\thttps://github.com/o/r/issues/3\t2026-04-15T12:00:00Z\t0",
-          "o/r\t4\tFeature\thttps://github.com/o/r/pull/4\t2026-04-15T12:00:00Z\t1",
-        ].join("\n"),
-      },
-    ]);
-    const client = new GhClient({
-      host: "github.com",
-      repoFilter: RepoFilter.empty(),
-      executor,
-    });
-    const tasks = await client.assignedItems(10);
-    expect(tasks.map((t) => t.kind)).toEqual([
-      "assigned_issue",
-      "assigned_pull_request",
-    ]);
-  });
-
   it("falls back to issue comments for search-derived PR candidates", async () => {
     const { executor, ctl } = makeStubExecutor();
     ctl.setResponder((spec) => {
@@ -206,7 +204,7 @@ describe("GhClient.reviewRequests / assignedItems", () => {
       executor,
     });
     const activity = await client.latestVisibleActivity(
-      buildRequiredReviewCandidate({
+      buildReviewRequestCandidate({
         repo: "o/r",
         number: 45,
         title: "Handle backlog",
@@ -243,7 +241,7 @@ describe("GhClient.reviewRequests / assignedItems", () => {
       executor,
     });
     const activity = await client.latestVisibleActivity(
-      buildRequiredReviewCandidate({
+      buildReviewRequestCandidate({
         repo: "o/r",
         number: 45,
         title: "Handle backlog",
@@ -258,37 +256,6 @@ describe("GhClient.reviewRequests / assignedItems", () => {
     });
   });
 
-  it("recovers required-review backlog from exact repo scopes", async () => {
-    const { executor, ctl } = makeStubExecutor();
-    ctl.setResponses([
-      {
-        stdout: [
-          "45\tHandle backlog\thttps://github.com/o/r/pull/45\t2026-04-15T12:00:00Z\t0\tREVIEW_REQUIRED",
-          "46\tSkip draft\thttps://github.com/o/r/pull/46\t2026-04-15T12:00:00Z\t1\tREVIEW_REQUIRED",
-          "47\tSkip changes requested\thttps://github.com/o/r/pull/47\t2026-04-15T12:00:00Z\t0\tCHANGES_REQUESTED",
-        ].join("\n"),
-      },
-    ]);
-    const client = new GhClient({
-      host: "github.com",
-      repoFilter: RepoFilter.parseCsv("o/r"),
-      executor,
-    });
-    const tasks = await client.requiredReviewBacklog(10);
-    expect(tasks).toHaveLength(1);
-    expect(tasks[0]).toEqual(
-      buildRequiredReviewCandidate({
-        repo: "o/r",
-        number: 45,
-        title: "Handle backlog",
-        webUrl: "https://github.com/o/r/pull/45",
-        updatedAt: "2026-04-15T12:00:00Z",
-      }),
-    );
-    expect(ctl.calls[0].args.slice(0, 2)).toEqual(["pr", "list"]);
-    expect(ctl.calls[0].args).toContain("--repo");
-    expect(ctl.calls[0].args).toContain("o/r");
-  });
 });
 
 describe("GhClient.collectCandidates", () => {
@@ -344,7 +311,7 @@ describe("GhClient.collectCandidates", () => {
     expect(poll.searchRateLimited).toBe(true);
   });
 
-  it("adds required-review backlog when review-requested search is empty", async () => {
+  it("does not add review backlog or assigned-search tasks when direct review search is empty", async () => {
     const { executor, ctl } = makeStubExecutor();
     ctl.setResponder((spec) => {
       if (spec.args[0] === "api") return { stdout: "" };
@@ -374,18 +341,13 @@ describe("GhClient.collectCandidates", () => {
       nowEpoch: now,
       lookbackSecs: 3600,
     });
-    expect(poll.tasks).toEqual([
-      buildRequiredReviewCandidate({
-        repo: "o/r",
-        number: 11,
-        title: "Review me later",
-        webUrl: "https://github.com/o/r/pull/11",
-        updatedAt: "2026-04-15T12:00:00Z",
-      }),
-    ]);
+    expect(poll.tasks).toEqual([]);
     expect(
       ctl.calls.some((call) => call.args[0] === "pr" && call.args[1] === "list"),
-    ).toBe(true);
+    ).toBe(false);
+    expect(
+      ctl.calls.some((call) => call.args[0] === "search" && call.args[1] === "issues"),
+    ).toBe(false);
   });
 });
 

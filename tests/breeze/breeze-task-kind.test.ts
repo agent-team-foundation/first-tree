@@ -59,17 +59,19 @@ describe("priorityFor", () => {
 });
 
 describe("shouldProcessReason", () => {
-  it("accepts the actionable set", () => {
+  it("accepts only explicit mentions and review requests", () => {
     for (const r of [
       "review_requested",
       "mention",
       "team_mention",
-      "comment",
-      "assign",
-      "author",
-      "manual",
     ]) {
       expect(shouldProcessReason(r)).toBe(true);
+    }
+  });
+
+  it("rejects non-explicit participation reasons", () => {
+    for (const r of ["comment", "assign", "author", "manual"]) {
+      expect(shouldProcessReason(r)).toBe(false);
     }
   });
 

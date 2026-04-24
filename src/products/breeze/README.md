@@ -1,9 +1,9 @@
 # `first-tree breeze`
 
-Local daemon that takes over your `gh` login and turns GitHub notifications
-(PRs, comments, discussions, issues) into a triaged, optionally auto-handled
-inbox. Drives a Claude Code statusline, an SSE dashboard, and scheduled
-background work.
+Local daemon that takes over your `gh` login and turns explicit GitHub review
+requests and direct mentions into a triaged, optionally auto-handled inbox.
+Drives a Claude Code statusline, an SSE dashboard, and scheduled background
+work.
 
 ## What's In This Directory
 
