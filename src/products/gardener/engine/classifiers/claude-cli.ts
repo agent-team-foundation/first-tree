@@ -26,7 +26,11 @@ import type {
   ClassifyInput,
   ClassifyOutput,
 } from "../comment.js";
-import { collectTreeDigest, formatDigest } from "./tree-digest.js";
+import {
+  collectTreeDigestDetailed,
+  emitDigestDiagnostics,
+  formatDigest,
+} from "./tree-digest.js";
 import { filterDiffNoise } from "./diff-filter.js";
 import {
   parseVerdictJson,
@@ -63,6 +67,13 @@ export interface ClaudeCliClassifierOptions {
   env?: NodeJS.ProcessEnv;
   /** Injected spawner for tests. */
   spawnImpl?: typeof spawn;
+  /**
+   * Optional logging sink for diagnostics (digest budget warnings,
+   * etc.). Defaults to `process.stderr.write`. The classifier never
+   * writes to stdout directly — stdout is reserved for the JSON
+   * verdict piped out to `gardener comment` / `sync`.
+   */
+  write?: (line: string) => void;
 }
 
 export function buildClaudeCliEnvironment(
@@ -79,8 +90,13 @@ export function createClaudeCliClassifier(
   const model = opts.model?.trim() || DEFAULT_MODEL;
   const env = buildClaudeCliEnvironment(opts.env ?? process.env);
   const doSpawn = opts.spawnImpl ?? spawn;
+  const write =
+    opts.write ??
+    ((line: string) => process.stderr.write(line + "\n"));
   return async (input: ClassifyInput): Promise<ClassifyOutput> => {
-    const digest = formatDigest(collectTreeDigest(input.treeRoot));
+    const detailed = collectTreeDigestDetailed(input.treeRoot);
+    emitDigestDiagnostics(detailed, write);
+    const digest = formatDigest(detailed.entries);
     const prompt = buildPrompt(input, digest);
     const { stdout, stderr, code, timedOut } = await runClaude(
       doSpawn,

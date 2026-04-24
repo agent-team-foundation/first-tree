@@ -23,7 +23,11 @@ import type {
   ClassifyInput,
   ClassifyOutput,
 } from "../comment.js";
-import { collectTreeDigest, formatDigest } from "./tree-digest.js";
+import {
+  collectTreeDigestDetailed,
+  emitDigestDiagnostics,
+  formatDigest,
+} from "./tree-digest.js";
 import { filterDiffNoise } from "./diff-filter.js";
 import {
   parseVerdictJson,
@@ -46,6 +50,11 @@ export interface AnthropicClassifierOptions {
   model?: string;
   /** Injected fetch for tests. Defaults to global fetch. */
   fetchImpl?: typeof fetch;
+  /**
+   * Optional logging sink for diagnostics (digest budget warnings,
+   * etc.). Defaults to `process.stderr.write`.
+   */
+  write?: (line: string) => void;
 }
 
 export function createAnthropicClassifier(
@@ -53,8 +62,13 @@ export function createAnthropicClassifier(
 ): Classifier {
   const model = opts.model?.trim() || DEFAULT_MODEL;
   const doFetch = opts.fetchImpl ?? fetch;
+  const write =
+    opts.write ??
+    ((line: string) => process.stderr.write(line + "\n"));
   return async (input: ClassifyInput): Promise<ClassifyOutput> => {
-    const digest = formatDigest(collectTreeDigest(input.treeRoot));
+    const detailed = collectTreeDigestDetailed(input.treeRoot);
+    emitDigestDiagnostics(detailed, write);
+    const digest = formatDigest(detailed.entries);
     const userPrompt = buildUserPrompt(input, digest);
     try {
       const res = await doFetch(ANTHROPIC_URL, {
