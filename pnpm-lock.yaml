@@ -196,6 +196,9 @@ importers:
       gray-matter:
         specifier: ^4.0.3
         version: 4.0.3
+      hearback-server:
+        specifier: ^0.1.6
+        version: 0.1.6
       jose:
         specifier: ^6.0.0
         version: 6.2.2
@@ -2842,6 +2845,12 @@ packages:
   hast-util-whitespace@3.0.0:
     resolution: {integrity: sha512-88JUN06ipLwsnv+dVn+OIYOvAuvBMy/Qoi6O7mQHxdPXpjy+Cd6xRkWwux7DKO+4sYILtLBRIKgsdpS2gQc7qw==}
 
+  hearback-core@0.1.1:
+    resolution: {integrity: sha512-ryatDBa8gvOdILp+VN05UnlekPy9YTxHqsjLQ5MTN+AtnO4ITAHHVyQfGD1iYo44GSJU6YwaA65ZiDsz9MjOlg==}
+
+  hearback-server@0.1.6:
+    resolution: {integrity: sha512-IlwduoRJvUBW3dU4H0hBvLjsgZHfXeOLQMqK9ahCLb45wgotIVL+CqieJnN7cQMNGU0i0sSpgyji5ELuwB+H5g==}
+
   hookable@6.1.0:
     resolution: {integrity: sha512-ZoKZSJgu8voGK2geJS+6YtYjvIzu9AOM/KZXsBxr83uhLL++e9pEv/dlgwgy3dvHg06kTz6JOh1hk3C8Ceiymw==}
 
@@ -4085,6 +4094,9 @@ packages:
   zip-stream@6.0.1:
     resolution: {integrity: sha512-zK7YHHz4ZXpW89AHXUPbQVGKI7uvkd3hzusTdotCg1UxyaVtg0zFJSTfW/Dq5f7OBBVnq6cZIaC8Ti4hb6dtCA==}
     engines: {node: '>= 14'}
+
+  zod@3.25.76:
+    resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
 
   zod@4.3.6:
     resolution: {integrity: sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg==}
@@ -6282,6 +6294,14 @@ snapshots:
     dependencies:
       '@types/hast': 3.0.4
 
+  hearback-core@0.1.1:
+    dependencies:
+      zod: 3.25.76
+
+  hearback-server@0.1.6:
+    dependencies:
+      hearback-core: 0.1.1
+
   hookable@6.1.0: {}
 
   html-url-attributes@3.0.1: {}
@@ -7885,6 +7905,8 @@ snapshots:
       archiver-utils: 5.0.2
       compress-commons: 6.0.2
       readable-stream: 4.7.0
+
+  zod@3.25.76: {}
 
   zod@4.3.6: {}
 

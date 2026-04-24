@@ -38,6 +38,7 @@ import { clientWsRoutes } from "./api/agent/ws-client.js";
 import { authRoutes } from "./api/auth.js";
 import { bootstrapConfigRoutes } from "./api/bootstrap/config.js";
 import { contextTreeInfoRoutes } from "./api/context-tree-info.js";
+import { feedbackRoutes } from "./api/feedback.js";
 import { healthRoutes } from "./api/health.js";
 import { healthzRoutes } from "./api/healthz.js";
 import { meRoutes } from "./api/me.js";
@@ -377,6 +378,31 @@ export async function buildApp(config: Config) {
     },
     { prefix: "/api/v1" },
   );
+
+  // Hearback feedback endpoint — mounted outside /api/v1 because the widget's
+  // default `data-endpoint="/feedback"` expects `/feedback/chat`, `/feedback/submit`,
+  // `/feedback/upload`, etc. Registered in an encapsulated scope so its
+  // image/* content-type parser doesn't affect the rest of the app.
+  if (config.feedback) {
+    const feedbackConfig = config.feedback;
+    await app.register(
+      async (scope) => {
+        await scope.register(feedbackRoutes, {
+          repo: feedbackConfig.repo,
+          githubToken: feedbackConfig.githubToken,
+          llm: feedbackConfig.llm
+            ? {
+                apiKey: feedbackConfig.llm.apiKey,
+                baseUrl: feedbackConfig.llm.baseUrl,
+                model: feedbackConfig.llm.model,
+              }
+            : undefined,
+          trustProxyHeaders: feedbackConfig.trustProxyHeaders,
+        });
+      },
+      { prefix: "/feedback" },
+    );
+  }
 
   // Serve Web static files
   const webDistPath = config.webDistPath;
