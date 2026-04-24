@@ -35,7 +35,11 @@ describe("resolveSenderLabel", () => {
   const ps = [
     mkParticipant("agent-a", "alice", "Alice Smith"),
     mkParticipant("agent-b", null, "Bob Only"),
-    mkParticipant("agent-c", null),
+    // Pre-Phase-2 nullable displayName is gone, but `""` is still a
+    // reachable DB state (the temporary DEFAULT '' added by migration
+    // 0024 catches old INSERTs during a rolling deploy). Keep the
+    // "both falsy" coverage by pinning the empty-string branch.
+    mkParticipant("agent-c", null, ""),
   ];
 
   it("returns the participant name when available", () => {
@@ -46,13 +50,11 @@ describe("resolveSenderLabel", () => {
     expect(resolveSenderLabel("agent-b", ps)).toBe("Bob Only");
   });
 
-  it("falls back to the raw senderId when the name is null (displayName post-Phase 2 is non-null but may be synthetic)", () => {
-    // Post-Phase 2 displayName is guaranteed non-null at the DB level, so
-    // the prior "both null" case is unreachable. The next best fallback
-    // `resolveSenderLabel` covers is still the raw senderId for rows whose
-    // displayName was synthesised from the agentId; the `mkParticipant`
-    // helper mirrors that (`agent-${agentId}`).
-    expect(resolveSenderLabel("agent-c", ps)).toBe("agent-agent-c");
+  it("falls back to the raw senderId when name is null and displayName is empty", () => {
+    // Covers the `return senderId` branch inside the participant-match
+    // loop (runtime/agent-io.ts) — still reachable for rows that came
+    // in under the migration 0024 rollout default.
+    expect(resolveSenderLabel("agent-c", ps)).toBe("agent-c");
   });
 
   it("returns the raw senderId when not present among participants (stale cache / ex-member)", () => {

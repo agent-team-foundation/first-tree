@@ -313,7 +313,8 @@ export async function listChatsForMember(db: Database, memberId: string, humanAg
     .where(eq(agents.managerId, memberId));
 
   // Ensure human agent is included (it should be, but be safe)
-  const agentMap = new Map<string, { uuid: string; name: string | null; type: string; displayName: string | null }>();
+  // displayName is non-null post-Phase 2 (migration 0024 enforces it).
+  const agentMap = new Map<string, { uuid: string; name: string | null; type: string; displayName: string }>();
   for (const a of managedAgents) {
     agentMap.set(a.uuid, a);
   }
@@ -375,7 +376,7 @@ export async function listChatsForMember(db: Database, memberId: string, humanAg
 
   // Build grouped result: per agent, list of chats
   const result: Array<{
-    agent: { uuid: string; name: string | null; type: string; displayName: string | null };
+    agent: { uuid: string; name: string | null; type: string; displayName: string };
     chats: Array<{
       id: string;
       type: string | null;
