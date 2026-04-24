@@ -6,7 +6,7 @@
  * The daemon needs a richer identity than the one-shot commands:
  *   - `host`  — GitHub host (default `github.com`)
  *   - `login` — the authenticated user's GH login
- *   - `gitProtocol` — `https` | `ssh` (from `gh auth status --json hosts`)
+ *   - `gitProtocol` — `https` | `ssh` (from `gh auth status --active`)
  *   - `scopes` — OAuth scope list; used by `hasRequiredScope` to warn if
  *     the token lacks `repo`/`notifications`
  *   - `lockKey(profile)` — `host__login__profile`, used by the broker
@@ -16,7 +16,7 @@
  * Caching: delegates to `runtime/identity-cache.ts`'s 24h-TTL JSON file at
  * `~/.breeze/identity.json`. The core cache only stores `{login, host,
  * fetched_at_ms}` because one-shot callers don't need scopes. The
- * daemon fetches the richer payload via `gh auth status --json hosts`
+ * daemon fetches the richer payload via `gh auth status --active`
  * and keeps it in memory for the lifetime of the daemon process.
  */
 
@@ -47,72 +47,85 @@ export interface ResolveDaemonIdentityDeps {
   host?: string;
 }
 
-interface AuthStatusHostEntry {
-  active?: boolean;
-  user?: string;
-  login?: string;
-  gitProtocol?: string;
-  git_protocol?: string;
-  scopes?: string | string[];
-}
-
-interface AuthStatusPayload {
-  hosts?: Record<string, AuthStatusHostEntry | AuthStatusHostEntry[]>;
-}
-
 /**
  * Parse the scope field as `gh` returns it. Shape varies:
  *   - Comma-separated string (`"repo,workflow"`) — older output
- *   - Array of strings (`["repo", "workflow"]`) — newer output
+ *   - Shell-quoted string from `gh auth status`
+ *     (`"'repo', 'workflow'"`)
  */
 function parseScopes(raw: unknown): string[] {
-  if (Array.isArray(raw)) {
-    return raw
-      .filter((s): s is string => typeof s === "string")
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0);
-  }
   if (typeof raw === "string") {
     return raw
       .split(",")
-      .map((s) => s.trim())
+      .map((s) => s.trim().replace(/^['"]+|['"]+$/gu, ""))
+      .filter((s) => s.length > 0)
+      .filter((s) => s !== "(none)" && s.toLowerCase() !== "none");
+  }
+  if (Array.isArray(raw)) {
+    return raw
+      .filter((s): s is string => typeof s === "string")
+      .map((s) => s.trim().replace(/^['"]+|['"]+$/gu, ""))
       .filter((s) => s.length > 0);
   }
   return [];
 }
 
 /**
- * Pick the active account from a `gh auth status --json hosts` payload.
- * Handles both shapes seen in the wild (single object vs array per host).
+ * Parse the active account from `gh auth status --active --hostname <host>`.
  */
-export function pickActiveIdentityFromAuthStatus(
-  payload: AuthStatusPayload,
+export function pickIdentityFromAuthStatusText(
+  statusText: string,
   targetHost: string,
 ): DaemonIdentity | null {
-  const hosts = payload.hosts ?? {};
-  for (const [host, bucket] of Object.entries(hosts)) {
-    if (host !== targetHost) continue;
-    const candidates: AuthStatusHostEntry[] = Array.isArray(bucket)
-      ? bucket
-      : [bucket];
-    const active = candidates.find((c) => c?.active === true) ?? candidates[0];
-    if (!active) continue;
-    const login = active.user ?? active.login;
-    if (typeof login !== "string" || login.length === 0) continue;
-    const gitProtocol = active.gitProtocol ?? active.git_protocol ?? "https";
-    return {
-      host,
-      login,
-      gitProtocol,
-      scopes: parseScopes(active.scopes),
-    };
+  let login: string | null = null;
+  let gitProtocol = "https";
+  let scopes: string[] = [];
+
+  for (const line of statusText.split(/\r?\n/u)) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) continue;
+
+    if (!login) {
+      const marker = `Logged in to ${targetHost} account `;
+      const start = trimmed.indexOf(marker);
+      if (start >= 0) {
+        const rest = trimmed.slice(start + marker.length).trim();
+        const parsedLogin = rest.match(/^([^\s(]+)/u)?.[1];
+        if (parsedLogin) {
+          login = parsedLogin;
+          continue;
+        }
+      }
+    }
+
+    const protocolMatch = trimmed.match(
+      /^-\s*Git operations protocol:\s*(\S+)/u,
+    );
+    if (protocolMatch) {
+      gitProtocol = protocolMatch[1];
+      continue;
+    }
+
+    const scopesMatch = trimmed.match(/^-\s*Token scopes:\s*(.+)$/u);
+    if (scopesMatch) {
+      scopes = parseScopes(scopesMatch[1]);
+    }
   }
-  return null;
+
+  if (!login) return null;
+
+  return {
+    host: targetHost,
+    login,
+    gitProtocol,
+    scopes,
+  };
 }
 
 /**
  * Resolve the active gh identity for the daemon. Uses
- * `gh auth status --json hosts` with a jq-free JSON parse in Node.
+ * `gh auth status --active --hostname <host>` to stay compatible with
+ * older gh releases that don't support `gh auth status --json`.
  */
 export function resolveDaemonIdentity(
   deps: ResolveDaemonIdentityDeps = {},
@@ -128,8 +141,6 @@ export function resolveDaemonIdentity(
       "--active",
       "--hostname",
       host,
-      "--json",
-      "hosts",
     ]);
   } catch (err) {
     if (err instanceof GhExecError) {
@@ -140,18 +151,11 @@ export function resolveDaemonIdentity(
     throw err;
   }
 
-  let parsed: AuthStatusPayload;
-  try {
-    parsed = JSON.parse(stdout) as AuthStatusPayload;
-  } catch (err) {
-    throw new Error(
-      `gh auth status returned non-JSON output: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
-
-  const identity = pickActiveIdentityFromAuthStatus(parsed, host);
+  const identity = pickIdentityFromAuthStatusText(stdout, host);
   if (!identity) {
-    throw new Error(`no active gh identity found for host \`${host}\``);
+    throw new Error(
+      `could not parse an active gh identity from \`gh auth status\` for host \`${host}\``,
+    );
   }
   return identity;
 }

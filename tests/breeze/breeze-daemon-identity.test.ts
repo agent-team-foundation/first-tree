@@ -14,20 +14,24 @@ import { GhClient } from "../../src/products/breeze/engine/runtime/gh.js";
 import {
   identityHasRequiredScope,
   identityLockKey,
-  pickActiveIdentityFromAuthStatus,
+  pickIdentityFromAuthStatusText,
   resolveDaemonIdentity,
 } from "../../src/products/breeze/engine/daemon/identity.js";
 
-function makeGhReturning(stdout: string, status = 0): GhClient {
+function makeGhReturning(
+  stdout: string,
+  status = 0,
+  stderr = "",
+): { gh: GhClient; spawn: ReturnType<typeof vi.fn> } {
   const spawn = vi.fn().mockReturnValue({
     pid: 1,
     status,
     signal: null,
     stdout: Buffer.from(stdout),
-    stderr: Buffer.alloc(0),
+    stderr: Buffer.from(stderr),
     output: [],
   });
-  return new GhClient({ spawn });
+  return { gh: new GhClient({ spawn }), spawn };
 }
 
 describe("identityLockKey", () => {
@@ -76,78 +80,76 @@ describe("identityHasRequiredScope", () => {
   });
 });
 
-describe("pickActiveIdentityFromAuthStatus", () => {
-  it("picks active=true when multiple entries per host", () => {
-    const payload = {
-      hosts: {
-        "github.com": [
-          {
-            user: "old-login",
-            active: false,
-            gitProtocol: "ssh",
-            scopes: "repo",
-          },
-          {
-            user: "active-login",
-            active: true,
-            gitProtocol: "https",
-            scopes: "repo,workflow",
-          },
-        ],
-      },
-    };
-    const id = pickActiveIdentityFromAuthStatus(payload, "github.com");
+describe("pickIdentityFromAuthStatusText", () => {
+  it("parses the active account, git protocol, and token scopes", () => {
+    const statusText = [
+      "github.com",
+      "  ✓ Logged in to github.com account active-login (keyring)",
+      "  - Active account: true",
+      "  - Git operations protocol: ssh",
+      "  - Token scopes: 'repo', 'workflow'",
+      "",
+    ].join("\n");
+
+    const id = pickIdentityFromAuthStatusText(statusText, "github.com");
     expect(id?.login).toBe("active-login");
     expect(id?.scopes).toEqual(["repo", "workflow"]);
-    expect(id?.gitProtocol).toBe("https");
+    expect(id?.gitProtocol).toBe("ssh");
   });
 
-  it("accepts scope arrays as well as comma strings", () => {
-    const payload = {
-      hosts: {
-        "github.com": {
-          user: "x",
-          active: true,
-          gitProtocol: "https",
-          scopes: ["repo", "notifications"],
-        },
-      },
-    };
-    const id = pickActiveIdentityFromAuthStatus(payload, "github.com");
+  it("accepts unquoted scope strings as well as quoted ones", () => {
+    const statusText = [
+      "github.com",
+      "  ✓ Logged in to github.com account x (keyring)",
+      "  - Active account: true",
+      "  - Git operations protocol: https",
+      "  - Token scopes: repo,notifications",
+      "",
+    ].join("\n");
+
+    const id = pickIdentityFromAuthStatusText(statusText, "github.com");
     expect(id?.scopes).toEqual(["repo", "notifications"]);
   });
 
-  it("returns null when target host is missing", () => {
-    const payload = {
-      hosts: { "ghe.other": { user: "x", active: true, scopes: "repo" } },
-    };
-    expect(pickActiveIdentityFromAuthStatus(payload, "github.com")).toBeNull();
+  it("returns null when the login line is missing for the target host", () => {
+    const statusText = [
+      "github.com",
+      "  - Active account: true",
+      "  - Token scopes: repo",
+      "",
+    ].join("\n");
+    expect(pickIdentityFromAuthStatusText(statusText, "github.com")).toBeNull();
   });
 });
 
 describe("resolveDaemonIdentity", () => {
   it("surfaces gh auth failure with an actionable error", () => {
-    const gh = makeGhReturning("", 1);
+    const { gh } = makeGhReturning("", 1, "not logged in");
     expect(() => resolveDaemonIdentity({ gh })).toThrow(/gh auth login/u);
   });
 
-  it("round-trips a realistic payload", () => {
-    const payload = JSON.stringify({
-      hosts: {
-        "github.com": {
-          user: "bingran-you",
-          active: true,
-          gitProtocol: "https",
-          scopes: "repo,workflow,notifications",
-        },
-      },
-    });
-    const gh = makeGhReturning(payload, 0);
+  it("parses a realistic auth status response without using --json", () => {
+    const statusText = [
+      "github.com",
+      "  ✓ Logged in to github.com account bingran-you (keyring)",
+      "  - Active account: true",
+      "  - Git operations protocol: https",
+      "  - Token scopes: 'repo', 'workflow', 'notifications'",
+      "",
+    ].join("\n");
+    const { gh, spawn } = makeGhReturning(statusText, 0);
     const id = resolveDaemonIdentity({ gh });
     expect(id.host).toBe("github.com");
     expect(id.login).toBe("bingran-you");
     expect(id.gitProtocol).toBe("https");
     expect(id.scopes).toContain("repo");
     expect(identityHasRequiredScope(id)).toBe(true);
+    expect(spawn.mock.calls[0]?.[1]).toEqual([
+      "auth",
+      "status",
+      "--active",
+      "--hostname",
+      "github.com",
+    ]);
   });
 });
