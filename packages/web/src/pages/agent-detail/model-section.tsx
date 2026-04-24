@@ -66,7 +66,7 @@ export function ModelSection({ value, baseline, onChange, onRevert, disabled }: 
           disabled={disabled}
           className="flex h-9 w-full max-w-md rounded-[var(--radius-input)] border border-input bg-transparent px-3 py-1 text-body shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
         >
-          {value === "" && <option value="">(unset — SDK default)</option>}
+          {value === "" && <option value="">(unset — inherits local)</option>}
           {CLAUDE_MODEL_OPTIONS.map((o) => (
             <option key={o.value} value={o.value}>
               {o.label}
