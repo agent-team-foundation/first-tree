@@ -1,0 +1,167 @@
+/*
+ * Marketing site design tokens — intentionally **independent** from the
+ * dashboard palette in packages/web/. Dashboard stays green-teal; marketing
+ * is deep indigo + cyan + violet to land a distinct "tech product" feel
+ * when linking out to the GitHub project.
+ *
+ * All colour tokens use oklch so runtime theme shifts stay perceptually even.
+ * color-mix against these tokens MUST be done with `in oklab` (not oklch)
+ * to avoid hue wraparound — see the dashboard ProfileHeader fix for context.
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* brand palette */
+  --m-bg: oklch(0.16 0.03 270);
+  --m-bg-raised: oklch(0.2 0.035 270);
+  --m-bg-sunken: oklch(0.13 0.025 270);
+  --m-bg-hover: oklch(0.24 0.04 270);
+  --m-border: oklch(0.32 0.04 270);
+  --m-border-strong: oklch(0.42 0.05 265);
+  --m-border-faint: oklch(0.26 0.035 270);
+
+  --m-fg: oklch(0.97 0.01 230);
+  --m-fg-2: oklch(0.82 0.015 230);
+  --m-fg-3: oklch(0.64 0.02 240);
+  --m-fg-4: oklch(0.48 0.03 250);
+
+  --m-accent: oklch(0.82 0.15 210);
+  --m-accent-dim: oklch(0.68 0.13 210);
+  --m-accent-soft: oklch(0.82 0.15 210 / 0.14);
+
+  --m-violet: oklch(0.72 0.22 300);
+  --m-violet-soft: oklch(0.72 0.22 300 / 0.2);
+
+  --m-danger: oklch(0.68 0.22 25);
+  --m-success: oklch(0.78 0.17 150);
+
+  /* spacing scale — minimal subset, marketing doesn't need the full
+   * dashboard system */
+  --m-sp-1: 0.25rem;
+  --m-sp-2: 0.5rem;
+  --m-sp-3: 0.75rem;
+  --m-sp-4: 1rem;
+  --m-sp-5: 1.25rem;
+  --m-sp-6: 1.5rem;
+  --m-sp-8: 2rem;
+  --m-sp-12: 3rem;
+  --m-sp-16: 4rem;
+  --m-sp-20: 5rem;
+
+  --m-radius: 12px;
+  --m-radius-lg: 20px;
+  --m-hairline: 1px;
+
+  --m-shell: 1120px;
+
+  /* body */
+  --m-font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", "Helvetica Neue", Arial, sans-serif;
+  --m-font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--m-bg);
+  color: var(--m-fg);
+  font-family: var(--m-font);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  /* subtle star-field / grid texture to lift the flat background */
+  background-image:
+    radial-gradient(circle at 15% 18%, color-mix(in oklab, var(--m-accent) 14%, transparent) 0, transparent 38%),
+    radial-gradient(circle at 85% 4%, color-mix(in oklab, var(--m-violet) 12%, transparent) 0, transparent 42%),
+    linear-gradient(to bottom, color-mix(in oklab, var(--m-bg-raised) 35%, var(--m-bg)) 0%, var(--m-bg) 28%);
+  background-repeat: no-repeat;
+  min-height: 100vh;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+/* ---- shared utilities ---- */
+
+.m-shell {
+  max-width: var(--m-shell);
+  margin-inline: auto;
+  padding-inline: var(--m-sp-6);
+}
+
+.m-eyebrow {
+  font-family: var(--m-font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--m-fg-4);
+}
+
+.m-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--m-sp-2);
+  padding: var(--m-sp-3) var(--m-sp-5);
+  border-radius: 999px;
+  font-weight: 500;
+  font-size: 14px;
+  border: var(--m-hairline) solid transparent;
+  transition:
+    transform 140ms ease,
+    background 140ms ease,
+    border-color 140ms ease;
+}
+
+.m-btn:hover {
+  transform: translateY(-1px);
+}
+
+.m-btn--primary {
+  background: var(--m-accent);
+  color: var(--m-bg);
+  border-color: var(--m-accent);
+}
+
+.m-btn--primary:hover {
+  background: color-mix(in oklab, var(--m-accent) 85%, var(--m-fg));
+}
+
+.m-btn--ghost {
+  background: transparent;
+  color: var(--m-fg-2);
+  border-color: var(--m-border);
+}
+
+.m-btn--ghost:hover {
+  background: var(--m-bg-hover);
+  border-color: var(--m-border-strong);
+}
+
+/* scroll-reveal animation hook */
+.m-reveal {
+  opacity: 0;
+  transform: translateY(12px);
+  transition:
+    opacity 600ms ease,
+    transform 600ms ease;
+}
+
+.m-reveal[data-visible="true"] {
+  opacity: 1;
+  transform: none;
+}
