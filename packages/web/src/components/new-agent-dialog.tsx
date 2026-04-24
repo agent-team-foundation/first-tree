@@ -55,16 +55,34 @@ function issuesToFieldErrors(issues: ValidationIssue[] | undefined): FieldErrors
 type Runtime = "claude-code" | "kael";
 
 /**
- * Slugify a free-text label into an agent name. Output always starts with
- * `[a-z0-9]` (stripping leading hyphens/underscores), uses lowercase ASCII
- * only, and is clamped to the max length so server validation never rejects
- * for length alone.
+ * Full slugification — lowercase, ASCII-only, strip leading/trailing
+ * separators, clamp length. Used when deriving the agent name from the
+ * display name (auto-follow path) where we always want a clean final
+ * slug. NOT used for interactive typing, because trimming trailing
+ * separators mid-edit would eat every `-` / `_` the moment the user
+ * typed it ("alice-" → "alice" → next char lands against "alice").
  */
 function slugify(raw: string): string {
   return raw
     .toLowerCase()
     .replace(/[^a-z0-9_-]+/g, "-")
     .replace(/^[-_]+|[-_]+$/g, "")
+    .slice(0, AGENT_NAME_MAX_LENGTH);
+}
+
+/**
+ * Lightweight normalizer applied to every keystroke in the agent-name
+ * input: downcase + fold illegal runs to `-`, but keep trailing `-` /
+ * `_` so users can type `alice-bot` one character at a time. Leading
+ * separators are still stripped because the server regex will reject
+ * them on submit and live-feedback is more useful than tolerating an
+ * input that can't be saved.
+ */
+function normalizeNameInput(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^[-_]+/, "")
     .slice(0, AGENT_NAME_MAX_LENGTH);
 }
 
@@ -387,10 +405,18 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
                 id="new-agent-name"
                 value={name}
                 onChange={(e) => {
-                  const next = slugify(e.target.value);
+                  // `normalizeNameInput` keeps trailing `-`/`_` so users
+                  // can type `alice-bot` one char at a time; the stricter
+                  // `slugify` fires only on blur to tidy a trailing
+                  // separator the user never follows up with a letter.
+                  const next = normalizeNameInput(e.target.value);
                   setName(next);
                   setNameDirty(true);
                   if (clientErrors.name) setClientErrors((prev) => ({ ...prev, name: undefined }));
+                }}
+                onBlur={(e) => {
+                  const cleaned = slugify(e.target.value);
+                  if (cleaned !== name) setName(cleaned);
                 }}
                 placeholder="my-dev-assistant"
                 className="rounded-l-none font-mono"
@@ -403,8 +429,11 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
               Used in @mentions and CLI commands. Lowercase letters, digits, hyphens (-), and underscores (_). Up to{" "}
               {AGENT_NAME_MAX_LENGTH} characters. Permanent after creation.
             </p>
-            {/* availability chip — only renders when we actually have a name */}
-            {name && !fieldErrors.name && (
+            {/* availability chip — only renders when there's a status worth
+                announcing. We skip it for the `idle` case (no name typed, or
+                the probe network-failed) so screen readers don't land on an
+                empty paragraph via `aria-describedby`. */}
+            {name && !fieldErrors.name && availability.status !== "idle" && (
               <p
                 id="new-agent-name-status"
                 className="text-caption"

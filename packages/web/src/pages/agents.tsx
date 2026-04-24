@@ -460,11 +460,11 @@ function AgentRow({
       <DenseTableCell>
         <DenseBadge tone={agent.type === "autonomous_agent" ? "accent" : "neutral"}>{agent.type}</DenseBadge>
       </DenseTableCell>
-      <DenseTableCell style={{ color: agent.delegateMention ? "var(--accent-dim)" : "var(--fg-4)" }}>
+      <DenseTableCell>
         {agent.delegateMention ? (
-          <AgentChip name={delegate?.name ?? null} displayName={delegate?.displayName ?? null} />
+          <AgentChip name={delegate?.name ?? null} displayName={delegate?.displayName ?? null} tone="accent" />
         ) : (
-          "—"
+          <span style={{ color: "var(--fg-4)" }}>—</span>
         )}
       </DenseTableCell>
       <DenseTableCell className="text-label" style={{ color: "var(--fg-2)" }}>

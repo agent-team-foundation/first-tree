@@ -56,9 +56,9 @@ export function detectMentionTrigger(text: string, cursor: number): ActiveTrigge
     const ch = text[i];
     if (ch === undefined) return null;
     if (ch === "@") break;
-    // Mention characters mirror `AGENT_NAME_REGEX` body charset plus letters
-    // so we don't cut the query short while the user is typing an uppercase
-    // letter that will later be lowercased during selection match.
+    // Accept the same charset as the mention regex body, plus uppercase —
+    // the user may type upper-case while searching, and we lowercase the
+    // accumulated query before matching.
     if (!/[A-Za-z0-9_-]/.test(ch)) return null;
     i--;
   }
@@ -182,6 +182,14 @@ export function useMentionAutocomplete({
   useEffect(() => {
     setHighlightIndex(0);
   }, [triggerKey]);
+
+  // Clear the dismissal flag whenever the active trigger disappears —
+  // otherwise, deleting an `@` and opening a fresh one at the same buffer
+  // offset (common flow when the user retries a mention) would silently
+  // keep the popover suppressed because `triggerIndex` alone collides.
+  useEffect(() => {
+    if (trigger === null && dismissedAt !== null) setDismissedAt(null);
+  }, [trigger, dismissedAt]);
 
   // A dismissal is sticky for the current trigger: re-typing inside the
   // same `@query` shouldn't reopen it until the user opens a new trigger.

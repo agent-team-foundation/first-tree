@@ -19,11 +19,22 @@ import { cn } from "../lib/utils.js";
  * and prose) and "stacked" (for dropdown options where vertical real estate
  * is available and the `@name` can wrap under the display name).
  */
+/**
+ * Tone preset controlling how the chip blends with the surrounding cell.
+ *   - `neutral` (default): display name in `--fg`, `@name` in `--fg-3`.
+ *   - `accent`: both halves render in `--accent-dim`, matching the
+ *     delegate-column affordance the list tables used before <AgentChip>
+ *     existed. Use when the chip should "pop" as a cross-reference.
+ */
+export type AgentChipTone = "neutral" | "accent";
+
 export type AgentChipProps = {
   name: string | null | undefined;
   displayName: string | null | undefined;
   /** Render stacked (displayName on top, `@name` below) instead of inline. */
   variant?: "inline" | "stacked";
+  /** Color treatment — see `AgentChipTone` docstring. */
+  tone?: AgentChipTone;
   /** Fallback shown when both fields are empty (e.g. soft-deleted row). */
   emptyLabel?: string;
   className?: string;
@@ -35,6 +46,7 @@ export function AgentChip({
   name,
   displayName,
   variant = "inline",
+  tone = "neutral",
   emptyLabel = "—",
   className,
   style,
@@ -57,6 +69,9 @@ export function AgentChip({
   const computedTitle =
     title ?? (hasName && hasDisplay ? `${displayName} (@${name})` : hasDisplay ? displayName : `@${name}`);
 
+  const primaryColor = tone === "accent" ? "var(--accent-dim)" : undefined;
+  const slugColor = tone === "accent" ? "var(--accent-dim)" : "var(--fg-3)";
+
   if (variant === "stacked") {
     return (
       <span
@@ -64,9 +79,13 @@ export function AgentChip({
         style={{ gap: 1, ...style }}
         title={computedTitle ?? undefined}
       >
-        {hasDisplay && <span className="text-body">{displayName}</span>}
+        {hasDisplay && (
+          <span className="text-body" style={{ color: primaryColor }}>
+            {displayName}
+          </span>
+        )}
         {hasName && (
-          <span className="mono text-caption" style={{ color: "var(--fg-3)" }}>
+          <span className="mono text-caption" style={{ color: slugColor }}>
             @{name}
           </span>
         )}
@@ -80,9 +99,9 @@ export function AgentChip({
       style={style}
       title={computedTitle ?? undefined}
     >
-      {hasDisplay && <span>{displayName}</span>}
+      {hasDisplay && <span style={{ color: primaryColor }}>{displayName}</span>}
       {hasName && (
-        <span className="mono text-caption" style={{ color: "var(--fg-3)" }}>
+        <span className="mono text-caption" style={{ color: slugColor }}>
           @{name}
         </span>
       )}
