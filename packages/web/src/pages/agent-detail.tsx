@@ -1,4 +1,4 @@
-import { ADAPTER_PLATFORMS } from "@agent-team-foundation/first-tree-hub-shared";
+import { ADAPTER_PLATFORMS, type Agent } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Cable, Link2, Plus, Trash2 } from "lucide-react";
 import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
@@ -25,7 +25,6 @@ import {
 } from "./../api/agents.js";
 import { ApiError } from "./../api/client.js";
 import { listAgentSessions } from "./../api/sessions.js";
-import { FirstTreeLogo } from "./../components/first-tree-logo.js";
 import { Breadcrumb, BreadcrumbCurrent, BreadcrumbLink, BreadcrumbSep } from "./../components/ui/breadcrumb.js";
 import { Button } from "./../components/ui/button.js";
 import { DenseBadge, type DenseBadgeTone } from "./../components/ui/dense-badge.js";
@@ -43,7 +42,7 @@ import { Label } from "./../components/ui/label.js";
 import { Panel } from "./../components/ui/panel.js";
 import { UppercaseLabel } from "./../components/ui/section-header.js";
 import { StateChip } from "./../components/ui/state-chip.js";
-import { Tile } from "./../components/ui/tile.js";
+import { useMemberNameMap } from "./../lib/use-member-name-map.js";
 import { cn, formatDate } from "./../lib/utils.js";
 import { ContextBar } from "./agent-detail/context-bar.js";
 import { DangerZone } from "./agent-detail/danger-zone.js";
@@ -53,6 +52,7 @@ import { IdentitySection } from "./agent-detail/identity-section.js";
 import { McpSection } from "./agent-detail/mcp-section.js";
 import { ModelSection } from "./agent-detail/model-section.js";
 import { OverviewSection } from "./agent-detail/overview-section.js";
+import { ProfileHeader } from "./agent-detail/profile-header.js";
 import { PromptSection } from "./agent-detail/prompt-section.js";
 import { SaveBar, sectionAnchorId } from "./agent-detail/save-bar.js";
 import { SectionDivider, SectionShell } from "./agent-detail/section-shell.js";
@@ -105,6 +105,7 @@ export function AgentDetailPage() {
   const uuid = params.uuid ?? "";
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const resolveMember = useMemberNameMap();
 
   // Agent identity data
   const agentQuery = useQuery({
@@ -485,6 +486,16 @@ export function AgentDetailPage() {
   const contextRuntimeLabel =
     setupRuntimeKind === "kael" ? "Kael" : setupRuntimeKind === "claude-code" ? "Claude Code" : (runtimeType ?? "—");
 
+  // Org label: `agent.organizationId` is a slug (e.g. "default") so we render
+  // it as-is. A dedicated org-name map would be a later improvement; today the
+  // slug is what shows up everywhere else in the product.
+  const orgLabel = agent.organizationId ?? null;
+
+  // Tagline: prefer the agent's description (if the schema carries one); fall
+  // back to the first non-empty line of the system prompt append. Truncate
+  // long lines so the ProfileHeader layout stays predictable.
+  const tagline = deriveTagline(agent, cfgQuery.data?.payload.prompt.append);
+
   const bindingsPanel = (
     <Panel>
       <div
@@ -675,53 +686,16 @@ export function AgentDetailPage() {
       <div className="flex-1 min-w-0 overflow-auto" style={{ background: "var(--bg)" }}>
         <div
           style={{
-            padding: "var(--sp-3_5) var(--sp-5)",
+            padding: "var(--sp-2_5) var(--sp-5)",
             borderBottom: "var(--hairline) solid var(--border-faint)",
             background: "var(--bg-raised)",
           }}
         >
-          <Breadcrumb style={{ marginBottom: 8 }}>
+          <Breadcrumb>
             <BreadcrumbLink onClick={() => navigate("/agents")}>Agents</BreadcrumbLink>
             <BreadcrumbSep />
             <BreadcrumbCurrent mono>{agent.name ?? shortId}</BreadcrumbCurrent>
           </Breadcrumb>
-          <div className="flex items-center gap-3">
-            <div
-              className="inline-flex items-center justify-center"
-              style={{
-                width: 36,
-                height: 36,
-                borderRadius: "var(--radius-panel)",
-                background: "var(--bg-active)",
-                border: "var(--hairline) solid var(--border-strong)",
-              }}
-            >
-              <FirstTreeLogo width={18} height={20} style={{ color: "var(--accent)" }} />
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-baseline gap-2">
-                <span className="text-title">{agent.displayName ?? agent.name ?? shortId}</span>
-                <span className="mono text-label" style={{ color: "var(--fg-4)" }}>
-                  @{agent.name ?? shortId}
-                </span>
-              </div>
-              <div className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-                agt_{shortId} · {agent.type}
-                {agent.visibility ? ` · ${agent.visibility}` : ""}
-              </div>
-            </div>
-            <StateChip state={runtimeState} />
-          </div>
-          <div className="grid gap-1.5 mt-3" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
-            <Tile label="sessions" value={tileValues.sessions} />
-            <Tile
-              label="active"
-              value={tileValues.active}
-              accent={typeof tileValues.active === "number" && tileValues.active > 0 ? "var(--accent)" : undefined}
-            />
-            <Tile label="runtime" value={tileValues.runtime} />
-            <Tile label="model" value={tileValues.model} />
-          </div>
         </div>
 
         {!isHuman && (
@@ -749,6 +723,25 @@ export function AgentDetailPage() {
             />
           )}
 
+          <ProfileHeader
+            agent={agent}
+            runtimeState={runtimeState}
+            runtimeType={runtimeType}
+            ownerName={resolveMember(agent.managerId)}
+            orgLabel={orgLabel}
+            activeSessions={activeSessions}
+            totalSessions={tileValues.sessions}
+            toolsCount={!isHuman ? draft.draft.mcp.filter((i) => i.status !== "deleted").length : null}
+            tagline={tagline}
+            isHuman={isHuman}
+            onOpenChat={() => navigate(`/?a=${agent.uuid}`)}
+            onTest={() => {
+              testMutation.reset();
+              testMutation.mutate();
+            }}
+            testPending={testMutation.isPending}
+          />
+
           <SectionShell anchorId={SECTION_ANCHORS.overview} title="Overview">
             <OverviewSection
               agent={agent}
@@ -762,21 +755,6 @@ export function AgentDetailPage() {
                 />
               }
               bindingsSlot={bindingsPanel}
-              health={{
-                runtimeState,
-                runtimeKind: runtimeType,
-                computerLabel: boundClientLabel,
-                model: tileValues.model,
-                activeSessions,
-                totalSessions: tileValues.sessions,
-                lastActiveAt: clientStatus?.offlineSince ?? null,
-              }}
-              onOpenChat={() => navigate(`/?a=${agent.uuid}`)}
-              onTest={() => {
-                testMutation.reset();
-                testMutation.mutate();
-              }}
-              testPending={testMutation.isPending}
             />
           </SectionShell>
 
@@ -1270,6 +1248,45 @@ function ConfirmDialog(props: {
       </DialogContent>
     </Dialog>
   );
+}
+
+// ─── profile helpers ──────────────────────────────────────────────────
+
+/**
+ * Pick a short "bio" string to show below the agent's name. Falls through
+ * from the agent's description field (when present) to the first non-empty
+ * line of the prompt append (trimmed to ~180 chars so it never overruns the
+ * header). Returns null when nothing useful is available.
+ */
+function deriveTagline(agent: Agent, promptAppend: string | undefined): string | null {
+  const direct = extractString(agent as Record<string, unknown>, ["description", "bio"]);
+  if (direct) return truncate(direct, 200);
+  const meta = (agent as { metadata?: Record<string, unknown> }).metadata;
+  const treeMeta = meta?.tree as Record<string, unknown> | undefined;
+  const treeDesc = extractString(treeMeta, ["description", "summary"]);
+  if (treeDesc) return truncate(treeDesc, 200);
+  if (promptAppend) {
+    const firstLine = promptAppend
+      .split("\n")
+      .map((s) => s.trim())
+      .find((s) => s.length > 0);
+    if (firstLine) return truncate(firstLine, 200);
+  }
+  return null;
+}
+
+function extractString(obj: Record<string, unknown> | undefined, keys: string[]): string | null {
+  if (!obj) return null;
+  for (const k of keys) {
+    const v = obj[k];
+    if (typeof v === "string" && v.trim().length > 0) return v.trim();
+  }
+  return null;
+}
+
+function truncate(s: string, max: number): string {
+  if (s.length <= max) return s;
+  return `${s.slice(0, max - 1).trimEnd()}…`;
 }
 
 // ─── binding helpers ──────────────────────────────────────────────────

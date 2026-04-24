@@ -64,8 +64,12 @@ export function IdentitySection({ agent, onSave }: IdentitySectionProps) {
       <div className="px-4 py-3 text-body space-y-1">
         <div>
           <span className="font-mono">{agent.name ?? agent.uuid}</span>
-          <span className="mx-2 text-muted-foreground">·</span>
-          <span>{agent.displayName ?? <span className="text-muted-foreground italic">no display name</span>}</span>
+          {agent.displayName && (
+            <>
+              <span className="mx-2 text-muted-foreground">·</span>
+              <span>{agent.displayName}</span>
+            </>
+          )}
           {delegateLabel && (
             <>
               <span className="mx-2 text-muted-foreground">·</span>
