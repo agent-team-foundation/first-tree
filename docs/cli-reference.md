@@ -108,17 +108,19 @@ Agent management — configuration, tokens, bindings, and messaging.
 ### Configuration
 
 ```bash
-# Add an agent (interactive or command-line)
+# Register an existing Hub agent on this client (interactive or --agent-id).
 # Optional: a running `first-tree-hub client start` auto-registers any agent
 # the admin pins to this clientId via the Hub UI / API, so this command is
-# only needed for unattended setups, scripted seeding, or when you want a
-# custom local name.
+# only needed for unattended setups or scripted seeding.
+#
+# The local config dir is always keyed by the agent's name on the Hub —
+# there is no separate "local alias" concept.
 first-tree-hub agent add
-first-tree-hub agent add my-agent --token aghub_xxx
+first-tree-hub agent add --agent-id <uuid>
 
-# List / remove
+# List / remove (name = Hub agent name)
 first-tree-hub agent list
-first-tree-hub agent remove my-agent
+first-tree-hub agent remove <name>
 
 # Workspace cleanup
 first-tree-hub agent workspace clean              # all agents

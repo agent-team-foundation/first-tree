@@ -93,10 +93,10 @@ first-tree-hub client start
 
 The running client picks up server-side pinning automatically: when an admin creates an agent with `--client-id <thisClientId>` (or binds an existing one via PATCH) the server pushes an `agent:pinned` frame and the runtime materialises the local `agents/<name>/agent.yaml`. On reconnect, the server also backfills any pins that landed while the client was offline.
 
-You only need `first-tree-hub agent add` for legacy setups or when you want a custom local name:
+You only need `first-tree-hub agent add` for unattended setups where you already know the agent's UUID. The local config dir is keyed by the agent's canonical name on the Hub — there is no "local alias" to pick:
 
 ```bash
-first-tree-hub agent add my-agent --token $FIRST_TREE_HUB_AGENT_TOKEN
+first-tree-hub agent add --agent-id <agent-uuid>
 first-tree-hub agent list
 ```
 

@@ -7,7 +7,7 @@ import {
   setConfigValue,
 } from "@agent-team-foundation/first-tree-hub-shared/config";
 import { input, password, select } from "@inquirer/prompts";
-import { ensureFreshAccessToken, resolveServerUrl } from "./bootstrap.js";
+import { ensureFreshAccessToken, loadCredentials, resolveServerUrl } from "./bootstrap.js";
 
 /**
  * Check if interactive mode is available.
@@ -83,6 +83,22 @@ export async function promptMissingFields(options: {
  * add (there's nothing sensible to key the local dir on).
  */
 export async function promptAddAgent(opts: { agentId?: string } = {}): Promise<{ name: string; agentId: string }> {
+  // Phase 3 needs a live Hub to resolve the canonical agent name, which
+  // means the caller must have run `client connect` first. Detect the
+  // two common "not connected yet" states up front with a clear error
+  // instead of letting `ensureFreshAccessToken` or `resolveServerUrl`
+  // throw a cryptic message after the user already typed a UUID.
+  if (loadCredentials() === null) {
+    throw new Error("Not connected. Run `first-tree-hub client connect <server-url>` first.");
+  }
+  let serverUrl: string;
+  try {
+    serverUrl = resolveServerUrl(process.env.FIRST_TREE_HUB_SERVER_URL);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`${msg} Run \`first-tree-hub client connect\` or set FIRST_TREE_HUB_SERVER_URL.`);
+  }
+
   const agentId =
     opts.agentId ??
     (await input({
@@ -90,7 +106,6 @@ export async function promptAddAgent(opts: { agentId?: string } = {}): Promise<{
       validate: (v) => (v.length > 0 ? true : "Agent UUID is required"),
     }));
 
-  const serverUrl = resolveServerUrl(process.env.FIRST_TREE_HUB_SERVER_URL);
   const token = await ensureFreshAccessToken();
   const res = await fetch(`${serverUrl}/api/v1/admin/agents/${encodeURIComponent(agentId)}`, {
     headers: { Authorization: `Bearer ${token}` },
