@@ -3,6 +3,7 @@ import {
   agentConfigSchema,
   clientConfigSchema,
   DEFAULT_CONFIG_DIR,
+  DEFAULT_DATA_DIR,
   DEFAULT_HOME_DIR,
   initConfig,
   loadAgents,
@@ -24,6 +25,7 @@ import {
   checkNodeVersion,
   checkServerReachable,
   checkWebSocket,
+  createApiNameResolver,
   createExecuteUpdate,
   declineUpdate,
   ensureFreshAccessToken,
@@ -31,6 +33,7 @@ import {
   handleClientOrgMismatch,
   installClientService,
   isServiceSupported,
+  migrateLocalAgentDirs,
   parseDuration,
   printResults,
   promptMissingFields,
@@ -80,8 +83,24 @@ export function registerClientCommands(program: Command): void {
           configureClientLoggerForService(join(DEFAULT_HOME_DIR, "logs"));
         }
 
-        // Load agents (may be empty — client can start without agents)
+        // Load agents (may be empty — client can start without agents).
+        // Phase 3 of the agent-naming refactor: run the local-dir rename
+        // migration BEFORE `loadAgents` so any config dir whose name
+        // drifted from the server-side `agent.name` slug is renamed
+        // first. `loadAgents` then enumerates the up-to-date layout.
+        // The migration is best-effort — it never blocks startup.
         const agentsDir = join(DEFAULT_CONFIG_DIR, "agents");
+        try {
+          await migrateLocalAgentDirs({
+            agentsDir,
+            workspacesDir: join(DEFAULT_DATA_DIR, "workspaces"),
+            sessionsDir: join(DEFAULT_DATA_DIR, "sessions"),
+            resolver: createApiNameResolver(config.server.url, () => ensureFreshAccessToken()),
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          print.status("⚠️", `agent-dir migration skipped: ${msg}`);
+        }
         const agents = loadAgents({ schema: agentConfigSchema, agentsDir });
 
         print.line(`\n  Connecting to ${config.server.url} (client id: ${config.client.id})...\n`);

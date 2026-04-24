@@ -3,6 +3,7 @@ import {
   agentConfigSchema,
   clientConfigSchema,
   DEFAULT_CONFIG_DIR,
+  DEFAULT_DATA_DIR,
   initConfig,
   loadAgents,
   resetConfig,
@@ -16,12 +17,15 @@ import { fail } from "../cli/output.js";
 import {
   ClientRuntime,
   COMMAND_VERSION,
+  createApiNameResolver,
   createExecuteUpdate,
+  ensureFreshAccessToken,
   getClientServiceStatus,
   handleClientOrgMismatch,
   installClientService,
   isServiceSupported,
   loadCredentials,
+  migrateLocalAgentDirs,
   promptUpdate,
   saveCredentials,
 } from "../core/index.js";
@@ -281,6 +285,20 @@ export function registerConnectCommand(parent: Command): void {
         }
 
         const agentsDir = join(DEFAULT_CONFIG_DIR, "agents");
+        // Phase 3 of the agent-naming refactor: reconcile local agent dir
+        // names with the server-authoritative `agent.name`. Best-effort —
+        // a network blip doesn't block startup.
+        try {
+          await migrateLocalAgentDirs({
+            agentsDir,
+            workspacesDir: join(DEFAULT_DATA_DIR, "workspaces"),
+            sessionsDir: join(DEFAULT_DATA_DIR, "sessions"),
+            resolver: createApiNameResolver(config.server.url, () => ensureFreshAccessToken()),
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          print.status("⚠️", `agent-dir migration skipped: ${msg}`);
+        }
         const agents = loadAgents({ schema: agentConfigSchema, agentsDir });
 
         // `connect --no-service` runs inline until Ctrl+C — no supervisor,
