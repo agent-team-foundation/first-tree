@@ -27,6 +27,7 @@ import type {
 import { findImagePath } from "../runtime/image-store.js";
 import { InputController } from "../runtime/input-controller.js";
 import { acquireWorkspace } from "../runtime/workspace.js";
+import { resolveClaudeCodeExecutable } from "./claude-executable.js";
 
 const MAX_RETRIES = 2;
 
@@ -309,6 +310,11 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   const workspaceRoot = config.workspaceRoot as string;
   const agentConfigCache = (config.agentConfigCache as AgentConfigCache | undefined) ?? null;
   const gitMirrorManager = (config.gitMirrorManager as GitMirrorManager | undefined) ?? null;
+  // Pre-resolved by registerBuiltinHandlers at process start. Undefined =
+  // defer to the SDK's bundled native binary (see claude-executable.ts for
+  // why we can't always rely on it).
+  const claudeCodeExecutable =
+    (config.claudeCodeExecutable as string | undefined) ?? resolveClaudeCodeExecutable().path;
 
   let cwd: string | null = null;
   let claudeSessionId: string | null = null;
@@ -325,7 +331,11 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   /** Worktrees materialised for this session — each entry removed on shutdown. */
   const ownedWorktrees: Array<{ url: string; path: string; branchName: string }> = [];
 
-  async function toSDKUserMessage(message: SessionMessage, sessionId: string): Promise<SDKUserMessage> {
+  async function toSDKUserMessage(
+    message: SessionMessage,
+    sessionCtx: SessionContext,
+    sessionId: string,
+  ): Promise<SDKUserMessage> {
     // Image messages — two supported shapes:
     //   1. imageRef: `{imageId, mimeType, filename, size}` — new path. Bytes
     //      live on local disk, delivered via the `image_payload` WS push.
@@ -338,7 +348,10 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     // does not reliably forward `{ type: "image" }` blocks to the underlying
     // model.
     if (message.format === "file") {
-      const prefix = message.senderId ? `[From: ${message.senderId}]\n\n` : "";
+      // Resolve the sender's chat-local name once up front so both branches
+      // emit the same `[From: <name>]` header as the default text path.
+      const senderLabel = message.senderId ? await sessionCtx.resolveSenderLabel(message.senderId) : "";
+      const prefix = senderLabel ? `[From: ${senderLabel}]\n\n` : "";
 
       if (isImageRefContent(message.content)) {
         const { imageId, mimeType, filename } = message.content;
@@ -389,15 +402,11 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       }
     }
 
-    // Default: text content
-    const rawContent = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
-    const content = message.senderId ? `[From: ${message.senderId}]\n\n${rawContent}` : rawContent;
+    // Default text content — sender attribution lives in the runtime so every
+    // handler frames `[From: ...]` the same way. See runtime/agent-io.ts.
     return {
       type: "user",
-      message: {
-        role: "user",
-        content,
-      },
+      message: { role: "user", content: await sessionCtx.formatInboundContent(message) },
       parent_tool_use_id: null,
       session_id: sessionId,
     };
@@ -410,8 +419,9 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    * process.env contains internal markers (CLAUDECODE, CLAUDE_CODE_ENTRYPOINT,
    * CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS, npm_lifecycle_script) that cause the
    * child to enable Agent Teams infrastructure and use wrong init paths,
-   * resulting in ~90s cold start vs ~17s standalone. Strip these so the child
-   * starts clean; the SDK sets its own CLAUDE_CODE_ENTRYPOINT="sdk-ts".
+   * resulting in ~90s cold start vs ~17s standalone. Strip these here (Claude
+   * Code specific) then let the runtime layer add the Agent-Hub envelope via
+   * `ctx.buildAgentEnv` so all handlers expose the same vars uniformly.
    */
   function buildEnv(sessionCtx: SessionContext): Record<string, string | undefined> {
     const env: Record<string, string | undefined> = { ...process.env };
@@ -435,12 +445,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     // the current agent. Obtaining the token at buildEnv-time means the child
     // sees the JWT valid at its spawn moment; long-lived runtimes should
     // re-spawn after refresh, or re-read the env on their own cadence.
-    return {
-      ...env,
-      FIRST_TREE_HUB_SERVER_URL: sessionCtx.sdk.serverUrl,
-      FIRST_TREE_HUB_AGENT_ID: sessionCtx.agent.agentId,
-      FIRST_TREE_HUB_CHAT_ID: sessionCtx.chatId,
-    };
+    return sessionCtx.buildAgentEnv(env);
   }
 
   /** Create query and input controller, then start consumer loop. */
@@ -488,7 +493,13 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         abortController,
         permissionMode,
         allowDangerouslySkipPermissions: true,
+        // SDK 0.2.84 defaults to isolation mode — no filesystem settings are
+        // read and the workspace's CLAUDE.md never reaches the system prompt.
+        // We opt into `project` so the bootstrap-generated CLAUDE.md (agent
+        // identity + Agent Hub SDK usage + tools reference) is loaded.
+        settingSources: ["project"],
         env: buildEnv(sessionCtx),
+        ...(claudeCodeExecutable ? { pathToClaudeCodeExecutable: claudeCodeExecutable } : {}),
         ...(payload?.model ? { model: payload.model } : {}),
         ...(payload?.prompt.append
           ? { systemPrompt: { type: "preset", preset: "claude_code", append: payload.prompt.append } }
@@ -580,10 +591,10 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                 if (message.result && sessionCtx.chatId) {
                   const resultText = message.result;
                   try {
-                    await sessionCtx.sdk.sendMessage(sessionCtx.chatId, {
-                      format: "text",
-                      content: resultText,
-                    });
+                    // All enrichment (inReplyTo, mentions, participants
+                    // lookup, transport) lives in ctx.forwardResult so every
+                    // handler shares one code path — see runtime/result-sink.ts.
+                    await sessionCtx.forwardResult(resultText);
                     sessionCtx.log("Result forwarded to chat");
                     sessionCtx.reportSessionCompletion();
                     sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "success" } });
@@ -772,7 +783,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         `Starting session (${claudeSessionId}), cwd=${cwd}, permissionMode=${config.permissionMode ?? "bypassPermissions"}`,
       );
       spawnQuery(claudeSessionId, sessionCtx);
-      const sdkMsg = await toSDKUserMessage(message, claudeSessionId);
+      const sdkMsg = await toSDKUserMessage(message, sessionCtx, claudeSessionId);
       inputController?.push(sdkMsg);
 
       sessionCtx.log(`Session started (${claudeSessionId})`);
@@ -799,7 +810,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       sessionCtx.log(`Resuming session (${sessionId}), cwd=${cwd}`);
       spawnQuery(sessionId, sessionCtx, sessionId);
       if (message) {
-        inputController?.push(await toSDKUserMessage(message, sessionId));
+        inputController?.push(await toSDKUserMessage(message, sessionCtx, sessionId));
       }
 
       sessionCtx.log(`Session resumed (${sessionId})`);
@@ -823,7 +834,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         })
         .finally(async () => {
           try {
-            const sdkMsg = await toSDKUserMessage(message, sid);
+            const sdkMsg = await toSDKUserMessage(message, sessionCtx, sid);
             inputController?.push(sdkMsg);
           } catch (err) {
             sessionCtx.log(`toSDKUserMessage errored: ${err instanceof Error ? err.message : String(err)}`);

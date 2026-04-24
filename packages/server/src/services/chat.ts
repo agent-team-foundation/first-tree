@@ -1,10 +1,49 @@
 import { randomUUID } from "node:crypto";
 import type { AddParticipant, CreateChat } from "@agent-team-foundation/first-tree-hub-shared";
-import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, ne, sql } from "drizzle-orm";
+import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatParticipants, chats } from "../db/schema/chats.js";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
+
+/** Structural DB type so both `Database` and transaction clients work. */
+type DbLike = Pick<PostgresJsDatabase<Record<string, never>>, "select" | "update">;
+
+/**
+ * When a direct chat grows past 2 participants, upgrade it to `group` and
+ * flip every existing non-human agent participant to `mention_only` — see
+ * proposals/hub-agent-messaging-reply-and-mentions §3.3. The caller is
+ * expected to insert the new participant AFTER this runs, so the "existing"
+ * set excludes them.
+ *
+ * Idempotent: if the chat is already a group, no-op.
+ */
+async function maybeUpgradeDirectToGroup(
+  db: DbLike,
+  chatId: string,
+  existingParticipantIds: string[],
+  newParticipantCount: number,
+): Promise<void> {
+  if (existingParticipantIds.length + newParticipantCount < 3) return;
+
+  const [chat] = await db.select({ type: chats.type }).from(chats).where(eq(chats.id, chatId)).limit(1);
+  if (!chat || chat.type !== "direct") return;
+
+  await db.update(chats).set({ type: "group", updatedAt: new Date() }).where(eq(chats.id, chatId));
+
+  if (existingParticipantIds.length === 0) return;
+  const nonHumans = await db
+    .select({ uuid: agents.uuid })
+    .from(agents)
+    .where(and(inArray(agents.uuid, existingParticipantIds), ne(agents.type, "human")));
+  const ids = nonHumans.map((a) => a.uuid);
+  if (ids.length === 0) return;
+  await db
+    .update(chatParticipants)
+    .set({ mode: "mention_only" })
+    .where(and(eq(chatParticipants.chatId, chatId), inArray(chatParticipants.agentId, ids)));
+}
 
 export async function createChat(db: Database, creatorId: string, data: CreateChat) {
   const chatId = randomUUID();
@@ -107,6 +146,28 @@ export async function listChats(db: Database, agentId: string, limit: number, cu
   return { items, nextCursor };
 }
 
+/**
+ * List participants of a chat with their agent names — used by the client
+ * runtime to resolve `@<name>` mentions against the authoritative participant
+ * set (see proposals/hub-agent-messaging-reply-and-mentions §4).
+ */
+export async function listChatParticipantsWithNames(db: Database, chatId: string) {
+  const rows = await db
+    .select({
+      agentId: chatParticipants.agentId,
+      role: chatParticipants.role,
+      mode: chatParticipants.mode,
+      joinedAt: chatParticipants.joinedAt,
+      name: agents.name,
+      displayName: agents.displayName,
+      type: agents.type,
+    })
+    .from(chatParticipants)
+    .innerJoin(agents, eq(chatParticipants.agentId, agents.uuid))
+    .where(eq(chatParticipants.chatId, chatId));
+  return rows;
+}
+
 export async function assertParticipant(db: Database, chatId: string, agentId: string): Promise<void> {
   const [row] = await db
     .select({ chatId: chatParticipants.chatId })
@@ -121,10 +182,39 @@ export async function assertParticipant(db: Database, chatId: string, agentId: s
 
 /** Ensure an agent is a participant of a chat. Silently adds them if not already. */
 export async function ensureParticipant(db: Database, chatId: string, agentId: string): Promise<void> {
-  await db
-    .insert(chatParticipants)
-    .values({ chatId, agentId, mode: "full" })
-    .onConflictDoNothing({ target: [chatParticipants.chatId, chatParticipants.agentId] });
+  // Short-circuit if already a participant so we don't spuriously trigger the
+  // direct→group upgrade on every admin message in a chat the sender already
+  // belongs to. Read outside the transaction — if a race adds this agent
+  // concurrently, the onConflictDoNothing inside the transaction is the
+  // authoritative dedupe.
+  const [existing] = await db
+    .select({ agentId: chatParticipants.agentId })
+    .from(chatParticipants)
+    .where(and(eq(chatParticipants.chatId, chatId), eq(chatParticipants.agentId, agentId)))
+    .limit(1);
+  if (existing) return;
+
+  // This is a genuine join — apply the same upgrade rule as joinChat /
+  // addParticipant. Web-console "start typing in a chat" funnels through
+  // here, so missing this call left the proposal's no-echo invariant
+  // silently off for UI-initiated joins. Atomic: upgrade + insert must not
+  // interleave with sendMessage's participant read.
+  await db.transaction(async (tx) => {
+    const current = await tx
+      .select({ agentId: chatParticipants.agentId })
+      .from(chatParticipants)
+      .where(eq(chatParticipants.chatId, chatId));
+    await maybeUpgradeDirectToGroup(
+      tx,
+      chatId,
+      current.map((p) => p.agentId),
+      1,
+    );
+    await tx
+      .insert(chatParticipants)
+      .values({ chatId, agentId, mode: "full" })
+      .onConflictDoNothing({ target: [chatParticipants.chatId, chatParticipants.agentId] });
+  });
 }
 
 export async function addParticipant(db: Database, chatId: string, requesterId: string, data: AddParticipant) {
@@ -160,10 +250,26 @@ export async function addParticipant(db: Database, chatId: string, requesterId: 
     throw new ConflictError(`Agent "${data.agentId}" is already a participant`);
   }
 
-  await db.insert(chatParticipants).values({
-    chatId,
-    agentId: data.agentId,
-    mode: data.mode ?? "full",
+  // Direct chats become groups on the third participant. Flip existing
+  // non-human agents to mention_only so the group doesn't devolve into noise.
+  // Atomic: upgrade + insert must not interleave with sendMessage's participant
+  // read, or a concurrent send would see chats.type='group' with mode='full'.
+  await db.transaction(async (tx) => {
+    const currentParticipants = await tx
+      .select({ agentId: chatParticipants.agentId })
+      .from(chatParticipants)
+      .where(eq(chatParticipants.chatId, chatId));
+    await maybeUpgradeDirectToGroup(
+      tx,
+      chatId,
+      currentParticipants.map((p) => p.agentId),
+      1,
+    );
+    await tx.insert(chatParticipants).values({
+      chatId,
+      agentId: data.agentId,
+      mode: data.mode ?? "full",
+    });
   });
 
   return db.select().from(chatParticipants).where(eq(chatParticipants.chatId, chatId));
@@ -355,11 +461,18 @@ export async function joinChat(db: Database, chatId: string, memberId: string, h
     throw new BadRequestError("Agent does not belong to the same organization as the chat");
   }
 
-  await db.insert(chatParticipants).values({
-    chatId,
-    agentId: humanAgentId,
-    role: "member",
-    mode: "full",
+  // Human joining a direct chat turns it into a group — existing agent
+  // participants (non-human) switch to mention_only so they only respond when
+  // explicitly addressed. Atomic: upgrade + insert must not interleave with
+  // sendMessage's participant read (mode is part of the mention-filter rule).
+  await db.transaction(async (tx) => {
+    await maybeUpgradeDirectToGroup(tx, chatId, participantAgentIds, 1);
+    await tx.insert(chatParticipants).values({
+      chatId,
+      agentId: humanAgentId,
+      role: "member",
+      mode: "full",
+    });
   });
 
   return db.select().from(chatParticipants).where(eq(chatParticipants.chatId, chatId));

@@ -83,6 +83,7 @@ describe("CLAUDE.md generation", () => {
 
     const identity: AgentIdentity = {
       agentId: "yuezengwu-assistant",
+      inboxId: "inbox-yuezengwu-assistant",
       displayName: "yuezengwu-assistant",
       type: "personal_assistant",
       delegateMention: null, // null — should still detect as personal_assistant
@@ -100,6 +101,7 @@ describe("CLAUDE.md generation", () => {
 
     const identity: AgentIdentity = {
       agentId: "code-reviewer",
+      inboxId: "inbox-code-reviewer",
       displayName: "Code Reviewer",
       type: "autonomous_agent",
       delegateMention: null,
@@ -119,6 +121,7 @@ describe("CLAUDE.md generation", () => {
 
     const identity: AgentIdentity = {
       agentId: "test",
+      inboxId: "inbox-test",
       displayName: "Test",
       type: "autonomous_agent",
       delegateMention: null,
@@ -140,6 +143,7 @@ describe("CLAUDE.md generation", () => {
 
     const identity: AgentIdentity = {
       agentId: "test",
+      inboxId: "inbox-test",
       displayName: "Test",
       type: "autonomous_agent",
       delegateMention: null,
@@ -158,6 +162,7 @@ describe("CLAUDE.md generation", () => {
 
     const identity: AgentIdentity = {
       agentId: "test",
+      inboxId: "inbox-test",
       displayName: "Test",
       type: "autonomous_agent",
       delegateMention: null,
@@ -178,6 +183,7 @@ describe("CLAUDE.md generation", () => {
 
     const identity: AgentIdentity = {
       agentId: "test",
+      inboxId: "inbox-test",
       displayName: "Test",
       type: "autonomous_agent",
       delegateMention: null,
@@ -195,6 +201,7 @@ describe("CLAUDE.md generation", () => {
 
     const identity: AgentIdentity = {
       agentId: "test",
+      inboxId: "inbox-test",
       displayName: "Test",
       type: "autonomous_agent",
       delegateMention: null,
@@ -213,6 +220,7 @@ describe("CLAUDE.md generation", () => {
 
     const identity: AgentIdentity = {
       agentId: "test",
+      inboxId: "inbox-test",
       displayName: "Test",
       type: "autonomous_agent",
       delegateMention: null,
@@ -230,6 +238,7 @@ describe("CLAUDE.md generation", () => {
 
     const identity: AgentIdentity = {
       agentId: "test",
+      inboxId: "inbox-test",
       displayName: "Test",
       type: "autonomous_agent",
       delegateMention: null,
@@ -247,6 +256,7 @@ describe("CLAUDE.md generation", () => {
 
     const identity: AgentIdentity = {
       agentId: "my-agent",
+      inboxId: "inbox-my-agent",
       displayName: null,
       type: "autonomous_agent",
       delegateMention: null,

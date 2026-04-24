@@ -40,6 +40,7 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => {
 import { createClaudeCodeHandler } from "../handlers/claude-code.js";
 import { createAgentConfigCache } from "../runtime/agent-config-cache.js";
 import type { SessionContext } from "../runtime/handler.js";
+import { mockCtxPlumbing } from "./test-helpers.js";
 
 const AGENT_ID = "019d9a97-90b0-716b-8317-a8c0be8430d7";
 
@@ -79,6 +80,7 @@ describe("claude-code handler — sendMessage failure surfaces lost result", () 
     const ctx: SessionContext = {
       agent: {
         agentId: AGENT_ID,
+        inboxId: "inbox-test",
         displayName: "test",
         type: "autonomous_agent",
         delegateMention: null,
@@ -93,6 +95,7 @@ describe("claude-code handler — sendMessage failure surfaces lost result", () 
         emitted.push(e);
       },
       reportSessionCompletion,
+      ...mockCtxPlumbing({ sendMessage }, "chat-1"),
     };
 
     await handler.start(

@@ -3,6 +3,7 @@ import {
   type Agent,
   type AgentRuntimeConfig,
   type Chat,
+  type ChatParticipantDetail,
   type InboxEntryWithMessage,
   type Message,
   type SendMessage,
@@ -142,6 +143,14 @@ export class FirstTreeHubSDK {
 
   async listMessages(chatId: string, options?: { limit?: number; cursor?: string }): Promise<PaginatedResult<Message>> {
     return this.requestJson(`/api/v1/agent/chats/${chatId}/messages${this.queryString(options)}`);
+  }
+
+  /**
+   * List participants of a chat with agent names/displayNames — used by the
+   * runtime to resolve `@<name>` mentions against the authoritative set.
+   */
+  async listChatParticipants(chatId: string): Promise<ChatParticipantDetail[]> {
+    return this.requestJson<ChatParticipantDetail[]>(`/api/v1/agent/chats/${chatId}/participants`);
   }
 
   private queryString(options?: { limit?: number; cursor?: string }): string {

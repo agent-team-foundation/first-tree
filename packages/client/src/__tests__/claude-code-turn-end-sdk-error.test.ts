@@ -44,6 +44,7 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => {
 import { createClaudeCodeHandler } from "../handlers/claude-code.js";
 import { createAgentConfigCache } from "../runtime/agent-config-cache.js";
 import type { SessionContext } from "../runtime/handler.js";
+import { mockCtxPlumbing } from "./test-helpers.js";
 
 const AGENT_ID = "019d9a97-90b0-716b-8317-a8c0be8430d8";
 
@@ -83,6 +84,7 @@ describe("claude-code handler — turn_end on SDK-reported subtype error", () =>
     const ctx: SessionContext = {
       agent: {
         agentId: AGENT_ID,
+        inboxId: "inbox-test",
         displayName: "test",
         type: "autonomous_agent",
         delegateMention: null,
@@ -95,6 +97,7 @@ describe("claude-code handler — turn_end on SDK-reported subtype error", () =>
       setRuntimeState: () => {},
       emitEvent: (e) => emitted.push(e),
       reportSessionCompletion,
+      ...mockCtxPlumbing({ sendMessage }, "chat-1"),
     };
 
     await handler.start(

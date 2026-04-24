@@ -27,6 +27,7 @@ afterEach(() => {
 function makeIdentity(overrides?: Partial<AgentIdentity>): AgentIdentity {
   return {
     agentId: "test-agent",
+    inboxId: "inbox-test-agent",
     displayName: "Test Agent",
     type: "autonomous_agent",
     delegateMention: null,
