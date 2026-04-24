@@ -46,12 +46,12 @@ Options:
   --help, -h                 Show this help message.
 
 Next steps after install:
-  1. Set the TREE_REPO_TOKEN and ANTHROPIC_API_KEY secrets on this
+  1. Set the TREE_REPO_TOKEN and CLAUDE_CODE_OAUTH_TOKEN secrets on this
      repo (see skills/first-tree/references/workflow-mode.md for the
      gh-auth-based quick path and the caveats).
-  2. Set the ANTHROPIC_API_KEY secret on this repo. Without it,
-     gardener comment refuses to post (PR #255) — this is the
-     intended fail-closed behaviour when no classifier is wired.
+  2. Optional: set ANTHROPIC_API_KEY and GARDENER_CLASSIFIER_MODEL
+     if you want the CI workflow to fall back to the API-key path
+     when Claude Code auth is unavailable.
   3. Commit and open a PR for the new workflow file.
   4. Verify the workflow runs once the PR is merged.
 `;
@@ -165,8 +165,8 @@ on:
 jobs:
   tree-sync:
     # Skip fork PRs: GitHub withholds secrets (TREE_REPO_TOKEN,
-    # ANTHROPIC_API_KEY) from fork workflows, so the job can't do its
-    # work. A skipped check is less misleading than a failed one.
+    # CLAUDE_CODE_OAUTH_TOKEN) from fork workflows, so the job can't do
+    # its work. A skipped check is less misleading than a failed one.
     # Also skip first-tree's own sync PRs so gardener never reviews itself.
     if: \${{ github.event.pull_request.head.repo.full_name == github.repository && !contains(github.event.pull_request.labels.*.name, 'first-tree:sync') }}
     runs-on: ubuntu-latest
@@ -176,13 +176,7 @@ jobs:
       pull-requests: write
     env:
       TREE_REPO_TOKEN: \${{ secrets.TREE_REPO_TOKEN }}
-      ANTHROPIC_API_KEY: \${{ secrets.ANTHROPIC_API_KEY }}
       GH_TOKEN: \${{ github.token }}
-      # Optional: when set, gardener comment posts an AI-classified verdict.
-      # When unset, gardener comment refuses to post (see PR #255). Set
-      # ANTHROPIC_API_KEY as a repo secret to enable posting.
-      ANTHROPIC_API_KEY: \${{ secrets.ANTHROPIC_API_KEY }}
-      GARDENER_CLASSIFIER_MODEL: \${{ secrets.GARDENER_CLASSIFIER_MODEL }}
     steps:
       - name: Checkout source repo
         uses: actions/checkout@v4
@@ -227,9 +221,27 @@ jobs:
         with:
           node-version: "${nodeVersion}"
 
+      - name: Install CLIs (first-tree + claude)
+        # npx -p first-tree first-tree ... (the older
+        # install-workflow template) is flaky on Node 22 / newer npm.
+        # Install both CLIs globally instead.
+        #
+        # Gardener's verdict classifier shells out to the claude
+        # CLI. Pre-install @anthropic-ai/claude-code so the workflow
+        # can authenticate via CLAUDE_CODE_OAUTH_TOKEN.
+        run: npm install -g first-tree @anthropic-ai/claude-code
+
       - name: Run first-tree gardener
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: \${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: \${{ secrets.ANTHROPIC_API_KEY }}
+          GARDENER_CLASSIFIER_MODEL: \${{ secrets.GARDENER_CLASSIFIER_MODEL }}
+          # Bypass gardener's \`gh api user\` self-identification call —
+          # GITHUB_TOKEN can't resolve /user reliably. Hardcoding the
+          # bot identity is enough for the self-loop guard.
+          GARDENER_USER: github-actions[bot]
         run: |
-          npx -p first-tree first-tree gardener comment \\
+          first-tree gardener comment \\
             --pr \${{ github.event.pull_request.number }} \\
             --repo \${{ github.repository }} \\
             --tree-path ${treePath} \\
@@ -317,28 +329,28 @@ export async function runInstallWorkflow(
   write("");
   write("Next steps:");
   write(
-    "  1. Set the TREE_REPO_TOKEN and ANTHROPIC_API_KEY secrets on this",
+    "  1. Set the TREE_REPO_TOKEN and CLAUDE_CODE_OAUTH_TOKEN secrets on",
   );
   write(
-    "     repo. Quick path via your local gh login (review the caveats in",
+    "     this repo. Quick paths via your local gh / claude login",
   );
   write(
-    "     skills/first-tree/references/workflow-mode.md first):",
+    "     (review the caveats in skills/first-tree/references/workflow-mode.md first):",
   );
   write(
     `       gh auth token | gh secret set TREE_REPO_TOKEN --repo <codebase-owner>/<repo> --body -`,
   );
   write(
-    `       printf '%s' \"$ANTHROPIC_API_KEY\" | gh secret set ANTHROPIC_API_KEY --repo <codebase-owner>/<repo> --body -`,
+    `       gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo <codebase-owner>/<repo>`,
   );
   write(
     `     The token needs \`issues:write\` and \`contents:read\` on ${flags.treeRepo}.`,
   );
   write(
-    "  2. Set ANTHROPIC_API_KEY on this repo. Without it, gardener comment",
+    "  2. Optional: set ANTHROPIC_API_KEY / GARDENER_CLASSIFIER_MODEL if",
   );
   write(
-    "     refuses to post (PR #255 fail-closed). Quick path:",
+    "     you want an API-key fallback when Claude Code auth is unavailable.",
   );
   write(
     `       gh secret set ANTHROPIC_API_KEY --repo <codebase-owner>/<repo>`,

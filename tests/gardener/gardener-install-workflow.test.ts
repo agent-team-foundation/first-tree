@@ -105,11 +105,18 @@ describe("gardener install-workflow — yaml builder", () => {
     );
     expect(yaml).toContain("TREE_REPO_TOKEN: ${{ secrets.TREE_REPO_TOKEN }}");
     expect(yaml).toContain(
+      "CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}",
+    );
+    expect(yaml).toContain(
       "ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}",
     );
     expect(yaml).toContain(
       "GARDENER_CLASSIFIER_MODEL: ${{ secrets.GARDENER_CLASSIFIER_MODEL }}",
     );
+    expect(yaml).toContain(
+      "npm install -g first-tree @anthropic-ai/claude-code",
+    );
+    expect(yaml).toContain("GARDENER_USER: github-actions[bot]");
   });
 
   it("honors a custom tree-path override", () => {
@@ -142,7 +149,7 @@ describe("gardener install-workflow — runInstallWorkflow", () => {
     expect(body).toContain('askpass_script="$RUNNER_TEMP/first-tree-git-askpass.sh"');
     expect(lines.some((l) => l.includes("wrote"))).toBe(true);
     expect(lines.some((l) => l.includes("TREE_REPO_TOKEN"))).toBe(true);
-    expect(lines.some((l) => l.includes("ANTHROPIC_API_KEY"))).toBe(true);
+    expect(lines.some((l) => l.includes("CLAUDE_CODE_OAUTH_TOKEN"))).toBe(true);
   });
 
   it("refuses to overwrite without --force", async () => {

@@ -118,15 +118,29 @@ broad, user prefers a dedicated token), create a new fine-grained PAT:
    unset TOKEN
    ```
 
-## Step 3 — set the `ANTHROPIC_API_KEY` secret
+## Step 3 — set the `CLAUDE_CODE_OAUTH_TOKEN` secret
 
-`gardener comment` needs a classifier to produce a verdict. When
-`ANTHROPIC_API_KEY` is unset, the CLI **refuses to post** (see PR #255)
-rather than silently degrading to a hard-coded template. This is the
-intended fail-closed behaviour for push mode.
+The generated push-mode workflow installs the `claude` CLI and lets
+`gardener comment` authenticate through `CLAUDE_CODE_OAUTH_TOKEN`.
+Generate a long-lived token locally with:
 
-If your shell already has `ANTHROPIC_API_KEY` exported, pipe it directly
-into the repo secret without echoing it or pasting it into chat:
+```bash
+claude setup-token
+```
+
+Then save it on the codebase repo without echoing it into chat history:
+
+```bash
+gh secret set CLAUDE_CODE_OAUTH_TOKEN \
+  --repo <CODEBASE_OWNER>/<CODEBASE_NAME>
+```
+
+Paste the token into the terminal prompt when `gh` asks for it.
+
+## Step 3b — optional `ANTHROPIC_API_KEY` fallback
+
+If you want CI to fall back to the API-key classifier path when Claude
+Code auth is unavailable, also set `ANTHROPIC_API_KEY`:
 
 ```bash
 printf '%s' "$ANTHROPIC_API_KEY" | gh secret set ANTHROPIC_API_KEY \
@@ -134,22 +148,9 @@ printf '%s' "$ANTHROPIC_API_KEY" | gh secret set ANTHROPIC_API_KEY \
   --body -
 ```
 
-If the variable is not already exported locally, ask the user to paste
-it privately into your terminal, then run:
-
-```bash
-printf '%s' "$TOKEN" | gh secret set ANTHROPIC_API_KEY \
-  --repo <CODEBASE_OWNER>/<CODEBASE_NAME> \
-  --body -
-unset TOKEN
-```
-
-Never print the key, never write it to a file, and never paste it into
-chat.
-
-The generated workflow also reads an optional `GARDENER_CLASSIFIER_MODEL`
-secret if you need to pin a specific Anthropic model; omit it to use the
-built-in default.
+The generated workflow also reads an optional
+`GARDENER_CLASSIFIER_MODEL` secret if you need to pin a specific model;
+omit it to use the built-in default.
 
 ## Step 4 — commit and open a PR
 
@@ -184,10 +185,10 @@ After the workflow PR merges:
 
 - **`TREE_REPO_TOKEN unset`** — secret not installed or scoped to a
   different repo. Re-run Step 2 with the correct `--repo`.
-- **Low-signal `INSUFFICIENT_CONTEXT` review** — `ANTHROPIC_API_KEY` is
-  not available to the workflow job, so gardener fell back to the
-  default no-classifier path. Re-run Step 3 with the correct `--repo`,
-  or add the secret at the org/environment level used by this repo.
+- **Low-signal `INSUFFICIENT_CONTEXT` review** — the workflow could not
+  authenticate a real classifier. Re-run Step 3 with the correct
+  `--repo`, or add the optional `ANTHROPIC_API_KEY` fallback from
+  Step 3b at the repo/org/environment level used by this repo.
 - **`tree-repo auth/access error (401/403/404)`** — PAT lacks
   `issues:write` or `contents:read` on the tree repo, or points at the
   wrong repo. Regenerate with the scopes in Step 2.
