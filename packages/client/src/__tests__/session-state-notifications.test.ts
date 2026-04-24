@@ -54,6 +54,7 @@ function createSessionManager(opts: {
     handlerConfig: { workspaceRoot: "/tmp/test" },
     agentIdentity: {
       agentId: "agent-1",
+      inboxId: "inbox-agent-1",
       displayName: "Agent",
       type: "autonomous_agent",
       delegateMention: null,

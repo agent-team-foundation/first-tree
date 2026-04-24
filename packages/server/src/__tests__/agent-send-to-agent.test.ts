@@ -56,6 +56,40 @@ describe("Agent Send-to-Agent API", () => {
     expect(res.statusCode).toBe(404);
   });
 
+  it("hints at using name when target looks like a uuid (common LLM mistake)", async () => {
+    // Agents routinely paste uuids harvested from `agent chats` / participant
+    // listings. The 404 error must nudge them to use the name so the next
+    // attempt self-corrects rather than looping.
+    const app = getApp();
+    const a1 = await createTestAgent(app, { name: "uuidhint-a1" });
+
+    const res = await a1.request("POST", "/api/v1/agent/agents/019db446-bdb7-71e6-860c-4204df2db1f6/messages", {
+      format: "text",
+      content: "Hello?",
+    });
+    expect(res.statusCode).toBe(404);
+    const body = res.json();
+    expect(body.error).toMatch(/not found/i);
+    expect(body.error).toMatch(/name, not a uuid/i);
+    expect(body.error).toMatch(/agent list/);
+  });
+
+  it("does NOT append the uuid hint when the target is a plain name", async () => {
+    // Plain-name 404s are a different failure mode (typo / wrong org) and
+    // should not be noised up with uuid guidance.
+    const app = getApp();
+    const a1 = await createTestAgent(app, { name: "namehint-a1" });
+
+    const res = await a1.request("POST", "/api/v1/agent/agents/typo-target/messages", {
+      format: "text",
+      content: "Hello?",
+    });
+    expect(res.statusCode).toBe(404);
+    const body = res.json();
+    expect(body.error).toMatch(/not found/i);
+    expect(body.error).not.toMatch(/uuid/i);
+  });
+
   it("sends with replyTo fields", async () => {
     const app = getApp();
     const a1 = await createTestAgent(app, { name: "reply-a1" });

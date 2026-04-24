@@ -52,6 +52,26 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
     };
   });
 
+  /**
+   * List chat participants with agent names/displayNames. Used by the client
+   * runtime to resolve `@<name>` mentions against the authoritative participant
+   * set (see proposals/hub-agent-messaging-reply-and-mentions §4).
+   */
+  app.get<{ Params: { chatId: string } }>("/:chatId/participants", async (request) => {
+    const identity = requireAgent(request);
+    await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
+    const rows = await chatService.listChatParticipantsWithNames(app.db, request.params.chatId);
+    return rows.map((r) => ({
+      agentId: r.agentId,
+      role: r.role,
+      mode: r.mode,
+      name: r.name,
+      displayName: r.displayName,
+      type: r.type,
+      joinedAt: r.joinedAt.toISOString(),
+    }));
+  });
+
   // Participant management
   app.post<{ Params: { chatId: string } }>("/:chatId/participants", async (request, reply) => {
     const identity = requireAgent(request);

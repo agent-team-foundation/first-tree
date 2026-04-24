@@ -199,7 +199,15 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
     expect(res.statusCode).toBe(404);
   });
 
-  it("revival defense — upsertSessionState on an evicted row is a no-op and keeps state='evicted'", async () => {
+  it("allows an evicted row to be overwritten when the client starts a fresh runtime session", async () => {
+    // `agent_chat_sessions.(agent_id, chat_id)` is a single-row "current
+    // session state" cache, NOT a session history log. After terminate the
+    // chat keeps its stable chat_id (see findOrCreateDirectChat); the next
+    // inbound message legitimately produces a new runtime session whose
+    // `active` state MUST overwrite the terminal `evicted` row, otherwise
+    // the chat becomes invisible in web listings forever even though it is
+    // still functional. Pinning this behaviour so the pre-refactor
+    // "revival defense" does not sneak back in.
     const app = getApp();
     const admin = await createAdminContext(app, { username: `revive-${crypto.randomUUID().slice(0, 6)}` });
     const agent = await createAgent(app.db, {
@@ -212,11 +220,31 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
     const chat = await createChat(app.db, admin.humanAgentUuid, { type: "direct", participantIds: [agent.uuid] });
     await seedSession(app, agent.uuid, chat.id, "evicted");
 
-    // Simulate a client reporting `active` (e.g. just resumed a session locally).
-    // organizationId is used only for NOTIFY payload; revival defense runs regardless.
+    // Client reports `active` because a new runtime session just started.
     await activityService.upsertSessionState(app.db, agent.uuid, chat.id, "active", "org-test");
 
-    expect(await readState(app, agent.uuid, chat.id)).toBe("evicted");
+    expect(await readState(app, agent.uuid, chat.id)).toBe("active");
+  });
+
+  it("suspended → active upsert still works (non-terminal transitions are unaffected)", async () => {
+    // Guards against over-correction: removing the revival defense must not
+    // accidentally block legit suspend→active transitions that were already
+    // supported.
+    const app = getApp();
+    const admin = await createAdminContext(app, { username: `susp-${crypto.randomUUID().slice(0, 6)}` });
+    const agent = await createAgent(app.db, {
+      name: `susp-agent-${crypto.randomUUID().slice(0, 6)}`,
+      type: "autonomous_agent",
+      displayName: "Suspend target",
+      managerId: admin.memberId,
+      clientId: admin.clientId,
+    });
+    const chat = await createChat(app.db, admin.humanAgentUuid, { type: "direct", participantIds: [agent.uuid] });
+    await seedSession(app, agent.uuid, chat.id, "suspended");
+
+    await activityService.upsertSessionState(app.db, agent.uuid, chat.id, "active", "org-test");
+
+    expect(await readState(app, agent.uuid, chat.id)).toBe("active");
   });
 
   it("default listing hides evicted rows; explicit ?state=evicted still returns them", async () => {

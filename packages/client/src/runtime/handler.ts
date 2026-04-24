@@ -5,6 +5,11 @@ import type { GitMirrorManager } from "./git-mirror-manager.js";
 /** Agent identity fields flowing from Server through the runtime pipeline. */
 export type AgentIdentity = {
   agentId: string;
+  /**
+   * Agent's inbox ID. Threaded into the handler so child processes can build
+   * cross-chat `replyTo` envelopes without a per-call server round-trip.
+   */
+  inboxId: string;
   displayName: string | null;
   type: string;
   delegateMention: string | null;
@@ -30,7 +35,7 @@ export type SessionContext = HandlerContext & {
   setRuntimeState: (state: "idle" | "working" | "blocked" | "error") => void;
   /**
    * Persist a structured session event (tool_call / error) to the server.
-   * Assistant text does NOT go through here — it flows via `sdk.sendMessage`.
+   * Assistant text does NOT go through here — it flows via `forwardResult`.
    */
   emitEvent: (event: SessionEvent) => void;
   /**
@@ -38,6 +43,40 @@ export type SessionContext = HandlerContext & {
    * `session_completed` notification on the server (5-min cooldown).
    */
   reportSessionCompletion: () => void;
+
+  /**
+   * Forward the handler's final text to the chat. Runtime handles mention
+   * extraction, `inReplyTo`, participants lookup, and transport — handlers
+   * just pass the raw output text.
+   */
+  forwardResult: (text: string) => Promise<void>;
+
+  /**
+   * Build env for CLI sub-processes that shell out to the `first-tree-hub`
+   * CLI. Layers Agent-Hub envelope vars (server/agent/inbox/chat IDs) on
+   * top of the parent env. Handlers pass their own cleaned `process.env`.
+   */
+  buildAgentEnv: (parentEnv: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
+
+  /**
+   * Format an inbound message's content for handoff to an LLM — prefixes a
+   * `[From: <name>]` attribution line when the sender is a participant of
+   * this chat. Handler implementations should wrap whatever LLM-specific
+   * message envelope they build around the string this returns.
+   *
+   * Async because resolving the name may require a one-time participant
+   * fetch; the runtime caches the result for the lifetime of the session.
+   */
+  formatInboundContent: (message: SessionMessage) => Promise<string>;
+
+  /**
+   * Resolve a senderId to its chat-local name (the `@<name>` mention token).
+   * Falls back to displayName, then to the raw senderId. Share the same
+   * participant cache as `formatInboundContent`. Handlers that synthesise
+   * content (e.g. the image path's "An image was shared" prompt) call this
+   * to keep `[From: ...]` attribution consistent with the text path.
+   */
+  resolveSenderLabel: (senderId: string) => Promise<string>;
 };
 
 /** Message content extracted from an inbox entry (no entry metadata). */

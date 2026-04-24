@@ -27,6 +27,7 @@ import { createClaudeCodeHandler } from "../handlers/claude-code.js";
 import { createAgentConfigCache } from "../runtime/agent-config-cache.js";
 import { createGitMirrorManager, type GitMirrorManager } from "../runtime/git-mirror-manager.js";
 import type { SessionContext } from "../runtime/handler.js";
+import { mockCtxPlumbing } from "./test-helpers.js";
 
 /**
  * This test locks down the contract that PRD §5.1.5 Git worktree lifecycle is
@@ -81,21 +82,24 @@ function buildCache(gitRepos: AgentRuntimeConfig["payload"]["gitRepos"]) {
 }
 
 function buildSessionCtx(chatId: string, log: (msg: string) => void): SessionContext {
+  const sendMessage = async () => undefined;
   return {
     agent: {
       agentId: AGENT_ID,
+      inboxId: "inbox-test",
       displayName: "test",
       type: "autonomous_agent",
       delegateMention: null,
       metadata: {},
     },
-    sdk: { serverUrl: "http://test" } as unknown as SessionContext["sdk"],
+    sdk: { serverUrl: "http://test", sendMessage } as unknown as SessionContext["sdk"],
     chatId,
     log,
     touch: () => {},
     setRuntimeState: () => {},
     emitEvent: () => {},
     reportSessionCompletion: () => {},
+    ...mockCtxPlumbing({ sendMessage }, chatId),
   };
 }
 

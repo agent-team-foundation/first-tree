@@ -1,5 +1,7 @@
 // Schemas
 
+// -- Mention extraction (shared by server fan-out resolver and client auto-forward) --
+export { extractMentions, type MentionParticipant, scanMentionTokens } from "./mentions.js";
 export {
   ADAPTER_BIND_METHODS,
   ADAPTER_PLATFORMS,
@@ -102,9 +104,11 @@ export {
   type Chat,
   type ChatDetail,
   type ChatParticipant,
+  type ChatParticipantDetail,
   type ChatType,
   type CreateChat,
   chatDetailSchema,
+  chatParticipantDetailSchema,
   chatParticipantSchema,
   chatSchema,
   chatTypeSchema,
@@ -167,6 +171,8 @@ export {
 export {
   type ClientMessage,
   clientMessageSchema,
+  type InReplyToSnapshot,
+  inReplyToSnapshotSchema,
   MESSAGE_FORMATS,
   MESSAGE_SOURCES,
   type Message,
@@ -175,6 +181,8 @@ export {
   messageFormatSchema,
   messageSchema,
   messageSourceSchema,
+  type ParticipantMode,
+  participantModeSchema,
   type SendMessage,
   type SendToAgent,
   sendMessageSchema,

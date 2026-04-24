@@ -55,6 +55,10 @@ async function pollInboxInner(db: Database, inboxId: string, limit: number) {
     // 3. Build wire payloads via the single dispatcher (Step 3): every
     // outbound client message must carry the current agent_configs.version
     // so the client can refresh config before delivering to the runtime.
+    //
+    // Payloads are keyed by (entryId) because replyTo routing can deliver the
+    // same message_id to the same recipient twice under different entry
+    // chatIds — each copy needs its own recipientMode lookup.
     const payloads = await buildClientMessagePayloadsForInbox(
       tx,
       inboxId,
@@ -62,25 +66,27 @@ async function pollInboxInner(db: Database, inboxId: string, limit: number) {
         const msg = msgMap.get(entry.message_id);
         if (!msg) throw new Error(`Unexpected: message ${entry.message_id} not found`);
         return {
-          id: msg.id,
-          chatId: msg.chatId,
-          senderId: msg.senderId,
-          format: msg.format,
-          content: msg.content,
-          metadata: msg.metadata,
-          replyToInbox: msg.replyToInbox,
-          replyToChat: msg.replyToChat,
-          inReplyTo: msg.inReplyTo,
-          source: msg.source,
-          createdAt: msg.createdAt.toISOString(),
+          entryChatId: entry.chat_id,
+          message: {
+            id: msg.id,
+            chatId: msg.chatId,
+            senderId: msg.senderId,
+            format: msg.format,
+            content: msg.content,
+            metadata: msg.metadata,
+            replyToInbox: msg.replyToInbox,
+            replyToChat: msg.replyToChat,
+            inReplyTo: msg.inReplyTo,
+            source: msg.source,
+            createdAt: msg.createdAt.toISOString(),
+          },
         };
       }),
     );
-    const payloadByMessageId = new Map(payloads.map((p) => [p.id, p]));
 
-    return claimed.map((entry) => {
-      const payload = payloadByMessageId.get(entry.message_id);
-      if (!payload) throw new Error(`Unexpected: payload for ${entry.message_id} not built`);
+    return claimed.map((entry, idx) => {
+      const payload = payloads[idx];
+      if (!payload) throw new Error(`Unexpected: payload for entry ${entry.id} not built`);
       return {
         id: entry.id,
         inboxId: entry.inbox_id,
