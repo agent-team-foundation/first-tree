@@ -250,25 +250,9 @@ describe("CLAUDE.md generation", () => {
     expect(md).toContain("Use the SDK.");
   });
 
-  it("renders displayName in the identity banner", () => {
-    // Post-Phase 2 of the agent-naming refactor, `displayName` is guaranteed
-    // non-null — the server defaults to the agent name (or "Unnamed Agent")
-    // when the caller omits it. The "uses agentId when displayName is null"
-    // case this test used to cover is unreachable; the behaviour we still
-    // care about is that whatever label is present shows up verbatim.
-    const workspace = join(tmpBase, "ws-display-name");
-    mkdirSync(join(workspace, ".agent", "context"), { recursive: true });
-
-    const identity: AgentIdentity = {
-      agentId: "my-agent",
-      inboxId: "inbox-my-agent",
-      displayName: "my-agent",
-      type: "autonomous_agent",
-      delegateMention: null,
-      metadata: {},
-    };
-
-    const md = generateClaudeMd(workspace, identity, null);
-    expect(md).toContain("You are my-agent, an autonomous agent");
-  });
+  // The pre-Phase-2 "uses agentId when displayName is null" case is now
+  // unreachable (server enforces NOT NULL + a default), and the coverage
+  // it pinned — that the identity banner renders `displayName` verbatim —
+  // is already covered by the "generates autonomous_agent template" test
+  // above. Intentionally no test here.
 });

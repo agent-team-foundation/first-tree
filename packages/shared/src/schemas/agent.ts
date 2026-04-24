@@ -84,7 +84,13 @@ export const createAgentSchema = z.object({
     })
     .optional(),
   type: agentTypeSchema,
-  displayName: z.string().max(200).optional(),
+  /**
+   * Post-Phase 2 the DB enforces `NOT NULL`; the service layer defaults
+   * missing/empty values to `name` (or "Unnamed Agent") so callers can
+   * still omit this. Reject empty / whitespace-only strings at the edge
+   * so the silent server-side replacement doesn't mask a user typo.
+   */
+  displayName: z.string().min(1).max(200).optional(),
   delegateMention: z.string().max(100).optional(),
   organizationId: z.string().max(100).optional(),
   /** How this agent was created */
