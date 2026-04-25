@@ -1,6 +1,6 @@
 # Hub Onboarding 重设计 —— 内部讨论稿
 
-**状态:** Draft / 工作文档,Phase 4 落地后归档或删除。
+**状态:** Draft / 工作文档,Phase 3 落地后归档或删除。
 
 **分支:** `feat/first-tree-hub-onboarding`
 
@@ -28,6 +28,10 @@
 
 代码里有一整套围绕"同一台机器多份凭据"的处理(account-switch gate、隔离指南、跨 org 重注册),但目前没有真实用户在用。如果不显式 defer 掉这部分,新文档会继承同一份混乱。
 
+### 1.4 本轮文档的 scope
+
+**先把本地版的所有决策锁死(第 4.1 节)**;托管版(第 4.2 节)留到下一次专门讨论。
+
 ## 2. 这一阶段的产品原则(讨论后落定)
 
 - **一人 → 一 org → 一 member → 一 client**,这是默认 invariant。
@@ -35,18 +39,7 @@
 - **Client 端的多账号能力无限期 defer**:不规划 `profile` 子命令,UI 里看不到,`FIRST_TREE_HUB_HOME` 仅作内部测试工具。
 - Login 在签 JWT 那一刻就把 `(member, org)` 钉死。`auth.ts:50-51` 的注释 `// Get first membership (this version: single org)` 已经暗示了这个产品边界,我们就不再扩它。
 - 公共文档**默认单账号**。Edge case 走 troubleshooting 页面,不进 onboarding。
-
-### 为什么这样划
-
-我考虑过三种可能的多账号场景,逐一过一下:
-
-| 场景 | 是否进 P0 | 理由 |
-|---|---|---|
-| 同一 Hub 上同一人加多 org | 否 | 早期客户基本是小团队,不会触发。Server 数据模型已经允许,不必现在搞 UX |
-| 个人 Hub + 公司 Hub 并存 | 否 | 真实但小众,跟 git remote 多 origin 一类问题。等用户提了再做 |
-| dogfood 测多 user | 否 | 内部场景,`FIRST_TREE_HUB_HOME` 留给开发者就够 |
-
-砍掉之后,有一个隐藏好处:**当前 launchd label `dev.first-tree-hub.client` 全局唯一**这个限制,反而把"多账号同时在线"挡在门外,我们不需要再写代码顶住"立刻支持多账号"的产品压力。
+- **本地版用户画像 = evaluator / 单机自用**。优化目标是"装好 → 跑起来 → 用上",心智里出现的概念越少越好。认证、org、密码、服务安装,默认全部隐藏。
 
 ## 3. 现状盘点(代码级,对齐 origin/main)
 
@@ -80,49 +73,113 @@ quickstart-zh.md 描述的中间路径(分别 connect 然后 add)在线上根本
 
 ## 4. 要做的修改
 
-### 4.1 文档(D1–D4)
+### 4.1 本地版流程(已锁定)
 
-- **D1.** 重写 `docs/quickstart-zh.md`。两个场景:
-  - **场景 1:本地自建** —— `server start`(需要 Docker)→ 首次创建 admin → 浏览器登录 → 进入"接入客户端 + 创建 agent"通用段。
-  - **场景 2:托管 Hub** —— 打开 admin 给的 URL → 登录 → 进入通用段。
-  - **通用段** —— 明确写 Path A 和 Path B 两条路径,说清楚什么时候走哪条。**不写多账号一节**。
-  - Workspace 三栏简介保留。
-- **D2.** 同步英文 `docs/onboarding-guide.md`。这份还在引用 PR #95 / #108 已删除的 `agent token bootstrap` 流程。要么原地重写,要么删了换成新的 `docs/onboarding.md`。
-- **D3.** 把 `CLAUDE.md` 里 `Local Testing Isolation` 那段移到内部 contributor 文档(`docs/dev/testing-isolation.md`)。对外的 CLAUDE.md 不再文档化 `FIRST_TREE_HUB_HOME`。
+新增一个顶层命令,把今天的三步("`server start` + `admin:create` + `client connect`") 合一:
+
+```
+$ first-tree-hub start
+✓ Postgres ready
+✓ Database initialized
+✓ Local admin ready
+✓ Server listening at http://127.0.0.1:8000
+✓ Client connected as this computer
+
+  Open this URL to log in:
+    http://127.0.0.1:8000/?bootstrap=eyJhbGc...
+
+Press Ctrl+C to stop.
+(Postgres container is kept running. To also stop it: first-tree-hub server stop)
+```
+
+#### 行为契约
+
+1. **前置检查(Q4-A)**:第一行就跑 `isDockerAvailable()`。Docker 不可用 → 沿用 `core/server.ts:57-64` 现有的友好文案(把 `re-run` 那行改成 `first-tree-hub start`),立刻退出。
+2. **Postgres**:复用 `ensurePostgres`,有容器就 reuse,没有就拉起来。
+3. **Migrations**:复用 `runMigrations`。
+4. **静默建 admin(Q1)**:`hasUser` 返回 false 时,无声建 admin —— `os.userInfo().username` slugify(空 / `root` 时回退 `admin`),org 写死 `default`,密码用 `randomBytes(12).base64url()`。**username / password / org 全程不向用户展示,也不落 cleartext 文件**。
+5. **签 bootstrap token(Q5-b)**:每次 start 都为该 admin 签发一个新 token(single-use,10 分钟 TTL),把 magic URL 显眼地打到 stdout。
+6. **起 Server**:复用 `buildApp` + `app.listen`,绑 `127.0.0.1:8000`。
+7. **嵌入 Client(Q5)**:同一个 Node 进程里,server listen 后 `new ClientRuntime("http://127.0.0.1:8000", clientId, { getAccessToken: () => <内存里那份 admin JWT> })` 起 client。`client.yaml` 和 `credentials.json` 也写一份,让后续手敲的 `first-tree-hub agent ...` CLI 能直接用。
+8. **不装 client 服务(Q5)**:嵌入式 client 跟主进程共生死,不写 launchd/systemd 单元。
+9. **SIGINT(Q5-c)**:优雅关 ClientRuntime → close fastify → 退出。**Postgres 容器留着**。退出输出告诉用户怎么也停 Postgres。
+
+#### 用户视野里看到的全部
+
+- 一条命令:`first-tree-hub start`
+- 每次跑出来的 bootstrap URL
+- "Press Ctrl+C to stop" 一行
+- 仅此而已
+
+用户**永远看不到**:username、password、org name、JWT、refresh token、`agent add`、`client connect`、服务安装/卸载、Postgres URL 等等。
+
+#### 恢复(URL 丢了 / cookie 过期)
+
+Ctrl+C → `start` 再跑一遍。每次都会打印新 URL,自动恢复登录入口。
+
+#### 故意不做的东西
+
+- `admin:reset` 命令 —— 重启就够,不需要单独命令。
+- `login` / `bootstrap-url` 命令 —— evaluator 几个月触发一次的概率,不值得加 CLI 长面。
+- `admin.json` 落盘文件 —— 凭据从不离开 DB(只留 bcrypt hash)。
+- Server-as-service —— 早期不做。daily user 真有需要再加。
+- Server `--detach` flag —— 同上。
+
+### 4.2 托管版流程
+
+**状态:** 留到下一次专门讨论。当前实现(Web `Generate` token、New Agent 自动 pin、Last-step 模态 one-liner、`client connect --token`)在那之前不动。
+
+需要后续敲定:
+
+- account-switch gate 是不是要简化(C1)。
+- Last-step 模态那条 one-liner 要不要砍掉 `agent add`(C3)。
+- Org provisioning 在文档里怎么处理(单独 operator runbook?用户文档里 out-of-scope?)。
+- Web "Connect a computer" 入口要不要保留,还是只留 Last-step 模态。
+
+### 4.3 文档修改(D1–D4)
+
+- **D1.** 重写 `docs/quickstart-zh.md`。本地段按 4.1 写定;托管段等 4.2 完成。
+- **D2.** 同步英文 `docs/onboarding-guide.md`。删掉 `agent token bootstrap` 旧引用。结构跟 D1 对齐。
+- **D3.** `CLAUDE.md` 里 `Local Testing Isolation` 段移到内部 `docs/dev/testing-isolation.md`。对外文档不再提 `FIRST_TREE_HUB_HOME`。
 - **D4.** `docs/multi-tenancy-hardening-design.md:18` 把 non-goals 里那行 "Multi-org switching UX (will become a `first-tree-hub profile` CLI feature later)" 改成 "deferred indefinitely"。不预定 `profile` 这个名字。
 
-### 4.2 代码(C1–C5)
+### 4.4 代码修改(C1–C5)
 
-- **C1.** 砍掉 `packages/command/src/commands/connect.ts:78-242` 的 account-switch gate。换成单一 Y/N:"This computer already has Hub credentials. Replace?"——不解析 JWT,不分 memberId,不打印隔离指南。约删 50 行。
-- **C2.** `server start` 在 `users` 表为空时**直接交互式建第一个 admin**。流程:
-  - 用 `hasUser()`(`core/admin.ts:10`)判定。
-  - prompt username,默认值取 `os.userInfo().username`。
-  - 密码用 `randomBytes(12).base64url()`(跟现在 admin:create 一致)。
-  - 在 "Server running at …" 之前打印一段凭据块,只显示一次。
-  - `--no-interactive` 时跳过。
-- **C3.** Last-step 模态的 one-liner 砍掉 `agent add` 段。理由:`client connect` 触发 `client:register` 后,server 已经知道这台 client,会通过 `agent:pinned` 把那一刻应该 pin 的 agent 推过来(`services/client.ts:147-149` 已经做这个 backfill);one-liner 里再写一遍 `agent add` 是冗余,而且会引入"connect 取消但 agent.yaml 已经写下"的孤儿 yaml 失败模式。
-  - 新链路:`npm install -g @agent-team-foundation/first-tree-hub && first-tree-hub client connect <url> --token <jwt>`。
-- **C4.** 修 `packages/command/src/core/service-install.ts:47` 的 `LOG_DIR` bug。当前用 `join(DEFAULT_HOME_DIR, "logs")` 在模块加载时算出常量——任何用不同 `FIRST_TREE_HUB_HOME` 的进程都会写到加载时 home 而不是当前 home。改成调用时算。
+- **C1.** 砍掉 `commands/connect.ts:78-242` 的 account-switch gate,换成单一 Y/N "Replace existing credentials?" prompt。约删 50 行。*等 C2 落地后 `client connect` 变成纯 hosted 路径再做。*
+- **C2.** 实现顶层 `first-tree-hub start` 命令。
+  - 文件:`packages/command/src/commands/start.ts`。
+  - Server 编排:重构 `core/server.ts:startServer`,把 listen 那一步交给调用者(或者拆成 `bootstrapServer()` 返回 `{app, config}` + 单独 listen)。
+  - Auto-admin:复用 `core/admin.ts:hasUser` + `createOwner`。
+  - 新端点:`POST /api/v1/auth/bootstrap`,接受 single-use bootstrap token,返回标准 access + refresh JWT 对(参考现有 `/auth/connect-token` 的模式)。
+  - Web 改动:根路由检测 `?bootstrap=<token>`,POST 到新端点拿 JWT,清掉 URL 参数,跳 Workspace。
+  - 嵌入 client:同一进程,`app.listen` resolve 后实例化 `ClientRuntime`,`getAccessToken: () => <内存 admin JWT>`。
+  - SIGINT 处理同时停掉两边。
+  - README "Quick Start" 段改成 `npm install ... && first-tree-hub start`。
+- **C3.** Last-step 模态的 one-liner 砍掉 `agent add` 段。`services/client.ts:147-149` 的 server-side `agent:pinned` replay 已经覆盖。*仅 hosted,等 4.2 完成。*
+- **C4.** 修 `core/service-install.ts:47` 的 `LOG_DIR` bug——改成调用时算,不在 import time 算。
 - **C5.** 加 `first-tree-hub client logout`:
   - 删 `credentials.json`。
-  - 询问是否同时卸 launchd / systemd 服务(或 `--keep-service`)。
-  - 调 `/api/v1/clients/<self>/disconnect` 让 server 端立刻标 offline。
-  - 打印下一步提示("To use this computer again, run `client connect <url>`")。
+  - 可选 flag 同时卸服务。
+  - 调 `/api/v1/clients/<self>/disconnect` 让 server 立刻标 offline。
+  - *主要给 hosted 用,4.2 后再看是否真的需要。*
 
-## 5. 分阶段顺序
+(原 C6 client-retry-backoff 和 C7 localhost-no-service 删除——都被 C2 的嵌入式 client 模型自动消解。)
 
-- **Phase 1(纯文档,零代码风险):** D1、D2。先把用户实际看的东西修对。
-- **Phase 2(本地 happy path):** C2。本地版用户从此一条命令就能登录,不用单独跑 admin:create。如果 D1 已经发了,这一步会同步更新。
-- **Phase 3(Onboarding 简化):** C1 + C3 一起做。两边都改 connect / Last-step 这对组合,测试范围一致,合一个 PR 干净。
-- **Phase 4(扫尾):** D3、D4、C4、C5。互相独立,可以拆 PR。
+## 5. 分阶段顺序(本地优先)
 
-## 6. 待定的开放问题(需要你拍)
+- **Phase 1(本地版完成):** C2(`first-tree-hub start` + bootstrap endpoint + Web URL handler)+ D1 的本地段 + README Quick Start 改写。
+- **Phase 2(托管版对齐):** 单独开一次讨论,定 4.2;落地 C1 / C3 / D1 托管段 / D2。
+- **Phase 3(扫尾):** D3、D4、C4、C5,各自独立 PR。
 
-- **Q1.** 文档文件名。保留 `docs/quickstart-zh.md`(改动面小,README 链接不动),还是改名 `docs/onboarding-zh.md`(语义更准)?
-- **Q2.** 英文版怎么处理。原地重写 `docs/onboarding-guide.md`,还是删掉换成新的 `docs/onboarding.md`?
-- **Q3.** C3 时机。Phase 3 里就把 `agent add` 从 one-liner 砍掉,还是先在 staging 验证 `agent:pinned` 能在 `client connect` 成功后稳定回放,再砍?
-- **Q4.** C2 admin-create UX。纯交互 prompt,还是也接受 `--admin-username` / `--admin-password` 给 CI 用?(`--no-interactive` 已经会跳过整个 prompt)
-- **Q5.** C5 logout 默认怎么处理服务。默认卸服务(贴近"我登出了"的心智),还是默认保留(贴近"服务安装是另一件事")?
+## 6. 决策记录
+
+| ID | 问题 | 决定 | 理由 |
+|---|---|---|---|
+| Q1 | auto-admin + bootstrap UX | username/password/org 全程不向用户展示,不落盘。每次 `start` 签新 URL。不加恢复命令(Ctrl+C 重启即可)。 | CLI 表面最小;evaluator 触发恢复频率以"几个月一次"为单位 |
+| Q2 | server 是否做成 service | 否(Q2-A),前台进程 | 本地用户是 evaluator,server-service 复杂度不值 |
+| Q3 | client connect 走交互还是 token | moot —— 本地流程没有独立 `client connect` 步骤 | 被 C2 的嵌入式 client 模型解掉 |
+| Q4 | Docker 前置 UX | Q4-A:`start` 第一行就检查,失败立刻给现有的友好文案 | 文案已够好,只需要把时机提前 |
+| Q5 | 一条命令 `first-tree-hub start` | 是。Q5-a 名字 `start`。Q5-b 每次签新 URL。Q5-c PG 容器 Ctrl+C 不停。Q5-d 文档里替代 `server start`。 | 四个子决议逐一通过 |
 
 ## 7. 显式 out of scope(留作未来)
 
@@ -131,4 +188,7 @@ quickstart-zh.md 描述的中间路径(分别 connect 然后 add)在线上根本
 - 多 org login UI(让用户选用哪份 membership)
 - 跨 Hub 联邦 / 多 Hub 凭据管理
 - 自助注册 / signup
-- 邮件邀请 / 链接邀请新成员(目前是 admin 建 member + 线下交付密码)
+- 邮件邀请 / 链接邀请新成员
+- Server-as-service 安装(`first-tree-hub server service install` 等)
+- `admin:reset` / `login` / `show-credentials` 命令(等真实需求出现再加)
+- Org provisioning UI(目前是运营方走 `server admin:create` / admin API)
