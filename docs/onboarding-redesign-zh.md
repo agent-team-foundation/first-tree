@@ -92,6 +92,104 @@ Press Ctrl+C to stop.
 (Postgres container is kept running. To also stop it: first-tree-hub server stop)
 ```
 
+#### 端到端旅程(我们要让它呈现的体验)
+
+**前置条件(由用户自己满足)**
+- Node.js ≥ 22.16
+- 装好并启动 Docker Engine 或 Docker Desktop
+
+**步骤 1 —— 安装(一次)**
+```
+npm install -g @agent-team-foundation/first-tree-hub
+```
+完成后:`first-tree-hub` 在 PATH 里。`~/.first-tree/hub/` **还不存在**。
+
+**步骤 2 —— 第一次启动**
+```
+first-tree-hub start
+```
+后台发生:
+1. Docker preflight(`isDockerAvailable()`);不可用立刻给指引退出。
+2. `ensurePostgres` —— 拉镜像 + 起 `first-tree-hub-postgres` 容器(首次约 5–10s)。
+3. `runMigrations` —— Drizzle 建约 32 张表。
+4. `hasUser()` 返回 false → `createOwner()` 静默建 user + org `default` + member + 第一个 human agent。username 用 `os.userInfo().username` slugify(回退 `admin`);密码随机生成,**永不展示给用户**。
+5. 给该 admin 签 single-use bootstrap JWT(10min TTL)。
+6. `buildApp` + `app.listen` 在 `127.0.0.1:8000`。
+7. 同进程:`new ClientRuntime(...)` 通过 loopback WS 连上,注册为这台机器的 client,落 `client.yaml` + `credentials.json`。
+8. 显眼地打印 magic URL,阻塞前台等 SIGINT。
+
+步骤 2 后磁盘状态:
+```
+~/.first-tree/hub/
+├── config/{server,client}.yaml
+├── config/credentials.json (mode 0600)
+├── logs/、data/
+└── (尚无 agents/<name>/)
+```
+`clients` 表有一行(这台电脑);`agents` 只有 admin 的 human 行。
+
+**步骤 3 —— 点击 magic link**
+
+用户 cmd-click 或 copy-paste 终端里的 URL。浏览器:
+1. 加载同一份 fastify 提供的 React Web app(`dist/web/index.html`)。
+2. 应用检测到 `?bootstrap=<token>`。
+3. POST 给 `POST /api/v1/auth/bootstrap` 拿到标准 access + refresh JWT。
+4. 存进 storage;`history.replaceState` 把 query 参数清掉,避免截图 / 刷新泄漏。
+5. 跳到 Workspace —— 空 state,还没 agent。
+
+到这一步用户已经登录,**全程没看见 username / password / org**。
+
+**步骤 4 —— 创建第一个 agent**
+
+Workspace → Agents → `+ New Agent` → 输入名字(比如 `my-assistant`)→ 点 Create。
+
+后台:
+1. Web `listClients()` 找到 1 台在线 client(嵌入式那台)。
+2. Web 调 `createAgent({name, type: "personal_assistant", clientId: <thisClient>})`。
+3. Server 写 agents 行(pinned),R-RUN 校验通过。
+4. Server 推 WS `agent:pinned` 给嵌入式 client。
+5. Client `handleAgentPinned()` 写 `~/.first-tree/hub/config/agents/my-assistant/agent.yaml`,实例化 `AgentSlot`,自己开 agent WS。
+6. Web 看到 `agent.clientId` 已 set,跳 Workspace 对应 agent。
+
+总耗时 1–2 秒。**Last-step 模态不会弹**,**用户不需要碰终端**。
+
+**步骤 5 —— 跟 agent 聊**
+
+用户在中栏输入消息。消息 → server inbox → WS → AgentSlot handler → spawn Claude Code 子进程(cwd 是 `~/.first-tree/hub/data/workspaces/my-assistant/`)→ 流式回传。第一条消息冷启动慢,同 session 后续快。
+
+**步骤 6 —— 停止(Ctrl+C)**
+
+在跑 `start` 的那个终端按 Ctrl+C:
+- 嵌入式 `ClientRuntime` 停所有 slot,关 WS。
+- Fastify close。
+- 进程退出。
+- **Postgres 容器留着**(Docker `ps` 还能看见)。
+- 终端最后一行:`(database container kept; first-tree-hub server stop to also stop it)`。
+
+磁盘状态完整保留,agent / messages 跨 session 持久。
+
+**步骤 7 —— 再次启动(第二天 / 重启电脑后)**
+
+用户开 Docker Desktop(或确认 Docker daemon 在跑),然后:
+```
+first-tree-hub start
+```
+这次:
+- `ensurePostgres` 发现容器已存在,reuse。启动很快(约 2–3s)。
+- `hasUser()` 现在是 true → **跳过建 admin**。
+- 仍然签**新的** bootstrap token,打印新 magic URL。
+- 嵌入式 client 连上,server 把已经 pin 的 `my-assistant` 通过 `agent:pinned` 重放,slot 自动起来。
+- 点新链接 → 进 Workspace,agent 在那等着,聊天历史还在。
+
+#### 用户敲过的命令一览
+
+| 时间点 | 命令 |
+|---|---|
+| 第一次安装 | `npm install -g @agent-team-foundation/first-tree-hub` |
+| 每次启动(包含第一次) | `first-tree-hub start` |
+
+**仅此**。其它全部由 `start` 内部完成,用户视野里没有任何其他 CLI。
+
 #### 行为契约
 
 1. **前置检查(Q4-A)**:第一行就跑 `isDockerAvailable()`。Docker 不可用 → 沿用 `core/server.ts:57-64` 现有的友好文案(把 `re-run` 那行改成 `first-tree-hub start`),立刻退出。

@@ -76,6 +76,104 @@ Press Ctrl+C to stop.
 (Postgres container is kept running. To also stop it: first-tree-hub server stop)
 ```
 
+#### End-to-end journey (the experience we are designing for)
+
+**Prerequisites the user must satisfy before anything happens:**
+- Node.js ≥ 22.16
+- Docker Engine or Docker Desktop installed and running
+
+**Step 1 — Install (once)**
+```
+npm install -g @agent-team-foundation/first-tree-hub
+```
+After: `first-tree-hub` is on PATH. `~/.first-tree/hub/` does NOT exist yet.
+
+**Step 2 — First run**
+```
+first-tree-hub start
+```
+What happens behind the scenes:
+1. Docker preflight (`isDockerAvailable()`); fail fast with actionable message if absent.
+2. `ensurePostgres` — pull image + start `first-tree-hub-postgres` container (5–10s on first run).
+3. `runMigrations` — Drizzle creates ~32 tables.
+4. `hasUser()` returns false → `createOwner()` silently creates user + org `default` + member + first human agent. Username = sanitised `os.userInfo().username` (fallback `admin`); password is random and never displayed.
+5. Sign a single-use bootstrap JWT for that admin (10-min TTL).
+6. `buildApp` + `app.listen` on `127.0.0.1:8000`.
+7. In-process: `new ClientRuntime(...)` connects via loopback WS, registers as this machine's client, persists `client.yaml` + `credentials.json`.
+8. Print the magic URL prominently; block on SIGINT.
+
+After Step 2, the disk state is:
+```
+~/.first-tree/hub/
+├── config/{server,client}.yaml
+├── config/credentials.json (mode 0600)
+├── logs/, data/
+└── (no agents/<name>/ yet)
+```
+The `clients` table has one row (this computer); `agents` has the admin's human row only.
+
+**Step 3 — Click the magic link**
+
+User cmd-clicks (or copy-pastes) the printed URL. Browser:
+1. Loads the React Web app served by the same fastify (`dist/web/index.html`).
+2. App detects `?bootstrap=<token>` query param.
+3. POSTs the token to `POST /api/v1/auth/bootstrap` → receives standard access + refresh JWT.
+4. Stores tokens; `history.replaceState` removes the query param so it cannot leak via screenshots / refresh.
+5. Routes to Workspace — empty state, no agent yet.
+
+The user has now signed in without ever seeing username, password, or org.
+
+**Step 4 — Create the first agent**
+
+Workspace → Agents → `+ New Agent` → enter a name (e.g., `my-assistant`) → Create.
+
+What happens:
+1. Web `listClients()` finds 1 connected client (the embedded one).
+2. Web calls `createAgent({name, type: "personal_assistant", clientId: <thisClient>})`.
+3. Server inserts the agents row, pinned, R-RUN check passes.
+4. Server emits WS `agent:pinned` to the embedded client.
+5. Client `handleAgentPinned()` writes `~/.first-tree/hub/config/agents/my-assistant/agent.yaml`, instantiates `AgentSlot`, opens its own agent WS.
+6. Web sees `agent.clientId` is set, routes to Workspace with the agent active.
+
+Total elapsed time: 1–2 seconds. No Last-step modal, no terminal step.
+
+**Step 5 — Chat with the agent**
+
+User types in the center column. Message → server inbox → WS → AgentSlot handler → spawn Claude Code subprocess with cwd `~/.first-tree/hub/data/workspaces/my-assistant/` → stream response back through the same path. First message slow (cold-start), follow-ups in the same session fast.
+
+**Step 6 — Stop (Ctrl+C)**
+
+In the terminal that ran `start`:
+- Embedded `ClientRuntime` stops slots and closes WS.
+- Fastify closes.
+- Process exits.
+- **Postgres container is left running** (Docker `ps` still shows it).
+- Final stdout line: `(database container kept; first-tree-hub server stop to also stop it)`.
+
+Disk state preserved entirely; agents and messages are persistent across sessions.
+
+**Step 7 — Subsequent runs (next day, after reboot, etc.)**
+
+User opens Docker Desktop (or ensures Docker daemon is up), then:
+```
+first-tree-hub start
+```
+This time:
+- `ensurePostgres` finds the existing container, reuses it. Boot is much faster (~2–3s).
+- `hasUser()` is now true → skip admin creation entirely.
+- Server still signs a **fresh** bootstrap token and prints a new magic URL.
+- Embedded client connects, server replays `agent:pinned` for the existing `my-assistant`, slot starts on its own.
+- Click the new URL → land in Workspace, the agent is already there with full chat history.
+
+#### Total commands the user types, ever
+
+| When | Command |
+|---|---|
+| First time on this machine | `npm install -g @agent-team-foundation/first-tree-hub` |
+| Every run, including the first | `first-tree-hub start` |
+
+That is the complete CLI surface for a local-version user. Everything else is hidden.
+
 **Behavior contract:**
 
 1. **Preflight (Q4-A):** check Docker availability. Missing → print existing actionable message (`core/server.ts:57-64`, with `re-run` line updated to `first-tree-hub start`) and exit immediately, before any other output.
