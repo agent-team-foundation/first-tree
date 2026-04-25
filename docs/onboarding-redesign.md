@@ -137,6 +137,7 @@ Items that need decision before the hosted scenario can be doc-rewritten:
   - Embedded client: in the same process, after `app.listen` resolves, instantiate `ClientRuntime` with `getAccessToken: () => <admin JWT in memory>`.
   - SIGINT handler stops both.
   - README "Quick Start" section updated to `npm install ... && first-tree-hub start`.
+  - **Port handling:** default `8000` (unchanged), `--port <n>` flag accepted. On `EADDRINUSE`, catch and print "Port N is busy. Try `first-tree-hub start --port <N+1>`." instead of the raw Node stack. No auto-fallback, no probing — see Section 7 for the future port-default discussion.
 - **C3.** Last-step modal one-liner drops the `agent add` segment. Server-side `agent:pinned` replay (`services/client.ts:147-149`) covers it. *Hosted-only; pending 4.2.*
 - **C4.** Fix `LOG_DIR` in `packages/command/src/core/service-install.ts:47`. Resolve at use-site, not at module load.
 - **C5.** Add `first-tree-hub client logout`:
@@ -165,8 +166,9 @@ Reorganized around the local-first scope:
 | Q4 | Docker prereq UX | Q4-A: check at top of `start`, fail fast with the existing actionable message | Existing message is good; only timing needs fixing |
 | Q5 | Single-command `first-tree-hub start` | Yes. Q5-a: name `start`. Q5-b: fresh URL each run. Q5-c: PG stays on Ctrl+C. Q5-d: replaces `server start` in user docs. | All four sub-decisions confirmed in turn |
 
-## 7. Out of scope (recorded for later)
+## 7. Out of scope / future considerations
 
+### Hard out of scope (no current intent)
 - `first-tree-hub profile` multi-account UX
 - Per-profile launchd / systemd unit names
 - Multi-org login UI (let the user pick which membership to use)
@@ -176,3 +178,6 @@ Reorganized around the local-first scope:
 - Server-as-service install (`first-tree-hub server service install` etc.)
 - `admin:reset` / `login` / `show-credentials` commands (deferred until real demand surfaces)
 - Org provisioning UI (currently operator-side via `server admin:create` / admin API)
+
+### Future discussion items (intent exists, not blocking current scope)
+- **Default port migration.** Leaning toward changing the default from `8000` (commonly occupied on dev machines by Django, FastAPI, etc.) to a less-common port (e.g., `8473`). Deferred to keep the onboarding redesign focused; current scope keeps `8000` and adds a friendly `EADDRINUSE` message + `--port` flag (see C2). Revisit when local-version usage data shows port collision is a frequent friction point.
