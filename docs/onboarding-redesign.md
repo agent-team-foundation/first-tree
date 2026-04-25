@@ -205,16 +205,52 @@ The user **never sees** username, password, org name, JWTs, refresh tokens, `age
 - Server-as-service — early stage; daily-driver users can keep terminal open or use their own backgrounding (tmux, screen).
 - Server `--detach` flag — same reasoning.
 
-### 4.2 Hosted-scenario flow
+### 4.2 Hosted-scenario flow (PARTIALLY FINALIZED)
 
-**Status:** Discussion deferred to a subsequent session. The current implementation (Web `Generate` token, New Agent dialog with auto-pin, Last-step modal one-liner, `client connect` with token) remains in place until then.
+The hosted scenario does not get a single new top-level command (no equivalent of `first-tree-hub start`). Instead, the existing Web + CLI surface stays and is trimmed in three concrete places (Qh-2, Qh-3, Qh-4 below). Several adjacent questions are explicitly deferred (Qh-1, Qh-5, Qh-6, Qh-7) — see the bottom of this section.
 
-Items that need decision before the hosted scenario can be doc-rewritten:
+#### Two lifecycle moments, two paths (Qh-2)
 
-- Whether to simplify the account-switch gate (C1)
-- Whether to drop `agent add` from the Last-step one-liner (C3)
-- How org provisioning is documented (operator runbook? out-of-scope of user docs?)
-- Whether to keep the Web "Generate Connect Command" strip or rely on Last-step modal exclusively
+The hosted user docs do not pick a single canonical path. Two paths are recognised as serving distinct lifecycle moments:
+
+- **First-time onboarding (Path A — Last-step modal):** A new hosted user has credentials, no client connected. Their natural goal is "use my assistant," not "set up infrastructure." They sign in, navigate to Agents, click `+ New Agent`. Because no client is connected, the Last-step modal appears with the install + connect command. They run it once on terminal; the modal detects connection; they land in Workspace. Path A is goal-driven and continues to be the implicit welcome flow.
+- **Adding more machines (Path B — Connect-a-computer strip):** A user with an existing connected client wants to add another machine (laptop + desktop, etc.). They navigate to Clients → "Connect a computer" → click `Generate` → run the resulting `client connect --token` on the new machine. Future agent creates from Web auto-pin via `agent:pinned` (zero CLI). Path B is admin/infra-driven and applies once the user is past day-1 onboarding.
+
+User-facing docs treat these as two separate paths organised by lifecycle moment; neither is "the canonical" — they apply at different times in the user's relationship with Hub.
+
+A future UX upgrade — a first-class Web onboarding wizard that replaces the "modal interrupt" framing with an explicit guided welcome flow — is recognised but out of scope for this redesign. Path A's Last-step modal is the form we keep.
+
+#### Last-step one-liner shape (Qh-3, C3 confirmed)
+
+The Last-step modal one-liner drops the `agent add` segment. New chain:
+
+```
+npm install -g @agent-team-foundation/first-tree-hub && \
+  first-tree-hub client connect <url> --token <jwt>
+```
+
+Server-side `agent:pinned` replay (`services/client.ts:147-149`) creates the local `agent.yaml` on its own once the client connects. The pre-existing chain's middle step was redundant and introduced an orphan-yaml failure mode: when `connect` was cancelled or failed mid-chain, the `agent.yaml` already on disk belonged to no real client, polluting the next attempt.
+
+Implementation: edit the command string in `packages/web/src/components/last-step-modal.tsx:76-82`. ~5–10 LOC.
+
+#### Account-switch gate simplification (Qh-4, C1 confirmed)
+
+The 60-line gate in `packages/command/src/commands/connect.ts:78-242` is replaced with a one-line confirmation:
+
+```
+This computer already has Hub credentials. Replace? [y/N]
+```
+
+Removed: JWT decoding, member ID labels, organization labels, service status display, `FIRST_TREE_HUB_HOME` isolation guide. Loses the "same memberId reconnecting → silent proceed" niceity (must press Y), which is acceptable trade-off given single-account-per-machine is the product principle. ~50 LOC removed. `ClientOrgMismatchError`'s rotate-and-guide path becomes practically unreachable and can be cleaned up alongside.
+
+#### Deferred for the hosted scenario
+
+The following are recognised but not finalised in this redesign. Each is blocked on a decision outside this conversation; revisit in a follow-up session.
+
+- **Qh-1 — Source of truth for member identity.** The architecture proposal `first-tree-architecture-overview.20260423.md` § 3.1 + 3.3 establishes Context Tree `members/` as the source of truth (Hh-1.B direction). A natural extension surfaced in this discussion: **Hub Web becomes the friendly UI for editing `members/`**, writing via PR/commit to the tree repo, with sync reading back into the Hub DB. Implementation timing AND authentication mechanism (GitHub OAuth vs username/password vs other) are open. Today's `members.createMember` (DB-only) stays as the implementation until further decision. Note: the proposal § 3.3 lists "Members 同步" as ✅ landed, but the Hub-side sync code does not exist; the Hub README's claim about "synced to Hub automatically" is aspirational, not implemented. Both should be reconciled when this is picked up.
+- **Qh-5 — Org provisioning docs.** Today all orgs are operator-provisioned via `server admin:create` or admin API; no self-service. User docs assume "you have credentials"; how/where to document operator-side provisioning is open. Likely outcome is a separate `docs/operator-runbook.md`, but not committed.
+- **Qh-6 — `client logout` default behavior.** Whether `client logout` should also tear down the launchd/systemd service (matching "log me out") or leave it (matching "service install is a separate concern") is open. C5 below leaves the flag default unspecified pending this.
+- **Qh-7 — Hosted end-to-end journey writeup.** The local scenario (Section 4.1) has a step-by-step journey. The hosted equivalent is contingent on Qh-1 (auth mechanism, "how does the user get their first credential") and is deferred until that resolves.
 
 ### 4.3 Documentation (D1–D4)
 
@@ -225,7 +261,13 @@ Items that need decision before the hosted scenario can be doc-rewritten:
 
 ### 4.4 Code changes (C1–C5)
 
-- **C1.** Strip the account-switch gate in `packages/command/src/commands/connect.ts:78-242`. Replace with a single Y/N "Replace existing credentials?" prompt. ~50 LOC removed. *Applies once C2 lands and `client connect` is hosted-only.*
+- **C1.** Strip the account-switch gate in `packages/command/src/commands/connect.ts:78-242`. Replace with a single Y/N confirmation:
+  - No credentials present → silent proceed (unchanged).
+  - Credentials present → `This computer already has Hub credentials. Replace? [y/N]`. Default No.
+  - Cancel → `Cancelled. Your existing setup is untouched.` Exit. **No** `FIRST_TREE_HUB_HOME` isolation guide.
+  - Replace → overwrite credentials, continue.
+  - **No** JWT decoding, member/org labels, or service status display.
+  - ~50 LOC removed. `ClientOrgMismatchError`'s rotate-and-guide path becomes practically unreachable; clean up alongside.
 - **C2.** Implement `first-tree-hub start` (new top-level command).
   - File: `packages/command/src/commands/start.ts`.
   - Server orchestration: refactor `core/server.ts:startServer` so the listen step is observable from the caller (or split into a `bootstrapServer()` returning `{app, config}` plus a separate listen call).
@@ -236,25 +278,30 @@ Items that need decision before the hosted scenario can be doc-rewritten:
   - SIGINT handler stops both.
   - README "Quick Start" section updated to `npm install ... && first-tree-hub start`.
   - **Port handling:** default `8000` (unchanged), `--port <n>` flag accepted. On `EADDRINUSE`, catch and print "Port N is busy. Try `first-tree-hub start --port <N+1>`." instead of the raw Node stack. No auto-fallback, no probing — see Section 7 for the future port-default discussion.
-- **C3.** Last-step modal one-liner drops the `agent add` segment. Server-side `agent:pinned` replay (`services/client.ts:147-149`) covers it. *Hosted-only; pending 4.2.*
+- **C3.** Last-step modal one-liner drops the `agent add` segment.
+  - New chain: `npm install -g @agent-team-foundation/first-tree-hub && first-tree-hub client connect <url> --token <jwt>`.
+  - Rationale: server-side `agent:pinned` replay (`services/client.ts:147-149`) writes the local `agent.yaml` on its own once the client connects. The pre-existing middle step was redundant and introduced an orphan-yaml failure mode (when `connect` was cancelled or failed mid-chain).
+  - Edit `packages/web/src/components/last-step-modal.tsx:76-82`. ~5–10 LOC.
 - **C4.** Fix `LOG_DIR` in `packages/command/src/core/service-install.ts:47`. Resolve at use-site, not at module load.
-- **C5.** Add `first-tree-hub client logout`:
+- **C5.** Add `first-tree-hub client logout`. Core actions agreed:
+  - POST `/api/v1/clients/<self>/disconnect` (best-effort, ignore failure).
+  - Stop the running client process.
   - Delete `credentials.json`.
-  - Optional flag for service teardown.
-  - POST `/api/v1/clients/<self>/disconnect` so server marks the row offline.
-  - *Primarily for hosted-scenario users; revisit relevance after 4.2.*
+  - Print: `Logged out. To use this computer again: first-tree-hub client connect <url>`.
+  - **Default flag for service teardown is pending Qh-6 (deferred).** Implementation can land the core actions and leave the service-teardown flag default unspecified, then flip to the Qh-6 decision when it arrives.
 
 (Old C6 client-retry-backoff and C7 localhost-no-service are removed — both made moot by C2's embedded-client model.)
 
 ## 5. Sequencing
 
-Reorganized around the local-first scope:
-
-- **Phase 1 (local-scenario complete).** C2 (`first-tree-hub start` + bootstrap endpoint + Web URL handler) + minimal D1 update for the local section + README Quick Start update.
-- **Phase 2 (hosted-scenario alignment).** Conduct the deferred discussion to finalize 4.2. Land C1 / C3 / final D1 hosted section / D2.
-- **Phase 3 (cleanup).** D3, D4, C4, C5 — independent, can each be its own PR.
+- **Phase 1 (local-scenario, fully spec'd).** C2 (`first-tree-hub start` + bootstrap endpoint + Web URL handler) + minimal D1 update for the local section + README Quick Start update. Independently shippable; doesn't depend on any hosted decision.
+- **Phase 2 (hosted-scenario simplifications, fully spec'd).** C1 + C3 — both touch the connect/Last-step pair, share a testing scope. D1 hosted section using Path A first-time / Path B add-machine framing (Qh-2). D2 mirror in English.
+- **Phase 3 (Hub-internal cleanup).** D3, D4, C4 — each can be its own small PR.
+- **Phase 4 (deferred-question follow-ups).** Re-open Qh-1, Qh-5, Qh-6, Qh-7 in a separate session. C5 lands its core (no default-flag commitment) here, then flips on Qh-6.
 
 ## 6. Decisions log
+
+### Local scenario
 
 | ID | Question | Decision | Reasoning |
 |---|---|---|---|
@@ -263,6 +310,18 @@ Reorganized around the local-first scope:
 | Q3 | Client connect mode | Moot — local flow has no separate `client connect` step | Resolved by C2 embedding the client in `start` |
 | Q4 | Docker prereq UX | Q4-A: check at top of `start`, fail fast with the existing actionable message | Existing message is good; only timing needs fixing |
 | Q5 | Single-command `first-tree-hub start` | Yes. Q5-a: name `start`. Q5-b: fresh URL each run. Q5-c: PG stays on Ctrl+C. Q5-d: replaces `server start` in user docs. | All four sub-decisions confirmed in turn |
+
+### Hosted scenario
+
+| ID | Question | Decision | Reasoning |
+|---|---|---|---|
+| Qh-1 | Source of truth for member identity | **Deferred.** Architecture direction is Hh-1.B (Context Tree `members/` as SoT, Hub Web as friendly UI for editing it via PR/commit). Implementation timing + auth mechanism (OAuth vs password) open. Today's `members.createMember` (DB-only) stays until further decision. | Architectural decision, cross-product; needs separate session |
+| Qh-2 | Path A vs Path B canonical | **Both.** Treat as two lifecycle moments: Path A (Last-step modal) is first-time onboarding; Path B (Connect-a-computer strip) is adding more machines. Doc structured by lifecycle moment, not "canonical vs alternative". Welcome-flow UX upgrade deferred. | A and B are different mental models for different stages, not competing options |
+| Qh-3 | Drop `agent add` from one-liner (C3) | **Yes.** Two-command chain (install + connect). | Removes orphan-yaml failure mode; `agent:pinned` replay covers the dropped step |
+| Qh-4 | Simplify account-switch gate (C1) | **Yes.** One-line Y/N replace prompt. No JWT decoding, no isolation guide. | Single-account-per-machine principle locked; the 60-line gate served a multi-account scenario we deferred |
+| Qh-5 | Org provisioning docs | **Deferred.** Likely outcome: separate `docs/operator-runbook.md`. Today: user docs assume "you have credentials". | Not blocking other Qh items; needs follow-up |
+| Qh-6 | `client logout` default service teardown | **Deferred.** C5 lands core actions (disconnect + stop process + clear creds); default flag for service teardown decided later. | Flag default doesn't block the command itself |
+| Qh-7 | Hosted end-to-end journey writeup | **Deferred.** Blocked on Qh-1 (auth mechanism shapes how user gets first credential). | The journey writeup needs a settled credential flow |
 
 ## 7. Out of scope / future considerations
 
