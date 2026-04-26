@@ -13,9 +13,7 @@ type PackageJson = {
 const packageJsonUrl = new URL("../package.json", import.meta.url);
 
 function readPackageVersion(): string {
-  const packageJson = JSON.parse(
-    readFileSync(packageJsonUrl, "utf8"),
-  ) as PackageJson;
+  const packageJson = JSON.parse(readFileSync(packageJsonUrl, "utf8")) as PackageJson;
 
   if (typeof packageJson.version !== "string" || packageJson.version.length === 0) {
     throw new Error("Unable to read first-tree package version.");

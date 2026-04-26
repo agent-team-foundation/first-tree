@@ -1,18 +1,29 @@
 {
   "name": "first-tree-monorepo",
   "version": "0.3.1-alpha",
-  "description": "",
   "private": true,
+  "description": "",
+  "keywords": [],
+  "license": "ISC",
+  "author": "",
   "scripts": {
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test"
+    "test": "pnpm -r test",
+    "lint": "oxlint .",
+    "fmt": "oxfmt . --write",
+    "fmt:check": "oxfmt . --check",
+    "precommit": "pnpm test && pnpm lint-staged",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "lint-staged": "^16.4.0",
+    "oxfmt": "^0.46.0",
+    "oxlint": "^1.61.0"
   },
   "engines": {
     "node": ">=22"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "packageManager": "pnpm@10.32.1"
 }

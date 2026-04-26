@@ -15,12 +15,7 @@ const commandNames = ["init", "tree", "hub", "breeze", "gardener"];
 const commandGroups = [
   {
     name: "tree",
-    subcommands: [
-      "inspect",
-      "status",
-      "generate-codeowners",
-      "install-claude-code-hook",
-    ],
+    subcommands: ["inspect", "status", "generate-codeowners", "install-claude-code-hook"],
   },
   {
     name: "hub",
@@ -42,18 +37,13 @@ async function readJson(path) {
 
 function runCli(args) {
   return new Promise((resolveRun) => {
-    execFile(
-      process.execPath,
-      [entryPath, ...args],
-      { cwd: repoRoot },
-      (error, stdout, stderr) => {
-        resolveRun({
-          code: error && "code" in error ? error.code : 0,
-          stdout,
-          stderr,
-        });
-      },
-    );
+    execFile(process.execPath, [entryPath, ...args], { cwd: repoRoot }, (error, stdout, stderr) => {
+      resolveRun({
+        code: error && "code" in error ? error.code : 0,
+        stdout,
+        stderr,
+      });
+    });
   });
 }
 
@@ -75,7 +65,9 @@ describe("first-tree CLI", () => {
     expect(result.code).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Usage: first-tree");
-    expect(result.stdout).toContain("CLI for initializing and maintaining first-tree context trees.");
+    expect(result.stdout).toContain(
+      "CLI for initializing and maintaining first-tree context trees.",
+    );
     for (const commandName of commandNames) {
       expect(result.stdout).toContain(commandName);
     }

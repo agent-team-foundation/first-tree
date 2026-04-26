@@ -5,11 +5,7 @@ import { installCommand } from "./install.js";
 import { statusCommand } from "./status.js";
 import { syncCommand } from "./sync.js";
 
-const gardenerSubcommands: SubcommandModule[] = [
-  syncCommand,
-  statusCommand,
-  installCommand,
-];
+const gardenerSubcommands: SubcommandModule[] = [syncCommand, statusCommand, installCommand];
 
 export const gardenerCommand: CommandModule = {
   name: "gardener",
