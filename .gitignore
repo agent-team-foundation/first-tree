@@ -1,6 +1,8 @@
 # Created by https://www.toptal.com/developers/gitignore/api/macos,windows,linux,git,node
 # Edit at https://www.toptal.com/developers/gitignore?templates=macos,windows,linux,git,node
 
+!AGENTS.md
+
 ### Git ###
 # Created by git for backups. To disable backups in Git:
 # $ git config --global mergetool.keepBackup false
