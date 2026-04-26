@@ -1,21 +1,15 @@
 import type { Command } from "commander";
 
-import type { CommandModule } from "../types.js";
+import type { CommandModule, SubcommandModule } from "../types.js";
+import { installCommand } from "./install.js";
+import { statusCommand } from "./status.js";
+import { syncCommand } from "./sync.js";
 
-const gardenerSubcommands = [
-  {
-    name: "sync",
-    description: "Sync gardener-managed state.",
-  },
-  {
-    name: "status",
-    description: "Show gardener-managed state status.",
-  },
-  {
-    name: "install",
-    description: "Install gardener workflow support.",
-  },
-] as const;
+const gardenerSubcommands: SubcommandModule[] = [
+  syncCommand,
+  statusCommand,
+  installCommand,
+];
 
 export const gardenerCommand: CommandModule = {
   name: "gardener",

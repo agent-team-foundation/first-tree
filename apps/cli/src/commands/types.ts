@@ -5,3 +5,8 @@ export type CommandModule = {
   description: string;
   register(program: Command): void;
 };
+
+export type SubcommandModule = {
+  name: string;
+  description: string;
+};

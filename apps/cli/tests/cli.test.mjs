@@ -23,6 +23,10 @@ const commandGroups = [
     ],
   },
   {
+    name: "hub",
+    subcommands: ["start", "stop", "doctor", "status"],
+  },
+  {
     name: "breeze",
     subcommands: ["install", "start", "stop", "status", "doctor", "poll"],
   },
@@ -30,9 +34,6 @@ const commandGroups = [
     name: "gardener",
     subcommands: ["sync", "status", "install"],
   },
-];
-const placeholderCommands = [
-  ["hub", "first-tree hub is not implemented yet."],
 ];
 
 async function readJson(path) {
@@ -87,16 +88,6 @@ describe("first-tree CLI", () => {
     expect(result.stderr).toBe("");
     expect(result.stdout.trim()).toBe("first-tree init is not implemented yet.");
   });
-
-  for (const [commandName, expectedOutput] of placeholderCommands) {
-    it(`runs the ${commandName} placeholder successfully`, async () => {
-      const result = await runCli([commandName]);
-
-      expect(result.code).toBe(0);
-      expect(result.stderr).toBe("");
-      expect(result.stdout.trim()).toBe(expectedOutput);
-    });
-  }
 
   for (const commandGroup of commandGroups) {
     it(`prints ${commandGroup.name} help with registered subcommands`, async () => {

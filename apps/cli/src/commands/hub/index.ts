@@ -2,38 +2,34 @@ import type { Command } from "commander";
 
 import type { CommandModule, SubcommandModule } from "../types.js";
 import { doctorCommand } from "./doctor.js";
-import { installCommand } from "./install.js";
-import { pollCommand } from "./poll.js";
 import { startCommand } from "./start.js";
 import { statusCommand } from "./status.js";
 import { stopCommand } from "./stop.js";
 
-const breezeSubcommands: SubcommandModule[] = [
-  installCommand,
+const hubSubcommands: SubcommandModule[] = [
   startCommand,
   stopCommand,
-  statusCommand,
   doctorCommand,
-  pollCommand,
+  statusCommand,
 ];
 
-export const breezeCommand: CommandModule = {
-  name: "breeze",
-  description: "Work with breeze workflow commands.",
+export const hubCommand: CommandModule = {
+  name: "hub",
+  description: "Work with hub workflow commands.",
   register(program: Command): void {
     const command = program
-      .command("breeze")
-      .description("Work with breeze workflow commands.")
+      .command("hub")
+      .description("Work with hub workflow commands.")
       .action(() => {
         command.outputHelp();
       });
 
-    for (const subcommand of breezeSubcommands) {
+    for (const subcommand of hubSubcommands) {
       command
         .command(subcommand.name)
         .description(subcommand.description)
         .action(() => {
-          console.log(`first-tree breeze ${subcommand.name} is not implemented yet.`);
+          console.log(`first-tree hub ${subcommand.name} is not implemented yet.`);
         });
     }
   },

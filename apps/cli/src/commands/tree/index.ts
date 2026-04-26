@@ -1,25 +1,17 @@
 import type { Command } from "commander";
 
-import type { CommandModule } from "../types.js";
+import type { CommandModule, SubcommandModule } from "../types.js";
+import { generateCodeownersCommand } from "./generate-codeowners.js";
+import { inspectCommand } from "./inspect.js";
+import { installClaudeCodeHookCommand } from "./install-claude-code-hook.js";
+import { statusCommand } from "./status.js";
 
-const treeSubcommands = [
-  {
-    name: "inspect",
-    description: "Inspect the first-tree workspace.",
-  },
-  {
-    name: "status",
-    description: "Show first-tree workspace status.",
-  },
-  {
-    name: "generate-codeowners",
-    description: "Generate CODEOWNERS entries from first-tree ownership data.",
-  },
-  {
-    name: "install-claude-code-hook",
-    description: "Install the Claude Code hook for first-tree workflows.",
-  },
-] as const;
+const treeSubcommands: SubcommandModule[] = [
+  inspectCommand,
+  statusCommand,
+  generateCodeownersCommand,
+  installClaudeCodeHookCommand,
+];
 
 export const treeCommand: CommandModule = {
   name: "tree",
