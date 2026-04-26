@@ -200,10 +200,29 @@ The user **never sees** username, password, org name, JWTs, refresh tokens, `age
 **What does NOT exist (deliberately deferred):**
 
 - `admin:reset` command — not needed; recovery is restart.
-- `login` / `bootstrap-url` command — not needed; restart frequency is low (estimated months between events for typical evaluators).
 - `admin.json` cleartext file — credentials never leave the DB (bcrypt hash only).
-- Server-as-service — early stage; daily-driver users can keep terminal open or use their own backgrounding (tmux, screen).
-- Server `--detach` flag — same reasoning.
+- Server `--detach` flag — service mode (below) covers the daily-user case; `--detach` for a non-installed background process adds little value.
+
+**Service mode (opt-in, post-discussion update):**
+
+The original `start` command is foreground-only. To accommodate daily-driver users (not just evaluators) without forcing them into tmux/nohup, we add an **opt-in service mode** that is symmetric to Multica's `daemon`:
+
+```
+first-tree-hub start --service       # one-shot install, then immediately exit
+                                      # daemon runs in background (launchd / systemd-user)
+
+first-tree-hub service status        # is it running?
+first-tree-hub service logs -f       # follow rotating log
+first-tree-hub service stop          # stop without uninstalling
+first-tree-hub service uninstall     # remove plist/unit, stop service
+
+first-tree-hub login                 # print a fresh magic URL on demand
+                                      # works whether `start` was run inline or as service
+```
+
+In service mode, the bootstrap URL still gets signed on every boot but goes to the rotating log, not to the user's terminal. The user logs in once via the URL (cookie persists for refresh-token TTL ≈ weeks), and only needs `first-tree-hub login` for cookie expiry / new browser / occasional recovery. Daily access is `localhost:8000` with cookies handling auth.
+
+This setup keeps Q1's "no password ever shown" promise intact while removing the "open terminal every reboot" friction.
 
 ### 4.2 Hosted-scenario flow (PARTIALLY FINALIZED)
 
@@ -289,12 +308,25 @@ The following are recognised but not finalised in this redesign. Each is blocked
   - Delete `credentials.json`.
   - Print: `Logged out. To use this computer again: first-tree-hub client connect <url>`.
   - **Default flag for service teardown is pending Qh-6 (deferred).** Implementation can land the core actions and leave the service-teardown flag default unspecified, then flip to the Qh-6 decision when it arrives.
+- **C8.** Add opt-in service mode for the local `start` command (post-discussion update; supersedes part of original Q2-A).
+  - `first-tree-hub start --service` — install launchd plist (macOS) or systemd-user unit (Linux), run the same `start` orchestration as a background service, then exit immediately. Subsequent reboots auto-start.
+  - `first-tree-hub service install` — alias for `start --service` (Multica-style entry point).
+  - `first-tree-hub service uninstall` — remove the plist/unit, stop the running service.
+  - `first-tree-hub service status` — running / installed-but-stopped / not-installed.
+  - `first-tree-hub service logs [-f] [-n N]` — print or follow rotating NDJSON log file under `~/.first-tree/hub/logs/`.
+  - The service's invocation calls `start` internally with the **same orchestration** — Docker preflight, auto-admin (first run), bootstrap-token signing on every boot, embedded ClientRuntime. Difference: stdout/stderr go to log files instead of terminal; bootstrap URL written to a known log line so `login` (C9) can re-issue without restart.
+  - Postgres lifecycle stays decoupled — service stop/uninstall does NOT touch the Docker container.
+- **C9.** Add `first-tree-hub login` command (post-discussion update; supersedes Q1's original "no recovery command" decision).
+  - Connects to the local server, signs a fresh single-use bootstrap token for the admin, prints the magic URL.
+  - Works whether `start` is running inline or as a service.
+  - Replaces the "Ctrl+C + restart for fresh URL" recovery path; same UX as Multica's email-re-send pattern but without leaving stdout.
+  - ~20 LOC: reuses existing `core/admin.ts` + signs token via the same path C2 uses.
 
 (Old C6 client-retry-backoff and C7 localhost-no-service are removed — both made moot by C2's embedded-client model.)
 
 ## 5. Sequencing
 
-- **Phase 1 (local-scenario, fully spec'd).** C2 (`first-tree-hub start` + bootstrap endpoint + Web URL handler) + minimal D1 update for the local section + README Quick Start update. Independently shippable; doesn't depend on any hosted decision.
+- **Phase 1 (local-scenario, fully spec'd).** C2 (`first-tree-hub start` foreground + bootstrap endpoint + Web URL handler) + C8 (opt-in service mode + service CLI commands) + C9 (`login` command) + minimal D1 update for the local section + README Quick Start update. Independently shippable; doesn't depend on any hosted decision.
 - **Phase 2 (hosted-scenario simplifications, fully spec'd).** C1 + C3 — both touch the connect/Last-step pair, share a testing scope. D1 hosted section using Path A first-time / Path B add-machine framing (Qh-2). D2 mirror in English.
 - **Phase 3 (Hub-internal cleanup).** D3, D4, C4 — each can be its own small PR.
 - **Phase 4 (deferred-question follow-ups).** Re-open Qh-1, Qh-5, Qh-6, Qh-7 in a separate session. C5 lands its core (no default-flag commitment) here, then flips on Qh-6.
@@ -305,11 +337,13 @@ The following are recognised but not finalised in this redesign. Each is blocked
 
 | ID | Question | Decision | Reasoning |
 |---|---|---|---|
-| Q1 | Auto-admin + bootstrap UX | Username/password/org never shown to user. No persistence in cleartext. Fresh URL on every `start`. No recovery command (Ctrl+C + restart). | Smallest CLI surface; restart frequency for evaluators is months apart |
-| Q2 | Server as service | No (Q2-A). Foreground only. | Local user is evaluator; server-service complexity not justified |
+| Q1 | Auto-admin + bootstrap UX | Username/password/org never shown to user. No persistence in cleartext. Fresh URL on every `start`. ~~No recovery command~~ | (See Q1-revisit below) |
+| Q2 | Server as service | ~~No (Q2-A). Foreground only.~~ | (See Q2-revisit below) |
 | Q3 | Client connect mode | Moot — local flow has no separate `client connect` step | Resolved by C2 embedding the client in `start` |
 | Q4 | Docker prereq UX | Q4-A: check at top of `start`, fail fast with the existing actionable message | Existing message is good; only timing needs fixing |
 | Q5 | Single-command `first-tree-hub start` | Yes. Q5-a: name `start`. Q5-b: fresh URL each run. Q5-c: PG stays on Ctrl+C. Q5-d: replaces `server start` in user docs. | All four sub-decisions confirmed in turn |
+| **Q2-revisit** | Server as service (revisited after Multica comparison) | **Opt-in service mode.** Default still foreground (`first-tree-hub start`). Add `--service` flag and `first-tree-hub service {install,uninstall,status,logs}` commands. Service mode auto-starts at boot (launchd / systemd-user). | Original Q2-A narrowed local users to evaluators only. Daily users (using local Hub for personal projects) need persistence; "open terminal every reboot" is real friction. Opt-in keeps evaluator path unchanged |
+| **Q1-revisit** | Recovery from cookie expiry / lost URL (revisited under service mode) | **Add `first-tree-hub login` command.** Prints fresh magic URL on demand. In service mode, bootstrap URL goes to log file at boot; `login` is the user-facing way to get one without restart. | Original Q1 ("no recovery command, Ctrl+C + restart") assumed foreground. Service mode breaks that — magic URL no longer visible in terminal. Path 1 (cookie persistence + occasional `login` command) keeps the "no password ever shown" promise intact |
 
 ### Hosted scenario
 
