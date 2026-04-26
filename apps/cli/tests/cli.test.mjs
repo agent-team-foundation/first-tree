@@ -12,11 +12,27 @@ const entryPath = resolve(cliRoot, "dist/index.js");
 const rootPackagePath = resolve(repoRoot, "package.json");
 const cliPackagePath = resolve(cliRoot, "package.json");
 const commandNames = ["init", "tree", "hub", "breeze", "gardener"];
+const commandGroups = [
+  {
+    name: "tree",
+    subcommands: [
+      "inspect",
+      "status",
+      "generate-codeowners",
+      "install-claude-code-hook",
+    ],
+  },
+  {
+    name: "breeze",
+    subcommands: ["install", "start", "stop", "status", "doctor", "poll"],
+  },
+  {
+    name: "gardener",
+    subcommands: ["sync", "status", "install"],
+  },
+];
 const placeholderCommands = [
-  ["tree", "first-tree tree is not implemented yet."],
   ["hub", "first-tree hub is not implemented yet."],
-  ["breeze", "first-tree breeze is not implemented yet."],
-  ["gardener", "first-tree gardener is not implemented yet."],
 ];
 
 async function readJson(path) {
@@ -80,6 +96,42 @@ describe("first-tree CLI", () => {
       expect(result.stderr).toBe("");
       expect(result.stdout.trim()).toBe(expectedOutput);
     });
+  }
+
+  for (const commandGroup of commandGroups) {
+    it(`prints ${commandGroup.name} help with registered subcommands`, async () => {
+      const result = await runCli([commandGroup.name, "--help"]);
+
+      expect(result.code).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toContain(`Usage: first-tree ${commandGroup.name}`);
+      for (const subcommandName of commandGroup.subcommands) {
+        expect(result.stdout).toContain(subcommandName);
+      }
+    });
+
+    it(`prints ${commandGroup.name} help when no subcommand is provided`, async () => {
+      const result = await runCli([commandGroup.name]);
+
+      expect(result.code).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toContain(`Usage: first-tree ${commandGroup.name}`);
+      for (const subcommandName of commandGroup.subcommands) {
+        expect(result.stdout).toContain(subcommandName);
+      }
+    });
+
+    for (const subcommandName of commandGroup.subcommands) {
+      it(`runs the ${commandGroup.name} ${subcommandName} placeholder successfully`, async () => {
+        const result = await runCli([commandGroup.name, subcommandName]);
+
+        expect(result.code).toBe(0);
+        expect(result.stderr).toBe("");
+        expect(result.stdout.trim()).toBe(
+          `first-tree ${commandGroup.name} ${subcommandName} is not implemented yet.`,
+        );
+      });
+    }
   }
 
   it("keeps a shebang on the compiled entry", async () => {
