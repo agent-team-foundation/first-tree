@@ -1,10 +1,15 @@
 {
-  "name": "first-tree",
+  "name": "first-tree-monorepo",
   "version": "0.3.1-alpha",
   "description": "",
-  "main": "index.js",
+  "private": true,
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test"
+  },
+  "engines": {
+    "node": ">=22"
   },
   "keywords": [],
   "author": "",
