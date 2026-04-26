@@ -7,6 +7,7 @@ import { registerClientCommands } from "../commands/client.js";
 import { registerConfigCommands } from "../commands/config.js";
 import { registerOnboardCommand } from "../commands/onboard.js";
 import { registerServerCommands } from "../commands/server.js";
+import { registerStartCommand } from "../commands/start.js";
 import { registerStatusCommand } from "../commands/status.js";
 import { runHomeMigration } from "../core/migrate-home.js";
 import { setJsonMode } from "../core/output.js";
@@ -50,6 +51,11 @@ program
       applyClientLoggerConfig({ level: "warn" });
     }
   });
+
+// One-command start — Docker preflight, Postgres, migrations, auto-admin,
+// embedded ClientRuntime, browser auto-open. Foreground shape; --service
+// is added in a subsequent change (Phase 1b / C8).
+registerStartCommand(program);
 
 // Core subsystems — `client` group mounts `connect` too.
 registerServerCommands(program);

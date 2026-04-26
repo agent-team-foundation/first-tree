@@ -12,6 +12,12 @@ type AuthContextValue = {
   memberId: string | null;
   agentId: string | null;
   login: (username: string, password: string) => Promise<void>;
+  /**
+   * Adopt a token pair obtained out-of-band (currently only the loopback-only
+   * `local-bootstrap` endpoint). Skips the username/password form entirely so
+   * the local-mode user never sees credentials.
+   */
+  adoptTokens: (tokens: { accessToken: string; refreshToken: string }) => Promise<void>;
   logout: () => void;
 };
 
@@ -42,8 +48,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const login = useCallback(async (username: string, password: string) => {
-    const tokens = await loginApi(username, password);
+  const adoptTokens = useCallback(async (tokens: { accessToken: string; refreshToken: string }) => {
     setStoredTokens({ accessToken: tokens.accessToken, refreshToken: tokens.refreshToken });
     setIsAuthenticated(true);
     // Fetch member info immediately after login
@@ -56,6 +61,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       })
       .catch(() => {});
   }, []);
+
+  const login = useCallback(
+    async (username: string, password: string) => {
+      const tokens = await loginApi(username, password);
+      await adoptTokens(tokens);
+    },
+    [adoptTokens],
+  );
 
   // Fetch member info on initial load if already authenticated
   useEffect(() => {
@@ -72,7 +85,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [logout]);
 
   return (
-    <AuthContext.Provider value={{ isAuthenticated, role, memberId, agentId, login, logout }}>
+    <AuthContext.Provider value={{ isAuthenticated, role, memberId, agentId, login, adoptTokens, logout }}>
       {children}
     </AuthContext.Provider>
   );

@@ -3,8 +3,11 @@
 // SDK — re-export for convenience
 export type { AccessTokenProvider, PullResult, RegisterResult, SdkConfig } from "@first-tree-hub/client";
 export { FirstTreeHubSDK, SdkError } from "@first-tree-hub/client";
-// Core types
-export type { CheckResult, ServiceInfo, ServiceState, StartOptions } from "./core/index.js";
+// Core types — public API for external Hub consumers (e.g. context-tree).
+// Note: `bootstrapServer` is intentionally NOT exported here — it's an
+// internal seam between `start` and the (future) daemon entry point and
+// will likely shift shape in Phase 1b.
+export type { CheckResult, LocalAdmin, ServiceInfo, ServiceState, StartOptions } from "./core/index.js";
 export {
   bindFeishuBot,
   bindFeishuUser,
@@ -19,10 +22,11 @@ export {
   checkServerHealth,
   checkServerReachable,
   checkWebSocket,
-  createOwner,
+  createAdmin,
   ensureFreshAccessToken,
   ensureFreshAdminToken,
   ensurePostgres,
+  findAdmin,
   formatCheckReport,
   getClientServiceStatus,
   handleClientOrgMismatch,

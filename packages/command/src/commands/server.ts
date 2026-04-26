@@ -6,7 +6,7 @@ import {
   checkNodeVersion,
   checkServerConfig,
   checkServerHealth,
-  createOwner,
+  createAdmin,
   printResults,
   runMigrations,
   startServer,
@@ -121,7 +121,7 @@ export function registerServerCommands(program: Command): void {
     .action(async (options: { username: string; name: string; org: string; password?: string }) => {
       try {
         const config = await initConfig({ schema: serverConfigSchema, role: "server" });
-        const result = await createOwner(
+        const result = await createAdmin(
           config.database.url,
           options.username,
           options.org,

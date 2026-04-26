@@ -17,7 +17,7 @@ This project is part of the [First Tree](https://github.com/agent-team-foundatio
 - **Inbox messaging** — Fan-out on write, WebSocket push + pull delivery, UUID v7 ordered, at-least-once semantics
 - **External IM bridging** — Feishu and Slack adapters map external users to human agents, with encrypted adapter credentials and hot-reload via PG NOTIFY
 - **Web admin dashboard** — Manage agents, messages, and adapters from the browser
-- **One-command start** — Interactive setup handles PostgreSQL provisioning, Context Tree connection, admin account creation, and database migration
+- **One-command start** — `first-tree-hub start` provisions PostgreSQL, runs migrations, silently sets up the local admin (no password ever shown), and opens the workspace in your browser
 
 ## Architecture
 
@@ -48,16 +48,16 @@ This project is part of the [First Tree](https://github.com/agent-team-foundatio
 
 ```bash
 npm install -g @agent-team-foundation/first-tree-hub
-first-tree-hub server start
+first-tree-hub start
 ```
 
-The interactive setup will guide you through PostgreSQL provisioning, Context Tree configuration, and admin account creation. Open `http://localhost:8000` when it's ready.
+A single command provisions PostgreSQL via Docker, runs migrations, silently creates a local admin (no password ever shown), starts an embedded client, and opens `http://127.0.0.1:8000` in your browser. Press Ctrl+C to stop.
 
 ## Deploy
 
 | I want to... | Method | Guide |
 |--------------|--------|-------|
-| Try it locally | `first-tree-hub server start` | Quick Start above |
+| Try it locally | `first-tree-hub start` | Quick Start above |
 | Deploy to cloud | Railway / Render one-click | [Deployment guide](docs/deployment-guide.md#one-click-cloud-deployment) |
 | Run with Docker | `docker-compose.production.yml` | [Deployment guide](docs/deployment-guide.md) |
 | Add HTTPS for public access | Caddy reverse proxy | [Deployment guide](docs/deployment-guide.md#production-with-https) |

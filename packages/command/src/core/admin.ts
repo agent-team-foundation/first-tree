@@ -20,8 +20,12 @@ export async function hasUser(databaseUrl: string): Promise<boolean> {
 /**
  * Create the initial admin user + organization + member + human agent.
  * Used during first-run onboard. Returns the generated password.
+ *
+ * Note: the function name was renamed from `createOwner` after the design
+ * spotted a schema mismatch — `members.role` is `"admin" | "member"`, not
+ * `"owner"`, and the inserted row has always been `'admin'`.
  */
-export async function createOwner(
+export async function createAdmin(
   databaseUrl: string,
   username: string,
   orgName: string,
@@ -78,6 +82,62 @@ export async function createOwner(
   }
 
   return { username, password: pw };
+}
+
+/**
+ * Identity tuple of the local admin — the human at this machine.
+ *
+ * `local-bootstrap` (Q7), the daemon's startup JWT recovery (B2), and
+ * out-of-band CLI auth (B3) all need to answer the same question: "who is
+ * the admin on this machine?". `findAdmin` is the single source of truth.
+ */
+export type LocalAdmin = {
+  userId: string;
+  memberId: string;
+  organizationId: string;
+  agentId: string;
+};
+
+/**
+ * Resolve the local admin: earliest `members.role = 'admin'` row in the
+ * `default` org. Returns null when no admin exists yet (the database has
+ * been migrated but `createAdmin` has not run).
+ *
+ * Mirrors the server-side resolver in `services/auth.ts:localBootstrap`;
+ * the two stay in lock-step so the daemon (B2) and the CLI both pick the
+ * same row. The server-side path is covered by
+ * `auth-local-bootstrap.test.ts`.
+ */
+export async function findAdmin(databaseUrl: string): Promise<LocalAdmin | null> {
+  const client = postgres(databaseUrl, { max: 1 });
+  try {
+    const rows = await client<
+      Array<{
+        user_id: string;
+        member_id: string;
+        organization_id: string;
+        agent_id: string;
+      }>
+    >`
+      SELECT u.id AS user_id, m.id AS member_id, m.organization_id, m.agent_id
+      FROM members m
+      JOIN users u ON u.id = m.user_id
+      JOIN organizations o ON o.id = m.organization_id
+      WHERE m.role = 'admin' AND o.name = 'default'
+      ORDER BY m.created_at ASC
+      LIMIT 1
+    `;
+    const row = rows[0];
+    if (!row) return null;
+    return {
+      userId: row.user_id,
+      memberId: row.member_id,
+      organizationId: row.organization_id,
+      agentId: row.agent_id,
+    };
+  } finally {
+    await client.end();
+  }
 }
 
 /** Generate a UUID v7 (time-ordered). Inline to avoid cross-package dependency. */

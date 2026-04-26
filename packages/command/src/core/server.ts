@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { initConfig, serverConfigSchema } from "@agent-team-foundation/first-tree-hub-shared/config";
 import { buildApp } from "@first-tree-hub/server";
 import type { Config } from "@first-tree-hub/server/config";
+import type { FastifyInstance } from "fastify";
 import { ensurePostgres, isDockerAvailable } from "./docker-postgres.js";
 import { runMigrations } from "./migrate.js";
 import { blank, print, status } from "./output.js";
@@ -19,19 +20,27 @@ export type StartOptions = {
   noInteractive?: boolean;
 };
 
-/**
- * Full server start orchestration:
- * 1. Prompt for missing required config (schema-driven)
- * 2. Load config (CLI args > env > YAML > auto-gen > defaults)
- * 3. Provision PostgreSQL if needed
- * 4. Run database migrations
- * 5. Create default admin if none exists
- * 6. Resolve web dist
- * 7. Start Fastify server
- */
-export async function startServer(options: StartOptions): Promise<void> {
-  print.line(`\n  First Tree Hub v${COMMAND_VERSION}\n\n`);
+export type ServerBootstrapResult = {
+  app: FastifyInstance;
+  config: Config;
+  shutdownTelemetry: () => Promise<void>;
+};
 
+/**
+ * Build the server up to the point of `app.listen()` without actually
+ * binding the port.
+ *
+ * The new `first-tree-hub start` command needs to perform the same
+ * orchestration the legacy `server start` did (Docker, Postgres, migrations,
+ * Web dist resolution, telemetry init, fastify build), but it also wants to
+ * embed its own `ClientRuntime` against the same process before yielding to
+ * `app.listen()`. Splitting the two phases lets the caller insert that step
+ * cleanly — and lets a future daemon caller skip re-running install-time
+ * work entirely (Pattern B / Q11). `startServer` below is now a thin wrapper
+ * preserved for backward compatibility with the existing `server start`
+ * command and external Hub consumers (e.g. context-tree).
+ */
+export async function bootstrapServer(options: StartOptions): Promise<ServerBootstrapResult> {
   // 1. Build CLI args
   const cliArgs: Record<string, unknown> = {};
   if (options.port !== undefined) cliArgs.server = { port: options.port };
@@ -58,9 +67,9 @@ export async function startServer(options: StartOptions): Promise<void> {
           "Docker is not available.\n\n" +
             "  First Tree Hub needs PostgreSQL. Two options:\n\n" +
             "  1. Install Docker → https://docs.docker.com/get-docker/\n" +
-            "     Then re-run: first-tree-hub server start\n\n" +
+            "     Then re-run: first-tree-hub start\n\n" +
             "  2. Provide an existing PostgreSQL URL:\n" +
-            "     first-tree-hub server start --database-url postgresql://user:pass@host:5432/db",
+            "     first-tree-hub start --database-url postgresql://user:pass@host:5432/db",
         );
       }
       status("PostgreSQL", "starting via Docker...");
@@ -96,7 +105,7 @@ export async function startServer(options: StartOptions): Promise<void> {
     status("Web", "not available (web package not found)");
   }
 
-  // 7. Start Fastify
+  // 6. Build app config
   const config: Config = {
     ...serverConfig,
     webDistPath: webDistPath ?? undefined,
@@ -112,6 +121,20 @@ export async function startServer(options: StartOptions): Promise<void> {
   await initTelemetry(serverConfig.observability.tracing, config.instanceId);
 
   const app = await buildApp(config);
+
+  return { app, config, shutdownTelemetry };
+}
+
+/**
+ * Full server start orchestration:
+ * 1. bootstrapServer: prompts, Postgres, migrations, telemetry, buildApp
+ * 2. Wire SIGINT/SIGTERM
+ * 3. app.listen()
+ */
+export async function startServer(options: StartOptions): Promise<void> {
+  print.line(`\n  First Tree Hub v${COMMAND_VERSION}\n\n`);
+
+  const { app, config, shutdownTelemetry } = await bootstrapServer(options);
 
   // Graceful shutdown
   const shutdown = async () => {

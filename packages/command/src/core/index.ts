@@ -1,7 +1,8 @@
 // Server lifecycle
 
 // Admin management
-export { createOwner, hasUser } from "./admin.js";
+export type { LocalAdmin } from "./admin.js";
+export { createAdmin, findAdmin, hasUser } from "./admin.js";
 // Agent messaging helpers
 export { resolveReplyToFromEnv } from "./agent-messaging.js";
 // Bootstrap / credentials
@@ -54,8 +55,8 @@ export {
 export { blank, status } from "./output.js";
 // Interactive prompts
 export { isInteractive, promptAddAgent, promptMissingFields } from "./prompt.js";
-export type { StartOptions } from "./server.js";
-export { startServer } from "./server.js";
+export type { ServerBootstrapResult, StartOptions } from "./server.js";
+export { bootstrapServer, startServer } from "./server.js";
 // Background service install (launchd / systemd --user)
 export type { ServiceInfo, ServiceState } from "./service-install.js";
 export {

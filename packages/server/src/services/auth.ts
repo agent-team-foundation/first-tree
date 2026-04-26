@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import bcrypt from "bcrypt";
-import { eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { jwtVerify, SignJWT } from "jose";
 import type { Database } from "../db/connection.js";
 import { members } from "../db/schema/members.js";
+import { organizations } from "../db/schema/organizations.js";
 import { users } from "../db/schema/users.js";
 import { UnauthorizedError } from "../errors.js";
 
@@ -186,6 +187,57 @@ export async function exchangeConnectToken(
   }
 
   const tokenBase = { sub: user.id, memberId: member.id, organizationId: member.organizationId, role: member.role };
+  const accessToken = await signToken(secret, { ...tokenBase, type: "access" }, ACCESS_TOKEN_EXPIRY);
+  const refreshToken = await signToken(secret, { ...tokenBase, type: "refresh" }, REFRESH_TOKEN_EXPIRY);
+
+  return { accessToken, refreshToken };
+}
+
+/**
+ * Mint a fresh access + refresh JWT pair for the local admin.
+ *
+ * Local-mode trust boundary (Q7): the HTTP layer has already verified the
+ * request reached us over loopback with no proxy hops and a same-host `Host`
+ * header. This function therefore just resolves "the local admin" and issues
+ * tokens — it performs no further authentication.
+ *
+ * The local admin is the earliest `members.role = 'admin'` row in the
+ * `default` org. Mirrors `findAdmin` in the Command package so both layers
+ * agree on which row represents this machine.
+ */
+export async function localBootstrap(
+  db: Database,
+  jwtSecretKey: string,
+): Promise<{ accessToken: string; refreshToken: string }> {
+  const [row] = await db
+    .select({
+      userId: members.userId,
+      memberId: members.id,
+      organizationId: members.organizationId,
+      role: members.role,
+      userStatus: users.status,
+    })
+    .from(members)
+    .innerJoin(users, eq(users.id, members.userId))
+    .innerJoin(organizations, eq(organizations.id, members.organizationId))
+    .where(and(eq(members.role, "admin"), eq(organizations.name, "default")))
+    .orderBy(asc(members.createdAt))
+    .limit(1);
+
+  if (!row) {
+    throw new UnauthorizedError("No local admin exists yet");
+  }
+  if (row.userStatus !== "active") {
+    throw new UnauthorizedError("Local admin account is suspended");
+  }
+
+  const secret = new TextEncoder().encode(jwtSecretKey);
+  const tokenBase = {
+    sub: row.userId,
+    memberId: row.memberId,
+    organizationId: row.organizationId,
+    role: row.role,
+  };
   const accessToken = await signToken(secret, { ...tokenBase, type: "access" }, ACCESS_TOKEN_EXPIRY);
   const refreshToken = await signToken(secret, { ...tokenBase, type: "refresh" }, REFRESH_TOKEN_EXPIRY);
 

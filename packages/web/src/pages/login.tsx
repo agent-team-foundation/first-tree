@@ -1,17 +1,48 @@
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import { Navigate } from "react-router";
+import { localBootstrap } from "../api/auth.js";
 import { useAuth } from "../auth/auth-context.js";
 import { Button } from "../components/ui/button.js";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card.js";
 import { Input } from "../components/ui/input.js";
 import { Label } from "../components/ui/label.js";
 
+const LOCAL_BOOTSTRAP_DISABLED_KEY = "first-tree-hub:local-bootstrap-disabled";
+
+type BootstrapState = "probing" | "form";
+
 export function LoginPage() {
-  const { isAuthenticated, login } = useAuth();
+  const { isAuthenticated, login, adoptTokens } = useAuth();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // Probe `local-bootstrap` on mount. Local-mode minting is silent — the
+  // user never sees a credentials form. Hosted mode (or any cross-origin
+  // browser hitting a real Hub) returns 404/401 and we fall back to the
+  // username/password form. The probe result is cached in sessionStorage
+  // so re-mounts after a logout don't reprobe within the same tab.
+  const [bootstrapState, setBootstrapState] = useState<BootstrapState>(() =>
+    sessionStorage.getItem(LOCAL_BOOTSTRAP_DISABLED_KEY) === "1" ? "form" : "probing",
+  );
+
+  useEffect(() => {
+    if (bootstrapState !== "probing") return;
+    let cancelled = false;
+    void (async () => {
+      const tokens = await localBootstrap();
+      if (cancelled) return;
+      if (tokens) {
+        await adoptTokens(tokens);
+        return;
+      }
+      sessionStorage.setItem(LOCAL_BOOTSTRAP_DISABLED_KEY, "1");
+      setBootstrapState("form");
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [adoptTokens, bootstrapState]);
 
   if (isAuthenticated) {
     return <Navigate to="/" replace />;
@@ -29,6 +60,19 @@ export function LoginPage() {
       setLoading(false);
     }
   };
+
+  if (bootstrapState === "probing") {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <Card className="w-full max-w-sm">
+          <CardHeader className="text-center">
+            <CardTitle className="text-title">First Tree</CardTitle>
+            <CardDescription>Signing you in…</CardDescription>
+          </CardHeader>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background">
