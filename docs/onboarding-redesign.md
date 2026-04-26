@@ -123,17 +123,30 @@ first-tree-hub start              # foreground shape
 first-tree-hub start --service    # service shape
 ```
 
-Behind the scenes (both shapes share these steps):
+Behind the scenes the two shapes share the **install-time** work but split who does what after that. **Pattern B (industry-standard for service install: setup at install time, not at boot time):**
+
+Common install-time work (CLI process, both shapes):
 1. Docker preflight (`isDockerAvailable()`); fail fast with the actionable message if absent.
 2. `ensurePostgres` — pull image + start `first-tree-hub-postgres` container (5–10s on first run).
-3. `runMigrations` — Drizzle creates ~32 tables.
-4. `hasUser()` returns false → `createOwner()` silently creates user + org `default` + member + first human agent. Username = sanitised `os.userInfo().username` (fallback `admin`); password is random and never displayed.
-5. Bring the server up (`buildApp` + `app.listen` on `127.0.0.1:8000`) plus an embedded `ClientRuntime` registered as this machine's client. CLI itself hits the loopback-only `local-bootstrap` endpoint, gets a JWT pair, persists `client.yaml` + `credentials.json` (the same JWT pair the embedded client uses).
-6. Open the user's browser at `http://127.0.0.1:8000` (unless `--no-open` / SSH / non-TTY); always print the URL to stdout as fallback.
+3. `runMigrations` — Drizzle applies any pending migrations.
+4. `hasUser()` returns false → `createAdmin()` silently creates user + org `default` + member + first human agent. Username = sanitised `os.userInfo().username` (fallback `admin`); password is random and never displayed.
 
-The shapes diverge after Step 2's shared work:
-- **Foreground:** server + embedded client live in the CLI process; the process blocks until SIGINT.
-- **Service:** install platform service unit, hand server + embedded client off to the daemon, parent polls daemon `/healthz` for up to 10s. On failure: roll back via `service uninstall`, print captured stderr (last ~20 lines from log), exit 1. On success: parent exits 0; daemon keeps running.
+Then the shapes diverge — **foreground**:
+5. CLI process itself runs the server (`buildApp` + `app.listen` on `127.0.0.1:8000`) plus an embedded `ClientRuntime` registered as this machine's client. CLI hits the loopback-only `local-bootstrap` endpoint, gets a JWT pair, persists `client.yaml` + `credentials.json`, and instantiates `ClientRuntime` with that pair.
+6. Open the user's browser at `http://127.0.0.1:8000` (unless `--no-open` / SSH / non-TTY); always print the URL to stdout as fallback.
+7. Block until SIGINT.
+
+**Service:**
+5. Install platform service unit (launchd plist on macOS, systemd-user unit on Linux). The unit's `ProgramArguments` / `ExecStart` points at a hidden `first-tree-hub daemon` subcommand (the daemon entry point) with the configured `--port`.
+6. Start the daemon. Daemon entry point:
+   - **Schema version guard** — compare the migrations bundled in the binary against `__drizzle_migrations` table; mismatch → log error + exit 1 (so launchd / systemd surface the failure on subsequent restart loops).
+   - `buildApp` + `app.listen` on `127.0.0.1:<port>`.
+   - Embed `ClientRuntime`; obtain JWT via `obtainDaemonJWT()` (B2 three-tier fallback).
+   - Block until SIGTERM, then graceful shutdown.
+7. Parent CLI polls daemon `/healthz` for up to 10s. On failure: `service uninstall` rollback, print captured stderr (last ~20 lines from log), exit 1.
+8. On success: parent CLI opens browser at `http://127.0.0.1:<port>`, exits 0. Daemon keeps running.
+
+**The daemon does NOT** re-run `ensurePostgres`, `runMigrations`, or `createAdmin` — those are install-time only. On subsequent boots (auto-restart at user login), the daemon's only orchestration is the schema-version guard plus server + ClientRuntime startup. **This is intentional** — see § 6 Q11 for the Pattern B / 12-factor rationale.
 
 After Step 2, the disk state is:
 ```
@@ -201,7 +214,22 @@ Everything else is hidden. **No `login` command exists** — recovery is opening
 2. **Postgres:** provision via `ensurePostgres`, or reuse a running container.
 3. **Migrations:** run via `runMigrations`.
 4. **Auto-admin (Q1):** if `users` table is empty (`hasUser` returns false), silently `createOwner` — sanitised `os.userInfo().username` (fallback `admin`), org `default`, random password. **Never displayed, never persisted in cleartext.**
-5. **Server + embedded client:** bring server up on `127.0.0.1:8000`, plus an embedded `ClientRuntime` registered as this machine's client. CLI hits its own `local-bootstrap` endpoint to obtain the admin JWT pair, persists to `client.yaml` + `credentials.json` (file mode 0600), shared by daemon + out-of-band CLI commands.
+5. **Process-responsibility split (Q11):** Pattern B — install-time work (Docker preflight, `ensurePostgres`, `runMigrations`, `createAdmin`) lives in the CLI process; runtime work (server + embedded `ClientRuntime` + schema-version guard) lives wherever the runtime owner is. Concretely:
+
+    | Step | Foreground | Service |
+    |---|---|---|
+    | Docker preflight | CLI | CLI (parent) |
+    | `ensurePostgres` | CLI | CLI (parent) |
+    | `runMigrations` | CLI | CLI (parent) |
+    | `createAdmin` (if `!hasUser`) | CLI | CLI (parent) |
+    | Install platform service unit | n/a | CLI (parent) |
+    | Schema-version guard | n/a (CLI just ran migrations) | daemon (on every boot) |
+    | `buildApp` + `app.listen` | CLI | daemon |
+    | Embedded `ClientRuntime` | CLI | daemon |
+    | Call `local-bootstrap` for admin JWT | CLI | daemon (B2) |
+    | Persist `credentials.json` | CLI | daemon |
+    | Poll `/healthz`, open browser | n/a | CLI (parent) |
+    | Block until shutdown | CLI (SIGINT) | daemon (SIGTERM) |
 6. **Loopback-trust auth endpoint (Q7):** server exposes `POST /api/v1/auth/local-bootstrap` that mints a fresh access + refresh JWT pair for the local admin. The endpoint is gated on `req.ip ∈ {127.0.0.1, ::1}` AND no `X-Forwarded-*` headers present (defence against proxy bypass). Hosted-mode deployments disable this endpoint via config (e.g. `FIRST_TREE_HUB_DISABLE_LOCAL_BOOTSTRAP=1`).
 7. **Web `/login` route:** auth guard redirects unauthenticated requests to `/login`; `/login` calls `local-bootstrap` and on success stores the JWT pair in localStorage and redirects to `/`. Any visit to `localhost:8000` without a valid JWT auto-recovers without user action.
 8. **Browser auto-open:** open `http://127.0.0.1:8000` via `open` / `xdg-open` / `start` unless `--no-open` / SSH session / non-TTY. Always print the URL to stdout as fallback.
@@ -303,6 +331,12 @@ The following are recognised but not finalised in this redesign. Each is blocked
 ### 4.3 Documentation (D1–D4)
 
 - **D1.** Rewrite `docs/quickstart-zh.md`. Local section uses 4.1's flow exclusively; hosted section pending 4.2. **Drop all `server start` mentions** from user-facing docs — replaced by `first-tree-hub start`. (`server start` itself stays in CLI for developers; just doesn't appear in user docs.)
+  - **Add an "Upgrading" subsection** documenting the two-command upgrade flow (Pattern B / Q11):
+    ```bash
+    npm install -g @agent-team-foundation/first-tree-hub@latest
+    first-tree-hub start --service
+    ```
+    Step 2 is required because npm doesn't know about launchd / systemd — daemon must be explicitly restarted to pick up new code. The same `start --service` invocation also runs any pending DB migrations. If the user forgets step 2, the running daemon stays on old code; the schema-version guard surfaces the mismatch on the next reboot via `service logs`.
 - **D2.** Update `docs/onboarding-guide.md` (English). Drop legacy `agent token bootstrap` references. Mirror D1 structure.
 - **D3.** Move `Local Testing Isolation` out of public `CLAUDE.md` to `docs/dev/testing-isolation.md`. Stop documenting `FIRST_TREE_HUB_HOME` in user-facing docs.
 - **D4.** `docs/multi-tenancy-hardening-design.md:18` — drop "Multi-org switching UX (will become a `first-tree-hub profile` CLI feature later)" parenthetical. Replace with "deferred indefinitely".
@@ -363,7 +397,8 @@ The following are recognised but not finalised in this redesign. Each is blocked
   - `first-tree-hub service logs [-f] [-n N]` — print or follow rotating NDJSON log file under `~/.first-tree/hub/logs/`.
   - `first-tree-hub service stop` — stop daemon without uninstalling.
   - The daemon process invokes the same orchestration C2 implements — Docker preflight, auto-admin (first run), embedded ClientRuntime, server on `127.0.0.1:8000`. Difference vs foreground: stdout/stderr go to log files, not terminal. The daemon does **not** mint or print URLs on its own — auth recovery is the Web `/login` route any time the user opens the browser.
-  - **Daemon startup auth (B2 / Q9):** the daemon has no parent CLI on auto-restart, so it bootstraps its own JWT via a 3-tier fallback in `core/auth.ts:obtainDaemonJWT()` — called before `ClientRuntime` is instantiated:
+  - **Schema-version guard (Q11):** daemon's first action on boot is to compare the migrations bundled in its own binary (`packages/server/src/db/migrations/`) against `__drizzle_migrations` in the live DB. Mismatch (DB older than binary expects) → log a clear error: `Schema version mismatch. CLI v<version> expects migration <hash>, DB at <hash>. Run 'first-tree-hub start --service' to apply pending migrations.` and exit 1. This is the **only** orchestration the daemon does — it does NOT re-run `ensurePostgres`, `runMigrations`, or `createAdmin`. Those are install-time work owned by the CLI parent. See § 6 Q11 for the 12-factor rationale.
+  - **Daemon startup auth (B2 / Q9):** after the schema-version guard passes, the daemon has no parent CLI on auto-restart, so it bootstraps its own JWT via a 3-tier fallback in `core/auth.ts:obtainDaemonJWT()` — called before `ClientRuntime` is instantiated:
     1. Read `credentials.json`. If access token's `exp` is still in the future → use directly.
     2. Else if refresh token still valid → POST `/api/v1/auth/refresh`, persist new pair, use.
     3. Else → POST `/api/v1/auth/local-bootstrap` (loopback access; the 3 A1 gates all pass for a same-process call), persist new pair, use.
@@ -406,6 +441,7 @@ The following are recognised but not finalised in this redesign. Each is blocked
 | Q7 | URL delivery + auth model | Single-step: open `http://127.0.0.1:8000` in the browser (via `open` / `xdg-open` / `start`, skipped on `--no-open` / SSH / non-TTY) + always print the URL to stdout. Web auth guard handles authentication via Web `/login` → `POST /api/v1/auth/local-bootstrap`. **Trust boundary: loopback access = local admin.** Endpoint hardened by 3 checks (A1): `req.ip ∈ {127.0.0.1, ::1}`, no `X-Forwarded-*` header, `Host` ∈ {`127.0.0.1:<port>`, `localhost:<port>`}. The `Host` check is the load-bearing one against DNS rebinding (CORS handles cross-origin response reads on its own). | Earlier draft listed 5 gates including Origin and strict Content-Type. Trimmed back: CORS already prevents cross-origin JS from reading responses (we never set `Access-Control-Allow-Origin`), so Origin check is redundant in normal cross-origin attacks. Only DNS rebinding bypasses CORS — `Host` check is the unique defense. Endpoint is disabled (route unregistered) in hosted-mode deployments |
 | Q8 | Service-shape health check + rollback | Parent process polls daemon `/healthz` for up to 10s after handing off. On timeout / unhealthy: invoke `service uninstall`, print last ~20 lines of daemon stderr from log, exit 1. **No half-installed state.** | Service-mode failures (Docker permission, port collision, broken plist) must surface in the parent's stdout; otherwise users are left with a half-installed service and a "nothing happened" terminal |
 | Q9 | Daemon startup auth (B2) | 3-tier fallback in `core/auth.ts:obtainDaemonJWT()`: (1) cached access in `credentials.json` if `exp` still in future → use; (2) else call `/auth/refresh` with cached refresh token; (3) else call `/auth/local-bootstrap`. The same fallback applies to mid-runtime failures inside `ClientRuntime.getAccessToken`. | Daemon has no parent CLI on auto-restart, so it must self-bootstrap. Always going to `local-bootstrap` would pollute the refresh-token table on every laptop sleep/wake cycle; the cached path is the fast path. `local-bootstrap` is the cold-start / token-revoked recovery only. Same endpoint serves CLI (start), daemon (this), and out-of-band CLI (B3) — 3 callers, one source of truth |
+| Q11 | Service-shape orchestration ownership (R1) | **Pattern B — install-time setup in CLI parent, not in daemon.** CLI parent owns: Docker preflight, `ensurePostgres`, `runMigrations`, `createAdmin`, install service unit. Daemon owns: schema-version guard (fail-fast on mismatch), server, embedded `ClientRuntime`, B2 self-bootstrap for JWT, SIGTERM handling. Upgrade flow is two manual commands: `npm install -g ...@latest && first-tree-hub start --service`. | Earlier draft floated Pattern A (daemon does the full orchestration on every boot, parent only installs + polls). Industry consensus is Pattern B: Postgres / Redis / MongoDB / 12-factor apps all do install-time setup separately from runtime. Migrations on every boot pollute startup time and violate the "run stage is not release stage" principle. Schema-version guard handles upgrade safety without forcing migrations into the daemon |
 | ~~Q10~~ | ~~Out-of-band CLI auth (B3)~~ | **Removed as over-spec.** The original concern (daemon + CLI racing on refresh-token rotation) is self-healing if CLI auth follows the standard "401-on-refresh → reread `credentials.json` → retry once" pattern. No new endpoint, no special CLI auth path, no sole-writer invariant. | Earlier draft introduced `obtainCliJWT()` + a "daemon is sole writer" invariant. CORS-style overengineering — the race recovers in one retry, with worst-case UX being "first command after daemon refresh is 50ms slower" |
 | ~~Q6~~ | ~~Bare `first-tree-hub` behavior~~ | **Removed.** With the `login` command dropped, there's no canonical action to alias bare invocation to. Bare `first-tree-hub` shows help, matching every other CLI. | n/a |
 
