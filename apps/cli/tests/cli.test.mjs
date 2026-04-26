@@ -11,6 +11,13 @@ const repoRoot = resolve(cliRoot, "../..");
 const entryPath = resolve(cliRoot, "dist/index.js");
 const rootPackagePath = resolve(repoRoot, "package.json");
 const cliPackagePath = resolve(cliRoot, "package.json");
+const commandNames = ["init", "tree", "hub", "breeze", "gardener"];
+const placeholderCommands = [
+  ["tree", "first-tree tree is not implemented yet."],
+  ["hub", "first-tree hub is not implemented yet."],
+  ["breeze", "first-tree breeze is not implemented yet."],
+  ["gardener", "first-tree gardener is not implemented yet."],
+];
 
 async function readJson(path) {
   return JSON.parse(await readFile(path, "utf8"));
@@ -45,14 +52,16 @@ describe("first-tree CLI", () => {
     expect(result.stdout.trim()).toBe(rootPackage.version);
   });
 
-  it("prints help with the init command", async () => {
+  it("prints help with registered commands", async () => {
     const result = await runCli(["--help"]);
 
     expect(result.code).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Usage: first-tree");
     expect(result.stdout).toContain("CLI for initializing and maintaining first-tree context trees.");
-    expect(result.stdout).toContain("init");
+    for (const commandName of commandNames) {
+      expect(result.stdout).toContain(commandName);
+    }
   });
 
   it("runs the init placeholder successfully", async () => {
@@ -62,6 +71,16 @@ describe("first-tree CLI", () => {
     expect(result.stderr).toBe("");
     expect(result.stdout.trim()).toBe("first-tree init is not implemented yet.");
   });
+
+  for (const [commandName, expectedOutput] of placeholderCommands) {
+    it(`runs the ${commandName} placeholder successfully`, async () => {
+      const result = await runCli([commandName]);
+
+      expect(result.code).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.stdout.trim()).toBe(expectedOutput);
+    });
+  }
 
   it("keeps a shebang on the compiled entry", async () => {
     const entrySource = await readFile(entryPath, "utf8");

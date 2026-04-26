@@ -4,6 +4,8 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Command } from "commander";
 
+import { registerCommands } from "./commands/index.js";
+
 type PackageJson = {
   version?: string;
 };
@@ -30,12 +32,7 @@ export function createProgram(version = readPackageVersion()): Command {
     .description("CLI for initializing and maintaining first-tree context trees.")
     .version(version);
 
-  program
-    .command("init")
-    .description("Initialize first-tree in a repository.")
-    .action(() => {
-      console.log("first-tree init is not implemented yet.");
-    });
+  registerCommands(program);
 
   return program;
 }
