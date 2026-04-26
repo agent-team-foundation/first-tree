@@ -317,7 +317,18 @@ The following are recognised but not finalised in this redesign. Each is blocked
 - **C2.** Implement `first-tree-hub start` (new top-level command — foreground shape + the shared orchestration both shapes use).
   - File: `packages/command/src/commands/start.ts`.
   - Server orchestration: refactor `core/server.ts:startServer` so the listen step is observable from the caller (or split into a `bootstrapServer()` returning `{app, config}` plus a separate listen call).
-  - Auto-admin: reuse `core/admin.ts:hasUser` + `createOwner`.
+  - Auto-admin: reuse `core/admin.ts:hasUser`. **Rename `createOwner` → `createAdmin`** — the existing name was misaligned with its actual behaviour (inserts `members.role = 'admin'`, not `'owner'`; the `'owner'` value never existed in the `members` schema — see [packages/server/src/db/schema/members.ts:22](packages/server/src/db/schema/members.ts:22) which documents the role enum as `"admin" | "member"`).
+  - **New `findAdmin(databaseUrl)` in `core/admin.ts` (Q1):** returns `{userId, memberId, organizationId, agentId}` for the local admin. Query: earliest `members.role = 'admin'` row in the `default` org —
+    ```sql
+    SELECT u.id AS user_id, m.id AS member_id, m.organization_id, m.agent_id
+    FROM members m
+    JOIN users u ON u.id = m.user_id
+    JOIN organizations o ON o.id = m.organization_id
+    WHERE m.role = 'admin' AND o.name = 'default'
+    ORDER BY m.created_at ASC
+    LIMIT 1
+    ```
+    Used by the `local-bootstrap` endpoint, the daemon's startup JWT recovery (B2), and out-of-band CLI auth (B3) — single source of truth for "who is this machine's admin".
   - **New endpoint `POST /api/v1/auth/local-bootstrap` (Q7):** loopback-only; mints a fresh access + refresh JWT pair for the local admin. Server validates `req.ip ∈ {127.0.0.1, ::1}` and rejects requests with any `X-Forwarded-*` header. Hosted-mode deployments disable the endpoint via env / config (e.g. `FIRST_TREE_HUB_DISABLE_LOCAL_BOOTSTRAP=1`). **No bootstrap-token endpoint** for local mode — the bootstrap-token mechanism is reserved for hosted email links etc.
   - **Web `/login` route:** the auth guard redirects unauthenticated requests to `/login`; the `/login` component posts to `local-bootstrap`, stores the returned JWT pair in localStorage, and redirects to `/`. Visiting `localhost:8000` without a JWT auto-recovers — no user input required.
   - Embedded client: in the same process, after `app.listen` resolves, the CLI calls its own `local-bootstrap` endpoint to obtain the admin JWT pair, persists `client.yaml` + `credentials.json`, and instantiates `ClientRuntime` with `getAccessToken: () => <persisted token, auto-refreshed>`.
@@ -366,7 +377,7 @@ The following are recognised but not finalised in this redesign. Each is blocked
 
 | ID | Question | Decision | Reasoning |
 |---|---|---|---|
-| Q1 | Auto-admin + auth UX | Username/password/org never shown to user. No persistence in cleartext. Recovery via opening the browser at `localhost:8000` — auth guard auto-mints a fresh JWT pair via the loopback-only `local-bootstrap` endpoint. **No CLI `login` command, no magic URL, no bootstrap token in local mode.** | "No password ever shown" is the load-bearing principle. CLI `login` and Web `/login` would share the exact same trust boundary (loopback access), so the CLI layer adds no security value. The simpler design has fewer moving parts (one endpoint, no token table, no URL delivery layer) and the same UX guarantees |
+| Q1 | Auto-admin + auth UX | Username/password/org never shown to user. No persistence in cleartext. Recovery via opening the browser at `localhost:8000` — auth guard auto-mints a fresh JWT pair via the loopback-only `local-bootstrap` endpoint. The endpoint resolves "the local admin" via `findAdmin()` — earliest `members.role = 'admin'` row in `default` org. **No CLI `login` command, no magic URL, no bootstrap token in local mode.** Side-cleanup: rename `createOwner` → `createAdmin` (function name was misaligned with the schema — `members.role` enum is `"admin" \| "member"`, no `"owner"` value). | "No password ever shown" is the load-bearing principle. CLI `login` and Web `/login` would share the exact same trust boundary (loopback access), so the CLI layer adds no security value. The simpler design has fewer moving parts (one endpoint, no token table, no URL delivery layer) and the same UX guarantees |
 | Q2 | Server as service | **Two equally-supported shapes, no default.** `first-tree-hub start` runs foreground (server + embedded client in CLI process); `first-tree-hub start --service` installs launchd plist / systemd-user unit and hands the same orchestration to a daemon. The onboarding guide presents them as parallel choices selected by user situation, not as default + opt-in. | A foreground-only design forced daily users into tmux/nohup; a service-default design surprised users with launchd plist installs they didn't ask for. Both shapes are first-class because they serve different real situations: foreground for SSH / Windows / debug, service for persistence |
 | Q3 | Client connect mode | Moot — local flow has no separate `client connect` step | Resolved by C2 embedding the client in `start` |
 | Q4 | Docker prereq UX | Q4-A: check at top of `start`, fail fast with the existing actionable message | Existing message is good; only timing needs fixing |

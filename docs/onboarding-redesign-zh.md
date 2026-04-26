@@ -333,7 +333,18 @@ This computer already has Hub credentials. Replace? [y/N]
 - **C2.** 实现顶层 `first-tree-hub start` 命令(前台形态 + 两种形态共用的编排核心)。
   - 文件:`packages/command/src/commands/start.ts`。
   - Server 编排:重构 `core/server.ts:startServer`,把 listen 那一步交给调用者(或者拆成 `bootstrapServer()` 返回 `{app, config}` + 单独 listen)。
-  - Auto-admin:复用 `core/admin.ts:hasUser` + `createOwner`。
+  - Auto-admin:复用 `core/admin.ts:hasUser`。**`createOwner` → `createAdmin` 改名** —— 原函数名跟它实际做的事不符(插入的是 `members.role = 'admin'`,不是 `'owner'`;`'owner'` 这个值在 `members` schema 里根本不存在,见 [packages/server/src/db/schema/members.ts:22](packages/server/src/db/schema/members.ts:22) 注释 `"admin" | "member"`)。
+  - **新增 `core/admin.ts:findAdmin(databaseUrl)`(Q1):** 返回本地 admin 的 `{userId, memberId, organizationId, agentId}`。查询规则:`default` org 里最早的 `members.role = 'admin'` 那一行 ——
+    ```sql
+    SELECT u.id AS user_id, m.id AS member_id, m.organization_id, m.agent_id
+    FROM members m
+    JOIN users u ON u.id = m.user_id
+    JOIN organizations o ON o.id = m.organization_id
+    WHERE m.role = 'admin' AND o.name = 'default'
+    ORDER BY m.created_at ASC
+    LIMIT 1
+    ```
+    被 `local-bootstrap` 端点、daemon 启动时的 JWT 恢复(B2)、带外 CLI 鉴权(B3)共用 —— "这台机器的 admin 是谁" 的唯一信息源。
   - **新端点 `POST /api/v1/auth/local-bootstrap`(Q7):** loopback-only,为本地 admin 签一份 access + refresh JWT 对。Server 校验 `req.ip ∈ {127.0.0.1, ::1}` 且无 `X-Forwarded-*` header。Hosted 部署用 env / config 关掉(如 `FIRST_TREE_HUB_DISABLE_LOCAL_BOOTSTRAP=1`)。**本地模式不做 bootstrap-token 端点** —— 那套机制留给 hosted 邮件链接。
   - **Web `/login` 路由:** auth guard 把没 JWT 的请求重定向到 `/login`;`/login` 组件 POST 到 `local-bootstrap`,拿 JWT 对存 localStorage,跳 `/`。任何对 `localhost:8000` 的访问无 JWT 都自动恢复 —— 用户什么都不用做。
   - 嵌入 client:同一进程,`app.listen` resolve 后,**CLI 自己**调一次 `local-bootstrap` 端点拿 admin JWT 对,落 `client.yaml` + `credentials.json`,实例化 `ClientRuntime`,`getAccessToken: () => <持久化的 token,自动 refresh>`。
@@ -382,7 +393,7 @@ This computer already has Hub credentials. Replace? [y/N]
 
 | ID | 问题 | 决定 | 理由 |
 |---|---|---|---|
-| Q1 | auto-admin + 鉴权 UX | username/password/org 全程不向用户展示,不落 cleartext。恢复就是开浏览器到 `localhost:8000` —— auth guard 通过 loopback-only 的 `local-bootstrap` 端点自动 mint 一份新 JWT 对。**本地模式没有 CLI `login`、没有 magic URL、没有 bootstrap token。** | "完全不暴露密码"是承重原则。CLI `login` 跟 Web `/login` 共享**完全一样的信任边界**(loopback 访问),CLI 这层不增加任何安全价值。简化方案动的 piece 更少(一个端点、不要 token 表、不要 URL 投递层),UX 保证一致 |
+| Q1 | auto-admin + 鉴权 UX | username/password/org 全程不向用户展示,不落 cleartext。恢复就是开浏览器到 `localhost:8000` —— auth guard 通过 loopback-only 的 `local-bootstrap` 端点自动 mint 一份新 JWT 对。端点通过 `findAdmin()` 解析"本地 admin" —— `default` org 里最早的 `members.role = 'admin'` 那一行。**本地模式没有 CLI `login`、没有 magic URL、没有 bootstrap token。** 顺手修一个长期错位的命名:`createOwner` → `createAdmin`(`members.role` 取值是 `"admin" \| "member"`,从来没有过 `"owner"`)。 | "完全不暴露密码"是承重原则。CLI `login` 跟 Web `/login` 共享**完全一样的信任边界**(loopback 访问),CLI 这层不增加任何安全价值。简化方案动的 piece 更少(一个端点、不要 token 表、不要 URL 投递层),UX 保证一致 |
 | Q2 | server 是否做成 service | **两种平等支持的形态,无默认。** `first-tree-hub start` 跑前台(server + 嵌入式 client 在 CLI 进程里);`first-tree-hub start --service` 装 launchd plist / systemd-user unit 把同一份编排交给 daemon。onboarding 文档把它们呈现为并列选项,按用户场景挑,不是"默认 + opt-in"。 | 纯前台逼着 daily user 用 tmux/nohup;默认装服务又会让用户在没意识到的情况下被默默写了 launchd plist。两种形态都是一等公民,因为它们对应不同真实场景:SSH / Windows / 调启动失败 → 前台,想跨重启常驻 → service |
 | Q3 | client connect 走交互还是 token | moot —— 本地流程没有独立 `client connect` 步骤 | 被 C2 的嵌入式 client 模型解掉 |
 | Q4 | Docker 前置 UX | Q4-A:`start` 第一行就检查,失败立刻给现有的友好文案 | 文案已够好,只需要把时机提前 |
