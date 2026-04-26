@@ -133,7 +133,7 @@ Behind the scenes (both shapes share these steps):
 
 The shapes diverge after Step 2's shared work:
 - **Foreground:** server + embedded client live in the CLI process; the process blocks until SIGINT.
-- **Service:** install platform service unit, hand server + embedded client off to the daemon, parent polls daemon `/health` for up to 10s. On failure: roll back via `service uninstall`, print captured stderr (last ~20 lines from log), exit 1. On success: parent exits 0; daemon keeps running.
+- **Service:** install platform service unit, hand server + embedded client off to the daemon, parent polls daemon `/healthz` for up to 10s. On failure: roll back via `service uninstall`, print captured stderr (last ~20 lines from log), exit 1. On success: parent exits 0; daemon keeps running.
 
 After Step 2, the disk state is:
 ```
@@ -206,7 +206,7 @@ Everything else is hidden. **No `login` command exists** — recovery is opening
 7. **Web `/login` route:** auth guard redirects unauthenticated requests to `/login`; `/login` calls `local-bootstrap` and on success stores the JWT pair in localStorage and redirects to `/`. Any visit to `localhost:8000` without a valid JWT auto-recovers without user action.
 8. **Browser auto-open:** open `http://127.0.0.1:8000` via `open` / `xdg-open` / `start` unless `--no-open` / SSH session / non-TTY. Always print the URL to stdout as fallback.
 9. **Foreground shape:** server + embedded client run in the CLI process; block until SIGINT. SIGINT stops both gracefully; **leaves Postgres container running**, with the hint to `first-tree-hub server stop`.
-10. **Service shape (Q2):** install launchd plist (macOS) or systemd-user unit (Linux), hand the orchestration off to the daemon, parent polls daemon `/health` up to 10s (Q8). On failure: `service uninstall` rollback, print last ~20 lines of daemon stderr from log, exit 1 — **no half-installed state**. On success: parent exits 0; daemon hosts server + embedded client.
+10. **Service shape (Q2):** install launchd plist (macOS) or systemd-user unit (Linux), hand the orchestration off to the daemon, parent polls daemon `/healthz` up to 10s (Q8). On failure: `service uninstall` rollback, print last ~20 lines of daemon stderr from log, exit 1 — **no half-installed state**. On success: parent exits 0; daemon hosts server + embedded client.
 11. **`--port <n>`:** default `8000`. On `EADDRINUSE`: print `Port N is busy. Try 'first-tree-hub start --port <N+1>'.` and exit. No auto-fallback, no probing. In service shape, the `--port` is written into the platform unit file so the daemon binds the same port across reboots.
 12. **`--no-open`:** opt out of browser auto-open. URL is still printed to stdout.
 13. **Idempotency (service shape):** re-running `first-tree-hub start --service` when service is already installed and running: skip install, best-effort liveness check, open browser at `localhost:8000`, exit 0.
@@ -223,7 +223,9 @@ first-tree-hub service stop              # stop daemon without uninstalling
 first-tree-hub service uninstall         # remove plist/unit + stop daemon (Postgres untouched)
 ```
 
-Service stop / uninstall does NOT touch the Postgres Docker container — that lifecycle is decoupled.
+Service stop / uninstall does NOT touch the Postgres Docker container — that lifecycle is decoupled. **`uninstall` also leaves `~/.first-tree/hub/` intact** so a subsequent `start --service` can resume with the same admin / agents / chats; manual full reset is `rm -rf ~/.first-tree/hub`.
+
+**macOS lifecycle note:** the service installs into `~/Library/LaunchAgents/` (user agent, no `sudo`); it follows the user's login session — stops at logout, restarts at next login. For a personal machine this is fine; users who want it always-on (across logout) should not expect it from the user-agent install.
 
 #### Recovery
 
@@ -300,7 +302,7 @@ The following are recognised but not finalised in this redesign. Each is blocked
 
 ### 4.3 Documentation (D1–D4)
 
-- **D1.** Rewrite `docs/quickstart-zh.md`. Local section uses 4.1's flow exclusively; hosted section pending 4.2.
+- **D1.** Rewrite `docs/quickstart-zh.md`. Local section uses 4.1's flow exclusively; hosted section pending 4.2. **Drop all `server start` mentions** from user-facing docs — replaced by `first-tree-hub start`. (`server start` itself stays in CLI for developers; just doesn't appear in user docs.)
 - **D2.** Update `docs/onboarding-guide.md` (English). Drop legacy `agent token bootstrap` references. Mirror D1 structure.
 - **D3.** Move `Local Testing Isolation` out of public `CLAUDE.md` to `docs/dev/testing-isolation.md`. Stop documenting `FIRST_TREE_HUB_HOME` in user-facing docs.
 - **D4.** `docs/multi-tenancy-hardening-design.md:18` — drop "Multi-org switching UX (will become a `first-tree-hub profile` CLI feature later)" parenthetical. Replace with "deferred indefinitely".
@@ -341,6 +343,7 @@ The following are recognised but not finalised in this redesign. Each is blocked
   - **Cross-shape collision detection:** before binding `:8000`, probe whether a daemon is already serving the port; if yes, print `Hub is already running as a service. Open http://127.0.0.1:8000 to log in, or run 'first-tree-hub service stop' first if you want to run inline.` and exit 1.
   - README "Quick Start" section updated to present both shapes (`start` and `start --service`) without designating a default.
   - **Port handling:** default `8000` (unchanged), `--port <n>` flag accepted. On `EADDRINUSE`, catch and print "Port N is busy. Try `first-tree-hub start --port <N+1>`." instead of the raw Node stack. No auto-fallback, no probing — see Section 7 for the future port-default discussion.
+  - **`server start` legacy command:** kept as a developer command (runs server only, no embedded client). Disappears from README and `docs/quickstart-zh.md`; `server --help` gets a one-line pointer "for end-user setup, see `first-tree-hub start`". Not deprecated, not warned.
 - **C3.** Last-step modal one-liner drops the `agent add` segment.
   - New chain: `npm install -g @agent-team-foundation/first-tree-hub && first-tree-hub client connect <url> --token <jwt>`.
   - Rationale: server-side `agent:pinned` replay (`services/client.ts:147-149`) writes the local `agent.yaml` on its own once the client connects. The pre-existing middle step was redundant and introduced an orphan-yaml failure mode (when `connect` was cancelled or failed mid-chain).
@@ -353,7 +356,7 @@ The following are recognised but not finalised in this redesign. Each is blocked
   - Print: `Logged out. To use this computer again: first-tree-hub client connect <url>`.
   - **Default flag for service teardown is pending Qh-6 (deferred).** Implementation can land the core actions and leave the service-teardown flag default unspecified, then flip to the Qh-6 decision when it arrives.
 - **C8.** Add the service shape — `first-tree-hub start --service` and the `service` management subcommands. Equal-status with C2's foreground shape; not "opt-in" relative to a default.
-  - `first-tree-hub start --service` — install launchd plist (macOS) or systemd-user unit (Linux), hand the orchestration off to the daemon, parent polls daemon `/health` for up to 10s, opens browser at `http://127.0.0.1:8000`, then exits. Subsequent reboots auto-start.
+  - `first-tree-hub start --service` — install launchd plist (macOS, into `~/Library/LaunchAgents/`, no `sudo`) or systemd-user unit (Linux, `~/.config/systemd/user/`), hand the orchestration off to the daemon, parent polls daemon `/healthz` for up to 10s, opens browser at `http://127.0.0.1:8000`, then exits. Subsequent **logins** auto-start (macOS user agent stops at logout / starts at login; Linux systemd-user behaves similarly unless `loginctl enable-linger` is set, which we don't require).
   - `first-tree-hub service install` — alias for `start --service` (Multica-style entry point).
   - `first-tree-hub service uninstall` — remove the plist/unit, stop the running service.
   - `first-tree-hub service status` — running / installed-but-stopped / not-installed.
@@ -369,7 +372,7 @@ The following are recognised but not finalised in this redesign. Each is blocked
 
     **Mid-runtime token expiry:** `ClientRuntime`'s existing auto-refresh loop handles normal renewal. **Contract:** if mid-runtime refresh fails (server lost the refresh row, etc.), `ClientRuntime.getAccessToken` should fall through to `local-bootstrap` rather than crashing the runtime — same path as B2 step 3.
   - **`--port` propagation:** when `--port <n>` is passed to `start --service`, write the value into the launchd plist `ProgramArguments` (or systemd unit `ExecStart`) so the daemon binds the same port across reboots. Changing port later requires `service uninstall && start --service --port <n>`.
-  - **Health check + rollback (Q8):** parent process polls daemon `/health` up to 10s. On timeout / unhealthy: invoke `service uninstall`, print last ~20 lines of daemon stderr from log, exit 1. **No half-installed state.**
+  - **Health check + rollback (Q8):** parent process polls daemon `/healthz` up to 10s. On timeout / unhealthy: invoke `service uninstall`, print last ~20 lines of daemon stderr from log, exit 1. **No half-installed state.**
   - Postgres lifecycle stays decoupled — service stop/uninstall does NOT touch the Docker container.
 
 (C9 removed — the `login` command and bare-command alias are no longer in scope. The Web `/login` route + loopback-only `local-bootstrap` endpoint cover every case `login` was meant to handle, with the same trust boundary and zero CLI involvement. See § 6 Q1 for rationale.)
@@ -380,7 +383,11 @@ The following are recognised but not finalised in this redesign. Each is blocked
 
 ## 5. Sequencing
 
-- **Phase 1 (local-scenario, fully spec'd).** C2 (`first-tree-hub start` foreground shape + shared orchestration + `local-bootstrap` endpoint + Web `/login` route + browser auto-open) + C8 (`--service` shape + `service` management subcommands + health check / rollback) + minimal D1 update for the local section + README Quick Start update. Independently shippable; doesn't depend on any hosted decision. Both shapes ship together so docs can present them as parallel choices. **Phase 1 is smaller than the previous draft** — the dropped `login` command (C9), bootstrap-token endpoint, multi-layered URL delivery, and bare-command alias all collapse into the loopback-trust + Web `/login` model.
+- **Phase 1 (local-scenario, fully spec'd) — split into 1a + 1b** (#14):
+  - **Phase 1a — C2 only.** `first-tree-hub start` foreground shape + shared orchestration (Docker preflight, Postgres, migrations, auto-admin via renamed `createAdmin` + `findAdmin`) + `local-bootstrap` endpoint with the 3-gate middleware + Web `/login` route + browser auto-open. End-to-end demoable on `start` foreground; no platform-specific code. Independently shippable.
+  - **Phase 1b — C8.** `--service` shape + `service` management subcommands + health-check + rollback (Q8) + daemon startup auth (B2/Q9). Adds launchd / systemd-user adapters. Depends on 1a.
+  - Plus minimal D1 update for the local section + README Quick Start update — bundle into 1a (docs follow code).
+  - **Phase 1 is smaller than the previous draft** — the dropped `login` command (C9), bootstrap-token endpoint, multi-layered URL delivery, and bare-command alias all collapse into the loopback-trust + Web `/login` model.
 - **Phase 2 (hosted-scenario simplifications, fully spec'd).** C1 + C3 — both touch the connect/Last-step pair, share a testing scope. D1 hosted section using Path A first-time / Path B add-machine framing (Qh-2). D2 mirror in English.
 - **Phase 3 (Hub-internal cleanup).** D3, D4, C4 — each can be its own small PR.
 - **Phase 4 (deferred-question follow-ups).** Re-open Qh-1, Qh-5, Qh-6, Qh-7 in a separate session. C5 lands its core (no default-flag commitment) here, then flips on Qh-6.
@@ -397,7 +404,7 @@ The following are recognised but not finalised in this redesign. Each is blocked
 | Q4 | Docker prereq UX | Q4-A: check at top of `start`, fail fast with the existing actionable message | Existing message is good; only timing needs fixing |
 | Q5 | Single-command `first-tree-hub start` | Yes. Q5-a: name `start`. Q5-b: each `start` invocation hands the user back into a logged-in browser. Q5-c: PG stays on Ctrl+C / `service stop` / `service uninstall`. Q5-d: replaces `server start` in user docs. | All four sub-decisions confirmed |
 | Q7 | URL delivery + auth model | Single-step: open `http://127.0.0.1:8000` in the browser (via `open` / `xdg-open` / `start`, skipped on `--no-open` / SSH / non-TTY) + always print the URL to stdout. Web auth guard handles authentication via Web `/login` → `POST /api/v1/auth/local-bootstrap`. **Trust boundary: loopback access = local admin.** Endpoint hardened by 3 checks (A1): `req.ip ∈ {127.0.0.1, ::1}`, no `X-Forwarded-*` header, `Host` ∈ {`127.0.0.1:<port>`, `localhost:<port>`}. The `Host` check is the load-bearing one against DNS rebinding (CORS handles cross-origin response reads on its own). | Earlier draft listed 5 gates including Origin and strict Content-Type. Trimmed back: CORS already prevents cross-origin JS from reading responses (we never set `Access-Control-Allow-Origin`), so Origin check is redundant in normal cross-origin attacks. Only DNS rebinding bypasses CORS — `Host` check is the unique defense. Endpoint is disabled (route unregistered) in hosted-mode deployments |
-| Q8 | Service-shape health check + rollback | Parent process polls daemon `/health` for up to 10s after handing off. On timeout / unhealthy: invoke `service uninstall`, print last ~20 lines of daemon stderr from log, exit 1. **No half-installed state.** | Service-mode failures (Docker permission, port collision, broken plist) must surface in the parent's stdout; otherwise users are left with a half-installed service and a "nothing happened" terminal |
+| Q8 | Service-shape health check + rollback | Parent process polls daemon `/healthz` for up to 10s after handing off. On timeout / unhealthy: invoke `service uninstall`, print last ~20 lines of daemon stderr from log, exit 1. **No half-installed state.** | Service-mode failures (Docker permission, port collision, broken plist) must surface in the parent's stdout; otherwise users are left with a half-installed service and a "nothing happened" terminal |
 | Q9 | Daemon startup auth (B2) | 3-tier fallback in `core/auth.ts:obtainDaemonJWT()`: (1) cached access in `credentials.json` if `exp` still in future → use; (2) else call `/auth/refresh` with cached refresh token; (3) else call `/auth/local-bootstrap`. The same fallback applies to mid-runtime failures inside `ClientRuntime.getAccessToken`. | Daemon has no parent CLI on auto-restart, so it must self-bootstrap. Always going to `local-bootstrap` would pollute the refresh-token table on every laptop sleep/wake cycle; the cached path is the fast path. `local-bootstrap` is the cold-start / token-revoked recovery only. Same endpoint serves CLI (start), daemon (this), and out-of-band CLI (B3) — 3 callers, one source of truth |
 | ~~Q10~~ | ~~Out-of-band CLI auth (B3)~~ | **Removed as over-spec.** The original concern (daemon + CLI racing on refresh-token rotation) is self-healing if CLI auth follows the standard "401-on-refresh → reread `credentials.json` → retry once" pattern. No new endpoint, no special CLI auth path, no sole-writer invariant. | Earlier draft introduced `obtainCliJWT()` + a "daemon is sole writer" invariant. CORS-style overengineering — the race recovers in one retry, with worst-case UX being "first command after daemon refresh is 50ms slower" |
 | ~~Q6~~ | ~~Bare `first-tree-hub` behavior~~ | **Removed.** With the `login` command dropped, there's no canonical action to alias bare invocation to. Bare `first-tree-hub` shows help, matching every other CLI. | n/a |
