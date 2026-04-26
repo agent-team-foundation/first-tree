@@ -390,6 +390,15 @@ This computer already has Hub credentials. Replace? [y/N]
 
 (C9 已移除 —— `login` 命令和裸命令别名都不在 scope 了。Web `/login` 路由 + loopback-only `local-bootstrap` 端点覆盖了 `login` 想解决的所有场景,**信任边界完全相同**,而且省掉了 CLI 这层。理由见 § 6 Q1。)
 
+- **C10. 带外 CLI 鉴权改走 `local-bootstrap`(B3 / Q10)。** 加共享 helper `core/auth.ts:obtainCliJWT(serverUrl)`,所有需要带鉴权调 server 的命令(`agent send`、`agent chats`、`agent status` 等)都用它。逻辑:
+  1. 读 `credentials.json`。access token 的 `exp` 还没过 → 直接用。
+  2. 否则(access 过期或没 creds.json),`serverUrl` 是 loopback(`127.0.0.1` / `localhost`)→ POST `/api/v1/auth/local-bootstrap`,**返回的新 token 对只在内存里用,不写回 `credentials.json`**。
+  3. 否则(hosted CLI)→ POST `/api/v1/auth/refresh` 走 cached refresh token(沿用现有行为;装着 client daemon 时本身就有 race,B3 不管)。
+
+  **不变量:** 本地模式下,**daemon 是 `credentials.json` 的唯一 writer**,带外 CLI 在盘上是只读;cached access 过期就内存里 mint 一份。daemon 和 CLI 之间不存在 refresh-token rotation race。
+
+  **DB 污染:** 只有冷 mint 分支(第 2 步)会建新的 refresh-token 行。被 access TTL × 用户活跃度 bound —— 假设 TTL = 1h,日活用户每天 ~10 行。不是 Phase 1 关心的;真成痛点再加 per-CLI-process 内存缓存(亚秒 TTL)。
+
 (原 C6 client-retry-backoff 和 C7 localhost-no-service 删除 —— 都被 C2 的嵌入式 client 模型自动消解。)
 
 ## 5. 分阶段顺序
@@ -413,6 +422,7 @@ This computer already has Hub credentials. Replace? [y/N]
 | Q7 | URL 投递 + 鉴权模型 | 单层:浏览器打开 `http://127.0.0.1:8000`(`open` / `xdg-open` / `start`,`--no-open` / SSH / 非 TTY 时跳过)+ 永远把 URL 也打 stdout。鉴权由 Web auth guard 处理:`/login` → `POST /api/v1/auth/local-bootstrap`。**信任边界:loopback 访问 = 本地 admin。** 端点三道检查(A1):`req.ip ∈ {127.0.0.1, ::1}`、无 `X-Forwarded-*`、`Host ∈ {127.0.0.1:<port>, localhost:<port>}`。**`Host` 检查是承重的那条**,防 DNS rebinding(其它情况 CORS 默认行为已经兜住)。 | 上一版围绕带 bootstrap token 的 magic URL 套了 auto-open + stdout + clipboard 三层 + 五道安全门。loopback-trust 模型把投递层全部收掉,安全门也只保留三条最小必需:Origin / 严格 Content-Type 是 CORS 的重复(浏览器跨域 JS 读不到响应),只有 DNS rebinding 能绕 CORS,`Host` 头是唯一防御。Hosted 部署关掉这个端点 |
 | Q8 | 服务形态健康检查 + 回滚 | 父进程把编排交给 daemon 后轮询 `/health` 最多 10s。超时 / 不健康:调 `service uninstall` 回滚,打印 daemon stderr 末尾约 20 行,退出 1。**不留半装状态。** | 服务模式失败(Docker 权限、端口冲突、plist 坏)必须在父进程 stdout 里冒出来;否则用户面对一个半装服务和"什么都没发生"的终端,无从下手 |
 | Q9 | Daemon 启动鉴权(B2) | `core/auth.ts:obtainDaemonJWT()` 三层降级:(1) `credentials.json` 里 access 的 `exp` 还没过 → 用;(2) 否则 `/auth/refresh` 用 cached refresh;(3) 否则 `/auth/local-bootstrap`。运行期间 `ClientRuntime.getAccessToken` 失败也走同一条降级链。 | Daemon 自起时没父 CLI,必须自己 bootstrap。无脑每次都走 `local-bootstrap` 会让笔记本每次睡醒都污染 refresh-token 表;缓存路径才是快路径,`local-bootstrap` 是冷启 / token 被吊销的兜底。同一个端点服务三方调用方:CLI(start)、daemon(B2)、带外 CLI(B3)—— 三个调用者,一个真实源 |
+| Q10 | 带外 CLI 鉴权(B3) | `core/auth.ts:obtainCliJWT()` 只读 `credentials.json`;access 还有效 → 用;否则,本地模式 → `local-bootstrap`(内存里用,不写盘);否则 → 标准 refresh(hosted,沿用现有行为)。**本地模式下 daemon 是 `credentials.json` 的唯一 writer**。 | Daemon 跟 CLI 共用 `credentials.json` 会在 refresh-token rotation 上抢(refresh 单次有效,谁先谁废另一份)。Loopback 访问让 CLI 内存里直接 mint 新对,完全不动共享状态。Hosted 模式的 race 是预存在问题,defer |
 | ~~Q6~~ | ~~裸 `first-tree-hub` 行为~~ | **移除。** `login` 砍了之后,没有"主操作"可以让裸命令别名。裸 `first-tree-hub` 显示 help,跟所有其它 CLI 一致。 | n/a |
 
 ### 托管场景
