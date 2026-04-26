@@ -345,7 +345,11 @@ This computer already has Hub credentials. Replace? [y/N]
     LIMIT 1
     ```
     被 `local-bootstrap` 端点、daemon 启动时的 JWT 恢复(B2)、带外 CLI 鉴权(B3)共用 —— "这台机器的 admin 是谁" 的唯一信息源。
-  - **新端点 `POST /api/v1/auth/local-bootstrap`(Q7):** loopback-only,为本地 admin 签一份 access + refresh JWT 对。Server 校验 `req.ip ∈ {127.0.0.1, ::1}` 且无 `X-Forwarded-*` header。Hosted 部署用 env / config 关掉(如 `FIRST_TREE_HUB_DISABLE_LOCAL_BOOTSTRAP=1`)。**本地模式不做 bootstrap-token 端点** —— 那套机制留给 hosted 邮件链接。
+  - **新端点 `POST /api/v1/auth/local-bootstrap`(Q7):** loopback-only,为本地 admin(`findAdmin()` 解析)签一份 access + refresh JWT 对。三道检查(A1):
+    1. **`req.ip ∈ {127.0.0.1, ::1}`** —— TCP 层 loopback 检查。
+    2. **无 `X-Forwarded-*` 头** —— 任何 forwarding 头出现就拒(防反代绕过)。
+    3. **`Host` 头**必须等于 `127.0.0.1:<port>` 或 `localhost:<port>`(用运行时 `config.server.port`)—— 防 DNS rebinding(攻击者把 `evil.com` 的 DNS 解析回 127.0.0.1,Host 头是 `evil.com:<port>`)。**这条是唯一不能被 CORS 兜的**,因为 DNS rebinding 让响应在浏览器看来是同源。
+    检查失败返 401。POST-only 由 Fastify 路由本身保证(GET 自动 405)。**故意不做** Origin / Content-Type 严格检查 —— CORS 默认行为(我们从不设 `Access-Control-Allow-Origin`)已经挡住跨域 JS 读响应,这两条是冗余。Hosted 部署设 `FIRST_TREE_HUB_DISABLE_LOCAL_BOOTSTRAP=1`,路由整个不注册(404)。**本地模式不做 bootstrap-token 端点** —— 那套机制留给 hosted 邮件链接。
   - **Web `/login` 路由:** auth guard 把没 JWT 的请求重定向到 `/login`;`/login` 组件 POST 到 `local-bootstrap`,拿 JWT 对存 localStorage,跳 `/`。任何对 `localhost:8000` 的访问无 JWT 都自动恢复 —— 用户什么都不用做。
   - 嵌入 client:同一进程,`app.listen` resolve 后,**CLI 自己**调一次 `local-bootstrap` 端点拿 admin JWT 对,落 `client.yaml` + `credentials.json`,实例化 `ClientRuntime`,`getAccessToken: () => <持久化的 token,自动 refresh>`。
   - SIGINT 优雅停 server + client;**Postgres 容器留着**,提示 `first-tree-hub server stop`。
@@ -398,7 +402,7 @@ This computer already has Hub credentials. Replace? [y/N]
 | Q3 | client connect 走交互还是 token | moot —— 本地流程没有独立 `client connect` 步骤 | 被 C2 的嵌入式 client 模型解掉 |
 | Q4 | Docker 前置 UX | Q4-A:`start` 第一行就检查,失败立刻给现有的友好文案 | 文案已够好,只需要把时机提前 |
 | Q5 | 一条命令 `first-tree-hub start` | 是。Q5-a 名字 `start`。Q5-b 每次跑都把用户送回登录态浏览器。Q5-c PG 容器 Ctrl+C / `service stop` / `service uninstall` 都不停。Q5-d 文档里替代 `server start`。 | 四个子决议逐一通过 |
-| Q7 | URL 投递 + 鉴权模型 | 单层:浏览器打开 `http://127.0.0.1:8000`(`open` / `xdg-open` / `start`,`--no-open` / SSH / 非 TTY 时跳过)+ 永远把 URL 也打 stdout。鉴权由 Web auth guard 处理:`/login` → `POST /api/v1/auth/local-bootstrap`(loopback-only,gate 在 `req.ip` + 无 `X-Forwarded-*`)。**信任边界:loopback 访问 = 本地 admin。** | 上一版围绕带 bootstrap token 的 magic URL 套了 auto-open + stdout + clipboard 三层。loopback-trust 模型把这套全部收掉:URL 就是 `http://127.0.0.1:8000`,没有 token 要复制,不需要剪贴板兜底。Hosted 部署关掉这个端点 |
+| Q7 | URL 投递 + 鉴权模型 | 单层:浏览器打开 `http://127.0.0.1:8000`(`open` / `xdg-open` / `start`,`--no-open` / SSH / 非 TTY 时跳过)+ 永远把 URL 也打 stdout。鉴权由 Web auth guard 处理:`/login` → `POST /api/v1/auth/local-bootstrap`。**信任边界:loopback 访问 = 本地 admin。** 端点三道检查(A1):`req.ip ∈ {127.0.0.1, ::1}`、无 `X-Forwarded-*`、`Host ∈ {127.0.0.1:<port>, localhost:<port>}`。**`Host` 检查是承重的那条**,防 DNS rebinding(其它情况 CORS 默认行为已经兜住)。 | 上一版围绕带 bootstrap token 的 magic URL 套了 auto-open + stdout + clipboard 三层 + 五道安全门。loopback-trust 模型把投递层全部收掉,安全门也只保留三条最小必需:Origin / 严格 Content-Type 是 CORS 的重复(浏览器跨域 JS 读不到响应),只有 DNS rebinding 能绕 CORS,`Host` 头是唯一防御。Hosted 部署关掉这个端点 |
 | Q8 | 服务形态健康检查 + 回滚 | 父进程把编排交给 daemon 后轮询 `/health` 最多 10s。超时 / 不健康:调 `service uninstall` 回滚,打印 daemon stderr 末尾约 20 行,退出 1。**不留半装状态。** | 服务模式失败(Docker 权限、端口冲突、plist 坏)必须在父进程 stdout 里冒出来;否则用户面对一个半装服务和"什么都没发生"的终端,无从下手 |
 | ~~Q6~~ | ~~裸 `first-tree-hub` 行为~~ | **移除。** `login` 砍了之后,没有"主操作"可以让裸命令别名。裸 `first-tree-hub` 显示 help,跟所有其它 CLI 一致。 | n/a |
 
