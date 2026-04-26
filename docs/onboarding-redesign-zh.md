@@ -376,6 +376,14 @@ This computer already has Hub credentials. Replace? [y/N]
   - `first-tree-hub service logs [-f] [-n N]` —— 打印或 follow `~/.first-tree/hub/logs/` 下的 NDJSON rotating log。
   - `first-tree-hub service stop` —— 停 daemon 但不卸。
   - Daemon 进程跑的是 C2 实现的同一份编排 —— Docker preflight、auto-admin(首次)、嵌入 ClientRuntime、server 在 `127.0.0.1:8000`。跟前台的差异:stdout/stderr 进 log 文件而不是终端。**daemon 自己不 mint 也不打 URL** —— 鉴权恢复就是用户开浏览器走 Web `/login` 路由。
+  - **Daemon 启动鉴权(B2 / Q9):** daemon 自起时没有父 CLI,要自己 bootstrap JWT。`core/auth.ts:obtainDaemonJWT()` 三层降级,在 `ClientRuntime` 实例化**之前**调:
+    1. 读 `credentials.json`。access token 的 `exp` 还没过 → 直接用。
+    2. access 过期、refresh 还有效 → POST `/api/v1/auth/refresh` 拿新对,持久化,用。
+    3. 都失效了 → POST `/api/v1/auth/local-bootstrap`(同进程 loopback,A1 三道门全过),持久化,用。
+
+    **为什么不无脑每次都走 local-bootstrap:** 那会污染 refresh-token 表(笔记本睡醒一次也算一次重启),缓存路径远比新签快。local-bootstrap 分支只在冷启动 / token 被吊销的情况下兜底。
+
+    **运行期间 token 过期:** `ClientRuntime` 自带的 auto-refresh loop 处理常规 renewal。**契约:** 运行期间 refresh 失败时(server 丢了 refresh 行等),`ClientRuntime.getAccessToken` 应该 fall through 到 `local-bootstrap` 而不是炸掉 runtime —— 跟 B2 第 3 层同一条路径。
   - **`--port` 传播:** `start --service` 带 `--port <n>` 时,把这个值写进 launchd plist 的 `ProgramArguments`(或 systemd unit 的 `ExecStart`),让 daemon 跨重启绑同一端口。换端口要 `service uninstall && start --service --port <n>`。
   - **健康检查 + 回滚(Q8):** 父进程轮询 daemon `/health` 最多 10s。失败:`service uninstall` 回滚,打印 daemon stderr 末尾约 20 行,退出 1。**不留半装状态。**
   - Postgres 容器生命周期跟 service 解耦 —— `service stop / uninstall` 不动 Docker 容器。
@@ -404,6 +412,7 @@ This computer already has Hub credentials. Replace? [y/N]
 | Q5 | 一条命令 `first-tree-hub start` | 是。Q5-a 名字 `start`。Q5-b 每次跑都把用户送回登录态浏览器。Q5-c PG 容器 Ctrl+C / `service stop` / `service uninstall` 都不停。Q5-d 文档里替代 `server start`。 | 四个子决议逐一通过 |
 | Q7 | URL 投递 + 鉴权模型 | 单层:浏览器打开 `http://127.0.0.1:8000`(`open` / `xdg-open` / `start`,`--no-open` / SSH / 非 TTY 时跳过)+ 永远把 URL 也打 stdout。鉴权由 Web auth guard 处理:`/login` → `POST /api/v1/auth/local-bootstrap`。**信任边界:loopback 访问 = 本地 admin。** 端点三道检查(A1):`req.ip ∈ {127.0.0.1, ::1}`、无 `X-Forwarded-*`、`Host ∈ {127.0.0.1:<port>, localhost:<port>}`。**`Host` 检查是承重的那条**,防 DNS rebinding(其它情况 CORS 默认行为已经兜住)。 | 上一版围绕带 bootstrap token 的 magic URL 套了 auto-open + stdout + clipboard 三层 + 五道安全门。loopback-trust 模型把投递层全部收掉,安全门也只保留三条最小必需:Origin / 严格 Content-Type 是 CORS 的重复(浏览器跨域 JS 读不到响应),只有 DNS rebinding 能绕 CORS,`Host` 头是唯一防御。Hosted 部署关掉这个端点 |
 | Q8 | 服务形态健康检查 + 回滚 | 父进程把编排交给 daemon 后轮询 `/health` 最多 10s。超时 / 不健康:调 `service uninstall` 回滚,打印 daemon stderr 末尾约 20 行,退出 1。**不留半装状态。** | 服务模式失败(Docker 权限、端口冲突、plist 坏)必须在父进程 stdout 里冒出来;否则用户面对一个半装服务和"什么都没发生"的终端,无从下手 |
+| Q9 | Daemon 启动鉴权(B2) | `core/auth.ts:obtainDaemonJWT()` 三层降级:(1) `credentials.json` 里 access 的 `exp` 还没过 → 用;(2) 否则 `/auth/refresh` 用 cached refresh;(3) 否则 `/auth/local-bootstrap`。运行期间 `ClientRuntime.getAccessToken` 失败也走同一条降级链。 | Daemon 自起时没父 CLI,必须自己 bootstrap。无脑每次都走 `local-bootstrap` 会让笔记本每次睡醒都污染 refresh-token 表;缓存路径才是快路径,`local-bootstrap` 是冷启 / token 被吊销的兜底。同一个端点服务三方调用方:CLI(start)、daemon(B2)、带外 CLI(B3)—— 三个调用者,一个真实源 |
 | ~~Q6~~ | ~~裸 `first-tree-hub` 行为~~ | **移除。** `login` 砍了之后,没有"主操作"可以让裸命令别名。裸 `first-tree-hub` 显示 help,跟所有其它 CLI 一致。 | n/a |
 
 ### 托管场景
