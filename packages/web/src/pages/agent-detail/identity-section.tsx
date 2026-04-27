@@ -10,6 +10,7 @@ import { DenseBadge } from "../../components/ui/dense-badge.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
+import { Panel, PanelBody, PanelHeader, PanelTitle } from "../../components/ui/panel.js";
 import { useAgentIdentityMap } from "../../lib/use-agent-name-map.js";
 import { useMemberNameMap } from "../../lib/use-member-name-map.js";
 
@@ -39,30 +40,16 @@ export function IdentitySection({ agent, onSave }: IdentitySectionProps) {
   const delegateIdentity = agent.delegateMention ? resolveAgent(agent.delegateMention) : null;
 
   return (
-    <section
-      style={{
-        background: "var(--bg-raised)",
-        border: "var(--hairline) solid var(--border)",
-        borderRadius: 6,
-      }}
-    >
-      <header
-        className="flex items-center justify-between"
-        style={{
-          padding: "var(--sp-2_5) var(--sp-3_5)",
-          borderBottom: "var(--hairline) solid var(--border-faint)",
-        }}
-      >
-        <h2 className="text-body font-semibold" style={{ color: "var(--fg)" }}>
-          Profile
-        </h2>
+    <Panel>
+      <PanelHeader>
+        <PanelTitle>Profile</PanelTitle>
         {agent.status === "active" && (
           <Button size="xs" variant="outline" onClick={() => setOpen(true)}>
             <Pencil className="h-3 w-3" /> Edit
           </Button>
         )}
-      </header>
-      <div className="px-4 py-3 text-body space-y-1">
+      </PanelHeader>
+      <PanelBody className="text-body space-y-1">
         <div>
           <span className="font-semibold">{agent.displayName}</span>
           {agent.name && <span className="ml-2 font-mono text-caption text-muted-foreground">@{agent.name}</span>}
@@ -106,10 +93,10 @@ export function IdentitySection({ agent, onSave }: IdentitySectionProps) {
             </span>
           )}
         </div>
-      </div>
+      </PanelBody>
 
       <IdentityEditDialog agent={agent} open={open} onOpenChange={setOpen} onSave={onSave} />
-    </section>
+    </Panel>
   );
 }
 

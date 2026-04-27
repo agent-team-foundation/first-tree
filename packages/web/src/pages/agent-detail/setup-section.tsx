@@ -1,6 +1,7 @@
 import { Link2, Lock, Play } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button } from "../../components/ui/button.js";
+import { Panel, PanelBody, PanelHeader, PanelTitle } from "../../components/ui/panel.js";
 
 /**
  * Setup section — immutable "where it runs" pick, bind-computer banner, and a
@@ -54,18 +55,9 @@ export function SetupSection(props: SetupSectionProps) {
 
 function RuntimeCard({ name, caption, locked }: { name: string; caption: string; locked: boolean }) {
   return (
-    <section
-      style={{
-        background: "var(--bg-raised)",
-        border: "var(--hairline) solid var(--border)",
-        borderRadius: 6,
-      }}
-    >
-      <header
-        className="flex items-center justify-between"
-        style={{ padding: "var(--sp-2_5) var(--sp-3_5)", borderBottom: "var(--hairline) solid var(--border-faint)" }}
-      >
-        <h3 className="inline-flex items-center gap-2 text-body font-semibold" style={{ color: "var(--fg)" }}>
+    <Panel>
+      <PanelHeader>
+        <PanelTitle>
           Where it runs
           {locked && (
             <span
@@ -75,9 +67,9 @@ function RuntimeCard({ name, caption, locked }: { name: string; caption: string;
               <Lock className="h-3 w-3" aria-hidden /> locked
             </span>
           )}
-        </h3>
-      </header>
-      <div className="px-4 py-3 text-body space-y-1">
+        </PanelTitle>
+      </PanelHeader>
+      <PanelBody className="space-y-1 text-body">
         <div className="inline-flex items-center gap-2">
           <Play className="h-3.5 w-3.5" aria-hidden style={{ color: "var(--accent)" }} />
           <span className="font-medium">{name}</span>
@@ -85,8 +77,8 @@ function RuntimeCard({ name, caption, locked }: { name: string; caption: string;
         <p className="text-caption" style={{ color: "var(--fg-3)" }}>
           {caption}
         </p>
-      </div>
-    </section>
+      </PanelBody>
+    </Panel>
   );
 }
 
@@ -98,28 +90,17 @@ function ComputerCard(props: {
 }) {
   const bound = !!props.computerLabel;
   return (
-    <section
-      style={{
-        background: "var(--bg-raised)",
-        border: "var(--hairline) solid var(--border)",
-        borderRadius: 6,
-      }}
-    >
-      <header
-        className="flex items-center justify-between"
-        style={{ padding: "var(--sp-2_5) var(--sp-3_5)", borderBottom: "var(--hairline) solid var(--border-faint)" }}
-      >
-        <h3 className="text-body font-semibold" style={{ color: "var(--fg)" }}>
-          Bound computer
-        </h3>
+    <Panel>
+      <PanelHeader>
+        <PanelTitle>Bound computer</PanelTitle>
         {props.canBindComputer && props.onBindComputer && !bound && (
           <Button size="xs" variant="outline" onClick={props.onBindComputer} disabled={props.bindPending}>
             <Link2 className="h-3 w-3" />
             {props.bindPending ? "Binding…" : "Bind computer"}
           </Button>
         )}
-      </header>
-      <div className="px-4 py-3 text-body">
+      </PanelHeader>
+      <PanelBody className="text-body">
         {bound ? (
           <div className="mono" style={{ color: "var(--fg-2)" }}>
             {props.computerLabel}
@@ -130,7 +111,7 @@ function ComputerCard(props: {
             via the button above.
           </p>
         )}
-      </div>
-    </section>
+      </PanelBody>
+    </Panel>
   );
 }

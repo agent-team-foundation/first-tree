@@ -1,8 +1,9 @@
 import { Button } from "../../components/ui/button.js";
+import { Panel, PanelBody, PanelHeader, PanelTitle } from "../../components/ui/panel.js";
 
 /**
- * Redesign §5.5 Model — an inline dropdown with a "changed" hint and Revert.
- * No inline save: the page Save Bar handles submission.
+ * Model — an inline dropdown with a "changed" hint and Revert. No inline save:
+ * the page Save Bar handles submission.
  */
 
 export type ModelOption = { value: string; label: string; hint?: string };
@@ -26,40 +27,35 @@ export function ModelSection({ value, baseline, onChange, onRevert, disabled }: 
   const hasExtra = !CLAUDE_MODEL_OPTIONS.some((o) => o.value === value) && value !== "";
 
   return (
-    <section
+    <Panel
       style={{
-        background: "var(--bg-raised)",
-        border: `var(--hairline) solid ${dirty ? "color-mix(in oklch, var(--state-blocked) 40%, transparent)" : "var(--border)"}`,
-        borderRadius: 6,
+        borderColor: dirty ? "color-mix(in oklch, var(--state-blocked) 70%, transparent)" : undefined,
       }}
     >
-      <header
-        className="flex items-center justify-between"
-        style={{ padding: "var(--sp-2_5) var(--sp-3_5)", borderBottom: "var(--hairline) solid var(--border-faint)" }}
-      >
-        <h3 className="inline-flex items-center gap-2 text-body font-semibold" style={{ color: "var(--fg)" }}>
+      <PanelHeader>
+        <PanelTitle>
           Model
           {dirty && (
             <span
               className="mono uppercase text-caption"
               style={{
                 padding: "var(--hairline) var(--sp-1_5)",
-                borderRadius: 3,
+                borderRadius: "var(--radius-chip)",
                 background: "color-mix(in oklch, var(--state-blocked) 16%, transparent)",
-                color: "color-mix(in oklch, var(--state-blocked) 50%, var(--fg))",
+                color: "color-mix(in oklch, var(--state-blocked) 60%, var(--fg))",
               }}
             >
               changed
             </span>
           )}
-        </h3>
+        </PanelTitle>
         {dirty && (
           <Button size="xs" variant="ghost" onClick={onRevert} disabled={disabled}>
             Revert
           </Button>
         )}
-      </header>
-      <div className="px-4 py-3 space-y-2">
+      </PanelHeader>
+      <PanelBody className="space-y-2">
         <select
           value={value}
           onChange={(e) => onChange(e.target.value)}
@@ -81,7 +77,7 @@ export function ModelSection({ value, baseline, onChange, onRevert, disabled }: 
           next message. Unset falls back to the operator's local <code>~/.claude/settings.json</code> model preference,
           then the CLI default.
         </p>
-      </div>
-    </section>
+      </PanelBody>
+    </Panel>
   );
 }

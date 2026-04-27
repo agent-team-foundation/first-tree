@@ -2,11 +2,12 @@ import { Pencil } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "../../components/ui/button.js";
 import { Markdown } from "../../components/ui/markdown.js";
+import { Panel, PanelBody, PanelHeader, PanelTitle } from "../../components/ui/panel.js";
 
 /**
- * Redesign §5.4 System Prompt Append — inline editor, no dialog.
- * `Done` collapses the editor but does NOT hit the server; the page-level
- * Save Bar is the single submission path for behavior drafts.
+ * System Prompt Append — inline editor, no dialog. `Done` collapses the editor
+ * but does NOT hit the server; the page-level Save Bar is the single submission
+ * path for behavior drafts.
  */
 
 export type PromptSectionProps = {
@@ -27,43 +28,24 @@ export function PromptSection({ value, baseline, onChange, onRevert, disabled }:
   }, [editing]);
 
   return (
-    <section
+    <Panel
       style={{
-        background: "var(--bg-raised)",
-        border: `var(--hairline) solid ${dirty ? "color-mix(in oklch, var(--state-blocked) 40%, transparent)" : "var(--border)"}`,
-        borderRadius: 6,
+        borderColor: dirty ? "color-mix(in oklch, var(--state-blocked) 70%, transparent)" : undefined,
       }}
     >
-      <header
-        className="flex items-center justify-between"
-        style={{ padding: "var(--sp-2_5) var(--sp-3_5)", borderBottom: "var(--hairline) solid var(--border-faint)" }}
-      >
-        <h3 className="inline-flex items-center gap-2 text-body font-semibold" style={{ color: "var(--fg)" }}>
-          System Prompt Append
-          {dirty && (
-            <span
-              className="mono uppercase text-caption"
-              style={{
-                padding: "var(--hairline) var(--sp-1_5)",
-                borderRadius: 3,
-                background: "color-mix(in oklch, var(--state-blocked) 16%, transparent)",
-                color: "color-mix(in oklch, var(--state-blocked) 50%, var(--fg))",
-              }}
-            >
-              changed
-            </span>
-          )}
-        </h3>
-        <div className="flex gap-2">
-          {!editing && !disabled && (
-            <Button size="xs" variant="outline" onClick={() => setEditing(true)}>
-              <Pencil className="h-3 w-3" /> Edit
-            </Button>
-          )}
-        </div>
-      </header>
+      <PanelHeader>
+        <PanelTitle>
+          System prompt append
+          {dirty && <ChangedChip />}
+        </PanelTitle>
+        {!editing && !disabled && (
+          <Button size="xs" variant="outline" onClick={() => setEditing(true)}>
+            <Pencil className="h-3 w-3" /> Edit
+          </Button>
+        )}
+      </PanelHeader>
 
-      <div className="px-4 py-3">
+      <PanelBody>
         {editing ? (
           <div className="space-y-2">
             <textarea
@@ -112,7 +94,23 @@ export function PromptSection({ value, baseline, onChange, onRevert, disabled }:
             )}
           </div>
         )}
-      </div>
-    </section>
+      </PanelBody>
+    </Panel>
+  );
+}
+
+function ChangedChip() {
+  return (
+    <span
+      className="mono uppercase text-caption"
+      style={{
+        padding: "var(--hairline) var(--sp-1_5)",
+        borderRadius: "var(--radius-chip)",
+        background: "color-mix(in oklch, var(--state-blocked) 16%, transparent)",
+        color: "color-mix(in oklch, var(--state-blocked) 60%, var(--fg))",
+      }}
+    >
+      changed
+    </span>
   );
 }

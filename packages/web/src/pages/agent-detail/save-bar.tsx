@@ -1,10 +1,15 @@
 import { Check, Loader2 } from "lucide-react";
 import { Button } from "../../components/ui/button.js";
+import { StateDot } from "../../components/ui/state-dot.js";
 import type { DraftSectionName, DraftSummary } from "./use-config-draft.js";
 
 /**
- * Redesign §5.7 Save Bar — sticky-bottom, page-scoped, Behavior-only.
- * Identity edits bypass it entirely (they go through the identity API).
+ * Sticky-bottom save bar for the agent detail page. Behavior-only — identity
+ * edits bypass it entirely (they go through the identity API).
+ *
+ * The bar is always tonally consistent with the rest of the page (mono / dense
+ * / token-driven colors); no emoji, no warning-banner aesthetic. Section chips
+ * use the same affordance as buttons elsewhere on the page.
  */
 
 export type SaveBarProps = {
@@ -32,25 +37,43 @@ const SECTION_LABELS: Record<DraftSectionName, string> = {
 export function SaveBar(props: SaveBarProps) {
   if (!props.summary.anyDirty && !props.conflictMessage && !props.errorMessage && !props.justSaved) return null;
 
+  const dirtyCount = props.summary.dirtySections.length;
+
   return (
-    <div className="sticky bottom-0 z-30 -mx-6 border-t bg-warn-soft/95 px-6 py-3 backdrop-blur">
+    <div
+      className="sticky bottom-0 z-30 -mx-6 backdrop-blur"
+      style={{
+        padding: "var(--sp-3) var(--sp-6)",
+        background: "color-mix(in oklch, var(--bg-raised) 94%, transparent)",
+        borderTop: "var(--hairline) solid var(--border)",
+      }}
+    >
       <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-        <div className="flex flex-col gap-1 text-body">
+        <div className="flex flex-col gap-1 text-body min-w-0">
           {props.summary.anyDirty && (
-            <div className="flex items-center gap-2">
-              <span aria-hidden>🟡</span>
+            <div className="flex items-center gap-2 flex-wrap">
+              <StateDot state="blocked" size={8} />
               <span className="font-medium">
-                {props.summary.dirtySections.length} section
-                {props.summary.dirtySections.length === 1 ? "" : "s"} with unsaved changes
+                {dirtyCount} section{dirtyCount === 1 ? "" : "s"} with unsaved changes
               </span>
-              <span className="text-muted-foreground">·</span>
+              <span style={{ color: "var(--fg-4)" }} aria-hidden>
+                ·
+              </span>
               <span className="flex flex-wrap gap-1">
                 {props.summary.dirtySections.map((s) => (
                   <button
                     key={s}
                     type="button"
-                    className="rounded bg-card px-2 py-0.5 text-caption border hover:bg-warn-soft"
                     onClick={() => props.onJumpTo(s)}
+                    className="text-caption transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    style={{
+                      padding: "var(--sp-0_5) var(--sp-1_5)",
+                      borderRadius: "var(--radius-chip)",
+                      background: "var(--bg-raised)",
+                      border: "var(--hairline) solid var(--border)",
+                      color: "var(--fg-2)",
+                      cursor: "pointer",
+                    }}
                   >
                     {SECTION_LABELS[s]}
                   </button>
@@ -67,11 +90,23 @@ export function SaveBar(props: SaveBarProps) {
               Saved
             </div>
           )}
-          <p className="text-caption text-muted-foreground">{props.saveHint}</p>
-          {props.conflictMessage && <p className="text-caption text-warn font-medium">{props.conflictMessage}</p>}
-          {props.errorMessage && <p className="text-caption text-error font-medium">{props.errorMessage}</p>}
+          {props.saveHint && (
+            <p className="text-caption" style={{ color: "var(--fg-3)" }}>
+              {props.saveHint}
+            </p>
+          )}
+          {props.conflictMessage && (
+            <p className="text-caption font-medium" style={{ color: "var(--state-blocked)" }}>
+              {props.conflictMessage}
+            </p>
+          )}
+          {props.errorMessage && (
+            <p className="text-caption font-medium" style={{ color: "var(--state-error)" }}>
+              {props.errorMessage}
+            </p>
+          )}
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 shrink-0">
           {props.conflictMessage && (
             <Button variant="outline" size="sm" onClick={props.onReloadRemote}>
               Discard mine, load latest
