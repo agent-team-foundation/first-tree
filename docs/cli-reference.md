@@ -94,12 +94,50 @@ first-tree-hub client connect <server-url> --token <token>
 # Start all configured agents (uses saved credentials)
 first-tree-hub client start
 
-# Check environment readiness
+# Check environment readiness (includes background-service state)
 first-tree-hub client doctor
 
-# Show connection status
+# Show locally configured agents
 first-tree-hub client status
 ```
+
+`client connect` automatically installs a background service on macOS (launchd) and Linux (`systemd --user`) so the computer stays online across reboots. Use `--no-service` to skip this and run inline (Ctrl+C to stop). Windows is not supported — `client connect` falls back to inline mode.
+
+### Manual service operations
+
+The CLI does not expose subcommands for installing/uninstalling/tailing the background service — those concerns are folded into `client connect` (install) and `client doctor` (status), and the rest is handled at the OS level.
+
+**Tail logs:**
+
+```bash
+# Live tail (current log file)
+tail -f ~/.first-tree/hub/logs/client.log
+
+# Search across rotated files (.log + .log.1 ... .log.7, max 10 MB each)
+ls -lt ~/.first-tree/hub/logs/
+```
+
+Logs are NDJSON; pipe through `jq` for filtering by level/time.
+
+**Decommission this machine (remove the background service + local credentials):**
+
+```bash
+# macOS
+launchctl bootout gui/$UID/dev.first-tree-hub.client 2>/dev/null
+rm -f ~/Library/LaunchAgents/dev.first-tree-hub.client.plist
+
+# Linux
+systemctl --user disable --now first-tree-hub-client.service
+rm -f ~/.config/systemd/user/first-tree-hub-client.service
+systemctl --user daemon-reload
+
+# Both: clear local credentials and config
+rm -rf ~/.first-tree/hub
+```
+
+To force-disconnect a client from the server side, use `client hub-disconnect <clientId>`.
+
+**Repair after Node upgrade or binary move** (plist still points at the old path): re-run `first-tree-hub client connect <url>` — re-authentication is required, but it re-writes the unit file with the current binary path.
 
 ## agent
 

@@ -1,6 +1,6 @@
 ---
 name: first-tree-hub-cli
-description: Install, operate, deploy, and modify First Tree Hub with emphasis on the unified `first-tree-hub` CLI, its `client connect`/`client service`/`server`/`agent`/`agent config`/`config`/`status`/`onboard` workflows, the JWT credential model, and the repo's collaboration surface for agent identity, inbox delivery, workspace bootstrap, and background-service operation. Use whenever the user mentions First Tree Hub, connecting a machine to a Hub server, installing or running the Hub as a background service (launchd/systemd), managing agent runtime configuration (model, prompt, MCP, env, git repos), onboarding a member, or changing code in `packages/command`, `packages/client`, `packages/server`, or `packages/shared` — even if they don't say "CLI".
+description: Install, operate, deploy, and modify First Tree Hub with emphasis on the unified `first-tree-hub` CLI, its `client connect`/`server`/`agent`/`agent config`/`config`/`status`/`onboard` workflows, the JWT credential model, and the repo's collaboration surface for agent identity, inbox delivery, workspace bootstrap, and background-service operation. Use whenever the user mentions First Tree Hub, connecting a machine to a Hub server, installing or running the Hub as a background service (launchd/systemd), managing agent runtime configuration (model, prompt, MCP, env, git repos), onboarding a member, or changing code in `packages/command`, `packages/client`, `packages/server`, or `packages/shared` — even if they don't say "CLI".
 ---
 
 # First Tree Hub CLI
@@ -29,8 +29,7 @@ This shape drives almost every command: `server` targets the deployment, `client
    - Explain product or architecture concepts → `references/core-concepts.md`
    - Modify CLI or adjacent package behavior → `references/developer-map.md`
 2. **Prefer the supported CLI path over hand-rolled API calls or YAML edits.** The CLI already wires up auth, refresh, config layering, and retries for you.
-   - `client connect` for first-time auth on a new machine
-   - `client service install` to keep the machine online after reboot
+   - `client connect` for first-time auth on a new machine (auto-installs the background service on macOS/Linux)
    - `agent config ...` to change a running agent's model / prompt / MCP / env / repos
    - `onboard` to add a member end-to-end
    - `config set/get/list` to read or write YAML, instead of hand-editing it
@@ -80,15 +79,15 @@ After `client connect` succeeds:
 
 ## Background Service (keep the machine online)
 
-The client runtime is normally a foreground process. For production or day-to-day desktop use, install it as a user-level service so it survives logout/reboot:
+`client connect` installs a user-level background service automatically (launchd on macOS, `systemd --user` on Linux) so the runtime survives logout/reboot — pass `--no-service` to opt out and run inline. Windows is unsupported; on Windows the command falls back to inline mode (`first-tree-hub client start` plus a user-managed supervisor).
+
+There are **no `client service ...` subcommands** — the service lifecycle is folded into `client connect` (install or repair) and `client doctor` (status). Tail logs directly:
 
 ```bash
-first-tree-hub client service install      # launchd on macOS, systemd --user on Linux
-first-tree-hub client service status       # running? installed?
-first-tree-hub client service uninstall
+tail -f ~/.first-tree/hub/logs/client.log
 ```
 
-`client connect` installs the service automatically unless `--no-service` is passed. Logs land in `~/.first-tree/hub/logs/`. Windows is currently unsupported — on Windows, fall back to running `first-tree-hub client start` manually or inside a user-managed process supervisor.
+To decommission a machine: stop and remove the unit at the OS level (`launchctl bootout` + `rm` of the plist on macOS; `systemctl --user disable --now` + `rm` of the unit file on Linux), then `rm -rf ~/.first-tree/hub`. See `docs/cli-reference.md` for the exact commands. To force-drop a client from the server side, use `client hub-disconnect <clientId>`.
 
 ## Operating Rules
 
@@ -119,7 +118,7 @@ first-tree-hub client service uninstall
 - First local boot or quick demo: `first-tree-hub server start`.
 - Environment readiness: `first-tree-hub server doctor`, `first-tree-hub client doctor`, or `first-tree-hub status` for a compact summary.
 - Connect a computer to a Hub server: `first-tree-hub client connect <url>` (add `--token <connect-token>` to skip interactive login).
-- Keep the computer online across reboots: `first-tree-hub client service install`.
+- Keep the computer online across reboots: handled automatically by `first-tree-hub client connect <url>` (omit `--no-service`).
 - Run the runtime inline (no service): `first-tree-hub client start`.
 - See which machines the Hub currently sees: `first-tree-hub client hub-list`; force-drop one with `first-tree-hub client hub-disconnect <clientId>`.
 - Create an agent from the CLI: `first-tree-hub agent create <name> --type <t> --client-id <id>`.

@@ -13,7 +13,7 @@
 
 - `packages/command/src/cli/index.ts` — top-level Commander program and command registration.
 - `packages/command/src/commands/server.ts` — `server start/stop/status/doctor/db:migrate/admin:create`.
-- `packages/command/src/commands/client.ts` — `client start/stop/status/doctor`, the `client service install/status/uninstall` subgroup, and the Hub-side `client hub-list/hub-disconnect` commands. Delegates `client connect` registration to `commands/connect.ts`.
+- `packages/command/src/commands/client.ts` — `client start/stop/status/doctor` and the Hub-side `client hub-list/hub-disconnect` commands. Delegates `client connect` registration to `commands/connect.ts`. The background service has no dedicated subgroup — its lifecycle is folded into `client connect` (auto-install, [connect.ts:263](packages/command/src/commands/connect.ts:263)) and `client doctor` (state, via `checkBackgroundService`).
 - `packages/command/src/commands/connect.ts` — `client connect <server-url>`: writes `server.url`, authenticates via connect token or interactive login, persists `credentials.json`, installs the background service by default.
 - `packages/command/src/commands/agent.ts` — local aliases (`add/remove/list`), `create`, `claim`, `workspace clean`, `bind client/bot/user`, messaging (`send/chats/history/register/pull`), runtime status (`status/reset/sessions/session/chat`). Delegates `agent config` registration to `commands/agent-config.ts`.
 - `packages/command/src/commands/agent-config.ts` — `agent config get/set-model/append-prompt/add-mcp/set-env/add-repo/dry-run`, all thin wrappers over `/api/v1/admin/agents/:id/config`.
@@ -28,7 +28,7 @@
 - `packages/command/src/core/bootstrap.ts` — credential persistence (`saveCredentials`, `loadCredentials`) and token freshness (`resolveAccessToken`, `ensureFreshAccessToken`), plus `resolveServerUrl` and `saveAgentConfig`. `ensureFreshAdminToken` is a back-compat alias of `ensureFreshAccessToken`.
 - `packages/command/src/core/service-install.ts` — `installClientService`, `uninstallClientService`, `getClientServiceStatus`, `isServiceSupported`, `resolveCliInvocation`. Handles launchd (macOS) and `systemd --user` (Linux); marks other platforms as `unsupported`. Logs go to `~/.first-tree/hub/logs/`.
 - `packages/command/src/core/client-runtime.ts` — the long-lived `ClientRuntime` used by `client start` and `client connect --no-service`. Watches the agents config dir for hot-add and uses `ensureFreshAccessToken` on every WebSocket handshake.
-- `packages/command/src/core/doctor.ts` — readiness checks used by `server doctor` and `client doctor`: `checkNodeVersion`, `checkDocker`, `checkServerConfig`, `checkDatabase`, `checkServerHealth`, `checkServerReachable`, `checkClientConfig`, `checkAgentConfigs`, `checkWebSocket`.
+- `packages/command/src/core/doctor.ts` — readiness checks used by `server doctor` and `client doctor`: `checkNodeVersion`, `checkDocker`, `checkServerConfig`, `checkDatabase`, `checkServerHealth`, `checkServerReachable`, `checkClientConfig`, `checkAgentConfigs`, `checkWebSocket`, `checkBackgroundService`.
 - `packages/command/src/core/feishu.ts` — `bindFeishuBot`, `bindFeishuUser`.
 - `packages/command/src/core/docker-postgres.ts` — `ensurePostgres`, `isDockerAvailable`, `stopPostgres` (CLI-managed Docker Postgres container).
 - `packages/command/src/core/migrate.ts` — `runMigrations`.
@@ -85,8 +85,8 @@ If a flag, env var, or config key changes, inspect these files and update docs a
 ### Change the background service
 
 1. `core/service-install.ts` for platform-specific logic (launchd plist, systemd unit, log paths, CLI invocation resolution).
-2. `commands/client.ts` (the `service` subcommand group) for CLI surface.
-3. `commands/connect.ts` if `client connect` install-on-connect behavior changes.
+2. `commands/connect.ts` for the install-on-connect behavior — there is no dedicated `client service ...` CLI subcommand; lifecycle is bundled into `client connect`.
+3. `core/doctor.ts` (`checkBackgroundService`) for what `client doctor` reports about service state.
 
 ### Change config behavior
 

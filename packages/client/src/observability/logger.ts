@@ -90,8 +90,8 @@ export function configureClientLoggerForService(logDir: string): void {
     maxBytes: SERVICE_LOG_MAX_BYTES,
     maxFiles: SERVICE_LOG_MAX_FILES,
   });
-  // Pretty ANSI codes in a log file are noise; lock format to NDJSON and let
-  // `client service logs` pretty-print on read.
+  // Pretty ANSI codes in a log file are noise; lock format to NDJSON. Tail with
+  // `tail -f ~/.first-tree/hub/logs/client.log` and pipe through `jq` to format.
   applyClientLoggerConfig({ format: "json", destination: stream });
 }
 

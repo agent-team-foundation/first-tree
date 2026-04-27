@@ -1,6 +1,6 @@
 {
   "name": "@agent-team-foundation/first-tree-hub",
-  "version": "0.9.10",
+  "version": "0.9.11",
   "type": "module",
   "description": "First Tree Hub — unified CLI for server, client, and agent management",
   "exports": {
