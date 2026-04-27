@@ -4,6 +4,7 @@ import type { FastifyInstance } from "fastify";
 import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
+import { organizations } from "../db/schema/organizations.js";
 import { users } from "../db/schema/users.js";
 import { requireMember } from "../middleware/require-identity.js";
 import * as authService from "../services/auth.js";
@@ -65,6 +66,34 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       );
     const hasConnectedClientElsewhere = (elsewhere[0]?.count ?? 0) > 0;
 
+    // Workspace info — display name + (admin-only) invite URL. The
+    // share link is admin-only because v1 doesn't support per-link
+    // revocation; surfacing it to a member would let them re-share
+    // it without admin oversight, exactly the leak vector the design
+    // doc §2.3 calls out.
+    const [orgRow] = await app.db
+      .select({
+        name: organizations.name,
+        displayName: organizations.displayName,
+        inviteToken: organizations.inviteToken,
+      })
+      .from(organizations)
+      .where(eq(organizations.id, m.organizationId))
+      .limit(1);
+    let inviteUrl: string | null = null;
+    if (m.role === "admin" && orgRow?.inviteToken) {
+      const configuredUrl = app.config.server.publicUrl;
+      let base: string;
+      if (configuredUrl) {
+        base = configuredUrl.replace(/\/+$/, "");
+      } else {
+        const proto = request.headers["x-forwarded-proto"] ?? request.protocol;
+        const host = request.headers["x-forwarded-host"] ?? request.headers.host ?? request.hostname;
+        base = `${proto}://${host}`;
+      }
+      inviteUrl = `${base}/invite/${orgRow.inviteToken}`;
+    }
+
     return {
       user: user ?? null,
       member: {
@@ -75,6 +104,15 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         onboardingState: memberRow?.onboardingState ?? null,
       },
       agent: agent ?? null,
+      workspace: orgRow
+        ? {
+            id: m.organizationId,
+            name: orgRow.name,
+            displayName: orgRow.displayName,
+            /** Public invite URL. Admin-only; null for non-admin callers. */
+            inviteUrl,
+          }
+        : null,
       wizard: {
         hasConnectedClientElsewhere,
       },

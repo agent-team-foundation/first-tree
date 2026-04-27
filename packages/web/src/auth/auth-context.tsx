@@ -12,6 +12,12 @@ type MeResponse = {
     agentId: string;
     onboardingState: OnboardingState | null;
   };
+  workspace: {
+    id: string;
+    name: string;
+    displayName: string;
+    inviteUrl: string | null;
+  } | null;
   wizard: { hasConnectedClientElsewhere: boolean };
 };
 
@@ -55,6 +61,13 @@ type AuthContextValue = {
    * wizard auto-advances Step 1 when this is true.
    */
   hasConnectedClientElsewhere: boolean;
+  /**
+   * Public invite URL for the current workspace. Server returns it only
+   * when the caller is an admin (members can't surface a re-shareable
+   * link without admin oversight; v1 has no per-link revocation).
+   * `null` for non-admin callers and for rootless tokens.
+   */
+  inviteUrl: string | null;
   /** Legacy username + password sign-in. Self-host path. */
   login: (username: string, password: string) => Promise<void>;
   /**
@@ -86,6 +99,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [userId, setUserId] = useState<string | null>(null);
   const [onboardingState, setOnboardingState] = useState<OnboardingState | null>(null);
   const [hasConnectedClientElsewhere, setHasConnectedClientElsewhere] = useState(false);
+  const [inviteUrl, setInviteUrl] = useState<string | null>(null);
   const [organizationId, setOrganizationId] = useState<string | null>(null);
   const [workspaces, setWorkspaces] = useState<WorkspaceListItem[] | null>(null);
 
@@ -101,6 +115,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setWorkspaces(null);
     setOnboardingState(null);
     setHasConnectedClientElsewhere(false);
+    setInviteUrl(null);
   }, []);
 
   /**
@@ -137,6 +152,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUserId(null);
       setOnboardingState(null);
       setHasConnectedClientElsewhere(false);
+      setInviteUrl(null);
       return;
     }
 
@@ -149,6 +165,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUserId(data.user?.id ?? null);
       setOnboardingState(data.member.onboardingState ?? null);
       setHasConnectedClientElsewhere(data.wizard?.hasConnectedClientElsewhere ?? false);
+      setInviteUrl(data.workspace?.inviteUrl ?? null);
     } catch {
       // /me failed despite memberships existing — leave member state null
       // and let the caller decide (typical case: token's organizationId
@@ -159,6 +176,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUserId(null);
       setOnboardingState(null);
       setHasConnectedClientElsewhere(false);
+      setInviteUrl(null);
       setAgentId(null);
     }
   }, []);
@@ -220,6 +238,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         userId,
         onboardingState,
         hasConnectedClientElsewhere,
+        inviteUrl,
         login,
         signInWithTokens,
         switchWorkspace,

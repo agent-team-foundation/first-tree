@@ -11,6 +11,7 @@ import { AgentsPage } from "./pages/agents.js";
 import { AuthCallbackPage } from "./pages/auth-callback.js";
 import { ClientsPage } from "./pages/clients.js";
 import { InvitePage } from "./pages/invite.js";
+import { PrivacyPage, TermsPage } from "./pages/legal.js";
 import { LoginPage } from "./pages/login.js";
 import { SettingsPage } from "./pages/settings.js";
 import { SetupPage } from "./pages/setup.js";
@@ -41,6 +42,8 @@ export function App() {
             <Route path="/signup" element={<SignupPage />} />
             <Route path="/auth/github/complete" element={<AuthCallbackPage />} />
             <Route path="/invite/:token" element={<InvitePage />} />
+            <Route path="/terms" element={<TermsPage />} />
+            <Route path="/privacy" element={<PrivacyPage />} />
 
             {/* Authenticated but workspace-less surface: lets a freshly
                 OAuthed user create or join a workspace. RequireAuth

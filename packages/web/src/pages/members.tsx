@@ -27,6 +27,7 @@ import { Label } from "../components/ui/label.js";
 import { Panel } from "../components/ui/panel.js";
 import { SectionHeader, UppercaseLabel } from "../components/ui/section-header.js";
 import { formatDate } from "../lib/utils.js";
+import { InviteLinkPanel } from "./admin/invite-link-panel.js";
 
 const roleValues = Object.values(MEMBER_ROLES);
 
@@ -102,6 +103,7 @@ export function MembersPage() {
 
   return (
     <>
+      <InviteLinkPanel />
       <Panel>
         <SectionHeader
           right={

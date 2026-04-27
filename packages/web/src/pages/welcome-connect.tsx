@@ -4,6 +4,7 @@ import { Navigate, useNavigate } from "react-router";
 import { type ConnectedClientSummary, generateConnectToken, listMyClients } from "../api/clients.js";
 import { setOnboardingState } from "../api/onboarding.js";
 import { useAuth } from "../auth/auth-context.js";
+import { MobileBanner } from "../components/mobile-banner.js";
 import { Button } from "../components/ui/button.js";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card.js";
 import { StateDot } from "../components/ui/state-dot.js";
@@ -164,6 +165,7 @@ export function WelcomeConnectPage() {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
+      <MobileBanner />
       <Card className="w-full max-w-2xl">
         <CardHeader>
           <CardTitle className="text-title">Connect your computer</CardTitle>

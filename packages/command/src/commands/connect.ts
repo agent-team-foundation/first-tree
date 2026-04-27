@@ -196,6 +196,60 @@ async function authenticateInteractive(url: string): Promise<{ accessToken: stri
   return (await loginRes.json()) as { accessToken: string; refreshToken: string };
 }
 
+/**
+ * One-shot version drift hint for the SaaS onboarding flow. We compare
+ * the CLI's bundled `COMMAND_VERSION` against `commandVersion` returned
+ * by `GET /health`. Older local CLI → emit a warning telling the user
+ * how to upgrade. Same-version or newer → silent. Network failures →
+ * silent (the connect itself already succeeded; a /health hiccup
+ * isn't user-actionable here).
+ *
+ * The runtime path uses `client/src/runtime/update-manager.ts` instead
+ * (driven by the `server:welcome` WS frame on long-running `client
+ * start`); this is the gap-filler for one-shot subcommands.
+ */
+async function warnIfCliBehind(serverUrl: string): Promise<void> {
+  try {
+    const res = await fetch(`${serverUrl}/api/v1/health`, {
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!res.ok) return;
+    const body = (await res.json()) as { commandVersion?: string };
+    const serverVersion = body.commandVersion;
+    if (!serverVersion || serverVersion === COMMAND_VERSION) return;
+    if (semverCompare(serverVersion, COMMAND_VERSION) <= 0) return;
+    print.line(
+      `\n  ⚠ Your CLI is ${COMMAND_VERSION}; the server is on ${serverVersion}.\n` +
+        `    Upgrade with: npm install -g @agent-team-foundation/first-tree-hub@latest\n\n`,
+    );
+  } catch {
+    // Silent — see doc-comment.
+  }
+}
+
+/**
+ * Lightweight `a > b` compare without dragging in semver — `connect.ts`
+ * deliberately stays dep-free. Returns negative when `a < b`, 0 when
+ * equal, positive when `a > b`. Treats anything beyond major.minor.patch
+ * (pre-release tags) as "equal-ish" — good enough for the warn path.
+ */
+function semverCompare(a: string, b: string): number {
+  const partsA = a
+    .split(/[.-]/)
+    .slice(0, 3)
+    .map((s) => Number.parseInt(s, 10) || 0);
+  const partsB = b
+    .split(/[.-]/)
+    .slice(0, 3)
+    .map((s) => Number.parseInt(s, 10) || 0);
+  for (let i = 0; i < 3; i++) {
+    const ai = partsA[i] ?? 0;
+    const bi = partsB[i] ?? 0;
+    if (ai !== bi) return ai - bi;
+  }
+  return 0;
+}
+
 export function registerConnectCommand(parent: Command): void {
   parent
     .command("connect <server-url>")
@@ -252,6 +306,15 @@ export function registerConnectCommand(parent: Command): void {
 
         saveCredentials({ ...tokens, serverUrl: url });
         print.line("  \u2713 Authenticated\n");
+
+        // 4b. Version-drift hint. The runtime UpdateManager handles this
+        // for `client start`, but `connect` is a one-shot \u2014 no welcome
+        // frame, no manager. Best-effort GET /health surfaces the
+        // server's commandVersion so we can warn before the user goes
+        // off and runs an outdated CLI for the next week. Network
+        // failures are silent \u2014 the connect already succeeded in step
+        // 2 so a /health hiccup is operator noise, not user-actionable.
+        await warnIfCliBehind(url);
 
         // Touch config + client.id so the background service picks up the
         // persisted clientId on its first launch (see #99).

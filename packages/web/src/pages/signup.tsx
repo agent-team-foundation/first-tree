@@ -1,5 +1,6 @@
-import { Navigate, useSearchParams } from "react-router";
+import { Link, Navigate, useSearchParams } from "react-router";
 import { useAuth } from "../auth/auth-context.js";
+import { MobileBanner } from "../components/mobile-banner.js";
 import { Button } from "../components/ui/button.js";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card.js";
 
@@ -39,6 +40,7 @@ export function SignupPage() {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background">
+      <MobileBanner />
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
           <CardTitle className="text-title">First Tree Hub</CardTitle>
@@ -54,7 +56,15 @@ export function SignupPage() {
             <a href={startUrl}>Continue with GitHub</a>
           </Button>
           <p className="text-caption text-muted-foreground text-center">
-            By continuing, you agree to our terms — privacy and tos pages coming soon.
+            By continuing, you agree to our{" "}
+            <Link to="/terms" className="underline">
+              Terms
+            </Link>
+            {" and "}
+            <Link to="/privacy" className="underline">
+              Privacy
+            </Link>{" "}
+            policies.
           </p>
         </CardContent>
       </Card>
