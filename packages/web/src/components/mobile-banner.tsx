@@ -17,11 +17,24 @@ const MOBILE_MAX_WIDTH_PX = 768;
 export function MobileBanner() {
   const [show, setShow] = useState(false);
 
+  // Subscribe to viewport changes (resize, orientation flip) so the
+  // banner appears / disappears as the user crosses the mobile-width
+  // threshold within a session. A one-shot `matches` read on mount
+  // would freeze the banner state to the initial viewport, which
+  // means a tablet rotated landscape would still see it and a
+  // resized desktop window would never catch it.
   useEffect(() => {
     if (typeof window === "undefined") return;
     const dismissed = window.localStorage.getItem(STORAGE_KEY) === "1";
-    const isMobile = window.matchMedia(`(max-width: ${MOBILE_MAX_WIDTH_PX}px)`).matches;
-    setShow(!dismissed && isMobile);
+    if (dismissed) {
+      setShow(false);
+      return;
+    }
+    const mql = window.matchMedia(`(max-width: ${MOBILE_MAX_WIDTH_PX}px)`);
+    const apply = () => setShow(mql.matches);
+    apply();
+    mql.addEventListener("change", apply);
+    return () => mql.removeEventListener("change", apply);
   }, []);
 
   if (!show) return null;

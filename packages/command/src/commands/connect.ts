@@ -260,6 +260,14 @@ export function registerConnectCommand(parent: Command): void {
       try {
         const url = serverUrl.replace(/\/+$/, "");
 
+        // 0. Pre-auth version-drift hint. Run BEFORE auth + creds + service
+        // install so a "your CLI is too old" warning surfaces while the
+        // user can still abort cleanly. /health is unauthenticated, so
+        // moving the check up costs nothing. Network failures stay
+        // silent — the connect itself can still succeed against a
+        // healthy hub even if /health timed out.
+        await warnIfCliBehind(url);
+
         // 1. Pre-auth account-switch gate (token path).
         //
         // Connect tokens are single-use. If we authed first and the user
@@ -306,15 +314,6 @@ export function registerConnectCommand(parent: Command): void {
 
         saveCredentials({ ...tokens, serverUrl: url });
         print.line("  \u2713 Authenticated\n");
-
-        // 4b. Version-drift hint. The runtime UpdateManager handles this
-        // for `client start`, but `connect` is a one-shot \u2014 no welcome
-        // frame, no manager. Best-effort GET /health surfaces the
-        // server's commandVersion so we can warn before the user goes
-        // off and runs an outdated CLI for the next week. Network
-        // failures are silent \u2014 the connect already succeeded in step
-        // 2 so a /health hiccup is operator noise, not user-actionable.
-        await warnIfCliBehind(url);
 
         // Touch config + client.id so the background service picks up the
         // persisted clientId on its first launch (see #99).
