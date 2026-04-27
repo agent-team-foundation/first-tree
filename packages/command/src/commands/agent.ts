@@ -150,21 +150,18 @@ export function registerAgentCommands(program: Command): void {
   // ── Config management (add / remove / list) ─────────────────────────
 
   agent
-    .command("add [name]")
-    .description("Register a local alias for an existing Hub agent (stores agentId)")
+    .command("add")
+    .description("Register an existing Hub agent on this client (uses the agent name from the Hub)")
     .option("--agent-id <id>", "Agent UUID on the Hub")
-    .action(async (name?: string, options?: { agentId?: string }) => {
+    .action(async (options?: { agentId?: string }) => {
       try {
-        let agentName = name;
-        let agentId = options?.agentId;
-
+        // Phase 3 of the agent-naming refactor retired the free-form
+        // local alias — the local config dir is always keyed by the
+        // server-side `agent.name`. The prompt helper fetches that name
+        // from the Hub given the agent UUID.
+        const { name: agentName, agentId } = await promptAddAgent({ agentId: options?.agentId });
         if (!agentName || !agentId) {
-          const result = await promptAddAgent();
-          agentName = agentName ?? result.name;
-          agentId = agentId ?? result.agentId;
-        }
-        if (!agentName || !agentId) {
-          fail("MISSING_AGENT_ARGS", "Both agent name and agent-id are required.", 2);
+          fail("MISSING_AGENT_ARGS", "Agent UUID (and a hub name for that UUID) are required.", 2);
         }
 
         const agentDir = join(DEFAULT_CONFIG_DIR, "agents", agentName);
@@ -186,7 +183,9 @@ export function registerAgentCommands(program: Command): void {
 
   agent
     .command("remove <name>")
-    .description("Remove a local agent alias and its runtime data")
+    .description(
+      "Remove an agent from this client and delete its local runtime data (config dir, workspace, session state)",
+    )
     .action((name: string) => {
       const agentDir = join(DEFAULT_CONFIG_DIR, "agents", name);
       if (!existsSync(agentDir)) {
@@ -410,7 +409,7 @@ export function registerAgentCommands(program: Command): void {
     .requiredOption("--platform <platform>", "Platform: feishu")
     .requiredOption("--app-id <id>", "Feishu bot App ID")
     .requiredOption("--app-secret <secret>", "Feishu bot App Secret")
-    .option("--agent <name>", "Local agent alias (default: first configured)")
+    .option("--agent <name>", "Agent name on the Hub (default: first configured on this client)")
     .option("--server <url>", "Hub server URL")
     .action(
       async (options: { platform: string; appId: string; appSecret: string; agent?: string; server?: string }) => {
@@ -437,7 +436,7 @@ export function registerAgentCommands(program: Command): void {
     .description("Bind a Feishu user to a human agent (via delegate_mention)")
     .requiredOption("--platform <platform>", "Platform: feishu")
     .requiredOption("--feishu-id <id>", "Feishu user ID (ou_xxx)")
-    .option("--agent <name>", "Local agent alias (default: first configured)")
+    .option("--agent <name>", "Agent name on the Hub (default: first configured on this client)")
     .option("--server <url>", "Hub server URL")
     .action(
       async (
@@ -483,7 +482,7 @@ export function registerAgentCommands(program: Command): void {
     .option("--reply-to <messageId>", "Message ID to reply to")
     .option("--reply-to-inbox <inboxId>", "Cross-chat reply target inbox")
     .option("--reply-to-chat <chatId>", "Cross-chat reply target chat")
-    .option("--agent <name>", "Local agent alias (default: first configured)")
+    .option("--agent <name>", "Agent name on the Hub (default: first configured on this client)")
     .action(async (target: string, message: string | undefined, options: SendOptions) => {
       try {
         const content = message ?? (await readStdin());
@@ -537,7 +536,7 @@ export function registerAgentCommands(program: Command): void {
     .description("List chats this agent participates in")
     .option("-l, --limit <number>", "Maximum chats to return (1-100)", "20")
     .option("--cursor <cursor>", "Pagination cursor from previous response")
-    .option("--agent <name>", "Local agent alias (default: first configured)")
+    .option("--agent <name>", "Agent name on the Hub (default: first configured on this client)")
     .action(async (options: { limit: string; cursor?: string; agent?: string }) => {
       try {
         const limit = parseLimit(options.limit, 100);
@@ -554,7 +553,7 @@ export function registerAgentCommands(program: Command): void {
     .description("View message history in a chat")
     .option("-l, --limit <number>", "Maximum messages to return (1-100)", "20")
     .option("--cursor <cursor>", "Pagination cursor from previous response")
-    .option("--agent <name>", "Local agent alias (default: first configured)")
+    .option("--agent <name>", "Agent name on the Hub (default: first configured on this client)")
     .action(async (chatId: string, options: { limit: string; cursor?: string; agent?: string }) => {
       try {
         const limit = parseLimit(options.limit, 100);
@@ -869,7 +868,7 @@ export function registerAgentCommands(program: Command): void {
   agent
     .command("register")
     .description("Register this agent and return identity info")
-    .option("--agent <name>", "Local agent alias (default: first configured)")
+    .option("--agent <name>", "Agent name on the Hub (default: first configured on this client)")
     .action(async (options: { agent?: string }) => {
       try {
         const sdk = createSdk(options.agent);
@@ -885,7 +884,7 @@ export function registerAgentCommands(program: Command): void {
     .description("Pull pending messages from inbox")
     .option("-l, --limit <number>", "Maximum entries to return", "10")
     .option("-a, --ack", "Automatically ACK entries after pulling")
-    .option("--agent <name>", "Local agent alias (default: first configured)")
+    .option("--agent <name>", "Agent name on the Hub (default: first configured on this client)")
     .action(async (options: { limit: string; ack?: boolean; agent?: string }) => {
       try {
         const sdk = createSdk(options.agent);

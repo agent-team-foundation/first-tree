@@ -184,11 +184,18 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
     metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
     clientId: args.type === "human" ? undefined : args.clientId,
   });
-  print.line(`Agent "${args.id}" created (uuid ${primary.uuid}).\n`);
+  // Phase 3: always prefer the server-returned `name` over the submitted
+  // `args.id`. The two usually agree, but the server may normalise or
+  // reject on collision and a subsequent rename would be needed on first
+  // start. Using `primary.name` here keeps the log message, local dir key,
+  // and the Hub's view aligned from the outset. The `?? args.id` fallback
+  // covers servers that (for some reason) return a null name — the
+  // idempotent migration on next start will reconcile.
+  const primaryLocalName = primary.name ?? args.id;
+  print.line(`Agent "${primaryLocalName}" created (uuid ${primary.uuid}).\n`);
 
-  // For non-human agents, persist the local alias so `client start` can bind.
   if (args.type !== "human") {
-    saveAgentConfig(args.id, primary.uuid, "claude-code");
+    saveAgentConfig(primaryLocalName, primary.uuid, "claude-code");
   }
 
   let assistantUuid: string | null = null;
@@ -203,8 +210,9 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
         clientId: args.clientId,
       });
       assistantUuid = assistant.uuid;
-      saveAgentConfig(args.assistant, assistant.uuid, "claude-code");
-      print.line(`Assistant "${args.assistant}" ready.\n`);
+      const assistantLocalName = assistant.name ?? args.assistant;
+      saveAgentConfig(assistantLocalName, assistant.uuid, "claude-code");
+      print.line(`Assistant "${assistantLocalName}" ready.\n`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       print.line(`Warning: Failed to create assistant "${args.assistant}": ${msg}\n`);
