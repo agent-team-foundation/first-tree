@@ -4,6 +4,7 @@ import {
   type Message,
   messageSourceSchema,
   type ParticipantMode,
+  type PrecedingMessage,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { and, eq, inArray } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
@@ -61,6 +62,7 @@ export async function buildClientMessagePayload(
   source: ClientMessagePayloadSource,
   message: RawMessageRow,
   entryChatId?: string | null,
+  precedingMessages: PrecedingMessage[] = [],
 ): Promise<ClientMessage> {
   const agentId = await resolveAgentId(db, source);
   const [cfg] = await db
@@ -92,10 +94,16 @@ export async function buildClientMessagePayload(
     configVersion: version,
     recipientMode,
     inReplyToSnapshot,
+    precedingMessages,
   };
 }
 
-export type MessageForInbox = { entryChatId: string | null; message: RawMessageRow };
+export type MessageForInbox = {
+  entryChatId: string | null;
+  message: RawMessageRow;
+  /** Group-chat context the recipient missed (silent inbox). Empty by default. */
+  precedingMessages?: PrecedingMessage[];
+};
 
 /**
  * Batch variant — builds all payloads with a single DB lookup per agent plus
@@ -146,7 +154,7 @@ export async function buildClientMessagePayloadsForInbox(
     }
   }
 
-  return items.map(({ entryChatId, message: m }) => ({
+  return items.map(({ entryChatId, message: m, precedingMessages = [] }) => ({
     id: m.id,
     chatId: m.chatId,
     senderId: m.senderId,
@@ -161,6 +169,7 @@ export async function buildClientMessagePayloadsForInbox(
     configVersion: version,
     recipientMode: modeByChat.get(entryChatId ?? m.chatId) ?? "full",
     inReplyToSnapshot: m.inReplyTo ? (snapshotById.get(m.inReplyTo) ?? null) : null,
+    precedingMessages,
   }));
 }
 

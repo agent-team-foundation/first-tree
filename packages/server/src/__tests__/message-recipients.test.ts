@@ -142,7 +142,9 @@ describe("sendMessage returns recipients", () => {
     });
 
     expect(result.message).toBeDefined();
-    expect(result.message.content).toBe("direct message");
+    // Server prepends @<targetName> on agent-to-agent sends — see
+    // agent-send-mention-injection.test.ts.
+    expect(result.message.content).toBe(`@${a2.name} direct message`);
     expect(result.recipients).toContain(a2.inboxId);
     expect(result.recipients).not.toContain(a1.inboxId);
   });

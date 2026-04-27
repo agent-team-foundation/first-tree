@@ -246,8 +246,12 @@ export async function adminChatRoutes(app: FastifyInstance): Promise<void> {
     // messages fall through unchanged.
     const prepared = await prepareImageOutbound(app.db, app.notifier, chatId, { ...body, source: "hub_ui" });
 
-    // Send message as the member's linked agent, always with source=hub_ui
-    const result = await sendMessage(app.db, chatId, member.agentId, prepared);
+    // Send message as the member's linked agent, always with source=hub_ui.
+    // `enforceGroupMention` matches the front-end mention picker's send-button
+    // gate so requests that bypass the picker (curl / scripts / tampered web)
+    // can't slip an unaddressed message into a group. Content is NOT
+    // normalised on this path — humans typed exactly what they typed.
+    const result = await sendMessage(app.db, chatId, member.agentId, prepared, { enforceGroupMention: true });
 
     // Notify recipients via PG NOTIFY
     notifyRecipients(app.notifier, result.recipients, result.message.id);

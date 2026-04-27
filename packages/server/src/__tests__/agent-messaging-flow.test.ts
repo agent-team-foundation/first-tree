@@ -16,7 +16,9 @@ describe("Agent Messaging Flow (send → chats → history)", () => {
     expect(sendRes.statusCode).toBe(201);
     const sentMessage = sendRes.json();
     expect(sentMessage.senderId).toBe(sender.agent.uuid);
-    expect(sentMessage.content).toBe("Hello from sender");
+    // Server prepends @<targetName> on agent-to-agent sends — see
+    // agent-send-mention-injection.test.ts.
+    expect(sentMessage.content).toBe(`@${receiver.agent.name} Hello from sender`);
     expect(sentMessage.chatId).toBeDefined();
 
     const chatId = sentMessage.chatId as string;
@@ -35,7 +37,7 @@ describe("Agent Messaging Flow (send → chats → history)", () => {
     expect(historyRes.statusCode).toBe(200);
     const history = historyRes.json();
     expect(history.items).toHaveLength(1);
-    expect(history.items[0].content).toBe("Hello from sender");
+    expect(history.items[0].content).toBe(`@${receiver.agent.name} Hello from sender`);
     expect(history.items[0].senderId).toBe(sender.agent.uuid);
 
     const replyRes = await receiver.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
@@ -132,7 +134,9 @@ describe("Agent Messaging Flow (send → chats → history)", () => {
     });
     expect(res.statusCode).toBe(201);
     expect(res.json().format).toBe("markdown");
-    expect(res.json().content).toBe("## Hello\n\nThis is **bold**");
+    // Server prepends @<targetName> on agent-to-agent sends — see
+    // agent-send-mention-injection.test.ts.
+    expect(res.json().content).toBe(`@${a2.name} ## Hello\n\nThis is **bold**`);
   });
 
   it("send with metadata", async () => {

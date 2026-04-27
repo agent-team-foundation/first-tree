@@ -1,4 +1,4 @@
-import { bigserial, index, integer, pgTable, text, timestamp, unique } from "drizzle-orm/pg-core";
+import { bigserial, boolean, index, integer, pgTable, text, timestamp, unique } from "drizzle-orm/pg-core";
 import { messages } from "./messages.js";
 
 /** Delivery queue (envelope). One entry per recipient created during message fan-out. Uses SKIP LOCKED for concurrent-safe consumption. */
@@ -15,6 +15,15 @@ export const inboxEntries = pgTable(
     chatId: text("chat_id"),
     /** "pending" → "delivered" → "acked" | "failed" */
     status: text("status").notNull().default("pending"),
+    /**
+     * When `false`, the entry is a "silent context" row: written so future
+     * deliveries can replay it as preceding chat history, but never wakes the
+     * recipient's session on its own and is not visible to the dispatcher's
+     * `pollInbox` claim. Group-chat fan-out sets this to `false` for
+     * `mention_only` participants who weren't named in the triggering message.
+     * Notify=true entries are the normal "active" deliverables.
+     */
+    notify: boolean("notify").notNull().default(true),
     /** Timeout reset count; entry is marked "failed" when this reaches the configured max */
     retryCount: integer("retry_count").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -24,5 +33,11 @@ export const inboxEntries = pgTable(
   (table) => [
     unique("uq_inbox_delivery").on(table.inboxId, table.messageId, table.chatId),
     index("idx_inbox_pending").on(table.inboxId, table.createdAt),
+    /**
+     * Bundling lookup: given a notify=true trigger, find all silent pending
+     * rows in the same chat that should be attached as preceding context.
+     * Composite shape mirrors the actual WHERE clause used in pollInbox.
+     */
+    index("idx_inbox_chat_silent").on(table.inboxId, table.chatId, table.notify, table.status),
   ],
 );

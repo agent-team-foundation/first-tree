@@ -176,6 +176,13 @@
       "when": 1777334400000,
       "tag": "0024_display_name_not_null",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1777420800000,
+      "tag": "0025_inbox_silent_entries",
+      "breakpoints": true
     }
   ]
 }

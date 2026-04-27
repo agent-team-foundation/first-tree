@@ -30,6 +30,7 @@ export async function agentMessageRoutes(app: FastifyInstance): Promise<void> {
       request.params.chatId,
       identity.uuid,
       prepared,
+      { enforceGroupMention: true, normalizeMentionsInContent: true },
     );
 
     notifyRecipients(app.notifier, recipients, msg.id);
