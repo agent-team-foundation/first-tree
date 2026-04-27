@@ -6,6 +6,8 @@ export function runStatusCommand(): void {
 
 export const statusCommand: SubcommandModule = {
   name: "status",
+  alias: "",
+  summary: "",
   description: "Show gardener-managed state status.",
   action: runStatusCommand,
 };

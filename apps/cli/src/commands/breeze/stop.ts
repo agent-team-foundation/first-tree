@@ -6,6 +6,8 @@ export function runStopCommand(): void {
 
 export const stopCommand: SubcommandModule = {
   name: "stop",
+  alias: "",
+  summary: "",
   description: "Stop breeze workflow services.",
   action: runStopCommand,
 };

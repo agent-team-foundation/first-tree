@@ -10,6 +10,8 @@ export type CommandModule = {
 
 export type SubcommandModule = {
   name: string;
+  alias: string;
+  summary: string;
   description: string;
   action: CommandAction;
 };

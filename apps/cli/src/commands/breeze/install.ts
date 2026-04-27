@@ -6,6 +6,8 @@ export function runInstallCommand(): void {
 
 export const installCommand: SubcommandModule = {
   name: "install",
+  alias: "",
+  summary: "",
   description: "Install breeze workflow support.",
   action: runInstallCommand,
 };

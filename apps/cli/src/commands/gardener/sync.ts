@@ -6,6 +6,8 @@ export function runSyncCommand(): void {
 
 export const syncCommand: SubcommandModule = {
   name: "sync",
+  alias: "",
+  summary: "",
   description: "Sync gardener-managed state.",
   action: runSyncCommand,
 };

@@ -6,6 +6,8 @@ export function runInstallCommand(): void {
 
 export const installCommand: SubcommandModule = {
   name: "install",
+  alias: "",
+  summary: "",
   description: "Install gardener workflow support.",
   action: runInstallCommand,
 };

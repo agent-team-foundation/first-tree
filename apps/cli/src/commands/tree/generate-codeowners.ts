@@ -6,6 +6,8 @@ export function runGenerateCodeownersCommand(): void {
 
 export const generateCodeownersCommand: SubcommandModule = {
   name: "generate-codeowners",
+  alias: "",
+  summary: "",
   description: "Generate CODEOWNERS entries from first-tree ownership data.",
   action: runGenerateCodeownersCommand,
 };

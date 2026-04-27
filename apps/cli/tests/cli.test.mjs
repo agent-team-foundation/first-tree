@@ -127,8 +127,27 @@ describe("first-tree CLI", () => {
           `first-tree ${commandGroup.name} ${subcommandName} is not implemented yet.`,
         );
       });
+
+      it(`prints ${commandGroup.name} ${subcommandName} help after an invalid option`, async () => {
+        const result = await runCli([commandGroup.name, subcommandName, "--bad-option"]);
+
+        expect(result.code).toBe(1);
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toContain("error: unknown option '--bad-option'");
+        expect(result.stderr).toContain(`Usage: first-tree ${commandGroup.name} ${subcommandName}`);
+        expect(result.stderr).toContain("Options:");
+      });
     }
   }
+
+  it("suggests a third-level subcommand for an unknown typo", async () => {
+    const result = await runCli(["tree", "inspec"]);
+
+    expect(result.code).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("error: unknown command 'inspec'");
+    expect(result.stderr).toContain("(Did you mean inspect?)");
+  });
 
   it("keeps a shebang on the compiled entry", async () => {
     const entrySource = await readFile(entryPath, "utf8");

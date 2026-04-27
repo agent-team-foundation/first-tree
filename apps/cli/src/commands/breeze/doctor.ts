@@ -6,6 +6,8 @@ export function runDoctorCommand(): void {
 
 export const doctorCommand: SubcommandModule = {
   name: "doctor",
+  alias: "",
+  summary: "",
   description: "Check breeze workflow configuration.",
   action: runDoctorCommand,
 };

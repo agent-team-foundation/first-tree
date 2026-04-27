@@ -6,6 +6,8 @@ export function runInspectCommand(): void {
 
 export const inspectCommand: SubcommandModule = {
   name: "inspect",
+  alias: "",
+  summary: "",
   description: "Inspect the first-tree workspace.",
   action: runInspectCommand,
 };

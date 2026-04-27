@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 
 import type { CommandModule, SubcommandModule } from "../types.js";
+import { registerCommandGroup } from "../groups.js";
 import { doctorCommand } from "./doctor.js";
 import { installCommand } from "./install.js";
 import { pollCommand } from "./poll.js";
@@ -21,18 +22,11 @@ export const breezeCommand: CommandModule = {
   name: "breeze",
   description: "Work with breeze workflow commands.",
   register(program: Command): void {
-    const command = program
-      .command("breeze")
-      .description("Work with breeze workflow commands.")
-      .action(() => {
-        command.outputHelp();
-      });
-
-    for (const subcommand of breezeSubcommands) {
-      command
-        .command(subcommand.name)
-        .description(subcommand.description)
-        .action(subcommand.action);
-    }
+    registerCommandGroup(
+      program,
+      "breeze",
+      "Work with breeze workflow commands.",
+      breezeSubcommands,
+    );
   },
 };

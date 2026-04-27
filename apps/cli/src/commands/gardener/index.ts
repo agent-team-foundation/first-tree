@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 
 import type { CommandModule, SubcommandModule } from "../types.js";
+import { registerCommandGroup } from "../groups.js";
 import { installCommand } from "./install.js";
 import { statusCommand } from "./status.js";
 import { syncCommand } from "./sync.js";
@@ -11,18 +12,11 @@ export const gardenerCommand: CommandModule = {
   name: "gardener",
   description: "Work with gardener workflow commands.",
   register(program: Command): void {
-    const command = program
-      .command("gardener")
-      .description("Work with gardener workflow commands.")
-      .action(() => {
-        command.outputHelp();
-      });
-
-    for (const subcommand of gardenerSubcommands) {
-      command
-        .command(subcommand.name)
-        .description(subcommand.description)
-        .action(subcommand.action);
-    }
+    registerCommandGroup(
+      program,
+      "gardener",
+      "Work with gardener workflow commands.",
+      gardenerSubcommands,
+    );
   },
 };

@@ -6,6 +6,8 @@ export function runStartCommand(): void {
 
 export const startCommand: SubcommandModule = {
   name: "start",
+  alias: "",
+  summary: "",
   description: "Start hub services.",
   action: runStartCommand,
 };

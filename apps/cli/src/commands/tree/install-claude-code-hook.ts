@@ -6,6 +6,8 @@ export function runInstallClaudeCodeHookCommand(): void {
 
 export const installClaudeCodeHookCommand: SubcommandModule = {
   name: "install-claude-code-hook",
+  alias: "",
+  summary: "",
   description: "Install the Claude Code hook for first-tree workflows.",
   action: runInstallClaudeCodeHookCommand,
 };

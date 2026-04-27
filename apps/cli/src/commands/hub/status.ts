@@ -6,6 +6,8 @@ export function runStatusCommand(): void {
 
 export const statusCommand: SubcommandModule = {
   name: "status",
+  alias: "",
+  summary: "",
   description: "Show hub status.",
   action: runStatusCommand,
 };

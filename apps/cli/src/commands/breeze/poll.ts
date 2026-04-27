@@ -6,6 +6,8 @@ export function runPollCommand(): void {
 
 export const pollCommand: SubcommandModule = {
   name: "poll",
+  alias: "",
+  summary: "",
   description: "Poll breeze workflow state.",
   action: runPollCommand,
 };
