@@ -6,7 +6,7 @@ export const users = pgTable("users", {
   username: text("username").unique().notNull(),
   /**
    * Primary contact email. Sourced from the GitHub OAuth provider for SaaS
-   * users; legacy self-hosted rows are backfilled with a `<id>@noreply.local`
+   * users; legacy self-hosted rows are backfilled with a `<id>@users.noreply.first-tree.ai`
    * placeholder by migration 0026 and updated when the user later links a
    * provider. UNIQUE NOT NULL — see docs/saas-onboarding-journey.md §5.1.
    */

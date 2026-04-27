@@ -38,7 +38,7 @@ describe("Admin WS — pulse:tick visibility filtering", () => {
       await tx.insert(users).values({
         id: userId,
         username: `pv-${suffix}-${crypto.randomUUID().slice(0, 6)}`,
-        email: `${userId}@noreply.local`,
+        email: `${userId}@users.noreply.first-tree.ai`,
         passwordHash: "x",
         displayName: `PV ${suffix}`,
       });

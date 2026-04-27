@@ -52,7 +52,7 @@ describe("Admin WS — cross-org isolation (S0)", () => {
       await tx.insert(users).values({
         id: userId,
         username: `iso-admin-${suffix}-${crypto.randomUUID().slice(0, 6)}`,
-        email: `${userId}@noreply.local`,
+        email: `${userId}@users.noreply.first-tree.ai`,
         passwordHash: "x",
         displayName: `Iso Admin ${suffix}`,
       });

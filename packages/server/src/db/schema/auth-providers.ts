@@ -17,6 +17,7 @@ import { users } from "./users.js";
 export const authProviders = pgTable(
   "auth_providers",
   {
+    /** UUID v7, system-generated. Callers must supply via `uuidv7()` at insert time — matches the convention used by `users` and `organizations`. */
     id: text("id").primaryKey(),
     userId: text("user_id")
       .notNull()

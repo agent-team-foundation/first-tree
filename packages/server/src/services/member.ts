@@ -43,13 +43,16 @@ export async function createMember(db: Database, orgId: string, data: CreateMemb
     const userId = existingUser?.id ?? uuidv7();
     if (isNewUser && passwordHash) {
       // Legacy admin-API path: email isn't collected here. Use a per-user
-      // noreply placeholder so the UNIQUE NOT NULL constraint holds. SaaS
-      // signups go through the OAuth callback (PR #2), which writes the
-      // real GitHub email instead.
+      // noreply placeholder so the UNIQUE NOT NULL constraint holds. The
+      // subdomain mirrors GitHub's `users.noreply.github.com` pattern —
+      // since `first-tree.ai` is under our control no real GitHub primary
+      // email can collide with the placeholder. SaaS signups go through
+      // the OAuth callback (PR #2), which overwrites this with the real
+      // GitHub email.
       await tx.insert(users).values({
         id: userId,
         username: data.username,
-        email: `${userId}@noreply.local`,
+        email: `${userId}@users.noreply.first-tree.ai`,
         passwordHash,
         displayName: data.displayName,
       });

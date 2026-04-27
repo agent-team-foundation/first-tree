@@ -33,7 +33,13 @@ export const memberSchema = z.object({
   organizationId: z.string(),
   agentId: z.string(),
   role: memberRoleSchema,
-  onboardingState: onboardingStateSchema.nullable(),
+  /**
+   * Wizard checkpoint. `.nullish()` because existing service projections
+   * (`listMembers`, `getMember`) do not yet select this column — PR #5
+   * adds the projection alongside the wizard-completion writes. Once that
+   * lands, tighten to `.nullable()`.
+   */
+  onboardingState: onboardingStateSchema.nullish(),
   createdAt: z.string(),
 });
 export type Member = z.infer<typeof memberSchema>;

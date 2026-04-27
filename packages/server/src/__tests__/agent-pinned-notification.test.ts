@@ -53,7 +53,7 @@ describe("Agent WS — agent:pinned push on create/bind", () => {
       await tx.insert(users).values({
         id: userId,
         username: `pin-user-${suffix}-${crypto.randomUUID().slice(0, 6)}`,
-        email: `${userId}@noreply.local`,
+        email: `${userId}@users.noreply.first-tree.ai`,
         passwordHash: "x",
         displayName: `Pin User ${suffix}`,
       });
