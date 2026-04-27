@@ -53,42 +53,6 @@ const commandMessages: Array<{
     args: ["hub", "status"],
     message: "first-tree hub status is not implemented yet.",
   },
-  {
-    args: ["breeze", "install"],
-    message: "first-tree breeze install is not implemented yet.",
-  },
-  {
-    args: ["breeze", "start"],
-    message: "first-tree breeze start is not implemented yet.",
-  },
-  {
-    args: ["breeze", "stop"],
-    message: "first-tree breeze stop is not implemented yet.",
-  },
-  {
-    args: ["breeze", "status"],
-    message: "first-tree breeze status is not implemented yet.",
-  },
-  {
-    args: ["breeze", "doctor"],
-    message: "first-tree breeze doctor is not implemented yet.",
-  },
-  {
-    args: ["breeze", "poll"],
-    message: "first-tree breeze poll is not implemented yet.",
-  },
-  {
-    args: ["gardener", "sync"],
-    message: "first-tree gardener sync is not implemented yet.",
-  },
-  {
-    args: ["gardener", "status"],
-    message: "first-tree gardener status is not implemented yet.",
-  },
-  {
-    args: ["gardener", "install"],
-    message: "first-tree gardener install is not implemented yet.",
-  },
 ];
 
 async function runConfiguredProgram(program: Command, args: string[]): Promise<ProgramRunResult> {
@@ -227,8 +191,6 @@ describe("first-tree program", () => {
     expect(result.stdout).toContain("All commands:");
     expect(result.stdout).toContain("first-tree tree inspect");
     expect(result.stdout).toContain("first-tree hub start");
-    expect(result.stdout).toContain("first-tree breeze poll");
-    expect(result.stdout).toContain("first-tree gardener sync");
   });
 
   it("omits the all-commands appendix when no commands are registered", async () => {

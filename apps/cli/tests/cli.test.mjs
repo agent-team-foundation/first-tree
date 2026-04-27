@@ -11,14 +11,8 @@ const repoRoot = resolve(cliRoot, "../..");
 const entryPath = resolve(cliRoot, "dist/index.js");
 const rootPackagePath = resolve(repoRoot, "package.json");
 const cliPackagePath = resolve(cliRoot, "package.json");
-const commandNames = ["init", "tree", "hub", "breeze", "gardener"];
-const rootHelpCommandPaths = [
-  "first-tree init",
-  "first-tree tree inspect",
-  "first-tree hub start",
-  "first-tree breeze poll",
-  "first-tree gardener sync",
-];
+const commandNames = ["init", "tree", "hub"];
+const rootHelpCommandPaths = ["first-tree init", "first-tree tree inspect", "first-tree hub start"];
 const commandGroups = [
   {
     name: "tree",
@@ -27,14 +21,6 @@ const commandGroups = [
   {
     name: "hub",
     subcommands: ["start", "stop", "doctor", "status"],
-  },
-  {
-    name: "breeze",
-    subcommands: ["install", "start", "stop", "status", "doctor", "poll"],
-  },
-  {
-    name: "gardener",
-    subcommands: ["sync", "status", "install"],
   },
 ];
 
