@@ -4,12 +4,16 @@ import { UnauthorizedError } from "../errors.js";
 import { pickDefaultMembership, signTokensForMember, signUserTokens } from "../services/auth.js";
 import {
   buildGithubAuthorizeUrl,
+  buildStateCookie,
+  clearStateCookie,
   exchangeGithubCode,
   findOrCreateUserViaGithub,
   type GithubProfile,
+  readStateCookie,
   resolveRedirectUri,
   signOauthState,
   verifyOauthState,
+  verifyStateCookieMatches,
 } from "../services/auth-github.js";
 
 /**
@@ -27,20 +31,29 @@ import {
  *      `POST /me/workspaces/join`, which is callable with either token type)
  */
 
+/**
+ * Whitelist for relative `next` paths. We allow only forward-slash-prefixed
+ * paths whose body is the URL-safe character set we'd ever generate. This
+ * blocks every documented open-redirect bypass shape:
+ *   * `//evil.com`     — protocol-relative URL
+ *   * `/\evil.com`     — backslash that browsers normalise to `/`
+ *   * `https://evil`   — absolute URL
+ *   * `javascript:…`   — pseudo-protocol
+ *   * `/foo@evil.com`  — userinfo-style host smuggling once concatenated
+ * If the value fails to match the whitelist we silently downgrade to `/`
+ * rather than throwing — the user reaches the sign-in page either way.
+ */
+const SAFE_NEXT_PATH = /^\/(?![/\\])[A-Za-z0-9_\-./?=&%#]*$/;
+
 const startQuerySchema = z.object({
-  /**
-   * Where the frontend wants to land after sign-in. Restricted to relative
-   * paths to keep the start endpoint from becoming an open redirect — any
-   * absolute URL is silently dropped to `/`.
-   */
   next: z
     .string()
     .optional()
-    .transform((v) => (v?.startsWith("/") && !v.startsWith("//") ? v : "/")),
+    .transform((v) => (v && SAFE_NEXT_PATH.test(v) ? v : "/")),
   // Dev-stub overrides — ignored in production. The frontend doesn't normally
   // pass these; tests do, and a curl-based local dev workflow can.
   dev_login: z.string().optional(),
-  dev_email: z.string().optional(),
+  dev_email: z.email().max(254).optional(),
   dev_id: z.string().optional(),
 });
 
@@ -51,22 +64,39 @@ const callbackQuerySchema = z.object({
 
 const devCallbackQuerySchema = z.object({
   state: z.string().min(1),
-  login: z.string().min(1),
+  login: z.string().min(1).max(64),
   /** Numeric-stringified GitHub id; tests use predictable values. */
-  github_id: z.string().min(1),
-  email: z.string().optional(),
-  display_name: z.string().optional(),
-  avatar_url: z.string().optional(),
+  github_id: z.string().min(1).max(64),
+  // Validated even on the dev stub — the value lands in `users.email` and
+  // `auth_providers.email_at_link`, which surfaces in admin UIs.
+  email: z.email().max(254).optional(),
+  display_name: z.string().max(200).optional(),
+  avatar_url: z.url().max(2048).optional(),
 });
 
 export async function authGithubRoutes(app: FastifyInstance): Promise<void> {
   const oauth = app.config.oauth?.github;
+
+  // Half-configured OAuth is unsafe: a deployment that sets clientId but
+  // forgets clientSecret would silently fall back to dev mode and accept
+  // forged identities at /dev-callback. Refuse to register routes — fail
+  // loud at boot so the operator notices immediately.
+  if ((oauth?.clientId && !oauth?.clientSecret) || (!oauth?.clientId && oauth?.clientSecret)) {
+    throw new Error(
+      "GitHub OAuth half-configured: set BOTH FIRST_TREE_HUB_OAUTH_GITHUB_CLIENT_ID and FIRST_TREE_HUB_OAUTH_GITHUB_CLIENT_SECRET, or neither (dev mode).",
+    );
+  }
   const devMode = !oauth?.clientId || !oauth?.clientSecret;
 
   app.get("/start", async (request, reply) => {
     const query = startQuerySchema.parse(request.query);
-    const { state } = await signOauthState(app.config.secrets.jwtSecret, query.next);
+    const { state, nonce } = await signOauthState(app.config.secrets.jwtSecret, query.next);
     const origin = readOrigin(request);
+    // Bind the state to THIS browser via an HttpOnly cookie. /callback
+    // requires the cookie to match the JWT's nonce — without this an
+    // attacker who calls /start themselves can trick a victim into
+    // signing in as the attacker (login-CSRF).
+    reply.header("set-cookie", buildStateCookie(nonce, origin.proto === "https"));
 
     if (devMode) {
       // Dev fallback — bounce straight to dev-callback with the supplied (or
@@ -96,7 +126,11 @@ export async function authGithubRoutes(app: FastifyInstance): Promise<void> {
       );
     }
     const query = callbackQuerySchema.parse(request.query);
-    const { next } = await verifyOauthState(app.config.secrets.jwtSecret, query.state);
+    const { nonce, next } = await verifyOauthState(app.config.secrets.jwtSecret, query.state);
+    // Login-CSRF gate. The cookie was set in /start and round-trips on the
+    // top-level GitHub→callback navigation (SameSite=Lax). Mismatch =>
+    // some other tab / actor started this state.
+    verifyStateCookieMatches(nonce, readStateCookie(request.headers.cookie));
     const origin = readOrigin(request);
     const redirectUri = resolveRedirectUri(oauth?.redirectUri, origin);
 
@@ -107,12 +141,17 @@ export async function authGithubRoutes(app: FastifyInstance): Promise<void> {
       { clientId: oauth.clientId, clientSecret: oauth.clientSecret, redirectUri },
       query.code,
     );
+    // One-shot cookie — clear after successful match so a replayed callback
+    // can't reuse the same nonce.
+    reply.header("set-cookie", clearStateCookie(origin.proto === "https"));
     return completeSignIn(app, reply, profile, next);
   });
 
   if (devMode) {
     app.get("/dev-callback", async (request, reply) => {
       const query = devCallbackQuerySchema.parse(request.query);
+      // No cookie check here — `/dev-callback` is the dev-mode opt-out of
+      // CSRF protection. Production deploys never register this route.
       const { next } = await verifyOauthState(app.config.secrets.jwtSecret, query.state);
       const profile: GithubProfile = {
         githubId: query.github_id,

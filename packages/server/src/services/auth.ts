@@ -91,9 +91,7 @@ export async function refreshAccessToken(db: Database, refreshToken: string, jwt
     throw new UnauthorizedError("Invalid or expired refresh token");
   }
 
-  // `type: "refresh"` always carries a memberId — the rootless user-token
-  // refresh flow uses a `type: "user"` refresh token, handled separately.
-  if (payload.type !== "refresh" || !payload.sub || !payload.memberId) {
+  if (!payload.sub) {
     throw new UnauthorizedError("Invalid token type");
   }
 
@@ -108,16 +106,33 @@ export async function refreshAccessToken(db: Database, refreshToken: string, jwt
     throw new UnauthorizedError("User not found or suspended");
   }
 
-  // Verify membership still exists
-  const [member] = await db.select().from(members).where(eq(members.id, payload.memberId)).limit(1);
-
-  if (!member) {
-    throw new UnauthorizedError("Membership not found");
+  // Two refresh shapes:
+  //   * `type: "refresh"` + memberId  → re-mint a per-org access token; this
+  //     is the established self-host path.
+  //   * `type: "user"` (no memberId)  → re-mint a rootless user access token
+  //     so the SaaS sign-up wizard survives past the 30-min user-token TTL
+  //     without forcing the new user to re-OAuth mid-onboarding.
+  if (payload.type === "refresh" && payload.memberId) {
+    const [member] = await db.select().from(members).where(eq(members.id, payload.memberId)).limit(1);
+    if (!member) {
+      throw new UnauthorizedError("Membership not found");
+    }
+    const tokenBase = {
+      sub: user.id,
+      memberId: member.id,
+      organizationId: member.organizationId,
+      role: member.role,
+    };
+    const accessToken = await signToken(secret, { ...tokenBase, type: "access" }, ACCESS_TOKEN_EXPIRY);
+    return { accessToken };
   }
 
-  const tokenBase = { sub: user.id, memberId: member.id, organizationId: member.organizationId, role: member.role };
-  const accessToken = await signToken(secret, { ...tokenBase, type: "access" }, ACCESS_TOKEN_EXPIRY);
-  return { accessToken };
+  if (payload.type === "user") {
+    const accessToken = await signToken(secret, { sub: user.id, type: "user" }, USER_TOKEN_EXPIRY);
+    return { accessToken };
+  }
+
+  throw new UnauthorizedError("Invalid token type");
 }
 
 /**
@@ -255,6 +270,17 @@ export async function signUserTokens(
  * to. The caller must be authenticated; we verify membership server-side
  * to refuse cross-tenant escalation even if the client lies about the
  * organizationId.
+ *
+ * Security trade-off (deferred): switch-org returns a fresh refresh token
+ * scoped to the target workspace. A leaked 30-min user token can therefore
+ * be parlayed into a 7-day refresh in any workspace the victim belongs to,
+ * with no JTI tracking on the original session. The proper fix is refresh-
+ * token rotation (per-family JTI table + rotation on every refresh), which
+ * is meaningfully larger than this PR's scope. Mitigations in place today:
+ *   * user tokens are short-lived (30 min)
+ *   * sign-in goes through GitHub OAuth (no password to phish)
+ *   * `/auth/switch-org` requires an authenticated caller
+ * Tracked for the post-M0 hardening pass.
  */
 export async function switchOrganization(
   db: Database,

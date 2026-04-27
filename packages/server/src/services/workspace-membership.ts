@@ -71,9 +71,10 @@ export async function listMyWorkspaces(db: Database, userId: string): Promise<Wo
  *   2. agents row — the user's 1:1 human agent in this workspace
  *   3. members row binding (user, org) → agent, role=admin
  *
- * Slug uniqueness lives on the column constraint; we map the resulting
- * 23505 to a `ConflictError` so the API returns 409 with the same shape as
- * the rest of the codebase.
+ * Three different unique constraints can fire (slug, agent name within org,
+ * member-per-org). We map each by inspecting `constraint_name` from the
+ * postgres-js error so the user sees the right message — defaulting to a
+ * generic "retry" rather than misattributing every collision to the slug.
  */
 export async function createWorkspaceForUser(
   db: Database,
@@ -102,6 +103,11 @@ export async function createWorkspaceForUser(
 
       const agentName = generateMemberAgentName(memberId);
 
+      // `as unknown as Database` because `createAgent` types its first arg
+      // as `Database`, but Drizzle's `Transaction` is a structural superset
+      // that supports the same query API. Acceptable here because we run
+      // entirely inside the parent tx — if `createAgent` ever opens a
+      // nested `db.transaction(…)` it'll savepoint, which is also fine.
       const agent = await createAgent(tx as unknown as Database, {
         name: agentName,
         type: "human",
@@ -122,12 +128,34 @@ export async function createWorkspaceForUser(
       return { workspaceId: orgId, memberId, role: "admin" as const };
     });
   } catch (err) {
-    const pgCode = (err as { code?: string })?.code ?? (err as { cause?: { code?: string } })?.cause?.code ?? "";
-    if (pgCode === "23505") {
-      throw new ConflictError(`Workspace name "${data.name}" is already taken`);
-    }
-    throw err;
+    throw mapWorkspaceConflict(err, data.name);
   }
+}
+
+/**
+ * Translate postgres unique-violation errors raised inside the create / join
+ * transactions into a user-meaningful `ConflictError`. We inspect the
+ * `constraint_name` exposed by postgres-js so the message points at the
+ * actual collision instead of always blaming the slug.
+ */
+function mapWorkspaceConflict(err: unknown, slug: string): unknown {
+  const code = (err as { code?: string })?.code ?? (err as { cause?: { code?: string } })?.cause?.code ?? "";
+  if (code !== "23505") return err;
+  const constraint =
+    (err as { constraint_name?: string }).constraint_name ??
+    (err as { cause?: { constraint_name?: string } }).cause?.constraint_name ??
+    "";
+  if (constraint === "organizations_name_unique") {
+    return new ConflictError(`Workspace name "${slug}" is already taken`);
+  }
+  if (constraint === "uq_members_user_org" || constraint === "members_agent_id_unique") {
+    return new ConflictError("You're already a member of this workspace");
+  }
+  if (constraint === "uq_agents_org_name") {
+    return new ConflictError("Workspace creation conflict — please retry");
+  }
+  // Unknown constraint — surface a generic retry rather than a 500.
+  return new ConflictError("Workspace operation conflicted — please retry");
 }
 
 /**
@@ -226,24 +254,53 @@ export async function joinWorkspaceByInvite(
     };
   }
 
-  return db.transaction(async (tx) => {
-    const memberId = uuidv7();
-    const agentName = generateMemberAgentName(memberId);
-    const agent = await createAgent(tx as unknown as Database, {
-      name: agentName,
-      type: "human",
-      displayName: user.displayName,
-      organizationId: org.id,
-      source: "portal",
-      managerId: memberId,
+  try {
+    return await db.transaction(async (tx) => {
+      const memberId = uuidv7();
+      const agentName = generateMemberAgentName(memberId);
+      // See note in createWorkspaceForUser re: the `as unknown as Database`.
+      const agent = await createAgent(tx as unknown as Database, {
+        name: agentName,
+        type: "human",
+        displayName: user.displayName,
+        organizationId: org.id,
+        source: "portal",
+        managerId: memberId,
+      });
+      await tx.insert(members).values({
+        id: memberId,
+        userId,
+        organizationId: org.id,
+        agentId: agent.uuid,
+        role: "member",
+      });
+      return { workspaceId: org.id, memberId, role: "member" as const, alreadyMember: false };
     });
-    await tx.insert(members).values({
-      id: memberId,
-      userId,
-      organizationId: org.id,
-      agentId: agent.uuid,
-      role: "member",
-    });
-    return { workspaceId: org.id, memberId, role: "member" as const, alreadyMember: false };
-  });
+  } catch (err) {
+    // Two concurrent join clicks can both pass the existence check above
+    // and both INSERT — the second hits `uq_members_user_org`. Recover by
+    // re-reading the now-existing membership and surfacing it as the
+    // idempotent "already a member" path the route promises.
+    const code = (err as { code?: string })?.code ?? (err as { cause?: { code?: string } })?.cause?.code ?? "";
+    const constraint =
+      (err as { constraint_name?: string }).constraint_name ??
+      (err as { cause?: { constraint_name?: string } }).cause?.constraint_name ??
+      "";
+    if (code === "23505" && constraint === "uq_members_user_org") {
+      const [now] = await db
+        .select({ id: members.id, role: members.role })
+        .from(members)
+        .where(and(eq(members.userId, userId), eq(members.organizationId, org.id)))
+        .limit(1);
+      if (now) {
+        return {
+          workspaceId: org.id,
+          memberId: now.id,
+          role: now.role === "admin" ? "admin" : "member",
+          alreadyMember: true,
+        };
+      }
+    }
+    throw mapWorkspaceConflict(err, "");
+  }
 }

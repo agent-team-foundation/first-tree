@@ -31,8 +31,19 @@ export const GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token";
 export const GITHUB_USER_URL = "https://api.github.com/user";
 export const GITHUB_EMAILS_URL = "https://api.github.com/user/emails";
 
-/** State JWT — short-lived (10 min) signed token carrying `next` + a CSRF nonce. */
+/**
+ * State JWT — short-lived (10 min) signed token carrying `next` + a CSRF
+ * nonce. The nonce is double-submitted: it's embedded in the JWT AND set as
+ * an HttpOnly `oauth_state_nonce` cookie at `/start`. `/callback` requires
+ * the two to match — the JWT alone proves "this server issued some state
+ * recently" but not "this state was issued for THIS browser". Without the
+ * cookie tie-in, an attacker who calls `/start` themselves can trick a
+ * victim into POSTing the attacker's `state` to `/callback` and signing in
+ * as the attacker (login-CSRF).
+ */
 const STATE_TTL_S = 600;
+export const STATE_COOKIE_NAME = "oauth_state_nonce";
+export const STATE_COOKIE_PATH = "/api/v1/auth/github";
 
 type StatePayload = {
   nonce: string;
@@ -64,7 +75,14 @@ export async function signOauthState(jwtSecretKey: string, next: string): Promis
   return { state, nonce };
 }
 
-/** Verify a state JWT. Throws `UnauthorizedError` on tamper / expiry. */
+/**
+ * Verify a state JWT. Throws `UnauthorizedError` on tamper / expiry. Callers
+ * that need login-CSRF protection (i.e. the production `/callback`) MUST
+ * also call `verifyStateCookieMatches` against the value of the
+ * `oauth_state_nonce` cookie sent by the browser. The dev-callback path
+ * skips the cookie check intentionally — dev mode opts out of CSRF
+ * protection by registering an unauthenticated stub.
+ */
 export async function verifyOauthState(jwtSecretKey: string, state: string): Promise<StatePayload> {
   const secret = new TextEncoder().encode(jwtSecretKey);
   try {
@@ -78,6 +96,61 @@ export async function verifyOauthState(jwtSecretKey: string, state: string): Pro
     if (err instanceof UnauthorizedError) throw err;
     throw new UnauthorizedError("OAuth state expired or tampered with");
   }
+}
+
+/**
+ * Read the `oauth_state_nonce` cookie from a raw `Cookie:` header. We don't
+ * want to take a runtime dep on `@fastify/cookie` for one cookie; the parse
+ * surface is tiny and entirely under our control.
+ */
+export function readStateCookie(cookieHeader: string | undefined): string | null {
+  if (!cookieHeader) return null;
+  for (const part of cookieHeader.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq === -1) continue;
+    const key = part.slice(0, eq).trim();
+    if (key === STATE_COOKIE_NAME) return part.slice(eq + 1).trim();
+  }
+  return null;
+}
+
+/**
+ * Compare the nonce embedded in the verified JWT against the one round-
+ * tripped via the cookie. Throws `UnauthorizedError` on mismatch — this is
+ * the gate that turns the JWT from "tamper-proof envelope" into "proof
+ * THIS browser started the flow".
+ */
+export function verifyStateCookieMatches(stateNonce: string, cookieNonce: string | null): void {
+  if (!cookieNonce || cookieNonce !== stateNonce) {
+    throw new UnauthorizedError("OAuth state cookie missing or mismatched");
+  }
+}
+
+/**
+ * Build a `Set-Cookie` header value for the state nonce. HttpOnly so JS
+ * can't read it; SameSite=Lax so the cookie rides along on the GitHub →
+ * callback top-level navigation; Path scoped to `/api/v1/auth/github` so
+ * the cookie isn't sent on every request. `Secure` is conditional — it's
+ * required by browsers when the cookie is set over HTTPS but breaks dev
+ * over plain HTTP if forced unconditionally.
+ */
+export function buildStateCookie(nonce: string, secure: boolean): string {
+  const parts = [
+    `${STATE_COOKIE_NAME}=${nonce}`,
+    "HttpOnly",
+    "SameSite=Lax",
+    `Path=${STATE_COOKIE_PATH}`,
+    `Max-Age=${STATE_TTL_S}`,
+  ];
+  if (secure) parts.push("Secure");
+  return parts.join("; ");
+}
+
+/** Build the `Set-Cookie` header value that clears the nonce cookie post-callback. */
+export function clearStateCookie(secure: boolean): string {
+  const parts = [`${STATE_COOKIE_NAME}=`, "HttpOnly", "SameSite=Lax", `Path=${STATE_COOKIE_PATH}`, "Max-Age=0"];
+  if (secure) parts.push("Secure");
+  return parts.join("; ");
 }
 
 /** Build the GitHub authorize URL. */
