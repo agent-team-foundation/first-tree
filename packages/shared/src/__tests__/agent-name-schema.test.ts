@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   AGENT_NAME_MAX_LENGTH,
   AGENT_NAME_REGEX,
+  agentSchema,
   createAgentSchema,
   isReservedAgentName,
   RESERVED_AGENT_NAMES,
+  updateAgentSchema,
 } from "../schemas/agent.js";
 
 /**
@@ -79,5 +81,53 @@ describe("createAgentSchema", () => {
     const tooLong = "a".repeat(AGENT_NAME_MAX_LENGTH + 1);
     const res = createAgentSchema.safeParse({ name: tooLong, type: "human" });
     expect(res.success).toBe(false);
+  });
+});
+
+describe("Phase 2: displayName is non-null on the wire", () => {
+  const baseRow = {
+    uuid: "uuid-1",
+    name: "alice",
+    organizationId: "org-1",
+    type: "human" as const,
+    delegateMention: null,
+    inboxId: "inbox_uuid-1",
+    status: "active",
+    visibility: "organization" as const,
+    metadata: {},
+    managerId: "mem-1",
+    clientId: null,
+    createdAt: "2026-04-24T00:00:00.000Z",
+    updatedAt: "2026-04-24T00:00:00.000Z",
+  };
+
+  it("agentSchema rejects a row with null displayName", () => {
+    const res = agentSchema.safeParse({ ...baseRow, displayName: null });
+    expect(res.success).toBe(false);
+  });
+
+  it("agentSchema accepts a non-null displayName", () => {
+    const res = agentSchema.safeParse({ ...baseRow, displayName: "Alice" });
+    expect(res.success).toBe(true);
+  });
+
+  it("updateAgentSchema rejects `displayName: null` (clearing the field is no longer allowed)", () => {
+    const res = updateAgentSchema.safeParse({ displayName: null });
+    expect(res.success).toBe(false);
+  });
+
+  it("updateAgentSchema rejects an empty-string displayName (min 1 char)", () => {
+    const res = updateAgentSchema.safeParse({ displayName: "" });
+    expect(res.success).toBe(false);
+  });
+
+  it("updateAgentSchema accepts a non-empty displayName", () => {
+    const res = updateAgentSchema.safeParse({ displayName: "Alice v2" });
+    expect(res.success).toBe(true);
+  });
+
+  it("updateAgentSchema accepts omitted displayName (leaves row untouched)", () => {
+    const res = updateAgentSchema.safeParse({});
+    expect(res.success).toBe(true);
   });
 });

@@ -74,7 +74,7 @@ export class AgentSlot {
     this.sdk = sdk;
     const agent = await sdk.register();
 
-    this.logger.info({ displayName: agent.displayName ?? agent.agentId }, "agent bound");
+    this.logger.info({ displayName: agent.displayName }, "agent bound");
 
     if (agent.type === "human") {
       this.logger.info("server reports type=human — message processing disabled");

@@ -9,14 +9,16 @@ import {
 import type { SessionMessage } from "../runtime/handler.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 
-function mkParticipant(agentId: string, name: string | null, displayName: string | null = null): ChatParticipantDetail {
+function mkParticipant(agentId: string, name: string | null, displayName?: string): ChatParticipantDetail {
   return {
     agentId,
     role: "member",
     mode: "full",
     joinedAt: new Date().toISOString(),
     name,
-    displayName,
+    // Post-Phase 2 the wire shape requires a non-null display name; fall
+    // back to a synthetic label when the caller doesn't provide one.
+    displayName: displayName ?? `agent-${agentId}`,
     type: "autonomous_agent",
   };
 }
@@ -33,7 +35,11 @@ describe("resolveSenderLabel", () => {
   const ps = [
     mkParticipant("agent-a", "alice", "Alice Smith"),
     mkParticipant("agent-b", null, "Bob Only"),
-    mkParticipant("agent-c", null, null),
+    // Pre-Phase-2 nullable displayName is gone, but `""` is still a
+    // reachable DB state (the temporary DEFAULT '' added by migration
+    // 0024 catches old INSERTs during a rolling deploy). Keep the
+    // "both falsy" coverage by pinning the empty-string branch.
+    mkParticipant("agent-c", null, ""),
   ];
 
   it("returns the participant name when available", () => {
@@ -44,7 +50,10 @@ describe("resolveSenderLabel", () => {
     expect(resolveSenderLabel("agent-b", ps)).toBe("Bob Only");
   });
 
-  it("falls back to the raw senderId when name and displayName are both null", () => {
+  it("falls back to the raw senderId when name is null and displayName is empty", () => {
+    // Covers the `return senderId` branch inside the participant-match
+    // loop (runtime/agent-io.ts) — still reachable for rows that came
+    // in under the migration 0024 rollout default.
     expect(resolveSenderLabel("agent-c", ps)).toBe("agent-c");
   });
 
@@ -156,7 +165,7 @@ describe("buildAgentEnv", () => {
       agent: {
         agentId: "agent-a",
         inboxId: "inbox-a",
-        displayName: null,
+        displayName: "agent-a",
         type: "autonomous_agent",
         delegateMention: null,
         metadata: {},
@@ -178,7 +187,7 @@ describe("buildAgentEnv", () => {
       agent: {
         agentId: "agent-a",
         inboxId: "inbox-a",
-        displayName: null,
+        displayName: "agent-a",
         type: "autonomous_agent",
         delegateMention: null,
         metadata: {},
