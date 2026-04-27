@@ -10,7 +10,7 @@
 | See if the server is alive | `first-tree-hub server status` | Hits `/api/v1/health`; defaults to `http://localhost:8000` unless `FIRST_TREE_HUB_SERVER_URL` is set |
 | Sign this computer into a Hub server | `first-tree-hub client connect <server-url> [--token <t>] [--no-service]` | Stores a member JWT at `~/.first-tree/hub/credentials.json`, writes `client.yaml`, and (by default) installs the background service |
 | Run the client inline instead of via service | `first-tree-hub client start` | Loads credentials written by `connect`; fails if there are none or if no agents are pinned to this client |
-| Keep the computer online across reboots | `first-tree-hub client service install` | launchd on macOS, `systemd --user` on Linux; Windows unsupported |
+| Keep the computer online across reboots | `first-tree-hub client connect <server-url>` (omit `--no-service`) | Auto-installs launchd on macOS or `systemd --user` on Linux; Windows unsupported (falls back to inline) |
 | List machines the Hub currently sees | `first-tree-hub client hub-list` | Server-side inventory of connected clients |
 | Forcibly drop a machine from the Hub | `first-tree-hub client hub-disconnect <clientId>` | Server-side admin action |
 | Register a local alias for a Hub agent on this machine | `first-tree-hub agent add [name] [--agent-id <uuid>]` | Local-only; a running client auto-registers any agent an admin pins to this `clientId`, so `agent add` is mostly for scripted or unattended setups |
@@ -52,8 +52,7 @@ Everything that is "this computer and its relationship to a Hub server".
 - `client start` — foreground runtime loop. Loads credentials, initializes config, spins up `ClientRuntime`, watches the agents config directory for hot-add, and stays alive until SIGINT/SIGTERM.
 - `client stop` — currently informational; prints the right Ctrl+C / `kill` hint. No daemon PID management yet.
 - `client status` — lists locally configured agent aliases with their runtime and agent UUID.
-- `client doctor` — Node version, client config, server reachability, agent configs, credential validity, WebSocket reachability.
-- `client service install` / `status` / `uninstall` — user-level launchd (macOS) or systemd (Linux) unit that runs `first-tree-hub client start --no-interactive` in the background. Logs go to `~/.first-tree/hub/logs/`. Use `isServiceSupported()` semantics — platform is `unsupported` on Windows and other OSes.
+- `client doctor` — Node version, client config, server reachability, agent configs, credential validity, WebSocket reachability, **and the background-service state** (running/inactive/not-installed/unsupported, with unit + log paths).
 - `client hub-list [--server <url>]` — enumerates clients currently known to the Hub server (`GET /api/v1/clients`), with hostname, agent count, and last-seen timestamp.
 - `client hub-disconnect <clientId> [--server <url>]` — POSTs `/api/v1/clients/:id/disconnect` to force-drop a WebSocket connection on the server side.
 

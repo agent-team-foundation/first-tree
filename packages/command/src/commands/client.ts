@@ -20,6 +20,7 @@ import {
   ClientRuntime,
   COMMAND_VERSION,
   checkAgentConfigs,
+  checkBackgroundService,
   checkClientConfig,
   checkNodeVersion,
   checkServerReachable,
@@ -27,18 +28,11 @@ import {
   createExecuteUpdate,
   declineUpdate,
   ensureFreshAccessToken,
-  getClientServiceStatus,
   handleClientOrgMismatch,
-  installClientService,
-  isServiceSupported,
-  parseDuration,
   printResults,
   promptMissingFields,
   promptUpdate,
   resolveServerUrl,
-  showServiceLogs,
-  uninstallClientService,
-  validateLevel,
 } from "../core/index.js";
 import { print } from "../core/output.js";
 import { registerConnectCommand } from "./connect.js";
@@ -150,6 +144,7 @@ export function registerClientCommands(program: Command): void {
         await checkServerReachable(),
         checkAgentConfigs(),
         await checkWebSocket(),
+        checkBackgroundService(),
       ];
       printResults(results);
     });
@@ -180,95 +175,6 @@ export function registerClientCommands(program: Command): void {
         print.line("\n");
       } catch {
         print.line("  No agents directory found.\n");
-      }
-    });
-
-  // ── Background service (launchd / systemd --user) ─────────────────
-
-  const service = client
-    .command("service")
-    .description("Install/uninstall the background service that keeps this computer online");
-
-  service
-    .command("install")
-    .description("Install as a background service — auto-starts on login/boot")
-    .action(() => {
-      if (!isServiceSupported()) {
-        print.line(
-          `  Background service is not supported on ${process.platform}.\n` +
-            "  Run `first-tree-hub client start` manually to keep the computer online.\n",
-        );
-        process.exit(1);
-      }
-      try {
-        const info = installClientService();
-        print.line(`\n  \u2713 Installed as a background service (${info.platform}).\n`);
-        print.line(`    Unit:  ${info.unitPath}\n`);
-        print.line(`    Logs:  ${info.logDir}\n`);
-        if (info.state === "active") {
-          print.line(`    State: running${info.detail ? ` (${info.detail})` : ""}\n`);
-        } else {
-          print.line(`    State: ${info.state}${info.detail ? ` (${info.detail})` : ""}\n`);
-        }
-        print.line("\n  You can close this terminal — the computer stays online.\n");
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        fail("SERVICE_INSTALL_ERROR", msg);
-      }
-    });
-
-  service
-    .command("status")
-    .description("Show background service state")
-    .action(() => {
-      const info = getClientServiceStatus();
-      if (info.platform === "unsupported") {
-        print.line(`  Not supported on ${process.platform}.\n`);
-        return;
-      }
-      print.line(`\n  ${info.platform}: ${info.label}\n`);
-      print.line(`  Unit:  ${info.unitPath}\n`);
-      print.line(`  Logs:  ${info.logDir}\n`);
-      print.line(`  State: ${info.state}${info.detail ? ` (${info.detail})` : ""}\n\n`);
-    });
-
-  service
-    .command("uninstall")
-    .description("Stop and remove the background service")
-    .action(() => {
-      if (!isServiceSupported()) {
-        print.line(`  Not supported on ${process.platform}.\n`);
-        return;
-      }
-      try {
-        const info = uninstallClientService();
-        print.line(`\n  \u2713 Uninstalled background service (${info.platform}).\n\n`);
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        fail("SERVICE_UNINSTALL_ERROR", msg);
-      }
-    });
-
-  service
-    .command("logs")
-    .description("Read background-service logs (pretty by default)")
-    .option("-f, --tail", "follow new lines as they arrive (Ctrl+C to stop)", false)
-    .option("--since <duration>", "only show records newer than duration (e.g. 10s, 5m, 2h, 1d)")
-    .option("--level <level>", "minimum level (trace|debug|info|warn|error|fatal)")
-    .option("--json", "emit raw NDJSON lines instead of pretty formatting", false)
-    .action(async (options: { tail?: boolean; since?: string; level?: string; json?: boolean }) => {
-      try {
-        const level = validateLevel(options.level);
-        const sinceMs = options.since ? parseDuration(options.since) : undefined;
-        await showServiceLogs({
-          tail: options.tail === true,
-          level,
-          sinceMs,
-          json: options.json === true,
-        });
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        fail("SERVICE_LOGS_ERROR", msg);
       }
     });
 

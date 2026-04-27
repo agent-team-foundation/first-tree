@@ -84,7 +84,7 @@ The client runtime:
 - manages session state and isolated chat workspaces
 - optionally syncs a shared Context Tree clone for organizational context
 
-The **background service** (`client service install`, typically triggered automatically by `client connect`) runs `client start --no-interactive` under launchd (macOS) or `systemd --user` (Linux), with logs at `~/.first-tree/hub/logs/`. This is how a machine stays online across reboots without a terminal.
+The **background service** is installed automatically by `client connect` (skip with `--no-service`). It runs `client start --no-interactive` under launchd (macOS) or `systemd --user` (Linux), with logs at `~/.first-tree/hub/logs/`. This is how a machine stays online across reboots without a terminal. There is no `client service ...` CLI subcommand — `client doctor` shows current state, manual lifecycle ops go through `launchctl` / `systemctl` directly (see `docs/cli-reference.md`).
 
 ### Workspace bootstrap
 

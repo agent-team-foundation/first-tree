@@ -76,8 +76,7 @@ To verify:
 
 ```bash
 first-tree-hub client status          # local: configured agents
-first-tree-hub client doctor          # readiness checks
-first-tree-hub client service status  # service state (if installed)
+first-tree-hub client doctor          # readiness checks (includes background-service state)
 first-tree-hub client hub-list        # server-side: this client appears in the Hub
 ```
 
@@ -95,21 +94,38 @@ Use this for a production desktop or a server that should run agents permanently
 
 ### Flow
 
+`client connect` installs the background service automatically on macOS (launchd) and Linux (`systemd --user`) — there is no `client service ...` subcommand. Just sign in and the machine stays online:
+
 ```bash
-first-tree-hub client service install      # launchd (macOS) or systemd --user (Linux)
-first-tree-hub client service status
-first-tree-hub client service uninstall    # when decommissioning the machine
+first-tree-hub client connect <server-url>     # auto-installs the service
+first-tree-hub client doctor                   # verify: shows running/inactive/not-installed
+tail -f ~/.first-tree/hub/logs/client.log      # tail logs (NDJSON)
 ```
 
-`client connect` installs the service by default. Only re-run `service install` when the user ran `connect --no-service` initially, or when re-installing after `uninstall`.
+To repair a broken unit (binary moved, Node upgraded), re-run `client connect <url>` — it rewrites the unit file. Re-authentication is required.
 
-Logs: `~/.first-tree/hub/logs/`.
+To decommission a machine, remove the unit at the OS level and clear local state:
+
+```bash
+# macOS
+launchctl bootout gui/$UID/dev.first-tree-hub.client
+rm -f ~/Library/LaunchAgents/dev.first-tree-hub.client.plist
+
+# Linux
+systemctl --user disable --now first-tree-hub-client.service
+rm -f ~/.config/systemd/user/first-tree-hub-client.service
+
+# Both
+rm -rf ~/.first-tree/hub
+```
+
+To force-disconnect from the server side: `first-tree-hub client hub-disconnect <clientId>`.
 
 ### What to remember
 
-- Windows is unsupported. Tell the user to use `first-tree-hub client start` inside a user-managed supervisor instead.
-- The service runs `client start --no-interactive`, so the machine must already have valid `credentials.json` — run `client connect` first.
-- `service install` is safe to re-run. It rewrites the unit file and reloads the supervisor.
+- Windows is unsupported. `client connect` falls back to inline mode there — tell the user to use `first-tree-hub client start` inside a user-managed supervisor.
+- The service runs `client start --no-interactive`, so the machine must already have valid `credentials.json` — `client connect` writes that for you in the same step.
+- Re-running `client connect` is safe and idempotent for the unit file, but always re-authenticates.
 
 ## 4. "Onboard a new human member"
 
@@ -196,8 +212,7 @@ Diagnose before editing code or YAML.
 
 ```bash
 first-tree-hub status                 # overall state: server, db, client, agents
-first-tree-hub client doctor          # or `server doctor` for the server side
-first-tree-hub client service status  # if running as a service
+first-tree-hub client doctor          # or `server doctor` for the server side (background-service state included)
 first-tree-hub config list -c         # effective client YAML
 first-tree-hub config list -s         # effective server YAML
 first-tree-hub server status          # health-probe an already-running server
@@ -269,7 +284,7 @@ Use this when the task goes beyond a local demo.
 1. Read `docs/deployment-guide.md` before proposing anything — it covers Docker, Railway, Render, Supabase, HTTPS, and multi-machine topology.
 2. Provision the backing Postgres externally and pass `--database-url` to `server start`; do not rely on the CLI's Docker-managed Postgres in production.
 3. Set secrets via env vars (`FIRST_TREE_HUB_JWT_SECRET`, `FIRST_TREE_HUB_ENCRYPTION_KEY`, `FIRST_TREE_HUB_GITHUB_TOKEN`, etc.) so they are not auto-generated on restart.
-4. On each client machine, run `client connect` once to sign in, then `client service install` so the runtime survives reboots.
+4. On each client machine, run `client connect <server-url>` once — it signs the machine in and installs the background service in a single step so the runtime survives reboots.
 
 ### What to remember
 

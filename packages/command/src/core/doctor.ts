@@ -10,6 +10,7 @@ import {
   serverConfigSchema,
 } from "@agent-team-foundation/first-tree-hub-shared/config";
 import { blank, print } from "./output.js";
+import { getClientServiceStatus } from "./service-install.js";
 
 export type CheckResult = {
   label: string;
@@ -172,6 +173,36 @@ export function checkAgentConfigs(): CheckResult {
   } catch {
     return { label: "Agents", ok: false, detail: "error reading agent configs" };
   }
+}
+
+export function checkBackgroundService(): CheckResult {
+  const info = getClientServiceStatus();
+  if (info.platform === "unsupported") {
+    return {
+      label: "Background service",
+      ok: true,
+      detail: `not supported on ${process.platform} — runs inline`,
+    };
+  }
+  if (info.state === "active") {
+    return {
+      label: "Background service",
+      ok: true,
+      detail: `running (${info.platform}${info.detail ? `, ${info.detail}` : ""}); logs at ${info.logDir}`,
+    };
+  }
+  if (info.state === "inactive") {
+    return {
+      label: "Background service",
+      ok: false,
+      detail: `installed but not running${info.detail ? ` — ${info.detail}` : ""}; unit at ${info.unitPath}`,
+    };
+  }
+  return {
+    label: "Background service",
+    ok: false,
+    detail: "not installed — re-run `first-tree-hub client connect <url>` to install",
+  };
 }
 
 export async function checkWebSocket(): Promise<CheckResult> {
