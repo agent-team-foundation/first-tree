@@ -71,11 +71,11 @@
 | 形态 | **每个 workspace 一条公共 share link**(多次使用),角色固定 member | 像 Discord / Slack 的 workspace 邀请 link;admin 复制一次即可在 IM 群里发广播,小团队场景最顺 |
 | 角色 | 固定 **member**;不支持邀请时直接给 admin | v1 简化:admin 提权场景不常见;新成员 join 后由 workspace admin 在 Settings 提权即可 |
 | 字段 | 仅 `token`,无 email、无 GitHub username、无 label、无 expiry、无 single-use | 简化到极致;v2 再加 rotate / expiry |
-| Token 生成时机 | workspace 创建时立即生成,持久化在 `organizations.invite_token` 字段 | lazy 也行,但 eager 更简单(用户进 Step 4 直接看到现成 link) |
+| Token 生成时机 | workspace 创建时立即生成,持久化在 `organizations.invite_token` 字段 | lazy 也行,但 eager 更简单(admin 任何时候去 Settings → Members 直接能 copy)|
 | Rotate(轮换 token)| **本期不做**;token 一旦泄露暂时只能容忍 | v2 再做 |
 | 自动检测 pending | **不做**(无 per-recipient 概念,也没东西可"自动检测")| 受邀人只能通过 admin 给的链接 access |
 | 接受时校验 | token 与某 workspace 的 `invite_token` 匹配即可 | 任何登录用户拿到有效链接即可 accept |
-| 谁能看 invite link | 仅 workspace admin 可见(`/welcome` Step 4 + Settings → Members)| member 看不到 → 不能未经 admin 同意拉外人入伙 |
+| 谁能看 invite link | 仅 workspace admin 可见(Settings → Members 页)| member 看不到 → 不能未经 admin 同意拉外人入伙 |
 
 ### 2.4 Agent Runtime
 
@@ -89,8 +89,10 @@
 
 | 决策 | 选择 | 理由 |
 |---|---|---|
-| 进度条 | **不做**进度条 | 4 步以上的进度条压力大;每屏只有 "Continue",自然推进;Linear / Vercel / Cursor 标准做法 |
-| Workspace setup 是否算 wizard 步骤 | **不算**;`/setup` 是 wizard 之前的强制前置门槛 | Workspace setup 是 cross-workspace 动作;wizard 内 4 步是 in-workspace 配置,概念不同 |
+| 屏数 | **仅 2 屏**:Connect computer → Create your first agent → 进 Workspace | 越少越好;每屏一个动作,完成即推进;不显示"还剩几步" |
+| 进度条 | **不做** | 跟"屏数极少"配合,用户感觉是被引导而非被压迫 |
+| Workspace setup | **不算 wizard 屏**,`/setup` 是 wizard 之前的强制前置门槛 | cross-workspace 动作,概念不同 |
+| Invite teammates | **不算 wizard 屏**,通过 Settings → Members 入口 | 邀请是日常运营,不是初次入门必经路径;`organizations.invite_token` 在 workspace 创建时已生成,admin 任何时候都能 copy |
 | 实现形式 | `/setup` 路由作 modal 载体;新用户和老用户(开第二个 workspace 时)共用同一个 modal | 单组件复用;UI 一致 |
 
 ### 2.6 基础设施
@@ -126,25 +128,21 @@
                                        ↓                                                     ↓
                               next=/invite/<token>                                  无 invite 上下文
                                        ↓                                                     ↓
-                              自动 accept invitation                                      跳 /setup
+                                加入 workspace                                            跳 /setup
                                        ↓                                                     ↓
                                        ↓                                          modal 弹出 (Create / Join)
                                        ↓                                                     ↓
                                        └──────────────── 进 /welcome ────────────────────────┘
-                                                            (wizard,无进度条)
+                                                            (wizard 仅 2 屏,无进度条)
                                                                   ↓
-                                                Step 1: Connect computer
+                                                       Connect your computer
                                                                   ↓
-                                                Step 2: Create your first agent
+                                                       Create your first agent
                                                                   ↓
-                                                Step 3: Workspace(进入主面板)
-                                                                  ↓
-                                                Step 4: Invite teammates(可跳过)
-                                                                  ↓
-                                                       [ Workspace 日常 ]
+                                                       [ Workspace 日常(已完成 onboarding)]
 ```
 
-### 4.2 Step 0(隐式)· 注册账号 · `/signup`
+### 4.2 注册账号 · `/signup`
 
 注册只产生 user 账号,**不创建 workspace、不创建 member、不创建 agent**。
 
@@ -250,9 +248,11 @@ Bob 在 Slack 看到 Alex 发的链接:https://hub.first-tree.ai/invite/abc123
 | 链接格式错 | `Doesn't look like a valid invite link` |
 | token 不存在 / 不匹配任何 workspace | `This invite link isn't valid. Ask your admin for the correct link.` |
 
-### 4.5 `/welcome` Wizard · Step 1 · 连接你的电脑
+### 4.5 `/welcome` Wizard
 
-**无进度条**。屏幕中央展示当前步骤,顶部显示 workspace 名,右上角 logout 入口。
+**仅 2 屏 · 无进度条**。屏幕中央展示当前屏内容,顶部显示 workspace 名,右上角 logout 入口。屏底只有 `[ Continue ]` 按钮。
+
+#### 4.5.1 Connect your computer
 
 1. **介绍**:"First Tree Hub 通过你机器上的 agent CLI(目前 Claude Code,Codex 等接入中)执行任务"
 2. **Prerequisite 双检查**:`node -v && claude --version && claude auth status`
@@ -274,63 +274,35 @@ Bob 在 Slack 看到 Alex 发的链接:https://hub.first-tree.ai/invite/abc123
 > **复用代码**:[connect.ts](../packages/command/src/commands/connect.ts)、[resolver.ts](../packages/shared/src/config/resolver.ts) 的 `client.yaml` 写入、launchd/systemd 服务安装(已有)
 > **新增**:Web 上的 connect token 生成 UI、轮询 client 上线、`first-tree-hub connect` 默认指向官方域名
 
-### 4.6 Wizard · Step 2 · 创建第一个 Agent
+#### 4.5.2 Create your first agent
 
 复用 [`NewAgentDialog`](../packages/web/src/components/new-agent-dialog.tsx) 内嵌进 wizard:
 
 1. **Agent name**(自动 slugify);冲突时实时提示并自动建议附加 4 位随机短码
-2. **Where it runs**:Step 1 的 client(自动选中);多机器时给下拉
+2. **Where it runs**:上一屏 connect 的 client(自动选中);多机器时给下拉
 3. **Powered by**:Claude Code(默认 / 当前唯一);Codex / OpenCode disabled · "coming soon"
 4. **高级**(可折叠):model、prompt 模板。默认值用 PR [#161](https://github.com/agent-team-foundation/first-tree-hub/pull/161) 引入的 opus + 通用 prompt
-5. 提交 → 后端创建 `agents` 行 → server 推 `agent:pinned` → daemon 拉起 Claude Code → Web 显示 "✅ Agent online"
+5. 提交 → 后端创建 `agents` 行 → server 推 `agent:pinned` → daemon 拉起 Claude Code → Web 显示 "✅ Agent online" → `[ Continue ]` 按钮亮起
 
 **Agent 状态机**:`creating → pinning → starting → online / failed`,失败把 daemon 错误翻译成人话。
 
-### 4.7 Wizard · Step 3 · 进入 Workspace
+#### 4.5.3 进入 Workspace(wizard 结束)
 
-**最低成本版本**:不要求用户真发消息,进 Workspace 就算完成。
+第二屏 `[ Continue ]` 后:
 
-1. Step 2 完成 → 直接进入 Workspace 视图,左侧已选中刚创建的 agent
-2. 输入框 `placeholder` 写 `Try: "介绍一下你能做什么"` — 仅 hint,不强制
-3. 进 Workspace 那一刻 wizard 自动推进:`onboarding_state.current_step = 'invite_team'`
-4. 顶部出现 `[ Continue → Invite Team ]` 按钮
+1. 直接进入 Workspace 主面板(`/`),左侧已选中刚创建的 agent
+2. `members.onboarding_state.current_step = 'completed'`,wizard 不再触发
+3. 输入框 `placeholder` 写 `Try: "介绍一下你能做什么"` — 仅 hint,不强制
 
-> **本期不追求 aha**,先跑通流程;v2 升级方向:agent 主动 seed 欢迎消息 / 任务示例卡片(类 Claude.ai)/ 对话式配置 agent 生成 append system prompt
+> **本期 wizard 不追求 aha**,先跑通流程;v2 升级方向:agent 主动 seed 欢迎消息 / 任务示例卡片 / 对话式配置 agent
 
-### 4.8 Wizard · Step 4 · 邀请队友(可跳过)
-
-workspace 创建时已经自动生成了 `invite_token`,Step 4 直接展示这条链接:
-
-```
-┌──────────────────────────────────────────────────────┐
-│   Invite your team                                   │
-│                                                      │
-│   Anyone with this link can join Acme Engineering    │
-│   as a member.                                       │
-│                                                      │
-│   [ https://hub.first-tree.ai/invite/abc123def... ]  │
-│                                  [ Copy link ]       │
-│                                                      │
-│   Send this link via Slack, 微信, Email, or any      │
-│   other channel your team uses.                      │
-│                                                      │
-│   [ Skip for now ]              [ Done · Continue ]  │
-└──────────────────────────────────────────────────────┘
-```
-
-1. 默认显示 workspace 现有的 `organizations.invite_token` 拼接成的完整 URL
-2. [ Copy link ] 复制到剪贴板,提示 "Copied!" toast
-3. [ Done · Continue ] / [ Skip for now ] 都进入正常 Workspace
-
-> 邀请的接受走 §4.3 路径 A — 受邀人点链接,GitHub 登录,自动加入 workspace。
-> Settings → Members 页同样展示这条 link + Copy 按钮(供后续随时取用)。
-
-### 4.9 日常使用
+### 4.6 日常使用
 
 Wizard 关闭后:
-- **Web 是主舞台**:agent 列表、对话、邀请新成员、配 prompt/model
+- **Web 是主舞台**:agent 列表、对话、邀请队友、配 prompt/model
 - **CLI 第一次 connect 之后不再用**,后台 service 永久运行
-- **加机器**:Settings → Computers → `Add another computer` → 重复 Step 1 流程
+- **邀请队友**:Settings → Members → Copy invite link
+- **加机器**:Settings → Computers → `Add another computer` → 重复 Connect 屏流程
 - **切 workspace**:顶部 dropdown;加新 workspace 通过 `/setup` modal(dropdown [ + Create / Join ])
 - **重新走向导**:Settings → `[ Restart onboarding ]`(P2-15)
 - **绑外部 IM**:Feishu / Slack adapter(已存在,不在 onboarding 范围)
@@ -380,7 +352,7 @@ auth_providers (
 
 | 字段 | 改动 | 说明 |
 |---|---|---|
-| `onboarding_state` | **新增** JSONB nullable | `{ current_step, completed_steps[], dismissed_at }`。**按 user × workspace 维度**(P0-5)。Bob 在 Acme 走完 Step 1 后被邀进 Beta,Beta 的 state 为空但他可共享已连过的机器 |
+| `onboarding_state` | **新增** JSONB nullable | `{ current_step: 'connect' \| 'create_agent' \| 'completed', dismissed_at }`。**按 user × workspace 维度**(P0-5)。Bob 在 Acme 走完 Connect 屏后被邀进 Beta,Beta 的 state 为空但他机器已连过,可在 Beta 的 wizard 跳过 Connect 屏 |
 
 ### 5.5 数据迁移
 
@@ -399,21 +371,21 @@ auth_providers (
 
 | # | 风险 | 对策 |
 |---|---|---|
-| P0-1 | Step 1 没检查 Claude Code 已 `claude login` → Step 3 第一句对话直接挂,无线索 | Prerequisite 双检查 `claude --version` + `claude auth status`,失败给具体修复命令 |
+| P0-1 | Connect 屏没检查 Claude Code 已 `claude login` → 进 Workspace 后第一句对话直接挂,无线索 | Prerequisite 双检查 `claude --version` + `claude auth status`,失败给具体修复命令 |
 | P0-2 | Admin 找不到 workspace 的 invite link | Settings → Members 显示当前 invite link + [ Copy link ] 按钮(rotate 本期不做)|
 | P0-3 | Onboarding 中途关浏览器后回来从头开始或被跳过 | `members.onboarding_state` 持久化进度,Web 进 `/` 时 reroute 回 wizard |
-| P0-4 | Step 1 token 过期 / 超时 / firewall 拦截无恢复路径 | 60s 没连上展开 troubleshoot 面板 + token 过期自动 [ Generate new token ];CLI 错误回写 server |
-| P0-5 | 老用户被邀进新 workspace 时**重复看到全部 wizard**(他在前一个 workspace 已经走过 Step 1 装 CLI) | onboarding_state 按 **user × workspace** 维度,挂 `members` 表;Bob 的 Beta workspace 自动跳过 Step 1 |
+| P0-4 | Connect 屏 token 过期 / 超时 / firewall 拦截无恢复路径 | 60s 没连上展开 troubleshoot 面板 + token 过期自动 [ Generate new token ];CLI 错误回写 server |
+| P0-5 | 老用户被邀进新 workspace 时**重复看到 Connect 屏**(他在前一个 workspace 已经装过 CLI 连过机器) | onboarding_state 按 **user × workspace** 维度,挂 `members` 表;Bob 的 Beta workspace 自动跳过 Connect 屏直接到 Create Agent |
 
 ### 6.2 P1 · 强烈建议(本期做)
 
 | # | 风险 | 对策 |
 |---|---|---|
 | P1-6 | Prerequisite 没装时提示太干 | OS 自动给 `brew` / `apt` / `nvm` + Claude Code 官方安装脚本 |
-| P1-7 | Step 2 → 3 之间 agent 启动几秒延迟 + 失败处理 | Agent 状态机 + 启动失败时把 daemon 错误翻译成人话 |
+| P1-7 | Create Agent 屏完成到进 Workspace 之间,agent 还在 starting 几秒钟 | Agent 状态机 + 启动失败时把 daemon 错误翻译成人话 |
 | P1-8 | Workspace name / agent name 冲突 | 实时校验 + 自动建议(附加 4 位随机短码)|
 | P1-9 | 多 workspace 顶部 switcher 缺失 | 顶部 dropdown:列出所有 workspace + `+ Create another` / `+ Join with link` 入口 |
-| P1-10 | Step 2 → 3 跳转时 agent 还在 starting,先显示"No agents"再突然出现 | "Your agent is starting..." spinner 直到 `agent.status === 'online'` |
+| P1-10 | 进 Workspace 时 agent 还在 starting,先显示"No agents"再突然出现 | "Your agent is starting..." spinner 直到 `agent.status === 'online'` |
 | P1-11 | 用户直接访问 `/`(workspace 主面板)但还没 workspace(理论上不应发生但要兜底) | 后端检测 → 自动 redirect 到 `/setup` |
 
 ### 6.3 P2 · 次重要(本期最小占位)
@@ -446,9 +418,9 @@ auth_providers (
 | **M0** | Schema 迁移:`users.email` + `auth_providers` + `organizations.invite_token` + `members.onboarding_state` | 后端 1d |
 | **M1** | 注册路径:GitHub OAuth 路由 + callback 处理 + `next` 参数支持 + JWT 颁发 | 后端 1.5d |
 | **M2** | `/setup` 路由 + Create / Join modal + 老用户复用入口(顶部 dropdown 弹同一个 modal)+ `/` 0-workspace 兜底 redirect(P1-11)| 前端 1.5d + 后端 0.5d |
-| **M3** | `/welcome` Wizard Step 1 Connect:Web token + CLI 简化 + prerequisite 双检查(P0-1, P1-6)+ 失败恢复(P0-4)| 前后端 2d |
-| **M4** | Wizard Step 2 Agent:复用 NewAgentDialog + agent 状态机 + 启动 spinner(P1-7, P1-10)+ name 冲突建议(P1-8)| 前后端 1.5d |
-| **M5** | Wizard Step 3 Workspace + Step 4 Invite(展示 invite_token 拼接的 link + Copy)| 前端 0.5d |
+| **M3** | `/welcome` Wizard 第 1 屏 Connect:Web token + CLI 简化 + prerequisite 双检查(P0-1, P1-6)+ 失败恢复(P0-4)| 前后端 2d |
+| **M4** | Wizard 第 2 屏 Create Agent:复用 NewAgentDialog + agent 状态机 + 启动 spinner(P1-7, P1-10)+ name 冲突建议(P1-8)| 前后端 1.5d |
+| **M5** | 进 Workspace + Workspace empty / loading 态 spinner(P1-10)+ wizard 完成态写入 onboarding_state | 前端 0.5d |
 | **M6** | Settings → Members 页面显示 workspace invite link + Copy(P0-2)| 前端 0.5d |
 | **M7** | Onboarding 状态持久化:`members.onboarding_state` 读写 + 跨 workspace 跳过逻辑(P0-3, P0-5)+ 顶部 workspace switcher(P1-9)| 前后端 2d |
 | **M8** | 收尾:ToS 占位 + 移动端 banner + 隐私说明 + CLI 版本提示 + 重启入口(P2 全部)| 1.5d |
@@ -469,7 +441,7 @@ auth_providers (
 | 注册 | OAuth via browser | 仅 GitHub OAuth |
 | 一行命令 | `multica setup` | `first-tree-hub connect --token=...` |
 | Runtime 探测 | daemon 自动探测 | 同样自动探测 |
-| Agent 创建 | Web Settings → Agents | Web wizard Step 2(复用 NewAgentDialog)|
+| Agent 创建 | Web Settings → Agents | Web wizard 第 2 屏(复用 NewAgentDialog)|
 | 第一个任务 | 创建 issue 分配给 agent | Workspace 直接对话(本期最低成本版)|
 | Web vs CLI | Web 主,CLI 是 daemon | 同样 Web 主导 |
 
@@ -488,9 +460,9 @@ auth_providers (
 
 | 路径 | 用途 |
 |---|---|
-| [packages/command/src/commands/connect.ts](../packages/command/src/commands/connect.ts) | CLI connect 入口(Step 1 复用)|
+| [packages/command/src/commands/connect.ts](../packages/command/src/commands/connect.ts) | CLI connect 入口(Connect 屏复用)|
 | [packages/shared/src/config/resolver.ts](../packages/shared/src/config/resolver.ts) | `client.yaml` 写入、`FIRST_TREE_HUB_HOME` |
-| [packages/web/src/components/new-agent-dialog.tsx](../packages/web/src/components/new-agent-dialog.tsx) | Step 2 复用 |
-| [packages/web/src/components/last-step-modal.tsx](../packages/web/src/components/last-step-modal.tsx) | Step 1 复用(token 生成 + 轮询)|
+| [packages/web/src/components/new-agent-dialog.tsx](../packages/web/src/components/new-agent-dialog.tsx) | Create Agent 屏复用 |
+| [packages/web/src/components/last-step-modal.tsx](../packages/web/src/components/last-step-modal.tsx) | Connect 屏复用(token 生成 + 轮询)|
 | [packages/web/src/auth/auth-context.tsx](../packages/web/src/auth/auth-context.tsx) | Auth state(需扩 user / memberships)|
 | [packages/server/src/services/agent.ts](../packages/server/src/services/agent.ts) | Rule R-RUN(`clients.user_id == jwt.userId` 强制,2.1 服务端兜底)|
