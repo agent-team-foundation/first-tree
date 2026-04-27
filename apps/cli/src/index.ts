@@ -83,6 +83,8 @@ export async function main(argv = process.argv): Promise<void> {
 }
 
 function isDirectRun(): boolean {
+  // A Node CLI bin invocation provides argv[1]; keep this guard for embedded runtimes.
+  /* v8 ignore next 3 */
   if (process.argv[1] === undefined) {
     return false;
   }
@@ -90,6 +92,8 @@ function isDirectRun(): boolean {
   return import.meta.url === pathToFileURL(realpathSync(resolve(process.argv[1]))).href;
 }
 
+// Direct bin execution is covered by subprocess smoke tests.
+/* v8 ignore next 6 */
 if (isDirectRun()) {
   main().catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);

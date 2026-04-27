@@ -10,6 +10,7 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
+    "test:coverage": "pnpm -r test:coverage",
     "lint": "oxlint .",
     "fmt": "oxfmt . --write",
     "fmt:check": "oxfmt . --check",
