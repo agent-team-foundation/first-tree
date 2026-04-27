@@ -8,72 +8,39 @@
 
 ---
 
-## 1. 为什么要做这件事
+## 1. 背景与现状
 
-### 1.1 现行 quickstart-zh.md 已经跟代码对不上
+### 1.1 为什么要做这件事
 
-针对 `origin/main` 上的 `06e40fb` 核对过,具体 drift:
+`docs/quickstart-zh.md` 已经跟 `origin/main` 上的代码对不上 —— 文档描述的"先 `client connect` → 然后 New Agent → 然后终端 `agent add`"路径在线上不存在;按钮文案、字段名、模态流转早就变了(对齐 `06e40fb` 的完整 drift:`Generate Connect Command` 按钮在代码里只是 `Generate`,容器叫 "Connect a computer";New Agent 的 `type` 硬编码 `personal_assistant`,给用户看的字段叫 "Where it runs";"Pin to client" 字段已被自动探测取代;"Agent Created" 对话框已变成 "Last step — connect your computer" 模态,命令是合并的 one-liner)。文档只覆盖托管 Hub,没有自托管本地场景的 quickstart,尽管 `first-tree-hub server start` 是支持的命令。代码里围绕"同一台机器多份凭据"的处理(account-switch gate、隔离指南、跨 org 重注册)对早期产品过度,如果不显式 defer 掉,新文档会继承同一份混乱。
 
-- 文档说 "顶栏 Clients → 点 **Generate Connect Command**"。代码里按钮文案是 `Generate` / `Regenerate`,容器叫 "Connect a computer"(`packages/web/src/pages/clients.tsx:33-95`)。
-- 文档说 New Agent 表单要选 **Type: Personal Assistant**。代码里 `type` 已硬编码为 `personal_assistant`(`packages/web/src/components/new-agent-dialog.tsx:135`),给用户看的字段叫 "Where it runs"(Claude Code / Kael)。
-- 文档说要填 **Pin to client**。代码里这字段早就移除了,改成自动探测在线客户端(`new-agent-dialog.tsx:210-243`)。
-- 文档说弹 "Agent Created" 对话框,里面是单条 `agent add`。代码里弹的是 "Last step — connect your computer",命令是合并的 one-liner `npm install && agent add && client connect`(`packages/web/src/components/last-step-modal.tsx:76-82`)。
-- 文档描述的串行顺序("先 client connect → 然后 New Agent → 然后终端 agent add")**在线上根本不存在**:实际只有 Path A(Last-step one-liner)或 Path B(`agent:pinned` 推送,零 CLI),没有中间形态。
+**本轮 scope:** 本地版第一锁(§ 2.1,所有决策已落定);托管版 § 2.2 部分锁定,几个问题显式 defer。
 
-### 1.2 没有"本地自建"场景
+### 1.2 产品原则(本阶段锁死)
 
-现行文档假设的网址是 `https://first-tree.staging.unispark.dev`。`first-tree-hub server start` 是支持的命令,但完全没文档化。
+- **一人 → 一 org → 一 member → 一 client**,默认 invariant。
+- **Server 端多租户保留** —— `organizations` 表、`members` 桥、JWT 带 `organizationId`、查询按 org 过滤。托管 Hub 多客户的 ACL 基底,**不是**用户可见的"加入多 org" 能力。
+- **Client 端多账号无限期 defer** —— 不规划 `profile` 子命令、UI 里看不到、`FIRST_TREE_HUB_HOME` 仅作内部测试工具,不文档化。
+- **Login 在签 JWT 那一刻就把 `(member, org)` 钉死。** `auth.ts:50-51` 注释 `// Get first membership (this version: single org)` 已经暗示这个产品边界。
+- **公共文档默认单账号。** Edge case 走 troubleshooting 页面,不进 onboarding。
+- **本地版用户 = 单机自用。** 优化目标是"装好 → 跑起来 → 用上",心智里概念越少越好。认证、org、密码完全隐藏。"evaluator vs daily user" 二分轴**抛弃** —— 一类受众。CLI 暴露两种**平等**操作形态(前台 vs `--service`),用户按场景挑,不是"默认 + opt-in"。
 
-### 1.3 多账号 / FIRST_TREE_HUB_HOME 复杂度对早期产品过度
+### 1.3 现状盘点(对齐 origin/main)
 
-代码里有一整套围绕"同一台机器多份凭据"的处理(account-switch gate、隔离指南、跨 org 重注册),但目前没有真实用户在用。如果不显式 defer 掉这部分,新文档会继承同一份混乱。
+**Server 命令**(`packages/command/src/commands/server.ts`)。`server start` 走 Docker 拉 Postgres(或 `--database-url`)→ 跑 migrations → Web 跑在 8000 —— **不会自动建 admin**(`core/server.ts:28` 注释说会建,实际跳过了)。`server admin:create` 是独立命令,建 `users` + `organizations` + `members` + 第一个 human `agents` 行 + `agent_configs` seed,密码只显示一次。`server doctor` / `status` / `db:migrate` / `stop` 是诊断 / 生命周期命令。
 
-### 1.4 本轮文档的 scope
+**Web**(`packages/web/src/`)。Clients 列表页(`pages/clients.tsx`)的 `ConnectStrip` `Generate` 按钮调 `POST /connect-tokens` 签 10 分钟单次有效的 connect token。New Agent 流(`components/new-agent-dialog.tsx`)`type` 硬编码 `personal_assistant`,提交后探测 `listClients()`:1 个在线就自动 pin,≥2 个就显示 "Choose a computer" 选择。0 个在线时,`last-step-modal.tsx` 弹合并 one-liner `npm install && agent add && client connect --token`,轮询 `agent.clientId` 直到 set,跳 Workspace。
 
-**先把本地版的所有决策锁死(第 4.1 节)**;托管版(第 4.2 节)留到下一次专门讨论。
+**Client CLI**(`packages/command/src/`)。`client connect <url>` 支持 `--token` 或交互式 username/password,目前**有一段 60 行的 account-switch gate** 解析新 JWT、比对 `memberId`、弹 Replace/Cancel。`agent add [name] --agent-id <uuid>` 写 per-agent `agent.yaml`。`core/client-runtime.ts:233-261` 监听 `agent:pinned` 推送,自动写跟 `agent add` 一模一样的 yaml 起 slot —— 注释明写 "mirror what `first-tree-hub agent add` does"。
 
-## 2. 这一阶段的产品原则(讨论后落定)
+**实际只有两条路径**(quickstart-zh.md 描述的"先 connect 再 add"中间路径在线上根本走不通):
 
-- **一人 → 一 org → 一 member → 一 client**,这是默认 invariant。
-- **Server 端的多租户保留**:`organizations` 表、`members` 桥、JWT 带 `organizationId`、所有查询按 org 过滤。这是托管版 ACL 的基底,不是面向用户的"加入多 org" 能力。
-- **Client 端的多账号能力无限期 defer**:不规划 `profile` 子命令,UI 里看不到,`FIRST_TREE_HUB_HOME` 仅作内部测试工具。
-- Login 在签 JWT 那一刻就把 `(member, org)` 钉死。`auth.ts:50-51` 的注释 `// Get first membership (this version: single org)` 已经暗示了这个产品边界,我们就不再扩它。
-- 公共文档**默认单账号**。Edge case 走 troubleshooting 页面,不进 onboarding。
-- **本地版用户画像 = 单机自用**。优化目标是"装好 → 跑起来 → 用上",心智里出现的概念越少越好。认证、org、密码完全隐藏。"evaluator vs daily user" 这条 persona 二分轴讨论后**抛弃** —— 只有一类受众。CLI 暴露**两种平等的操作形态**(前台 vs `--service`),用户按当时场景挑(SSH 远程 / Windows / 调启动失败 → 前台;想跨重启持续跑 → `--service`),不存在"哪个是默认"的说法。
+- **Path A**(全新机器,0 client 在线):Web 建 agent → Last-step 模态 → 复制 one-liner → 终端跑 `npm install + agent add + client connect --token` → 模态轮询 → 跳 Workspace。
+- **Path B**(机器已连):Web 建 agent → server pin → WS push `agent:pinned` → client 自动注册 → Web 跳 Workspace。**零 CLI**。
 
-## 3. 现状盘点(代码级,对齐 origin/main)
+## 2. 要做的修改
 
-### Server 端(`packages/command/src/commands/server.ts`)
-
-- `server start`(line 21):Docker 拉 Postgres(或 `--database-url`)→ 跑 migration → Web 跑在 8000。**不会自动建 admin**。`core/server.ts:28` 的注释说"step 5: Create default admin if none exists",但实际函数从 migration 直接跳到 web dist + listen,这一步不存在。
-- `server admin:create`(line 115):独立命令。建 `users` + `organizations` + `members` + 第一个 human `agents` 行 + `agent_configs` seed。生成的密码只显示一次。
-- 还有 `server doctor` / `server status` / `server db:migrate` / `server stop`,功能性命令。
-
-### Web(`packages/web/src/`)
-
-- `pages/clients.tsx`:Clients 列表页,顶部 `ConnectStrip`,`Generate` 按钮调 `POST /connect-tokens`,inline 输出 `first-tree-hub client connect <url> --token <jwt>`。10 分钟有效,single-use。
-- `components/new-agent-dialog.tsx`:New Agent 流。`type` 硬编码 `personal_assistant`。提交后探测 `listClients()`:
-  - 0 在线 → fall through 到 Last-step 模态。
-  - 1 在线 → 自动 `createAgent({clientId})`。
-  - ≥2 在线 → "Choose a computer" 选择步骤。
-- `components/last-step-modal.tsx`:只有 0 在线时才会出现。生成合并 one-liner `npm install && agent add && client connect --token`。轮询 `agent.clientId`,绑定后跳 Workspace。
-
-### Client 端(`packages/command/src/`)
-
-- `commands/connect.ts`:`client connect <url>`。支持 `--token`(连接 token)或交互式 username/password。**有一段 60 行的 account-switch gate**——解析新 JWT,比对 `memberId`,弹 Replace/Cancel,Cancel 时打印 `FIRST_TREE_HUB_HOME` 隔离指南。默认装 launchd / systemd-user 服务,除非加 `--no-service`。
-- `commands/agent.ts`:`agent add [name] --agent-id <uuid>`,写 `~/.first-tree/hub/config/agents/<name>/agent.yaml`。
-- `core/client-runtime.ts:233-261`:监听 `agent:pinned` server 推送,自动写跟 `agent add` 完全一样的 yaml,然后起 slot。注释明写 "mirror what `first-tree-hub agent add` does"。
-
-### 实际只有两条路径
-
-- **Path A(全新机器,0 client 在线):** Web 建 agent → Last-step 模态 → 复制 one-liner → 终端跑 `npm install + agent add + client connect --token` → 模态轮询完成 → 跳 Workspace。
-- **Path B(机器已连):** Web 建 agent → server pin → server WS push `agent:pinned` → client 自动注册 → Web 跳 Workspace。**零 CLI**。
-
-quickstart-zh.md 描述的中间路径(分别 connect 然后 add)在线上根本走不通。
-
-## 4. 要做的修改
-
-### 4.1 本地版流程(已锁定)
+### 2.1 本地版流程(已锁定)
 
 新增一个顶层命令 `first-tree-hub start`,把今天的三步("`server start` + `admin:create` + `client connect`")合一。该命令有**两种平等支持的操作形态**,用户按当下场景挑;**不存在"哪个是默认"的说法**,onboarding 文档把它们当作并列选项呈现。
 
@@ -162,7 +129,7 @@ CLI 进程做的装机一次性活(两种形态都干):
 7. 父 CLI 轮询 daemon `/healthz` 最多 10s。失败:`service uninstall` 回滚,打印 daemon stderr 末尾约 20 行,退出 1。
 8. 成功:父 CLI 打开浏览器到 `http://127.0.0.1:<port>`,退出 0。Daemon 继续跑。
 
-**daemon 不**重跑 `ensurePostgres`、`runMigrations`、`createAdmin` —— 这些是装机一次性的活。后续 boot(用户登录自起)时,daemon 唯一做的编排就是 schema 守卫 + server / ClientRuntime 启动。**这是有意为之** —— 见 § 6 Q11 的 Pattern B / 12-factor 理由。
+**daemon 不**重跑 `ensurePostgres`、`runMigrations`、`createAdmin` —— 这些是装机一次性的活。后续 boot(用户登录自起)时,daemon 唯一做的编排就是 schema 守卫 + server / ClientRuntime 启动。**这是有意为之** —— 见 § 4 Q11 的 Pattern B / 12-factor 理由。
 
 步骤 2 后磁盘状态:
 ```
@@ -298,7 +265,7 @@ first-tree-hub service uninstall         # 删 plist/unit + 停 daemon(不动 Po
 - Windows 服务支持 —— Windows 上当前只有前台形态(`first-tree-hub start`)可用。
 - 单机多账号 —— 单账号/机器是产品 invariant。
 
-### 4.2 托管版流程(部分锁定)
+### 2.2 托管版流程(部分锁定)
 
 托管版**不引入** `first-tree-hub start` 之类的顶层一条龙命令——既有 Web + CLI 表面保留,只在三个具体地方做 trim(Qh-2 / Qh-3 / Qh-4)。剩下几个相邻问题被显式 defer(Qh-1 / Qh-5 / Qh-6 / Qh-7),见本节末尾。
 
@@ -343,11 +310,11 @@ This computer already has Hub credentials. Replace? [y/N]
 - **Qh-1 —— member identity source of truth。** 架构文档 `first-tree-architecture-overview.20260423.md` § 3.1 + 3.3 已定 Hh-1.B 方向(Context Tree `members/` 是 SoT)。本次讨论里又冒出一个自然延伸:**Hub Web 作为编辑 `members/` 的友好 UI**(通过 PR/commit 写到 tree 仓,sync 反向读回 Hub DB)。**实现节奏 + auth 机制**(GitHub OAuth vs username/password vs 其他)都开放。今天的 `members.createMember`(纯 DB)留作占位。注意:proposal § 3.3 把"Members 同步" 标 ✅ landed,但 Hub 一侧的 sync 代码不存在;Hub README 那句"synced to Hub automatically"也是 aspirational,**不是已实现**。这两边等接续讨论时一起对齐。
 - **Qh-5 —— Org provisioning 文档放哪。** 今天所有 org 都是运营方通过 `server admin:create` 或 admin API 建,无自助。用户文档假设"你已经有凭据";如何/在哪写运营侧 provisioning 文档开放。**大概率落地形态**:单独 `docs/operator-runbook.md`,但本次不 commit。
 - **Qh-6 —— `client logout` 默认是否同时卸服务。** 是按"我登出了 → 一切干净"的心智(默认卸),还是按"服务安装是另一件事"的心智(默认保留),开放。C5 下面只落核心动作,服务卸载默认 flag 等 Qh-6 决了再 wire。
-- **Qh-7 —— Hosted 端到端旅程文档。** 本地版第 4.1 已经有逐步旅程,hosted 等价物**依赖 Qh-1**(auth 机制决定"用户怎么拿到第一份凭据"),先不写。
+- **Qh-7 —— Hosted 端到端旅程文档。** 本地版 § 2.1 已经有逐步旅程,hosted 等价物**依赖 Qh-1**(auth 机制决定"用户怎么拿到第一份凭据"),先不写。
 
-### 4.3 文档修改(D1–D4)
+### 2.3 文档修改(D1–D4)
 
-- **D1.** 重写 `docs/quickstart-zh.md`。本地段按 4.1 写定;托管段等 4.2 完成。**所有 `server start` 提及全部从用户文档里删掉**,被 `first-tree-hub start` 替换。(`server start` 在 CLI 里保留作开发者命令,只是不出现在用户文档。)
+- **D1.** 重写 `docs/quickstart-zh.md`。本地段按 § 2.1 写定;托管段等 § 2.2 完成。**所有 `server start` 提及全部从用户文档里删掉**,被 `first-tree-hub start` 替换。(`server start` 在 CLI 里保留作开发者命令,只是不出现在用户文档。)
   - **新增 "升级" 小节**讲两条命令的升级流程(Pattern B / Q11):
     ```bash
     npm install -g @agent-team-foundation/first-tree-hub@latest
@@ -358,7 +325,7 @@ This computer already has Hub credentials. Replace? [y/N]
 - **D3.** `CLAUDE.md` 里 `Local Testing Isolation` 段移到内部 `docs/dev/testing-isolation.md`。对外文档不再提 `FIRST_TREE_HUB_HOME`。
 - **D4.** `docs/multi-tenancy-hardening-design.md:18` 把 non-goals 里那行 "Multi-org switching UX (will become a `first-tree-hub profile` CLI feature later)" 改成 "deferred indefinitely"。不预定 `profile` 这个名字。
 
-### 4.4 代码修改(C1–C5)
+### 2.4 代码修改(C1–C5)
 
 - **C1.** 砍掉 `packages/command/src/commands/connect.ts:78-242` 的 account-switch gate,换成单一 Y/N 确认:
   - 没现有凭据 → 静默继续(不变)。
@@ -394,7 +361,7 @@ This computer already has Hub credentials. Replace? [y/N]
   - **浏览器自动打开:** 用 `open`(macOS)/ `xdg-open`(Linux)/ `start`(Windows)打开 `http://127.0.0.1:8000`。`--no-open` / SSH 会话 / 非 TTY 时跳过。永远把 URL 也打到 stdout 兜底。**不做剪贴板复制、不做 Cmd+click magic URL** —— URL 就是 `http://127.0.0.1:8000`,短到不需要"花式投递"。
   - **跨形态冲突探测:** bind `:8000` 之前先探测 daemon 是不是已经占了端口,如果是,打印 `Hub is already running as a service. Open http://127.0.0.1:8000 to log in, or run 'first-tree-hub service stop' first if you want to run inline.` 然后退出 1。
   - README "Quick Start" 段改成两种形态并列(`start` 和 `start --service`),不指定哪个是默认。
-  - **端口处理:** 默认 `8000`(暂不变),`--port <n>` flag 支持。撞 `EADDRINUSE` 时 catch 后打印 "Port N is busy. Try `first-tree-hub start --port <N+1>`.",不再让 Node 原栈飞出来。**不做** auto-fallback、不做"另一个 Hub 在跑"特判 —— 参见第 7 节关于改默认端口的未来讨论项。
+  - **端口处理:** 默认 `8000`(暂不变),`--port <n>` flag 支持。撞 `EADDRINUSE` 时 catch 后打印 "Port N is busy. Try `first-tree-hub start --port <N+1>`.",不再让 Node 原栈飞出来。**不做** auto-fallback、不做"另一个 Hub 在跑"特判 —— 参见 § 5 关于改默认端口的未来讨论项。
   - **`server start` 老命令保留:** 仍作为开发者命令(只起 server,不带 embedded client)。从 README / `docs/quickstart-zh.md` 等用户文档里消失;`server --help` 加一行注脚 "for end-user setup, see `first-tree-hub start`"。**不 deprecate、不警告。**
 - **C3.** Last-step 模态的 one-liner 砍掉 `agent add` 段。
   - 新链:`npm install -g @agent-team-foundation/first-tree-hub && first-tree-hub client connect <url> --token <jwt>`。
@@ -415,7 +382,7 @@ This computer already has Hub credentials. Replace? [y/N]
   - `first-tree-hub service logs [-f] [-n N]` —— 打印或 follow `~/.first-tree/hub/logs/` 下的 NDJSON rotating log。
   - `first-tree-hub service stop` —— 停 daemon 但不卸。
   - Daemon 进程跑的是 C2 实现的同一份编排 —— Docker preflight、auto-admin(首次)、嵌入 ClientRuntime、server 在 `127.0.0.1:8000`。跟前台的差异:stdout/stderr 进 log 文件而不是终端。**daemon 自己不 mint 也不打 URL** —— 鉴权恢复就是用户开浏览器走 Web `/login` 路由。
-  - **Schema 版本守卫(Q11):** daemon 启动时**第一件事**就是比对自家二进制夹带的 migrations(`packages/server/src/db/migrations/`)跟 DB 里的 `__drizzle_migrations` 表。不匹配(DB 比二进制 expect 的旧)→ 日志清晰报错:`Schema version mismatch. CLI v<version> expects migration <hash>, DB at <hash>. Run 'first-tree-hub start --service' to apply pending migrations.` 然后退出 1。这是 daemon **唯一**做的编排 —— 它**不**重跑 `ensurePostgres`、`runMigrations`、`createAdmin`,这些都是 CLI parent 的装机一次性活。详见 § 6 Q11 的 12-factor 理由。
+  - **Schema 版本守卫(Q11):** daemon 启动时**第一件事**就是比对自家二进制夹带的 migrations(`packages/server/src/db/migrations/`)跟 DB 里的 `__drizzle_migrations` 表。不匹配(DB 比二进制 expect 的旧)→ 日志清晰报错:`Schema version mismatch. CLI v<version> expects migration <hash>, DB at <hash>. Run 'first-tree-hub start --service' to apply pending migrations.` 然后退出 1。这是 daemon **唯一**做的编排 —— 它**不**重跑 `ensurePostgres`、`runMigrations`、`createAdmin`,这些都是 CLI parent 的装机一次性活。详见 § 4 Q11 的 12-factor 理由。
   - **Daemon 启动鉴权(B2 / Q9):** schema 守卫过了之后,daemon 自起时没有父 CLI,要自己 bootstrap JWT。`core/auth.ts:obtainDaemonJWT()` 三层降级,在 `ClientRuntime` 实例化**之前**调:
     1. 读 `credentials.json`。access token 的 `exp` 还没过 → 直接用。
     2. access 过期、refresh 还有效 → POST `/api/v1/auth/refresh` 拿新对,持久化,用。
@@ -428,13 +395,13 @@ This computer already has Hub credentials. Replace? [y/N]
   - **健康检查 + 回滚(Q8):** 父进程轮询 daemon `/healthz` 最多 10s。失败:`service uninstall` 回滚,打印 daemon stderr 末尾约 20 行,退出 1。**不留半装状态。**
   - Postgres 容器生命周期跟 service 解耦 —— `service stop / uninstall` 不动 Docker 容器。
 
-(C9 已移除 —— `login` 命令和裸命令别名都不在 scope 了。Web `/login` 路由 + loopback-only `local-bootstrap` 端点覆盖了 `login` 想解决的所有场景,**信任边界完全相同**,而且省掉了 CLI 这层。理由见 § 6 Q1。)
+(C9 已移除 —— `login` 命令和裸命令别名都不在 scope 了。Web `/login` 路由 + loopback-only `local-bootstrap` 端点覆盖了 `login` 想解决的所有场景,**信任边界完全相同**,而且省掉了 CLI 这层。理由见 § 4 Q1。)
 
 - **B3 follow-up(不需要单独代码改动)。** 原稿想加一条专用 `obtainCliJWT()` 走 `local-bootstrap` 来绕开跟 daemon 抢 refresh token 的 race,**过度设计了**。真实情况:这条 race 是**自愈**的,只要 CLI 现有的 refresh helper 遵循标准模式 "refresh 收 401 → 重读 `credentials.json` → 再试一次"。Daemon 写新对;CLI 内存里旧对 refresh 失败;CLI 重读盘,拿到 daemon 写的新对,再试 —— 全程对用户透明。**真正的动作:** 确保 CLI 鉴权 helper 有这条 "重读再试" 分支;不需要新端点路由、不需要"唯一 writer"不变量。
 
 (原 C6 client-retry-backoff 和 C7 localhost-no-service 删除 —— 都被 C2 的嵌入式 client 模型自动消解。)
 
-## 5. 分阶段顺序
+## 3. 分阶段顺序
 
 - **Phase 1(本地版,已完整 spec)—— 切成 1a + 1b 两个 PR**(#14):
   - **Phase 1a —— 仅 C2。** `first-tree-hub start` 前台形态 + 共用编排(Docker preflight、Postgres、迁移、改名后的 `createAdmin` + `findAdmin` 自动建 admin)+ `local-bootstrap` 端点带三道 gate 中间件 + Web `/login` 路由 + 浏览器自动打开。前台跑端到端可演示;**没有平台特定代码**。独立可发。
@@ -445,7 +412,7 @@ This computer already has Hub credentials. Replace? [y/N]
 - **Phase 3(Hub 内扫尾):** D3、D4、C4,各自独立小 PR。
 - **Phase 4(defer 题的 follow-up):** 单独会话重开 Qh-1 / Qh-5 / Qh-6 / Qh-7。C5 在这阶段先落核心动作(不 commit 默认 flag),等 Qh-6 决了再 flip。
 
-## 6. 决策记录
+## 4. 决策记录
 
 ### 本地场景
 
@@ -475,7 +442,7 @@ This computer already has Hub credentials. Replace? [y/N]
 | Qh-6 | `client logout` 默认是否卸服务 | **Defer。** C5 落核心动作(disconnect + 停进程 + 清凭据);服务卸载默认 flag 等后续决。 | flag 默认不阻塞命令本体 |
 | Qh-7 | 托管端到端旅程文档 | **Defer。** 阻塞在 Qh-1(auth 机制决定"用户怎么拿到第一份凭据")。 | 旅程写作需要稳定的凭据流程 |
 
-## 7. 显式 out of scope / 未来讨论项
+## 5. 显式 out of scope / 未来讨论项
 
 ### 当前没有意图做(hard out of scope)
 - `first-tree-hub profile` 多账号 UX

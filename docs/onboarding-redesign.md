@@ -8,56 +8,39 @@
 
 ---
 
-## 1. Why
+## 1. Background and current state
 
-- `docs/quickstart-zh.md` no longer matches the code on `origin/main`. Concrete drift verified against `06e40fb`:
-  - "Generate Connect Command" button label — actual label is just `Generate` / `Regenerate`, container titled "Connect a computer" (`packages/web/src/pages/clients.tsx:33-95`).
-  - "Type: Personal Assistant" field on the New Agent form — `type` is hardcoded to `personal_assistant` in `packages/web/src/components/new-agent-dialog.tsx:135`; the user-visible field is "Where it runs" (Claude Code / Kael).
-  - "Pin to client" field — removed; replaced by automatic client probing (`new-agent-dialog.tsx:210-243`).
-  - "Agent Created" dialog with single `agent add` line — replaced by "Last step — connect your computer" modal that emits a combined `npm install && agent add && client connect` one-liner (`packages/web/src/components/last-step-modal.tsx:76-82`).
-  - The doc's prescribed sequence (`client connect` first, then create agent, then `agent add`) does not exist in current code: either Path A (Last-step one-liner) or Path B (zero CLI via `agent:pinned`) is taken — never the doc's middle path.
-- The doc only covers a hosted Hub (`https://first-tree.staging.unispark.dev`); there is no quickstart for the self-hosted local-machine scenario, despite `first-tree-hub server start` being a supported command.
-- Multi-account / `FIRST_TREE_HUB_HOME` complexity in the code is premature for the current product stage. We need an explicit decision to defer it before doc rewrite, otherwise the doc inherits the same confusion.
-- **Scope of this doc:** local scenario is locked first (Section 4.1, all decisions finalized); hosted scenario is deferred to a subsequent discussion (Section 4.2).
+### 1.1 Why this redesign
 
-## 2. Product principles for this stage
+`docs/quickstart-zh.md` no longer matches the code on `origin/main`. The doc prescribes a `client connect` → New Agent → `agent add` sequence that doesn't exist in the running system; field labels, command shapes, and modal flows have all moved on (full drift list against `06e40fb`: "Generate Connect Command" button is now just `Generate` in a "Connect a computer" strip; `type` field on New Agent is hardcoded to `personal_assistant` and replaced by a "Where it runs" selector; "Pin to client" field is gone, replaced by automatic client probing; "Agent Created" dialog became a "Last step — connect your computer" modal emitting a combined one-liner). The doc only covers a hosted Hub; there is no quickstart for the self-hosted local-machine scenario despite `first-tree-hub server start` being a supported command. And the multi-account / `FIRST_TREE_HUB_HOME` machinery in the code is premature for the current product stage — without an explicit decision to defer it, any rewrite inherits the same confusion.
+
+**Scope of this doc:** local scenario is locked first (§ 2.1, all decisions finalised); hosted scenario is partially finalised (§ 2.2) with several questions explicitly deferred.
+
+### 1.2 Product principles (locked for this stage)
 
 - **One human = one org = one member = one client.** Default invariant.
-- **Server-side multi-tenancy** stays — `organizations` table, `members` join table, JWT-scoped-to-org. This is the ACL substrate for hosted Hub serving multiple customers; it is NOT a user-visible "join multiple orgs" capability.
-- **Client-side multi-account is deferred indefinitely.** No `profile` subcommand; no UI affordance; `FIRST_TREE_HUB_HOME` is treated as an internal testing tool, not a documented product surface.
-- **Login binds (member, org) at JWT issue time.** `auth.ts:50-51` already comments "this version: single org" — we do not change that.
-- Public docs assume single-account-per-machine. Edge cases go into separate troubleshooting pages, not onboarding.
-- **Local-version users are single-machine self-users.** Optimize for "install → run → use" with the fewest possible concepts in their mental model. Authentication, org, password are hidden entirely. The "evaluator vs daily user" persona distinction is dropped — there is one audience. The CLI exposes two operational shapes (foreground vs `--service`) presented as parallel choices, not as default + opt-in: the user picks based on their situation (debug a startup issue, run on Windows, SSH session → foreground; want Hub to survive reboots → `--service`).
+- **Server-side multi-tenancy stays** — `organizations` table, `members` join table, JWT scoped to org. ACL substrate for a hosted Hub serving multiple customers; NOT a user-visible "join multiple orgs" capability.
+- **Client-side multi-account is deferred indefinitely.** No `profile` subcommand, no UI affordance; `FIRST_TREE_HUB_HOME` is an internal testing tool, not a documented product surface.
+- **Login binds `(member, org)` at JWT issue time.** `auth.ts:50-51` already comments "this version: single org"; we do not change that.
+- **Public docs assume single-account-per-machine.** Edge cases go into separate troubleshooting pages, not onboarding.
+- **Local-version users are single-machine self-users.** Optimise for "install → run → use" with the fewest possible concepts. Authentication, org, password are hidden entirely. The "evaluator vs daily user" persona distinction is dropped — one audience. The CLI exposes two operational shapes (foreground vs `--service`) as parallel choices selected by user situation, not as default + opt-in.
 
-## 3. Current-state inventory (verified against `origin/main`)
+### 1.3 Current code state (verified against `origin/main`)
 
-### Server (`packages/command/src/commands/server.ts`)
-- `server start` (line 21): launches Postgres via Docker (or `--database-url`), runs migrations, serves Web on port 8000. **Does NOT auto-create an admin** — comment in `core/server.ts:28` claims it does, but actual implementation skips that step.
-- `server admin:create` (line 115): separate command. Creates `users` + `organizations` + `members` + first human `agents` row + `agent_configs` seed. Generates and prints password once.
-- `server doctor` / `server status` / `server db:migrate` / `server stop`: diagnostics + lifecycle.
+**Server commands** (`packages/command/src/commands/server.ts`). `server start` launches Postgres via Docker (or `--database-url`), runs migrations, serves Web on port 8000 — but **does NOT auto-create an admin** (comment in `core/server.ts:28` claims it does; actual implementation skips). `server admin:create` is a separate command that creates `users` + `organizations` + `members` + first human `agents` row + `agent_configs` seed and prints the generated password once. `server doctor` / `status` / `db:migrate` / `stop` cover diagnostics and lifecycle.
 
-### Web (`packages/web/src/`)
-- `pages/clients.tsx`: Clients list. Top of page has a `ConnectStrip` with a `Generate` button that hits `POST /connect-tokens` and prints `first-tree-hub client connect <url> --token <jwt>` inline (10-min, single-use token).
-- `components/new-agent-dialog.tsx`: New Agent flow. `type` hardcoded to `personal_assistant`. Probes `listClients()` after submit:
-  - 0 connected → falls through to Last-step modal.
-  - 1 connected → auto-pins via `createAgent({clientId})`.
-  - ≥2 connected → "Choose a computer" picker.
-- `components/last-step-modal.tsx`: Shown only when no connected client could absorb the new agent. Generates a combined one-liner `npm install && agent add && client connect --token`. Polls `agent.clientId` until it becomes set, then auto-routes to Workspace.
+**Web** (`packages/web/src/`). The Clients list page (`pages/clients.tsx`) has a `ConnectStrip` with a `Generate` button that mints a 10-minute single-use connect token. The New Agent flow (`components/new-agent-dialog.tsx`) hardcodes `type: "personal_assistant"`, probes `listClients()` after submit, and either auto-pins (1 client) or shows a "Choose a computer" picker (≥2). When no client is connected, `last-step-modal.tsx` emits a combined `npm install && agent add && client connect --token` one-liner and polls `agent.clientId` until set, then auto-routes to Workspace.
 
-### Client (`packages/command/src/`)
-- `commands/connect.ts`: `client connect <url>`. Supports `--token` (connect token) or interactive username/password. Has a 60-line **account-switch gate** that decodes the new JWT, compares `memberId` with existing credentials, prompts Replace/Cancel, and on Cancel prints a `FIRST_TREE_HUB_HOME` isolation guide. Installs the launchd / systemd-user service by default unless `--no-service`.
-- `commands/agent.ts`: `agent add [name] --agent-id <uuid>` writes `~/.first-tree/hub/config/agents/<name>/agent.yaml`.
-- `core/client-runtime.ts:233-261`: Listens for `agent:pinned` server push and auto-writes the same `agent.yaml` that `agent add` would have written, then starts the slot. Comment explicitly says "mirror what `first-tree-hub agent add` does".
+**Client CLI** (`packages/command/src/`). `client connect <url>` supports `--token` or interactive username/password and currently has a 60-line account-switch gate that decodes the new JWT, compares `memberId` with existing credentials, and prompts Replace/Cancel. `agent add [name] --agent-id <uuid>` writes per-agent `agent.yaml`. `core/client-runtime.ts:233-261` listens for `agent:pinned` server push and auto-writes the same yaml that `agent add` would, then starts the slot — comment explicitly says "mirror what `first-tree-hub agent add` does".
 
-### Two real onboarding paths
-- **Path A** (brand-new machine, 0 connected clients): user creates agent in Web → Last-step modal → copies one-liner → terminal runs `npm install + agent add + client connect --token` → modal polls and routes to Workspace.
-- **Path B** (already-connected machine): user creates agent in Web → server pins → server WS push → client auto-registers → Web jumps to Workspace. Zero CLI.
+**Two real onboarding paths** in current code (the `quickstart-zh.md`-prescribed "middle path" of separate `connect` then `agent add` is unreachable):
 
-The middle path described in current `quickstart-zh.md` (separate `client connect` then `agent add`) is unreachable in current code.
+- **Path A** (brand-new machine, no connected client): user creates an agent in Web → Last-step modal → copies one-liner → terminal runs `npm install + agent add + client connect --token` → modal polls and routes to Workspace.
+- **Path B** (already-connected machine): user creates an agent in Web → server pins → WS push to client → client auto-registers → Web jumps to Workspace. Zero CLI.
 
-## 4. Required changes
+## 2. Required changes
 
-### 4.1 Local-scenario flow (FINALIZED)
+### 2.1 Local-scenario flow (FINALIZED)
 
 A single new top-level command — `first-tree-hub start` — replaces today's three-step `server start` + `admin:create` + `client connect`. The command has two equally-supported operational shapes; the user picks the one that matches their situation. Neither is "the default"; the onboarding guide presents them as parallel choices.
 
@@ -146,7 +129,7 @@ Then the shapes diverge — **foreground**:
 7. Parent CLI polls daemon `/healthz` for up to 10s. On failure: `service uninstall` rollback, print captured stderr (last ~20 lines from log), exit 1.
 8. On success: parent CLI opens browser at `http://127.0.0.1:<port>`, exits 0. Daemon keeps running.
 
-**The daemon does NOT** re-run `ensurePostgres`, `runMigrations`, or `createAdmin` — those are install-time only. On subsequent boots (auto-restart at user login), the daemon's only orchestration is the schema-version guard plus server + ClientRuntime startup. **This is intentional** — see § 6 Q11 for the Pattern B / 12-factor rationale.
+**The daemon does NOT** re-run `ensurePostgres`, `runMigrations`, or `createAdmin` — those are install-time only. On subsequent boots (auto-restart at user login), the daemon's only orchestration is the schema-version guard plus server + ClientRuntime startup. **This is intentional** — see § 4 Q11 for the Pattern B / 12-factor rationale.
 
 After Step 2, the disk state is:
 ```
@@ -282,7 +265,7 @@ The user **never sees** username, password, org name, JWTs, refresh tokens, `age
 - **Windows service support** — foreground shape (`first-tree-hub start`) is the only path on Windows for now.
 - **Multi-account on a single machine** — single-account-per-machine is the product invariant.
 
-### 4.2 Hosted-scenario flow (PARTIALLY FINALIZED)
+### 2.2 Hosted-scenario flow (PARTIALLY FINALIZED)
 
 The hosted scenario does not get a single new top-level command (no equivalent of `first-tree-hub start`). Instead, the existing Web + CLI surface stays and is trimmed in three concrete places (Qh-2, Qh-3, Qh-4 below). Several adjacent questions are explicitly deferred (Qh-1, Qh-5, Qh-6, Qh-7) — see the bottom of this section.
 
@@ -327,11 +310,11 @@ The following are recognised but not finalised in this redesign. Each is blocked
 - **Qh-1 — Source of truth for member identity.** The architecture proposal `first-tree-architecture-overview.20260423.md` § 3.1 + 3.3 establishes Context Tree `members/` as the source of truth (Hh-1.B direction). A natural extension surfaced in this discussion: **Hub Web becomes the friendly UI for editing `members/`**, writing via PR/commit to the tree repo, with sync reading back into the Hub DB. Implementation timing AND authentication mechanism (GitHub OAuth vs username/password vs other) are open. Today's `members.createMember` (DB-only) stays as the implementation until further decision. Note: the proposal § 3.3 lists "Members 同步" as ✅ landed, but the Hub-side sync code does not exist; the Hub README's claim about "synced to Hub automatically" is aspirational, not implemented. Both should be reconciled when this is picked up.
 - **Qh-5 — Org provisioning docs.** Today all orgs are operator-provisioned via `server admin:create` or admin API; no self-service. User docs assume "you have credentials"; how/where to document operator-side provisioning is open. Likely outcome is a separate `docs/operator-runbook.md`, but not committed.
 - **Qh-6 — `client logout` default behavior.** Whether `client logout` should also tear down the launchd/systemd service (matching "log me out") or leave it (matching "service install is a separate concern") is open. C5 below leaves the flag default unspecified pending this.
-- **Qh-7 — Hosted end-to-end journey writeup.** The local scenario (Section 4.1) has a step-by-step journey. The hosted equivalent is contingent on Qh-1 (auth mechanism, "how does the user get their first credential") and is deferred until that resolves.
+- **Qh-7 — Hosted end-to-end journey writeup.** The local scenario (§ 2.1) has a step-by-step journey. The hosted equivalent is contingent on Qh-1 (auth mechanism, "how does the user get their first credential") and is deferred until that resolves.
 
-### 4.3 Documentation (D1–D4)
+### 2.3 Documentation (D1–D4)
 
-- **D1.** Rewrite `docs/quickstart-zh.md`. Local section uses 4.1's flow exclusively; hosted section pending 4.2. **Drop all `server start` mentions** from user-facing docs — replaced by `first-tree-hub start`. (`server start` itself stays in CLI for developers; just doesn't appear in user docs.)
+- **D1.** Rewrite `docs/quickstart-zh.md`. Local section uses § 2.1's flow exclusively; hosted section pending § 2.2. **Drop all `server start` mentions** from user-facing docs — replaced by `first-tree-hub start`. (`server start` itself stays in CLI for developers; just doesn't appear in user docs.)
   - **Add an "Upgrading" subsection** documenting the two-command upgrade flow (Pattern B / Q11):
     ```bash
     npm install -g @agent-team-foundation/first-tree-hub@latest
@@ -342,7 +325,7 @@ The following are recognised but not finalised in this redesign. Each is blocked
 - **D3.** Move `Local Testing Isolation` out of public `CLAUDE.md` to `docs/dev/testing-isolation.md`. Stop documenting `FIRST_TREE_HUB_HOME` in user-facing docs.
 - **D4.** `docs/multi-tenancy-hardening-design.md:18` — drop "Multi-org switching UX (will become a `first-tree-hub profile` CLI feature later)" parenthetical. Replace with "deferred indefinitely".
 
-### 4.4 Code changes (C1–C5)
+### 2.4 Code changes (C1–C5)
 
 - **C1.** Strip the account-switch gate in `packages/command/src/commands/connect.ts:78-242`. Replace with a single Y/N confirmation:
   - No credentials present → silent proceed (unchanged).
@@ -378,7 +361,7 @@ The following are recognised but not finalised in this redesign. Each is blocked
   - **Browser auto-open:** open `http://127.0.0.1:8000` via `open` (macOS) / `xdg-open` (Linux) / `start` (Windows). Skipped when `--no-open` is passed, an SSH session is detected (`SSH_CLIENT` env), or stdout is not a TTY. Always print the URL to stdout as fallback. **No clipboard copy, no Cmd+click magic URL** — the URL is just `http://127.0.0.1:8000`, short enough to not need fancy delivery.
   - **Cross-shape collision detection:** before binding `:8000`, probe whether a daemon is already serving the port; if yes, print `Hub is already running as a service. Open http://127.0.0.1:8000 to log in, or run 'first-tree-hub service stop' first if you want to run inline.` and exit 1.
   - README "Quick Start" section updated to present both shapes (`start` and `start --service`) without designating a default.
-  - **Port handling:** default `8000` (unchanged), `--port <n>` flag accepted. On `EADDRINUSE`, catch and print "Port N is busy. Try `first-tree-hub start --port <N+1>`." instead of the raw Node stack. No auto-fallback, no probing — see Section 7 for the future port-default discussion.
+  - **Port handling:** default `8000` (unchanged), `--port <n>` flag accepted. On `EADDRINUSE`, catch and print "Port N is busy. Try `first-tree-hub start --port <N+1>`." instead of the raw Node stack. No auto-fallback, no probing — see § 5 for the future port-default discussion.
   - **`server start` legacy command:** kept as a developer command (runs server only, no embedded client). Disappears from README and `docs/quickstart-zh.md`; `server --help` gets a one-line pointer "for end-user setup, see `first-tree-hub start`". Not deprecated, not warned.
 - **C3.** Last-step modal one-liner drops the `agent add` segment.
   - New chain: `npm install -g @agent-team-foundation/first-tree-hub && first-tree-hub client connect <url> --token <jwt>`.
@@ -399,7 +382,7 @@ The following are recognised but not finalised in this redesign. Each is blocked
   - `first-tree-hub service logs [-f] [-n N]` — print or follow rotating NDJSON log file under `~/.first-tree/hub/logs/`.
   - `first-tree-hub service stop` — stop daemon without uninstalling.
   - The daemon process invokes the same orchestration C2 implements — Docker preflight, auto-admin (first run), embedded ClientRuntime, server on `127.0.0.1:8000`. Difference vs foreground: stdout/stderr go to log files, not terminal. The daemon does **not** mint or print URLs on its own — auth recovery is the Web `/login` route any time the user opens the browser.
-  - **Schema-version guard (Q11):** daemon's first action on boot is to compare the migrations bundled in its own binary (`packages/server/src/db/migrations/`) against `__drizzle_migrations` in the live DB. Mismatch (DB older than binary expects) → log a clear error: `Schema version mismatch. CLI v<version> expects migration <hash>, DB at <hash>. Run 'first-tree-hub start --service' to apply pending migrations.` and exit 1. This is the **only** orchestration the daemon does — it does NOT re-run `ensurePostgres`, `runMigrations`, or `createAdmin`. Those are install-time work owned by the CLI parent. See § 6 Q11 for the 12-factor rationale.
+  - **Schema-version guard (Q11):** daemon's first action on boot is to compare the migrations bundled in its own binary (`packages/server/src/db/migrations/`) against `__drizzle_migrations` in the live DB. Mismatch (DB older than binary expects) → log a clear error: `Schema version mismatch. CLI v<version> expects migration <hash>, DB at <hash>. Run 'first-tree-hub start --service' to apply pending migrations.` and exit 1. This is the **only** orchestration the daemon does — it does NOT re-run `ensurePostgres`, `runMigrations`, or `createAdmin`. Those are install-time work owned by the CLI parent. See § 4 Q11 for the 12-factor rationale.
   - **Daemon startup auth (B2 / Q9):** after the schema-version guard passes, the daemon has no parent CLI on auto-restart, so it bootstraps its own JWT via a 3-tier fallback in `core/auth.ts:obtainDaemonJWT()` — called before `ClientRuntime` is instantiated:
     1. Read `credentials.json`. If access token's `exp` is still in the future → use directly.
     2. Else if refresh token still valid → POST `/api/v1/auth/refresh`, persist new pair, use.
@@ -412,13 +395,13 @@ The following are recognised but not finalised in this redesign. Each is blocked
   - **Health check + rollback (Q8):** parent process polls daemon `/healthz` up to 10s. On timeout / unhealthy: invoke `service uninstall`, print last ~20 lines of daemon stderr from log, exit 1. **No half-installed state.**
   - Postgres lifecycle stays decoupled — service stop/uninstall does NOT touch the Docker container.
 
-(C9 removed — the `login` command and bare-command alias are no longer in scope. The Web `/login` route + loopback-only `local-bootstrap` endpoint cover every case `login` was meant to handle, with the same trust boundary and zero CLI involvement. See § 6 Q1 for rationale.)
+(C9 removed — the `login` command and bare-command alias are no longer in scope. The Web `/login` route + loopback-only `local-bootstrap` endpoint cover every case `login` was meant to handle, with the same trust boundary and zero CLI involvement. See § 4 Q1 for rationale.)
 
 - **B3 follow-up (no separate code change).** Earlier draft proposed a dedicated `obtainCliJWT()` helper to route out-of-band CLI auth through `local-bootstrap` and avoid the refresh-token race with a running daemon. That was over-spec: the race is **self-healing** if the existing CLI refresh helper (whatever auth path the agent commands already use) follows the standard pattern of "on 401-from-refresh → reread `credentials.json` → retry once". Daemon writes new tokens; CLI's stale in-memory pair fails refresh; CLI re-reads disk, picks up daemon's new pair, retries — all transparent. **Action:** ensure the CLI auth helper has the retry-on-stale-creds branch; no new endpoint route or sole-writer invariant needed.
 
 (Old C6 client-retry-backoff and C7 localhost-no-service are removed — both made moot by C2's embedded-client model.)
 
-## 5. Sequencing
+## 3. Sequencing
 
 - **Phase 1 (local-scenario, fully spec'd) — split into 1a + 1b** (#14):
   - **Phase 1a — C2 only.** `first-tree-hub start` foreground shape + shared orchestration (Docker preflight, Postgres, migrations, auto-admin via renamed `createAdmin` + `findAdmin`) + `local-bootstrap` endpoint with the 3-gate middleware + Web `/login` route + browser auto-open. End-to-end demoable on `start` foreground; no platform-specific code. Independently shippable.
@@ -429,7 +412,7 @@ The following are recognised but not finalised in this redesign. Each is blocked
 - **Phase 3 (Hub-internal cleanup).** D3, D4, C4 — each can be its own small PR.
 - **Phase 4 (deferred-question follow-ups).** Re-open Qh-1, Qh-5, Qh-6, Qh-7 in a separate session. C5 lands its core (no default-flag commitment) here, then flips on Qh-6.
 
-## 6. Decisions log
+## 4. Decisions log
 
 ### Local scenario
 
@@ -459,7 +442,7 @@ The following are recognised but not finalised in this redesign. Each is blocked
 | Qh-6 | `client logout` default service teardown | **Deferred.** C5 lands core actions (disconnect + stop process + clear creds); default flag for service teardown decided later. | Flag default doesn't block the command itself |
 | Qh-7 | Hosted end-to-end journey writeup | **Deferred.** Blocked on Qh-1 (auth mechanism shapes how user gets first credential). | The journey writeup needs a settled credential flow |
 
-## 7. Out of scope / future considerations
+## 5. Out of scope / future considerations
 
 ### Hard out of scope (no current intent)
 - `first-tree-hub profile` multi-account UX
