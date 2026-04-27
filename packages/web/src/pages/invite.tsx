@@ -32,11 +32,22 @@ export function InvitePage() {
 
   useEffect(() => {
     if (!token) return;
+    // `cancelled` flag rather than AbortController — `previewInvite` uses
+    // the shared `fetch` which doesn't expose a signal threading API
+    // here. Effect dropping the result of a stale request avoids the
+    // "set state on unmounted component" silent flash without needing
+    // to re-plumb the network layer.
+    let cancelled = false;
     previewInvite(token)
-      .then(setPreview)
+      .then((preview) => {
+        if (!cancelled) setPreview(preview);
+      })
       .catch((err: unknown) => {
-        setPreviewError(err instanceof Error ? err.message : "Could not load invite");
+        if (!cancelled) setPreviewError(err instanceof Error ? err.message : "Could not load invite");
       });
+    return () => {
+      cancelled = true;
+    };
   }, [token]);
 
   if (!token) {

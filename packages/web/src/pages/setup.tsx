@@ -21,6 +21,13 @@ import { slugifyWorkspace } from "../utils/workspace-slug.js";
  * keeps them here. Existing per-org users hitting `/setup` directly
  * (e.g. via "+ Create another workspace" in PR #5) ALSO use this same
  * page; the layout / nav matters more than the gate.
+ *
+ * Deferred to the workspace-switcher PR: when a per-org user creates or
+ * joins from `/setup`, the success path silently overwrites their
+ * current per-org token with the new workspace's token — they "switch"
+ * without UI feedback. Today we land them on `/`; the switcher PR will
+ * surface a "Now in: <Workspace Name>" toast and let them choose
+ * whether to switch or stay in the original org.
  */
 export function SetupPage() {
   const navigate = useNavigate();

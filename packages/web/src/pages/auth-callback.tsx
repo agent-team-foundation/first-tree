@@ -40,23 +40,42 @@ export function AuthCallbackPage() {
       return;
     }
 
-    // Scrub the fragment before any other render — no point persisting
-    // tokens in browser history once they're in localStorage.
-    window.history.replaceState({}, "", window.location.pathname);
-
     void signInWithTokens({ accessToken: fragment.accessToken, refreshToken: fragment.refreshToken })
-      .then(() => navigate(fragment.next, { replace: true }))
+      .then(() => {
+        // Scrub the fragment ONLY after the tokens are safely in storage.
+        // Doing it before the await means a `signInWithTokens` rejection
+        // (localStorage quota, private-mode Safari, transient
+        // /me/workspaces 5xx) would leave the tokens lost on the user —
+        // they'd have to redo the full GitHub OAuth round-trip just to
+        // recover. After-success scrub plus an inline-retry on failure
+        // (below) keeps the recovery path tractable.
+        window.history.replaceState({}, "", window.location.pathname);
+        navigate(fragment.next, { replace: true });
+      })
       .catch(() => {
+        // Don't navigate — leave the fragment in the URL so a page
+        // refresh re-runs this handler and can succeed once the
+        // transient cause clears.
         setError("storage_failed");
-        navigate("/signup?error=storage_failed", { replace: true });
       });
   }, [navigate, signInWithTokens]);
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background">
-      <div className="text-body text-muted-foreground">
-        {error ? "Sign-in didn't complete. Redirecting…" : "Signing you in…"}
-      </div>
+    <div className="flex min-h-screen items-center justify-center bg-background p-4">
+      {error ? (
+        <div className="text-center space-y-3 max-w-sm">
+          <div className="text-body text-destructive">Sign-in didn't complete.</div>
+          <div className="text-caption text-muted-foreground">
+            Refresh this page to try again, or{" "}
+            <a href="/signup" className="underline">
+              start over
+            </a>
+            .
+          </div>
+        </div>
+      ) : (
+        <div className="text-body text-muted-foreground">Signing you in…</div>
+      )}
     </div>
   );
 }

@@ -1,3 +1,4 @@
+import { sanitizeNextPath } from "@agent-team-foundation/first-tree-hub-shared";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { UnauthorizedError } from "../errors.js";
@@ -31,25 +32,15 @@ import {
  *      `POST /me/workspaces/join`, which is callable with either token type)
  */
 
-/**
- * Whitelist for relative `next` paths. We allow only forward-slash-prefixed
- * paths whose body is the URL-safe character set we'd ever generate. This
- * blocks every documented open-redirect bypass shape:
- *   * `//evil.com`     — protocol-relative URL
- *   * `/\evil.com`     — backslash that browsers normalise to `/`
- *   * `https://evil`   — absolute URL
- *   * `javascript:…`   — pseudo-protocol
- *   * `/foo@evil.com`  — userinfo-style host smuggling once concatenated
- * If the value fails to match the whitelist we silently downgrade to `/`
- * rather than throwing — the user reaches the sign-in page either way.
- */
-const SAFE_NEXT_PATH = /^\/(?![/\\])[A-Za-z0-9_\-./?=&%#]*$/;
-
+// `next` whitelist lives in `@agent-team-foundation/first-tree-hub-shared/safe-redirect`
+// so the SPA's fragment consumer (`/auth/github/complete`) applies the
+// same rule. Drift between the two = open-redirect or token-fixation
+// risk; co-locating the regex prevents that.
 const startQuerySchema = z.object({
   next: z
     .string()
     .optional()
-    .transform((v) => (v && SAFE_NEXT_PATH.test(v) ? v : "/")),
+    .transform((v) => sanitizeNextPath(v)),
   // Dev-stub overrides — ignored in production. The frontend doesn't normally
   // pass these; tests do, and a curl-based local dev workflow can.
   dev_login: z.string().optional(),

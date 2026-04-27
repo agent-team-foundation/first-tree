@@ -36,8 +36,13 @@ type AuthContextValue = {
   signInWithTokens: (tokens: { accessToken: string; refreshToken: string }) => Promise<void>;
   /** Re-issue tokens scoped to a different workspace the caller belongs to. */
   switchWorkspace: (organizationId: string) => Promise<void>;
-  /** Force-refresh the workspaces list (after create / join). */
-  refetchWorkspaces: () => Promise<void>;
+  /**
+   * Force-refresh both the workspaces list AND the per-org member context
+   * (`/me`). Same payload as the first-mount fetch — name reflects that
+   * `refetchAll` doesn't ONLY touch `/me/workspaces`. Cheap workspaces-only
+   * refresh isn't surfaced today; PR #5's switcher will add one.
+   */
+  refetchAll: () => Promise<void>;
   logout: () => void;
 };
 
@@ -114,8 +119,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const refetchWorkspaces = refetchAll;
-
   const login = useCallback(
     async (username: string, password: string) => {
       const tokens = await loginApi(username, password);
@@ -173,7 +176,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         login,
         signInWithTokens,
         switchWorkspace,
-        refetchWorkspaces,
+        refetchAll,
         logout,
       }}
     >

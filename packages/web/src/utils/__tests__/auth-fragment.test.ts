@@ -39,4 +39,16 @@ describe("parseAuthFragment", () => {
   it("preserves the URL-decoded `next` so deep-links survive the round-trip", () => {
     expect(parseAuthFragment("#access=A&refresh=B&next=%2Finvite%2Fabc-123")?.next).toBe("/invite/abc-123");
   });
+
+  it("downgrades a malicious `next` to '/' to block fragment-based open redirects", () => {
+    // A crafted link like /auth/github/complete#access=…&refresh=…&next=//evil
+    // would otherwise land the user off-origin AFTER persisting the
+    // server-controlled tokens. Server-side `/start` validates `next`
+    // before it ever reaches the JWT — the same guard runs here so a
+    // bypass through a fabricated fragment is also blocked.
+    expect(parseAuthFragment("#access=A&refresh=B&next=%2F%2Fevil.com")?.next).toBe("/");
+    expect(parseAuthFragment("#access=A&refresh=B&next=%2F%5Cevil.com")?.next).toBe("/");
+    expect(parseAuthFragment("#access=A&refresh=B&next=https%3A%2F%2Fevil.com")?.next).toBe("/");
+    expect(parseAuthFragment("#access=A&refresh=B&next=javascript%3Aalert(1)")?.next).toBe("/");
+  });
 });

@@ -8,13 +8,20 @@ import { useAuth } from "./auth-context.js";
  * `RequireAuth` — `RequireAuth` enforces "any token", this layer
  * enforces "per-org token".
  *
- * `workspaces === null` means we haven't fetched yet — render nothing
- * rather than flashing the wrong UI; the auth-context's first-mount
- * effect populates it within a tick.
+ * `workspaces === null` means we haven't fetched yet. Render a centered
+ * "Loading…" instead of nothing — on a slow network the
+ * `/me/workspaces` round-trip can take hundreds of ms; a blank screen
+ * is worse UX than a clearly-pending one.
  */
 export function RequireWorkspace() {
   const { isRootless, workspaces } = useAuth();
-  if (workspaces === null) return null;
+  if (workspaces === null) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <div className="text-body text-muted-foreground">Loading…</div>
+      </div>
+    );
+  }
   if (isRootless || workspaces.length === 0) {
     return <Navigate to="/setup" replace />;
   }

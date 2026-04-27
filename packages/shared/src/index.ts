@@ -2,6 +2,8 @@
 
 // -- Mention extraction (shared by server fan-out resolver and client auto-forward) --
 export { extractMentions, MENTION_REGEX, type MentionParticipant, scanMentionTokens } from "./mentions.js";
+// -- SaaS auth `next=` redirect whitelist (shared by `/auth/github/start` and the SPA fragment consumer) --
+export { SAFE_NEXT_PATH, sanitizeNextPath } from "./safe-redirect.js";
 export {
   ADAPTER_BIND_METHODS,
   ADAPTER_PLATFORMS,
