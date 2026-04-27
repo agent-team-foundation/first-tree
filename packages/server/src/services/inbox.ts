@@ -20,9 +20,12 @@ const DEFAULT_MAX_RETRY_COUNT = 3;
  * against runaway batches if a chat is very chatty between two mentions of
  * the same agent. Older / overflow silent rows are still bulk-acked so they
  * don't accumulate forever.
+ *
+ * Exported (test-only) so the cap-overflow test doesn't have to spam 50+
+ * silent messages — it pins the invariant by reading the constant.
  */
-const PRECEDING_CONTEXT_MAX_ENTRIES = 50;
-const PRECEDING_CONTEXT_WINDOW_SECONDS = 24 * 60 * 60;
+export const PRECEDING_CONTEXT_MAX_ENTRIES = 50;
+export const PRECEDING_CONTEXT_WINDOW_SECONDS = 24 * 60 * 60;
 
 export async function pollInbox(db: Database, inboxId: string, limit: number) {
   return withSpan("inbox.deliver", { "inbox.id": inboxId, "inbox.poll.limit": limit }, () =>
@@ -168,6 +171,14 @@ async function collectPrecedingContext(
 
     // For each trigger, fetch silent context strictly before it (and after
     // the previous trigger in this batch). Window: 24h before the trigger.
+    //
+    // Order matters: when there are MORE than `PRECEDING_CONTEXT_MAX_ENTRIES`
+    // candidates, we want to keep the rows CLOSEST to the trigger (most
+    // contextually relevant) and drop the oldest. So select DESC + LIMIT,
+    // then reverse in JS to get chronological prompt-ready output. Selecting
+    // ASC + LIMIT would drop the recent rows — and the bulk-ack below would
+    // mark them acked anyway, so the agent would silently lose the messages
+    // that mattered most.
     let prevCreatedAt: string | null = null;
     for (const trigger of chatTriggers) {
       const rows = await tx.execute<{
@@ -190,18 +201,21 @@ async function collectPrecedingContext(
           AND ie.created_at < ${trigger.created_at}
           ${prevCreatedAt === null ? sql`` : sql`AND ie.created_at > ${prevCreatedAt}`}
           AND ie.created_at > NOW() - make_interval(secs => ${PRECEDING_CONTEXT_WINDOW_SECONDS})
-        ORDER BY ie.created_at
+        ORDER BY ie.created_at DESC
         LIMIT ${PRECEDING_CONTEXT_MAX_ENTRIES}
       `);
 
-      const preceding: PrecedingMessage[] = rows.map((r) => ({
-        id: r.message_id,
-        senderId: r.sender_id,
-        format: r.format,
-        content: r.content,
-        metadata: (r.metadata ?? {}) as Record<string, unknown>,
-        createdAt: r.created_at,
-      }));
+      // Reverse so the prompt-rendered block reads oldest → newest.
+      const preceding: PrecedingMessage[] = rows
+        .map((r) => ({
+          id: r.message_id,
+          senderId: r.sender_id,
+          format: r.format,
+          content: r.content,
+          metadata: (r.metadata ?? {}) as Record<string, unknown>,
+          createdAt: r.created_at,
+        }))
+        .reverse();
       result.set(trigger.id, preceding);
       prevCreatedAt = trigger.created_at;
     }

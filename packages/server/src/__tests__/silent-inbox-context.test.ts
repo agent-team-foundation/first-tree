@@ -4,7 +4,7 @@ import { chatParticipants } from "../db/schema/chats.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { createAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
-import { ackEntry, pollInbox } from "../services/inbox.js";
+import { ackEntry, PRECEDING_CONTEXT_MAX_ENTRIES, pollInbox } from "../services/inbox.js";
 import { sendMessage } from "../services/message.js";
 import { createAdminContext, useTestApp } from "./helpers.js";
 
@@ -187,6 +187,49 @@ describe("silent inbox + preceding context", () => {
     expect(first.message.precedingMessages.map((p) => p.content)).toEqual(["silent-1"]);
     expect(second.message.content).toContain("mention-2");
     expect(second.message.precedingMessages.map((p) => p.content)).toEqual(["silent-2"]);
+  });
+
+  it("caps preceding context at PRECEDING_CONTEXT_MAX_ENTRIES and keeps the rows closest to the trigger", async () => {
+    // When silent rows exceed the cap, the bundled context must be the LATEST
+    // N before the trigger (the most contextually relevant), not the oldest.
+    // Older rows still get bulk-acked so they don't accumulate.
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const { human, observer, chat } = await setupGroupWithMentionOnlyAgent(uid);
+
+    const cap = PRECEDING_CONTEXT_MAX_ENTRIES;
+    const overflow = 10;
+    const silentCount = cap + overflow;
+    const pad = (i: number) => `silent-${String(i).padStart(3, "0")}`;
+    for (let i = 0; i < silentCount; i++) {
+      await sendMessage(app.db, chat.id, human.uuid, { format: "text", content: pad(i) });
+    }
+    await sendMessage(app.db, chat.id, human.uuid, {
+      format: "text",
+      content: `@si-obs-${uid} please weigh in`,
+    });
+
+    const pulled = await pollInbox(app.db, observer.inboxId, 10);
+    expect(pulled).toHaveLength(1);
+    const entry = pulled[0];
+    if (!entry) throw new Error("entry missing");
+
+    const preceding = entry.message.precedingMessages;
+    expect(preceding).toHaveLength(cap);
+    // Window kept = the `cap` rows closest to the trigger, oldest-first.
+    // The first `overflow` rows (silent-000 … silent-009) get dropped.
+    const expected = Array.from({ length: cap }, (_, i) => pad(silentCount - cap + i));
+    expect(preceding.map((p) => p.content)).toEqual(expected);
+
+    // All silent rows — including the 10 dropped ones — must be acked so they
+    // don't replay onto the next trigger.
+    const remaining = await app.db
+      .select({ notify: inboxEntries.notify, status: inboxEntries.status })
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.inboxId, observer.inboxId), eq(inboxEntries.chatId, chat.id)));
+    const silentRemaining = remaining.filter((r) => r.notify === false);
+    expect(silentRemaining).toHaveLength(silentCount);
+    expect(silentRemaining.every((r) => r.status === "acked")).toBe(true);
   });
 
   it("full-mode participants still wake on every group message and carry no preceding context", async () => {
