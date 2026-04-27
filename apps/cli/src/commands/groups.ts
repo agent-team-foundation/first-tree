@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 
+import { withCommandContext } from "./context.js";
 import type { SubcommandModule } from "./types.js";
 
 type CommandWithUnknownCommand = Command & {
@@ -34,6 +35,6 @@ export function registerCommandGroup(
       .description(subcommand.description)
       .showHelpAfterError(true)
       .showSuggestionAfterError(true)
-      .action(subcommand.action);
+      .action(withCommandContext(subcommand.action));
   }
 }

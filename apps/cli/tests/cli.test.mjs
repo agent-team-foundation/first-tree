@@ -75,6 +75,9 @@ describe("first-tree CLI", () => {
     expect(result.stdout).toContain(
       "CLI for initializing and maintaining first-tree context trees.",
     );
+    expect(result.stdout).toContain("--json");
+    expect(result.stdout).toContain("-d, --debug");
+    expect(result.stdout).toContain("-q, --quiet");
     for (const commandName of commandNames) {
       expect(result.stdout).toContain(commandName);
     }

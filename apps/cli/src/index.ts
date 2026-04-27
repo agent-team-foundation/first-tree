@@ -70,7 +70,10 @@ export function createProgram(version = readPackageVersion()): Command {
   program
     .name("first-tree")
     .description("CLI for initializing and maintaining first-tree context trees.")
-    .version(version);
+    .version(version)
+    .option("--json", "output in json format")
+    .option("-d, --debug", "Show debugging output.")
+    .option("-q, --quiet", "Quiet.");
 
   registerCommands(program);
   program.addHelpText("after", () => formatAllCommandsHelp(program));

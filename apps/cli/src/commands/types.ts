@@ -1,6 +1,17 @@
 import type { Command } from "commander";
 
-export type CommandAction = (...args: unknown[]) => void | Promise<void>;
+export type GlobalOptions = {
+  json: boolean;
+  debug: boolean;
+  quiet: boolean;
+};
+
+export type CommandContext = {
+  options: GlobalOptions;
+  command: Command;
+};
+
+export type CommandAction = (context: CommandContext) => void | Promise<void>;
 
 export type CommandModule = {
   name: string;
