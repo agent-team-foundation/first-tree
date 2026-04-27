@@ -1,7 +1,7 @@
 import { ADAPTER_PLATFORMS } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Cable, Link2, Play, Plus, Trash2 } from "lucide-react";
-import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { Cable, Link2, Plus, Trash2 } from "lucide-react";
+import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { type HubClient, listClients } from "./../api/activity.js";
 import { createAdapterMapping, deleteAdapterMapping, listAdapterMappings } from "./../api/adapter-mappings.js";
@@ -45,14 +45,18 @@ import { UppercaseLabel } from "./../components/ui/section-header.js";
 import { StateChip } from "./../components/ui/state-chip.js";
 import { Tile } from "./../components/ui/tile.js";
 import { cn, formatDate } from "./../lib/utils.js";
+import { ContextBar } from "./agent-detail/context-bar.js";
 import { DangerZone } from "./agent-detail/danger-zone.js";
 import { EnvSection } from "./agent-detail/env-section.js";
 import { GitSection } from "./agent-detail/git-section.js";
 import { IdentitySection } from "./agent-detail/identity-section.js";
 import { McpSection } from "./agent-detail/mcp-section.js";
 import { ModelSection } from "./agent-detail/model-section.js";
+import { OverviewSection } from "./agent-detail/overview-section.js";
 import { PromptSection } from "./agent-detail/prompt-section.js";
 import { SaveBar, sectionAnchorId } from "./agent-detail/save-bar.js";
+import { SectionDivider, SectionShell } from "./agent-detail/section-shell.js";
+import { type SetupRuntimeKind, SetupSection } from "./agent-detail/setup-section.js";
 import { deriveSaveHint } from "./agent-detail/status-bar.js";
 import { useConfigDraft } from "./agent-detail/use-config-draft.js";
 
@@ -62,32 +66,38 @@ type SidebarItem = {
   key: string;
   label: string;
   anchor: string;
+  /** Items after the divider render with a visual separation. */
+  divider?: boolean;
+  /** Red-text styling for Danger zone entry. */
+  danger?: boolean;
 };
 
-type SidebarGroup = {
-  label: string;
-  items: SidebarItem[];
-};
+const SECTION_ANCHORS = {
+  overview: "ad-overview",
+  setup: "ad-setup",
+  prompt: sectionAnchorId("prompt"),
+  tools: sectionAnchorId("mcp"),
+  advanced: "ad-advanced",
+  danger: "ad-danger",
+} as const;
 
-function buildSidebar(isHuman: boolean): SidebarGroup[] {
-  const identity: SidebarItem[] = [
-    { key: "identity", label: "Profile", anchor: "ad-identity" },
-    { key: "bindings", label: "Bindings", anchor: "ad-bindings" },
-  ];
-  const runtime: SidebarItem[] = isHuman
-    ? []
-    : [
-        { key: "prompt", label: "Prompt", anchor: sectionAnchorId("prompt") },
-        { key: "model", label: "Model", anchor: sectionAnchorId("model") },
-        { key: "mcp", label: "MCP tools", anchor: sectionAnchorId("mcp") },
-        { key: "env", label: "Environment", anchor: sectionAnchorId("env") },
-        { key: "git", label: "Git", anchor: sectionAnchorId("git") },
-      ];
-  const danger: SidebarItem[] = [{ key: "danger", label: "Danger zone", anchor: "ad-danger" }];
-  const groups: SidebarGroup[] = [{ label: "Identity", items: identity }];
-  if (runtime.length > 0) groups.push({ label: "Runtime", items: runtime });
-  groups.push({ label: "Danger zone", items: danger });
-  return groups;
+/**
+ * Flat sidebar with a divider before Danger zone. Autonomous agents get the
+ * full list; human agents collapse to Overview + Danger zone per the ticket
+ * "human agent 自然降级" rule.
+ */
+function buildSidebar(isHuman: boolean): SidebarItem[] {
+  const items: SidebarItem[] = [{ key: "overview", label: "Overview", anchor: SECTION_ANCHORS.overview }];
+  if (!isHuman) {
+    items.push(
+      { key: "setup", label: "Setup", anchor: SECTION_ANCHORS.setup },
+      { key: "prompt", label: "Prompt", anchor: SECTION_ANCHORS.prompt },
+      { key: "tools", label: "Tools", anchor: SECTION_ANCHORS.tools },
+      { key: "advanced", label: "Advanced", anchor: SECTION_ANCHORS.advanced },
+    );
+  }
+  items.push({ key: "danger", label: "Danger zone", anchor: SECTION_ANCHORS.danger, divider: true, danger: true });
+  return items;
 }
 
 export function AgentDetailPage() {
@@ -132,10 +142,23 @@ export function AgentDetailPage() {
   const agentAdapters = adaptersQuery.data?.filter((a) => a.agentId === uuid) ?? [];
   const agentMappings = mappingsQuery.data?.filter((m) => m.agentId === uuid) ?? [];
 
+  // All connected/known clients; used to resolve the bound computer's hostname
+  // for the sticky context bar and Overview. This is distinct from the
+  // bind-dialog-gated query below (that one only fires when the dialog opens).
+  const allClientsQuery = useQuery({
+    queryKey: ["clients"],
+    queryFn: listClients,
+    enabled: !!uuid && agentQuery.data?.type !== "human",
+    refetchInterval: 30_000,
+  });
+
   // -- Config draft
   const draft = useConfigDraft(cfgQuery.data);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [conflictMsg, setConflictMsg] = useState<string | null>(null);
+  // Flash an inline "Saved" check in the SaveBar for a short window after a
+  // successful save. Cleared by any subsequent edit, error, or timer.
+  const [justSaved, setJustSaved] = useState(false);
 
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -147,8 +170,10 @@ export function AgentDetailPage() {
       queryClient.setQueryData(["agent-config", uuid], next);
       setSaveError(null);
       setConflictMsg(null);
+      setJustSaved(true);
     },
     onError: (err) => {
+      setJustSaved(false);
       if (err instanceof ApiError && err.status === 409) {
         setConflictMsg("Someone else saved a newer version while you were editing.");
         setSaveError(null);
@@ -157,6 +182,17 @@ export function AgentDetailPage() {
       setSaveError(err instanceof Error ? err.message : String(err));
     },
   });
+
+  // Clear the "Saved" flash shortly after it appears, and also whenever the
+  // user touches the draft again (a new edit shouldn't show a stale success).
+  useEffect(() => {
+    if (!justSaved) return;
+    const t = setTimeout(() => setJustSaved(false), 2500);
+    return () => clearTimeout(t);
+  }, [justSaved]);
+  useEffect(() => {
+    if (draft.summary.anyDirty) setJustSaved(false);
+  }, [draft.summary.anyDirty]);
 
   const reloadRemote = useCallback(() => {
     setConflictMsg(null);
@@ -222,6 +258,12 @@ export function AgentDetailPage() {
   const [bindingEditId, setBindingEditId] = useState<number | null>(null);
   const [bindingForm, setBindingForm] = useState(EMPTY_BINDING_FORM);
   const [bindingCredError, setBindingCredError] = useState("");
+  // Confirm-dialog state that used to be handled by window.confirm(). Holding
+  // the target id (or `true` for discard) keeps the corresponding Radix Dialog
+  // open; null/false closes it.
+  const [mappingToDelete, setMappingToDelete] = useState<number | null>(null);
+  const [adapterToDelete, setAdapterToDelete] = useState<number | null>(null);
+  const [discardDialogOpen, setDiscardDialogOpen] = useState(false);
   const createAdapterMutation = useMutation({
     mutationFn: async () => {
       const creds = buildCredentials(bindingForm);
@@ -296,7 +338,30 @@ export function AgentDetailPage() {
   }, [draft.summary.anyDirty]);
 
   const isHumanLocal = agentQuery.data?.type === "human";
-  const sidebarGroups = useMemo(() => buildSidebar(isHumanLocal), [isHumanLocal]);
+  const sidebarItems = useMemo(() => buildSidebar(isHumanLocal), [isHumanLocal]);
+
+  // Sticky ContextBar visibility: hide while the Overview section is on screen
+  // (its Status & Health card already shows runtime/computer/model), show once
+  // the operator has scrolled past it. Driven by an IntersectionObserver on a
+  // zero-height sentinel placed at the bottom of the Overview section.
+  const overviewSentinelRef = useRef<HTMLDivElement | null>(null);
+  const [contextBarVisible, setContextBarVisible] = useState(false);
+  useEffect(() => {
+    if (isHumanLocal) return;
+    const el = overviewSentinelRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        if (!entry) return;
+        // Show the bar only after the sentinel has scrolled *above* the viewport.
+        setContextBarVisible(!entry.isIntersecting && entry.boundingClientRect.top < 0);
+      },
+      { threshold: 0 },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [isHumanLocal]);
 
   if (agentQuery.isLoading) {
     return (
@@ -425,6 +490,160 @@ export function AgentDetailPage() {
     model: cfgQuery.data?.payload.model?.trim() || "—",
   };
 
+  // Resolve the bound client's display name (hostname, fallback to id) for the
+  // sticky context bar and the Overview "Runs on …" row. The client list is
+  // refetched in the background so a hostname that hasn't reported yet fills
+  // in lazily rather than forcing a page reload.
+  const boundClientId = clientStatus?.clientId ?? null;
+  const boundClient: HubClient | null = boundClientId
+    ? (allClientsQuery.data?.find((c) => c.id === boundClientId) ?? null)
+    : null;
+  const boundClientLabel: string | null = boundClientId ? (boundClient?.hostname ?? boundClientId) : null;
+
+  // Runtime kind label for the Setup "Where it runs" card. The agent schema
+  // does not currently carry a first-class runtime field; we derive from
+  // `runtimeType` when the backend reports it ("kael"), otherwise treat the
+  // agent as Claude Code, which matches today's only shipping runtime.
+  const setupRuntimeKind: SetupRuntimeKind = runtimeType === "kael" ? "kael" : "claude-code";
+  const contextRuntimeLabel =
+    setupRuntimeKind === "kael" ? "Kael" : setupRuntimeKind === "claude-code" ? "Claude Code" : (runtimeType ?? "—");
+
+  const bindingsPanel = (
+    <Panel>
+      <div
+        className="flex items-center justify-between"
+        style={{
+          padding: "var(--sp-2_5) var(--sp-3_5)",
+          borderBottom: "var(--hairline) solid var(--border-faint)",
+        }}
+      >
+        <div className="inline-flex items-center gap-2 text-body font-semibold">
+          {isHuman ? <Link2 className="h-3.5 w-3.5" /> : <Cable className="h-3.5 w-3.5" />}
+          Platform bindings
+        </div>
+        <Button size="xs" variant="outline" onClick={() => setBindingDialogOpen(true)}>
+          <Plus className="h-3 w-3" />
+          {isHuman ? "Bind user" : "Bind bot"}
+        </Button>
+      </div>
+      {isHuman ? (
+        <DenseTable>
+          <DenseTableHeader>
+            <DenseTableRow>
+              <DenseTableHead>Platform</DenseTableHead>
+              <DenseTableHead>External user ID</DenseTableHead>
+              <DenseTableHead>Display name</DenseTableHead>
+              <DenseTableHead>Bound via</DenseTableHead>
+              <DenseTableHead>Created</DenseTableHead>
+              <DenseTableHead style={{ width: 32 }} />
+            </DenseTableRow>
+          </DenseTableHeader>
+          <DenseTableBody>
+            {agentMappings.length === 0 ? (
+              <DenseTableRow>
+                <DenseTableCell colSpan={6} style={{ textAlign: "center", color: "var(--fg-3)", padding: 16 }}>
+                  No platform bindings
+                </DenseTableCell>
+              </DenseTableRow>
+            ) : (
+              agentMappings.map((m) => (
+                <DenseTableRow key={m.id}>
+                  <DenseTableCell>
+                    <DenseBadge>{m.platform}</DenseBadge>
+                  </DenseTableCell>
+                  <DenseTableCell className="mono text-label">{m.externalUserId}</DenseTableCell>
+                  <DenseTableCell>{m.displayName ?? "—"}</DenseTableCell>
+                  <DenseTableCell>
+                    <DenseBadge tone="outline">{m.boundVia ?? "—"}</DenseBadge>
+                  </DenseTableCell>
+                  <DenseTableCell className="mono text-caption" style={{ color: "var(--fg-4)" }}>
+                    {formatDate(m.createdAt)}
+                  </DenseTableCell>
+                  <DenseTableCell>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={() => setMappingToDelete(m.id)}
+                      disabled={deleteMappingMutation.isPending}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </DenseTableCell>
+                </DenseTableRow>
+              ))
+            )}
+          </DenseTableBody>
+        </DenseTable>
+      ) : (
+        <DenseTable>
+          <DenseTableHeader>
+            <DenseTableRow>
+              <DenseTableHead>Platform</DenseTableHead>
+              <DenseTableHead>Status</DenseTableHead>
+              <DenseTableHead>Connection</DenseTableHead>
+              <DenseTableHead>Created</DenseTableHead>
+              <DenseTableHead style={{ width: 64 }} />
+            </DenseTableRow>
+          </DenseTableHeader>
+          <DenseTableBody>
+            {agentAdapters.length === 0 ? (
+              <DenseTableRow>
+                <DenseTableCell colSpan={5} style={{ textAlign: "center", color: "var(--fg-3)", padding: 16 }}>
+                  No platform bindings
+                </DenseTableCell>
+              </DenseTableRow>
+            ) : (
+              agentAdapters.map((a) => {
+                const status = botStatuses?.find((s) => s.configId === a.id);
+                const isConnected = a.platform === "kael" ? a.status === "active" : !!status?.connected;
+                return (
+                  <DenseTableRow key={a.id}>
+                    <DenseTableCell>
+                      <DenseBadge>{a.platform}</DenseBadge>
+                    </DenseTableCell>
+                    <DenseTableCell>
+                      <DenseBadge tone={a.status === "active" ? "accent" : "outline"}>{a.status}</DenseBadge>
+                    </DenseTableCell>
+                    <DenseTableCell>
+                      <StateChip state={isConnected ? "idle" : "offline"} />
+                    </DenseTableCell>
+                    <DenseTableCell className="mono text-caption" style={{ color: "var(--fg-4)" }}>
+                      {formatDate(a.createdAt)}
+                    </DenseTableCell>
+                    <DenseTableCell>
+                      <div className="flex gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          onClick={() => openEditAdapter(a)}
+                          title="Edit"
+                        >
+                          …
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          onClick={() => setAdapterToDelete(a.id)}
+                          disabled={deleteAdapterMutation.isPending}
+                          title="Delete"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    </DenseTableCell>
+                  </DenseTableRow>
+                );
+              })
+            )}
+          </DenseTableBody>
+        </DenseTable>
+      )}
+    </Panel>
+  );
+
   return (
     <div className="-m-6 flex" style={{ minHeight: "calc(100vh - var(--sp-10))" }}>
       <aside
@@ -436,36 +655,42 @@ export function AgentDetailPage() {
           padding: "var(--sp-3) 0",
         }}
       >
-        {sidebarGroups.map((group) => (
-          <div key={group.label} style={{ marginBottom: 12 }}>
-            <UppercaseLabel style={{ display: "block", padding: "var(--sp-1) var(--sp-4)" }}>
-              {group.label}
-            </UppercaseLabel>
-            {group.items.map((it) => (
-              <button
-                key={it.key}
-                type="button"
-                onClick={() => jumpTo(it.anchor)}
-                className="block w-full text-left bg-transparent text-body"
+        <UppercaseLabel style={{ display: "block", padding: "var(--sp-1) var(--sp-4) var(--sp-2)" }}>
+          Agent
+        </UppercaseLabel>
+        {sidebarItems.map((it) => (
+          <div key={it.key}>
+            {it.divider && (
+              <div
+                aria-hidden
                 style={{
-                  padding: "var(--sp-1_25) var(--sp-4) var(--sp-1_25) var(--sp-3_5)",
-                  color: "var(--fg-3)",
-                  border: "none",
-                  borderLeft: "var(--hairline-bold) solid transparent",
-                  cursor: "pointer",
+                  margin: "var(--sp-2) var(--sp-3_5)",
+                  borderTop: "var(--hairline) solid var(--border)",
                 }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.color = "var(--fg)";
-                  e.currentTarget.style.background = "var(--bg-hover)";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.color = "var(--fg-3)";
-                  e.currentTarget.style.background = "transparent";
-                }}
-              >
-                {it.label}
-              </button>
-            ))}
+              />
+            )}
+            <button
+              type="button"
+              onClick={() => jumpTo(it.anchor)}
+              className="block w-full text-left bg-transparent text-body"
+              style={{
+                padding: "var(--sp-1_25) var(--sp-4) var(--sp-1_25) var(--sp-3_5)",
+                color: it.danger ? "var(--state-error)" : "var(--fg-3)",
+                border: "none",
+                borderLeft: "var(--hairline-bold) solid transparent",
+                cursor: "pointer",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.color = it.danger ? "var(--state-error)" : "var(--fg)";
+                e.currentTarget.style.background = "var(--bg-hover)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.color = it.danger ? "var(--state-error)" : "var(--fg-3)";
+                e.currentTarget.style.background = "transparent";
+              }}
+            >
+              {it.label}
+            </button>
           </div>
         ))}
       </aside>
@@ -509,25 +734,6 @@ export function AgentDetailPage() {
               </div>
             </div>
             <StateChip state={runtimeState} />
-            <div className="flex gap-1.5">
-              <Button variant="ghost" size="xs" onClick={() => navigate(`/?a=${agent.uuid}`)}>
-                Open chat →
-              </Button>
-              {!isHuman && agent.status === "active" && (
-                <Button
-                  variant="outline"
-                  size="xs"
-                  onClick={() => {
-                    testMutation.reset();
-                    testMutation.mutate();
-                  }}
-                  disabled={testMutation.isPending}
-                >
-                  <Play className="h-3 w-3" />
-                  {testMutation.isPending ? "Testing…" : "Test"}
-                </Button>
-              )}
-            </div>
           </div>
           <div className="grid gap-1.5 mt-3" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
             <Tile label="sessions" value={tileValues.sessions} />
@@ -541,6 +747,15 @@ export function AgentDetailPage() {
           </div>
         </div>
 
+        {!isHuman && (
+          <ContextBar
+            runtimeLabel={contextRuntimeLabel}
+            computerLabel={boundClientLabel}
+            modelLabel={tileValues.model}
+            visible={contextBarVisible}
+          />
+        )}
+
         <div
           className="mx-auto"
           style={{
@@ -548,7 +763,7 @@ export function AgentDetailPage() {
             maxWidth: 960,
             display: "flex",
             flexDirection: "column",
-            gap: 16,
+            gap: 20,
           }}
         >
           {(testMutation.data || testMutation.error) && (
@@ -558,282 +773,196 @@ export function AgentDetailPage() {
             />
           )}
 
-          {isUnclaimed && agent.status === "active" && (
-            <div
-              className="flex items-center justify-between gap-3"
-              style={{
-                borderRadius: "var(--radius-panel)",
-                padding: "var(--sp-2_5) var(--sp-3_5)",
-                background: "color-mix(in oklch, var(--state-blocked) 10%, transparent)",
-                border: "var(--hairline) solid color-mix(in oklch, var(--state-blocked) 28%, transparent)",
-              }}
-            >
-              <div className="text-body">
-                <div className="font-medium">No computer bound</div>
-                <div className="text-label" style={{ color: "var(--fg-3)" }}>
-                  Bind this agent to a computer so it can run. A computer will also claim it on first WebSocket connect.
-                </div>
-              </div>
-              <Button size="xs" variant="outline" onClick={() => setBindClientOpen(true)}>
-                <Link2 className="h-3 w-3" />
-                Bind computer
-              </Button>
-            </div>
-          )}
-
-          <div id="ad-identity">
-            <IdentitySection
+          <SectionShell anchorId={SECTION_ANCHORS.overview} title="Overview">
+            <OverviewSection
               agent={agent}
-              onSave={async (patch) => {
-                await identityUpdateMutation.mutateAsync(patch);
+              isHuman={isHuman}
+              profileSlot={
+                <IdentitySection
+                  agent={agent}
+                  onSave={async (patch) => {
+                    await identityUpdateMutation.mutateAsync(patch);
+                  }}
+                />
+              }
+              bindingsSlot={bindingsPanel}
+              health={{
+                runtimeState,
+                model: tileValues.model,
+                activeSessions,
+                totalSessions: tileValues.sessions,
+                offlineSince: clientStatus?.offlineSince ?? null,
               }}
+              onOpenChat={() => navigate(`/?a=${agent.uuid}`)}
+              onTest={() => {
+                testMutation.reset();
+                testMutation.mutate();
+              }}
+              testPending={testMutation.isPending}
             />
-          </div>
+          </SectionShell>
+          {/* Sentinel observed by the ContextBar IntersectionObserver above. */}
+          <div ref={overviewSentinelRef} aria-hidden style={{ height: 0 }} />
 
           {!isHuman && (
-            <BehaviorSection
-              loaded={!!cfgQuery.data}
-              loading={cfgQuery.isLoading}
-              error={cfgQuery.error ? String(cfgQuery.error) : null}
-              version={cfgQuery.data?.version ?? null}
-              dirty={draft.summary.anyDirty}
-            >
-              <div id={sectionAnchorId("prompt")}>
-                <PromptSection
-                  value={draft.draft.promptAppend}
-                  baseline={cfgQuery.data?.payload.prompt.append ?? ""}
-                  onChange={draft.setPromptAppend}
-                  onRevert={draft.revertPrompt}
-                  disabled={agent.status !== "active"}
-                />
-              </div>
-              <div id={sectionAnchorId("model")}>
-                <ModelSection
-                  value={draft.draft.model}
-                  baseline={cfgQuery.data?.payload.model ?? ""}
-                  onChange={draft.setModel}
-                  onRevert={draft.revertModel}
-                  disabled={agent.status !== "active"}
-                />
-              </div>
-              <div id={sectionAnchorId("mcp")}>
-                <McpSection
-                  items={draft.draft.mcp}
-                  otherNames={mcpOtherNames}
-                  onAdd={draft.addMcp}
-                  onUpdate={draft.updateMcp}
-                  onDelete={draft.deleteMcp}
-                  onUndoDelete={draft.undoDeleteMcp}
-                  disabled={agent.status !== "active"}
-                />
-              </div>
-              <div id={sectionAnchorId("env")}>
-                <EnvSection
-                  items={draft.draft.env}
-                  otherKeys={envOtherKeys}
-                  onAdd={draft.addEnv}
-                  onUpdate={draft.updateEnv}
-                  onDelete={draft.deleteEnv}
-                  onUndoDelete={draft.undoDeleteEnv}
-                  disabled={agent.status !== "active"}
-                />
-              </div>
-              <div id={sectionAnchorId("git")}>
-                <GitSection
-                  items={draft.draft.git}
-                  otherPaths={gitOtherPaths}
-                  onAdd={draft.addGit}
-                  onUpdate={draft.updateGit}
-                  onDelete={draft.deleteGit}
-                  onUndoDelete={draft.undoDeleteGit}
-                  disabled={agent.status !== "active"}
-                />
-              </div>
-              {dryRunText && (
-                <pre
-                  className="whitespace-pre-wrap mono text-label"
-                  style={{
-                    padding: 8,
-                    borderRadius: "var(--radius-input)",
-                    background: "var(--bg-sunken)",
-                    border: "var(--hairline) solid var(--border-faint)",
-                    color: "var(--fg-2)",
-                  }}
-                >
-                  {dryRunText}
-                </pre>
-              )}
-            </BehaviorSection>
+            <>
+              <SectionShell
+                anchorId={SECTION_ANCHORS.setup}
+                title="Setup"
+                caption={
+                  cfgQuery.data?.version != null ? (
+                    <span className="mono">
+                      config v{cfgQuery.data.version}
+                      {draft.summary.anyDirty && (
+                        <>
+                          {" · "}
+                          <span style={{ color: "var(--state-blocked)" }}>draft</span>
+                        </>
+                      )}
+                    </span>
+                  ) : null
+                }
+              >
+                {cfgQuery.isLoading && (
+                  <div className="text-body" style={{ color: "var(--fg-3)" }}>
+                    Loading configuration…
+                  </div>
+                )}
+                {cfgQuery.error && (
+                  <div className="text-body" style={{ color: "var(--state-error)" }}>
+                    Failed to load configuration: {String(cfgQuery.error)}
+                  </div>
+                )}
+                {cfgQuery.data && (
+                  <SetupSection
+                    runtimeKind={setupRuntimeKind}
+                    computerLabel={boundClientLabel}
+                    canBindComputer={isUnclaimed && agent.status === "active"}
+                    bindComputerPending={bindClientMutation.isPending}
+                    onBindComputer={() => setBindClientOpen(true)}
+                    modelSlot={
+                      <ModelSection
+                        value={draft.draft.model}
+                        baseline={cfgQuery.data?.payload.model ?? ""}
+                        onChange={draft.setModel}
+                        onRevert={draft.revertModel}
+                        disabled={agent.status !== "active"}
+                      />
+                    }
+                  />
+                )}
+              </SectionShell>
+
+              <SectionShell anchorId={SECTION_ANCHORS.prompt} title="Prompt">
+                {cfgQuery.data ? (
+                  <PromptSection
+                    value={draft.draft.promptAppend}
+                    baseline={cfgQuery.data?.payload.prompt.append ?? ""}
+                    onChange={draft.setPromptAppend}
+                    onRevert={draft.revertPrompt}
+                    disabled={agent.status !== "active"}
+                  />
+                ) : null}
+              </SectionShell>
+
+              <SectionShell
+                anchorId={SECTION_ANCHORS.tools}
+                title="Tools"
+                caption="MCP servers available to this agent"
+              >
+                {cfgQuery.data ? (
+                  <McpSection
+                    items={draft.draft.mcp}
+                    otherNames={mcpOtherNames}
+                    onAdd={draft.addMcp}
+                    onUpdate={draft.updateMcp}
+                    onDelete={draft.deleteMcp}
+                    onUndoDelete={draft.undoDeleteMcp}
+                    disabled={agent.status !== "active"}
+                  />
+                ) : null}
+              </SectionShell>
+
+              <SectionShell
+                anchorId={SECTION_ANCHORS.advanced}
+                title="Advanced"
+                caption="Environment variables and git repositories the runtime clones into each session."
+              >
+                {cfgQuery.data && (
+                  <div className="space-y-4">
+                    <div id={sectionAnchorId("env")} className="space-y-2">
+                      <h3 className="text-body font-medium" style={{ color: "var(--fg)" }}>
+                        Environment variables
+                      </h3>
+                      <EnvSection
+                        items={draft.draft.env}
+                        otherKeys={envOtherKeys}
+                        onAdd={draft.addEnv}
+                        onUpdate={draft.updateEnv}
+                        onDelete={draft.deleteEnv}
+                        onUndoDelete={draft.undoDeleteEnv}
+                        disabled={agent.status !== "active"}
+                      />
+                    </div>
+                    <hr aria-hidden style={{ border: 0, borderTop: "var(--hairline) solid var(--border-faint)" }} />
+                    <div id={sectionAnchorId("git")} className="space-y-2">
+                      <h3 className="text-body font-medium" style={{ color: "var(--fg)" }}>
+                        Git repositories
+                      </h3>
+                      <GitSection
+                        items={draft.draft.git}
+                        otherPaths={gitOtherPaths}
+                        onAdd={draft.addGit}
+                        onUpdate={draft.updateGit}
+                        onDelete={draft.deleteGit}
+                        onUndoDelete={draft.undoDeleteGit}
+                        disabled={agent.status !== "active"}
+                      />
+                    </div>
+                    {dryRunText && (
+                      <pre
+                        className="whitespace-pre-wrap mono text-label"
+                        style={{
+                          padding: 8,
+                          borderRadius: "var(--radius-input)",
+                          background: "var(--bg-sunken)",
+                          border: "var(--hairline) solid var(--border-faint)",
+                          color: "var(--fg-2)",
+                        }}
+                      >
+                        {dryRunText}
+                      </pre>
+                    )}
+                    {draft.summary.anyDirty && (
+                      <div className="text-label" style={{ color: "var(--fg-3)" }}>
+                        <button
+                          type="button"
+                          onClick={() => dryRunMutation.mutate()}
+                          className="underline bg-transparent border-0 cursor-pointer"
+                          style={{ color: "var(--fg-3)" }}
+                          disabled={dryRunMutation.isPending}
+                        >
+                          {dryRunMutation.isPending ? "Computing dry-run…" : "Preview server-side diff"}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </SectionShell>
+            </>
           )}
 
-          <div id="ad-bindings">
-            <Panel>
-              <div
-                className="flex items-center justify-between"
-                style={{
-                  padding: "var(--sp-2_5) var(--sp-3_5)",
-                  borderBottom: "var(--hairline) solid var(--border-faint)",
-                }}
-              >
-                <div className="inline-flex items-center gap-2 text-body font-semibold">
-                  {isHuman ? <Link2 className="h-3.5 w-3.5" /> : <Cable className="h-3.5 w-3.5" />}
-                  Platform bindings
-                </div>
-                <Button size="xs" variant="outline" onClick={() => setBindingDialogOpen(true)}>
-                  <Plus className="h-3 w-3" />
-                  {isHuman ? "Bind user" : "Bind bot"}
-                </Button>
-              </div>
-              {isHuman ? (
-                <DenseTable>
-                  <DenseTableHeader>
-                    <DenseTableRow>
-                      <DenseTableHead>Platform</DenseTableHead>
-                      <DenseTableHead>External user ID</DenseTableHead>
-                      <DenseTableHead>Display name</DenseTableHead>
-                      <DenseTableHead>Bound via</DenseTableHead>
-                      <DenseTableHead>Created</DenseTableHead>
-                      <DenseTableHead style={{ width: 32 }} />
-                    </DenseTableRow>
-                  </DenseTableHeader>
-                  <DenseTableBody>
-                    {agentMappings.length === 0 ? (
-                      <DenseTableRow>
-                        <DenseTableCell colSpan={6} style={{ textAlign: "center", color: "var(--fg-3)", padding: 16 }}>
-                          No platform bindings
-                        </DenseTableCell>
-                      </DenseTableRow>
-                    ) : (
-                      agentMappings.map((m) => (
-                        <DenseTableRow key={m.id}>
-                          <DenseTableCell>
-                            <DenseBadge>{m.platform}</DenseBadge>
-                          </DenseTableCell>
-                          <DenseTableCell className="mono text-label">{m.externalUserId}</DenseTableCell>
-                          <DenseTableCell>{m.displayName ?? "—"}</DenseTableCell>
-                          <DenseTableCell>
-                            <DenseBadge tone="outline">{m.boundVia ?? "—"}</DenseBadge>
-                          </DenseTableCell>
-                          <DenseTableCell className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-                            {formatDate(m.createdAt)}
-                          </DenseTableCell>
-                          <DenseTableCell>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-7 w-7"
-                              onClick={() => {
-                                if (confirm("Remove this binding?")) deleteMappingMutation.mutate(m.id);
-                              }}
-                              disabled={deleteMappingMutation.isPending}
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
-                          </DenseTableCell>
-                        </DenseTableRow>
-                      ))
-                    )}
-                  </DenseTableBody>
-                </DenseTable>
-              ) : (
-                <DenseTable>
-                  <DenseTableHeader>
-                    <DenseTableRow>
-                      <DenseTableHead>Platform</DenseTableHead>
-                      <DenseTableHead>Status</DenseTableHead>
-                      <DenseTableHead>Connection</DenseTableHead>
-                      <DenseTableHead>Created</DenseTableHead>
-                      <DenseTableHead style={{ width: 64 }} />
-                    </DenseTableRow>
-                  </DenseTableHeader>
-                  <DenseTableBody>
-                    {agentAdapters.length === 0 ? (
-                      <DenseTableRow>
-                        <DenseTableCell colSpan={5} style={{ textAlign: "center", color: "var(--fg-3)", padding: 16 }}>
-                          No platform bindings
-                        </DenseTableCell>
-                      </DenseTableRow>
-                    ) : (
-                      agentAdapters.map((a) => {
-                        const status = botStatuses?.find((s) => s.configId === a.id);
-                        const isConnected = a.platform === "kael" ? a.status === "active" : !!status?.connected;
-                        return (
-                          <DenseTableRow key={a.id}>
-                            <DenseTableCell>
-                              <DenseBadge>{a.platform}</DenseBadge>
-                            </DenseTableCell>
-                            <DenseTableCell>
-                              <DenseBadge tone={a.status === "active" ? "accent" : "outline"}>{a.status}</DenseBadge>
-                            </DenseTableCell>
-                            <DenseTableCell>
-                              <StateChip state={isConnected ? "idle" : "offline"} />
-                            </DenseTableCell>
-                            <DenseTableCell className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-                              {formatDate(a.createdAt)}
-                            </DenseTableCell>
-                            <DenseTableCell>
-                              <div className="flex gap-1">
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-7 w-7"
-                                  onClick={() => openEditAdapter(a)}
-                                  title="Edit"
-                                >
-                                  …
-                                </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-7 w-7"
-                                  onClick={() => {
-                                    if (confirm("Remove this bot binding?")) deleteAdapterMutation.mutate(a.id);
-                                  }}
-                                  disabled={deleteAdapterMutation.isPending}
-                                  title="Delete"
-                                >
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                </Button>
-                              </div>
-                            </DenseTableCell>
-                          </DenseTableRow>
-                        );
-                      })
-                    )}
-                  </DenseTableBody>
-                </DenseTable>
-              )}
-            </Panel>
-          </div>
+          <SectionDivider />
 
-          <div id="ad-danger">
-            <DangerZone
-              agent={agent}
-              suspendPending={suspendMutation.isPending}
-              reactivatePending={reactivateMutation.isPending}
-              deletePending={deleteMutation.isPending}
-              onSuspend={() => {
-                if (confirm("Suspend this agent? Runtime binds and HTTP calls will be refused."))
-                  suspendMutation.mutate();
-              }}
-              onReactivate={() => reactivateMutation.mutate()}
-              onDelete={() => deleteMutation.mutate()}
-            />
-          </div>
-
-          {!isHuman && draft.summary.anyDirty && (
-            <div className="text-label" style={{ color: "var(--fg-3)" }}>
-              <button
-                type="button"
-                onClick={() => dryRunMutation.mutate()}
-                className="underline bg-transparent border-0 cursor-pointer"
-                style={{ color: "var(--fg-3)" }}
-                disabled={dryRunMutation.isPending}
-              >
-                {dryRunMutation.isPending ? "Computing dry-run…" : "Preview server-side diff"}
-              </button>
-            </div>
-          )}
+          <DangerZone
+            agent={agent}
+            suspendPending={suspendMutation.isPending}
+            reactivatePending={reactivateMutation.isPending}
+            deletePending={deleteMutation.isPending}
+            onSuspend={() => suspendMutation.mutate()}
+            onReactivate={() => reactivateMutation.mutate()}
+            onDelete={() => deleteMutation.mutate()}
+          />
         </div>
 
         {!isHuman && (
@@ -843,19 +972,62 @@ export function AgentDetailPage() {
             conflictMessage={conflictMsg}
             errorMessage={saveError}
             saving={saveMutation.isPending}
+            justSaved={justSaved}
             onSave={() => saveMutation.mutate()}
             onDiscard={() => {
-              if (!draft.summary.anyDirty || confirm("Discard all unsaved changes?")) {
-                draft.resetAll();
-                setSaveError(null);
-                setConflictMsg(null);
-              }
+              if (!draft.summary.anyDirty) return;
+              setDiscardDialogOpen(true);
             }}
             onReloadRemote={reloadRemote}
             onJumpTo={(section) => jumpTo(sectionAnchorId(section))}
           />
         )}
       </div>
+
+      <ConfirmDialog
+        open={mappingToDelete != null}
+        onOpenChange={(o) => !o && setMappingToDelete(null)}
+        title="Remove this binding?"
+        description="The external user will stop routing to this agent. You can add the mapping again later."
+        confirmLabel="Remove binding"
+        pending={deleteMappingMutation.isPending}
+        onConfirm={() => {
+          if (mappingToDelete != null) {
+            deleteMappingMutation.mutate(mappingToDelete);
+            setMappingToDelete(null);
+          }
+        }}
+      />
+
+      <ConfirmDialog
+        open={adapterToDelete != null}
+        onOpenChange={(o) => !o && setAdapterToDelete(null)}
+        title="Remove this bot binding?"
+        description="The bot will stop routing to this agent and any platform credentials stored here will be dropped."
+        confirmLabel="Remove binding"
+        pending={deleteAdapterMutation.isPending}
+        onConfirm={() => {
+          if (adapterToDelete != null) {
+            deleteAdapterMutation.mutate(adapterToDelete);
+            setAdapterToDelete(null);
+          }
+        }}
+      />
+
+      <ConfirmDialog
+        open={discardDialogOpen}
+        onOpenChange={setDiscardDialogOpen}
+        title="Discard unsaved changes?"
+        description="Your edits to Prompt / Model / Tools / Advanced will be reverted to the last saved baseline."
+        confirmLabel="Discard changes"
+        destructive
+        onConfirm={() => {
+          draft.resetAll();
+          setSaveError(null);
+          setConflictMsg(null);
+          setDiscardDialogOpen(false);
+        }}
+      />
 
       <Dialog
         open={bindClientOpen}
@@ -1082,39 +1254,45 @@ export function AgentDetailPage() {
   );
 }
 
-function BehaviorSection(props: {
-  loaded: boolean;
-  loading: boolean;
-  error: string | null;
-  version: number | null;
-  dirty: boolean;
-  children: ReactNode;
+/**
+ * Simple confirm dialog used for the remaining non-delete destructive actions
+ * (remove binding / remove bot binding / discard draft). The delete-agent flow
+ * lives in `DangerZone` and has its own type-the-name guard.
+ */
+function ConfirmDialog(props: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  title: string;
+  description: ReactNode;
+  confirmLabel: string;
+  onConfirm: () => void;
+  pending?: boolean;
+  destructive?: boolean;
 }) {
   return (
-    <section className="space-y-3">
-      <div className="flex items-center justify-between">
-        <div className="inline-flex items-baseline gap-2">
-          <h2 className="text-subtitle">Behavior</h2>
-          {props.version != null && (
-            <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-              v{props.version}
-            </span>
-          )}
-          {props.dirty && <UppercaseLabel style={{ color: "var(--state-blocked)" }}>draft</UppercaseLabel>}
+    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{props.title}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 text-body" style={{ color: "var(--fg-2)" }}>
+          {props.description}
         </div>
-      </div>
-      {props.loading && (
-        <div className="text-body" style={{ color: "var(--fg-3)" }}>
-          Loading configuration…
-        </div>
-      )}
-      {props.error && (
-        <div className="text-body" style={{ color: "var(--state-error)" }}>
-          Failed to load configuration: {props.error}
-        </div>
-      )}
-      {props.loaded && <div className="space-y-3">{props.children}</div>}
-    </section>
+        <DialogFooter>
+          <Button type="button" variant="ghost" onClick={() => props.onOpenChange(false)} disabled={props.pending}>
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant={props.destructive ? "destructive" : "default"}
+            onClick={props.onConfirm}
+            disabled={props.pending}
+          >
+            {props.pending ? "Working…" : props.confirmLabel}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
