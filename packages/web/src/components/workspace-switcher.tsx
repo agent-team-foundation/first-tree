@@ -21,8 +21,9 @@ import { useAuth } from "../auth/auth-context.js";
  */
 export function WorkspaceSwitcher() {
   const navigate = useNavigate();
-  const { workspaces, organizationId, switchWorkspace } = useAuth();
+  const { workspaces, organizationId, switchWorkspace, refetchAll } = useAuth();
   const [open, setOpen] = useState(false);
+  const [switchError, setSwitchError] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
 
   // Close on outside click. Fires on every open-state mount; cleans up.
@@ -42,11 +43,7 @@ export function WorkspaceSwitcher() {
   // navigate to /setup directly.
   if (workspaces.length <= 1) {
     return (
-      <span
-        className="text-body"
-        style={{ color: "var(--fg-3)", padding: "var(--sp-1) var(--sp-2)" }}
-        aria-label="Workspace"
-      >
+      <span className="text-body" style={{ color: "var(--fg-3)", padding: "var(--sp-1) var(--sp-2)" }}>
         {current?.organizationDisplayName ?? "Workspace"}
       </span>
     );
@@ -76,6 +73,19 @@ export function WorkspaceSwitcher() {
           className="absolute right-0 z-10 mt-1 min-w-[14rem] rounded-md border border-border bg-card shadow-md"
           style={{ padding: "var(--sp-1)" }}
         >
+          {switchError && (
+            <div
+              role="alert"
+              className="rounded-md text-caption text-destructive"
+              style={{
+                padding: "var(--sp-1) var(--sp-2)",
+                marginBottom: "var(--sp-1)",
+                background: "color-mix(in srgb, var(--state-error) 12%, transparent)",
+              }}
+            >
+              {switchError}
+            </div>
+          )}
           {workspaces.map((w) => (
             <button
               key={w.organizationId}
@@ -83,17 +93,26 @@ export function WorkspaceSwitcher() {
               role="option"
               aria-selected={w.organizationId === organizationId}
               onClick={async () => {
-                setOpen(false);
-                if (w.organizationId === organizationId) return;
+                if (w.organizationId === organizationId) {
+                  setOpen(false);
+                  return;
+                }
+                setSwitchError(null);
                 try {
                   await switchWorkspace(w.organizationId);
+                  setOpen(false);
                   // Drop the user back at the workspace root so any
                   // route param scoped to the previous org (e.g.
                   // /agents/:uuid) doesn't 404 in the new context.
                   navigate("/", { replace: true });
-                } catch {
-                  // Swallow — refetchAll will surface the failure via
-                  // its own error path; no extra UI here.
+                } catch (err) {
+                  // Surface inline rather than dropping the failure on
+                  // the floor — the caller may have lost membership in
+                  // the target workspace (403 from /auth/switch-org).
+                  // Force a workspaces refetch so the dropdown reflects
+                  // the post-failure list.
+                  setSwitchError(err instanceof Error ? err.message : "Could not switch workspace");
+                  void refetchAll();
                 }
               }}
               className="block w-full text-left text-body transition-colors hover:bg-[color:var(--bg-sunken)]"

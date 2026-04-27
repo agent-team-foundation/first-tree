@@ -73,14 +73,6 @@ export function WelcomeConnectPage() {
     })();
   }, [shouldSkipConnect, refetchAll]);
 
-  // Honour the stored checkpoint regardless of polling state.
-  if (onboardingState?.currentStep === ONBOARDING_STEPS.COMPLETED) {
-    return <Navigate to="/" replace />;
-  }
-  if (onboardingState?.currentStep === ONBOARDING_STEPS.CREATE_AGENT) {
-    return <Navigate to="/welcome/agent" replace />;
-  }
-
   // Mint the first connect token on mount. The token expires in 10
   // minutes (CONNECT_TOKEN_EXPIRY in services/auth.ts) — if the user
   // dawdles past that, the command will 401; we surface a "Generate
@@ -158,6 +150,17 @@ export function WelcomeConnectPage() {
   useEffect(() => {
     if (connected && stale) setStale(false);
   }, [connected, stale]);
+
+  // Honour the stored checkpoint regardless of polling state. Placed AFTER
+  // all hook calls — the rules-of-hooks linter requires conditional
+  // returns to live below the top-level useState/useEffect sequence so
+  // call order stays stable across renders.
+  if (onboardingState?.currentStep === ONBOARDING_STEPS.COMPLETED) {
+    return <Navigate to="/" replace />;
+  }
+  if (onboardingState?.currentStep === ONBOARDING_STEPS.CREATE_AGENT) {
+    return <Navigate to="/welcome/agent" replace />;
+  }
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background p-4">

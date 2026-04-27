@@ -25,7 +25,7 @@ import { Label } from "../components/ui/label.js";
  */
 export function WelcomeAgentPage() {
   const navigate = useNavigate();
-  const { onboardingState, refetchAll } = useAuth();
+  const { onboardingState, refetchAll, userId } = useAuth();
   const [name, setName] = useState("my-agent");
   const [clientId, setClientId] = useState<string | null>(null);
   const [clientError, setClientError] = useState<string | null>(null);
@@ -36,12 +36,19 @@ export function WelcomeAgentPage() {
   // already guaranteed at least one exists; we re-fetch here rather
   // than threading the value through navigation state so a refresh
   // mid-wizard works.
+  //
+  // The `userId` filter is critical: `/clients/` returns the WHOLE org
+  // for an admin caller (workspace creators are auto-admin), so the
+  // first connected client could be a teammate's machine. Pinning the
+  // new agent there would silently corrupt `agents.client_id` and the
+  // agent would never run from the user's perspective. Same filter as
+  // the polling loop on /welcome/connect post-PR-#4 fix.
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
         const list = await listMyClients();
-        const connected = list.find((c) => c.status === "connected");
+        const connected = list.find((c) => c.status === "connected" && c.userId === userId);
         if (cancelled) return;
         if (!connected) {
           setClientError("No connected machine found. Go back to step 1.");
@@ -55,7 +62,7 @@ export function WelcomeAgentPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [userId]);
 
   // If the wizard is already marked completed (e.g. user refreshed
   // /welcome/agent post-completion), bounce them out — replaying the
