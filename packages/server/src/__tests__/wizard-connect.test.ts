@@ -85,6 +85,32 @@ describe("Wizard Connect — server contract", () => {
     expect(body.command).toContain(body.token);
   });
 
+  it("POST /connect-tokens uses `server.publicUrl` when set (proxy-safe)", async () => {
+    // Inject the config field on the running app — the test framework
+    // doesn't let us re-`createTestApp` cheaply per-case. The handler
+    // reads `app.config.server.publicUrl` at request time so this works.
+    const original = app.config.server.publicUrl;
+    (app.config.server as { publicUrl?: string }).publicUrl = "https://hub.example.com";
+    try {
+      const id = `${Date.now()}c4`;
+      const signIn = await devSignIn({ githubId: id, login: `proxy-${id}` });
+      const ws = await createWorkspace(signIn.accessToken, `ws-proxy-${id}`);
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/connect-tokens",
+        headers: { authorization: `Bearer ${ws.accessToken}` },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json<{ command: string }>();
+      // Configured URL wins over the request's `host` header (which would
+      // be 127.0.0.1:<random> for the test inject).
+      expect(body.command).toContain("https://hub.example.com");
+      expect(body.command).not.toContain("127.0.0.1");
+    } finally {
+      (app.config.server as { publicUrl?: string }).publicUrl = original;
+    }
+  });
+
   it("POST /connect-tokens refuses a rootless user-token (no workspace yet)", async () => {
     // Wizard never reaches Connect with a rootless token — RequireWorkspace
     // bounces them to /setup first. Pin the server-side guard so a

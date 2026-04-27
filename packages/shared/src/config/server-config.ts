@@ -23,6 +23,15 @@ export const serverConfigSchema = defineConfig({
   server: {
     port: field(z.number().default(8000), { env: "FIRST_TREE_HUB_PORT" }),
     host: field(z.string().default("127.0.0.1"), { env: "FIRST_TREE_HUB_HOST" }),
+    /**
+     * Public URL clients reach this hub on. Used to render the
+     * `first-tree-hub client connect <url>` command in the SaaS wizard
+     * and any other place that needs an absolute hub address. When unset,
+     * we fall back to the request's `x-forwarded-*` / `host` headers —
+     * fine for self-host, wrong behind a CDN that strips forwarded
+     * headers (would leak `http://127.0.0.1:8000` into the wizard).
+     */
+    publicUrl: field(z.string().optional(), { env: "FIRST_TREE_HUB_PUBLIC_URL" }),
   },
   secrets: {
     jwtSecret: field(z.string(), {

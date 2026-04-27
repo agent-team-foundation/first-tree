@@ -5,6 +5,7 @@ import { api, clearStoredTokens, getStoredTokens, setStoredTokens } from "../api
 import { listMyWorkspaces, switchOrganization as switchOrgApi } from "../api/workspaces.js";
 
 type MeResponse = {
+  user: { id: string } | null;
   member: { id: string; role: string; agentId: string };
 };
 
@@ -26,6 +27,13 @@ type AuthContextValue = {
   memberId: string | null;
   agentId: string | null;
   organizationId: string | null;
+  /**
+   * `users.id` of the signed-in user. Surfaced so wizard pages can
+   * filter org-wide query results to "my own rows" — admins on the
+   * Connect screen would otherwise see peers' connected clients and
+   * falsely auto-advance.
+   */
+  userId: string | null;
   /** Legacy username + password sign-in. Self-host path. */
   login: (username: string, password: string) => Promise<void>;
   /**
@@ -54,6 +62,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [role, setRole] = useState<string | null>(null);
   const [memberId, setMemberId] = useState<string | null>(null);
   const [agentId, setAgentId] = useState<string | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
   const [organizationId, setOrganizationId] = useState<string | null>(null);
   const [workspaces, setWorkspaces] = useState<WorkspaceListItem[] | null>(null);
 
@@ -64,6 +73,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setRole(null);
     setMemberId(null);
     setAgentId(null);
+    setUserId(null);
     setOrganizationId(null);
     setWorkspaces(null);
   }, []);
@@ -99,6 +109,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setRole(null);
       setMemberId(null);
       setAgentId(null);
+      setUserId(null);
       return;
     }
 
@@ -108,6 +119,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setRole(data.member.role);
       setMemberId(data.member.id);
       setAgentId(data.member.agentId);
+      setUserId(data.user?.id ?? null);
     } catch {
       // /me failed despite memberships existing — leave member state null
       // and let the caller decide (typical case: token's organizationId
@@ -115,6 +127,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // can offer a switch-org prompt against the live workspaces list.
       setRole(null);
       setMemberId(null);
+      setUserId(null);
       setAgentId(null);
     }
   }, []);
@@ -173,6 +186,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         memberId,
         agentId,
         organizationId,
+        userId,
         login,
         signInWithTokens,
         switchWorkspace,

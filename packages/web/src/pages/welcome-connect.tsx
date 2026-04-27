@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { type ConnectedClientSummary, generateConnectToken, listMyClients } from "../api/clients.js";
+import { useAuth } from "../auth/auth-context.js";
 import { Button } from "../components/ui/button.js";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card.js";
 import { StateDot } from "../components/ui/state-dot.js";
@@ -27,13 +28,23 @@ import { StateDot } from "../components/ui/state-dot.js";
  * shell as a fully-configured one.
  */
 const POLL_INTERVAL_MS = 3000;
+/**
+ * After this long without seeing a connected client, surface a stale-token
+ * hint. The wizard can't see CLI-side failures directly (the CLI talks to
+ * `/auth/connect-token`, the wizard polls `/clients/`); this approximates
+ * P0-4 "失败恢复" from docs/saas-onboarding-journey.md §4.5.1 by giving
+ * the user a way out when the most likely failure (token expiry) bites.
+ */
+const STALE_BANNER_MS = 60_000;
 
 export function WelcomeConnectPage() {
   const navigate = useNavigate();
+  const { userId } = useAuth();
   const [tokenResp, setTokenResp] = useState<{ token: string; command: string } | null>(null);
   const [tokenError, setTokenError] = useState<string | null>(null);
   const [tokenBusy, setTokenBusy] = useState(false);
   const [clients, setClients] = useState<ConnectedClientSummary[] | null>(null);
+  const [stale, setStale] = useState(false);
 
   // Mint the first connect token on mount. The token expires in 10
   // minutes (CONNECT_TOKEN_EXPIRY in services/auth.ts) — if the user
@@ -64,8 +75,13 @@ export function WelcomeConnectPage() {
   // Poll the clients list. We don't WS-subscribe because the existing
   // admin WS doesn't push `client:connected` to the wizard's session,
   // and threading that through is more risk than the wizard warrants
-  // in this slice. Polling stops when at least one connected client
-  // appears — once detected, no further polls are scheduled.
+  // in this slice. Polling stops when at least one OF THE CALLER'S
+  // OWN clients is connected — admins (workspace creators) can see
+  // peers' clients on this endpoint, so we filter by `userId` to avoid
+  // a false-positive Continue when a teammate happens to be online.
+  // We also DON'T resume polling after disconnect: this is a one-shot
+  // wizard; a Ctrl-C after success is the user's choice and shouldn't
+  // bounce them back into the connect screen.
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -75,8 +91,8 @@ export function WelcomeConnectPage() {
         const list = await listMyClients();
         if (cancelled) return;
         setClients(list);
-        const anyConnected = list.some((c) => c.status === "connected");
-        if (!anyConnected) {
+        const anyConnectedMine = list.some((c) => c.status === "connected" && c.userId === userId);
+        if (!anyConnectedMine) {
           timer = setTimeout(poll, POLL_INTERVAL_MS);
         }
       } catch {
@@ -92,9 +108,21 @@ export function WelcomeConnectPage() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
+  }, [userId]);
+
+  // Stale-token banner — fires once after STALE_BANNER_MS if the client
+  // still hasn't appeared. Cleared automatically the moment a connected
+  // own-client is detected.
+  useEffect(() => {
+    const timer = setTimeout(() => setStale(true), STALE_BANNER_MS);
+    return () => clearTimeout(timer);
   }, []);
 
-  const connected = clients?.find((c) => c.status === "connected") ?? null;
+  const connected = clients?.find((c) => c.status === "connected" && c.userId === userId) ?? null;
+  // Reset the stale banner the moment we see the user's client come online.
+  useEffect(() => {
+    if (connected && stale) setStale(false);
+  }, [connected, stale]);
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
@@ -112,10 +140,12 @@ export function WelcomeConnectPage() {
             tokenResp={tokenResp}
             tokenError={tokenError}
             tokenBusy={tokenBusy}
+            stale={stale && !connected}
             onRegenerate={() => {
               setTokenResp(null);
               setTokenBusy(true);
               setTokenError(null);
+              setStale(false);
               void generateConnectToken()
                 .then((r) => setTokenResp({ token: r.token, command: r.command }))
                 .catch((err) => setTokenError(err instanceof Error ? err.message : "Could not generate token"))
@@ -166,11 +196,14 @@ function ConnectCommandSection({
   tokenResp,
   tokenError,
   tokenBusy,
+  stale,
   onRegenerate,
 }: {
   tokenResp: { token: string; command: string } | null;
   tokenError: string | null;
   tokenBusy: boolean;
+  /** True when the wizard has been waiting unusually long without seeing the client land. */
+  stale: boolean;
   onRegenerate: () => void;
 }) {
   return (
@@ -188,6 +221,15 @@ function ConnectCommandSection({
       ) : tokenResp ? (
         <>
           <CodeBlock value={tokenResp.command} />
+          {stale && (
+            <div className="rounded-md border border-border bg-card p-2 text-caption">
+              Still waiting? Your token may have expired (10-minute window).{" "}
+              <button type="button" className="underline" onClick={onRegenerate} disabled={tokenBusy}>
+                Generate a new one
+              </button>
+              {" and try again."}
+            </div>
+          )}
           <p className="text-caption text-muted-foreground">
             Token expires in 10 minutes. Trouble?{" "}
             <button type="button" className="underline" onClick={onRegenerate} disabled={tokenBusy}>

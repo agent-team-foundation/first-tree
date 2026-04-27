@@ -22,6 +22,7 @@ export async function createTestApp(): Promise<FastifyInstance> {
     server: {
       port: 0,
       host: "127.0.0.1",
+      publicUrl: undefined,
     },
     secrets: {
       jwtSecret: process.env.JWT_SECRET ?? "test-jwt-secret-key-for-vitest",

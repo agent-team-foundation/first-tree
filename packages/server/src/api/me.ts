@@ -55,10 +55,21 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       app.config.secrets.jwtSecret,
     );
 
-    // Build the CLI connect command using the request's origin (preserve port)
-    const proto = request.headers["x-forwarded-proto"] ?? request.protocol;
-    const host = request.headers["x-forwarded-host"] ?? request.headers.host ?? request.hostname;
-    const serverUrl = `${proto}://${host}`;
+    // Build the CLI connect command. Prefer the explicit `server.publicUrl`
+    // (deployments behind a CDN that strips forwarded headers); fall back
+    // to forwarded-proto/host or the request's own headers (self-host,
+    // direct access). Without the configured-first preference, a hub
+    // running behind a proxy that drops `x-forwarded-*` would advertise
+    // an unreachable `http://127.0.0.1:8000/...` to the wizard.
+    const configuredUrl = app.config.server.publicUrl;
+    let serverUrl: string;
+    if (configuredUrl) {
+      serverUrl = configuredUrl.replace(/\/+$/, "");
+    } else {
+      const proto = request.headers["x-forwarded-proto"] ?? request.protocol;
+      const host = request.headers["x-forwarded-host"] ?? request.headers.host ?? request.hostname;
+      serverUrl = `${proto}://${host}`;
+    }
     const command = `first-tree-hub client connect ${serverUrl} --token ${token}`;
 
     return { token, expiresIn, command };
