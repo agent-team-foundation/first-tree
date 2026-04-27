@@ -81,17 +81,22 @@ export function createLogger(module: string): pino.Logger {
  * The launchd / systemd unit files already set `StandardOutPath` /
  * `StandardError` as a fallback for crash-time stderr; this routes normal
  * operational logs into a size-rotated NDJSON file at
- * `<logDir>/client.log` so it doesn't grow unbounded. Must be called once
- * at `client start` when running under `FIRST_TREE_HUB_SERVICE_MODE=1`.
+ * `<logDir>/<basename>.log` so it doesn't grow unbounded. Must be called
+ * once at the supervised entry point when running under
+ * `FIRST_TREE_HUB_SERVICE_MODE=1`.
+ *
+ * `basename` defaults to `"client"` for the legacy `client connect
+ * --service` flow; the Hub daemon (Phase 1b) passes `"daemon"` so its
+ * logs land in a separate file from any concurrent client install.
  */
-export function configureClientLoggerForService(logDir: string): void {
+export function configureClientLoggerForService(logDir: string, basename = "client"): void {
   const stream = new RotatingFileStream({
-    path: join(logDir, "client.log"),
+    path: join(logDir, `${basename}.log`),
     maxBytes: SERVICE_LOG_MAX_BYTES,
     maxFiles: SERVICE_LOG_MAX_FILES,
   });
   // Pretty ANSI codes in a log file are noise; lock format to NDJSON and let
-  // `client service logs` pretty-print on read.
+  // `service logs` pretty-print on read.
   applyClientLoggerConfig({ format: "json", destination: stream });
 }
 

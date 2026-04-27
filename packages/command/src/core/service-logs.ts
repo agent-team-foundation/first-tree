@@ -11,13 +11,22 @@ import {
 import { print } from "./output.js";
 
 const LOG_DIR = join(DEFAULT_HOME_DIR, "logs");
-const PRIMARY_LOG = join(LOG_DIR, "client.log");
-// Supervisor (launchd / systemd) writes raw stdout/stderr here as a fallback,
-// capturing crash output that happens before pino takes over the stream, plus
-// anything third-party code writes to stderr directly. Operators need these
-// when diagnosing startup failures, so surface them alongside client.log.
-const FALLBACK_STDOUT = join(LOG_DIR, "client.stdout.log");
-const FALLBACK_STDERR = join(LOG_DIR, "client.stderr.log");
+
+// Two service variants share this log reader: the legacy `client.service`
+// installed by `client connect --service` and the new Hub `daemon.service`
+// installed by `start --service`. Each variant gets its own primary +
+// supervisor-fallback file basenames so operators can keep both around
+// during the migration window without confusing diagnostics.
+type ServiceVariant = "client" | "daemon";
+
+function logFiles(variant: ServiceVariant) {
+  const base = variant;
+  return {
+    primary: join(LOG_DIR, `${base}.log`),
+    fallbackStdout: join(LOG_DIR, `${base}.stdout.log`),
+    fallbackStderr: join(LOG_DIR, `${base}.stderr.log`),
+  };
+}
 
 /**
  * Duration string → milliseconds. Accepts `10s`, `5m`, `2h`, `1d`; rejects
@@ -45,13 +54,14 @@ const LEVEL_RANK: Record<LogLevel, number> = {
 };
 
 /** Rotated log files, newest-first. Missing files are silently skipped. */
-export function listLogFilesNewestFirst(): string[] {
+export function listLogFilesNewestFirst(variant: ServiceVariant = "client"): string[] {
+  const { primary } = logFiles(variant);
   const files: string[] = [];
-  if (existsSync(PRIMARY_LOG)) files.push(PRIMARY_LOG);
+  if (existsSync(primary)) files.push(primary);
   // Rotated files `.1`, `.2`, … are older as the index grows; rotation
   // produces contiguous numbering, so the first miss means there are no more.
   for (let i = 1; ; i++) {
-    const p = `${PRIMARY_LOG}.${i}`;
+    const p = `${primary}.${i}`;
     if (!existsSync(p)) break;
     files.push(p);
   }
@@ -59,10 +69,11 @@ export function listLogFilesNewestFirst(): string[] {
 }
 
 /** Supervisor fallback files (raw stdout/stderr, not NDJSON). Missing files skipped. */
-export function listFallbackFiles(): string[] {
+export function listFallbackFiles(variant: ServiceVariant = "client"): string[] {
+  const { fallbackStdout, fallbackStderr } = logFiles(variant);
   const files: string[] = [];
-  if (existsSync(FALLBACK_STDERR)) files.push(FALLBACK_STDERR);
-  if (existsSync(FALLBACK_STDOUT)) files.push(FALLBACK_STDOUT);
+  if (existsSync(fallbackStderr)) files.push(fallbackStderr);
+  if (existsSync(fallbackStdout)) files.push(fallbackStdout);
   return files;
 }
 
@@ -75,6 +86,8 @@ export type ServiceLogsOptions = {
   sinceMs?: number;
   /** Bypass pretty-printing; emit raw NDJSON lines to stdout. */
   json: boolean;
+  /** Which service's log files to read. Defaults to the legacy "client". */
+  variant?: ServiceVariant;
 };
 
 function matchesFilters(
@@ -186,41 +199,42 @@ export async function showServiceLogs(options: ServiceLogsOptions): Promise<void
     return;
   }
 
+  const variant: ServiceVariant = options.variant ?? "client";
+  const { primary } = logFiles(variant);
   const minLevel = options.level ? LEVEL_RANK[options.level] : undefined;
   const cutoffMs = options.sinceMs !== undefined ? Date.now() - options.sinceMs : undefined;
 
   // Supervisor fallback files capture pre-pino bootstrap output and crash
   // dumps — effectively the oldest context, so walk them first.
-  for (const f of listFallbackFiles()) {
+  for (const f of listFallbackFiles(variant)) {
     await readFallbackFile(f, cutoffMs, options.json);
   }
 
   // Historical read: oldest-first so the terminal shows them in chronological
   // order. listLogFilesNewestFirst returns active file + `.1` (newest rotated)
   // + `.2` (older rotated) etc., so we reverse to walk oldest → newest.
-  const files = listLogFilesNewestFirst().reverse();
+  const files = listLogFilesNewestFirst(variant).reverse();
   for (const f of files) {
     await readFileLines(f, minLevel, cutoffMs, options.json);
   }
 
   if (!options.tail) return;
-  if (!existsSync(PRIMARY_LOG)) {
-    // Nothing to tail yet; wait for it to appear.
-    print.status("tail", "waiting for client.log to appear...");
+  if (!existsSync(primary)) {
+    print.status("tail", `waiting for ${variant}.log to appear...`);
   }
 
   await new Promise<void>((resolve) => {
-    let position = existsSync(PRIMARY_LOG) ? statSync(PRIMARY_LOG).size : 0;
+    let position = existsSync(primary) ? statSync(primary).size : 0;
     const onChange = () => {
-      if (!existsSync(PRIMARY_LOG)) return;
-      const current = statSync(PRIMARY_LOG).size;
+      if (!existsSync(primary)) return;
+      const current = statSync(primary).size;
       if (current < position) {
-        // Rotation happened — the writer moved our file to client.log.1 and
-        // opened a fresh client.log. Start reading the new file from 0.
+        // Rotation happened — the writer moved the active file to
+        // <variant>.log.1 and opened a fresh one. Start reading from 0.
         position = 0;
       }
       if (current <= position) return;
-      const stream = createReadStream(PRIMARY_LOG, { start: position, end: current - 1, encoding: "utf8" });
+      const stream = createReadStream(primary, { start: position, end: current - 1, encoding: "utf8" });
       position = current;
       const rl = createInterface({ input: stream });
       rl.on("line", (line) => {
@@ -228,9 +242,9 @@ export async function showServiceLogs(options: ServiceLogsOptions): Promise<void
         if (rendered) process.stdout.write(rendered);
       });
     };
-    watchFile(PRIMARY_LOG, { interval: 500 }, onChange);
+    watchFile(primary, { interval: 500 }, onChange);
     process.once("SIGINT", () => {
-      unwatchFile(PRIMARY_LOG, onChange);
+      unwatchFile(primary, onChange);
       resolve();
     });
   });

@@ -5,8 +5,10 @@ import { Command } from "commander";
 import { registerAgentCommands } from "../commands/agent.js";
 import { registerClientCommands } from "../commands/client.js";
 import { registerConfigCommands } from "../commands/config.js";
+import { registerDaemonCommand } from "../commands/daemon.js";
 import { registerOnboardCommand } from "../commands/onboard.js";
 import { registerServerCommands } from "../commands/server.js";
+import { registerServiceCommands } from "../commands/service.js";
 import { registerStartCommand } from "../commands/start.js";
 import { registerStatusCommand } from "../commands/status.js";
 import { runHomeMigration } from "../core/migrate-home.js";
@@ -53,9 +55,15 @@ program
   });
 
 // One-command start — Docker preflight, Postgres, migrations, auto-admin,
-// embedded ClientRuntime, browser auto-open. Foreground shape; --service
-// is added in a subsequent change (Phase 1b / C8).
+// embedded ClientRuntime, browser auto-open. Supports both foreground
+// (default) and `--service` (launchd / systemd-user background daemon).
 registerStartCommand(program);
+
+// Hub daemon entry (hidden) — invoked by launchd / systemd-user only.
+registerDaemonCommand(program);
+
+// Background-service management for the daemon installed by `start --service`.
+registerServiceCommands(program);
 
 // Core subsystems — `client` group mounts `connect` too.
 registerServerCommands(program);

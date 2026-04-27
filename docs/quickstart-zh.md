@@ -15,17 +15,22 @@
 npm install -g @agent-team-foundation/first-tree-hub
 ```
 
-### 2. 启动（前台）
+### 2. 启动（选一种）
+
+| 操作模式 | 适合什么场景 | 关掉终端后还在跑吗？ |
+|----------|------------|--------------------|
+| `first-tree-hub start` | 在当前终端跑 Hub。临时试用、调启动问题、SSH、Windows。 | 仅 Postgres 容器；CLI 进程拥有 server + client，Ctrl+C 一起停。 |
+| `first-tree-hub start --service` | 让 Hub 跨重启后台运行。 | Postgres + 后台 daemon（server + client 在同一进程）。下次登录自动起。 |
+
+两条命令共享相同的安装期工作（Docker 预检 → Postgres → migrations → 自动建管理员），只在生命周期上不同：前台模式阻塞至 SIGINT；`--service` 安装 launchd plist (macOS) 或 systemd-user unit (Linux)，daemon 健康检查通过后即返回。
 
 ```bash
-first-tree-hub start
+first-tree-hub start              # 前台
+# or
+first-tree-hub start --service    # 后台服务
 ```
 
-执行流程一次性搞定：Docker 预检 → 拉起 Postgres 容器 → 跑 migrations → 自动建本机管理员（用户名/密码不会显示） → 嵌入式 Client 启动 → 浏览器自动打开 `http://127.0.0.1:8000`。
-
-终端保持运行，按 `Ctrl+C` 停 server + client（Postgres 容器保留；要一并停：`first-tree-hub server stop`）。
-
-> 想让 Hub 持续后台运行 / 重启后自动起？后台服务模式（`--service`，macOS launchd / Linux systemd-user）正在实现中。
+按 `Ctrl+C`（前台）或 `first-tree-hub service stop`（服务模式）停止；Postgres 容器保留，要一并停：`first-tree-hub server stop`。
 
 ### 3. 在 Web 里建第一个 agent
 
@@ -63,14 +68,29 @@ first-tree-hub start
 
 打开 `http://127.0.0.1:8000`。如果 localStorage 的 JWT 过期或不存在，Web `/login` 路由会自动调 loopback-only 的 `local-bootstrap` 端点重铸一对新的 token —— 不需要任何 CLI 命令。
 
+### 服务模式管理
+
+```bash
+first-tree-hub service status            # running / installed-but-stopped / not-installed
+first-tree-hub service logs -f           # 跟踪 daemon 日志（NDJSON）
+first-tree-hub service stop              # 停 daemon，不卸载
+first-tree-hub service uninstall         # 卸载 plist/unit（Postgres 与 ~/.first-tree/hub 保留）
+```
+
 ### 升级
 
 ```bash
 npm install -g @agent-team-foundation/first-tree-hub@latest
+
+# 前台：直接重新启动即可拾起新代码
 first-tree-hub start
+
+# 服务模式：必须先停再起，daemon 才会重新加载新 binary
+first-tree-hub service stop
+first-tree-hub start --service
 ```
 
-第二行重启 server，并应用任何新 migration。
+npm 不知道 launchd / systemd 的存在。前台直接重启拾起新代码并跑任何新 migration；服务模式下 `start --service` 在 daemon 已经在跑时是幂等的（只打开浏览器后退出），所以必须显式 `service stop` 一次再起，让 daemon 重新加载。如果忘记，旧 daemon 继续跑旧版，新一轮 migration 不会应用；下次重启时 schema 版本守卫会在 `service logs` 里抛出明确的版本不匹配错误。
 
 ## 托管：连别人架好的 Hub
 

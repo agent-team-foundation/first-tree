@@ -56,7 +56,7 @@ export { blank, status } from "./output.js";
 // Interactive prompts
 export { isInteractive, promptAddAgent, promptMissingFields } from "./prompt.js";
 export type { ServerBootstrapResult, StartOptions } from "./server.js";
-export { bootstrapServer, startServer } from "./server.js";
+export { bootstrapServer, prepareInstallTime, startServer } from "./server.js";
 // Background service install (launchd / systemd --user)
 export type { ServiceInfo, ServiceState } from "./service-install.js";
 export {

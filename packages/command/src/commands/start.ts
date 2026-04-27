@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { userInfo } from "node:os";
 import { join } from "node:path";
@@ -12,6 +13,12 @@ import {
 } from "@agent-team-foundation/first-tree-hub-shared/config";
 import { type Command, InvalidArgumentError } from "commander";
 import {
+  getHubServiceStatus,
+  installHubService,
+  isHubServiceSupported,
+  uninstallHubService,
+} from "../core/hub-service.js";
+import {
   bootstrapServer,
   ClientRuntime,
   COMMAND_VERSION,
@@ -19,6 +26,7 @@ import {
   createExecuteUpdate,
   hasUser,
   isDockerAvailable,
+  prepareInstallTime,
   promptUpdate,
   saveCredentials,
 } from "../core/index.js";
@@ -29,6 +37,7 @@ type StartCommandOptions = {
   host?: string;
   databaseUrl?: string;
   open?: boolean;
+  service?: boolean;
 };
 
 const DEFAULT_PORT = 8000;
@@ -43,14 +52,19 @@ const DEFAULT_PORT = 8000;
 export function registerStartCommand(program: Command): void {
   program
     .command("start")
-    .description("Run First Tree Hub in this terminal (foreground)")
+    .description("Run First Tree Hub (foreground), or install as a background service with --service")
     .option("--port <number>", "Server port (default: 8000)", parsePortArg)
     .option("--host <address>", "Bind address (default: 127.0.0.1)")
     .option("--database-url <url>", "Use an existing PostgreSQL (skip Docker)")
     .option("--no-open", "Do not auto-open the browser")
+    .option("--service", "Install Hub as a launchd / systemd-user background service")
     .action(async (options: StartCommandOptions) => {
       try {
-        await runStart(options);
+        if (options.service === true) {
+          await runStartService(options);
+        } else {
+          await runStart(options);
+        }
       } catch (err) {
         if (isAddressInUseError(err)) {
           const port = options.port ?? DEFAULT_PORT;
@@ -296,6 +310,139 @@ export function isAddressInUseError(err: unknown): boolean {
   if (typeof err !== "object" || err === null) return false;
   const code = Reflect.get(err, "code");
   return code === "EADDRINUSE";
+}
+
+/**
+ * Install Hub as a background service. Pattern B (Q11): the CLI parent
+ * runs install-time work (Docker, Postgres, migrations, auto-admin), then
+ * hands binding/listening off to the daemon via launchd / systemd-user.
+ *
+ * Flow:
+ *   1. Reject on unsupported platform (Windows for now).
+ *   2. Idempotency: if service already installed and running, skip
+ *      install + try to open the browser (Q13).
+ *   3. Pre-probe the port — same rationale as foreground; surfaces
+ *      cross-shape collision early (Q14).
+ *   4. Install-time orchestration via `prepareInstallTime`.
+ *   5. Auto-admin (Q1).
+ *   6. Install platform unit; daemon auto-starts via launchd/systemd-user.
+ *   7. Poll daemon `/healthz` for up to 10s (Q8).
+ *   8. On timeout: uninstall + tail stderr fallback log + exit 1 (no half-
+ *      installed state).
+ *   9. On success: open browser, print summary, exit 0.
+ */
+async function runStartService(options: StartCommandOptions): Promise<void> {
+  print.line(`\n  First Tree Hub v${COMMAND_VERSION} — installing as a service\n\n`);
+
+  if (!isHubServiceSupported()) {
+    throw new Error(
+      `Background service install is not supported on ${process.platform}. ` +
+        "Run `first-tree-hub start` (foreground) instead.",
+    );
+  }
+
+  const port = options.port ?? DEFAULT_PORT;
+  const browserUrl = `http://127.0.0.1:${port}`;
+
+  // Idempotency / cross-shape collision detection.
+  const existing = getHubServiceStatus();
+  if (existing.state === "active") {
+    print.line(`  Service is already running (${existing.detail ?? existing.label}).\n`);
+    if (shouldAutoOpenBrowser(options)) {
+      openBrowser(browserUrl);
+      print.line(`  Opening browser at ${browserUrl}\n\n`);
+    } else {
+      print.line(`  Open ${browserUrl} in your browser to get started.\n\n`);
+    }
+    return;
+  }
+
+  if (options.databaseUrl === undefined && !isDockerAvailable()) {
+    throw new Error(
+      "Docker is not available.\n\n" +
+        "  First Tree Hub needs PostgreSQL. Two options:\n\n" +
+        "  1. Install Docker → https://docs.docker.com/get-docker/\n" +
+        "     Then re-run: first-tree-hub start --service\n\n" +
+        "  2. Provide an existing PostgreSQL URL:\n" +
+        "     first-tree-hub start --service --database-url postgresql://user:pass@host:5432/db",
+    );
+  }
+
+  const requestedHost = options.host ?? "127.0.0.1";
+  await assertPortFree(requestedHost, port);
+
+  const serverConfig = await prepareInstallTime({
+    port: options.port,
+    host: options.host,
+    databaseUrl: options.databaseUrl,
+    noInteractive: false,
+  });
+
+  const adminCreated = await ensureLocalAdmin(serverConfig.database.url);
+  if (adminCreated) status("Local admin", "ready");
+
+  const info = installHubService({ port });
+  status("Service", `installed (${info.platform}, unit: ${info.unitPath})`);
+
+  const healthy = await pollHealth(`http://127.0.0.1:${port}/healthz`, 10_000);
+  if (!healthy) {
+    print.line("\n  Daemon failed health check. Tearing down install...\n\n");
+    const tail = readDaemonStderrTail(info.logDir, 20);
+    if (tail) {
+      print.line("  Last lines of daemon stderr:\n");
+      for (const line of tail) print.line(`    ${line}\n`);
+      print.line("\n");
+    }
+    try {
+      uninstallHubService();
+    } catch {
+      // Best effort — primary signal is the failed health check.
+    }
+    throw new Error("Daemon did not become healthy within 10s; service uninstalled.");
+  }
+
+  status("Service", "running");
+  blank();
+
+  if (shouldAutoOpenBrowser(options)) {
+    openBrowser(browserUrl);
+    print.line(`  Opening browser at ${browserUrl}\n`);
+  } else {
+    print.line(`  Open ${browserUrl} in your browser to get started.\n`);
+  }
+  print.line("\n  (Service runs in the background and auto-starts at next login.)\n");
+  print.line("  Manage via: first-tree-hub service [status|logs|stop|uninstall]\n\n");
+}
+
+async function pollHealth(url: string, deadlineMs: number): Promise<boolean> {
+  const start = Date.now();
+  let attempt = 0;
+  while (Date.now() - start < deadlineMs) {
+    attempt++;
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(2_000) });
+      if (res.ok) return true;
+    } catch {
+      // Connection refused / not yet listening — keep retrying.
+    }
+    await sleep(Math.min(500 + attempt * 100, 1_500));
+  }
+  return false;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function readDaemonStderrTail(logDir: string, lines: number): string[] | null {
+  const path = join(logDir, "daemon.stderr.log");
+  if (!existsSync(path)) return null;
+  try {
+    const content = readFileSync(path, "utf-8");
+    return content.trimEnd().split(/\r?\n/).slice(-lines);
+  } catch {
+    return null;
+  }
 }
 
 function parsePortArg(value: string): number {

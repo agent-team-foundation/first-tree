@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { ServerConfig } from "@agent-team-foundation/first-tree-hub-shared/config";
 import { initConfig, serverConfigSchema } from "@agent-team-foundation/first-tree-hub-shared/config";
 import { buildApp } from "@first-tree-hub/server";
 import type { Config } from "@first-tree-hub/server/config";
@@ -27,21 +28,17 @@ export type ServerBootstrapResult = {
 };
 
 /**
- * Build the server up to the point of `app.listen()` without actually
- * binding the port.
+ * Run install-time orchestration (Pattern B / Q11):
  *
- * The new `first-tree-hub start` command needs to perform the same
- * orchestration the legacy `server start` did (Docker, Postgres, migrations,
- * Web dist resolution, telemetry init, fastify build), but it also wants to
- * embed its own `ClientRuntime` against the same process before yielding to
- * `app.listen()`. Splitting the two phases lets the caller insert that step
- * cleanly — and lets a future daemon caller skip re-running install-time
- * work entirely (Pattern B / Q11). `startServer` below is now a thin wrapper
- * preserved for backward compatibility with the existing `server start`
- * command and external Hub consumers (e.g. context-tree).
+ *   1. Schema-driven prompts for missing required fields
+ *   2. Provision Postgres (or reuse) via the docker-pg auto-generator
+ *   3. Apply Drizzle migrations
+ *
+ * Used by `start --service` (Phase 1b), which hands off binding/listening
+ * to the daemon — and by `bootstrapServer`, which wraps this and adds the
+ * fastify build for foreground / `server start` callers.
  */
-export async function bootstrapServer(options: StartOptions): Promise<ServerBootstrapResult> {
-  // 1. Build CLI args
+export async function prepareInstallTime(options: StartOptions): Promise<ServerConfig> {
   const cliArgs: Record<string, unknown> = {};
   if (options.port !== undefined) cliArgs.server = { port: options.port };
   if (options.host !== undefined) {
@@ -51,7 +48,6 @@ export async function bootstrapServer(options: StartOptions): Promise<ServerBoot
     cliArgs.database = { url: options.databaseUrl, provider: "external" };
   }
 
-  // 2. Schema-driven interactive prompts for missing required fields
   await promptMissingFields({
     schema: serverConfigSchema as Record<string, unknown>,
     role: "server",
@@ -59,7 +55,6 @@ export async function bootstrapServer(options: StartOptions): Promise<ServerBoot
     noInteractive: options.noInteractive,
   });
 
-  // 3. docker-pg auto generator
   const autoGenerators = {
     "docker-pg": async () => {
       if (!isDockerAvailable()) {
@@ -92,12 +87,30 @@ export async function bootstrapServer(options: StartOptions): Promise<ServerBoot
 
   status("PostgreSQL", "ready");
 
-  // 4. Run migrations
   status("Database", "running migrations...");
   const tableCount = await runMigrations(serverConfig.database.url);
   status("Database", `initialized (${tableCount} tables)`);
 
-  // 5. Resolve web dist (build if needed)
+  return serverConfig;
+}
+
+/**
+ * Build the server up to the point of `app.listen()` without actually
+ * binding the port.
+ *
+ * The new `first-tree-hub start` command needs to perform the same
+ * orchestration the legacy `server start` did (Docker, Postgres, migrations,
+ * Web dist resolution, telemetry init, fastify build), but it also wants to
+ * embed its own `ClientRuntime` against the same process before yielding to
+ * `app.listen()`. Splitting the two phases lets the caller insert that step
+ * cleanly — and lets a future daemon caller skip re-running install-time
+ * work entirely (Pattern B / Q11). `startServer` below is now a thin wrapper
+ * preserved for backward compatibility with the existing `server start`
+ * command and external Hub consumers (e.g. context-tree).
+ */
+export async function bootstrapServer(options: StartOptions): Promise<ServerBootstrapResult> {
+  const serverConfig = await prepareInstallTime(options);
+
   const webDistPath = resolveWebDist();
   if (webDistPath) {
     status("Web", `serving from ${webDistPath}`);
@@ -105,7 +118,6 @@ export async function bootstrapServer(options: StartOptions): Promise<ServerBoot
     status("Web", "not available (web package not found)");
   }
 
-  // 6. Build app config
   const config: Config = {
     ...serverConfig,
     webDistPath: webDistPath ?? undefined,
