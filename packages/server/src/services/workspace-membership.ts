@@ -160,9 +160,11 @@ function mapWorkspaceConflict(err: unknown, slug: string): unknown {
 
 /**
  * Extract the bare invite token from either a full URL like
- * `https://hub.first-tree.ai/invite/abc123` or the bare `abc123` string.
- * Returns `null` when the input doesn't match either shape so callers can
- * surface a clear "doesn't look like a valid invite link" error.
+ * `https://first-tree.staging.unispark.dev/invite/abc123` (the current
+ * staging hub; production lands on `hub.first-tree.ai` once that domain
+ * is provisioned) or the bare `abc123` string. Returns `null` when the
+ * input doesn't match either shape so callers can surface a clear
+ * "doesn't look like a valid invite link" error.
  */
 export function extractInviteToken(tokenOrUrl: string): string | null {
   const trimmed = tokenOrUrl.trim();

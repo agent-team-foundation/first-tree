@@ -166,10 +166,25 @@ export async function authGithubRoutes(app: FastifyInstance): Promise<void> {
 }
 
 /**
- * Resolve a GitHub profile to a user, then issue tokens scoped either to
- * the user's most-recent membership (if any) or to a rootless user token.
- * Returns the JSON shape `signInResponseSchema` documents — the frontend
- * stashes the tokens and follows `nextRoute`.
+ * Resolve a GitHub profile to a user, then 302-redirect the browser to the
+ * SPA's completion page with the tokens + `nextRoute` packed into the URL
+ * fragment.
+ *
+ * Why a fragment and not a JSON body or query string:
+ *   * JSON body: GitHub bounces the browser here via 302; a JSON response
+ *     would render as raw text in the address bar.
+ *   * Query string: tokens land in proxy / CDN / web-server access logs.
+ *   * Fragment: never transmitted to the server, only the SPA sees it; the
+ *     SPA immediately persists to localStorage and `replaceState`s the
+ *     fragment out of the browser history. This is the standard "implicit
+ *     grant" delivery shape for SPA-based OAuth on a Bearer-token API.
+ *
+ * The SPA route that consumes this fragment lives at
+ * `/auth/github/complete` — see `packages/web/src/pages/auth-callback.tsx`.
+ *
+ * Failure modes (token sign / DB error) bubble up and the global error
+ * handler turns them into a 500; the SPA's `/signup` page can detect via
+ * `?error=` and re-prompt.
  */
 async function completeSignIn(
   app: FastifyInstance,
@@ -201,11 +216,12 @@ async function completeSignIn(
   //     wizard-incomplete case via `members.onboarding_state` in PR #5)
   const nextRoute = next.startsWith("/invite/") ? next : membership ? "/" : "/setup";
 
-  return reply.send({
-    accessToken: tokens.accessToken,
-    refreshToken: tokens.refreshToken,
-    nextRoute,
+  const fragment = new URLSearchParams({
+    access: tokens.accessToken,
+    refresh: tokens.refreshToken,
+    next: nextRoute,
   });
+  return reply.redirect(`/auth/github/complete#${fragment.toString()}`, 302);
 }
 
 function readOrigin(request: FastifyRequest): { proto: string; host: string } {

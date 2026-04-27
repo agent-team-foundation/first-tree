@@ -35,9 +35,11 @@ describe("SaaS auth — GitHub OAuth + workspaces + switch-org (dev mode)", () =
 
   /**
    * Sign in via the dev-callback, returning the issued token pair + the
-   * `nextRoute` hint. Tests pass distinct `githubId`s so each call lands a
-   * fresh user; reusing the same id is the documented "second sign-in"
-   * idempotent path.
+   * `nextRoute` hint. The server 302-redirects to
+   * `/auth/github/complete#access=…&refresh=…&next=…` (fragment so the
+   * tokens never reach a server access log) — we read the Location header
+   * and parse the fragment ourselves rather than letting Fastify follow
+   * the redirect to a route that doesn't exist server-side.
    */
   async function devSignIn(opts: { githubId: string; login?: string; email?: string; next?: string }) {
     const next = opts.next ?? "/";
@@ -52,10 +54,20 @@ describe("SaaS auth — GitHub OAuth + workspaces + switch-org (dev mode)", () =
       method: "GET",
       url: `/api/v1/auth/github/dev-callback?${params.toString()}`,
     });
-    if (res.statusCode !== 200) {
+    if (res.statusCode !== 302) {
       throw new Error(`dev sign-in failed (${res.statusCode}): ${res.body}`);
     }
-    return res.json<{ accessToken: string; refreshToken: string; nextRoute: string }>();
+    const location = res.headers.location ?? "";
+    const hashIdx = location.indexOf("#");
+    if (hashIdx === -1) throw new Error(`dev sign-in redirect missing fragment: ${location}`);
+    const fragment = new URLSearchParams(location.slice(hashIdx + 1));
+    const accessToken = fragment.get("access");
+    const refreshToken = fragment.get("refresh");
+    const nextRoute = fragment.get("next");
+    if (!accessToken || !refreshToken || !nextRoute) {
+      throw new Error(`dev sign-in redirect missing fields: ${location}`);
+    }
+    return { accessToken, refreshToken, nextRoute };
   }
 
   it("dev sign-in for a brand-new user lands on /setup with a user-only token", async () => {
@@ -151,7 +163,7 @@ describe("SaaS auth — GitHub OAuth + workspaces + switch-org (dev mode)", () =
       method: "POST",
       url: "/api/v1/me/workspaces/join",
       headers: { authorization: `Bearer ${joinerSignIn.accessToken}` },
-      payload: { tokenOrUrl: `https://hub.first-tree.ai/invite/${inviteToken}` },
+      payload: { tokenOrUrl: `https://first-tree.staging.unispark.dev/invite/${inviteToken}` },
     });
     expect(join2.statusCode).toBe(200);
     expect(join2.json<{ alreadyMember: boolean }>().alreadyMember).toBe(true);
