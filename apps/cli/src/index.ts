@@ -22,6 +22,48 @@ function readPackageVersion(): string {
   return packageJson.version;
 }
 
+type CommandHelpEntry = {
+  path: string;
+  description: string;
+};
+
+function collectCommandHelpEntries(command: Command, parentPath: string[]): CommandHelpEntry[] {
+  const entries: CommandHelpEntry[] = [];
+
+  for (const childCommand of command.commands) {
+    const commandPath = [...parentPath, childCommand.name()];
+
+    entries.push({
+      path: commandPath.join(" "),
+      description: childCommand.description(),
+    });
+    entries.push(...collectCommandHelpEntries(childCommand, commandPath));
+  }
+
+  return entries;
+}
+
+function formatAllCommandsHelp(program: Command): string {
+  const entries = collectCommandHelpEntries(program, [program.name()]);
+
+  if (entries.length === 0) {
+    return "";
+  }
+
+  const pathWidth = Math.max(...entries.map((entry) => entry.path.length));
+  const lines = entries.map((entry) => {
+    const description = entry.description.trim();
+
+    if (description.length === 0) {
+      return `  ${entry.path}`;
+    }
+
+    return `  ${entry.path.padEnd(pathWidth)}  ${description}`;
+  });
+
+  return `\nAll commands:\n${lines.join("\n")}\n`;
+}
+
 export function createProgram(version = readPackageVersion()): Command {
   const program = new Command();
 
@@ -31,6 +73,7 @@ export function createProgram(version = readPackageVersion()): Command {
     .version(version);
 
   registerCommands(program);
+  program.addHelpText("after", () => formatAllCommandsHelp(program));
 
   return program;
 }

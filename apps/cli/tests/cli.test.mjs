@@ -12,6 +12,13 @@ const entryPath = resolve(cliRoot, "dist/index.js");
 const rootPackagePath = resolve(repoRoot, "package.json");
 const cliPackagePath = resolve(cliRoot, "package.json");
 const commandNames = ["init", "tree", "hub", "breeze", "gardener"];
+const rootHelpCommandPaths = [
+  "first-tree init",
+  "first-tree tree inspect",
+  "first-tree hub start",
+  "first-tree breeze poll",
+  "first-tree gardener sync",
+];
 const commandGroups = [
   {
     name: "tree",
@@ -71,6 +78,10 @@ describe("first-tree CLI", () => {
     for (const commandName of commandNames) {
       expect(result.stdout).toContain(commandName);
     }
+    expect(result.stdout).toContain("All commands:");
+    for (const commandPath of rootHelpCommandPaths) {
+      expect(result.stdout).toContain(commandPath);
+    }
   });
 
   it("runs the init placeholder successfully", async () => {
@@ -88,6 +99,7 @@ describe("first-tree CLI", () => {
       expect(result.code).toBe(0);
       expect(result.stderr).toBe("");
       expect(result.stdout).toContain(`Usage: first-tree ${commandGroup.name}`);
+      expect(result.stdout).not.toContain("All commands:");
       for (const subcommandName of commandGroup.subcommands) {
         expect(result.stdout).toContain(subcommandName);
       }
@@ -99,6 +111,7 @@ describe("first-tree CLI", () => {
       expect(result.code).toBe(0);
       expect(result.stderr).toBe("");
       expect(result.stdout).toContain(`Usage: first-tree ${commandGroup.name}`);
+      expect(result.stdout).not.toContain("All commands:");
       for (const subcommandName of commandGroup.subcommands) {
         expect(result.stdout).toContain(subcommandName);
       }
