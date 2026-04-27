@@ -250,20 +250,9 @@ describe("CLAUDE.md generation", () => {
     expect(md).toContain("Use the SDK.");
   });
 
-  it("uses agentId when displayName is null", () => {
-    const workspace = join(tmpBase, "ws-no-name");
-    mkdirSync(join(workspace, ".agent", "context"), { recursive: true });
-
-    const identity: AgentIdentity = {
-      agentId: "my-agent",
-      inboxId: "inbox-my-agent",
-      displayName: null,
-      type: "autonomous_agent",
-      delegateMention: null,
-      metadata: {},
-    };
-
-    const md = generateClaudeMd(workspace, identity, null);
-    expect(md).toContain("You are my-agent, an autonomous agent");
-  });
+  // The pre-Phase-2 "uses agentId when displayName is null" case is now
+  // unreachable (server enforces NOT NULL + a default), and the coverage
+  // it pinned — that the identity banner renders `displayName` verbatim —
+  // is already covered by the "generates autonomous_agent template" test
+  // above. Intentionally no test here.
 });

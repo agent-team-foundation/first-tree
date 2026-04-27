@@ -50,7 +50,7 @@ function buildSink(fx: SinkFixtures) {
     agent: {
       agentId: ME,
       inboxId: "inbox-me",
-      displayName: null,
+      displayName: "test-agent",
       type: "autonomous_agent",
       delegateMention: null,
       metadata: {},
@@ -174,7 +174,7 @@ describe("createResultSink — forwardResult enrichment", () => {
       agent: {
         agentId: ME,
         inboxId: "inbox-me",
-        displayName: null,
+        displayName: "test-agent",
         type: "autonomous_agent",
         delegateMention: null,
         metadata: {},

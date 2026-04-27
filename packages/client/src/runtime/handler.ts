@@ -10,7 +10,13 @@ export type AgentIdentity = {
    * cross-chat `replyTo` envelopes without a per-call server round-trip.
    */
   inboxId: string;
-  displayName: string | null;
+  /**
+   * Always populated post-Phase 2 of the agent-naming refactor — the server
+   * enforces `agents.display_name NOT NULL` (migration 0024) and the
+   * `agent:pinned` WebSocket frame it emits resolves the fallback before
+   * sending, so the client no longer has to second-guess the value.
+   */
+  displayName: string;
   type: string;
   delegateMention: string | null;
   metadata: Record<string, unknown>;

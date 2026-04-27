@@ -15,7 +15,13 @@ export const agents = pgTable(
       .references(() => organizations.id),
     /** "human" | "personal_assistant" | "autonomous_agent" */
     type: text("type").notNull(),
-    displayName: text("display_name"),
+    /**
+     * Required human-readable label. Defaulted to `name` (or "Unnamed Agent"
+     * when both would be null) on create by the service layer — see Phase 2
+     * of the agent-naming refactor. Tombstoned rows (status="deleted") keep
+     * whatever value they had; only `name` is nulled on delete.
+     */
+    displayName: text("display_name").notNull(),
     /** Agent UUID to forward @mentions to (e.g. personal assistant) */
     delegateMention: text("delegate_mention"),
     /** Delivery address, auto-generated as inbox_{uuid} */

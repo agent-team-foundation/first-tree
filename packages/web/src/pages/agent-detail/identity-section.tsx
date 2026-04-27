@@ -64,9 +64,7 @@ export function IdentitySection({ agent, onSave }: IdentitySectionProps) {
       </header>
       <div className="px-4 py-3 text-body space-y-1">
         <div>
-          <span className="font-semibold">
-            {agent.displayName ?? <span className="text-muted-foreground italic">no display name</span>}
-          </span>
+          <span className="font-semibold">{agent.displayName}</span>
           {agent.name && <span className="ml-2 font-mono text-caption text-muted-foreground">@{agent.name}</span>}
           {delegateIdentity && (
             <>
@@ -124,7 +122,7 @@ type IdentityDialogProps = {
 
 function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialogProps) {
   const { memberId, role } = useAuth();
-  const [displayName, setDisplayName] = useState(agent.displayName ?? "");
+  const [displayName, setDisplayName] = useState(agent.displayName);
   const [delegateMention, setDelegateMention] = useState(agent.delegateMention ?? "");
   const [visibility, setVisibility] = useState(agent.visibility);
   const [saving, setSaving] = useState(false);
@@ -132,7 +130,7 @@ function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialo
 
   useEffect(() => {
     if (open) {
-      setDisplayName(agent.displayName ?? "");
+      setDisplayName(agent.displayName);
       setDelegateMention(agent.delegateMention ?? "");
       setVisibility(agent.visibility);
       setError(null);
@@ -156,10 +154,17 @@ function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialo
   async function submit(e: FormEvent) {
     e.preventDefault();
     setError(null);
+    // Display name is required after Phase 2 — reject empty locally so the
+    // server 400 doesn't bubble up as a mystery "validation failed".
+    const trimmed = displayName.trim();
+    if (!trimmed) {
+      setError("Display name is required.");
+      return;
+    }
     setSaving(true);
     try {
       const patch: UpdateAgent = {
-        displayName: displayName || null,
+        displayName: trimmed,
         delegateMention: delegateMention || null,
       };
       if (visibility !== agent.visibility) {
