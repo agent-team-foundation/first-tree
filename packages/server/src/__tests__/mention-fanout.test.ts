@@ -21,6 +21,14 @@ import { createTestAgent, useTestApp } from "./helpers.js";
 describe("server mention resolution + fan-out filter", () => {
   const getApp = useTestApp();
 
+  /**
+   * Only counts rows that will *wake the recipient's session* (notify=true).
+   * Silent context rows (notify=false) — written for `mention_only` participants
+   * who weren't @mentioned — are intentionally excluded here so existing
+   * "is this participant in the active fan-out?" assertions still mean
+   * "would this agent's session be woken?". Silent-row behaviour is covered by
+   * the dedicated tests in `silent-inbox-context.test.ts`.
+   */
   async function inboxEntriesFor(app: ReturnType<typeof getApp>, chatId: string, agentUuid: string) {
     const [row] = await app.db
       .select({ inboxId: agents.inboxId })
@@ -31,7 +39,9 @@ describe("server mention resolution + fan-out filter", () => {
     return app.db
       .select({ messageId: inboxEntries.messageId })
       .from(inboxEntries)
-      .where(and(eq(inboxEntries.inboxId, row.inboxId), eq(inboxEntries.chatId, chatId)));
+      .where(
+        and(eq(inboxEntries.inboxId, row.inboxId), eq(inboxEntries.chatId, chatId), eq(inboxEntries.notify, true)),
+      );
   }
 
   async function setParticipantMode(

@@ -155,6 +155,64 @@ describe("formatInboundContent", () => {
     expect(await formatInboundContent(msg, cache)).toBe("[From: agent-a]\n\nhi");
     expect(logs.some((l) => l.includes("listChatParticipants failed"))).toBe(true);
   });
+
+  it("renders precedingMessages as an [Earlier in chat] block before the trigger", async () => {
+    const ps = [mkParticipant("agent-a", "alice"), mkParticipant("agent-b", "bob"), mkParticipant("agent-c", "carol")];
+    const sdk = mkSdk(async () => ps);
+    const cache = createParticipantCache(sdk, "chat-1", () => {});
+    const msg: SessionMessage = {
+      id: "m3",
+      chatId: "chat-1",
+      senderId: "agent-c",
+      format: "text",
+      content: "@me what do you think?",
+      metadata: null,
+      precedingMessages: [
+        {
+          id: "m1",
+          senderId: "agent-a",
+          format: "text",
+          content: "anyone seen the report?",
+          metadata: {},
+          createdAt: new Date().toISOString(),
+        },
+        {
+          id: "m2",
+          senderId: "agent-b",
+          format: "text",
+          content: "yeah, working on it",
+          metadata: {},
+          createdAt: new Date().toISOString(),
+        },
+      ],
+    };
+    const out = await formatInboundContent(msg, cache);
+    expect(out).toContain("[Earlier in chat — context you missed]");
+    expect(out).toContain("[From: alice] anyone seen the report?");
+    expect(out).toContain("[From: bob] yeah, working on it");
+    expect(out).toContain("[Now — message that woke you]");
+    expect(out).toContain("[From: carol]\n\n@me what do you think?");
+    // Ordering: earlier block must precede the trigger.
+    expect(out.indexOf("[Earlier in chat")).toBeLessThan(out.indexOf("[Now — message"));
+    expect(out.indexOf("[Now — message")).toBeLessThan(out.indexOf("[From: carol]"));
+  });
+
+  it("omits the [Earlier in chat] block when precedingMessages is empty / absent", async () => {
+    const sdk = mkSdk(async () => participants);
+    const cache = createParticipantCache(sdk, "chat-1", () => {});
+    const msg: SessionMessage = {
+      id: "m1",
+      chatId: "chat-1",
+      senderId: "agent-a",
+      format: "text",
+      content: "hi",
+      metadata: null,
+      precedingMessages: [],
+    };
+    const out = await formatInboundContent(msg, cache);
+    expect(out).toBe("[From: alice]\n\nhi");
+    expect(out).not.toContain("[Earlier in chat");
+  });
 });
 
 describe("buildAgentEnv", () => {

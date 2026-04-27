@@ -1,3 +1,4 @@
+import { extractMentions, type MentionParticipant } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, MessageSquare, Paperclip, Pause, Pencil, Send, Square, X } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -718,6 +719,14 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  /** Once-per-chat guard for the focus auto-prime: after the user has
+   * focused the input even once, we don't keep slapping `@` back into an
+   * empty draft. Reset when switching chats. */
+  const focusPrimedRef = useRef(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset is intentionally chatId-scoped.
+  useEffect(() => {
+    focusPrimedRef.current = false;
+  }, [chatId]);
 
   const { data: messagesData } = useQuery({
     queryKey: ["chat-messages", chatId],
@@ -790,6 +799,9 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
     const images = pendingImages;
     if (!text && images.length === 0) return;
     if (uploading) return;
+    // Group-chat send guard: don't fire requests we know the server (with
+    // proposal §3 enforcement) or downstream `mention_only` agents will drop.
+    if (requiresMention && draftMentions.length === 0) return;
 
     if (images.length > 0) {
       setUploading(true);
@@ -883,17 +895,43 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
 
   // Mention autocomplete candidates — participants of this chat resolved to
   // their `{name, displayName}` via the shared identity map. Filter out
-  // rows with no `name` since mentions need a slug target to insert.
+  // rows with no `name` since mentions need a slug target to insert. The
+  // current viewer's own agent is also excluded so the picker never offers
+  // self-mention (which the server filters anyway).
   const mentionCandidates = useMemo<MentionCandidate[]>(() => {
     const sourceIds = chatDetail?.participants?.map((p) => p.agentId) ?? [agentId];
     const out: MentionCandidate[] = [];
     for (const id of sourceIds) {
+      if (id === myAgentId) continue;
       const ident = agentIdentity(id);
       if (!ident || !ident.name) continue;
       out.push({ agentId: id, name: ident.name, displayName: ident.displayName });
     }
     return out;
-  }, [chatDetail?.participants, agentId, agentIdentity]);
+  }, [chatDetail?.participants, agentId, agentIdentity, myAgentId]);
+
+  /**
+   * "Needs explicit @mention" guard: a real group, OR a direct chat where the
+   * current user isn't yet a participant (their first send promotes it to a
+   * 3-person group). In both cases an unaddressed message would be silently
+   * dropped by `mention_only` peers and the server now rejects it with 400.
+   * See proposals/group-chat-ux-improvements §2.
+   */
+  const requiresMention = useMemo(() => {
+    if (!chatDetail) return false;
+    if (chatDetail.type === "group") return true;
+    const meIn = chatDetail.participants.some((p) => p.agentId === myAgentId);
+    return chatDetail.type === "direct" && !meIn && chatDetail.participants.length >= 2;
+  }, [chatDetail, myAgentId]);
+
+  /** Local mirror of the server's mention resolution. Empty when nothing in
+   * `draft` resolves to a participant — drives the send-button gate so we
+   * don't hit the network with a request the server will 400. */
+  const draftMentions = useMemo(() => {
+    if (!requiresMention) return [];
+    const ps: MentionParticipant[] = mentionCandidates.map((c) => ({ agentId: c.agentId, name: c.name }));
+    return extractMentions(draft, ps);
+  }, [draft, mentionCandidates, requiresMention]);
 
   const mention = useMentionAutocomplete({
     value: draft,
@@ -1173,6 +1211,27 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
               onSelect={(e) => {
                 setCursor(e.currentTarget.selectionStart ?? draft.length);
               }}
+              onFocus={() => {
+                // Group / about-to-be-group chats: prime the input with `@`
+                // on focus so the autocomplete pops the recipient list right
+                // away — matches the proposal §2 "must choose a receiver
+                // before typing" UX. Once-per-chat (focusPrimedRef): we
+                // don't want to re-stamp `@` after the user has cleared
+                // their draft and tabbed away/back; that would constantly
+                // fight the user when they're trying to write a fresh
+                // empty message without addressing anyone (e.g. paste over).
+                if (!requiresMention) return;
+                if (focusPrimedRef.current) return;
+                if (draft.length > 0 || mentionCandidates.length === 0) return;
+                focusPrimedRef.current = true;
+                setDraft("@");
+                setCursor(1);
+                requestAnimationFrame(() => {
+                  const el = textareaRef.current;
+                  if (!el) return;
+                  el.setSelectionRange(1, 1);
+                });
+              }}
               onPaste={(e) => {
                 const files = Array.from(e.clipboardData.files);
                 if (files.length > 0) {
@@ -1180,7 +1239,11 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
                   addImages(files);
                 }
               }}
-              placeholder={`Message @${displayName}  ·  / for commands  ·  @ to mention`}
+              placeholder={
+                requiresMention
+                  ? "Type @ to pick a recipient, then your message"
+                  : `Message @${displayName}  ·  / for commands  ·  @ to mention`
+              }
               rows={2}
               onKeyDown={(e) => {
                 // Mention autocomplete gets first crack at navigation keys so
@@ -1260,10 +1323,23 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
               <button
                 type="button"
                 onClick={handleSend}
-                disabled={sendMut.isPending || uploading || (!draft.trim() && pendingImages.length === 0)}
+                disabled={
+                  sendMut.isPending ||
+                  uploading ||
+                  (!draft.trim() && pendingImages.length === 0) ||
+                  (requiresMention && draftMentions.length === 0)
+                }
+                title={
+                  requiresMention && draftMentions.length === 0
+                    ? "Pick at least one recipient with @ before sending in a group chat"
+                    : undefined
+                }
                 className={cn(
                   "inline-flex items-center transition-colors text-label font-semibold",
-                  (sendMut.isPending || uploading || (!draft.trim() && pendingImages.length === 0)) &&
+                  (sendMut.isPending ||
+                    uploading ||
+                    (!draft.trim() && pendingImages.length === 0) ||
+                    (requiresMention && draftMentions.length === 0)) &&
                     "opacity-50 cursor-not-allowed",
                 )}
                 style={{

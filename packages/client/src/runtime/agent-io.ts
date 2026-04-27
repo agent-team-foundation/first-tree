@@ -92,12 +92,32 @@ export function resolveSenderLabel(senderId: string, participants: ChatParticipa
  * content is serialised to JSON — handlers that want to feed structured
  * content some other way should opt out and format themselves.
  *
+ * If the server attached `precedingMessages` (silent group-chat history the
+ * recipient missed because it was `mention_only` and not @mentioned), prepend
+ * them under an `[Earlier in chat]` block so the LLM sees what came before
+ * the @mention that woke this turn — see proposals/group-chat-ux-improvements §1.
+ *
  * Async because the participant list may need a server round-trip on first
  * use; subsequent messages in the same session hit the cache.
  */
 export async function formatInboundContent(message: SessionMessage, participants: ParticipantCache): Promise<string> {
   const rawContent = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
-  if (!message.senderId) return rawContent;
+  const preceding = message.precedingMessages ?? [];
+
+  let header = "";
+  if (preceding.length > 0) {
+    const ps = await participants.get();
+    const lines: string[] = ["[Earlier in chat — context you missed]"];
+    for (const p of preceding) {
+      const label = resolveSenderLabel(p.senderId, ps);
+      const text = typeof p.content === "string" ? p.content : JSON.stringify(p.content);
+      lines.push(`[From: ${label}] ${text}`);
+    }
+    lines.push("", "[Now — message that woke you]");
+    header = `${lines.join("\n")}\n\n`;
+  }
+
+  if (!message.senderId) return `${header}${rawContent}`;
   const label = resolveSenderLabel(message.senderId, await participants.get());
-  return `[From: ${label}]\n\n${rawContent}`;
+  return `${header}[From: ${label}]\n\n${rawContent}`;
 }

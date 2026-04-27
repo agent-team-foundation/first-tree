@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { extractMentions, type SendMessage, type SendToAgent } from "@agent-team-foundation/first-tree-hub-shared";
+import {
+  extractMentions,
+  type SendMessage,
+  type SendToAgent,
+  scanMentionTokens,
+} from "@agent-team-foundation/first-tree-hub-shared";
 import { and, desc, eq, lt, ne } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
@@ -16,16 +21,43 @@ export type SendMessageResult = {
   recipients: string[];
 };
 
+export type SendMessageOptions = {
+  /**
+   * When true, reject the send with `BadRequestError` if the chat is a group
+   * and no recipient mention can be resolved (neither from `metadata.mentions`
+   * nor from a `@<name>` token in the content). Used by both agent and
+   * admin/web routes so a group chat message ALWAYS names a receiver — see
+   * proposals/group-chat-ux-improvements §3.
+   *
+   * Direct chats are unaffected (the lone peer is unambiguous). Adapter and
+   * webhook paths leave this off so external bridges aren't gated on hub-side
+   * naming conventions.
+   */
+  enforceGroupMention?: boolean;
+  /**
+   * When true and `data.content` is a string, prepend `@<name>` tokens for
+   * any participant in `metadata.mentions` whose name is missing from the
+   * content. Used by the agent path so the rendered message stays in sync
+   * with the routing decision (e.g. `result-sink` reply enrichment puts the
+   * trigger sender in `metadata.mentions` but the agent's text rarely
+   * includes the @). Admin/web path leaves this off — the picker has the
+   * user write the @ themselves; we don't want server to silently mutate
+   * human-typed content.
+   */
+  normalizeMentionsInContent?: boolean;
+};
+
 export async function sendMessage(
   db: Database,
   chatId: string,
   senderId: string,
   data: SendMessage,
+  options: SendMessageOptions = {},
 ): Promise<SendMessageResult> {
   return withSpan(
     "inbox.enqueue",
     messageAttrs({ chatId, senderAgentId: senderId, source: data.source ?? undefined }),
-    () => sendMessageInner(db, chatId, senderId, data),
+    () => sendMessageInner(db, chatId, senderId, data, options),
   );
 }
 
@@ -34,20 +66,27 @@ async function sendMessageInner(
   chatId: string,
   senderId: string,
   data: SendMessage,
+  options: SendMessageOptions,
 ): Promise<SendMessageResult> {
   return db.transaction(async (tx) => {
-    // 1. Load participants once — we use them both to resolve `@name`
-    //    mentions and to fan-out inbox entries.
-    const participants = await tx
-      .select({
-        agentId: chatParticipants.agentId,
-        inboxId: agents.inboxId,
-        mode: chatParticipants.mode,
-        name: agents.name,
-      })
-      .from(chatParticipants)
-      .innerJoin(agents, eq(chatParticipants.agentId, agents.uuid))
-      .where(eq(chatParticipants.chatId, chatId));
+    // 1. Load participants + chat type in parallel — we need both for the
+    //    fan-out + mention enforcement steps; running them concurrently
+    //    keeps the hot send path on a single round-trip's worth of latency
+    //    rather than two sequential lookups (proposal §3 review feedback).
+    const [participants, [chatRow]] = await Promise.all([
+      tx
+        .select({
+          agentId: chatParticipants.agentId,
+          inboxId: agents.inboxId,
+          mode: chatParticipants.mode,
+          name: agents.name,
+        })
+        .from(chatParticipants)
+        .innerJoin(agents, eq(chatParticipants.agentId, agents.uuid))
+        .where(eq(chatParticipants.chatId, chatId)),
+      tx.select({ type: chats.type }).from(chats).where(eq(chats.id, chatId)).limit(1),
+    ]);
+    const chatType = chatRow?.type ?? null;
 
     // `replyTo` is a sender-declared routing promise — the sender is saying
     // "when someone replies to this, also deliver a copy to my own inbox in
@@ -84,7 +123,48 @@ async function sendMessageInner(
     const mergedMentions = [...new Set([...explicitMentions, ...resolved])];
     const metadataToStore = mergedMentions.length > 0 ? { ...incomingMeta, mentions: mergedMentions } : incomingMeta;
 
-    // 3. Store the message (with merged metadata).
+    // 2b. Group-chat receiver enforcement (agent-only). Stop a misuse where an
+    //     agent calls `send --chat <id>` against a group without naming who
+    //     should pick it up — every mention_only participant would silently
+    //     drop the message and the sender would assume delivery.
+    //     Uses the chat type pre-fetched in step 1 so this stays cheap.
+    if (options.enforceGroupMention && chatType === "group") {
+      const recipientMentions = mergedMentions.filter((id) => id !== senderId);
+      if (recipientMentions.length === 0) {
+        throw new BadRequestError(
+          "Sending to a group chat requires an explicit @mention. " +
+            "Use `agent send <name>` to message a single agent, or @<name> in the content to address one or more group members.",
+        );
+      }
+    }
+
+    // 2c. Agent-path content normalisation: if the caller declared mentions in
+    //     metadata but didn't write the corresponding `@<name>` in the text,
+    //     prepend the missing tokens. This keeps the visible message in sync
+    //     with the routing decision — most importantly when an agent replies
+    //     in a group: the runtime's `result-sink` already adds the trigger
+    //     sender to `mentions`, but only the content shows up in the UI.
+    //
+    //     Driven by its own opt-in flag (separate from enforceGroupMention) so
+    //     admin/web and adapter paths can validate without mutating content.
+    let outboundContent = data.content;
+    if (options.normalizeMentionsInContent && typeof outboundContent === "string") {
+      const present = new Set(scanMentionTokens(outboundContent));
+      const missingNames: string[] = [];
+      for (const id of mergedMentions) {
+        if (id === senderId) continue;
+        const p = participants.find((q) => q.agentId === id);
+        if (!p?.name) continue;
+        if (present.has(p.name.toLowerCase())) continue;
+        missingNames.push(p.name);
+      }
+      if (missingNames.length > 0) {
+        const prefix = missingNames.map((n) => `@${n}`).join(" ");
+        outboundContent = outboundContent.length > 0 ? `${prefix} ${outboundContent}` : prefix;
+      }
+    }
+
+    // 3. Store the message (with merged metadata + normalised content).
     const messageId = randomUUID();
     const [msg] = await tx
       .insert(messages)
@@ -93,7 +173,7 @@ async function sendMessageInner(
         chatId,
         senderId,
         format: data.format,
-        content: data.content,
+        content: outboundContent,
         metadata: metadataToStore,
         replyToInbox: data.replyToInbox ?? null,
         replyToChat: data.replyToChat ?? null,
@@ -102,30 +182,39 @@ async function sendMessageInner(
       })
       .returning();
 
-    // 4. Fan-out: create inbox entries for participants who should see this
-    //    message. Rules:
+    // 4. Fan-out: create inbox entries for every non-sender participant.
+    //    The `notify` flag splits them in two:
+    //    - `notify=true`  — wakes the recipient's session (the existing path).
+    //    - `notify=false` — silent context row, written so a future active
+    //      delivery to the same chat can replay it as preceding history.
+    //
+    //    Rules:
     //    - sender is always filtered out (no self-delivery).
-    //    - `full` mode participants always receive.
-    //    - `mention_only` participants receive only when in `mentions`.
-    //    See proposals/hub-agent-messaging-reply-and-mentions §3.5. Filtering
-    //    server-side means mention_only agents don't wake their session over
-    //    irrelevant chatter and the client runtime never has to double-guard.
+    //    - `full` mode participants always get notify=true.
+    //    - `mention_only` participants get notify=true only when in `mentions`,
+    //      otherwise notify=false (silent context).
+    //
+    //    Replaces the previous "filter mention_only out at fan-out time" rule
+    //    so a `mention_only` agent that gets @mentioned later can still see
+    //    the chat history it missed — see proposals/group-chat-ux-improvements §1.
     const mentionSet = new Set(mergedMentions);
     const entries = participants
       .filter((p) => p.agentId !== senderId)
-      .filter((p) => p.mode !== "mention_only" || mentionSet.has(p.agentId))
       .map((p) => ({
         inboxId: p.inboxId,
         messageId,
         chatId,
+        notify: p.mode !== "mention_only" || mentionSet.has(p.agentId),
       }));
 
     if (entries.length > 0) {
       await tx.insert(inboxEntries).values(entries);
     }
 
-    // Collect recipient inboxIds for notification
-    const recipients = entries.map((e) => e.inboxId);
+    // Collect recipient inboxIds for notification — only the `notify=true`
+    // entries actually wake a session. Silent entries piggy-back on the next
+    // active delivery to the same chat (see services/inbox.ts pollInbox).
+    const recipients = entries.filter((e) => e.notify).map((e) => e.inboxId);
 
     // 4. replyTo routing: if this message replies to another message that has a replyTo,
     //    create an additional inbox entry for the original requester
@@ -202,15 +291,32 @@ export async function sendToAgent(
   // Find or create direct chat
   const chat = await findOrCreateDirectChat(db, senderUuid, target.uuid);
 
-  // Send message via existing sendMessage
-  return sendMessage(db, chat.id, senderUuid, {
-    format: data.format,
-    content: data.content,
-    metadata: data.metadata,
-    replyToInbox: data.replyToInbox,
-    replyToChat: data.replyToChat,
-    source: data.source,
-  });
+  // The receiver is explicit (`<name>`); merge them into metadata.mentions so
+  // sendMessage's step 2c will prepend `@<name>` to content. One uniform
+  // injection path means agent-to-agent and result-sink replies use exactly
+  // the same logic — no risk of the two drifting on edge cases.
+  const incomingMeta = (data.metadata ?? {}) as Record<string, unknown>;
+  const existingMentionsRaw = incomingMeta.mentions;
+  const existingMentions = Array.isArray(existingMentionsRaw)
+    ? existingMentionsRaw.filter((m): m is string => typeof m === "string")
+    : [];
+  const mergedMentions = existingMentions.includes(target.uuid) ? existingMentions : [...existingMentions, target.uuid];
+  const metadata = { ...incomingMeta, mentions: mergedMentions };
+
+  return sendMessage(
+    db,
+    chat.id,
+    senderUuid,
+    {
+      format: data.format,
+      content: data.content,
+      metadata,
+      replyToInbox: data.replyToInbox,
+      replyToChat: data.replyToChat,
+      source: data.source,
+    },
+    { normalizeMentionsInContent: true },
+  );
 }
 
 export async function editMessage(

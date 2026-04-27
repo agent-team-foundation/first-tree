@@ -703,6 +703,7 @@ export class SessionManager {
       format: msg.format,
       content: msg.content as string | Record<string, unknown>,
       metadata: msg.metadata,
+      precedingMessages: msg.precedingMessages ?? [],
     };
   }
 

@@ -1,4 +1,8 @@
-import type { InboxEntryWithMessage, InReplyToSnapshot } from "@agent-team-foundation/first-tree-hub-shared";
+import type {
+  InboxEntryWithMessage,
+  InReplyToSnapshot,
+  PrecedingMessage,
+} from "@agent-team-foundation/first-tree-hub-shared";
 import type { SessionMessage } from "../runtime/handler.js";
 
 /**
@@ -50,6 +54,7 @@ export function mockEntry(
     inReplyToSnapshot?: InReplyToSnapshot;
     recipientMode?: "full" | "mention_only";
     metadata?: Record<string, unknown>;
+    precedingMessages?: PrecedingMessage[];
     /** Override the derived `message.id` — needed when two entries share a
      * messageId but differ on chatId (the replyTo cross-chat routing shape). */
     messageId?: string;
@@ -82,6 +87,7 @@ export function mockEntry(
       configVersion: 1,
       recipientMode: opts.recipientMode ?? "full",
       inReplyToSnapshot: opts.inReplyToSnapshot ?? null,
+      precedingMessages: opts.precedingMessages ?? [],
     },
   };
 }

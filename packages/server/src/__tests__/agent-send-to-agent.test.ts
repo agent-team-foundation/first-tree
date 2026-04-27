@@ -15,14 +15,16 @@ describe("Agent Send-to-Agent API", () => {
     });
     expect(res.statusCode).toBe(201);
     const msg = res.json();
-    expect(msg.content).toBe("Hello agent!");
+    // Server prepends @<targetName> so the recipient always sees the explicit
+    // mention regardless of chat type — see agent-send-mention-injection.test.ts.
+    expect(msg.content).toBe(`@${a2.agent.name} Hello agent!`);
     expect(msg.chatId).toBeDefined();
 
     const pollRes = await a2.request("GET", "/api/v1/agent/inbox");
     expect(pollRes.statusCode).toBe(200);
     const entries = pollRes.json();
     expect(entries.length).toBeGreaterThanOrEqual(1);
-    expect(entries[0].message.content).toBe("Hello agent!");
+    expect(entries[0].message.content).toBe(`@${a2.agent.name} Hello agent!`);
   });
 
   it("reuses existing direct chat for same pair", async () => {

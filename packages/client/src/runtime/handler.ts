@@ -99,6 +99,23 @@ export type SessionMessage = {
   content: string | Record<string, unknown>;
   /** Optional metadata. */
   metadata: Record<string, unknown> | null;
+  /**
+   * Group-chat history the recipient missed (mention_only + not @mentioned)
+   * up to this triggering message. Sorted oldest-first. Server attaches and
+   * also acks these — the runtime only renders them as preceding context in
+   * the prompt; it must NOT try to ack them individually.
+   * See proposals/group-chat-ux-improvements §1 (silent inbox).
+   */
+  precedingMessages?: PrecedingMessage[];
+};
+
+export type PrecedingMessage = {
+  id: string;
+  senderId: string;
+  format: string;
+  content: unknown;
+  metadata: Record<string, unknown>;
+  createdAt: string;
 };
 
 /**
