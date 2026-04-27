@@ -15,6 +15,7 @@ import { LoginPage } from "./pages/login.js";
 import { SettingsPage } from "./pages/settings.js";
 import { SetupPage } from "./pages/setup.js";
 import { SignupPage } from "./pages/signup.js";
+import { WelcomeAgentPage } from "./pages/welcome-agent.js";
 import { WelcomeConnectPage } from "./pages/welcome-connect.js";
 import { WorkspacePage } from "./pages/workspace/index.js";
 
@@ -54,6 +55,7 @@ export function App() {
                     column flow that the design doc spec'd as "screen
                     centre, no nav". */}
                 <Route path="welcome/connect" element={<WelcomeConnectPage />} />
+                <Route path="welcome/agent" element={<WelcomeAgentPage />} />
                 <Route
                   element={
                     <PulseProvider>

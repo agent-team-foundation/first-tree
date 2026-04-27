@@ -7,6 +7,7 @@ import { CommandPalette } from "../pages/workspace/palette/command-palette.js";
 import { FirstTreeLogo } from "./first-tree-logo.js";
 import { NotificationBell } from "./notification-bell.js";
 import { ThemeToggle } from "./ui/theme-toggle.js";
+import { WorkspaceSwitcher } from "./workspace-switcher.js";
 
 const navTabs = [
   { to: "/", label: "Workspace", end: true, kbd: "⌘1" },
@@ -120,6 +121,15 @@ export function Layout() {
             <span>Jump to…</span>
             <span className="kbd">⌘K</span>
           </button>
+          <span
+            style={{
+              width: 1,
+              height: 18,
+              background: "var(--border)",
+              margin: "0 var(--sp-1)",
+            }}
+          />
+          <WorkspaceSwitcher />
           <span
             style={{
               width: 1,

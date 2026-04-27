@@ -1,4 +1,4 @@
-import type { WorkspaceListItem } from "@agent-team-foundation/first-tree-hub-shared";
+import type { OnboardingState, WorkspaceListItem } from "@agent-team-foundation/first-tree-hub-shared";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useState } from "react";
 import { login as loginApi } from "../api/auth.js";
 import { api, clearStoredTokens, getStoredTokens, setStoredTokens } from "../api/client.js";
@@ -6,7 +6,13 @@ import { listMyWorkspaces, switchOrganization as switchOrgApi } from "../api/wor
 
 type MeResponse = {
   user: { id: string } | null;
-  member: { id: string; role: string; agentId: string };
+  member: {
+    id: string;
+    role: string;
+    agentId: string;
+    onboardingState: OnboardingState | null;
+  };
+  wizard: { hasConnectedClientElsewhere: boolean };
 };
 
 type AuthContextValue = {
@@ -34,6 +40,21 @@ type AuthContextValue = {
    * falsely auto-advance.
    */
   userId: string | null;
+  /**
+   * Wizard checkpoint stored on `members.onboarding_state` for the
+   * current member. `null` either means this is a brand-new
+   * membership (wizard hasn't run yet) OR the token is rootless. The
+   * wizard pages use this together with `hasConnectedClientElsewhere`
+   * to pick the right step.
+   */
+  onboardingState: OnboardingState | null;
+  /**
+   * Cross-workspace skip signal (P0-5): the user has a connected client
+   * in some OTHER workspace, so the Connect screen for THIS workspace
+   * is redundant — they already proved the prerequisites work. The
+   * wizard auto-advances Step 1 when this is true.
+   */
+  hasConnectedClientElsewhere: boolean;
   /** Legacy username + password sign-in. Self-host path. */
   login: (username: string, password: string) => Promise<void>;
   /**
@@ -63,6 +84,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [memberId, setMemberId] = useState<string | null>(null);
   const [agentId, setAgentId] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
+  const [onboardingState, setOnboardingState] = useState<OnboardingState | null>(null);
+  const [hasConnectedClientElsewhere, setHasConnectedClientElsewhere] = useState(false);
   const [organizationId, setOrganizationId] = useState<string | null>(null);
   const [workspaces, setWorkspaces] = useState<WorkspaceListItem[] | null>(null);
 
@@ -76,6 +99,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUserId(null);
     setOrganizationId(null);
     setWorkspaces(null);
+    setOnboardingState(null);
+    setHasConnectedClientElsewhere(false);
   }, []);
 
   /**
@@ -110,6 +135,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setMemberId(null);
       setAgentId(null);
       setUserId(null);
+      setOnboardingState(null);
+      setHasConnectedClientElsewhere(false);
       return;
     }
 
@@ -120,6 +147,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setMemberId(data.member.id);
       setAgentId(data.member.agentId);
       setUserId(data.user?.id ?? null);
+      setOnboardingState(data.member.onboardingState ?? null);
+      setHasConnectedClientElsewhere(data.wizard?.hasConnectedClientElsewhere ?? false);
     } catch {
       // /me failed despite memberships existing — leave member state null
       // and let the caller decide (typical case: token's organizationId
@@ -128,6 +157,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setRole(null);
       setMemberId(null);
       setUserId(null);
+      setOnboardingState(null);
+      setHasConnectedClientElsewhere(false);
       setAgentId(null);
     }
   }, []);
@@ -187,6 +218,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         agentId,
         organizationId,
         userId,
+        onboardingState,
+        hasConnectedClientElsewhere,
         login,
         signInWithTokens,
         switchWorkspace,
