@@ -22,9 +22,7 @@ export const gardenerCommand: CommandModule = {
       command
         .command(subcommand.name)
         .description(subcommand.description)
-        .action(() => {
-          console.log(`first-tree gardener ${subcommand.name} is not implemented yet.`);
-        });
+        .action(subcommand.action);
     }
   },
 };

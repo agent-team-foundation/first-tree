@@ -28,9 +28,7 @@ export const hubCommand: CommandModule = {
       command
         .command(subcommand.name)
         .description(subcommand.description)
-        .action(() => {
-          console.log(`first-tree hub ${subcommand.name} is not implemented yet.`);
-        });
+        .action(subcommand.action);
     }
   },
 };

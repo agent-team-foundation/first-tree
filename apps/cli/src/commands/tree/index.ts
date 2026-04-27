@@ -28,9 +28,7 @@ export const treeCommand: CommandModule = {
       command
         .command(subcommand.name)
         .description(subcommand.description)
-        .action(() => {
-          console.log(`first-tree tree ${subcommand.name} is not implemented yet.`);
-        });
+        .action(subcommand.action);
     }
   },
 };

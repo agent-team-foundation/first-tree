@@ -32,9 +32,7 @@ export const breezeCommand: CommandModule = {
       command
         .command(subcommand.name)
         .description(subcommand.description)
-        .action(() => {
-          console.log(`first-tree breeze ${subcommand.name} is not implemented yet.`);
-        });
+        .action(subcommand.action);
     }
   },
 };
