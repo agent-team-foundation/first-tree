@@ -17,27 +17,31 @@
 ### 1.2 目标
 
 1. 新用户从访问 `https://hub.first-tree.ai` 到第一个 agent online,**< 5 分钟**
-2. 邀请队友:发邮件 → 队友点链接 → 自助完成 onboarding,**无需联系发起人**
+2. 邀请队友:admin 生成链接 → 通过任意 IM 渠道发出 → 队友点链接自助加入,**无需联系发起人**
 3. 现有 self-host 命令对终端用户隐藏(代码保留供运维 / 内部使用)
 
 ### 1.3 范围
 
 **In Scope**
-- Web:注册、登录、`/workspaces`、引导向导、邀请管理
-- 后端:schema 改造(email-based identity)、auth 新路由、invitations 表
+- Web:GitHub OAuth 注册、`/setup`、引导向导、邀请管理
+- 后端:schema 改造(`users.email` + `auth_providers` + `invitations`)、auth 新路由
 - CLI:简化 `connect` 命令,默认指向官方域名
 
 **Out of Scope**(本期不做)
+- Email OTP / magic link 等邮箱认证(2.1)
+- **任何邮件投递通道**(welcome / 邀请邮件 / OTP / nudge — 都不做)
 - 付费 / Stripe / 计费配额(2.2)
-- 任意人可接受的 share link(2.3)
-- Activation funnel 埋点(2.5)
+- 邀请 link 的 rotate / expiry / 多 link / per-recipient 单次使用(2.3 — 都是 v2)
+- 邀请发送时直接给 admin 角色(2.3 — admin 提权由 Settings → Members 完成)
+- "登录后自动检测 pending invitations"(2.3 — 路径 3 模型不支持)
+- Activation funnel 埋点(2.6)
 - Cookie banner / GDPR 合规
 - Cross-device session 管理 / 远程登出
 
 ### 1.4 成功定义
 
-- 新用户 onboarding 完成率 ≥ 70%(Stage 0 → Stage 3)
-- 受邀人无需联系发起人即可加入 org
+- 新用户 onboarding 完成率 ≥ 70%(注册 → 第一个 agent online)
+- 受邀人无需联系发起人即可加入 workspace
 - 0 用户因被锁在 self-host 配置外而流失
 
 ---
@@ -48,42 +52,54 @@
 
 | 决策 | 选择 | 理由 |
 |---|---|---|
-| 认证方式 | GitHub OAuth + Email OTP(6 位验证码)并存 | **无密码方案**:不存 bcrypt,每次登录都是一次性 token。OAuth 主推(`/signup` 大按钮),OTP 兜底。OTP 比 magic link 在国内邮件场景更稳(避开 QQ/微信邮箱链接拦截) |
-| 账号归并 | 一邮箱 = 一账号(UNIQUE);GitHub 与 OTP 按 email 自动归并 | 同人不会有两个账号;GitHub 作为已绑定 provider 共存 |
+| 认证方式 | **仅 GitHub OAuth**(无密码、无 OTP)| 目标用户是工程师,GitHub 是默认装备;一键登录最顺;省去邮件服务依赖。"Continue with GitHub" 单按钮,决策疲劳为 0 |
+| `users.email` 字段 | 保留,从 GitHub 回调取 primary email,UNIQUE NOT NULL | 给后续扩展(notification、邮件邀请 v2、SCIM 等)留路;不主动用,但白存 |
+| 账号归并 | 一 GitHub 账号 = 一 user 记录;按 GitHub `provider_user_id` 归并 | 同人不会有两个账号;email 仅作辅助标识 |
 
-### 2.2 组织模型
+### 2.2 组织 / Workspace 模型
 
 | 决策 | 选择 | 理由 |
 |---|---|---|
-| 注册与组织解耦 | 注册只建 user;创建/加入 org 是后续动作 | 数据模型本就是 user × org 多对多;被邀请用户不必先建废 org;0 org 用户允许存在(先看看再说) |
-| Plan 配额 | 暂不做付费,所有用户同 plan;仅依赖现有 `organizations.maxAgents` 软限 | 减少 onboarding 复杂度;到需要收费时再加 |
+| 用户面术语 | **workspace**(DB 仍叫 `organizations`)| 跟 Slack / Linear / Notion / Multica 一致;DB 内部不动避免 schema rename |
+| 注册与 workspace 解耦 | 注册只建 user;workspace 由用户**显式** Create / Join | 不自动建避免僵尸 workspace + 用户感受被塞;符合"诚实"原则 |
+| Plan 配额 | 暂不做付费,所有用户同 plan;仅依赖现有 `organizations.maxAgents` 软限 | 减少 onboarding 复杂度 |
 
 ### 2.3 邀请
 
 | 决策 | 选择 | 理由 |
 |---|---|---|
-| 形态 | 仅邮件邀请(`invitations.email NOT NULL`);**不做** "Generate share link"(任意人可接受) | 简化心智 + 防错邀让陌生人加入 |
-| 角色默认 | member;admin 须显式选 | 低权默认 |
-| 邮箱匹配 | 严格匹配:`invitation.email == 登录账号.email` 才能 accept | 防陌生人(同邮箱被回收 / 错邀)意外加入 |
-| Pending 自动展示 | 登录后 `/workspaces` 按 user.email 自动查 pending invitations 并显示 | 不依赖邮件触达 — 邮件被拦截也能看到。Linear / Notion / Vercel 标配 |
-| 链接复制 | 已发出的 invitation 仍可"复制邀请链接"到 Slack/微信 | 安全模型不变(接受时仍要求邮箱匹配),只是触达多渠道 |
+| 形态 | **每个 workspace 一条公共 share link**(多次使用),角色固定 member | 像 Discord / Slack 的 workspace 邀请 link;admin 复制一次即可在 IM 群里发广播,小团队场景最顺 |
+| 角色 | 固定 **member**;不支持邀请时直接给 admin | v1 简化:admin 提权场景不常见;新成员 join 后由 workspace admin 在 Settings 提权即可 |
+| 字段 | 仅 `token`,无 email、无 GitHub username、无 label、无 expiry、无 single-use | 简化到极致;v2 再加 rotate / expiry |
+| Token 生成时机 | workspace 创建时立即生成,持久化在 `organizations.invite_token` 字段 | lazy 也行,但 eager 更简单(用户进 Step 4 直接看到现成 link) |
+| Rotate(轮换 token)| **本期不做**;token 一旦泄露暂时只能容忍 | v2 再做 |
+| 自动检测 pending | **不做**(无 per-recipient 概念,也没东西可"自动检测")| 受邀人只能通过 admin 给的链接 access |
+| 接受时校验 | token 与某 workspace 的 `invite_token` 匹配即可 | 任何登录用户拿到有效链接即可 accept |
+| 谁能看 invite link | 仅 workspace admin 可见(`/welcome` Step 4 + Settings → Members)| member 看不到 → 不能未经 admin 同意拉外人入伙 |
 
 ### 2.4 Agent Runtime
 
 | 决策 | 选择 | 理由 |
 |---|---|---|
-| 当前支持 | 用户本机 Claude Code(唯一已实现的 agent CLI) | Stage 1 的 `first-tree-hub connect` 是必经路径 |
+| 当前支持 | 用户本机 Claude Code(唯一已实现的 agent CLI) | "连机器"是必经路径 |
 | 未来扩展 | Codex / OpenCode 等显示 coming soon | UI 占位,云端 runtime 更晚 |
 | OS 支持 | macOS + Linux 一键安装;Windows 显式不支持(banner 提示走 WSL) | 对齐现有 daemon 限制 |
 
-### 2.5 基础设施
+### 2.5 引导向导(Wizard)
 
 | 决策 | 选择 | 理由 |
 |---|---|---|
-| 域名 | `hub.first-tree.ai`,Web/API/WS/邀请同主域 | 跟产品名严格对齐;同域免 CORS 配置;邮件发件 `noreply@hub.first-tree.ai` |
+| 进度条 | **不做**进度条 | 4 步以上的进度条压力大;每屏只有 "Continue",自然推进;Linear / Vercel / Cursor 标准做法 |
+| Workspace setup 是否算 wizard 步骤 | **不算**;`/setup` 是 wizard 之前的强制前置门槛 | Workspace setup 是 cross-workspace 动作;wizard 内 4 步是 in-workspace 配置,概念不同 |
+| 实现形式 | `/setup` 路由作 modal 载体;新用户和老用户(开第二个 workspace 时)共用同一个 modal | 单组件复用;UI 一致 |
+
+### 2.6 基础设施
+
+| 决策 | 选择 | 理由 |
+|---|---|---|
+| 域名 | `hub.first-tree.ai`,Web/API/WS/邀请同主域 | 跟产品名严格对齐;同域免 CORS 配置 |
 | 默认语言 | 英文,中文按 `Accept-Language` 兜底 | 产品定位海外为主 |
 | Self-host 命令 | 保留代码,从 CLI help 隐藏(Commander `hidden: true`) | 给内部运维 + 未来 enterprise 留口子 |
-| 邮件发件服务商 | 待定(Resend / SES / Postmark) | 见开放问题 §8 |
 | 埋点 | 本期不接 | 流量小,先跑通比看数据重要;后续可选 PostHog |
 
 ---
@@ -92,8 +108,8 @@
 
 | 角色 | 描述 | 进入路径 |
 |---|---|---|
-| **Alex** — 创始人 / admin | 创业团队工程师;本机已装 Claude Code、Node 22、有 GitHub 账号 | 主动注册,创建 org,邀请队友 |
-| **Bob** — 被邀请的成员 | Alex 的同事;可能已注册或未注册;自己机器需装 CLI | 收到 Alex 的邀请邮件,或自主注册后看到 pending invitation |
+| **Alex** — 创始人 / admin | 创业团队工程师;本机已装 Claude Code、Node 22、有 GitHub 账号 | 自主注册 → Create workspace → 走 wizard → 邀请队友 |
+| **Bob** — 被邀请的成员 | Alex 的同事;Slack 收到 Alex 发的邀请链接 | 点链接 → GitHub OAuth → 自动 accept → 走 wizard |
 
 ---
 
@@ -102,75 +118,145 @@
 ### 4.1 总览图
 
 ```
-[官网] ─→ /signup ─→ GitHub OAuth / Email OTP ─→ user 账号建好
-                              ↓
-                    ┌──── /workspaces ────┐
-                    ↓                     ↓
-              [创建 org]      [pending invitation 卡片]
-                    └──── ↓ (跳进 /welcome) ────┘
-                          │
-   Stage 1 · 连接电脑 → Stage 2 · 创建 Agent →
-   Stage 3 · 进入 Workspace → Stage 4 · 邀请(可跳过) →
-                          ↓
-                  [Workspace 日常]
-
-(邀请也可来自:点邮件/Slack 链接 → /invite/<token> → /workspaces)
+[官网 hub.first-tree.ai] → /signup → "Continue with GitHub" → GitHub OAuth
+                                                                  ↓
+                                                          回调检查 next 参数
+                                                                  ↓
+                                       ┌──────────────────────────┴──────────────────────────┐
+                                       ↓                                                     ↓
+                              next=/invite/<token>                                  无 invite 上下文
+                                       ↓                                                     ↓
+                              自动 accept invitation                                      跳 /setup
+                                       ↓                                                     ↓
+                                       ↓                                          modal 弹出 (Create / Join)
+                                       ↓                                                     ↓
+                                       └──────────────── 进 /welcome ────────────────────────┘
+                                                            (wizard,无进度条)
+                                                                  ↓
+                                                Step 1: Connect computer
+                                                                  ↓
+                                                Step 2: Create your first agent
+                                                                  ↓
+                                                Step 3: Workspace(进入主面板)
+                                                                  ↓
+                                                Step 4: Invite teammates(可跳过)
+                                                                  ↓
+                                                       [ Workspace 日常 ]
 ```
 
-### 4.2 Stage 0 · 注册账号
+### 4.2 Step 0(隐式)· 注册账号 · `/signup`
 
-注册只产生 user 账号,**不强制创建 org**。
+注册只产生 user 账号,**不创建 workspace、不创建 member、不创建 agent**。
 
-1. Alex 打开 `https://hub.first-tree.ai`,落地页 → 点 "Get Started" → `/signup`
-2. 选择登录方式:
-   - **Continue with GitHub**(主):跳转 GitHub 授权 → 回调拿 primary email + provider id → 后端按 email 查 `users`;不存在就建,存在就关联 GitHub 到 `auth_providers`
-   - **Continue with Email**(次):填邮箱 → 收 6 位 OTP(5 分钟有效)→ 回填 → 同上邮箱归并
-3. 落到 `/workspaces`
+1. 用户打开 `https://hub.first-tree.ai`,落地页 → 点 `Get Started` → `/signup?next=<optional>`
+2. 页面只有一个大按钮:**Continue with GitHub**
+3. 点击 → 跳 GitHub OAuth → 用户授权(scopes:`read:user` + `user:email`)→ 回调到 `/api/v1/auth/github/callback?code=xxx&state=xxx`
+4. 后端处理回调:
+   - 用 code 换 access_token
+   - 拿 GitHub user info(login、id、primary email)
+   - 按 `auth_providers.provider_user_id` 查 → 不存在则建 `users` 行(`email = github primary` 或 noreply 兜底)+ `auth_providers` 行
+   - 颁发 access/refresh JWT,写 cookie
+5. **路由判定**(关键):
+   - 如果 `next` 参数指向 `/invite/<token>` → 见 §4.3 直接走 accept 分支
+   - 否则 → 跳 `/setup`,弹 Create/Join modal
 
-> **后端事务**:仅写 `users`(+ `auth_providers` 若 GitHub 路径)。**不**创建 org / member / agent
+### 4.3 路径 A · 通过邀请链接进入(被邀请人)
 
-### 4.3 Stage 0.5 · 选择工作空间(`/workspaces`)
+```
+Bob 在 Slack 看到 Alex 发的链接:https://hub.first-tree.ai/invite/abc123
+                                          ↓
+                                     点击,落到 /invite/abc123
+                                          ↓
+                          后端按 token 查 organizations.invite_token
+                                          ↓
+                                 找到对应 workspace
+                                          ↓
+                              ┌──── Bob 是否登录? ────┐
+                              ↓                       ↓
+                            未登录                  已登录
+                              ↓                       ↓
+              跳 /signup?next=/invite/abc123          ↓
+                              ↓                       ↓
+                         GitHub OAuth                 ↓
+                              ↓                       ↓
+                       回调检测 next 参数              ↓
+                              ↓                       ↓
+                              └─────────┬─────────────┘
+                                        ↓
+                                 加入 workspace
+                                        ↓
+                            建 members(role=member)
+                            + Bob 在该 workspace 的 human agent
+                                        ↓
+                                 跳进 /welcome
+                                 (不弹 /setup modal)
+```
 
-进入此页时,**后端必查一次** `invitations WHERE email=user.email AND status=pending`,把待接受邀请展示在顶部(decision 2.3)。
+**边界**:
+- token 不匹配任何 workspace → 落地页给错误文案 "This invite link isn't valid. Ask your admin for the correct link."
+- Bob 已经是该 workspace 的 member → 跳进该 workspace 的 `/`(不重复加入)
+- Bob 已经有别的 workspace → 加入完成后该 workspace 加到他的列表,顶部 dropdown 切换
 
-| 用户状态 | UI 表现 |
+### 4.4 路径 B · 主动注册(创建者)· `/setup` modal
+
+适用于:Alex 这种自主访问 hub 注册的用户。GitHub OAuth 完成后,后端检测 next 无 invite,跳 `/setup`。
+
+`/setup` 是一个**承载 modal 的路由**,modal 强制弹出,不能 dismiss(用户必须 Create 或 Join,否则没有 workspace 进不了 `/`)。
+
+```
+┌────────────────────────────────────────────────────────┐
+│   Get started with First Tree Hub 👋                   │
+│                                                        │
+│   ────  I'm the admin · Create our workspace  ────     │
+│                                                        │
+│   Workspace name                                       │
+│   [ Acme Engineering                            ]      │
+│   ↳ acme-engineering · ✅ available                    │
+│                                                        │
+│            [ Create workspace ]                        │
+│                                                        │
+│   ─────────────────  or  ───────────────────────       │
+│                                                        │
+│   ────  I was invited · Join my team  ────             │
+│                                                        │
+│   Paste the invite link your admin shared              │
+│   [ https://hub.first-tree.ai/invite/...        ]      │
+│                                                        │
+│            [ Join workspace ]                          │
+│                                                        │
+└────────────────────────────────────────────────────────┘
+```
+
+**Create 提交**:
+1. 实时校验 name → slug 冲突自动建议(`acme-engineering` 已占 → 建议 `acme-engineering-7f2x`)
+2. 提交 → 后端事务建 `organizations` + `members(role=admin)` + 当前 user 的 human `agents` 行
+3. 跳 `/welcome`(进 wizard)
+
+**Join 提交**(兜底场景:Bob 拿到链接但没直接点而是先来注册):
+1. 用户粘贴**完整 URL** 或裸 token,前端正则提取
+2. 提交 → 后端等价于 `/invite/<token>` accept 流程(§4.3 后半段)
+3. 跳 `/welcome`(进 wizard)
+
+**老用户访问 `/setup`**:dropdown 里点 [ + Create another workspace ] / [ + Join with link ] → 同一个 modal,作为 dialog 渲染在当前页面之上(不导航走);成功后进入新 workspace。
+
+**错误文案**:
+
+| 场景 | 文案 |
 |---|---|
-| 0 个 membership,**有** pending | 顶部高亮 `Acme invited you to join as member · [ Accept ] [ Decline ]`(多条堆叠);下方仍可 `[ + 创建组织 ]` |
-| 0 个 membership,**无** pending | 主面板单卡 `[ + 创建组织 ]`;底部小字 "Expecting an invitation? Make sure you logged in with the same email it was sent to." |
-| 1 个 membership,无 pending | 自动跳转进 `/`(单 org 不停留) |
-| 1+ 个 membership,有 pending | 顶部 pending 卡片 + 下方 org 列表,**不**自动跳转 |
-| N 个 membership | 列出每个 org(name + role + 上次进入时间);顶部 `+ Create organization` |
+| 名字太短 | `Workspace name must be at least 2 characters` |
+| 名字太长 | `Workspace name must be under 50 characters` |
+| slug 已占 | `This name is taken. Try acme-eng-7f2x?`(自动建议变体)|
+| 含非法字符 | `Use letters, numbers, spaces, and hyphens only` |
+| 链接格式错 | `Doesn't look like a valid invite link` |
+| token 不存在 / 不匹配任何 workspace | `This invite link isn't valid. Ask your admin for the correct link.` |
 
-#### 4.3.1 路径 A · 创建 org
+### 4.5 `/welcome` Wizard · Step 1 · 连接你的电脑
 
-1. 点 `[ 创建组织 ]` → 弹窗:Organization name + (可选)Your role
-2. 提交 → 后端事务:`organizations` + `members(role=admin)` + 当前 user 的 human `agents` 行
-3. 跳进 `/welcome` 走向导(Stage 1–4)
-
-#### 4.3.2 路径 B · 接受邀请
-
-两个入口都汇合到同一份 invitation:
-
-**B1 · 点链接(主动)** — 来源:邮件 / Slack / 微信 / 口述粘贴
-1. 点 `https://hub.first-tree.ai/invite/<token>` → 后端读 invitation
-2. 未登录 → 跳 `/signup?next=/invite/<token>`,登录/注册后回此页
-3. 已登录,email 严格匹配 → 一键 `[ Accept ]`
-4. 已登录,email 不匹配 → 提示 "This invitation was sent to `bob@acme.com`. `[ Switch to that account ]`"(无"用当前账号接受"逃生口,decision 2.3)
-
-**B2 · 登录后自动看到(被动)**
-1. 用 `bob@acme.com` 登录 → 落到 `/workspaces`
-2. 后端按 email 查 pending → 顶部高亮卡片
-3. 点 `[ Accept ]` / `[ Decline ]`
-
-**Accept 后续(B1/B2 共用)**:后端事务 `invitations.status='accepted' + accepted_by/at` + `members(role=invitation.role)` + 给 user 在该 org 起一个 human `agents` 行 → 跳进 `/welcome`
-
-### 4.4 Stage 1 · 向导 1/4 · 连接你的电脑
-
-进度条 `1 / 4 · Connect Computer`。
+**无进度条**。屏幕中央展示当前步骤,顶部显示 workspace 名,右上角 logout 入口。
 
 1. **介绍**:"First Tree Hub 通过你机器上的 agent CLI(目前 Claude Code,Codex 等接入中)执行任务"
 2. **Prerequisite 双检查**:`node -v && claude --version && claude auth status`
-   - 任一失败按 OS 给修复命令(brew / apt / nvm + Claude Code 安装脚本)
+   - 任一失败按 OS 给修复命令(brew / apt / nvm + Claude Code 官方安装脚本)
    - macOS / Linux 一键命令;Windows 显式不支持,banner 提示走 WSL
 3. **Web 生成 connect token**(10–15 分钟有效)+ 一键复制完整命令:
    ```bash
@@ -178,53 +264,75 @@
    first-tree-hub connect --token eyJhbG...
    ```
 4. CLI 单条命令完成:token 兑换 → 写 `client.yaml` → 装后台服务 → 启动 daemon → WS 连官方 hub
-5. **Web 实时反馈**:"Waiting for your computer..." → 检测到 `clients` 行 `status=connected` → "✅ Alex's MacBook Air 已连接"
+5. **Web 实时反馈**:"Waiting for your computer..." → 检测到 `clients` 行 `status=connected` → "✅ Alex's MacBook Air 已连接" → `[ Continue ]` 按钮亮起
 
-**失败恢复**(P0):60s 没连上展开 troubleshoot 折叠面板;token 过期自动 `[ Generate new token ]`;CLI 端错误回写 server,Web 拉来显示人话错误
+**失败恢复**(P0):
+- 60s 没连上 → 展开 troubleshoot 折叠面板
+- token 过期 → 自动 [ Generate new token ]
+- CLI 端连接错误 → 回写 server,Web 拉来显示人话错误
 
 > **复用代码**:[connect.ts](../packages/command/src/commands/connect.ts)、[resolver.ts](../packages/shared/src/config/resolver.ts) 的 `client.yaml` 写入、launchd/systemd 服务安装(已有)
 > **新增**:Web 上的 connect token 生成 UI、轮询 client 上线、`first-tree-hub connect` 默认指向官方域名
 
-### 4.5 Stage 2 · 向导 2/4 · 创建第一个 Agent
+### 4.6 Wizard · Step 2 · 创建第一个 Agent
 
-进度条 `2 / 4 · Create Agent`。复用 [`NewAgentDialog`](../packages/web/src/components/new-agent-dialog.tsx),内嵌进向导:
+复用 [`NewAgentDialog`](../packages/web/src/components/new-agent-dialog.tsx) 内嵌进 wizard:
 
 1. **Agent name**(自动 slugify);冲突时实时提示并自动建议附加 4 位随机短码
-2. **Where it runs**:Stage 1 的 client(自动选中);多机器时给下拉
+2. **Where it runs**:Step 1 的 client(自动选中);多机器时给下拉
 3. **Powered by**:Claude Code(默认 / 当前唯一);Codex / OpenCode disabled · "coming soon"
 4. **高级**(可折叠):model、prompt 模板。默认值用 PR [#161](https://github.com/agent-team-foundation/first-tree-hub/pull/161) 引入的 opus + 通用 prompt
 5. 提交 → 后端创建 `agents` 行 → server 推 `agent:pinned` → daemon 拉起 Claude Code → Web 显示 "✅ Agent online"
 
-**Agent 状态机**:`creating → pinning → starting → online / failed`,失败把 daemon 错误翻译成人话
+**Agent 状态机**:`creating → pinning → starting → online / failed`,失败把 daemon 错误翻译成人话。
 
-### 4.6 Stage 3 · 向导 3/4 · 进入 Workspace
+### 4.7 Wizard · Step 3 · 进入 Workspace
 
-进度条 `3 / 4 · Workspace`。**最低成本版本**:不要求用户真发消息,进 Workspace 就算完成。
+**最低成本版本**:不要求用户真发消息,进 Workspace 就算完成。
 
-1. Stage 2 完成 → 直接进 Workspace,左侧已选中刚创建的 agent
+1. Step 2 完成 → 直接进入 Workspace 视图,左侧已选中刚创建的 agent
 2. 输入框 `placeholder` 写 `Try: "介绍一下你能做什么"` — 仅 hint,不强制
-3. **进 Workspace 那一刻就算 Stage 3 完成**:`onboarding_state.current_step = 'invite_team'` 自动推进
+3. 进 Workspace 那一刻 wizard 自动推进:`onboarding_state.current_step = 'invite_team'`
 4. 顶部出现 `[ Continue → Invite Team ]` 按钮
 
 > **本期不追求 aha**,先跑通流程;v2 升级方向:agent 主动 seed 欢迎消息 / 任务示例卡片(类 Claude.ai)/ 对话式配置 agent 生成 append system prompt
 
-### 4.7 Stage 4 · 向导 4/4 · 邀请队友(可跳过)
+### 4.8 Wizard · Step 4 · 邀请队友(可跳过)
 
-进度条 `4 / 4 · Invite Team`。
+workspace 创建时已经自动生成了 `invite_token`,Step 4 直接展示这条链接:
 
-1. 邮箱输入框(支持多邮箱)+ 角色默认 member + 点 `Send invites`
-2. 后端为每邮箱建一行 `invitations(email NOT NULL, role, token, expires_at = now+7d)` → 发邮件
-3. 受邀人路径走 §4.3.2(B1 / B2 任一)
-4. `Skip for now` 完成向导 → 关闭进度条 → 进入正常 Workspace
+```
+┌──────────────────────────────────────────────────────┐
+│   Invite your team                                   │
+│                                                      │
+│   Anyone with this link can join Acme Engineering    │
+│   as a member.                                       │
+│                                                      │
+│   [ https://hub.first-tree.ai/invite/abc123def... ]  │
+│                                  [ Copy link ]       │
+│                                                      │
+│   Send this link via Slack, 微信, Email, or any      │
+│   other channel your team uses.                      │
+│                                                      │
+│   [ Skip for now ]              [ Done · Continue ]  │
+└──────────────────────────────────────────────────────┘
+```
 
-### 4.8 Stage 5 · 日常使用
+1. 默认显示 workspace 现有的 `organizations.invite_token` 拼接成的完整 URL
+2. [ Copy link ] 复制到剪贴板,提示 "Copied!" toast
+3. [ Done · Continue ] / [ Skip for now ] 都进入正常 Workspace
 
-向导关闭后:
+> 邀请的接受走 §4.3 路径 A — 受邀人点链接,GitHub 登录,自动加入 workspace。
+> Settings → Members 页同样展示这条 link + Copy 按钮(供后续随时取用)。
+
+### 4.9 日常使用
+
+Wizard 关闭后:
 - **Web 是主舞台**:agent 列表、对话、邀请新成员、配 prompt/model
 - **CLI 第一次 connect 之后不再用**,后台 service 永久运行
-- **加机器**:Settings → Computers → `Add another computer` → 重复 Stage 1
-- **切 org**:顶部 org switcher;加新 org 只能通过邮件邀请
-- **重新走向导**:Settings → `[ Restart onboarding ]`(P2-18)
+- **加机器**:Settings → Computers → `Add another computer` → 重复 Step 1 流程
+- **切 workspace**:顶部 dropdown;加新 workspace 通过 `/setup` modal(dropdown [ + Create / Join ])
+- **重新走向导**:Settings → `[ Restart onboarding ]`(P2-15)
 - **绑外部 IM**:Feishu / Slack adapter(已存在,不在 onboarding 范围)
 
 ---
@@ -235,8 +343,7 @@
 
 | 字段 | 改动 | 说明 |
 |---|---|---|
-| `email` | **新增** UNIQUE NOT NULL | 账号主标识,所有登录方式按 email 归并 |
-| `email_verified_at` | **新增** timestamptz nullable | OTP 验证 / GitHub 已校验 email 时设置 |
+| `email` | **新增** UNIQUE NOT NULL | 从 GitHub primary email 取;UNIQUE 防同人多账号;暂不主动用,留扩展 |
 | `username` | 保留,降级为可选 display handle | 不再作为登录标识 |
 | `password_hash` | 保留(self-host 兼容)+ SaaS 流程不写入 | 已有自部署用户兼容 |
 
@@ -256,42 +363,32 @@ auth_providers (
 )
 ```
 
-email OTP 不进 auth_providers(它本身就是 email 一致性校验,等价于本地 provider)。
+### 5.3 `organizations.invite_token` — 新增字段
 
-### 5.3 `invitations` — 新增
+每个 workspace 一条公共 share link,token 持久化在 `organizations` 表上。**不再需要独立的 `invitations` 表**。
 
-每行必须绑定具体邮箱(decision 2.3)。
+| 字段 | 改动 | 说明 |
+|---|---|---|
+| `invite_token` | **新增** TEXT UNIQUE NOT NULL | url-safe base64(32 字节随机),workspace 创建时自动生成 |
+| `invite_token_created_at` | **新增** timestamptz | 审计用,记录 token 何时生成;rotate 时更新(本期不做 rotate)|
 
-```
-invitations (
-  id               uuid v7 PK
-  organization_id  uuid → organizations.id
-  email            text NOT NULL    -- 目标邮箱;accept 时必须与登录账号 email 匹配
-  token            text UNIQUE      -- url-safe base64,邀请链接里的 <token>
-  role             text             -- 'admin' | 'member'
-  invited_by       uuid → users.id
-  expires_at       timestamptz      -- 默认 7 天
-  accepted_at      timestamptz nullable
-  accepted_by      uuid → users.id nullable
-  status           text             -- 'pending' | 'accepted' | 'expired' | 'revoked'
-  created_at
-  INDEX(organization_id, status), INDEX(email, status)
-)
-```
+`/invite/<token>` 落地时按 `organizations WHERE invite_token = ?` 单查找;命中即为有效 link,workspace 即邀请目标,角色固定 member。
+
+> v2 扩展空间:rotate(更新 token + invite_token_created_at)、expiry(加 invite_token_expires_at)、多 link(改回独立 `invitations` 表)。本期都不做。
 
 ### 5.4 `members.onboarding_state` — 新增字段
 
 | 字段 | 改动 | 说明 |
 |---|---|---|
-| `onboarding_state` | **新增** JSONB nullable | `{ current_step, completed_steps[], dismissed_at }`。**按 user × org 维度**,而非按 user(P0-5)。Bob 在 Acme 走完 Stage 1 后被邀进 Beta,Beta 的 state 为空,但他可共享已连过的机器跳过 Stage 1 |
+| `onboarding_state` | **新增** JSONB nullable | `{ current_step, completed_steps[], dismissed_at }`。**按 user × workspace 维度**(P0-5)。Bob 在 Acme 走完 Step 1 后被邀进 Beta,Beta 的 state 为空但他可共享已连过的机器 |
 
 ### 5.5 数据迁移
 
-存量自部署用户(`users` 已有记录但无 email)→ 迁移脚本不一次性回填;首次升级后引导补 email + OTP 验证。SaaS 新用户从开始就走新流程,不受影响。
+存量自部署用户(`users` 已有记录但无 email)→ 迁移脚本不一次性回填;首次升级后,登录时引导补 GitHub 绑定。SaaS 新用户从开始就走新流程。
 
 **影响面**:
-- 后端:`packages/server/src/db/schema/{users,members}.ts`、`packages/server/src/services/auth.ts`、`packages/server/src/api/auth.ts`
-- 共享:`packages/shared/src/schemas/{user,auth,member}.ts`
+- 后端:`packages/server/src/db/schema/{users,members,organizations}.ts`、`packages/server/src/services/auth.ts`、`packages/server/src/services/organization.ts`、`packages/server/src/api/auth.ts`
+- 共享:`packages/shared/src/schemas/{user,auth,member,organization}.ts`
 - 前端:`packages/web/src/auth/auth-context.tsx` 的 user / member 类型
 
 ---
@@ -302,40 +399,41 @@ invitations (
 
 | # | 风险 | 对策 |
 |---|---|---|
-| P0-1 | Stage 1 没检查 Claude Code 已 `claude login` → Stage 3 第一句对话直接挂,无线索 | Prerequisite 双检查 `claude --version` + `claude auth status`,失败给具体修复命令 |
-| P0-2 | 邀请发出后无入口看待接受 / revoke / resend | Settings → Members → Pending Invitations 列表 + revoke / resend / 复制链接 |
-| P0-3 | Onboarding 中途关浏览器后回来从头开始或被跳过 | `members.onboarding_state` 持久化进度,Web 进 `/` 时 reroute 回向导 |
-| P0-4 | Stage 1 token 过期 / 超时 / firewall 拦截无恢复路径 | 60s 没连上展开 troubleshoot 面板 + token 过期自动 `[ Generate new token ]`;CLI 错误回写 server |
-| P0-5 | 老用户被邀进新 org 时**重复看到全部向导**(他在前一个 org 已经走过 Stage 1 装 CLI) | onboarding_state 按 **user × org** 维度,挂 `members` 表;Bob 的 Beta org 自动跳过 Stage 1 |
-| P0-6 | 当前 Layout 假设有 currentOrg,**0 membership 用户页面崩** | RequireAuth 后按 membership 数量分流(0 → `/workspaces`;1 → 自动进;>1 → switcher) |
+| P0-1 | Step 1 没检查 Claude Code 已 `claude login` → Step 3 第一句对话直接挂,无线索 | Prerequisite 双检查 `claude --version` + `claude auth status`,失败给具体修复命令 |
+| P0-2 | Admin 找不到 workspace 的 invite link | Settings → Members 显示当前 invite link + [ Copy link ] 按钮(rotate 本期不做)|
+| P0-3 | Onboarding 中途关浏览器后回来从头开始或被跳过 | `members.onboarding_state` 持久化进度,Web 进 `/` 时 reroute 回 wizard |
+| P0-4 | Step 1 token 过期 / 超时 / firewall 拦截无恢复路径 | 60s 没连上展开 troubleshoot 面板 + token 过期自动 [ Generate new token ];CLI 错误回写 server |
+| P0-5 | 老用户被邀进新 workspace 时**重复看到全部 wizard**(他在前一个 workspace 已经走过 Step 1 装 CLI) | onboarding_state 按 **user × workspace** 维度,挂 `members` 表;Bob 的 Beta workspace 自动跳过 Step 1 |
 
 ### 6.2 P1 · 强烈建议(本期做)
 
 | # | 风险 | 对策 |
 |---|---|---|
-| P1-7 | Prerequisite 没装时提示太干 | OS 自动给 `brew` / `apt` / `nvm` + Claude Code 官方安装脚本 |
-| P1-8 | Stage 2 → 3 之间 agent 启动几秒延迟 + 失败处理 | Agent 状态机 + 启动失败时把 daemon 错误翻译成人话 |
-| P1-9 | Org name / agent name 冲突 | 实时校验 + 自动建议(附加 4 位随机短码) |
-| P1-10 | Welcome email 缺失 | 1 封 welcome 邮件;nudge / re-engage 后续迭代再加 |
-| P1-11 | 多 org 顶部 switcher 缺失 | 顶部下拉 + `+ Create organization` 入口 |
-| P1-12 | Stage 2 → 3 跳转时 agent 还在 starting,先显示"No agents"再突然出现 | "Your agent is starting..." spinner 直到 `agent.status === 'online'` |
+| P1-6 | Prerequisite 没装时提示太干 | OS 自动给 `brew` / `apt` / `nvm` + Claude Code 官方安装脚本 |
+| P1-7 | Step 2 → 3 之间 agent 启动几秒延迟 + 失败处理 | Agent 状态机 + 启动失败时把 daemon 错误翻译成人话 |
+| P1-8 | Workspace name / agent name 冲突 | 实时校验 + 自动建议(附加 4 位随机短码)|
+| P1-9 | 多 workspace 顶部 switcher 缺失 | 顶部 dropdown:列出所有 workspace + `+ Create another` / `+ Join with link` 入口 |
+| P1-10 | Step 2 → 3 跳转时 agent 还在 starting,先显示"No agents"再突然出现 | "Your agent is starting..." spinner 直到 `agent.status === 'online'` |
+| P1-11 | 用户直接访问 `/`(workspace 主面板)但还没 workspace(理论上不应发生但要兜底) | 后端检测 → 自动 redirect 到 `/setup` |
 
 ### 6.3 P2 · 次重要(本期最小占位)
 
 | # | 风险 | 对策 |
 |---|---|---|
-| P2-13 | 移动端打开做不下去 | Banner "Best experienced on desktop";不阻断登录 |
-| P2-14 | ToS / Privacy 未链接 | 注册按钮下加 "By continuing you agree to [ToS] / [Privacy]" 占位页 |
-| P2-15 | Workspace 隐私说明缺失("我的代码会被发到哪") | Workspace 折叠 "Privacy & Data Flow" 短文 + 链到独立页 |
+| P2-12 | 移动端打开做不下去 | Banner "Best experienced on desktop";不阻断登录 |
+| P2-13 | ToS / Privacy 未链接 | 注册按钮下加 "By continuing you agree to [ToS] / [Privacy]" 占位页 |
+| P2-14 | Workspace 隐私说明缺失("我的代码会被发到哪") | Workspace 折叠 "Privacy & Data Flow" 短文 + 链到独立页 |
+| P2-15 | 跳过向导后无重启入口 | Settings 加 `[ Restart onboarding ]` 按钮 |
 | P2-16 | CLI 长期升级路径不明 | Web 顶部检测过期 banner;自动升级延后 |
-| P2-17 | 跳过向导后无重启入口 | Settings 加 `[ Restart onboarding ]` 按钮 |
 
 ### 6.4 推迟 · 本期不做
 
-- Activation funnel 埋点(decision 2.5)
+- Activation funnel 埋点(decision 2.6)
 - Cross-device session 管理(查活跃登录 / 远程登出)
-- Welcome 之外的 nudge 邮件序列(stuck-at-stage / re-engage)
+- Welcome / nudge / re-engage 任何邮件序列(本期完全无邮件通道)
 - Cookie banner / GDPR 合规
+- 邀请 link rotate / expiry / 多 link / per-recipient 单次(全部 v2,decision 2.3)
+- "登录后自动检测 pending invitations"(decision 2.3,纯 share link 模型不支持)
 
 ---
 
@@ -345,22 +443,22 @@ invitations (
 
 | M | 内容 | 工程量 |
 |---|---|---|
-| **M0** | Schema 迁移:`users.email` + `auth_providers` + `invitations` + `members.onboarding_state` | 后端 1d |
-| **M1** | Stage 0 注册:GitHub OAuth + Email OTP API + welcome email(P1-10) | 后端 2d |
-| **M2** | Stage 0.5 `/workspaces`:创建 org / pending invitations 卡片 + 顶部 org switcher(P1-11) + Layout 0 membership 分流(P0-6) | 前端 2d |
-| **M3** | Stage 1 Connect 向导:Web token + CLI 简化 + prerequisite 双检查(P0-1, P1-7)+ 失败恢复(P0-4) | 前后端 2d |
-| **M4** | Stage 2 Agent 向导:复用 NewAgentDialog + agent 状态机 + 启动 spinner(P1-8, P1-12)+ name 冲突建议(P1-9) | 前后端 1.5d |
-| **M5** | Stage 3 Workspace + Stage 4 邀请发送 | 前端 1d |
-| **M6** | 邀请管理:Pending Invitations 列表 + revoke/resend(P0-2) | 前后端 1.5d |
-| **M7** | Onboarding 状态持久化:`members.onboarding_state` 读写 + 跨 org 跳过逻辑(P0-3, P0-5) | 前后端 1.5d |
-| **M8** | 收尾:ToS 占位 + 移动端 banner + 隐私说明 + CLI 版本提示 + 重启入口(P2 全部) | 1.5d |
-| **M9** | 隐藏 self-host 命令(`hidden: true`) | 0.5d |
+| **M0** | Schema 迁移:`users.email` + `auth_providers` + `organizations.invite_token` + `members.onboarding_state` | 后端 1d |
+| **M1** | 注册路径:GitHub OAuth 路由 + callback 处理 + `next` 参数支持 + JWT 颁发 | 后端 1.5d |
+| **M2** | `/setup` 路由 + Create / Join modal + 老用户复用入口(顶部 dropdown 弹同一个 modal)+ `/` 0-workspace 兜底 redirect(P1-11)| 前端 1.5d + 后端 0.5d |
+| **M3** | `/welcome` Wizard Step 1 Connect:Web token + CLI 简化 + prerequisite 双检查(P0-1, P1-6)+ 失败恢复(P0-4)| 前后端 2d |
+| **M4** | Wizard Step 2 Agent:复用 NewAgentDialog + agent 状态机 + 启动 spinner(P1-7, P1-10)+ name 冲突建议(P1-8)| 前后端 1.5d |
+| **M5** | Wizard Step 3 Workspace + Step 4 Invite(展示 invite_token 拼接的 link + Copy)| 前端 0.5d |
+| **M6** | Settings → Members 页面显示 workspace invite link + Copy(P0-2)| 前端 0.5d |
+| **M7** | Onboarding 状态持久化:`members.onboarding_state` 读写 + 跨 workspace 跳过逻辑(P0-3, P0-5)+ 顶部 workspace switcher(P1-9)| 前后端 2d |
+| **M8** | 收尾:ToS 占位 + 移动端 banner + 隐私说明 + CLI 版本提示 + 重启入口(P2 全部)| 1.5d |
+| **M9** | 隐藏 self-host 命令(Commander `hidden: true`)| 0.5d |
 
-**合计**:~14 工程日(单人全力 ~3 周)
+**合计**:**~11.5 工程日**(单人全力 ~2.5 周)
 
 ### 7.2 上线策略
 
-- **必须串行**:M0 → M1 → M2 → M3(schema → auth → workspaces → connect)
+- **必须串行**:M0 → M1 → M2 → M3
 - **可并行**:M4 / M5 / M6 / M7 在 M3 之后可分头推进
 - **收尾**:M8 / M9 在主流程稳定后并入
 
@@ -368,11 +466,11 @@ invitations (
 
 | 维度 | Multica | First Tree Hub(本方案) |
 |---|---|---|
-| 注册 | OAuth via browser | GitHub OAuth + Email OTP |
+| 注册 | OAuth via browser | 仅 GitHub OAuth |
 | 一行命令 | `multica setup` | `first-tree-hub connect --token=...` |
 | Runtime 探测 | daemon 自动探测 | 同样自动探测 |
-| Agent 创建 | Web Settings → Agents | Web 向导 Stage 2(复用 NewAgentDialog) |
-| 第一个任务 | 创建 issue 分配给 agent | Workspace 直接对话(本期最低成本版) |
+| Agent 创建 | Web Settings → Agents | Web wizard Step 2(复用 NewAgentDialog)|
+| 第一个任务 | 创建 issue 分配给 agent | Workspace 直接对话(本期最低成本版)|
 | Web vs CLI | Web 主,CLI 是 daemon | 同样 Web 主导 |
 
 ---
@@ -381,9 +479,8 @@ invitations (
 
 | # | 问题 | 阻塞里程碑 |
 |---|---|---|
-| Q1 | **邮件发件服务商**选型(Resend / SES / Postmark)+ 发件域 SPF/DKIM/DMARC 配置 | M1(welcome email)、M5(邀请邮件) |
-| Q2 | **GitHub OAuth App 申请**:运维侧创建 dev / staging / prod 各一份;callback URL `https://hub.first-tree.ai/api/v1/auth/github/callback`;scopes `read:user` + `user:email` | M1 |
-| Q3 | **域名 DNS 配置**:`hub.first-tree.ai` 的 A/AAAA + 邮件 MX 记录 | 上线前 |
+| Q1 | **GitHub OAuth App 申请**:运维侧创建 dev / staging / prod 各一份;callback URL `https://hub.first-tree.ai/api/v1/auth/github/callback`;scopes `read:user` + `user:email` | M1 |
+| Q2 | **域名 DNS 配置**:`hub.first-tree.ai` 的 A/AAAA 记录 | 上线前 |
 
 ---
 
@@ -391,9 +488,9 @@ invitations (
 
 | 路径 | 用途 |
 |---|---|
-| [packages/command/src/commands/connect.ts](../packages/command/src/commands/connect.ts) | CLI connect 入口(Stage 1 复用) |
+| [packages/command/src/commands/connect.ts](../packages/command/src/commands/connect.ts) | CLI connect 入口(Step 1 复用)|
 | [packages/shared/src/config/resolver.ts](../packages/shared/src/config/resolver.ts) | `client.yaml` 写入、`FIRST_TREE_HUB_HOME` |
-| [packages/web/src/components/new-agent-dialog.tsx](../packages/web/src/components/new-agent-dialog.tsx) | Stage 2 复用 |
-| [packages/web/src/components/last-step-modal.tsx](../packages/web/src/components/last-step-modal.tsx) | Stage 1 复用(token 生成 + 轮询) |
-| [packages/web/src/auth/auth-context.tsx](../packages/web/src/auth/auth-context.tsx) | Auth state(需扩 user / memberships) |
-| [packages/server/src/services/agent.ts](../packages/server/src/services/agent.ts) | Rule R-RUN(`clients.user_id == jwt.userId` 强制,2.1 服务端兜底) |
+| [packages/web/src/components/new-agent-dialog.tsx](../packages/web/src/components/new-agent-dialog.tsx) | Step 2 复用 |
+| [packages/web/src/components/last-step-modal.tsx](../packages/web/src/components/last-step-modal.tsx) | Step 1 复用(token 生成 + 轮询)|
+| [packages/web/src/auth/auth-context.tsx](../packages/web/src/auth/auth-context.tsx) | Auth state(需扩 user / memberships)|
+| [packages/server/src/services/agent.ts](../packages/server/src/services/agent.ts) | Rule R-RUN(`clients.user_id == jwt.userId` 强制,2.1 服务端兜底)|
