@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import type { CreateOrganizationInput, UpdateOrganization } from "@agent-team-foundation/first-tree-hub-shared";
 import { and, desc, eq, lt, ne } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
@@ -5,6 +6,17 @@ import { agents } from "../db/schema/agents.js";
 import { organizations } from "../db/schema/organizations.js";
 import { BadRequestError, ConflictError, NotFoundError } from "../errors.js";
 import { uuidv7 } from "../uuid.js";
+
+/**
+ * Generate a fresh public invite-link token: 32 random bytes encoded as
+ * url-safe base64 with padding stripped (43 chars). Workspace creation uses
+ * this so admins can immediately copy the share link from `/admin` → Members.
+ *
+ * See docs/saas-onboarding-journey.md §2.3.
+ */
+export function generateInviteToken(): string {
+  return randomBytes(32).toString("base64url");
+}
 
 /** UUID v7 regex pattern for distinguishing UUIDs from name slugs. */
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -39,6 +51,7 @@ export async function createOrganization(db: Database, data: CreateOrganizationI
         maxAgents: data.maxAgents ?? 0,
         maxMessagesPerMinute: data.maxMessagesPerMinute ?? 0,
         features: data.features ?? {},
+        inviteToken: generateInviteToken(),
       })
       .returning();
 
@@ -176,7 +189,12 @@ export async function ensureDefaultOrganization(db: Database) {
   const id = uuidv7();
   const [org] = await db
     .insert(organizations)
-    .values({ id, name: "default", displayName: "Default Organization" })
+    .values({
+      id,
+      name: "default",
+      displayName: "Default Organization",
+      inviteToken: generateInviteToken(),
+    })
     .onConflictDoNothing()
     .returning();
 

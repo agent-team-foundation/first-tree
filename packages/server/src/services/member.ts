@@ -42,9 +42,14 @@ export async function createMember(db: Database, orgId: string, data: CreateMemb
     // Create user if needed
     const userId = existingUser?.id ?? uuidv7();
     if (isNewUser && passwordHash) {
+      // Legacy admin-API path: email isn't collected here. Use a per-user
+      // noreply placeholder so the UNIQUE NOT NULL constraint holds. SaaS
+      // signups go through the OAuth callback (PR #2), which writes the
+      // real GitHub email instead.
       await tx.insert(users).values({
         id: userId,
         username: data.username,
+        email: `${userId}@noreply.local`,
         passwordHash,
         displayName: data.displayName,
       });

@@ -11,6 +11,12 @@ export type UserStatus = z.infer<typeof userStatusSchema>;
 export const userSchema = z.object({
   id: z.string(),
   username: z.string(),
+  /**
+   * Primary contact email (UNIQUE NOT NULL since migration 0026). Sourced
+   * from GitHub OAuth for SaaS signups; legacy self-hosted users carry a
+   * `<id>@noreply.local` placeholder until they link a provider.
+   */
+  email: z.email(),
   displayName: z.string(),
   avatarUrl: z.string().nullable(),
   status: userStatusSchema,
@@ -21,6 +27,8 @@ export type User = z.infer<typeof userSchema>;
 
 export const createUserSchema = z.object({
   username: z.string().min(1).max(100),
+  /** Required for SaaS signups; self-host paths fall back to the noreply placeholder. */
+  email: z.email(),
   displayName: z.string().min(1).max(200),
   password: z.string().min(8).max(200),
 });

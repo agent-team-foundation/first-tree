@@ -32,6 +32,7 @@ beforeEach(async () => {
       agent_presence,
       members,
       agents,
+      auth_providers,
       users,
       clients,
       processed_events,
@@ -40,9 +41,19 @@ beforeEach(async () => {
       organizations
     CASCADE
   `);
-  // Re-insert default organization with UUID PK (required by agents/chats FK constraints)
+  // Re-insert default organization with UUID PK (required by agents/chats FK
+  // constraints). `invite_token` is NOT NULL since migration 0026 — generate
+  // a fresh per-test token rather than hard-coding a stable value, which
+  // would conflict with any test that exercises the invite-link flow.
   await db.execute(
-    sql`INSERT INTO organizations (id, name, display_name) VALUES (${DEFAULT_ORG_ID}, 'default', 'Default Organization') ON CONFLICT DO NOTHING`,
+    sql`INSERT INTO organizations (id, name, display_name, invite_token)
+        VALUES (
+          ${DEFAULT_ORG_ID},
+          'default',
+          'Default Organization',
+          rtrim(replace(replace(encode(gen_random_bytes(32), 'base64'), '+', '-'), '/', '_'), '=')
+        )
+        ON CONFLICT DO NOTHING`,
   );
 });
 

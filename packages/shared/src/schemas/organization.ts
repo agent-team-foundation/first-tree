@@ -49,6 +49,13 @@ export const organizationSchema = z.object({
   maxAgents: z.number(),
   maxMessagesPerMinute: z.number(),
   features: z.record(z.string(), z.unknown()),
+  /**
+   * Public invite share-link token (url-safe base64, 32 random bytes).
+   * Auto-generated on workspace create; only workspace admins surface it
+   * via `/admin` → Members. See docs/saas-onboarding-journey.md §5.3.
+   */
+  inviteToken: z.string(),
+  inviteTokenCreatedAt: z.string(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

@@ -6,6 +6,7 @@ export { agentChatSessions } from "./agent-chat-sessions.js";
 export { agentConfigs } from "./agent-configs.js";
 export { agentPresence } from "./agent-presence.js";
 export { agents } from "./agents.js";
+export { authProviders } from "./auth-providers.js";
 export { chatParticipants, chats } from "./chats.js";
 export { clients } from "./clients.js";
 export { inboxEntries } from "./inbox-entries.js";

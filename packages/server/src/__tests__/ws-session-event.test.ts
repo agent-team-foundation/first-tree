@@ -63,6 +63,7 @@ describe("Agent WS — session event protocol (S10)", () => {
       await tx.insert(users).values({
         id: userId,
         username: `evt-user-${suffix}-${crypto.randomUUID().slice(0, 6)}`,
+        email: `${userId}@noreply.local`,
         passwordHash: "x",
         displayName: `Evt User ${suffix}`,
       });

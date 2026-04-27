@@ -102,6 +102,13 @@ export {
   refreshTokenSchema,
 } from "./schemas/auth.js";
 export {
+  AUTH_PROVIDERS,
+  type AuthProvider,
+  type AuthProviderName,
+  authProviderNameSchema,
+  authProviderSchema,
+} from "./schemas/auth-provider.js";
+export {
   type AddParticipant,
   addParticipantSchema,
   CHAT_TYPES,
@@ -169,6 +176,11 @@ export {
   memberCreatedSchema,
   memberRoleSchema,
   memberSchema,
+  ONBOARDING_STEPS,
+  type OnboardingState,
+  type OnboardingStep,
+  onboardingStateSchema,
+  onboardingStepSchema,
   type UpdateMember,
   updateMemberSchema,
 } from "./schemas/member.js";

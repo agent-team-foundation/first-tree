@@ -4,6 +4,7 @@ import { organizations } from "../db/schema/organizations.js";
 import { taskChats } from "../db/schema/tasks.js";
 import { createAgent } from "../services/agent.js";
 import { findOrCreateDirectChat } from "../services/chat.js";
+import { generateInviteToken } from "../services/organization.js";
 import * as taskService from "../services/task.js";
 import { createTestAgent, useTestApp } from "./helpers.js";
 
@@ -59,7 +60,12 @@ describe("Task ↔ Chat linking", () => {
     const altOrgId = "01961234-0000-7000-8000-0000000000aa";
     await app.db
       .insert(organizations)
-      .values({ id: altOrgId, name: `alt-${Date.now()}`, displayName: "Alt" })
+      .values({
+        id: altOrgId,
+        name: `alt-${Date.now()}`,
+        displayName: "Alt",
+        inviteToken: generateInviteToken(),
+      })
       .onConflictDoNothing();
     // Use human type so createAgent doesn't require a client — this test is
     // about cross-org chat linking, not R-RUN pinning.

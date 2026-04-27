@@ -97,10 +97,16 @@ describe("Task service", () => {
 
     // Create a second org and an agent there
     const { organizations } = await import("../db/schema/organizations.js");
+    const { generateInviteToken } = await import("../services/organization.js");
     const altOrgId = "01961234-0000-7000-8000-000000000099";
     await app.db
       .insert(organizations)
-      .values({ id: altOrgId, name: `alt-${Date.now()}`, displayName: "Alt" })
+      .values({
+        id: altOrgId,
+        name: `alt-${Date.now()}`,
+        displayName: "Alt",
+        inviteToken: generateInviteToken(),
+      })
       .onConflictDoNothing();
     // Use human type to avoid the R-RUN client pin requirement — this test
     // is about cross-org assignee rejection, not runtime pinning.

@@ -6,6 +6,7 @@ import { organizations } from "../db/schema/organizations.js";
 import { ClientOrgMismatchError, ForbiddenError } from "../errors.js";
 import { createAgent } from "../services/agent.js";
 import { assertClientOwner, registerClient } from "../services/client.js";
+import { generateInviteToken } from "../services/organization.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
 /**
@@ -28,7 +29,12 @@ describe("clients: cross-org isolation", () => {
     const suffix = crypto.randomUUID().slice(0, 8);
     const [row] = await app.db
       .insert(organizations)
-      .values({ id: `org-${suffix}`, name: `other-${suffix}`, displayName: `Other ${suffix}` })
+      .values({
+        id: `org-${suffix}`,
+        name: `other-${suffix}`,
+        displayName: `Other ${suffix}`,
+        inviteToken: generateInviteToken(),
+      })
       .returning({ id: organizations.id });
     if (!row) throw new Error("failed to seed secondary organization");
     return row.id;

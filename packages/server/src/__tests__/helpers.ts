@@ -212,6 +212,7 @@ export async function createTestAdmin(app: FastifyInstance, opts: { username?: s
     await tx.insert(users).values({
       id: userId,
       username,
+      email: `${userId}@noreply.local`,
       passwordHash,
       displayName: "Test Admin",
     });

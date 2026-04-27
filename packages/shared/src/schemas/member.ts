@@ -8,12 +8,32 @@ export const MEMBER_ROLES = {
 export const memberRoleSchema = z.enum(["admin", "member"]);
 export type MemberRole = z.infer<typeof memberRoleSchema>;
 
+export const ONBOARDING_STEPS = {
+  CONNECT: "connect",
+  CREATE_AGENT: "create_agent",
+  COMPLETED: "completed",
+} as const;
+
+export const onboardingStepSchema = z.enum(["connect", "create_agent", "completed"]);
+export type OnboardingStep = z.infer<typeof onboardingStepSchema>;
+
+/**
+ * Wizard checkpoint, one per (user × workspace). Null on legacy rows and on
+ * fresh memberships before the wizard begins. See P0-5 in
+ * docs/saas-onboarding-journey.md §6.1.
+ */
+export const onboardingStateSchema = z.object({
+  currentStep: onboardingStepSchema,
+});
+export type OnboardingState = z.infer<typeof onboardingStateSchema>;
+
 export const memberSchema = z.object({
   id: z.string(),
   userId: z.string(),
   organizationId: z.string(),
   agentId: z.string(),
   role: memberRoleSchema,
+  onboardingState: onboardingStateSchema.nullable(),
   createdAt: z.string(),
 });
 export type Member = z.infer<typeof memberSchema>;
