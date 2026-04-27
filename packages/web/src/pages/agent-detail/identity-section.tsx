@@ -4,12 +4,13 @@ import { Pencil } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import { listAgents } from "../../api/agents.js";
 import { useAuth } from "../../auth/auth-context.js";
+import { AgentChip } from "../../components/agent-chip.js";
 import { Button } from "../../components/ui/button.js";
 import { DenseBadge } from "../../components/ui/dense-badge.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
-import { useAgentNameMap } from "../../lib/use-agent-name-map.js";
+import { useAgentIdentityMap } from "../../lib/use-agent-name-map.js";
 import { useMemberNameMap } from "../../lib/use-member-name-map.js";
 
 /**
@@ -25,7 +26,7 @@ export type IdentitySectionProps = {
 
 export function IdentitySection({ agent, onSave }: IdentitySectionProps) {
   const [open, setOpen] = useState(false);
-  const resolveAgent = useAgentNameMap();
+  const resolveAgent = useAgentIdentityMap();
   const resolveMember = useMemberNameMap();
 
   const metadata = agent.metadata as Record<string, unknown> | undefined;
@@ -35,7 +36,7 @@ export function IdentitySection({ agent, onSave }: IdentitySectionProps) {
     ? (treeMeta?.domains as unknown[]).filter((d): d is string => typeof d === "string")
     : [];
   const ownerName = agent.managerId ? resolveMember(agent.managerId) : null;
-  const delegateLabel = agent.delegateMention ? resolveAgent(agent.delegateMention) : null;
+  const delegateIdentity = agent.delegateMention ? resolveAgent(agent.delegateMention) : null;
 
   return (
     <section
@@ -63,14 +64,15 @@ export function IdentitySection({ agent, onSave }: IdentitySectionProps) {
       </header>
       <div className="px-4 py-3 text-body space-y-1">
         <div>
-          <span className="font-mono">{agent.name ?? agent.uuid}</span>
-          <span className="mx-2 text-muted-foreground">·</span>
-          <span>{agent.displayName ?? <span className="text-muted-foreground italic">no display name</span>}</span>
-          {delegateLabel && (
+          <span className="font-semibold">
+            {agent.displayName ?? <span className="text-muted-foreground italic">no display name</span>}
+          </span>
+          {agent.name && <span className="ml-2 font-mono text-caption text-muted-foreground">@{agent.name}</span>}
+          {delegateIdentity && (
             <>
               <span className="mx-2 text-muted-foreground">·</span>
               <span className="text-muted-foreground">
-                delegate <span className="font-mono">{delegateLabel}</span>
+                delegate <AgentChip name={delegateIdentity.name} displayName={delegateIdentity.displayName} />
               </span>
             </>
           )}
@@ -180,9 +182,11 @@ function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialo
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4">
           <div className="space-y-2">
-            <Label>Name (mention)</Label>
-            <Input value={agent.name ?? ""} disabled className="font-mono" />
-            <p className="text-caption text-muted-foreground">Name is permanent after creation.</p>
+            <Label>Agent name</Label>
+            <Input value={agent.name ? `@${agent.name}` : ""} disabled className="font-mono" />
+            <p className="text-caption text-muted-foreground">
+              Agent name is permanent after creation — used in @mentions and CLI commands.
+            </p>
           </div>
           <div className="space-y-2">
             <Label htmlFor="id-display">Display Name</Label>
@@ -224,7 +228,7 @@ function IdentityEditDialog({ agent, open, onOpenChange, onSave }: IdentityDialo
                 <option value="">None</option>
                 {assistantsQuery.data?.map((a) => (
                   <option key={a.uuid} value={a.uuid}>
-                    {a.displayName ? `${a.displayName} (${a.name ?? a.uuid})` : (a.name ?? a.uuid)}
+                    {a.displayName ? `${a.displayName} (@${a.name ?? a.uuid})` : a.name ? `@${a.name}` : a.uuid}
                   </option>
                 ))}
               </select>

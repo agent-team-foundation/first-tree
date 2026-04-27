@@ -5,9 +5,11 @@ import type {
   UpdateAgent,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import {
+  AGENT_NAME_REGEX,
   AGENT_STATUSES,
   AGENT_VISIBILITY,
   DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD,
+  isReservedAgentName,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { and, count, desc, eq, lt, ne } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
@@ -138,6 +140,9 @@ export async function createAgent(db: Database, data: CreateAgent & { managerId?
       `Agent name "${name}" is reserved — names starting with "${RESERVED_AGENT_NAME_PREFIX}" are Hub-internal`,
     );
   }
+  if (name && isReservedAgentName(name)) {
+    throw new BadRequestError(`Agent name "${name}" is reserved — pick a different one.`);
+  }
   const inboxId = `inbox_${uuid}`;
 
   // Resolve orgId + managerId with a strict "manager owns the org" contract.
@@ -252,6 +257,44 @@ export async function createAgent(db: Database, data: CreateAgent & { managerId?
     }
     throw err;
   }
+}
+
+/**
+ * Result of a pre-create agent-name availability probe used by the web
+ * creation form. The server is authoritative (the POST still validates);
+ * this endpoint only trades one DB lookup for a better UX so the user sees
+ * "taken" / "reserved" inline while typing instead of after submit.
+ *
+ * Possible `reason` values:
+ *   - `invalid`  — fails `AGENT_NAME_REGEX` (not a well-formed slug)
+ *   - `reserved` — matches `__` prefix or `RESERVED_AGENT_NAMES`
+ *   - `taken`    — an active or suspended agent already owns the name in this org
+ *
+ * `available: true` is returned only if none of the above applies. Deleted
+ * rows have their `name` nulled in the `deleteAgent` service so the name
+ * is recyclable without a tombstone check here.
+ */
+export type AgentNameAvailability =
+  | { available: true }
+  | { available: false; reason: "invalid" | "reserved" | "taken" };
+
+export async function checkAgentNameAvailability(
+  db: Database,
+  orgId: string,
+  name: string,
+): Promise<AgentNameAvailability> {
+  if (!AGENT_NAME_REGEX.test(name)) {
+    return { available: false, reason: "invalid" };
+  }
+  if (isReservedAgentName(name) || name.startsWith(RESERVED_AGENT_NAME_PREFIX)) {
+    return { available: false, reason: "reserved" };
+  }
+  const [existing] = await db
+    .select({ uuid: agents.uuid })
+    .from(agents)
+    .where(and(eq(agents.organizationId, orgId), eq(agents.name, name), ne(agents.status, AGENT_STATUSES.DELETED)))
+    .limit(1);
+  return existing ? { available: false, reason: "taken" } : { available: true };
 }
 
 export async function getAgent(db: Database, uuid: string) {

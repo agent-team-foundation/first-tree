@@ -30,11 +30,16 @@ import {
 } from "../../../api/sessions.js";
 import { useAuth } from "../../../auth/auth-context.js";
 import { FirstTreeLogo } from "../../../components/first-tree-logo.js";
+import {
+  MentionAutocompletePopover,
+  type MentionCandidate,
+  useMentionAutocomplete,
+} from "../../../components/mention-autocomplete.js";
 import { Button } from "../../../components/ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog.js";
 import { Markdown } from "../../../components/ui/markdown.js";
 import { StateDot } from "../../../components/ui/state-dot.js";
-import { useAgentNameMap } from "../../../lib/use-agent-name-map.js";
+import { useAgentIdentityMap, useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { cn } from "../../../lib/utils.js";
 import { resolveAgentState } from "../../../utils/agent-state.js";
 import { filterEventsForTimeline } from "../../../utils/session-timeline.js";
@@ -703,12 +708,15 @@ type TimelineItem =
 export function ChatView({ agentId, chatId }: { agentId: string; chatId: string }) {
   const queryClient = useQueryClient();
   const agentName = useAgentNameMap();
+  const agentIdentity = useAgentIdentityMap();
   const { agentId: myAgentId } = useAuth();
   const [draft, setDraft] = useState("");
+  const [cursor, setCursor] = useState(0);
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const { data: messagesData } = useQuery({
@@ -872,6 +880,39 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
         .join(" ")
     : `@${agentName(agentId)}`;
   const displayName = agentName(agentId);
+
+  // Mention autocomplete candidates — participants of this chat resolved to
+  // their `{name, displayName}` via the shared identity map. Filter out
+  // rows with no `name` since mentions need a slug target to insert.
+  const mentionCandidates = useMemo<MentionCandidate[]>(() => {
+    const sourceIds = chatDetail?.participants?.map((p) => p.agentId) ?? [agentId];
+    const out: MentionCandidate[] = [];
+    for (const id of sourceIds) {
+      const ident = agentIdentity(id);
+      if (!ident || !ident.name) continue;
+      out.push({ agentId: id, name: ident.name, displayName: ident.displayName });
+    }
+    return out;
+  }, [chatDetail?.participants, agentId, agentIdentity]);
+
+  const mention = useMentionAutocomplete({
+    value: draft,
+    cursor,
+    candidates: mentionCandidates,
+    disabled: sendMut.isPending || uploading,
+    onSelect: (update) => {
+      setDraft(update.text);
+      setCursor(update.cursor);
+      // Defer so React has committed the new value before we move the
+      // selection — otherwise the textarea snaps back to its old cursor.
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (!el) return;
+        el.focus();
+        el.setSelectionRange(update.cursor, update.cursor);
+      });
+    },
+  });
   const runtimeLabel = session?.runtimeState ?? "idle";
   const runtimeState = resolveAgentState(session?.runtimeState ?? null, agentId ? "connected" : null);
   const msgCount = session?.messageCount ?? messagesData?.items?.length ?? 0;
@@ -1114,34 +1155,54 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
               ))}
             </div>
           )}
-          <textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onPaste={(e) => {
-              const files = Array.from(e.clipboardData.files);
-              if (files.length > 0) {
-                e.preventDefault();
-                addImages(files);
-              }
-            }}
-            placeholder={`Message @${displayName}  ·  / for commands  ·  @ to mention`}
-            rows={2}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                handleSend();
-              }
-            }}
-            disabled={sendMut.isPending || uploading}
-            className="w-full outline-none text-subtitle font-normal"
-            style={{
-              padding: "var(--sp-2_25) var(--sp-3) var(--sp-7_5)",
-              background: "transparent",
-              border: "none",
-              resize: "none",
-              color: "var(--fg)",
-            }}
-          />
+          <div style={{ position: "relative" }}>
+            <MentionAutocompletePopover
+              trigger={mention.trigger}
+              results={mention.results}
+              highlightIndex={mention.highlightIndex}
+              anchorRef={textareaRef}
+              onPick={mention.pick}
+            />
+            <textarea
+              ref={textareaRef}
+              value={draft}
+              onChange={(e) => {
+                setDraft(e.target.value);
+                setCursor(e.target.selectionStart ?? e.target.value.length);
+              }}
+              onSelect={(e) => {
+                setCursor(e.currentTarget.selectionStart ?? draft.length);
+              }}
+              onPaste={(e) => {
+                const files = Array.from(e.clipboardData.files);
+                if (files.length > 0) {
+                  e.preventDefault();
+                  addImages(files);
+                }
+              }}
+              placeholder={`Message @${displayName}  ·  / for commands  ·  @ to mention`}
+              rows={2}
+              onKeyDown={(e) => {
+                // Mention autocomplete gets first crack at navigation keys so
+                // ArrowUp/Down/Enter/Tab/Escape cycle candidates instead of
+                // sending or moving the cursor.
+                if (mention.handleKey(e)) return;
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend();
+                }
+              }}
+              disabled={sendMut.isPending || uploading}
+              className="w-full outline-none text-subtitle font-normal"
+              style={{
+                padding: "var(--sp-2_25) var(--sp-3) var(--sp-7_5)",
+                background: "transparent",
+                border: "none",
+                resize: "none",
+                color: "var(--fg)",
+              }}
+            />
+          </div>
           <div
             className="flex items-center justify-between text-caption"
             style={{

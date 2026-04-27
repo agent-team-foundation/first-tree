@@ -35,6 +35,21 @@ export function createAgent(data: CreateAgent): Promise<Agent> {
   return api.post<Agent>("/admin/agents", data);
 }
 
+/**
+ * Probe whether an agent name is available in the caller's organization.
+ *
+ * The web creation dialog calls this (debounced) so the user sees collision
+ * or reserved-name errors inline, before submitting. The authoritative check
+ * still happens server-side on POST — this is a UX convenience only.
+ */
+export type AgentNameAvailability =
+  | { available: true }
+  | { available: false; reason: "invalid" | "reserved" | "taken" };
+
+export function checkAgentNameAvailability(name: string): Promise<AgentNameAvailability> {
+  return api.get<AgentNameAvailability>(`/admin/agents/names/${encodeURIComponent(name)}/availability`);
+}
+
 export function updateAgent(uuid: string, data: UpdateAgent): Promise<Agent> {
   return api.patch<Agent>(`/admin/agents/${encodeURIComponent(uuid)}`, data);
 }

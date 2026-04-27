@@ -35,12 +35,53 @@ export type AgentSource = z.infer<typeof agentSourceSchema>;
 export const agentStatusSchema = z.enum(["active", "suspended"]);
 export type AgentStatus = z.infer<typeof agentStatusSchema>;
 
+/**
+ * Agent-name rules (see docs/agent-naming-design.md §3.1):
+ *   - Lowercase ASCII slug, hyphens + underscores allowed.
+ *   - Must start with alphanumeric: `-` / `_` as first char collide with
+ *     CLI flag parsing and markdown list syntax.
+ *   - 1–64 chars — aligned with `MENTION_REGEX` so any valid name can be
+ *     @-mentioned in chat. Older rows created under the previous 1–100
+ *     regex are grandfathered; the tight rule only gates new creates.
+ */
+export const AGENT_NAME_REGEX = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+export const AGENT_NAME_MAX_LENGTH = 64;
+
+/**
+ * Names users cannot claim in the portal. Prefix `__` is separately
+ * reserved for Hub-internal pseudo-agents (enforced in the server service
+ * layer) — this list covers short, obvious squatters that would confuse
+ * routing, docs, or CLI help.
+ */
+export const RESERVED_AGENT_NAMES: readonly string[] = [
+  "admin",
+  "agent",
+  "first-tree",
+  "hub",
+  "me",
+  "null",
+  "system",
+  "undefined",
+];
+
+const RESERVED_AGENT_NAMES_SET: ReadonlySet<string> = new Set(RESERVED_AGENT_NAMES);
+
+export function isReservedAgentName(name: string): boolean {
+  return RESERVED_AGENT_NAMES_SET.has(name);
+}
+
 export const createAgentSchema = z.object({
   name: z
     .string()
     .min(1)
-    .max(100)
-    .regex(/^[a-z0-9_-]+$/, "Only lowercase alphanumeric, hyphens, and underscores")
+    .max(AGENT_NAME_MAX_LENGTH)
+    .regex(
+      AGENT_NAME_REGEX,
+      "Must start with a letter or digit and contain only lowercase letters, digits, hyphens (-), and underscores (_). Max 64 chars.",
+    )
+    .refine((n) => !isReservedAgentName(n), {
+      message: "That agent name is reserved — pick a different one.",
+    })
     .optional(),
   type: agentTypeSchema,
   displayName: z.string().max(200).optional(),
