@@ -1,3 +1,4 @@
+import { Check, Loader2 } from "lucide-react";
 import { Button } from "../../components/ui/button.js";
 import type { DraftSectionName, DraftSummary } from "./use-config-draft.js";
 
@@ -12,6 +13,8 @@ export type SaveBarProps = {
   conflictMessage: string | null;
   errorMessage: string | null;
   saving: boolean;
+  /** Emits true for a short window after a successful save, so the bar can flash an inline check. */
+  justSaved: boolean;
   onSave: () => void;
   onDiscard: () => void;
   onReloadRemote: () => void;
@@ -27,7 +30,7 @@ const SECTION_LABELS: Record<DraftSectionName, string> = {
 };
 
 export function SaveBar(props: SaveBarProps) {
-  if (!props.summary.anyDirty && !props.conflictMessage && !props.errorMessage) return null;
+  if (!props.summary.anyDirty && !props.conflictMessage && !props.errorMessage && !props.justSaved) return null;
 
   return (
     <div className="sticky bottom-0 z-30 -mx-6 border-t bg-warn-soft/95 px-6 py-3 backdrop-blur">
@@ -55,6 +58,15 @@ export function SaveBar(props: SaveBarProps) {
               </span>
             </div>
           )}
+          {props.justSaved && !props.summary.anyDirty && !props.errorMessage && !props.conflictMessage && (
+            <div
+              className="inline-flex items-center gap-1.5 text-body font-medium"
+              style={{ color: "var(--state-idle)" }}
+            >
+              <Check className="h-3.5 w-3.5" />
+              Saved
+            </div>
+          )}
           <p className="text-caption text-muted-foreground">{props.saveHint}</p>
           {props.conflictMessage && <p className="text-caption text-warn font-medium">{props.conflictMessage}</p>}
           {props.errorMessage && <p className="text-caption text-error font-medium">{props.errorMessage}</p>}
@@ -69,7 +81,14 @@ export function SaveBar(props: SaveBarProps) {
             Discard changes
           </Button>
           <Button size="sm" onClick={props.onSave} disabled={props.saving || !props.summary.anyDirty}>
-            {props.saving ? "Saving…" : "Save"}
+            {props.saving ? (
+              <span className="inline-flex items-center gap-1.5">
+                <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+                Saving…
+              </span>
+            ) : (
+              "Save"
+            )}
           </Button>
         </div>
       </div>
