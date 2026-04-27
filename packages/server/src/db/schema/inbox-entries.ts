@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { bigserial, boolean, index, integer, pgTable, text, timestamp, unique } from "drizzle-orm/pg-core";
 import { messages } from "./messages.js";
 
@@ -33,6 +34,15 @@ export const inboxEntries = pgTable(
   (table) => [
     unique("uq_inbox_delivery").on(table.inboxId, table.messageId, table.chatId),
     index("idx_inbox_pending").on(table.inboxId, table.createdAt),
+    /**
+     * Partial index for the pollInbox claim hot-path. Without `notify` in the
+     * index, a chat that accumulates silent rows forces the planner to scan
+     * past them to find the next notify=true trigger; with this partial
+     * index the lookup is bounded by the trigger count alone.
+     */
+    index("idx_inbox_pending_notify")
+      .on(table.inboxId, table.createdAt)
+      .where(sql`status = 'pending' AND notify = true`),
     /**
      * Bundling lookup: given a notify=true trigger, find all silent pending
      * rows in the same chat that should be attached as preceding context.

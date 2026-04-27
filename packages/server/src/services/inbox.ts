@@ -179,6 +179,12 @@ async function collectPrecedingContext(
     // ASC + LIMIT would drop the recent rows — and the bulk-ack below would
     // mark them acked anyway, so the agent would silently lose the messages
     // that mattered most.
+    //
+    // Concurrency: `FOR UPDATE OF ie SKIP LOCKED` prevents two parallel polls
+    // on the same inbox from bundling the same silent row twice. Without it,
+    // poll A picking trigger T1 and poll B picking T2 (T2 > T1) would both
+    // include silent rows < T1 in their preceding context. With SKIP LOCKED,
+    // the second poll skips the rows the first has reserved.
     let prevCreatedAt: string | null = null;
     for (const trigger of chatTriggers) {
       const rows = await tx.execute<{
@@ -203,6 +209,7 @@ async function collectPrecedingContext(
           AND ie.created_at > NOW() - make_interval(secs => ${PRECEDING_CONTEXT_WINDOW_SECONDS})
         ORDER BY ie.created_at DESC
         LIMIT ${PRECEDING_CONTEXT_MAX_ENTRIES}
+        FOR UPDATE OF ie SKIP LOCKED
       `);
 
       // Reverse so the prompt-rendered block reads oldest → newest.
@@ -301,6 +308,53 @@ export async function resetTimedOutEntries(
   `);
 
   return { reset: resetResult.length, failed: failedResult.length };
+}
+
+/** Default age (30 days) past which silent rows that no notify-true delivery
+ *  ever picked up are physically deleted. */
+export const SILENT_ROW_GC_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
+
+/**
+ * Garbage-collect silent inbox rows so the table doesn't grow forever in
+ * chats where a `mention_only` agent is never @mentioned.
+ *
+ * Two cleanup paths:
+ *
+ *   1. `notify=false AND status='acked'` of any age — these are fully
+ *      consumed (either bundled into a previous trigger or aged out via the
+ *      bulk-ack in `collectPrecedingContext`); keep them only as long as
+ *      the corresponding message rows we link to. The unique constraint
+ *      `(inbox_id, message_id, chat_id)` means leaving them around blocks
+ *      legitimate retries with the same key.
+ *
+ *   2. `notify=false AND status='pending' AND created_at < NOW() - maxAge` —
+ *      stale silent rows that no trigger ever caught up with. After 30
+ *      days they're useless as preceding context (the @mention almost
+ *      certainly already happened or the chat went dormant).
+ *
+ * Returns the number of rows deleted in each bucket so the background task
+ * can log meaningful counts.
+ */
+export async function pruneStaleSilentEntries(
+  db: Database,
+  maxAgeSeconds = SILENT_ROW_GC_MAX_AGE_SECONDS,
+): Promise<{ ackedDeleted: number; stalePendingDeleted: number }> {
+  const ackedResult = await db.execute<{ id: number }>(sql`
+    DELETE FROM inbox_entries
+    WHERE notify = false
+      AND status = 'acked'
+    RETURNING id
+  `);
+
+  const staleResult = await db.execute<{ id: number }>(sql`
+    DELETE FROM inbox_entries
+    WHERE notify = false
+      AND status = 'pending'
+      AND created_at < NOW() - make_interval(secs => ${maxAgeSeconds})
+    RETURNING id
+  `);
+
+  return { ackedDeleted: ackedResult.length, stalePendingDeleted: staleResult.length };
 }
 
 export async function assertInboxOwner(inboxId: string, agentInboxId: string): Promise<void> {

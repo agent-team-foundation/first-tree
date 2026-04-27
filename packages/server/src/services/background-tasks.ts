@@ -35,6 +35,18 @@ export function createBackgroundTasks(
           const timeoutSeconds = (configs.inbox_timeout_seconds as number) ?? 300;
           const maxRetries = (configs.max_retry_count as number) ?? 3;
           await inboxService.resetTimedOutEntries(app.db, timeoutSeconds, maxRetries);
+          // Silent row GC piggy-backs on the inbox timer (no need for a
+          // second timer — DELETE is rare and tiny). Uses default 30-day
+          // window for stale-pending; acked rows are deleted regardless of
+          // age (they've fulfilled their context-replay purpose). See
+          // pruneStaleSilentEntries jsdoc.
+          const pruned = await inboxService.pruneStaleSilentEntries(app.db);
+          if (pruned.ackedDeleted > 0 || pruned.stalePendingDeleted > 0) {
+            log.debug(
+              { ackedDeleted: pruned.ackedDeleted, stalePendingDeleted: pruned.stalePendingDeleted },
+              "pruned silent inbox rows",
+            );
+          }
         } catch (err) {
           log.error({ err }, "failed to reset timed-out inbox entries");
         }

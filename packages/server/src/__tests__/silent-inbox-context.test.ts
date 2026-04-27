@@ -1,10 +1,10 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { chatParticipants } from "../db/schema/chats.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { createAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
-import { ackEntry, PRECEDING_CONTEXT_MAX_ENTRIES, pollInbox } from "../services/inbox.js";
+import { ackEntry, PRECEDING_CONTEXT_MAX_ENTRIES, pollInbox, pruneStaleSilentEntries } from "../services/inbox.js";
 import { sendMessage } from "../services/message.js";
 import { createAdminContext, useTestApp } from "./helpers.js";
 
@@ -244,5 +244,238 @@ describe("silent inbox + preceding context", () => {
     const pulled = await pollInbox(app.db, peer.inboxId, 10);
     expect(pulled).toHaveLength(1);
     expect(pulled[0]?.message.precedingMessages).toEqual([]);
+  });
+
+  it("excludes silent rows older than the 24h context window from preceding", async () => {
+    // The 24h window keeps stale chatter out of the prompt. We can't time-
+    // travel the clock, so we backdate the row directly via SQL. The cap test
+    // proved the LIMIT semantics; this one isolates the time-window filter.
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const { human, observer, chat } = await setupGroupWithMentionOnlyAgent(uid);
+
+    // Two silent rows: one fresh, one >24h old.
+    await sendMessage(app.db, chat.id, human.uuid, { format: "text", content: "stale-old" });
+    await sendMessage(app.db, chat.id, human.uuid, { format: "text", content: "fresh-recent" });
+    // Backdate the first silent inbox entry to 25 hours ago.
+    await app.db.execute(sql`
+      UPDATE inbox_entries
+      SET created_at = NOW() - make_interval(hours => 25)
+      WHERE inbox_id = ${observer.inboxId}
+        AND chat_id = ${chat.id}
+        AND notify = false
+        AND id = (
+          SELECT id FROM inbox_entries
+          WHERE inbox_id = ${observer.inboxId} AND chat_id = ${chat.id} AND notify = false
+          ORDER BY id ASC LIMIT 1
+        )
+    `);
+
+    await sendMessage(app.db, chat.id, human.uuid, {
+      format: "text",
+      content: `@si-obs-${uid} please weigh in`,
+    });
+
+    const pulled = await pollInbox(app.db, observer.inboxId, 10);
+    expect(pulled).toHaveLength(1);
+    const entry = pulled[0];
+    if (!entry) throw new Error("entry missing");
+    // Only the fresh row makes the cut; the backdated one is window-excluded.
+    expect(entry.message.precedingMessages.map((p) => p.content)).toEqual(["fresh-recent"]);
+
+    // The window-excluded silent row is still bulk-acked so it doesn't
+    // re-attach to a future trigger — it's just dropped from the prompt.
+    const remaining = await app.db
+      .select({ status: inboxEntries.status })
+      .from(inboxEntries)
+      .where(
+        and(
+          eq(inboxEntries.inboxId, observer.inboxId),
+          eq(inboxEntries.chatId, chat.id),
+          eq(inboxEntries.notify, false),
+        ),
+      );
+    expect(remaining.every((r) => r.status === "acked")).toBe(true);
+  });
+
+  it("collects silent context per (inbox, chatId) when one poll returns triggers from multiple chats", async () => {
+    // Same agent participates in two groups. Both produce a trigger before
+    // the agent polls. The single pollInbox call must split silent-row
+    // collection by chatId so context from chat A doesn't leak into chat B's
+    // preceding (and vice versa).
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const ctx = await createAdminContext(app, { username: `mc-${uid}` });
+    const human = await createAgent(app.db, { name: `mc-h-${uid}`, type: "human", managerId: ctx.memberId });
+    const observer = await createAgent(app.db, {
+      name: `mc-obs-${uid}`,
+      type: "autonomous_agent",
+      managerId: ctx.memberId,
+      clientId: ctx.clientId,
+    });
+    const filler = await createAgent(app.db, {
+      name: `mc-fill-${uid}`,
+      type: "autonomous_agent",
+      managerId: ctx.memberId,
+      clientId: ctx.clientId,
+    });
+    const chatA = await createChat(app.db, human.uuid, {
+      type: "group",
+      participantIds: [observer.uuid, filler.uuid],
+    });
+    const chatB = await createChat(app.db, human.uuid, {
+      type: "group",
+      participantIds: [observer.uuid, filler.uuid],
+    });
+    for (const chatId of [chatA.id, chatB.id]) {
+      await app.db
+        .update(chatParticipants)
+        .set({ mode: "mention_only" })
+        .where(and(eq(chatParticipants.chatId, chatId), eq(chatParticipants.agentId, observer.uuid)));
+    }
+
+    // Chat A: silent-A then mention-A. Chat B: silent-B then mention-B.
+    await sendMessage(app.db, chatA.id, human.uuid, { format: "text", content: "silent-A" });
+    await sendMessage(app.db, chatA.id, human.uuid, {
+      format: "text",
+      content: `@mc-obs-${uid} mention-A`,
+    });
+    await sendMessage(app.db, chatB.id, human.uuid, { format: "text", content: "silent-B" });
+    await sendMessage(app.db, chatB.id, human.uuid, {
+      format: "text",
+      content: `@mc-obs-${uid} mention-B`,
+    });
+
+    const pulled = await pollInbox(app.db, observer.inboxId, 10);
+    expect(pulled).toHaveLength(2);
+    const byChat = new Map(pulled.map((e) => [e.chatId, e] as const));
+    const a = byChat.get(chatA.id);
+    const b = byChat.get(chatB.id);
+    if (!a || !b) throw new Error("expected one entry per chat");
+    expect(a.message.precedingMessages.map((p) => p.content)).toEqual(["silent-A"]);
+    expect(b.message.precedingMessages.map((p) => p.content)).toEqual(["silent-B"]);
+  });
+
+  it("replyTo-routed entries do not pull silent context from the secondary chat", async () => {
+    // The replyTo cross-chat route writes an extra inbox row with a chat_id
+    // that's *not* the message's home chat. silent-context lookup keys on the
+    // entry's chat_id, so the routed entry must look at chat B's silent rows
+    // (where it lives) — not chat A's.
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const ctx = await createAdminContext(app, { username: `rt-${uid}` });
+    const sender = await createAgent(app.db, {
+      name: `rt-s-${uid}`,
+      type: "autonomous_agent",
+      managerId: ctx.memberId,
+      clientId: ctx.clientId,
+    });
+    const peer = await createAgent(app.db, {
+      name: `rt-p-${uid}`,
+      type: "autonomous_agent",
+      managerId: ctx.memberId,
+      clientId: ctx.clientId,
+    });
+
+    // Chat A: sender + peer. Sender will write the original message here with
+    // replyTo pointing at chat B (a private group with sender alone).
+    const chatA = await createChat(app.db, sender.uuid, { type: "direct", participantIds: [peer.uuid] });
+    const chatB = await createChat(app.db, sender.uuid, { type: "group", participantIds: [] });
+
+    // Original — establishes replyTo routing.
+    const original = await sendMessage(app.db, chatA.id, sender.uuid, {
+      format: "text",
+      content: "any progress?",
+      replyToInbox: sender.inboxId,
+      replyToChat: chatB.id,
+    });
+
+    // Peer drains the message they got in chat A.
+    await pollInbox(app.db, peer.inboxId, 10);
+
+    // Peer replies in chat A — fan-out drops a row in chat A for sender (full
+    // mode here, not mention_only) AND replyTo routing drops a second row in
+    // chat B with chat_id=B.
+    const reply = await sendMessage(app.db, chatA.id, peer.uuid, {
+      format: "text",
+      content: "yes, almost done",
+      inReplyTo: original.message.id,
+    });
+
+    // Sender polls — should get both rows; neither carries any preceding
+    // silent context (no silent rows exist in either chat).
+    const pulled = await pollInbox(app.db, sender.inboxId, 10);
+    expect(pulled.length).toBeGreaterThanOrEqual(1);
+    for (const entry of pulled) {
+      expect(entry.messageId).toBe(reply.message.id);
+      expect(entry.message.precedingMessages).toEqual([]);
+    }
+    // Confirm the routed row exists on chat B's chat_id.
+    const chatIds = pulled.map((e) => e.chatId).sort();
+    expect(chatIds).toContain(chatB.id);
+  });
+
+  it("pruneStaleSilentEntries deletes acked silent rows immediately and stale-pending rows past the age window", async () => {
+    // GC keeps the inbox_entries table from growing forever in chats where a
+    // mention_only agent is never @mentioned. Acked rows are deleted on any
+    // age (they've fulfilled their replay purpose); pending rows survive
+    // until they pass the configured max age.
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const { human, observer, chat } = await setupGroupWithMentionOnlyAgent(uid);
+
+    // Silent row #1 — will be acked first (still fresh).
+    await sendMessage(app.db, chat.id, human.uuid, { format: "text", content: "silent-acked" });
+    // Mark it acked manually (bulk-ack would happen on next mention, but we
+    // isolate the GC behaviour from mention timing here).
+    await app.db
+      .update(inboxEntries)
+      .set({ status: "acked", ackedAt: new Date() })
+      .where(
+        and(
+          eq(inboxEntries.inboxId, observer.inboxId),
+          eq(inboxEntries.chatId, chat.id),
+          eq(inboxEntries.notify, false),
+        ),
+      );
+
+    // Silent row #2 — fresh pending (within the age window).
+    await sendMessage(app.db, chat.id, human.uuid, { format: "text", content: "silent-fresh-pending" });
+
+    // Silent row #3 — backdated past the age window.
+    await sendMessage(app.db, chat.id, human.uuid, { format: "text", content: "silent-stale-pending" });
+    // Use a 1-second age limit + backdate the latest row 2 seconds.
+    await app.db.execute(sql`
+      UPDATE inbox_entries
+      SET created_at = NOW() - make_interval(secs => 2)
+      WHERE inbox_id = ${observer.inboxId}
+        AND chat_id = ${chat.id}
+        AND status = 'pending'
+        AND notify = false
+        AND id = (
+          SELECT id FROM inbox_entries
+          WHERE inbox_id = ${observer.inboxId} AND chat_id = ${chat.id}
+            AND status = 'pending' AND notify = false
+          ORDER BY id DESC LIMIT 1
+        )
+    `);
+
+    const result = await pruneStaleSilentEntries(app.db, /* maxAgeSeconds */ 1);
+    expect(result.ackedDeleted).toBe(1); // silent-acked
+    expect(result.stalePendingDeleted).toBe(1); // silent-stale-pending
+
+    // The fresh-pending row survives both passes.
+    const surviving = await app.db
+      .select({ status: inboxEntries.status })
+      .from(inboxEntries)
+      .where(
+        and(
+          eq(inboxEntries.inboxId, observer.inboxId),
+          eq(inboxEntries.chatId, chat.id),
+          eq(inboxEntries.notify, false),
+        ),
+      );
+    expect(surviving).toHaveLength(1);
+    expect(surviving[0]?.status).toBe("pending");
   });
 });

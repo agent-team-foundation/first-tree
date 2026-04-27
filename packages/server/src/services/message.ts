@@ -69,18 +69,24 @@ async function sendMessageInner(
   options: SendMessageOptions,
 ): Promise<SendMessageResult> {
   return db.transaction(async (tx) => {
-    // 1. Load participants once — we use them both to resolve `@name`
-    //    mentions and to fan-out inbox entries.
-    const participants = await tx
-      .select({
-        agentId: chatParticipants.agentId,
-        inboxId: agents.inboxId,
-        mode: chatParticipants.mode,
-        name: agents.name,
-      })
-      .from(chatParticipants)
-      .innerJoin(agents, eq(chatParticipants.agentId, agents.uuid))
-      .where(eq(chatParticipants.chatId, chatId));
+    // 1. Load participants + chat type in parallel — we need both for the
+    //    fan-out + mention enforcement steps; running them concurrently
+    //    keeps the hot send path on a single round-trip's worth of latency
+    //    rather than two sequential lookups (proposal §3 review feedback).
+    const [participants, [chatRow]] = await Promise.all([
+      tx
+        .select({
+          agentId: chatParticipants.agentId,
+          inboxId: agents.inboxId,
+          mode: chatParticipants.mode,
+          name: agents.name,
+        })
+        .from(chatParticipants)
+        .innerJoin(agents, eq(chatParticipants.agentId, agents.uuid))
+        .where(eq(chatParticipants.chatId, chatId)),
+      tx.select({ type: chats.type }).from(chats).where(eq(chats.id, chatId)).limit(1),
+    ]);
+    const chatType = chatRow?.type ?? null;
 
     // `replyTo` is a sender-declared routing promise — the sender is saying
     // "when someone replies to this, also deliver a copy to my own inbox in
@@ -121,16 +127,14 @@ async function sendMessageInner(
     //     agent calls `send --chat <id>` against a group without naming who
     //     should pick it up — every mention_only participant would silently
     //     drop the message and the sender would assume delivery.
-    if (options.enforceGroupMention) {
+    //     Uses the chat type pre-fetched in step 1 so this stays cheap.
+    if (options.enforceGroupMention && chatType === "group") {
       const recipientMentions = mergedMentions.filter((id) => id !== senderId);
       if (recipientMentions.length === 0) {
-        const [chat] = await tx.select({ type: chats.type }).from(chats).where(eq(chats.id, chatId)).limit(1);
-        if (chat?.type === "group") {
-          throw new BadRequestError(
-            "Sending to a group chat requires an explicit @mention. " +
-              "Use `agent send <name>` to message a single agent, or @<name> in the content to address one or more group members.",
-          );
-        }
+        throw new BadRequestError(
+          "Sending to a group chat requires an explicit @mention. " +
+            "Use `agent send <name>` to message a single agent, or @<name> in the content to address one or more group members.",
+        );
       }
     }
 

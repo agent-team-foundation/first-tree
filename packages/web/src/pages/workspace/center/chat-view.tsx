@@ -719,6 +719,14 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  /** Once-per-chat guard for the focus auto-prime: after the user has
+   * focused the input even once, we don't keep slapping `@` back into an
+   * empty draft. Reset when switching chats. */
+  const focusPrimedRef = useRef(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset is intentionally chatId-scoped.
+  useEffect(() => {
+    focusPrimedRef.current = false;
+  }, [chatId]);
 
   const { data: messagesData } = useQuery({
     queryKey: ["chat-messages", chatId],
@@ -1207,9 +1215,15 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
                 // Group / about-to-be-group chats: prime the input with `@`
                 // on focus so the autocomplete pops the recipient list right
                 // away — matches the proposal §2 "must choose a receiver
-                // before typing" UX. Skipped if the user already has text or
-                // there are no candidates to pick from.
-                if (!requiresMention || draft.length > 0 || mentionCandidates.length === 0) return;
+                // before typing" UX. Once-per-chat (focusPrimedRef): we
+                // don't want to re-stamp `@` after the user has cleared
+                // their draft and tabbed away/back; that would constantly
+                // fight the user when they're trying to write a fresh
+                // empty message without addressing anyone (e.g. paste over).
+                if (!requiresMention) return;
+                if (focusPrimedRef.current) return;
+                if (draft.length > 0 || mentionCandidates.length === 0) return;
+                focusPrimedRef.current = true;
                 setDraft("@");
                 setCursor(1);
                 requestAnimationFrame(() => {
