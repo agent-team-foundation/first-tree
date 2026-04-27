@@ -32,7 +32,7 @@
 - **任何邮件投递通道**(welcome / 邀请邮件 / OTP / nudge — 都不做)
 - 付费 / Stripe / 计费配额(2.2)
 - 邀请 link 的 rotate / expiry / 多 link / per-recipient 单次使用(2.3 — 都是 v2)
-- 邀请发送时直接给 admin 角色(2.3 — admin 提权由 Settings → Members 完成)
+- 邀请发送时直接给 admin 角色(2.3 — admin 提权由 `/admin` → Members 完成)
 - "登录后自动检测 pending invitations"(2.3 — 路径 3 模型不支持)
 - Activation funnel 埋点(2.6)
 - Cookie banner / GDPR 合规
@@ -71,11 +71,11 @@
 | 形态 | **每个 workspace 一条公共 share link**(多次使用),角色固定 member | 像 Discord / Slack 的 workspace 邀请 link;admin 复制一次即可在 IM 群里发广播,小团队场景最顺 |
 | 角色 | 固定 **member**;不支持邀请时直接给 admin | v1 简化:admin 提权场景不常见;新成员 join 后由 workspace admin 在 Settings 提权即可 |
 | 字段 | 仅 `token`,无 email、无 GitHub username、无 label、无 expiry、无 single-use | 简化到极致;v2 再加 rotate / expiry |
-| Token 生成时机 | workspace 创建时立即生成,持久化在 `organizations.invite_token` 字段 | lazy 也行,但 eager 更简单(admin 任何时候去 Settings → Members 直接能 copy)|
+| Token 生成时机 | workspace 创建时立即生成,持久化在 `organizations.invite_token` 字段 | lazy 也行,但 eager 更简单(admin 任何时候去 `/admin` → Members 直接能 copy)|
 | Rotate(轮换 token)| **本期不做**;token 一旦泄露暂时只能容忍 | v2 再做 |
 | 自动检测 pending | **不做**(无 per-recipient 概念,也没东西可"自动检测")| 受邀人只能通过 admin 给的链接 access |
 | 接受时校验 | token 与某 workspace 的 `invite_token` 匹配即可 | 任何登录用户拿到有效链接即可 accept |
-| 谁能看 invite link | 仅 workspace admin 可见(Settings → Members 页)| member 看不到 → 不能未经 admin 同意拉外人入伙 |
+| 谁能看 invite link | 仅 workspace admin 可见(`/admin` → Members 页)| member 看不到 → 不能未经 admin 同意拉外人入伙;Web 路由层用现有 admin role gate |
 
 ### 2.4 Agent Runtime
 
@@ -92,7 +92,7 @@
 | 屏数 | **仅 2 屏**:Connect computer → Create your first agent → 进 Workspace | 越少越好;每屏一个动作,完成即推进;不显示"还剩几步" |
 | 进度条 | **不做** | 跟"屏数极少"配合,用户感觉是被引导而非被压迫 |
 | Workspace setup | **不算 wizard 屏**,`/setup` 是 wizard 之前的强制前置门槛 | cross-workspace 动作,概念不同 |
-| Invite teammates | **不算 wizard 屏**,通过 Settings → Members 入口 | 邀请是日常运营,不是初次入门必经路径;`organizations.invite_token` 在 workspace 创建时已生成,admin 任何时候都能 copy |
+| Invite teammates | **不算 wizard 屏**,通过 `/admin` → Members 入口 | 邀请是日常运营,不是初次入门必经路径;`organizations.invite_token` 在 workspace 创建时已生成,admin 任何时候都能 copy |
 | 实现形式 | `/setup` 路由作 modal 载体;新用户和老用户(开第二个 workspace 时)共用同一个 modal | 单组件复用;UI 一致 |
 
 ### 2.6 基础设施
@@ -301,11 +301,10 @@ Bob 在 Slack 看到 Alex 发的链接:https://hub.first-tree.ai/invite/abc123
 Wizard 关闭后:
 - **Web 是主舞台**:agent 列表、对话、邀请队友、配 prompt/model
 - **CLI 第一次 connect 之后不再用**,后台 service 永久运行
-- **邀请队友**:Settings → Members → Copy invite link
-- **加机器**:Settings → Computers → `Add another computer` → 重复 Connect 屏流程
+- **邀请队友**(admin only):`/admin` → Members → Copy invite link
+- **加机器**:顶部 Computers tab(`/clients`)→ `Add another computer` → 重复 Connect 屏流程
 - **切 workspace**:顶部 dropdown;加新 workspace 通过 `/setup` modal(dropdown [ + Create / Join ])
-- **重新走向导**:Settings → `[ Restart onboarding ]`(P2-15)
-- **绑外部 IM**:Feishu / Slack adapter(已存在,不在 onboarding 范围)
+- **绑外部 IM**:`/settings` → Bindings(每个 member 自己的 Feishu / Slack 绑定)
 
 ---
 
@@ -352,7 +351,7 @@ auth_providers (
 
 | 字段 | 改动 | 说明 |
 |---|---|---|
-| `onboarding_state` | **新增** JSONB nullable | `{ current_step: 'connect' \| 'create_agent' \| 'completed', dismissed_at }`。**按 user × workspace 维度**(P0-5)。Bob 在 Acme 走完 Connect 屏后被邀进 Beta,Beta 的 state 为空但他机器已连过,可在 Beta 的 wizard 跳过 Connect 屏 |
+| `onboarding_state` | **新增** JSONB nullable | `{ current_step: 'connect' \| 'create_agent' \| 'completed' }`。**按 user × workspace 维度**(P0-5)。Bob 在 Acme 走完 Connect 屏后被邀进 Beta,Beta 的 state 为空但他机器已连过,可在 Beta 的 wizard 跳过 Connect 屏 |
 
 ### 5.5 数据迁移
 
@@ -372,7 +371,7 @@ auth_providers (
 | # | 风险 | 对策 |
 |---|---|---|
 | P0-1 | Connect 屏没检查 Claude Code 已 `claude login` → 进 Workspace 后第一句对话直接挂,无线索 | Prerequisite 双检查 `claude --version` + `claude auth status`,失败给具体修复命令 |
-| P0-2 | Admin 找不到 workspace 的 invite link | Settings → Members 显示当前 invite link + [ Copy link ] 按钮(rotate 本期不做)|
+| P0-2 | Admin 找不到 workspace 的 invite link | `/admin` → Members 页面显示当前 invite link + [ Copy link ] 按钮(rotate 本期不做)|
 | P0-3 | Onboarding 中途关浏览器后回来从头开始或被跳过 | `members.onboarding_state` 持久化进度,Web 进 `/` 时 reroute 回 wizard |
 | P0-4 | Connect 屏 token 过期 / 超时 / firewall 拦截无恢复路径 | 60s 没连上展开 troubleshoot 面板 + token 过期自动 [ Generate new token ];CLI 错误回写 server |
 | P0-5 | 老用户被邀进新 workspace 时**重复看到 Connect 屏**(他在前一个 workspace 已经装过 CLI 连过机器) | onboarding_state 按 **user × workspace** 维度,挂 `members` 表;Bob 的 Beta workspace 自动跳过 Connect 屏直接到 Create Agent |
@@ -395,8 +394,7 @@ auth_providers (
 | P2-12 | 移动端打开做不下去 | Banner "Best experienced on desktop";不阻断登录 |
 | P2-13 | ToS / Privacy 未链接 | 注册按钮下加 "By continuing you agree to [ToS] / [Privacy]" 占位页 |
 | P2-14 | Workspace 隐私说明缺失("我的代码会被发到哪") | Workspace 折叠 "Privacy & Data Flow" 短文 + 链到独立页 |
-| P2-15 | 跳过向导后无重启入口 | Settings 加 `[ Restart onboarding ]` 按钮 |
-| P2-16 | CLI 长期升级路径不明 | Web 顶部检测过期 banner;自动升级延后 |
+| P2-15 | CLI 长期升级路径不明 | Web 顶部检测过期 banner;自动升级延后 |
 
 ### 6.4 推迟 · 本期不做
 
@@ -406,6 +404,7 @@ auth_providers (
 - Cookie banner / GDPR 合规
 - 邀请 link rotate / expiry / 多 link / per-recipient 单次(全部 v2,decision 2.3)
 - "登录后自动检测 pending invitations"(decision 2.3,纯 share link 模型不支持)
+- "Restart onboarding" 按钮:Workspace empty state + 现有独立 action 入口(`Add another computer` / `+ New Agent`)已经覆盖所有"想再走一遍"的场景,加按钮属于多余
 
 ---
 
@@ -421,12 +420,12 @@ auth_providers (
 | **M3** | `/welcome` Wizard 第 1 屏 Connect:Web token + CLI 简化 + prerequisite 双检查(P0-1, P1-6)+ 失败恢复(P0-4)| 前后端 2d |
 | **M4** | Wizard 第 2 屏 Create Agent:复用 NewAgentDialog + agent 状态机 + 启动 spinner(P1-7, P1-10)+ name 冲突建议(P1-8)| 前后端 1.5d |
 | **M5** | 进 Workspace + Workspace empty / loading 态 spinner(P1-10)+ wizard 完成态写入 onboarding_state | 前端 0.5d |
-| **M6** | Settings → Members 页面显示 workspace invite link + Copy(P0-2)| 前端 0.5d |
+| **M6** | `/admin` → Members 页面显示 workspace invite link + Copy(P0-2)| 前端 0.5d |
 | **M7** | Onboarding 状态持久化:`members.onboarding_state` 读写 + 跨 workspace 跳过逻辑(P0-3, P0-5)+ 顶部 workspace switcher(P1-9)| 前后端 2d |
-| **M8** | 收尾:ToS 占位 + 移动端 banner + 隐私说明 + CLI 版本提示 + 重启入口(P2 全部)| 1.5d |
+| **M8** | 收尾:ToS 占位 + 移动端 banner + 隐私说明 + CLI 版本提示(P2 全部)| 1d |
 | **M9** | 隐藏 self-host 命令(Commander `hidden: true`)| 0.5d |
 
-**合计**:**~11.5 工程日**(单人全力 ~2.5 周)
+**合计**:**~11 工程日**(单人全力 ~2 周)
 
 ### 7.2 上线策略
 
