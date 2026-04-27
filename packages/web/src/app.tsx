@@ -15,6 +15,7 @@ import { LoginPage } from "./pages/login.js";
 import { SettingsPage } from "./pages/settings.js";
 import { SetupPage } from "./pages/setup.js";
 import { SignupPage } from "./pages/signup.js";
+import { WelcomeConnectPage } from "./pages/welcome-connect.js";
 import { WorkspacePage } from "./pages/workspace/index.js";
 
 const queryClient = new QueryClient({
@@ -48,6 +49,11 @@ export function App() {
 
               {/* Per-org app shell: must have at least one membership. */}
               <Route element={<RequireWorkspace />}>
+                {/* Wizard pages live under /welcome/* and intentionally
+                    skip the regular Layout — they're a focused, single-
+                    column flow that the design doc spec'd as "screen
+                    centre, no nav". */}
+                <Route path="welcome/connect" element={<WelcomeConnectPage />} />
                 <Route
                   element={
                     <PulseProvider>

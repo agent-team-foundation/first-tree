@@ -61,7 +61,11 @@ export function InvitePage() {
     try {
       const res = await joinWorkspace({ tokenOrUrl: token });
       await signInWithTokens({ accessToken: res.accessToken, refreshToken: res.refreshToken });
-      navigate("/", { replace: true });
+      // Per design doc §4.3: invitees land in `/welcome` (skipping the
+      // `/setup` modal — they didn't need to pick a workspace, the
+      // invite already did). The wizard then runs Connect Computer →
+      // Create Agent for the freshly-joined workspace.
+      navigate("/welcome/connect", { replace: true });
     } catch (err) {
       setJoinError(err instanceof Error ? err.message : "Could not join workspace");
     } finally {

@@ -49,9 +49,13 @@ export function SetupPage() {
           <CardDescription>Create your workspace, or join one your team has already set up.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          <CreateWorkspaceForm onSuccess={(t) => signInWithTokens(t).then(() => navigate("/", { replace: true }))} />
+          <CreateWorkspaceForm
+            onSuccess={(t) => signInWithTokens(t).then(() => navigate("/welcome/connect", { replace: true }))}
+          />
           <Divider />
-          <JoinWorkspaceForm onSuccess={(t) => signInWithTokens(t).then(() => navigate("/", { replace: true }))} />
+          <JoinWorkspaceForm
+            onSuccess={(t) => signInWithTokens(t).then(() => navigate("/welcome/connect", { replace: true }))}
+          />
         </CardContent>
       </Card>
     </div>

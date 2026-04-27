@@ -15,7 +15,14 @@ import {
 import { print } from "../core/output.js";
 
 export function registerServerCommands(program: Command): void {
-  const server = program.command("server").description("Manage First Tree Hub server");
+  // Self-host operator surface — kept functional but hidden from `--help`
+  // per M9 of docs/saas-onboarding-journey.md. SaaS users never run `server
+  // start` directly; the hub backend is operated by the host. Internal /
+  // enterprise operators can still discover and run the subcommands by
+  // typing them explicitly. Nothing is removed from the codebase.
+  const server = program
+    .command("server", { hidden: true })
+    .description("Self-host: manage the First Tree Hub server (advanced; hidden from default help)");
 
   server
     .command("start")
