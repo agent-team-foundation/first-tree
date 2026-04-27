@@ -52,6 +52,30 @@ export const serverConfigSchema = defineConfig({
       env: "FIRST_TREE_HUB_GITHUB_ALLOWED_ORG",
     }),
   },
+  /**
+   * GitHub OAuth — used by `/api/v1/auth/github/{start,callback}` for SaaS
+   * sign-in. When `clientId` / `clientSecret` are absent the server falls
+   * back to a dev-only stub callback path — see
+   * `packages/server/src/services/auth-github.ts`. State CSRF protection is
+   * always on and uses `secrets.jwtSecret` to sign the `state` parameter.
+   */
+  oauth: optional({
+    github: optional({
+      clientId: field(z.string(), { env: "FIRST_TREE_HUB_OAUTH_GITHUB_CLIENT_ID" }),
+      clientSecret: field(z.string(), {
+        env: "FIRST_TREE_HUB_OAUTH_GITHUB_CLIENT_SECRET",
+        secret: true,
+      }),
+      /**
+       * Public redirect URI registered with the GitHub OAuth app. Defaults to
+       * deriving from the request's origin if unset; explicit value is required
+       * once the hub sits behind a CDN that rewrites Host/Forwarded headers.
+       */
+      redirectUri: field(z.string().optional(), {
+        env: "FIRST_TREE_HUB_OAUTH_GITHUB_REDIRECT_URI",
+      }),
+    }),
+  }),
   cors: optional({
     origin: field(z.string(), { env: "FIRST_TREE_HUB_CORS_ORIGIN" }),
   }),

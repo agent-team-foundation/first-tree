@@ -36,12 +36,15 @@ import { agentMessageRoutes, agentSendToAgentRoutes } from "./api/agent/messages
 import { agentTaskRoutes } from "./api/agent/tasks.js";
 import { clientWsRoutes } from "./api/agent/ws-client.js";
 import { authRoutes } from "./api/auth.js";
+import { authGithubRoutes } from "./api/auth-github.js";
 import { bootstrapConfigRoutes } from "./api/bootstrap/config.js";
 import { contextTreeInfoRoutes } from "./api/context-tree-info.js";
 import { feedbackRoutes } from "./api/feedback.js";
 import { healthRoutes } from "./api/health.js";
 import { healthzRoutes } from "./api/healthz.js";
+import { inviteRoutes } from "./api/invite.js";
 import { meRoutes } from "./api/me.js";
+import { meWorkspacesRoutes, switchOrgRoutes } from "./api/me-workspaces.js";
 import { memberRoutes } from "./api/members.js";
 // Public agent discovery removed — visibility is now handled via agent.visibility field
 import { githubWebhookRoutes } from "./api/webhooks/github.js";
@@ -50,6 +53,7 @@ import { connectDatabase } from "./db/connection.js";
 import { AppError } from "./errors.js";
 import { agentSelectorHook } from "./middleware/agent-selector.js";
 import { memberAuthHook, requireAdminRoleHook } from "./middleware/member-auth.js";
+import { userAuthHook } from "./middleware/user-auth.js";
 import {
   applyLoggerConfig,
   createLogger,
@@ -152,6 +156,7 @@ export async function buildApp(config: Config) {
 
   // Auth hooks
   const memberAuth = memberAuthHook(db, config.secrets.jwtSecret);
+  const userAuth = userAuthHook(db, config.secrets.jwtSecret);
   const adminOnly = requireAdminRoleHook();
   const agentSelector = agentSelectorHook(db);
 
@@ -180,8 +185,28 @@ export async function buildApp(config: Config) {
       await api.register(healthRoutes);
       await api.register(githubWebhookRoutes, { prefix: "/webhooks" });
       await api.register(authRoutes, { prefix: "/auth" });
+      await api.register(authGithubRoutes, { prefix: "/auth/github" });
+      await api.register(inviteRoutes, { prefix: "/invite" });
       await api.register(contextTreeInfoRoutes, { prefix: "/context-tree" });
       await api.register(bootstrapConfigRoutes, { prefix: "/bootstrap" });
+
+      // User-token routes — accept both the rootless `type: "user"` JWT
+      // (just signed in, no workspace) and the per-org `type: "access"`
+      // JWT (existing user creating / joining another workspace).
+      await api.register(
+        async (userApp) => {
+          userApp.addHook("onRequest", userAuth);
+          await userApp.register(meWorkspacesRoutes);
+        },
+        { prefix: "/me/workspaces" },
+      );
+      await api.register(
+        async (userApp) => {
+          userApp.addHook("onRequest", userAuth);
+          await userApp.register(switchOrgRoutes);
+        },
+        { prefix: "/auth" },
+      );
 
       // Admin routes (JWT protected)
       await api.register(

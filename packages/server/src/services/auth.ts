@@ -1,26 +1,41 @@
 import { randomUUID } from "node:crypto";
 import bcrypt from "bcrypt";
-import { eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { jwtVerify, SignJWT } from "jose";
 import type { Database } from "../db/connection.js";
 import { members } from "../db/schema/members.js";
 import { users } from "../db/schema/users.js";
-import { UnauthorizedError } from "../errors.js";
+import { ForbiddenError, UnauthorizedError } from "../errors.js";
 
 const ACCESS_TOKEN_EXPIRY = "30m";
 const REFRESH_TOKEN_EXPIRY = "7d";
 const CONNECT_TOKEN_EXPIRY = "10m";
+/**
+ * User-only tokens are short-lived because they're issued to brand-new SaaS
+ * sign-ins who haven't picked / created a workspace yet. The frontend
+ * exchanges them for a per-org token via `/me/workspaces*` or
+ * `/auth/switch-org` quickly — long-lived user tokens would let an attacker
+ * who steals one keep enumerating workspace lookups indefinitely.
+ */
+const USER_TOKEN_EXPIRY = "30m";
 
 /** In-memory set of consumed connect token JTIs. Entries auto-expire after 10 minutes. */
 const consumedConnectJtis = new Map<string, number>();
 const CONNECT_JTI_TTL_MS = 600_000;
 
+/**
+ * `type: "user"` is a "rootless" JWT — it carries only `sub` (userId) and
+ * authorises only the `/me/workspaces*` + `/auth/switch-org` routes. SaaS
+ * sign-in issues a user token when the new account has zero memberships;
+ * after Create / Join / Switch the route returns a regular `type: "access"`
+ * token scoped to a specific organization.
+ */
 type TokenPayload = {
   sub: string;
-  memberId: string;
-  organizationId: string;
-  role: string;
-  type: "access" | "refresh" | "connect";
+  memberId?: string;
+  organizationId?: string;
+  role?: string;
+  type: "access" | "refresh" | "connect" | "user";
 };
 
 async function signToken(
@@ -76,7 +91,9 @@ export async function refreshAccessToken(db: Database, refreshToken: string, jwt
     throw new UnauthorizedError("Invalid or expired refresh token");
   }
 
-  if (payload.type !== "refresh" || !payload.sub) {
+  // `type: "refresh"` always carries a memberId — the rootless user-token
+  // refresh flow uses a `type: "user"` refresh token, handled separately.
+  if (payload.type !== "refresh" || !payload.sub || !payload.memberId) {
     throw new UnauthorizedError("Invalid token type");
   }
 
@@ -190,4 +207,92 @@ export async function exchangeConnectToken(
   const refreshToken = await signToken(secret, { ...tokenBase, type: "refresh" }, REFRESH_TOKEN_EXPIRY);
 
   return { accessToken, refreshToken };
+}
+
+/**
+ * Mint an access + refresh token pair scoped to a single membership. Shared
+ * by SaaS sign-in (GitHub callback), workspace create / join, and the
+ * `/auth/switch-org` endpoint.
+ */
+export async function signTokensForMember(
+  member: { userId: string; memberId: string; organizationId: string; role: string },
+  jwtSecretKey: string,
+): Promise<{ accessToken: string; refreshToken: string }> {
+  const secret = new TextEncoder().encode(jwtSecretKey);
+  const base = {
+    sub: member.userId,
+    memberId: member.memberId,
+    organizationId: member.organizationId,
+    role: member.role,
+  };
+  const accessToken = await signToken(secret, { ...base, type: "access" }, ACCESS_TOKEN_EXPIRY);
+  const refreshToken = await signToken(secret, { ...base, type: "refresh" }, REFRESH_TOKEN_EXPIRY);
+  return { accessToken, refreshToken };
+}
+
+/**
+ * Mint a "rootless" user token + companion refresh token. Issued when a
+ * SaaS sign-in lands on a user with zero memberships — the frontend
+ * exchanges it for a per-org token via `/me/workspaces` create / join.
+ *
+ * The refresh token is also `type: "user"` so the refresh endpoint can
+ * keep the rootless context alive without forcing the user to re-OAuth
+ * inside the wizard.
+ */
+export async function signUserTokens(
+  userId: string,
+  jwtSecretKey: string,
+): Promise<{ accessToken: string; refreshToken: string }> {
+  const secret = new TextEncoder().encode(jwtSecretKey);
+  const base = { sub: userId };
+  const accessToken = await signToken(secret, { ...base, type: "user" }, USER_TOKEN_EXPIRY);
+  const refreshToken = await signToken(secret, { ...base, type: "user" }, REFRESH_TOKEN_EXPIRY);
+  return { accessToken, refreshToken };
+}
+
+/**
+ * Re-issue tokens scoped to a different workspace the user already belongs
+ * to. The caller must be authenticated; we verify membership server-side
+ * to refuse cross-tenant escalation even if the client lies about the
+ * organizationId.
+ */
+export async function switchOrganization(
+  db: Database,
+  userId: string,
+  organizationId: string,
+  jwtSecretKey: string,
+): Promise<{ accessToken: string; refreshToken: string }> {
+  const [member] = await db
+    .select()
+    .from(members)
+    .where(and(eq(members.userId, userId), eq(members.organizationId, organizationId)))
+    .limit(1);
+  if (!member) {
+    // 403 not 404 — the caller is authenticated; we just refuse to grant
+    // access to a workspace they're not a member of.
+    throw new ForbiddenError("Not a member of the requested workspace");
+  }
+  return signTokensForMember(
+    { userId, memberId: member.id, organizationId: member.organizationId, role: member.role },
+    jwtSecretKey,
+  );
+}
+
+/**
+ * Pick the membership a freshly signed-in user should land in by default
+ * when they have multiple. Most-recently-created wins — it's the workspace
+ * they last cared about. Returns null when the user has no memberships
+ * yet (caller must issue a user-only token instead).
+ */
+export async function pickDefaultMembership(
+  db: Database,
+  userId: string,
+): Promise<{ memberId: string; organizationId: string; role: string } | null> {
+  const [latest] = await db
+    .select({ memberId: members.id, organizationId: members.organizationId, role: members.role })
+    .from(members)
+    .where(eq(members.userId, userId))
+    .orderBy(desc(members.createdAt))
+    .limit(1);
+  return latest ?? null;
 }
