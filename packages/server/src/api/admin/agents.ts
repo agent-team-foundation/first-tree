@@ -118,6 +118,20 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
     };
   });
 
+  /**
+   * Pre-create availability probe for the web creation form. The caller types
+   * an agent name; we answer whether the POST would succeed (`available: true`)
+   * or why it would fail (`invalid` / `reserved` / `taken`) without actually
+   * inserting a row. The regular POST still validates authoritatively — this is
+   * a pure UX convenience. Scoped to the caller's org, so two orgs can each
+   * have a `coder` without one blocking the other.
+   */
+  app.get<{ Params: { name: string } }>("/names/:name/availability", async (request) => {
+    const scope = memberScope(request);
+    const result = await agentService.checkAgentNameAvailability(app.db, scope.organizationId, request.params.name);
+    return result;
+  });
+
   app.post("/", async (request, reply) => {
     const scope = memberScope(request);
     const body = createAgentSchema.parse(request.body);

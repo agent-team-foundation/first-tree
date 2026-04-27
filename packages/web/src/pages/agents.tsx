@@ -7,6 +7,7 @@ import { useNavigate } from "react-router";
 import { getActivityOverview, type RuntimeAgent } from "../api/activity.js";
 import { listAgents } from "../api/agents.js";
 import { useAuth } from "../auth/auth-context.js";
+import { AgentChip } from "../components/agent-chip.js";
 import { LastStepModal } from "../components/last-step-modal.js";
 import { NewAgentDialog } from "../components/new-agent-dialog.js";
 import { Button } from "../components/ui/button.js";
@@ -24,7 +25,7 @@ import { PageHeader } from "../components/ui/page-header.js";
 import { Panel } from "../components/ui/panel.js";
 import { SectionHeader } from "../components/ui/section-header.js";
 import { StateDot } from "../components/ui/state-dot.js";
-import { useAgentNameMap } from "../lib/use-agent-name-map.js";
+import { useAgentIdentityMap, useAgentNameMap } from "../lib/use-agent-name-map.js";
 import { useMemberNameMap } from "../lib/use-member-name-map.js";
 import { formatDate } from "../lib/utils.js";
 
@@ -69,6 +70,7 @@ export function AgentsPage() {
   const [pill, setPill] = useState<PillKey>("all");
   const [search, setSearch] = useState("");
   const resolveAgentName = useAgentNameMap();
+  const resolveAgentIdentity = useAgentIdentityMap();
   const resolveMemberName = useMemberNameMap();
 
   const { data, isLoading, error } = useQuery({
@@ -256,7 +258,7 @@ export function AgentsPage() {
               title={`My agents · ${filteredMy.length}`}
               agents={filteredMy}
               runtimeMap={runtimeMap}
-              resolveAgentName={resolveAgentName}
+              resolveAgentIdentity={resolveAgentIdentity}
               resolveMemberName={resolveMemberName}
               navigate={navigate}
               showOwner={false}
@@ -282,7 +284,7 @@ export function AgentsPage() {
                 title={`Team agents · ${filteredTeam.length}`}
                 agents={filteredTeam}
                 runtimeMap={runtimeMap}
-                resolveAgentName={resolveAgentName}
+                resolveAgentIdentity={resolveAgentIdentity}
                 resolveMemberName={resolveMemberName}
                 navigate={navigate}
                 showOwner
@@ -337,7 +339,7 @@ function AgentsPanel({
   title,
   agents,
   runtimeMap,
-  resolveAgentName,
+  resolveAgentIdentity,
   resolveMemberName,
   navigate,
   emptyLabel,
@@ -348,7 +350,7 @@ function AgentsPanel({
   title: string;
   agents: Agent[];
   runtimeMap: Map<string, RuntimeAgent>;
-  resolveAgentName: (mention: string | null | undefined) => string;
+  resolveAgentIdentity: (uuid: string | null | undefined) => { name: string | null; displayName: string | null } | null;
   resolveMemberName: (id: string | null | undefined) => string;
   navigate: NavigateFn;
   emptyLabel: string;
@@ -367,8 +369,8 @@ function AgentsPanel({
         <DenseTable>
           <DenseTableHeader>
             <DenseTableRow>
-              <DenseTableHead>Name</DenseTableHead>
-              <DenseTableHead>Display</DenseTableHead>
+              <DenseTableHead>Display name</DenseTableHead>
+              <DenseTableHead>Agent name</DenseTableHead>
               <DenseTableHead>Type</DenseTableHead>
               <DenseTableHead>Delegate</DenseTableHead>
               {showOwner && <DenseTableHead>Owner</DenseTableHead>}
@@ -383,7 +385,7 @@ function AgentsPanel({
                 key={agent.uuid}
                 agent={agent}
                 runtime={pickRuntime(agent, runtimeMap)}
-                resolveAgentName={resolveAgentName}
+                resolveAgentIdentity={resolveAgentIdentity}
                 resolveMemberName={resolveMemberName}
                 navigate={navigate}
                 showOwner={showOwner}
@@ -424,14 +426,14 @@ function StateBreakdown({ items }: { items: Array<{ state: string; count: number
 function AgentRow({
   agent,
   runtime,
-  resolveAgentName,
+  resolveAgentIdentity,
   resolveMemberName,
   navigate,
   showOwner,
 }: {
   agent: Agent;
   runtime: RuntimeInfo;
-  resolveAgentName: (mention: string | null | undefined) => string;
+  resolveAgentIdentity: (uuid: string | null | undefined) => { name: string | null; displayName: string | null } | null;
   resolveMemberName: (id: string | null | undefined) => string;
   navigate: NavigateFn;
   showOwner: boolean;
@@ -443,20 +445,32 @@ function AgentRow({
     runtimeState === "blocked" ||
     runtimeState === "error" ||
     runtimeState === "offline";
+  const delegate = agent.delegateMention ? resolveAgentIdentity(agent.delegateMention) : null;
   return (
     <DenseTableRow interactive onClick={() => navigate(`/agents/${agent.uuid}`)}>
       <DenseTableCell>
-        <span className="mono font-medium">{agent.name}</span>
+        <span className="font-medium">{agent.displayName ?? <span style={{ color: "var(--fg-4)" }}>—</span>}</span>
       </DenseTableCell>
-      <DenseTableCell style={{ color: "var(--fg-2)" }}>{agent.displayName ?? "—"}</DenseTableCell>
+      <DenseTableCell>
+        {agent.name ? (
+          <span className="mono text-label" style={{ color: "var(--fg-3)" }}>
+            @{agent.name}
+          </span>
+        ) : (
+          <span className="mono text-label" style={{ color: "var(--fg-4)" }}>
+            —
+          </span>
+        )}
+      </DenseTableCell>
       <DenseTableCell>
         <DenseBadge tone={agent.type === "autonomous_agent" ? "accent" : "neutral"}>{agent.type}</DenseBadge>
       </DenseTableCell>
-      <DenseTableCell
-        className="mono text-label"
-        style={{ color: agent.delegateMention ? "var(--accent-dim)" : "var(--fg-4)" }}
-      >
-        {agent.delegateMention ? resolveAgentName(agent.delegateMention) : "—"}
+      <DenseTableCell>
+        {agent.delegateMention ? (
+          <AgentChip name={delegate?.name ?? null} displayName={delegate?.displayName ?? null} tone="accent" />
+        ) : (
+          <span style={{ color: "var(--fg-4)" }}>—</span>
+        )}
       </DenseTableCell>
       {showOwner && (
         <DenseTableCell className="text-label" style={{ color: "var(--fg-2)" }}>

@@ -53,8 +53,8 @@ export function AdminAllAgentsPage() {
           <DenseTable>
             <DenseTableHeader>
               <DenseTableRow>
-                <DenseTableHead>Name</DenseTableHead>
-                <DenseTableHead>Display</DenseTableHead>
+                <DenseTableHead>Display name</DenseTableHead>
+                <DenseTableHead>Agent name</DenseTableHead>
                 <DenseTableHead>Type</DenseTableHead>
                 <DenseTableHead>Visibility</DenseTableHead>
                 <DenseTableHead>Owner</DenseTableHead>
@@ -70,9 +70,21 @@ export function AdminAllAgentsPage() {
                   onClick={() => navigate(`/agents/${encodeURIComponent(a.uuid)}`)}
                 >
                   <DenseTableCell>
-                    <span className="mono font-medium">{a.name ?? a.uuid.slice(0, 8)}</span>
+                    <span className="font-medium">
+                      {a.displayName ?? <span style={{ color: "var(--fg-4)" }}>—</span>}
+                    </span>
                   </DenseTableCell>
-                  <DenseTableCell style={{ color: "var(--fg-2)" }}>{a.displayName ?? "—"}</DenseTableCell>
+                  <DenseTableCell>
+                    {a.name ? (
+                      <span className="mono text-label" style={{ color: "var(--fg-3)" }}>
+                        @{a.name}
+                      </span>
+                    ) : (
+                      <span className="mono text-label" style={{ color: "var(--fg-4)" }}>
+                        {a.uuid.slice(0, 8)}
+                      </span>
+                    )}
+                  </DenseTableCell>
                   <DenseTableCell>
                     <DenseBadge tone={a.type === "autonomous_agent" ? "accent" : "neutral"}>{a.type}</DenseBadge>
                   </DenseTableCell>
