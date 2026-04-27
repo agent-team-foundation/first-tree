@@ -2,6 +2,7 @@ import type { McpServer } from "@agent-team-foundation/first-tree-hub-shared";
 import { Plus } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import { Button } from "../../components/ui/button.js";
+import { DenseBadge } from "../../components/ui/dense-badge.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
@@ -13,15 +14,31 @@ import type { DraftListItem } from "./use-config-draft.js";
  * draft; actual persistence is deferred to the bottom Save Bar.
  */
 
+/** Runtime health of a single MCP tool entry. */
+export type McpToolHealth = "working" | "error" | "unknown";
+
 export type McpSectionProps = {
   items: Array<DraftListItem<McpServer>>;
   otherNames: (exceptKey: string | null) => ReadonlySet<string>;
+  /**
+   * Optional per-tool runtime-health lookup. Takes the MCP server name (case
+   * sensitive) and returns its status. When the page does not yet know (no
+   * runtime API wired), return "unknown" or leave undefined — the badge falls
+   * back to "unknown" automatically.
+   */
+  toolHealth?: (name: string) => McpToolHealth;
   onAdd: (value: McpServer) => void;
   onUpdate: (key: string, value: McpServer) => void;
   onDelete: (key: string) => void;
   onUndoDelete: (key: string) => void;
   disabled?: boolean;
 };
+
+function toolHealthBadgeTone(h: McpToolHealth): "accent" | "error" | "outline" {
+  if (h === "working") return "accent";
+  if (h === "error") return "error";
+  return "outline";
+}
 
 export function McpSection(props: McpSectionProps) {
   const [dialog, setDialog] = useState<{ mode: "add" } | { mode: "edit"; key: string; initial: McpServer } | null>(
@@ -54,20 +71,27 @@ export function McpSection(props: McpSectionProps) {
         {props.items.length === 0 ? (
           <p className="text-body text-muted-foreground">No MCP servers. Add one to extend the agent's tools.</p>
         ) : (
-          props.items.map((item) => (
-            <ListRow
-              key={item.key}
-              status={item.status}
-              onEdit={() => setDialog({ mode: "edit", key: item.key, initial: item.value })}
-              onDelete={() => props.onDelete(item.key)}
-              onUndo={() => props.onUndoDelete(item.key)}
-              disabled={props.disabled}
-            >
-              <span className="text-caption rounded bg-muted px-1.5 py-0.5 font-mono">{item.value.transport}</span>
-              <span className="font-medium font-mono">{item.value.name}</span>
-              <span className="text-caption text-muted-foreground truncate">{describeMcp(item.value)}</span>
-            </ListRow>
-          ))
+          props.items.map((item) => {
+            // Runtime health is "unknown" until the caller wires a real lookup.
+            // Deleted rows always render as unknown since the binding is going away.
+            const health: McpToolHealth =
+              item.status === "deleted" || !props.toolHealth ? "unknown" : props.toolHealth(item.value.name);
+            return (
+              <ListRow
+                key={item.key}
+                status={item.status}
+                onEdit={() => setDialog({ mode: "edit", key: item.key, initial: item.value })}
+                onDelete={() => props.onDelete(item.key)}
+                onUndo={() => props.onUndoDelete(item.key)}
+                disabled={props.disabled}
+              >
+                <span className="text-caption rounded bg-muted px-1.5 py-0.5 font-mono">{item.value.transport}</span>
+                <span className="font-medium font-mono">{item.value.name}</span>
+                <DenseBadge tone={toolHealthBadgeTone(health)}>{health}</DenseBadge>
+                <span className="text-caption text-muted-foreground truncate">{describeMcp(item.value)}</span>
+              </ListRow>
+            );
+          })
         )}
       </div>
 
