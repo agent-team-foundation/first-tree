@@ -14,9 +14,9 @@
 
 `docs/quickstart-zh.md` 已经跟 `origin/main` 上的代码对不上 —— 文档描述的"先 `client connect` → 然后 New Agent → 然后终端 `agent add`"路径在线上不存在;按钮文案、字段名、模态流转早就变了(对齐 `06e40fb` 的完整 drift:`Generate Connect Command` 按钮在代码里只是 `Generate`,容器叫 "Connect a computer";New Agent 的 `type` 硬编码 `personal_assistant`,给用户看的字段叫 "Where it runs";"Pin to client" 字段已被自动探测取代;"Agent Created" 对话框已变成 "Last step — connect your computer" 模态,命令是合并的 one-liner)。文档只覆盖托管 Hub,没有自托管本地场景的 quickstart,尽管 `first-tree-hub server start` 是支持的命令。代码里围绕"同一台机器多份凭据"的处理(account-switch gate、隔离指南、跨 org 重注册)对早期产品过度,如果不显式 defer 掉,新文档会继承同一份混乱。
 
-**本轮 scope:** 本地版第一锁(§ 2.1,所有决策已落定);托管版 § 2.2 部分锁定,几个问题显式 defer。
+**本轮 scope:** 本地版先草拟(§ 2.1);托管版 § 2.2 草稿,几个问题显式 defer。整篇是工作草稿,有需要重审的地方随时拍出来。
 
-### 1.2 产品原则(本阶段锁死)
+### 1.2 产品原则(当前看法)
 
 - **一人 → 一 org → 一 member → 一 client**,默认 invariant。
 - **Server 端多租户保留** —— `organizations` 表、`members` 桥、JWT 带 `organizationId`、查询按 org 过滤。托管 Hub 多客户的 ACL 基底,**不是**用户可见的"加入多 org" 能力。
@@ -40,7 +40,7 @@
 
 ## 2. 要做的修改
 
-### 2.1 本地版流程(已锁定)
+### 2.1 本地版流程(草稿)
 
 新增一个顶层命令 `first-tree-hub start`,把今天的三步("`server start` + `admin:create` + `client connect`")合一。该命令有**两种平等支持的操作形态**,用户按当下场景挑;**不存在"哪个是默认"的说法**,onboarding 文档把它们当作并列选项呈现。
 
@@ -265,7 +265,7 @@ first-tree-hub service uninstall         # 删 plist/unit + 停 daemon(不动 Po
 - Windows 服务支持 —— Windows 上当前只有前台形态(`first-tree-hub start`)可用。
 - 单机多账号 —— 单账号/机器是产品 invariant。
 
-### 2.2 托管版流程(部分锁定)
+### 2.2 托管版流程(草稿,部分)
 
 托管版**不引入** `first-tree-hub start` 之类的顶层一条龙命令——既有 Web + CLI 表面保留,只在三个具体地方做 trim(Qh-2 / Qh-3 / Qh-4)。剩下几个相邻问题被显式 defer(Qh-1 / Qh-5 / Qh-6 / Qh-7),见本节末尾。
 
@@ -403,12 +403,12 @@ This computer already has Hub credentials. Replace? [y/N]
 
 ## 3. 分阶段顺序
 
-- **Phase 1(本地版,已完整 spec)—— 切成 1a + 1b 两个 PR**(#14):
+- **Phase 1(本地版,已草拟)—— 切成 1a + 1b 两个 PR**(#14):
   - **Phase 1a —— 仅 C2。** `first-tree-hub start` 前台形态 + 共用编排(Docker preflight、Postgres、迁移、改名后的 `createAdmin` + `findAdmin` 自动建 admin)+ `local-bootstrap` 端点带三道 gate 中间件 + Web `/login` 路由 + 浏览器自动打开。前台跑端到端可演示;**没有平台特定代码**。独立可发。
   - **Phase 1b —— C8。** `--service` 形态 + `service` 子命令组 + 健康检查 + 回滚(Q8)+ daemon 启动鉴权(B2/Q9)。新增 launchd / systemd-user 适配。依赖 1a。
   - 加上 D1 的本地段 + README Quick Start 改写 —— 跟 1a 同 PR(文档跟代码走)。
   - **Phase 1 比上一版小** —— 砍掉的 `login` 命令(C9)、bootstrap-token 端点、多层 URL 投递、裸命令别名都被 loopback-trust + Web `/login` 模型一勺端。
-- **Phase 2(托管版简化,已完整 spec):** C1 + C3——两边都改 connect / Last-step 这对组合,测试 scope 共享。D1 托管段按 Path A 首次 / Path B 加机器(Qh-2)写。D2 同步英文。
+- **Phase 2(托管版简化,已草拟):** C1 + C3——两边都改 connect / Last-step 这对组合,测试 scope 共享。D1 托管段按 Path A 首次 / Path B 加机器(Qh-2)写。D2 同步英文。
 - **Phase 3(Hub 内扫尾):** D3、D4、C4,各自独立小 PR。
 - **Phase 4(defer 题的 follow-up):** 单独会话重开 Qh-1 / Qh-5 / Qh-6 / Qh-7。C5 在这阶段先落核心动作(不 commit 默认 flag),等 Qh-6 决了再 flip。
 
@@ -437,7 +437,7 @@ This computer already has Hub credentials. Replace? [y/N]
 | Qh-1 | member identity source of truth | **Defer。** 架构方向是 Hh-1.B(Context Tree `members/` 是 SoT,Hub Web 作为编辑它的友好 UI,通过 PR/commit 写,sync 反向读)。**实现节奏 + auth 机制**(OAuth vs password)开放。今天的 `members.createMember`(纯 DB)留作占位。 | 架构级、跨产品决策,需另开会话 |
 | Qh-2 | Path A vs Path B canonical | **两条都要。** 按生命周期时点拆:Path A(Last-step 模态)是首次接入;Path B(Connect a computer strip)是加机器。文档按时点写,不强行选 canonical。Welcome flow UX 升级 defer。 | A 和 B 是用户在不同阶段的两种心智,不是互相替代 |
 | Qh-3 | 砍 `agent add`(C3) | **是**。两命令链(install + connect)。 | 消灭孤儿 yaml 失败模式;`agent:pinned` replay 已覆盖被砍那一步 |
-| Qh-4 | 简化 account-switch gate(C1) | **是**。一行 Y/N replace prompt。无 JWT 解码、无隔离指南。 | 单账号原则已锁;原 60 行 gate 服务的多账号场景已 defer |
+| Qh-4 | 简化 account-switch gate(C1) | **是**。一行 Y/N replace prompt。无 JWT 解码、无隔离指南。 | 单账号/机器是本草稿的工作假设;原 60 行 gate 服务的多账号场景已 defer |
 | Qh-5 | Org provisioning 文档放哪 | **Defer。** 大概率落地形态:单独 `docs/operator-runbook.md`。当前用户文档假设"已有凭据"。 | 不阻塞别的 Qh,需要 follow-up |
 | Qh-6 | `client logout` 默认是否卸服务 | **Defer。** C5 落核心动作(disconnect + 停进程 + 清凭据);服务卸载默认 flag 等后续决。 | flag 默认不阻塞命令本体 |
 | Qh-7 | 托管端到端旅程文档 | **Defer。** 阻塞在 Qh-1(auth 机制决定"用户怎么拿到第一份凭据")。 | 旅程写作需要稳定的凭据流程 |

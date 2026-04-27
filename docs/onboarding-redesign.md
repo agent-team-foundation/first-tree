@@ -14,9 +14,9 @@
 
 `docs/quickstart-zh.md` no longer matches the code on `origin/main`. The doc prescribes a `client connect` → New Agent → `agent add` sequence that doesn't exist in the running system; field labels, command shapes, and modal flows have all moved on (full drift list against `06e40fb`: "Generate Connect Command" button is now just `Generate` in a "Connect a computer" strip; `type` field on New Agent is hardcoded to `personal_assistant` and replaced by a "Where it runs" selector; "Pin to client" field is gone, replaced by automatic client probing; "Agent Created" dialog became a "Last step — connect your computer" modal emitting a combined one-liner). The doc only covers a hosted Hub; there is no quickstart for the self-hosted local-machine scenario despite `first-tree-hub server start` being a supported command. And the multi-account / `FIRST_TREE_HUB_HOME` machinery in the code is premature for the current product stage — without an explicit decision to defer it, any rewrite inherits the same confusion.
 
-**Scope of this doc:** local scenario is locked first (§ 2.1, all decisions finalised); hosted scenario is partially finalised (§ 2.2) with several questions explicitly deferred.
+**Scope of this doc:** local scenario is drafted first (§ 2.1); hosted scenario is sketched in § 2.2 with several questions explicitly deferred. Everything in this doc is a working draft — call out anything that should be revisited.
 
-### 1.2 Product principles (locked for this stage)
+### 1.2 Product principles (current take)
 
 - **One human = one org = one member = one client.** Default invariant.
 - **Server-side multi-tenancy stays** — `organizations` table, `members` join table, JWT scoped to org. ACL substrate for a hosted Hub serving multiple customers; NOT a user-visible "join multiple orgs" capability.
@@ -40,7 +40,7 @@
 
 ## 2. Required changes
 
-### 2.1 Local-scenario flow (FINALIZED)
+### 2.1 Local-scenario flow (draft)
 
 A single new top-level command — `first-tree-hub start` — replaces today's three-step `server start` + `admin:create` + `client connect`. The command has two equally-supported operational shapes; the user picks the one that matches their situation. Neither is "the default"; the onboarding guide presents them as parallel choices.
 
@@ -265,7 +265,7 @@ The user **never sees** username, password, org name, JWTs, refresh tokens, `age
 - **Windows service support** — foreground shape (`first-tree-hub start`) is the only path on Windows for now.
 - **Multi-account on a single machine** — single-account-per-machine is the product invariant.
 
-### 2.2 Hosted-scenario flow (PARTIALLY FINALIZED)
+### 2.2 Hosted-scenario flow (draft, partial)
 
 The hosted scenario does not get a single new top-level command (no equivalent of `first-tree-hub start`). Instead, the existing Web + CLI surface stays and is trimmed in three concrete places (Qh-2, Qh-3, Qh-4 below). Several adjacent questions are explicitly deferred (Qh-1, Qh-5, Qh-6, Qh-7) — see the bottom of this section.
 
@@ -403,12 +403,12 @@ The following are recognised but not finalised in this redesign. Each is blocked
 
 ## 3. Sequencing
 
-- **Phase 1 (local-scenario, fully spec'd) — split into 1a + 1b** (#14):
+- **Phase 1 (local-scenario, drafted) — split into 1a + 1b** (#14):
   - **Phase 1a — C2 only.** `first-tree-hub start` foreground shape + shared orchestration (Docker preflight, Postgres, migrations, auto-admin via renamed `createAdmin` + `findAdmin`) + `local-bootstrap` endpoint with the 3-gate middleware + Web `/login` route + browser auto-open. End-to-end demoable on `start` foreground; no platform-specific code. Independently shippable.
   - **Phase 1b — C8.** `--service` shape + `service` management subcommands + health-check + rollback (Q8) + daemon startup auth (B2/Q9). Adds launchd / systemd-user adapters. Depends on 1a.
   - Plus minimal D1 update for the local section + README Quick Start update — bundle into 1a (docs follow code).
   - **Phase 1 is smaller than the previous draft** — the dropped `login` command (C9), bootstrap-token endpoint, multi-layered URL delivery, and bare-command alias all collapse into the loopback-trust + Web `/login` model.
-- **Phase 2 (hosted-scenario simplifications, fully spec'd).** C1 + C3 — both touch the connect/Last-step pair, share a testing scope. D1 hosted section using Path A first-time / Path B add-machine framing (Qh-2). D2 mirror in English.
+- **Phase 2 (hosted-scenario simplifications, drafted).** C1 + C3 — both touch the connect/Last-step pair, share a testing scope. D1 hosted section using Path A first-time / Path B add-machine framing (Qh-2). D2 mirror in English.
 - **Phase 3 (Hub-internal cleanup).** D3, D4, C4 — each can be its own small PR.
 - **Phase 4 (deferred-question follow-ups).** Re-open Qh-1, Qh-5, Qh-6, Qh-7 in a separate session. C5 lands its core (no default-flag commitment) here, then flips on Qh-6.
 
@@ -437,7 +437,7 @@ The following are recognised but not finalised in this redesign. Each is blocked
 | Qh-1 | Source of truth for member identity | **Deferred.** Architecture direction is Hh-1.B (Context Tree `members/` as SoT, Hub Web as friendly UI for editing it via PR/commit). Implementation timing + auth mechanism (OAuth vs password) open. Today's `members.createMember` (DB-only) stays until further decision. | Architectural decision, cross-product; needs separate session |
 | Qh-2 | Path A vs Path B canonical | **Both.** Treat as two lifecycle moments: Path A (Last-step modal) is first-time onboarding; Path B (Connect-a-computer strip) is adding more machines. Doc structured by lifecycle moment, not "canonical vs alternative". Welcome-flow UX upgrade deferred. | A and B are different mental models for different stages, not competing options |
 | Qh-3 | Drop `agent add` from one-liner (C3) | **Yes.** Two-command chain (install + connect). | Removes orphan-yaml failure mode; `agent:pinned` replay covers the dropped step |
-| Qh-4 | Simplify account-switch gate (C1) | **Yes.** One-line Y/N replace prompt. No JWT decoding, no isolation guide. | Single-account-per-machine principle locked; the 60-line gate served a multi-account scenario we deferred |
+| Qh-4 | Simplify account-switch gate (C1) | **Yes.** One-line Y/N replace prompt. No JWT decoding, no isolation guide. | Single-account-per-machine is the working assumption in this draft; the 60-line gate served a multi-account scenario we deferred |
 | Qh-5 | Org provisioning docs | **Deferred.** Likely outcome: separate `docs/operator-runbook.md`. Today: user docs assume "you have credentials". | Not blocking other Qh items; needs follow-up |
 | Qh-6 | `client logout` default service teardown | **Deferred.** C5 lands core actions (disconnect + stop process + clear creds); default flag for service teardown decided later. | Flag default doesn't block the command itself |
 | Qh-7 | Hosted end-to-end journey writeup | **Deferred.** Blocked on Qh-1 (auth mechanism shapes how user gets first credential). | The journey writeup needs a settled credential flow |
