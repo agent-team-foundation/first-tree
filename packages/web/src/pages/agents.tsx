@@ -1,7 +1,7 @@
 import type { Agent } from "@agent-team-foundation/first-tree-hub-shared";
 import { AGENT_TYPES } from "@agent-team-foundation/first-tree-hub-shared";
 import { useQuery } from "@tanstack/react-query";
-import { Filter, Plus, Search } from "lucide-react";
+import { Plus, Search } from "lucide-react";
 import { type ReactNode, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { getActivityOverview, type RuntimeAgent } from "../api/activity.js";
@@ -33,8 +33,6 @@ const agentTypeValues = Object.values(AGENT_TYPES);
 
 type RuntimeInfo = {
   runtimeState: string | null;
-  activeSessions: number | null;
-  totalSessions: number | null;
 };
 
 function sortByName(agents: Agent[]): Agent[] {
@@ -49,8 +47,6 @@ function pickRuntime(agent: Agent, map: Map<string, RuntimeAgent>): RuntimeInfo 
   const r = map.get(agent.uuid);
   return {
     runtimeState: r?.runtimeState ?? null,
-    activeSessions: r?.activeSessions ?? null,
-    totalSessions: r?.totalSessions ?? null,
   };
 }
 
@@ -171,9 +167,6 @@ export function AgentsPage() {
         }
         right={
           <div className="flex items-center gap-1.5">
-            <Button variant="outline" size="xs">
-              Import
-            </Button>
             <Button size="xs" onClick={() => setCreateDialogOpen(true)}>
               <Plus className="h-3 w-3" />
               New agent
@@ -249,9 +242,6 @@ export function AgentsPage() {
               </option>
             ))}
           </select>
-          <Button variant="ghost" size="xs" className="text-label">
-            <Filter className="h-3 w-3" /> Columns
-          </Button>
         </div>
 
         {isLoading ? (
@@ -271,6 +261,7 @@ export function AgentsPage() {
               resolveAgentIdentity={resolveAgentIdentity}
               resolveMemberName={resolveMemberName}
               navigate={navigate}
+              showOwner={false}
               emptyLabel={
                 myAgents.length === 0
                   ? "No agents yet — create one to get started"
@@ -296,7 +287,17 @@ export function AgentsPage() {
                 resolveAgentIdentity={resolveAgentIdentity}
                 resolveMemberName={resolveMemberName}
                 navigate={navigate}
+                showOwner
                 emptyLabel="No agents match the current filter"
+                breakdown={
+                  <StateBreakdown
+                    items={[
+                      { state: "working", count: countByRuntime(teamAgents, runtimeMap, "working") },
+                      { state: "blocked", count: countByRuntime(teamAgents, runtimeMap, "blocked") },
+                      { state: "error", count: countByRuntime(teamAgents, runtimeMap, "error") },
+                    ]}
+                  />
+                }
               />
             )}
           </>
@@ -344,6 +345,7 @@ function AgentsPanel({
   emptyLabel,
   breakdown,
   className,
+  showOwner,
 }: {
   title: string;
   agents: Agent[];
@@ -354,6 +356,7 @@ function AgentsPanel({
   emptyLabel: string;
   breakdown?: ReactNode;
   className?: string;
+  showOwner: boolean;
 }) {
   return (
     <Panel className={className}>
@@ -370,9 +373,8 @@ function AgentsPanel({
               <DenseTableHead>Agent name</DenseTableHead>
               <DenseTableHead>Type</DenseTableHead>
               <DenseTableHead>Delegate</DenseTableHead>
-              <DenseTableHead>Owner</DenseTableHead>
+              {showOwner && <DenseTableHead>Owner</DenseTableHead>}
               <DenseTableHead>Runtime</DenseTableHead>
-              <DenseTableHead>Sessions</DenseTableHead>
               <DenseTableHead>Status</DenseTableHead>
               <DenseTableHead>Created</DenseTableHead>
             </DenseTableRow>
@@ -386,6 +388,7 @@ function AgentsPanel({
                 resolveAgentIdentity={resolveAgentIdentity}
                 resolveMemberName={resolveMemberName}
                 navigate={navigate}
+                showOwner={showOwner}
               />
             ))}
           </DenseTableBody>
@@ -426,14 +429,16 @@ function AgentRow({
   resolveAgentIdentity,
   resolveMemberName,
   navigate,
+  showOwner,
 }: {
   agent: Agent;
   runtime: RuntimeInfo;
   resolveAgentIdentity: (uuid: string | null | undefined) => { name: string | null; displayName: string | null } | null;
   resolveMemberName: (id: string | null | undefined) => string;
   navigate: NavigateFn;
+  showOwner: boolean;
 }) {
-  const { runtimeState, activeSessions, totalSessions } = runtime;
+  const { runtimeState } = runtime;
   const isKnownState =
     runtimeState === "idle" ||
     runtimeState === "working" ||
@@ -467,9 +472,11 @@ function AgentRow({
           <span style={{ color: "var(--fg-4)" }}>—</span>
         )}
       </DenseTableCell>
-      <DenseTableCell className="text-label" style={{ color: "var(--fg-2)" }}>
-        {resolveMemberName(agent.managerId)}
-      </DenseTableCell>
+      {showOwner && (
+        <DenseTableCell className="text-label" style={{ color: "var(--fg-2)" }}>
+          {resolveMemberName(agent.managerId)}
+        </DenseTableCell>
+      )}
       <DenseTableCell>
         {runtimeState && isKnownState ? (
           <span className="inline-flex items-center gap-1.5">
@@ -481,18 +488,6 @@ function AgentRow({
         ) : (
           <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
             —
-          </span>
-        )}
-      </DenseTableCell>
-      <DenseTableCell>
-        {activeSessions === null && totalSessions === null ? (
-          <span className="mono text-label" style={{ color: "var(--fg-4)" }}>
-            —
-          </span>
-        ) : (
-          <span className="mono tnum text-label">
-            <span style={{ color: "var(--fg-2)" }}>{activeSessions ?? 0}</span>
-            <span style={{ color: "var(--fg-4)" }}> / {totalSessions ?? 0}</span>
           </span>
         )}
       </DenseTableCell>
