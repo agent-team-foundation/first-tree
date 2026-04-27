@@ -47,3 +47,15 @@ Pull requests should include a short problem statement, a summary of changes,
 the commands run, and any known gaps. Link related issues when available. For
 GitHub operations, prefer the `gh` CLI. Do not include generated artifacts,
 local secrets, or unrelated formatting churn.
+
+## 一些技术决策
+
+### apps 和 packages 的用法
+
+- apps 下的包是未来要发布在 npm 上的包；
+- packages下的包都是 internal 的包，不需要发布在 npm 上，而是通过内部引用来使用；
+
+### apps 下的 tree 和 packages 中的 core 的界限如何划分？
+
+1. apps/cli 下主要负责和 Linux/MacOS/Windows 的操作系统交互，主要处理外界信息的转换和处理；前置抛出报错；
+2. packages 中的逻辑主要实现核心业务逻辑；假设接受到的信息已经完成了基础的 format，为可用数据；
