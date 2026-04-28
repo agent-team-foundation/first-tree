@@ -142,8 +142,15 @@ async function completeOauthFlow(
 ) {
   const { userId } = await findOrCreateUserFromGithub(app.db, profile);
 
-  // If `next` is an /invite/<token> path, attempt to join that org instead
-  // of provisioning the personal team. Invite paths look like `/invite/abc123`.
+  // Track which signup path the user took. Surfaced to the SPA via the
+  // post-OAuth fragment so the onboarding modal can pick context-aware copy.
+  // - "invite": user redeemed an invite token, joined an existing org
+  // - "solo":   first-time user, fresh org auto-provisioned
+  // - "returning": existing user signing back in
+  let joinPath: "invite" | "solo" | "returning" = "returning";
+
+  // If `next` is an /invite/<token> path, join that org instead of
+  // auto-provisioning. Invite paths look like `/invite/abc123`.
   const inviteMatch = /^\/invite\/([^/?#]+)/.exec(next);
   let memberInfo: { memberId: string; organizationId: string; role: "admin" | "member" } | null = null;
 
@@ -171,8 +178,10 @@ async function completeOauthFlow(
       organizationId: member.organizationId,
       role: member.role === "admin" ? "admin" : "member",
     };
-    // After consuming an invite, the desired landing is /welcome.
-    next = "/welcome";
+    joinPath = "invite";
+    // Drop the now-consumed invite path; land on the team dashboard so the
+    // onboarding modal can layer on top.
+    next = "/";
   } else {
     const primary = await pickPrimaryMembership(app.db, userId);
     if (primary) {
@@ -181,6 +190,7 @@ async function completeOauthFlow(
         organizationId: primary.organizationId,
         role: primary.role === "admin" ? "admin" : "member",
       };
+      // joinPath stays "returning"; preserve caller's original `next` intent.
     } else {
       const personal = await createPersonalTeam(app.db, {
         userId,
@@ -192,7 +202,8 @@ async function completeOauthFlow(
         organizationId: personal.organizationId,
         role: "admin",
       };
-      next = "/welcome";
+      joinPath = "solo";
+      next = "/";
     }
   }
 
@@ -211,6 +222,7 @@ async function completeOauthFlow(
     access: tokens.accessToken,
     refresh: tokens.refreshToken,
     next,
+    joinPath,
   }).toString();
   return reply.redirect(`/auth/github/complete#${fragment}`, 302);
 }

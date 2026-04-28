@@ -58,7 +58,10 @@ export function InviteAcceptPage() {
         tokens: { accessToken: string; refreshToken: string };
       }>("/me/organizations/join", { token });
       await adoptTokens(res.tokens);
-      navigate("/welcome", { replace: true });
+      // Land on dashboard; onboarding modal layers on top if wizard incomplete.
+      window.sessionStorage.setItem("onboarding:autoOpen", "1");
+      window.sessionStorage.setItem("onboarding:joinPath", "invite");
+      navigate("/", { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to join team");
     } finally {

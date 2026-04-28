@@ -1,6 +1,6 @@
 import { Github } from "lucide-react";
 import { type FormEvent, useState } from "react";
-import { Link, Navigate } from "react-router";
+import { Navigate } from "react-router";
 import { useAuth } from "../auth/auth-context.js";
 import { Button } from "../components/ui/button.js";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card.js";
@@ -69,12 +69,6 @@ export function LoginPage() {
               {loading ? "Signing in..." : "Sign in"}
             </Button>
           </form>
-          <div className="text-center text-label text-muted-foreground">
-            New to First Tree?{" "}
-            <Link to="/signup" className="underline">
-              Create an account
-            </Link>
-          </div>
         </CardContent>
       </Card>
     </div>

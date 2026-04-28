@@ -2,7 +2,15 @@ import { createContext, type ReactNode, useCallback, useContext, useEffect, useS
 import { login as loginApi } from "../api/auth.js";
 import { api, clearStoredTokens, getStoredTokens, setStoredTokens } from "../api/client.js";
 
+type MeUser = {
+  id: string;
+  username: string;
+  displayName: string;
+  avatarUrl: string | null;
+};
+
 type MeResponse = {
+  user?: MeUser;
   member: { id: string; role: string; agentId: string; organizationId: string };
   wizard?: { step: "connect" | "create_agent" | "completed" };
 };
@@ -13,6 +21,7 @@ type AuthContextValue = {
   memberId: string | null;
   agentId: string | null;
   organizationId: string | null;
+  user: MeUser | null;
   wizardStep: "connect" | "create_agent" | "completed" | null;
   login: (username: string, password: string) => Promise<void>;
   /**
@@ -33,6 +42,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [memberId, setMemberId] = useState<string | null>(null);
   const [agentId, setAgentId] = useState<string | null>(null);
   const [organizationId, setOrganizationId] = useState<string | null>(null);
+  const [user, setUser] = useState<MeUser | null>(null);
   const [wizardStep, setWizardStep] = useState<"connect" | "create_agent" | "completed" | null>(null);
 
   const logout = useCallback(() => {
@@ -42,6 +52,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setMemberId(null);
     setAgentId(null);
     setOrganizationId(null);
+    setUser(null);
     setWizardStep(null);
   }, []);
 
@@ -52,6 +63,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setMemberId(data.member.id);
       setAgentId(data.member.agentId);
       setOrganizationId(data.member.organizationId);
+      setUser(data.user ?? null);
       setWizardStep(data.wizard?.step ?? null);
     } catch {
       // If /me fails, role stays null — UI falls back to hiding admin features
@@ -99,6 +111,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         memberId,
         agentId,
         organizationId,
+        user,
         wizardStep,
         login,
         adoptTokens,

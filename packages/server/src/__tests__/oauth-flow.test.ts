@@ -26,7 +26,11 @@ describe("GitHub OAuth onboarding flow", () => {
     expect(location).toContain("/auth/github/complete#");
     expect(location).toContain("access=");
     expect(location).toContain("refresh=");
-    expect(location).toContain("next=%2Fwelcome");
+    // First-time signup lands on dashboard; the onboarding modal layers on top.
+    const fragment = location.split("#")[1] ?? "";
+    const params = new URLSearchParams(fragment);
+    expect(params.get("next")).toBe("/");
+    expect(params.get("joinPath")).toBe("solo");
 
     // Auth identity is recorded.
     const ids = await app.db.select().from(authIdentities).where(eq(authIdentities.identifier, "42"));
@@ -154,7 +158,7 @@ describe("OAuth callback rejects malformed state", () => {
 
   it("dev-callback ignores open-redirect bypasses in `next`", async () => {
     const app = getApp();
-    // `next=//evil.com` should land on `/welcome` for new users (default safe).
+    // `next=//evil.com` should be sanitized; first-time signup lands on `/`.
     const res = await app.inject({
       method: "GET",
       url: "/api/v1/auth/github/dev-callback?githubId=55&login=evilnext&next=//evil.com",
@@ -162,6 +166,6 @@ describe("OAuth callback rejects malformed state", () => {
     expect(res.statusCode).toBe(302);
     const fragment = res.headers.location?.split("#")[1] ?? "";
     const params = new URLSearchParams(fragment);
-    expect(params.get("next")).toBe("/welcome");
+    expect(params.get("next")).toBe("/");
   });
 });
