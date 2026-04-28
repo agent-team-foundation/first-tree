@@ -11,8 +11,13 @@ const repoRoot = resolve(cliRoot, "../..");
 const entryPath = resolve(cliRoot, "dist/index.js");
 const rootPackagePath = resolve(repoRoot, "package.json");
 const cliPackagePath = resolve(cliRoot, "package.json");
-const commandNames = ["init", "tree", "hub"];
-const rootHelpCommandPaths = ["first-tree init", "first-tree tree inspect", "first-tree hub start"];
+const commandNames = ["init", "tree", "hub", "auto"];
+const rootHelpCommandPaths = [
+  "first-tree init",
+  "first-tree tree inspect",
+  "first-tree hub start",
+  "first-tree auto",
+];
 const commandGroups = [
   {
     name: "tree",
@@ -79,6 +84,35 @@ describe("first-tree CLI", () => {
     expect(result.code).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout.trim()).toBe("first-tree init is not implemented yet.");
+  });
+
+  it("runs bare `auto` and prints AUTO_USAGE with exit 0", async () => {
+    const result = await runCli(["auto"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("usage: first-tree auto");
+    expect(result.stdout).toContain("Auto is the proposal/inbox agent");
+  });
+
+  it("passes auto pass-through args without commander interception", async () => {
+    // `auto status --allow-repo foo` reaches runStatus inside runAuto, which
+    // rejects the malformed `foo` pattern via the runtime allow-repo guard
+    // and exits 1 with the auto-prefixed stderr message. This proves the
+    // catch-all routes args through unchanged.
+    const result = await runCli(["auto", "status", "--allow-repo", "foo"]);
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("first-tree auto");
+    expect(result.stderr).toContain("invalid repo allow pattern");
+  });
+
+  it("forwards --help to runAuto via the auto catch-all", async () => {
+    const result = await runCli(["auto", "--help"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("usage: first-tree auto");
   });
 
   for (const commandGroup of commandGroups) {

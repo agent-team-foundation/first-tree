@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>auto</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff;
+    --fg: #1b1f24;
+    --muted: #6b7280;
+    --border: #e5e7eb;
+    --accent: #3b82f6;
+    --new: #2563eb;
+    --human: #d97706;
+    --wip: #7c3aed;
+    --done: #6b7280;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b0d10;
+      --fg: #e5e7eb;
+      --muted: #9ca3af;
+      --border: #2a2f37;
+      --new: #60a5fa;
+      --human: #fbbf24;
+      --wip: #c4b5fd;
+      --done: #9ca3af;
+    }
+  }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 13px; line-height: 1.4; }
+  header { padding: 14px 20px; border-bottom: 1px solid var(--border); display: flex; gap: 16px; align-items: baseline; }
+  header h1 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: 0.02em; }
+  header .meta { color: var(--muted); font-size: 12px; }
+  header .status-pill { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: var(--border); color: var(--fg); }
+  header .status-pill.live { background: #10b98122; color: #10b981; }
+  main { padding: 12px 20px; }
+  .counts { display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+  .count-chip { padding: 4px 10px; border-radius: 12px; border: 1px solid var(--border); font-size: 12px; }
+  .count-chip b { font-weight: 600; margin-right: 4px; }
+  .count-chip.new b { color: var(--new); }
+  .count-chip.human b { color: var(--human); }
+  .count-chip.wip b { color: var(--wip); }
+  .count-chip.done b { color: var(--done); }
+  .filters { margin-bottom: 10px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .filters input[type=search] { padding: 4px 8px; border: 1px solid var(--border); border-radius: 4px; background: transparent; color: var(--fg); font: inherit; }
+  .filters button { padding: 3px 8px; border: 1px solid var(--border); border-radius: 10px; background: transparent; color: var(--muted); font: inherit; cursor: pointer; }
+  .filters button.active { color: var(--fg); border-color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); font-weight: 500; }
+  tr.hidden { display: none; }
+  td a { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--muted); }
+  td a:hover { border-bottom-color: var(--accent); color: var(--accent); }
+  td.repo { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); font-size: 12px; }
+  td.priority { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); text-align: center; }
+  td.updated { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .badge { display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: 8px; font-weight: 500; }
+  .badge.new { background: color-mix(in srgb, var(--new) 15%, transparent); color: var(--new); }
+  .badge.human { background: color-mix(in srgb, var(--human) 15%, transparent); color: var(--human); }
+  .badge.wip { background: color-mix(in srgb, var(--wip) 15%, transparent); color: var(--wip); }
+  .badge.done { background: color-mix(in srgb, var(--done) 15%, transparent); color: var(--done); }
+  .label-chip { display: inline-block; font-size: 10px; padding: 0 6px; border-radius: 6px; background: var(--border); color: var(--muted); margin-right: 4px; }
+  .empty { padding: 40px 20px; text-align: center; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>auto</h1>
+  <span class="meta" id="last-poll">loading…</span>
+  <span class="status-pill" id="sse-status">connecting</span>
+</header>
+<main>
+  <div class="counts" id="counts"></div>
+  <div class="filters">
+    <input type="search" id="search" placeholder="filter by repo or title…" autocomplete="off" />
+    <button data-status="all" class="active">all</button>
+    <button data-status="new">new</button>
+    <button data-status="human">human</button>
+    <button data-status="wip">wip</button>
+    <button data-status="done">done</button>
+  </div>
+  <table>
+    <thead><tr>
+      <th>status</th><th>type</th><th>repo</th><th>title</th><th>labels</th><th class="priority">p</th><th class="updated">updated</th>
+    </tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div class="empty" id="empty" hidden>No notifications.</div>
+</main>
+<script>
+  const state = { inbox: null, filter: "all", query: "" };
+
+  function format(ts) {
+    if (!ts) return "—";
+    const d = new Date(ts);
+    if (isNaN(d)) return ts;
+    const now = Date.now();
+    const diff = Math.round((now - d.getTime()) / 1000);
+    if (diff < 60) return diff + "s ago";
+    if (diff < 3600) return Math.round(diff / 60) + "m ago";
+    if (diff < 86400) return Math.round(diff / 3600) + "h ago";
+    return Math.round(diff / 86400) + "d ago";
+  }
+
+  function escape(s) {
+    return (s || "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+  }
+
+  function render() {
+    const data = state.inbox;
+    if (!data) return;
+    document.getElementById("last-poll").textContent =
+      "last poll " + format(data.last_poll);
+
+    const buckets = { new: 0, human: 0, wip: 0, done: 0 };
+    for (const n of data.notifications) {
+      buckets[n.breeze_status] = (buckets[n.breeze_status] || 0) + 1;
+    }
+    document.getElementById("counts").innerHTML = ["new","human","wip","done"]
+      .map(k => `<span class="count-chip ${k}"><b>${buckets[k] || 0}</b>${k}</span>`)
+      .join("");
+
+    const q = state.query.toLowerCase();
+    const rows = data.notifications
+      .filter(n => state.filter === "all" || n.breeze_status === state.filter)
+      .filter(n => !q || (n.repo || "").toLowerCase().includes(q) || (n.title || "").toLowerCase().includes(q))
+      .map(n => {
+        const labels = (n.labels || []).filter(l => !l.startsWith("breeze:"))
+          .map(l => `<span class="label-chip">${escape(l)}</span>`).join("");
+        return `<tr>
+          <td><span class="badge ${n.breeze_status}">${n.breeze_status}</span></td>
+          <td>${escape(n.type)}</td>
+          <td class="repo">${escape(n.repo)}</td>
+          <td><a href="${escape(n.html_url)}" target="_blank" rel="noopener">${escape(n.title)}</a></td>
+          <td>${labels}</td>
+          <td class="priority">${n.priority}</td>
+          <td class="updated" title="${escape(n.updated_at)}">${format(n.updated_at)}</td>
+        </tr>`;
+      })
+      .join("");
+
+    document.getElementById("rows").innerHTML = rows;
+    document.getElementById("empty").hidden = rows.length > 0;
+  }
+
+  async function fetchInbox() {
+    try {
+      const res = await fetch("/inbox", { cache: "no-store" });
+      if (res.ok) {
+        state.inbox = await res.json();
+        render();
+      }
+    } catch (error) {
+      console.warn("inbox fetch failed", error);
+    }
+  }
+
+  function connectSse() {
+    const ev = new EventSource("/events");
+    const pill = document.getElementById("sse-status");
+    ev.addEventListener("ready", () => {
+      pill.textContent = "live";
+      pill.classList.add("live");
+    });
+    ev.addEventListener("inbox", () => fetchInbox());
+    ev.addEventListener("activity", () => fetchInbox());
+    ev.onerror = () => {
+      pill.textContent = "offline — retrying";
+      pill.classList.remove("live");
+    };
+  }
+
+  document.querySelectorAll(".filters button").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".filters button").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      state.filter = btn.dataset.status;
+      render();
+    });
+  });
+  document.getElementById("search").addEventListener("input", event => {
+    state.query = event.target.value;
+    render();
+  });
+
+  fetchInbox();
+  connectSse();
+</script>
+</body>
+</html>

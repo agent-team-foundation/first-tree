@@ -1,0 +1,73 @@
+{
+  "last_poll": "2026-04-16T20:15:30Z",
+  "notifications": [
+    {
+      "id": "23576674030",
+      "type": "PullRequest",
+      "reason": "author",
+      "repo": "example-org/paperclip-tree",
+      "title": "fix(tree): salvage member node from closed sync PR",
+      "url": "https://api.github.com/repos/example-org/paperclip-tree/pulls/290",
+      "last_actor": "https://api.github.com/repos/example-org/paperclip-tree/issues/comments/4258143984",
+      "updated_at": "2026-04-16T07:24:28Z",
+      "unread": false,
+      "priority": 5,
+      "number": 290,
+      "html_url": "https://github.com/example-org/paperclip-tree/pull/290",
+      "gh_state": "OPEN",
+      "labels": [],
+      "breeze_status": "new"
+    },
+    {
+      "id": "23576674031",
+      "type": "PullRequest",
+      "reason": "review_requested",
+      "repo": "example-org/paperclip-tree",
+      "title": "feat: add breeze TS port core",
+      "url": "https://api.github.com/repos/example-org/paperclip-tree/pulls/300",
+      "last_actor": "https://api.github.com/repos/example-org/paperclip-tree/issues/comments/4258143999",
+      "updated_at": "2026-04-16T08:00:00Z",
+      "unread": true,
+      "priority": 1,
+      "number": 300,
+      "html_url": "https://github.com/example-org/paperclip-tree/pull/300",
+      "gh_state": "OPEN",
+      "labels": ["breeze:wip"],
+      "breeze_status": "wip"
+    },
+    {
+      "id": "23576674032",
+      "type": "Issue",
+      "reason": "mention",
+      "repo": "example-org/paperclip-tree",
+      "title": "flaky test in CI",
+      "url": "https://api.github.com/repos/example-org/paperclip-tree/issues/155",
+      "last_actor": "https://api.github.com/repos/example-org/paperclip-tree/issues/comments/4258143888",
+      "updated_at": "2026-04-15T12:00:00Z",
+      "unread": false,
+      "priority": 2,
+      "number": 155,
+      "html_url": "https://github.com/example-org/paperclip-tree/issues/155",
+      "gh_state": "CLOSED",
+      "labels": ["bug", "breeze:done"],
+      "breeze_status": "done"
+    },
+    {
+      "id": "23576674033",
+      "type": "Discussion",
+      "reason": "manual",
+      "repo": "example-org/paperclip-tree",
+      "title": "discuss: skill payload layout",
+      "url": "https://github.com/example-org/paperclip-tree/discussions/42",
+      "last_actor": "https://github.com/example-org/paperclip-tree/discussions/42",
+      "updated_at": "2026-04-14T10:00:00Z",
+      "unread": false,
+      "priority": 5,
+      "number": null,
+      "html_url": "https://github.com/example-org/paperclip-tree",
+      "gh_state": null,
+      "labels": [],
+      "breeze_status": "new"
+    }
+  ]
+}
