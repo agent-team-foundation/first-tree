@@ -22,6 +22,7 @@ export async function createTestApp(): Promise<FastifyInstance> {
     server: {
       port: 0,
       host: "127.0.0.1",
+      publicUrl: undefined,
     },
     secrets: {
       jwtSecret: process.env.JWT_SECRET ?? "test-jwt-secret-key-for-vitest",
@@ -30,6 +31,13 @@ export async function createTestApp(): Promise<FastifyInstance> {
     github: {
       webhookSecret: "test-webhook-secret",
       allowedOrg: "test-org",
+    },
+    oauth: {
+      github: {
+        clientId: "test-github-client",
+        clientSecret: "test-github-secret",
+        devCallbackEnabled: true,
+      },
     },
     rateLimit: { max: 10000, loginMax: 10000, webhookMax: 10000 },
     observability: {

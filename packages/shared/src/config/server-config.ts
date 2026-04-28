@@ -23,6 +23,17 @@ export const serverConfigSchema = defineConfig({
   server: {
     port: field(z.number().default(8000), { env: "FIRST_TREE_HUB_PORT" }),
     host: field(z.string().default("127.0.0.1"), { env: "FIRST_TREE_HUB_HOST" }),
+    /**
+     * Public-facing URL of this Hub server. Required in production — used to:
+     *   1. Stamp the `iss` claim on connect tokens so `first-tree-hub connect`
+     *      can derive the hub URL with no extra arg.
+     *   2. Build invite-link URLs surfaced to admins.
+     *   3. Construct the OAuth callback URL the GitHub app redirects back to.
+     * Dev environments may omit it — we fall back to the request's host header
+     * for local quickstart, and the boot check below only fires when
+     * `NODE_ENV === 'production'`.
+     */
+    publicUrl: field(z.string().optional(), { env: "FIRST_TREE_HUB_PUBLIC_URL" }),
   },
   secrets: {
     jwtSecret: field(z.string(), {
@@ -52,6 +63,29 @@ export const serverConfigSchema = defineConfig({
       env: "FIRST_TREE_HUB_GITHUB_ALLOWED_ORG",
     }),
   },
+  oauth: optional({
+    /**
+     * GitHub OAuth App credentials for SaaS sign-in. The "half configured"
+     * shape (only one of clientId/clientSecret set) is rejected at boot so a
+     * misconfigured production instance can't accidentally expose the
+     * dev-callback bypass with no real OAuth wired up.
+     */
+    github: optional({
+      clientId: field(z.string(), { env: "FIRST_TREE_HUB_GITHUB_OAUTH_CLIENT_ID" }),
+      clientSecret: field(z.string(), {
+        env: "FIRST_TREE_HUB_GITHUB_OAUTH_CLIENT_SECRET",
+        secret: true,
+      }),
+      /**
+       * Opt-in to the `/auth/github/dev-callback` shortcut that mints a stub
+       * GitHub identity without round-tripping to github.com. Always disabled
+       * in production regardless of this flag.
+       */
+      devCallbackEnabled: field(z.boolean().default(false), {
+        env: "FIRST_TREE_HUB_GITHUB_OAUTH_DEV_CALLBACK",
+      }),
+    }),
+  }),
   cors: optional({
     origin: field(z.string(), { env: "FIRST_TREE_HUB_CORS_ORIGIN" }),
   }),

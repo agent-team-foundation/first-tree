@@ -21,6 +21,14 @@ export const members = pgTable(
       .references(() => agents.uuid),
     /** "admin" | "member" */
     role: text("role").notNull(),
+    /**
+     * "active" | "left". Soft-delete marker. Members who leave a team have
+     * their row flipped to "left" rather than deleted, so historical chats /
+     * agent ownership references stay intact. The auth middleware refuses
+     * tokens that resolve to a "left" member; the join-by-invite flow flips
+     * a previously-"left" row back to "active".
+     */
+    status: text("status").notNull().default("active"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [

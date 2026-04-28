@@ -8,8 +8,13 @@ import { AdminPage } from "./pages/admin.js";
 import { AgentDetailPage } from "./pages/agent-detail.js";
 import { AgentsPage } from "./pages/agents.js";
 import { ClientsPage } from "./pages/clients.js";
+import { InviteAcceptPage } from "./pages/invite-accept.js";
 import { LoginPage } from "./pages/login.js";
+import { OAuthCompletePage } from "./pages/oauth-complete.js";
 import { SettingsPage } from "./pages/settings.js";
+import { SignupPage } from "./pages/signup.js";
+import { TeamSetupPage } from "./pages/team-setup.js";
+import { WelcomePage } from "./pages/welcome.js";
 import { WorkspacePage } from "./pages/workspace/index.js";
 
 const queryClient = new QueryClient({
@@ -27,8 +32,17 @@ export function App() {
       <AuthProvider>
         <BrowserRouter>
           <Routes>
+            {/* Public routes — no auth required */}
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/signup" element={<SignupPage />} />
+            <Route path="/auth/github/complete" element={<OAuthCompletePage />} />
+            <Route path="/invite/:token" element={<InviteAcceptPage />} />
+            {/* Auth-required wizard / setup pages — outside the main Layout
+                so they get a clean centered card UI. RequireAuth still
+                bounces unauthenticated visitors to /login. */}
             <Route element={<RequireAuth />}>
+              <Route path="/welcome" element={<WelcomePage />} />
+              <Route path="/setup" element={<TeamSetupPage />} />
               <Route
                 element={
                   <PulseProvider>

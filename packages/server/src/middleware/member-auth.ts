@@ -40,19 +40,20 @@ export function memberAuthHook(db: Database, jwtSecret: string) {
       throw new UnauthorizedError("User not found or suspended");
     }
 
-    // Verify membership still exists
+    // Verify membership still exists and hasn't been soft-deleted via "leave team".
     const [member] = await db
       .select({
         id: members.id,
         organizationId: members.organizationId,
         role: members.role,
         agentId: members.agentId,
+        status: members.status,
       })
       .from(members)
       .where(eq(members.id, payload.memberId))
       .limit(1);
 
-    if (!member) {
+    if (!member || member.status !== "active") {
       throw new UnauthorizedError("Membership not found");
     }
 

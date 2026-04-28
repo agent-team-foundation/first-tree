@@ -6,6 +6,7 @@ import { cn } from "../lib/utils.js";
 import { CommandPalette } from "../pages/workspace/palette/command-palette.js";
 import { FirstTreeLogo } from "./first-tree-logo.js";
 import { NotificationBell } from "./notification-bell.js";
+import { OrganizationSwitcher } from "./organization-switcher.js";
 import { ThemeToggle } from "./ui/theme-toggle.js";
 
 const navTabs = [
@@ -61,6 +62,7 @@ export function Layout() {
               Hub
             </span>
           </span>
+          <OrganizationSwitcher />
         </div>
 
         {/* Tabs */}

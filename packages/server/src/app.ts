@@ -35,13 +35,14 @@ import { agentMeRoutes } from "./api/agent/me.js";
 import { agentMessageRoutes, agentSendToAgentRoutes } from "./api/agent/messages.js";
 import { agentTaskRoutes } from "./api/agent/tasks.js";
 import { clientWsRoutes } from "./api/agent/ws-client.js";
+import { githubOauthRoutes } from "./api/auth/github.js";
 import { authRoutes } from "./api/auth.js";
 import { bootstrapConfigRoutes } from "./api/bootstrap/config.js";
 import { contextTreeInfoRoutes } from "./api/context-tree-info.js";
 import { feedbackRoutes } from "./api/feedback.js";
 import { healthRoutes } from "./api/health.js";
 import { healthzRoutes } from "./api/healthz.js";
-import { meRoutes } from "./api/me.js";
+import { adminInvitationRoutes, meRoutes, publicInvitePreviewRoute } from "./api/me.js";
 import { memberRoutes } from "./api/members.js";
 // Public agent discovery removed — visibility is now handled via agent.visibility field
 import { githubWebhookRoutes } from "./api/webhooks/github.js";
@@ -180,6 +181,8 @@ export async function buildApp(config: Config) {
       await api.register(healthRoutes);
       await api.register(githubWebhookRoutes, { prefix: "/webhooks" });
       await api.register(authRoutes, { prefix: "/auth" });
+      await api.register(githubOauthRoutes, { prefix: "/auth/github" });
+      await api.register(publicInvitePreviewRoute, { prefix: "/invite" });
       await api.register(contextTreeInfoRoutes, { prefix: "/context-tree" });
       await api.register(bootstrapConfigRoutes, { prefix: "/bootstrap" });
 
@@ -312,6 +315,17 @@ export async function buildApp(config: Config) {
           await adminApp.register(adminOrganizationRoutes);
         },
         { prefix: "/admin/organizations" },
+      );
+
+      // Per-org invitation management — gated on admin role inside the
+      // route handler so the org-scope check (members.organizationId
+      // matches request.params.id) and the admin check live together.
+      await api.register(
+        async (adminApp) => {
+          adminApp.addHook("onRequest", memberAuth);
+          await adminApp.register(adminInvitationRoutes);
+        },
+        { prefix: "/admin/organizations/:id/invitations" },
       );
 
       await api.register(

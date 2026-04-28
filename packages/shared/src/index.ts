@@ -2,6 +2,8 @@
 
 // -- Mention extraction (shared by server fan-out resolver and client auto-forward) --
 export { extractMentions, MENTION_REGEX, type MentionParticipant, scanMentionTokens } from "./mentions.js";
+// -- OAuth-callback open-redirect guard --
+export { DEFAULT_SAFE_REDIRECT, safeRedirectPath } from "./safe-redirect.js";
 export {
   ADAPTER_BIND_METHODS,
   ADAPTER_PLATFORMS,
@@ -160,6 +162,27 @@ export {
   inboxPollQuerySchema,
 } from "./schemas/inbox.js";
 export {
+  type InvitationPreview,
+  type InvitationView,
+  invitationPreviewSchema,
+  invitationViewSchema,
+  type JoinByInvitation,
+  joinByInvitationSchema,
+  rotateInvitationSchema,
+  type UpdateInvitation,
+  updateInvitationSchema,
+} from "./schemas/invitation.js";
+export {
+  type CreateOrgFromMe,
+  createOrgFromMeSchema,
+  type OrgBrief,
+  orgBriefSchema,
+  type SwitchOrg,
+  switchOrgSchema,
+  type WizardStep,
+  wizardStepSchema,
+} from "./schemas/me-extras.js";
+export {
   type CreateMember,
   createMemberSchema,
   MEMBER_ROLES,
@@ -206,6 +229,14 @@ export {
   notificationSeveritySchema,
   notificationTypeSchema,
 } from "./schemas/notification.js";
+export {
+  type GithubCallbackQuery,
+  type GithubDevCallbackQuery,
+  type GithubStartQuery,
+  githubCallbackQuerySchema,
+  githubDevCallbackQuerySchema,
+  githubStartQuerySchema,
+} from "./schemas/oauth.js";
 export {
   type CreateOrganization,
   type CreateOrganizationInput,
