@@ -6,6 +6,24 @@ export interface OpenTreePrOpts {
   body: string;
   labels?: string[];
   env?: NodeJS.ProcessEnv;
+  /**
+   * Queue GitHub's native auto-merge after the PR is opened. Defaults
+   * to **false**.
+   *
+   * `gh pr merge --auto` waits for branch protection (required reviews,
+   * required checks) to be satisfied before merging. On a repo without
+   * branch protection, "auto-merge" merges immediately — the PR opens
+   * and lands in the same instant, bypassing review entirely. Several
+   * deployments have seen tree PRs merged without a single approval
+   * because of this.
+   *
+   * Default off so the unsafe path is opt-in. Callers (gardener-sync)
+   * should only set `autoMerge: true` when the tree repo has branch
+   * protection that requires approvals — typically driven by a config
+   * flag like `modules.sync.auto_merge: true` in
+   * `.claude/gardener-config.yaml`.
+   */
+  autoMerge?: boolean;
 }
 
 export interface OpenTreePrResult {
@@ -28,7 +46,7 @@ export async function openTreePr(
   treeRoot: string,
   opts: OpenTreePrOpts,
 ): Promise<OpenTreePrResult> {
-  const { branch, title, body, labels, env } = opts;
+  const { branch, title, body, labels, env, autoMerge = false } = opts;
 
   const pushResult = await shellRun("git", ["push", "origin", branch], {
     cwd: treeRoot,
@@ -66,24 +84,25 @@ export async function openTreePr(
     await shellRun("gh", ["pr", "edit", prUrl, ...labelArgs], { cwd: treeRoot, env });
   }
 
-  // Queue GitHub's native auto-merge. Treated as best-effort: repos with
-  // "Allow auto-merge" disabled (the default) emit a specific error
-  // string which we swallow so behavior is unchanged for every repo that
-  // hasn't opted in via its Settings page. Any other failure (auth,
-  // transport, unexpected gh output) is surfaced — otherwise gardener
-  // would report the PR as handled while auto-merge was never queued.
-  // See #321.
-  const autoMerge = await shellRun(
-    "gh",
-    ["pr", "merge", prUrl, "--auto", "--squash", "--delete-branch"],
-    { cwd: treeRoot, env },
-  );
-  if (autoMerge.code !== 0 && !isAutoMergeDisabledError(autoMerge.stderr)) {
-    return {
-      success: false,
-      prUrl,
-      error: `gh pr merge --auto failed: ${autoMerge.stderr.trim()}`,
-    };
+  // Queue GitHub's native auto-merge — but only when the caller
+  // explicitly opts in. `gh pr merge --auto` is safe ONLY on repos with
+  // branch protection that requires approvals/checks; on a repo without
+  // protection it merges immediately and bypasses review. Default off
+  // means a fresh deployment never silently auto-merges sync PRs. See
+  // #321 for context.
+  if (autoMerge) {
+    const autoMergeResult = await shellRun(
+      "gh",
+      ["pr", "merge", prUrl, "--auto", "--squash", "--delete-branch"],
+      { cwd: treeRoot, env },
+    );
+    if (autoMergeResult.code !== 0 && !isAutoMergeDisabledError(autoMergeResult.stderr)) {
+      return {
+        success: false,
+        prUrl,
+        error: `gh pr merge --auto failed: ${autoMergeResult.stderr.trim()}`,
+      };
+    }
   }
 
   return { success: true, prUrl };

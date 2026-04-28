@@ -23,6 +23,7 @@ import {
 } from "#products/tree/engine/runtime/binding-state.js";
 import { resolveNodeOwners } from "../../../../assets/tree/helpers/generate-codeowners.js";
 import { openTreePr } from "#products/tree/engine/open-tree-pr.js";
+import { loadGardenerConfig } from "./runtime/config.js";
 import type {
   ShellResult,
   ShellRun,
@@ -1432,12 +1433,14 @@ async function pushAndCreatePr(
   shellRun: ShellRun,
   treeRoot: string,
   prepared: PreparedProposalGroup,
+  autoMerge: boolean,
 ): Promise<{ success: boolean; prUrl?: string; error?: string }> {
   return openTreePr(shellRun, treeRoot, {
     branch: prepared.branch,
     title: prepared.prTitle,
     body: prepared.prBody,
     labels: ["first-tree:sync"],
+    autoMerge,
   });
 }
 
@@ -1449,6 +1452,7 @@ async function pushAndCreatePrsParallel(
   treeRoot: string,
   preparedGroups: PreparedProposalGroup[],
   concurrency: number,
+  autoMerge: boolean,
 ): Promise<{ successes: number; failures: number; prUrls: string[] }> {
   const results: { success: boolean; prUrl?: string; error?: string }[] = [];
   const prUrls: string[] = [];
@@ -1459,7 +1463,7 @@ async function pushAndCreatePrsParallel(
       batch.map(async (prepared) => {
         const MAX_RETRIES = 2;
         for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-          const result = await pushAndCreatePr(shellRun, treeRoot, prepared);
+          const result = await pushAndCreatePr(shellRun, treeRoot, prepared, autoMerge);
           if (result.success) return result;
 
           // Check for rate limiting
@@ -1874,6 +1878,14 @@ export async function runSync(
     return 1;
   }
 
+  // Resolve sync auto-merge opt-in. Defaults to false: opening a tree
+  // PR no longer queues `gh pr merge --auto` unless the user explicitly
+  // opts in via `modules.sync.auto_merge: true`. Even with the flag on,
+  // it is only safe when the tree repo has branch protection that
+  // requires approvals/checks. See `OpenTreePrOpts.autoMerge`.
+  const gardenerCfg = loadGardenerConfig(treeRoot);
+  const syncAutoMerge = gardenerCfg?.modules?.sync?.auto_merge === true;
+
   // Check that claude CLI is available (required for classification)
   const hasClaude = await claudeCliAvailable(shellRun);
   if (!hasClaude) {
@@ -2276,6 +2288,7 @@ export async function runSync(
             repo.root,
             preparedGroups,
             APPLY_CONCURRENCY,
+            syncAutoMerge,
           );
           console.log(`\u2713 Push/PR phase complete: ${successes} succeeded, ${failures} failed`);
           for (const prUrl of prUrls) {

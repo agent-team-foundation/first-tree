@@ -45,12 +45,14 @@ describe("openTreePr", () => {
     expect(result).toEqual({ success: true, prUrl: "https://github.com/o/r/pull/42" });
 
     const kinds = calls.map((c) => `${c.command} ${c.args.slice(0, 2).join(" ")}`);
+    // Auto-merge is opt-in (defaults to false). The happy path should
+    // NOT include `gh pr merge` — that only fires when the caller
+    // passes `autoMerge: true`. See OpenTreePrOpts.autoMerge.
     expect(kinds).toEqual([
       "git push origin",
       "gh pr create",
       "gh label create",
       "gh pr edit",
-      "gh pr merge",
     ]);
 
     const prCreate = calls.find((c) => c.command === "gh" && c.args[1] === "create")!;
@@ -125,10 +127,10 @@ describe("openTreePr", () => {
     });
 
     expect(result).toEqual({ success: true, prUrl: "https://x/pr/1" });
+    // No labels and no autoMerge → only push + create.
     expect(calls.map((c) => c.command + " " + c.args[0] + " " + c.args[1])).toEqual([
       "git push origin",
       "gh pr create",
-      "gh pr merge",
     ]);
   });
 
@@ -174,13 +176,16 @@ describe("openTreePr", () => {
     expect(gitPush.env).toBe(undefined);
 
     const ghCalls = calls.filter((c) => c.command === "gh");
-    expect(ghCalls).toHaveLength(4);
+    // pr create + label create + pr edit (no auto-merge by default)
+    expect(ghCalls).toHaveLength(3);
     for (const call of ghCalls) {
       expect(call.env?.GH_TOKEN).toBe("secret-token");
     }
   });
 
-  it("queues GitHub native auto-merge after PR create (#321)", async () => {
+  it("does NOT queue auto-merge by default", async () => {
+    // Auto-merge is opt-in. Default off avoids silently merging fresh
+    // sync PRs on tree repos without branch protection.
     const { shell, calls } = recordingShell((c) => {
       if (c.command === "git") return { stdout: "", stderr: "", code: 0 };
       if (c.args[1] === "create") return { stdout: "https://x/pr/7", stderr: "", code: 0 };
@@ -189,6 +194,18 @@ describe("openTreePr", () => {
 
     await openTreePr(shell, "/tree", { branch: "b", title: "t", body: "y" });
 
+    expect(calls.some((c) => c.command === "gh" && c.args[1] === "merge")).toBe(false);
+  });
+
+  it("queues GitHub native auto-merge when autoMerge=true (#321)", async () => {
+    const { shell, calls } = recordingShell((c) => {
+      if (c.command === "git") return { stdout: "", stderr: "", code: 0 };
+      if (c.args[1] === "create") return { stdout: "https://x/pr/7", stderr: "", code: 0 };
+      return { stdout: "", stderr: "", code: 0 };
+    });
+
+    await openTreePr(shell, "/tree", { branch: "b", title: "t", body: "y", autoMerge: true });
+
     const autoMerge = calls.find((c) => c.command === "gh" && c.args[1] === "merge")!;
     expect(autoMerge.args).toEqual([
       "pr", "merge", "https://x/pr/7",
@@ -196,7 +213,7 @@ describe("openTreePr", () => {
     ]);
   });
 
-  it("skips auto-merge queueing when the PR already exists", async () => {
+  it("skips auto-merge queueing when the PR already exists (even with autoMerge=true)", async () => {
     const { shell, calls } = recordingShell((c) => {
       if (c.command === "git") return { stdout: "", stderr: "", code: 0 };
       if (c.args[1] === "create") {
@@ -205,13 +222,13 @@ describe("openTreePr", () => {
       return { stdout: "", stderr: "", code: 0 };
     });
 
-    const result = await openTreePr(shell, "/tree", { branch: "b", title: "t", body: "y" });
+    const result = await openTreePr(shell, "/tree", { branch: "b", title: "t", body: "y", autoMerge: true });
 
     expect(result.success).toBe(true);
     expect(calls.some((c) => c.command === "gh" && c.args[1] === "merge")).toBe(false);
   });
 
-  it("treats the 'auto-merge not allowed' error as success (repo hasn't opted in)", async () => {
+  it("treats the 'auto-merge not allowed' error as success when autoMerge=true (repo hasn't opted in)", async () => {
     const { shell, calls } = recordingShell((c) => {
       if (c.command === "git") return { stdout: "", stderr: "", code: 0 };
       if (c.args[1] === "create") return { stdout: "https://x/pr/9", stderr: "", code: 0 };
@@ -221,13 +238,13 @@ describe("openTreePr", () => {
       return { stdout: "", stderr: "", code: 0 };
     });
 
-    const result = await openTreePr(shell, "/tree", { branch: "b", title: "t", body: "y" });
+    const result = await openTreePr(shell, "/tree", { branch: "b", title: "t", body: "y", autoMerge: true });
 
     expect(result).toEqual({ success: true, prUrl: "https://x/pr/9" });
     expect(calls.some((c) => c.command === "gh" && c.args[1] === "merge")).toBe(true);
   });
 
-  it("surfaces non-disabled gh pr merge failures instead of silently swallowing", async () => {
+  it("surfaces non-disabled gh pr merge failures when autoMerge=true", async () => {
     const { shell } = recordingShell((c) => {
       if (c.command === "git") return { stdout: "", stderr: "", code: 0 };
       if (c.args[1] === "create") return { stdout: "https://x/pr/11", stderr: "", code: 0 };
@@ -237,7 +254,7 @@ describe("openTreePr", () => {
       return { stdout: "", stderr: "", code: 0 };
     });
 
-    const result = await openTreePr(shell, "/tree", { branch: "b", title: "t", body: "y" });
+    const result = await openTreePr(shell, "/tree", { branch: "b", title: "t", body: "y", autoMerge: true });
 
     expect(result.success).toBe(false);
     expect(result.prUrl).toBe("https://x/pr/11");

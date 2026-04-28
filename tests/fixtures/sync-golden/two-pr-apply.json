@@ -311,30 +311,6 @@
       "cwdLabel": "<tree-root>"
     },
     {
-      "command": "gh",
-      "args": [
-        "pr",
-        "merge",
-        "https://github.com/alice/tree/pull/501",
-        "--auto",
-        "--squash",
-        "--delete-branch"
-      ],
-      "cwdLabel": "<tree-root>"
-    },
-    {
-      "command": "gh",
-      "args": [
-        "pr",
-        "merge",
-        "https://github.com/alice/tree/pull/502",
-        "--auto",
-        "--squash",
-        "--delete-branch"
-      ],
-      "cwdLabel": "<tree-root>"
-    },
-    {
       "command": "git",
       "args": [
         "checkout",

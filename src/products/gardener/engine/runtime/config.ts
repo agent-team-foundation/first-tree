@@ -28,6 +28,24 @@ import { join } from "node:path";
 
 export interface ModuleToggle {
   enabled: boolean;
+  /**
+   * Sync-only: queue GitHub native auto-merge on freshly-opened tree
+   * PRs. **Defaults to false.** Setting `true` is safe ONLY when the
+   * tree repo has branch protection that requires approvals/checks —
+   * `gh pr merge --auto` waits for those before merging. On a repo
+   * without branch protection, `--auto` merges immediately and bypasses
+   * review entirely.
+   *
+   * The flag is read from the same `modules.sync` block:
+   *
+   *   modules:
+   *     sync:
+   *       enabled: true
+   *       auto_merge: true   # only if your tree repo requires approvals
+   *
+   * Ignored on non-sync modules.
+   */
+  auto_merge?: boolean;
 }
 
 export interface GardenerConfig {
@@ -195,13 +213,19 @@ function coerceModuleToggle(value: unknown): ModuleToggle | undefined {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
-  const raw = (value as Record<string, unknown>).enabled;
-  if (typeof raw === "boolean") return { enabled: raw };
-  if (typeof raw === "string") {
-    if (raw === "true") return { enabled: true };
-    if (raw === "false") return { enabled: false };
-  }
-  return undefined;
+  const obj = value as Record<string, unknown>;
+  const raw = obj.enabled;
+  let enabled: boolean | undefined;
+  if (typeof raw === "boolean") enabled = raw;
+  else if (raw === "true") enabled = true;
+  else if (raw === "false") enabled = false;
+  if (enabled === undefined) return undefined;
+  const toggle: ModuleToggle = { enabled };
+  const am = obj.auto_merge;
+  if (typeof am === "boolean") toggle.auto_merge = am;
+  else if (am === "true") toggle.auto_merge = true;
+  else if (am === "false") toggle.auto_merge = false;
+  return toggle;
 }
 
 function coerceConfig(raw: Record<string, unknown>): GardenerConfig {
