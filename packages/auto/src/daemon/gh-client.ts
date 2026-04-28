@@ -15,7 +15,6 @@ import { join } from "node:path";
 import {
   bucketForArgs,
   isRateLimited,
-  type ExecOutput,
   type GhCommandSpec,
   type GhBucket,
   type GhExecutor,

@@ -139,17 +139,19 @@ type Output = (text: string) => void;
 type TsTarget = {
   kind: "ts";
   /** The node:module specifier to `await import()`. */
-  specifier:
-    | "status-manager"
-    | "poll"
-    | "watch"
-    | "doctor"
-    | "status"
-    | "cleanup"
-    | "start"
-    | "stop"
-    | "install";
+  specifier: TsSpecifier;
 };
+
+type TsSpecifier =
+  | "status-manager"
+  | "poll"
+  | "watch"
+  | "doctor"
+  | "status"
+  | "cleanup"
+  | "start"
+  | "stop"
+  | "install";
 
 type StatuslineTarget = {
   kind: "statusline";
@@ -247,49 +249,8 @@ export async function runAuto(
 
   try {
     switch (target.kind) {
-      case "ts": {
-        // Lazy-import the TS command so startup stays cheap for workflows
-        // that never touch the ported commands.
-        if (target.specifier === "status-manager") {
-          const mod = await import("./commands/status-manager.js");
-          return await mod.runStatusManager(rest);
-        }
-        if (target.specifier === "poll") {
-          const mod = await import("./commands/poll.js");
-          return await mod.runPoll(rest);
-        }
-        if (target.specifier === "watch") {
-          const mod = await import("./commands/watch.js");
-          return await mod.runWatch(rest);
-        }
-        if (target.specifier === "doctor") {
-          const mod = await import("./commands/doctor.js");
-          return await mod.runDoctor(rest);
-        }
-        if (target.specifier === "status") {
-          const mod = await import("./commands/status.js");
-          return await mod.runStatus(rest);
-        }
-        if (target.specifier === "cleanup") {
-          const mod = await import("./commands/cleanup.js");
-          return await mod.runCleanup(rest);
-        }
-        if (target.specifier === "start") {
-          const mod = await import("./commands/start.js");
-          return await mod.runStart(rest);
-        }
-        if (target.specifier === "stop") {
-          const mod = await import("./commands/stop.js");
-          return await mod.runStop(rest);
-        }
-        if (target.specifier === "install") {
-          const mod = await import("./commands/install.js");
-          return mod.runInstall(rest);
-        }
-        // Exhaustiveness check.
-        const _never: never = target.specifier;
-        throw new Error(`unknown ts specifier: ${_never as string}`);
-      }
+      case "ts":
+        return await dispatchTsCommand(target.specifier, rest);
       case "statusline": {
         // Execute the separate `auto-statusline.js` bundle via `node`.
         // This keeps cold start under ~30ms: the bundle has zero npm
@@ -312,5 +273,35 @@ export async function runAuto(
     const message = err instanceof Error ? err.message : String(err);
     process.stderr.write(`first-tree auto: ${message}\n`);
     return 1;
+  }
+}
+
+/**
+ * Lazy-import the TS command implementation so startup stays cheap for
+ * workflows that never touch the ported commands.
+ */
+async function dispatchTsCommand(
+  specifier: TsSpecifier,
+  rest: string[],
+): Promise<number> {
+  switch (specifier) {
+    case "status-manager":
+      return (await import("./commands/status-manager.js")).runStatusManager(rest);
+    case "poll":
+      return (await import("./commands/poll.js")).runPoll(rest);
+    case "watch":
+      return (await import("./commands/watch.js")).runWatch(rest);
+    case "doctor":
+      return (await import("./commands/doctor.js")).runDoctor(rest);
+    case "status":
+      return (await import("./commands/status.js")).runStatus(rest);
+    case "cleanup":
+      return (await import("./commands/cleanup.js")).runCleanup(rest);
+    case "start":
+      return (await import("./commands/start.js")).runStart(rest);
+    case "stop":
+      return (await import("./commands/stop.js")).runStop(rest);
+    case "install":
+      return (await import("./commands/install.js")).runInstall(rest);
   }
 }

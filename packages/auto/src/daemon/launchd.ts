@@ -231,7 +231,7 @@ export function renderLaunchdPlist(inputs: LaunchdPlistInputs): string {
   }
   const resolveVar = inputs.resolveEnvVar ?? resolveLaunchdEnvVar;
   const passthroughVars = collectLaunchdPassthroughEnvVars(
-    { ...process.env, ...(inputs.env ?? {}) },
+    { ...process.env, ...inputs.env },
     inputs.loginShellVars ?? readLoginShellEnvVarNames(),
   );
   for (const variable of passthroughVars) {

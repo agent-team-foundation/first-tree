@@ -79,39 +79,7 @@ export async function runStart(
     return 1;
   }
 
-  // #293: detect a live daemon and refuse to silently no-op. The bootstrap
-  // path below is idempotent at the launchd level, but it doesn't update
-  // the running process's allow-list — users kept running `auto start`
-  // with a new --allow-repo and seeing no effect. Fail loudly so the user
-  // knows to stop first.
-  const existingLock = findServiceLock(
-    `${home}/locks`,
-    {
-      host: config.host,
-      login: identity.login,
-      scopes: [],
-      gitProtocol: "",
-    },
-    profile,
-  );
-  if (existingLock && !isLockStale(existingLock)) {
-    const stopCmd = formatStopCommand({
-      home: options.runnerHome ?? parseHome(argv),
-      profile: options.profile ?? parseProfile(argv),
-    });
-    write(
-      `auto: daemon already running (pid ${existingLock.pid}).`,
-    );
-    write(
-      "  The live daemon's --allow-repo list is baked in at start time and",
-    );
-    write(
-      "  will not update if you edit ~/.first-tree/auto/config.yaml or re-run `start`.",
-    );
-    write(
-      `  Run \`${stopCmd}\` first, then re-run \`start\` with the`,
-    );
-    write("  full --allow-repo csv.");
+  if (refuseIfAlreadyRunning({ argv, options, home, config, identity, profile, write })) {
     return 1;
   }
 
@@ -127,45 +95,114 @@ export async function runStart(
     defaultDaemonArgs(argv, options.executable ? [] : self.prefixArgs);
 
   if (supportsLaunchd()) {
-    try {
-      const result = bootstrapLaunchdJob({
-        runnerHome: home,
-        login: identity.login,
-        profile,
-        executable,
-        arguments: daemonArgs,
-        logPath,
-        env: {
-          AUTO_DIR: autoDir,
-          AUTO_HOME: home,
-        },
-      });
-      write("auto-daemon started in background via launchd");
-      write(`plist: ${result.plistPath}`);
-      write(`log: ${logPath}`);
-      write(`label: ${result.label}`);
-      return 0;
-    } catch (err) {
-      write(
-        `auto: launchd bootstrap failed (${err instanceof Error ? err.message : String(err)}), falling back to detached spawn`,
-      );
-    }
+    const launchdResult = tryLaunchdBootstrap({
+      runnerHome: home,
+      autoDir,
+      login: identity.login,
+      profile,
+      executable,
+      daemonArgs,
+      logPath,
+      write,
+    });
+    if (launchdResult !== "fallback") return launchdResult;
   }
 
-  // Fallback: detached spawn with stdout + stderr redirected.
-  const logFd = openSync(logPath, "a");
-  const child = spawn(executable, daemonArgs, {
+  return spawnDetachedDaemon({ executable, daemonArgs, logPath, write });
+}
+
+function tryLaunchdBootstrap(opts: {
+  runnerHome: string;
+  autoDir: string;
+  login: string;
+  profile: string;
+  executable: string;
+  daemonArgs: readonly string[];
+  logPath: string;
+  write: (line: string) => void;
+}): number | "fallback" {
+  try {
+    const result = bootstrapLaunchdJob({
+      runnerHome: opts.runnerHome,
+      login: opts.login,
+      profile: opts.profile,
+      executable: opts.executable,
+      arguments: opts.daemonArgs,
+      logPath: opts.logPath,
+      env: { AUTO_DIR: opts.autoDir, AUTO_HOME: opts.runnerHome },
+    });
+    opts.write("auto-daemon started in background via launchd");
+    opts.write(`plist: ${result.plistPath}`);
+    opts.write(`log: ${opts.logPath}`);
+    opts.write(`label: ${result.label}`);
+    return 0;
+  } catch (err) {
+    opts.write(
+      `auto: launchd bootstrap failed (${err instanceof Error ? err.message : String(err)}), falling back to detached spawn`,
+    );
+    return "fallback";
+  }
+}
+
+/**
+ * #293: detect a live daemon and refuse to silently no-op. The bootstrap
+ * path below is idempotent at the launchd level, but it doesn't update
+ * the running process's allow-list — users kept running `auto start`
+ * with a new --allow-repo and seeing no effect. Fail loudly so the user
+ * knows to stop first.
+ */
+function refuseIfAlreadyRunning(args: {
+  argv: readonly string[];
+  options: RunStartOptions;
+  home: string;
+  config: { host: string };
+  identity: { login: string };
+  profile: string;
+  write: (line: string) => void;
+}): boolean {
+  const { argv, options, home, config, identity, profile, write } = args;
+  const existingLock = findServiceLock(
+    `${home}/locks`,
+    {
+      host: config.host,
+      login: identity.login,
+      scopes: [],
+      gitProtocol: "",
+    },
+    profile,
+  );
+  if (!existingLock || isLockStale(existingLock)) return false;
+  const stopCmd = formatStopCommand({
+    home: options.runnerHome ?? parseHome(argv),
+    profile: options.profile ?? parseProfile(argv),
+  });
+  write(`auto: daemon already running (pid ${existingLock.pid}).`);
+  write("  The live daemon's --allow-repo list is baked in at start time and");
+  write("  will not update if you edit ~/.first-tree/auto/config.yaml or re-run `start`.");
+  write(`  Run \`${stopCmd}\` first, then re-run \`start\` with the`);
+  write("  full --allow-repo csv.");
+  return true;
+}
+
+function spawnDetachedDaemon(opts: {
+  executable: string;
+  daemonArgs: readonly string[];
+  logPath: string;
+  write: (line: string) => void;
+}): number {
+  const logFd = openSync(opts.logPath, "a");
+  const child = spawn(opts.executable, opts.daemonArgs, {
     detached: true,
     stdio: ["ignore", logFd, logFd],
   });
   child.unref();
   if (!child.pid) {
-    write("auto: failed to spawn detached daemon process");
+    opts.write("auto: failed to spawn detached daemon process");
     return 1;
   }
-  write("auto-daemon started via detached spawn");
-  write(`pid: ${child.pid}`);
-  write(`log: ${logPath}`);
+  opts.write("auto-daemon started via detached spawn");
+  opts.write(`pid: ${child.pid}`);
+  opts.write(`log: ${opts.logPath}`);
   return 0;
 }
 

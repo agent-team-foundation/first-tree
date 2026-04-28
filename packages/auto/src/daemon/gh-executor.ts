@@ -308,7 +308,7 @@ function defaultSleep(ms: number): Promise<void> {
 function defaultSpawnGh(realGh: string) {
   return async (spec: GhCommandSpec): Promise<ExecOutput> =>
     new Promise((resolve, reject) => {
-      const env = { ...process.env, ...(spec.envs ?? {}) };
+      const env = { ...process.env, ...spec.envs };
       const child = spawn(realGh, spec.args, {
         cwd: spec.cwd,
         env,

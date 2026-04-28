@@ -207,10 +207,27 @@ export function loadAutoDaemonConfig(
   // 1. Defaults.
   const config: DaemonConfig = { ...DAEMON_CONFIG_DEFAULTS };
 
-  // 2. YAML overlay.
+  // 2. YAML overlay (first existing file wins).
   const candidates = deps.configPath
     ? [deps.configPath]
     : autoDaemonConfigSearchPaths(homeDir(), env);
+  applyYamlOverlay(config, candidates, fileExists, readFile);
+
+  // 3. Env overlay.
+  applyEnvOverlay(config, env);
+
+  // 4. CLI overrides.
+  applyCliOverlay(config, cli);
+
+  return config;
+}
+
+function applyYamlOverlay(
+  config: DaemonConfig,
+  candidates: readonly string[],
+  fileExists: (path: string) => boolean,
+  readFile: (path: string) => string,
+): void {
   for (const path of candidates) {
     if (!fileExists(path)) continue;
     let raw: string;
@@ -228,29 +245,35 @@ export function loadAutoDaemonConfig(
       );
     }
     if (parsed !== null && typeof parsed === "object") {
-      const y = parsed as RawYamlConfig;
-      const pollInterval = pickNumber(y.poll_interval_sec, y.pollIntervalSec);
-      if (pollInterval !== undefined) config.pollIntervalSec = pollInterval;
-      const taskTimeout = pickNumber(y.task_timeout_sec, y.taskTimeoutSec);
-      if (taskTimeout !== undefined) config.taskTimeoutSec = taskTimeout;
-      const logLevel = pickLogLevel(y.log_level ?? y.logLevel);
-      if (logLevel !== undefined) config.logLevel = logLevel;
-      const httpPort = pickNumber(y.http_port, y.httpPort);
-      if (httpPort !== undefined && httpPort < 65_536) {
-        config.httpPort = httpPort;
-      }
-      const host = pickString(y.host);
-      if (host !== undefined) config.host = host;
-      const maxParallel = pickNumber(y.max_parallel, y.maxParallel);
-      if (maxParallel !== undefined) config.maxParallel = maxParallel;
-      const searchLimit = pickNumber(y.search_limit, y.searchLimit);
-      if (searchLimit !== undefined) config.searchLimit = searchLimit;
+      mergeYamlInto(config, parsed as RawYamlConfig);
     }
-    // First existing file wins — stop searching.
-    break;
+    return;
   }
+}
 
-  // 3. Env overlay.
+function mergeYamlInto(config: DaemonConfig, y: RawYamlConfig): void {
+  const pollInterval = pickNumber(y.poll_interval_sec, y.pollIntervalSec);
+  if (pollInterval !== undefined) config.pollIntervalSec = pollInterval;
+  const taskTimeout = pickNumber(y.task_timeout_sec, y.taskTimeoutSec);
+  if (taskTimeout !== undefined) config.taskTimeoutSec = taskTimeout;
+  const logLevel = pickLogLevel(y.log_level ?? y.logLevel);
+  if (logLevel !== undefined) config.logLevel = logLevel;
+  const httpPort = pickNumber(y.http_port, y.httpPort);
+  if (httpPort !== undefined && httpPort < 65_536) {
+    config.httpPort = httpPort;
+  }
+  const host = pickString(y.host);
+  if (host !== undefined) config.host = host;
+  const maxParallel = pickNumber(y.max_parallel, y.maxParallel);
+  if (maxParallel !== undefined) config.maxParallel = maxParallel;
+  const searchLimit = pickNumber(y.search_limit, y.searchLimit);
+  if (searchLimit !== undefined) config.searchLimit = searchLimit;
+}
+
+function applyEnvOverlay(
+  config: DaemonConfig,
+  env: (name: string) => string | undefined,
+): void {
   const envPoll = pickNumber(
     env("AUTO_POLL_INTERVAL_SECS"),
     env("AUTO_INBOX_POLL_INTERVAL_SECS"),
@@ -268,8 +291,12 @@ export function loadAutoDaemonConfig(
   if (envMaxParallel !== undefined) config.maxParallel = envMaxParallel;
   const envSearchLimit = pickNumber(env("AUTO_SEARCH_LIMIT"));
   if (envSearchLimit !== undefined) config.searchLimit = envSearchLimit;
+}
 
-  // 4. CLI overrides.
+function applyCliOverlay(
+  config: DaemonConfig,
+  cli: DaemonCliOverrides,
+): void {
   if (cli.pollIntervalSec !== undefined && cli.pollIntervalSec > 0) {
     config.pollIntervalSec = cli.pollIntervalSec;
   }
@@ -294,6 +321,4 @@ export function loadAutoDaemonConfig(
   if (cli.searchLimit !== undefined && cli.searchLimit > 0) {
     config.searchLimit = cli.searchLimit;
   }
-
-  return config;
 }

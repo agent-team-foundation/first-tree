@@ -51,8 +51,10 @@ function pr(
 function strip(s: string | undefined): string {
   if (!s) return "";
   // OSC-8: ESC ] 8 ; ; URL BEL TEXT ESC ] 8 ; ; BEL
+  // oxlint-disable-next-line no-control-regex
   let out = s.replace(/\x1b\]8;;[^\x07]*\x07/gu, "");
   // ANSI SGR
+  // oxlint-disable-next-line no-control-regex
   out = out.replace(/\x1b\[[0-9;]*m/gu, "");
   return out;
 }

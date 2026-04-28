@@ -12,7 +12,7 @@
  *   - `peekClaim`: read-only inspection.
  */
 
-import { mkdtempSync, existsSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, existsSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 

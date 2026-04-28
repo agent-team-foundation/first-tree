@@ -143,54 +143,77 @@ export function parseNotifications(
   const entries: InboxEntry[] = [];
   const seenIds = new Set<string>();
   for (const raw of rawJsonPages) {
-    const trimmed = raw.trim();
-    if (!trimmed) continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(trimmed);
-    } catch {
-      continue;
-    }
-    if (!Array.isArray(parsed)) continue;
-    for (const item of parsed as RawNotification[]) {
-      const id = item.id;
-      if (typeof id !== "string" || id.length === 0) continue;
-      if (seenIds.has(id)) continue;
-      const subjectType = item.subject?.type ?? "";
-      if (subjectType === "CheckSuite" || subjectType === "Commit") continue;
-      const repo = item.repository?.full_name ?? "";
-      if (!repo) continue;
-      const reason = item.reason ?? "";
-      if (!shouldProcessReason(reason)) continue;
-      const title = item.subject?.title ?? "";
-      const url = item.subject?.url ?? "";
-      const lastActor = item.subject?.latest_comment_url ?? url ?? "";
-      const updatedAt = item.updated_at ?? "";
-      const unread = Boolean(item.unread);
-      const number =
-        typeof url === "string" ? extractTrailingNumber(url) : null;
-      const htmlUrl = htmlUrlFor(host, repo, subjectType, number);
-      seenIds.add(id);
-      entries.push({
-        id,
-        type: subjectType,
-        reason,
-        repo,
-        title,
-        url: url ?? "",
-        last_actor: lastActor ?? "",
-        updated_at: updatedAt,
-        unread,
-        priority: priorityForReason(reason),
-        number,
-        html_url: htmlUrl,
-        gh_state: null,
-        labels: [],
-        breeze_status: "new",
-      });
+    const items = parseNotificationPage(raw);
+    if (!items) continue;
+    for (const item of items) {
+      const entry = mapNotificationItem(item, host, seenIds);
+      if (entry) entries.push(entry);
     }
   }
   return entries;
+}
+
+function parseNotificationPage(raw: string): RawNotification[] | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+  return parsed as RawNotification[];
+}
+
+function mapNotificationItem(
+  item: RawNotification,
+  host: string,
+  seenIds: Set<string>,
+): InboxEntry | null {
+  const accepted = acceptNotification(item, seenIds);
+  if (!accepted) return null;
+  const { id, subjectType, repo, reason } = accepted;
+  const url = item.subject?.url ?? "";
+  const number = typeof url === "string" ? extractTrailingNumber(url) : null;
+  seenIds.add(id);
+  return {
+    id,
+    type: subjectType,
+    reason,
+    repo,
+    title: item.subject?.title ?? "",
+    url: url ?? "",
+    last_actor: item.subject?.latest_comment_url ?? url ?? "",
+    updated_at: item.updated_at ?? "",
+    unread: Boolean(item.unread),
+    priority: priorityForReason(reason),
+    number,
+    html_url: htmlUrlFor(host, repo, subjectType, number),
+    gh_state: null,
+    labels: [],
+    breeze_status: "new",
+  };
+}
+
+/**
+ * Validate the notification metadata required to admit it into the inbox.
+ * Returns the normalized fields, or `null` to skip.
+ */
+function acceptNotification(
+  item: RawNotification,
+  seenIds: ReadonlySet<string>,
+): { id: string; subjectType: string; repo: string; reason: string } | null {
+  const id = item.id;
+  if (typeof id !== "string" || id.length === 0) return null;
+  if (seenIds.has(id)) return null;
+  const subjectType = item.subject?.type ?? "";
+  if (subjectType === "CheckSuite" || subjectType === "Commit") return null;
+  const repo = item.repository?.full_name ?? "";
+  if (!repo) return null;
+  const reason = item.reason ?? "";
+  if (!shouldProcessReason(reason)) return null;
+  return { id, subjectType, repo, reason };
 }
 
 /** Sort: priority asc, updated_at desc, id asc. Matches `sort_entries`. */
@@ -547,30 +570,10 @@ export async function runPoll(
     return 1;
   }
 
-  // Fetch notifications. `--paginate` concatenates pages to stdout as
-  // `[...][...][...]` with no separator; `splitConcatenatedJsonArrays`
-  // carves them back apart.
-  let rawPages: string[];
-  try {
-    const stdout = gh.runChecked("fetch notifications", [
-      "api",
-      // See #251: `all=true` bypassed GitHub's spam filter. `participating=true`
-      // restricts to direct-participation notifications.
-      "/notifications?participating=true",
-      "--paginate",
-      "-H",
-      "X-GitHub-Api-Version: 2022-11-28",
-    ]);
-    rawPages = splitConcatenatedJsonArrays(stdout);
-  } catch (err) {
-    if (err instanceof GhExecError) {
-      io.stderr(`WARN: GitHub API failed, skipping (${err.message})`);
-      return 0;
-    }
-    throw err;
-  }
+  const fetched = fetchNotificationPages(gh, io);
+  if (fetched === "skipped") return 0;
 
-  const entries = parseNotifications(rawPages, config.host);
+  const entries = parseNotifications(fetched, config.host);
   sortEntries(entries);
 
   const enrichmentWarning = enrichWithLabels(entries, gh, config.host);
@@ -591,12 +594,60 @@ export async function runPoll(
     { inboxPath: paths.inbox },
   );
 
-  // Append activity events outside the inbox lock (activity.log has its
-  // own append-only semantics; we don't need to serialize with the inbox
-  // writer).
+  appendDiffEvents(diff, append, paths.activityLog, pollTs);
+  cleanupExpiredClaims(paths.claimsDir, claimTimeoutSecs, now);
+
+  const total = entries.length;
+  const newCount = entries.filter((e) => e.breeze_status === "new").length;
+  const timeOnly = pollTs.slice(11, 19);
+  io.stdout(`auto: polled ${timeOnly} — ${total} notifications (${newCount} new)`);
+  return 0;
+}
+
+/**
+ * Fetch + paginate the GitHub notifications endpoint. Returns the page
+ * payloads, or "skipped" if the API call failed in a way that should
+ * leave the existing inbox alone (matches the bash script).
+ */
+function fetchNotificationPages(
+  gh: GhClient,
+  io: PollIO,
+): string[] | "skipped" {
+  try {
+    // `--paginate` concatenates pages to stdout as `[...][...][...]`
+    // with no separator; `splitConcatenatedJsonArrays` carves them back
+    // apart.
+    const stdout = gh.runChecked("fetch notifications", [
+      "api",
+      // See #251: `all=true` bypassed GitHub's spam filter.
+      // `participating=true` restricts to direct-participation
+      // notifications.
+      "/notifications?participating=true",
+      "--paginate",
+      "-H",
+      "X-GitHub-Api-Version: 2022-11-28",
+    ]);
+    return splitConcatenatedJsonArrays(stdout);
+  } catch (err) {
+    if (err instanceof GhExecError) {
+      io.stderr(`WARN: GitHub API failed, skipping (${err.message})`);
+      return "skipped";
+    }
+    throw err;
+  }
+}
+
+function appendDiffEvents(
+  diff: DiffEvent[],
+  append: typeof appendActivityEvent,
+  activityLog: string,
+  pollTs: string,
+): void {
+  // Activity log has its own append-only semantics; no need to serialize
+  // with the inbox writer.
   for (const ev of diff) {
     if (ev.kind === "new") {
-      append(paths.activityLog, {
+      append(activityLog, {
         ts: pollTs,
         event: "new",
         id: ev.entry.id,
@@ -606,7 +657,7 @@ export async function runPoll(
         url: ev.entry.html_url,
       });
     } else if (ev.kind === "transition" && ev.from && ev.to) {
-      append(paths.activityLog, {
+      append(activityLog, {
         ts: pollTs,
         event: "transition",
         id: ev.entry.id,
@@ -619,14 +670,6 @@ export async function runPoll(
       });
     }
   }
-
-  cleanupExpiredClaims(paths.claimsDir, claimTimeoutSecs, now);
-
-  const total = entries.length;
-  const newCount = entries.filter((e) => e.breeze_status === "new").length;
-  const timeOnly = pollTs.slice(11, 19);
-  io.stdout(`auto: polled ${timeOnly} — ${total} notifications (${newCount} new)`);
-  return 0;
 }
 
 export default runPoll;

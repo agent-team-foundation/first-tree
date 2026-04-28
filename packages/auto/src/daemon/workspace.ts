@@ -318,7 +318,7 @@ export function sanitizeFilename(raw: string): string {
 export const defaultGitRunner: GitRunner = async ({ args, env }) => {
   return new Promise((resolve, reject) => {
     const child = spawn("git", args, {
-      env: { ...process.env, ...(env ?? {}) },
+      env: { ...process.env, ...env },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";

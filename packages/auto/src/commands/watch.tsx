@@ -17,7 +17,6 @@ import { createReadStream, existsSync, statSync, watch } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import React, {
-  useCallback,
   useEffect,
   useMemo,
   useRef,

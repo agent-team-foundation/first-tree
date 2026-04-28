@@ -114,7 +114,7 @@ export function decodeMultiline(value: string): string {
   return value.replace(/\\n/g, "\n");
 }
 
-const SHELL_SAFE = /^[A-Za-z0-9\-_.\/:=,@]+$/;
+const SHELL_SAFE = /^[A-Za-z0-9\-_./:=,@]+$/;
 
 /**
  * POSIX-safe shell quoting (single-quote form). Empty string renders
@@ -146,39 +146,50 @@ export function parseKvLines(contents: string): Array<[string, string]> {
  * which is also strict about format length and separators.
  */
 export function parseGithubTimestampEpoch(value: string): number | undefined {
-  if (value.length !== 20) return undefined;
-  if (
-    value[4] !== "-" ||
-    value[7] !== "-" ||
-    value[10] !== "T" ||
-    value[13] !== ":" ||
-    value[16] !== ":" ||
-    value[19] !== "Z"
-  ) {
-    return undefined;
-  }
-  const year = Number.parseInt(value.slice(0, 4), 10);
-  const month = Number.parseInt(value.slice(5, 7), 10);
-  const day = Number.parseInt(value.slice(8, 10), 10);
-  const hour = Number.parseInt(value.slice(11, 13), 10);
-  const minute = Number.parseInt(value.slice(14, 16), 10);
-  const second = Number.parseInt(value.slice(17, 19), 10);
-  if (
-    !Number.isFinite(year) ||
-    !Number.isFinite(month) ||
-    !Number.isFinite(day) ||
-    !Number.isFinite(hour) ||
-    !Number.isFinite(minute) ||
-    !Number.isFinite(second)
-  ) {
-    return undefined;
-  }
+  const parts = parseTimestampParts(value);
+  if (parts === undefined) return undefined;
+  const { year, month, day, hour, minute, second } = parts;
   if (month < 1 || month > 12) return undefined;
   if (hour > 23 || minute > 59 || second > 59) return undefined;
   if (day < 1 || day > daysInMonth(year, month)) return undefined;
   const ms = Date.UTC(year, month - 1, day, hour, minute, second);
   if (!Number.isFinite(ms)) return undefined;
   return Math.floor(ms / 1000);
+}
+
+interface TimestampParts {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+}
+
+function parseTimestampParts(value: string): TimestampParts | undefined {
+  if (value.length !== 20) return undefined;
+  if (!hasGithubTimestampSeparators(value)) return undefined;
+  const year = Number.parseInt(value.slice(0, 4), 10);
+  const month = Number.parseInt(value.slice(5, 7), 10);
+  const day = Number.parseInt(value.slice(8, 10), 10);
+  const hour = Number.parseInt(value.slice(11, 13), 10);
+  const minute = Number.parseInt(value.slice(14, 16), 10);
+  const second = Number.parseInt(value.slice(17, 19), 10);
+  for (const part of [year, month, day, hour, minute, second]) {
+    if (!Number.isFinite(part)) return undefined;
+  }
+  return { year, month, day, hour, minute, second };
+}
+
+function hasGithubTimestampSeparators(value: string): boolean {
+  return (
+    value[4] === "-" &&
+    value[7] === "-" &&
+    value[10] === "T" &&
+    value[13] === ":" &&
+    value[16] === ":" &&
+    value[19] === "Z"
+  );
 }
 
 /** True when `value` parses as a timestamp and lies within `lookbackSecs` of `nowEpoch`. */

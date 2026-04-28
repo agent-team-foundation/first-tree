@@ -314,10 +314,33 @@ export function candidateFromTaskMetadata(
   if (kind === undefined) return undefined;
 
   const reason = metadata.get("reason") ?? "";
-  const title = decodeMultiline(metadata.get("title") ?? "");
-  const updatedAt = metadata.get("updated_at") ?? "";
-  const source = metadata.get("source") ?? "recovered-running";
+  const { apiUrl, webUrl } = resolveCandidateUrls(metadata, host, repo, threadKey);
+  const workspaceRepoRaw = metadata.get("workspace_repo") ?? "";
+  const workspaceRepo =
+    workspaceRepoRaw.trim().length > 0 ? workspaceRepoRaw : repo;
 
+  return {
+    source: metadata.get("source") ?? "recovered-running",
+    repo,
+    workspaceRepo,
+    threadKey,
+    kind,
+    reason,
+    title: decodeMultiline(metadata.get("title") ?? ""),
+    webUrl,
+    apiUrl,
+    latestCommentApiUrl: metadata.get("latest_comment_api_url") ?? "",
+    updatedAt: metadata.get("updated_at") ?? "",
+    priority: priorityFor(kind, reason),
+  };
+}
+
+function resolveCandidateUrls(
+  metadata: ReadonlyMap<string, string>,
+  host: string,
+  repo: string,
+  threadKey: string,
+): { apiUrl: string; webUrl: string } {
   const apiUrl = threadKey.startsWith("/repos/")
     ? `https://api.github.com${threadKey}`
     : metadata.get("api_url") ?? "";
@@ -326,26 +349,7 @@ export function candidateFromTaskMetadata(
     webUrlRaw.trim().length > 0
       ? webUrlRaw
       : deriveWebUrl(host, repo, threadKey) ?? "";
-  const latestCommentApiUrl = metadata.get("latest_comment_api_url") ?? "";
-
-  const workspaceRepoRaw = metadata.get("workspace_repo") ?? "";
-  const workspaceRepo =
-    workspaceRepoRaw.trim().length > 0 ? workspaceRepoRaw : repo;
-
-  return {
-    source,
-    repo,
-    workspaceRepo,
-    threadKey,
-    kind,
-    reason,
-    title,
-    webUrl,
-    apiUrl,
-    latestCommentApiUrl,
-    updatedAt,
-    priority: priorityFor(kind, reason),
-  };
+  return { apiUrl, webUrl };
 }
 
 /* -------------------------- helpers ---------------------------------- */

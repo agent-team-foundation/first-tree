@@ -21,7 +21,6 @@ import {
   WorkspaceManager,
   type GitRunner,
 } from "../../src/daemon/workspace.js";
-import type { AgentSpawner } from "../../src/daemon/runner.js";
 import { RepoFilter } from "../../src/runtime/repo-filter.js";
 import { GhExecutor } from "../../src/daemon/gh-executor.js";
 
@@ -170,7 +169,7 @@ describe("runCandidateLoop", () => {
     });
     const { dispatcher } = makeDispatcher();
     const controller = new AbortController();
-    const sleep = vi.fn(async (ms: number) => {
+    const sleep = vi.fn(async (_ms: number) => {
       // Abort mid-loop so we don't wait the real interval.
       controller.abort();
     });

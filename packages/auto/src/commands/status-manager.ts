@@ -311,57 +311,91 @@ async function cmdClaim(
     writeFileSync(join(claimDir, "action"), `${action}\n`, "utf-8");
   };
 
-  let firstClaim = false;
-  try {
-    // Atomic mkdir — mirrors bash `mkdir "$CLAIMS_DIR/$NOTIF_ID" 2>/dev/null`.
-    mkdirSync(claimDir);
-    firstClaim = true;
-  } catch (err) {
-    const e = err as NodeJS.ErrnoException;
-    if (e.code !== "EEXIST") {
-      io.stderr(`ERROR: cannot create claim dir: ${e.message}`);
-      return 1;
-    }
-  }
+  const firstClaim = tryCreateClaimDir(claimDir, io);
+  if (firstClaim === "error") return 1;
 
   if (firstClaim) {
     writeClaim();
-    // Append `claimed` event with inbox metadata.
-    const inbox = readInbox(paths.inbox);
-    const entry = findEntry(inbox, id);
-    const append = deps.appendActivity ?? appendActivityEvent;
-    append(paths.activityLog, {
-      ts: nowTs,
-      event: "claimed",
-      id,
-      type: entry?.type ?? "unknown",
-      repo: entry?.repo ?? "unknown",
-      title: entry?.title ?? "unknown",
-      url: entry?.html_url ?? "",
-      by: sessionId,
-      action,
-    });
+    recordClaimedEvent({ deps, paths, id, sessionId, action, nowTs });
     io.stdout("claimed");
     return 0;
   }
 
-  // Someone else already owns it. Check timeout.
+  return resolveExistingClaim({
+    claimDir,
+    claimTimeoutSecs,
+    now,
+    writeClaim,
+    io,
+  });
+}
+
+function tryCreateClaimDir(
+  claimDir: string,
+  io: StatusManagerIO,
+): boolean | "error" {
+  try {
+    // Atomic mkdir — mirrors bash `mkdir "$CLAIMS_DIR/$NOTIF_ID" 2>/dev/null`.
+    mkdirSync(claimDir);
+    return true;
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    if (e.code === "EEXIST") return false;
+    io.stderr(`ERROR: cannot create claim dir: ${e.message}`);
+    return "error";
+  }
+}
+
+function recordClaimedEvent(args: {
+  deps: StatusManagerDeps;
+  paths: ReturnType<typeof resolveAutoPaths>;
+  id: string;
+  sessionId: string;
+  action: string;
+  nowTs: string;
+}): void {
+  const { deps, paths, id, sessionId, action, nowTs } = args;
+  const inbox = readInbox(paths.inbox);
+  const entry = findEntry(inbox, id);
+  const append = deps.appendActivity ?? appendActivityEvent;
+  append(paths.activityLog, {
+    ts: nowTs,
+    event: "claimed",
+    id,
+    type: entry?.type ?? "unknown",
+    repo: entry?.repo ?? "unknown",
+    title: entry?.title ?? "unknown",
+    url: entry?.html_url ?? "",
+    by: sessionId,
+    action,
+  });
+}
+
+function resolveExistingClaim(args: {
+  claimDir: string;
+  claimTimeoutSecs: number;
+  now: () => Date;
+  writeClaim: () => void;
+  io: StatusManagerIO;
+}): number {
+  const { claimDir, claimTimeoutSecs, now, writeClaim, io } = args;
   const claimedAtPath = join(claimDir, "claimed_at");
-  if (existsSync(claimedAtPath)) {
-    const ts = parseIsoUtc(readLine(claimedAtPath));
-    const ageSecs = ts === null ? Number.POSITIVE_INFINITY : (now().getTime() - ts) / 1000;
-    if (ageSecs >= claimTimeoutSecs) {
-      writeClaim();
-      io.stdout("claimed");
-      return 0;
-    }
-    const owner = readLine(join(claimDir, "claimed_by")) || "unknown";
-    io.stdout(`already_claimed:${owner}`);
+  if (!existsSync(claimedAtPath)) {
+    // Claim dir exists but no metadata — reclaim.
+    writeClaim();
+    io.stdout("claimed");
     return 0;
   }
-  // Claim dir exists but no metadata — reclaim.
-  writeClaim();
-  io.stdout("claimed");
+  const ts = parseIsoUtc(readLine(claimedAtPath));
+  const ageSecs =
+    ts === null ? Number.POSITIVE_INFINITY : (now().getTime() - ts) / 1000;
+  if (ageSecs >= claimTimeoutSecs) {
+    writeClaim();
+    io.stdout("claimed");
+    return 0;
+  }
+  const owner = readLine(join(claimDir, "claimed_by")) || "unknown";
+  io.stdout(`already_claimed:${owner}`);
   return 0;
 }
 

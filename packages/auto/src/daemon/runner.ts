@@ -40,7 +40,7 @@ import {
   rmSync,
   type WriteStream,
 } from "node:fs";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import { join } from "node:path";
 
 export type AgentKind = "codex" | "claude";

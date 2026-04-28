@@ -363,7 +363,7 @@ export class Dispatcher {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         errors.push(`${spec.kind}: ${message}`);
-        if (/^timed out/.test(message) || /^aborted/.test(message)) {
+        if (message.startsWith("timed out") || message.startsWith("aborted")) {
           timedOut = true;
           break;
         }

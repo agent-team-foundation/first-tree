@@ -49,17 +49,15 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 
 import {
   GhExecutor,
   bucketForArgs,
   commandIsMutating,
-  type ExecOutput,
   type GhCommandSpec,
 } from "./gh-executor.js";
 

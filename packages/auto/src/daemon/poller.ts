@@ -189,7 +189,6 @@ export async function pollOnce(deps: PollOnceDeps): Promise<PollOutcome> {
     rawPages = splitConcatenatedJsonArrays(stdout);
   } catch (err) {
     if (err instanceof GhExecError) {
-      const combined = `${err.stdout}\n${err.stderr}`;
       const rateLimited = isRateLimited(err.stdout, err.stderr);
       warnings.push(
         `GitHub notifications fetch failed: ${err.message.split("\n")[0]}`,
