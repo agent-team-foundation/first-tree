@@ -236,7 +236,6 @@ export interface SnapshotBundle {
 export const RESPOND_MAX_ATTEMPTS = 5;
 const ATTEMPTS_MARKER_RE = /<!--\s*gardener:respond-attempts=(\d+)\s*-->/;
 const SOURCE_PR_RE = /source_pr=(\d+)/;
-const GARDENER_FIX_RE = /@gardener\s+fix/i;
 const GARDENER_MARKER_RE = /<!--\s*gardener:/;
 
 /**
@@ -259,9 +258,27 @@ export function isFromGardener(
   return false;
 }
 
-async function resolveGardenerLogin(shell: ShellRun): Promise<string> {
+export async function resolveGardenerLogin(shell: ShellRun): Promise<string> {
   const res = await shell("gh", ["api", "user", "--jq", ".login"]);
   return res.code === 0 ? res.stdout.trim() : "";
+}
+
+/**
+ * Build the regex that matches `@<login> fix` reviewer commands.
+ *
+ * The bot's GitHub login isn't always literally "gardener" — it's whatever
+ * account is configured to run gardener (resolved via `gh api user` or
+ * `GARDENER_LOGIN`). The regex must match the actual login so reviewers'
+ * `@<bot> fix` mentions trigger the fix path. Falls back to literal
+ * "gardener" when the login is unknown so existing behavior is preserved
+ * for default-named accounts.
+ */
+export function buildFixCommandRegex(gardenerLogin: string): RegExp {
+  const login = gardenerLogin.trim() || "gardener";
+  // Escape regex metacharacters in the login (defensive — usernames can
+  // technically contain `-`, `[a-zA-Z0-9]`, but escape anyway).
+  const escaped = login.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`@${escaped}\\s+fix`, "i");
 }
 
 export function readRespondAttempts(body: string | undefined): number {
@@ -578,19 +595,25 @@ async function respondSinglePr(
   // looks like reviewer feedback and respond would try to "fix" it,
   // push a commit, re-trigger review → loop.
   // See: agent-team-foundation/first-tree#134, repo-gardener#22.
+  // Build the fix-command regex from the actual gardener login so
+  // `@<bot> fix` mentions trigger the fix path even when the bot's
+  // GitHub login is something other than the literal "gardener" (e.g.
+  // a maintainer's own account running gardener locally).
+  const fixRe = buildFixCommandRegex(gardenerLogin);
+
   const nonGardenerReviews = reviews.filter(
     (r) => r.state === "CHANGES_REQUESTED" && !isFromGardener(r, gardenerLogin),
   );
   const nonGardenerFixComments = issueComments.filter(
-    (c) => c.body && GARDENER_FIX_RE.test(c.body) && !isFromGardener(c, gardenerLogin),
+    (c) => c.body && fixRe.test(c.body) && !isFromGardener(c, gardenerLogin),
   );
 
   // If the PR's review decision is CHANGES_REQUESTED but every
   // CHANGES_REQUESTED entry is self-authored, and there are no
-  // non-gardener @gardener-fix mentions, skip to avoid self-loop.
+  // non-gardener `@<bot> fix` mentions, skip to avoid self-loop.
   const wantsChangesRequested =
     prView.reviewDecision === "CHANGES_REQUESTED" ||
-    issueComments.some((c) => c.body && GARDENER_FIX_RE.test(c.body));
+    issueComments.some((c) => c.body && fixRe.test(c.body));
   if (
     wantsChangesRequested &&
     nonGardenerReviews.length === 0 &&
@@ -637,7 +660,7 @@ async function respondSinglePr(
   }
 
   if (decision === "none") {
-    write(`\u23ed #${pr}: no CHANGES_REQUESTED review and no @gardener fix`);
+    write(`\u23ed #${pr}: no CHANGES_REQUESTED review and no @${gardenerLogin || "gardener"} fix`);
     logEvent(env, { kind: "skip", pr_number: pr, reason: "no_review" });
     return { status: "skipped", summary: `no actionable review` };
   }

@@ -23,6 +23,7 @@ import {
 } from "#products/tree/engine/runtime/binding-state.js";
 import { resolveNodeOwners } from "../../../../assets/tree/helpers/generate-codeowners.js";
 import { openTreePr } from "#products/tree/engine/open-tree-pr.js";
+import { resolveGardenerLogin } from "./respond.js";
 import type {
   ShellResult,
   ShellRun,
@@ -1196,6 +1197,7 @@ async function prepareProposalGroup(
   baseRef: string,
   verifyTree: (treeRoot: string) => number | Promise<number>,
   pendingParentAdditions: Map<string, ParentSubDomainAddition[]>,
+  gardenerLogin: string,
 ): Promise<PreparedProposalGroup | null> {
   const shortSha = drift.toSha.slice(0, 7);
   const branchSuffix = group.sourcePrNumber !== null
@@ -1407,7 +1409,7 @@ async function prepareProposalGroup(
     "",
     "---",
     "",
-    "\uD83D\uDCAC **Reviewer:** comment `@gardener fix` after leaving feedback.",
+    `\uD83D\uDCAC **Reviewer:** comment \`@${gardenerLogin || "gardener"} fix\` after leaving feedback.`,
     "gardener will read your review, push a fix, and reply.",
     "(Or just leave a review \u2014 gardener auto-checks every 30 minutes.)",
   ];
@@ -1874,6 +1876,14 @@ export async function runSync(
     return 1;
   }
 
+  // Resolve the gardener bot login once. The PR-body footer that asks
+  // reviewers to comment `@<bot> fix` needs to mention the actual login
+  // running gardener (not the literal "gardener"), so reviewer mentions
+  // notify the right account. Falls back to "gardener" if resolution
+  // fails \u2014 preserves prior behavior for default-named accounts.
+  const gardenerLogin =
+    process.env.GARDENER_LOGIN?.trim() || (await resolveGardenerLogin(shellRun));
+
   // Check that claude CLI is available (required for classification)
   const hasClaude = await claudeCliAvailable(shellRun);
   if (!hasClaude) {
@@ -2241,6 +2251,7 @@ export async function runSync(
             originalRef,
             verifyTree,
             pendingParentAdditions,
+            gardenerLogin,
           );
           if (prepared === null) {
             // Fatal error during preparation

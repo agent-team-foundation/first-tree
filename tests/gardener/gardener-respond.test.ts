@@ -7,6 +7,7 @@ import {
   runGardener,
 } from "#products/gardener/cli.js";
 import {
+  buildFixCommandRegex,
   classifyReviewDecision,
   extractSourcePr,
   hasSyncLabel,
@@ -871,6 +872,29 @@ describe("gardener respond -- helpers", () => {
   });
 });
 
+describe("gardener respond -- buildFixCommandRegex", () => {
+  it("matches @<login> fix for the actual gardener login", () => {
+    const re = buildFixCommandRegex("serenakeyitan");
+    expect(re.test("please @serenakeyitan fix this")).toBe(true);
+    expect(re.test("@SerenaKeyitan FIX")).toBe(true); // case-insensitive
+    // The literal "@gardener fix" should NOT match when login is custom.
+    expect(re.test("@gardener fix this")).toBe(false);
+  });
+
+  it("falls back to @gardener fix when login is empty/whitespace", () => {
+    expect(buildFixCommandRegex("").test("@gardener fix")).toBe(true);
+    expect(buildFixCommandRegex("   ").test("@gardener fix")).toBe(true);
+  });
+
+  it("escapes regex metacharacters in the login", () => {
+    // GitHub usernames don't usually contain these, but defense in depth.
+    const re = buildFixCommandRegex("foo.bar");
+    expect(re.test("@foo.bar fix")).toBe(true);
+    // Ensure the dot is treated literally — `@fooXbar fix` should not match.
+    expect(re.test("@fooXbar fix")).toBe(false);
+  });
+});
+
 describe("gardener respond -- isFromGardener helper", () => {
   it("matches by login when gardenerLogin is set", () => {
     expect(
@@ -1047,7 +1071,7 @@ describe("gardener respond -- self-loop guard", () => {
     expect(commentCall).toBeDefined();
   });
 
-  it("skips when the only @gardener fix comment was posted by gardener itself", async () => {
+  it("skips when the only @<bot> fix comment was posted by gardener itself", async () => {
     const tmp = useTmpDir();
     const snapshotDir = join(tmp.path, "snap");
     mkdirSync(snapshotDir, { recursive: true });
@@ -1056,7 +1080,8 @@ describe("gardener respond -- self-loop guard", () => {
       title: "sync: something",
       headRefName: "first-tree/sync-203",
       // Note: reviewDecision is NOT CHANGES_REQUESTED here — the only
-      // reason respond would otherwise act is the @gardener fix mention.
+      // reason respond would otherwise act is the @<bot> fix mention,
+      // and that comment is gardener-authored, so we should skip.
       reviewDecision: "",
       body: "plain body",
       updatedAt: "2026-04-15T00:00:00Z",
@@ -1068,8 +1093,11 @@ describe("gardener respond -- self-loop guard", () => {
       JSON.stringify([
         {
           user: { login: "serenakeyitan" },
+          // The comment uses the actual bot login — `@serenakeyitan fix`,
+          // not the literal `@gardener fix` — because the fix-command
+          // regex is now built dynamically from gardenerLogin.
           body:
-            "<!-- gardener:sync -->\nping @gardener fix (self-reminder)\n",
+            "<!-- gardener:sync -->\nping @serenakeyitan fix (self-reminder)\n",
           created_at: "2026-04-15T10:00:00Z",
         },
       ]),
