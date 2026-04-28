@@ -99,8 +99,12 @@ export async function authGithubRoutes(app: FastifyInstance): Promise<void> {
         email: query.dev_email ?? "devuser@example.local",
         display_name: query.dev_login ?? "Dev User",
       });
-      const url = `${origin.proto}://${origin.host}/api/v1/auth/github/dev-callback?${params.toString()}`;
-      return reply.redirect(url, 302);
+      // Relative redirect — keeps the browser on the originating host so a
+      // Vite-proxied dev setup (frontend on :5173 → backend on :8000) works
+      // without needing a manual `FIRST_TREE_HUB_PUBLIC_URL` override. The
+      // production /callback path uses an absolute URL because GitHub
+      // bounces the browser there with the host in the redirect_uri.
+      return reply.redirect(`/api/v1/auth/github/dev-callback?${params.toString()}`, 302);
     }
 
     const redirectUri = resolveRedirectUri(oauth.redirectUri, origin);

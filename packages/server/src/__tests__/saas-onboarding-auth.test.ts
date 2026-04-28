@@ -379,9 +379,11 @@ describe("SaaS auth — GitHub OAuth + workspaces + switch-org (dev mode)", () =
     const location = start.headers.location ?? "";
     expect(location).toContain("/api/v1/auth/github/dev-callback");
     expect(location).not.toContain("evil.com");
-    // The state JWT carries the (sanitized) `next` — decode the redirect
-    // URL and confirm the embedded next is "/".
-    const stateParam = new URL(location).searchParams.get("state") ?? "";
+    // The state JWT carries the (sanitized) `next` — pluck it out via a
+    // base-anchored URL parse since the redirect Location is relative
+    // (keeps the SPA on the originating host through Vite proxies in
+    // dev). The base host is irrelevant — we only inspect query params.
+    const stateParam = new URL(location, "http://example").searchParams.get("state") ?? "";
     expect(stateParam.length).toBeGreaterThan(20);
   });
 
