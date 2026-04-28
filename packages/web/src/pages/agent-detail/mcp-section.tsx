@@ -6,6 +6,7 @@ import { DenseBadge } from "../../components/ui/dense-badge.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
+import { Panel, PanelBody, PanelHeader, PanelTitle } from "../../components/ui/panel.js";
 import { ListRow } from "./list-row.js";
 import type { DraftListItem } from "./use-config-draft.js";
 
@@ -47,27 +48,16 @@ export function McpSection(props: McpSectionProps) {
   const activeCount = props.items.filter((i) => i.status !== "deleted").length;
 
   return (
-    <section
-      style={{
-        background: "var(--bg-raised)",
-        border: "var(--hairline) solid var(--border)",
-        borderRadius: 6,
-      }}
-    >
-      <header
-        className="flex items-center justify-between"
-        style={{ padding: "var(--sp-2_5) var(--sp-3_5)", borderBottom: "var(--hairline) solid var(--border-faint)" }}
-      >
-        <h3 className="text-body font-semibold" style={{ color: "var(--fg)" }}>
-          MCP Servers ({activeCount})
-        </h3>
+    <Panel>
+      <PanelHeader>
+        <PanelTitle>MCP servers ({activeCount})</PanelTitle>
         {!props.disabled && (
           <Button size="xs" variant="outline" onClick={() => setDialog({ mode: "add" })}>
             <Plus className="h-3 w-3" /> Add
           </Button>
         )}
-      </header>
-      <div className="px-4 py-3 space-y-2">
+      </PanelHeader>
+      <PanelBody className="space-y-2">
         {props.items.length === 0 ? (
           <p className="text-body text-muted-foreground">No MCP servers. Add one to extend the agent's tools.</p>
         ) : (
@@ -93,7 +83,7 @@ export function McpSection(props: McpSectionProps) {
             );
           })
         )}
-      </div>
+      </PanelBody>
 
       {dialog && (
         <McpDialog
@@ -108,7 +98,7 @@ export function McpSection(props: McpSectionProps) {
           }}
         />
       )}
-    </section>
+    </Panel>
   );
 }
 

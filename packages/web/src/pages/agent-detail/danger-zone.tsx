@@ -33,7 +33,7 @@ export function DangerZone(props: DangerZoneProps) {
       style={{
         background: "color-mix(in oklch, var(--state-error) 6%, var(--bg-raised))",
         border: "var(--hairline) solid color-mix(in oklch, var(--state-error) 28%, transparent)",
-        borderRadius: 6,
+        borderRadius: "var(--radius-panel)",
       }}
     >
       <header className="flex items-center gap-2" style={{ padding: "var(--sp-2_5) var(--sp-3_5)" }}>

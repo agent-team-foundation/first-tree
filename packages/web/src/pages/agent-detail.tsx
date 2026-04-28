@@ -1,12 +1,8 @@
-import { ADAPTER_PLATFORMS } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Cable, Link2, Plus, Trash2 } from "lucide-react";
-import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link2, MessageSquare, Play } from "lucide-react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { type HubClient, listClients } from "./../api/activity.js";
-import { createAdapterMapping, deleteAdapterMapping, listAdapterMappings } from "./../api/adapter-mappings.js";
-import { getAdapterStatuses } from "./../api/adapter-status.js";
-import { createAdapter, deleteAdapter, listAdapters, updateAdapter } from "./../api/adapters.js";
 import {
   type ClientStatusInfo,
   dryRunAgentConfig,
@@ -29,18 +25,7 @@ import { FirstTreeLogo } from "./../components/first-tree-logo.js";
 import { Breadcrumb, BreadcrumbCurrent, BreadcrumbLink, BreadcrumbSep } from "./../components/ui/breadcrumb.js";
 import { Button } from "./../components/ui/button.js";
 import { DenseBadge, type DenseBadgeTone } from "./../components/ui/dense-badge.js";
-import {
-  DenseTable,
-  DenseTableBody,
-  DenseTableCell,
-  DenseTableHead,
-  DenseTableHeader,
-  DenseTableRow,
-} from "./../components/ui/dense-table.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./../components/ui/dialog.js";
-import { Input } from "./../components/ui/input.js";
-import { Label } from "./../components/ui/label.js";
-import { Panel } from "./../components/ui/panel.js";
 import { UppercaseLabel } from "./../components/ui/section-header.js";
 import { StateChip } from "./../components/ui/state-chip.js";
 import { Tile } from "./../components/ui/tile.js";
@@ -52,7 +37,6 @@ import { GitSection } from "./agent-detail/git-section.js";
 import { IdentitySection } from "./agent-detail/identity-section.js";
 import { McpSection } from "./agent-detail/mcp-section.js";
 import { ModelSection } from "./agent-detail/model-section.js";
-import { OverviewSection } from "./agent-detail/overview-section.js";
 import { PromptSection } from "./agent-detail/prompt-section.js";
 import { SaveBar, sectionAnchorId } from "./agent-detail/save-bar.js";
 import { SectionDivider, SectionShell } from "./agent-detail/section-shell.js";
@@ -60,19 +44,19 @@ import { type SetupRuntimeKind, SetupSection } from "./agent-detail/setup-sectio
 import { deriveSaveHint } from "./agent-detail/status-bar.js";
 import { useConfigDraft } from "./agent-detail/use-config-draft.js";
 
-const platformValues = Object.values(ADAPTER_PLATFORMS);
-
 type SidebarItem = {
   key: string;
   label: string;
   anchor: string;
   /** Items after the divider render with a visual separation. */
   divider?: boolean;
-  /** Red-text styling for Danger zone entry. */
+  /** Red dot accent for the Danger zone entry; the label itself stays neutral. */
   danger?: boolean;
 };
 
 const SECTION_ANCHORS = {
+  // Anchor id stays "ad-overview" for back-compat with deep links from older
+  // sessions; the visible heading reads "Profile" now.
   overview: "ad-overview",
   setup: "ad-setup",
   prompt: sectionAnchorId("prompt"),
@@ -83,11 +67,11 @@ const SECTION_ANCHORS = {
 
 /**
  * Flat sidebar with a divider before Danger zone. Autonomous agents get the
- * full list; human agents collapse to Overview + Danger zone per the ticket
+ * full list; human agents collapse to Profile + Danger zone per the ticket
  * "human agent 自然降级" rule.
  */
 function buildSidebar(isHuman: boolean): SidebarItem[] {
-  const items: SidebarItem[] = [{ key: "overview", label: "Overview", anchor: SECTION_ANCHORS.overview }];
+  const items: SidebarItem[] = [{ key: "overview", label: "Profile", anchor: SECTION_ANCHORS.overview }];
   if (!isHuman) {
     items.push(
       { key: "setup", label: "Setup", anchor: SECTION_ANCHORS.setup },
@@ -131,19 +115,8 @@ export function AgentDetailPage() {
     enabled: !!uuid && agentQuery.data?.type !== "human",
   });
 
-  const adaptersQuery = useQuery({ queryKey: ["adapters"], queryFn: listAdapters });
-  const mappingsQuery = useQuery({ queryKey: ["adapter-mappings"], queryFn: listAdapterMappings });
-  const { data: botStatuses } = useQuery({
-    queryKey: ["adapter-statuses"],
-    queryFn: getAdapterStatuses,
-    refetchInterval: 15_000,
-  });
-
-  const agentAdapters = adaptersQuery.data?.filter((a) => a.agentId === uuid) ?? [];
-  const agentMappings = mappingsQuery.data?.filter((m) => m.agentId === uuid) ?? [];
-
   // All connected/known clients; used to resolve the bound computer's hostname
-  // for the sticky context bar and Overview. This is distinct from the
+  // for the sticky context bar and Setup section. This is distinct from the
   // bind-dialog-gated query below (that one only fires when the dialog opens).
   const allClientsQuery = useQuery({
     queryKey: ["clients"],
@@ -254,67 +227,9 @@ export function AgentDetailPage() {
     onError: (err) => setBindClientError(err instanceof Error ? err.message : String(err)),
   });
 
-  const [bindingDialogOpen, setBindingDialogOpen] = useState(false);
-  const [bindingEditId, setBindingEditId] = useState<number | null>(null);
-  const [bindingForm, setBindingForm] = useState(EMPTY_BINDING_FORM);
-  const [bindingCredError, setBindingCredError] = useState("");
-  // Confirm-dialog state that used to be handled by window.confirm(). Holding
-  // the target id (or `true` for discard) keeps the corresponding Radix Dialog
-  // open; null/false closes it.
-  const [mappingToDelete, setMappingToDelete] = useState<number | null>(null);
-  const [adapterToDelete, setAdapterToDelete] = useState<number | null>(null);
+  // Discard-draft confirm. Other delete confirms (adapter / user binding) live
+  // in the Settings page now that bindings CRUD has moved there.
   const [discardDialogOpen, setDiscardDialogOpen] = useState(false);
-  const createAdapterMutation = useMutation({
-    mutationFn: async () => {
-      const creds = buildCredentials(bindingForm);
-      if (!creds) throw new Error("Credentials are required");
-      return createAdapter({
-        platform: bindingForm.platform as "feishu" | "slack" | "kael",
-        agentId: uuid,
-        credentials: creds,
-        status: bindingForm.status as "active" | "inactive",
-      });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["adapters"] });
-      closeBindingDialog();
-    },
-  });
-  const updateAdapterMutation = useMutation({
-    mutationFn: () => {
-      if (!bindingEditId) throw new Error("No adapter selected");
-      const data: Record<string, unknown> = { status: bindingForm.status };
-      const creds = buildCredentials(bindingForm);
-      if (creds) data.credentials = creds;
-      return updateAdapter(bindingEditId, data);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["adapters"] });
-      closeBindingDialog();
-    },
-  });
-  const deleteAdapterMutation = useMutation({
-    mutationFn: deleteAdapter,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["adapters"] }),
-  });
-  const createMappingMutation = useMutation({
-    mutationFn: () =>
-      createAdapterMapping({
-        platform: bindingForm.platform as "feishu" | "slack" | "kael",
-        externalUserId: bindingForm.externalUserId,
-        agentId: uuid,
-        boundVia: "manual",
-        displayName: bindingForm.displayName || undefined,
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["adapter-mappings"] });
-      closeBindingDialog();
-    },
-  });
-  const deleteMappingMutation = useMutation({
-    mutationFn: deleteAdapterMapping,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["adapter-mappings"] }),
-  });
 
   const [dryRunText, setDryRunText] = useState<string | null>(null);
   const dryRunMutation = useMutation({
@@ -340,15 +255,14 @@ export function AgentDetailPage() {
   const isHumanLocal = agentQuery.data?.type === "human";
   const sidebarItems = useMemo(() => buildSidebar(isHumanLocal), [isHumanLocal]);
 
-  // Sticky ContextBar visibility: hide while the Overview section is on screen
-  // (its Status & Health card already shows runtime/computer/model), show once
-  // the operator has scrolled past it. Driven by an IntersectionObserver on a
-  // zero-height sentinel placed at the bottom of the Overview section.
-  const overviewSentinelRef = useRef<HTMLDivElement | null>(null);
+  // Sticky ContextBar visibility: hide while the page-top header is on screen,
+  // show once the operator has scrolled past it. Driven by an IntersectionObserver
+  // on a zero-height sentinel placed right under the top header.
+  const headerSentinelRef = useRef<HTMLDivElement | null>(null);
   const [contextBarVisible, setContextBarVisible] = useState(false);
   useEffect(() => {
     if (isHumanLocal) return;
-    const el = overviewSentinelRef.current;
+    const el = headerSentinelRef.current;
     if (!el || typeof IntersectionObserver === "undefined") return;
     const io = new IntersectionObserver(
       (entries) => {
@@ -362,6 +276,50 @@ export function AgentDetailPage() {
     io.observe(el);
     return () => io.disconnect();
   }, [isHumanLocal]);
+
+  // Sidebar scroll-spy: marks the section currently nearest the top of the
+  // viewport as active, giving the operator a sense of place while scrolling.
+  // rootMargin shrinks the observation window to a strip near the top so only
+  // one section is "active" at a time.
+  const [activeAnchor, setActiveAnchor] = useState<string>(SECTION_ANCHORS.overview);
+  useEffect(() => {
+    if (typeof IntersectionObserver === "undefined") return;
+    const observers: IntersectionObserver[] = [];
+    for (const item of sidebarItems) {
+      const el = document.getElementById(item.anchor);
+      if (!el) continue;
+      const obs = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            if (entry.isIntersecting) setActiveAnchor(item.anchor);
+          }
+        },
+        // rootMargin shrinks the observation strip to the top 30% of the
+        // viewport so only one section is "active" at a time as the user
+        // scrolls. CSS margin allows unitless zero; this avoids the design-
+        // token lint rule that bans `Npx` literals.
+        { rootMargin: "0% 0% -70% 0%", threshold: 0 },
+      );
+      obs.observe(el);
+      observers.push(obs);
+    }
+    return () => {
+      for (const o of observers) o.disconnect();
+    };
+  }, [sidebarItems]);
+
+  // Map dirty draft sections to their sidebar anchors so each item can render
+  // a small dot when there are unsaved edits below.
+  const dirtyAnchors = useMemo(() => {
+    const set = new Set<string>();
+    for (const s of draft.summary.dirtySections) {
+      if (s === "prompt") set.add(SECTION_ANCHORS.prompt);
+      if (s === "model") set.add(SECTION_ANCHORS.setup);
+      if (s === "mcp") set.add(SECTION_ANCHORS.tools);
+      if (s === "env" || s === "git") set.add(SECTION_ANCHORS.advanced);
+    }
+    return set;
+  }, [draft.summary.dirtySections]);
 
   if (agentQuery.isLoading) {
     return (
@@ -401,59 +359,6 @@ export function AgentDetailPage() {
   const totalSessions = (runtimeExt.totalSessions as number | null) ?? null;
 
   const shortId = agent.uuid.slice(0, 8);
-
-  function closeBindingDialog() {
-    setBindingDialogOpen(false);
-    setBindingEditId(null);
-    setBindingForm(EMPTY_BINDING_FORM);
-    setBindingCredError("");
-  }
-  function openEditAdapter(adapter: { id: number; platform: string; status: string }) {
-    setBindingEditId(adapter.id);
-    setBindingForm({ ...EMPTY_BINDING_FORM, platform: adapter.platform, status: adapter.status });
-    setBindingDialogOpen(true);
-  }
-  function handleBindingSubmit(e: FormEvent) {
-    e.preventDefault();
-    setBindingCredError("");
-    if (isHuman) {
-      if (!bindingForm.externalUserId) return;
-      createMappingMutation.mutate();
-      return;
-    }
-    if (bindingForm.platform === "feishu") {
-      if (!bindingEditId && (!bindingForm.feishuAppId || !bindingForm.feishuAppSecret)) {
-        setBindingCredError("App ID and App Secret are required");
-        return;
-      }
-    } else if (bindingForm.platform === "kael") {
-      if (!bindingEditId && (!bindingForm.kaelUserId || !bindingForm.kaelProjectId)) {
-        setBindingCredError("User ID and Project ID are required");
-        return;
-      }
-    } else {
-      const trimmed = bindingForm.credentialsJson.trim();
-      if (!bindingEditId && !trimmed) {
-        setBindingCredError("Credentials are required");
-        return;
-      }
-      if (trimmed) {
-        try {
-          JSON.parse(trimmed);
-        } catch {
-          setBindingCredError("Invalid JSON");
-          return;
-        }
-      }
-    }
-    if (bindingEditId) updateAdapterMutation.mutate();
-    else createAdapterMutation.mutate();
-  }
-
-  const bindingMutationError =
-    createAdapterMutation.error ?? updateAdapterMutation.error ?? createMappingMutation.error;
-  const bindingIsPending =
-    createAdapterMutation.isPending || updateAdapterMutation.isPending || createMappingMutation.isPending;
 
   const saveHint = deriveSaveHint({
     activeSessions,
@@ -508,142 +413,6 @@ export function AgentDetailPage() {
   const contextRuntimeLabel =
     setupRuntimeKind === "kael" ? "Kael" : setupRuntimeKind === "claude-code" ? "Claude Code" : (runtimeType ?? "—");
 
-  const bindingsPanel = (
-    <Panel>
-      <div
-        className="flex items-center justify-between"
-        style={{
-          padding: "var(--sp-2_5) var(--sp-3_5)",
-          borderBottom: "var(--hairline) solid var(--border-faint)",
-        }}
-      >
-        <div className="inline-flex items-center gap-2 text-body font-semibold">
-          {isHuman ? <Link2 className="h-3.5 w-3.5" /> : <Cable className="h-3.5 w-3.5" />}
-          Platform bindings
-        </div>
-        <Button size="xs" variant="outline" onClick={() => setBindingDialogOpen(true)}>
-          <Plus className="h-3 w-3" />
-          {isHuman ? "Bind user" : "Bind bot"}
-        </Button>
-      </div>
-      {isHuman ? (
-        <DenseTable>
-          <DenseTableHeader>
-            <DenseTableRow>
-              <DenseTableHead>Platform</DenseTableHead>
-              <DenseTableHead>External user ID</DenseTableHead>
-              <DenseTableHead>Display name</DenseTableHead>
-              <DenseTableHead>Bound via</DenseTableHead>
-              <DenseTableHead>Created</DenseTableHead>
-              <DenseTableHead style={{ width: 32 }} />
-            </DenseTableRow>
-          </DenseTableHeader>
-          <DenseTableBody>
-            {agentMappings.length === 0 ? (
-              <DenseTableRow>
-                <DenseTableCell colSpan={6} style={{ textAlign: "center", color: "var(--fg-3)", padding: 16 }}>
-                  No platform bindings
-                </DenseTableCell>
-              </DenseTableRow>
-            ) : (
-              agentMappings.map((m) => (
-                <DenseTableRow key={m.id}>
-                  <DenseTableCell>
-                    <DenseBadge>{m.platform}</DenseBadge>
-                  </DenseTableCell>
-                  <DenseTableCell className="mono text-label">{m.externalUserId}</DenseTableCell>
-                  <DenseTableCell>{m.displayName ?? "—"}</DenseTableCell>
-                  <DenseTableCell>
-                    <DenseBadge tone="outline">{m.boundVia ?? "—"}</DenseBadge>
-                  </DenseTableCell>
-                  <DenseTableCell className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-                    {formatDate(m.createdAt)}
-                  </DenseTableCell>
-                  <DenseTableCell>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7"
-                      onClick={() => setMappingToDelete(m.id)}
-                      disabled={deleteMappingMutation.isPending}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  </DenseTableCell>
-                </DenseTableRow>
-              ))
-            )}
-          </DenseTableBody>
-        </DenseTable>
-      ) : (
-        <DenseTable>
-          <DenseTableHeader>
-            <DenseTableRow>
-              <DenseTableHead>Platform</DenseTableHead>
-              <DenseTableHead>Status</DenseTableHead>
-              <DenseTableHead>Connection</DenseTableHead>
-              <DenseTableHead>Created</DenseTableHead>
-              <DenseTableHead style={{ width: 64 }} />
-            </DenseTableRow>
-          </DenseTableHeader>
-          <DenseTableBody>
-            {agentAdapters.length === 0 ? (
-              <DenseTableRow>
-                <DenseTableCell colSpan={5} style={{ textAlign: "center", color: "var(--fg-3)", padding: 16 }}>
-                  No platform bindings
-                </DenseTableCell>
-              </DenseTableRow>
-            ) : (
-              agentAdapters.map((a) => {
-                const status = botStatuses?.find((s) => s.configId === a.id);
-                const isConnected = a.platform === "kael" ? a.status === "active" : !!status?.connected;
-                return (
-                  <DenseTableRow key={a.id}>
-                    <DenseTableCell>
-                      <DenseBadge>{a.platform}</DenseBadge>
-                    </DenseTableCell>
-                    <DenseTableCell>
-                      <DenseBadge tone={a.status === "active" ? "accent" : "outline"}>{a.status}</DenseBadge>
-                    </DenseTableCell>
-                    <DenseTableCell>
-                      <StateChip state={isConnected ? "idle" : "offline"} />
-                    </DenseTableCell>
-                    <DenseTableCell className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-                      {formatDate(a.createdAt)}
-                    </DenseTableCell>
-                    <DenseTableCell>
-                      <div className="flex gap-1">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7"
-                          onClick={() => openEditAdapter(a)}
-                          title="Edit"
-                        >
-                          …
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7"
-                          onClick={() => setAdapterToDelete(a.id)}
-                          disabled={deleteAdapterMutation.isPending}
-                          title="Delete"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    </DenseTableCell>
-                  </DenseTableRow>
-                );
-              })
-            )}
-          </DenseTableBody>
-        </DenseTable>
-      )}
-    </Panel>
-  );
-
   return (
     <div className="-m-6 flex" style={{ minHeight: "calc(100vh - var(--sp-10))" }}>
       <aside
@@ -669,28 +438,13 @@ export function AgentDetailPage() {
                 }}
               />
             )}
-            <button
-              type="button"
+            <SidebarItem
+              label={it.label}
+              active={activeAnchor === it.anchor}
+              danger={it.danger ?? false}
+              dirty={dirtyAnchors.has(it.anchor)}
               onClick={() => jumpTo(it.anchor)}
-              className="block w-full text-left bg-transparent text-body"
-              style={{
-                padding: "var(--sp-1_25) var(--sp-4) var(--sp-1_25) var(--sp-3_5)",
-                color: it.danger ? "var(--state-error)" : "var(--fg-3)",
-                border: "none",
-                borderLeft: "var(--hairline-bold) solid transparent",
-                cursor: "pointer",
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.color = it.danger ? "var(--state-error)" : "var(--fg)";
-                e.currentTarget.style.background = "var(--bg-hover)";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.color = it.danger ? "var(--state-error)" : "var(--fg-3)";
-                e.currentTarget.style.background = "transparent";
-              }}
-            >
-              {it.label}
-            </button>
+            />
           </div>
         ))}
       </aside>
@@ -703,7 +457,7 @@ export function AgentDetailPage() {
             background: "var(--bg-raised)",
           }}
         >
-          <Breadcrumb style={{ marginBottom: 8 }}>
+          <Breadcrumb style={{ marginBottom: "var(--sp-2)" }}>
             <BreadcrumbLink onClick={() => navigate("/agents")}>Agents</BreadcrumbLink>
             <BreadcrumbSep />
             <BreadcrumbCurrent mono>{agent.name ?? shortId}</BreadcrumbCurrent>
@@ -723,17 +477,45 @@ export function AgentDetailPage() {
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-baseline gap-2">
-                <span className="text-title">{agent.displayName}</span>
+                <span className="text-title" title={`agt_${shortId}`}>
+                  {agent.displayName}
+                </span>
                 <span className="mono text-label" style={{ color: "var(--fg-4)" }}>
                   @{agent.name ?? shortId}
                 </span>
               </div>
-              <div className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-                agt_{shortId} · {agent.type}
-                {agent.visibility ? ` · ${agent.visibility}` : ""}
+              <div className="flex flex-wrap items-center gap-1.5 text-caption" style={{ color: "var(--fg-4)" }}>
+                <DenseBadge tone={agent.type === "autonomous_agent" ? "accent" : "neutral"}>{agent.type}</DenseBadge>
+                {agent.visibility && (
+                  <DenseBadge tone={agent.visibility === "organization" ? "accent" : "outline"}>
+                    {agent.visibility}
+                  </DenseBadge>
+                )}
+                {clientStatus?.offlineSince && (
+                  <span className="mono">offline since {formatDate(clientStatus.offlineSince)}</span>
+                )}
               </div>
             </div>
-            <StateChip state={runtimeState} />
+            <div className="flex items-center gap-2 shrink-0">
+              <StateChip state={runtimeState} />
+              <Button variant="ghost" size="xs" onClick={() => navigate(`/?a=${agent.uuid}`)}>
+                <MessageSquare className="h-3 w-3" /> Open chat
+              </Button>
+              {!isHuman && agent.status === "active" && (
+                <Button
+                  variant="outline"
+                  size="xs"
+                  onClick={() => {
+                    testMutation.reset();
+                    testMutation.mutate();
+                  }}
+                  disabled={testMutation.isPending}
+                >
+                  <Play className="h-3 w-3" />
+                  {testMutation.isPending ? "Testing…" : "Test"}
+                </Button>
+              )}
+            </div>
           </div>
           <div className="grid gap-1.5 mt-3" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
             <Tile label="sessions" value={tileValues.sessions} />
@@ -746,14 +528,11 @@ export function AgentDetailPage() {
             <Tile label="model" value={tileValues.model} />
           </div>
         </div>
+        {/* Sentinel observed by the ContextBar IntersectionObserver above. */}
+        <div ref={headerSentinelRef} aria-hidden style={{ height: 0 }} />
 
         {!isHuman && (
-          <ContextBar
-            runtimeLabel={contextRuntimeLabel}
-            computerLabel={boundClientLabel}
-            modelLabel={tileValues.model}
-            visible={contextBarVisible}
-          />
+          <ContextBar runtimeLabel={contextRuntimeLabel} computerLabel={boundClientLabel} visible={contextBarVisible} />
         )}
 
         <div
@@ -773,36 +552,28 @@ export function AgentDetailPage() {
             />
           )}
 
-          <SectionShell anchorId={SECTION_ANCHORS.overview} title="Overview">
-            <OverviewSection
+          <SectionShell
+            anchorId={SECTION_ANCHORS.overview}
+            title="Profile"
+            right={
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={() => navigate(`/settings?agent=${agent.uuid}`)}
+                title="Manage platform bindings in Settings"
+              >
+                <Link2 className="h-3 w-3" />
+                Manage bindings
+              </Button>
+            }
+          >
+            <IdentitySection
               agent={agent}
-              isHuman={isHuman}
-              profileSlot={
-                <IdentitySection
-                  agent={agent}
-                  onSave={async (patch) => {
-                    await identityUpdateMutation.mutateAsync(patch);
-                  }}
-                />
-              }
-              bindingsSlot={bindingsPanel}
-              health={{
-                runtimeState,
-                model: tileValues.model,
-                activeSessions,
-                totalSessions: tileValues.sessions,
-                offlineSince: clientStatus?.offlineSince ?? null,
+              onSave={async (patch) => {
+                await identityUpdateMutation.mutateAsync(patch);
               }}
-              onOpenChat={() => navigate(`/?a=${agent.uuid}`)}
-              onTest={() => {
-                testMutation.reset();
-                testMutation.mutate();
-              }}
-              testPending={testMutation.isPending}
             />
           </SectionShell>
-          {/* Sentinel observed by the ContextBar IntersectionObserver above. */}
-          <div ref={overviewSentinelRef} aria-hidden style={{ height: 0 }} />
 
           {!isHuman && (
             <>
@@ -890,10 +661,7 @@ export function AgentDetailPage() {
               >
                 {cfgQuery.data && (
                   <div className="space-y-4">
-                    <div id={sectionAnchorId("env")} className="space-y-2">
-                      <h3 className="text-body font-medium" style={{ color: "var(--fg)" }}>
-                        Environment variables
-                      </h3>
+                    <div id={sectionAnchorId("env")}>
                       <EnvSection
                         items={draft.draft.env}
                         otherKeys={envOtherKeys}
@@ -904,11 +672,7 @@ export function AgentDetailPage() {
                         disabled={agent.status !== "active"}
                       />
                     </div>
-                    <hr aria-hidden style={{ border: 0, borderTop: "var(--hairline) solid var(--border-faint)" }} />
-                    <div id={sectionAnchorId("git")} className="space-y-2">
-                      <h3 className="text-body font-medium" style={{ color: "var(--fg)" }}>
-                        Git repositories
-                      </h3>
+                    <div id={sectionAnchorId("git")}>
                       <GitSection
                         items={draft.draft.git}
                         otherPaths={gitOtherPaths}
@@ -923,7 +687,7 @@ export function AgentDetailPage() {
                       <pre
                         className="whitespace-pre-wrap mono text-label"
                         style={{
-                          padding: 8,
+                          padding: "var(--sp-2)",
                           borderRadius: "var(--radius-input)",
                           background: "var(--bg-sunken)",
                           border: "var(--hairline) solid var(--border-faint)",
@@ -983,36 +747,6 @@ export function AgentDetailPage() {
           />
         )}
       </div>
-
-      <ConfirmDialog
-        open={mappingToDelete != null}
-        onOpenChange={(o) => !o && setMappingToDelete(null)}
-        title="Remove this binding?"
-        description="The external user will stop routing to this agent. You can add the mapping again later."
-        confirmLabel="Remove binding"
-        pending={deleteMappingMutation.isPending}
-        onConfirm={() => {
-          if (mappingToDelete != null) {
-            deleteMappingMutation.mutate(mappingToDelete);
-            setMappingToDelete(null);
-          }
-        }}
-      />
-
-      <ConfirmDialog
-        open={adapterToDelete != null}
-        onOpenChange={(o) => !o && setAdapterToDelete(null)}
-        title="Remove this bot binding?"
-        description="The bot will stop routing to this agent and any platform credentials stored here will be dropped."
-        confirmLabel="Remove binding"
-        pending={deleteAdapterMutation.isPending}
-        onConfirm={() => {
-          if (adapterToDelete != null) {
-            deleteAdapterMutation.mutate(adapterToDelete);
-            setAdapterToDelete(null);
-          }
-        }}
-      />
 
       <ConfirmDialog
         open={discardDialogOpen}
@@ -1086,171 +820,75 @@ export function AgentDetailPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      <Dialog
-        open={bindingDialogOpen}
-        onOpenChange={(open) => (open ? setBindingDialogOpen(true) : closeBindingDialog())}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>
-              {isHuman ? "Bind External User" : bindingEditId ? "Edit Bot Binding" : "Bind Bot"}
-            </DialogTitle>
-          </DialogHeader>
-          <form onSubmit={handleBindingSubmit} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="binding-platform">Platform</Label>
-              <select
-                id="binding-platform"
-                value={bindingForm.platform}
-                onChange={(e) => setBindingForm({ ...bindingForm, platform: e.target.value })}
-                disabled={!!bindingEditId}
-                className="flex h-9 w-full rounded-[var(--radius-input)] border border-input bg-transparent px-3 py-1 text-body shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
-              >
-                {platformValues.map((p) => (
-                  <option key={p} value={p}>
-                    {p}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {isHuman ? (
-              <>
-                <div className="space-y-2">
-                  <Label htmlFor="binding-ext-id">External User ID</Label>
-                  <Input
-                    id="binding-ext-id"
-                    value={bindingForm.externalUserId}
-                    onChange={(e) => setBindingForm({ ...bindingForm, externalUserId: e.target.value })}
-                    placeholder="ou_xxxxxxxx..."
-                    className="font-mono"
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="binding-name">Display Name (optional)</Label>
-                  <Input
-                    id="binding-name"
-                    value={bindingForm.displayName}
-                    onChange={(e) => setBindingForm({ ...bindingForm, displayName: e.target.value })}
-                  />
-                </div>
-              </>
-            ) : (
-              <>
-                {bindingForm.platform === "feishu" ? (
-                  <>
-                    <div className="space-y-2">
-                      <Label htmlFor="feishu-app-id">
-                        App ID{bindingEditId ? " — leave empty to keep existing" : ""}
-                      </Label>
-                      <Input
-                        id="feishu-app-id"
-                        value={bindingForm.feishuAppId}
-                        onChange={(e) => setBindingForm({ ...bindingForm, feishuAppId: e.target.value })}
-                        placeholder="cli_xxxxxxxx"
-                        className="font-mono"
-                        autoComplete="off"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="feishu-app-secret">
-                        App Secret{bindingEditId ? " — leave empty to keep existing" : ""}
-                      </Label>
-                      <Input
-                        id="feishu-app-secret"
-                        type="password"
-                        autoComplete="new-password"
-                        value={bindingForm.feishuAppSecret}
-                        onChange={(e) => setBindingForm({ ...bindingForm, feishuAppSecret: e.target.value })}
-                        placeholder="••••••••"
-                      />
-                    </div>
-                  </>
-                ) : bindingForm.platform === "kael" ? (
-                  <>
-                    <div className="space-y-2">
-                      <Label htmlFor="kael-user-id">
-                        User ID{bindingEditId ? " — leave empty to keep existing" : ""}
-                      </Label>
-                      <Input
-                        id="kael-user-id"
-                        value={bindingForm.kaelUserId}
-                        onChange={(e) => setBindingForm({ ...bindingForm, kaelUserId: e.target.value })}
-                        placeholder="user_xxxxxxxx"
-                        className="font-mono"
-                        autoComplete="off"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="kael-project-id">
-                        Project ID{bindingEditId ? " — leave empty to keep existing" : ""}
-                      </Label>
-                      <Input
-                        id="kael-project-id"
-                        value={bindingForm.kaelProjectId}
-                        onChange={(e) => setBindingForm({ ...bindingForm, kaelProjectId: e.target.value })}
-                        placeholder="proj_xxxxxxxx"
-                        className="font-mono"
-                        autoComplete="off"
-                      />
-                    </div>
-                    {!bindingEditId && (
-                      <p className="text-body" style={{ color: "var(--fg-3)" }}>
-                        Agent Token will be created automatically when you save.
-                      </p>
-                    )}
-                  </>
-                ) : (
-                  <div className="space-y-2">
-                    <Label htmlFor="binding-creds">
-                      Credentials (JSON){bindingEditId ? " — leave empty to keep existing" : ""}
-                    </Label>
-                    <textarea
-                      id="binding-creds"
-                      value={bindingForm.credentialsJson}
-                      onChange={(e) => setBindingForm({ ...bindingForm, credentialsJson: e.target.value })}
-                      rows={4}
-                      className="flex w-full rounded-[var(--radius-input)] border border-input bg-transparent px-3 py-2 text-body shadow-sm font-mono focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                      placeholder='{"bot_token": "xoxb-...", "signing_secret": "..."}'
-                    />
-                  </div>
-                )}
-                {bindingCredError && (
-                  <p className="text-body" style={{ color: "var(--state-error)" }}>
-                    {bindingCredError}
-                  </p>
-                )}
-                <div className="space-y-2">
-                  <Label htmlFor="binding-status">Status</Label>
-                  <select
-                    id="binding-status"
-                    value={bindingForm.status}
-                    onChange={(e) => setBindingForm({ ...bindingForm, status: e.target.value })}
-                    className="flex h-9 w-full rounded-[var(--radius-input)] border border-input bg-transparent px-3 py-1 text-body shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  >
-                    <option value="active">active</option>
-                    <option value="inactive">inactive</option>
-                  </select>
-                </div>
-              </>
-            )}
-
-            {bindingMutationError instanceof Error && (
-              <div className="text-body" style={{ color: "var(--state-error)" }}>
-                {bindingMutationError.message}
-              </div>
-            )}
-            <DialogFooter>
-              <Button type="submit" disabled={bindingIsPending}>
-                {bindingIsPending ? "Saving..." : bindingEditId ? "Update" : "Create"}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
     </div>
+  );
+}
+
+/**
+ * Sidebar entry. Renders an active-state left bar, a small unsaved-changes dot
+ * for sections that hold draft edits below them, and a softened danger
+ * treatment (neutral text with a red dot) for the Danger zone link.
+ */
+function SidebarItem({
+  label,
+  active,
+  danger,
+  dirty,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  danger: boolean;
+  dirty: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "block w-full text-left bg-transparent text-body transition-colors cursor-pointer",
+        "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+        active ? "" : "hover:bg-accent",
+      )}
+      style={{
+        padding: "var(--sp-1_25) var(--sp-4) var(--sp-1_25) var(--sp-3_5)",
+        border: "none",
+        borderLeft: `var(--hairline-bold) solid ${active ? "var(--accent)" : "transparent"}`,
+        background: active ? "var(--bg-active)" : "transparent",
+        color: active ? "var(--fg)" : "var(--fg-3)",
+        fontWeight: active ? 500 : 400,
+      }}
+    >
+      <span className="flex items-center gap-2">
+        <span className="flex-1 truncate">{label}</span>
+        {dirty && (
+          <span
+            role="img"
+            aria-label="unsaved changes"
+            style={{
+              width: "var(--sp-1_5)",
+              height: "var(--sp-1_5)",
+              borderRadius: "50%",
+              background: "var(--state-blocked)",
+              flexShrink: 0,
+            }}
+          />
+        )}
+        {danger && !dirty && (
+          <span
+            aria-hidden
+            style={{
+              width: "var(--sp-1_5)",
+              height: "var(--sp-1_5)",
+              borderRadius: "50%",
+              background: "var(--state-error)",
+              flexShrink: 0,
+            }}
+          />
+        )}
+      </span>
+    </button>
   );
 }
 
@@ -1294,49 +932,6 @@ function ConfirmDialog(props: {
       </DialogContent>
     </Dialog>
   );
-}
-
-// ─── binding helpers ──────────────────────────────────────────────────
-
-const EMPTY_BINDING_FORM = {
-  platform: "feishu",
-  feishuAppId: "",
-  feishuAppSecret: "",
-  credentialsJson: "{}",
-  status: "active",
-  externalUserId: "",
-  displayName: "",
-  kaelUserId: "",
-  kaelProjectId: "",
-  kaelAgentToken: "",
-};
-
-function buildCredentials(form: {
-  platform: string;
-  feishuAppId: string;
-  feishuAppSecret: string;
-  credentialsJson: string;
-  kaelUserId: string;
-  kaelProjectId: string;
-  kaelAgentToken: string;
-}): Record<string, unknown> | null {
-  if (form.platform === "feishu") {
-    if (!form.feishuAppId && !form.feishuAppSecret) return null;
-    if (!form.feishuAppId || !form.feishuAppSecret) {
-      throw new Error("Both App ID and App Secret are required");
-    }
-    return { app_id: form.feishuAppId, app_secret: form.feishuAppSecret };
-  }
-  if (form.platform === "kael") {
-    if (!form.kaelUserId && !form.kaelProjectId) return null;
-    if (!form.kaelUserId || !form.kaelProjectId) {
-      throw new Error("User ID and Project ID are required");
-    }
-    return { kaelUserId: form.kaelUserId, kaelProjectId: form.kaelProjectId };
-  }
-  const trimmed = form.credentialsJson.trim();
-  if (!trimmed) return null;
-  return JSON.parse(trimmed) as Record<string, unknown>;
 }
 
 // ─── bind-client picker ──────────────────────────────────────────────

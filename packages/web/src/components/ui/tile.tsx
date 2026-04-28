@@ -12,7 +12,8 @@ export function Tile({ label, value, accent }: TileProps) {
       style={{
         padding: "var(--sp-2) var(--sp-2_5)",
         background: "var(--bg-sunken)",
-        borderRadius: 4,
+        borderRadius: "var(--radius-input)",
+        cursor: "default",
       }}
     >
       <div className="mono uppercase text-eyebrow" style={{ color: "var(--fg-4)" }}>
@@ -22,7 +23,7 @@ export function Tile({ label, value, accent }: TileProps) {
         className="mono text-subtitle font-semibold"
         style={{
           color: accent ?? "var(--fg)",
-          marginTop: 1,
+          marginTop: "var(--sp-px)",
         }}
       >
         {value}

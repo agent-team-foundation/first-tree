@@ -1,11 +1,12 @@
-import type { AdapterBotStatus } from "@agent-team-foundation/first-tree-hub-shared";
-import { useQuery } from "@tanstack/react-query";
-import { Link2 } from "lucide-react";
-import { useMemo } from "react";
-import { useNavigate } from "react-router";
-import { listAdapterMappings } from "../api/adapter-mappings.js";
+import type { AdapterBotStatus, Agent } from "@agent-team-foundation/first-tree-hub-shared";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Plus, Trash2, X } from "lucide-react";
+import { type ReactNode, useMemo, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router";
+import { createAdapterMapping, deleteAdapterMapping, listAdapterMappings } from "../api/adapter-mappings.js";
 import { getAdapterStatuses } from "../api/adapter-status.js";
-import { listAdapters } from "../api/adapters.js";
+import { createAdapter, deleteAdapter, listAdapters, updateAdapter } from "../api/adapters.js";
+import { listAgents } from "../api/agents.js";
 import { Button } from "../components/ui/button.js";
 import { DenseBadge } from "../components/ui/dense-badge.js";
 import {
@@ -16,84 +17,273 @@ import {
   DenseTableHeader,
   DenseTableRow,
 } from "../components/ui/dense-table.js";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog.js";
 import { Panel } from "../components/ui/panel.js";
 import { SectionHeader } from "../components/ui/section-header.js";
 import { StateDot } from "../components/ui/state-dot.js";
 import { useAgentNameMap } from "../lib/use-agent-name-map.js";
 import { formatDate } from "../lib/utils.js";
+import { BindingFormDialog, type BindingFormSubmit } from "./binding-form.js";
 
+/**
+ * Bindings page — single source of truth for managing adapter (bot) and
+ * adapter-mapping (user) bindings. Lives at /settings (the Settings tab),
+ * with optional `?agent=<uuid>` filter so links from agent detail can
+ * pre-scope the view to a single agent.
+ *
+ * Why centralized here (vs. on agent detail): bindings are a server-level
+ * concern (the Hub server is the one that receives Feishu/Slack webhooks
+ * and routes them to agent inboxes; the client computer never holds these
+ * credentials). Surfacing CRUD here keeps the agent detail page focused on
+ * "how this agent thinks/acts" while letting integrations admins find one
+ * place for all platform plumbing.
+ */
 export function BindingsPage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const agentFilter = searchParams.get("agent");
+
   const resolveAgentName = useAgentNameMap();
 
-  const { data: adapters, isLoading: loadingAdapters } = useQuery({
-    queryKey: ["adapters"],
-    queryFn: listAdapters,
-  });
-
-  const { data: mappings, isLoading: loadingMappings } = useQuery({
-    queryKey: ["adapter-mappings"],
-    queryFn: listAdapterMappings,
-  });
-
-  const { data: botStatuses } = useQuery({
+  const adaptersQuery = useQuery({ queryKey: ["adapters"], queryFn: listAdapters });
+  const mappingsQuery = useQuery({ queryKey: ["adapter-mappings"], queryFn: listAdapterMappings });
+  const botStatusQuery = useQuery({
     queryKey: ["adapter-statuses"],
     queryFn: getAdapterStatuses,
     refetchInterval: 15_000,
   });
 
-  const isLoading = loadingAdapters || loadingMappings;
+  // We need the full agent list for two reasons: (1) the "+ Bot binding" /
+  // "+ User binding" pickers, and (2) the filter chip at the top of the page.
+  // Cached for 30s in the same query-key shape as `useAgentNameMap` so they
+  // share the request.
+  const agentsQuery = useQuery({
+    queryKey: ["agents", "name-map"],
+    queryFn: () => listAgents({ limit: 100 }),
+    staleTime: 30_000,
+  });
+  const allAgents = agentsQuery.data?.items ?? [];
 
+  // Status lookup: fast O(1) check whether an adapter row's bot is online.
   const statusByConfigId = useMemo(() => {
     const map = new Map<number, AdapterBotStatus>();
-    for (const s of botStatuses ?? []) map.set(s.configId, s);
+    for (const s of botStatusQuery.data ?? []) map.set(s.configId, s);
     return map;
-  }, [botStatuses]);
+  }, [botStatusQuery.data]);
 
-  const { onlineBots, offlineBots } = useMemo(() => {
-    let on = 0;
-    let off = 0;
-    for (const a of adapters ?? []) {
-      if (statusByConfigId.get(a.id)?.connected) on++;
-      else off++;
+  // Apply the optional `?agent=` filter. `null` = no filter; everything below
+  // funnels through these two filtered arrays so the count badges and table
+  // bodies stay consistent.
+  const adapters = useMemo(() => {
+    const list = adaptersQuery.data ?? [];
+    if (!agentFilter) return list;
+    return list.filter((a) => a.agentId === agentFilter);
+  }, [adaptersQuery.data, agentFilter]);
+
+  const mappings = useMemo(() => {
+    const list = mappingsQuery.data ?? [];
+    if (!agentFilter) return list;
+    return list.filter((m) => m.agentId === agentFilter);
+  }, [mappingsQuery.data, agentFilter]);
+
+  const onlineBots = adapters.reduce((n, a) => n + (statusByConfigId.get(a.id)?.connected ? 1 : 0), 0);
+  const offlineBots = adapters.length - onlineBots;
+
+  const isLoading = adaptersQuery.isLoading || mappingsQuery.isLoading;
+
+  // ── Pickers / dialogs state ────────────────────────────────────────────
+  // Picker = "which agent is this binding for?" — only shown when no
+  // `?agent=` filter is in effect. Otherwise we use the filter directly and
+  // skip straight to the credentials form.
+  const [pickerOpen, setPickerOpen] = useState<null | { kind: "bot" | "user" }>(null);
+  const [pickerAgentId, setPickerAgentId] = useState("");
+
+  const [botDialog, setBotDialog] = useState<null | {
+    agentId: string;
+    editingId: number | null;
+    initialPlatform?: "feishu" | "slack" | "kael";
+    initialStatus?: "active" | "inactive";
+  }>(null);
+  const [userDialog, setUserDialog] = useState<null | { agentId: string }>(null);
+  const [adapterToDelete, setAdapterToDelete] = useState<number | null>(null);
+  const [mappingToDelete, setMappingToDelete] = useState<number | null>(null);
+
+  // ── Mutations ──────────────────────────────────────────────────────────
+  const createAdapterMutation = useMutation({
+    mutationFn: (vars: {
+      agentId: string;
+      platform: "feishu" | "slack" | "kael";
+      status: "active" | "inactive";
+      credentials: Record<string, unknown>;
+    }) =>
+      createAdapter({
+        platform: vars.platform,
+        agentId: vars.agentId,
+        credentials: vars.credentials,
+        status: vars.status,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["adapters"] });
+      setBotDialog(null);
+    },
+  });
+
+  const updateAdapterMutation = useMutation({
+    mutationFn: (vars: { id: number; status: "active" | "inactive"; credentials?: Record<string, unknown> }) => {
+      const data: Record<string, unknown> = { status: vars.status };
+      if (vars.credentials) data.credentials = vars.credentials;
+      return updateAdapter(vars.id, data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["adapters"] });
+      setBotDialog(null);
+    },
+  });
+
+  const deleteAdapterMutation = useMutation({
+    mutationFn: deleteAdapter,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["adapters"] }),
+  });
+
+  const createMappingMutation = useMutation({
+    mutationFn: (vars: {
+      agentId: string;
+      platform: "feishu" | "slack" | "kael";
+      externalUserId: string;
+      displayName: string | null;
+    }) =>
+      createAdapterMapping({
+        platform: vars.platform,
+        externalUserId: vars.externalUserId,
+        agentId: vars.agentId,
+        boundVia: "manual",
+        displayName: vars.displayName ?? undefined,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["adapter-mappings"] });
+      setUserDialog(null);
+    },
+  });
+
+  const deleteMappingMutation = useMutation({
+    mutationFn: deleteAdapterMapping,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["adapter-mappings"] }),
+  });
+
+  // ── Pick-an-agent ↔ open-the-real-form bridge ─────────────────────────
+  // When a `?agent=` filter is in effect, "+ binding" goes straight to the
+  // credentials dialog. Without a filter, we step through a small picker
+  // first so the operator commits to a target agent before typing secrets.
+  function openCreate(kind: "bot" | "user") {
+    if (agentFilter) {
+      if (kind === "bot") setBotDialog({ agentId: agentFilter, editingId: null });
+      else setUserDialog({ agentId: agentFilter });
+      return;
     }
-    return { onlineBots: on, offlineBots: off };
-  }, [adapters, statusByConfigId]);
+    setPickerAgentId("");
+    setPickerOpen({ kind });
+  }
+  function confirmPicker() {
+    if (!pickerOpen || !pickerAgentId) return;
+    if (pickerOpen.kind === "bot") setBotDialog({ agentId: pickerAgentId, editingId: null });
+    else setUserDialog({ agentId: pickerAgentId });
+    setPickerOpen(null);
+  }
+
+  function handleBotSubmit(payload: BindingFormSubmit) {
+    if (!botDialog) return;
+    if (payload.kind === "bot-create") {
+      createAdapterMutation.mutate({
+        agentId: botDialog.agentId,
+        platform: payload.draft.platform,
+        status: payload.draft.status,
+        credentials: payload.draft.credentials,
+      });
+    } else if (payload.kind === "bot-update") {
+      if (!botDialog.editingId) return;
+      updateAdapterMutation.mutate({
+        id: botDialog.editingId,
+        status: payload.status,
+        credentials: payload.credentials,
+      });
+    }
+  }
+  function handleUserSubmit(payload: BindingFormSubmit) {
+    if (!userDialog || payload.kind !== "user-create") return;
+    createMappingMutation.mutate({
+      agentId: userDialog.agentId,
+      platform: payload.draft.platform,
+      externalUserId: payload.draft.externalUserId,
+      displayName: payload.draft.displayName,
+    });
+  }
+
+  const filterAgent = agentFilter ? allAgents.find((a) => a.uuid === agentFilter) : null;
 
   return (
     <>
       <p className="text-label" style={{ color: "var(--fg-3)", padding: "0 var(--sp-0_5) var(--sp-3)" }}>
-        Overview of platform bindings for agents you can manage. Configure each binding from the Agent detail page.
+        Manage how external platforms (Feishu, Slack, Kael) reach your agents. Bot bindings hold encrypted credentials;
+        user bindings map an external user to a human agent in this organization.
       </p>
+
+      {agentFilter && (
+        <div className="flex items-center gap-2" style={{ padding: "0 var(--sp-0_5) var(--sp-3)" }}>
+          <span className="text-caption" style={{ color: "var(--fg-3)" }}>
+            Filtered to
+          </span>
+          <span
+            className="inline-flex items-center gap-1.5 mono text-caption"
+            style={{
+              padding: "var(--sp-0_5) var(--sp-2)",
+              borderRadius: "var(--radius-chip)",
+              background: "var(--bg-active)",
+              border: "var(--hairline) solid var(--border)",
+            }}
+          >
+            {filterAgent?.displayName ?? agentFilter}
+            <button
+              type="button"
+              onClick={() => {
+                const next = new URLSearchParams(searchParams);
+                next.delete("agent");
+                setSearchParams(next, { replace: true });
+              }}
+              aria-label="Clear filter"
+              className="inline-flex items-center justify-center hover:bg-accent rounded-full"
+              style={{ width: 14, height: 14, border: "none", background: "transparent", cursor: "pointer" }}
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </span>
+        </div>
+      )}
 
       <Panel className="mb-3.5">
         <SectionHeader
           right={
-            <span className="inline-flex items-center">
-              <span className="mono inline-flex items-center gap-1" style={{ color: "var(--state-idle)" }}>
-                <span aria-hidden>●</span>
-                {onlineBots} online
+            <span className="inline-flex items-center gap-2">
+              <span className="inline-flex items-center gap-3 text-caption">
+                <span className="mono inline-flex items-center gap-1" style={{ color: "var(--state-idle)" }}>
+                  <StateDot state="idle" size={6} /> {onlineBots} online
+                </span>
+                <span className="mono inline-flex items-center gap-1" style={{ color: "var(--fg-4)" }}>
+                  <StateDot state="offline" size={6} /> {offlineBots} offline
+                </span>
               </span>
-              <span style={{ color: "var(--fg-4)", margin: "0 var(--sp-1_5)" }} aria-hidden>
-                ·
-              </span>
-              <span className="mono inline-flex items-center gap-1" style={{ color: "var(--fg-4)" }}>
-                <span aria-hidden>○</span>
-                {offlineBots} offline
-              </span>
+              <Button size="xs" variant="outline" onClick={() => openCreate("bot")}>
+                <Plus className="h-3 w-3" /> Bot binding
+              </Button>
             </span>
           }
         >
-          Bot bindings · {adapters?.length ?? 0}
+          Bot bindings · {adapters.length}
         </SectionHeader>
         {isLoading ? (
-          <div className="text-center py-6 text-body" style={{ color: "var(--fg-3)" }}>
-            Loading…
-          </div>
-        ) : !adapters?.length ? (
-          <div className="text-center py-6 text-body" style={{ color: "var(--fg-3)" }}>
-            No bot bindings
-          </div>
+          <EmptyRow>Loading…</EmptyRow>
+        ) : !adapters.length ? (
+          <EmptyRow>{agentFilter ? "No bot bindings for this agent yet." : "No bot bindings"}</EmptyRow>
         ) : (
           <DenseTable>
             <DenseTableHeader>
@@ -103,7 +293,7 @@ export function BindingsPage() {
                 <DenseTableHead>Status</DenseTableHead>
                 <DenseTableHead>Connection</DenseTableHead>
                 <DenseTableHead>Created</DenseTableHead>
-                <DenseTableHead />
+                <DenseTableHead style={{ width: 96, textAlign: "right" }} />
               </DenseTableRow>
             </DenseTableHeader>
             <DenseTableBody>
@@ -129,18 +319,34 @@ export function BindingsPage() {
                     <DenseTableCell className="mono text-caption" style={{ color: "var(--fg-4)" }}>
                       {formatDate(a.createdAt)}
                     </DenseTableCell>
-                    <DenseTableCell style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                    <DenseTableCell
+                      style={{ textAlign: "right", whiteSpace: "nowrap" }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
                       <Button
                         variant="ghost"
                         size="xs"
                         className="text-label"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          navigate(`/agents/${a.agentId}`);
-                        }}
+                        onClick={() =>
+                          setBotDialog({
+                            agentId: a.agentId,
+                            editingId: a.id,
+                            initialPlatform: narrowPlatform(a.platform),
+                            initialStatus: narrowStatus(a.status),
+                          })
+                        }
                       >
-                        <Link2 className="h-3 w-3" />
-                        Manage
+                        Edit
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7"
+                        onClick={() => setAdapterToDelete(a.id)}
+                        disabled={deleteAdapterMutation.isPending}
+                        title="Delete"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
                       </Button>
                     </DenseTableCell>
                   </DenseTableRow>
@@ -152,15 +358,19 @@ export function BindingsPage() {
       </Panel>
 
       <Panel>
-        <SectionHeader>User bindings · {mappings?.length ?? 0}</SectionHeader>
+        <SectionHeader
+          right={
+            <Button size="xs" variant="outline" onClick={() => openCreate("user")}>
+              <Plus className="h-3 w-3" /> User binding
+            </Button>
+          }
+        >
+          User bindings · {mappings.length}
+        </SectionHeader>
         {isLoading ? (
-          <div className="text-center py-6 text-body" style={{ color: "var(--fg-3)" }}>
-            Loading…
-          </div>
-        ) : !mappings?.length ? (
-          <div className="text-center py-6 text-body" style={{ color: "var(--fg-3)" }}>
-            No user bindings
-          </div>
+          <EmptyRow>Loading…</EmptyRow>
+        ) : !mappings.length ? (
+          <EmptyRow>{agentFilter ? "No user bindings for this agent yet." : "No user bindings"}</EmptyRow>
         ) : (
           <DenseTable>
             <DenseTableHeader>
@@ -171,6 +381,7 @@ export function BindingsPage() {
                 <DenseTableHead>Display name</DenseTableHead>
                 <DenseTableHead>Bound via</DenseTableHead>
                 <DenseTableHead>Created</DenseTableHead>
+                <DenseTableHead style={{ width: 32 }} />
               </DenseTableRow>
             </DenseTableHeader>
             <DenseTableBody>
@@ -196,12 +407,206 @@ export function BindingsPage() {
                   <DenseTableCell className="mono text-caption" style={{ color: "var(--fg-4)" }}>
                     {formatDate(m.createdAt)}
                   </DenseTableCell>
+                  <DenseTableCell onClick={(e) => e.stopPropagation()}>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={() => setMappingToDelete(m.id)}
+                      disabled={deleteMappingMutation.isPending}
+                      title="Delete"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </DenseTableCell>
                 </DenseTableRow>
               ))}
             </DenseTableBody>
           </DenseTable>
         )}
       </Panel>
+
+      {/* Pick agent → then open the real form. Skipped when ?agent=is set. */}
+      <AgentPickerDialog
+        open={pickerOpen != null}
+        kind={pickerOpen?.kind ?? "bot"}
+        agents={allAgents}
+        agentId={pickerAgentId}
+        onAgentChange={setPickerAgentId}
+        onCancel={() => setPickerOpen(null)}
+        onConfirm={confirmPicker}
+      />
+
+      <BindingFormDialog
+        open={botDialog != null}
+        kind="bot"
+        editingId={botDialog?.editingId ?? null}
+        initialPlatform={botDialog?.initialPlatform}
+        initialStatus={botDialog?.initialStatus}
+        agentLabel={botDialog ? resolveAgentName(botDialog.agentId) : ""}
+        pending={createAdapterMutation.isPending || updateAdapterMutation.isPending}
+        errorMessage={
+          (createAdapterMutation.error ?? updateAdapterMutation.error) instanceof Error
+            ? ((createAdapterMutation.error ?? updateAdapterMutation.error) as Error).message
+            : null
+        }
+        onOpenChange={(open) => {
+          if (!open) {
+            setBotDialog(null);
+            createAdapterMutation.reset();
+            updateAdapterMutation.reset();
+          }
+        }}
+        onSubmit={handleBotSubmit}
+      />
+
+      <BindingFormDialog
+        open={userDialog != null}
+        kind="user"
+        editingId={null}
+        agentLabel={userDialog ? resolveAgentName(userDialog.agentId) : ""}
+        pending={createMappingMutation.isPending}
+        errorMessage={createMappingMutation.error instanceof Error ? createMappingMutation.error.message : null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setUserDialog(null);
+            createMappingMutation.reset();
+          }
+        }}
+        onSubmit={handleUserSubmit}
+      />
+
+      <ConfirmDialog
+        open={adapterToDelete != null}
+        onOpenChange={(o) => !o && setAdapterToDelete(null)}
+        title="Remove this bot binding?"
+        description="The bot will stop routing to this agent and any platform credentials stored here will be dropped."
+        confirmLabel="Remove binding"
+        pending={deleteAdapterMutation.isPending}
+        onConfirm={() => {
+          if (adapterToDelete != null) {
+            deleteAdapterMutation.mutate(adapterToDelete);
+            setAdapterToDelete(null);
+          }
+        }}
+      />
+      <ConfirmDialog
+        open={mappingToDelete != null}
+        onOpenChange={(o) => !o && setMappingToDelete(null)}
+        title="Remove this binding?"
+        description="The external user will stop routing to this agent. You can add the mapping again later."
+        confirmLabel="Remove binding"
+        pending={deleteMappingMutation.isPending}
+        onConfirm={() => {
+          if (mappingToDelete != null) {
+            deleteMappingMutation.mutate(mappingToDelete);
+            setMappingToDelete(null);
+          }
+        }}
+      />
     </>
+  );
+}
+
+// AdapterConfig response type widens platform/status to plain `string` (the
+// server response schema uses `z.string()` rather than the enum). We narrow
+// here so the form's prop types stay strict; the values are already known to
+// match because the server only ever stores valid platform/status strings.
+function narrowPlatform(p: string): "feishu" | "slack" | "kael" {
+  return p === "feishu" || p === "slack" || p === "kael" ? p : "feishu";
+}
+function narrowStatus(s: string): "active" | "inactive" {
+  return s === "inactive" ? "inactive" : "active";
+}
+
+function EmptyRow({ children }: { children: ReactNode }) {
+  return (
+    <div className="text-center py-6 text-body" style={{ color: "var(--fg-3)" }}>
+      {children}
+    </div>
+  );
+}
+
+function AgentPickerDialog(props: {
+  open: boolean;
+  kind: "bot" | "user";
+  agents: Agent[];
+  agentId: string;
+  onAgentChange: (id: string) => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  // Bot bindings are typically attached to autonomous agents; user bindings
+  // map external IM users to human agents. Filter the picker accordingly so
+  // the operator picks from the right pool.
+  const candidates =
+    props.kind === "user"
+      ? props.agents.filter((a) => a.type === "human" && a.status === "active")
+      : props.agents.filter((a) => a.type !== "human" && a.status === "active");
+
+  return (
+    <Dialog open={props.open} onOpenChange={(o) => !o && props.onCancel()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{props.kind === "bot" ? "Bind a bot" : "Bind an external user"}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <p className="text-body" style={{ color: "var(--fg-3)" }}>
+            Pick the agent this binding routes to.
+          </p>
+          <select
+            value={props.agentId}
+            onChange={(e) => props.onAgentChange(e.target.value)}
+            className="flex h-9 w-full rounded-[var(--radius-input)] border border-input bg-transparent px-3 py-1 text-body shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          >
+            <option value="">Select an agent…</option>
+            {candidates.map((a) => (
+              <option key={a.uuid} value={a.uuid}>
+                {a.displayName} {a.name ? `(@${a.name})` : ""}
+              </option>
+            ))}
+          </select>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={props.onCancel}>
+            Cancel
+          </Button>
+          <Button onClick={props.onConfirm} disabled={!props.agentId}>
+            Continue
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ConfirmDialog(props: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  title: string;
+  description: ReactNode;
+  confirmLabel: string;
+  onConfirm: () => void;
+  pending?: boolean;
+}) {
+  return (
+    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{props.title}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 text-body" style={{ color: "var(--fg-2)" }}>
+          {props.description}
+        </div>
+        <DialogFooter>
+          <Button type="button" variant="ghost" onClick={() => props.onOpenChange(false)} disabled={props.pending}>
+            Cancel
+          </Button>
+          <Button type="button" variant="destructive" onClick={props.onConfirm} disabled={props.pending}>
+            {props.pending ? "Working…" : props.confirmLabel}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
