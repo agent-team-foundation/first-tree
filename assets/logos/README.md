@@ -12,6 +12,7 @@ with `prefers-color-scheme` to swap between them.
 | `gemini` | Simple Icons (`googlegemini`) | CC0 |
 | `github` | Simple Icons (`github`) | CC0 |
 | `mcp` | Simple Icons (`modelcontextprotocol`) | CC0 |
+| `openclaw` | `openclaw/openclaw` repo (`docs/assets/pixel-lobster.svg`) | MIT |
 
 Each pair was generated from the same source SVG with `fill="#000000"` (light
 variant) and `fill="#ffffff"` (dark variant). To refresh:
