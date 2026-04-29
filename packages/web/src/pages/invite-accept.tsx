@@ -1,23 +1,25 @@
-import type { InvitationPreview } from "@agent-team-foundation/first-tree-hub-shared";
-import { Github } from "lucide-react";
+import type { InvitationPreview, OrgBrief } from "@agent-team-foundation/first-tree-hub-shared";
+import { ArrowLeft, Github, TriangleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router";
+import { Link, useNavigate, useParams } from "react-router";
 import { api } from "../api/client.js";
 import { useAuth } from "../auth/auth-context.js";
 import { Button } from "../components/ui/button.js";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card.js";
+import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card.js";
 import { markOnboardingResume } from "../utils/onboarding-flags.js";
 
 /**
  * Public landing for `/invite/:token`. Two cases:
  *
- *   - Visitor not signed in: show the org name + a "Continue with GitHub"
- *     button that round-trips through OAuth and lands them inside the team.
- *   - Visitor already signed in: surface a "Join now" button that POSTs
- *     `/me/organizations/join` and switches their token over.
+ *   - Visitor not signed in: "Continue with GitHub" round-trips through OAuth
+ *     and lands them inside the team.
+ *   - Visitor already signed in: "Join now" POSTs `/me/organizations/join`
+ *     and switches their token over.
  *
- * The preview only exposes org name + display name + role — the public
- * endpoint deliberately does NOT leak member counts, emails, or billing.
+ * The preview omits anything internal (memberCount, member emails, billing).
+ * The page is team-centric on purpose — invite links are shareable URLs that
+ * may reach the recipient via channels we don't track, so identifying "who
+ * invited you" can mislead. The team is the load-bearing identity.
  */
 export function InviteAcceptPage() {
   const { token } = useParams<{ token: string }>();
@@ -26,6 +28,7 @@ export function InviteAcceptPage() {
   const [preview, setPreview] = useState<InvitationPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [currentTeamName, setCurrentTeamName] = useState<string | null>(null);
 
   useEffect(() => {
     if (!token) return;
@@ -33,8 +36,7 @@ export function InviteAcceptPage() {
       try {
         const res = await fetch(`/api/v1/invite/${encodeURIComponent(token)}/preview`);
         if (!res.ok) {
-          const body = (await res.json().catch(() => ({}))) as { error?: string };
-          setError(body.error ?? "This invitation is no longer valid");
+          setError("This invitation is no longer valid");
           return;
         }
         setPreview((await res.json()) as InvitationPreview);
@@ -44,12 +46,29 @@ export function InviteAcceptPage() {
     })();
   }, [token]);
 
-  if (!token) return <Centered>Bad invitation URL</Centered>;
-  if (error) return <Centered>{error}</Centered>;
-  if (!preview) return <Centered>Loading…</Centered>;
+  // For the switch warning we need the current team's displayName, not just
+  // the orgId from the JWT. Fetched lazily — no-op for unauthenticated visitors.
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    void (async () => {
+      try {
+        const orgs = await api.get<OrgBrief[]>("/me/organizations");
+        // The /me JWT carries `organizationId`; resolve via the listing so we
+        // get the human-readable display name.
+        const me = await api.get<{ member: { organizationId: string } }>("/me");
+        const current = orgs.find((o) => o.id === me.member.organizationId);
+        setCurrentTeamName(current?.displayName ?? null);
+      } catch {
+        // best-effort — switch warning just stays hidden
+      }
+    })();
+  }, [isAuthenticated]);
+
+  if (!token) return <ErrorScreen message="Bad invitation URL" />;
+  if (error) return <ErrorScreen message="This invitation is no longer valid" />;
+  if (!preview) return <SkeletonScreen />;
 
   const handleJoin = async () => {
-    if (!token) return;
     setBusy(true);
     try {
       const res = await api.post<{
@@ -59,7 +78,6 @@ export function InviteAcceptPage() {
         tokens: { accessToken: string; refreshToken: string };
       }>("/me/organizations/join", { token });
       await adoptTokens(res.tokens);
-      // Land on dashboard; onboarding modal layers on top if wizard incomplete.
       markOnboardingResume("invite");
       navigate("/", { replace: true });
     } catch (err) {
@@ -70,19 +88,32 @@ export function InviteAcceptPage() {
   };
 
   const continueOauthHref = `/api/v1/auth/github/start?next=${encodeURIComponent(`/invite/${token}`)}`;
+  const switchingTeam = isAuthenticated && currentTeamName && currentTeamName !== preview.organizationDisplayName;
+  const expiresHint = formatExpiresHint(preview.expiresAt);
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background">
-      <Card className="w-full max-w-md">
+    <PageShell>
+      <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
-          <CardTitle className="text-title">Join {preview.organizationDisplayName}</CardTitle>
-          <CardDescription>
-            You've been invited as a {preview.role}.
+          <CardTitle className="text-title">
+            You're invited to join
             <br />
-            <span className="text-muted-foreground">team: {preview.organizationName}</span>
-          </CardDescription>
+            {preview.organizationDisplayName}
+          </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
+          {switchingTeam && (
+            <div
+              className="flex items-start gap-2 rounded-md p-3 text-label"
+              style={{ background: "var(--bg-sunken)", color: "var(--fg-2)" }}
+            >
+              <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>
+                You'll switch from <span className="font-medium">{currentTeamName}</span> to{" "}
+                <span className="font-medium">{preview.organizationDisplayName}</span>.
+              </span>
+            </div>
+          )}
           {isAuthenticated ? (
             <Button className="w-full" disabled={busy} onClick={handleJoin}>
               {busy ? "Joining…" : `Join ${preview.organizationDisplayName}`}
@@ -95,16 +126,109 @@ export function InviteAcceptPage() {
               </a>
             </Button>
           )}
+          {expiresHint && (
+            <p
+              className="text-center text-label"
+              style={{ color: expiresHint.urgent ? "var(--destructive)" : "var(--fg-3)" }}
+            >
+              {expiresHint.text}
+            </p>
+          )}
+          <p className="text-center text-label text-muted-foreground">
+            By continuing you agree to our{" "}
+            <a href="/terms" className="underline underline-offset-2 transition-colors hover:text-foreground">
+              Terms
+            </a>{" "}
+            ·{" "}
+            <a href="/privacy" className="underline underline-offset-2 transition-colors hover:text-foreground">
+              Privacy
+            </a>
+          </p>
         </CardContent>
       </Card>
+    </PageShell>
+  );
+}
+
+function PageShell({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex min-h-screen flex-col bg-background">
+      <header className="px-4 py-3">
+        <Link
+          to="/"
+          className="inline-flex items-center gap-1.5 rounded-[var(--radius-input)] px-2 py-1 text-body text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+        >
+          <ArrowLeft className="h-3.5 w-3.5" />
+          Back to home
+        </Link>
+      </header>
+      <div className="flex flex-1 items-center justify-center px-4 pb-16">{children}</div>
     </div>
   );
 }
 
-function Centered({ children }: { children: React.ReactNode }) {
+function SkeletonScreen() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background text-body text-muted-foreground">
-      {children}
-    </div>
+    <PageShell>
+      <Card className="w-full max-w-sm">
+        <CardHeader className="text-center">
+          <div className="mx-auto h-5 w-2/3 rounded-md" style={{ background: "var(--bg-sunken)" }} />
+          <div className="mx-auto mt-2 h-5 w-1/2 rounded-md" style={{ background: "var(--bg-sunken)" }} />
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="h-9 w-full rounded-md" style={{ background: "var(--bg-sunken)" }} />
+          <div className="mx-auto h-3 w-1/3 rounded-md" style={{ background: "var(--bg-sunken)" }} />
+        </CardContent>
+      </Card>
+    </PageShell>
   );
+}
+
+function ErrorScreen({ message }: { message: string }) {
+  return (
+    <PageShell>
+      <Card className="w-full max-w-sm">
+        <CardHeader className="text-center">
+          <div className="mb-2 flex justify-center text-fg-3">
+            <TriangleAlert className="h-6 w-6" />
+          </div>
+          <CardTitle className="text-title">{message}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-center text-body text-muted-foreground">
+            It may have expired or been revoked. Ask the team admin for a fresh link.
+          </p>
+          <Button asChild variant="outline" className="w-full">
+            <Link to="/">
+              <ArrowLeft className="h-3.5 w-3.5" />
+              Back to home
+            </Link>
+          </Button>
+        </CardContent>
+      </Card>
+    </PageShell>
+  );
+}
+
+/**
+ * Format the expiry hint shown under the join CTA. Returns null when the link
+ * has more than 7 days left (no urgency, no need to show the user the date).
+ * Marked `urgent` when under 24 hours so the UI can render it in the
+ * destructive color.
+ */
+function formatExpiresHint(expiresAt: string | null): { text: string; urgent: boolean } | null {
+  if (!expiresAt) return null;
+  const target = new Date(expiresAt).getTime();
+  if (!Number.isFinite(target)) return null;
+  const diffMs = target - Date.now();
+  if (diffMs <= 0) return null;
+
+  const minutes = Math.floor(diffMs / 60_000);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+
+  if (days > 7) return null;
+  if (days >= 1) return { text: `Expires in ${days} ${days === 1 ? "day" : "days"}`, urgent: false };
+  if (hours >= 1) return { text: `Expires in ${hours} ${hours === 1 ? "hour" : "hours"}`, urgent: true };
+  return { text: `Expires in ${Math.max(1, minutes)} ${minutes === 1 ? "minute" : "minutes"}`, urgent: true };
 }
