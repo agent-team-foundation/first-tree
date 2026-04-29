@@ -245,7 +245,7 @@ export class ClientRuntime {
     const agentDir = join(this.agentsDir, localName);
     try {
       mkdirSync(agentDir, { recursive: true, mode: 0o700 });
-      const yaml = stringifyYaml({ agentId: message.agentId, runtime: "claude-code" });
+      const yaml = stringifyYaml({ agentId: message.agentId, runtime: message.runtimeProvider });
       writeFileSync(join(agentDir, "agent.yaml"), yaml, { mode: 0o600 });
       print.check(true, `auto-added agent "${localName}"`, `${message.agentId} (from server push)`);
     } catch (err) {

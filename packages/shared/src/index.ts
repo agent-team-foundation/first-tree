@@ -58,6 +58,8 @@ export {
   createAgentSchema,
   isReservedAgentName,
   RESERVED_AGENT_NAMES,
+  type RebindAgent,
+  rebindAgentSchema,
   type UpdateAgent,
   updateAgentSchema,
 } from "./schemas/agent.js";
@@ -70,7 +72,9 @@ export {
   agentRuntimeConfigSchema,
   type ClientMessagePayload,
   DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD,
+  DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD,
   type DryRunAgentRuntimeConfig,
+  defaultRuntimeConfigPayload,
   deriveRepoLocalPath,
   dryRunAgentRuntimeConfigSchema,
   ENV_REDACTED_PLACEHOLDER,
@@ -131,6 +135,19 @@ export {
   clientSchema,
   clientStatusSchema,
 } from "./schemas/client.js";
+export {
+  CAPABILITY_STATES,
+  type CapabilityAuthMethod,
+  type CapabilityEntry,
+  type CapabilityState,
+  type ClientCapabilities,
+  capabilityAuthMethodSchema,
+  capabilityEntrySchema,
+  capabilityStateSchema,
+  clientCapabilitiesSchema,
+  type UpdateClientCapabilities,
+  updateClientCapabilitiesSchema,
+} from "./schemas/client-capabilities.js";
 export {
   type PaginationQuery,
   paginatedResponse,
@@ -248,6 +265,12 @@ export {
   pulseBucketSchema,
   pulseTickSchema,
 } from "./schemas/pulse.js";
+export {
+  DEFAULT_RUNTIME_PROVIDER,
+  RUNTIME_PROVIDERS,
+  type RuntimeProvider,
+  runtimeProviderSchema,
+} from "./schemas/runtime-provider.js";
 export {
   type AssistantTextEventPayload,
   assistantTextEventPayload,

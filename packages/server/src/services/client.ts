@@ -1,10 +1,15 @@
+import {
+  type ClientCapabilities,
+  clientCapabilitiesSchema,
+  type RuntimeProvider,
+} from "@agent-team-foundation/first-tree-hub-shared";
 import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
 import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
-import { ClientOrgMismatchError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
+import { BadRequestError, ClientOrgMismatchError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 import { runtimeFieldsReset } from "./presence.js";
 
 /**
@@ -159,9 +164,75 @@ export async function listActiveAgentsPinnedToClient(db: Database, clientId: str
       name: agents.name,
       displayName: agents.displayName,
       type: agents.type,
+      runtimeProvider: agents.runtimeProvider,
     })
     .from(agents)
     .where(and(eq(agents.clientId, clientId), ne(agents.status, "deleted")));
+}
+
+/**
+ * Member-scoped: every active agent pinned to a client owned by this user
+ * within the given organization. Used by client startup to reconcile its
+ * local YAML against the authoritative `agents.runtime_provider`.
+ */
+export async function listMyPinnedAgents(
+  db: Database,
+  scope: { userId: string; organizationId: string },
+): Promise<Array<{ agentId: string; clientId: string; runtimeProvider: RuntimeProvider }>> {
+  const rows = await db
+    .select({
+      agentId: agents.uuid,
+      clientId: agents.clientId,
+      runtimeProvider: agents.runtimeProvider,
+    })
+    .from(agents)
+    .innerJoin(clients, eq(agents.clientId, clients.id))
+    .where(
+      and(
+        eq(clients.userId, scope.userId),
+        eq(clients.organizationId, scope.organizationId),
+        ne(agents.status, "deleted"),
+      ),
+    );
+  return rows
+    .filter((r): r is { agentId: string; clientId: string; runtimeProvider: string } => r.clientId !== null)
+    .map((r) => ({
+      agentId: r.agentId,
+      clientId: r.clientId,
+      runtimeProvider: r.runtimeProvider as RuntimeProvider,
+    }));
+}
+
+/**
+ * Replace this client's capabilities snapshot. Capabilities live under
+ * `clients.metadata.capabilities` (Option C — no dedicated column); other
+ * `metadata` subkeys are preserved on merge.
+ *
+ * Caller is expected to have already passed `assertClientOwner`.
+ */
+export async function updateClientCapabilities(
+  db: Database,
+  clientId: string,
+  capabilities: ClientCapabilities,
+): Promise<void> {
+  const parsed = clientCapabilitiesSchema.safeParse(capabilities);
+  if (!parsed.success) {
+    throw new BadRequestError(`Invalid capabilities payload: ${parsed.error.message}`);
+  }
+
+  const [client] = await db
+    .select({ metadata: clients.metadata })
+    .from(clients)
+    .where(eq(clients.id, clientId))
+    .limit(1);
+  if (!client) {
+    throw new NotFoundError(`Client "${clientId}" not found`);
+  }
+
+  const baseMetadata = (client.metadata ?? {}) as Record<string, unknown>;
+  const merged = { ...baseMetadata, capabilities: parsed.data };
+
+  await db.update(clients).set({ metadata: merged }).where(eq(clients.id, clientId));
 }
 
 /**

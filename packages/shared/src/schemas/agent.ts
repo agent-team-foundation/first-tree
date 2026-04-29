@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { presenceStatusSchema } from "./presence.js";
+import { runtimeProviderSchema } from "./runtime-provider.js";
 
 export const AGENT_TYPES = {
   HUMAN: "human",
@@ -106,6 +107,12 @@ export const createAgentSchema = z.object({
    * (see `api/agent/ws-client.ts`). Human agents must omit it.
    */
   clientId: z.string().min(1).max(100).optional(),
+  /**
+   * Runtime provider that drives this agent. Defaults to `"claude-code"` at
+   * the service layer when omitted. Must match a provider available in the
+   * pinned client's reported capabilities (or be force-overridden).
+   */
+  runtimeProvider: runtimeProviderSchema.optional(),
 });
 export type CreateAgent = z.infer<typeof createAgentSchema>;
 
@@ -125,13 +132,28 @@ export const updateAgentSchema = z.object({
   /** Admin-only: reassign the manager */
   managerId: z.string().nullable().optional(),
   /**
-   * One-shot bind. NULL → ID is allowed (admin claims an unbound agent for
-   * a known client); ID → another ID and ID → null are rejected by the
-   * service layer with explicit 400s.
+   * One-shot bind. NULL → ID still allowed (admin claims an unbound agent for
+   * a known client). ID → another ID and ID → null are rejected at the
+   * service layer; cross-client moves go through `rebindAgent`, which runs
+   * owner / org / capability checks atomically.
    */
   clientId: z.string().min(1).max(100).nullable().optional(),
 });
 export type UpdateAgent = z.infer<typeof updateAgentSchema>;
+
+/**
+ * Service-level rebind input. Admin / owner re-binds an agent to a new
+ * client and/or a new runtime provider in one atomic operation.
+ *
+ * `force` bypasses the capability-match check (e.g. when the client is
+ * offline and capabilities are stale).
+ */
+export const rebindAgentSchema = z.object({
+  clientId: z.string().min(1).max(100),
+  runtimeProvider: runtimeProviderSchema,
+  force: z.boolean().optional(),
+});
+export type RebindAgent = z.infer<typeof rebindAgentSchema>;
 
 export const agentSchema = z.object({
   uuid: z.string(),
@@ -156,6 +178,8 @@ export const agentSchema = z.object({
   managerId: z.string().nullable(),
   /** Physical client this agent is pinned to. NULL for human agents only. */
   clientId: z.string().nullable(),
+  /** Which runtime provider drives this agent. NOT NULL post-0026. */
+  runtimeProvider: runtimeProviderSchema,
   presenceStatus: presenceStatusSchema.optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -185,5 +209,11 @@ export const agentPinnedMessageSchema = z.object({
    */
   displayName: z.string(),
   agentType: agentTypeSchema,
+  /**
+   * Authoritative runtime provider for this agent (post-0026). Older clients
+   * that omit this field on parse are tolerated by the consumer side, which
+   * falls back to `"claude-code"` for legacy compatibility.
+   */
+  runtimeProvider: runtimeProviderSchema,
 });
 export type AgentPinnedMessage = z.infer<typeof agentPinnedMessageSchema>;

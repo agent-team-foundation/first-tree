@@ -80,7 +80,14 @@ export function createAgentConfigCache(opts: AgentConfigCacheOptions): AgentConf
         config: {
           agentId,
           version: 0,
-          payload: { prompt: { append: "" }, model: "", mcpServers: [], env: [], gitRepos: [] },
+          payload: {
+            kind: "claude-code",
+            prompt: { append: "" },
+            model: "",
+            mcpServers: [],
+            env: [],
+            gitRepos: [],
+          },
           updatedAt: "",
           updatedBy: "",
         },

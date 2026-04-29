@@ -14,6 +14,7 @@ import {
   applyClientLoggerConfig,
   ClientOrgMismatchError,
   configureClientLoggerForService,
+  probeCapabilities,
 } from "@first-tree-hub/client";
 import type { Command } from "commander";
 import { fail } from "../cli/output.js";
@@ -35,7 +36,9 @@ import {
   printResults,
   promptMissingFields,
   promptUpdate,
+  reconcileLocalRuntimeProviders,
   resolveServerUrl,
+  uploadClientCapabilities,
 } from "../core/index.js";
 import { print } from "../core/output.js";
 import { registerConnectCommand } from "./connect.js";
@@ -95,6 +98,27 @@ export function registerClientCommands(program: Command): void {
           const msg = err instanceof Error ? err.message : String(err);
           print.status("⚠️", `agent-dir migration skipped: ${msg}`);
         }
+
+        // Pre-flight runtime-provider reconciliation: probe local runtime SDKs
+        // and rewrite any local `agent.yaml::runtime` whose value drifted from
+        // the authoritative `agents.runtime_provider` (so the spawn loop sees
+        // up-to-date config). The capabilities upload itself runs AFTER WS
+        // registration — see post-start block — because the `clients` row is
+        // created lazily during the `client:register` handshake.
+        let probedCapabilities: Awaited<ReturnType<typeof probeCapabilities>> | null = null;
+        try {
+          const accessToken = await ensureFreshAccessToken();
+          probedCapabilities = await probeCapabilities();
+          await reconcileLocalRuntimeProviders({
+            serverUrl: config.server.url,
+            accessToken,
+            agentsDir,
+            log: (level, msg) => print.status(level === "warn" ? "⚠️" : "•", msg),
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          print.status("⚠️", `runtime-provider reconcile skipped: ${msg}`);
+        }
         const agents = loadAgents({ schema: agentConfigSchema, agentsDir });
 
         print.line(`\n  Connecting to ${config.server.url} (client id: ${config.client.id})...\n`);
@@ -118,6 +142,25 @@ export function registerClientCommands(program: Command): void {
         }
 
         await runtime.start();
+
+        // Post-register capabilities upload — the `clients` row only exists
+        // after the `client:register` WS handshake, so we run the PATCH here
+        // instead of pre-flight. Best-effort: a transient failure logs and
+        // moves on; agents still bind, and a subsequent restart retries.
+        if (probedCapabilities) {
+          try {
+            const accessToken = await ensureFreshAccessToken();
+            await uploadClientCapabilities({
+              serverUrl: config.server.url,
+              accessToken,
+              clientId: config.client.id,
+              capabilities: probedCapabilities,
+            });
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            print.status("⚠️", `capabilities upload skipped: ${msg}`);
+          }
+        }
 
         // Watch agents config dir for hot-add
         runtime.watchAgentsDir(agentsDir);

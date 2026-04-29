@@ -116,22 +116,48 @@ export async function syncContextTree(
   }
 }
 
+/**
+ * Marker file written into every workspace so the Codex CLI's project-root
+ * detection (configured via `project_root_markers: ["first-tree-workspace"]`)
+ * stops at the workspace boundary instead of walking up the filesystem and
+ * loading an unintended `AGENTS.md` from the operator's home or repo root.
+ */
+export const FIRST_TREE_WORKSPACE_MARKER = ".first-tree-workspace";
+
+export type AgentBriefingFormat = "claude" | "agents-md";
+
+export type AgentBriefing = {
+  format: AgentBriefingFormat;
+  /** Pre-rendered markdown to materialise as the briefing file. */
+  content: string;
+};
+
 export type BootstrapOptions = {
   workspacePath: string;
   identity: AgentIdentity;
   contextTreePath: string | null;
   serverUrl: string;
   chatId: string;
+  /**
+   * Provider-specific runtime briefing materialised at the workspace root.
+   * `agents-md` writes `AGENTS.md` (Codex reads it from the project root via
+   * the marker); `claude` is a no-op file-write because Claude Code receives
+   * the system prompt through the SDK option directly.
+   */
+  briefing?: AgentBriefing;
 };
 
 /**
- * Bootstrap a workspace with .agent/ directory files.
+ * Bootstrap a workspace with `.agent/` directory files plus the workspace
+ * root marker (and an optional provider-specific briefing).
  *
- * Writes identity.json, context/self.md (if context tree available), and tools.md.
- * Designed to be called on every handler start() and conditionally on resume().
+ * Writes identity.json, context/agent-instructions.md (if context tree
+ * available), tools.md, the `.first-tree-workspace` marker, and — for
+ * Codex — `AGENTS.md`. Idempotent: safe to call on every handler start()
+ * and on resume().
  */
 export function bootstrapWorkspace(options: BootstrapOptions): void {
-  const { workspacePath, identity, contextTreePath, serverUrl, chatId } = options;
+  const { workspacePath, identity, contextTreePath, serverUrl, chatId, briefing } = options;
   const agentDir = join(workspacePath, ".agent");
   const contextDir = join(agentDir, "context");
 
@@ -172,8 +198,18 @@ export function bootstrapWorkspace(options: BootstrapOptions): void {
     }
   }
 
-  // 4. Write tools.md (static SDK reference)
+  // 3. Write tools.md (static SDK reference)
   writeFileSync(join(agentDir, "tools.md"), generateToolsDoc(), "utf-8");
+
+  // 4. Workspace-root marker — gates Codex's AGENTS.md walk-up so the agent
+  //    sees the briefing in this workspace and not whatever sits in the
+  //    operator's HOME / git root.
+  writeFileSync(join(workspacePath, FIRST_TREE_WORKSPACE_MARKER), "", "utf-8");
+
+  // 5. Provider-specific briefing
+  if (briefing?.format === "agents-md") {
+    writeFileSync(join(workspacePath, "AGENTS.md"), briefing.content, "utf-8");
+  }
 }
 
 export type InstallFirstTreeIntegrationExec = (
