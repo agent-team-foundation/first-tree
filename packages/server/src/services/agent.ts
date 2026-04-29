@@ -2,13 +2,16 @@ import type {
   AgentType,
   AgentVisibility,
   CreateAgent,
+  RebindAgent,
+  RuntimeProvider,
   UpdateAgent,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import {
   AGENT_NAME_REGEX,
   AGENT_STATUSES,
   AGENT_VISIBILITY,
-  DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD,
+  DEFAULT_RUNTIME_PROVIDER,
+  defaultRuntimeConfigPayload,
   isReservedAgentName,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { and, count, desc, eq, lt, ne } from "drizzle-orm";
@@ -34,6 +37,43 @@ import { resolveDefaultOrgId } from "./organization.js";
  */
 const RESERVED_AGENT_NAME_PREFIX = "__";
 
+/**
+ * True iff `clients.metadata.capabilities` is a non-empty object — i.e. the
+ * client has reported at least one runtime probe result. Used to distinguish
+ * "we don't know what's installed yet" (empty / never reported) from
+ * "client explicitly reports this provider is missing".
+ */
+function clientCapabilitiesReported(metadata: unknown): boolean {
+  if (!metadata || typeof metadata !== "object") return false;
+  const meta = metadata as Record<string, unknown>;
+  const caps = meta.capabilities;
+  if (!caps || typeof caps !== "object") return false;
+  return Object.keys(caps as Record<string, unknown>).length > 0;
+}
+
+/**
+ * Inspect a `clients.metadata.capabilities` blob (jsonb) for a specific
+ * runtime provider entry. Capabilities live under the `metadata.capabilities`
+ * subkey (Option C); the column is unstructured at the DB layer, so we
+ * defensively narrow before key access.
+ *
+ * "Supports" requires the entry's SDK to be **available** — `state: "ok"` or
+ * `state: "unauthenticated"`. A `missing` or `error` entry is *reported* but
+ * not usable, so we explicitly reject those rather than treating mere key
+ * presence as support. Auth state is left to the user to fix at runtime
+ * (the re-bind dialog surfaces an `unauthenticated` hint).
+ */
+function clientSupportsRuntimeProvider(metadata: unknown, provider: RuntimeProvider): boolean {
+  if (!metadata || typeof metadata !== "object") return false;
+  const meta = metadata as Record<string, unknown>;
+  const caps = meta.capabilities;
+  if (!caps || typeof caps !== "object") return false;
+  const entry = (caps as Record<string, unknown>)[provider];
+  if (!entry || typeof entry !== "object") return false;
+  const available = (entry as { available?: unknown }).available;
+  return available === true;
+}
+
 /** Default visibility per agent type. */
 function defaultVisibility(type: AgentType): AgentVisibility {
   switch (type) {
@@ -58,6 +98,53 @@ function defaultVisibility(type: AgentType): AgentVisibility {
  *   - When a non-human agent IS created with a `clientId`, the pinned client
  *     must already be owned by the manager's user (Rule R-RUN).
  */
+/**
+ * Check that a client's reported capabilities show the given runtime provider
+ * as **available** (SDK installed, regardless of auth state).
+ *
+ * Tri-state semantics by `clients.metadata.capabilities` shape:
+ *   - empty / absent — client hasn't probed yet (newly registered or pre-P2
+ *     install). Treat as "unknown" and allow; the in-band repair path
+ *     (RUNTIME_PROVIDER_MISMATCH on bind) catches actual incompatibility.
+ *   - reported, entry shows `state: ok | unauthenticated` (i.e. `available:
+ *     true`) — allow.
+ *   - reported, entry missing OR `state: missing | error` — block unless
+ *     `force` is set. We deliberately do NOT treat mere key presence as
+ *     support: probeCapabilities() always emits an entry per built-in
+ *     provider, including `{ state: "missing" }` for absent SDKs.
+ *
+ * Skipped entirely for human agents (no clientId) and when `force` is set
+ * (e.g. operator overrides for an offline client).
+ */
+async function ensureClientSupportsRuntimeProvider(
+  db: Database,
+  clientId: string | null,
+  runtimeProvider: RuntimeProvider,
+  options: { force?: boolean } = {},
+): Promise<void> {
+  if (clientId === null) return;
+  if (options.force) return;
+
+  const [client] = await db
+    .select({ metadata: clients.metadata })
+    .from(clients)
+    .where(eq(clients.id, clientId))
+    .limit(1);
+  if (!client) return; // resolveAgentClient validates existence elsewhere
+
+  // Best-effort: if the client never reported capabilities, allow and let
+  // the runtime path catch real mismatches at bind time.
+  if (!clientCapabilitiesReported(client.metadata)) return;
+
+  if (!clientSupportsRuntimeProvider(client.metadata, runtimeProvider)) {
+    throw new BadRequestError(
+      `Client "${clientId}" does not have runtime provider "${runtimeProvider}" available. ` +
+        "Install the matching SDK on that machine and re-run capability detection, " +
+        "or retry with `force: true` if the client is offline / capabilities are stale.",
+    );
+  }
+}
+
 async function resolveAgentClient(
   db: Database,
   data: { clientId?: string; managerId: string; type: string },
@@ -132,9 +219,14 @@ async function resolveFallbackManagerId(db: Database, orgId: string): Promise<st
   return row.id;
 }
 
-export async function createAgent(db: Database, data: CreateAgent & { managerId?: string }) {
+export async function createAgent(
+  db: Database,
+  data: CreateAgent & { managerId?: string },
+  options: { force?: boolean } = {},
+) {
   const uuid = uuidv7();
   const name = data.name ?? null;
+  const runtimeProvider: RuntimeProvider = data.runtimeProvider ?? DEFAULT_RUNTIME_PROVIDER;
   if (name?.startsWith(RESERVED_AGENT_NAME_PREFIX)) {
     throw new BadRequestError(
       `Agent name "${name}" is reserved — names starting with "${RESERVED_AGENT_NAME_PREFIX}" are Hub-internal`,
@@ -197,6 +289,8 @@ export async function createAgent(db: Database, data: CreateAgent & { managerId?
     type: data.type,
   });
 
+  await ensureClientSupportsRuntimeProvider(db, clientId, runtimeProvider, { force: options.force });
+
   // Check organization-level agent quota.
   // NOTE: TOCTOU race — concurrent requests may both pass the check. Acceptable for Phase 1;
   // enforce with a DB-level CHECK constraint or SELECT ... FOR UPDATE in Phase 2 if needed.
@@ -243,6 +337,7 @@ export async function createAgent(db: Database, data: CreateAgent & { managerId?
         metadata: data.metadata ?? {},
         managerId,
         clientId,
+        runtimeProvider,
       })
       .returning();
 
@@ -253,7 +348,7 @@ export async function createAgent(db: Database, data: CreateAgent & { managerId?
       .values({
         agentId: agent.uuid,
         version: 1,
-        payload: DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD,
+        payload: defaultRuntimeConfigPayload(runtimeProvider),
         updatedBy: "system",
       })
       .onConflictDoNothing();
@@ -350,6 +445,7 @@ export async function listAgents(db: Database, orgId: string, limit: number, cur
       metadata: agents.metadata,
       managerId: agents.managerId,
       clientId: agents.clientId,
+      runtimeProvider: agents.runtimeProvider,
       createdAt: agents.createdAt,
       updatedAt: agents.updatedAt,
       presenceStatus: agentPresence.status,
@@ -400,6 +496,7 @@ export async function listAgentsForAdmin(db: Database, scope: MemberScope, limit
       metadata: agents.metadata,
       managerId: agents.managerId,
       clientId: agents.clientId,
+      runtimeProvider: agents.runtimeProvider,
       createdAt: agents.createdAt,
       updatedAt: agents.updatedAt,
       presenceStatus: agentPresence.status,
@@ -453,6 +550,7 @@ export async function listAgentsForMember(
       metadata: agents.metadata,
       managerId: agents.managerId,
       clientId: agents.clientId,
+      runtimeProvider: agents.runtimeProvider,
       createdAt: agents.createdAt,
       updatedAt: agents.updatedAt,
       presenceStatus: agentPresence.status,
@@ -477,16 +575,18 @@ export async function listAgentsForMember(
 export async function updateAgent(db: Database, uuid: string, data: UpdateAgent) {
   const agent = await getAgent(db, uuid);
 
-  // `clientId` is one-shot: NULL → ID is allowed (admin claiming an unbound
-  // agent for a known client). ID → null and ID → another ID are not —
-  // moving a running agent requires delete + recreate.
+  // `clientId` is one-shot via this entry: NULL → ID is allowed (admin
+  // claiming an unbound agent for a known client). Cross-client moves go
+  // through `rebindAgent`, which runs owner / org / capability checks
+  // atomically. ID → null is never allowed.
   if (data.clientId !== undefined) {
     if (data.clientId === null) {
       throw new BadRequestError("clientId cannot be cleared — once bound, an agent stays bound to its client");
     }
     if (agent.clientId !== null && agent.clientId !== data.clientId) {
       throw new BadRequestError(
-        "clientId is immutable once set — delete and re-create the agent on the target client to move it",
+        "clientId is immutable through this entry — cross-client moves go through rebindAgent " +
+          "(PATCH /admin/agents/:agentId/rebind), which runs owner / org / capability checks atomically.",
       );
     }
   }
@@ -531,6 +631,52 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
   }
 
   const [updated] = await db.update(agents).set(updates).where(eq(agents.uuid, agent.uuid)).returning();
+
+  if (!updated) throw new Error("Unexpected: UPDATE RETURNING produced no row");
+  return updated;
+}
+
+/**
+ * Atomically re-bind an agent to a new client and/or runtime provider.
+ *
+ * Validations: agent must exist and not be human; new client must belong to
+ * the same owner (manager.userId) and same organization; client must report
+ * the requested runtime provider in its capabilities (skipped under `force`).
+ *
+ * Intended caller: PATCH /admin/agents/:agentId/rebind. The Web "Re-bind"
+ * dialog routes both same-client runtime-only switches and cross-client
+ * moves through this single entry.
+ *
+ * NOTE: active sessions on the previous client are not auto-suspended in P1.
+ * P3 will wire in cross-service coordination (inbox + presence + session)
+ * so the destination client can resume cleanly.
+ */
+export async function rebindAgent(db: Database, uuid: string, data: RebindAgent) {
+  const agent = await getAgent(db, uuid);
+  if (agent.type === "human") {
+    throw new BadRequestError("Human agents have no runtime — they cannot be re-bound to a client.");
+  }
+
+  const newClientId = await resolveAgentClient(db, {
+    clientId: data.clientId,
+    managerId: agent.managerId,
+    type: agent.type,
+  });
+  if (newClientId === null) {
+    throw new BadRequestError("Rebind requires a non-null clientId.");
+  }
+
+  await ensureClientSupportsRuntimeProvider(db, newClientId, data.runtimeProvider, { force: data.force });
+
+  const [updated] = await db
+    .update(agents)
+    .set({
+      clientId: newClientId,
+      runtimeProvider: data.runtimeProvider,
+      updatedAt: new Date(),
+    })
+    .where(eq(agents.uuid, uuid))
+    .returning();
 
   if (!updated) throw new Error("Unexpected: UPDATE RETURNING produced no row");
   return updated;

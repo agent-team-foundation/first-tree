@@ -304,6 +304,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                     name: agent.name,
                     displayName: agent.displayName,
                     agentType: agent.type,
+                    runtimeProvider: agent.runtimeProvider,
                   });
                   if (!parsed.success) {
                     app.log.warn(
@@ -337,6 +338,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                   inboxId: agents.inboxId,
                   status: agents.status,
                   clientId: agents.clientId,
+                  runtimeProvider: agents.runtimeProvider,
                   clientUserId: clients.userId,
                   managerUserId: members.userId,
                 })
@@ -384,6 +386,15 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 return;
               } else if (!agent.clientUserId || agent.clientUserId !== session.userId) {
                 sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.NOT_OWNED);
+                return;
+              }
+
+              // Reject if the connecting client is running a different runtime
+              // provider than the one pinned on the agent. The client repair
+              // path will re-fetch authoritative state and respawn the right
+              // handler before retrying the bind.
+              if (bindRequest.runtimeType !== agent.runtimeProvider) {
+                sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.RUNTIME_PROVIDER_MISMATCH);
                 return;
               }
 

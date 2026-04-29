@@ -16,6 +16,10 @@ export {
 // Runtime
 export type { AgentSlotConfig } from "./runtime/agent-slot.js";
 export { AgentSlot } from "./runtime/agent-slot.js";
+// Capabilities
+export { probeClaudeCodeCapability } from "./runtime/capabilities/claude-code.js";
+export { probeCodexCapability } from "./runtime/capabilities/codex.js";
+export { probeCapabilities } from "./runtime/capabilities/index.js";
 export type { AgentSlotYamlConfig, RuntimeConfig, SessionConfig } from "./runtime/config.js";
 export { loadRuntimeConfig } from "./runtime/config.js";
 export { Deduplicator } from "./runtime/deduplicator.js";

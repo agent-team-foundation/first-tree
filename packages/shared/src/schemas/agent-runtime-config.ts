@@ -1,11 +1,13 @@
 import { z } from "zod";
+import type { runtimeProviderSchema } from "./runtime-provider.js";
 
 /**
- * Agent runtime configuration — M1 (Claude Code only).
+ * Agent runtime configuration.
  *
  * Defines the 5 user-tunable field groups that the Hub centrally manages
  * and pushes down to the client runtime: prompt append, model, MCP servers,
- * env vars, and Git repos.
+ * env vars, and Git repos. Tagged by `kind` (a runtime provider) so future
+ * provider-specific fields can land on a dedicated variant.
  *
  * NOTE: do not co-locate with `packages/shared/src/config/` — that namespace
  * is reserved for the local YAML config (`agent.yaml` / server / client) and
@@ -68,9 +70,11 @@ export const gitRepoSchema = z.object({
 export type GitRepo = z.infer<typeof gitRepoSchema>;
 
 /**
- * Base shape (no refinements) — used for `.partial()` derivations such as the
- * PATCH payload schema. Zod 4 forbids `.partial()` on a refined object, so we
- * keep refinements on a separate full schema below.
+ * Untagged base shape — 5 user-tunable fields, no `kind` discriminator.
+ * Used for `.partial()` derivations on the PATCH side, where `kind` is
+ * pinned to `agents.runtime_provider` and never changes via config PATCH.
+ * Zod 4 forbids `.partial()` on a refined object, so we keep refinements
+ * on the tagged schema below.
  */
 export const agentRuntimeConfigPayloadShape = z.object({
   prompt: promptConfigSchema.default({ append: "" }),
@@ -85,7 +89,28 @@ export const agentRuntimeConfigPayloadShape = z.object({
   gitRepos: z.array(gitRepoSchema).default([]),
 });
 
-const payloadDuplicatesRefinement = (payload: z.infer<typeof agentRuntimeConfigPayloadShape>, ctx: z.RefinementCtx) => {
+/**
+ * Tagged variants — read-side, full payload including `kind`. Adding a new
+ * provider means adding a variant here, plus a handler factory and a
+ * capability probe module on the client side.
+ *
+ * Provider-specific fields (e.g. codex `sandboxMode`) belong on the
+ * matching variant, not on the base shape.
+ */
+const claudeRuntimeConfigPayloadShape = agentRuntimeConfigPayloadShape.extend({
+  kind: z.literal("claude-code"),
+});
+const codexRuntimeConfigPayloadShape = agentRuntimeConfigPayloadShape.extend({
+  kind: z.literal("codex"),
+});
+
+const taggedPayloadUnion = z.discriminatedUnion("kind", [
+  claudeRuntimeConfigPayloadShape,
+  codexRuntimeConfigPayloadShape,
+]);
+type TaggedPayload = z.infer<typeof taggedPayloadUnion>;
+
+const payloadDuplicatesRefinement = (payload: TaggedPayload, ctx: z.RefinementCtx) => {
   const seenMcp = new Set<string>();
   payload.mcpServers.forEach((server, idx) => {
     const lower = server.name.toLowerCase();
@@ -126,17 +151,72 @@ const payloadDuplicatesRefinement = (payload: z.infer<typeof agentRuntimeConfigP
   });
 };
 
-export const agentRuntimeConfigPayloadSchema = agentRuntimeConfigPayloadShape.superRefine(payloadDuplicatesRefinement);
+/**
+ * Read-side full payload schema. Rows persisted before 0026 do not carry
+ * `kind`; `z.preprocess` injects `"claude-code"` so they parse cleanly into
+ * the claude variant. The service layer separately enforces
+ * `payload.kind === agents.runtime_provider` on writes.
+ */
+export const agentRuntimeConfigPayloadSchema = z
+  .preprocess((input) => {
+    if (
+      input &&
+      typeof input === "object" &&
+      !Array.isArray(input) &&
+      !("kind" in (input as Record<string, unknown>))
+    ) {
+      return { ...(input as Record<string, unknown>), kind: "claude-code" };
+    }
+    return input;
+  }, taggedPayloadUnion)
+  .superRefine((payload, ctx) => {
+    payloadDuplicatesRefinement(payload as TaggedPayload, ctx);
+  });
 export type AgentRuntimeConfigPayload = z.infer<typeof agentRuntimeConfigPayloadSchema>;
 
-/** Default payload used when creating a fresh agent. */
+/** Default payload used when creating a fresh claude-code agent. */
 export const DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = {
+  kind: "claude-code",
   prompt: { append: "" },
   model: "opus",
   mcpServers: [],
   env: [],
   gitRepos: [],
 };
+
+/**
+ * Default payload for a fresh codex agent. Same 5 fields as claude-code.
+ * `model` is left empty by default so the Codex CLI picks one matching the
+ * user's auth mode — `gpt-5-codex` is rejected by ChatGPT-account auth, while
+ * an empty string lets the SDK fall through to its built-in default.
+ */
+export const DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD: AgentRuntimeConfigPayload = {
+  kind: "codex",
+  prompt: { append: "" },
+  model: "",
+  mcpServers: [],
+  env: [],
+  gitRepos: [],
+};
+
+/**
+ * Default payload selector by runtime provider.
+ */
+export function defaultRuntimeConfigPayload(
+  provider: z.infer<typeof runtimeProviderSchema>,
+): AgentRuntimeConfigPayload {
+  switch (provider) {
+    case "codex":
+      return { ...DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD };
+    case "claude-code":
+      return { ...DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD };
+    default: {
+      const _exhaustive: never = provider;
+      void _exhaustive;
+      return { ...DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD };
+    }
+  }
+}
 
 export const agentRuntimeConfigSchema = z.object({
   agentId: z.string(),

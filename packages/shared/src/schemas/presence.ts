@@ -65,6 +65,7 @@ export const AGENT_BIND_REJECT_REASONS = {
   AGENT_SUSPENDED: "agent_suspended",
   WRONG_ORG: "wrong_org",
   UNKNOWN_AGENT: "unknown_agent",
+  RUNTIME_PROVIDER_MISMATCH: "runtime_provider_mismatch",
 } as const;
 
 export const agentBindRejectReasonSchema = z.enum([
@@ -73,6 +74,7 @@ export const agentBindRejectReasonSchema = z.enum([
   "agent_suspended",
   "wrong_org",
   "unknown_agent",
+  "runtime_provider_mismatch",
 ]);
 export type AgentBindRejectReason = z.infer<typeof agentBindRejectReasonSchema>;
 

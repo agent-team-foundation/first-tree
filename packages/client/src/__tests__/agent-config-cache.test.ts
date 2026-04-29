@@ -8,6 +8,7 @@ function makeConfig(version: number, urls: string[] = []): AgentRuntimeConfig {
     agentId: "agent-1",
     version,
     payload: {
+      kind: "claude-code",
       prompt: { append: "" },
       model: "",
       mcpServers: [],

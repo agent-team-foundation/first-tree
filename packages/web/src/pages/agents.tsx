@@ -1,4 +1,4 @@
-import type { Agent } from "@agent-team-foundation/first-tree-hub-shared";
+import type { Agent, RuntimeProvider } from "@agent-team-foundation/first-tree-hub-shared";
 import { AGENT_TYPES } from "@agent-team-foundation/first-tree-hub-shared";
 import { useQuery } from "@tanstack/react-query";
 import { Plus, Search } from "lucide-react";
@@ -144,13 +144,17 @@ export function AgentsPage() {
   const filteredMy = myAgents.filter((a) => matchesPill(a) && matchesSearch(a));
   const filteredTeam = teamAgents.filter((a) => matchesPill(a) && matchesSearch(a));
 
-  function handleCreated(agent: Agent, runtime: "claude-code" | "kael") {
+  function handleCreated(agent: Agent, runtimeProvider: RuntimeProvider) {
     setCreateDialogOpen(false);
     if (agent.clientId) {
       navigate(`/?a=${agent.uuid}`);
       return;
     }
-    if (runtime === "claude-code") {
+    // Local-runtime providers (claude-code / codex) need a follow-up
+    // step that points the operator at `client connect` so the new
+    // agent finds a host. Future cloud-only runtimes can short-circuit
+    // straight to the agent detail.
+    if (runtimeProvider === "claude-code" || runtimeProvider === "codex") {
       setLastStepAgent(agent);
       return;
     }

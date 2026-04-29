@@ -1,11 +1,19 @@
+import {
+  type CapabilityEntry,
+  type ClientCapabilities,
+  RUNTIME_PROVIDERS,
+  type RuntimeProvider,
+} from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronDown, ChevronRight, Copy, Terminal, Trash2, Unplug } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
+  type ClientWithCapabilities,
   type ConnectTokenResponse,
   disconnectClient,
   generateConnectToken,
   getActivityOverview,
+  getClientCapabilities,
   type HubClient,
   listClients,
   type RuntimeAgent,
@@ -364,6 +372,125 @@ export function ClientsPage() {
   );
 }
 
+const PROVIDER_LABEL: Record<RuntimeProvider, string> = {
+  "claude-code": "Claude Code",
+  codex: "Codex",
+};
+
+const PROVIDER_ORDER: RuntimeProvider[] = [RUNTIME_PROVIDERS.CLAUDE_CODE, RUNTIME_PROVIDERS.CODEX];
+
+const PROVIDER_INSTALL_HINT: Record<RuntimeProvider, string> = {
+  "claude-code": "Run `npm install -g @anthropic-ai/claude-code` on this computer.",
+  codex: "Install the OpenAI Codex CLI on this computer.",
+};
+
+const PROVIDER_UNAUTH_HINT: Record<RuntimeProvider, string> = {
+  "claude-code": "Run `claude login` (or set ANTHROPIC_API_KEY) on the computer.",
+  codex: "Run `codex login` (or set CODEX_API_KEY) on the computer.",
+};
+
+/**
+ * Lazy-loaded runtime-provider capability matrix shown inside the expanded
+ * row of the Computers table. We only fetch when the row is open so the
+ * /clients listing stays cheap on large fleets — capabilities are reported by
+ * the client at startup and stored under `clients.metadata.capabilities`.
+ */
+function CapabilityMatrix({ clientId, enabled }: { clientId: string; enabled: boolean }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ["client-capabilities", clientId],
+    queryFn: () => getClientCapabilities(clientId),
+    enabled,
+  });
+  const capabilities: ClientCapabilities | null = (data as ClientWithCapabilities | undefined)?.capabilities ?? null;
+  return (
+    <>
+      <UppercaseLabel style={{ display: "block", marginBottom: 6 }}>Runtimes</UppercaseLabel>
+      {isLoading && !capabilities ? (
+        <div className="text-body" style={{ color: "var(--fg-3)" }}>
+          Loading…
+        </div>
+      ) : capabilities && Object.keys(capabilities).length === 0 ? (
+        <div className="text-body" style={{ color: "var(--fg-3)" }}>
+          Capabilities not yet reported. Reconnect this computer to refresh.
+        </div>
+      ) : (
+        <div className="flex flex-col gap-1">
+          {PROVIDER_ORDER.map((provider) => (
+            <ProviderRow
+              key={provider}
+              provider={provider}
+              entry={capabilities ? (capabilities[provider] ?? null) : null}
+            />
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+function ProviderRow({ provider, entry }: { provider: RuntimeProvider; entry: CapabilityEntry | null }) {
+  const label = PROVIDER_LABEL[provider];
+  if (!entry) {
+    return (
+      <div className="flex items-center gap-2.5 text-body" style={{ opacity: 0.7 }}>
+        <span className="mono font-medium" style={{ minWidth: 180 }}>
+          {label}
+        </span>
+        <span className="text-caption" style={{ color: "var(--fg-4)" }}>
+          not reported · {PROVIDER_INSTALL_HINT[provider]}
+        </span>
+      </div>
+    );
+  }
+  switch (entry.state) {
+    case "ok":
+      return (
+        <div className="flex items-center gap-2.5 text-body">
+          <span className="mono font-medium" style={{ minWidth: 180 }}>
+            {label}
+          </span>
+          <span className="text-caption" style={{ color: "var(--state-idle)" }}>
+            ✓ {entry.sdkVersion ? `v${entry.sdkVersion} · ` : ""}authenticated ({entry.authMethod})
+          </span>
+        </div>
+      );
+    case "unauthenticated":
+      return (
+        <div className="flex items-center gap-2.5 text-body">
+          <span className="mono font-medium" style={{ minWidth: 180 }}>
+            {label}
+          </span>
+          <span className="text-caption" style={{ color: "var(--state-blocked)" }}>
+            ⚠ installed{entry.sdkVersion ? ` v${entry.sdkVersion}` : ""}, not authenticated ·{" "}
+            {PROVIDER_UNAUTH_HINT[provider]}
+          </span>
+        </div>
+      );
+    case "missing":
+      return (
+        <div className="flex items-center gap-2.5 text-body" style={{ opacity: 0.7 }}>
+          <span className="mono font-medium" style={{ minWidth: 180 }}>
+            {label}
+          </span>
+          <span className="text-caption" style={{ color: "var(--fg-4)" }}>
+            ✗ not installed · {PROVIDER_INSTALL_HINT[provider]}
+          </span>
+        </div>
+      );
+    case "error":
+      return (
+        <div className="flex items-center gap-2.5 text-body">
+          <span className="mono font-medium" style={{ minWidth: 180 }}>
+            {label}
+          </span>
+          <span className="text-caption" style={{ color: "var(--state-error)" }}>
+            error · {entry.error ?? "probe failed"}
+          </span>
+        </div>
+      );
+  }
+}
+
 function ClientRow({
   client,
   boundAgents,
@@ -442,7 +569,8 @@ function ClientRow({
         <tr style={{ background: "var(--bg-sunken)" }}>
           <DenseTableCell />
           <DenseTableCell colSpan={colSpan - 1} style={{ padding: "var(--sp-2_5) var(--sp-3) var(--sp-3_5)" }}>
-            <UppercaseLabel style={{ display: "block", marginBottom: 6 }}>
+            <CapabilityMatrix clientId={client.id} enabled={isExpanded} />
+            <UppercaseLabel style={{ display: "block", marginTop: "var(--sp-3)", marginBottom: 6 }}>
               Bound agents · {boundAgents.length}
             </UppercaseLabel>
             {boundAgents.length === 0 ? (

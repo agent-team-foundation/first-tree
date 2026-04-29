@@ -97,6 +97,7 @@ describe("Phase 2: displayName is non-null on the wire", () => {
     metadata: {},
     managerId: "mem-1",
     clientId: null,
+    runtimeProvider: "claude-code" as const,
     createdAt: "2026-04-24T00:00:00.000Z",
     updatedAt: "2026-04-24T00:00:00.000Z",
   };

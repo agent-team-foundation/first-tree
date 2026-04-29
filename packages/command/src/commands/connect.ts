@@ -10,7 +10,7 @@ import {
   resetConfigMeta,
   setConfigValue,
 } from "@agent-team-foundation/first-tree-hub-shared/config";
-import { ClientOrgMismatchError } from "@first-tree-hub/client";
+import { ClientOrgMismatchError, probeCapabilities } from "@first-tree-hub/client";
 import { input, password, select } from "@inquirer/prompts";
 import type { Command } from "commander";
 import { fail } from "../cli/output.js";
@@ -27,7 +27,9 @@ import {
   loadCredentials,
   migrateLocalAgentDirs,
   promptUpdate,
+  reconcileLocalRuntimeProviders,
   saveCredentials,
+  uploadClientCapabilities,
 } from "../core/index.js";
 import { print } from "../core/output.js";
 
@@ -299,6 +301,25 @@ export function registerConnectCommand(parent: Command): void {
           const msg = err instanceof Error ? err.message : String(err);
           print.status("⚠️", `agent-dir migration skipped: ${msg}`);
         }
+
+        // Pre-flight: probe local SDKs and reconcile local YAMLs against the
+        // authoritative `agents.runtime_provider`. The capabilities upload runs
+        // AFTER WS register (post-start block) because the `clients` row is
+        // created lazily during the `client:register` handshake.
+        let probedCapabilities: Awaited<ReturnType<typeof probeCapabilities>> | null = null;
+        try {
+          const accessToken = await ensureFreshAccessToken();
+          probedCapabilities = await probeCapabilities();
+          await reconcileLocalRuntimeProviders({
+            serverUrl: config.server.url,
+            accessToken,
+            agentsDir,
+            log: (level, msg) => print.status(level === "warn" ? "⚠️" : "•", msg),
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          print.status("⚠️", `runtime-provider reconcile skipped: ${msg}`);
+        }
         const agents = loadAgents({ schema: agentConfigSchema, agentsDir });
 
         // `connect --no-service` runs inline until Ctrl+C — no supervisor,
@@ -317,6 +338,23 @@ export function registerConnectCommand(parent: Command): void {
         }
 
         await runtime.start();
+
+        // Post-register capabilities upload — see client.ts for the rationale.
+        if (probedCapabilities) {
+          try {
+            const accessToken = await ensureFreshAccessToken();
+            await uploadClientCapabilities({
+              serverUrl: config.server.url,
+              accessToken,
+              clientId: config.client.id,
+              capabilities: probedCapabilities,
+            });
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            print.status("⚠️", `capabilities upload skipped: ${msg}`);
+          }
+        }
+
         runtime.watchAgentsDir(agentsDir);
 
         // Graceful shutdown
