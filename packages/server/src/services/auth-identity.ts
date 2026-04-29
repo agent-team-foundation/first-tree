@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { authIdentities } from "../db/schema/auth-identities.js";
 import { users } from "../db/schema/users.js";
@@ -40,6 +40,39 @@ export async function findOrCreateUserFromGithub(db: Database, profile: GithubPr
         .where(and(eq(authIdentities.provider, "github"), eq(authIdentities.identifier, profile.githubId)));
     }
     return { userId: existing.userId };
+  }
+
+  // Legacy bridge: a pre-OAuth password user whose `users.username` already
+  // equals this GitHub login but who has never bound a github identity yet.
+  // First time that user clicks "Continue with GitHub", auto-bind the new
+  // identity to the existing row so they land on their existing organization
+  // instead of getting a freshly minted personal team.
+  //
+  // Strict matching: case-insensitive username equality AND zero rows in
+  // `auth_identities` for `(provider='github')` under that user. The
+  // (provider, identifier) UNIQUE on auth_identities makes a duplicate insert
+  // race-impossible. Risk: a fresh GitHub login that collides with a legacy
+  // username "claims" that account; for SaaS the legacy set is the early
+  // dogfooders (real GitHub handles), so collision risk is effectively zero.
+  const candidateLogin = profile.login.toLowerCase();
+  const [legacyUser] = await db
+    .select({ id: users.id })
+    .from(users)
+    .leftJoin(authIdentities, and(eq(authIdentities.userId, users.id), eq(authIdentities.provider, "github")))
+    .where(and(sql`lower(${users.username}) = ${candidateLogin}`, isNull(authIdentities.id)))
+    .limit(1);
+
+  if (legacyUser) {
+    await db.insert(authIdentities).values({
+      id: uuidv7(),
+      userId: legacyUser.id,
+      provider: "github",
+      identifier: profile.githubId,
+      email: profile.email,
+      verifiedAt: new Date(),
+      metadata: { login: profile.login, migratedFrom: "legacy_password" },
+    });
+    return { userId: legacyUser.id };
   }
 
   const userId = uuidv7();

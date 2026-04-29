@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import { authIdentities } from "../db/schema/auth-identities.js";
 import { members } from "../db/schema/members.js";
 import { organizations } from "../db/schema/organizations.js";
-import { useTestApp } from "./helpers.js";
+import { users } from "../db/schema/users.js";
+import { createTestAdmin, useTestApp } from "./helpers.js";
 
 /**
  * End-to-end tests for the public GitHub-OAuth onboarding surface.
@@ -92,6 +93,71 @@ describe("GitHub OAuth onboarding flow", () => {
     } finally {
       process.env.NODE_ENV = original;
     }
+  });
+
+  it("auto-binds legacy password user when github login matches username", async () => {
+    const app = getApp();
+    // Pre-OAuth user: bcrypt password + active membership, no auth_identities row.
+    const legacy = await createTestAdmin(app, { username: "legacypal" });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/auth/github/dev-callback?githubId=12345&login=legacypal&displayName=Legacy+Pal",
+    });
+    expect(res.statusCode).toBe(302);
+
+    // The new auth_identity is bound to the existing legacy user — not a fresh one.
+    const ids = await app.db.select().from(authIdentities).where(eq(authIdentities.identifier, "12345"));
+    expect(ids).toHaveLength(1);
+    expect(ids[0]?.userId).toBe(legacy.userId);
+    expect((ids[0]?.metadata as Record<string, unknown> | null)?.migratedFrom).toBe("legacy_password");
+
+    // No second user — username remains unique.
+    const dupes = await app.db.select().from(users).where(eq(users.username, "legacypal"));
+    expect(dupes).toHaveLength(1);
+
+    // joinPath is "returning" because the legacy user already has a membership.
+    const fragment = res.headers.location?.split("#")[1] ?? "";
+    expect(new URLSearchParams(fragment).get("joinPath")).toBe("returning");
+  });
+
+  it("matches legacy username case-insensitively", async () => {
+    const app = getApp();
+    const legacy = await createTestAdmin(app, { username: "MixedCase" });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/auth/github/dev-callback?githubId=999&login=mixedcase",
+    });
+    expect(res.statusCode).toBe(302);
+
+    const ids = await app.db.select().from(authIdentities).where(eq(authIdentities.identifier, "999"));
+    expect(ids[0]?.userId).toBe(legacy.userId);
+  });
+
+  it("does not auto-bind a different github account to a user already bound", async () => {
+    const app = getApp();
+    // First sign-in mints a fresh user `dupelogin` and binds githubId=100.
+    await app.inject({
+      method: "GET",
+      url: "/api/v1/auth/github/dev-callback?githubId=100&login=dupelogin",
+    });
+
+    // A second GitHub account whose login matches the existing user's username
+    // must NOT take over — `findOrCreateUserFromGithub` requires the legacy
+    // user to have ZERO github identities. We expect a brand-new user, with
+    // username disambiguated by the existing collision-retry path.
+    await app.inject({
+      method: "GET",
+      url: "/api/v1/auth/github/dev-callback?githubId=200&login=dupelogin",
+    });
+
+    const both = await app.db.select().from(authIdentities).where(eq(authIdentities.provider, "github"));
+    const u100 = both.find((i) => i.identifier === "100")?.userId;
+    const u200 = both.find((i) => i.identifier === "200")?.userId;
+    expect(u100).toBeDefined();
+    expect(u200).toBeDefined();
+    expect(u100).not.toBe(u200);
   });
 
   it("issues tokens that authenticate /me", async () => {
