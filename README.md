@@ -17,7 +17,10 @@
   <a href="https://first-tree.ai/"><img src="https://img.shields.io/badge/Built%20by-Agent%20Team%20Foundation-blueviolet?style=for-the-badge" alt="Built by Agent Team Foundation"></a>
 </p>
 
-# first-tree
+<h1>
+  <img src="assets/logo.png" alt="first-tree logo" width="40" align="left" style="margin-right: 12px;" />
+  first-tree
+</h1>
 
 **Shared Context for Agent Teams.** A Git-native knowledge layer your team and your agents both read from and write to — kept alive by a context-aware review bot, and a chief-of-staff daemon that clears your GitHub inbox while you sleep.
 
