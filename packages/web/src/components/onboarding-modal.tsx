@@ -5,6 +5,7 @@ import { createAgentChat } from "../api/chats.js";
 import { api } from "../api/client.js";
 import { useAuth } from "../auth/auth-context.js";
 import { useOnboardingState } from "../hooks/use-onboarding-state.js";
+import { ConnectCommandPanel } from "./connect-command-panel.js";
 import { Button } from "./ui/button.js";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "./ui/dialog.js";
 import { Input } from "./ui/input.js";
@@ -46,7 +47,6 @@ export function OnboardingModal() {
   const [localStep, setLocalStep] = useState<"name" | "connect" | "creating">("name");
   const [token, setToken] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
 
   // Reset local state on open. Server-driven `step` may already be
   // `create_agent` (returning user with a connected client) — we still
@@ -164,7 +164,7 @@ export function OnboardingModal() {
 
   const cliCommand = token
     ? `npm install -g @agent-team-foundation/first-tree-hub\nfirst-tree-hub connect ${token}`
-    : "Generating token…";
+    : null;
 
   return (
     <Dialog open={modalOpen} onOpenChange={(next) => !next && closeModal()}>
@@ -180,7 +180,9 @@ export function OnboardingModal() {
           </DialogDescription>
         </DialogHeader>
 
-        {error && <div className="rounded-md bg-destructive/10 p-2 text-label text-destructive">{error}</div>}
+        {error && localStep !== "connect" && (
+          <div className="rounded-md bg-destructive/10 p-2 text-label text-destructive">{error}</div>
+        )}
 
         {localStep === "name" && (
           <form className="space-y-3" onSubmit={onSubmitName}>
@@ -201,38 +203,14 @@ export function OnboardingModal() {
         )}
 
         {localStep === "connect" && (
-          <div className="space-y-3" style={{ minWidth: 0, maxWidth: "100%" }}>
-            <div style={{ width: "100%", overflow: "hidden", minWidth: 0 }}>
-              <pre
-                className="rounded-md bg-muted p-3 text-label font-mono"
-                style={{
-                  whiteSpace: "pre-wrap",
-                  wordBreak: "break-all",
-                  overflowWrap: "anywhere",
-                  width: "100%",
-                  minWidth: 0,
-                  boxSizing: "border-box",
-                  margin: 0,
-                }}
-              >
-                {cliCommand}
-              </pre>
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={!token}
-              onClick={() => {
-                if (!token) return;
-                void navigator.clipboard.writeText(cliCommand);
-                setCopied(true);
-                setTimeout(() => setCopied(false), 1500);
-              }}
-            >
-              {copied ? "Copied!" : "Copy commands"}
-            </Button>
-            <p className="text-label text-muted-foreground">Waiting for your computer to check in…</p>
-          </div>
+          <ConnectCommandPanel
+            command={cliCommand}
+            phase={error ? "error" : "waiting"}
+            copyLabel={{ idle: "Copy commands", done: "Copied" }}
+            waitingText="Waiting for your computer to check in…"
+            errorContent={error}
+            caption={null}
+          />
         )}
 
         {localStep === "creating" && <p className="text-body text-muted-foreground">Creating your agent…</p>}

@@ -1,16 +1,13 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { Check, Copy } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { type ConnectTokenResponse, generateConnectToken, type HubClient, listClients } from "../../api/activity.js";
 import { useAuth } from "../../auth/auth-context.js";
+import { ConnectCommandPanel, type ConnectPhase } from "../../components/connect-command-panel.js";
 import { Button } from "../../components/ui/button.js";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 
-type Phase = "loading" | "waiting" | "success" | "error";
-
 const POLL_MS = 3_000;
 const SUCCESS_HOLD_MS = 1_200;
-const COPY_FEEDBACK_MS = 1_500;
 
 /**
  * "Connect a new computer" modal — replaces the always-on ConnectStrip.
@@ -26,11 +23,10 @@ const COPY_FEEDBACK_MS = 1_500;
 export function NewConnectionDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (next: boolean) => void }) {
   const queryClient = useQueryClient();
   const { user } = useAuth();
-  const [phase, setPhase] = useState<Phase>("loading");
+  const [phase, setPhase] = useState<ConnectPhase>("loading");
   const [token, setToken] = useState<ConnectTokenResponse | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [arrivedHostname, setArrivedHostname] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
   const baselineRef = useRef<Set<string>>(new Set());
 
   // 1. On open: snapshot, mint, switch to waiting. Reset all state on close.
@@ -40,7 +36,6 @@ export function NewConnectionDialog({ open, onOpenChange }: { open: boolean; onO
       setToken(null);
       setErrorMessage(null);
       setArrivedHostname(null);
-      setCopied(false);
       baselineRef.current = new Set();
       return;
     }
@@ -97,13 +92,6 @@ export function NewConnectionDialog({ open, onOpenChange }: { open: boolean; onO
     return () => clearTimeout(handle);
   }, [phase, onOpenChange, queryClient]);
 
-  const handleCopy = async () => {
-    if (!token) return;
-    await navigator.clipboard.writeText(token.command);
-    setCopied(true);
-    setTimeout(() => setCopied(false), COPY_FEEDBACK_MS);
-  };
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
@@ -112,105 +100,17 @@ export function NewConnectionDialog({ open, onOpenChange }: { open: boolean; onO
           <DialogDescription>Run this command on the machine you want to pair with this Hub.</DialogDescription>
         </DialogHeader>
 
-        <div className="flex" style={{ gap: "var(--sp-2)", alignItems: "stretch" }}>
-          <code
-            className="mono text-label flex-1"
-            style={{
-              padding: "var(--sp-2_5) var(--sp-3)",
-              background: "var(--bg-sunken)",
-              border: "var(--hairline) solid var(--border-faint)",
-              borderRadius: "var(--radius-input)",
-              color: "var(--fg-2)",
-              wordBreak: "break-all",
-            }}
-            title={token?.command ?? ""}
-          >
-            {token ? (
-              <>
-                {token.command}{" "}
-                <span style={{ color: "var(--fg-4)" }}># expires in {Math.round(token.expiresIn / 60)}m</span>
-              </>
-            ) : (
-              "Generating token…"
-            )}
-          </code>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={handleCopy}
-            disabled={!token}
-            style={{ alignSelf: "flex-start" }}
-          >
-            {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-            {copied ? "Copied" : "Copy"}
-          </Button>
-        </div>
-        <p className="text-label" style={{ color: "var(--fg-4)", margin: 0 }}>
-          Single-use · regenerates the previous one.
-        </p>
-
-        {phase === "waiting" && (
-          <div
-            className="flex items-center text-body"
-            style={{
-              gap: "var(--sp-2_5)",
-              padding: "var(--sp-2_5) var(--sp-3)",
-              background: "color-mix(in oklch, var(--state-blocked) 14%, transparent)",
-              border: "var(--hairline) solid color-mix(in oklch, var(--state-blocked) 35%, transparent)",
-              borderRadius: "var(--radius-input)",
-              color: "color-mix(in oklch, var(--state-blocked) 35%, var(--fg))",
-            }}
-          >
-            <span
-              aria-hidden="true"
-              style={{
-                width: 12,
-                height: 12,
-                flexShrink: 0,
-                borderRadius: "50%",
-                border: "var(--hairline-bold) solid color-mix(in oklch, var(--state-blocked) 30%, transparent)",
-                borderTopColor: "var(--state-blocked)",
-                animation: "spin 0.85s linear infinite",
-              }}
-            />
-            Waiting for your computer to connect…
-          </div>
-        )}
-
-        {phase === "success" && (
-          <div
-            className="flex items-center text-body"
-            style={{
-              gap: "var(--sp-2_5)",
-              padding: "var(--sp-2_5) var(--sp-3)",
-              background: "color-mix(in oklch, var(--state-idle) 14%, transparent)",
-              border: "var(--hairline) solid color-mix(in oklch, var(--state-idle) 35%, transparent)",
-              borderRadius: "var(--radius-input)",
-              color: "color-mix(in oklch, var(--state-idle) 45%, var(--fg))",
-            }}
-          >
-            <Check className="h-3.5 w-3.5" style={{ flexShrink: 0 }} />
-            <span>
+        <ConnectCommandPanel
+          command={token?.command ?? null}
+          expiresInSeconds={token?.expiresIn}
+          phase={phase}
+          successContent={
+            <>
               <span className="font-semibold">{arrivedHostname ?? "Computer"}</span> connected. Closing…
-            </span>
-          </div>
-        )}
-
-        {phase === "error" && errorMessage && (
-          <div
-            className="text-body"
-            style={{
-              padding: "var(--sp-2_5) var(--sp-3)",
-              background: "color-mix(in oklch, var(--state-error) 12%, transparent)",
-              border: "var(--hairline) solid color-mix(in oklch, var(--state-error) 28%, transparent)",
-              borderRadius: "var(--radius-input)",
-              color: "var(--state-error)",
-            }}
-          >
-            {errorMessage}
-          </div>
-        )}
+            </>
+          }
+          errorContent={errorMessage}
+        />
 
         <div className="flex justify-end" style={{ gap: "var(--sp-2)" }}>
           <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
