@@ -1,3 +1,4 @@
+import { updateClientCapabilitiesSchema } from "@agent-team-foundation/first-tree-hub-shared";
 import type { FastifyInstance } from "fastify";
 import { memberScope } from "../../services/access-control.js";
 import * as activityService from "../../services/activity.js";
@@ -34,13 +35,39 @@ export async function adminClientRoutes(app: FastifyInstance): Promise<void> {
     }));
   });
 
-  // GET /clients/:clientId — single client, owner-scoped.
+  // GET /clients/me/agents — every agent pinned to a client owned by the
+  // calling user. Used by client startup to reconcile authoritative
+  // `agents.runtime_provider` before spawning handlers (B3 layer 1).
+  app.get("/me/agents", async (request) => {
+    const scope = memberScope(request);
+    const agents = await clientService.listMyPinnedAgents(app.db, {
+      userId: scope.userId,
+      organizationId: scope.organizationId,
+    });
+    return agents;
+  });
+
+  // PATCH /clients/:clientId/capabilities — owner-scoped capability snapshot
+  // upload. Stored under `clients.metadata.capabilities` (Option C).
+  app.patch<{ Params: { clientId: string } }>("/:clientId/capabilities", async (request, reply) => {
+    const scope = memberScope(request);
+    await clientService.assertClientOwner(app.db, request.params.clientId, scope);
+    const body = updateClientCapabilitiesSchema.parse(request.body);
+    await clientService.updateClientCapabilities(app.db, request.params.clientId, body.capabilities);
+    return reply.status(204).send();
+  });
+
+  // GET /clients/:clientId — single client, owner-scoped. Includes the
+  // `capabilities` snapshot from `metadata.capabilities` (Option C, P2).
   app.get<{ Params: { clientId: string } }>("/:clientId", async (request) => {
     const scope = memberScope(request);
     await clientService.assertClientOwner(app.db, request.params.clientId, scope);
     const client = await clientService.getClient(app.db, request.params.clientId);
     // assertClientOwner already 404'd on missing/not-yours; the row is present.
     if (!client) throw new Error("unreachable: client missing after owner check");
+    const metadata = (client.metadata ?? {}) as Record<string, unknown>;
+    const capabilities =
+      metadata.capabilities && typeof metadata.capabilities === "object" ? metadata.capabilities : {};
     return {
       id: client.id,
       userId: client.userId,
@@ -50,6 +77,7 @@ export async function adminClientRoutes(app: FastifyInstance): Promise<void> {
       os: client.os,
       connectedAt: serializeDate(client.connectedAt),
       lastSeenAt: client.lastSeenAt.toISOString(),
+      capabilities,
     };
   });
 

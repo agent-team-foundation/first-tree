@@ -190,6 +190,13 @@
       "when": 1777507200000,
       "tag": "0026_saas_onboarding",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1777593600000,
+      "tag": "0027_runtime_provider",
+      "breakpoints": true
     }
   ]
 }

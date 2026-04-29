@@ -1,42 +1,44 @@
+import type { RuntimeProvider } from "@agent-team-foundation/first-tree-hub-shared";
 import { Link2, Lock, Play } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button } from "../../components/ui/button.js";
 import { Panel, PanelBody, PanelHeader, PanelTitle } from "../../components/ui/panel.js";
 
 /**
- * Setup section — immutable "where it runs" pick, bind-computer banner, and a
- * slot for the Model editor. Two of the three settings (runtime kind, bound
- * computer) are fixed after creation; this section surfaces those facts in a
- * single place before the operator reaches the editable Model control below.
+ * Setup section — "where it runs" pick (locked here, re-bindable via the
+ * unified Re-bind dialog), bind-computer banner, and a slot for the Model
+ * editor. Surfaces the runtime provider + bound computer pair in a single
+ * place before the operator reaches the editable Model control below.
  */
 
-export type SetupRuntimeKind = "claude-code" | "kael";
-
 export type SetupSectionProps = {
-  runtimeKind: SetupRuntimeKind;
+  runtimeProvider: RuntimeProvider;
   /** Display label of the bound computer; null when no computer is bound yet. */
   computerLabel: string | null;
   /** Whether the "Bind computer" CTA should be shown (only when no client is bound and agent is active). */
   canBindComputer: boolean;
   bindComputerPending?: boolean;
   onBindComputer?: () => void;
+  /** When set, the bound-computer card surfaces a "Re-bind" button that
+   *  opens the unified ReBindDialog (UX U2). Available only on bound agents. */
+  onRebind?: () => void;
   /** Slot for the Model dropdown — we reuse the existing ModelSection via composition. */
   modelSlot: ReactNode;
 };
 
-const RUNTIME_COPY: Record<SetupRuntimeKind, { name: string; caption: string }> = {
+const RUNTIME_COPY: Record<RuntimeProvider, { name: string; caption: string }> = {
   "claude-code": {
     name: "Claude Code",
-    caption: "Anthropic's Claude Code runtime. Fixed after creation — create a new agent to switch.",
+    caption: "Anthropic's Claude Code runtime. Re-bind via the agent's settings to switch computer or runtime.",
   },
-  kael: {
-    name: "Kael",
-    caption: "Kael runtime (coming soon). Fixed after creation — create a new agent to switch.",
+  codex: {
+    name: "Codex",
+    caption: "OpenAI's Codex CLI runtime. Re-bind via the agent's settings to switch computer or runtime.",
   },
 };
 
 export function SetupSection(props: SetupSectionProps) {
-  const copy = RUNTIME_COPY[props.runtimeKind];
+  const copy = RUNTIME_COPY[props.runtimeProvider];
   return (
     <div className="space-y-3">
       <RuntimeCard name={copy.name} caption={copy.caption} locked />
@@ -46,6 +48,7 @@ export function SetupSection(props: SetupSectionProps) {
         canBindComputer={props.canBindComputer}
         bindPending={props.bindComputerPending ?? false}
         onBindComputer={props.onBindComputer}
+        onRebind={props.onRebind}
       />
 
       {props.modelSlot}
@@ -87,6 +90,7 @@ function ComputerCard(props: {
   canBindComputer: boolean;
   bindPending: boolean;
   onBindComputer: (() => void) | undefined;
+  onRebind: (() => void) | undefined;
 }) {
   const bound = !!props.computerLabel;
   return (
@@ -97,6 +101,12 @@ function ComputerCard(props: {
           <Button size="xs" variant="outline" onClick={props.onBindComputer} disabled={props.bindPending}>
             <Link2 className="h-3 w-3" />
             {props.bindPending ? "Binding…" : "Bind computer"}
+          </Button>
+        )}
+        {bound && props.onRebind && (
+          <Button size="xs" variant="outline" onClick={props.onRebind}>
+            <Link2 className="h-3 w-3" />
+            Re-bind
           </Button>
         )}
       </PanelHeader>

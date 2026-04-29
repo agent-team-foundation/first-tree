@@ -18,6 +18,10 @@ type TabKey = (typeof tabs)[number]["key"];
  *
  * Membership tab hosts the self-service "leave team" flow — visible to
  * every role per proposal §决策 #20.
+ *
+ * Computer-level info (registered machines + their runtime-provider capability
+ * matrix) lives on `/clients`, not here, so the operator answers "which
+ * machines can run what" in one place.
  */
 export function SettingsPage() {
   const location = useLocation();

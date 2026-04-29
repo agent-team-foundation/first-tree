@@ -252,6 +252,7 @@ export function registerAgentCommands(program: Command): void {
             name,
             type: options.type,
             clientId: options.clientId,
+            runtimeProvider: options.runtime,
           };
           if (options.displayName) createBody.displayName = options.displayName;
 

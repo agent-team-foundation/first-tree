@@ -3,6 +3,7 @@ import {
   AGENT_NAME_REGEX,
   type Agent,
   isReservedAgentName,
+  type RuntimeProvider,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
@@ -52,7 +53,9 @@ function issuesToFieldErrors(issues: ValidationIssue[] | undefined): FieldErrors
  *   - delegateMention, visibility, clientId = not surfaced
  */
 
-type Runtime = "claude-code" | "kael";
+// Runtime selection sources its values from `RuntimeProvider`; new providers
+// extend the union in `@agent-team-foundation/first-tree-hub-shared` and the
+// dialog picks them up automatically.
 
 /**
  * Full slugification — lowercase, ASCII-only, strip leading/trailing
@@ -100,7 +103,7 @@ function availabilityReasonMessage(reason: "invalid" | "reserved" | "taken"): st
 type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onCreated: (agent: Agent, runtime: Runtime) => void;
+  onCreated: (agent: Agent, runtimeProvider: RuntimeProvider) => void;
 };
 
 type Step = "form" | "pick-computer";
@@ -115,7 +118,7 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
   const [displayName, setDisplayName] = useState("");
   const [name, setName] = useState("");
   const [nameDirty, setNameDirty] = useState(false);
-  const [runtime, setRuntime] = useState<Runtime>("claude-code");
+  const [runtime, setRuntime] = useState<RuntimeProvider>("claude-code");
 
   const [step, setStep] = useState<Step>("form");
   const [candidateClients, setCandidateClients] = useState<HubClient[]>([]);
@@ -199,6 +202,7 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
         type: "personal_assistant",
         displayName: effectiveDisplay,
         clientId: opts.clientId,
+        runtimeProvider: runtime,
       });
     },
     onSuccess: (agent) => {
@@ -259,11 +263,6 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
     setClientErrors(errs);
     if (Object.keys(errs).length > 0) return;
     if (availability.status === "bad") return;
-
-    if (runtime !== "claude-code") {
-      createMut.mutate({ clientId: undefined });
-      return;
-    }
 
     setProbing(true);
     try {
@@ -477,20 +476,29 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
                 <div>
                   <div className="text-body font-medium">Claude Code</div>
                   <div className="text-caption text-muted-foreground">
-                    Runs on your computer, can access your local files. (default)
+                    Anthropic's Claude Code on the bound computer. (default)
                   </div>
                 </div>
               </label>
               <label
-                className="flex items-start gap-3 rounded-md border border-border p-3 cursor-not-allowed opacity-60"
-                title="Coming soon"
+                className={
+                  runtime === "codex"
+                    ? "flex items-start gap-3 rounded-md border border-primary bg-primary/5 p-3 cursor-pointer"
+                    : "flex items-start gap-3 rounded-md border border-border p-3 cursor-pointer hover:bg-accent/30"
+                }
               >
-                <input type="radio" name="runtime" disabled className="mt-1" />
+                <input
+                  type="radio"
+                  name="runtime"
+                  checked={runtime === "codex"}
+                  onChange={() => setRuntime("codex")}
+                  className="mt-1"
+                />
                 <div>
-                  <div className="text-body font-medium">
-                    Kael <span className="ml-1 text-caption font-normal text-muted-foreground">— coming soon</span>
+                  <div className="text-body font-medium">Codex</div>
+                  <div className="text-caption text-muted-foreground">
+                    OpenAI Codex CLI on the bound computer. Run <code>codex login</code> on the host once.
                   </div>
-                  <div className="text-caption text-muted-foreground">Ready to go, runs in the cloud.</div>
                 </div>
               </label>
             </div>

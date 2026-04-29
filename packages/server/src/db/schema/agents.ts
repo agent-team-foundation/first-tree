@@ -37,11 +37,17 @@ export const agents = pgTable(
     managerId: text("manager_id").notNull(),
     /**
      * Physical client this agent is pinned to. Nullable for human agents (no
-     * runtime); for every non-human agent the column is set at creation time
-     * and never changes (Rule R-RUN). Moving a non-human agent to a different
-     * client requires delete + recreate in this milestone.
+     * runtime). For non-human agents this used to be immutable (Rule R-RUN);
+     * post-0026 it is re-bindable via `agentService.rebindAgent`, which runs
+     * owner / org / capability checks atomically.
      */
     clientId: text("client_id").references(() => clients.id, { onDelete: "restrict" }),
+    /**
+     * Runtime provider that drives this agent (e.g. `"claude-code"`, `"codex"`).
+     * NOT NULL; defaults to `"claude-code"` for backward compatibility with
+     * rows created before 0026.
+     */
+    runtimeProvider: text("runtime_provider").notNull().default("claude-code"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

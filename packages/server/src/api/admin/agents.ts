@@ -3,6 +3,7 @@ import {
   agentTypeSchema,
   createAgentSchema,
   paginationQuerySchema,
+  rebindAgentSchema,
   updateAgentSchema,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { and, eq, gt, ne } from "drizzle-orm";
@@ -42,6 +43,7 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
     displayName: string | null;
     type: string;
     clientId: string | null;
+    runtimeProvider: string;
   }): void {
     if (!agent.clientId) return;
     const parsed = agentPinnedMessageSchema.safeParse({
@@ -50,6 +52,7 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
       name: agent.name,
       displayName: agent.displayName,
       agentType: agent.type,
+      runtimeProvider: agent.runtimeProvider,
     });
     if (!parsed.success) {
       // Schema drift between server and shared types is a contract bug — log
@@ -172,6 +175,24 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
     if (before && before.clientId === null && agent.clientId !== null) {
       notifyClientAgentPinned(agent);
     }
+    return {
+      ...agent,
+      createdAt: agent.createdAt.toISOString(),
+      updatedAt: agent.updatedAt.toISOString(),
+    };
+  });
+
+  /**
+   * Rebind an agent to a new client and/or runtime provider. Re-runs owner /
+   * org / capability checks atomically. Capability mismatch can be overridden
+   * with `force: true` (e.g. client offline, capabilities stale).
+   */
+  app.patch<{ Params: { uuid: string } }>("/:uuid/rebind", async (request) => {
+    const scope = memberScope(request);
+    await assertCanManage(app.db, scope, request.params.uuid);
+    const body = rebindAgentSchema.parse(request.body);
+    const agent = await agentService.rebindAgent(app.db, request.params.uuid, body);
+    notifyClientAgentPinned(agent);
     return {
       ...agent,
       createdAt: agent.createdAt.toISOString(),

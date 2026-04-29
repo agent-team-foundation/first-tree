@@ -4,8 +4,10 @@ import {
   type AgentRuntimeConfig,
   type Chat,
   type ChatParticipantDetail,
+  type ClientCapabilities,
   type InboxEntryWithMessage,
   type Message,
+  type RuntimeProvider,
   type SendMessage,
   type SendToAgent,
 } from "@agent-team-foundation/first-tree-hub-shared";
@@ -103,6 +105,27 @@ export class FirstTreeHubSDK {
 
   async fetchAgentConfig(): Promise<AgentRuntimeConfig> {
     return this.requestJson<AgentRuntimeConfig>("/api/v1/agent/config");
+  }
+
+  /**
+   * Member-scoped: report this client's runtime-provider capabilities. The
+   * server stores them under `clients.metadata.capabilities` after checking
+   * that the connected member owns the client.
+   */
+  async updateCapabilities(clientId: string, capabilities: ClientCapabilities): Promise<void> {
+    await this.requestVoid(`/api/v1/clients/${encodeURIComponent(clientId)}/capabilities`, {
+      method: "PATCH",
+      body: JSON.stringify({ capabilities }),
+    });
+  }
+
+  /**
+   * Member-scoped: every agent pinned to a client owned by the calling user.
+   * Used by client startup to reconcile the local `agent.yaml::runtime` with
+   * the authoritative `agents.runtime_provider` before spawning handlers.
+   */
+  async listMyAgents(): Promise<Array<{ agentId: string; clientId: string; runtimeProvider: RuntimeProvider }>> {
+    return this.requestJson("/api/v1/clients/me/agents");
   }
 
   async isHubReachable(timeoutMs = 3_000): Promise<boolean> {

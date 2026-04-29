@@ -1,3 +1,4 @@
+import type { ClientCapabilities } from "@agent-team-foundation/first-tree-hub-shared";
 import { api } from "./client.js";
 
 export type AgentType = "human" | "personal_assistant" | "autonomous_agent";
@@ -52,6 +53,20 @@ export function listClients(): Promise<HubClient[]> {
 
 export function getClient(clientId: string): Promise<HubClient> {
   return api.get<HubClient>(`/clients/${clientId}`);
+}
+
+/**
+ * Fetch this client's reported runtime-provider capabilities. Returns the
+ * client's full row plus its `metadata.capabilities` blob (Option C). Used
+ * by the Settings → Computers section to surface SDK install + auth state
+ * per provider.
+ */
+export type ClientWithCapabilities = HubClient & {
+  capabilities: ClientCapabilities;
+};
+
+export function getClientCapabilities(clientId: string): Promise<ClientWithCapabilities> {
+  return api.get<ClientWithCapabilities>(`/clients/${clientId}`);
 }
 
 export function disconnectClient(clientId: string): Promise<{ disconnected: boolean; agentIds: string[] }> {
