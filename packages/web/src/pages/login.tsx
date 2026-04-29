@@ -1,21 +1,41 @@
 import { Github } from "lucide-react";
 import { type FormEvent, useState } from "react";
-import { Navigate } from "react-router";
+import { Navigate, useLocation } from "react-router";
 import { useAuth } from "../auth/auth-context.js";
 import { Button } from "../components/ui/button.js";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card.js";
 import { Input } from "../components/ui/input.js";
 import { Label } from "../components/ui/label.js";
 
+/**
+ * Type guard for the {from: Location} state set by RequireAuth when it
+ * redirects an unauthenticated deep-link visitor to /login. router-7 types
+ * `location.state` as `unknown`, so we narrow without casts.
+ */
+function readFromPath(state: unknown): string | null {
+  if (typeof state !== "object" || state === null) return null;
+  if (!("from" in state)) return null;
+  const from = state.from;
+  if (typeof from !== "object" || from === null) return null;
+  if (!("pathname" in from) || typeof from.pathname !== "string") return null;
+  const search = "search" in from && typeof from.search === "string" ? from.search : "";
+  const hash = "hash" in from && typeof from.hash === "string" ? from.hash : "";
+  // Refuse to bounce back to /login itself — that would loop.
+  if (from.pathname === "/login") return null;
+  return `${from.pathname}${search}${hash}`;
+}
+
 export function LoginPage() {
   const { isAuthenticated, login } = useAuth();
+  const location = useLocation();
+  const redirectTo = readFromPath(location.state) ?? "/";
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   if (isAuthenticated) {
-    return <Navigate to="/" replace />;
+    return <Navigate to={redirectTo} replace />;
   }
 
   const handleSubmit = async (e: FormEvent) => {
