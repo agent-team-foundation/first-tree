@@ -135,6 +135,19 @@ CREATE INDEX IF NOT EXISTS "idx_invitation_redemptions_user"
 -- ---------------------------------------------------------------------------
 -- 3. members.status — soft-delete marker for "leave team"
 -- ---------------------------------------------------------------------------
+--
+-- No partial index on `status='active'` is created in v1. Filter sites are:
+--   - middleware/member-auth.ts: lookup by members.id (already PK-indexed)
+--   - services/auth.ts (password login): WHERE user_id = ? AND status='active'
+--   - services/membership.ts (listActiveMemberships): same filter
+-- The existing `idx_members_user (user_id)` already collapses each user's
+-- members rows to ~1-5 typical, so the in-page status check is essentially
+-- free at the v1 SaaS scale (low six-digit users × low single-digit teams).
+-- A partial unique-eligible index becomes worth adding when:
+--   - members > ~100k rows AND
+--   - average rows-per-user > ~50
+-- whichever comes first. At that point the migration is a single
+-- `CREATE INDEX CONCURRENTLY ... WHERE status='active'`.
 --> statement-breakpoint
 ALTER TABLE "members"
 	ADD COLUMN IF NOT EXISTS "status" text DEFAULT 'active' NOT NULL;

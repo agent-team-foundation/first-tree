@@ -4,6 +4,17 @@ import { afterAll, beforeAll } from "vitest";
 import { buildApp } from "../app.js";
 import type { Config } from "../config.js";
 
+/**
+ * Reusable password-hash placeholder for tests that need a `users` row but
+ * don't exercise the password-login path. Real bcrypt hashes are pricey to
+ * generate per-test (cost factor 4 → ~5ms each); this placeholder is the
+ * canonical bcrypt $2b$ format with a 22-byte salt + 31-byte hash so any
+ * future bcrypt upgrade that tightens input validation still accepts it.
+ * `bcrypt.compare(anything, this)` returns false (intended) without
+ * throwing.
+ */
+export const INVALID_BCRYPT_PLACEHOLDER = `$2b$04$${"x".repeat(22)}${"y".repeat(31)}`;
+
 type InjectResponse = Awaited<ReturnType<FastifyInstance["inject"]>>;
 
 type AgentRequestFn = (

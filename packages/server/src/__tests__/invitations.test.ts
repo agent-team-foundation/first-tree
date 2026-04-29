@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { invitationRedemptions, invitations } from "../db/schema/invitations.js";
 import { members } from "../db/schema/members.js";
-import { createTestAdmin, useTestApp } from "./helpers.js";
+import { createTestAdmin, INVALID_BCRYPT_PLACEHOLDER, useTestApp } from "./helpers.js";
 
 describe("Invitation lifecycle", () => {
   const getApp = useTestApp();
@@ -57,7 +57,7 @@ describe("Invitation lifecycle", () => {
     await app.db.insert(users).values({
       id: otherUserId,
       username: `peer-${otherUserId.slice(0, 8)}`,
-      passwordHash: "x",
+      passwordHash: INVALID_BCRYPT_PLACEHOLDER,
       displayName: "Peer",
     });
     const peer = await ensureMembership(app.db, {

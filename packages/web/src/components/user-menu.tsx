@@ -121,8 +121,12 @@ export function UserMenu() {
               </div>
             </div>
 
-            {/* Teams list */}
-            {orgs.length > 0 && (
+            {/* Teams list — hidden when the user only belongs to one team
+                (proposal §"OrganizationSwitcher": single-org users get a
+                static label, no switcher overhead). The Create / Join
+                actions below remain visible so the user can still self-
+                serve into a multi-org state. */}
+            {orgs.length > 1 && (
               <div className="border-b py-1" style={{ borderColor: "var(--border)" }}>
                 <div className="px-4 py-1 text-eyebrow text-muted-foreground">Teams</div>
                 <div>

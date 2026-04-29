@@ -169,8 +169,6 @@ export {
   type JoinByInvitation,
   joinByInvitationSchema,
   rotateInvitationSchema,
-  type UpdateInvitation,
-  updateInvitationSchema,
 } from "./schemas/invitation.js";
 export {
   type CreateOrgFromMe,

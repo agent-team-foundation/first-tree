@@ -50,15 +50,15 @@ export async function signOAuthState(jwtSecret: string, next: string): Promise<{
  * `Error` with the verification failure mode on rejection so the route
  * layer can map to 401.
  *
- * `cookieNonce` may be null when called from `/dev-callback` — we honor
- * the `skipCookieCheck` flag in that case but the route is itself gated
- * on dev mode.
+ * Cookie/nonce double-submit is mandatory — this is the CSRF defense.
+ * `/dev-callback` does NOT call this function; it bypasses state entirely
+ * (see `api/auth/github.ts`) because the dev shortcut also bypasses the
+ * github.com round-trip that would have set a state cookie.
  */
 export async function verifyOAuthState(
   jwtSecret: string,
   token: string,
   cookieNonce: string | null,
-  opts: { skipCookieCheck?: boolean } = {},
 ): Promise<{ next: string }> {
   const secret = new TextEncoder().encode(jwtSecret);
   let payload: StatePayload;
@@ -73,10 +73,8 @@ export async function verifyOAuthState(
     throw new Error("OAuth state payload malformed");
   }
 
-  if (!opts.skipCookieCheck) {
-    if (!cookieNonce || cookieNonce !== payload.nonce) {
-      throw new Error("OAuth state nonce / cookie mismatch");
-    }
+  if (!cookieNonce || cookieNonce !== payload.nonce) {
+    throw new Error("OAuth state nonce / cookie mismatch");
   }
 
   return { next: payload.next };

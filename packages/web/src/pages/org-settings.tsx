@@ -6,6 +6,7 @@ import { getConfigs, updateConfigs } from "../api/system-config.js";
 import { Button } from "../components/ui/button.js";
 import { Panel, PanelHeader, PanelTitle } from "../components/ui/panel.js";
 import { UppercaseLabel } from "../components/ui/section-header.js";
+import { TeamIdentityPanel } from "./team-identity-panel.js";
 
 type ConfigMeta = {
   key: string;
@@ -98,48 +99,51 @@ export function OrgSettingsPage() {
   }
 
   return (
-    <form onSubmit={handleSubmit}>
-      <Panel>
-        <PanelHeader>
-          <PanelTitle>System configuration</PanelTitle>
-          <div className="flex items-center gap-1.5">
-            {saved && (
-              <span className="mono text-caption" style={{ color: "var(--accent-dim)" }}>
-                saved
-              </span>
+    <div className="space-y-4">
+      <TeamIdentityPanel />
+      <form onSubmit={handleSubmit}>
+        <Panel>
+          <PanelHeader>
+            <PanelTitle>System configuration</PanelTitle>
+            <div className="flex items-center gap-1.5">
+              {saved && (
+                <span className="mono text-caption" style={{ color: "var(--accent-dim)" }}>
+                  saved
+                </span>
+              )}
+              <Button type="button" variant="ghost" size="xs" onClick={handleReset} disabled={mutation.isPending}>
+                Reset defaults
+              </Button>
+              <Button type="submit" size="xs" disabled={mutation.isPending}>
+                <Check className="h-3 w-3" />
+                {mutation.isPending ? "Saving…" : "Save changes"}
+              </Button>
+            </div>
+          </PanelHeader>
+          <div style={{ padding: "var(--sp-1) var(--sp-4) var(--sp-3_5)" }}>
+            {isLoading ? (
+              <div className="py-6 text-body" style={{ color: "var(--fg-3)" }}>
+                Loading…
+              </div>
+            ) : (
+              CONFIG_FIELDS.map((field) => (
+                <ConfigRow
+                  key={field.key}
+                  field={field}
+                  value={values[field.key] ?? ""}
+                  onChange={(v) => setValues({ ...values, [field.key]: v })}
+                />
+              ))
             )}
-            <Button type="button" variant="ghost" size="xs" onClick={handleReset} disabled={mutation.isPending}>
-              Reset defaults
-            </Button>
-            <Button type="submit" size="xs" disabled={mutation.isPending}>
-              <Check className="h-3 w-3" />
-              {mutation.isPending ? "Saving…" : "Save changes"}
-            </Button>
+            {mutation.error instanceof Error && (
+              <div className="text-body pt-2" style={{ color: "var(--state-error)" }}>
+                {mutation.error.message}
+              </div>
+            )}
           </div>
-        </PanelHeader>
-        <div style={{ padding: "var(--sp-1) var(--sp-4) var(--sp-3_5)" }}>
-          {isLoading ? (
-            <div className="py-6 text-body" style={{ color: "var(--fg-3)" }}>
-              Loading…
-            </div>
-          ) : (
-            CONFIG_FIELDS.map((field) => (
-              <ConfigRow
-                key={field.key}
-                field={field}
-                value={values[field.key] ?? ""}
-                onChange={(v) => setValues({ ...values, [field.key]: v })}
-              />
-            ))
-          )}
-          {mutation.error instanceof Error && (
-            <div className="text-body pt-2" style={{ color: "var(--state-error)" }}>
-              {mutation.error.message}
-            </div>
-          )}
-        </div>
-      </Panel>
-    </form>
+        </Panel>
+      </form>
+    </div>
   );
 }
 

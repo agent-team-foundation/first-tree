@@ -39,9 +39,7 @@ export type JoinByInvitation = z.infer<typeof joinByInvitationSchema>;
 /** Admin: rotate the active invitation (revoke prior + issue new). No body. */
 export const rotateInvitationSchema = z.object({}).optional();
 
-/** Admin: tweak the active invitation expiry. */
-export const updateInvitationSchema = z.object({
-  /** ISO-8601 string or null to clear. */
-  expiresAt: z.string().datetime().nullable(),
-});
-export type UpdateInvitation = z.infer<typeof updateInvitationSchema>;
+// NOTE: An expiry-update schema/route was deliberately removed — v1 doesn't
+// surface the expires_at column to the API (the column itself is kept on
+// `invitations` so a future "auto-expire" feature is a route addition,
+// not a schema change). See proposal §"invitations 设计要点".

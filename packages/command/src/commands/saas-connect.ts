@@ -37,6 +37,13 @@ type ConnectJwt = {
   organizationId?: unknown;
 };
 
+/**
+ * @internal
+ * Decode a JWT payload without verifying its signature. Used only by the
+ * CLI's account-switch prompt and the URL-derivation helper below. Not
+ * re-exported from `packages/command/src/index.ts` — external consumers
+ * should call `deriveHubUrlFromToken` instead.
+ */
 export function decodeJwtPayload(token: string): ConnectJwt | null {
   try {
     const parts = token.split(".");

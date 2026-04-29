@@ -3,7 +3,7 @@ import { and, desc, eq, gt, isNull, or } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { invitationRedemptions, invitations } from "../db/schema/invitations.js";
 import { organizations } from "../db/schema/organizations.js";
-import { BadRequestError, NotFoundError } from "../errors.js";
+import { NotFoundError } from "../errors.js";
 import { uuidv7 } from "../uuid.js";
 
 const TOKEN_BYTES = 32;
@@ -137,14 +137,6 @@ export async function recordRedemption(
     ip: data.ip ?? null,
     userAgent: data.userAgent ?? null,
   });
-}
-
-/** Update the expires_at on the *active* invitation for an org. */
-export async function updateInvitationExpiry(db: Database, orgId: string, expiresAt: Date | null) {
-  const inv = await getActiveInvitation(db, orgId);
-  if (!inv) throw new BadRequestError("No active invitation to update — rotate first");
-  await db.update(invitations).set({ expiresAt }).where(eq(invitations.id, inv.id));
-  return { ...inv, expiresAt };
 }
 
 /**

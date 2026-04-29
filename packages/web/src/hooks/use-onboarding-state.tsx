@@ -1,8 +1,9 @@
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { useAuth } from "../auth/auth-context.js";
+import { ONBOARDING_AUTO_OPEN_KEY, ONBOARDING_JOIN_PATH_KEY } from "../utils/onboarding-flags.js";
 
-const AUTO_OPEN_KEY = "onboarding:autoOpen";
-const JOIN_PATH_KEY = "onboarding:joinPath";
+const AUTO_OPEN_KEY = ONBOARDING_AUTO_OPEN_KEY;
+const JOIN_PATH_KEY = ONBOARDING_JOIN_PATH_KEY;
 
 type JoinPath = "solo" | "invite";
 type WizardStep = "connect" | "create_agent" | "completed" | null;

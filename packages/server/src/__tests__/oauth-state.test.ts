@@ -31,10 +31,4 @@ describe("OAuth state JWT", () => {
     const { token } = await signOAuthState(SECRET, "/welcome");
     await expect(verifyOAuthState(SECRET, token, "different-nonce")).rejects.toThrow();
   });
-
-  it("permits cookie skip in dev-callback mode", async () => {
-    const { token } = await signOAuthState(SECRET, "/welcome");
-    const result = await verifyOAuthState(SECRET, token, null, { skipCookieCheck: true });
-    expect(result.next).toBe("/welcome");
-  });
 });

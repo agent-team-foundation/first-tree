@@ -3,12 +3,11 @@
 // SDK — re-export for convenience
 export type { AccessTokenProvider, PullResult, RegisterResult, SdkConfig } from "@first-tree-hub/client";
 export { FirstTreeHubSDK, SdkError } from "@first-tree-hub/client";
-// SaaS connect helpers (decode JWT, derive hub URL from `iss`).
-export {
-  decodeJwtPayload,
-  deriveHubUrlFromToken,
-  HubUrlDerivationError,
-} from "./commands/saas-connect.js";
+// SaaS connect helpers — derive the hub URL from a connect token's `iss`.
+// `decodeJwtPayload` is intentionally NOT re-exported: it's an internal
+// helper used by the CLI account-switch prompt, and its only legitimate
+// public use case (URL derivation) already has a dedicated export.
+export { deriveHubUrlFromToken, HubUrlDerivationError } from "./commands/saas-connect.js";
 // Core types
 export type { CheckResult, ServiceInfo, ServiceState, StartOptions } from "./core/index.js";
 export {

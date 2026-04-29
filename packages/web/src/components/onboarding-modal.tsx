@@ -45,6 +45,11 @@ export function OnboardingModal() {
       ? `You've joined ${friendlyTeamName}.`
       : "Welcome — let's get you set up.";
 
+  // Solo (default-team) sign-ins: surface a single explanatory line so the
+  // user knows the auto-provisioned `<login>-personal` slug isn't a system
+  // mistake — they can rename or invite later. Proposal §决策 #16.
+  const showDefaultTeamHint = step === "connect" && joinPath !== "invite";
+
   return (
     <Dialog open={isOpen} onOpenChange={(next) => !next && close()}>
       <DialogContent>
@@ -58,6 +63,11 @@ export function OnboardingModal() {
                 : "All set!"}
           </DialogDescription>
         </DialogHeader>
+        {showDefaultTeamHint && (
+          <p className="text-label text-muted-foreground" style={{ margin: 0 }}>
+            We've created your personal team. You can rename it, invite teammates, or join an existing team later.
+          </p>
+        )}
         {step === "connect" && <ConnectStep onAdvance={refreshMe} />}
         {step === "create_agent" && <CreateAgentStep onAdvance={refreshMe} />}
       </DialogContent>

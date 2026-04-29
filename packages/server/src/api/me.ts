@@ -88,8 +88,13 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
    * POST /connect-tokens — generate a short-lived connect token for CLI authentication.
    * Stamped with `iss = server.publicUrl` (or the request host as a dev fallback)
    * so the CLI's `connect <token>` form can derive the hub URL with no extra arg.
+   *
+   * Rate-limited per-route at the same level as `/auth/login`: a "Copy
+   * commands" double-click in the wizard mustn't burn through token slots,
+   * but neither should a stolen access token mint unlimited connect tokens.
    */
-  app.post("/connect-tokens", async (request) => {
+  const loginMax = app.config.rateLimit?.loginMax ?? 5;
+  app.post("/connect-tokens", { config: { rateLimit: { max: loginMax, timeWindow: "1 minute" } } }, async (request) => {
     const m = requireMember(request);
     const issuer = resolvePublicUrl(app, request);
     const { token, expiresIn } = await authService.generateConnectToken(
@@ -154,49 +159,56 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
-  app.post("/me/organizations/join", async (request, reply) => {
-    const m = requireMember(request);
-    const body = joinByInvitationSchema.parse(request.body);
+  // Rate-limit `join`: an attacker holding a valid access token shouldn't
+  // be able to brute-force invite tokens via this endpoint. Same bucket
+  // size as login.
+  app.post(
+    "/me/organizations/join",
+    { config: { rateLimit: { max: loginMax, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const m = requireMember(request);
+      const body = joinByInvitationSchema.parse(request.body);
 
-    const inv = await findActiveByToken(app.db, body.token);
-    if (!inv) {
-      return reply.status(404).send({ error: "Invitation not found or no longer valid" });
-    }
+      const inv = await findActiveByToken(app.db, body.token);
+      if (!inv) {
+        return reply.status(404).send({ error: "Invitation not found or no longer valid" });
+      }
 
-    const [u] = await app.db
-      .select({ username: users.username, displayName: users.displayName })
-      .from(users)
-      .where(eq(users.id, m.userId))
-      .limit(1);
-    if (!u) throw new NotFoundError("User not found");
+      const [u] = await app.db
+        .select({ username: users.username, displayName: users.displayName })
+        .from(users)
+        .where(eq(users.id, m.userId))
+        .limit(1);
+      if (!u) throw new NotFoundError("User not found");
 
-    const member = await ensureMembership(app.db, {
-      userId: m.userId,
-      organizationId: inv.organizationId,
-      role: inv.role === "admin" ? "admin" : "member",
-      displayName: u.displayName,
-      username: u.username,
-    });
-    await recordRedemption(app.db, {
-      invitationId: inv.id,
-      userId: m.userId,
-      ip: request.ip,
-      userAgent: request.headers["user-agent"] ?? null,
-    });
+      const member = await ensureMembership(app.db, {
+        userId: m.userId,
+        organizationId: inv.organizationId,
+        role: inv.role === "admin" ? "admin" : "member",
+        displayName: u.displayName,
+        username: u.username,
+      });
+      await recordRedemption(app.db, {
+        invitationId: inv.id,
+        userId: m.userId,
+        ip: request.ip,
+        userAgent: request.headers["user-agent"] ?? null,
+      });
 
-    const tokens = await authService.signTokensForMember(app.config.secrets.jwtSecret, {
-      userId: m.userId,
-      memberId: member.id,
-      organizationId: member.organizationId,
-      role: member.role,
-    });
-    return reply.status(200).send({
-      organizationId: member.organizationId,
-      memberId: member.id,
-      role: member.role,
-      tokens,
-    });
-  });
+      const tokens = await authService.signTokensForMember(app.config.secrets.jwtSecret, {
+        userId: m.userId,
+        memberId: member.id,
+        organizationId: member.organizationId,
+        role: member.role,
+      });
+      return reply.status(200).send({
+        organizationId: member.organizationId,
+        memberId: member.id,
+        role: member.role,
+        tokens,
+      });
+    },
+  );
 
   app.post("/me/organizations/leave", async (request, reply) => {
     const m = requireMember(request);
@@ -236,6 +248,14 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
 /**
  * Infer the wizard step from observable runtime state. Refer to
  * proposal §"Onboarding 状态推断" for the rationale.
+ *
+ * Note: we deliberately do NOT filter by `clients.status='connected'`
+ * here. The original "fact-is-state" reading would have flapped between
+ * `completed` and `connect` every time the user's client briefly went
+ * offline — UX disaster (the onboarding modal would re-pop). "Ever
+ * connected" (= a clients row exists at all for this user/org) is still
+ * fact-derived: deleting the row really does rewind the wizard, and
+ * that's the explicit reset path.
  */
 async function inferWizardStep(
   app: FastifyInstance,
@@ -244,9 +264,7 @@ async function inferWizardStep(
   const [hasClient] = await app.db
     .select({ id: clients.id })
     .from(clients)
-    .where(
-      and(eq(clients.userId, m.userId), eq(clients.organizationId, m.organizationId), eq(clients.status, "connected")),
-    )
+    .where(and(eq(clients.userId, m.userId), eq(clients.organizationId, m.organizationId)))
     .limit(1);
   if (!hasClient) return "connect";
 

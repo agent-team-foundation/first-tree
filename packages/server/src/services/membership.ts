@@ -111,10 +111,8 @@ export async function createPersonalTeam(db: Database, input: CreatePersonalTeam
   const baseSlug = sanitizeOrgSlug(`${input.loginSeed}-personal`);
   const displayName = `${input.userDisplayName}'s Personal Team`;
 
-  const slug = await pickAvailableOrgSlug(db, baseSlug);
-
   const orgId = uuidv7();
-  await db.insert(organizations).values({ id: orgId, name: slug, displayName });
+  const slug = await insertOrgWithSlugRetry(db, orgId, baseSlug, displayName);
 
   const member = await ensureMembership(db, {
     userId: input.userId,
@@ -138,24 +136,40 @@ function sanitizeOrgSlug(raw: string): string {
   );
 }
 
-async function pickAvailableOrgSlug(db: Database, base: string): Promise<string> {
+/** Postgres `unique_violation` SQLSTATE — `organizations.name` UNIQUE tripping. */
+const PG_UNIQUE_VIOLATION = "23505";
+
+/**
+ * Attempt INSERT into `organizations` with `base` slug, retrying with a
+ * disambiguator on UNIQUE constraint violations. Two concurrent OAuth
+ * sign-ins for the same GitHub `login` would race here without retry —
+ * pre-check `SELECT` followed by `INSERT` has a TOCTOU window the unique
+ * constraint catches but the catch path needs to exist. Returns the slug
+ * actually used.
+ */
+async function insertOrgWithSlugRetry(db: Database, orgId: string, base: string, displayName: string): Promise<string> {
   const [existing] = await db
     .select({ id: organizations.id })
     .from(organizations)
     .where(eq(organizations.name, base))
     .limit(1);
-  if (!existing) return base;
-  for (let i = 0; i < 8; i += 1) {
-    const candidate = `${base}-${randomBytes(2).toString("hex")}`;
-    const [hit] = await db
-      .select({ id: organizations.id })
-      .from(organizations)
-      .where(eq(organizations.name, candidate))
-      .limit(1);
-    if (!hit) return candidate;
+  let candidate = existing ? `${base}-${randomBytes(2).toString("hex")}` : base;
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      await db.insert(organizations).values({ id: orgId, name: candidate, displayName });
+      return candidate;
+    } catch (err) {
+      const code = (err as { code?: string })?.code ?? (err as { cause?: { code?: string } })?.cause?.code;
+      if (code !== PG_UNIQUE_VIOLATION) throw err;
+      candidate = `${base}-${randomBytes(2).toString("hex")}`;
+    }
   }
-  // Pathological collision storm — fall back to a 12-char random suffix.
-  return `${base}-${uuidv7().slice(0, 12)}`;
+
+  // Pathological collision storm — random suffix always wins.
+  candidate = `${base}-${uuidv7().slice(0, 12)}`;
+  await db.insert(organizations).values({ id: orgId, name: candidate, displayName });
+  return candidate;
 }
 
 /** List ACTIVE memberships (omit soft-deleted "left") for a user. */

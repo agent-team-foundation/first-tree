@@ -49,10 +49,9 @@ export async function findOrCreateUserFromGithub(db: Database, profile: GithubPr
   // suffix on collision; we never re-issue the suffix because the user_id
   // is the actual key.
   const baseUsername = profile.login.toLowerCase();
-  const username = await pickUniqueUsername(db, baseUsername);
   const placeholderHash = `oauth:${randomBytes(32).toString("base64url")}`;
 
-  await db.transaction(async (tx) => {
+  await insertWithUsernameRetry(db, baseUsername, async (tx, username) => {
     await tx.insert(users).values({
       id: userId,
       username,
@@ -74,15 +73,43 @@ export async function findOrCreateUserFromGithub(db: Database, profile: GithubPr
   return { userId };
 }
 
-async function pickUniqueUsername(db: Database, base: string): Promise<string> {
+/** Postgres `unique_violation` SQLSTATE — emitted when a UNIQUE constraint trips. */
+const PG_UNIQUE_VIOLATION = "23505";
+
+/**
+ * Pick a candidate username, attempt the caller's INSERT in a transaction,
+ * and retry under a fresh disambiguator if the UNIQUE(users.username)
+ * constraint trips. Two concurrent OAuth sign-ins for the same GitHub
+ * `login` would otherwise let one INSERT win and the other 500 — the
+ * race window between the pre-check `SELECT` and the `INSERT` is small but
+ * non-zero in production. Retry budget is small; pathological storms fall
+ * back to a fully-random suffix.
+ */
+async function insertWithUsernameRetry(
+  db: Database,
+  base: string,
+  insert: (tx: Database, username: string) => Promise<void>,
+): Promise<void> {
   const [hit] = await db.select({ id: users.id }).from(users).where(eq(users.username, base)).limit(1);
-  if (!hit) return base;
-  for (let i = 0; i < 8; i += 1) {
-    const candidate = `${base}-${randomBytes(2).toString("hex")}`;
-    const [exists] = await db.select({ id: users.id }).from(users).where(eq(users.username, candidate)).limit(1);
-    if (!exists) return candidate;
+  let candidate = hit ? `${base}-${randomBytes(2).toString("hex")}` : base;
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      await db.transaction(async (tx) => {
+        await insert(tx as unknown as Database, candidate);
+      });
+      return;
+    } catch (err) {
+      const code = (err as { code?: string })?.code ?? (err as { cause?: { code?: string } })?.cause?.code;
+      if (code !== PG_UNIQUE_VIOLATION) throw err;
+      candidate = `${base}-${randomBytes(2).toString("hex")}`;
+    }
   }
-  // Pathological collision storm — fall back to a fully-random slug. The
-  // user can rename later if they want a vanity username.
-  return `${base}-${uuidv7().slice(0, 12)}`;
+
+  // After 4 retries something is badly wrong (or extremely unlucky) — fall
+  // back to a fully-random suffix so the operator always succeeds.
+  candidate = `${base}-${uuidv7().slice(0, 12)}`;
+  await db.transaction(async (tx) => {
+    await insert(tx as unknown as Database, candidate);
+  });
 }

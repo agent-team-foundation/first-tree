@@ -6,6 +6,7 @@ import { api } from "../api/client.js";
 import { useAuth } from "../auth/auth-context.js";
 import { Button } from "../components/ui/button.js";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card.js";
+import { markOnboardingResume } from "../utils/onboarding-flags.js";
 
 /**
  * Public landing for `/invite/:token`. Two cases:
@@ -59,8 +60,7 @@ export function InviteAcceptPage() {
       }>("/me/organizations/join", { token });
       await adoptTokens(res.tokens);
       // Land on dashboard; onboarding modal layers on top if wizard incomplete.
-      window.sessionStorage.setItem("onboarding:autoOpen", "1");
-      window.sessionStorage.setItem("onboarding:joinPath", "invite");
+      markOnboardingResume("invite");
       navigate("/", { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to join team");

@@ -2,6 +2,7 @@ import { safeRedirectPath } from "@agent-team-foundation/first-tree-hub-shared";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { useAuth } from "../auth/auth-context.js";
+import { markOnboardingResume } from "../utils/onboarding-flags.js";
 
 /**
  * Consumes the `#access=…&refresh=…&next=…` fragment that the server
@@ -34,10 +35,9 @@ export function OAuthCompletePage() {
     // Stash the join path so the onboarding modal can pick context-aware copy
     // ("solo" vs "invite") on its first render. sessionStorage scope is
     // intentional — onboarding is a one-shot, and the flag is consumed and
-    // cleared by the modal once it has used it.
+    // cleared by the provider once it has used it.
     if (joinPath === "solo" || joinPath === "invite") {
-      sessionStorage.setItem("onboarding:joinPath", joinPath);
-      sessionStorage.setItem("onboarding:autoOpen", "1");
+      markOnboardingResume(joinPath);
     }
 
     // Wipe the fragment immediately — token sits in localStorage from here on.
