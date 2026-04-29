@@ -19,7 +19,7 @@ export type GithubCallbackQuery = z.infer<typeof githubCallbackQuerySchema>;
 
 /**
  * Dev-only callback to bypass the GitHub round-trip — sign in as a stub
- * Github user. Gated by NODE_ENV !== 'production' AND `oauth.github.devCallbackEnabled`.
+ * Github user. Gated by NODE_ENV !== 'production'; production always 404s.
  */
 export const githubDevCallbackQuerySchema = z.object({
   /** Synthetic GitHub numeric id (acts as `auth_identities.identifier`). */

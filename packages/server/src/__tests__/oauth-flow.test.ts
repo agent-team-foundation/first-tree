@@ -97,6 +97,39 @@ describe("GitHub OAuth onboarding flow", () => {
     }
   });
 
+  it("partial unique index forbids a single user from holding two github identities", async () => {
+    const app = getApp();
+    // Sign in once to create a user + bind githubId=700.
+    await app.inject({
+      method: "GET",
+      url: "/api/v1/auth/github/dev-callback?githubId=700&login=alphaone",
+    });
+    const [first] = await app.db
+      .select({ userId: authIdentities.userId })
+      .from(authIdentities)
+      .where(eq(authIdentities.identifier, "700"));
+    const userId = first?.userId;
+    expect(userId).toBeDefined();
+    if (!userId) throw new Error("seed identity missing");
+
+    // Direct INSERT bypassing the service layer — verifies the storage-layer
+    // guarantee that one user cannot hold two github identities, regardless
+    // of whether any application-layer flow ever attempts it.
+    const { authIdentities: ai } = await import("../db/schema/auth-identities.js");
+    const { uuidv7 } = await import("../uuid.js");
+    await expect(
+      app.db.insert(ai).values({
+        id: uuidv7(),
+        userId,
+        provider: "github",
+        identifier: "701",
+        email: null,
+        verifiedAt: new Date(),
+        metadata: { login: "alphaone-shadow" },
+      }),
+    ).rejects.toThrow();
+  });
+
   it("issues tokens that authenticate /me", async () => {
     const app = getApp();
     const res = await app.inject({

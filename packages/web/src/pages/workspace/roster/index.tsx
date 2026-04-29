@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Plus, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import { getActivityOverview, type RuntimeAgent } from "../../../api/activity.js";
@@ -42,7 +42,6 @@ export function AgentRoster({
 }) {
   const agentName = useAgentNameMap();
   const { resolve: resolveClient } = useClientMap();
-  const queryClient = useQueryClient();
   const pulse = usePulse();
   const [query, setQuery] = useState("");
   const [pill, setPill] = useState<Pill>("all");
@@ -63,7 +62,11 @@ export function AgentRoster({
   const newChatMut = useMutation({
     mutationFn: (agentId: string) => createAgentChat(agentId),
     onSuccess: (result, agentId) => {
-      queryClient.invalidateQueries({ queryKey: agentSessionsQueryKey(agentId) });
+      // No sessions invalidate here: at chat-creation time the
+      // agent_chat_sessions row does NOT yet exist (server only writes it
+      // after the user sends a first message — see M plan Step 1b in
+      // docs/session-creation-on-first-message.md). The list refresh is
+      // therefore moved to chat-view's sendMut.onSuccess.
       onSelectChat(agentId, result.id);
     },
   });

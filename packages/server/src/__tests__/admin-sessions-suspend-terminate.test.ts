@@ -4,6 +4,8 @@ import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
 import * as activityService from "../services/activity.js";
 import { createAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
+import { sendMessage } from "../services/message.js";
+import * as sessionService from "../services/session.js";
 import * as sessionEventService from "../services/session-event.js";
 import { createAdminContext, useTestApp } from "./helpers.js";
 
@@ -283,5 +285,48 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
     expect(filteredRes.statusCode).toBe(200);
     const filteredChats = filteredRes.json<Array<{ chatId: string; state: string }>>().map((r) => r.chatId);
     expect(filteredChats).toContain(chatEvicted.id);
+  });
+
+  it("archive vs sendMessage race always resolves to active (sendMessage wins via archive's conservative gate, R3)", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app, { username: `race-${crypto.randomUUID().slice(0, 6)}` });
+    const sender = await createAgent(app.db, {
+      name: `race-snd-${crypto.randomUUID().slice(0, 6)}`,
+      type: "autonomous_agent",
+      displayName: "Race sender",
+      managerId: admin.memberId,
+      clientId: admin.clientId,
+    });
+    const target = await createAgent(app.db, {
+      name: `race-tgt-${crypto.randomUUID().slice(0, 6)}`,
+      type: "autonomous_agent",
+      displayName: "Race target",
+      managerId: admin.memberId,
+      clientId: admin.clientId,
+    });
+    const chat = await createChat(app.db, admin.humanAgentUuid, {
+      type: "group",
+      participantIds: [sender.uuid, target.uuid],
+    });
+    await seedSession(app, target.uuid, chat.id, "suspended");
+
+    // Concurrently fire archive (suspended → evicted, gated by from=['suspended'])
+    // and sendMessage (any → active via upsertSessionState, unconditional).
+    // Both touch the same agent_chat_sessions row, so PG row-level locks
+    // serialize them. Either commit order resolves to active:
+    //
+    // - archive first → state becomes 'evicted'; the upsert then unconditionally
+    //   overrides → 'active'.
+    // - upsert first → state becomes 'active'; archive then sees 'active' which
+    //   is NOT in its `from=['suspended']` gate, so it becomes a no-op
+    //   (transitioned=false).
+    //
+    // sendMessage always wins, due to archive's conservative gate.
+    await Promise.all([
+      sessionService.archiveSession(app.db, target.uuid, chat.id, admin.organizationId, app.notifier),
+      sendMessage(app.db, chat.id, sender.uuid, { format: "text", content: "race" }),
+    ]);
+
+    expect(await readState(app, target.uuid, chat.id)).toBe("active");
   });
 });
