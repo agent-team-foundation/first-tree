@@ -117,9 +117,12 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.get("/dev-callback", async (request, reply) => {
-    const isProd = process.env.NODE_ENV === "production";
-    const devEnabled = oauthCfg?.devCallbackEnabled === true;
-    if (isProd || !devEnabled) {
+    // dev-callback mints a stub GitHub identity without round-tripping to
+    // github.com. Always disabled in production — there's no flag to flip,
+    // so a misconfigured prod deploy can never accidentally expose it.
+    // In any non-production environment it's enabled unconditionally so dev
+    // can sign in with one click without standing up a real OAuth client.
+    if (process.env.NODE_ENV === "production") {
       return reply.status(404).send({ error: "Not found" });
     }
     const params = githubDevCallbackQuerySchema.parse(request.query);

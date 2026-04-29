@@ -76,14 +76,6 @@ export const serverConfigSchema = defineConfig({
         env: "FIRST_TREE_HUB_GITHUB_OAUTH_CLIENT_SECRET",
         secret: true,
       }),
-      /**
-       * Opt-in to the `/auth/github/dev-callback` shortcut that mints a stub
-       * GitHub identity without round-tripping to github.com. Always disabled
-       * in production regardless of this flag.
-       */
-      devCallbackEnabled: field(z.boolean().default(false), {
-        env: "FIRST_TREE_HUB_GITHUB_OAUTH_DEV_CALLBACK",
-      }),
     }),
   }),
   cors: optional({
