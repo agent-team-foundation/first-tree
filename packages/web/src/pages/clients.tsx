@@ -5,13 +5,11 @@ import {
   type RuntimeProvider,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronDown, ChevronRight, Copy, Terminal, Trash2, Unplug } from "lucide-react";
+import { ChevronDown, ChevronRight, Plus, Trash2, Unplug } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
   type ClientWithCapabilities,
-  type ConnectTokenResponse,
   disconnectClient,
-  generateConnectToken,
   getActivityOverview,
   getClientCapabilities,
   type HubClient,
@@ -37,71 +35,7 @@ import { StateChip } from "../components/ui/state-chip.js";
 import { useAgentNameMap } from "../lib/use-agent-name-map.js";
 import { useUserNameMap } from "../lib/use-user-name-map.js";
 import { formatDate } from "../lib/utils.js";
-
-function ConnectStrip() {
-  const [connectData, setConnectData] = useState<ConnectTokenResponse | null>(null);
-  const [copied, setCopied] = useState(false);
-
-  const generateMut = useMutation({
-    mutationFn: generateConnectToken,
-    onSuccess: (data) => {
-      setConnectData(data);
-      setCopied(false);
-    },
-  });
-
-  const handleCopy = async () => {
-    if (!connectData) return;
-    await navigator.clipboard.writeText(connectData.command);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  return (
-    <div
-      className="grid items-center gap-2.5 mb-3.5"
-      style={{
-        gridTemplateColumns: "auto 1fr auto auto",
-        padding: "var(--sp-2) var(--sp-3)",
-        background: "var(--bg-raised)",
-        border: "var(--hairline) solid var(--border)",
-        borderRadius: "var(--radius-panel)",
-      }}
-    >
-      <span className="inline-flex items-center gap-2 text-body" style={{ color: "var(--fg-2)" }}>
-        <Terminal className="h-3.5 w-3.5" />
-        Connect a computer
-      </span>
-      {connectData ? (
-        <code
-          className="mono whitespace-nowrap overflow-hidden text-ellipsis text-label"
-          style={{
-            padding: "var(--sp-1_25) var(--sp-2_5)",
-            background: "var(--bg-sunken)",
-            border: "var(--hairline) solid var(--border-faint)",
-            borderRadius: "var(--radius-input)",
-            color: "var(--fg-2)",
-          }}
-          title={connectData.command}
-        >
-          {connectData.command}{" "}
-          <span style={{ color: "var(--fg-4)" }}># expires in {Math.round(connectData.expiresIn / 60)}m</span>
-        </code>
-      ) : (
-        <span className="mono text-label" style={{ color: "var(--fg-4)" }}>
-          Generate a single-use command to pair a new machine with this Hub.
-        </span>
-      )}
-      <Button variant="outline" size="xs" onClick={handleCopy} disabled={!connectData}>
-        {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-        {copied ? "Copied" : "Copy"}
-      </Button>
-      <Button variant="outline" size="xs" onClick={() => generateMut.mutate()} disabled={generateMut.isPending}>
-        {generateMut.isPending ? "Generating…" : connectData ? "Regenerate" : "Generate"}
-      </Button>
-    </div>
-  );
-}
+import { NewConnectionDialog } from "./clients/new-connection-dialog.js";
 
 export function ClientsPage() {
   const queryClient = useQueryClient();
@@ -113,6 +47,7 @@ export function ClientsPage() {
   const [confirmDisconnect, setConfirmDisconnect] = useState<HubClient | null>(null);
   const [confirmRetire, setConfirmRetire] = useState<HubClient | null>(null);
   const [retireError, setRetireError] = useState<string | null>(null);
+  const [newConnectionOpen, setNewConnectionOpen] = useState(false);
 
   const { data: clients } = useQuery({
     queryKey: ["clients"],
@@ -176,10 +111,18 @@ export function ClientsPage() {
             </>
           ) : null
         }
+        right={
+          <div className="flex items-center gap-1.5">
+            <Button size="xs" onClick={() => setNewConnectionOpen(true)}>
+              <Plus className="h-3 w-3" />
+              New Connection
+            </Button>
+          </div>
+        }
       />
 
       <div style={{ padding: "var(--sp-3_5) var(--sp-5) var(--sp-7)" }}>
-        <ConnectStrip />
+        <NewConnectionDialog open={newConnectionOpen} onOpenChange={setNewConnectionOpen} />
 
         {confirmRetire && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay-scrim">
