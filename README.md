@@ -9,7 +9,7 @@
 <p align="center">
   <a href="#install-and-run"><strong>Quickstart</strong></a> &middot;
   <a href="https://first-tree.ai/"><strong>Website</strong></a> &middot;
-  <a href="WHITEPAPER.md"><strong>Whitepaper</strong></a> &middot;
+  <a href="#commands"><strong>Commands</strong></a> &middot;
   <a href="https://github.com/agent-team-foundation/first-tree/discussions"><strong>Discussions</strong></a>
 </p>
 
