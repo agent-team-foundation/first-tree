@@ -27,6 +27,7 @@ export async function upsertSessionState(
   state: SessionState,
   organizationId: string,
   notifier?: Notifier,
+  options?: { touchPresenceLastSeen?: boolean },
 ) {
   const now = new Date();
   let wrote = false;
@@ -52,14 +53,15 @@ export async function upsertSessionState(
     const activeSessions = counts?.active ?? 0;
     const totalSessions = counts?.total ?? 0;
 
-    await tx
-      .update(agentPresence)
-      .set({
-        activeSessions,
-        totalSessions,
-        lastSeenAt: now,
-      })
-      .where(eq(agentPresence.agentId, agentId));
+    // `lastSeenAt` is owned by the client's bind/heartbeat. Skip it on
+    // server-predictive writes (e.g. sendMessage upserting active on first
+    // message); default-true preserves the WS `session:state` path's behavior.
+    const touchLastSeen = options?.touchPresenceLastSeen ?? true;
+    const presenceSet = touchLastSeen
+      ? { activeSessions, totalSessions, lastSeenAt: now }
+      : { activeSessions, totalSessions };
+
+    await tx.update(agentPresence).set(presenceSet).where(eq(agentPresence.agentId, agentId));
 
     wrote = true;
   });
