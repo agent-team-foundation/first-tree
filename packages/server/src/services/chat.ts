@@ -545,8 +545,8 @@ export async function findOrCreateDirectChat(db: Database, agentAId: string, age
   const agentB = ends.find((a) => a.uuid === agentBId);
   if (!agentB) throw new NotFoundError(`Agent "${agentBId}" not found`);
 
-  const isAgentOnly = agentA.type !== "human" && agentB.type !== "human";
-  const mode = isAgentOnly ? "mention_only" : "full";
+  const isDirectAgentOnly = agentA.type !== "human" && agentB.type !== "human";
+  const mode = isDirectAgentOnly ? "mention_only" : "full";
 
   const chatId = randomUUID();
   return db.transaction(async (tx) => {

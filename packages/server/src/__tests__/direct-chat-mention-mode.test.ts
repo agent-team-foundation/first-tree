@@ -67,6 +67,21 @@ describe("direct chat default mode (migration 0029)", () => {
       const modes = await loadModes(chat.id);
       expect(modes.map((m) => m.mode).sort()).toEqual(["full", "full"]);
     });
+
+    it("autonomous_agent↔personal_assistant → both `mention_only` (rule keys on `type !== 'human'`, not a whitelist)", async () => {
+      // Pin the rule against the kind of refactor that would replace
+      // `type !== 'human'` with a positive whitelist like
+      // `type === 'autonomous_agent'`. `personal_assistant` is also a
+      // non-human agent and must follow the same loop-prevention default.
+      const app = getApp();
+      const uid = crypto.randomUUID().slice(0, 6);
+      const auto = await createTestAgent(app, { name: `dc-au-${uid}`, type: "autonomous_agent" });
+      const { agent: pa } = await createTestAgent(app, { name: `dc-pa-${uid}`, type: "personal_assistant" });
+
+      const chat = await findOrCreateDirectChat(app.db, auto.agent.uuid, pa.uuid);
+      const modes = await loadModes(chat.id);
+      expect(modes.map((m) => m.mode).sort()).toEqual(["mention_only", "mention_only"]);
+    });
   });
 
   describe("createChat seeds the right modes", () => {
