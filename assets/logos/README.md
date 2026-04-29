@@ -1,18 +1,21 @@
 # Partner logos
 
-Each entry has a `-light.svg` (black fill, for light-mode README) and a
-`-dark.svg` (white fill, for dark-mode README). The README uses `<picture>`
-with `prefers-color-scheme` to swap between them.
+All partner logos use **original brand colors** (paperclip-style). For brands
+with monochrome marks (Cursor / GitHub / MCP), the `-light.svg` keeps the
+brand black/dark color and the `-dark.svg` is a white-fill variant so the
+mark stays visible against GitHub's dark theme. Brands with saturated brand
+colors (Claude orange, Codex green, Gemini purple) use the same fill in
+both variants.
 
-| Slug | Source | License |
-|---|---|---|
-| `claude-code` | Bootstrap Icons (`bi:claude` via Iconify) — Claude mark, not Anthropic logo | MIT |
-| `codex` | Bootstrap Icons (`bi:openai` via Iconify) | MIT |
-| `cursor` | Simple Icons (`cursor`) | CC0 |
-| `gemini` | Simple Icons (`googlegemini`) | CC0 |
-| `github` | Simple Icons (`github`) | CC0 |
-| `mcp` | Simple Icons (`modelcontextprotocol`) | CC0 |
-| `openclaw.png` | `https://avatars.githubusercontent.com/openclaw` (org avatar) | OpenClaw brand mark |
+| Slug | Source | Brand color (light → dark) | License |
+|---|---|---|---|
+| `claude-code` | Bootstrap Icons `bi:claude` via Iconify — Claude mark, not Anthropic logo | `#D97757` (Anthropic orange) | MIT |
+| `codex` | Bootstrap Icons `bi:openai` via Iconify | `#10A37F` (OpenAI green) | MIT |
+| `cursor` | Simple Icons (`cursor`) | `#000000` → `#ffffff` | CC0 |
+| `gemini` | Simple Icons (`googlegemini`) | `#8E75B2` (Gemini purple) | CC0 |
+| `github` | Simple Icons (`github`) | `#181717` → `#ffffff` | CC0 |
+| `mcp` | Simple Icons (`modelcontextprotocol`) | `#000000` → `#ffffff` | CC0 |
+| `openclaw.png` | `https://avatars.githubusercontent.com/openclaw` (org avatar) | full-color red lobster | OpenClaw brand mark |
 
 Each pair was generated from the same source SVG with `fill="#000000"` (light
 variant) and `fill="#ffffff"` (dark variant). To refresh:
