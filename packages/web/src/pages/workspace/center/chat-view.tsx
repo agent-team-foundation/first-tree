@@ -761,6 +761,13 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
     onSuccess: () => {
       setDraft("");
       queryClient.invalidateQueries({ queryKey: ["chat-messages", chatId] });
+      // Refresh the workspace sidebar the moment the message is durable —
+      // server's predictive Step 1b (in services/message.ts) just upserted an
+      // `active` agent_chat_sessions row, so the new chat now satisfies the
+      // listAgentSessions INNER JOIN. Without this invalidate the user would
+      // wait up to 10s for the polling refetch. See M plan Step 3 in
+      // docs/session-creation-on-first-message.md.
+      queryClient.invalidateQueries({ queryKey: agentSessionsQueryKey(agentId) });
     },
   });
 
@@ -827,6 +834,10 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
         if (text) await sendChatMessage(chatId, text);
         setDraft("");
         queryClient.invalidateQueries({ queryKey: ["chat-messages", chatId] });
+        // Mirror sendMut.onSuccess: predictive session-activation only shows
+        // up in the sidebar after we invalidate, otherwise the file-send path
+        // for the first message in a new chat waits for 10s polling.
+        queryClient.invalidateQueries({ queryKey: agentSessionsQueryKey(agentId) });
       } catch (err) {
         setUploadError(err instanceof Error ? err.message : "Failed to send image");
       } finally {
