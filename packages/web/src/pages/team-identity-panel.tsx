@@ -1,27 +1,20 @@
 import type { Organization } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, X } from "lucide-react";
+import { Check } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
-import { listMembers } from "../api/members.js";
 import { getOrganization, updateOrganization } from "../api/organizations.js";
 import { useAuth } from "../auth/auth-context.js";
 import { Button } from "../components/ui/button.js";
 import { Panel, PanelBody, PanelHeader, PanelTitle } from "../components/ui/panel.js";
 
-const RENAME_HINT_DISMISS_PREFIX = "rename-hint:";
-
 /**
  * Admin-only panel for renaming the team (`organizations.display_name` and
- * the URL slug `organizations.name`). Implements proposal §决策 #17 (rename
- * is a v1 feature) and §决策 #19 (one-shot rename hint when a default
- * "<login>-personal" team grows past one member).
+ * the URL slug `organizations.name`). Implements proposal §决策 #17.
  *
- * The hint banner is intentionally derived client-side from facts already
- * on the wire (org slug + members list + localStorage dismissed flag) —
- * no schema changes, no toast system, no event triggers. Trade-off vs
- * proposal: the hint surfaces "next time admin visits Settings" instead
- * of "instantly when the second member joins" — but the rename form is
- * right here, so the timing miss doesn't cost any clicks.
+ * The auto-provisioned default team's name is the user's GitHub login
+ * (slug) and real name (display name) — already a friendly default — so
+ * there's no separate "rename hint" surface; admins who want to customize
+ * just edit the form below.
  */
 export function TeamIdentityPanel() {
   const { organizationId } = useAuth();
@@ -31,11 +24,6 @@ export function TeamIdentityPanel() {
     queryKey: ["organization", organizationId],
     queryFn: () => (organizationId ? getOrganization(organizationId) : Promise.reject(new Error("no org"))),
     enabled: !!organizationId,
-  });
-
-  const membersQuery = useQuery({
-    queryKey: ["members"],
-    queryFn: listMembers,
   });
 
   const [displayName, setDisplayName] = useState("");
@@ -74,26 +62,6 @@ export function TeamIdentityPanel() {
     mutation.mutate();
   };
 
-  // Rename-hint visibility (v1 simplified version of proposal §决策 #19):
-  //   - admin (this panel is only mounted under the admin tab)
-  //   - team slug still ends in "-personal" (auto-provisioned default)
-  //   - >= 2 active members in the team
-  //   - user hasn't dismissed the hint for THIS org before
-  const dismissKey = `${RENAME_HINT_DISMISS_PREFIX}${organizationId ?? "unknown"}:dismissed`;
-  const [hintDismissed, setHintDismissed] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    return window.localStorage.getItem(dismissKey) === "1";
-  });
-  const dismissHint = () => {
-    window.localStorage.setItem(dismissKey, "1");
-    setHintDismissed(true);
-  };
-  const showRenameHint =
-    !hintDismissed &&
-    !!orgQuery.data?.name &&
-    orgQuery.data.name.endsWith("-personal") &&
-    (membersQuery.data?.length ?? 0) >= 2;
-
   return (
     <Panel>
       <PanelHeader>
@@ -111,33 +79,6 @@ export function TeamIdentityPanel() {
         </div>
       </PanelHeader>
       <PanelBody>
-        {showRenameHint && (
-          <div
-            className="flex items-start justify-between gap-3"
-            style={{
-              padding: "var(--sp-2_5) var(--sp-3)",
-              marginBottom: "var(--sp-3)",
-              background: "var(--bg-sunken)",
-              border: "var(--hairline) solid var(--border-faint)",
-              borderRadius: "var(--radius-input)",
-            }}
-          >
-            <div className="text-label" style={{ color: "var(--fg-2)" }}>
-              Heads up — this team is still using its auto-generated name (
-              <span className="mono">{orgQuery.data?.name}</span>). Now that you have teammates, you might want to give
-              it a friendlier name in the form below.
-            </div>
-            <button
-              type="button"
-              aria-label="Dismiss rename hint"
-              onClick={dismissHint}
-              className="shrink-0"
-              style={{ color: "var(--fg-3)", padding: 2, background: "transparent", border: "none", cursor: "pointer" }}
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        )}
         {orgQuery.isLoading ? (
           <div className="text-body" style={{ color: "var(--fg-3)" }}>
             Loading…

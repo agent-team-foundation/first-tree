@@ -3,9 +3,10 @@ import { Button } from "../../../components/ui/button.js";
 import { useOnboardingState } from "../../../hooks/use-onboarding-state.js";
 
 export function EmptyState() {
-  const { shouldShowResumeCTA, open, step } = useOnboardingState();
+  const { step, openModal } = useOnboardingState();
+  const onboardingIncomplete = step !== null && step !== "completed";
 
-  if (shouldShowResumeCTA) {
+  if (onboardingIncomplete) {
     const stepLabel =
       step === "connect"
         ? "Connect your computer to create your first agent."
@@ -18,7 +19,7 @@ export function EmptyState() {
           <FirstTreeLogo width={36} height={40} className="mx-auto mb-3 text-primary opacity-60" />
           <div className="text-subtitle mb-1">No agents yet</div>
           <div className="text-body text-muted-foreground mb-4">{stepLabel}</div>
-          <Button onClick={open}>Resume setup</Button>
+          <Button onClick={openModal}>Resume setup</Button>
         </div>
       </div>
     );

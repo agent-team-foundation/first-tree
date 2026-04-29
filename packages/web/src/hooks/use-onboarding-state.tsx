@@ -1,79 +1,80 @@
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { useAuth } from "../auth/auth-context.js";
-import { ONBOARDING_AUTO_OPEN_KEY, ONBOARDING_JOIN_PATH_KEY } from "../utils/onboarding-flags.js";
-
-const AUTO_OPEN_KEY = ONBOARDING_AUTO_OPEN_KEY;
-const JOIN_PATH_KEY = ONBOARDING_JOIN_PATH_KEY;
+import { ONBOARDING_BANNER_DISMISSED_KEY, ONBOARDING_JOIN_PATH_KEY } from "../utils/onboarding-flags.js";
 
 type JoinPath = "solo" | "invite";
 type WizardStep = "connect" | "create_agent" | "completed" | null;
 
 type OnboardingContextValue = {
-  isOpen: boolean;
-  open: () => void;
-  close: () => void;
+  /** Modal is open. Only changes via `openModal` / `closeModal` — no auto-open. */
+  modalOpen: boolean;
+  openModal: () => void;
+  closeModal: () => void;
+  /** Banner is shown — true iff onboarding incomplete AND user hasn't dismissed. */
+  bannerVisible: boolean;
+  /** Persistently mark the banner as dismissed. */
+  dismissBanner: () => void;
   joinPath: JoinPath | null;
   step: WizardStep;
-  shouldShowResumeCTA: boolean;
 };
 
 const OnboardingContext = createContext<OnboardingContextValue | null>(null);
 
 /**
- * Drives the onboarding modal's open state. Mount the provider once near
- * the top of the auth-required tree so EmptyState's [Resume setup] CTA
- * and the modal share a single state instance.
+ * Onboarding state provider. Two surfaces share this context:
  *
- * Auto-open semantics: opens itself ONCE, immediately after OAuth
- * completion, by consuming a transient sessionStorage flag the
- * OAuth-complete page sets. After dismiss, modal stays closed in this
- * and all subsequent sessions until manually re-opened.
+ *   - <OnboardingBanner /> — top-of-layout dismissible reminder; shown to
+ *     users whose wizard step is not "completed" and who haven't dismissed.
+ *   - <OnboardingModal />  — opened only by explicit user action (banner
+ *     button, EmptyState "Resume setup"). Never auto-pops.
  *
- * Once `wizard.step === "completed"`, the flags are cleaned up so
- * stale state doesn't carry across an unrelated next sign-in.
+ * Auto-popup was retired: it covered the workspace before the user could
+ * see anything, was wrong for invite users (who joined an existing team
+ * and might not need to install a CLI at all), and removed user agency.
+ * The banner is the equivalent gentle entry point.
  */
 export function OnboardingProvider({ children }: { children: ReactNode }) {
   const { wizardStep, isAuthenticated } = useAuth();
-  const [isOpen, setIsOpen] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [bannerDismissed, setBannerDismissed] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem(ONBOARDING_BANNER_DISMISSED_KEY) === "1";
+  });
   const [joinPath, setJoinPath] = useState<JoinPath | null>(() => {
-    const v = typeof window !== "undefined" ? window.sessionStorage.getItem(JOIN_PATH_KEY) : null;
+    const v = typeof window !== "undefined" ? window.sessionStorage.getItem(ONBOARDING_JOIN_PATH_KEY) : null;
     return v === "solo" || v === "invite" ? v : null;
   });
 
-  // Auto-open once after OAuth completion.
-  useEffect(() => {
-    if (!isAuthenticated) return;
-    if (wizardStep === null || wizardStep === "completed") return;
-    const flag = window.sessionStorage.getItem(AUTO_OPEN_KEY);
-    if (flag === "1") {
-      setIsOpen(true);
-      window.sessionStorage.removeItem(AUTO_OPEN_KEY);
-    }
-  }, [isAuthenticated, wizardStep]);
-
-  // Wizard completed → close modal + clean up flags.
+  // When wizard reaches completed, clean up persistent flags so a future
+  // "incomplete" state (e.g. user deletes their client) gets a fresh banner.
   useEffect(() => {
     if (wizardStep === "completed") {
-      setIsOpen(false);
-      window.sessionStorage.removeItem(AUTO_OPEN_KEY);
-      window.sessionStorage.removeItem(JOIN_PATH_KEY);
+      setModalOpen(false);
+      window.sessionStorage.removeItem(ONBOARDING_JOIN_PATH_KEY);
+      window.localStorage.removeItem(ONBOARDING_BANNER_DISMISSED_KEY);
       setJoinPath(null);
+      setBannerDismissed(false);
     }
   }, [wizardStep]);
 
-  const open = useCallback(() => setIsOpen(true), []);
-  const close = useCallback(() => setIsOpen(false), []);
+  const openModal = useCallback(() => setModalOpen(true), []);
+  const closeModal = useCallback(() => setModalOpen(false), []);
+  const dismissBanner = useCallback(() => {
+    window.localStorage.setItem(ONBOARDING_BANNER_DISMISSED_KEY, "1");
+    setBannerDismissed(true);
+  }, []);
 
   const value = useMemo<OnboardingContextValue>(
     () => ({
-      isOpen,
-      open,
-      close,
+      modalOpen,
+      openModal,
+      closeModal,
+      bannerVisible: isAuthenticated && wizardStep !== null && wizardStep !== "completed" && !bannerDismissed,
+      dismissBanner,
       joinPath,
       step: wizardStep,
-      shouldShowResumeCTA: isAuthenticated && wizardStep !== null && wizardStep !== "completed" && !isOpen,
     }),
-    [isOpen, open, close, joinPath, wizardStep, isAuthenticated],
+    [modalOpen, openModal, closeModal, isAuthenticated, wizardStep, bannerDismissed, dismissBanner, joinPath],
   );
 
   return <OnboardingContext.Provider value={value}>{children}</OnboardingContext.Provider>;
@@ -82,15 +83,16 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
 export function useOnboardingState(): OnboardingContextValue {
   const ctx = useContext(OnboardingContext);
   if (!ctx) {
-    // Not inside a provider — most likely a public route. Return a
-    // permanently-closed default so callers don't have to null-check.
+    // Not inside a provider — most likely a public route. Return permanently-
+    // closed defaults so callers don't have to null-check.
     return {
-      isOpen: false,
-      open: () => {},
-      close: () => {},
+      modalOpen: false,
+      openModal: () => {},
+      closeModal: () => {},
+      bannerVisible: false,
+      dismissBanner: () => {},
       joinPath: null,
       step: null,
-      shouldShowResumeCTA: false,
     };
   }
   return ctx;

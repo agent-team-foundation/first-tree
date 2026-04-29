@@ -97,19 +97,20 @@ type CreatePersonalTeamInput = {
 };
 
 /**
- * Create a fresh "personal team" org for a brand-new user, plus the
- * matching admin membership + 1:1 human agent. Slug strategy:
+ * Create a fresh default team org for a brand-new user, plus the matching
+ * admin membership + 1:1 human agent. Slug strategy:
  *
- *   - First try: `${login}-personal`
+ *   - First try: `${login}` (lowercased, sanitized)
  *   - On collision: append a 4-char hex disambiguator
  *
- * The display name is `{user}'s Personal Team` so it reads sensibly in the
- * UI; the user can rename via Settings later (proposal §"Personal team
- * visual降级").
+ * Display name is the user's GitHub real name (or login as fallback). No
+ * "Personal Team" suffix — the user might invite teammates later, and we
+ * don't want a label that reads like a private sandbox to be the team name
+ * other members see. Users rename freely via Settings.
  */
 export async function createPersonalTeam(db: Database, input: CreatePersonalTeamInput) {
-  const baseSlug = sanitizeOrgSlug(`${input.loginSeed}-personal`);
-  const displayName = `${input.userDisplayName}'s Personal Team`;
+  const baseSlug = sanitizeOrgSlug(input.loginSeed);
+  const displayName = input.userDisplayName;
 
   const orgId = uuidv7();
   const slug = await insertOrgWithSlugRetry(db, orgId, baseSlug, displayName);
