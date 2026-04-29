@@ -133,9 +133,11 @@ export {
   type Client,
   type ClientRegister,
   type ClientStatus,
+  type ClientWireCapabilities,
   clientRegisterSchema,
   clientSchema,
   clientStatusSchema,
+  clientWireCapabilitiesSchema,
 } from "./schemas/client.js";
 export {
   CAPABILITY_STATES,
@@ -178,6 +180,12 @@ export {
   inboxEntryWithMessageSchema,
   inboxPollQuerySchema,
 } from "./schemas/inbox.js";
+export type {
+  InboxAckFrame,
+  InboxDeliverFrame,
+} from "./schemas/inbox-frames.js";
+// -- WebSocket inbox data-plane frames --
+export { inboxAckFrameSchema, inboxDeliverFrameSchema } from "./schemas/inbox-frames.js";
 export {
   INVITATION_DEFAULT_TTL_DAYS,
   type InvitationPreview,
@@ -391,6 +399,11 @@ export {
   userSchema,
   userStatusSchema,
 } from "./schemas/user.js";
-export type { ServerWelcomeFrame, WsAuthFrame } from "./schemas/ws-auth.js";
+export type { ServerCapabilities, ServerWelcomeFrame, WsAuthFrame } from "./schemas/ws-auth.js";
 // -- WebSocket handshake frames --
-export { serverWelcomeFrameSchema, WS_AUTH_FRAME_TIMEOUT_MS, wsAuthFrameSchema } from "./schemas/ws-auth.js";
+export {
+  serverCapabilitiesSchema,
+  serverWelcomeFrameSchema,
+  WS_AUTH_FRAME_TIMEOUT_MS,
+  wsAuthFrameSchema,
+} from "./schemas/ws-auth.js";

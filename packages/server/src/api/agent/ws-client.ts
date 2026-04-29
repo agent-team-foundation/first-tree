@@ -4,6 +4,9 @@ import {
   agentBindRequestSchema,
   agentPinnedMessageSchema,
   clientRegisterSchema,
+  type InboxEntryWithMessage,
+  inboxAckFrameSchema,
+  inboxDeliverFrameSchema,
   runtimeStateMessageSchema,
   sessionCompletionMessageSchema,
   sessionEventMessageSchema,
@@ -32,10 +35,33 @@ import {
 import * as activityService from "../../services/activity.js";
 import * as clientService from "../../services/client.js";
 import * as connectionManager from "../../services/connection-manager.js";
+import * as inboxService from "../../services/inbox.js";
 import * as notificationService from "../../services/notification.js";
-import type { Notifier } from "../../services/notifier.js";
+import type { InboxPushHandler, Notifier } from "../../services/notifier.js";
 import * as presenceService from "../../services/presence.js";
 import * as sessionEventService from "../../services/session-event.js";
+
+/**
+ * Default per-agent in-flight cap when `server.inbox.maxInFlightPerAgent` is
+ * unset. Mirrors the schema default so a hub running without an explicit
+ * `inbox` block still gets reasonable backpressure once `wsDataPlane` is
+ * flipped on. See proposal hub-inbox-ws-data-plane §3.5.
+ */
+const DEFAULT_INBOX_MAX_IN_FLIGHT_PER_AGENT = 32;
+/**
+ * Hard cap on entries scanned in a single backlog drain so a recovering
+ * client doesn't trigger an arbitrarily large transaction or burst of
+ * frames. Anything beyond this stays `pending` and gets picked up by
+ * subsequent post-ack drains. Same constant covers both the agent:bound
+ * recovery path and the post-ack top-up.
+ *
+ * Lower than proposal §3.3's 500 on purpose: the actual limit per drain is
+ * `min(remainingInFlightBudget, INBOX_BACKLOG_BATCH_LIMIT)`, so with a
+ * default cap of 32 the drain SQL never asks for more than ~32 anyway.
+ * Subsequent NOTIFYs and post-ack top-ups continue draining without a
+ * single-transaction megabatch.
+ */
+const INBOX_BACKLOG_BATCH_LIMIT = 50;
 
 const wsMessageSchema = z.object({
   type: z.string(),
@@ -102,6 +128,8 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
   return async (app: FastifyInstance): Promise<void> => {
     const jwtSecretBytes = new TextEncoder().encode(app.config.secrets.jwtSecret);
 
+    const inboxMaxInFlightPerAgent = app.config.inbox?.maxInFlightPerAgent ?? DEFAULT_INBOX_MAX_IN_FLIGHT_PER_AGENT;
+
     // config.otel=false skips @fastify/otel's HTTP instrumentation for the
     // upgrade request. We already emit a long-running `ws.connection` span
     // ourselves via startWsConnectionSpan — a parallel HTTP-style span for a
@@ -112,6 +140,178 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
       let clientId: string | null = null;
       let authExpiryTimer: NodeJS.Timeout | null = null;
       const boundAgents = new Map<string, { agentId: string; inboxId: string }>();
+
+      /**
+       * Whether the connected client opted into the WS inbox data plane via
+       * `client:register.wireCapabilities.wsInboxDeliver`. Set per-socket
+       * because client SDKs are upgraded independently — an old client
+       * connecting to a new server must keep receiving the legacy
+       * `new_message` doorbell + HTTP poll path (proposal §3.6).
+       */
+      let clientWantsWsInboxDeliver = false;
+
+      /**
+       * Per-agent in-flight `inbox:deliver` counter for backpressure. Lives on
+       * the socket — when the WS closes it goes with it; that's intentional,
+       * because re-counting on a fresh connection would bias the cap against
+       * a healthy reconnect (proposal §3.5).
+       */
+      const inboxInFlight = new Map<string, number>();
+
+      function pushUseWsDataPlane(): boolean {
+        return clientWantsWsInboxDeliver;
+      }
+
+      /**
+       * Returns `false` when the socket has already moved out of `OPEN` —
+       * the only failure mode the caller can observe synchronously.
+       *
+       * Note: `ws.send` is fire-and-forget; a buffered frame that fails
+       * to actually flush (TCP slow-close, internal queue full) does NOT
+       * surface here. That class of loss is recovered by the 300s timeout
+       * reaper rolling the entry back to `pending` (§3.7). If you ever
+       * need flush-level confirmation, switch to the `ws.send(frame, cb)`
+       * callback form (see `notifier.ts pushFrameToInbox`).
+       */
+      function sendInboxDeliverFrame(entry: InboxEntryWithMessage): boolean {
+        if (socket.readyState !== socket.OPEN) return false;
+        const frame = {
+          type: "inbox:deliver",
+          entryId: entry.id,
+          inboxId: entry.inboxId,
+          chatId: entry.chatId,
+          message: entry.message,
+        };
+        // Self-validate the wire shape against the same schema the client
+        // applies. A failure here means the server has serialised something
+        // the client will reject — log loudly so a schema-drift bug surfaces
+        // server-side instead of getting stuck behind the client's silent
+        // drop. We still send the frame: client also logs the issue, and
+        // dropping here unilaterally would leave the entry as `delivered`
+        // forever (unable to ack on a frame the client never saw).
+        const validated = inboxDeliverFrameSchema.safeParse(frame);
+        if (!validated.success) {
+          app.log.error(
+            {
+              entryId: entry.id,
+              inboxId: entry.inboxId,
+              issues: validated.error.issues.map((i) => ({
+                path: i.path.join("."),
+                code: i.code,
+                message: i.message,
+              })),
+            },
+            "inbox:deliver frame failed self-validation — wire shape drift",
+          );
+        }
+        socket.send(JSON.stringify(frame));
+        return true;
+      }
+
+      /**
+       * Build the per-socket push handler bound to a specific agent. Closes
+       * over `agentId`, `inboxId`, the socket, and the in-flight counter.
+       *
+       * Backpressure: when the agent is at-cap we drop the NOTIFY (entry
+       * stays `pending` server-side) and a debug log records the drop so
+       * staging can correlate "messages slow" reports against cap hits.
+       * The dropped row is replayed by `drainBacklogForAgent` once an ack
+       * frees a slot, or by the next NOTIFY when we're back below cap (§3.5).
+       *
+       * Multi-row claims: a single `(inboxId, messageId)` pair can map to
+       * more than one `inbox_entries` row (replyTo cross-chat case writes
+       * a second row with a different chatId). We push every row claimed
+       * by this NOTIFY in one go — see `claimAndBuildForPush`.
+       *
+       * The cap is intentionally **soft**: claim happens after the gate
+       * check, so an N>1 claim can nudge in-flight slightly past
+       * `inboxMaxInFlightPerAgent`. N is bounded by the
+       * `(inbox_id, message_id, chat_id)` unique constraint (≤2 today),
+       * so worst-case overshoot is small and the memory headroom in §3.5's
+       * 64MB estimate covers it.
+       */
+      function makeInboxPushHandler(agentId: string, inboxId: string): InboxPushHandler {
+        return async (messageId: string) => {
+          const current = inboxInFlight.get(agentId) ?? 0;
+          if (current >= inboxMaxInFlightPerAgent) {
+            app.log.debug(
+              { agentId, inboxId, messageId, inFlightCount: current, cap: inboxMaxInFlightPerAgent },
+              "inbox push: at cap, dropping NOTIFY (will replay via post-ack drain)",
+            );
+            return;
+          }
+
+          let entries: InboxEntryWithMessage[];
+          try {
+            entries = await inboxService.claimAndBuildForPush(app.db, inboxId, messageId);
+          } catch (err) {
+            app.log.error({ err, inboxId, messageId, agentId }, "claimAndBuildForPush failed");
+            return;
+          }
+          if (entries.length === 0) {
+            // Benign race — HTTP poll or another instance claimed it first.
+            return;
+          }
+
+          for (const entry of entries) {
+            inboxInFlight.set(agentId, (inboxInFlight.get(agentId) ?? 0) + 1);
+            if (!sendInboxDeliverFrame(entry)) {
+              // Socket dropped mid-loop. The entry is still 'delivered' in
+              // the DB; the existing 300s timeout reaper rolls it back to
+              // 'pending' so a reconnect (or another instance) re-delivers.
+              // Release the slot we just took, then bail — remaining
+              // unsent entries also stay 'delivered' for the reaper.
+              inboxInFlight.set(agentId, Math.max(0, (inboxInFlight.get(agentId) ?? 1) - 1));
+              return;
+            }
+          }
+        };
+      }
+
+      /**
+       * Drain up to `INBOX_BACKLOG_BATCH_LIMIT` pending entries for an agent
+       * over the current WS, capped by the remaining in-flight budget so a
+       * full drain stays within the per-agent backpressure cap (§3.3, §3.5).
+       *
+       * Used in two places:
+       *   1. Right after `agent:bound` — covers reconnects where NOTIFYs
+       *      were dropped while the socket was offline.
+       *   2. Right after an `inbox:ack` — top up the in-flight slot just
+       *      freed, in case the previous NOTIFY was dropped at-cap.
+       *
+       * The cap is **soft**: this function reads `slotsFree` once before the
+       * `claimBacklogForPush` round-trip, and a NOTIFY-driven push handler
+       * may increment the counter concurrently. In the worst case in-flight
+       * temporarily exceeds the cap by the number of concurrent pushes. With
+       * the default cap of 32 and N ≤ 2 per push handler invocation, the
+       * memory headroom in §3.5's 64MB estimate covers this.
+       */
+      async function drainBacklogForAgent(agentId: string, inboxId: string): Promise<void> {
+        if (socket.readyState !== socket.OPEN) return;
+        const inFlight = inboxInFlight.get(agentId) ?? 0;
+        const slotsFree = inboxMaxInFlightPerAgent - inFlight;
+        if (slotsFree <= 0) return;
+        const limit = Math.min(slotsFree, INBOX_BACKLOG_BATCH_LIMIT);
+
+        let entries: InboxEntryWithMessage[];
+        try {
+          entries = await inboxService.claimBacklogForPush(app.db, inboxId, limit);
+        } catch (err) {
+          app.log.error({ err, agentId, inboxId, limit }, "claimBacklogForPush failed");
+          return;
+        }
+
+        for (const entry of entries) {
+          inboxInFlight.set(agentId, (inboxInFlight.get(agentId) ?? 0) + 1);
+          if (!sendInboxDeliverFrame(entry)) {
+            inboxInFlight.set(agentId, Math.max(0, (inboxInFlight.get(agentId) ?? 1) - 1));
+            // Socket gone mid-drain — stop pushing. Remaining entries stay
+            // 'delivered'; reaper will reset them and a future reconnect picks
+            // them up.
+            return;
+          }
+        }
+      }
 
       // FIFO per session so session:event persistence happens before any
       // subsequent eviction's clearEvents — without this, the message handler
@@ -236,12 +436,17 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
             scheduleAuthExpiry(claims.exp);
             socket.send(JSON.stringify({ type: "auth:ok" }));
             // Wire-additive: older clients drop the unknown type; newer ones
-            // use it to detect version drift.
+            // use it to detect version drift. `capabilities.wsInboxDeliver`
+            // is unconditionally true on this build — the data plane is
+            // always available; whether it's actually used per-connection
+            // depends on the client's own `wireCapabilities` opt-in on
+            // `client:register` (proposal hub-inbox-ws-data-plane §3.6).
             socket.send(
               JSON.stringify({
                 type: "server:welcome",
                 serverCommandVersion: app.commandVersion,
                 serverTimeMs: Date.now(),
+                capabilities: { wsInboxDeliver: true },
               }),
             );
           } catch (err) {
@@ -259,6 +464,11 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
           try {
             if (type === "client:register") {
               const data = clientRegisterSchema.parse(msg);
+
+              // Record opt-in for the WS inbox data plane. Per-socket so a
+              // legacy client on a pushed-enabled server still works (proposal
+              // §3.6). Default false — only an explicit `true` activates push.
+              clientWantsWsInboxDeliver = data.wireCapabilities?.wsInboxDeliver === true;
 
               try {
                 await clientService.registerClient(app.db, {
@@ -408,7 +618,16 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               connectionManager.bindAgentToClient(clientId, agent.id);
               boundAgents.set(agent.id, { agentId: agent.id, inboxId: agent.inboxId });
 
-              notifier.subscribe(agent.inboxId, socket);
+              // Subscribe to NOTIFY traffic. When both server config and the
+              // client's wire-capability opt-in are true, register a push
+              // handler so NOTIFYs land as `inbox:deliver` frames. Otherwise
+              // legacy `new_message` doorbell — old clients keep working.
+              const wsPushActive = pushUseWsDataPlane();
+              if (wsPushActive) {
+                notifier.subscribe(agent.inboxId, socket, makeInboxPushHandler(agent.id, agent.inboxId));
+              } else {
+                notifier.subscribe(agent.inboxId, socket);
+              }
 
               socket.send(
                 JSON.stringify({
@@ -419,6 +638,16 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                   agentType: agent.type,
                 }),
               );
+
+              // Reconnect/recovery: if we're on the WS push path, drain any
+              // pending entries that piled up while this socket was offline
+              // (or while another instance held the subscription). Failures
+              // are logged inside the helper — don't crash the bind path.
+              if (wsPushActive) {
+                drainBacklogForAgent(agent.id, agent.inboxId).catch((err) => {
+                  app.log.error({ err, agentId: agent.id }, "post-bind backlog drain crashed");
+                });
+              }
             } else if (type === "agent:unbind") {
               const agentId = parsed.data.agentId;
               if (!agentId || !boundAgents.has(agentId)) {
@@ -434,6 +663,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               await presenceService.unbindAgent(app.db, agentId);
               connectionManager.unbindAgentFromClient(agentId);
               boundAgents.delete(agentId);
+              inboxInFlight.delete(agentId);
 
               socket.send(JSON.stringify({ type: "agent:unbound", agentId }));
             } else if (type === "session:state") {
@@ -555,6 +785,48 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 notificationService
                   .notifyAgentEvent(app.db, agentId, "session_completed", "low", payload.chatId)
                   .catch(() => {});
+              }
+            } else if (type === "inbox:ack") {
+              const payloadResult = inboxAckFrameSchema.safeParse(msg);
+              if (!payloadResult.success) {
+                socket.send(JSON.stringify({ type: "error", message: "Malformed inbox:ack frame" }));
+                return;
+              }
+              const { entryId } = payloadResult.data;
+
+              // Find the agent / inbox this entry belongs to from the bind
+              // map. We never trust an `agentId` from the wire here — that
+              // would let one bound agent ack another agent's entry. Instead
+              // we resolve the inbox via the DB (one round-trip) and check
+              // the resulting inboxId is in this socket's bound set.
+              try {
+                const ackedEntry = await inboxService.ackEntryByIdForBoundAgents(
+                  app.db,
+                  entryId,
+                  [...boundAgents.values()].map((a) => a.inboxId),
+                );
+                if (!ackedEntry) {
+                  // Either the entry doesn't exist, or it's not in 'delivered'
+                  // status, or it belongs to an inbox this socket hasn't bound.
+                  // All three are non-fatal — the client may have raced a
+                  // server-side reset (300s timeout reaper) or be ack'ing a
+                  // stale entry from a previous run. Drop silently.
+                  return;
+                }
+                // Find the agentId that owns this inbox to decrement the
+                // counter and trigger backlog drain.
+                const owner = [...boundAgents.values()].find((a) => a.inboxId === ackedEntry.inboxId);
+                if (owner) {
+                  inboxInFlight.set(owner.agentId, Math.max(0, (inboxInFlight.get(owner.agentId) ?? 1) - 1));
+                  // Slot freed → top up. Cheap when no backlog (single SQL
+                  // statement returning 0 rows). Critical when the cap was
+                  // hit and queued NOTIFYs got dropped (proposal §3.5).
+                  drainBacklogForAgent(owner.agentId, owner.inboxId).catch((err) => {
+                    app.log.error({ err, agentId: owner.agentId }, "post-ack backlog drain crashed");
+                  });
+                }
+              } catch (err) {
+                app.log.error({ err, entryId }, "inbox:ack handling failed");
               }
             } else if (type === "heartbeat") {
               if (clientId) {
