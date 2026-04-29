@@ -4,7 +4,7 @@ import { useAuth } from "../auth/auth-context.js";
 import { readFromPath } from "../auth/redirect-from-state.js";
 import { FirstTreeLogo } from "../components/first-tree-logo.js";
 import { Button } from "../components/ui/button.js";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card.js";
+import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card.js";
 
 /**
  * Sign-in entry. Single path: GitHub OAuth. The legacy password form has
@@ -67,7 +67,6 @@ export function LoginPage() {
             <CardTitle className="text-title">
               First Tree <span className="font-normal text-muted-foreground">Hub</span>
             </CardTitle>
-            <CardDescription>Sign in or sign up — both go through GitHub</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <Button asChild className="w-full">

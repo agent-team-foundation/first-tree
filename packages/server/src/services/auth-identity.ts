@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { authIdentities } from "../db/schema/auth-identities.js";
 import { users } from "../db/schema/users.js";
@@ -25,10 +25,7 @@ export type GithubProfile = {
  * treats it as a plain string and rejects every password — that's the
  * intended behaviour: SaaS users cannot fall back to password login.
  */
-export async function findOrCreateUserFromGithub(
-  db: Database,
-  profile: GithubProfile,
-): Promise<{ userId: string; legacyBound?: boolean }> {
+export async function findOrCreateUserFromGithub(db: Database, profile: GithubProfile): Promise<{ userId: string }> {
   const [existing] = await db
     .select({ userId: authIdentities.userId })
     .from(authIdentities)
@@ -43,49 +40,6 @@ export async function findOrCreateUserFromGithub(
         .where(and(eq(authIdentities.provider, "github"), eq(authIdentities.identifier, profile.githubId)));
     }
     return { userId: existing.userId };
-  }
-
-  // Legacy bridge: a pre-OAuth password user whose `users.username` already
-  // equals this GitHub login but who has never bound a github identity yet.
-  // First time that user clicks "Continue with GitHub", auto-bind the new
-  // identity to the existing row so they land on their existing organization
-  // instead of getting a freshly minted personal team.
-  //
-  // Strict matching: active user, case-insensitive username equality, AND
-  // zero rows in `auth_identities` for `(provider='github')` under that user.
-  // Suspended users are excluded so a banned account can't be silently
-  // resurrected via OAuth. The race window between this SELECT and the
-  // INSERT below is closed by `uq_auth_identities_user_github` — the
-  // partial UNIQUE INDEX on (user_id) WHERE provider='github' makes a
-  // double-bind impossible at the storage layer.
-  //
-  // Collision risk: a brand-new GitHub login that happens to match a
-  // legacy username "claims" that account. For our SaaS install the
-  // legacy set is the early dogfooders using their real GitHub handles,
-  // so the collision surface is effectively zero. Test accounts (admin,
-  // test, etc.) carry no real data; their accidental "takeover" is
-  // harmless.
-  const candidateLogin = profile.login.toLowerCase();
-  const [legacyUser] = await db
-    .select({ id: users.id })
-    .from(users)
-    .leftJoin(authIdentities, and(eq(authIdentities.userId, users.id), eq(authIdentities.provider, "github")))
-    .where(
-      and(sql`lower(${users.username}) = ${candidateLogin}`, eq(users.status, "active"), isNull(authIdentities.id)),
-    )
-    .limit(1);
-
-  if (legacyUser) {
-    await db.insert(authIdentities).values({
-      id: uuidv7(),
-      userId: legacyUser.id,
-      provider: "github",
-      identifier: profile.githubId,
-      email: profile.email,
-      verifiedAt: new Date(),
-      metadata: { login: profile.login, migratedFrom: "legacy_password" },
-    });
-    return { userId: legacyUser.id, legacyBound: true };
   }
 
   const userId = uuidv7();
