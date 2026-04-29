@@ -82,7 +82,7 @@ describe("createResultSink — forwardResult enrichment", () => {
     expect(body).toMatchObject({ format: "text", content: "final answer", inReplyTo: "m1" });
   });
 
-  it("omits mentions metadata in a 2-person direct chat (peer is always full-mode)", async () => {
+  it("omits mentions metadata in a 2-person direct chat when peer is full-mode (human↔agent)", async () => {
     const { sink, sendMessage } = buildSink({
       trigger: { messageId: "m1", senderId: "agent-peer" },
       participants: [mkParticipant(ME, "me"), mkParticipant("agent-peer", "peer")],
@@ -92,6 +92,28 @@ describe("createResultSink — forwardResult enrichment", () => {
 
     const body = sendMessage.mock.calls[0]?.[1] as Record<string, unknown>;
     expect(body.metadata).toBeUndefined();
+  });
+
+  it("emits default trigger mention in a 2-person direct chat when peer is mention_only (agent↔agent)", async () => {
+    // Migration 0029 + findOrCreateDirectChat seed both participants as
+    // `mention_only` in agent↔agent direct chats so courtesy replies don't
+    // wake the peer and produce A↔B reply loops. The sink has to
+    // explicitly @-mention the trigger sender to route the genuine reply
+    // back to them; without this branch, B's answer to A's question would
+    // land silently and A would never see it.
+    const peer = mkParticipant("agent-peer", "peer");
+    peer.mode = "mention_only";
+    const me = mkParticipant(ME, "me");
+    me.mode = "mention_only";
+    const { sink, sendMessage } = buildSink({
+      trigger: { messageId: "m1", senderId: "agent-peer" },
+      participants: [me, peer],
+    });
+
+    await sink("final answer");
+
+    const body = sendMessage.mock.calls[0]?.[1] as { metadata?: { mentions?: string[] } };
+    expect(body.metadata?.mentions).toEqual(["agent-peer"]);
   });
 
   it("defaults mentions to [trigger.senderId] in a group chat (Mention-default)", async () => {

@@ -53,7 +53,7 @@ export async function createChat(db: Database, creatorId: string, data: CreateCh
 
   // Verify all participants exist and belong to the same organization
   const existingAgents = await db
-    .select({ id: agents.uuid, organizationId: agents.organizationId })
+    .select({ id: agents.uuid, organizationId: agents.organizationId, type: agents.type })
     .from(agents)
     .where(inArray(agents.uuid, [...allParticipantIds]));
 
@@ -72,6 +72,13 @@ export async function createChat(db: Database, creatorId: string, data: CreateCh
     throw new BadRequestError(`Cross-organization chat not allowed: ${crossOrg.map((a) => a.id).join(", ")}`);
   }
 
+  // Direct chat with no human participant: every message is implicitly
+  // addressed to the only other party, so `full` mode causes A↔B reply loops
+  // (each agent's reply wakes the other forever). Flip both to `mention_only`
+  // so engagement requires an explicit `@` — see also `findOrCreateDirectChat`
+  // and migration 0029.
+  const isDirectAgentOnly = data.type === "direct" && existingAgents.every((a) => a.type !== "human");
+
   return db.transaction(async (tx) => {
     const [chat] = await tx
       .insert(chats)
@@ -88,6 +95,7 @@ export async function createChat(db: Database, creatorId: string, data: CreateCh
       chatId,
       agentId,
       role: agentId === creatorId ? "owner" : "member",
+      ...(isDirectAgentOnly ? { mode: "mention_only" as const } : {}),
     }));
 
     await tx.insert(chatParticipants).values(participantRows);
@@ -523,14 +531,22 @@ export async function findOrCreateDirectChat(db: Database, agentAId: string, age
     }
   }
 
-  // Create new direct chat
-  const [agentA] = await db
-    .select({ organizationId: agents.organizationId })
+  // Create new direct chat. Fetch both agents' types so we can apply the
+  // "agent-only direct → mention_only" rule (see also `createChat` and
+  // migration 0029): without it, A↔B replies loop forever because every
+  // message in a `full` direct chat wakes the other party unconditionally.
+  const ends = await db
+    .select({ uuid: agents.uuid, organizationId: agents.organizationId, type: agents.type })
     .from(agents)
-    .where(eq(agents.uuid, agentAId))
-    .limit(1);
+    .where(inArray(agents.uuid, [agentAId, agentBId]));
 
+  const agentA = ends.find((a) => a.uuid === agentAId);
   if (!agentA) throw new NotFoundError(`Agent "${agentAId}" not found`);
+  const agentB = ends.find((a) => a.uuid === agentBId);
+  if (!agentB) throw new NotFoundError(`Agent "${agentBId}" not found`);
+
+  const isAgentOnly = agentA.type !== "human" && agentB.type !== "human";
+  const mode = isAgentOnly ? "mention_only" : "full";
 
   const chatId = randomUUID();
   return db.transaction(async (tx) => {
@@ -544,8 +560,8 @@ export async function findOrCreateDirectChat(db: Database, agentAId: string, age
       .returning();
 
     await tx.insert(chatParticipants).values([
-      { chatId, agentId: agentAId, role: "member" },
-      { chatId, agentId: agentBId, role: "member" },
+      { chatId, agentId: agentAId, role: "member", mode },
+      { chatId, agentId: agentBId, role: "member", mode },
     ]);
 
     if (!chat) throw new Error("Unexpected: INSERT RETURNING produced no row");
