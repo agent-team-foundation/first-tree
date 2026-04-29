@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import bcrypt from "bcrypt";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { jwtVerify, SignJWT } from "jose";
 import type { Database } from "../db/connection.js";
 import { members } from "../db/schema/members.js";
@@ -21,6 +21,7 @@ type TokenPayload = {
   organizationId: string;
   role: string;
   type: "access" | "refresh" | "connect";
+  iss?: string;
 };
 
 async function signToken(
@@ -35,6 +36,27 @@ async function signToken(
     .sign(secret);
 }
 
+/**
+ * Sign an `(access, refresh)` pair for the given member. Used by both the
+ * legacy username/password login path and the SaaS GitHub OAuth callback,
+ * so the issuance shape stays in one place.
+ */
+export async function signTokensForMember(
+  jwtSecretKey: string,
+  member: { userId: string; memberId: string; organizationId: string; role: string },
+): Promise<{ accessToken: string; refreshToken: string }> {
+  const secret = new TextEncoder().encode(jwtSecretKey);
+  const tokenBase = {
+    sub: member.userId,
+    memberId: member.memberId,
+    organizationId: member.organizationId,
+    role: member.role,
+  };
+  const accessToken = await signToken(secret, { ...tokenBase, type: "access" }, ACCESS_TOKEN_EXPIRY);
+  const refreshToken = await signToken(secret, { ...tokenBase, type: "refresh" }, REFRESH_TOKEN_EXPIRY);
+  return { accessToken, refreshToken };
+}
+
 export async function login(db: Database, username: string, password: string, jwtSecretKey: string) {
   const [user] = await db.select().from(users).where(eq(users.username, username)).limit(1);
 
@@ -47,22 +69,30 @@ export async function login(db: Database, username: string, password: string, jw
     throw new UnauthorizedError("Invalid username or password");
   }
 
-  // Get first membership (this version: single org)
-  const [member] = await db.select().from(members).where(eq(members.userId, user.id)).limit(1);
+  // Password login: pick the most recently joined ACTIVE membership. Soft-
+  // deleted ("left") rows are ignored so a member who left their last team
+  // can't password-login back in without re-joining.
+  const [member] = await db
+    .select()
+    .from(members)
+    .where(and(eq(members.userId, user.id), eq(members.status, "active")))
+    .limit(1);
 
   if (!member) {
     throw new UnauthorizedError("No organization membership found");
   }
 
-  const secret = new TextEncoder().encode(jwtSecretKey);
-  const tokenBase = { sub: user.id, memberId: member.id, organizationId: member.organizationId, role: member.role };
-  const accessToken = await signToken(secret, { ...tokenBase, type: "access" }, ACCESS_TOKEN_EXPIRY);
-  const refreshToken = await signToken(secret, { ...tokenBase, type: "refresh" }, REFRESH_TOKEN_EXPIRY);
+  const tokens = await signTokensForMember(jwtSecretKey, {
+    userId: user.id,
+    memberId: member.id,
+    organizationId: member.organizationId,
+    role: member.role,
+  });
 
   // Update last login
   await db.update(users).set({ updatedAt: new Date() }).where(eq(users.id, user.id));
 
-  return { accessToken, refreshToken };
+  return tokens;
 }
 
 export async function refreshAccessToken(db: Database, refreshToken: string, jwtSecretKey: string) {
@@ -91,8 +121,12 @@ export async function refreshAccessToken(db: Database, refreshToken: string, jwt
     throw new UnauthorizedError("User not found or suspended");
   }
 
-  // Verify membership still exists
-  const [member] = await db.select().from(members).where(eq(members.id, payload.memberId)).limit(1);
+  // Verify membership still exists and hasn't been left.
+  const [member] = await db
+    .select()
+    .from(members)
+    .where(and(eq(members.id, payload.memberId), eq(members.status, "active")))
+    .limit(1);
 
   if (!member) {
     throw new UnauthorizedError("Membership not found");
@@ -107,14 +141,20 @@ export async function refreshAccessToken(db: Database, refreshToken: string, jwt
  * Generate a short-lived connect token for CLI authentication.
  * The connect token carries the member's identity and can be exchanged
  * for full access+refresh tokens via exchangeConnectToken().
+ *
+ * `iss` (when supplied) is stamped into the JWT so the CLI can derive
+ * the hub URL with no additional argument. Production servers must
+ * always pass it; dev callers may omit and the CLI will require an
+ * explicit `--server-url` (legacy form).
  */
 export async function generateConnectToken(
   member: { userId: string; memberId: string; organizationId: string; role: string },
   jwtSecretKey: string,
+  iss?: string,
 ): Promise<{ token: string; expiresIn: number }> {
   const secret = new TextEncoder().encode(jwtSecretKey);
   const jti = randomUUID();
-  const token = await new SignJWT({
+  const builder = new SignJWT({
     sub: member.userId,
     memberId: member.memberId,
     organizationId: member.organizationId,
@@ -124,8 +164,9 @@ export async function generateConnectToken(
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setJti(jti)
-    .setExpirationTime(CONNECT_TOKEN_EXPIRY)
-    .sign(secret);
+    .setExpirationTime(CONNECT_TOKEN_EXPIRY);
+  if (iss) builder.setIssuer(iss);
+  const token = await builder.sign(secret);
   return { token, expiresIn: 600 };
 }
 
@@ -178,16 +219,21 @@ export async function exchangeConnectToken(
     throw new UnauthorizedError("User not found or suspended");
   }
 
-  // Verify membership still exists
-  const [member] = await db.select().from(members).where(eq(members.id, payload.memberId)).limit(1);
+  // Verify membership still exists and hasn't been left.
+  const [member] = await db
+    .select()
+    .from(members)
+    .where(and(eq(members.id, payload.memberId), eq(members.status, "active")))
+    .limit(1);
 
   if (!member) {
     throw new UnauthorizedError("Membership not found");
   }
 
-  const tokenBase = { sub: user.id, memberId: member.id, organizationId: member.organizationId, role: member.role };
-  const accessToken = await signToken(secret, { ...tokenBase, type: "access" }, ACCESS_TOKEN_EXPIRY);
-  const refreshToken = await signToken(secret, { ...tokenBase, type: "refresh" }, REFRESH_TOKEN_EXPIRY);
-
-  return { accessToken, refreshToken };
+  return signTokensForMember(jwtSecretKey, {
+    userId: user.id,
+    memberId: member.id,
+    organizationId: member.organizationId,
+    role: member.role,
+  });
 }

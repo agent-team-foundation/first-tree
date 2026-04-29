@@ -3,11 +3,13 @@ import { useAuth } from "../auth/auth-context.js";
 import { PageHeader } from "../components/ui/page-header.js";
 import { Tab, TabBar } from "../components/ui/tab-bar.js";
 import { AdminAllAgentsPage } from "./admin-all-agents.js";
+import { InviteLinkPanel } from "./invite-link-panel.js";
 import { MembersPage } from "./members.js";
 import { OrgSettingsPage } from "./org-settings.js";
 
 const tabs = [
   { key: "members", label: "Members" },
+  { key: "invite", label: "Invite link" },
   { key: "all-agents", label: "All agents" },
   { key: "settings", label: "Org settings" },
 ] as const;
@@ -49,6 +51,7 @@ export function AdminPage() {
       </TabBar>
       <div style={{ padding: "var(--sp-4) var(--sp-5) var(--sp-7)" }}>
         {active === "members" && <MembersPage />}
+        {active === "invite" && <InviteLinkPanel />}
         {active === "all-agents" && <AdminAllAgentsPage />}
         {active === "settings" && <OrgSettingsPage />}
       </div>

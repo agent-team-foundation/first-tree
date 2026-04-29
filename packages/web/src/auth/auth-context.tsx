@@ -2,8 +2,17 @@ import { createContext, type ReactNode, useCallback, useContext, useEffect, useS
 import { login as loginApi } from "../api/auth.js";
 import { api, clearStoredTokens, getStoredTokens, setStoredTokens } from "../api/client.js";
 
+type MeUser = {
+  id: string;
+  username: string;
+  displayName: string;
+  avatarUrl: string | null;
+};
+
 type MeResponse = {
-  member: { id: string; role: string; agentId: string };
+  user?: MeUser;
+  member: { id: string; role: string; agentId: string; organizationId: string };
+  wizard?: { step: "connect" | "create_agent" | "completed" };
 };
 
 type AuthContextValue = {
@@ -11,7 +20,17 @@ type AuthContextValue = {
   role: string | null;
   memberId: string | null;
   agentId: string | null;
+  organizationId: string | null;
+  user: MeUser | null;
+  wizardStep: "connect" | "create_agent" | "completed" | null;
   login: (username: string, password: string) => Promise<void>;
+  /**
+   * Adopt a token pair handed in from a non-login surface (OAuth fragment
+   * consumer, switch-org response, accept-invite). Mirrors what `login`
+   * does after the API call: persist tokens + warm the /me cache.
+   */
+  adoptTokens: (tokens: { accessToken: string; refreshToken: string }) => Promise<void>;
+  refreshMe: () => Promise<void>;
   logout: () => void;
 };
 
@@ -22,6 +41,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [role, setRole] = useState<string | null>(null);
   const [memberId, setMemberId] = useState<string | null>(null);
   const [agentId, setAgentId] = useState<string | null>(null);
+  const [organizationId, setOrganizationId] = useState<string | null>(null);
+  const [user, setUser] = useState<MeUser | null>(null);
+  const [wizardStep, setWizardStep] = useState<"connect" | "create_agent" | "completed" | null>(null);
 
   const logout = useCallback(() => {
     clearStoredTokens();
@@ -29,6 +51,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setRole(null);
     setMemberId(null);
     setAgentId(null);
+    setOrganizationId(null);
+    setUser(null);
+    setWizardStep(null);
   }, []);
 
   const fetchMe = useCallback(async () => {
@@ -37,25 +62,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setRole(data.member.role);
       setMemberId(data.member.id);
       setAgentId(data.member.agentId);
+      setOrganizationId(data.member.organizationId);
+      setUser(data.user ?? null);
+      setWizardStep(data.wizard?.step ?? null);
     } catch {
       // If /me fails, role stays null — UI falls back to hiding admin features
     }
   }, []);
 
-  const login = useCallback(async (username: string, password: string) => {
-    const tokens = await loginApi(username, password);
-    setStoredTokens({ accessToken: tokens.accessToken, refreshToken: tokens.refreshToken });
-    setIsAuthenticated(true);
-    // Fetch member info immediately after login
-    await api
-      .get<MeResponse>("/me")
-      .then((data) => {
-        setRole(data.member.role);
-        setMemberId(data.member.id);
-        setAgentId(data.member.agentId);
-      })
-      .catch(() => {});
-  }, []);
+  const login = useCallback(
+    async (username: string, password: string) => {
+      const tokens = await loginApi(username, password);
+      setStoredTokens({ accessToken: tokens.accessToken, refreshToken: tokens.refreshToken });
+      setIsAuthenticated(true);
+      await fetchMe();
+    },
+    [fetchMe],
+  );
+
+  const adoptTokens = useCallback(
+    async (tokens: { accessToken: string; refreshToken: string }) => {
+      setStoredTokens(tokens);
+      setIsAuthenticated(true);
+      await fetchMe();
+    },
+    [fetchMe],
+  );
 
   // Fetch member info on initial load if already authenticated
   useEffect(() => {
@@ -72,7 +104,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [logout]);
 
   return (
-    <AuthContext.Provider value={{ isAuthenticated, role, memberId, agentId, login, logout }}>
+    <AuthContext.Provider
+      value={{
+        isAuthenticated,
+        role,
+        memberId,
+        agentId,
+        organizationId,
+        user,
+        wizardStep,
+        login,
+        adoptTokens,
+        refreshMe: fetchMe,
+        logout,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

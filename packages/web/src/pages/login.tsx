@@ -1,3 +1,4 @@
+import { Github } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { Navigate } from "react-router";
 import { useAuth } from "../auth/auth-context.js";
@@ -37,7 +38,17 @@ export function LoginPage() {
           <CardTitle className="text-title">First Tree</CardTitle>
           <CardDescription>Sign in to your workspace</CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
+          <Button asChild variant="outline" className="w-full">
+            <a href="/api/v1/auth/github/start">
+              <Github className="h-4 w-4" />
+              Continue with GitHub
+            </a>
+          </Button>
+          <div className="relative my-2 text-center text-label text-muted-foreground">
+            <span className="bg-card px-2 relative z-10">or sign in with username</span>
+            <div className="absolute inset-x-0 top-1/2 h-px bg-border" />
+          </div>
           <form onSubmit={handleSubmit} className="space-y-4">
             {error && <div className="rounded-md bg-destructive/10 p-3 text-body text-destructive">{error}</div>}
             <div className="space-y-2">

@@ -1,4 +1,4 @@
-import { LogOut, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router";
 import { useAuth } from "../auth/auth-context.js";
@@ -6,7 +6,9 @@ import { cn } from "../lib/utils.js";
 import { CommandPalette } from "../pages/workspace/palette/command-palette.js";
 import { FirstTreeLogo } from "./first-tree-logo.js";
 import { NotificationBell } from "./notification-bell.js";
+import { OnboardingModal } from "./onboarding-modal.js";
 import { ThemeToggle } from "./ui/theme-toggle.js";
+import { UserMenu } from "./user-menu.js";
 
 const navTabs = [
   { to: "/", label: "Workspace", end: true, kbd: "⌘1" },
@@ -18,7 +20,7 @@ const navTabs = [
 const adminTab = { to: "/admin", label: "Admin", end: false, kbd: "⌘5" };
 
 export function Layout() {
-  const { role, logout } = useAuth();
+  const { role } = useAuth();
   const isAdmin = role === "admin";
   const [paletteOpen, setPaletteOpen] = useState(false);
 
@@ -138,24 +140,12 @@ export function Layout() {
               margin: "0 var(--sp-1)",
             }}
           />
-          <button
-            type="button"
-            onClick={logout}
-            className="inline-flex items-center transition-colors hover:text-[var(--fg)] text-body"
-            style={{
-              padding: "var(--sp-1) var(--sp-2)",
-              color: "var(--fg-3)",
-              borderRadius: "var(--radius-input)",
-              gap: 6,
-            }}
-            aria-label="Log out"
-          >
-            <LogOut className="h-4 w-4" />
-          </button>
+          <UserMenu />
         </div>
       </header>
 
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+      <OnboardingModal />
 
       {/* Main content */}
       {isWorkspace ? (

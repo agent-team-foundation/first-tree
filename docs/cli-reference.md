@@ -14,6 +14,8 @@ first-tree-hub --version
 
 ```
 first-tree-hub
+├── connect <token>
+│   └── [--no-service]
 ├── server
 │   ├── start [--port] [--host] [--database-url] [--no-interactive]
 │   ├── stop
@@ -22,6 +24,7 @@ first-tree-hub
 │   ├── db:migrate
 │   └── admin:create [-u <username>] [-p <password>]
 ├── client
+│   ├── connect <server-url> [--token <token>] [--no-service]   (legacy/self-host)
 │   ├── start [--no-interactive]
 │   ├── stop
 │   ├── status
@@ -51,6 +54,23 @@ first-tree-hub
 │   [--assistant] [--server] [--feishu-bot-app-id] [--feishu-bot-app-secret]
 └── status
 ```
+
+## connect
+
+Top-level shortcut for SaaS users. Paste the connect token your Hub web
+console shows in *Connect your computer*; the CLI decodes the token's
+`iss` claim to derive the hub URL — no `--server-url` argument needed.
+
+```bash
+first-tree-hub connect eyJhbGciOi...           # default: install background service
+first-tree-hub connect eyJhbGciOi... --no-service   # run inline until Ctrl+C
+```
+
+Hard-fails (no fallback) when the token is missing an `iss` claim or the
+claim is not an `http(s)` URL — that prevents stale tokens from one
+environment from accidentally re-targeting another. The legacy
+`first-tree-hub client connect <url> --token <token>` form is still
+available for self-host users who need the explicit URL.
 
 ## server
 
@@ -268,6 +288,10 @@ Most environment variables use the `FIRST_TREE_HUB_` prefix. `onboard` also acce
 | `FIRST_TREE_HUB_CONTEXT_TREE_REPO` | Context Tree repository URL (optional) | — |
 | `FIRST_TREE_HUB_GITHUB_TOKEN` | GitHub API token (optional, for webhooks) | — |
 | `FIRST_TREE_HUB_WEB_DIST_PATH` | Web static files path | auto-discovered |
+| `FIRST_TREE_HUB_PUBLIC_URL` | Public-facing hub URL. Stamped as the `iss` claim on connect tokens (so `connect <token>` derives the hub URL with no extra arg) and used to build invite-link URLs + the GitHub OAuth callback. **Required in production.** | request `Host` (dev only) |
+| `FIRST_TREE_HUB_GITHUB_OAUTH_CLIENT_ID` | GitHub OAuth App client ID. Enables `/signup` + `/auth/github/start`. Both client id AND secret must be set together. | — |
+| `FIRST_TREE_HUB_GITHUB_OAUTH_CLIENT_SECRET` | GitHub OAuth App client secret. | — |
+| `FIRST_TREE_HUB_GITHUB_OAUTH_DEV_CALLBACK` | Opt-in to the `/auth/github/dev-callback` shortcut (no-op github round-trip, dev only). Always disabled when `NODE_ENV=production`. | `false` |
 
 ### Client
 

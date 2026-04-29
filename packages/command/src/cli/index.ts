@@ -6,6 +6,7 @@ import { registerAgentCommands } from "../commands/agent.js";
 import { registerClientCommands } from "../commands/client.js";
 import { registerConfigCommands } from "../commands/config.js";
 import { registerOnboardCommand } from "../commands/onboard.js";
+import { registerSaaSConnectCommand } from "../commands/saas-connect.js";
 import { registerServerCommands } from "../commands/server.js";
 import { registerStatusCommand } from "../commands/status.js";
 import { runHomeMigration } from "../core/migrate-home.js";
@@ -51,7 +52,13 @@ program
     }
   });
 
-// Core subsystems — `client` group mounts `connect` too.
+// Top-level `connect <token>` — the SaaS-form entry point. Hub URL is
+// derived from the token's `iss` claim, so users only paste the token.
+// The legacy `client connect <url> --token` form remains for self-host /
+// power-user workflows; both are supported simultaneously.
+registerSaaSConnectCommand(program);
+
+// Core subsystems — `client` group mounts the legacy `client connect` too.
 registerServerCommands(program);
 registerClientCommands(program);
 
