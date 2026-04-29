@@ -6,7 +6,7 @@ with `prefers-color-scheme` to swap between them.
 
 | Slug | Source | License |
 |---|---|---|
-| `claude-code` | Simple Icons (`anthropic`) | CC0 |
+| `claude-code` | Bootstrap Icons (`bi:claude` via Iconify) — Claude mark, not Anthropic logo | MIT |
 | `codex` | Bootstrap Icons (`bi:openai` via Iconify) | MIT |
 | `cursor` | Simple Icons (`cursor`) | CC0 |
 | `gemini` | Simple Icons (`googlegemini`) | CC0 |
