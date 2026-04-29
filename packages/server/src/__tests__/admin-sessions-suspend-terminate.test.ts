@@ -4,6 +4,8 @@ import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
 import * as activityService from "../services/activity.js";
 import { createAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
+import { sendMessage } from "../services/message.js";
+import * as sessionService from "../services/session.js";
 import * as sessionEventService from "../services/session-event.js";
 import { createAdminContext, useTestApp } from "./helpers.js";
 
@@ -283,5 +285,49 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
     expect(filteredRes.statusCode).toBe(200);
     const filteredChats = filteredRes.json<Array<{ chatId: string; state: string }>>().map((r) => r.chatId);
     expect(filteredChats).toContain(chatEvicted.id);
+  });
+
+  it("archive (terminate) vs sendMessage race resolves to a valid state, last-writer-wins (R3)", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app, { username: `race-${crypto.randomUUID().slice(0, 6)}` });
+    const sender = await createAgent(app.db, {
+      name: `race-snd-${crypto.randomUUID().slice(0, 6)}`,
+      type: "autonomous_agent",
+      displayName: "Race sender",
+      managerId: admin.memberId,
+      clientId: admin.clientId,
+    });
+    const target = await createAgent(app.db, {
+      name: `race-tgt-${crypto.randomUUID().slice(0, 6)}`,
+      type: "autonomous_agent",
+      displayName: "Race target",
+      managerId: admin.memberId,
+      clientId: admin.clientId,
+    });
+    const chat = await createChat(app.db, admin.humanAgentUuid, {
+      type: "group",
+      participantIds: [sender.uuid, target.uuid],
+    });
+    await seedSession(app, target.uuid, chat.id, "suspended");
+
+    // Concurrently fire archive (suspended → evicted, gated by from=['suspended'])
+    // and sendMessage (any → active via upsertSessionState's INSERT ... ON
+    // CONFLICT DO UPDATE, unconditional). Both touch the same agent_chat_sessions
+    // row, so PG row-level locks serialize them.
+    //
+    // - sendMessage's path is unconditional override → 'active'
+    // - archive's path requires existing state in {'suspended'}; if sendMessage
+    //   already flipped it to 'active', archive becomes a no-op (transitioned=false)
+    //
+    // Expectation: data integrity holds (state ∈ valid set);
+    // sendMessage always wins, so the final state is 'active'.
+    await Promise.all([
+      sessionService.archiveSession(app.db, target.uuid, chat.id, admin.organizationId, app.notifier),
+      sendMessage(app.db, chat.id, sender.uuid, { format: "text", content: "race" }),
+    ]);
+
+    const finalState = await readState(app, target.uuid, chat.id);
+    expect(["active", "suspended", "evicted"]).toContain(finalState);
+    expect(finalState).toBe("active");
   });
 });
