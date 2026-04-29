@@ -268,7 +268,7 @@ export async function resolveGardenerLogin(shell: ShellRun): Promise<string> {
  *
  * The bot's GitHub login isn't always literally "gardener" — it's whatever
  * account is configured to run gardener (resolved via `gh api user` or
- * `GARDENER_LOGIN`). The regex must match the actual login so reviewers'
+ * `GARDENER_USER`). The regex must match the actual login so reviewers'
  * `@<bot> fix` mentions trigger the fix path. Falls back to literal
  * "gardener" when the login is unknown so existing behavior is preserved
  * for default-named accounts.
@@ -873,10 +873,15 @@ export async function runRespond(
 
   // Resolve gardener's own GitHub login once, so isFromGardener() can
   // filter out self-authored feedback (self-loop guard — first-tree#134).
-  // In snapshot mode (breeze-runner) we prefer GARDENER_LOGIN from the
-  // environment to avoid an extra `gh api` call, and fall back to the
-  // marker-only path when unset.
-  let gardenerLogin = env.GARDENER_LOGIN?.trim() ?? "";
+  // In snapshot mode (breeze-runner) we prefer GARDENER_USER from the
+  // environment to avoid an extra `gh api` call. The breeze runner sets
+  // GARDENER_USER from the daemon's resolved DaemonIdentity.login, so
+  // every dispatched respond run sees the actual bot login without a
+  // second `gh api user` call. GARDENER_LOGIN is honored as a
+  // back-compat alias for setups that pre-date the rename.
+  let gardenerLogin = env.GARDENER_USER?.trim()
+    || env.GARDENER_LOGIN?.trim()
+    || "";
   if (!gardenerLogin && !env.BREEZE_SNAPSHOT_DIR) {
     gardenerLogin = await resolveGardenerLogin(shell);
   }

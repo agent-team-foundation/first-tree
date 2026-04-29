@@ -1881,8 +1881,13 @@ export async function runSync(
   // running gardener (not the literal "gardener"), so reviewer mentions
   // notify the right account. Falls back to "gardener" if resolution
   // fails \u2014 preserves prior behavior for default-named accounts.
+  // Prefer GARDENER_USER (one canonical env contract, also used in
+  // comment.ts and the breeze runner). Honor GARDENER_LOGIN as a
+  // back-compat alias for older deployments.
   const gardenerLogin =
-    process.env.GARDENER_LOGIN?.trim() || (await resolveGardenerLogin(shellRun));
+    process.env.GARDENER_USER?.trim()
+    || process.env.GARDENER_LOGIN?.trim()
+    || (await resolveGardenerLogin(shellRun));
 
   // Check that claude CLI is available (required for classification)
   const hasClaude = await claudeCliAvailable(shellRun);

@@ -371,6 +371,14 @@ export function buildAgentEnv(
     BREEZE_BROKER_DIR: request.ghBrokerDir,
     BREEZE_SNAPSHOT_DIR: request.snapshotDir,
     BREEZE_TASK_DIR: request.taskDir,
+    // Surface the daemon's resolved GitHub login so subprocesses (notably
+    // gardener-respond's `@<bot> fix` regex) match the actual bot name
+    // instead of the literal "gardener". Without this, snapshot-mode
+    // runRespond() falls back to "gardener" and reviewers' mentions
+    // silently no-op on any deployment using a custom bot account.
+    // Reuses the existing GARDENER_USER contract from comment.ts /
+    // install-workflow.ts rather than introducing a second env name.
+    GARDENER_USER: request.identity.login,
   };
 }
 

@@ -556,6 +556,172 @@ describe("gardener respond -- snapshot mode", () => {
     );
     expect(prViewCalls.length).toBeGreaterThan(0);
   });
+
+  it("uses GARDENER_USER for @<bot> fix mentions in snapshot mode without gh api user (#351)", async () => {
+    // Regression for the breeze-runner deployment path: the runner sets
+    // GARDENER_USER from the daemon's resolved login, and snapshot-mode
+    // runRespond must honor it to build the @<bot> fix regex without a
+    // second `gh api user` round-trip. Before the fix, the runner did
+    // not export the login at all, so gardenerLogin was empty and
+    // buildFixCommandRegex fell back to the literal "gardener" — and
+    // reviewers' `@<actual-bot> fix` mentions silently no-op'd.
+    const tmp = useTmpDir();
+    const snapshotDir = join(tmp.path, "snap");
+    mkdirSync(snapshotDir, { recursive: true });
+    const prView = {
+      number: 88,
+      title: "sync: paperclip #5500",
+      headRefName: "first-tree/sync-88",
+      reviewDecision: "CHANGES_REQUESTED",
+      body: "body with <!-- gardener:sync · source_pr=5500 · source_repo=paperclipai/paperclip -->",
+      updatedAt: "2026-04-15T00:00:00Z",
+    };
+    writeFileSync(join(snapshotDir, "pr-view.json"), JSON.stringify(prView));
+    writeFileSync(
+      join(snapshotDir, "pr-reviews.json"),
+      JSON.stringify([
+        {
+          user: { login: "human-reviewer" },
+          state: "CHANGES_REQUESTED",
+          body: "needs work",
+          submitted_at: "2026-04-15T10:00:00Z",
+        },
+      ]),
+    );
+    // The reviewer mentions the actual bot login, NOT the literal "gardener".
+    writeFileSync(
+      join(snapshotDir, "issue-comments.json"),
+      JSON.stringify([
+        {
+          user: { login: "human-reviewer" },
+          body: "@custom-bot-acct fix",
+          created_at: "2026-04-15T11:00:00Z",
+        },
+      ]),
+    );
+    writeFileSync(join(snapshotDir, "pr.diff"), "diff --git a b\n");
+
+    const calls: ShellCall[] = [];
+    const shell = makeShell(
+      [
+        (call) => {
+          // Hard-fail if anything tries `gh api user` — snapshot mode must
+          // resolve the login from GARDENER_USER alone.
+          if (
+            call.command === "gh"
+            && call.args[0] === "api"
+            && call.args[1] === "user"
+          ) {
+            throw new Error(
+              `unexpected gh api user call in snapshot mode: ${call.args.join(" ")}`,
+            );
+          }
+          return { stdout: "", stderr: "", code: 0 };
+        },
+      ],
+      calls,
+    );
+    const { write, lines } = captureWrite();
+    const code = await runRespond(
+      ["--pr", "88", "--repo", "owner/name", "--tree-path", tmp.path],
+      {
+        shellRun: shell,
+        write,
+        env: {
+          BREEZE_SNAPSHOT_DIR: snapshotDir,
+          GARDENER_USER: "custom-bot-acct",
+        },
+        now: () => new Date("2026-04-16T00:00:00Z"),
+      },
+    );
+    expect(code).toBe(0);
+    // No gh api user lookup happened.
+    const apiUserCalls = calls.filter(
+      (c) => c.command === "gh"
+        && c.args[0] === "api"
+        && c.args[1] === "user",
+    );
+    expect(apiUserCalls).toHaveLength(0);
+    // The custom-login fix-mention was recognized — respond did not
+    // exit with the "no non-gardener feedback" skip.
+    expect(
+      lines.some((l) => l.includes("no non-gardener feedback")),
+    ).toBe(false);
+  });
+
+  it("falls back to GARDENER_LOGIN when GARDENER_USER is unset (back-compat)", async () => {
+    // Older deployments that pre-date the GARDENER_USER consolidation
+    // may still set GARDENER_LOGIN. respond.ts honors it as an alias
+    // so we don't break those setups on upgrade.
+    const tmp = useTmpDir();
+    const snapshotDir = join(tmp.path, "snap");
+    mkdirSync(snapshotDir, { recursive: true });
+    const prView = {
+      number: 89,
+      title: "sync: legacy",
+      headRefName: "first-tree/sync-89",
+      reviewDecision: "CHANGES_REQUESTED",
+      body: "plain body",
+      updatedAt: "2026-04-15T00:00:00Z",
+    };
+    writeFileSync(join(snapshotDir, "pr-view.json"), JSON.stringify(prView));
+    writeFileSync(
+      join(snapshotDir, "pr-reviews.json"),
+      JSON.stringify([
+        {
+          user: { login: "human-reviewer" },
+          state: "CHANGES_REQUESTED",
+          body: "needs work",
+          submitted_at: "2026-04-15T10:00:00Z",
+        },
+      ]),
+    );
+    writeFileSync(
+      join(snapshotDir, "issue-comments.json"),
+      JSON.stringify([
+        {
+          user: { login: "human-reviewer" },
+          body: "@legacy-bot fix",
+          created_at: "2026-04-15T11:00:00Z",
+        },
+      ]),
+    );
+    writeFileSync(join(snapshotDir, "pr.diff"), "diff --git a b\n");
+
+    const calls: ShellCall[] = [];
+    const shell = makeShell(
+      [
+        (call) => {
+          if (
+            call.command === "gh"
+            && call.args[0] === "api"
+            && call.args[1] === "user"
+          ) {
+            throw new Error("unexpected gh api user call");
+          }
+          return { stdout: "", stderr: "", code: 0 };
+        },
+      ],
+      calls,
+    );
+    const { write, lines } = captureWrite();
+    const code = await runRespond(
+      ["--pr", "89", "--repo", "owner/name", "--tree-path", tmp.path],
+      {
+        shellRun: shell,
+        write,
+        env: {
+          BREEZE_SNAPSHOT_DIR: snapshotDir,
+          GARDENER_LOGIN: "legacy-bot",
+        },
+        now: () => new Date("2026-04-16T00:00:00Z"),
+      },
+    );
+    expect(code).toBe(0);
+    expect(
+      lines.some((l) => l.includes("no non-gardener feedback")),
+    ).toBe(false);
+  });
 });
 
 describe("gardener respond -- attempts counter", () => {

@@ -181,6 +181,19 @@ describe("buildAgentEnv", () => {
     expect(env.BREEZE_SNAPSHOT_DIR).toBe("/snap");
     expect(env.BREEZE_TASK_DIR).toBe("/task");
   });
+
+  it("exports GARDENER_USER from request.identity.login (#351)", () => {
+    // Subprocesses (notably gardener-respond's @<bot> fix regex) need
+    // the actual bot login, not the literal "gardener". The runner
+    // must surface DaemonIdentity.login through the env so snapshot
+    // mode does not need a second `gh api user` call.
+    const env = buildAgentEnv(
+      fakeRequest({
+        identity: { login: "custom-bot-acct", host: "github.com" },
+      }),
+    );
+    expect(env.GARDENER_USER).toBe("custom-bot-acct");
+  });
 });
 
 describe("AgentPool", () => {
