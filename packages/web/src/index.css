@@ -110,6 +110,28 @@
   --text-title--letter-spacing: -0.2px;
   --text-title--font-weight: 600;
 
+  /* Marketing-tier typography — used by the public landing page only.
+     Dashboard surfaces should keep using the dense scale above (eyebrow → title);
+     these three tiers exist so the landing hero / section headings / lead
+     copy can breathe without falling back to raw Tailwind text-* classes
+     (which the design-token guardrail forbids). */
+  --text-lead: 18px;
+  --text-lead--line-height: 1.55;
+  --text-lead--font-weight: 400;
+
+  --text-headline: 24px;
+  --text-headline--line-height: 1.2;
+  --text-headline--letter-spacing: -0.01em;
+  --text-headline--font-weight: 600;
+
+  /* clamp() so the hero scales from ~40px on phones to ~60px on desktop
+     without media queries; the upper bound keeps it from going circus-large
+     on ultrawide monitors. */
+  --text-display: clamp(2.5rem, 6vw, 3.75rem);
+  --text-display--line-height: 1.05;
+  --text-display--letter-spacing: -0.02em;
+  --text-display--font-weight: 600;
+
   /* ---- Radius scale -------------------------------------------------------- */
   /* Semantic radii. Prefer these over --radius-sm/md/lg (shadcn legacy). */
   --radius-chip: 3px;
@@ -313,6 +335,40 @@
      macOS overlay scrollbars so layout doesn't jump between platforms. */
   scrollbar-width: thin;
   scrollbar-color: var(--border-strong) transparent;
+}
+
+/* ============================================================================
+   Marketing surface — pins the public landing page to the first-tree.ai
+   palette regardless of the dashboard's light/dark toggle. First Tree Hub
+   is a sub-product of first-tree, so the marketing entry point should
+   always read as the parent brand: near-black canvas + cool-light text +
+   the shared green accent. Scoped to `.landing-marketing` so the dashboard
+   chrome (when an authenticated user happens to land on a marketing-styled
+   route) is untouched. Same `--bg` / `--fg` variable names — every
+   component utility (bg-background, text-foreground, etc.) inherits.
+   ============================================================================ */
+.landing-marketing {
+  /* Surface — hex equivalents shown as comments for first-tree.ai parity. */
+  --bg: oklch(0.04 0 0); /* #040404 — first-tree.ai body bg */
+  --bg-raised: oklch(0.1 0 0);
+  --bg-sunken: oklch(0.02 0 0);
+  --bg-card: oklch(0.07 0 0);
+  --bg-hover: oklch(0.13 0 0);
+  --bg-active: oklch(0.16 0 0);
+
+  /* Foreground — cool-tinted neutrals to match first-tree.ai's #e8ecf4. */
+  --fg: oklch(0.95 0.01 240);
+  --fg-2: oklch(0.78 0.01 240);
+  --fg-3: oklch(0.55 0.01 240);
+  --fg-4: oklch(0.4 0.01 240);
+
+  --border: oklch(0.2 0.005 240);
+  --border-strong: oklch(0.3 0.005 240);
+  --border-faint: oklch(0.13 0.005 240);
+
+  /* Accent green stays identical — it's the cross-product brand color. */
+
+  color-scheme: dark;
 }
 
 .dark {
