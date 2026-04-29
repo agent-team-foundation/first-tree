@@ -1,25 +1,33 @@
 /**
- * Shared sessionStorage flags consumed by `OnboardingProvider` to decide
- * whether the wizard modal should auto-open after a token-adoption surface
- * (OAuth fragment consumer, invite-accept). Centralising the keys here
- * avoids drift between the two writers and the single reader.
+ * Onboarding-related browser-side flags.
+ *
+ * - `joinPath` (sessionStorage): set by the OAuth-complete page and the
+ *   invite-accept handler. Drives the modal's greeting copy ("You've joined
+ *   {team}." vs "Welcome — let's get you set up."). Cleared once the user's
+ *   wizard reaches `completed`.
+ *
+ * - `bannerDismissed` (localStorage): set when the user clicks ✕ on the
+ *   onboarding banner. localStorage (not sessionStorage) so dismiss persists
+ *   across reloads but resets if the user signs in on a different device.
+ *   Cleared when the user actually completes onboarding so the dismiss flag
+ *   doesn't leak into a future "incomplete" state (e.g. they delete their
+ *   client).
  */
 
-const AUTO_OPEN_KEY = "onboarding:autoOpen";
 const JOIN_PATH_KEY = "onboarding:joinPath";
+const BANNER_DISMISSED_KEY = "onboarding:bannerDismissed";
 
 export type OnboardingJoinPath = "solo" | "invite";
 
 /**
- * Mark "the next time the dashboard mounts, auto-open the onboarding modal
- * (with copy keyed off `joinPath`)." Idempotent — overwriting is fine.
+ * Mark the join path so the next dashboard mount can pick context-aware
+ * copy. Idempotent — overwriting is fine.
  */
 export function markOnboardingResume(joinPath: OnboardingJoinPath): void {
   if (typeof window === "undefined") return;
-  window.sessionStorage.setItem(AUTO_OPEN_KEY, "1");
   window.sessionStorage.setItem(JOIN_PATH_KEY, joinPath);
 }
 
-/** Internal — used by `OnboardingProvider` to consume + clear the flag. */
-export const ONBOARDING_AUTO_OPEN_KEY = AUTO_OPEN_KEY;
+/** Internal — used by `OnboardingProvider` to read/clear the flags. */
 export const ONBOARDING_JOIN_PATH_KEY = JOIN_PATH_KEY;
+export const ONBOARDING_BANNER_DISMISSED_KEY = BANNER_DISMISSED_KEY;
