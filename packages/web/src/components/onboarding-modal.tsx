@@ -95,11 +95,17 @@ export function OnboardingModal() {
         navigate(`/?a=${encodeURIComponent(agent.uuid)}&c=${encodeURIComponent(chat.id)}`, { replace: true });
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to create agent");
-        // Bounce back to the previous step so the user can retry.
-        setLocalStep(step === "connect" ? "connect" : "name");
+        // Always fall back to the name step so the user sees the error and
+        // chooses whether to retry. NOT the connect step — `finishOnboarding`
+        // is only ever entered when `step === "create_agent"` (i.e. a client
+        // is registered), so a "connect" fallback would put the user back in
+        // a now-pointless install screen AND would let the auto-advance
+        // effect immediately re-fire `finishOnboarding`, looping on
+        // persistent errors (name collision, server 500, quota).
+        setLocalStep("name");
       }
     },
-    [refreshMe, closeModal, navigate, step],
+    [refreshMe, closeModal, navigate],
   );
 
   // When user submits the name input.
