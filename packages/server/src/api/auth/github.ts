@@ -146,7 +146,17 @@ async function completeOauthFlow(
   profile: GithubProfile,
   next: string,
 ) {
-  const { userId } = await findOrCreateUserFromGithub(app.db, profile);
+  const { userId, legacyBound } = await findOrCreateUserFromGithub(app.db, profile);
+
+  if (legacyBound) {
+    // Log loud — incident triage for "why did this account suddenly link to
+    // a new GitHub identity?" should be one log query away, not buried in
+    // the auth_identities.metadata jsonb.
+    app.log.info(
+      { userId, githubId: profile.githubId, login: profile.login },
+      "auto-bound legacy user to github identity",
+    );
+  }
 
   // Track which signup path the user took. Surfaced to the SPA via the
   // post-OAuth fragment so the onboarding modal can pick context-aware copy.

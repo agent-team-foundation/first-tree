@@ -160,6 +160,62 @@ describe("GitHub OAuth onboarding flow", () => {
     expect(u100).not.toBe(u200);
   });
 
+  it("does not auto-bind a suspended legacy user", async () => {
+    const app = getApp();
+    // Legacy user that has been suspended — must NOT silently come back online
+    // through OAuth. Creating + then suspending mirrors how an admin would
+    // disable an account in production.
+    const suspended = await createTestAdmin(app, { username: "banned" });
+    await app.db.update(users).set({ status: "suspended" }).where(eq(users.id, suspended.userId));
+
+    await app.inject({
+      method: "GET",
+      url: "/api/v1/auth/github/dev-callback?githubId=555&login=banned",
+    });
+
+    // The dev-callback creates a fresh user instead of binding the suspended one.
+    const ids = await app.db.select().from(authIdentities).where(eq(authIdentities.identifier, "555"));
+    expect(ids).toHaveLength(1);
+    expect(ids[0]?.userId).not.toBe(suspended.userId);
+    // Suspended user remains identity-less.
+    const suspendedIds = await app.db.select().from(authIdentities).where(eq(authIdentities.userId, suspended.userId));
+    expect(suspendedIds).toHaveLength(0);
+  });
+
+  it("partial unique index forbids a single user from holding two github identities", async () => {
+    const app = getApp();
+    // Sign in once to create a user + bind githubId=700.
+    await app.inject({
+      method: "GET",
+      url: "/api/v1/auth/github/dev-callback?githubId=700&login=alphaone",
+    });
+    const [first] = await app.db
+      .select({ userId: authIdentities.userId })
+      .from(authIdentities)
+      .where(eq(authIdentities.identifier, "700"));
+    const userId = first?.userId;
+    expect(userId).toBeDefined();
+    if (!userId) throw new Error("seed identity missing");
+
+    // Direct INSERT bypassing the service layer — simulates the race window
+    // (two concurrent legacy binds) the partial unique index is meant to
+    // close. The DB must reject the second row regardless of whether the
+    // service layer would have caught it.
+    const { authIdentities: ai } = await import("../db/schema/auth-identities.js");
+    const { uuidv7 } = await import("../uuid.js");
+    await expect(
+      app.db.insert(ai).values({
+        id: uuidv7(),
+        userId,
+        provider: "github",
+        identifier: "701",
+        email: null,
+        verifiedAt: new Date(),
+        metadata: { login: "alphaone-shadow" },
+      }),
+    ).rejects.toThrow();
+  });
+
   it("issues tokens that authenticate /me", async () => {
     const app = getApp();
     const res = await app.inject({

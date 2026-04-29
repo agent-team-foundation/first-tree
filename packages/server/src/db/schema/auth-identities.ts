@@ -1,4 +1,5 @@
-import { index, jsonb, pgTable, text, timestamp, unique } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { index, jsonb, pgTable, text, timestamp, unique, uniqueIndex } from "drizzle-orm/pg-core";
 import { users } from "./users.js";
 
 /**
@@ -52,5 +53,12 @@ export const authIdentities = pgTable(
     unique("uq_auth_identities_provider_identifier").on(table.provider, table.identifier),
     index("idx_auth_identities_user").on(table.userId),
     index("idx_auth_identities_email").on(table.email),
+    // Each user can hold at most one github identity. Closes the race window
+    // in `findOrCreateUserFromGithub`'s legacy-bind fallback (two concurrent
+    // OAuth callbacks for the same legacy user with different githubIds
+    // would otherwise both pass the SELECT and both INSERT, leaving the user
+    // bound to two distinct GitHub accounts). Generalises beyond legacy:
+    // also forbids accidentally double-binding a regular OAuth user.
+    uniqueIndex("uq_auth_identities_user_github").on(table.userId).where(sql`provider = 'github'`),
   ],
 );

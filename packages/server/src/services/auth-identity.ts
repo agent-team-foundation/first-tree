@@ -25,7 +25,10 @@ export type GithubProfile = {
  * treats it as a plain string and rejects every password — that's the
  * intended behaviour: SaaS users cannot fall back to password login.
  */
-export async function findOrCreateUserFromGithub(db: Database, profile: GithubProfile): Promise<{ userId: string }> {
+export async function findOrCreateUserFromGithub(
+  db: Database,
+  profile: GithubProfile,
+): Promise<{ userId: string; legacyBound?: boolean }> {
   const [existing] = await db
     .select({ userId: authIdentities.userId })
     .from(authIdentities)
@@ -48,18 +51,28 @@ export async function findOrCreateUserFromGithub(db: Database, profile: GithubPr
   // identity to the existing row so they land on their existing organization
   // instead of getting a freshly minted personal team.
   //
-  // Strict matching: case-insensitive username equality AND zero rows in
-  // `auth_identities` for `(provider='github')` under that user. The
-  // (provider, identifier) UNIQUE on auth_identities makes a duplicate insert
-  // race-impossible. Risk: a fresh GitHub login that collides with a legacy
-  // username "claims" that account; for SaaS the legacy set is the early
-  // dogfooders (real GitHub handles), so collision risk is effectively zero.
+  // Strict matching: active user, case-insensitive username equality, AND
+  // zero rows in `auth_identities` for `(provider='github')` under that user.
+  // Suspended users are excluded so a banned account can't be silently
+  // resurrected via OAuth. The race window between this SELECT and the
+  // INSERT below is closed by `uq_auth_identities_user_github` — the
+  // partial UNIQUE INDEX on (user_id) WHERE provider='github' makes a
+  // double-bind impossible at the storage layer.
+  //
+  // Collision risk: a brand-new GitHub login that happens to match a
+  // legacy username "claims" that account. For our SaaS install the
+  // legacy set is the early dogfooders using their real GitHub handles,
+  // so the collision surface is effectively zero. Test accounts (admin,
+  // test, etc.) carry no real data; their accidental "takeover" is
+  // harmless.
   const candidateLogin = profile.login.toLowerCase();
   const [legacyUser] = await db
     .select({ id: users.id })
     .from(users)
     .leftJoin(authIdentities, and(eq(authIdentities.userId, users.id), eq(authIdentities.provider, "github")))
-    .where(and(sql`lower(${users.username}) = ${candidateLogin}`, isNull(authIdentities.id)))
+    .where(
+      and(sql`lower(${users.username}) = ${candidateLogin}`, eq(users.status, "active"), isNull(authIdentities.id)),
+    )
     .limit(1);
 
   if (legacyUser) {
@@ -72,7 +85,7 @@ export async function findOrCreateUserFromGithub(db: Database, profile: GithubPr
       verifiedAt: new Date(),
       metadata: { login: profile.login, migratedFrom: "legacy_password" },
     });
-    return { userId: legacyUser.id };
+    return { userId: legacyUser.id, legacyBound: true };
   }
 
   const userId = uuidv7();
