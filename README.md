@@ -1,11 +1,27 @@
+<p align="center">
+  <img src="assets/banner.png" alt="first-tree — Shared Context for Agent Teams" width="100%">
+</p>
+
+<p align="center">
+  <a href="#install-and-run"><strong>Quickstart</strong></a> &middot;
+  <a href="https://first-tree.ai/"><strong>Website</strong></a> &middot;
+  <a href="WHITEPAPER.md"><strong>Whitepaper</strong></a> &middot;
+  <a href="https://github.com/agent-team-foundation/first-tree/discussions"><strong>Discussions</strong></a>
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/first-tree"><img src="https://img.shields.io/npm/v/first-tree?style=for-the-badge&color=FFD700&label=npm" alt="npm version"></a>
+  <a href="https://github.com/agent-team-foundation/first-tree/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/agent-team-foundation/first-tree/ci.yml?style=for-the-badge&label=CI" alt="CI"></a>
+  <a href="https://github.com/agent-team-foundation/first-tree/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-green?style=for-the-badge" alt="License: Apache 2.0"></a>
+  <a href="https://github.com/agent-team-foundation/first-tree/stargazers"><img src="https://img.shields.io/github/stars/agent-team-foundation/first-tree?style=for-the-badge&color=blueviolet" alt="GitHub stars"></a>
+  <a href="https://first-tree.ai/"><img src="https://img.shields.io/badge/Built%20by-Agent%20Team%20Foundation-blueviolet?style=for-the-badge" alt="Built by Agent Team Foundation"></a>
+</p>
+
 # first-tree
 
-**A Git-native knowledge layer for your team — and a three-tool suite that keeps it alive.**
+**Shared Context for Agent Teams.** A Git-native knowledge layer your team and your agents both read from and write to — kept alive by a context-aware review bot, and a chief-of-staff daemon that clears your GitHub inbox while you sleep.
 
-`first-tree` publishes the `first-tree` CLI and its bundled agent skills. A
-Context Tree is the living source of truth for decisions, ownership, and
-cross-domain relationships that humans and agents maintain together —
-`first-tree` is the toolkit that lets agents build, tend, and react to it.
+Humans and agents need the *same* level of context to ship together. Notion is human-first with AI bolted on. CLAUDE.md per repo drifts within a week. Glean is search-shaped, not write-back. `first-tree` is the missing layer: a tree of markdown nodes in a Git repo where every node has an owner, agents propose updates after each task, and owners approve like a tiny PR.
 
 ---
 
@@ -16,37 +32,45 @@ cross-domain relationships that humans and agents maintain together —
 │                         first-tree (umbrella CLI)                    │
 ├──────────────┬───────────────────────────┬───────────────────────────┤
 │    tree      │        gardener           │          breeze           │
-│  toolkit     │     maint. agent          │     local daemon          │
+│  toolkit     │     auto-maintainer       │     AI chief of staff     │
 ├──────────────┼───────────────────────────┼───────────────────────────┤
-│  init, bind, │ reviews source PRs/issues │ watches gh notifications  │
-│  workspace,  │ and sync PRs; can run as  │ → labels / routes / drafts│
-│  publish,    │ a workflow or daemon.     │ replies for PRs, issues,  │
-│  verify, ... │                           │ discussions, reviews.     │
+│  the         │ context-aware PR review   │ context-aware: hijacks    │
+│  context     │ bot. keeps the tree       │ your GitHub @-mentions    │
+│  layer       │ coherent as code changes; │ and review requests,      │
+│  itself      │ flags drift, drafts       │ spawns agent runners that │
+│              │ updates, reviews them.    │ actually fix issues and   │
+│              │                           │ ship the work, clears     │
+│              │                           │ your inbox while you      │
+│              │                           │ sleep.                    │
 └──────────────┴───────────────────────────┴───────────────────────────┘
-                           │
-                   ┌───────┴────────┐
-                   │ first-tree     │  ← umbrella skill:
-                   │    skill       │    methodology, references,
-                   │                │    routing into the product skills
-                   └────────────────┘
 ```
 
 | Tool | What it is | When to reach for it |
 |------|------------|----------------------|
-| **[tree](src/products/tree)** | CLI toolkit for `first-tree tree inspect/status/init/bootstrap/bind/integrate/workspace/publish/verify/upgrade/...` | You want an agent to create, maintain, or bind a Context Tree repo. |
-| **[gardener](src/products/gardener)** | Maintenance agent for drift sync, source-repo verdict comments, sync-PR review responses, and optional push-mode workflow / pull-mode daemon orchestration | You want the tree to stay coherent as code changes without asking a human to drive it. |
-| **[breeze](src/products/breeze)** | Local inbox daemon that takes over your `gh` login and turns GitHub notifications into a triaged, optionally auto-handled queue | You want an agent sitting on your GitHub notifications so you don't have to. |
+| **[tree](src/products/tree)** | The **context layer**. CLI toolkit (`first-tree tree init/inspect/bind/workspace/publish/verify/...`) for creating and tending a Context Tree — markdown nodes with owners, the living source of truth your team and your agents share. | You want one place that humans and agents both read and write — without notion drift, without `.cursorrules` rot. |
+| **[gardener](src/products/gardener)** | The **context auto-maintainer**. A context-aware PR review bot that detects drift between your code and the tree, drafts updates, posts verdict comments, and answers reviewer feedback. Runs as a workflow or daemon. | You want the tree to stay coherent as code changes without anyone manually keeping it in sync. |
+| **[breeze](src/products/breeze)** | The **AI chief of staff for GitHub**. Context-aware (it reads from the tree). Hijacks your @-mentions and review requests, spawns agent runners that actually fix issues and ship the work. Clears your inbox while you sleep. | You want an agent sitting on your GitHub notifications, reading your tree's context, and shipping work — not just summarizing it. |
 
 Every product ships:
 - an operational handbook at `skills/<name>/SKILL.md` (loaded into agents),
 - a lazy CLI dispatcher at `src/products/<name>/cli.ts`,
 - its own semver'd `VERSION` file, independent from the npm package version.
 
-The umbrella `first-tree` skill at [`skills/first-tree/`](skills/first-tree/)
-is the single entry point an agent reads first — it teaches the Context Tree
-methodology and routes to the three product skills above. The CLI also exposes
-one **maintenance namespace** — `first-tree skill ...` — for skill
-installation, diagnosis, and repair. It is not a fourth product.
+The umbrella `first-tree` skill at [`skills/first-tree/`](skills/first-tree/) is the single entry point an agent reads first — it teaches the Context Tree methodology and routes to the three product skills above. The CLI also exposes one **maintenance namespace** — `first-tree skill ...` — for skill installation, diagnosis, and repair. It is not a fourth product.
+
+---
+
+## Why first-tree
+
+| | CLAUDE.md per repo | Notion / Glean | `.cursorrules` | **first-tree** |
+|---|---|---|---|---|
+| Humans can read it | ✓ | ✓ | partial | ✓ |
+| Agents can read it | ✓ | search-only | ✓ | ✓ |
+| Agents can write back | partial | ✗ | ✗ | ✓ (PR-style) |
+| Survives across repos | ✗ (drifts) | ✓ | ✗ | ✓ |
+| Owner-per-node accountability | ✗ | ✗ | ✗ | ✓ |
+| Stays current as code changes | ✗ (manual) | ✗ (manual) | ✗ (manual) | ✓ (gardener) |
+| Acts on GitHub notifications | ✗ | ✗ | ✗ | ✓ (breeze) |
 
 ---
 
@@ -90,8 +114,7 @@ The npm package and installed CLI command are both `first-tree`.
 
 ## Quick Start For Agents
 
-Paste one of these into Claude Code, Codex, or any agent — from the root you
-want to onboard:
+Paste one of these into Claude Code, Codex, or any agent — from the root you want to onboard:
 
 **First person on the team:**
 
@@ -112,8 +135,7 @@ https://github.com/<your-org>/<your-tree-repo>.
 
 **Driving one full gardener → breeze cycle end-to-end:**
 
-Paste this as-is — the agent will ask you which repos to target before
-running anything, so there's nothing to fill in up front.
+Paste this as-is — the agent will ask you which repos to target before running anything, so there's nothing to fill in up front.
 
 ```text
 I want to set up first-tree — a Context Tree that tracks decisions across
@@ -153,14 +175,9 @@ Four first-class paths:
 | Workspace root + shared tree | `first-tree tree init --scope workspace` (pass `--tree-path` / `--tree-url` to reuse an existing shared tree; run `first-tree tree workspace sync` later after adding new repos) |
 | You're inside the tree repo itself | `first-tree tree bootstrap --here` |
 
-When the current root is a workspace, the workspace root gets local integration
-plus `.first-tree/source.json` (with workspace members), and
-`first-tree tree init --scope workspace` binds currently discovered child repos
-as `workspace-member`s to the same shared tree by default. Run
-`first-tree tree workspace sync` later after adding new child repos.
+When the current root is a workspace, the workspace root gets local integration plus `.first-tree/source.json` (with workspace members), and `first-tree tree init --scope workspace` binds currently discovered child repos as `workspace-member`s to the same shared tree by default. Run `first-tree tree workspace sync` later after adding new child repos.
 
-See [`skills/first-tree/references/onboarding.md`](skills/first-tree/references/onboarding.md)
-for the full guide, and run `first-tree tree help onboarding` to print it.
+See [`skills/first-tree/references/onboarding.md`](skills/first-tree/references/onboarding.md) for the full guide, and run `first-tree tree help onboarding` to print it.
 
 ---
 
@@ -194,12 +211,7 @@ for the full guide, and run `first-tree tree help onboarding` to print it.
   … tree domains …
 ```
 
-The source/workspace root is never a tree — it never contains `NODE.md`,
-`members/`, or tree-scoped `AGENTS.md` / `CLAUDE.md`. Source-side state lives
-under `.first-tree/source.json`; tree-side state lives under
-`.first-tree/tree.json` and `.first-tree/bindings/<source-id>.json`. The
-default dedicated tree repo name is `<repo>-tree`, while shared tree setups
-continue to work cleanly for multi-repo workspaces.
+The source/workspace root is never a tree — it never contains `NODE.md`, `members/`, or tree-scoped `AGENTS.md` / `CLAUDE.md`. Source-side state lives under `.first-tree/source.json`; tree-side state lives under `.first-tree/tree.json` and `.first-tree/bindings/<source-id>.json`. The default dedicated tree repo name is `<repo>-tree`, while shared tree setups continue to work cleanly for multi-repo workspaces.
 
 ---
 
@@ -249,37 +261,26 @@ continue to work cleanly for multi-repo workspaces.
 - The npm package is `first-tree`.
 - The installed CLI command is also `first-tree`.
 - The CLI dispatches into three products: `tree`, `breeze`, `gardener`.
-- The CLI also exposes one maintenance namespace: `skill`.
-  Run `first-tree --help` for the routing.
-- The published package ships **four skill payloads**, each with the same
-  name in the package and when installed into a user repo:
+- The CLI also exposes one maintenance namespace: `skill`. Run `first-tree --help` for the routing.
+- The published package ships **four skill payloads**, each with the same name in the package and when installed into a user repo:
   - `skills/first-tree/` — the umbrella entry-point `first-tree` skill (methodology, references, routing).
   - `skills/tree/`, `skills/breeze/`, `skills/gardener/` — one operational handbook per product CLI.
-- In this source repo, `.agents/skills/first-tree/` and `.claude/skills/first-tree/`
-  (plus the three product equivalents) are tracked symlink aliases back to the
-  four `skills/<name>/` payloads, so local agents resolve the same skills the
-  package ships.
-- `npx first-tree <namespace> <command>` is the recommended human-facing
-  one-off entrypoint.
-- For automation, hooks, and CI templates, prefer the more explicit
-  `npx -p first-tree first-tree <namespace> <command>` form.
+- In this source repo, `.agents/skills/first-tree/` and `.claude/skills/first-tree/` (plus the three product equivalents) are tracked symlink aliases back to the four `skills/<name>/` payloads, so local agents resolve the same skills the package ships.
+- `npx first-tree <namespace> <command>` is the recommended human-facing one-off entrypoint.
+- For automation, hooks, and CI templates, prefer the more explicit `npx -p first-tree first-tree <namespace> <command>` form.
 
 ---
 
 ## Canonical Documentation
 
-User-facing references ship under `skills/first-tree/references/` and get
-copied into user repos by `first-tree tree init` / `first-tree tree bind`:
+User-facing references ship under `skills/first-tree/references/` and get copied into user repos by `first-tree tree init` / `first-tree tree bind`:
 
 - Methodology overview: `skills/first-tree/references/whitepaper.md`
 - Onboarding guide: `skills/first-tree/references/onboarding.md`
-- Source/workspace install contract:
-  `skills/first-tree/references/source-workspace-installation.md`
-- Upgrade and layout contract:
-  `skills/first-tree/references/upgrade-contract.md`
+- Source/workspace install contract: `skills/first-tree/references/source-workspace-installation.md`
+- Upgrade and layout contract: `skills/first-tree/references/upgrade-contract.md`
 
-Decision-grade design knowledge for this project lives in the bound Context Tree
-under `first-tree-skill-cli/`, not in this repo:
+Decision-grade design knowledge for this project lives in the bound Context Tree under `first-tree-skill-cli/`, not in this repo:
 
 - Canonical architecture: `first-tree-skill-cli/repo-architecture.md`
 - Canonical sync design: `first-tree-skill-cli/sync.md`
@@ -324,8 +325,7 @@ docs/                     # maintainer-only implementation notes
 evals/                    # maintainer-only evaluation harness
 ```
 
-See [`AGENTS.md`](AGENTS.md) (== `CLAUDE.md`) for maintainer rules, and
-[`docs/source-map.md`](docs/source-map.md) for the annotated file map.
+See [`AGENTS.md`](AGENTS.md) (== `CLAUDE.md`) for maintainer rules, and [`docs/source-map.md`](docs/source-map.md) for the annotated file map.
 
 ---
 
