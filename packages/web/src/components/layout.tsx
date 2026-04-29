@@ -4,6 +4,7 @@ import { NavLink, Outlet, useLocation } from "react-router";
 import { useAuth } from "../auth/auth-context.js";
 import { cn } from "../lib/utils.js";
 import { CommandPalette } from "../pages/workspace/palette/command-palette.js";
+import { DisconnectChip } from "./disconnect-chip.js";
 import { FirstTreeLogo } from "./first-tree-logo.js";
 import { NotificationBell } from "./notification-bell.js";
 import { OnboardingBanner } from "./onboarding-banner.js";
@@ -48,26 +49,33 @@ export function Layout() {
         className="relative shrink-0 grid items-center"
         style={{
           height: 48,
-          gridTemplateColumns: "auto 1fr auto",
+          // 1fr auto 1fr keeps the centre column (tabs) anchored to the
+          // page midpoint regardless of how the brand cluster grows. The
+          // disconnect chip can appear/disappear without shifting tabs.
+          gridTemplateColumns: "1fr auto 1fr",
+          gap: "var(--sp-3)",
           padding: "0 var(--sp-3)",
           borderBottom: "var(--hairline) solid var(--border)",
           background: "var(--bg-raised)",
         }}
       >
-        {/* Brand */}
-        <div className="flex items-center" style={{ gap: 10 }}>
-          <FirstTreeLogo width={16} height={18} style={{ color: "var(--fg)" }} />
-          {/* Brand uses the `text-title` token (16 / 600 / -0.2 letter-spacing). */}
-          <span className="text-title" style={{ color: "var(--fg)" }}>
-            First Tree{" "}
-            <span className="font-normal" style={{ color: "var(--fg-3)" }}>
-              Hub
+        {/* Brand cluster: logo + name welded together, then the optional chip. */}
+        <div className="flex items-center" style={{ gap: "var(--sp-3_5)", justifySelf: "start", minWidth: 0 }}>
+          <span className="flex items-center" style={{ gap: 10, flexShrink: 0 }}>
+            <FirstTreeLogo width={16} height={18} style={{ color: "var(--fg)" }} />
+            {/* Brand uses the `text-title` token (16 / 600 / -0.2 letter-spacing). */}
+            <span className="text-title" style={{ color: "var(--fg)" }}>
+              First Tree{" "}
+              <span className="font-normal" style={{ color: "var(--fg-3)" }}>
+                Hub
+              </span>
             </span>
           </span>
+          <DisconnectChip />
         </div>
 
         {/* Tabs */}
-        <nav className="flex justify-center" style={{ gap: 2, pointerEvents: "none" }}>
+        <nav className="flex" style={{ gap: 2, pointerEvents: "none", justifySelf: "center" }}>
           {tabs.map((tab) => (
             <NavLink
               key={tab.to}
@@ -98,7 +106,7 @@ export function Layout() {
         </nav>
 
         {/* Right controls */}
-        <div className="flex items-center" style={{ gap: 6 }}>
+        <div className="flex items-center" style={{ gap: 6, justifySelf: "end" }}>
           <button
             type="button"
             onClick={() => setPaletteOpen(true)}
