@@ -5,7 +5,7 @@ import {
   deriveRepoLocalPath,
   type SessionEvent,
 } from "@agent-team-foundation/first-tree-hub-shared";
-import { Codex, type Input, type Thread, type ThreadEvent, type ThreadOptions } from "@openai/codex-sdk";
+import { Codex, type Input, type Thread, type ThreadItem, type ThreadOptions } from "@openai/codex-sdk";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import { bootstrapWorkspace, FIRST_TREE_WORKSPACE_MARKER } from "../runtime/bootstrap.js";
 import type { GitMirrorManager } from "../runtime/git-mirror-manager.js";
@@ -205,15 +205,18 @@ export const createCodexHandler: HandlerFactory = (config) => {
     sessionCtx.emitEvent(event);
   }
 
-  function processItem(item: ThreadEvent extends { item: infer I } ? I : never, sessionCtx: SessionContext): string {
-    // Returns any text the assistant message added so the runTurn loop can
-    // accumulate the full final response.
-    return processItemImpl(item as never, sessionCtx);
-  }
-
-  function processItemImpl(item: import("@openai/codex-sdk").ThreadItem, sessionCtx: SessionContext): string {
+  /**
+   * Translate one terminal `item.completed` payload into the runtime's event
+   * stream and, when the item is the assistant's final message, return the
+   * raw text so `runTurn` can stitch the per-turn reply together.
+   */
+  function processItem(item: ThreadItem, sessionCtx: SessionContext): string {
     switch (item.type) {
       case "agent_message": {
+        // Skip whitespace-only assistant messages — they'd otherwise clutter
+        // the events stream with empty `assistant_text` rows. Mirrors the
+        // claude-code handler's `text.trim()` guard.
+        if (!item.text.trim()) return "";
         sessionCtx.emitEvent({
           kind: "assistant_text",
           payload: { text: item.text.slice(0, ASSISTANT_TEXT_EVENT_LIMIT) },
@@ -313,7 +316,12 @@ export const createCodexHandler: HandlerFactory = (config) => {
     currentAbort = abort;
     sessionCtx.setRuntimeState("working");
 
-    let accumulated = "";
+    // Emit exactly one `turn_end` per turn, after `forwardResult` resolves —
+    // mirrors claude-code so admin events + completion bookkeeping reflect
+    // actual delivery, not just SDK turn termination. `turn.completed` /
+    // `turn.failed` only flip the local status here; the emit happens below.
+    const assistantTexts: string[] = [];
+    let turnFailed = false;
     const promise = (async () => {
       try {
         const streamed = await activeThread.runStreamed(input, { signal: abort.signal });
@@ -325,24 +333,19 @@ export const createCodexHandler: HandlerFactory = (config) => {
           } else if (event.type === "turn.started") {
             // No-op — runtime state already "working".
           } else if (event.type === "item.completed") {
-            accumulated += processItem(event.item as never, sessionCtx);
+            const text = processItem(event.item, sessionCtx);
+            if (text) assistantTexts.push(text);
           } else if (event.type === "item.started" || event.type === "item.updated") {
             // Stream-only intermediate states — claude-code likewise emits
             // events on terminal items only; codex's run-to-completion model
             // means the terminal item carries the full payload.
           } else if (event.type === "turn.completed") {
-            sessionCtx.emitEvent({
-              kind: "turn_end",
-              payload: { status: "success" },
-            });
+            // Status-only — `turn_end` is emitted after forwardResult below.
           } else if (event.type === "turn.failed") {
+            turnFailed = true;
             sessionCtx.emitEvent({
               kind: "error",
               payload: { source: "sdk", message: event.error.message },
-            });
-            sessionCtx.emitEvent({
-              kind: "turn_end",
-              payload: { status: "error" },
             });
           } else if (event.type === "error") {
             sessionCtx.emitEvent({
@@ -353,9 +356,9 @@ export const createCodexHandler: HandlerFactory = (config) => {
         }
       } catch (err) {
         if (abort.signal.aborted) return;
+        turnFailed = true;
         const msg = err instanceof Error ? err.message : String(err);
         sessionCtx.emitEvent({ kind: "error", payload: { source: "sdk", message: msg } });
-        sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
       }
     })();
 
@@ -367,12 +370,38 @@ export const createCodexHandler: HandlerFactory = (config) => {
       currentTurnPromise = null;
     }
 
+    if (abort.signal.aborted) {
+      // Suspend/shutdown raced ahead — let the abort handler set state.
+      return;
+    }
+
+    // `\n\n` between assistant messages so multi-message turns aren't fused
+    // into one blob (Codex can emit several `agent_message` items in a turn).
+    const accumulated = assistantTexts.join("\n\n");
+
+    let forwardFailed = false;
     if (accumulated.trim()) {
       try {
         await sessionCtx.forwardResult(accumulated);
       } catch (err) {
-        sessionCtx.log(`codex forwardResult failed: ${err instanceof Error ? err.message : String(err)}`);
+        forwardFailed = true;
+        const msg = err instanceof Error ? err.message : String(err);
+        sessionCtx.emitEvent({
+          kind: "error",
+          payload: { source: "runtime", message: `forwardResult failed: ${msg}` },
+        });
       }
+    }
+
+    const succeeded = !turnFailed && !forwardFailed;
+    sessionCtx.emitEvent({
+      kind: "turn_end",
+      payload: { status: succeeded ? "success" : "error" },
+    });
+    // Only signal session completion when the turn truly succeeded — mirrors
+    // claude-code's `result.subtype === "success"` gate so a partial-error
+    // turn doesn't trip downstream cooldown bookkeeping.
+    if (succeeded && accumulated.trim()) {
       sessionCtx.reportSessionCompletion();
     }
     sessionCtx.setRuntimeState("idle");
