@@ -12,8 +12,18 @@ describe("OAuth state JWT", () => {
 
   it("rejects a tampered state token", async () => {
     const { token, nonce } = await signOAuthState(SECRET, "/welcome");
-    // Flip the last char of the signature segment
-    const tampered = `${token.slice(0, -1)}${token.endsWith("a") ? "b" : "a"}`;
+    // Flip the FIRST char of the signature segment, not the last.
+    // The signature is HMAC-SHA256 (32 bytes / 256 bits) → 43 base64url
+    // chars, but the last char encodes only 4 data bits + 2 zero pad bits
+    // (since 256 % 6 == 4). Multiple base64url chars decode to the same
+    // trailing byte (e.g. 'Y' (011000) and 'a' (011010) both yield data
+    // bits 0110), so flipping the last char silently passes ~1/16 of the
+    // time when the original happens to share data bits with the
+    // replacement. The first sig char carries 6 full data bits — flipping
+    // it always changes the decoded signature.
+    const dot = token.lastIndexOf(".");
+    const head = token.charAt(dot + 1);
+    const tampered = `${token.slice(0, dot + 1)}${head === "A" ? "B" : "A"}${token.slice(dot + 2)}`;
     await expect(verifyOAuthState(SECRET, tampered, nonce)).rejects.toThrow();
   });
 

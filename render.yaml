@@ -30,6 +30,15 @@ services:
         sync: false
       - key: FIRST_TREE_HUB_GITHUB_WEBHOOK_SECRET
         sync: false
+      # GitHub OAuth — required for SaaS sign-in on /login. Register a GitHub
+      # OAuth App at https://github.com/settings/developers, set the callback
+      # to https://<your-render-host>/api/v1/auth/github/callback, then paste
+      # the issued credentials into Render Dashboard (sync:false keeps them
+      # out of source control).
+      - key: FIRST_TREE_HUB_GITHUB_OAUTH_CLIENT_ID
+        sync: false
+      - key: FIRST_TREE_HUB_GITHUB_OAUTH_CLIENT_SECRET
+        sync: false
       - key: FIRST_TREE_HUB_ADMIN_PASSWORD
         generateValue: true
       - key: FIRST_TREE_HUB_JWT_SECRET

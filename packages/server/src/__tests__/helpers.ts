@@ -47,7 +47,6 @@ export async function createTestApp(): Promise<FastifyInstance> {
       github: {
         clientId: "test-github-client",
         clientSecret: "test-github-secret",
-        devCallbackEnabled: true,
       },
     },
     rateLimit: { max: 10000, loginMax: 10000, webhookMax: 10000 },
