@@ -17,9 +17,10 @@ describe("Inbox Timeout Reset", () => {
     });
     const chatId = chatRes.json().id;
 
+    // mention_only direct (migration 0029) — @a2 to land an active entry.
     await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
       format: "text",
-      content: "Timeout test",
+      content: `@${a2.agent.name} Timeout test`,
     });
 
     const pollRes = await a2.request("GET", "/api/v1/agent/inbox");
@@ -51,9 +52,10 @@ describe("Inbox Timeout Reset", () => {
     });
     const chatId = chatRes.json().id;
 
+    // mention_only direct (migration 0029) — @a2 to land an active entry.
     await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
       format: "text",
-      content: "Fail test",
+      content: `@${a2.agent.name} Fail test`,
     });
 
     const pollRes = await a2.request("GET", "/api/v1/agent/inbox");

@@ -164,7 +164,7 @@ describe("buildClientMessagePayload — recipientMode + inReplyToSnapshot", () =
     expect(built.recipientMode).toBe("mention_only");
   });
 
-  it("returns 'full' for a direct-chat participant (baseline)", async () => {
+  it("returns 'mention_only' for an agent↔agent direct chat (migration 0029)", async () => {
     const a1 = await createAgent(app.db, {
       name: `rmode-dir1-${Date.now()}`,
       type: "autonomous_agent",
@@ -181,6 +181,28 @@ describe("buildClientMessagePayload — recipientMode + inReplyToSnapshot", () =
     const built = await buildClientMessagePayload(
       app.db,
       { kind: "agentId", agentId: a2.uuid },
+      { ...RAW, chatId: chat.id },
+      chat.id,
+    );
+    expect(built.recipientMode).toBe("mention_only");
+  });
+
+  it("returns 'full' for a human↔agent direct chat", async () => {
+    const human = await createAgent(app.db, {
+      name: `rmode-hum-${Date.now()}`,
+      type: "human",
+      managerId: ctx.memberId,
+    });
+    const agent = await createAgent(app.db, {
+      name: `rmode-agt-${Date.now()}`,
+      type: "autonomous_agent",
+      managerId: ctx.memberId,
+      clientId: ctx.clientId,
+    });
+    const chat = await createChat(app.db, human.uuid, { type: "direct", participantIds: [agent.uuid] });
+    const built = await buildClientMessagePayload(
+      app.db,
+      { kind: "agentId", agentId: agent.uuid },
       { ...RAW, chatId: chat.id },
       chat.id,
     );

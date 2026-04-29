@@ -91,8 +91,8 @@ describe("Agent Chats API", () => {
     expect(byId.get(a1.agent.uuid)?.name).toBe(`parts-a1-${uid}`);
     expect(byId.get(a2.uuid)?.displayName).toBe("Bob");
     for (const r of rows) {
-      // Direct chat → both start in full mode.
-      expect(r.mode).toBe("full");
+      // Agent↔agent direct → both start in mention_only (migration 0029).
+      expect(r.mode).toBe("mention_only");
       expect(r.type).toBe("autonomous_agent");
     }
   });

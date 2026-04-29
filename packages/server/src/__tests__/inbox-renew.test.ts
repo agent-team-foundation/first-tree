@@ -16,9 +16,10 @@ describe("Inbox Renew & Timeout API", () => {
     });
     const chatId = chatRes.json().id;
 
+    // mention_only direct (migration 0029) — @a2 to wake the recipient.
     await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
       format: "text",
-      content: "Renew test",
+      content: `@${a2.agent.name} Renew test`,
     });
 
     const pollRes = await a2.request("GET", "/api/v1/agent/inbox");

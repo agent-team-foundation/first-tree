@@ -18,9 +18,13 @@ describe("sendMessage returns recipients", () => {
       participantIds: [a2.uuid],
     });
 
+    // Agent↔agent direct seeds both as mention_only (migration 0029) so the
+    // recipient is only included when explicitly @-mentioned. Pass the
+    // mention so this stays a recipient-shape test rather than a mode test.
     const result = await sendMessage(app.db, chat.id, a1.uuid, {
       format: "text",
       content: "hello",
+      metadata: { mentions: [a2.uuid] },
     });
 
     expect(result.message).toBeDefined();

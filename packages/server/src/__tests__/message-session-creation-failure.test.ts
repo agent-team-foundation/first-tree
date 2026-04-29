@@ -49,7 +49,13 @@ describe("sendMessage — N4-B: predictive activation failure does not block the
     // 1:1 chat fan-out produces exactly one upsertSessionState call.
     mockedUpsert.mockRejectedValueOnce(new Error("simulated upsert failure"));
 
-    const result = await sendMessage(app.db, chat.id, a1.uuid, { format: "text", content: "should still arrive" });
+    // mention_only direct (migration 0029): @ to keep notify=true so the
+    // upsert call site is reached (otherwise the silent fan-out skips it).
+    const result = await sendMessage(app.db, chat.id, a1.uuid, {
+      format: "text",
+      content: "should still arrive",
+      metadata: { mentions: [a2.uuid] },
+    });
 
     expect(result.message).toBeDefined();
     expect(result.message.content).toBe("should still arrive");
