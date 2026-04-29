@@ -1,6 +1,23 @@
+import { lazy, Suspense } from "react";
 import { Navigate, Outlet, useLocation } from "react-router";
-import { LandingPage } from "../pages/landing/index.js";
 import { useAuth } from "./auth-context.js";
+
+/**
+ * Lazy-loaded so the landing-page bundle (LandingPage shell + lucide
+ * icons used by the marketing surface) is fetched only when an
+ * unauthenticated visitor lands on `/`. Authenticated users — the common
+ * case — never download it. Saves ~5–10 KB off the dashboard's auth
+ * bundle.
+ */
+const LandingPage = lazy(() => import("../pages/landing/index.js").then((m) => ({ default: m.LandingPage })));
+
+/**
+ * Pre-mount placeholder for the lazy LandingPage chunk. Matches the
+ * landing-marketing surface (near-black) so the suspense flash is
+ * indistinguishable from the page below — no light flash on first paint
+ * even if the chunk takes a few hundred ms over slow 3G.
+ */
+const LandingFallback = () => <div className="landing-marketing min-h-screen bg-background" />;
 
 /**
  * Route guard for everything behind the dashboard chrome.
@@ -21,7 +38,13 @@ export function RequireAuth() {
   const { isAuthenticated } = useAuth();
   const location = useLocation();
   if (!isAuthenticated) {
-    if (location.pathname === "/") return <LandingPage />;
+    if (location.pathname === "/") {
+      return (
+        <Suspense fallback={<LandingFallback />}>
+          <LandingPage />
+        </Suspense>
+      );
+    }
     // Stash full location (pathname + search + hash) so a deep-link visitor
     // who logs in lands back on the page they originally requested.
     return <Navigate to="/login" replace state={{ from: location }} />;

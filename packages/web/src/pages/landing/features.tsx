@@ -41,9 +41,9 @@ export function Features() {
   return (
     <section className="mx-auto w-full max-w-6xl px-6 py-20 sm:py-24">
       <div className="mx-auto mb-16 max-w-2xl text-center">
-        <h2 className="text-headline text-foreground">Three primitives</h2>
+        <h2 className="text-headline text-foreground">Three things you stop worrying about</h2>
         <p className="mt-3 text-body text-fg-3">
-          Identity, messaging, and integration. No framework. No orchestration.
+          No framework. No orchestration. Just the wiring your team is already missing.
         </p>
       </div>
       <ul className="grid grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-3">
