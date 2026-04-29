@@ -158,8 +158,17 @@ describe("Invitation lifecycle", () => {
 
     const preview = await app.inject({ method: "GET", url: `/api/v1/invite/${token}/preview` });
     expect(preview.statusCode).toBe(200);
-    const body = preview.json<{ organizationName: string; role: string }>();
+    const body = preview.json<{ organizationName: string; role: string; expiresAt: string | null }>();
     expect(body.role).toBe("member");
+    // expiresAt is exposed so the invite page can render an "Expires in N days" hint.
+    // Default invitations carry a 7-day TTL (services/invitation.ts), so this is a string,
+    // not null. Parse to verify it's a valid future ISO timestamp.
+    expect(typeof body.expiresAt).toBe("string");
+    if (body.expiresAt) {
+      const parsed = Date.parse(body.expiresAt);
+      expect(Number.isFinite(parsed)).toBe(true);
+      expect(parsed).toBeGreaterThan(Date.now());
+    }
   });
 
   it("public preview 404s for revoked tokens", async () => {

@@ -14,12 +14,18 @@ export const INVITATION_DEFAULT_TTL_DAYS = 7;
  * Surfaces just enough for the recipient to recognise the team they're
  * joining; intentionally omits anything internal (memberCount, member
  * emails, billing) so an attacker can't enumerate via leaked tokens.
+ *
+ * `expiresAt` is exposed because the invite page renders an "Expires in N
+ * days" hint — the recipient should know how urgent the link is. Knowing
+ * the link's TTL doesn't help an attacker beyond what stealing the token
+ * itself already gives them.
  */
 export const invitationPreviewSchema = z.object({
   organizationId: z.string(),
   organizationName: z.string(),
   organizationDisplayName: z.string(),
   role: z.string(),
+  expiresAt: z.string().nullable(),
 });
 export type InvitationPreview = z.infer<typeof invitationPreviewSchema>;
 
