@@ -2,7 +2,7 @@
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.png">
     <source media="(prefers-color-scheme: light)" srcset="assets/banner-light.png">
-    <img src="assets/banner-light.png" alt="first-tree" width="640">
+    <img src="assets/banner-light.png" alt="first-tree" width="100%">
   </picture>
 </p>
 
