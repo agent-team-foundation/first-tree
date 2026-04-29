@@ -283,7 +283,12 @@ export function OnboardingModal() {
           <DialogDescription>Three quick steps and you're chatting with your agent.</DialogDescription>
         </DialogHeader>
 
-        {error && <div className="rounded-md bg-destructive/10 p-2 text-label text-destructive">{error}</div>}
+        {/* Top-level error banner. Hidden in the timeout phase so the
+            phase-specific timeout block can frame the error in context
+            (runtime timeout vs createAgentChat failure). */}
+        {error && creatingPhase !== "timeout" && (
+          <div className="rounded-md bg-destructive/10 p-2 text-label text-destructive">{error}</div>
+        )}
 
         <div className="space-y-2">
           <Label htmlFor="onboarding-agent-name">
@@ -361,14 +366,26 @@ export function OnboardingModal() {
         )}
         {creatingPhase === "timeout" && (
           <div className="space-y-2">
-            <p className="text-body text-destructive">
-              ⚠️ The runtime didn't start within {RUNTIME_READY_TIMEOUT_S} seconds.
-            </p>
-            <p className="text-label text-muted-foreground">
-              Common causes: missing API key, network issue, expired credentials. Your agent has been created — fix the
-              issue on your computer and click Try again. If you close instead, reusing the same name will require
-              deleting the existing agent in Settings first.
-            </p>
+            {error ? (
+              <>
+                <p className="text-body text-destructive">⚠️ {error}</p>
+                <p className="text-label text-muted-foreground">
+                  Your agent is set up but we couldn't open the chat. Click Try again, or Close to abandon this attempt
+                  — reusing the same name will require deleting the existing agent in Settings first.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-body text-destructive">
+                  ⚠️ The runtime didn't start within {RUNTIME_READY_TIMEOUT_S} seconds.
+                </p>
+                <p className="text-label text-muted-foreground">
+                  Common causes: missing API key, network issue, expired credentials. Your agent has been created — fix
+                  the issue on your computer and click Try again. If you close instead, reusing the same name will
+                  require deleting the existing agent in Settings first.
+                </p>
+              </>
+            )}
             <div className="flex gap-2">
               <Button variant="outline" onClick={handleRetry}>
                 Try again
