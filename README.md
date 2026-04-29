@@ -11,7 +11,8 @@
   <a href="https://first-tree.ai/"><strong>Website</strong></a> &middot;
   <a href="#commands"><strong>Commands</strong></a> &middot;
   <a href="https://github.com/agent-team-foundation/first-tree/discussions"><strong>Discussions</strong></a> &middot;
-  <a href="https://discord.gg/J47j3RFgsB"><strong>Discord</strong></a>
+  <a href="https://discord.gg/J47j3RFgsB"><strong>Discord</strong></a> &middot;
+  <a href="https://x.com/first_tree_ai"><strong>X</strong></a>
 </p>
 
 <p align="center">
@@ -20,6 +21,7 @@
   <a href="https://github.com/agent-team-foundation/first-tree/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-green?style=for-the-badge" alt="License: Apache 2.0"></a>
   <a href="https://github.com/agent-team-foundation/first-tree/stargazers"><img src="https://img.shields.io/github/stars/agent-team-foundation/first-tree?style=for-the-badge&color=blueviolet" alt="GitHub stars"></a>
   <a href="https://discord.gg/J47j3RFgsB"><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
+  <a href="https://x.com/first_tree_ai"><img src="https://img.shields.io/badge/Follow-%40first__tree__ai-000000?style=for-the-badge&logo=x&logoColor=white" alt="X / Twitter"></a>
   <a href="https://first-tree.ai/"><img src="https://img.shields.io/badge/Built%20by-Agent%20Team%20Foundation-blueviolet?style=for-the-badge" alt="Built by Agent Team Foundation"></a>
 </p>
 
