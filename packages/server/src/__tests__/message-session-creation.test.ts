@@ -22,7 +22,14 @@ describe("sendMessage — predictive session activation (M plan Step 1b)", () =>
     await seedPresence(app, a2.uuid, oldDate);
 
     const chat = await createChat(app.db, a1.uuid, { type: "direct", participantIds: [a2.uuid] });
-    await sendMessage(app.db, chat.id, a1.uuid, { format: "text", content: "hi" });
+    // Agent↔agent direct seeds both as mention_only (migration 0029). The
+    // predictive activation only fires for notify=true rows, so the message
+    // must @ the recipient to count as an active fan-out target.
+    await sendMessage(app.db, chat.id, a1.uuid, {
+      format: "text",
+      content: "hi",
+      metadata: { mentions: [a2.uuid] },
+    });
 
     expect(await readSessionState(app, a2.uuid, chat.id)).toBe("active");
     const presence = await readPresence(app, a2.uuid);
@@ -38,7 +45,12 @@ describe("sendMessage — predictive session activation (M plan Step 1b)", () =>
     const chat = await createChat(app.db, a1.uuid, { type: "direct", participantIds: [a2.uuid] });
     await app.db.insert(agentChatSessions).values({ agentId: a2.uuid, chatId: chat.id, state: "evicted" });
 
-    await sendMessage(app.db, chat.id, a1.uuid, { format: "text", content: "ping" });
+    // mention_only direct (migration 0029): @ to wake + revive.
+    await sendMessage(app.db, chat.id, a1.uuid, {
+      format: "text",
+      content: "ping",
+      metadata: { mentions: [a2.uuid] },
+    });
 
     expect(await readSessionState(app, a2.uuid, chat.id)).toBe("active");
   });
