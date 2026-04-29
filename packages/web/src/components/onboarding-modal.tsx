@@ -36,18 +36,13 @@ export function OnboardingModal() {
   }, [isOpen]);
 
   const currentOrg = orgs.find((o) => o.id === organizationId);
-  // Strip the "'s Personal Team" suffix from auto-provisioned team names
-  // so the user-facing copy doesn't surface that internal label.
-  const friendlyTeamName = (currentOrg?.displayName ?? "").replace(/'s Personal Team$/, "'s team");
+  const teamName = currentOrg?.displayName ?? "";
 
-  const greeting =
-    joinPath === "invite" && friendlyTeamName
-      ? `You've joined ${friendlyTeamName}.`
-      : "Welcome — let's get you set up.";
+  const greeting = joinPath === "invite" && teamName ? `You've joined ${teamName}.` : "Welcome — let's get you set up.";
 
   // Solo (default-team) sign-ins: surface a single explanatory line so the
-  // user knows the auto-provisioned `<login>-personal` slug isn't a system
-  // mistake — they can rename or invite later. Proposal §决策 #16.
+  // user knows the auto-provisioned default team isn't a system mistake —
+  // they can rename or invite teammates later.
   const showDefaultTeamHint = step === "connect" && joinPath !== "invite";
 
   return (

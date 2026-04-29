@@ -133,7 +133,7 @@ describe("Invitation lifecycle", () => {
       url: "/api/v1/auth/github/dev-callback?githubId=999&login=other-org-admin",
     });
     const { organizations } = await import("../db/schema/organizations.js");
-    const orgs = await app.db.select().from(organizations).where(eq(organizations.name, "other-org-admin-personal"));
+    const orgs = await app.db.select().from(organizations).where(eq(organizations.name, "other-org-admin"));
     const otherOrgRow = orgs[0];
     if (!otherOrgRow) throw new Error("expected other org row");
     const otherOrgId = otherOrgRow.id;
