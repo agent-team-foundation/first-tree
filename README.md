@@ -31,18 +31,16 @@
 
 Humans and agents need the *same* level of context to ship together. Notion is human-first with AI bolted on. CLAUDE.md per repo drifts within a week. Glean is search-shaped, not write-back. `first-tree` is the missing layer: a tree of markdown nodes in a Git repo where every node has an owner, agents propose updates after each task, and owners approve like a tiny PR.
 
-<!-- "Works with" logo strip — TODO: drop SVG/PNG marks into assets/logos/ for each entry. -->
-<!-- Sourcing rule: use each tool's official brand asset, not lifted from another OSS README. -->
 <div align="center">
 <table>
   <tr>
     <td align="center"><strong>Works<br/>with</strong></td>
-    <td align="center"><img src="assets/logos/claude-code.svg" width="32" alt="Claude Code" /><br/><sub>Claude Code</sub></td>
-    <td align="center"><img src="assets/logos/codex.svg" width="32" alt="Codex" /><br/><sub>Codex</sub></td>
-    <td align="center"><img src="assets/logos/cursor.svg" width="32" alt="Cursor" /><br/><sub>Cursor</sub></td>
-    <td align="center"><img src="assets/logos/gemini.svg" width="32" alt="Gemini CLI" /><br/><sub>Gemini CLI</sub></td>
-    <td align="center"><img src="assets/logos/github.svg" width="32" alt="GitHub" /><br/><sub>GitHub</sub></td>
-    <td align="center"><img src="assets/logos/mcp.svg" width="32" alt="MCP" /><br/><sub>MCP</sub></td>
+    <td align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/logos/claude-code-dark.svg"><img src="assets/logos/claude-code-light.svg" width="32" alt="Claude Code" /></picture><br/><sub>Claude Code</sub></td>
+    <td align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/logos/codex-dark.svg"><img src="assets/logos/codex-light.svg" width="32" alt="Codex" /></picture><br/><sub>Codex</sub></td>
+    <td align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/logos/cursor-dark.svg"><img src="assets/logos/cursor-light.svg" width="32" alt="Cursor" /></picture><br/><sub>Cursor</sub></td>
+    <td align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/logos/gemini-dark.svg"><img src="assets/logos/gemini-light.svg" width="32" alt="Gemini CLI" /></picture><br/><sub>Gemini CLI</sub></td>
+    <td align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/logos/github-dark.svg"><img src="assets/logos/github-light.svg" width="32" alt="GitHub" /></picture><br/><sub>GitHub</sub></td>
+    <td align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/logos/mcp-dark.svg"><img src="assets/logos/mcp-light.svg" width="32" alt="MCP" /></picture><br/><sub>MCP</sub></td>
   </tr>
 </table>
 </div>
