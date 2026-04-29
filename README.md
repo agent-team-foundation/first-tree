@@ -10,7 +10,8 @@
   <a href="#install-and-run"><strong>Quickstart</strong></a> &middot;
   <a href="https://first-tree.ai/"><strong>Website</strong></a> &middot;
   <a href="#commands"><strong>Commands</strong></a> &middot;
-  <a href="https://github.com/agent-team-foundation/first-tree/discussions"><strong>Discussions</strong></a>
+  <a href="https://github.com/agent-team-foundation/first-tree/discussions"><strong>Discussions</strong></a> &middot;
+  <a href="https://discord.gg/J47j3RFgsB"><strong>Discord</strong></a>
 </p>
 
 <p align="center">
@@ -18,6 +19,7 @@
   <a href="https://github.com/agent-team-foundation/first-tree/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/agent-team-foundation/first-tree/ci.yml?style=for-the-badge&label=CI" alt="CI"></a>
   <a href="https://github.com/agent-team-foundation/first-tree/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-green?style=for-the-badge" alt="License: Apache 2.0"></a>
   <a href="https://github.com/agent-team-foundation/first-tree/stargazers"><img src="https://img.shields.io/github/stars/agent-team-foundation/first-tree?style=for-the-badge&color=blueviolet" alt="GitHub stars"></a>
+  <a href="https://discord.gg/J47j3RFgsB"><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
   <a href="https://first-tree.ai/"><img src="https://img.shields.io/badge/Built%20by-Agent%20Team%20Foundation-blueviolet?style=for-the-badge" alt="Built by Agent Team Foundation"></a>
 </p>
 
@@ -26,6 +28,22 @@
 **Shared Context for Agent Teams.** A Git-native knowledge layer your team and your agents both read from and write to — kept alive by a context-aware review bot, and a chief-of-staff daemon that clears your GitHub inbox while you sleep.
 
 Humans and agents need the *same* level of context to ship together. Notion is human-first with AI bolted on. CLAUDE.md per repo drifts within a week. Glean is search-shaped, not write-back. `first-tree` is the missing layer: a tree of markdown nodes in a Git repo where every node has an owner, agents propose updates after each task, and owners approve like a tiny PR.
+
+<!-- "Works with" logo strip — TODO: drop SVG/PNG marks into assets/logos/ for each entry. -->
+<!-- Sourcing rule: use each tool's official brand asset, not lifted from another OSS README. -->
+<div align="center">
+<table>
+  <tr>
+    <td align="center"><strong>Works<br/>with</strong></td>
+    <td align="center"><img src="assets/logos/claude-code.svg" width="32" alt="Claude Code" /><br/><sub>Claude Code</sub></td>
+    <td align="center"><img src="assets/logos/codex.svg" width="32" alt="Codex" /><br/><sub>Codex</sub></td>
+    <td align="center"><img src="assets/logos/cursor.svg" width="32" alt="Cursor" /><br/><sub>Cursor</sub></td>
+    <td align="center"><img src="assets/logos/gemini.svg" width="32" alt="Gemini CLI" /><br/><sub>Gemini CLI</sub></td>
+    <td align="center"><img src="assets/logos/github.svg" width="32" alt="GitHub" /><br/><sub>GitHub</sub></td>
+    <td align="center"><img src="assets/logos/mcp.svg" width="32" alt="MCP" /><br/><sub>MCP</sub></td>
+  </tr>
+</table>
+</div>
 
 ---
 
