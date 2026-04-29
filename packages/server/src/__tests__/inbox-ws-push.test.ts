@@ -28,9 +28,12 @@ describe("inbox WS data-plane claim helpers", () => {
       participantIds: [a2.agent.uuid],
     });
     const chatId = chatRes.json().id;
+    // Agent↔agent direct seeds both as mention_only (migration 0029); the
+    // claim helpers operate on `pending` rows with `notify=true`, so the
+    // seed message must @-mention a2 to land an active row.
     const msgRes = await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
       format: "text",
-      content: "WS push test",
+      content: `@${a2.agent.name} WS push test`,
     });
     return { a2, messageId: msgRes.json().id, chatId };
   }
@@ -99,11 +102,15 @@ describe("inbox WS data-plane claim helpers", () => {
     const chatA = await createChat(app.db, sender.uuid, { type: "direct", participantIds: [peer.uuid] });
     const chatB = await createChat(app.db, sender.uuid, { type: "group", participantIds: [] });
 
+    // chatA is mention_only on both ends (migration 0029), so explicit
+    // mentions on each leg keep the fan-out + replyTo rows both notify=true
+    // — this test is about the WS claim shape, not mode semantics.
     const original = await sendMessage(app.db, chatA.id, sender.uuid, {
       format: "text",
       content: "any progress?",
       replyToInbox: sender.inboxId,
       replyToChat: chatB.id,
+      metadata: { mentions: [peer.uuid] },
     });
     // Drain peer's inbox so it doesn't muddy the assertions below.
     await inboxService.pollInbox(app.db, peer.inboxId, 10);
@@ -114,6 +121,7 @@ describe("inbox WS data-plane claim helpers", () => {
       format: "text",
       content: "yes, almost done",
       inReplyTo: original.message.id,
+      metadata: { mentions: [sender.uuid] },
     });
 
     // Sanity check the seed: two pending rows exist before we claim.
@@ -220,10 +228,12 @@ describe("inbox WS data-plane claim helpers", () => {
     });
     const chatId = chatRes.json().id;
 
+    // mention_only direct (migration 0029): each backlog message must @ a2
+    // to land as a notify=true pending row that the backlog claim drains.
     for (let i = 0; i < 3; i++) {
       await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
         format: "text",
-        content: `msg ${i}`,
+        content: `@${a2.agent.name} msg ${i}`,
       });
     }
 

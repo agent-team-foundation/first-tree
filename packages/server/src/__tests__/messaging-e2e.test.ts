@@ -110,31 +110,30 @@ describe("messaging E2E — proposal §六 scenarios", () => {
     });
     await ackAll(app, b2Pulled, b2.inboxId);
 
-    // Simulate b1's runtime polling again — should see BOTH the fan-out entry
-    // (chatId=c2) AND the replyTo-routed entry (chatId=c1).
+    // Simulate b1's runtime polling again. Under migration 0029, c2
+    // (b1↔b2 agent-only direct) is `mention_only` on both ends, so b2's
+    // reply lands as a SILENT context row in c2 (not delivered to b1's
+    // active poll) — the no-echo invariant is now enforced at the inbox
+    // layer instead of by the runtime's suppression filter. The c1 entry
+    // survives because replyTo routing always inserts notify=true.
     const b1Pulled2 = await pollInbox(app.db, b1.inboxId, 10);
-    expect(b1Pulled2).toHaveLength(2);
+    expect(b1Pulled2).toHaveLength(1);
 
     const byChat = new Map<string, InboxEntryWithMessage>(
       b1Pulled2.map((e) => [e.chatId ?? e.message.chatId, e as InboxEntryWithMessage]),
     );
     const c1Entry = byChat.get(c1.id);
-    const c2Entry = byChat.get(c2Id);
-    if (!c1Entry || !c2Entry) throw new Error("expected both c1 and c2 entries");
+    if (!c1Entry) throw new Error("expected c1 entry from replyTo routing");
+    expect(byChat.has(c2Id)).toBe(false);
 
-    // Both entries carry the same snapshot (original M1 from b1 in c2).
-    for (const e of [c1Entry, c2Entry]) {
-      expect(e.message.inReplyToSnapshot).toEqual({
-        senderId: b1.uuid,
-        chatId: c2Id,
-        replyToChat: c1.id,
-      });
-    }
+    // The surviving entry carries the same snapshot (original M1 from b1 in c2).
+    expect(c1Entry.message.inReplyToSnapshot).toEqual({
+      senderId: b1.uuid,
+      chatId: c2Id,
+      replyToChat: c1.id,
+    });
 
-    // Suppression verdict:
-    // - c2 entry: me + same chat + replyTo elsewhere → SUPPRESS (echo blocker)
-    // - c1 entry: snapshot.chatId (c2) ≠ entryChatId (c1) → keep, wake c1 session
-    expect(suppressEcho(c2Entry, b1.uuid)).toBe(true);
+    // c1 entry: snapshot.chatId (c2) ≠ entryChatId (c1) → keep, wake c1 session.
     expect(suppressEcho(c1Entry, b1.uuid)).toBe(false);
 
     // No-echo invariant: c2 has exactly M1 (b1→b2) + M2 (b2→b1), stays at 2
@@ -165,21 +164,24 @@ describe("messaging E2E — proposal §六 scenarios", () => {
 
     const c2 = await findOrCreateDirectChat(app.db, b1.uuid, b2.uuid);
 
-    // b1 writes in c2 with replyTo = c2 itself.
+    // b1 writes in c2 with replyTo = c2 itself. Both ends are mention_only
+    // (migration 0029) so b1 must @-mention b2 explicitly to wake the peer.
     const m1 = await sendMessage(app.db, c2.id, b1.uuid, {
       format: "text",
       content: "hi",
       replyToInbox: b1.inboxId,
       replyToChat: c2.id,
+      metadata: { mentions: [b2.uuid] },
     });
 
-    // b2 auto-forwards.
+    // b2 auto-forwards. Same rule applies — b2's reply must mention b1.
     const b2Pulled = await pollInbox(app.db, b2.inboxId, 10);
     expect(b2Pulled).toHaveLength(1);
     await sendMessage(app.db, c2.id, b2.uuid, {
       format: "text",
       content: "reply",
       inReplyTo: m1.message.id,
+      metadata: { mentions: [b1.uuid] },
     });
     await ackAll(app, b2Pulled, b2.inboxId);
 
@@ -353,12 +355,15 @@ describe("messaging E2E — proposal §六 scenarios", () => {
     });
     const c1 = await findOrCreateDirectChat(app.db, b1.uuid, b2.uuid);
 
-    // Send M1 from b1 with a replyTo envelope.
+    // Send M1 from b1 with a replyTo envelope. Mention b2 explicitly:
+    // c1 is a mention_only direct (migration 0029) so the active fan-out
+    // entry only lands when the recipient is in the mention set.
     const m1 = await sendMessage(app.db, c1.id, b1.uuid, {
       format: "text",
       content: "first cut",
       replyToInbox: b1.inboxId,
       replyToChat: c1.id,
+      metadata: { mentions: [b2.uuid] },
     });
 
     // b2 drains so we observe the PRE-edit fan-out count (1 entry).

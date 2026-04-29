@@ -40,9 +40,12 @@ describe("chat upgrade — direct to group", () => {
       participantIds: [a2.uuid],
     });
 
-    // Both agents start in full mode (default).
-    expect((await loadParticipant(chat.id, a1.agent.uuid))?.mode).toBe("full");
-    expect((await loadParticipant(chat.id, a2.uuid))?.mode).toBe("full");
+    // Both agents start as `mention_only` because no human is in the chat —
+    // see migration 0029 / `createChat`'s direct-agent-only branch. The
+    // upgrade rule is therefore a no-op for the existing two on this path,
+    // but we still want to assert it doesn't downgrade them or break.
+    expect((await loadParticipant(chat.id, a1.agent.uuid))?.mode).toBe("mention_only");
+    expect((await loadParticipant(chat.id, a2.uuid))?.mode).toBe("mention_only");
 
     // Third autonomous agent joins.
     await addParticipant(app.db, chat.id, a1.agent.uuid, { agentId: a3.uuid, mode: "full" });
