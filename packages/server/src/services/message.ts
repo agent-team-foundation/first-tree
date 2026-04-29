@@ -224,14 +224,15 @@ async function sendMessageInner(
         .values(fanout.map((f) => ({ inboxId: f.inboxId, messageId, chatId, notify: f.notify })));
     }
 
-    // Collect recipient inboxIds for notification — only the `notify=true`
-    // entries actually wake a session. Silent entries piggy-back on the next
-    // active delivery to the same chat (see services/inbox.ts pollInbox).
-    const recipients = fanout.filter((f) => f.notify).map((f) => f.inboxId);
-
-    // Predictive session-activation targets (N1-B). Consumed AFTER the
-    // transaction commits — see Step 1b block below.
-    const recipientAgentIds = fanout.filter((f) => f.notify).map((f) => f.agentId);
+    // notify=true entries serve two consumers:
+    //   - `recipients` (inboxIds) — feeds the route-layer PG NOTIFY for
+    //     wake-up. Silent entries piggy-back on the next active delivery
+    //     (see services/inbox.ts pollInbox).
+    //   - `recipientAgentIds` — feeds the post-transaction predictive
+    //     session-activation block (Step 1b below; M-plan N1-B range).
+    const notified = fanout.filter((f) => f.notify);
+    const recipients = notified.map((f) => f.inboxId);
+    const recipientAgentIds = notified.map((f) => f.agentId);
 
     // 4. replyTo routing: if this message replies to another message that has a replyTo,
     //    create an additional inbox entry for the original requester
@@ -288,9 +289,13 @@ async function sendMessageInner(
       }),
     ),
   );
-  for (const r of settled) {
-    if (r.status === "rejected") {
-      log.error({ err: r.reason, chatId }, "predictive session activation failed");
+  for (let i = 0; i < settled.length; i++) {
+    const r = settled[i];
+    if (r?.status === "rejected") {
+      log.error(
+        { err: r.reason, chatId, agentId: txResult.recipientAgentIds[i] },
+        "predictive session activation failed",
+      );
     }
   }
 
