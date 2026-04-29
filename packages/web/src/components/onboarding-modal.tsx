@@ -317,6 +317,8 @@ export function OnboardingModal() {
               phase="waiting"
               copyLabel={{ idle: "Copy commands", done: "Copied" }}
               waitingText="Waiting for your computer to check in…"
+              caption={null}
+              copyButtonPlacement="bottom"
             />
           )}
         </div>

@@ -21,6 +21,14 @@ type ConnectCommandPanelProps = {
   errorContent?: ReactNode;
   /** Caption under the command block. Default: `Single-use · regenerates the previous one.`. */
   caption?: ReactNode;
+  /**
+   * Where to place the Copy button relative to the command block.
+   * `"right"` (default) is compact and matches the `/clients` New Connection
+   * surface. `"bottom"` puts the button on its own row below the command —
+   * better when the host modal is narrow and the inline button squeezes
+   * the command text.
+   */
+  copyButtonPlacement?: "right" | "bottom";
 };
 
 const COPY_FEEDBACK_MS = 1_500;
@@ -49,6 +57,7 @@ export function ConnectCommandPanel({
   successContent,
   errorContent,
   caption = "Single-use · regenerates the previous one.",
+  copyButtonPlacement = "right",
 }: ConnectCommandPanelProps) {
   const [copied, setCopied] = useState(false);
 
@@ -61,46 +70,62 @@ export function ConnectCommandPanel({
 
   const expiryMinutes = expiresInSeconds !== undefined ? Math.max(1, Math.round(expiresInSeconds / 60)) : null;
 
+  const commandBlock = (
+    <pre
+      className="mono text-label"
+      style={{
+        margin: 0,
+        padding: "var(--sp-2_5) var(--sp-3)",
+        background: "var(--bg-sunken)",
+        border: "var(--hairline) solid var(--border-faint)",
+        borderRadius: "var(--radius-input)",
+        color: "var(--fg-2)",
+        whiteSpace: "pre-wrap",
+        wordBreak: "break-all",
+        overflowWrap: "anywhere",
+        minWidth: 0,
+        flex: copyButtonPlacement === "right" ? 1 : undefined,
+      }}
+      title={command ?? ""}
+    >
+      {command ? (
+        <>
+          {command}
+          {expiryMinutes !== null && <span style={{ color: "var(--fg-4)" }}> # expires in {expiryMinutes}m</span>}
+        </>
+      ) : (
+        "Generating token…"
+      )}
+    </pre>
+  );
+
+  const copyButton = (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      onClick={handleCopy}
+      disabled={!command}
+      style={{ alignSelf: "flex-start" }}
+    >
+      {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+      {copied ? copyLabel.done : copyLabel.idle}
+    </Button>
+  );
+
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
-      <div className="flex" style={{ gap: "var(--sp-2)", alignItems: "stretch" }}>
-        <pre
-          className="mono text-label flex-1"
-          style={{
-            margin: 0,
-            padding: "var(--sp-2_5) var(--sp-3)",
-            background: "var(--bg-sunken)",
-            border: "var(--hairline) solid var(--border-faint)",
-            borderRadius: "var(--radius-input)",
-            color: "var(--fg-2)",
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-all",
-            overflowWrap: "anywhere",
-            minWidth: 0,
-          }}
-          title={command ?? ""}
-        >
-          {command ? (
-            <>
-              {command}
-              {expiryMinutes !== null && <span style={{ color: "var(--fg-4)" }}> # expires in {expiryMinutes}m</span>}
-            </>
-          ) : (
-            "Generating token…"
-          )}
-        </pre>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={handleCopy}
-          disabled={!command}
-          style={{ alignSelf: "flex-start" }}
-        >
-          {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-          {copied ? copyLabel.done : copyLabel.idle}
-        </Button>
-      </div>
+      {copyButtonPlacement === "right" ? (
+        <div className="flex" style={{ gap: "var(--sp-2)", alignItems: "stretch" }}>
+          {commandBlock}
+          {copyButton}
+        </div>
+      ) : (
+        <>
+          {commandBlock}
+          {copyButton}
+        </>
+      )}
 
       {caption && (
         <p className="text-label" style={{ color: "var(--fg-4)", margin: 0 }}>
