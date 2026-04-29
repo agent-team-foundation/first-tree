@@ -5,6 +5,7 @@ describe("claude-code handler helpers (Step 6)", () => {
   describe("mapMcpServers", () => {
     it("maps stdio server with args", () => {
       const out = mapMcpServers({
+        kind: "claude-code",
         prompt: { append: "" },
         model: "",
         env: [],
@@ -16,6 +17,7 @@ describe("claude-code handler helpers (Step 6)", () => {
 
     it("maps http server with headers", () => {
       const out = mapMcpServers({
+        kind: "claude-code",
         prompt: { append: "" },
         model: "",
         env: [],
@@ -33,6 +35,7 @@ describe("claude-code handler helpers (Step 6)", () => {
 
     it("maps sse server", () => {
       const out = mapMcpServers({
+        kind: "claude-code",
         prompt: { append: "" },
         model: "",
         env: [],
@@ -45,6 +48,7 @@ describe("claude-code handler helpers (Step 6)", () => {
     it("returns empty record when no servers", () => {
       expect(
         mapMcpServers({
+          kind: "claude-code",
           prompt: { append: "" },
           model: "",
           env: [],

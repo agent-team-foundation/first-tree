@@ -1,3 +1,4 @@
+import type { RuntimeProvider } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link2, MessageSquare, Play } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -38,9 +39,10 @@ import { IdentitySection } from "./agent-detail/identity-section.js";
 import { McpSection } from "./agent-detail/mcp-section.js";
 import { ModelSection } from "./agent-detail/model-section.js";
 import { PromptSection } from "./agent-detail/prompt-section.js";
+import { ReBindDialog } from "./agent-detail/re-bind-dialog.js";
 import { SaveBar, sectionAnchorId } from "./agent-detail/save-bar.js";
 import { SectionDivider, SectionShell } from "./agent-detail/section-shell.js";
-import { type SetupRuntimeKind, SetupSection } from "./agent-detail/setup-section.js";
+import { SetupSection } from "./agent-detail/setup-section.js";
 import { deriveSaveHint } from "./agent-detail/status-bar.js";
 import { useConfigDraft } from "./agent-detail/use-config-draft.js";
 
@@ -209,6 +211,7 @@ export function AgentDetailPage() {
   const [bindClientOpen, setBindClientOpen] = useState(false);
   const [bindClientSelected, setBindClientSelected] = useState<string>("");
   const [bindClientError, setBindClientError] = useState<string | null>(null);
+  const [reBindOpen, setReBindOpen] = useState(false);
   const clientsQuery = useQuery({
     queryKey: ["clients"],
     queryFn: listClients,
@@ -405,13 +408,12 @@ export function AgentDetailPage() {
     : null;
   const boundClientLabel: string | null = boundClientId ? (boundClient?.hostname ?? boundClientId) : null;
 
-  // Runtime kind label for the Setup "Where it runs" card. The agent schema
-  // does not currently carry a first-class runtime field; we derive from
-  // `runtimeType` when the backend reports it ("kael"), otherwise treat the
-  // agent as Claude Code, which matches today's only shipping runtime.
-  const setupRuntimeKind: SetupRuntimeKind = runtimeType === "kael" ? "kael" : "claude-code";
-  const contextRuntimeLabel =
-    setupRuntimeKind === "kael" ? "Kael" : setupRuntimeKind === "claude-code" ? "Claude Code" : (runtimeType ?? "—");
+  // Runtime provider label for the Setup "Where it runs" card. The agent
+  // schema carries the authoritative `runtimeProvider` field post-0026; the
+  // legacy `runtimeType` from presence is the *running* shape and may lag
+  // briefly during a re-bind.
+  const setupRuntimeProvider: RuntimeProvider = agent.runtimeProvider ?? "claude-code";
+  const contextRuntimeLabel = setupRuntimeProvider === "codex" ? "Codex" : "Claude Code";
 
   return (
     <div className="-m-6 flex" style={{ minHeight: "calc(100vh - var(--sp-10))" }}>
@@ -606,11 +608,12 @@ export function AgentDetailPage() {
                 )}
                 {cfgQuery.data && (
                   <SetupSection
-                    runtimeKind={setupRuntimeKind}
+                    runtimeProvider={setupRuntimeProvider}
                     computerLabel={boundClientLabel}
                     canBindComputer={isUnclaimed && agent.status === "active"}
                     bindComputerPending={bindClientMutation.isPending}
                     onBindComputer={() => setBindClientOpen(true)}
+                    onRebind={agent.clientId ? () => setReBindOpen(true) : undefined}
                     modelSlot={
                       <ModelSection
                         value={draft.draft.model}
@@ -618,6 +621,7 @@ export function AgentDetailPage() {
                         onChange={draft.setModel}
                         onRevert={draft.revertModel}
                         disabled={agent.status !== "active"}
+                        provider={setupRuntimeProvider}
                       />
                     }
                   />
@@ -820,6 +824,8 @@ export function AgentDetailPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ReBindDialog open={reBindOpen} onOpenChange={setReBindOpen} agent={agent} />
     </div>
   );
 }

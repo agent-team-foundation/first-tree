@@ -146,7 +146,9 @@ describe("Agent WS — session event protocol (S10)", () => {
         type: "agent:bind",
         agentId: seed.agent.uuid,
         ref: "bind-1",
-        runtimeType: "test",
+        // Match the seeded agent's `runtime_provider` (defaults to claude-code)
+        // so the post-0026 RUNTIME_PROVIDER_MISMATCH check passes.
+        runtimeType: "claude-code",
         runtimeVersion: "0.0.0",
       }),
     );

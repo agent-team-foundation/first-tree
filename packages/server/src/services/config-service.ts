@@ -6,11 +6,13 @@ import {
   ENV_REDACTED_PLACEHOLDER,
   type EnvEntry,
   isRedactedEnvValue,
+  type RuntimeProvider,
   type UpdateAgentRuntimeConfig,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { and, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentConfigs } from "../db/schema/agent-configs.js";
+import { agents } from "../db/schema/agents.js";
 import { ConflictError, NotFoundError } from "../errors.js";
 import { decryptValue, encryptValue, isEncryptedValue } from "./crypto.js";
 import type { Notifier } from "./notifier.js";
@@ -111,13 +113,17 @@ export function createConfigService(opts: ConfigServiceOptions): ConfigService {
     current: AgentRuntimeConfigPayload,
     patch: Partial<AgentRuntimeConfigPayload>,
   ): AgentRuntimeConfigPayload {
-    const next: AgentRuntimeConfigPayload = {
+    const next = {
+      // `kind` is pinned to `agents.runtime_provider` and never patchable
+      // from the config side; preserve the current value here and let
+      // `commitWrite` re-sync it against the authoritative source.
+      kind: current.kind,
       prompt: patch.prompt ?? current.prompt,
       model: patch.model ?? current.model,
       mcpServers: patch.mcpServers ?? current.mcpServers,
       env: patch.env ? mergeEnv(current.env, patch.env) : current.env,
       gitRepos: patch.gitRepos ?? current.gitRepos,
-    };
+    } as AgentRuntimeConfigPayload;
     return next;
   }
 
@@ -142,7 +148,24 @@ export function createConfigService(opts: ConfigServiceOptions): ConfigService {
     if (!row) {
       throw new NotFoundError(`Agent config "${agentId}" not found`);
     }
-    return row;
+    // Parse via zod so legacy payloads written before 0026 (no `kind`)
+    // are normalized to claude-code by preprocess. The authoritative kind
+    // is re-synced on every commit from agents.runtime_provider; the
+    // read-side default is a back-compat conversion only.
+    const payload = agentRuntimeConfigPayloadSchema.parse(row.payload);
+    return { ...row, payload };
+  }
+
+  async function readRuntimeProviderFor(agentId: string): Promise<RuntimeProvider> {
+    const [row] = await db
+      .select({ runtimeProvider: agents.runtimeProvider })
+      .from(agents)
+      .where(eq(agents.uuid, agentId))
+      .limit(1);
+    if (!row) {
+      throw new NotFoundError(`Agent "${agentId}" not found`);
+    }
+    return row.runtimeProvider as RuntimeProvider;
   }
 
   async function commitWrite(
@@ -157,10 +180,15 @@ export function createConfigService(opts: ConfigServiceOptions): ConfigService {
         `Agent config "${agentId}" version mismatch: expected ${expectedVersion}, got ${current.version}`,
       );
     }
+    // Re-sync `kind` with the authoritative agents.runtime_provider on
+    // every commit so a re-bind to a different provider lands on the
+    // correct discriminator next read.
+    const provider = await readRuntimeProviderFor(agentId);
     const merged = applyPatch(current.payload, patch);
+    const synced = { ...merged, kind: provider } as AgentRuntimeConfigPayload;
     // Validate the fully-merged payload — guards against e.g. duplicate env keys
     // introduced by the merge that the patch alone wouldn't catch.
-    const validated = agentRuntimeConfigPayloadSchema.parse(merged);
+    const validated = agentRuntimeConfigPayloadSchema.parse(synced);
 
     const [updated] = await db
       .update(agentConfigs)
@@ -300,7 +328,10 @@ export function createConfigService(opts: ConfigServiceOptions): ConfigService {
 
     async dryRun(agentId, patch) {
       const row = await readRow(agentId);
-      const next = agentRuntimeConfigPayloadSchema.parse(applyPatch(row.payload, patch));
+      const provider = await readRuntimeProviderFor(agentId);
+      const merged = applyPatch(row.payload, patch);
+      const synced = { ...merged, kind: provider } as AgentRuntimeConfigPayload;
+      const next = agentRuntimeConfigPayloadSchema.parse(synced);
       const diff = computeDiff(row.payload, next);
       return {
         current: { ...rowToConfig(row), payload: redact(row.payload) },
@@ -337,7 +368,7 @@ function computeDiff(
   b: AgentRuntimeConfigPayload,
 ): AgentRuntimeConfigDryRunResult["diff"] {
   const out: AgentRuntimeConfigDryRunResult["diff"] = [];
-  const fields: Array<keyof AgentRuntimeConfigPayload> = ["prompt", "model", "mcpServers", "env", "gitRepos"];
+  const fields = ["prompt", "model", "mcpServers", "env", "gitRepos"] as const;
   for (const f of fields) {
     const before = a[f];
     const after = b[f];

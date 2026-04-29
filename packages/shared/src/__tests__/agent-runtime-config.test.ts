@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   agentRuntimeConfigPayloadSchema,
   DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD,
+  DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD,
+  defaultRuntimeConfigPayload,
 } from "../schemas/agent-runtime-config.js";
 
 /**
@@ -30,5 +32,53 @@ describe("agent runtime config — default model", () => {
     // must not silently replace it with the default.
     const parsed = agentRuntimeConfigPayloadSchema.parse({ model: "" });
     expect(parsed.model).toBe("");
+  });
+});
+
+/**
+ * Codex defaults sit on a different invariant than claude-code: the Codex
+ * CLI's ChatGPT-account auth rejects `gpt-5-codex` (the SDK's compile-time
+ * default), so Hub leaves `model` empty and lets the CLI pick a slug that
+ * matches the user's auth mode. Pin it here so a well-meaning "set a sane
+ * default" change doesn't quietly break ChatGPT-auth users.
+ */
+describe("agent runtime config — codex defaults", () => {
+  it("DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD.model is empty (defer to CLI auth-mode default)", () => {
+    expect(DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD.model).toBe("");
+    expect(DEFAULT_CODEX_RUNTIME_CONFIG_PAYLOAD.kind).toBe("codex");
+  });
+
+  it("defaultRuntimeConfigPayload(provider) selects the matching variant", () => {
+    expect(defaultRuntimeConfigPayload("claude-code")).toMatchObject({
+      kind: "claude-code",
+      model: "opus",
+    });
+    expect(defaultRuntimeConfigPayload("codex")).toMatchObject({
+      kind: "codex",
+      model: "",
+    });
+  });
+
+  it("returns a distinct top-level object on each call (callers can mutate safely at top level)", () => {
+    // Implementation is a shallow spread, so nested arrays still share
+    // identity — pin the top-level guarantee only, since that's all
+    // current callers rely on (they replace fields, not mutate them).
+    const a = defaultRuntimeConfigPayload("claude-code");
+    const b = defaultRuntimeConfigPayload("claude-code");
+    expect(a).not.toBe(b);
+    a.model = "haiku";
+    expect(b.model).toBe("opus");
+  });
+
+  it("schema accepts an explicit codex payload (kind discriminator)", () => {
+    const parsed = agentRuntimeConfigPayloadSchema.parse({
+      kind: "codex",
+      model: "gpt-5.5",
+      mcpServers: [],
+      env: [],
+      gitRepos: [],
+    });
+    expect(parsed.kind).toBe("codex");
+    expect(parsed.model).toBe("gpt-5.5");
   });
 });
