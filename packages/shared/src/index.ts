@@ -162,6 +162,7 @@ export {
   inboxPollQuerySchema,
 } from "./schemas/inbox.js";
 export {
+  INVITATION_DEFAULT_TTL_DAYS,
   type InvitationPreview,
   type InvitationView,
   invitationPreviewSchema,

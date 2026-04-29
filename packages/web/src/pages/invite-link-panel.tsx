@@ -1,15 +1,31 @@
-import type { InvitationView } from "@agent-team-foundation/first-tree-hub-shared";
+import { INVITATION_DEFAULT_TTL_DAYS, type InvitationView } from "@agent-team-foundation/first-tree-hub-shared";
 import { useEffect, useState } from "react";
 import { api } from "../api/client.js";
 import { useAuth } from "../auth/auth-context.js";
 import { Button } from "../components/ui/button.js";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card.js";
 
+/** Render the expiry timestamp as "in N days · 2026/5/6" — both relative
+ *  and absolute, so the admin doesn't have to do arithmetic. */
+function formatExpiry(iso: string): string {
+  const expiresAt = new Date(iso);
+  const now = Date.now();
+  const msLeft = expiresAt.getTime() - now;
+  if (msLeft <= 0) return `expired ${expiresAt.toLocaleDateString()}`;
+  const daysLeft = Math.ceil(msLeft / (24 * 60 * 60 * 1000));
+  const relative = daysLeft === 1 ? "in less than a day" : `in ${daysLeft} days`;
+  return `expires ${relative} · ${expiresAt.toLocaleDateString()}`;
+}
+
 /**
  * Admin panel for the org's *current* invite link. v1 enforces "one
  * active link per org" via the `uq_invitations_active_per_org` partial
  * unique index, so the UI surfaces a single share URL with a "rotate"
  * action that revokes-and-replaces in one transaction.
+ *
+ * Links auto-expire after `INVITATION_DEFAULT_TTL_DAYS` to bound the
+ * blast radius of accidental link leakage. Admin extends by clicking
+ * Rotate (mints a fresh link with a fresh timer).
  */
 export function InviteLinkPanel() {
   const { organizationId } = useAuth();
@@ -49,7 +65,8 @@ export function InviteLinkPanel() {
       <CardHeader>
         <CardTitle>Invite link</CardTitle>
         <CardDescription>
-          Anyone with this link can join your team as a member. Rotating revokes the old link instantly.
+          Anyone with this link can join your team as a member. Links expire after {INVITATION_DEFAULT_TTL_DAYS} days;
+          rotating revokes the old link instantly and resets the timer.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -79,7 +96,7 @@ export function InviteLinkPanel() {
             </div>
             <p className="text-label text-muted-foreground">
               Created {new Date(invite.createdAt).toLocaleString()}
-              {invite.expiresAt ? ` · expires ${new Date(invite.expiresAt).toLocaleString()}` : " · no expiry"}
+              {invite.expiresAt ? ` · ${formatExpiry(invite.expiresAt)}` : " · no expiry"}
             </p>
           </>
         ) : (

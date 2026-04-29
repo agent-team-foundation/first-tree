@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { INVITATION_DEFAULT_TTL_DAYS } from "@agent-team-foundation/first-tree-hub-shared";
 import { and, desc, eq, gt, isNull, or } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { invitationRedemptions, invitations } from "../db/schema/invitations.js";
@@ -8,8 +9,26 @@ import { uuidv7 } from "../uuid.js";
 
 const TOKEN_BYTES = 32;
 
+/**
+ * Default invite-link TTL — authoritative server-side value. Tightening
+ * "anyone with this link can join" to a bounded window is the primary
+ * mitigation for accidental link leakage (admin pasting into a public
+ * Slack channel, forwarded email chains, screen-share captures, etc).
+ * 7 days mirrors what GitHub and Vercel default to; longer windows put
+ * more leak surface on the same token. Admins extend by clicking Rotate
+ * (which mints a fresh 7-day link in one transaction).
+ *
+ * The mirror constant in `@…shared/schemas/invitation.ts` exists so the
+ * web UI can render "expires in 7 days" copy without an extra round-trip.
+ */
+const INVITATION_DEFAULT_TTL_MS = INVITATION_DEFAULT_TTL_DAYS * 24 * 60 * 60 * 1000;
+
 function generateInvitationToken(): string {
   return randomBytes(TOKEN_BYTES).toString("base64url");
+}
+
+function defaultExpiry(): Date {
+  return new Date(Date.now() + INVITATION_DEFAULT_TTL_MS);
 }
 
 /**
@@ -40,24 +59,27 @@ export async function getActiveInvitation(db: Database, orgId: string) {
  * Get-or-create the active invitation for `orgId`. Idempotent so the admin
  * UI can call this on first render without inadvertently creating a fresh
  * link every time someone visits Settings.
+ *
+ * "Active" is filtered by `getActiveInvitation` (revoked_at IS NULL AND
+ * not expired). When no active row exists we delegate to `rotateInvitation`
+ * — that path correctly handles the case where a prior row exists but
+ * has expired (`revoked_at IS NULL` but `expires_at < now()`). A naked
+ * INSERT here would trip `uq_invitations_active_per_org` (the partial
+ * unique index can't filter on `now()`, so it considers expired-but-not-
+ * revoked rows as still occupying the slot).
  */
 export async function ensureActiveInvitation(db: Database, orgId: string, createdBy: string) {
   const existing = await getActiveInvitation(db, orgId);
   if (existing) return existing;
-
-  const id = uuidv7();
-  const token = generateInvitationToken();
-  const [row] = await db
-    .insert(invitations)
-    .values({ id, organizationId: orgId, token, role: "member", createdBy })
-    .returning();
-  if (!row) throw new Error("Unexpected: INSERT RETURNING produced no row");
-  return row;
+  return rotateInvitation(db, orgId, createdBy);
 }
 
 /**
- * Rotate the invitation: revoke the current active row (if any) and insert
- * a new one in a single transaction. Old tokens stop redeeming immediately.
+ * Rotate the invitation: revoke every non-revoked row for this org (the
+ * current active link AND any expired-but-not-revoked stragglers) and
+ * insert a fresh one in a single transaction. Old tokens stop redeeming
+ * immediately. The new row carries a default 7-day expiry; admin extends
+ * by rotating again.
  */
 export async function rotateInvitation(db: Database, orgId: string, createdBy: string) {
   return db.transaction(async (tx) => {
@@ -71,7 +93,7 @@ export async function rotateInvitation(db: Database, orgId: string, createdBy: s
     const token = generateInvitationToken();
     const [row] = await tx
       .insert(invitations)
-      .values({ id, organizationId: orgId, token, role: "member", createdBy })
+      .values({ id, organizationId: orgId, token, role: "member", createdBy, expiresAt: defaultExpiry() })
       .returning();
     if (!row) throw new Error("Unexpected: INSERT RETURNING produced no row");
     return row;

@@ -7,7 +7,7 @@ import { createTestAdmin, INVALID_BCRYPT_PLACEHOLDER, useTestApp } from "./helpe
 describe("Invitation lifecycle", () => {
   const getApp = useTestApp();
 
-  it("admin can fetch (and auto-create) the active invite link", async () => {
+  it("admin can fetch (and auto-create) the active invite link with default 7-day expiry", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const res = await app.inject({
@@ -16,9 +16,52 @@ describe("Invitation lifecycle", () => {
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
     expect(res.statusCode).toBe(200);
-    const body = res.json<{ token: string; inviteUrl: string }>();
+    const body = res.json<{ token: string; inviteUrl: string; expiresAt: string | null }>();
     expect(body.token).toMatch(/^[A-Za-z0-9_-]{20,}$/);
     expect(body.inviteUrl).toContain(`/invite/${body.token}`);
+
+    // Default 7-day TTL; allow a generous window for clock drift between
+    // the test process and the in-process server.
+    if (!body.expiresAt) throw new Error("expected expiresAt to be set");
+    const expiresMs = new Date(body.expiresAt).getTime() - Date.now();
+    expect(expiresMs).toBeGreaterThan(6 * 24 * 60 * 60 * 1000);
+    expect(expiresMs).toBeLessThan(8 * 24 * 60 * 60 * 1000);
+  });
+
+  it("ensureActiveInvitation rotates past an expired-but-not-revoked row", async () => {
+    // Reproduces the scenario where a prior invitation has aged past its
+    // expiry but no admin has rotated yet. Bare INSERT would have tripped
+    // `uq_invitations_active_per_org` (the partial unique can't filter on
+    // now()); ensureActive's delegation to rotate handles it.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const { ensureActiveInvitation, getActiveInvitation } = await import("../services/invitation.js");
+    const { uuidv7 } = await import("../uuid.js");
+
+    // Plant an expired row by hand — same shape as a stale rotation.
+    const expiredId = uuidv7();
+    const expiredToken = `expired-${expiredId}`;
+    await app.db.insert(invitations).values({
+      id: expiredId,
+      organizationId: admin.organizationId,
+      token: expiredToken,
+      role: "member",
+      createdBy: admin.userId,
+      expiresAt: new Date(Date.now() - 60_000),
+    });
+
+    const fresh = await ensureActiveInvitation(app.db, admin.organizationId, admin.userId);
+    expect(fresh.token).not.toBe(expiredToken);
+    if (!fresh.expiresAt) throw new Error("rotated invitation should have a default expiry");
+    expect(fresh.expiresAt.getTime()).toBeGreaterThan(Date.now());
+
+    // Old row got revoked as part of the same rotate transaction.
+    const oldRow = await app.db.select().from(invitations).where(eq(invitations.id, expiredId));
+    expect(oldRow[0]?.revokedAt).not.toBeNull();
+
+    // Active = the new one.
+    const active = await getActiveInvitation(app.db, admin.organizationId);
+    expect(active?.id).toBe(fresh.id);
   });
 
   it("rotate revokes the prior token and issues a fresh one", async () => {

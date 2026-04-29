@@ -1,6 +1,15 @@
 import { z } from "zod";
 
 /**
+ * Default invite-link TTL (days). Authoritative value lives in
+ * `services/invitation.ts`; mirrored here so the web UI can surface
+ * "expires in N days" copy without an extra round-trip. Changing one
+ * place without the other will only desync UI copy from server behavior
+ * — no security impact.
+ */
+export const INVITATION_DEFAULT_TTL_DAYS = 7;
+
+/**
  * Public preview returned for an invite link before the recipient signs in.
  * Surfaces just enough for the recipient to recognise the team they're
  * joining; intentionally omits anything internal (memberCount, member
