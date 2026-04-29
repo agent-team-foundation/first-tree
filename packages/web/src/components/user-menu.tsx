@@ -121,31 +121,42 @@ export function UserMenu() {
               </div>
             </div>
 
-            {/* Teams list — hidden when the user only belongs to one team
-                (proposal §"OrganizationSwitcher": single-org users get a
-                static label, no switcher overhead). The Create / Join
-                actions below remain visible so the user can still self-
-                serve into a multi-org state. */}
-            {orgs.length > 1 && (
+            {/* Teams section — proposal §"OrganizationSwitcher":
+                single-org users see a static label (the user still
+                needs to know which team they're in), multi-org users
+                get clickable rows with a checkmark on the active one. */}
+            {orgs.length > 0 && (
               <div className="border-b py-1" style={{ borderColor: "var(--border)" }}>
-                <div className="px-4 py-1 text-eyebrow text-muted-foreground">Teams</div>
-                <div>
-                  {orgs.map((o) => (
-                    <button
-                      type="button"
-                      role="menuitem"
-                      key={o.id}
-                      onClick={() => void switchOrg(o.id)}
-                      className="flex w-full items-center gap-2 px-4 py-1.5 text-left text-body hover:bg-accent transition-colors"
-                      style={{ color: "var(--fg)" }}
-                    >
-                      <span style={{ width: 14, display: "inline-flex" }}>
-                        {o.id === organizationId ? <Check className="h-3.5 w-3.5" /> : null}
-                      </span>
-                      <span className="truncate">{o.displayName}</span>
-                    </button>
-                  ))}
-                </div>
+                <div className="px-4 py-1 text-eyebrow text-muted-foreground">Team</div>
+                {orgs.length === 1 ? (
+                  <div
+                    className="flex w-full items-center gap-2 px-4 py-1.5 text-left text-body"
+                    style={{ color: "var(--fg)" }}
+                  >
+                    <span style={{ width: 14, display: "inline-flex" }}>
+                      <Check className="h-3.5 w-3.5" />
+                    </span>
+                    <span className="truncate">{orgs[0]?.displayName}</span>
+                  </div>
+                ) : (
+                  <div>
+                    {orgs.map((o) => (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        key={o.id}
+                        onClick={() => void switchOrg(o.id)}
+                        className="flex w-full items-center gap-2 px-4 py-1.5 text-left text-body hover:bg-accent transition-colors"
+                        style={{ color: "var(--fg)" }}
+                      >
+                        <span style={{ width: 14, display: "inline-flex" }}>
+                          {o.id === organizationId ? <Check className="h-3.5 w-3.5" /> : null}
+                        </span>
+                        <span className="truncate">{o.displayName}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
