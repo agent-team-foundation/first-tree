@@ -1,5 +1,5 @@
 import type { SessionState } from "@agent-team-foundation/first-tree-hub-shared";
-import { and, eq, isNotNull, sql } from "drizzle-orm";
+import { and, eq, isNotNull, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
@@ -19,6 +19,12 @@ import type { Notifier } from "./notifier.js";
  * what `evicted` actually means) and "this chat is permanently archived for
  * this agent" (a chat-level decision that should live on `chats`, not here).
  * See proposals/hub-agent-messaging-reply-and-mentions §M2-session-lifecycle.
+ *
+ * Presence row contract: this function tolerates a missing `agent_presence`
+ * row by using `INSERT ... ON CONFLICT DO UPDATE`. The predictive-write path
+ * (sendMessage on first message) may target an agent whose client has never
+ * bound, so a prior `update agent_presence ... where agentId` would silently
+ * drop the activeSessions/totalSessions refresh. See PR #198 review §2.
  */
 export async function upsertSessionState(
   db: Database,
@@ -27,16 +33,22 @@ export async function upsertSessionState(
   state: SessionState,
   organizationId: string,
   notifier?: Notifier,
+  options?: { touchPresenceLastSeen?: boolean },
 ) {
   const now = new Date();
   let wrote = false;
   await db.transaction(async (tx) => {
+    // Short-circuit when the row is already at the target state: skip the
+    // updatedAt refresh so steady-state messaging doesn't churn the row.
+    // Insertions and any state transition (evicted → active, active →
+    // suspended, etc.) still take the UPDATE branch.
     await tx
       .insert(agentChatSessions)
       .values({ agentId, chatId, state, updatedAt: now })
       .onConflictDoUpdate({
         target: [agentChatSessions.agentId, agentChatSessions.chatId],
         set: { state, updatedAt: now },
+        setWhere: ne(agentChatSessions.state, state),
       });
 
     // runtimeState is owned by the client's `runtime:state` frame — do not
@@ -52,14 +64,24 @@ export async function upsertSessionState(
     const activeSessions = counts?.active ?? 0;
     const totalSessions = counts?.total ?? 0;
 
+    // `lastSeenAt` is owned by the client's bind/heartbeat. Skip it on
+    // server-predictive writes (e.g. sendMessage upserting active on first
+    // message); default-true preserves the WS `session:state` path's behavior.
+    // Note: when the row is being inserted (no prior presence), the schema's
+    // `lastSeenAt` default (now()) populates it regardless — touchLastSeen
+    // only governs subsequent UPDATE behavior.
+    const touchLastSeen = options?.touchPresenceLastSeen ?? true;
+    const presenceSet = touchLastSeen
+      ? { activeSessions, totalSessions, lastSeenAt: now }
+      : { activeSessions, totalSessions };
+
     await tx
-      .update(agentPresence)
-      .set({
-        activeSessions,
-        totalSessions,
-        lastSeenAt: now,
-      })
-      .where(eq(agentPresence.agentId, agentId));
+      .insert(agentPresence)
+      .values({ agentId, activeSessions, totalSessions })
+      .onConflictDoUpdate({
+        target: [agentPresence.agentId],
+        set: presenceSet,
+      });
 
     wrote = true;
   });
