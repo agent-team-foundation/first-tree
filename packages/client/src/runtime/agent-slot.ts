@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import type {
+  InboxDeliverFrame,
   InboxEntryWithMessage,
   RuntimeState,
   SessionEvent,
@@ -32,6 +33,7 @@ export type AgentSlotConfig = {
 
 type ConnectionListener =
   | { event: "agent:message"; fn: (agentId: string, data: unknown) => void }
+  | { event: "inbox:deliver"; fn: (inboxId: string, frame: InboxDeliverFrame) => void }
   | { event: "agent:bound"; fn: (agent: { agentId: string }) => void }
   | { event: "session:command"; fn: (cmd: { agentId: string; chatId: string; type: string }) => void }
   | { event: "session:reconcile:result"; fn: (result: SessionReconcileResult) => void };
@@ -45,6 +47,12 @@ export class AgentSlot {
   private pollingTimer: ReturnType<typeof setInterval> | null = null;
   private reconcileTimer: ReturnType<typeof setInterval> | null = null;
   private listeners: ConnectionListener[] = [];
+  /**
+   * The inbox this slot's agent owns — used to filter `inbox:deliver`
+   * frames addressed to other agents on the same client. Captured at
+   * `start()` from `sdk.register()`.
+   */
+  private inboxId: string | null = null;
 
   constructor(config: AgentSlotConfig) {
     this.config = config;
@@ -91,8 +99,16 @@ export class AgentSlot {
       throw new Error(`Hub unreachable while loading agent config: ${msg}`);
     }
 
+    this.inboxId = agent.inboxId;
+
     const onMessage = (agentId: string) => {
       if (agentId === this.config.agentId) this.pullAndDispatch();
+    };
+    const onInboxDeliver = (inboxId: string, frame: InboxDeliverFrame) => {
+      if (inboxId !== this.inboxId) return;
+      this.dispatchPushedFrame(frame).catch((err) => {
+        this.logger.warn({ err, entryId: frame.entryId }, "inbox:deliver dispatch error");
+      });
     };
     const onBound = (boundAgent: { agentId: string }) => {
       if (boundAgent.agentId === this.config.agentId) {
@@ -108,10 +124,12 @@ export class AgentSlot {
       }
     };
     this.clientConnection.on("agent:message", onMessage);
+    this.clientConnection.on("inbox:deliver", onInboxDeliver);
     this.clientConnection.on("agent:bound", onBound);
     this.clientConnection.on("session:reconcile:result", onReconcileResult);
     this.listeners.push(
       { event: "agent:message", fn: onMessage },
+      { event: "inbox:deliver", fn: onInboxDeliver },
       { event: "agent:bound", fn: onBound },
       { event: "session:reconcile:result", fn: onReconcileResult },
     );
@@ -125,6 +143,22 @@ export class AgentSlot {
       dataDir: DEFAULT_DATA_DIR,
       log: createLogger("git-mirror").child({ agentName: this.config.name, agentId: this.config.agentId }),
     });
+
+    // Pin the ack channel ONCE per slot. `clientConnection.supportsWsInboxDeliver`
+    // is per-connection (resolves on `server:welcome`) and cannot flip mid-slot
+    // — server-side per-socket subscriptions register a push handler OR the
+    // legacy doorbell, never both, so the ack channel matches the delivery
+    // channel for this slot's lifetime. Mixing them would leak the server's
+    // per-agent in-flight counter (proposal hub-inbox-ws-data-plane §3.5).
+    const ackEntry = this.clientConnection.supportsWsInboxDeliver
+      ? (entryId: number) => {
+          this.clientConnection.sendInboxAck(entryId);
+          // sendInboxAck is fire-and-forget (`ws.send` doesn't block on flush);
+          // SessionManager treats ack as advisory. Wrap in resolved Promise to
+          // satisfy the `(id) => Promise<void>` config signature.
+          return Promise.resolve();
+        }
+      : undefined;
 
     this.sessionManager = new SessionManager({
       session: this.config.session,
@@ -147,6 +181,7 @@ export class AgentSlot {
       log: this.logger,
       registryPath,
       agentConfigCache: this.agentConfigCache,
+      ackEntry,
       onStateChange: (chatId, state) => this.reportSessionState(chatId, state),
       onRuntimeStateChange: (state) => this.reportRuntimeState(state),
       onSessionEvent: (chatId, event) => this.reportSessionEvent(chatId, event),
@@ -182,6 +217,7 @@ export class AgentSlot {
     }
     for (const entry of this.listeners) {
       if (entry.event === "agent:message") this.clientConnection.off(entry.event, entry.fn);
+      else if (entry.event === "inbox:deliver") this.clientConnection.off(entry.event, entry.fn);
       else if (entry.event === "agent:bound") this.clientConnection.off(entry.event, entry.fn);
       else if (entry.event === "session:reconcile:result") this.clientConnection.off(entry.event, entry.fn);
       else this.clientConnection.off(entry.event, entry.fn);
@@ -220,10 +256,57 @@ export class AgentSlot {
   }
 
   private startPolling(): void {
+    // Skip the 5s HTTP poll when the server has negotiated the WS data plane
+    // (`server:welcome.capabilities.wsInboxDeliver`). The push path drains
+    // any in-flight backlog immediately after `agent:bound` (server-side),
+    // so we don't need a kick-poll either. Legacy servers leave the
+    // capability off and we keep polling exactly as before — that's the
+    // rollback path (proposal hub-inbox-ws-data-plane §3.6).
+    if (this.clientConnection.supportsWsInboxDeliver) {
+      this.logger.info("WS inbox data plane active — skipping 5s HTTP poll");
+      return;
+    }
     this.pollingTimer = setInterval(() => {
       this.pullAndDispatch();
     }, 5000);
     this.pullAndDispatch();
+  }
+
+  /**
+   * Translate an `inbox:deliver` push frame into the {@link InboxEntryWithMessage}
+   * shape `SessionManager.dispatch` expects, then dispatch.
+   *
+   * Ack happens INSIDE `dispatch` via the `ackEntry` callback we pinned at
+   * construction time — for push slots that's `clientConnection.sendInboxAck`,
+   * for poll slots it stays the legacy `sdk.ack`. Sending an additional ack
+   * here would double-ack: HTTP first (`delivered → acked`) followed by a
+   * WS frame the server can no longer match against any `delivered` row,
+   * which leaks the server's per-agent in-flight counter and stalls push
+   * after `inboxMaxInFlightPerAgent` messages.
+   *
+   * Dispatch errors propagate up; the entry stays `delivered` server-side
+   * and the 300s timeout reaper rolls it back to `pending` for replay
+   * (proposal §3.7).
+   */
+  private async dispatchPushedFrame(frame: InboxDeliverFrame): Promise<void> {
+    if (!this.sessionManager) return;
+    const entry: InboxEntryWithMessage = {
+      id: frame.entryId,
+      inboxId: frame.inboxId,
+      messageId: frame.message.id,
+      chatId: frame.chatId,
+      // The DB columns we don't carry on the wire — set to the values the
+      // claim path would have produced. Only `chatId`, `id`, and `message`
+      // are read by SessionManager.dispatch, but keeping the shape correct
+      // lets test fixtures and downstream consumers depend on the schema.
+      status: "delivered",
+      retryCount: 0,
+      createdAt: frame.message.createdAt,
+      deliveredAt: new Date().toISOString(),
+      ackedAt: null,
+      message: frame.message,
+    };
+    await this.sessionManager.dispatch(entry);
   }
 
   private startReconcileLoop(): void {
