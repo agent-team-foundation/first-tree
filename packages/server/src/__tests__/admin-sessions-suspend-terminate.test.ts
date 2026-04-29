@@ -287,7 +287,7 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
     expect(filteredChats).toContain(chatEvicted.id);
   });
 
-  it("archive (terminate) vs sendMessage race resolves to a valid state, last-writer-wins (R3)", async () => {
+  it("archive vs sendMessage race always resolves to active (sendMessage wins via archive's conservative gate, R3)", async () => {
     const app = getApp();
     const admin = await createAdminContext(app, { username: `race-${crypto.randomUUID().slice(0, 6)}` });
     const sender = await createAgent(app.db, {
@@ -311,23 +311,22 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
     await seedSession(app, target.uuid, chat.id, "suspended");
 
     // Concurrently fire archive (suspended → evicted, gated by from=['suspended'])
-    // and sendMessage (any → active via upsertSessionState's INSERT ... ON
-    // CONFLICT DO UPDATE, unconditional). Both touch the same agent_chat_sessions
-    // row, so PG row-level locks serialize them.
+    // and sendMessage (any → active via upsertSessionState, unconditional).
+    // Both touch the same agent_chat_sessions row, so PG row-level locks
+    // serialize them. Either commit order resolves to active:
     //
-    // - sendMessage's path is unconditional override → 'active'
-    // - archive's path requires existing state in {'suspended'}; if sendMessage
-    //   already flipped it to 'active', archive becomes a no-op (transitioned=false)
+    // - archive first → state becomes 'evicted'; the upsert then unconditionally
+    //   overrides → 'active'.
+    // - upsert first → state becomes 'active'; archive then sees 'active' which
+    //   is NOT in its `from=['suspended']` gate, so it becomes a no-op
+    //   (transitioned=false).
     //
-    // Expectation: data integrity holds (state ∈ valid set);
-    // sendMessage always wins, so the final state is 'active'.
+    // sendMessage always wins, due to archive's conservative gate.
     await Promise.all([
       sessionService.archiveSession(app.db, target.uuid, chat.id, admin.organizationId, app.notifier),
       sendMessage(app.db, chat.id, sender.uuid, { format: "text", content: "race" }),
     ]);
 
-    const finalState = await readState(app, target.uuid, chat.id);
-    expect(["active", "suspended", "evicted"]).toContain(finalState);
-    expect(finalState).toBe("active");
+    expect(await readState(app, target.uuid, chat.id)).toBe("active");
   });
 });

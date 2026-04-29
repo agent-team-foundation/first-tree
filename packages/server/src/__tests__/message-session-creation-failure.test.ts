@@ -21,6 +21,15 @@ vi.mock("../services/activity.js", async (importOriginal) => {
 // uses `pool: forks` with `isolate: false`), in which case it holds a
 // reference to the real `upsertSessionState` and our mock would be ignored.
 // Reset the module graph and re-import so the mocked binding wins.
+//
+// IMPORTANT: this is an isolation hack. If a future test in this same file
+// (or a test runner ordering quirk) imports `services/message.js` BEFORE the
+// `vi.mock` factory runs, the mock will silently miss. Symptoms:
+// `expect(mockedUpsert).toHaveBeenCalled()` fails with `0 times`. If you hit
+// that, reach for `vi.spyOn(activityService, "upsertSessionState")` won't
+// work either (ESM named exports are readonly bindings) — instead, ensure
+// no top-level import of message.js exists in this file and rely on the
+// dynamic import below.
 let sendMessage: typeof import("../services/message.js")["sendMessage"];
 beforeAll(async () => {
   vi.resetModules();

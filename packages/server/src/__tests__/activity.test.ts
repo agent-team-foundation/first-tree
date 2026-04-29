@@ -70,4 +70,24 @@ describe("upsertSessionState — touchPresenceLastSeen option", () => {
     expect(row).toBeDefined();
     expect(row?.lastSeenAt?.getTime()).toBeGreaterThan(oldDate.getTime());
   });
+
+  // Predictive write may target an agent whose client has never bound (so
+  // `agent_presence` has no row yet). The previous `update ... where agentId`
+  // silently dropped the activeSessions/totalSessions refresh in that case;
+  // the INSERT ... ON CONFLICT DO UPDATE form must populate the row instead.
+  // See PR #198 review §2.
+  it("creates the agent_presence row when none exists (predictive write on a never-bound agent)", async () => {
+    const { app, admin, agent, chat } = await setup();
+    // Do NOT seed presence.
+    expect(await readPresence(app, agent.uuid)).toBeUndefined();
+
+    await upsertSessionState(app.db, agent.uuid, chat.id, "active", admin.organizationId, undefined, {
+      touchPresenceLastSeen: false,
+    });
+
+    const row = await readPresence(app, agent.uuid);
+    expect(row).toBeDefined();
+    expect(row?.activeSessions).toBe(1);
+    expect(row?.totalSessions).toBe(1);
+  });
 });
