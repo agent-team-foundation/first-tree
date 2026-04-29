@@ -144,6 +144,22 @@ export class AgentSlot {
       log: createLogger("git-mirror").child({ agentName: this.config.name, agentId: this.config.agentId }),
     });
 
+    // Pin the ack channel ONCE per slot. `clientConnection.supportsWsInboxDeliver`
+    // is per-connection (resolves on `server:welcome`) and cannot flip mid-slot
+    // — server-side per-socket subscriptions register a push handler OR the
+    // legacy doorbell, never both, so the ack channel matches the delivery
+    // channel for this slot's lifetime. Mixing them would leak the server's
+    // per-agent in-flight counter (proposal hub-inbox-ws-data-plane §3.5).
+    const ackEntry = this.clientConnection.supportsWsInboxDeliver
+      ? (entryId: number) => {
+          this.clientConnection.sendInboxAck(entryId);
+          // sendInboxAck is fire-and-forget (`ws.send` doesn't block on flush);
+          // SessionManager treats ack as advisory. Wrap in resolved Promise to
+          // satisfy the `(id) => Promise<void>` config signature.
+          return Promise.resolve();
+        }
+      : undefined;
+
     this.sessionManager = new SessionManager({
       session: this.config.session,
       concurrency: this.config.concurrency,
@@ -165,6 +181,7 @@ export class AgentSlot {
       log: this.logger,
       registryPath,
       agentConfigCache: this.agentConfigCache,
+      ackEntry,
       onStateChange: (chatId, state) => this.reportSessionState(chatId, state),
       onRuntimeStateChange: (state) => this.reportRuntimeState(state),
       onSessionEvent: (chatId, event) => this.reportSessionEvent(chatId, event),
@@ -257,15 +274,19 @@ export class AgentSlot {
 
   /**
    * Translate an `inbox:deliver` push frame into the {@link InboxEntryWithMessage}
-   * shape `SessionManager.dispatch` expects, run dispatch, then ack. Mirrors
-   * the legacy poll path exactly except for the ack channel: WS frame instead
-   * of `sdk.ack()` HTTP call.
+   * shape `SessionManager.dispatch` expects, then dispatch.
    *
-   * Ack runs ONLY on the success path so a dispatch crash leaves the entry
-   * `delivered` server-side, which the 300s timeout reaper rolls back to
-   * `pending` for replay (proposal §3.7). A `finally` block here would ack
-   * on every exception too — silently dropping the message because reaper
-   * skips already-`acked` rows.
+   * Ack happens INSIDE `dispatch` via the `ackEntry` callback we pinned at
+   * construction time — for push slots that's `clientConnection.sendInboxAck`,
+   * for poll slots it stays the legacy `sdk.ack`. Sending an additional ack
+   * here would double-ack: HTTP first (`delivered → acked`) followed by a
+   * WS frame the server can no longer match against any `delivered` row,
+   * which leaks the server's per-agent in-flight counter and stalls push
+   * after `inboxMaxInFlightPerAgent` messages.
+   *
+   * Dispatch errors propagate up; the entry stays `delivered` server-side
+   * and the 300s timeout reaper rolls it back to `pending` for replay
+   * (proposal §3.7).
    */
   private async dispatchPushedFrame(frame: InboxDeliverFrame): Promise<void> {
     if (!this.sessionManager) return;
@@ -286,7 +307,6 @@ export class AgentSlot {
       message: frame.message,
     };
     await this.sessionManager.dispatch(entry);
-    this.clientConnection.sendInboxAck(frame.entryId);
   }
 
   private startReconcileLoop(): void {

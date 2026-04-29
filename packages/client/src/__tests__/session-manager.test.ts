@@ -566,3 +566,157 @@ describe("SessionManager routing guards — dispatch integration", () => {
     await sm.shutdown();
   });
 });
+
+/**
+ * `ackEntry` is the WS-push escape hatch (proposal hub-inbox-ws-data-plane
+ * §3.4): when set, dispatch acks via this callback instead of `sdk.ack`,
+ * keeping push-mode slots from double-acking and leaking the server-side
+ * per-agent in-flight counter (which only decrements on a WS ack matching
+ * a still-`delivered` row).
+ *
+ * The four paths that ack inside dispatch — echo suppression, inject into
+ * an active session, start a new session, resume an evicted session —
+ * must all flow through the injected callback, AND `sdk.ack` must NOT be
+ * called when one is provided. Anything less than that re-introduces the
+ * counter leak.
+ */
+describe("SessionManager ackEntry callback (WS push channel)", () => {
+  function buildSm(ackEntry: (entryId: number) => Promise<void>, handler?: AgentHandler) {
+    const h = handler ?? createMockHandler();
+    const sdk = mockSdk();
+    const sm = new SessionManager({
+      session: { idle_timeout: 300, max_sessions: 10, reconcile_interval_seconds: 300 },
+      concurrency: 5,
+      handlerFactory: () => h,
+      handlerConfig: { workspaceRoot: "/tmp/test" },
+      agentIdentity: {
+        agentId: "agent-1",
+        inboxId: "inbox-agent-1",
+        displayName: "Agent",
+        type: "autonomous_agent",
+        delegateMention: null,
+        metadata: {},
+      },
+      sdk,
+      log: silentLogger(),
+      ackEntry,
+    });
+    return { sm, sdk, handler: h };
+  }
+
+  it("uses the injected callback (not sdk.ack) when starting a new session", async () => {
+    const ackEntry = vi.fn().mockResolvedValue(undefined);
+    const { sm, sdk } = buildSm(ackEntry);
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-1" }));
+
+    expect(ackEntry).toHaveBeenCalledTimes(1);
+    expect(ackEntry).toHaveBeenCalledWith(1);
+    expect(sdk.ack).not.toHaveBeenCalled();
+
+    await sm.shutdown();
+  });
+
+  it("uses the injected callback when injecting into an active session", async () => {
+    const ackEntry = vi.fn().mockResolvedValue(undefined);
+    const { sm, sdk } = buildSm(ackEntry);
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-1" }));
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-1" }));
+
+    expect(ackEntry).toHaveBeenCalledTimes(2);
+    expect(ackEntry).toHaveBeenNthCalledWith(1, 1);
+    expect(ackEntry).toHaveBeenNthCalledWith(2, 2);
+    expect(sdk.ack).not.toHaveBeenCalled();
+
+    await sm.shutdown();
+  });
+
+  it("uses the injected callback for echo-suppressed entries", async () => {
+    const ackEntry = vi.fn().mockResolvedValue(undefined);
+    const handler = createMockHandler();
+    const { sm, sdk } = buildSm(ackEntry, handler);
+
+    const echo = mockEntry({
+      id: 99,
+      chatId: "c2",
+      inReplyTo: "M1",
+      inReplyToSnapshot: { senderId: "agent-1", chatId: "c2", replyToChat: "c1" },
+    });
+    await sm.dispatch(echo);
+
+    expect(handler.start).not.toHaveBeenCalled();
+    expect(ackEntry).toHaveBeenCalledWith(99);
+    expect(sdk.ack).not.toHaveBeenCalled();
+
+    await sm.shutdown();
+  });
+
+  it("uses the injected callback when resuming an evicted session", async () => {
+    // Seed an evicted session by exceeding concurrency=1, then dispatch into
+    // the evicted chat to trigger the resume branch (session-manager.ts:422).
+    const ackEntry = vi.fn().mockResolvedValue(undefined);
+    const handler = createMockHandler();
+    const sdk = mockSdk();
+    const sm = new SessionManager({
+      session: { idle_timeout: 300, max_sessions: 1, reconcile_interval_seconds: 300 },
+      concurrency: 1,
+      handlerFactory: () => handler,
+      handlerConfig: { workspaceRoot: "/tmp/test" },
+      agentIdentity: {
+        agentId: "agent-1",
+        inboxId: "inbox-agent-1",
+        displayName: "Agent",
+        type: "autonomous_agent",
+        delegateMention: null,
+        metadata: {},
+      },
+      sdk,
+      log: silentLogger(),
+      ackEntry,
+    });
+
+    // Start chat-a, then chat-b which evicts chat-a (max_sessions=1).
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-a" }));
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-b" }));
+    ackEntry.mockClear();
+    (sdk.ack as ReturnType<typeof vi.fn>).mockClear();
+
+    // Dispatching back into chat-a hits the resume branch.
+    await sm.dispatch(mockEntry({ id: 3, chatId: "chat-a", messageId: "msg-resume" }));
+
+    expect(ackEntry).toHaveBeenCalledWith(3);
+    expect(sdk.ack).not.toHaveBeenCalled();
+
+    await sm.shutdown();
+  });
+
+  it("falls back to sdk.ack when no ackEntry callback is configured (legacy poll path)", async () => {
+    // Default behaviour — a slot constructed without `ackEntry` keeps the
+    // legacy HTTP ack channel so existing poll deployments are unaffected.
+    const sdk = mockSdk();
+    const handler = createMockHandler();
+    const sm = new SessionManager({
+      session: { idle_timeout: 300, max_sessions: 10, reconcile_interval_seconds: 300 },
+      concurrency: 5,
+      handlerFactory: () => handler,
+      handlerConfig: { workspaceRoot: "/tmp/test" },
+      agentIdentity: {
+        agentId: "agent-1",
+        inboxId: "inbox-agent-1",
+        displayName: "Agent",
+        type: "autonomous_agent",
+        delegateMention: null,
+        metadata: {},
+      },
+      sdk,
+      log: silentLogger(),
+    });
+
+    await sm.dispatch(mockEntry({ id: 7, chatId: "chat-1" }));
+
+    expect(sdk.ack).toHaveBeenCalledWith(7);
+
+    await sm.shutdown();
+  });
+});
