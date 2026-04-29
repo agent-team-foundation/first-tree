@@ -18,6 +18,9 @@
 *_LOCAL_*.txt
 *_REMOTE_*.txt
 
+# Tracked despite *.BASE.* glob (TypeScript shared config).
+!tsconfig.base.json
+
 ### Linux ###
 *~
 

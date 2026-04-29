@@ -1,0 +1,15 @@
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "number": 300,
+        "state": "OPEN",
+        "labels": {
+          "nodes": [
+            { "name": "breeze:wip" }
+          ]
+        }
+      }
+    }
+  }
+}

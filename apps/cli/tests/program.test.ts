@@ -7,6 +7,9 @@ import { statusCommand as treeStatusCommand } from "../src/commands/tree/status.
 import type { CommandAction, CommandContext, GlobalOptions } from "../src/commands/types.js";
 import { createProgram, main } from "../src/index.js";
 
+const runAutoMock = vi.hoisted(() => vi.fn().mockResolvedValue(0));
+vi.mock("@first-tree/auto", () => ({ runAuto: runAutoMock }));
+
 type ProgramRunResult = {
   code: number;
   stderr: string;
@@ -364,6 +367,73 @@ describe("first-tree program", () => {
       expect(log).toHaveBeenCalledWith(message);
     });
   }
+
+  it("dispatches bare `auto` to runAuto with empty args", async () => {
+    runAutoMock.mockClear();
+    runAutoMock.mockResolvedValue(0);
+    const previousExitCode = process.exitCode;
+    process.exitCode = 0;
+
+    try {
+      const result = await runProgram(["auto"], "0.0.0-test");
+
+      expect(result.code).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(runAutoMock).toHaveBeenCalledTimes(1);
+      expect(runAutoMock).toHaveBeenCalledWith([]);
+      expect(process.exitCode).toBe(0);
+    } finally {
+      process.exitCode = previousExitCode;
+    }
+  });
+
+  it("transparently passes auto args through to runAuto", async () => {
+    runAutoMock.mockClear();
+    runAutoMock.mockResolvedValue(0);
+    const previousExitCode = process.exitCode;
+    process.exitCode = 0;
+
+    try {
+      await runProgram(["auto", "status", "--allow-repo", "foo"], "0.0.0-test");
+
+      expect(runAutoMock).toHaveBeenCalledWith(
+        ["status", "--allow-repo", "foo"],
+      );
+    } finally {
+      process.exitCode = previousExitCode;
+    }
+  });
+
+  it("forwards --help to runAuto when invoked under auto", async () => {
+    runAutoMock.mockClear();
+    runAutoMock.mockResolvedValue(0);
+    const previousExitCode = process.exitCode;
+    process.exitCode = 0;
+
+    try {
+      await runProgram(["auto", "--help"], "0.0.0-test");
+
+      expect(runAutoMock).toHaveBeenCalledWith(["--help"]);
+    } finally {
+      process.exitCode = previousExitCode;
+    }
+  });
+
+  it("propagates non-zero runAuto exit code via process.exitCode", async () => {
+    runAutoMock.mockClear();
+    runAutoMock.mockResolvedValue(7);
+    const previousExitCode = process.exitCode;
+    process.exitCode = 0;
+
+    try {
+      await runProgram(["auto", "doctor"], "0.0.0-test");
+
+      expect(runAutoMock).toHaveBeenCalledWith(["doctor"]);
+      expect(process.exitCode).toBe(7);
+    } finally {
+      process.exitCode = previousExitCode;
+    }
+  });
 
   it("runs main with an explicit argv", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
