@@ -11,9 +11,13 @@ import type { AgentIdentity } from "./handler.js";
  * - `inReplyTo` is pulled from the current trigger (the message that kicked
  *   off this turn), so peers that threaded via reply routing see the answer
  *   in their waiting chat — see proposals/hub-agent-messaging-reply-and-mentions §3.4.
- * - In `mention_only` group chats the trigger sender is added to the outbound
+ * - For `mention_only` peers the trigger sender is added to the outbound
  *   mention list so the server's fan-out filter routes the reply back to them
- *   even if the handler didn't explicitly `@` them.
+ *   even if the handler didn't explicitly `@` them. This applies in groups
+ *   AND in agent↔agent direct chats (both participants are `mention_only`
+ *   under migration 0029 to break A↔B reply loops); we skip it in
+ *   human↔agent direct chats where the human stays `full` and the prefix
+ *   would just be UI noise.
  *
  * Content-level `@<name>` resolution (extracting tokens and cross-validating
  * against the participant list) is the server's job — see
@@ -49,17 +53,19 @@ export type ResultSink = (text: string) => Promise<void>;
 
 export function createResultSink(deps: ResultSinkDeps): ResultSink {
   async function buildMetadata(trigger: Trigger | null): Promise<Record<string, unknown> | undefined> {
-    // Direct chats (2 participants) never need a default mention — the peer
-    // sits in `full` mode so fan-out reaches them regardless. We key on
-    // participant count (not chat type) because the upgrade rule in
-    // services/chat.ts is one-directional: direct → group on the third
-    // join, and groups never shrink back to 2. If that ever changes (e.g.
-    // `removeParticipant` starts down-grading) this branch must switch to
-    // reading chat.type, or groups that transiently shrink will miss the
-    // default @trigger.sender mention.
+    // Default-mention the trigger sender so the server's fan-out wakes them
+    // regardless of whether the handler text contains an explicit `@`. Skip
+    // when the peer is `full` AND we're 1:1: the message reaches them
+    // anyway, so the prefix would just be UI noise (typically a human in a
+    // human↔agent direct chat). In groups we always emit the @ — it's the
+    // visual cue that says "this reply is for X" and the routing guarantee
+    // for any `mention_only` participant who happens to be the trigger.
     if (!trigger || trigger.senderId === deps.agent.agentId) return undefined;
     const participants = await deps.participants.get();
-    if (participants.length <= 2) return undefined;
+    if (participants.length <= 2) {
+      const peer = participants.find((p) => p.agentId === trigger.senderId);
+      if (peer && peer.mode !== "mention_only") return undefined;
+    }
     return { mentions: [trigger.senderId] };
   }
 

@@ -10,6 +10,8 @@ import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { type HubClient, listClients } from "../api/activity.js";
 import { type AgentNameAvailability, checkAgentNameAvailability, createAgent } from "../api/agents.js";
 import { ApiError, type ValidationIssue } from "../api/client.js";
+import { useAuth } from "../auth/auth-context.js";
+import { slugify } from "../utils/agent-naming.js";
 import { Button } from "./ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog.js";
 import { Input } from "./ui/input.js";
@@ -58,22 +60,6 @@ function issuesToFieldErrors(issues: ValidationIssue[] | undefined): FieldErrors
 // dialog picks them up automatically.
 
 /**
- * Full slugification — lowercase, ASCII-only, strip leading/trailing
- * separators, clamp length. Used when deriving the agent name from the
- * display name (auto-follow path) where we always want a clean final
- * slug. NOT used for interactive typing, because trimming trailing
- * separators mid-edit would eat every `-` / `_` the moment the user
- * typed it ("alice-" → "alice" → next char lands against "alice").
- */
-function slugify(raw: string): string {
-  return raw
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, "-")
-    .replace(/^[-_]+|[-_]+$/g, "")
-    .slice(0, AGENT_NAME_MAX_LENGTH);
-}
-
-/**
  * Lightweight normalizer applied to every keystroke in the agent-name
  * input: downcase + fold illegal runs to `-`, but keep trailing `-` /
  * `_` so users can type `alice-bot` one character at a time. Leading
@@ -115,6 +101,7 @@ type AvailabilityState =
 
 export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
   const queryClient = useQueryClient();
+  const { refreshMe } = useAuth();
   const [displayName, setDisplayName] = useState("");
   const [name, setName] = useState("");
   const [nameDirty, setNameDirty] = useState(false);
@@ -208,6 +195,10 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
     onSuccess: (agent) => {
       queryClient.invalidateQueries({ queryKey: ["agents"] });
       queryClient.invalidateQueries({ queryKey: ["activity"] });
+      // Refresh /me so wizardStep flips to "completed" — otherwise the
+      // onboarding banner sticks around even though the user just
+      // created an agent through this non-onboarding path.
+      void refreshMe();
       onCreated(agent, runtime);
     },
   });

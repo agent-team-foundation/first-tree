@@ -52,4 +52,44 @@ describe("serverWelcomeFrameSchema", () => {
     });
     expect(res.success).toBe(false);
   });
+
+  it("accepts a capabilities block advertising wsInboxDeliver", () => {
+    const res = serverWelcomeFrameSchema.safeParse({
+      type: "server:welcome",
+      serverCommandVersion: "1.0.0",
+      serverTimeMs: 1_713_000_000_000,
+      capabilities: { wsInboxDeliver: true },
+    });
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.capabilities?.wsInboxDeliver).toBe(true);
+    }
+  });
+
+  it("accepts an empty capabilities object and defaults wsInboxDeliver to false", () => {
+    const res = serverWelcomeFrameSchema.safeParse({
+      type: "server:welcome",
+      serverCommandVersion: "1.0.0",
+      serverTimeMs: 0,
+      capabilities: {},
+    });
+    expect(res.success).toBe(true);
+    if (res.success) {
+      // The field default + .partial() inflate `{}` → `{wsInboxDeliver:false}`,
+      // matching the server-side behaviour: unset == "no opt-in".
+      expect(res.data.capabilities?.wsInboxDeliver).toBe(false);
+    }
+  });
+
+  it("accepts a welcome with no capabilities key at all (legacy server)", () => {
+    const res = serverWelcomeFrameSchema.safeParse({
+      type: "server:welcome",
+      serverCommandVersion: "0.9.2",
+      serverTimeMs: 0,
+    });
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.capabilities).toBeUndefined();
+    }
+  });
 });

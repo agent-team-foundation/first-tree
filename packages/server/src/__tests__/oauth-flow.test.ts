@@ -37,11 +37,13 @@ describe("GitHub OAuth onboarding flow", () => {
     expect(ids).toHaveLength(1);
     expect(ids[0]?.provider).toBe("github");
 
-    // Personal team was minted.
-    const orgs = await app.db.select().from(organizations).where(eq(organizations.name, "octocat-personal"));
+    // Default team was minted — slug is the GitHub login (no `-personal` suffix).
+    const orgs = await app.db.select().from(organizations).where(eq(organizations.name, "octocat"));
     expect(orgs).toHaveLength(1);
     const orgRow = orgs[0];
-    if (!orgRow) throw new Error("expected personal org row");
+    if (!orgRow) throw new Error("expected default org row");
+    // Display name is the GitHub real name, not "<user>'s Personal Team".
+    expect(orgRow.displayName).toBe("Octo Cat");
 
     // The new user is its admin.
     const memberRows = await app.db.select().from(members).where(eq(members.organizationId, orgRow.id));
@@ -64,7 +66,7 @@ describe("GitHub OAuth onboarding flow", () => {
     expect(ids).toHaveLength(1);
   });
 
-  it("disambiguates personal team slug on collision", async () => {
+  it("disambiguates default team slug on collision", async () => {
     const app = getApp();
     await app.inject({
       method: "GET",
@@ -75,8 +77,9 @@ describe("GitHub OAuth onboarding flow", () => {
       url: "/api/v1/auth/github/dev-callback?githubId=2&login=duplicate",
     });
     const orgs = await app.db.select().from(organizations);
-    const personals = orgs.filter((o) => o.name.startsWith("duplicate-personal"));
-    expect(personals.length).toBeGreaterThanOrEqual(2);
+    // First sign-in claims `duplicate`; second gets `duplicate-XXXX` (4-char hex).
+    const claims = orgs.filter((o) => o.name === "duplicate" || /^duplicate-[a-f0-9]{4}$/.test(o.name));
+    expect(claims.length).toBeGreaterThanOrEqual(2);
   });
 
   it("rejects /dev-callback in production", async () => {
@@ -92,6 +95,39 @@ describe("GitHub OAuth onboarding flow", () => {
     } finally {
       process.env.NODE_ENV = original;
     }
+  });
+
+  it("partial unique index forbids a single user from holding two github identities", async () => {
+    const app = getApp();
+    // Sign in once to create a user + bind githubId=700.
+    await app.inject({
+      method: "GET",
+      url: "/api/v1/auth/github/dev-callback?githubId=700&login=alphaone",
+    });
+    const [first] = await app.db
+      .select({ userId: authIdentities.userId })
+      .from(authIdentities)
+      .where(eq(authIdentities.identifier, "700"));
+    const userId = first?.userId;
+    expect(userId).toBeDefined();
+    if (!userId) throw new Error("seed identity missing");
+
+    // Direct INSERT bypassing the service layer — verifies the storage-layer
+    // guarantee that one user cannot hold two github identities, regardless
+    // of whether any application-layer flow ever attempts it.
+    const { authIdentities: ai } = await import("../db/schema/auth-identities.js");
+    const { uuidv7 } = await import("../uuid.js");
+    await expect(
+      app.db.insert(ai).values({
+        id: uuidv7(),
+        userId,
+        provider: "github",
+        identifier: "701",
+        email: null,
+        verifiedAt: new Date(),
+        metadata: { login: "alphaone-shadow" },
+      }),
+    ).rejects.toThrow();
   });
 
   it("issues tokens that authenticate /me", async () => {

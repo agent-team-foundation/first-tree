@@ -197,13 +197,18 @@ export async function findOrCreateChatForChannel(
       metadata: { source: data.platform, externalChannelId: data.externalChannelId },
     });
 
-    // Add bot agent and sender as participants
+    // Add bot agent and sender as participants. External IM users
+    // (Feishu/Slack) always map to a `human` agent on the sender side, so
+    // these chats are inherently human↔agent and should stay `full` —
+    // pin the mode explicitly so a future schema-default change (or a new
+    // adapter that pairs two bots) can't silently drift into the agent↔agent
+    // `mention_only` rule from migration 0029 without an audit.
     const participants =
       data.botAgentId === data.senderAgentId
-        ? [{ chatId, agentId: data.botAgentId, role: "member" as const }]
+        ? [{ chatId, agentId: data.botAgentId, role: "member" as const, mode: "full" as const }]
         : [
-            { chatId, agentId: data.botAgentId, role: "member" as const },
-            { chatId, agentId: data.senderAgentId, role: "member" as const },
+            { chatId, agentId: data.botAgentId, role: "member" as const, mode: "full" as const },
+            { chatId, agentId: data.senderAgentId, role: "member" as const, mode: "full" as const },
           ];
     await tx.insert(chatParticipants).values(participants);
 

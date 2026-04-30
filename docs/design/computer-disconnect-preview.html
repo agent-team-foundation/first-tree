@@ -1,0 +1,1031 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Computer Disconnect — UI Preview</title>
+    <style>
+      :root {
+        --font-sans:
+          "Inter", "Inter Fallback", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+          "Microsoft YaHei", system-ui, ui-sans-serif, sans-serif;
+        --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+        --accent: oklch(0.72 0.17 150);
+        --accent-bg: oklch(0.72 0.17 150 / 0.12);
+
+        --state-idle: oklch(0.72 0.17 150);
+        --state-blocked: oklch(0.82 0.18 75);
+        --state-error: oklch(0.68 0.22 25);
+        --state-offline: oklch(0.5 0 0);
+
+        --bg: oklch(0.985 0.005 150);
+        --bg-raised: oklch(1 0 0);
+        --bg-sunken: oklch(0.965 0.006 150);
+        --bg-hover: oklch(0.95 0.008 150);
+
+        --fg: oklch(0.18 0.01 150);
+        --fg-2: oklch(0.36 0.01 150);
+        --fg-3: oklch(0.52 0.008 150);
+        --fg-4: oklch(0.68 0.005 150);
+
+        --border: oklch(0.9 0.006 150);
+        --border-strong: oklch(0.82 0.008 150);
+        --border-faint: oklch(0.94 0.005 150);
+
+        --overlay-scrim: oklch(0 0 0 / 0.55);
+        --shadow-md: 0 4px 12px oklch(0 0 0 / 0.08);
+
+        --radius-input: 6px;
+        --radius-chip: 5px;
+        --radius-panel: 8px;
+
+        --hairline: 1px;
+      }
+
+      /* Mirrors packages/web/src/index.css `ring-pulse` keyframe used by StateDot.working. */
+      @keyframes ring-pulse {
+        0% {
+          transform: scale(1);
+          opacity: 0.6;
+        }
+        100% {
+          transform: scale(2.6);
+          opacity: 0;
+        }
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        font-family: var(--font-sans);
+        background: oklch(0.93 0.008 150);
+        color: var(--fg);
+        font-size: 14px;
+        line-height: 1.45;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      .doc {
+        max-width: 1280px;
+        margin: 0 auto;
+        padding: 28px 24px 80px;
+      }
+
+      .doc h1 {
+        font-size: 22px;
+        font-weight: 600;
+        letter-spacing: -0.2px;
+        margin: 0 0 4px;
+      }
+      .doc .subtitle {
+        font-size: 13px;
+        color: var(--fg-3);
+        margin: 0 0 28px;
+      }
+
+      .doc h2 {
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--fg-3);
+        margin: 32px 0 10px;
+      }
+      .doc .note {
+        font-size: 12px;
+        color: var(--fg-3);
+        margin: 4px 0 12px;
+        line-height: 1.5;
+      }
+
+      /* ----- Frame: simulates a browser window ----- */
+      .frame {
+        background: var(--bg);
+        border: var(--hairline) solid var(--border);
+        border-radius: 10px;
+        overflow: hidden;
+        box-shadow: 0 1px 2px oklch(0 0 0 / 0.04);
+      }
+
+      /* =================== TOP BAR ===================
+         Three-column grid: 1fr auto 1fr.
+         Tabs sit in the centre (auto) column → guaranteed to be at the
+         page's horizontal centre regardless of how many elements exist on
+         either side. Future left/right additions never shift the tabs. */
+      .topbar {
+        height: 48px;
+        background: var(--bg-raised);
+        border-bottom: var(--hairline) solid var(--border);
+        padding: 0 12px;
+        display: grid;
+        grid-template-columns: 1fr auto 1fr;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .brand-cluster {
+        display: inline-flex;
+        align-items: center;
+        gap: 14px;
+        min-width: 0;
+        justify-self: start;
+      }
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        flex-shrink: 0;
+      }
+      .brand .logo {
+        width: 16px;
+        height: 18px;
+        color: var(--fg);
+        display: inline-block;
+      }
+      .brand .name {
+        font-size: 16px;
+        font-weight: 600;
+        letter-spacing: -0.2px;
+      }
+      .brand .name .light {
+        font-weight: 400;
+        color: var(--fg-3);
+      }
+
+      /* The disconnect chip — brand-anchored, immediately right of "First Tree Hub".
+         No icon. Hostname truncates to keep total chip width sane. */
+      .disconnect-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        height: 26px;
+        padding: 0 10px 0 9px;
+        border: 0;
+        border-radius: 999px;
+        font-size: 12.5px;
+        font-weight: 500;
+        letter-spacing: -0.1px;
+        cursor: pointer;
+        background: color-mix(in oklch, var(--state-error) 14%, transparent);
+        color: color-mix(in oklch, var(--state-error) 80%, var(--fg));
+        outline: var(--hairline) solid color-mix(in oklch, var(--state-error) 38%, transparent);
+        outline-offset: -1px;
+        transition:
+          background 0.12s,
+          outline-color 0.12s;
+        max-width: 100%;
+        min-width: 0;
+      }
+      .disconnect-chip:hover {
+        background: color-mix(in oklch, var(--state-error) 22%, transparent);
+        outline-color: color-mix(in oklch, var(--state-error) 50%, transparent);
+      }
+
+      /* Pulse follows project StateDot.working pattern: solid dot + expanding ring.
+         We swap the colour token to --state-error. */
+      .pulse-dot {
+        position: relative;
+        width: 8px;
+        height: 8px;
+        flex-shrink: 0;
+        display: inline-block;
+      }
+      .pulse-dot::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: 50%;
+        background: var(--state-error);
+      }
+      .pulse-dot::after {
+        content: "";
+        position: absolute;
+        inset: -3px;
+        border-radius: 50%;
+        border: var(--hairline) solid var(--state-error);
+        animation: ring-pulse 1.8s infinite;
+        opacity: 0.6;
+      }
+
+      .chip-text {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        min-width: 0;
+        max-width: 280px;
+      }
+      .chip-host {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        font-weight: 500;
+        max-width: 160px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: color-mix(in oklch, var(--state-error) 60%, var(--fg));
+      }
+      .chip-suffix {
+        flex-shrink: 0;
+      }
+      .chip-count {
+        font-variant-numeric: tabular-nums;
+        font-weight: 600;
+      }
+
+      /* Tabs (centre column — always page-centred) */
+      .tabs {
+        display: flex;
+        gap: 2px;
+        justify-self: center;
+      }
+      .tab {
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--fg-3);
+        padding: 6px 12px;
+        border-radius: 5px;
+        cursor: pointer;
+      }
+      .tab.active {
+        color: var(--fg);
+        background: var(--bg-hover);
+      }
+      .tab .kbd {
+        margin-left: 6px;
+        font-family: var(--font-mono);
+        font-size: 11px;
+        color: var(--fg-4);
+        border: var(--hairline) solid var(--border);
+        padding: 1px 4px;
+        border-radius: 3px;
+      }
+
+      /* Right controls */
+      .controls {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        justify-self: end;
+      }
+      .jumpbtn {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 8px;
+        color: var(--fg-3);
+        border: var(--hairline) solid var(--border);
+        border-radius: var(--radius-input);
+        background: var(--bg-sunken);
+        font-size: 13px;
+      }
+      .jumpbtn .kbd {
+        font-family: var(--font-mono);
+        font-size: 11px;
+        color: var(--fg-4);
+      }
+      .icon-btn {
+        width: 28px;
+        height: 28px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: var(--radius-input);
+        color: var(--fg-3);
+        cursor: pointer;
+      }
+      .icon-btn:hover {
+        background: var(--bg-hover);
+      }
+      .divider {
+        width: 1px;
+        height: 18px;
+        background: var(--border);
+        margin: 0 4px;
+      }
+      .avatar {
+        width: 28px;
+        height: 28px;
+        border-radius: 999px;
+        background: linear-gradient(135deg, var(--accent), var(--state-idle));
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      /* =================== Page body =================== */
+      .page {
+        padding: 14px 20px 40px;
+      }
+      .pageheader {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        padding: 12px 0 18px;
+        border-bottom: var(--hairline) solid var(--border-faint);
+        margin-bottom: 14px;
+      }
+      .pageheader h1 {
+        font-size: 22px;
+        font-weight: 600;
+        letter-spacing: -0.3px;
+        margin: 0;
+      }
+      .pageheader .stats {
+        font-size: 12.5px;
+        color: var(--fg-3);
+      }
+
+      .toolbar {
+        display: flex;
+        justify-content: flex-end;
+        margin-bottom: 14px;
+      }
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 32px;
+        padding: 0 12px;
+        border-radius: var(--radius-input);
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        border: var(--hairline) solid transparent;
+        background: var(--bg-raised);
+        color: var(--fg);
+      }
+      .btn.primary {
+        background: var(--fg);
+        color: var(--bg-raised);
+        border-color: var(--fg);
+      }
+      .btn.primary:hover {
+        opacity: 0.92;
+      }
+      .btn.outline {
+        background: var(--bg-raised);
+        border-color: var(--border-strong);
+        color: var(--fg);
+      }
+      .btn.outline:hover {
+        background: var(--bg-hover);
+      }
+      .btn.ghost {
+        background: transparent;
+        color: var(--fg-3);
+      }
+      .btn.ghost:hover {
+        color: var(--fg);
+      }
+      .btn svg {
+        width: 14px;
+        height: 14px;
+      }
+
+      .panel {
+        background: var(--bg-raised);
+        border: var(--hairline) solid var(--border);
+        border-radius: var(--radius-panel);
+        overflow: hidden;
+      }
+      .section-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 10px 16px;
+        border-bottom: var(--hairline) solid var(--border-faint);
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--fg-3);
+      }
+      .section-head .right {
+        font-family: var(--font-mono);
+        font-size: 11px;
+        font-weight: 400;
+        letter-spacing: 0;
+        text-transform: none;
+        color: var(--fg-3);
+      }
+
+      table.dense {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      table.dense th,
+      table.dense td {
+        padding: 7px 12px;
+        text-align: left;
+        font-size: 13px;
+        border-bottom: var(--hairline) solid var(--border-faint);
+      }
+      table.dense th {
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--fg-3);
+        background: var(--bg-sunken);
+        letter-spacing: 0.04em;
+      }
+      table.dense tr:last-child td {
+        border-bottom: none;
+      }
+      table.dense td.mono {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        color: var(--fg-3);
+      }
+
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        height: 20px;
+        padding: 0 8px;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 500;
+      }
+      .chip .dot {
+        width: 5px;
+        height: 5px;
+        border-radius: 999px;
+      }
+      .chip.idle {
+        background: color-mix(in oklch, var(--state-idle) 15%, transparent);
+        color: color-mix(in oklch, var(--state-idle) 70%, var(--fg));
+      }
+      .chip.idle .dot {
+        background: var(--state-idle);
+      }
+      .chip.offline {
+        background: color-mix(in oklch, var(--state-offline) 15%, transparent);
+        color: var(--fg-3);
+      }
+      .chip.offline .dot {
+        background: var(--state-offline);
+      }
+
+      /* =================== Modal =================== */
+      .modal-stage {
+        position: relative;
+        background: var(--bg-sunken);
+        padding: 24px;
+        border-top: var(--hairline) solid var(--border);
+      }
+      .modal-stage::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: var(--overlay-scrim);
+        pointer-events: none;
+      }
+      .modal {
+        position: relative;
+        max-width: 480px;
+        margin: 0 auto;
+        background: var(--bg-raised);
+        border: var(--hairline) solid var(--border);
+        border-radius: var(--radius-panel);
+        box-shadow: var(--shadow-md);
+        padding: 22px 24px 22px;
+      }
+      .modal h3 {
+        margin: 0 0 4px;
+        font-size: 16px;
+        font-weight: 600;
+        letter-spacing: -0.1px;
+      }
+      .modal p.desc {
+        margin: 0 0 16px;
+        font-size: 13px;
+        color: var(--fg-3);
+      }
+      .modal .cmd-row {
+        display: flex;
+        gap: 8px;
+        align-items: stretch;
+        margin-bottom: 6px;
+      }
+      .modal .cmd {
+        flex: 1;
+        background: var(--bg-sunken);
+        border: var(--hairline) solid var(--border-faint);
+        border-radius: var(--radius-input);
+        padding: 10px 12px;
+        font-family: var(--font-mono);
+        font-size: 12.5px;
+        color: var(--fg-2);
+        word-break: break-all;
+        line-height: 1.5;
+      }
+      .modal .cmd .expiry {
+        color: var(--fg-4);
+      }
+      .modal .copy-btn {
+        align-self: flex-start;
+      }
+      .modal .meta {
+        font-size: 11.5px;
+        color: var(--fg-4);
+        margin: 0 0 14px;
+      }
+
+      /* Waiting — yellow (state-blocked / warn) */
+      .waiting {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 12px;
+        background: color-mix(in oklch, var(--state-blocked) 14%, transparent);
+        border: var(--hairline) solid color-mix(in oklch, var(--state-blocked) 35%, transparent);
+        border-radius: var(--radius-input);
+        font-size: 12.5px;
+        color: color-mix(in oklch, var(--state-blocked) 35%, var(--fg));
+      }
+      .waiting .spinner {
+        width: 12px;
+        height: 12px;
+        border-radius: 999px;
+        border: 1.5px solid color-mix(in oklch, var(--state-blocked) 30%, transparent);
+        border-top-color: var(--state-blocked);
+        animation: spin 0.85s linear infinite;
+      }
+
+      /* Success — green (state-idle) */
+      .success {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 12px;
+        background: color-mix(in oklch, var(--state-idle) 14%, transparent);
+        border: var(--hairline) solid color-mix(in oklch, var(--state-idle) 35%, transparent);
+        border-radius: var(--radius-input);
+        font-size: 12.5px;
+        color: color-mix(in oklch, var(--state-idle) 45%, var(--fg));
+      }
+      .success svg {
+        width: 14px;
+        height: 14px;
+      }
+
+      .modal .footer {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 16px;
+      }
+
+      .legend {
+        margin-top: 18px;
+        padding: 14px 16px;
+        background: var(--bg-raised);
+        border: var(--hairline) dashed var(--border);
+        border-radius: var(--radius-panel);
+        font-size: 12.5px;
+        color: var(--fg-3);
+        line-height: 1.6;
+      }
+      .legend strong {
+        color: var(--fg);
+        font-weight: 600;
+      }
+
+      /* Centre-line guide for the demo so reviewers can verify tab centring. */
+      .frame.show-center-guide {
+        position: relative;
+      }
+      .frame.show-center-guide::after {
+        content: "";
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 50%;
+        width: 1px;
+        background: color-mix(in oklch, var(--accent) 60%, transparent);
+        opacity: 0.5;
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="doc">
+      <h1>Computer Disconnect — UI Preview · v2</h1>
+      <p class="subtitle">
+        Iteration on review: chip uses project's <code>ring-pulse</code> on red, no icon, copy is
+        <code>"&lt;host&gt; disconnected"</code> / <code>"&lt;n&gt; computers disconnected"</code>, hostname truncates
+        at 160px, tabs use <code>1fr&nbsp;auto&nbsp;1fr</code> grid (locked centre), waiting state is yellow, success is
+        green. The vertical green guide line marks the page centre so you can verify the tabs stay put.
+      </p>
+
+      <!-- =================== State A: 1 disconnected =================== -->
+      <h2>A · Topbar — single disconnected computer</h2>
+      <p class="note">
+        Copy: <code>&lt;hostname&gt; disconnected</code>. Pulse follows
+        <code>StateDot.working</code> pattern (solid dot + expanding ring), recoloured with
+        <code>--state-error</code>. No warning icon. Hostname truncates with ellipsis past 160px.
+      </p>
+      <div class="frame show-center-guide">
+        <header class="topbar">
+          <div class="brand-cluster">
+            <span class="brand">
+              <svg class="logo" viewBox="0 0 9 10" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true">
+                <rect x="4" y="0" width="1" height="1" /><rect x="3" y="1" width="3" height="1" /><rect x="2" y="2" width="5" height="1" /><rect x="3" y="3" width="3" height="1" /><rect x="2" y="4" width="5" height="1" /><rect x="1" y="5" width="7" height="1" /><rect x="2" y="6" width="5" height="1" /><rect x="1" y="7" width="7" height="1" /><rect x="0" y="8" width="9" height="1" /><rect x="3" y="9" width="3" height="1" />
+              </svg>
+              <span class="name">First Tree <span class="light">Hub</span></span>
+            </span>
+
+            <button class="disconnect-chip" type="button" title="Click to manage your computers">
+              <span class="pulse-dot" aria-hidden="true"></span>
+              <span class="chip-text">
+                <span class="chip-host">yue-mbp-16</span>
+                <span class="chip-suffix">disconnected</span>
+              </span>
+            </button>
+          </div>
+
+          <nav class="tabs">
+            <span class="tab">Workspace</span>
+            <span class="tab">Agents</span>
+            <span class="tab active">Computers <span class="kbd">⌘3</span></span>
+            <span class="tab">Settings</span>
+          </nav>
+
+          <div class="controls">
+            <span class="jumpbtn">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path></svg>
+              Jump to…<span class="kbd">⌘K</span>
+            </span>
+            <span class="divider"></span>
+            <span class="icon-btn">🔔</span>
+            <span class="icon-btn">☀</span>
+            <span class="divider"></span>
+            <span class="avatar">YZ</span>
+          </div>
+        </header>
+      </div>
+
+      <!-- =================== State A2: very long hostname (truncation) =================== -->
+      <h2>A2 · Topbar — hostname truncation</h2>
+      <p class="note">
+        Long hostname overflows past <code>max-width: 160px</code> and ellipsises. Hover/title shows the full name.
+      </p>
+      <div class="frame show-center-guide">
+        <header class="topbar">
+          <div class="brand-cluster">
+            <span class="brand">
+              <svg class="logo" viewBox="0 0 9 10" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true">
+                <rect x="4" y="0" width="1" height="1" /><rect x="3" y="1" width="3" height="1" /><rect x="2" y="2" width="5" height="1" /><rect x="3" y="3" width="3" height="1" /><rect x="2" y="4" width="5" height="1" /><rect x="1" y="5" width="7" height="1" /><rect x="2" y="6" width="5" height="1" /><rect x="1" y="7" width="7" height="1" /><rect x="0" y="8" width="9" height="1" /><rect x="3" y="9" width="3" height="1" />
+              </svg>
+              <span class="name">First Tree <span class="light">Hub</span></span>
+            </span>
+
+            <button
+              class="disconnect-chip"
+              type="button"
+              title="yue-engineering-mbp-16-2024-prod-replica.local"
+            >
+              <span class="pulse-dot" aria-hidden="true"></span>
+              <span class="chip-text">
+                <span class="chip-host">yue-engineering-mbp-16-2024-prod-replica.local</span>
+                <span class="chip-suffix">disconnected</span>
+              </span>
+            </button>
+          </div>
+
+          <nav class="tabs">
+            <span class="tab active">Workspace <span class="kbd">⌘1</span></span>
+            <span class="tab">Agents</span>
+            <span class="tab">Computers</span>
+            <span class="tab">Settings</span>
+          </nav>
+
+          <div class="controls">
+            <span class="jumpbtn">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path></svg>
+              Jump to…<span class="kbd">⌘K</span>
+            </span>
+            <span class="divider"></span>
+            <span class="icon-btn">🔔</span>
+            <span class="icon-btn">☀</span>
+            <span class="divider"></span>
+            <span class="avatar">YZ</span>
+          </div>
+        </header>
+      </div>
+
+      <!-- =================== State B: 2+ disconnected =================== -->
+      <h2>B · Topbar — multiple disconnected</h2>
+      <p class="note">Copy: <code>&lt;n&gt; computers disconnected</code>. Number is bold tabular-num.</p>
+      <div class="frame show-center-guide">
+        <header class="topbar">
+          <div class="brand-cluster">
+            <span class="brand">
+              <svg class="logo" viewBox="0 0 9 10" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true">
+                <rect x="4" y="0" width="1" height="1" /><rect x="3" y="1" width="3" height="1" /><rect x="2" y="2" width="5" height="1" /><rect x="3" y="3" width="3" height="1" /><rect x="2" y="4" width="5" height="1" /><rect x="1" y="5" width="7" height="1" /><rect x="2" y="6" width="5" height="1" /><rect x="1" y="7" width="7" height="1" /><rect x="0" y="8" width="9" height="1" /><rect x="3" y="9" width="3" height="1" />
+              </svg>
+              <span class="name">First Tree <span class="light">Hub</span></span>
+            </span>
+
+            <button class="disconnect-chip" type="button">
+              <span class="pulse-dot" aria-hidden="true"></span>
+              <span class="chip-text">
+                <span class="chip-suffix"><span class="chip-count">2</span>&nbsp;computers disconnected</span>
+              </span>
+            </button>
+          </div>
+          <nav class="tabs">
+            <span class="tab active">Workspace <span class="kbd">⌘1</span></span>
+            <span class="tab">Agents</span>
+            <span class="tab">Computers</span>
+            <span class="tab">Settings</span>
+          </nav>
+          <div class="controls">
+            <span class="jumpbtn">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path></svg>
+              Jump to…<span class="kbd">⌘K</span>
+            </span>
+            <span class="divider"></span>
+            <span class="icon-btn">🔔</span>
+            <span class="icon-btn">☀</span>
+            <span class="divider"></span>
+            <span class="avatar">YZ</span>
+          </div>
+        </header>
+      </div>
+
+      <!-- =================== State C: all good =================== -->
+      <h2>C · Topbar — healthy (no chip)</h2>
+      <p class="note">No chip. Tabs sit at the same centre line as the previous frames.</p>
+      <div class="frame show-center-guide">
+        <header class="topbar">
+          <div class="brand-cluster">
+            <span class="brand">
+              <svg class="logo" viewBox="0 0 9 10" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true">
+                <rect x="4" y="0" width="1" height="1" /><rect x="3" y="1" width="3" height="1" /><rect x="2" y="2" width="5" height="1" /><rect x="3" y="3" width="3" height="1" /><rect x="2" y="4" width="5" height="1" /><rect x="1" y="5" width="7" height="1" /><rect x="2" y="6" width="5" height="1" /><rect x="1" y="7" width="7" height="1" /><rect x="0" y="8" width="9" height="1" /><rect x="3" y="9" width="3" height="1" />
+              </svg>
+              <span class="name">First Tree <span class="light">Hub</span></span>
+            </span>
+          </div>
+          <nav class="tabs">
+            <span class="tab active">Workspace <span class="kbd">⌘1</span></span>
+            <span class="tab">Agents</span>
+            <span class="tab">Computers</span>
+            <span class="tab">Settings</span>
+          </nav>
+          <div class="controls">
+            <span class="jumpbtn">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path></svg>
+              Jump to…<span class="kbd">⌘K</span>
+            </span>
+            <span class="divider"></span>
+            <span class="icon-btn">🔔</span>
+            <span class="icon-btn">☀</span>
+            <span class="divider"></span>
+            <span class="avatar">YZ</span>
+          </div>
+        </header>
+      </div>
+
+      <!-- =================== State D: Computers page =================== -->
+      <h2>D · Computers page — "New Connection +" replaces ConnectStrip</h2>
+      <p class="note">
+        ConnectStrip removed. Right-aligned <strong>New Connection</strong> primary CTA above the registered table.
+        Stats and table unchanged.
+      </p>
+      <div class="frame show-center-guide">
+        <header class="topbar">
+          <div class="brand-cluster">
+            <span class="brand">
+              <svg class="logo" viewBox="0 0 9 10" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true">
+                <rect x="4" y="0" width="1" height="1" /><rect x="3" y="1" width="3" height="1" /><rect x="2" y="2" width="5" height="1" /><rect x="3" y="3" width="3" height="1" /><rect x="2" y="4" width="5" height="1" /><rect x="1" y="5" width="7" height="1" /><rect x="2" y="6" width="5" height="1" /><rect x="1" y="7" width="7" height="1" /><rect x="0" y="8" width="9" height="1" /><rect x="3" y="9" width="3" height="1" />
+              </svg>
+              <span class="name">First Tree <span class="light">Hub</span></span>
+            </span>
+            <button class="disconnect-chip" type="button">
+              <span class="pulse-dot" aria-hidden="true"></span>
+              <span class="chip-text">
+                <span class="chip-host">yue-mbp-16</span>
+                <span class="chip-suffix">disconnected</span>
+              </span>
+            </button>
+          </div>
+          <nav class="tabs">
+            <span class="tab">Workspace</span><span class="tab">Agents</span>
+            <span class="tab active">Computers <span class="kbd">⌘3</span></span><span class="tab">Settings</span>
+          </nav>
+          <div class="controls">
+            <span class="jumpbtn">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path></svg>
+              Jump to…<span class="kbd">⌘K</span>
+            </span>
+            <span class="divider"></span>
+            <span class="icon-btn">🔔</span>
+            <span class="icon-btn">☀</span>
+            <span class="divider"></span>
+            <span class="avatar">YZ</span>
+          </div>
+        </header>
+
+        <main class="page">
+          <div class="pageheader">
+            <h1>Computers</h1>
+            <span class="stats">2 total · 1 connected · 4 agents bound</span>
+          </div>
+
+          <div class="toolbar">
+            <button class="btn primary" type="button">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+              New Connection
+            </button>
+          </div>
+
+          <div class="panel">
+            <div class="section-head">
+              <span>Registered · 2</span>
+              <span class="right">click a row to expand</span>
+            </div>
+            <table class="dense">
+              <thead>
+                <tr>
+                  <th style="width:16px"></th>
+                  <th>Hostname</th>
+                  <th>OS</th>
+                  <th>SDK</th>
+                  <th>Agents</th>
+                  <th>Connected</th>
+                  <th>Status</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>›</td>
+                  <td style="font-weight:500;">yue-mbp-16</td>
+                  <td style="color:var(--fg-3);">macOS</td>
+                  <td class="mono">v1.4.2</td>
+                  <td class="mono">3</td>
+                  <td class="mono" style="color:var(--fg-4); font-size:11.5px;">2026-04-29 09:14</td>
+                  <td><span class="chip offline"><span class="dot"></span>offline</span></td>
+                  <td style="text-align:right; color:var(--fg-3); font-size:12px;">Disconnect · Retire</td>
+                </tr>
+                <tr>
+                  <td>›</td>
+                  <td style="font-weight:500;">yue-studio-mac</td>
+                  <td style="color:var(--fg-3);">macOS</td>
+                  <td class="mono">v1.4.2</td>
+                  <td class="mono">1</td>
+                  <td class="mono" style="color:var(--fg-4); font-size:11.5px;">2026-04-28 22:01</td>
+                  <td><span class="chip idle"><span class="dot"></span>idle</span></td>
+                  <td style="text-align:right; color:var(--fg-3); font-size:12px;">Disconnect · Retire</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </main>
+      </div>
+
+      <!-- =================== State E: New Connection modal — waiting (yellow) =================== -->
+      <h2>E · New Connection modal — waiting (yellow)</h2>
+      <p class="note">
+        Waiting state uses <code>--state-blocked</code> (yellow) — same warn pair the rest of the app uses for
+        "blocked / waiting on something external". Spinner is yellow-tinted.
+      </p>
+      <div class="frame">
+        <header class="topbar">
+          <div class="brand-cluster">
+            <span class="brand">
+              <svg class="logo" viewBox="0 0 9 10" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true">
+                <rect x="4" y="0" width="1" height="1" /><rect x="3" y="1" width="3" height="1" /><rect x="2" y="2" width="5" height="1" /><rect x="3" y="3" width="3" height="1" /><rect x="2" y="4" width="5" height="1" /><rect x="1" y="5" width="7" height="1" /><rect x="2" y="6" width="5" height="1" /><rect x="1" y="7" width="7" height="1" /><rect x="0" y="8" width="9" height="1" /><rect x="3" y="9" width="3" height="1" />
+              </svg>
+              <span class="name">First Tree <span class="light">Hub</span></span>
+            </span>
+          </div>
+          <nav class="tabs">
+            <span class="tab">Workspace</span><span class="tab">Agents</span>
+            <span class="tab active">Computers <span class="kbd">⌘3</span></span><span class="tab">Settings</span>
+          </nav>
+          <div class="controls"><span class="avatar">YZ</span></div>
+        </header>
+
+        <div class="modal-stage">
+          <div class="modal">
+            <h3>Connect a new computer</h3>
+            <p class="desc">Run this command on the machine you want to pair with this Hub.</p>
+            <div class="cmd-row">
+              <code class="cmd"
+                >first-tree-hub connect <span style="color:var(--fg);">eyJhbGciOi…iY4WX</span>
+                <span class="expiry"># expires in 10m</span></code
+              >
+              <button class="btn outline copy-btn" type="button">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                Copy
+              </button>
+            </div>
+            <p class="meta">Single-use · regenerates the previous one.</p>
+
+            <div class="waiting">
+              <span class="spinner"></span>
+              Waiting for your computer to connect…
+            </div>
+
+            <div class="footer">
+              <button class="btn ghost" type="button">Cancel</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- =================== State F: success (green) =================== -->
+      <h2>F · New Connection modal — success (green)</h2>
+      <p class="note">
+        On detecting a new client, swap waiting → success (green, <code>--state-idle</code>), brief hold (~1.2s), then
+        auto-close + refresh table.
+      </p>
+      <div class="frame">
+        <header class="topbar">
+          <div class="brand-cluster">
+            <span class="brand">
+              <svg class="logo" viewBox="0 0 9 10" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true">
+                <rect x="4" y="0" width="1" height="1" /><rect x="3" y="1" width="3" height="1" /><rect x="2" y="2" width="5" height="1" /><rect x="3" y="3" width="3" height="1" /><rect x="2" y="4" width="5" height="1" /><rect x="1" y="5" width="7" height="1" /><rect x="2" y="6" width="5" height="1" /><rect x="1" y="7" width="7" height="1" /><rect x="0" y="8" width="9" height="1" /><rect x="3" y="9" width="3" height="1" />
+              </svg>
+              <span class="name">First Tree <span class="light">Hub</span></span>
+            </span>
+          </div>
+          <nav class="tabs">
+            <span class="tab">Workspace</span><span class="tab">Agents</span>
+            <span class="tab active">Computers <span class="kbd">⌘3</span></span><span class="tab">Settings</span>
+          </nav>
+          <div class="controls"><span class="avatar">YZ</span></div>
+        </header>
+
+        <div class="modal-stage">
+          <div class="modal">
+            <h3>Connect a new computer</h3>
+            <p class="desc">Run this command on the machine you want to pair with this Hub.</p>
+            <div class="cmd-row">
+              <code class="cmd"
+                >first-tree-hub connect <span style="color:var(--fg);">eyJhbGciOi…iY4WX</span>
+                <span class="expiry"># expires in 10m</span></code
+              >
+              <button class="btn outline copy-btn" type="button">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                Copied
+              </button>
+            </div>
+            <p class="meta">Single-use · regenerates the previous one.</p>
+
+            <div class="success">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              <span><strong style="font-weight:600;">yue-mbp-16</strong>&nbsp;connected. Closing…</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- =================== Behavioural notes =================== -->
+      <div class="legend">
+        <strong>Decisions reflected in this iteration</strong>
+        <ul style="margin: 8px 0 0 0; padding-left: 18px;">
+          <li>
+            <strong>Pulsing dot</strong> — exact same DOM pattern as <code>StateDot.working</code>: solid circle +
+            absolute ring with <code>animation: ring-pulse 1.8s infinite</code>. Only the colour token changes
+            (<code>--state-error</code>).
+          </li>
+          <li><strong>No icon</strong> — chip is dot + text only.</li>
+          <li>
+            <strong>Copy</strong> — single: <code>"&lt;host&gt; disconnected"</code>; multi:
+            <code>"&lt;n&gt; computers disconnected"</code>.
+          </li>
+          <li>
+            <strong>Hostname max-width</strong> — 160px, <code>text-overflow: ellipsis</code>; full hostname surfaces in
+            the chip's <code>title</code> tooltip.
+          </li>
+          <li>
+            <strong>Tab centring</strong> — topbar grid changed from <code>auto&nbsp;1fr&nbsp;auto</code> to
+            <code>1fr&nbsp;auto&nbsp;1fr</code>. Tabs always sit at the page centre regardless of how the brand cluster
+            grows. The dashed green guide line in each frame proves this.
+          </li>
+          <li>
+            <strong>Waiting / success colours</strong> — yellow <code>--state-blocked</code> (warn) for waiting,
+            green <code>--state-idle</code> (ok) for success. Both via <code>color-mix</code> so they sit on the same
+            soft-pastel scale as other inline states.
+          </li>
+        </ul>
+      </div>
+    </div>
+  </body>
+</html>

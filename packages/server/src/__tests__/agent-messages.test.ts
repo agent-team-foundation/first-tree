@@ -53,16 +53,20 @@ describe("Agent Messages API", () => {
     const app = getApp();
     const { a1, a2, chatId } = await setupChat(app);
 
+    // Agent↔agent direct chat is mention_only on both ends (migration 0029)
+    // so this fan-out test must include an explicit @ to wake the recipient
+    // — without it, the entry would be a silent context row and `pollInbox`
+    // would skip it.
     await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
       format: "text",
-      content: "Fan-out test",
+      content: `@${a2.agent.name} Fan-out test`,
     });
 
     const pollRes = await a2.request("GET", "/api/v1/agent/inbox");
     expect(pollRes.statusCode).toBe(200);
     const entries = pollRes.json();
     expect(entries.length).toBeGreaterThanOrEqual(1);
-    expect(entries[0].message.content).toBe("Fan-out test");
+    expect(entries[0].message.content).toContain("Fan-out test");
   });
 
   it("rejects message from non-participant", async () => {

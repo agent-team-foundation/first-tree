@@ -270,10 +270,13 @@ async function dispatchTaskSystemMessage(
     ...(fromStatus ? { fromStatus } : {}),
     originRef: task.originRef,
   };
+  // Mention the assignee explicitly: agent↔agent direct chats default to
+  // `mention_only` (migration 0029), so without this the task notification
+  // would be parked silently and the assignee never woken.
   return sendMessage(db, chat.id, systemAgentId, {
     format: "task",
     content,
-    metadata: { taskId: task.id, event },
+    metadata: { taskId: task.id, event, mentions: [task.assigneeAgentId] },
   });
 }
 

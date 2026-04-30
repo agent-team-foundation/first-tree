@@ -15,9 +15,11 @@ describe("Agent Inbox API", () => {
     });
     const chatId = chatRes.json().id;
 
+    // Agent↔agent direct seeds both as mention_only (migration 0029); add
+    // the @ so the recipient is woken rather than silently parked.
     await a1.request("POST", `/api/v1/agent/chats/${chatId}/messages`, {
       format: "text",
-      content: "Inbox test",
+      content: `@${a2.agent.name} Inbox test`,
     });
 
     const pollRes = await a2.request("GET", "/api/v1/agent/inbox");

@@ -12,8 +12,11 @@ import { chatParticipants, chats } from "../db/schema/chats.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
 import { BadRequestError, ForbiddenError, NotFoundError } from "../errors.js";
-import { messageAttrs, withSpan } from "../observability/index.js";
+import { createLogger, messageAttrs, withSpan } from "../observability/index.js";
+import { upsertSessionState } from "./activity.js";
 import { findOrCreateDirectChat } from "./chat.js";
+
+const log = createLogger("message");
 
 export type SendMessageResult = {
   message: typeof messages.$inferSelect;
@@ -68,12 +71,14 @@ async function sendMessageInner(
   data: SendMessage,
   options: SendMessageOptions,
 ): Promise<SendMessageResult> {
-  return db.transaction(async (tx) => {
-    // 1. Load participants + chat type in parallel — we need both for the
-    //    fan-out + mention enforcement steps; running them concurrently
-    //    keeps the hot send path on a single round-trip's worth of latency
-    //    rather than two sequential lookups (proposal §3 review feedback).
-    const [participants, [chatRow]] = await Promise.all([
+  const txResult = await db.transaction(async (tx) => {
+    // 1. Load participants, chat type, and sender (inbox + org) in parallel —
+    //    all three are needed for fan-out + mention enforcement + post-tx
+    //    session activation. Running concurrently keeps the hot send path on
+    //    a single round-trip rather than three sequential lookups.
+    //    Sender's organizationId is reused for predictive session activation
+    //    (chat-internal participants share the same org under multi-tenant).
+    const [participants, [chatRow], [senderRow]] = await Promise.all([
       tx
         .select({
           agentId: chatParticipants.agentId,
@@ -85,8 +90,16 @@ async function sendMessageInner(
         .innerJoin(agents, eq(chatParticipants.agentId, agents.uuid))
         .where(eq(chatParticipants.chatId, chatId)),
       tx.select({ type: chats.type }).from(chats).where(eq(chats.id, chatId)).limit(1),
+      tx
+        .select({ inboxId: agents.inboxId, organizationId: agents.organizationId })
+        .from(agents)
+        .where(eq(agents.uuid, senderId))
+        .limit(1),
     ]);
     const chatType = chatRow?.type ?? null;
+    if (!senderRow) {
+      throw new NotFoundError(`Sender agent "${senderId}" not found`);
+    }
 
     // `replyTo` is a sender-declared routing promise — the sender is saying
     // "when someone replies to this, also deliver a copy to my own inbox in
@@ -98,12 +111,7 @@ async function sendMessageInner(
     // target chat when they *read* that reply, and we don't want to block
     // legit "I'll come back to this later" envelopes.
     if (data.replyToInbox !== undefined && data.replyToInbox !== null) {
-      const [senderRow] = await tx
-        .select({ inboxId: agents.inboxId })
-        .from(agents)
-        .where(eq(agents.uuid, senderId))
-        .limit(1);
-      if (!senderRow || senderRow.inboxId !== data.replyToInbox) {
+      if (senderRow.inboxId !== data.replyToInbox) {
         throw new BadRequestError("replyToInbox must reference the sender's own inbox");
       }
     }
@@ -198,23 +206,33 @@ async function sendMessageInner(
     //    so a `mention_only` agent that gets @mentioned later can still see
     //    the chat history it missed — see proposals/group-chat-ux-improvements §1.
     const mentionSet = new Set(mergedMentions);
-    const entries = participants
+    // Build a single fan-out structure that carries agentId alongside the
+    // inbox row. agentId is needed by the post-tx session-activation step
+    // (Step 1b) but is not part of the inbox_entries schema — it's stripped
+    // back out at insert time below.
+    const fanout = participants
       .filter((p) => p.agentId !== senderId)
       .map((p) => ({
+        agentId: p.agentId,
         inboxId: p.inboxId,
-        messageId,
-        chatId,
         notify: p.mode !== "mention_only" || mentionSet.has(p.agentId),
       }));
 
-    if (entries.length > 0) {
-      await tx.insert(inboxEntries).values(entries);
+    if (fanout.length > 0) {
+      await tx
+        .insert(inboxEntries)
+        .values(fanout.map((f) => ({ inboxId: f.inboxId, messageId, chatId, notify: f.notify })));
     }
 
-    // Collect recipient inboxIds for notification — only the `notify=true`
-    // entries actually wake a session. Silent entries piggy-back on the next
-    // active delivery to the same chat (see services/inbox.ts pollInbox).
-    const recipients = entries.filter((e) => e.notify).map((e) => e.inboxId);
+    // notify=true entries serve two consumers:
+    //   - `recipients` (inboxIds) — feeds the route-layer PG NOTIFY for
+    //     wake-up. Silent entries piggy-back on the next active delivery
+    //     (see services/inbox.ts pollInbox).
+    //   - `recipientAgentIds` — feeds the post-transaction predictive
+    //     session-activation block (Step 1b below; M-plan N1-B range).
+    const notified = fanout.filter((f) => f.notify);
+    const recipients = notified.map((f) => f.inboxId);
+    const recipientAgentIds = notified.map((f) => f.agentId);
 
     // 4. replyTo routing: if this message replies to another message that has a replyTo,
     //    create an additional inbox entry for the original requester
@@ -249,8 +267,39 @@ async function sendMessageInner(
     await tx.update(chats).set({ updatedAt: new Date() }).where(eq(chats.id, chatId));
 
     if (!msg) throw new Error("Unexpected: INSERT RETURNING produced no row");
-    return { message: msg, recipients };
+    return {
+      message: msg,
+      recipients,
+      recipientAgentIds,
+      organizationId: senderRow.organizationId,
+    };
   });
+
+  // Predictive session-state activation: after the main transaction commits,
+  // best-effort upsert an `active` agent_chat_sessions row for every notify=true
+  // recipient so the Hub UI list refreshes immediately on send (see M-plan
+  // §8 R7 / §5 invariant #2 — notifier=undefined keeps NOTIFY scoped to Hub UI,
+  // touchPresenceLastSeen=false avoids polluting the client's heartbeat).
+  // Failure is logged but never thrown: the message is durable, and the
+  // client's later `session:state: active` frame self-heals the row.
+  const settled = await Promise.allSettled(
+    txResult.recipientAgentIds.map((agentId) =>
+      upsertSessionState(db, agentId, chatId, "active", txResult.organizationId, undefined, {
+        touchPresenceLastSeen: false,
+      }),
+    ),
+  );
+  for (let i = 0; i < settled.length; i++) {
+    const r = settled[i];
+    if (r?.status === "rejected") {
+      log.error(
+        { err: r.reason, chatId, agentId: txResult.recipientAgentIds[i] },
+        "predictive session activation failed",
+      );
+    }
+  }
+
+  return { message: txResult.message, recipients: txResult.recipients };
 }
 
 export async function sendToAgent(

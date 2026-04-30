@@ -76,14 +76,6 @@ export const serverConfigSchema = defineConfig({
         env: "FIRST_TREE_HUB_GITHUB_OAUTH_CLIENT_SECRET",
         secret: true,
       }),
-      /**
-       * Opt-in to the `/auth/github/dev-callback` shortcut that mints a stub
-       * GitHub identity without round-tripping to github.com. Always disabled
-       * in production regardless of this flag.
-       */
-      devCallbackEnabled: field(z.boolean().default(false), {
-        env: "FIRST_TREE_HUB_GITHUB_OAUTH_DEV_CALLBACK",
-      }),
     }),
   }),
   cors: optional({
@@ -93,6 +85,23 @@ export const serverConfigSchema = defineConfig({
     max: field(z.number().default(100), { env: "FIRST_TREE_HUB_RATE_LIMIT_MAX" }),
     loginMax: field(z.number().default(5), { env: "FIRST_TREE_HUB_RATE_LIMIT_LOGIN_MAX" }),
     webhookMax: field(z.number().default(60), { env: "FIRST_TREE_HUB_RATE_LIMIT_WEBHOOK_MAX" }),
+  }),
+  inbox: optional({
+    /**
+     * Backpressure cap on per-agent in-flight (un-acked) `inbox:deliver`
+     * frames. Once reached the server stops pushing for that agent until an
+     * ack arrives — leftover entries stay `pending` in the DB and get
+     * replayed via the post-ack backlog scan. See proposal §3.5.
+     *
+     * The WS data plane itself is always on; cross-version compatibility is
+     * handled by the per-socket `wireCapabilities.wsInboxDeliver` opt-in
+     * negotiated during `client:register` (proposal §3.6). An old client
+     * that doesn't send the flag automatically gets the legacy `new_message`
+     * doorbell + HTTP poll; a new client gets push frames.
+     */
+    maxInFlightPerAgent: field(z.number().int().min(1).max(1024).default(32), {
+      env: "FIRST_TREE_HUB_INBOX_MAX_IN_FLIGHT_PER_AGENT",
+    }),
   }),
   kael: optional({
     endpoint: field(z.string(), { env: "KAEL_ENDPOINT" }),

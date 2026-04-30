@@ -141,6 +141,7 @@ export async function previewInvitation(db: Database, token: string) {
     organizationName: org.name,
     organizationDisplayName: org.displayName,
     role: inv.role,
+    expiresAt: inv.expiresAt ? inv.expiresAt.toISOString() : null,
   };
 }
 

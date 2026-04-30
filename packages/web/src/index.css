@@ -514,6 +514,11 @@
     transform: rotate(360deg);
   }
 }
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 @keyframes subtle-fade {
   from {
     opacity: 0;
