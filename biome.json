@@ -40,7 +40,8 @@
       "!**/drizzle",
       "!**/.venv",
       "!**/*.code-workspace",
-      "!**/.gstack"
+      "!**/.gstack",
+      "!**/.first-tree/tmp"
     ]
   }
 }

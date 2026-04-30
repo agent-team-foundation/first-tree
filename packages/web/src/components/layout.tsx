@@ -7,8 +7,6 @@ import { CommandPalette } from "../pages/workspace/palette/command-palette.js";
 import { DisconnectChip } from "./disconnect-chip.js";
 import { FirstTreeLogo } from "./first-tree-logo.js";
 import { NotificationBell } from "./notification-bell.js";
-import { OnboardingBanner } from "./onboarding-banner.js";
-import { OnboardingModal } from "./onboarding-modal.js";
 import { ThemeToggle } from "./ui/theme-toggle.js";
 import { UserMenu } from "./user-menu.js";
 
@@ -153,10 +151,7 @@ export function Layout() {
         </div>
       </header>
 
-      <OnboardingBanner />
-
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
-      <OnboardingModal />
 
       {/* Main content */}
       {isWorkspace ? (

@@ -1,6 +1,7 @@
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useState } from "react";
 import { login as loginApi } from "../api/auth.js";
 import { api, clearStoredTokens, getStoredTokens, setStoredTokens } from "../api/client.js";
+import { clearOnboardingJoinPath } from "../utils/onboarding-flags.js";
 
 type MeUser = {
   id: string;
@@ -64,7 +65,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setAgentId(data.member.agentId);
       setOrganizationId(data.member.organizationId);
       setUser(data.user ?? null);
-      setWizardStep(data.wizard?.step ?? null);
+      const nextStep = data.wizard?.step ?? null;
+      setWizardStep(nextStep);
+      // Drop the join-path flag once onboarding is complete so a later
+      // incomplete state (e.g. user deletes their client) doesn't reuse a
+      // stale "you've joined {team}" headline that no longer fits.
+      if (nextStep === "completed") clearOnboardingJoinPath();
     } catch {
       // If /me fails, role stays null — UI falls back to hiding admin features
     }
