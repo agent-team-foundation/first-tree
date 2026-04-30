@@ -5,7 +5,7 @@ import { Plus, Search } from "lucide-react";
 import { type ReactNode, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { getActivityOverview, type RuntimeAgent } from "../api/activity.js";
-import { listAgents } from "../api/agents.js";
+import { listAgents, listAllAgentsForAdmin } from "../api/agents.js";
 import { useAuth } from "../auth/auth-context.js";
 import { AgentChip } from "../components/agent-chip.js";
 import { LastStepModal } from "../components/last-step-modal.js";
@@ -65,20 +65,24 @@ type PillKey = "all" | "mine" | "running" | "attn";
 
 export function AgentsPage() {
   const navigate = useNavigate();
-  const { memberId } = useAuth();
+  const { memberId, role } = useAuth();
   const [cursor, setCursor] = useState<string | undefined>();
   const [typeFilter, setTypeFilter] = useState<string>("");
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [lastStepAgent, setLastStepAgent] = useState<Agent | null>(null);
   const [pill, setPill] = useState<PillKey>("all");
+  const [scope, setScope] = useState<"visible" | "all">("visible");
   const [search, setSearch] = useState("");
   const resolveAgentName = useAgentNameMap();
   const resolveAgentIdentity = useAgentIdentityMap();
   const resolveMemberName = useMemberNameMap();
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["agents", cursor, typeFilter],
-    queryFn: () => listAgents({ limit: 100, cursor, type: typeFilter || undefined }),
+    queryKey: ["agents", scope, cursor, typeFilter],
+    queryFn: () =>
+      scope === "all"
+        ? listAllAgentsForAdmin({ limit: 100, cursor })
+        : listAgents({ limit: 100, cursor, type: typeFilter || undefined }),
   });
 
   const { data: activity } = useQuery({
@@ -105,6 +109,8 @@ export function AgentsPage() {
   }, [data, memberId]);
 
   const totalCount = data?.items.length ?? 0;
+  const isAdmin = role === "admin";
+  const allAgents = useMemo(() => sortByName(data?.items ?? []), [data?.items]);
   const mineCount = myAgents.length;
   const teamCount = teamAgents.length;
   const runningCount = useMemo(
@@ -122,6 +128,7 @@ export function AgentsPage() {
 
   function matchesPill(agent: Agent): boolean {
     const s = runtimeMap.get(agent.uuid)?.runtimeState;
+    if (scope === "all") return true;
     if (pill === "mine") return memberId != null && agent.managerId === memberId;
     if (pill === "running") return s === "working";
     if (pill === "attn") return s === "blocked" || s === "error";
@@ -143,6 +150,7 @@ export function AgentsPage() {
 
   const filteredMy = myAgents.filter((a) => matchesPill(a) && matchesSearch(a));
   const filteredTeam = teamAgents.filter((a) => matchesPill(a) && matchesSearch(a));
+  const filteredAll = allAgents.filter(matchesSearch);
 
   function handleCreated(agent: Agent, runtimeProvider: RuntimeProvider) {
     setCreateDialogOpen(false);
@@ -213,42 +221,90 @@ export function AgentsPage() {
             />
           </div>
           <div className="flex gap-1">
-            <FilterPill active={pill === "all"} count={totalCount} onClick={() => setPill("all")}>
+            <FilterPill
+              active={scope === "visible" && pill === "all"}
+              count={totalCount}
+              onClick={() => {
+                setScope("visible");
+                setPill("all");
+                setCursor(undefined);
+              }}
+            >
               all
             </FilterPill>
-            <FilterPill active={pill === "mine"} count={mineCount} onClick={() => setPill("mine")}>
+            <FilterPill
+              active={scope === "visible" && pill === "mine"}
+              count={mineCount}
+              onClick={() => {
+                setScope("visible");
+                setPill("mine");
+                setCursor(undefined);
+              }}
+            >
               mine
             </FilterPill>
-            <FilterPill active={pill === "running"} count={runningCount} onClick={() => setPill("running")}>
+            <FilterPill
+              active={scope === "visible" && pill === "running"}
+              count={runningCount}
+              onClick={() => {
+                setScope("visible");
+                setPill("running");
+                setCursor(undefined);
+              }}
+            >
               running
             </FilterPill>
-            <FilterPill active={pill === "attn"} count={attnCount} warn onClick={() => setPill("attn")}>
+            <FilterPill
+              active={scope === "visible" && pill === "attn"}
+              count={attnCount}
+              warn
+              onClick={() => {
+                setScope("visible");
+                setPill("attn");
+                setCursor(undefined);
+              }}
+            >
               attn
             </FilterPill>
+            {isAdmin && (
+              <FilterPill
+                active={scope === "all"}
+                count={totalCount}
+                onClick={() => {
+                  setScope((next) => (next === "all" ? "visible" : "all"));
+                  setPill("all");
+                  setCursor(undefined);
+                }}
+              >
+                admin all
+              </FilterPill>
+            )}
           </div>
           <div style={{ flex: 1 }} />
-          <select
-            value={typeFilter}
-            onChange={(e) => {
-              setTypeFilter(e.target.value);
-              setCursor(undefined);
-            }}
-            className="outline-none text-label"
-            style={{
-              padding: "var(--sp-1_25) var(--sp-2_5)",
-              background: "var(--bg-sunken)",
-              border: "var(--hairline) solid var(--border)",
-              borderRadius: "var(--radius-input)",
-              color: "var(--fg)",
-            }}
-          >
-            <option value="">all types</option>
-            {agentTypeValues.map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ))}
-          </select>
+          {scope !== "all" && (
+            <select
+              value={typeFilter}
+              onChange={(e) => {
+                setTypeFilter(e.target.value);
+                setCursor(undefined);
+              }}
+              className="outline-none text-label"
+              style={{
+                padding: "var(--sp-1_25) var(--sp-2_5)",
+                background: "var(--bg-sunken)",
+                border: "var(--hairline) solid var(--border)",
+                borderRadius: "var(--radius-input)",
+                color: "var(--fg)",
+              }}
+            >
+              <option value="">all types</option>
+              {agentTypeValues.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
 
         {isLoading ? (
@@ -259,6 +315,26 @@ export function AgentsPage() {
           <div className="text-center py-8" style={{ color: "var(--state-error)" }}>
             Failed to load agents: {error instanceof Error ? error.message : "Unknown error"}
           </div>
+        ) : scope === "all" ? (
+          <AgentsPanel
+            title={`All agents · ${filteredAll.length}`}
+            agents={filteredAll}
+            runtimeMap={runtimeMap}
+            resolveAgentIdentity={resolveAgentIdentity}
+            resolveMemberName={resolveMemberName}
+            navigate={navigate}
+            showOwner
+            emptyLabel="No agents match the current filter"
+            breakdown={
+              <StateBreakdown
+                items={[
+                  { state: "working", count: countByRuntime(allAgents, runtimeMap, "working") },
+                  { state: "blocked", count: countByRuntime(allAgents, runtimeMap, "blocked") },
+                  { state: "error", count: countByRuntime(allAgents, runtimeMap, "error") },
+                ]}
+              />
+            }
+          />
         ) : (
           <>
             <AgentsPanel

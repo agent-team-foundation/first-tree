@@ -44,7 +44,7 @@ export function listManagedAgents(): Promise<ManagedAgent[]> {
 
 /**
  * Admin-only: every agent in the caller's org, ignoring visibility. Used by
- * the Admin → All Agents tab; the server 403s for non-admin callers.
+ * the Agents page's admin-only "all" scope; the server 403s for non-admin callers.
  */
 export function listAllAgentsForAdmin(params?: { limit?: number; cursor?: string }): Promise<PaginatedAgents> {
   const qs = new URLSearchParams();

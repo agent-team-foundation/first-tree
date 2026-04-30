@@ -1,5 +1,5 @@
 import type { OrgBrief } from "@agent-team-foundation/first-tree-hub-shared";
-import { Check, LogOut, Plus, Settings, UserPlus } from "lucide-react";
+import { Check, LogOut, Plus, UserPlus, Users } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { api } from "../api/client.js";
@@ -9,7 +9,7 @@ import { TeamSetupModal } from "./team-setup-modal.js";
 
 /**
  * Right-side user menu. Avatar trigger; dropdown nests team switching,
- * Create / Join entry points, settings, and sign-out.
+ * admin team management, Create / Join entry points, and sign-out.
  *
  * Replaces the previous brand-side OrganizationSwitcher and the
  * standalone right-side logout button. Single org users see the same
@@ -17,7 +17,7 @@ import { TeamSetupModal } from "./team-setup-modal.js";
  * present so they can self-serve into a multi-org state.
  */
 export function UserMenu() {
-  const { organizationId, user, selectOrganization, logout } = useAuth();
+  const { organizationId, role, user, selectOrganization, logout } = useAuth();
   const navigate = useNavigate();
   const [orgs, setOrgs] = useState<OrgBrief[]>([]);
   const [open, setOpen] = useState(false);
@@ -55,6 +55,8 @@ export function UserMenu() {
   const displayName = user?.displayName ?? "User";
   const username = user?.username ?? "";
   const avatarSrc = user?.avatarUrl ?? null;
+  const currentOrg = orgs.find((o) => o.id === organizationId) ?? null;
+  const currentRole = currentOrg?.role ?? (role === "admin" || role === "member" ? role : null);
 
   const switchOrg = async (id: string) => {
     if (id === organizationId) {
@@ -127,7 +129,7 @@ export function UserMenu() {
                 get clickable rows with a checkmark on the active one. */}
             {orgs.length > 0 && (
               <div className="border-b py-1" style={{ borderColor: "var(--border)" }}>
-                <div className="px-4 py-1 text-eyebrow text-muted-foreground">Team</div>
+                <div className="px-4 py-1 text-eyebrow text-muted-foreground">Current team</div>
                 {orgs.length === 1 ? (
                   <div
                     className="flex w-full items-center gap-2 px-4 py-1.5 text-left text-body"
@@ -136,7 +138,8 @@ export function UserMenu() {
                     <span style={{ width: 14, display: "inline-flex" }}>
                       <Check className="h-3.5 w-3.5" />
                     </span>
-                    <span className="truncate">{orgs[0]?.displayName}</span>
+                    <span className="min-w-0 flex-1 truncate">{orgs[0]?.displayName}</span>
+                    <RoleBadge role={orgs[0]?.role ?? currentRole} />
                   </div>
                 ) : (
                   <div>
@@ -152,11 +155,31 @@ export function UserMenu() {
                         <span style={{ width: 14, display: "inline-flex" }}>
                           {o.id === organizationId ? <Check className="h-3.5 w-3.5" /> : null}
                         </span>
-                        <span className="truncate">{o.displayName}</span>
+                        <span className="min-w-0 flex-1 truncate">{o.displayName}</span>
+                        <RoleBadge role={o.role} />
                       </button>
                     ))}
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* Current-team actions */}
+            {currentRole === "admin" && (
+              <div className="border-b py-1" style={{ borderColor: "var(--border)" }}>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setOpen(false);
+                    navigate("/team");
+                  }}
+                  className="flex w-full items-center gap-2 px-4 py-1.5 text-left text-body hover:bg-accent transition-colors"
+                  style={{ color: "var(--fg)" }}
+                >
+                  <Users className="h-3.5 w-3.5" />
+                  <span>Manage team</span>
+                </button>
               </div>
             )}
 
@@ -191,19 +214,6 @@ export function UserMenu() {
                 role="menuitem"
                 onClick={() => {
                   setOpen(false);
-                  navigate("/settings");
-                }}
-                className="flex w-full items-center gap-2 px-4 py-1.5 text-left text-body hover:bg-accent transition-colors"
-                style={{ color: "var(--fg)" }}
-              >
-                <Settings className="h-3.5 w-3.5" />
-                <span>Settings</span>
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setOpen(false);
                   logout();
                 }}
                 className="flex w-full items-center gap-2 px-4 py-1.5 text-left text-body hover:bg-accent transition-colors"
@@ -219,5 +229,23 @@ export function UserMenu() {
 
       <TeamSetupModal action={setupAction} onClose={() => setSetupAction(null)} />
     </>
+  );
+}
+
+function RoleBadge({ role }: { role: string | null | undefined }) {
+  if (role !== "admin" && role !== "member") return null;
+  return (
+    <span
+      className="mono uppercase text-caption"
+      style={{
+        padding: "var(--hairline) var(--sp-1_75)",
+        borderRadius: "var(--radius-chip)",
+        color: role === "admin" ? "var(--accent-dim)" : "var(--fg-3)",
+        border: "var(--hairline) solid var(--border)",
+        background: role === "admin" ? "var(--accent-bg)" : "var(--bg-sunken)",
+      }}
+    >
+      {role}
+    </span>
   );
 }

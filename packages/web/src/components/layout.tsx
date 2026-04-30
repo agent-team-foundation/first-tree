@@ -1,7 +1,6 @@
 import { Search } from "lucide-react";
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router";
-import { useAuth } from "../auth/auth-context.js";
 import { cn } from "../lib/utils.js";
 import { CommandPalette } from "../pages/workspace/palette/command-palette.js";
 import { DisconnectChip } from "./disconnect-chip.js";
@@ -14,17 +13,11 @@ const navTabs = [
   { to: "/", label: "Workspace", end: true, kbd: "⌘1" },
   { to: "/agents", label: "Agents", end: false, kbd: "⌘2" },
   { to: "/clients", label: "Computers", end: false, kbd: "⌘3" },
-  { to: "/settings", label: "Settings", end: false, kbd: "⌘4" },
+  { to: "/integrations", label: "Integrations", end: false, kbd: "⌘4" },
 ];
 
-const adminTab = { to: "/admin", label: "Admin", end: false, kbd: "⌘5" };
-
 export function Layout() {
-  const { role } = useAuth();
-  const isAdmin = role === "admin";
   const [paletteOpen, setPaletteOpen] = useState(false);
-
-  const tabs = isAdmin ? [...navTabs, adminTab] : navTabs;
 
   const location = useLocation();
   const isWorkspace = location.pathname === "/" || location.search.includes("a=");
@@ -74,7 +67,7 @@ export function Layout() {
 
         {/* Tabs */}
         <nav className="flex" style={{ gap: 2, pointerEvents: "none", justifySelf: "center" }}>
-          {tabs.map((tab) => (
+          {navTabs.map((tab) => (
             <NavLink
               key={tab.to}
               to={tab.to}

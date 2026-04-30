@@ -10,7 +10,7 @@ import type { DraftListStatus } from "./use-config-draft.js";
  * (non-deleted) or an Undo action (deleted, soft-removed pending save).
  *
  * The Edit/Delete pair uses icon-only ghost buttons consistent with the
- * Settings → Bindings table; titles surface the action label on hover and
+ * Integrations → Bindings table; titles surface the action label on hover and
  * to assistive tech.
  */
 

@@ -23,7 +23,7 @@ type ConnectCommandPanelProps = {
   caption?: ReactNode;
   /**
    * Where to place the Copy button relative to the command block.
-   * `"right"` (default) is compact and matches the `/clients` New Connection
+   * `"right"` (default) is compact and matches the `/clients` Connect computer
    * surface. `"bottom"` puts the button on its own row below the command —
    * better when the host modal is narrow and the inline button squeezes
    * the command text.
@@ -36,7 +36,7 @@ const COPY_FEEDBACK_MS = 1_500;
 /**
  * Shared panel for "run this CLI command on the machine you want to pair"
  * surfaces. Used by the onboarding wizard's connect step and the
- * `New Connection +` modal on /clients — both render the same code block,
+ * `Connect computer` modal on /clients — both render the same code block,
  * Copy button, and yellow→green status rows so the visual vocabulary stays
  * unified across the app.
  *

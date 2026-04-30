@@ -115,7 +115,7 @@ export function ClientsPage() {
           <div className="flex items-center gap-1.5">
             <Button size="xs" onClick={() => setNewConnectionOpen(true)}>
               <Plus className="h-3 w-3" />
-              New Connection
+              Connect computer
             </Button>
           </div>
         }
@@ -253,7 +253,7 @@ export function ClientsPage() {
         {!clients || clients.length === 0 ? (
           <Panel>
             <div className="text-center py-10 text-body" style={{ color: "var(--fg-3)" }}>
-              No computers. Use the button above to generate a connect command.
+              No computers connected. Use the button above to generate a connect command.
             </div>
           </Panel>
         ) : (

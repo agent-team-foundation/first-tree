@@ -2,7 +2,6 @@ import { Navigate, useLocation, useNavigate } from "react-router";
 import { useAuth } from "../auth/auth-context.js";
 import { PageHeader } from "../components/ui/page-header.js";
 import { Tab, TabBar } from "../components/ui/tab-bar.js";
-import { AdminAllAgentsPage } from "./admin-all-agents.js";
 import { InviteLinkPanel } from "./invite-link-panel.js";
 import { MembersPage } from "./members.js";
 import { OrgSettingsPage } from "./org-settings.js";
@@ -10,13 +9,12 @@ import { OrgSettingsPage } from "./org-settings.js";
 const tabs = [
   { key: "members", label: "Members" },
   { key: "invite", label: "Invite link" },
-  { key: "all-agents", label: "All agents" },
-  { key: "settings", label: "Org settings" },
+  { key: "settings", label: "Team settings" },
 ] as const;
 
 type TabKey = (typeof tabs)[number]["key"];
 
-export function AdminPage() {
+export function TeamPage() {
   const { role } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
@@ -24,12 +22,12 @@ export function AdminPage() {
   if (role === null) {
     return (
       <div className="text-body" style={{ padding: 20, color: "var(--fg-3)" }}>
-        Loading…
+        Loading...
       </div>
     );
   }
   if (role !== "admin") {
-    return <Navigate to="/settings" replace />;
+    return <Navigate to="/integrations" replace />;
   }
 
   const hashTab = location.hash.replace("#", "") as TabKey;
@@ -41,7 +39,7 @@ export function AdminPage() {
 
   return (
     <div className="-m-6">
-      <PageHeader title="Admin" subtitle="Organization-wide controls" />
+      <PageHeader title="Team" subtitle="Members, invites, and organization settings" />
       <TabBar>
         {tabs.map((tab) => (
           <Tab key={tab.key} active={active === tab.key} onClick={() => switchTab(tab.key)}>
@@ -52,7 +50,6 @@ export function AdminPage() {
       <div style={{ padding: "var(--sp-4) var(--sp-5) var(--sp-7)" }}>
         {active === "members" && <MembersPage />}
         {active === "invite" && <InviteLinkPanel />}
-        {active === "all-agents" && <AdminAllAgentsPage />}
         {active === "settings" && <OrgSettingsPage />}
       </div>
     </div>

@@ -27,7 +27,7 @@ import { BindingFormDialog, type BindingFormSubmit } from "./binding-form.js";
 
 /**
  * Bindings page — single source of truth for managing adapter (bot) and
- * adapter-mapping (user) bindings. Lives at /settings (the Settings tab),
+ * adapter-mapping (user) bindings. Lives at /integrations,
  * with optional `?agent=<uuid>` filter so links from agent detail can
  * pre-scope the view to a single agent.
  *

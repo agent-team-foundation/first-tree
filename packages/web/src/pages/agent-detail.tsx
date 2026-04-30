@@ -231,7 +231,7 @@ export function AgentDetailPage() {
   });
 
   // Discard-draft confirm. Other delete confirms (adapter / user binding) live
-  // in the Settings page now that bindings CRUD has moved there.
+  // in the Integrations page now that bindings CRUD has moved there.
   const [discardDialogOpen, setDiscardDialogOpen] = useState(false);
 
   const [dryRunText, setDryRunText] = useState<string | null>(null);
@@ -561,8 +561,8 @@ export function AgentDetailPage() {
               <Button
                 variant="outline"
                 size="xs"
-                onClick={() => navigate(`/settings?agent=${agent.uuid}`)}
-                title="Manage platform bindings in Settings"
+                onClick={() => navigate(`/integrations?agent=${agent.uuid}`)}
+                title="Manage platform bindings in Integrations"
               >
                 <Link2 className="h-3 w-3" />
                 Manage bindings
