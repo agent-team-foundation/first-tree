@@ -4,7 +4,6 @@ import { AuthProvider } from "./auth/auth-context.js";
 import { RequireAuth } from "./auth/require-auth.js";
 import { Layout } from "./components/layout.js";
 import { PulseProvider } from "./hooks/pulse-context.js";
-import { OnboardingProvider } from "./hooks/use-onboarding-state.js";
 import { AdminPage } from "./pages/admin.js";
 import { AgentDetailPage } from "./pages/agent-detail.js";
 import { AgentsPage } from "./pages/agents.js";
@@ -36,15 +35,14 @@ export function App() {
             <Route path="/signup" element={<Navigate to="/login" replace />} />
             <Route path="/auth/github/complete" element={<OAuthCompletePage />} />
             <Route path="/invite/:token" element={<InviteAcceptPage />} />
-            {/* Auth-required pages. Onboarding wizard is now a modal layered
-                over the workspace, so there's no separate /welcome route. */}
+            {/* Auth-required pages. Onboarding is now an inline view inside
+                CenterPanel (OnboardingView) — no separate /welcome route, no
+                provider, no banner. */}
             <Route element={<RequireAuth />}>
               <Route
                 element={
                   <PulseProvider>
-                    <OnboardingProvider>
-                      <Layout />
-                    </OnboardingProvider>
+                    <Layout />
                   </PulseProvider>
                 }
               >

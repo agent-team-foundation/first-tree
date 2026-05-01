@@ -723,6 +723,11 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
    * focused the input even once, we don't keep slapping `@` back into an
    * empty draft. Reset when switching chats. */
   const focusPrimedRef = useRef(false);
+  /** Once-per-session set of chatIds we've pre-filled. Set semantics
+   * (not a single ref) so revisiting an empty chat we already touched
+   * doesn't re-stamp the greeting on top of the user's cleared draft.
+   * Persists for the life of the ChatView component. */
+  const prefilledChatsRef = useRef<Set<string>>(new Set());
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset is intentionally chatId-scoped.
   useEffect(() => {
     focusPrimedRef.current = false;
@@ -934,6 +939,39 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
     const meIn = chatDetail.participants.some((p) => p.agentId === myAgentId);
     return chatDetail.type === "direct" && !meIn && chatDetail.participants.length >= 2;
   }, [chatDetail, myAgentId]);
+
+  // First-message pre-fill: when the user lands on a brand-new empty chat
+  // (typical right after onboarding's "Create" succeeds), drop a friendly
+  // "Hi {name}!" into the input so hitting Enter is enough. Group chats are
+  // skipped — the focus auto-prime there stamps "@" to pick a recipient,
+  // which would conflict with this. Once pre-filled, the chatId is added
+  // to a Set so re-entering the same empty chat later (user navigated away
+  // before sending) doesn't slap the greeting back over their cleared draft.
+  // Gated on `chatDetail` being loaded too, otherwise `requiresMention`
+  // would still be its default `false` while messages/events have arrived,
+  // and we'd stamp a plain greeting into a group/about-to-be-group chat
+  // that actually needs an `@` recipient. Also gated on `displayName !==
+  // agentId` — the name map's fallback is the raw UUID, so an unresolved
+  // name would otherwise stamp "Hi <uuid>! …" and the Set guard prevents
+  // a fix-up once the map loads. We just wait for it.
+  useEffect(() => {
+    if (prefilledChatsRef.current.has(chatId)) return;
+    if (!messagesData || !eventsData || !chatDetail) return;
+    if (items.length > 0) return;
+    if (draft.length > 0) return;
+    if (requiresMention) return;
+    if (displayName === agentId) return;
+    const greeting = `Hi ${displayName}! What can you help with?`;
+    setDraft(greeting);
+    setCursor(greeting.length);
+    prefilledChatsRef.current.add(chatId);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(greeting.length, greeting.length);
+    });
+  }, [chatId, agentId, messagesData, eventsData, chatDetail, items.length, draft.length, displayName, requiresMention]);
 
   /** Local mirror of the server's mention resolution. Empty when nothing in
    * `draft` resolves to a participant — drives the send-button gate so we

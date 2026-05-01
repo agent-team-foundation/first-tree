@@ -338,7 +338,16 @@ export function AgentRoster({
       <div className="flex-1 overflow-y-auto">
         {totalVisible === 0 && (
           <div className="text-center text-body" style={{ padding: "var(--sp-6) var(--sp-3)", color: "var(--fg-3)" }}>
-            {query || pill !== "all" ? "No matches" : "No agents"}
+            {query || pill !== "all" ? (
+              "No matches"
+            ) : (
+              <>
+                <p style={{ margin: 0 }}>No agents</p>
+                <p className="text-label" style={{ margin: "var(--sp-1) 0 0", color: "var(--fg-4)" }}>
+                  Your first agent will appear here.
+                </p>
+              </>
+            )}
           </div>
         )}
         {agents.length > 0 && (

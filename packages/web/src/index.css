@@ -529,6 +529,30 @@
     transform: translateY(0);
   }
 }
+@keyframes onboarding-pop {
+  0% {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  70% {
+    opacity: 1;
+    transform: translateY(0) scale(1.015);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+@keyframes onboarding-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
 @keyframes thinking-bar {
   0%,
   100% {
@@ -541,6 +565,22 @@
 
 .fade-in {
   animation: subtle-fade 180ms ease-out;
+}
+
+.onboarding-runtime-option {
+  border-radius: var(--radius-input);
+  outline: var(--hairline) solid transparent;
+  outline-offset: var(--sp-0_75);
+}
+
+.onboarding-runtime-option:focus-within {
+  color: color-mix(in oklch, var(--accent) 30%, var(--fg));
+  outline-color: var(--accent-ring);
+}
+
+.onboarding-name-input::placeholder {
+  color: var(--fg-4);
+  opacity: 0.72;
 }
 
 /* Dense table row hover — used by DenseTableRow[data-interactive] */
