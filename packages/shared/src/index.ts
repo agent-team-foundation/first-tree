@@ -130,10 +130,12 @@ export {
 } from "./schemas/chat.js";
 export {
   CLIENT_STATUSES,
+  type ClaimClientResponse,
   type Client,
   type ClientRegister,
   type ClientStatus,
   type ClientWireCapabilities,
+  claimClientResponseSchema,
   clientRegisterSchema,
   clientSchema,
   clientStatusSchema,
@@ -199,6 +201,8 @@ export {
 export {
   type CreateOrgFromMe,
   createOrgFromMeSchema,
+  type MeMembership,
+  meMembershipSchema,
   type OrgBrief,
   orgBriefSchema,
   type SwitchOrg,

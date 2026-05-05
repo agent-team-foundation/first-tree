@@ -38,6 +38,7 @@ import { clientWsRoutes } from "./api/agent/ws-client.js";
 import { githubOauthRoutes } from "./api/auth/github.js";
 import { authRoutes } from "./api/auth.js";
 import { bootstrapConfigRoutes } from "./api/bootstrap/config.js";
+import { memberClientRoutes } from "./api/clients.js";
 import { contextTreeInfoRoutes } from "./api/context-tree-info.js";
 import { feedbackRoutes } from "./api/feedback.js";
 import { healthRoutes } from "./api/health.js";
@@ -297,6 +298,15 @@ export async function buildApp(config: Config) {
           await adminApp.register(adminClientRoutes);
         },
         { prefix: "/clients" },
+      );
+
+      // Member-scoped client routes (claim — see decouple-client-from-identity §4.4).
+      await api.register(
+        async (memberApp) => {
+          memberApp.addHook("onRequest", memberAuth);
+          await memberApp.register(memberClientRoutes);
+        },
+        { prefix: "/me/clients" },
       );
 
       // M1: Agent activity routes

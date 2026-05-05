@@ -5,6 +5,7 @@ import { jwtVerify } from "jose";
 import type { WebSocket } from "ws";
 import type { Database } from "../../db/connection.js";
 import { agents } from "../../db/schema/agents.js";
+import { members } from "../../db/schema/members.js";
 import { endWsConnectionSpan, setWsConnectionAttrs, startWsConnectionSpan } from "../../observability/index.js";
 import { registerAdminBroadcaster } from "../../services/admin-broadcast.js";
 import type { Notifier } from "../../services/notifier.js";
@@ -98,29 +99,49 @@ export function adminWsRoutes(notifier: Notifier, jwtSecret: string) {
         return;
       }
 
+      let userId: string;
       let organizationId: string;
-      let memberId: string;
       try {
         const { payload } = await jwtVerify(token, secret);
         if (
           payload.type !== "access" ||
-          !payload.sub ||
-          typeof payload.organizationId !== "string" ||
-          typeof payload.memberId !== "string"
+          typeof payload.sub !== "string" ||
+          typeof payload.organizationId !== "string"
         ) {
           socket.send(JSON.stringify({ type: "error", message: "Invalid token type" }));
           socket.close(4001, "Invalid token");
           endWsConnectionSpan(socket, 4001);
           return;
         }
+        userId = payload.sub;
+        // JWT `organizationId` is a hint for which org the dashboard wants
+        // to watch; the authoritative membership comes from the realtime
+        // probe below (decouple-client-from-identity §D.4).
         organizationId = payload.organizationId;
-        memberId = payload.memberId;
       } catch {
         socket.send(JSON.stringify({ type: "error", message: "Invalid or expired token" }));
         socket.close(4001, "Auth failed");
         endWsConnectionSpan(socket, 4001);
         return;
       }
+
+      // Realtime membership probe — refuse the subscription if the user is
+      // no longer an active member of the org. Must run on every handshake;
+      // a JWT for a revoked membership cannot keep watching the dashboard.
+      const [memberRow] = await app.db
+        .select({ id: members.id, role: members.role })
+        .from(members)
+        .where(
+          and(eq(members.userId, userId), eq(members.organizationId, organizationId), eq(members.status, "active")),
+        )
+        .limit(1);
+      if (!memberRow) {
+        socket.send(JSON.stringify({ type: "error", message: "Not an active member of this organization" }));
+        socket.close(4403, "Not a member");
+        endWsConnectionSpan(socket, 4403);
+        return;
+      }
+      const memberId = memberRow.id;
 
       setWsConnectionAttrs(socket, { organizationId, memberId });
 

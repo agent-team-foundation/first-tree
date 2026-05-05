@@ -21,7 +21,12 @@ export async function adminChatRoutes(app: FastifyInstance): Promise<void> {
   /** List all chats in org (admin-only, for audit). Members should use GET /mine. */
   app.get("/", { preHandler: requireAdminRoleHook() }, async (request) => {
     const query = paginationQuerySchema.parse(request.query);
-    const orgParam = (request.query as Record<string, string>).org;
+    // Accept both legacy `?org=` (slug or id) and the unified PR-D
+    // `?organizationId=` query param the web client now injects after
+    // `/auth/switch-org` returns 204 (codex P1 #2). Falls back to JWT
+    // default org when neither is supplied.
+    const rawQuery = request.query as Record<string, string>;
+    const orgParam = rawQuery.organizationId ?? rawQuery.org;
     let orgId: string;
     if (orgParam) {
       const resolved = await resolveOrganization(app.db, orgParam);

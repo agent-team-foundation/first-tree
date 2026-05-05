@@ -10,7 +10,7 @@ import {
   resetConfigMeta,
   setConfigValue,
 } from "@agent-team-foundation/first-tree-hub-shared/config";
-import { ClientOrgMismatchError, probeCapabilities } from "@first-tree-hub/client";
+import { ClientOrgMismatchError, ClientUserMismatchError, probeCapabilities } from "@first-tree-hub/client";
 import { input, password, select } from "@inquirer/prompts";
 import type { Command } from "commander";
 import { fail } from "../cli/output.js";
@@ -373,6 +373,14 @@ export function registerConnectCommand(parent: Command): void {
         if ((error as { name?: string }).name === "ExitPromptError") {
           print.line("\n  Cancelled.\n");
           return;
+        }
+        if (error instanceof ClientUserMismatchError) {
+          print.line("\n");
+          print.line("  ⚠️  This client.yaml is owned by a different user.\n");
+          print.line("  Run `first-tree-hub client claim --confirm` to transfer ownership\n");
+          print.line("  to your account. The previous owner's agents will be unpinned\n");
+          print.line("  from this machine.\n\n");
+          process.exit(1);
         }
         if (error instanceof ClientOrgMismatchError) {
           // --no-service path lands here when the credentials we just saved

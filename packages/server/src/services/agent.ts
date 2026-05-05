@@ -161,7 +161,7 @@ async function resolveAgentClient(
   }
 
   const [manager] = await db
-    .select({ userId: members.userId, organizationId: members.organizationId })
+    .select({ userId: members.userId })
     .from(members)
     .where(eq(members.id, data.managerId))
     .limit(1);
@@ -170,7 +170,7 @@ async function resolveAgentClient(
   }
 
   const [client] = await db
-    .select({ id: clients.id, userId: clients.userId, organizationId: clients.organizationId })
+    .select({ id: clients.id, userId: clients.userId })
     .from(clients)
     .where(eq(clients.id, data.clientId))
     .limit(1);
@@ -182,11 +182,6 @@ async function resolveAgentClient(
     throw new BadRequestError(
       `Client "${data.clientId}" has not been claimed by a user yet. Have the operator run ` +
         "`first-tree-hub client connect` on that machine before pinning an agent to it.",
-    );
-  }
-  if (client.organizationId !== manager.organizationId) {
-    throw new ForbiddenError(
-      `Client "${data.clientId}" belongs to a different organization — pick a client registered in the manager's org.`,
     );
   }
   if (client.userId !== manager.userId) {
@@ -530,7 +525,7 @@ export async function listAgentsForMember(
   type?: string,
 ) {
   // agentVisibilityCondition already includes org + status + visibility filtering
-  const conditions = [agentVisibilityCondition(scope)];
+  const conditions = [agentVisibilityCondition(scope.organizationId, scope.memberId)];
   if (cursor) conditions.push(lt(agents.createdAt, new Date(cursor)));
   if (type) conditions.push(eq(agents.type, type));
 

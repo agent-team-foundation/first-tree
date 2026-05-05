@@ -165,5 +165,5 @@ export async function listAgentsWithRuntime(db: Database, scope?: MemberScope) {
     })
     .from(agentPresence)
     .innerJoin(agents, eq(agentPresence.agentId, agents.uuid))
-    .where(and(isNotNull(agentPresence.runtimeState), agentVisibilityCondition(scope)));
+    .where(and(isNotNull(agentPresence.runtimeState), agentVisibilityCondition(scope.organizationId, scope.memberId)));
 }

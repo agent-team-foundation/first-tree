@@ -13,9 +13,11 @@ import {
 import {
   applyClientLoggerConfig,
   ClientOrgMismatchError,
+  ClientUserMismatchError,
   configureClientLoggerForService,
   probeCapabilities,
 } from "@first-tree-hub/client";
+import { confirm } from "@inquirer/prompts";
 import type { Command } from "commander";
 import { fail } from "../cli/output.js";
 import {
@@ -178,6 +180,14 @@ export function registerClientCommands(program: Command): void {
         // Keep process alive
         await new Promise(() => {});
       } catch (error) {
+        if (error instanceof ClientUserMismatchError) {
+          print.line("\n");
+          print.line("  ⚠️  This client.yaml is owned by a different user.\n");
+          print.line("  Run `first-tree-hub client claim --confirm` to transfer ownership\n");
+          print.line("  to your account. The previous owner's agents will be unpinned\n");
+          print.line("  from this machine.\n\n");
+          process.exit(1);
+        }
         if (error instanceof ClientOrgMismatchError) {
           await handleClientOrgMismatch(error, {
             managed: options.interactive === false,
@@ -284,6 +294,75 @@ export function registerClientCommands(program: Command): void {
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         fail("CLIENT_LIST_ERROR", msg);
+      }
+    });
+
+  // ── client claim — transfer ownership of this machine to the current user ──
+  // Triggered after a 4403 CLIENT_USER_MISMATCH on `client start`. The
+  // server-side transaction:
+  //   1. UPDATE clients.user_id to the JWT's user_id
+  //   2. Unpins every agent whose manager belongs to the previous owner
+  //   3. Marks those agents' presence offline
+  // After claim, the operator runs `client start` to reconnect.
+  client
+    .command("claim")
+    .description(
+      "Transfer ownership of this machine to your account (unpins the previous owner's agents from this machine)",
+    )
+    .option("--confirm", "Skip the interactive confirmation prompt")
+    .option("--server <url>", "Hub server URL")
+    .action(async (options: { confirm?: boolean; server?: string }) => {
+      try {
+        const config = await initConfig({ schema: clientConfigSchema, role: "client" });
+        const serverUrl = resolveServerUrl(options.server) ?? config.server.url;
+        const clientId = config.client.id;
+
+        print.line("\n");
+        print.line("  Transferring ownership of this machine to your account.\n");
+        print.line("  This will unpin the previous owner's agents from this client.\n\n");
+        print.status("client.id", clientId);
+        print.status("server", serverUrl);
+        print.line("\n");
+
+        if (!options.confirm) {
+          const approved = await confirm({
+            message: "Proceed with ownership transfer?",
+            default: false,
+          }).catch(() => false);
+          if (!approved) {
+            print.line("  Cancelled.\n\n");
+            return;
+          }
+        }
+
+        const token = await ensureFreshAccessToken();
+        const response = await fetch(`${serverUrl}/api/v1/me/clients/${clientId}/claim`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: "{}",
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!response.ok) {
+          const body = await response.text();
+          fail("CLAIM_ERROR", `Server returned ${response.status}: ${body}`, 1);
+        }
+        const result = (await response.json()) as {
+          clientId: string;
+          previousUserId: string | null;
+          unpinnedAgentCount: number;
+        };
+
+        print.line(`  ✓ Ownership transferred. ${result.unpinnedAgentCount} agent(s) unpinned.\n`);
+        print.line("  Run `first-tree-hub client start` to reconnect.\n\n");
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        fail("CLAIM_ERROR", msg);
+      } finally {
+        resetConfig();
+        resetConfigMeta();
       }
     });
 

@@ -180,6 +180,7 @@ export async function listActiveMemberships(db: Database, userId: string) {
       memberId: members.id,
       organizationId: members.organizationId,
       role: members.role,
+      agentId: members.agentId,
       orgName: organizations.name,
       orgDisplayName: organizations.displayName,
       createdAt: members.createdAt,

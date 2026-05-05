@@ -100,14 +100,30 @@ type ClientConnectionEvents = {
 /**
  * Thrown (emitted on `error` and rejected from `connect()`) when the server
  * refuses a `client:register` because the local clientId is bound to a
- * different organization. The CLI layer detects this via `instanceof` and
- * prompts the user before rotating the local clientId.
+ * different organization. Retained for wire compatibility — the read paths
+ * that produced this code were retired in decouple-client-from-identity §4.1.
  */
 export class ClientOrgMismatchError extends Error {
   readonly code = "CLIENT_ORG_MISMATCH";
   constructor(message = "Client belongs to a different organization") {
     super(message);
     this.name = "ClientOrgMismatchError";
+  }
+}
+
+/**
+ * Thrown when the server refuses `client:register` because the local
+ * client.yaml is owned by a different user. The CLI detects this via
+ * `instanceof` and guides the operator to run
+ * `first-tree-hub client claim --confirm` to take ownership (which unpins
+ * the previous owner's agents from this machine). See decouple-client-from-
+ * identity §4.4.
+ */
+export class ClientUserMismatchError extends Error {
+  readonly code = "CLIENT_USER_MISMATCH";
+  constructor(message = "Client belongs to a different user") {
+    super(message);
+    this.name = "ClientUserMismatchError";
   }
 }
 
@@ -525,9 +541,11 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       // one. See docs/multi-tenancy-hardening-design.md (B4).
       this.closing = true;
       const err =
-        code === "CLIENT_ORG_MISMATCH"
-          ? new ClientOrgMismatchError(message)
-          : new Error(`client:register rejected: ${message}`);
+        code === "CLIENT_USER_MISMATCH"
+          ? new ClientUserMismatchError(message)
+          : code === "CLIENT_ORG_MISMATCH"
+            ? new ClientOrgMismatchError(message)
+            : new Error(`client:register rejected: ${message}`);
       this.lastHandshakeError = err;
       this.wsLogger.error({ code, message }, "client register rejected");
       this.emit("error", err);

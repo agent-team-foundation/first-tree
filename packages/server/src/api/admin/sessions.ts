@@ -2,7 +2,13 @@ import { paginationQuerySchema } from "@agent-team-foundation/first-tree-hub-sha
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { requireMember } from "../../middleware/require-identity.js";
-import { assertAgentVisible, assertCanManage, assertChatAccess, memberScope } from "../../services/access-control.js";
+import {
+  assertAgentVisible,
+  assertCanManage,
+  assertChatAccess,
+  memberScope,
+  resolveAdminScope,
+} from "../../services/access-control.js";
 import * as agentService from "../../services/agent.js";
 import { sendToAgent } from "../../services/connection-manager.js";
 import * as sessionService from "../../services/session.js";
@@ -16,19 +22,23 @@ const sessionFilterSchema = z.object({
 const globalSessionFilterSchema = paginationQuerySchema.extend({
   state: z.enum(["active", "suspended", "evicted"]).optional(),
   agentId: z.string().optional(),
+  organizationId: z.string().min(1).optional(),
 });
 
 // assertAgentInOrg replaced by assertAgentVisible from access-control.ts
 
 export async function adminSessionRoutes(app: FastifyInstance): Promise<void> {
-  /** GET /admin/sessions — global session list, scoped to caller's org */
+  /** GET /admin/sessions — global session list, scoped to the selected
+   *  org. The web client passes `?organizationId=<selectedOrgId>` after a
+   *  /auth/switch-org 204 (codex P1 #2); falls back to the JWT default. */
   app.get("/", async (request) => {
-    const member = requireMember(request);
+    const scope = memberScope(request);
     const query = globalSessionFilterSchema.parse(request.query);
+    const effective = await resolveAdminScope(app.db, request, scope, query.organizationId);
     return sessionService.listAllSessions(app.db, query.limit, query.cursor, {
       state: query.state,
       agentId: query.agentId,
-      organizationId: member.organizationId,
+      organizationId: effective.organizationId,
     });
   });
 

@@ -119,9 +119,32 @@ first-tree-hub client doctor
 
 # Show locally configured agents
 first-tree-hub client status
+
+# Transfer ownership of this machine's client.yaml to the currently
+# logged-in user (run after a 4403 CLIENT_USER_MISMATCH on `client start`).
+# Unpins the previous owner's agents from this machine in a single
+# transaction; --confirm skips the interactive prompt.
+first-tree-hub client claim --confirm
 ```
 
 `client connect` automatically installs a background service on macOS (launchd) and Linux (`systemd --user`) so the computer stays online across reboots. Use `--no-service` to skip this and run inline (Ctrl+C to stop). Windows is not supported — `client connect` falls back to inline mode.
+
+### Sharing a machine across users (`client claim`)
+
+A `client.yaml` is bound to exactly one user. When a different user logs in
+and runs `client start`, the WebSocket handshake refuses with code
+`CLIENT_USER_MISMATCH` (close 4403) and the CLI prints a guide pointing at
+`first-tree-hub client claim --confirm`. Running claim:
+
+1. Updates `clients.user_id` to the calling JWT's user.
+2. Unpins every agent whose manager belonged to the previous owner
+   (`agents.client_id` ← NULL, presence reset to offline) — atomic.
+3. Logs `event=client.owner_transfer` with the previous/new owner ids.
+
+After claim, `client start` reconnects without further prompts. There is no
+`--force` flag — interactive confirmation (or explicit `--confirm`) is
+mandatory so a typo doesn't strip the previous owner's machine. See
+[docs/decouple-client-from-identity-design-zh.md §4.4](decouple-client-from-identity-design-zh.md).
 
 ### Manual service operations
 
@@ -177,7 +200,9 @@ first-tree-hub agent add
 first-tree-hub agent add --agent-id <uuid>
 
 # List / remove (name = Hub agent name)
-first-tree-hub agent list
+first-tree-hub agent list                           # locally configured agents on this machine
+first-tree-hub agent list --remote                  # every agent you manage on the Hub (cross-org)
+first-tree-hub agent list --org <organizationId>    # restrict the remote list to one org
 first-tree-hub agent remove <name>
 
 # Workspace cleanup

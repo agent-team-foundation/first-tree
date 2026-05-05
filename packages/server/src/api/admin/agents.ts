@@ -13,7 +13,7 @@ import { agents } from "../../db/schema/agents.js";
 import { messages } from "../../db/schema/messages.js";
 import { ForbiddenError } from "../../errors.js";
 import { requireMember } from "../../middleware/require-identity.js";
-import { assertAgentVisible, assertCanManage, memberScope } from "../../services/access-control.js";
+import { assertAgentVisible, assertCanManage, memberScope, requireMemberInOrg } from "../../services/access-control.js";
 import * as agentService from "../../services/agent.js";
 import { createChat, findOrCreateDirectChat } from "../../services/chat.js";
 import * as clientService from "../../services/client.js";
@@ -68,13 +68,26 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
     sendToClient(agent.clientId, parsed.data);
   }
 
-  const listAgentsFilterSchema = z.object({ type: agentTypeSchema.optional() });
+  const listAgentsFilterSchema = z.object({
+    type: agentTypeSchema.optional(),
+    organizationId: z.string().min(1).optional(),
+  });
 
   app.get("/", async (request) => {
     const query = paginationQuerySchema.parse(request.query);
-    const { type } = listAgentsFilterSchema.parse(request.query);
+    const { type, organizationId } = listAgentsFilterSchema.parse(request.query);
     const scope = memberScope(request);
-    const result = await agentService.listAgentsForMember(app.db, scope, query.limit, query.cursor, type);
+    // Optional `?organizationId=` lets a multi-org user list agents in a
+    // non-default org without re-issuing the JWT (decouple-client-from-identity §4.5.1).
+    // Falls back to the JWT default org. The realtime probe ensures an
+    // admin in org A cannot peek into org B by spoofing the query string.
+    const targetOrgId = organizationId ?? scope.organizationId;
+    let queryScope = scope;
+    if (targetOrgId !== scope.organizationId) {
+      const probe = await requireMemberInOrg(app.db, request, targetOrgId);
+      queryScope = { ...scope, memberId: probe.memberId, organizationId: targetOrgId, role: probe.role };
+    }
+    const result = await agentService.listAgentsForMember(app.db, queryScope, query.limit, query.cursor, type);
     return {
       items: result.items.map((a) => ({
         ...a,
@@ -100,11 +113,18 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
    */
   app.get("/all", async (request) => {
     const scope = memberScope(request);
-    if (scope.role !== "admin") {
+    const query = paginationQuerySchema.parse(request.query);
+    const { organizationId } = listAgentsFilterSchema.parse(request.query);
+    const targetOrgId = organizationId ?? scope.organizationId;
+    // Realtime admin probe: cross-org admin powers must be re-checked against
+    // the live `members` row, never inherited from the JWT default scope
+    // (decouple-client-from-identity §4.5).
+    const probe = await requireMemberInOrg(app.db, request, targetOrgId);
+    if (probe.role !== "admin") {
       throw new ForbiddenError("Admin role required");
     }
-    const query = paginationQuerySchema.parse(request.query);
-    const result = await agentService.listAgentsForAdmin(app.db, scope, query.limit, query.cursor);
+    const adminScope = { ...scope, memberId: probe.memberId, organizationId: targetOrgId, role: probe.role };
+    const result = await agentService.listAgentsForAdmin(app.db, adminScope, query.limit, query.cursor);
     return {
       items: result.items.map((a) => ({
         ...a,
@@ -138,10 +158,18 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
   app.post("/", async (request, reply) => {
     const scope = memberScope(request);
     const body = createAgentSchema.parse(request.body);
-    // member role: managerId forced to self; admin role: can specify any managerId
-    const managerId = scope.role === "admin" ? (body.managerId ?? scope.memberId) : scope.memberId;
+    // Realtime role probe — JWT `role` claim is a hint for the default org
+    // only. An admin in org A cannot exercise admin powers when creating
+    // an agent in org B by passing `body.organizationId = orgB`
+    // (decouple-client-from-identity §4.5).
+    const targetOrgId = body.organizationId ?? scope.organizationId;
+    const probe = await requireMemberInOrg(app.db, request, targetOrgId);
+    // member role: managerId forced to caller's member in target org;
+    // admin role: may specify any managerId in that org.
+    const managerId = probe.role === "admin" ? (body.managerId ?? probe.memberId) : probe.memberId;
     const agent = await agentService.createAgent(app.db, {
       ...body,
+      organizationId: targetOrgId,
       source: body.source ?? "admin-api",
       managerId,
     });
