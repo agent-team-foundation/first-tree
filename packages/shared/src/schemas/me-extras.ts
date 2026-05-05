@@ -35,3 +35,18 @@ export const switchOrgSchema = z.object({
   organizationId: z.string().min(1),
 });
 export type SwitchOrg = z.infer<typeof switchOrgSchema>;
+
+/**
+ * One element of `GET /me memberships`. Powers the web client's
+ * `currentMembership` derivation (decouple-client-from-identity §C1).
+ * `agentId` is the human-agent UUID seeded for the user in that org —
+ * the web admin gate keys off it.
+ */
+export const meMembershipSchema = z.object({
+  id: z.string(),
+  organizationId: z.string(),
+  organizationName: z.string(),
+  role: z.enum(["admin", "member"]),
+  agentId: z.string(),
+});
+export type MeMembership = z.infer<typeof meMembershipSchema>;

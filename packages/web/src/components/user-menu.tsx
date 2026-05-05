@@ -17,7 +17,7 @@ import { TeamSetupModal } from "./team-setup-modal.js";
  * present so they can self-serve into a multi-org state.
  */
 export function UserMenu() {
-  const { organizationId, user, adoptTokens, logout } = useAuth();
+  const { organizationId, user, selectOrganization, logout } = useAuth();
   const navigate = useNavigate();
   const [orgs, setOrgs] = useState<OrgBrief[]>([]);
   const [open, setOpen] = useState(false);
@@ -62,10 +62,10 @@ export function UserMenu() {
       return;
     }
     try {
-      const tokens = await api.post<{ accessToken: string; refreshToken: string }>("/auth/switch-org", {
-        organizationId: id,
-      });
-      await adoptTokens(tokens);
+      // selectOrganization persists `localStorage.selectedOrganizationId`
+      // and refreshes /me. The server returns 204 — no token swap, the WS
+      // session keeps its bound agents (decouple-client-from-identity §4.6).
+      await selectOrganization(id);
       setOpen(false);
       navigate("/", { replace: true });
     } catch {

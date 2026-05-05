@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { clients } from "../db/schema/clients.js";
-import { ForbiddenError } from "../errors.js";
+import { ClientUserMismatchError } from "../errors.js";
 import { registerClient } from "../services/client.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
@@ -56,8 +56,9 @@ describe("registerClient — legacy user_id NULL claim + conflict rejection", ()
       instanceId: "test-instance",
     });
 
-    // Both admins live in the default org, so the conflict surfaces as
-    // ForbiddenError (same org, different user) rather than CLIENT_ORG_MISMATCH.
+    // Connection ownership is now per-user only — a different user attempting
+    // to re-register the same clientId is rejected with CLIENT_USER_MISMATCH
+    // (operator must run `client claim --confirm` to transfer ownership).
     await expect(
       registerClient(app.db, {
         clientId,
@@ -65,7 +66,7 @@ describe("registerClient — legacy user_id NULL claim + conflict rejection", ()
         organizationId: bob.organizationId,
         instanceId: "test-instance",
       }),
-    ).rejects.toBeInstanceOf(ForbiddenError);
+    ).rejects.toBeInstanceOf(ClientUserMismatchError);
 
     // Owner unchanged.
     const [row] = await app.db.select().from(clients).where(eq(clients.id, clientId)).limit(1);

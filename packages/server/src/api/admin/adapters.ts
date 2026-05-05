@@ -1,11 +1,13 @@
 import { createAdapterConfigSchema, updateAdapterConfigSchema } from "@agent-team-foundation/first-tree-hub-shared";
 import type { FastifyInstance } from "fastify";
+import { z } from "zod";
 import { BadRequestError } from "../../errors.js";
 import { createLogger } from "../../observability/index.js";
-import { assertCanManage, memberScope } from "../../services/access-control.js";
+import { assertCanManage, memberScope, resolveAdminScope } from "../../services/access-control.js";
 import * as adapterService from "../../services/adapter.js";
 
 const log = createLogger("AdminAdapters");
+const orgQuerySchema = z.object({ organizationId: z.string().min(1).optional() });
 
 function parseId(raw: string): number {
   const id = Number(raw);
@@ -18,7 +20,11 @@ function parseId(raw: string): number {
 export async function adminAdapterRoutes(app: FastifyInstance): Promise<void> {
   app.get("/", async (request) => {
     const scope = memberScope(request);
-    const configs = await adapterService.listAdapterConfigsForMember(app.db, scope);
+    const { organizationId } = orgQuerySchema.parse(request.query);
+    // Cross-org: web carries `?organizationId=<selected>` after a 204 switch
+    // (codex P1 #2). Falls back to JWT default org when omitted.
+    const effective = await resolveAdminScope(app.db, request, scope, organizationId);
+    const configs = await adapterService.listAdapterConfigsForMember(app.db, effective);
     return configs.map((c) => ({
       ...c,
       createdAt: c.createdAt.toISOString(),

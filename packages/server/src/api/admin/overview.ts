@@ -7,8 +7,10 @@ import * as presenceService from "../../services/presence.js";
 
 export async function adminOverviewRoutes(app: FastifyInstance): Promise<void> {
   app.get("/", async (request) => {
-    const orgParam = ((request.query ?? {}) as Record<string, string>).org;
-    // Resolve org param: if provided, resolve by UUID or name; otherwise use default org UUID
+    // Both `?org=` (legacy) and `?organizationId=` (web's PR-D query — codex
+    // P1 #2 fix). Falls back to JWT default org when neither is supplied.
+    const q = (request.query ?? {}) as Record<string, string>;
+    const orgParam = q.organizationId ?? q.org;
     let orgId: string;
     if (orgParam) {
       const resolved = await resolveOrganization(app.db, orgParam);

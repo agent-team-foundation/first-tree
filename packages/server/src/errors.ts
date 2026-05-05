@@ -45,15 +45,30 @@ export class BadRequestError extends AppError {
 
 /**
  * Thrown when an operation targets a client whose organization does not match
- * the caller's authenticated organization. A client is bound to exactly one
- * org for its lifetime; re-registering or operating under a different org's
- * credentials is refused. CLI consumers recognize the `code` field and
- * respond by abandoning the local clientId to register a fresh one.
+ * the caller's authenticated organization. Retained for wire compatibility:
+ * the read paths that produced this error were retired in
+ * decouple-client-from-identity §4.1, so the server itself no longer raises
+ * it. SDK consumers may still pattern-match the `code` field on legacy
+ * payloads.
  */
 export class ClientOrgMismatchError extends AppError {
   readonly code = "CLIENT_ORG_MISMATCH";
   constructor(message = "Client belongs to a different organization") {
     super(403, message);
     this.name = "ClientOrgMismatchError";
+  }
+}
+
+/**
+ * Thrown when a client.yaml is presented with a JWT whose user_id does not
+ * match the row's owner. The CLI responds by guiding the operator through
+ * `first-tree-hub client claim --confirm` to take over ownership, which
+ * unpins the previous owner's agents from this machine.
+ */
+export class ClientUserMismatchError extends AppError {
+  readonly code = "CLIENT_USER_MISMATCH";
+  constructor(message = "Client belongs to a different user") {
+    super(403, message);
+    this.name = "ClientUserMismatchError";
   }
 }

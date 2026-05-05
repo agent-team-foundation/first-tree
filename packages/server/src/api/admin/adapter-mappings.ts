@@ -1,11 +1,14 @@
 import { createAdapterMappingSchema } from "@agent-team-foundation/first-tree-hub-shared";
 import { and, desc, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
+import { z } from "zod";
 import { adapterAgentMappings } from "../../db/schema/adapter-agent-mappings.js";
 import { agents } from "../../db/schema/agents.js";
 import { BadRequestError, NotFoundError } from "../../errors.js";
-import { assertCanManage, memberScope } from "../../services/access-control.js";
+import { assertCanManage, memberScope, requireMemberInOrg } from "../../services/access-control.js";
 import { createAgentMapping } from "../../services/adapter-mapping.js";
+
+const orgQuerySchema = z.object({ organizationId: z.string().min(1).optional() });
 
 function parseId(raw: string): number {
   const id = Number(raw);
@@ -26,9 +29,18 @@ export async function adminAdapterMappingRoutes(app: FastifyInstance): Promise<v
     // enforce this even when the UI hides the edit button — admin-only
     // has been removed from the route hook.
     const scope = memberScope(request);
-    const conditions = [eq(agents.organizationId, scope.organizationId)];
-    if (scope.role !== "admin") {
-      conditions.push(eq(agents.managerId, scope.memberId));
+    // Cross-org listing: web carries `?organizationId=<selected>` after a
+    // 204 switch (codex P1 #2). Falls back to JWT default when omitted.
+    const { organizationId } = orgQuerySchema.parse(request.query);
+    const targetOrgId = organizationId ?? scope.organizationId;
+    // Realtime role probe: an admin claim in the JWT default org is not
+    // authoritative for any other org; even within the same org we re-read
+    // members.role so a downgrade lands immediately
+    // (decouple-client-from-identity §4.5).
+    const probe = await requireMemberInOrg(app.db, request, targetOrgId);
+    const conditions = [eq(agents.organizationId, targetOrgId)];
+    if (probe.role !== "admin") {
+      conditions.push(eq(agents.managerId, probe.memberId));
     }
     const rows = await app.db
       .select({

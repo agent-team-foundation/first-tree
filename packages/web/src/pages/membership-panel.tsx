@@ -27,7 +27,7 @@ import { Panel, PanelHeader, PanelTitle } from "../components/ui/panel.js";
  *      - 0 left    → log out completely
  */
 export function MembershipPanel() {
-  const { organizationId, adoptTokens, logout } = useAuth();
+  const { organizationId, selectOrganization, logout } = useAuth();
   const [orgs, setOrgs] = useState<OrgBrief[]>([]);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -57,10 +57,9 @@ export function MembershipPanel() {
       const remaining = await api.get<OrgBrief[]>("/me/organizations").catch(() => [] as OrgBrief[]);
       const nextOrg = remaining.find((o) => o.id !== organizationId);
       if (nextOrg) {
-        const tokens = await api.post<{ accessToken: string; refreshToken: string }>("/auth/switch-org", {
-          organizationId: nextOrg.id,
-        });
-        await adoptTokens(tokens);
+        // selectOrganization persists the choice in localStorage and
+        // refetches /me — no JWT swap (decouple-client-from-identity §4.6).
+        await selectOrganization(nextOrg.id);
       } else {
         // No teams left — full sign-out so the user lands on /login cleanly.
         logout();

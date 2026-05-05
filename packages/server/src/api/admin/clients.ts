@@ -1,27 +1,30 @@
 import { updateClientCapabilitiesSchema } from "@agent-team-foundation/first-tree-hub-shared";
 import type { FastifyInstance } from "fastify";
-import { memberScope } from "../../services/access-control.js";
+import { z } from "zod";
+import { ForbiddenError } from "../../errors.js";
+import { memberScope, requireMemberInOrg } from "../../services/access-control.js";
 import * as activityService from "../../services/activity.js";
 import * as clientService from "../../services/client.js";
 import { forceDisconnectClient } from "../../services/connection-manager.js";
 import { serializeDate } from "../../utils.js";
 
+const listClientsQuerySchema = z.object({ organizationId: z.string().min(1).optional() });
+
 export async function adminClientRoutes(app: FastifyInstance): Promise<void> {
-  // GET /clients — clients visible to the caller.
-  //
-  //   - member: only their own (`clients.user_id == scope.userId`). The
-  //     `assertClientOwner` check on per-id routes continues to enforce
-  //     the write path.
-  //   - admin: every client belonging to a member of the caller's org
-  //     plus any legacy unclaimed (user_id NULL) rows. The `/clients` UI
-  //     surfaces the owner so admins can tell whose machine is whose.
+  // GET /clients — by default returns clients owned by the caller (a client
+  // is owned by a user, cross-org by design). With `?organizationId=…` an
+  // admin in that org gets the cross-user roster: every client owned by an
+  // active member (decouple-client-from-identity §4.5.1 (γ)).
   app.get("/", async (request) => {
     const scope = memberScope(request);
-    const clients = await clientService.listClients(app.db, {
-      userId: scope.userId,
-      organizationId: scope.organizationId,
-      role: scope.role,
-    });
+    const { organizationId } = listClientsQuerySchema.parse(request.query);
+    const clients = organizationId
+      ? await (async () => {
+          const probe = await requireMemberInOrg(app.db, request, organizationId);
+          if (probe.role !== "admin") throw new ForbiddenError("Admin role required");
+          return clientService.listClientsForOrgAdmin(app.db, organizationId);
+        })()
+      : await clientService.listClients(app.db, { userId: scope.userId });
     return clients.map((c) => ({
       id: c.id,
       userId: c.userId,
@@ -40,10 +43,7 @@ export async function adminClientRoutes(app: FastifyInstance): Promise<void> {
   // `agents.runtime_provider` before spawning handlers (B3 layer 1).
   app.get("/me/agents", async (request) => {
     const scope = memberScope(request);
-    const agents = await clientService.listMyPinnedAgents(app.db, {
-      userId: scope.userId,
-      organizationId: scope.organizationId,
-    });
+    const agents = await clientService.listMyPinnedAgents(app.db, { userId: scope.userId });
     return agents;
   });
 

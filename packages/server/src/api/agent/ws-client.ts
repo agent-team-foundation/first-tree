@@ -25,7 +25,7 @@ import { agents } from "../../db/schema/agents.js";
 import { clients } from "../../db/schema/clients.js";
 import { members } from "../../db/schema/members.js";
 import { users } from "../../db/schema/users.js";
-import { ClientOrgMismatchError } from "../../errors.js";
+import { ClientOrgMismatchError, ClientUserMismatchError } from "../../errors.js";
 import {
   endWsConnectionSpan,
   setWsConnectionAttrs,
@@ -106,18 +106,14 @@ function shouldNotify(agentId: string, notificationType: string): boolean {
 /**
  * Authenticated WS session state.
  *
- * Invariant: `organizationId` is sourced from the `members` row keyed by the
- * JWT's `memberId`, not from the JWT's own `organizationId` claim. The
- * server never trusts the JWT payload directly for org scope — a revoked or
- * re-scoped membership takes effect the moment the DB row changes, not on
- * the token's next refresh. This is a deliberate defense-in-depth choice
- * paired with R-RUN and `clients.organization_id`.
+ * Carries only the user identity; org scope is no longer attached to the
+ * connection (decouple-client-from-identity §4.2). Bind-time R-RUN resolves
+ * the agent's owner via the `agents → manager → user` JOIN at every
+ * `agent:bind`, so a revoked or re-scoped membership takes effect the moment
+ * the DB row changes — no socket-level cache to invalidate.
  */
 type AuthenticatedSession = {
   userId: string;
-  memberId: string;
-  organizationId: string;
-  role: string;
 };
 
 function sendRejected(socket: WebSocket, ref: string | undefined, reason: AgentBindRejectReason): void {
@@ -137,9 +133,19 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
     app.get("/client", { websocket: true, config: { otel: false } }, async (socket) => {
       startWsConnectionSpan(socket);
       let session: AuthenticatedSession | null = null;
+      // JWT default org claim — kept solely so `registerClient` can satisfy
+      // the legacy `clients.organization_id` NOT NULL constraint as a
+      // placeholder (see decouple-client-from-identity §4.1.1). NOT consulted
+      // by any rule; never compared against `agent.organizationId` or used
+      // for visibility filtering.
+      let jwtDefaultOrgId: string | null = null;
       let clientId: string | null = null;
       let authExpiryTimer: NodeJS.Timeout | null = null;
-      const boundAgents = new Map<string, { agentId: string; inboxId: string }>();
+      // `organizationId` is cached per-bound-agent (not per-session): the agent
+      // table is the authority for an agent's org, and frames that need to
+      // emit org-scoped NOTIFY (admin WS broadcast filter) read it from this
+      // cache rather than the long-retired session.organizationId.
+      const boundAgents = new Map<string, { agentId: string; inboxId: string; organizationId: string }>();
 
       /**
        * Whether the connected client opted into the WS inbox data plane via
@@ -400,7 +406,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               type?: string;
               exp?: number;
             };
-            if (claims.type !== "access" || !claims.sub || !claims.memberId) {
+            if (claims.type !== "access" || !claims.sub) {
               throw new Error("Invalid token claims");
             }
 
@@ -413,25 +419,13 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               throw new Error("User not found or suspended");
             }
 
-            const [member] = await app.db
-              .select({ id: members.id, organizationId: members.organizationId, role: members.role })
-              .from(members)
-              .where(eq(members.id, claims.memberId))
-              .limit(1);
-            if (!member) {
-              throw new Error("Membership not found");
-            }
-
-            session = {
-              userId: user.id,
-              memberId: member.id,
-              organizationId: member.organizationId,
-              role: member.role,
-            };
-            setWsConnectionAttrs(socket, {
-              "organization.id": member.organizationId,
-              "member.id": member.id,
-            });
+            // Session is org-free (decouple-client-from-identity §4.2). The
+            // JWT's `organizationId`/`memberId`/`role` claims are recorded as
+            // hints only; bind-time R-RUN re-resolves the agent's owner
+            // through `agents → manager → user` against the live DB.
+            session = { userId: user.id };
+            jwtDefaultOrgId = typeof claims.organizationId === "string" ? claims.organizationId : null;
+            setWsConnectionAttrs(socket, { "user.id": user.id });
             clearTimeout(authTimeout);
             scheduleAuthExpiry(claims.exp);
             socket.send(JSON.stringify({ type: "auth:ok" }));
@@ -470,11 +464,21 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               // §3.6). Default false — only an explicit `true` activates push.
               clientWantsWsInboxDeliver = data.wireCapabilities?.wsInboxDeliver === true;
 
+              if (!jwtDefaultOrgId) {
+                socket.send(
+                  JSON.stringify({
+                    type: "client:register:rejected",
+                    message: "JWT missing organizationId claim",
+                  }),
+                );
+                socket.close(4401, "client register rejected");
+                return;
+              }
               try {
                 await clientService.registerClient(app.db, {
                   clientId: data.clientId,
                   userId: session.userId,
-                  organizationId: session.organizationId,
+                  organizationId: jwtDefaultOrgId,
                   instanceId,
                   hostname: data.hostname,
                   os: data.os,
@@ -482,7 +486,12 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 });
               } catch (err) {
                 const message = err instanceof Error ? err.message : "client register failed";
-                const code = err instanceof ClientOrgMismatchError ? err.code : undefined;
+                const code =
+                  err instanceof ClientUserMismatchError
+                    ? err.code
+                    : err instanceof ClientOrgMismatchError
+                      ? err.code
+                      : undefined;
                 socket.send(
                   JSON.stringify({
                     type: "client:register:rejected",
@@ -551,6 +560,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                   runtimeProvider: agents.runtimeProvider,
                   clientUserId: clients.userId,
                   managerUserId: members.userId,
+                  managerMemberStatus: members.status,
                 })
                 .from(agents)
                 .leftJoin(clients, eq(agents.clientId, clients.id))
@@ -562,26 +572,28 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.UNKNOWN_AGENT);
                 return;
               }
-              if (agent.organizationId !== session.organizationId) {
-                sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.WRONG_ORG);
-                return;
-              }
               if (agent.status !== "active") {
                 sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.AGENT_SUSPENDED);
                 return;
               }
 
+              // R-RUN owner check: same user AND manager's membership still
+              // active. Multi-org under the same user is permitted — agent
+              // org binding is not consulted (decouple-client-from-identity
+              // §4.3). Membership flipped to inactive denies new binds while
+              // already-bound agents continue running until unbind.
+              const ownerOk = agent.managerUserId !== null && agent.managerUserId === session.userId;
+              const membershipActive = agent.managerMemberStatus === "active";
+              if (!ownerOk || !membershipActive) {
+                sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.NOT_OWNED);
+                return;
+              }
+
               // First-bind path: agent.clientId is NULL (e.g. created before
               // the operator brought up a client, or migrated from pre-M1 with
-              // no presence record). Claim it for the connecting client iff
-              // the manager and the connecting session belong to the same
-              // user. The race-safe UPDATE returns 0 rows if another bind
-              // claimed it first — surface as WRONG_CLIENT.
+              // no presence record). The race-safe UPDATE returns 0 rows if
+              // another bind claimed it first — surface as WRONG_CLIENT.
               if (agent.clientId === null) {
-                if (!agent.managerUserId || agent.managerUserId !== session.userId) {
-                  sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.NOT_OWNED);
-                  return;
-                }
                 const claim = await app.db
                   .update(agents)
                   .set({ clientId, updatedAt: new Date() })
@@ -616,7 +628,11 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               });
 
               connectionManager.bindAgentToClient(clientId, agent.id);
-              boundAgents.set(agent.id, { agentId: agent.id, inboxId: agent.inboxId });
+              boundAgents.set(agent.id, {
+                agentId: agent.id,
+                inboxId: agent.inboxId,
+                organizationId: agent.organizationId,
+              });
 
               // Subscribe to NOTIFY traffic. When both server config and the
               // client's wire-capability opt-in are true, register a push
@@ -690,12 +706,14 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 return;
               }
 
+              const boundAgentInfo = boundAgents.get(agentId);
+              if (!boundAgentInfo) return;
               await activityService.upsertSessionState(
                 app.db,
                 agentId,
                 payloadResult.data.chatId,
                 payloadResult.data.state,
-                session.organizationId,
+                boundAgentInfo.organizationId,
                 notifier,
               );
             } else if (type === "session:reconcile") {
@@ -742,8 +760,10 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               }
 
               const payload = runtimeStateMessageSchema.parse(msg);
+              const boundAgentInfo = boundAgents.get(agentId);
+              if (!boundAgentInfo) return;
               await presenceService.setRuntimeState(app.db, agentId, payload.runtimeState, {
-                organizationId: session.organizationId,
+                organizationId: boundAgentInfo.organizationId,
                 notifier,
               });
 

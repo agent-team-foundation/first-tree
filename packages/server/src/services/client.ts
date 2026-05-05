@@ -9,62 +9,41 @@ import { agentPresence } from "../db/schema/agent-presence.js";
 import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
-import { BadRequestError, ClientOrgMismatchError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
+import { BadRequestError, ClientUserMismatchError, ConflictError, NotFoundError } from "../errors.js";
 import { runtimeFieldsReset } from "./presence.js";
 
 /**
  * Assert the caller can act on this client. Throws 404 for both "not found"
- * and "not yours" to prevent UUID enumeration across org/user boundaries.
- *
- * A client is bound to exactly one organization (`clients.organization_id`).
- * Access is granted when:
- *   - member: row.user_id == scope.userId AND row.organization_id == scope.organizationId.
- *   - admin: row.organization_id == scope.organizationId AND the owner is a
- *     member of that same org (defense in depth).
- *
- * Same user across two orgs has two distinct client rows; operating on one
- * while logged into the other is refused by the org filter.
+ * and "not yours" to prevent UUID enumeration. The client is owned by exactly
+ * one user; cross-user admin access is no longer supported by this code path
+ * (see decouple-client-from-identity-design §4.10.5 option A). Cross-user
+ * ownership transfer goes through `claimClient` in PR-B.
  */
-export async function assertClientOwner(
-  db: Database,
-  clientId: string,
-  scope: { userId: string; organizationId: string; role: string },
-): Promise<void> {
+export async function assertClientOwner(db: Database, clientId: string, scope: { userId: string }): Promise<void> {
   const [row] = await db
-    .select({ id: clients.id, userId: clients.userId, organizationId: clients.organizationId })
+    .select({ id: clients.id, userId: clients.userId })
     .from(clients)
     .where(eq(clients.id, clientId))
     .limit(1);
-  if (!row) {
+  if (!row || row.userId !== scope.userId) {
     throw new NotFoundError(`Client "${clientId}" not found`);
   }
-  if (row.organizationId !== scope.organizationId) {
-    throw new NotFoundError(`Client "${clientId}" not found`);
-  }
-  if (row.userId === scope.userId) return;
-  if (scope.role === "admin" && row.userId !== null) {
-    const [sibling] = await db
-      .select({ id: members.id })
-      .from(members)
-      .where(and(eq(members.userId, row.userId), eq(members.organizationId, scope.organizationId)))
-      .limit(1);
-    if (sibling) return;
-  }
-  throw new NotFoundError(`Client "${clientId}" not found`);
 }
 
 /**
  * Upsert the clients row for a given `client_id` under an authenticated user.
  *
- * Claim semantics (see proposal M13 + multi-tenancy hardening):
- *   - New client_id → INSERT with the authenticated user_id and org_id.
- *   - Existing row with the same user_id + org_id → refresh runtime columns.
- *   - Existing row in a different org → {@link ClientOrgMismatchError}. A
- *     client is bound to one org for its lifetime; the CLI reacts by
- *     abandoning the local clientId and registering a new one.
- *   - Existing row with a different user_id (same org) → {@link ForbiddenError};
- *     the operator must pick a different clientId. Hard conflict because
- *     pinned agents under that client belong to the original owner.
+ * Claim semantics (decouple-client-from-identity §4.1.1):
+ *   - New client_id → INSERT with the authenticated user_id. `organization_id`
+ *     is written as a placeholder (NOT NULL legacy column; no longer consumed
+ *     by any read path) sourced from the caller-supplied JWT default org.
+ *   - Existing row with the same user_id → refresh runtime columns.
+ *     `organization_id` is **not** updated on conflict, so the placeholder set
+ *     at first insert sticks for the row's lifetime.
+ *   - Existing row with a different user_id → raises
+ *     {@link ClientUserMismatchError} (WS close 4403). The CLI guides the
+ *     operator through `first-tree-hub client claim --confirm` to take
+ *     ownership, which unpins the previous owner's agents from the machine.
  */
 export async function registerClient(
   db: Database,
@@ -81,20 +60,15 @@ export async function registerClient(
   const now = new Date();
 
   const [existing] = await db
-    .select({ id: clients.id, userId: clients.userId, organizationId: clients.organizationId })
+    .select({ id: clients.id, userId: clients.userId })
     .from(clients)
     .where(eq(clients.id, data.clientId))
     .limit(1);
 
-  if (existing && existing.organizationId !== data.organizationId) {
-    throw new ClientOrgMismatchError(
-      `Client "${data.clientId}" is bound to a different organization. Re-register as a new client under the current org.`,
-    );
-  }
-
   if (existing?.userId && existing.userId !== data.userId) {
-    throw new ForbiddenError(
-      `Client "${data.clientId}" is already claimed by a different user. Pick a unique client_id.`,
+    throw new ClientUserMismatchError(
+      `Client "${data.clientId}" is owned by a different user. ` +
+        "Run `first-tree-hub client claim --confirm` to transfer ownership.",
     );
   }
 
@@ -125,6 +99,65 @@ export async function registerClient(
         lastSeenAt: now,
       },
     });
+}
+
+/**
+ * Transfer ownership of a client row to a new user, unpinning any agents
+ * whose manager belonged to the previous owner. Atomic: caller is guaranteed
+ * either a fully-applied ownership flip + bulk unpin, or no change. Idempotent
+ * when `newUserId` already owns the row.
+ *
+ * Manager → user resolution goes through the members JOIN (the agents table
+ * carries only `manager_id`); cross-org agents under the same previous owner
+ * are unpinned together (decouple-client-from-identity §4.4).
+ *
+ * Caller is responsible for the caller-side authorization (the new owner must
+ * be the authenticated request's user). The structured log
+ * `event: client.owner_transfer` is emitted by the caller after the
+ * transaction commits, using the returned `previousUserId` /
+ * `unpinnedAgentIds`.
+ */
+export async function claimClient(
+  db: Database,
+  clientId: string,
+  newUserId: string,
+): Promise<{ previousUserId: string | null; unpinnedAgentIds: string[] }> {
+  return db.transaction(async (tx) => {
+    const [locked] = await tx.execute<{ id: string; user_id: string | null }>(
+      sql`SELECT id, user_id FROM clients WHERE id = ${clientId} FOR UPDATE`,
+    );
+    if (!locked) {
+      throw new NotFoundError(`Client "${clientId}" not found`);
+    }
+    const previousUserId = locked.user_id;
+
+    if (previousUserId === newUserId) {
+      return { previousUserId, unpinnedAgentIds: [] as string[] };
+    }
+
+    let unpinnedAgentIds: string[] = [];
+    if (previousUserId !== null) {
+      const rows = await tx
+        .select({ uuid: agents.uuid })
+        .from(agents)
+        .innerJoin(members, eq(agents.managerId, members.id))
+        .where(and(eq(agents.clientId, clientId), eq(members.userId, previousUserId)));
+      unpinnedAgentIds = rows.map((r) => r.uuid);
+
+      if (unpinnedAgentIds.length > 0) {
+        const now = new Date();
+        await tx.update(agents).set({ clientId: null, updatedAt: now }).where(inArray(agents.uuid, unpinnedAgentIds));
+        await tx
+          .update(agentPresence)
+          .set({ status: "offline", clientId: null, ...runtimeFieldsReset(now) })
+          .where(inArray(agentPresence.agentId, unpinnedAgentIds));
+      }
+    }
+
+    await tx.update(clients).set({ userId: newUserId }).where(eq(clients.id, clientId));
+
+    return { previousUserId, unpinnedAgentIds };
+  });
 }
 
 export async function disconnectClient(db: Database, clientId: string) {
@@ -171,13 +204,14 @@ export async function listActiveAgentsPinnedToClient(db: Database, clientId: str
 }
 
 /**
- * Member-scoped: every active agent pinned to a client owned by this user
- * within the given organization. Used by client startup to reconcile its
- * local YAML against the authoritative `agents.runtime_provider`.
+ * Member-scoped: every active agent pinned to a client owned by this user.
+ * Used by client startup to reconcile its local YAML against the authoritative
+ * `agents.runtime_provider`. Cross-org by design — a client is owned by a
+ * user, not an org (decouple-client-from-identity §4.1).
  */
 export async function listMyPinnedAgents(
   db: Database,
-  scope: { userId: string; organizationId: string },
+  scope: { userId: string },
 ): Promise<Array<{ agentId: string; clientId: string; runtimeProvider: RuntimeProvider }>> {
   const rows = await db
     .select({
@@ -187,13 +221,7 @@ export async function listMyPinnedAgents(
     })
     .from(agents)
     .innerJoin(clients, eq(agents.clientId, clients.id))
-    .where(
-      and(
-        eq(clients.userId, scope.userId),
-        eq(clients.organizationId, scope.organizationId),
-        ne(agents.status, "deleted"),
-      ),
-    );
+    .where(and(eq(clients.userId, scope.userId), ne(agents.status, "deleted")));
   return rows
     .filter((r): r is { agentId: string; clientId: string; runtimeProvider: string } => r.clientId !== null)
     .map((r) => ({
@@ -236,36 +264,50 @@ export async function updateClientCapabilities(
 }
 
 /**
- * Scope-aware client listing.
- *
- *   - member: rows where `user_id = scope.userId` AND `organization_id = scope.organizationId`
- *     — protects against a user listing their own clients registered under a
- *     different org when they're logged into this one.
- *   - admin: every row in `scope.organizationId`, regardless of owner.
+ * Scope-aware client listing. Returns the caller's own clients (cross-org —
+ * a client is owned by a user, not an org). The admin route adds a separate
+ * `?organizationId=` cross-user view via {@link listClientsForOrgAdmin}.
  */
-export async function listClients(db: Database, scope: { userId: string; organizationId: string; role: string }) {
-  const rows =
-    scope.role === "admin"
-      ? await db
-          .select({
-            id: clients.id,
-            userId: clients.userId,
-            status: clients.status,
-            sdkVersion: clients.sdkVersion,
-            hostname: clients.hostname,
-            os: clients.os,
-            instanceId: clients.instanceId,
-            connectedAt: clients.connectedAt,
-            lastSeenAt: clients.lastSeenAt,
-            metadata: clients.metadata,
-          })
-          .from(clients)
-          .where(eq(clients.organizationId, scope.organizationId))
-      : await db
-          .select()
-          .from(clients)
-          .where(and(eq(clients.userId, scope.userId), eq(clients.organizationId, scope.organizationId)));
+export async function listClients(db: Database, scope: { userId: string }) {
+  const rows = await db.select().from(clients).where(eq(clients.userId, scope.userId));
+  return attachAgentCounts(db, rows);
+}
 
+/**
+ * Admin-only cross-user listing: every client owned by an active member of
+ * `orgId`. Joining `clients → members.user_id` instead of `clients.organization_id`
+ * keeps the read path consistent with the rule that connection has no
+ * runtime relationship to organization (decouple-client-from-identity §A).
+ *
+ * The caller must verify admin role realtime via `requireMemberInOrg` before
+ * invoking this function — the service does not re-check, so it is
+ * unsafe to expose without that gate.
+ */
+export async function listClientsForOrgAdmin(db: Database, orgId: string) {
+  const rows = await db
+    .select({
+      id: clients.id,
+      userId: clients.userId,
+      organizationId: clients.organizationId,
+      status: clients.status,
+      sdkVersion: clients.sdkVersion,
+      hostname: clients.hostname,
+      os: clients.os,
+      instanceId: clients.instanceId,
+      connectedAt: clients.connectedAt,
+      lastSeenAt: clients.lastSeenAt,
+      metadata: clients.metadata,
+    })
+    .from(clients)
+    .innerJoin(members, eq(members.userId, clients.userId))
+    .where(and(eq(members.organizationId, orgId), eq(members.status, "active")));
+  return attachAgentCounts(db, rows);
+}
+
+async function attachAgentCounts<T extends { id: string }>(
+  db: Database,
+  rows: T[],
+): Promise<Array<T & { agentCount: number }>> {
   const counts = await db
     .select({
       clientId: agents.clientId,

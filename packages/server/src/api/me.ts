@@ -12,6 +12,7 @@ import { members } from "../db/schema/members.js";
 import { users } from "../db/schema/users.js";
 import { ForbiddenError, NotFoundError, UnauthorizedError } from "../errors.js";
 import { requireMember } from "../middleware/require-identity.js";
+import { listAgentsManagedByUser } from "../services/access-control.js";
 import * as authService from "../services/auth.js";
 import {
   buildInviteUrl,
@@ -70,6 +71,12 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       }
     }
 
+    // Multi-org payload (decouple-client-from-identity §C1): the web client
+    // derives `currentMembership` from `localStorage.selectedOrganizationId`
+    // joined against this list, so it never has to call /auth/switch-org just
+    // to learn which orgs the user belongs to.
+    const memberships = await listActiveMemberships(app.db, m.userId);
+
     return {
       user: user ?? null,
       member: {
@@ -78,6 +85,13 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         role: m.role,
         agentId: m.agentId,
       },
+      memberships: memberships.map((mb) => ({
+        id: mb.memberId,
+        organizationId: mb.organizationId,
+        organizationName: mb.orgDisplayName,
+        role: mb.role,
+        agentId: mb.agentId,
+      })),
       agent: agent ?? null,
       wizard: { step: wizardStep },
       inviteUrl,
@@ -109,6 +123,27 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     const command = `first-tree-hub connect ${token}`;
 
     return { token, expiresIn, command };
+  });
+
+  // GET /me/managed-agents — cross-org list of every agent the caller
+  // manages (decouple-client-from-identity §4.5.1 case (b)). Powers the
+  // CLI `agent list` view, which now shows a multi-org user's full
+  // managed agent set without an explicit `?organizationId=`. The web
+  // roster stays org-scoped through the `/admin/agents` endpoint.
+  app.get("/me/managed-agents", async (request) => {
+    const m = requireMember(request);
+    const rows = await listAgentsManagedByUser(app.db, m.userId);
+    return rows.map((r) => ({
+      uuid: r.uuid,
+      name: r.name,
+      displayName: r.displayName,
+      type: r.type,
+      organizationId: r.organizationId,
+      inboxId: r.inboxId,
+      visibility: r.visibility,
+      runtimeProvider: r.runtimeProvider,
+      clientId: r.clientId,
+    }));
   });
 
   // ── Self-service org management ───────────────────────────────────────────
@@ -216,12 +251,18 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     return reply.status(204).send();
   });
 
+  // POST /auth/switch-org degrades to a server-side authorization probe:
+  // the call confirms the user is an active member of the target org and
+  // returns 204. The web client now persists the selected org locally
+  // (`localStorage.selectedOrganizationId`) and rederives every auth-context
+  // field from `/me memberships` — no more JWT swap. WS connections keep
+  // their existing bound agents (decouple-client-from-identity §4.6).
   app.post("/auth/switch-org", async (request, reply) => {
     const m = requireMember(request);
     const body = switchOrgSchema.parse(request.body);
 
     const [target] = await app.db
-      .select()
+      .select({ id: members.id })
       .from(members)
       .where(
         and(
@@ -235,13 +276,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       throw new ForbiddenError("You do not belong to that organization");
     }
 
-    const tokens = await authService.signTokensForMember(app.config.secrets.jwtSecret, {
-      userId: m.userId,
-      memberId: target.id,
-      organizationId: target.organizationId,
-      role: target.role,
-    });
-    return reply.send(tokens);
+    return reply.status(204).send();
   });
 }
 
@@ -264,7 +299,7 @@ async function inferWizardStep(
   const [hasClient] = await app.db
     .select({ id: clients.id })
     .from(clients)
-    .where(and(eq(clients.userId, m.userId), eq(clients.organizationId, m.organizationId)))
+    .where(eq(clients.userId, m.userId))
     .limit(1);
   if (!hasClient) return "connect";
 

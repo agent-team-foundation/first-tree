@@ -1,6 +1,42 @@
 const BASE_URL = "/api/v1";
 const TOKEN_KEY = "first-tree-hub:tokens";
 
+/**
+ * Currently selected organization id, mirrored from
+ * `localStorage.selectedOrganizationId` via `setApiSelectedOrganizationId`.
+ * Persisted in module scope so the request layer can transparently
+ * inject `?organizationId=…` into admin-scoped GET requests without every
+ * caller having to thread the value through (decouple-client-from-identity
+ * §C / fix for codex P1 #2).
+ *
+ * Why module scope and not the auth-context: the api wrapper here is
+ * import-only — making it depend on a React context would require every
+ * caller to live inside the provider tree, which non-component helpers
+ * (e.g. `lib/use-agent-name-map`) cannot guarantee.
+ */
+let selectedOrganizationId: string | null = null;
+
+export function setApiSelectedOrganizationId(value: string | null): void {
+  selectedOrganizationId = value;
+}
+
+/**
+ * Inject the selected organization id as a query param on admin-scoped
+ * paths so the server resolves the correct cross-org membership instead
+ * of falling back to the JWT default org. Only `/admin/*` paths are
+ * touched — `/auth/*`, `/me/*`, `/health` etc. are unaffected, matching
+ * the server contract that admin endpoints accept an optional
+ * `?organizationId=…` and gate it via `requireMemberInOrg`.
+ */
+function decoratePath(path: string): string {
+  if (!selectedOrganizationId) return path;
+  if (!path.startsWith("/admin/") && path !== "/admin") return path;
+  // Caller already supplied organizationId — never overwrite.
+  if (/[?&]organizationId=/.test(path)) return path;
+  const sep = path.includes("?") ? "&" : "?";
+  return `${path}${sep}organizationId=${encodeURIComponent(selectedOrganizationId)}`;
+}
+
 type StoredTokens = {
   accessToken: string;
   refreshToken: string;
@@ -84,11 +120,12 @@ async function tryRefresh(refreshToken: string): Promise<StoredTokens | null> {
 async function request<T>(path: string, options?: { method?: string; body?: unknown }): Promise<T> {
   const { method = "GET", body } = options ?? {};
 
+  const decoratedPath = decoratePath(path);
   const doFetch = (token?: string) => {
     const headers: Record<string, string> = {};
     if (token) headers.Authorization = `Bearer ${token}`;
     if (body !== undefined) headers["Content-Type"] = "application/json";
-    return fetch(`${BASE_URL}${path}`, {
+    return fetch(`${BASE_URL}${decoratedPath}`, {
       method,
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
