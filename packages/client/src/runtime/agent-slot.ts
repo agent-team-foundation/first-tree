@@ -59,6 +59,14 @@ export class AgentSlot {
     this.logger = createLogger("slot").child({ agentName: config.name, agentId: config.agentId });
   }
 
+  get name(): string {
+    return this.config.name;
+  }
+
+  get agentId(): string {
+    return this.config.agentId;
+  }
+
   private get clientConnection(): ClientConnection {
     return this.config.clientConnection;
   }

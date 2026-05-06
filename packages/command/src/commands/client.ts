@@ -33,12 +33,15 @@ import {
   createExecuteUpdate,
   declineUpdate,
   ensureFreshAccessToken,
+  findStaleAliases,
   handleClientOrgMismatch,
   migrateLocalAgentDirs,
   printResults,
   promptMissingFields,
   promptUpdate,
+  reconcileAgentConfigs,
   reconcileLocalRuntimeProviders,
+  removeLocalAgent,
   resolveServerUrl,
   uploadClientCapabilities,
 } from "../core/index.js";
@@ -210,11 +213,24 @@ export function registerClientCommands(program: Command): void {
     .description("Check client environment readiness")
     .action(async () => {
       print.line("\n  First Tree Hub Client Doctor\n\n");
+      // The "Agents" line cross-references local aliases against the
+      // server's pinned-agent set. Without a configured server URL we
+      // can't talk to anything; fall back to the legacy local-only count.
+      let agentCheck: Awaited<ReturnType<typeof reconcileAgentConfigs>>;
+      try {
+        const serverUrl = resolveServerUrl();
+        agentCheck = await reconcileAgentConfigs({
+          serverUrl,
+          getAccessToken: () => ensureFreshAccessToken(),
+        });
+      } catch {
+        agentCheck = checkAgentConfigs();
+      }
       const results = [
         checkNodeVersion(),
         checkClientConfig(),
         await checkServerReachable(),
-        checkAgentConfigs(),
+        agentCheck,
         await checkWebSocket(),
         checkBackgroundService(),
       ];
@@ -356,7 +372,58 @@ export function registerClientCommands(program: Command): void {
         };
 
         print.line(`  ✓ Ownership transferred. ${result.unpinnedAgentCount} agent(s) unpinned.\n`);
-        print.line("  Run `first-tree-hub client start` to reconnect.\n\n");
+
+        // After claim, the previous owner's pinned agents are unpinned
+        // server-side but their `agents/<name>/agent.yaml` files still
+        // sit on disk. Without cleanup, the next `client start` tries to
+        // bind those orphaned agentIds, R-RUN rejects each one, and
+        // doctor keeps reporting the inflated "N configured" count.
+        // Detect + offer to prune in the same breath as the claim.
+        try {
+          const stale = await findStaleAliases({
+            serverUrl,
+            getAccessToken: () => ensureFreshAccessToken(),
+          });
+          if (stale.length === 0) {
+            print.line("  No stale local aliases — local config already matches the server.\n");
+          } else {
+            print.line(
+              `\n  ${stale.length} local ${stale.length === 1 ? "alias" : "aliases"} no longer pinned to this client:\n\n`,
+            );
+            for (const s of stale) {
+              print.line(`    - ${s.name.padEnd(30)} (agentId: ${s.agentId})\n`);
+            }
+            print.line("\n");
+
+            // `--confirm` was the operator pre-acknowledging the claim
+            // itself; reusing the flag here keeps `client claim --confirm`
+            // a fully non-interactive command (which the docs and the
+            // CLIENT_USER_MISMATCH error message both rely on).
+            const approved =
+              options.confirm === true
+                ? true
+                : await confirm({
+                    message: `Remove the ${stale.length} stale ${stale.length === 1 ? "alias" : "aliases"} above (config + workspace + session state)?`,
+                    default: true,
+                  }).catch(() => false);
+
+            if (approved) {
+              for (const s of stale) {
+                removeLocalAgent(s.name);
+                print.line(`  ✓ removed ${s.name}\n`);
+              }
+              print.line(`\n  ${stale.length} alias(es) pruned.\n`);
+            } else {
+              print.line("  Skipped. Run `first-tree-hub agent prune` later to clean up.\n");
+            }
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          print.line(`  (Could not check for stale aliases: ${msg.slice(0, 100)})\n`);
+          print.line("  Run `first-tree-hub agent prune` after reconnecting.\n");
+        }
+
+        print.line("\n  Run `first-tree-hub client start` to reconnect.\n\n");
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         fail("CLAIM_ERROR", msg);

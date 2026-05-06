@@ -9,6 +9,7 @@ import {
   resolveConfigReadonly,
   serverConfigSchema,
 } from "@agent-team-foundation/first-tree-hub-shared/config";
+import { FirstTreeHubSDK } from "@first-tree-hub/client";
 import { blank, print } from "./output.js";
 import { getClientServiceStatus } from "./service-install.js";
 
@@ -173,6 +174,78 @@ export function checkAgentConfigs(): CheckResult {
   } catch {
     return { label: "Agents", ok: false, detail: "error reading agent configs" };
   }
+}
+
+/**
+ * Server-aware agent reconciliation. Reads local `agents/<name>/agent.yaml`
+ * files and cross-references each `agentId` with `/api/v1/clients/me/agents`.
+ * Categorises into:
+ *   - pinned   — agent row is pinned to this client and owned by the caller
+ *   - stale    — local alias whose `agentId` is not in the server list
+ *
+ * This is the check that should be displayed in `client doctor`. The plain
+ * `checkAgentConfigs` (sync, local-only) is retained for back-compat with
+ * external consumers but its "N configured" wording is misleading because
+ * stale aliases never bind at runtime.
+ *
+ * Falls back to the local-only result if the server is unreachable or the
+ * caller is not authenticated — doctor should still print *something* useful
+ * in offline / pre-connect scenarios.
+ */
+export async function reconcileAgentConfigs(opts: {
+  serverUrl: string;
+  getAccessToken: () => Promise<string>;
+}): Promise<CheckResult> {
+  const local = checkAgentConfigs();
+  // Propagate the "no agents configured" / read-error states unchanged.
+  if (!local.ok) return local;
+
+  const agentsDir = join(DEFAULT_CONFIG_DIR, "agents");
+  let localAgents: Map<string, { agentId: string }>;
+  try {
+    localAgents = loadAgents({ schema: agentConfigSchema, agentsDir });
+  } catch {
+    return local;
+  }
+
+  let pinnedAgentIds: Set<string>;
+  try {
+    const sdk = new FirstTreeHubSDK({ serverUrl: opts.serverUrl, getAccessToken: opts.getAccessToken });
+    const remote = await sdk.listMyAgents();
+    pinnedAgentIds = new Set(remote.map((a) => a.agentId));
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return {
+      label: "Agents",
+      ok: true,
+      detail: `${local.detail} — server reconciliation skipped (${msg.slice(0, 60)})`,
+    };
+  }
+
+  const pinned: string[] = [];
+  const stale: string[] = [];
+  for (const [name, cfg] of localAgents) {
+    if (pinnedAgentIds.has(cfg.agentId)) pinned.push(name);
+    else stale.push(name);
+  }
+
+  const total = localAgents.size;
+  if (stale.length === 0) {
+    return {
+      label: "Agents",
+      ok: true,
+      detail: `${total} configured, all pinned to this client (${pinned.join(", ")})`,
+    };
+  }
+
+  return {
+    label: "Agents",
+    ok: false,
+    detail:
+      `${total} configured locally, ${pinned.length} pinned to this client (${pinned.join(", ") || "—"}); ` +
+      `${stale.length} stale ${stale.length === 1 ? "alias" : "aliases"} (${stale.join(", ")}) — ` +
+      "run `first-tree-hub agent prune` to clean up",
+  };
 }
 
 export function checkBackgroundService(): CheckResult {

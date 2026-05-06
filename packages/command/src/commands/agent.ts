@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { MessageFormat } from "@agent-team-foundation/first-tree-hub-shared";
 import {
@@ -9,9 +9,11 @@ import {
   setConfigValue,
 } from "@agent-team-foundation/first-tree-hub-shared/config";
 import { cleanWorkspaces, FirstTreeHubSDK, SdkError, SessionRegistry } from "@first-tree-hub/client";
+import { confirm } from "@inquirer/prompts";
 import type { Command } from "commander";
 import { fail, success } from "../cli/output.js";
 import { resolveReplyToFromEnv } from "../core/agent-messaging.js";
+import { findStaleAliases, removeLocalAgent } from "../core/agent-prune.js";
 import { ensureFreshAccessToken, resolveServerUrl, saveAgentConfig } from "../core/bootstrap.js";
 import { bindFeishuBot, bindFeishuUser } from "../core/feishu.js";
 import { promptAddAgent } from "../core/index.js";
@@ -192,11 +194,67 @@ export function registerAgentCommands(program: Command): void {
         print.line(`  Agent "${name}" not found.\n`);
         process.exit(1);
       }
-      rmSync(agentDir, { recursive: true, force: true });
-      rmSync(join(DEFAULT_DATA_DIR, "workspaces", name), { recursive: true, force: true });
-      rmSync(join(DEFAULT_DATA_DIR, "sessions", `${name}.json`), { force: true });
+      removeLocalAgent(name);
 
       print.line(`  Agent "${name}" removed.\n`);
+    });
+
+  // ── prune — drop local aliases the server no longer pins to me ─────
+  // Counterpart to `client doctor`'s "stale aliases" warning. Walks the
+  // local `agents/<name>/` dirs and removes any whose `agentId` is not
+  // returned by `/api/v1/clients/me/agents`. Common after `client claim`,
+  // after the previous owner deleted an agent server-side, or after a
+  // typo `agent add` left a junk dir.
+  agent
+    .command("prune")
+    .description("Remove local agent aliases that are no longer pinned to this client (or that you don't own)")
+    .option("--yes", "Skip the interactive confirmation prompt")
+    .option("--dry-run", "Only list what would be removed; don't touch the filesystem")
+    .option("--server <url>", "Hub server URL")
+    .action(async (options: { yes?: boolean; dryRun?: boolean; server?: string }) => {
+      try {
+        const serverUrl = resolveServerUrl(options.server);
+        const stale = await findStaleAliases({
+          serverUrl,
+          getAccessToken: () => ensureFreshAccessToken(),
+        });
+
+        if (stale.length === 0) {
+          print.line("\n  ✓ No stale agent aliases. Local config matches the server.\n\n");
+          return;
+        }
+
+        print.line(`\n  ${stale.length} stale ${stale.length === 1 ? "alias" : "aliases"}:\n\n`);
+        for (const s of stale) {
+          print.line(`    - ${s.name.padEnd(30)} (agentId: ${s.agentId})\n`);
+        }
+        print.line("\n");
+
+        if (options.dryRun) {
+          print.line("  Dry run — no files removed. Re-run without --dry-run to delete.\n\n");
+          return;
+        }
+
+        if (!options.yes) {
+          const approved = await confirm({
+            message: `Remove the ${stale.length} stale ${stale.length === 1 ? "alias" : "aliases"} above (config + workspace + session state)?`,
+            default: false,
+          }).catch(() => false);
+          if (!approved) {
+            print.line("  Cancelled.\n\n");
+            return;
+          }
+        }
+
+        for (const s of stale) {
+          removeLocalAgent(s.name);
+          print.line(`  ✓ removed ${s.name}\n`);
+        }
+        print.line(`\n  ${stale.length} alias(es) pruned.\n\n`);
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        fail("PRUNE_ERROR", msg);
+      }
     });
 
   agent
