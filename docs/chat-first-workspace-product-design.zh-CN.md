@@ -13,9 +13,9 @@
 
 First Tree Hub Workspace 应从以 agent roster 为中心，转向以 chat/conversation 为中心的协作界面。
 
-左侧只展示 conversations。Agents 和 humans 不再作为 Workspace 左侧导航项，而是在 composer 里的轻量 target picker 中选择。新建聊天不弹出对话框，也不要求用户命名。用户选择一个或多个目标，输入第一条消息并发送，系统根据目标数量创建或复用合适的 chat：
+左侧只展示 conversations。Agents 和 humans 不再作为 Workspace 左侧导航项，而是在 composer 里的轻量 target picker 中选择。新建聊天不弹出对话框，也不要求用户命名。用户选择一个或多个目标，输入第一条消息并发送，系统根据目标数量创建合适的 chat：
 
-- 一个目标：创建或复用 direct chat；
+- 一个目标：创建新的 direct chat；
 - 多个目标：创建 group chat；
 - group title 根据参与者名称自动生成。
 
@@ -73,7 +73,114 @@ Agent session = runtime execution state inside a chat
 - new-chat draft 在发送第一条消息前还没有 backend chat，更没有 runtime session。session-first 导航会让 draft creation 变得别扭。
 - 未来 task chats 应该绑定到 chats，而不是绑定到某个单一 agent session。
 
-本设计唯一需要新增的持久化模型是 member-scoped read state，用于支持 unread mention dots。
+Read state 应附着在 chat membership 上，而不是放在一张 Workspace-only 的独立表中。推荐实现是在 `chat_participants` 中保存 participant 和 watcher 的 read state。
+
+## Workspace 可见性决策
+
+Workspace 应同时包含：
+
+```text
+A. Participant chats
+   当前 member 的 human agent 是 active chat participant。
+
+B. Watching chats
+   当前 member 管理的一个或多个 agents 参与了该 chat，
+   但 member 的 human agent 尚未作为 speaking participant 加入。
+```
+
+这让 Workspace 能成为 agent team 的工作入口：用户既能看到自己正在参与的 conversations，也能看到自己管理的 agents 需要关注的 conversations。
+
+但这两种状态必须在视觉和行为上明确区分：
+
+```text
+participant
+→ 可读
+→ 可回复
+→ composer enabled
+→ 普通 conversation row
+
+watching
+→ 可读
+→ 暂不可回复
+→ composer 替换为 "Join to reply"
+→ row/header 显示 Watching
+```
+
+打开 watching chat 不能隐式把 human agent 加为 speaking participant。Join 是一个明确动作，因为 membership 是一个持久协作信号。
+
+## Watch State 架构方案
+
+上面的产品要求意味着 Workspace 不能只展示用户 human agent 已参与的 chats。Watching state 有两个可行的存储方案。
+
+### 方案 A：独立 Supervision Read State 表
+
+为 supervision-only chats 增加专门 read state 表：
+
+```text
+chat_supervision_read_states
+├─ member_id
+├─ chat_id
+├─ last_read_at
+└─ unread_mention_count
+```
+
+优点：
+
+- 严格区分“参与者”和“观察者”。
+- 不向 `chat_participants` 引入 non-speaking rows。
+- 不需要调整 message fan-out 的 participant 过滤。
+
+缺点：
+
+- 引入第二套 read-state model。
+- `GET /me/chats` 需要 union participant rows 和 supervision rows。
+- Mark-read、unread counters 和 migrations 需要两条路径。
+- 重新引入专家评估建议避免的额外 read-state 表。
+
+### 方案 B：在 `chat_participants` 中增加 Watcher Role（推荐）
+
+把 `chat_participants` 作为唯一 per-chat/per-agent state 表，增加 watcher role：
+
+```text
+chat_participants
+├─ chat_id
+├─ agent_id
+├─ role: owner | member | watcher
+├─ mode: full | mention_only
+├─ last_read_at
+└─ unread_mention_count
+```
+
+语义：
+
+- `owner` / `member`：speaking participants，可回复，参与消息投递。
+- `watcher`：non-speaking observer，可阅读，出现在 Workspace，有 read/unread state，不参与消息投递。
+- `Join to reply`：把当前 member 的 human-agent row 从 `watcher` 升级为 `member`，并设置 `mode = "full"`。
+
+优点：
+
+- 不新增表。
+- Read state 与拥有它的 chat relationship 放在一起。
+- `/me/chats` 只需要查一张表：`chat_participants.agent_id = myHumanAgentId`。
+- Participant 和 watcher rows 共享同一套 counter/update 路径。
+- 产品语义明确：watching 是一种弱 chat relationship，不是隐藏在旁边表里的状态。
+
+缺点：
+
+- `chat_participants` 会包含 non-speaking rows。
+- Message fan-out 必须明确排除 `role = "watcher"`。
+- 现有假设每个 `chat_participants` row 都可投递的代码需要 audit。
+
+推荐：
+
+采用方案 B。它在产品体验、查询性能和模型简洁性之间最平衡。实现必须文档化并测试这个不变量：`role = "watcher"` rows 永远不进入 inbox fan-out。
+
+Watcher row 应在写入时维护：
+
+- 当 chat 创建或新增 participants 时，识别 non-human participants 的 managers。
+- 对每个 manager，解析其 human agent。
+- 如果该 human agent 还不是 speaking participant，则 upsert 一个 `watcher` row。
+- 迁移/backfill 应为既有 managed-agent chats 创建 watcher rows。
 
 ## 问题
 
@@ -155,16 +262,15 @@ Workspace
 │                      │                                             │
 │ + New chat           │                                             │
 │                      │             Hi, I'm code agent              │
-│ ● Code Agent         │                Try asking                   │
-│   Fix build error    │                                             │
-│   2m ago             │   [List my open tasks by priority]          │
+│ ● Fix build error    │                Try asking                   │
+│   Code Agent · 2m    │   [List my open tasks by priority]          │
 │                      │   [Summarize what I did today]              │
-│   Design + Gandy     │   [Plan what to work on next]               │
-│   Review layout      │                                             │
+│   Review layout      │   [Plan what to work on next]               │
+│   Design + Gandy     │                                             │
 │   18m ago            │                                             │
 │                      │ ┌─────────────────────────────────────────┐ │
-│   Product +2         │ │ Tell code agent what to do...           │ │
-│   Plan next sprint   │ │ To: code agent ▼                   Send │ │
+│   Plan next sprint   │ │ Tell code agent what to do...           │ │
+│   Product Agent +2   │ │ To: code agent ▼                   Send │ │
 │   1h ago             │ └─────────────────────────────────────────┘ │
 └──────────────────────┴─────────────────────────────────────────────┘
 ```
@@ -180,7 +286,7 @@ flowchart TD
   E --> F{"Target 数量"}
   F -->|一个| G["发送第一条消息"]
   F -->|多个| H["发送第一条消息"]
-  G --> I["创建或复用 direct chat"]
+  G --> I["创建新的 direct chat"]
   H --> J["创建 group chat"]
   I --> K["持久化 message"]
   J --> K
@@ -213,8 +319,8 @@ To: code agent ▼
 
 - Draft chat 始终至少有一个 selected target。
 - 默认 target 是最近使用的 agent。如果没有历史记录，则使用用户的 primary assistant。
-- 选择一个 target 表示 direct chat。
-- 选择多个 targets 表示 group chat。
+- 选择一个 target 表示新的 direct chat。
+- 选择多个 targets 表示新的 group chat。
 - Enter 切换当前高亮 row 的选择状态。
 - 当 search input 为空时，Backspace 删除最后一个 selected chip。
 - Escape 关闭 picker。
@@ -282,6 +388,8 @@ Add members
 - UI 乐观更新。
 - 如果 server 拒绝添加，则移除该 row 并显示 inline error。
 - 向 direct chat 添加新成员时，系统在后台将其升级为 group chat。UI 只表现为变成了 multi-participant chat，不需要用户理解“升级”概念。
+- Chat 一旦升级为 `group`，未来即使成员减少也不降级回 `direct`。
+- 添加 non-human participants 时，系统可能为其 managers 创建 watcher rows。
 
 ## Conversation List
 
@@ -292,27 +400,33 @@ Conversation list 替代当前 agent roster。
 │ Conversations              │
 │ + New chat                 │
 ├────────────────────────────┤
-│ ● Code Agent               │
-│   Fix homepage layout      │
-│   2m ago                   │
+│ ● Fix homepage layout      │
+│   Code Agent · 2m ago      │
 ├────────────────────────────┤
-│   Design Agent, Gandy +2   │
 │   Review copied changes    │
-│   18m ago                  │
+│   Design, Gandy +2 · 18m   │
 ├────────────────────────────┤
-│   Product Agent            │
 │   Plan next sprint         │
-│   1h ago                   │
+│   Product Agent · Watching │
 └────────────────────────────┘
 ```
 
 Row hierarchy：
 
 1. Unread `@` red dot。
-2. Conversation title。
-3. Last message preview。
-4. Updated time。
-5. Optional badges，例如 `group`、`offline` 和未来的 `task`。
+2. Conversation title，而不是 primary agent name。
+3. Collaborator metadata，包括 participants 和 `Watching` state。
+4. 当 last-message preview 没有被用作 title 时，展示 preview。
+5. Updated time。
+6. Optional badges，例如 `group`、`offline` 和未来的 `task`。
+
+Title resolution：
+
+1. 优先使用 `chat.topic`。
+2. 否则使用 first-message 或 last-message 生成的 title。
+3. 否则用 participant summary 作为 fallback。
+
+Agent names 是 metadata，不是 row 的主标题。这样可以避免 UI 名义上 chat-first、视觉上仍然 agent-first。
 
 ## Unread Mentions
 
@@ -322,10 +436,21 @@ Unread mention 定义：
 
 - message 属于当前 member 可见的 chat；
 - `messages.metadata.mentions` 包含当前 member 的 human agent id；
-- `messages.createdAt` 晚于该 member 对此 chat 的 read state；
+- 或者 message mention 了当前 member 管理的 agent，且当前 member 的 human-agent row 是 `role = "watcher"`；
 - message 不是当前 member 的 human agent 发送的。
 
-打开 chat 后标记为 read。
+Unread mention counters 在写入时维护：
+
+- 对被 mention 的 speaking participants 增加 `chat_participants.unread_mention_count`；
+- 对被 mention 的 managed agents 对应的 watcher rows 增加 counter；
+- 不增加 sender 自己的 row。
+
+打开 chat 且 message list 加载完成后，将当前 member 的 human-agent row 标记为 read：
+
+```text
+last_read_at = NOW()
+unread_mention_count = 0
+```
 
 ## Notification Model
 
@@ -346,6 +471,23 @@ Notification bell
 ```
 
 Notification bell 不展示 chat mention notifications。这样 bell 保持为 system-level events 的入口，chat attention 留在 chat list 本地。
+
+## 实时更新模型
+
+Chat-first Workspace 需要 chat-level realtime signal。现有 admin WS 会 invalidate notification 和 session queries，但目前没有 chat message push。
+
+新增 best-effort `chat:message` frame：
+
+```text
+message persisted + inbox fan-out committed
+→ projection fields updated
+→ PG NOTIFY chat_message
+→ admin WS sends chat:message to affected web clients
+→ Web invalidates ["me", "chats"]
+→ selected chat may append or refetch messages
+```
+
+Realtime delivery 只是优化。失败必须 log and swallow；durable message persistence 和 polling/refetch 仍然是 correctness path。
 
 ## URL Model
 
@@ -371,18 +513,31 @@ UI 不应再要求必须有 `agentId` 才能渲染 chat。Agent-specific context
 
 ## API 设计
 
-### List Workspace Chats
+新增 member-scoped chat APIs 应放在 `/me/*` 下，而不是 `/admin/*`。`workspace` 是 UI 概念，不应出现在 API path 中。
 
 ```text
-GET /admin/chats/workspace
+GET  /me/chats
+POST /me/chats
+POST /me/chats/:chatId/read
+POST /me/chats/:chatId/participants
+POST /me/chats/:chatId/join
+```
+
+现有 `/admin/chats/*` APIs 保持兼容，不作为本设计的新 public surface。
+
+### List Chats
+
+```text
+GET /me/chats
 ```
 
 Response：
 
 ```ts
-type WorkspaceChatRow = {
+type MeChatRow = {
   chatId: string;
-  type: "direct" | "group" | "thread";
+  type: "direct" | "group";
+  membershipKind: "participant" | "watching";
   title: string;
   topic: string | null;
   participants: Array<{
@@ -391,26 +546,33 @@ type WorkspaceChatRow = {
     type: "human" | "personal_assistant" | "autonomous_agent";
   }>;
   participantCount: number;
+  lastMessageAt: string | null;
   lastMessagePreview: string | null;
   unreadMentionCount: number;
-  updatedAt: string;
+  canReply: boolean;
   taskId: string | null;
   taskStatus: string | null;
 };
 ```
 
-Task fields 在 Task primitive 落地前保持 `null`。
+规则：
+
+- 返回当前 member 的 human agent 在 `chat_participants` 中有 row 的 chats。
+- `role = "watcher"` 映射为 `membershipKind = "watching"` 和 `canReply = false`。
+- `role = "owner" | "member"` 映射为 `membershipKind = "participant"` 和 `canReply = true`。
+- v1 过滤 thread rows：`parent_chat_id IS NULL`。
+- Task fields 在 Task primitive 落地前保持 `null`。
 
 ### Create Chat
 
 ```text
-POST /admin/chats
+POST /me/chats
 ```
 
 Body：
 
 ```ts
-type CreateAdminChatBody = {
+type CreateMeChatBody = {
   participantIds: string[];
   topic?: string | null;
 };
@@ -418,15 +580,17 @@ type CreateAdminChatBody = {
 
 规则：
 
-- 当前 member 的 human agent 自动加入。
-- 一个非 self participant 时，尽可能创建或复用 direct chat。
-- 多个 participants 时创建 group chat。
+- 当前 member 的 human agent 自动以 `role = "owner"`、`mode = "full"` 加入。
+- 始终创建新 chat。不对 direct chats 或完全相同 participant sets 去重。
+- 一个非 self participant 创建 `type = "direct"`。
+- 两个或更多非 self participants 创建 `type = "group"`。
 - 所有 participants 必须对当前 member 可见，且属于 selected organization。
+- 为 non-human participants 的 managers upsert watcher rows。
 
 ### Add Participants
 
 ```text
-POST /admin/chats/:chatId/participants
+POST /me/chats/:chatId/participants
 ```
 
 Body：
@@ -439,50 +603,108 @@ type AddParticipantsBody = {
 
 规则：
 
-- 向 direct chat 添加成员时，必要时升级为 group。
-- 已存在的 participants 可以忽略或作为 no-op 返回。
+- 已存在的 speaking participants 作为 no-op 返回。
+- 向 direct chat 添加成员且 participant count 达到 3 时，升级为 `type = "group"`。
+- `type = "group"` 永不降级回 direct。
 - Server 强制校验 visibility 和 organization boundaries。
+- 为新增 non-human participants 的 managers upsert watcher rows。
 
 ### Mark Chat Read
 
 ```text
-POST /admin/chats/:chatId/read
+POST /me/chats/:chatId/read
 ```
 
-将当前 member 对该 chat 标记为 read。
+将当前 member 的 human-agent participant 或 watcher row 标记为 read：
+
+```text
+last_read_at = NOW()
+unread_mention_count = 0
+```
+
+### Join To Reply
+
+```text
+POST /me/chats/:chatId/join
+```
+
+如果当前 member 的 human agent 有 watcher row，则升级：
+
+```text
+role = "member"
+mode = "full"
+```
+
+如果没有 row 但允许访问，则插入 member row。Join 后，该 chat 变成普通 participant chat，composer enabled。
 
 ## 数据模型
 
-新增 member-scoped read state：
+扩展 `chat_participants`，不新增独立 read-state 表：
 
 ```text
-chat_read_states
-├─ member_id text not null
-├─ chat_id text not null
-├─ last_read_at timestamptz not null
-├─ updated_at timestamptz not null
-└─ unique(member_id, chat_id)
+chat_participants
+├─ role text not null default 'member'
+├─ mode text not null default 'full'
+├─ last_read_at timestamptz
+└─ unread_mention_count int not null default 0
 ```
 
-Indexes：
+Role semantics：
 
 ```text
-idx_chat_read_states_member_chat(member_id, chat_id)
+owner   = 带 ownership 语义的 speaking participant
+member  = speaking participant
+watcher = non-speaking observer，不进入 inbox fan-out
 ```
 
-Unread mention count 可通过 visible chats、messages 和 read state join 计算得到。
+`mode` 仍然表示 speaking participant 的 delivery mode：
+
+```text
+full
+mention_only
+```
+
+在 `chats` 上增加 conversation-list projection fields：
+
+```text
+chats
+├─ last_message_at timestamptz
+└─ last_message_preview text
+```
+
+推荐索引：
+
+```text
+idx_chats_org_last_message(organization_id, last_message_at DESC)
+```
+
+写入侧 projection 更新：
+
+- message persistence 和 inbox fan-out 完成后，在同一个 transaction 中更新 `chats.last_message_at`、`chats.last_message_preview` 和 `chats.updated_at`；
+- 对被 mention 的 speaking participants 和相关 watcher rows 增加 unread counters；
+- projection update 只作为现有 fan-out 逻辑之后的追加步骤，不重写 message delivery path。
+
+Backfill：
+
+```sql
+UPDATE chats c SET
+  last_message_at = (SELECT MAX(created_at) FROM messages WHERE chat_id = c.id),
+  last_message_preview = (
+    SELECT LEFT(content::text, 200)
+    FROM messages
+    WHERE chat_id = c.id
+    ORDER BY created_at DESC
+    LIMIT 1
+  );
+```
+
+`unread_mention_count` 对现有 rows 默认设为 `0`。产品上接受迁移后历史 chats 在 Workspace row-dot 语义下被视为已读。
 
 ## Client SDK 影响
 
-把已有 agent chat 能力暴露为 SDK first-class methods：
+SDK 变化不在 chat-first Workspace rollout 的关键路径上。
 
-```ts
-createChat(data: CreateChat): Promise<ChatDetail>
-addChatParticipant(chatId: string, agentId: string): Promise<ChatParticipant[]>
-removeChatParticipant(chatId: string, agentId: string): Promise<void>
-```
-
-Server 已经暴露 agent-side create 和 participant APIs。SDK 需要补齐封装。
+本设计的实现范围是 Web UI 和 member-facing server APIs。Agent-runtime SDK helpers，例如 `createChat`、`addChatParticipant` 和 `removeChatParticipant`，应放到独立 PR 中处理，避免这个需求扩展到 agent data plane。
 
 ## Web Components
 
@@ -542,17 +764,39 @@ Some targets are no longer available.
 
 ## 实施计划
 
-1. 添加 `chat_read_states` schema 和 migration。
-2. 添加 `GET /admin/chats/workspace`。
-3. 添加 `POST /admin/chats`。
-4. 添加 admin web 的 multi-add participant endpoint。
-5. 添加 mark-read endpoint。
-6. 添加 SDK create/add/remove chat participant methods。
-7. 用 `ConversationList` 替换 Workspace `AgentRoster`。
-8. 添加 `NewChatDraft` 和 `TargetPicker`。
-9. 更新 `ChatView` 和 `ContextPanel`，让 `chatId` 成为 primary route state。
-10. Notification bell 只保留 system events。
-11. 添加 server tests 和 web type checks。
+推荐拆成多 PR：
+
+1. Backend foundation：
+   - migration for `chat_participants.role`、`last_read_at`、`unread_mention_count`；
+   - migration for `chats.last_message_at`、`last_message_preview`；
+   - managed-agent chats 的 watcher-row backfill；
+   - `GET /me/chats`；
+   - `POST /me/chats`；
+   - `POST /me/chats/:chatId/read`；
+   - `POST /me/chats/:chatId/participants`；
+   - `POST /me/chats/:chatId/join`；
+   - service tests。
+2. Realtime projection：
+   - message persistence 和 fan-out 后更新 message-list projection；
+   - 通过 PG notify 和 admin WS 发送 `chat:message`；
+   - Web 使用 `["me", "chats"]` query invalidation contract；
+   - realtime failure 必须 log and swallow。
+3. Web UI：
+   - 用 `ConversationList` 替换 Workspace `AgentRoster`；
+   - 添加 `NewChatDraft` 和 `TargetPicker`；
+   - 添加 `ParticipantsHeader` 和 `Join to reply`；
+   - 兼容 legacy `?a=&c=`，通过 redirect 或从 `chatId` 推导 state；
+   - notification bell 只保留 system events。
+4. SDK follow-up：
+   - 独立 PR 中补齐 agent-side chat helper methods。
+
+风险约束：
+
+1. 不重写 `services/message.ts`、`services/inbox.ts` 或 message-dispatcher payload assembly。
+2. Projection updates 只追加在现有 message persistence 和 fan-out 之后，并单独测试。
+3. Watcher rows 永远不能收到 inbox entries。
+4. 不复用 inbox `acked` status 作为 Web read state。
+5. 不把 read-state writes piggyback 到 `sendMessage`；mark-read 保持为 member action。
 
 ## 验收标准
 
@@ -560,10 +804,13 @@ Some targets are no longer available.
 - Workspace 不展示 agent rows。
 - 点击 New chat 后打开 inline draft，并聚焦 composer。
 - 默认 target 自动选中。
-- 发送给一个 target 时创建或复用 direct chat。
+- 发送给一个 target 时创建新的 direct chat。
 - 发送给多个 targets 时创建 group chat。
 - Group chat 创建不打开 dialog，也不要求命名。
 - 已有 chats 可以无 dialog 加成员。
+- Watching chats 在列表中可见，并有明确的 `Watching` 状态。
+- 打开 watching chat 不会自动把当前用户加入为 speaking participant。
+- `Join to reply` 将 watcher row 升级为 speaking member row。
 - Conversation rows 展示 unread `@` red dots。
 - 打开 chat 后清除该 chat 的 unread mention state。
 - Notification bell 不展示 chat mention notifications。
@@ -572,10 +819,16 @@ Some targets are no longer available.
 ## 开放问题
 
 - 用户 primary assistant 的权威来源是什么？
-- Direct chat creation 应始终复用已有 direct chat，还是允许同一个 target 有多个 direct chats？
-- Group chat creation 是否应该对完全相同 participants 集合做 dedupe，还是每次都创建新的 group chat？
-- Mark-read 应在 chat open 时发生、message list load 完成后发生，还是用户滚动到底部后发生？
-- 引用 chat 的 system notifications 是否应跳转到 `/?c=<chatId>`，即使 mention notifications 不进入 bell？
+- Mark-read 应在 message list load 完成后发生，还是用户滚动到底部后发生？v1 建议：message list load 完成后发生。
+- 引用 chat 的 system notifications 是否应跳转到 `/?c=<chatId>`，即使 mention notifications 不进入 bell？建议：是。
+
+已决策：
+
+- Direct chat creation 不做 dedupe；每次 New Chat send 都创建新的 direct chat。
+- Group chat creation 不对完全相同 participants 集合做 dedupe。
+- Thread chats 在 v1 不出现在 Workspace conversation list。
+- SDK helpers 放到独立 follow-up PR。
+- 推荐 watch-state 存储方案是 `chat_participants.role = "watcher"`，而不是独立 read-state 表。
 
 ## Context Tree 影响
 
