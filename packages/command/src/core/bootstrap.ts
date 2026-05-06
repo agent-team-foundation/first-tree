@@ -63,18 +63,27 @@ export function resolveAccessToken(): string {
  */
 let inflightRefresh: Promise<string> | null = null;
 
+/** Default freshness window for HTTP callers: refresh if token expires within 30s. */
+const DEFAULT_MIN_VALIDITY_MS = 30_000;
+
 /**
  * Ensure the persisted access token is fresh. Call before any API request
  * when using persisted credentials. Returns the (possibly refreshed) access
  * token. Service-user API keys are out of scope for this milestone.
+ *
+ * `opts.minValidityMs` raises the freshness bar — refresh when the cached
+ * token has less than that much life left. The WS proactive-refresh path
+ * passes a value that overlaps its lead window so it never receives a
+ * token already inside the "about to expire" zone.
  */
-export async function ensureFreshAccessToken(): Promise<string> {
+export async function ensureFreshAccessToken(opts?: { minValidityMs?: number }): Promise<string> {
+  const minValidityMs = opts?.minValidityMs ?? DEFAULT_MIN_VALIDITY_MS;
   const creds = loadCredentials();
   if (!creds) {
     throw new Error("No credentials found. Run `first-tree-hub client connect <server-url>` to sign in.");
   }
 
-  if (!isTokenExpired(creds.accessToken)) {
+  if (!isTokenStale(creds.accessToken, minValidityMs)) {
     return creds.accessToken;
   }
 
@@ -109,14 +118,13 @@ export async function ensureFreshAccessToken(): Promise<string> {
 /** Back-compat alias retained so existing call sites keep compiling. */
 export const ensureFreshAdminToken = ensureFreshAccessToken;
 
-function isTokenExpired(token: string): boolean {
+function isTokenStale(token: string, minValidityMs: number): boolean {
   try {
     const parts = token.split(".");
     if (parts.length !== 3 || !parts[1]) return true;
     const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString()) as { exp?: number };
     if (!payload.exp) return false;
-    // Refresh 30s before exp so requests never fly with an about-to-expire token.
-    return payload.exp * 1000 < Date.now() + 30_000;
+    return payload.exp * 1000 < Date.now() + minValidityMs;
   } catch {
     return true;
   }

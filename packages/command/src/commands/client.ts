@@ -284,7 +284,7 @@ export function registerClientCommands(program: Command): void {
       try {
         const serverUrl = resolveServerUrl();
         const cfg = await initConfig({ schema: clientConfigSchema, role: "client" });
-        const sdk = new FirstTreeHubSDK({ serverUrl, getAccessToken: () => ensureFreshAccessToken() });
+        const sdk = new FirstTreeHubSDK({ serverUrl, getAccessToken: (opts) => ensureFreshAccessToken(opts) });
         agentCheck = await reconcileAgentConfigs({
           clientId: cfg.client.id,
           listPinnedAgents: () => sdk.listMyAgents(),
@@ -539,7 +539,7 @@ export function registerClientCommands(program: Command): void {
         // doctor keeps reporting the inflated "N configured" count.
         // Detect + offer to prune in the same breath as the claim.
         try {
-          const sdk = new FirstTreeHubSDK({ serverUrl, getAccessToken: () => ensureFreshAccessToken() });
+          const sdk = new FirstTreeHubSDK({ serverUrl, getAccessToken: (opts) => ensureFreshAccessToken(opts) });
           const stale = await findStaleAliases({
             clientId,
             listPinnedAgents: () => sdk.listMyAgents(),

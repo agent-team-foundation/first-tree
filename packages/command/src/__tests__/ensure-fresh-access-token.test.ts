@@ -122,6 +122,29 @@ describe("ensureFreshAccessToken — safety margin", () => {
     for (const r of results) expect(r).toBe(refreshed);
   });
 
+  it("respects opts.minValidityMs — refreshes a token that the default would consider fresh", async () => {
+    // Regression: WS proactive refresh fires at exp-60s; before this fix it
+    // re-called ensureFreshAccessToken() with the default 30s lead, saw
+    // ~60s of life remaining, returned the *same* token, and the server
+    // pushed auth:expired ~55s later. Asking for 65s validity must drive a
+    // real /auth/refresh round-trip.
+    const stale = makeJwt({ exp: Math.floor(Date.now() / 1000) + 60 });
+    const refreshed = makeJwt({ exp: Math.floor(Date.now() / 1000) + 1800 });
+    await writeCredentials(stale);
+
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ accessToken: refreshed })));
+
+    const { ensureFreshAccessToken } = await import("../core/bootstrap.js");
+
+    // Default threshold (30s): the 60s-lived token is still considered fresh.
+    expect(await ensureFreshAccessToken()).toBe(stale);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    // WS-style call asking for 65s of validity: must refresh.
+    expect(await ensureFreshAccessToken({ minValidityMs: 65_000 })).toBe(refreshed);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("releases the inflight slot so subsequent expirations can refresh again", async () => {
     const stale1 = makeJwt({ exp: Math.floor(Date.now() / 1000) - 5 });
     const refreshed1 = makeJwt({ exp: Math.floor(Date.now() / 1000) + 10 }); // still within 30s lead

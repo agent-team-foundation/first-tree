@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import * as semver from "semver";
 import { print } from "./output.js";
@@ -38,8 +38,23 @@ function resolveNpmCommand(): string {
  */
 export function detectInstallMode(argv1: string = process.argv[1] ?? ""): InstallMode {
   if (!argv1) return "npx";
+  // Resolve symlinks first. Standard `npm i -g` lays the binary out as
+  // `<prefix>/bin/<name> -> ../lib/node_modules/<pkg>/dist/cli/index.mjs`,
+  // and `process.argv[1]` keeps the symlink path. Walking from the link
+  // dir (`<prefix>/bin/`) never hits an ancestor `package.json` matching
+  // our name, so the function falls through to "npx" and `update` refuses
+  // to run on a perfectly valid global install. realpathSync moves the
+  // walk start into the package tree where detection actually works.
+  // Wrapped in try/catch because argv1 may be a path that no longer
+  // exists on disk (overridden process.argv[1], odd test fixtures).
+  let resolvedArgv1: string;
+  try {
+    resolvedArgv1 = realpathSync(argv1);
+  } catch {
+    resolvedArgv1 = argv1;
+  }
   // Cap at 10 levels to avoid runaway walks on exotic symlink layouts.
-  const start = dirname(resolve(argv1));
+  const start = dirname(resolve(resolvedArgv1));
 
   // Pass 1: any ancestor with a `.git` dir means we're inside a checkout.
   // This MUST happen before the package.json scan — when a built dist lives

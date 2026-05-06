@@ -78,7 +78,7 @@ function createSdk(agentName?: string): FirstTreeHubSDK {
   const { serverUrl, agentId } = resolveLocalAgent(agentName);
   return new FirstTreeHubSDK({
     serverUrl,
-    getAccessToken: () => ensureFreshAccessToken(),
+    getAccessToken: (opts) => ensureFreshAccessToken(opts),
     agentId,
   });
 }
@@ -234,7 +234,7 @@ export function registerAgentCommands(program: Command): void {
       try {
         const serverUrl = resolveServerUrl(options.server);
         const clientId = readClientId();
-        const sdk = new FirstTreeHubSDK({ serverUrl, getAccessToken: () => ensureFreshAccessToken() });
+        const sdk = new FirstTreeHubSDK({ serverUrl, getAccessToken: (opts) => ensureFreshAccessToken(opts) });
         const stale = await findStaleAliases({
           clientId,
           listPinnedAgents: () => sdk.listMyAgents(),
