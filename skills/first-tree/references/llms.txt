@@ -1,5 +1,6 @@
 First Tree is a git-native context layer for durable decisions, ownership, and cross-repo relationships.
 Core objects: source or workspace root, tree repo, binding.
 Use the tree for decisions and constraints; keep execution detail in source systems.
-Canonical skills: first-tree, first-tree-onboarding, first-tree-sync, first-tree-write, first-tree-github-scan.
+Canonical workflow skills: first-tree, first-tree-onboarding, first-tree-sync, first-tree-write, first-tree-github-scan.
+Auxiliary operational skill: github-scan.
 Current CLI groups: first-tree tree, first-tree github scan, first-tree hub.

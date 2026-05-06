@@ -52,7 +52,7 @@ No further action expected.
 ```
 <one-sentence summary of what you did or decided>.
 
-Context: see [<tree-node-title>](<tree-node-link>).
+Context: see <tree-node-title> (<tree-node-link>).
 
 No further action expected.
 

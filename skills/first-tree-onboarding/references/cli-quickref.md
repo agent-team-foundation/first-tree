@@ -67,7 +67,7 @@ proceed past step 3 without a clean verify.
 
 ```bash
 first-tree github scan install --allow-repo <owner/repo>[,...]
-first-tree github scan start
+first-tree github scan start --allow-repo <owner/repo>[,...]
 first-tree github scan status
 first-tree github scan doctor
 first-tree github scan stop

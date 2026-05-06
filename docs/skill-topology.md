@@ -24,6 +24,8 @@ The intent is:
 - old gardener logic belongs in `first-tree-sync` and `first-tree-write`
 - no skill should reintroduce the old top-level `gardener` or `skill`
   CLI public shape
+- operator handbooks can exist alongside the 5 workflow skills when they are
+  tied to a runtime surface rather than a workflow topology
 
 ## Current Workspace Reality
 
@@ -34,14 +36,11 @@ This workspace now carries the canonical skill source at the repo root:
 - `skills/first-tree-sync/`
 - `skills/first-tree-write/`
 - `skills/first-tree-github-scan/`
+- `skills/github-scan/` (auxiliary operational handbook for the daemon CLI)
 
-The current gaps are now narrower:
-
-- `packages/github-scan/skills/github-scan/` still exists as the package-local,
-  historical operational handbook for the runtime package
-- the remaining gaps are now mostly around higher-level sync/write behavior and
-  repo/tree adoption rather than the base tree command surface
-  behind the current CLI shell
+The package-local `packages/github-scan/skills/github-scan/` copy remains so
+the runtime package can publish its own handbook, but the repo-root and
+package-local payloads now move together.
 
 ## Why This Matters
 

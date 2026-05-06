@@ -80,8 +80,11 @@ and tree manually; the fix phase opens PRs via `gh`.
   `owners:` lists.
 - **Audit produces a list; fix takes actions.** Do not write tree updates
   inside the audit phase.
-- **Sync does not introduce new content.** "The tree could say more" is
-  not drift — that is `first-tree-write`'s job.
+- **Sync does not introduce new decision content.** "The tree could say more"
+  is not drift — that is `first-tree-write`'s job. The narrow exception is a
+  purely additive structural fix needed to reflect code or workspace reality
+  that already exists (for example, registering a newly bound repo in
+  `source-repos.md`).
 
 ## References
 

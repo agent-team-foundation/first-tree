@@ -20,7 +20,8 @@ inside the tree repo itself.
 
 If `role` is `source-repo-bound` or `workspace-root-bound`, a binding already
 exists. Run `first-tree tree skill upgrade` to refresh shipped skills, then
-skip to step 5 (agents) — there is nothing to bind.
+skip to step 4 (daemon) and step 5 (agents) — there is nothing to bind, but
+the daemon still needs to be installed or checked.
 
 ## Step 1: Choose The Daemon Mode
 

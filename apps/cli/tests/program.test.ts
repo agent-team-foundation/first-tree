@@ -715,9 +715,10 @@ describe("first-tree program", () => {
 
     expect(installResult.code).toBe(0);
     expect(listResult.code).toBe(0);
-    expect(String(log.mock.calls[0]?.[0])).toContain("Installed 5 shipped first-tree skills");
+    expect(String(log.mock.calls[0]?.[0])).toContain("Installed 6 shipped first-tree skills");
     expect(String(log.mock.calls[1]?.[0])).toContain('"name": "first-tree"');
     expect(String(log.mock.calls[1]?.[0])).toContain('"name": "first-tree-onboarding"');
+    expect(String(log.mock.calls[1]?.[0])).toContain('"name": "github-scan"');
     expect(String(log.mock.calls[1]?.[0])).toContain('"installed": true');
   });
 

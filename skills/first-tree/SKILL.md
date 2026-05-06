@@ -30,6 +30,7 @@ Use the skill that matches the job:
 - `first-tree-sync` for auditing drift between merged code and tree content
 - `first-tree-write` for writing tree updates from explicit source material
 - `first-tree-github-scan` for handling a single GitHub notification inside the daemon path
+- `github-scan` for human/operator work on the GitHub scan daemon itself
 
 If you are unsure which one applies, stay here and read `references/cli-manual.md`.
 
@@ -50,7 +51,8 @@ inside the skill until the shared logic is worth extracting.
 - Read the relevant tree nodes before making cross-repo decisions.
 - Prefer `first-tree-onboarding` when the repo is not yet bound.
 - Prefer `first-tree-sync` for broad drift audits and `first-tree-write` for explicit sources.
-- Treat `first-tree-github-scan` as an agent behavior spec, not a human daemon handbook.
+- Treat `first-tree-github-scan` as an agent behavior spec, and use `github-scan`
+  for human/operator daemon work.
 
 ## References
 

@@ -1,6 +1,7 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -21,6 +22,8 @@ import type { CommandContext, SubcommandModule } from "../src/commands/types.js"
 
 const tempDirs: string[] = [];
 const originalCwd = process.cwd();
+const testFileDir = dirname(fileURLToPath(import.meta.url));
+const repoRoot = resolve(testFileDir, "..", "..", "..");
 
 function makeTempDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "first-tree-helpers-"));
@@ -102,6 +105,19 @@ describe("createCommandContext", () => {
       debug: false,
       quiet: false,
     });
+  });
+});
+
+describe("shipped github-scan skill payloads", () => {
+  it("keeps the repo-root and package-local copies in sync", () => {
+    const repoSkillRoot = resolve(repoRoot, "skills", "github-scan");
+    const packageSkillRoot = resolve(repoRoot, "packages", "github-scan", "skills", "github-scan");
+
+    for (const relativePath of ["SKILL.md", "VERSION", join("agents", "openai.yaml")]) {
+      expect(readFileSync(join(repoSkillRoot, relativePath), "utf8")).toBe(
+        readFileSync(join(packageSkillRoot, relativePath), "utf8"),
+      );
+    }
   });
 });
 

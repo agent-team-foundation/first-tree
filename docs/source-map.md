@@ -35,6 +35,7 @@ restructured workspace.
 - [`skills/first-tree-sync/`](../skills/first-tree-sync): drift audit skill
 - [`skills/first-tree-write/`](../skills/first-tree-write): source-driven tree writing skill
 - [`skills/first-tree-github-scan/`](../skills/first-tree-github-scan): notification-handling agent skill
+- [`skills/github-scan/`](../skills/github-scan): operator handbook for the daemon CLI
 
 ## Tests
 

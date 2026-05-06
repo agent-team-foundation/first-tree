@@ -28,7 +28,8 @@ Use for GitHub inbox runtime work:
 
 This runtime is implemented in the current repo and now points agents at the
 shipped `first-tree`, `first-tree-github-scan`, `first-tree-sync`, and
-`first-tree-write` skills.
+`first-tree-write` skills. For human/operator daemon work, load the shipped
+`github-scan` operational skill.
 
 ## `first-tree hub`
 

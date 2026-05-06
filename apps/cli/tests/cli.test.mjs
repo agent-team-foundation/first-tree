@@ -385,18 +385,21 @@ describe("first-tree CLI", () => {
     const linkResult = await runCli(["tree", "skill", "link", "--root", root]);
 
     expect(installResult.code).toBe(0);
-    expect(installResult.stdout).toContain("Installed 5 shipped first-tree skills");
+    expect(installResult.stdout).toContain("Installed 6 shipped first-tree skills");
 
     expect(listResult.code).toBe(0);
     expect(listResult.stdout).toContain("first-tree-onboarding");
+    expect(listResult.stdout).toContain("github-scan");
     expect(listResult.stdout).toContain("installed");
     const listJson = JSON.parse(listJsonResult.stdout);
     expect(listJson[0].cliCompat).toBe(">=0.4.0 <0.5.0");
     expect(listJson[0].cliVersion).toBe("0.4.0-alpha.1");
+    expect(listJson.some((row) => row.name === "github-scan")).toBe(true);
 
     expect(doctorResult.code).toBe(0);
     expect(doctorResult.stdout).toContain("OK first-tree");
     expect(doctorResult.stdout).toContain("OK first-tree-github-scan");
+    expect(doctorResult.stdout).toContain("OK github-scan");
 
     expect(linkResult.code).toBe(0);
     expect(linkResult.stdout).toContain("Linked");
