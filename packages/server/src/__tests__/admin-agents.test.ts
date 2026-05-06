@@ -1,7 +1,10 @@
 import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
+import { members } from "../db/schema/members.js";
+import { organizations } from "../db/schema/organizations.js";
 import { createAgent } from "../services/agent.js";
-import { createAdminContext, useTestApp } from "./helpers.js";
+import { uuidv7 } from "../uuid.js";
+import { createAdminContext, createTestAdmin, useTestApp } from "./helpers.js";
 
 describe("Admin Agents API", () => {
   const getApp = useTestApp();
@@ -150,5 +153,124 @@ describe("Admin Agents API", () => {
     const app = getApp();
     const res = await app.inject({ method: "GET", url: "/api/v1/admin/agents" });
     expect(res.statusCode).toBe(401);
+  });
+
+  /**
+   * PR #220 — `POST /admin/agents` resolves the target organization with
+   * precedence `body > query > JWT default`. The query-string fallback exists
+   * because the api-client `decoratePath` (in `packages/web/src/api/client.ts`)
+   * injects `?organizationId=<selectedOrgId>` into every `/admin/*` URL; the
+   * pre-#220 handler ignored that on writes, silently creating agents in the
+   * JWT default org regardless of what the user's dropdown showed.
+   */
+  describe("org precedence on create", () => {
+    /** Attach `userId` to a fresh org with the requested role. Mirrors the
+     * helper in admin-realtime-role.test.ts. */
+    async function attachOrg(
+      app: FastifyInstance,
+      userId: string,
+      role: "admin" | "member",
+    ): Promise<{ orgId: string; memberId: string }> {
+      const orgId = `org-prec-${crypto.randomUUID().slice(0, 8)}`;
+      const memberId = uuidv7();
+      await app.db.transaction(async (tx) => {
+        await tx
+          .insert(organizations)
+          .values({ id: orgId, name: `prec-${crypto.randomUUID().slice(0, 6)}`, displayName: "Precedence Side" });
+        const human = await createAgent(tx as unknown as typeof app.db, {
+          name: `prec-h-${crypto.randomUUID().slice(0, 6)}`,
+          type: "human",
+          displayName: "Prec Human",
+          managerId: memberId,
+          organizationId: orgId,
+        });
+        await tx.insert(members).values({ id: memberId, userId, organizationId: orgId, agentId: human.uuid, role });
+      });
+      return { orgId, memberId };
+    }
+
+    it("body.organizationId wins over JWT default", async () => {
+      const app = getApp();
+      const alice = await createTestAdmin(app);
+      const orgB = await attachOrg(app, alice.userId, "admin");
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/admin/agents",
+        headers: { authorization: `Bearer ${alice.accessToken}` },
+        payload: {
+          name: `body-wins-${crypto.randomUUID().slice(0, 6)}`,
+          type: "autonomous_agent",
+          displayName: "Body Wins",
+          organizationId: orgB.orgId,
+        },
+      });
+      expect(res.statusCode).toBe(201);
+      expect(res.json<{ organizationId: string }>().organizationId).toBe(orgB.orgId);
+    });
+
+    it("?organizationId= wins over JWT default when body omits it (decoratePath fallback)", async () => {
+      const app = getApp();
+      const alice = await createTestAdmin(app);
+      const orgB = await attachOrg(app, alice.userId, "admin");
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/admin/agents?organizationId=${encodeURIComponent(orgB.orgId)}`,
+        headers: { authorization: `Bearer ${alice.accessToken}` },
+        payload: {
+          name: `query-wins-${crypto.randomUUID().slice(0, 6)}`,
+          type: "autonomous_agent",
+          displayName: "Query Wins",
+          // intentionally no organizationId in body — mirrors what the web
+          // sends when the developer forgets to thread the selected org
+          // through the mutation
+        },
+      });
+      expect(res.statusCode).toBe(201);
+      expect(res.json<{ organizationId: string }>().organizationId).toBe(orgB.orgId);
+    });
+
+    it("body.organizationId wins over ?organizationId= when both are set", async () => {
+      const app = getApp();
+      const alice = await createTestAdmin(app);
+      const orgB = await attachOrg(app, alice.userId, "admin");
+      const orgC = await attachOrg(app, alice.userId, "admin");
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/admin/agents?organizationId=${encodeURIComponent(orgC.orgId)}`,
+        headers: { authorization: `Bearer ${alice.accessToken}` },
+        payload: {
+          name: `body-over-query-${crypto.randomUUID().slice(0, 6)}`,
+          type: "autonomous_agent",
+          displayName: "Body Over Query",
+          organizationId: orgB.orgId,
+        },
+      });
+      expect(res.statusCode).toBe(201);
+      // Body's orgB wins over query's orgC.
+      expect(res.json<{ organizationId: string }>().organizationId).toBe(orgB.orgId);
+    });
+
+    it("rejects ?organizationId= for an org the caller has no membership in (403 via requireMemberInOrg)", async () => {
+      const app = getApp();
+      const alice = await createTestAdmin(app);
+      // brand-new org Alice never joined
+      const orgC = `org-prec-c-${crypto.randomUUID().slice(0, 8)}`;
+      await app.db.insert(organizations).values({ id: orgC, name: orgC.slice(0, 30), displayName: "Outside" });
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/admin/agents?organizationId=${encodeURIComponent(orgC)}`,
+        headers: { authorization: `Bearer ${alice.accessToken}` },
+        payload: {
+          name: `cross-org-no-${crypto.randomUUID().slice(0, 6)}`,
+          type: "autonomous_agent",
+          displayName: "Cross-Org Forbidden",
+        },
+      });
+      expect(res.statusCode).toBe(403);
+    });
   });
 });

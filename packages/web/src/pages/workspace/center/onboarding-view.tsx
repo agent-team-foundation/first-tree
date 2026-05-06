@@ -274,6 +274,11 @@ export function OnboardingView() {
         ...(slug ? { name: slug } : {}),
         clientId: connectedClient.id,
         runtimeProvider: selectedRuntime,
+        // Pin the agent to the org the user has selected in the dropdown.
+        // Without this the server falls back to JWT default org, which is
+        // non-deterministic across logins (auth.ts password-login member pick)
+        // and silently lands the agent in the wrong tenant.
+        ...(organizationId ? { organizationId } : {}),
       });
       agentUuid = res.uuid;
       createdAgentRef.current = agentUuid;
@@ -283,7 +288,7 @@ export function OnboardingView() {
       return;
     }
     await pollUntilReady(agentUuid);
-  }, [trimmedName, connectedClient, selectedRuntime, pollUntilReady]);
+  }, [trimmedName, connectedClient, selectedRuntime, pollUntilReady, organizationId]);
 
   const handleRetry = useCallback(async () => {
     const agentUuid = createdAgentRef.current;

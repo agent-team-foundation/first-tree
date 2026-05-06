@@ -101,7 +101,7 @@ type AvailabilityState =
 
 export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
   const queryClient = useQueryClient();
-  const { refreshMe } = useAuth();
+  const { refreshMe, organizationId } = useAuth();
   const [displayName, setDisplayName] = useState("");
   const [name, setName] = useState("");
   const [nameDirty, setNameDirty] = useState(false);
@@ -190,6 +190,11 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
         displayName: effectiveDisplay,
         clientId: opts.clientId,
         runtimeProvider: runtime,
+        // Pin the agent to the org the user is currently viewing in the
+        // dropdown — the JWT default org is non-deterministic across logins
+        // (auth.ts member pick) and creating into "wherever the JWT lands"
+        // is the source of "I created it in atf, why is it in gandy02?".
+        ...(organizationId ? { organizationId } : {}),
       });
     },
     onSuccess: (agent) => {
