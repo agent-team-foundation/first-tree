@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import bcrypt from "bcrypt";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { jwtVerify, SignJWT } from "jose";
 import type { Database } from "../db/connection.js";
 import { members } from "../db/schema/members.js";
@@ -71,11 +71,25 @@ export async function login(db: Database, username: string, password: string, jw
 
   // Password login: pick the most recently joined ACTIVE membership. Soft-
   // deleted ("left") rows are ignored so a member who left their last team
-  // can't password-login back in without re-joining.
+  // can't password-login back in without re-joining. Note: `createdAt` is
+  // the original insert timestamp; `ensureMembership` reactivates a left
+  // member without touching it, so a leave-and-rejoin reads as "first
+  // joined" — acceptable because the reactivation path is rare and the
+  // determinism is what we actually need.
+  //
+  // The ORDER BY is load-bearing: without it, Postgres returns memberships
+  // in implementation-defined order and a multi-org user gets a non-
+  // deterministic JWT default org across logins. That non-determinism is
+  // the upstream cause of "I created an agent in team A but it shows up in
+  // team B" — `POST /admin/agents` falls back to JWT default when the body
+  // omits `organizationId`. The `desc(id)` tiebreak guards the (rare) case
+  // of two memberships with identical `created_at`; `members.id` is
+  // uuidv7 so its lexicographic order matches insert order.
   const [member] = await db
     .select()
     .from(members)
     .where(and(eq(members.userId, user.id), eq(members.status, "active")))
+    .orderBy(desc(members.createdAt), desc(members.id))
     .limit(1);
 
   if (!member) {

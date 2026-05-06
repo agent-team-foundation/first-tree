@@ -16,6 +16,33 @@ export function listAgents(params?: { limit?: number; cursor?: string; type?: st
 }
 
 /**
+ * Cross-org list of every agent the caller manages — the web mirror of the
+ * CLI `agent list --remote` view. Backed by `GET /me/managed-agents`, which
+ * is org-free (joins `agents → members.user_id`) so it returns agents in
+ * non-default orgs too.
+ *
+ * The Computers panel uses this as a name-resolution source for `BOUND
+ * AGENTS` rows: a client is user-scoped and may host agents from multiple
+ * orgs, so the org-scoped `/admin/agents` query alone falls back to the raw
+ * UUID for any agent outside the currently-selected org.
+ */
+export type ManagedAgent = {
+  uuid: string;
+  name: string | null;
+  displayName: string;
+  type: string;
+  organizationId: string;
+  inboxId: string;
+  visibility: string;
+  runtimeProvider: string;
+  clientId: string | null;
+};
+
+export function listManagedAgents(): Promise<ManagedAgent[]> {
+  return api.get<ManagedAgent[]>("/me/managed-agents");
+}
+
+/**
  * Admin-only: every agent in the caller's org, ignoring visibility. Used by
  * the Admin → All Agents tab; the server 403s for non-admin callers.
  */

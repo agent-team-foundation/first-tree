@@ -158,11 +158,19 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
   app.post("/", async (request, reply) => {
     const scope = memberScope(request);
     const body = createAgentSchema.parse(request.body);
+    const { organizationId: queryOrganizationId } = listAgentsFilterSchema.parse(request.query);
     // Realtime role probe — JWT `role` claim is a hint for the default org
     // only. An admin in org A cannot exercise admin powers when creating
     // an agent in org B by passing `body.organizationId = orgB`
     // (decouple-client-from-identity §4.5).
-    const targetOrgId = body.organizationId ?? scope.organizationId;
+    //
+    // Org resolution precedence: body > query > JWT default. The query-string
+    // fallback exists so the api-client `decoratePath` injection
+    // (`?organizationId=<selectedOrgId>`) is honored even if the web caller
+    // forgets to set `body.organizationId` — without this, a multi-org user
+    // creates agents in the JWT default org regardless of what their dropdown
+    // shows ("agent landed in the wrong team").
+    const targetOrgId = body.organizationId ?? queryOrganizationId ?? scope.organizationId;
     const probe = await requireMemberInOrg(app.db, request, targetOrgId);
     // member role: managerId forced to caller's member in target org;
     // admin role: may specify any managerId in that org.
