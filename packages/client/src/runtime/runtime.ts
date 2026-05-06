@@ -135,11 +135,28 @@ export class AgentRuntime {
     const results = await Promise.allSettled(this.slots.map((slot) => slot.start(contextTreePath)));
 
     let failed = 0;
-    for (const result of results) {
+    const failures: Array<{ agentName: string; agentId: string; reason: string }> = [];
+    for (const [i, result] of results.entries()) {
       if (result.status === "rejected") {
-        this.logger.error({ err: result.reason }, "failed to start agent");
+        const slot = this.slots[i];
+        // `slots` and `results` are 1:1 by construction (Promise.allSettled
+        // preserves input order), so this lookup is total.
+        const agentName = slot?.name ?? "<unknown>";
+        const agentId = slot?.agentId ?? "<unknown>";
+        const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
+        this.logger.error({ err: result.reason, agentName, agentId, reason }, "failed to start agent");
+        failures.push({ agentName, agentId, reason });
         failed++;
       }
+    }
+
+    if (failed > 0) {
+      // One aggregate WARN that operators can grep for from `client doctor` /
+      // log triage without having to scan for every per-slot ERROR line.
+      this.logger.warn(
+        { failedCount: failed, totalCount: this.slots.length, failures },
+        "some agents failed to start — check that each agentId is still pinned to this client",
+      );
     }
 
     if (failed === this.slots.length) {

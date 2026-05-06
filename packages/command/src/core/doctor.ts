@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import {
   agentConfigSchema,
@@ -9,6 +9,7 @@ import {
   resolveConfigReadonly,
   serverConfigSchema,
 } from "@agent-team-foundation/first-tree-hub-shared/config";
+import { findStaleAliases, formatStaleReason, type PinnedAgent, type StaleAlias } from "./agent-prune.js";
 import { blank, print } from "./output.js";
 import { getClientServiceStatus } from "./service-install.js";
 
@@ -173,6 +174,95 @@ export function checkAgentConfigs(): CheckResult {
   } catch {
     return { label: "Agents", ok: false, detail: "error reading agent configs" };
   }
+}
+
+/**
+ * Server-aware agent reconciliation. Walks `agents/<name>/agent.yaml` and
+ * cross-references each `agentId` with `/api/v1/clients/me/agents`,
+ * filtering by `clientId` so the "stale" verdict matches what R-RUN will
+ * actually accept on this machine.
+ *
+ * Categorises each local alias into:
+ *   - pinned             — bind would succeed on this client.
+ *   - pinned-elsewhere   — owned by you, but pinned to a different client
+ *                          (alias is dead weight here; real agent is alive
+ *                          on the other machine).
+ *   - unowned            — agentId not in the server's response at all.
+ *   - unreadable         — yaml missing/malformed/no agentId.
+ *
+ * The plain `checkAgentConfigs` (sync, local-only) is retained for
+ * back-compat with external consumers but its "N configured" wording is
+ * misleading because stale aliases never bind at runtime.
+ *
+ * Skipped reconciliation (server unreachable / unauthenticated) returns
+ * `ok: false` — doctor's other server-touching checks already report
+ * connectivity loss as a failure, and silently passing here would hide
+ * the very issue the operator is running doctor to diagnose.
+ */
+export async function reconcileAgentConfigs(opts: {
+  clientId: string;
+  listPinnedAgents: () => Promise<PinnedAgent[]>;
+  /** Override for tests; defaults to `$FIRST_TREE_HUB_HOME/config/agents`. */
+  agentsDir?: string;
+}): Promise<CheckResult> {
+  const agentsDir = opts.agentsDir ?? join(DEFAULT_CONFIG_DIR, "agents");
+
+  // Count local alias dirs ourselves — `loadAgents` is fail-fast on
+  // malformed yaml, and one bad dir would mask the entire alias set.
+  let localCount = 0;
+  if (existsSync(agentsDir)) {
+    for (const entry of readdirSync(agentsDir)) {
+      try {
+        if (statSync(join(agentsDir, entry)).isDirectory()) localCount++;
+      } catch {
+        // Vanished between readdir and stat; treat as absent.
+      }
+    }
+  }
+  if (localCount === 0) {
+    return { label: "Agents", ok: false, detail: "no agents configured" };
+  }
+
+  let stale: StaleAlias[];
+  try {
+    stale = await findStaleAliases({
+      clientId: opts.clientId,
+      listPinnedAgents: opts.listPinnedAgents,
+      agentsDir,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return {
+      label: "Agents",
+      ok: false,
+      detail: `${localCount} configured locally — server reconciliation failed (${msg.slice(0, 60)})`,
+    };
+  }
+
+  const pinnedCount = localCount - stale.length;
+
+  if (stale.length === 0) {
+    return {
+      label: "Agents",
+      ok: true,
+      detail: `${localCount} configured, all pinned to this client`,
+    };
+  }
+
+  const staleSummary = stale
+    .map((s) => `${s.name} [${formatStaleReason(s.reason)}]`)
+    .slice(0, 5)
+    .join("; ");
+  const truncated = stale.length > 5 ? `; ...+${stale.length - 5} more` : "";
+
+  return {
+    label: "Agents",
+    ok: false,
+    detail:
+      `${localCount} configured locally, ${pinnedCount} pinned to this client; ` +
+      `${stale.length} stale: ${staleSummary}${truncated} — ` +
+      "run `first-tree-hub agent prune` to clean up",
+  };
 }
 
 export function checkBackgroundService(): CheckResult {
