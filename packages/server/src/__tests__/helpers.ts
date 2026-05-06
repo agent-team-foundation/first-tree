@@ -24,7 +24,19 @@ type AgentRequestFn = (
   extraHeaders?: Record<string, string>,
 ) => Promise<InjectResponse>;
 
-export async function createTestApp(): Promise<FastifyInstance> {
+/**
+ * Optional overrides for `createTestApp` / `useTestApp`. Today only the
+ * rate-limit caps are tunable — the default config sets all caps to 10000 so
+ * existing tests never trip them; tests that specifically exercise limiter
+ * behavior (e.g. `agent-messages-rate-limit.test.ts`) override the relevant
+ * field down to a small number to keep the test loop tight.
+ */
+export type CreateTestAppOptions = {
+  rateLimit?: Partial<NonNullable<Config["rateLimit"]>>;
+};
+
+export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<FastifyInstance> {
+  const baseRateLimit = { max: 10000, loginMax: 10000, webhookMax: 10000, agentMessageMax: 10000 };
   const config: Config = {
     database: {
       url: process.env.DATABASE_URL ?? "",
@@ -50,7 +62,7 @@ export async function createTestApp(): Promise<FastifyInstance> {
       },
     },
     trustProxy: false,
-    rateLimit: { max: 10000, loginMax: 10000, webhookMax: 10000, agentMessageMax: 10000 },
+    rateLimit: { ...baseRateLimit, ...opts.rateLimit },
     observability: {
       logging: { level: "error", format: "json", bridgeToSpanLevel: "off" },
     },
@@ -62,10 +74,10 @@ export async function createTestApp(): Promise<FastifyInstance> {
 }
 
 /** Lazy test app lifecycle — creates in beforeAll, closes in afterAll. */
-export function useTestApp() {
+export function useTestApp(opts: CreateTestAppOptions = {}) {
   let app: FastifyInstance;
   beforeAll(async () => {
-    app = await createTestApp();
+    app = await createTestApp(opts);
   });
   afterAll(async () => {
     await app?.close();

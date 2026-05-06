@@ -117,6 +117,20 @@ export async function buildApp(config: Config) {
     trustProxy: config.trustProxy,
   });
 
+  // Loud security reminder: trustProxy=true makes Fastify trust ANY upstream's
+  // x-forwarded-for header. Safe iff the Hub container only receives traffic
+  // through a vetted proxy (Cloudflare → CapRover). If the container is ever
+  // exposed to the public internet directly, attackers can spoof XFF and
+  // bypass every IP-keyed rate limit / audit log. Surface this on every boot
+  // so a misconfiguration is loud rather than silent.
+  if (config.trustProxy) {
+    app.log.warn(
+      "trustProxy=true — Fastify trusts ANY upstream's x-forwarded-for. " +
+        "Ensure Cloudflare / CapRover is the only ingress; do NOT expose this " +
+        "container's port to the public internet directly.",
+    );
+  }
+
   // Register @fastify/otel before any route — it wraps each request handler
   // in an HTTP span that becomes the parent for business spans.
   const otelPlugin = getFastifyOtelPlugin();
@@ -182,6 +196,20 @@ export async function buildApp(config: Config) {
     }
     if (error instanceof ZodError) {
       return reply.status(400).send({ error: "Validation error", details: error.issues, ...traceField });
+    }
+    // Fastify plugins (e.g. @fastify/rate-limit's 429, @fastify/jwt's 401)
+    // throw errors with `statusCode` in the 4xx range. Surface them with
+    // their intended status + message rather than collapsing to 500. 5xx
+    // statuses still fall through to the generic handler below to avoid
+    // leaking server-internal messages.
+    if (
+      error instanceof Error &&
+      "statusCode" in error &&
+      typeof error.statusCode === "number" &&
+      error.statusCode >= 400 &&
+      error.statusCode < 500
+    ) {
+      return reply.status(error.statusCode).send({ error: error.message, ...traceField });
     }
     request.log.error({ err: error }, "unhandled request error");
     return reply.status(500).send({ error: "Internal server error", ...traceField });

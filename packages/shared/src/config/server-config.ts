@@ -106,11 +106,16 @@ export const serverConfigSchema = defineConfig({
     /**
      * Maximum payload size (bytes) for a single WebSocket frame on the
      * client/admin sockets. Protects the server against single-frame OOM via a
-     * malicious or buggy client. Default 64 KiB — frames in this codebase are
-     * JSON envelopes (`auth`, `inbox:ack`, `session:event`, …) that fit
-     * comfortably within this bound. Image content travels via HTTP, not WS.
+     * malicious or buggy client. Default 256 KiB — large enough to fit
+     * legitimate `session:event` frames whose `tool_call.payload.args` may
+     * carry full file contents (Claude Code's Write/Edit `new_string`, Bash
+     * heredoc payloads, MCP tools forwarding diffs/AST), while still bounding
+     * worst-case memory per frame. Image content travels via HTTP, not WS.
+     * Real OOM attackers send MB+, not KiB — this is a guardrail, not a DoS
+     * shield. Tighten or loosen via `FIRST_TREE_HUB_WS_MAX_PAYLOAD` once we
+     * have production P99 frame-size data.
      */
-    maxPayload: field(z.number().int().min(1024).default(65536), { env: "FIRST_TREE_HUB_WS_MAX_PAYLOAD" }),
+    maxPayload: field(z.number().int().min(1024).default(262_144), { env: "FIRST_TREE_HUB_WS_MAX_PAYLOAD" }),
   }),
   inbox: optional({
     /**

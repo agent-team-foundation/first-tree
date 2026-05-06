@@ -25,9 +25,15 @@ const editMessageSchema = z.object({
  * the global limiter — registered with `hook: "preHandler"` — fires).
  *
  * Rationale: agent ↔ agent reply loops are the documented failure mode
- * (`mention_only` is the semantic guard; this is the hard ceiling). Falls
- * back to IP keying for the unauthenticated edge case so the limiter never
- * silently disables itself.
+ * (`mention_only` is the semantic guard; this is the hard ceiling).
+ *
+ * The IP fallback is **defensive scaffolding, not a real code path**. These
+ * routes mount under `/agent` which forces `memberAuth + agentSelector`
+ * onRequest hooks (see app.ts) — a missing `req.agent` would have already
+ * 403'd before this preHandler runs. The fallback exists so that if a future
+ * refactor reorders hooks (or detaches one of these routes from the agent
+ * scope), the limiter degrades to per-IP keying with a logged warning rather
+ * than silently keying everyone to the same `undefined` bucket.
  */
 function agentMessageWriteRateLimit(max: number) {
   return {
@@ -36,7 +42,12 @@ function agentMessageWriteRateLimit(max: number) {
       timeWindow: "1 minute",
       keyGenerator: (req: FastifyRequest): string => {
         const agentId = req.agent?.uuid;
-        return agentId ? `agent:${agentId}` : `ip:${req.ip}`;
+        if (agentId) return `agent:${agentId}`;
+        log.warn(
+          { ip: req.ip, route: req.routeOptions?.url ?? req.url },
+          "rate-limit keyGenerator fell back to IP — req.agent missing on a route under /agent (hook order regression?)",
+        );
+        return `ip:${req.ip}`;
       },
     },
   };
