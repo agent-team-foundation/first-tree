@@ -68,18 +68,22 @@ export { reconcileLocalRuntimeProviders, uploadClientCapabilities } from "./runt
 export type { StartOptions } from "./server.js";
 export { startServer } from "./server.js";
 // Background service install (launchd / systemd --user)
-export type { ServiceInfo, ServiceState } from "./service-install.js";
+export type { ServiceInfo, ServiceOpResult, ServiceState } from "./service-install.js";
 export {
+  deriveServiceSuffix,
   getClientServiceStatus,
   installClientService,
   isServiceSupported,
   resolveCliInvocation,
+  restartClientService,
+  startClientService,
+  stopClientService,
   uninstallClientService,
 } from "./service-install.js";
 export type { ExecuteUpdateResult, InstallMode } from "./update.js";
 // Self-update glue — exported so both `client start` and `client connect`
 // can pass identical prompt / install callbacks to the ClientRuntime.
-export { detectInstallMode, installGlobalLatest } from "./update.js";
+export { detectInstallMode, fetchLatestVersion, installGlobalLatest, PACKAGE_NAME } from "./update.js";
 export { createExecuteUpdate, declineUpdate, promptUpdate, SELF_RESTART_EXIT_CODE } from "./update-glue.js";
 // Command package version (bundle self-identification)
 export { COMMAND_VERSION } from "./version.js";
