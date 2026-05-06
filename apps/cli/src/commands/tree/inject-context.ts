@@ -1,3 +1,5 @@
+import { Option, type Command } from "commander";
+
 import type { CommandContext, SubcommandModule } from "../types.js";
 import { buildTreeFirstContextBundle } from "./tree-first-context.js";
 
@@ -10,6 +12,12 @@ appends a bindings-derived repo index. Tree repos still work directly.
 
 Options:
   --help  Show this help message`;
+
+function configureInjectContextCommand(command: Command): void {
+  command.addOption(
+    new Option("--skip-version-check", "deprecated no-op compatibility flag").hideHelp(),
+  );
+}
 
 export function runInjectContextCommand(_context: CommandContext): void {
   const bundle = buildTreeFirstContextBundle(process.cwd());
@@ -33,5 +41,6 @@ export const injectContextCommand: SubcommandModule = {
   alias: "",
   summary: "",
   description: "Emit the Claude Code SessionStart payload from NODE.md.",
+  configure: configureInjectContextCommand,
   action: runInjectContextCommand,
 };

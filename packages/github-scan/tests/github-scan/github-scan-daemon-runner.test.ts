@@ -7,7 +7,7 @@
  *   - `daemon --backend=ts` invokes the TS runner; `--backend=rust` bridges
  */
 
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -16,7 +16,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as identityModule from "../../src/github-scan/engine/daemon/identity.js";
 import * as httpModule from "../../src/github-scan/engine/daemon/http.js";
 import * as pollerModule from "../../src/github-scan/engine/daemon/poller.js";
-import { parseDaemonArgs, runDaemon } from "../../src/github-scan/engine/daemon/runner-skeleton.js";
+import {
+  detectAvailableAgents,
+  parseDaemonArgs,
+  runDaemon,
+} from "../../src/github-scan/engine/daemon/runner-skeleton.js";
 import { extractBackendFlag } from "../../src/github-scan/cli.js";
 
 const tempRoots: string[] = [];
@@ -132,6 +136,79 @@ describe("parseDaemonArgs", () => {
   it("drops empty --agent-login values", () => {
     expect(parseDaemonArgs(["--agent-login", ""]).agentLogin).toBeUndefined();
     expect(parseDaemonArgs(["--agent-login="]).agentLogin).toBeUndefined();
+  });
+});
+
+describe("detectAvailableAgents", () => {
+  it("prefers local agent templates when a bound tree checkout is available", () => {
+    const root = makeTempRoot("agent-templates");
+    const sourceRoot = join(root, "product-repo");
+    const treeRoot = join(root, "product-repo-tree");
+
+    mkdirSync(sourceRoot, { recursive: true });
+    mkdirSync(join(treeRoot, ".first-tree", "agent-templates"), { recursive: true });
+    writeFileSync(
+      join(sourceRoot, "AGENTS.md"),
+      [
+        "<!-- BEGIN FIRST-TREE-SOURCE-INTEGRATION -->",
+        "## First Tree integration",
+        "",
+        "<!--",
+        "FIRST-TREE-TREE-REPO: `product-repo-tree`",
+        "-->",
+        "<!-- END FIRST-TREE-SOURCE-INTEGRATION -->",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(treeRoot, ".first-tree", "agent-templates", "developer.yaml"),
+      [
+        "name: developer",
+        "prompt: |",
+        "  Default developer profile.",
+        "runtime: codex",
+        "env:",
+        "  FIRST_TREE_AGENT_ROLE: developer",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(treeRoot, ".first-tree", "agent-templates", "code-reviewer.yaml"),
+      ["name: code-reviewer", "prompt: |", "  Review carefully.", "runtime: claude", ""].join("\n"),
+    );
+
+    const agents = detectAvailableAgents({
+      startDir: sourceRoot,
+      executableFinder: (name) =>
+        name === "codex" || name === "claude" ? `/usr/bin/${name}` : null,
+    });
+
+    expect(agents).toEqual([
+      {
+        kind: "codex",
+        env: {
+          FIRST_TREE_AGENT_ROLE: "developer",
+        },
+        prompt: "Default developer profile.",
+        templateName: "developer",
+      },
+      {
+        kind: "claude",
+        prompt: "Review carefully.",
+        templateName: "code-reviewer",
+      },
+    ]);
+  });
+
+  it("falls back to raw binary detection when no templates are present", () => {
+    const root = makeTempRoot("agent-fallback");
+
+    const agents = detectAvailableAgents({
+      startDir: root,
+      executableFinder: (name) => (name === "codex" ? "/usr/bin/codex" : null),
+    });
+
+    expect(agents).toEqual([{ kind: "codex" }]);
   });
 });
 

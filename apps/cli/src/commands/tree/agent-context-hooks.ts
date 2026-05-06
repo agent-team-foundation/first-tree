@@ -4,8 +4,7 @@ import { dirname, join } from "node:path";
 export const CLAUDE_SETTINGS_PATH = ".claude/settings.json";
 export const CODEX_CONFIG_PATH = ".codex/config.toml";
 export const CODEX_HOOKS_PATH = ".codex/hooks.json";
-export const INJECT_CONTEXT_COMMAND =
-  "npx -p first-tree first-tree tree inject-context --skip-version-check";
+export const INJECT_CONTEXT_COMMAND = "npx -p first-tree first-tree tree inject-context";
 
 const CODEX_SESSION_START_MATCHER = "startup|resume";
 const CODEX_SESSION_START_STATUS = "Loading First Tree context";

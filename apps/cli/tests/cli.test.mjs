@@ -351,15 +351,15 @@ describe("first-tree CLI", () => {
     expect(result.code).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain(".claude/settings.json");
-    expect(await readFile(resolve(root, ".claude", "settings.json"), "utf8")).toContain(
-      "first-tree tree inject-context",
-    );
+    const claudeSettings = await readFile(resolve(root, ".claude", "settings.json"), "utf8");
+    const codexHooks = await readFile(resolve(root, ".codex", "hooks.json"), "utf8");
+    expect(claudeSettings).toContain("first-tree tree inject-context");
+    expect(claudeSettings).not.toContain("--skip-version-check");
     expect(await readFile(resolve(root, ".codex", "config.toml"), "utf8")).toContain(
       "codex_hooks = true",
     );
-    expect(await readFile(resolve(root, ".codex", "hooks.json"), "utf8")).toContain(
-      "Loading First Tree context",
-    );
+    expect(codexHooks).toContain("Loading First Tree context");
+    expect(codexHooks).not.toContain("--skip-version-check");
   });
 
   it("emits inject-context payload from a local tree repo", async () => {

@@ -92,6 +92,19 @@ describe("buildPrompt", () => {
     expect(prompt).toContain("GITHUB_SCAN_RESULT: status=");
   });
 
+  it("injects template-specific instructions when a template profile is selected", () => {
+    const prompt = buildPrompt(fakeRequest(), {
+      kind: "codex",
+      templateName: "code-reviewer",
+      prompt: "Focus on review quality.\nEscalate ownership issues.",
+    });
+
+    expect(prompt).toContain("Active agent template: code-reviewer");
+    expect(prompt).toContain("Template-specific instructions:");
+    expect(prompt).toContain("Focus on review quality.");
+    expect(prompt).toContain("Escalate ownership issues.");
+  });
+
   it("loads the shipped first-tree skills and defines explicit sync/write routes", () => {
     const request = fakeRequest({
       workspaceDir: "/tmp/workspace-root",
@@ -201,6 +214,19 @@ describe("buildAgentEnv", () => {
     expect(env.GITHUB_SCAN_TASK_DIR).toBe("/task");
     expect(env.FIRST_TREE_GITHUB_SCAN_TREE_REPO).toBe("agent-team-foundation/first-tree-context");
   });
+
+  it("merges template env overrides before spawning the agent", () => {
+    const env = buildAgentEnv(fakeRequest(), {
+      kind: "codex",
+      env: {
+        FIRST_TREE_AGENT_ROLE: "developer",
+        GITHUB_SCAN_FEATURE_FLAG: "enabled",
+      },
+    });
+
+    expect(env.FIRST_TREE_AGENT_ROLE).toBe("developer");
+    expect(env.GITHUB_SCAN_FEATURE_FLAG).toBe("enabled");
+  });
 });
 
 describe("AgentPool", () => {
@@ -219,6 +245,11 @@ describe("AgentPool", () => {
   it("exposes available names", () => {
     const pool = new AgentPool([{ kind: "claude" }]);
     expect(pool.availableNames()).toEqual(["claude"]);
+  });
+
+  it("uses template labels in available names when present", () => {
+    const pool = new AgentPool([{ kind: "codex", templateName: "developer" }]);
+    expect(pool.availableNames()).toEqual(["developer (codex)"]);
   });
 });
 

@@ -48,7 +48,10 @@ export type AgentKind = "codex" | "claude";
 
 export interface AgentSpec {
   kind: AgentKind;
+  env?: Record<string, string>;
   model?: string;
+  prompt?: string;
+  templateName?: string;
 }
 
 export interface AgentIdentity {
@@ -112,7 +115,7 @@ export async function executeAgent(
   request: AgentRequest,
   options: ExecuteOptions,
 ): Promise<AgentOutcome> {
-  const promptText = buildPrompt(request);
+  const promptText = buildPrompt(request, spec);
   const promptPath = join(request.taskDir, "prompt.txt");
   const outputPath = join(request.taskDir, "runner-output.txt");
   const liveOutputPath =
@@ -157,11 +160,26 @@ export async function executeAgent(
   return { status, summary, outputPath };
 }
 
-export function buildPrompt(request: AgentRequest): string {
+function buildTemplatePromptSection(spec?: AgentSpec): string {
+  if (spec?.prompt === undefined && spec?.templateName === undefined) {
+    return "";
+  }
+
+  const lines = [
+    `Active agent template: ${spec?.templateName ?? spec?.kind ?? "default"}`,
+    ...(spec?.prompt ? ["", "Template-specific instructions:", spec.prompt.trim()] : []),
+    "",
+  ];
+
+  return `${lines.join("\n")}\n`;
+}
+
+export function buildPrompt(request: AgentRequest, spec?: AgentSpec): string {
   const task = request.task;
   const workingRepoLine =
     task.workspaceRepo !== task.repo ? `- Working repository: ${task.workspaceRepo}\n` : "";
   const firstTreeSkillSection = buildFirstTreeSkillSection(request);
+  const templateSection = buildTemplatePromptSection(spec);
   return (
     `You are responding to a GitHub notification on behalf of ${request.identity.login}.\n` +
     `\n` +
@@ -178,6 +196,7 @@ export function buildPrompt(request: AgentRequest): string {
     `- Snapshot directory: ${request.snapshotDir}\n` +
     `- Task artifacts directory: ${request.taskDir}\n` +
     `\n` +
+    templateSection +
     `Do not stop unless\n` +
     `0. Read carefully about the request and gather all the needed context\n` +
     `1. Task / Request in the GitHub message has been done completely\n` +
@@ -297,8 +316,8 @@ export class AgentPool {
     this.agents = agents;
   }
 
-  availableNames(): AgentKind[] {
-    return this.agents.map((r) => r.kind);
+  availableNames(): string[] {
+    return this.agents.map((r) => formatAgentSpecLabel(r));
   }
 
   executionOrder(): AgentSpec[] {
@@ -325,7 +344,7 @@ export const defaultAgentSpawner: AgentSpawner = async ({
   stdoutPath,
   stderrPath,
 }) => {
-  const env = buildAgentEnv(request);
+  const env = buildAgentEnv(request, spec);
   const { cmd, args, cwd } = buildCommand({
     spec,
     request,
@@ -381,10 +400,15 @@ export function buildCommand(args: {
   return { cmd: "claude", args: argv, cwd: request.workspaceDir };
 }
 
-export function buildAgentEnv(request: AgentRequest): NodeJS.ProcessEnv {
+export function formatAgentSpecLabel(spec: AgentSpec): string {
+  return spec.templateName ? `${spec.templateName} (${spec.kind})` : spec.kind;
+}
+
+export function buildAgentEnv(request: AgentRequest, spec?: AgentSpec): NodeJS.ProcessEnv {
   const existingPath = process.env.PATH ?? "";
   return {
     ...process.env,
+    ...spec?.env,
     PATH: `${request.ghShimDir}:${existingPath}`,
     GITHUB_SCAN_BROKER_DIR: request.ghBrokerDir,
     GITHUB_SCAN_SNAPSHOT_DIR: request.snapshotDir,

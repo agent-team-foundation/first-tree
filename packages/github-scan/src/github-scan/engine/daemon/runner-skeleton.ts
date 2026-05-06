@@ -57,6 +57,8 @@ import { RepoFilter } from "../runtime/repo-filter.js";
 import { Scheduler } from "./scheduler.js";
 import { ThreadStore } from "./thread-store.js";
 import { requireExplicitRepoFilter } from "../runtime/allow-repo.js";
+import { loadAgentTemplateSpecs } from "./agent-templates.js";
+import { formatAgentSpecLabel } from "./runner.js";
 
 export interface DaemonCliOverrides {
   pollIntervalSec?: number;
@@ -495,7 +497,9 @@ export async function runDaemon(
         onCompletion: (record) => scheduler.handleCompletion(record),
       });
       logger.info(
-        `github-scan daemon: dispatcher ready (agents=${agents.map((r) => r.kind).join(",")}, broker=${broker.shimDir})`,
+        `github-scan daemon: dispatcher ready (agents=${agents
+          .map((r) => formatAgentSpecLabel(r))
+          .join(",")}, broker=${broker.shimDir})`,
       );
 
       candidateRuntime = {
@@ -683,10 +687,20 @@ export async function runDaemon(
  * binaries are silently omitted — the caller decides whether that is
  * fatal.
  */
-export function detectAvailableAgents(): AgentSpec[] {
+export function detectAvailableAgents(options?: {
+  executableFinder?: (name: string) => string | null;
+  startDir?: string;
+}): AgentSpec[] {
+  const executableFinder = options?.executableFinder ?? findExecutable;
+  const startDir = options?.startDir ?? process.cwd();
+  const templatedAgents = loadAgentTemplateSpecs(startDir, executableFinder);
+  if (templatedAgents.length > 0) {
+    return templatedAgents;
+  }
+
   const agents: AgentSpec[] = [];
-  if (findExecutable("codex")) agents.push({ kind: "codex" });
-  if (findExecutable("claude")) agents.push({ kind: "claude" });
+  if (executableFinder("codex")) agents.push({ kind: "codex" });
+  if (executableFinder("claude")) agents.push({ kind: "claude" });
   return agents;
 }
 
