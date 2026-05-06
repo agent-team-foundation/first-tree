@@ -49,7 +49,8 @@ export async function createTestApp(): Promise<FastifyInstance> {
         clientSecret: "test-github-secret",
       },
     },
-    rateLimit: { max: 10000, loginMax: 10000, webhookMax: 10000 },
+    trustProxy: false,
+    rateLimit: { max: 10000, loginMax: 10000, webhookMax: 10000, agentMessageMax: 10000 },
     observability: {
       logging: { level: "error", format: "json", bridgeToSpanLevel: "off" },
     },

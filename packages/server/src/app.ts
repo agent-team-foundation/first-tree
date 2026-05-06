@@ -108,7 +108,14 @@ export async function buildApp(config: Config) {
   // Cast widens pino.Logger<never, boolean> → FastifyBaseLogger so the
   // returned FastifyInstance has the default generic and remains assignable
   // in tests / callers that reference FastifyInstance without type args.
-  const app = Fastify({ loggerInstance: rootLogger as unknown as FastifyBaseLogger });
+  const app = Fastify({
+    loggerInstance: rootLogger as unknown as FastifyBaseLogger,
+    // When deployed behind Cloudflare / reverse proxy, `req.ip` must reflect
+    // the real client IP rather than the proxy — otherwise every IP-keyed
+    // rate-limit key collapses. Operators set FIRST_TREE_HUB_TRUST_PROXY=true
+    // when they control the upstream proxy chain.
+    trustProxy: config.trustProxy,
+  });
 
   // Register @fastify/otel before any route — it wraps each request handler
   // in an HTTP span that becomes the parent for business spans.
@@ -135,8 +142,12 @@ export async function buildApp(config: Config) {
   const listenClient = postgres(config.database.url, { max: 1 });
   const notifier = createNotifier(listenClient);
 
-  // WebSocket plugin
-  await app.register(websocket);
+  // WebSocket plugin. `maxPayload` caps a single inbound frame so a hostile
+  // or buggy client cannot OOM the server with one giant message. Frames in
+  // this codebase are JSON envelopes; image content travels via HTTP.
+  await app.register(websocket, {
+    options: { maxPayload: config.ws?.maxPayload ?? 65_536 },
+  });
 
   // CORS — explicit origins if configured; allow all in dev; same-origin in production
   const corsOrigin = config.cors?.origin;
@@ -146,10 +157,14 @@ export async function buildApp(config: Config) {
     credentials: true,
   });
 
-  // Rate limiting — global default; overridden per-route where needed
+  // Rate limiting — global default; overridden per-route where needed.
+  // `hook: "preHandler"` runs the limiter after route-level onRequest hooks
+  // (memberAuth, agentSelector) so per-route keyGenerators can read
+  // `req.member` / `req.agent` populated by those hooks.
   await app.register(rateLimit, {
     max: config.rateLimit?.max ?? 100,
     timeWindow: "1 minute",
+    hook: "preHandler",
   });
 
   // Auth hooks

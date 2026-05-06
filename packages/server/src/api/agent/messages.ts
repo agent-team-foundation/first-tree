@@ -3,7 +3,7 @@ import {
   sendMessageSchema,
   sendToAgentSchema,
 } from "@agent-team-foundation/first-tree-hub-shared";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { requireAgent } from "../../middleware/require-identity.js";
 import { createLogger } from "../../observability/index.js";
@@ -19,8 +19,33 @@ const editMessageSchema = z.object({
   content: z.unknown(),
 });
 
+/**
+ * Per-agent rate limit on outbound message writes. Keyed by `agent.uuid`
+ * (populated by `agentSelectorHook`, which runs as an onRequest hook before
+ * the global limiter — registered with `hook: "preHandler"` — fires).
+ *
+ * Rationale: agent ↔ agent reply loops are the documented failure mode
+ * (`mention_only` is the semantic guard; this is the hard ceiling). Falls
+ * back to IP keying for the unauthenticated edge case so the limiter never
+ * silently disables itself.
+ */
+function agentMessageWriteRateLimit(max: number) {
+  return {
+    rateLimit: {
+      max,
+      timeWindow: "1 minute",
+      keyGenerator: (req: FastifyRequest): string => {
+        const agentId = req.agent?.uuid;
+        return agentId ? `agent:${agentId}` : `ip:${req.ip}`;
+      },
+    },
+  };
+}
+
 export async function agentMessageRoutes(app: FastifyInstance): Promise<void> {
-  app.post<{ Params: { chatId: string } }>("/:chatId/messages", async (request, reply) => {
+  const writeRateLimit = agentMessageWriteRateLimit(app.config.rateLimit?.agentMessageMax ?? 30);
+
+  app.post<{ Params: { chatId: string } }>("/:chatId/messages", { config: writeRateLimit }, async (request, reply) => {
     const identity = requireAgent(request);
     await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
     const body = sendMessageSchema.parse(request.body);
@@ -79,7 +104,9 @@ export async function agentMessageRoutes(app: FastifyInstance): Promise<void> {
 }
 
 export async function agentSendToAgentRoutes(app: FastifyInstance): Promise<void> {
-  app.post<{ Params: { name: string } }>("/:name/messages", async (request, reply) => {
+  const writeRateLimit = agentMessageWriteRateLimit(app.config.rateLimit?.agentMessageMax ?? 30);
+
+  app.post<{ Params: { name: string } }>("/:name/messages", { config: writeRateLimit }, async (request, reply) => {
     const identity = requireAgent(request);
     const body = sendToAgentSchema.parse(request.body);
     const { message: msg, recipients } = await messageService.sendToAgent(
