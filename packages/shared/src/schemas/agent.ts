@@ -93,7 +93,7 @@ export const createAgentSchema = z.object({
    */
   displayName: z.string().min(1).max(200).optional(),
   delegateMention: z.string().max(100).optional(),
-  organizationId: z.string().max(100).optional(),
+  organizationId: z.string().min(1).max(100).optional(),
   /** How this agent was created */
   source: agentSourceSchema.optional(),
   /** Agent visibility: "private" (manager only) or "organization" (all members) */
