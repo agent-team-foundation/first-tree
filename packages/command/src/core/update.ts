@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import * as semver from "semver";
@@ -6,7 +6,7 @@ import { print } from "./output.js";
 
 export type InstallMode = "global" | "npx" | "source";
 
-const PACKAGE_NAME = "@agent-team-foundation/first-tree-hub";
+export const PACKAGE_NAME = "@agent-team-foundation/first-tree-hub";
 
 /**
  * Pick the `npm` binary to invoke for self-update. Background service units
@@ -38,12 +38,30 @@ function resolveNpmCommand(): string {
  */
 export function detectInstallMode(argv1: string = process.argv[1] ?? ""): InstallMode {
   if (!argv1) return "npx";
-  // Walk up from argv[1] looking for either a `.git` dir (source) or a
-  // `package.json` whose `name` matches ours (installed). Cap at 10 levels to
-  // avoid runaway walks on exotic symlink layouts.
-  let dir = dirname(resolve(argv1));
+  // Cap at 10 levels to avoid runaway walks on exotic symlink layouts.
+  const start = dirname(resolve(argv1));
+
+  // Pass 1: any ancestor with a `.git` dir means we're inside a checkout.
+  // This MUST happen before the package.json scan — when a built dist lives
+  // at `packages/command/dist/index.mjs` inside the monorepo, the scan
+  // would otherwise hit `packages/command/package.json` (name matches)
+  // before reaching the repo root's `.git`, mis-classifying a dev build
+  // as `global` and letting `update` run `npm i -g` against the operator's
+  // real install. The two-pass split keeps source-checkout detection
+  // strictly higher priority than "package on disk with our name".
+  {
+    let dir = start;
+    for (let i = 0; i < 10; i++) {
+      if (existsSync(resolve(dir, ".git"))) return "source";
+      const parent = dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  }
+
+  // Pass 2: find an ancestor `package.json` whose `name` matches ours.
+  let dir = start;
   for (let i = 0; i < 10; i++) {
-    if (existsSync(resolve(dir, ".git"))) return "source";
     const pkgPath = resolve(dir, "package.json");
     if (existsSync(pkgPath)) {
       try {
@@ -125,4 +143,29 @@ function parseInstalledVersion(stdout: string): string | null {
 
 function escapeForRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Look up the latest published version of the CLI package.
+ *
+ * Uses `npm view <pkg> version` (rather than fetch'ing registry.npmjs.org
+ * directly) so the user's `.npmrc` registry, proxy, and auth settings are
+ * honored — important for corporate users routed through Verdaccio /
+ * Artifactory mirrors.
+ */
+export function fetchLatestVersion(timeoutMs = 10_000): { ok: true; version: string } | { ok: false; reason: string } {
+  const res = spawnSync(resolveNpmCommand(), ["view", PACKAGE_NAME, "version"], {
+    encoding: "utf-8",
+    timeout: timeoutMs,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (res.status !== 0) {
+    const stderr = (res.stderr ?? "").trim();
+    return { ok: false, reason: stderr || `npm view exited with code ${res.status}` };
+  }
+  const version = (res.stdout ?? "").trim();
+  if (!semver.valid(version)) {
+    return { ok: false, reason: `npm view returned non-semver value: ${version.slice(0, 80)}` };
+  }
+  return { ok: true, version };
 }

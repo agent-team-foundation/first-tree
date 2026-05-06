@@ -38,18 +38,14 @@ pnpm --filter @first-tree-hub/server db:migrate     # Apply migrations
 
 ## Local Testing Isolation
 
-When exercising the CLI against a live hub on the same machine, always relocate the client home so tests do not clobber the production client's saved JWT credentials (`credentials.json`), client/agent config, workspaces, or cloned Context Tree:
+Use `scripts/dev-cli.sh` to run the in-tree CLI against an isolated home — it sets `FIRST_TREE_HUB_HOME` and (via the home-derived service-suffix logic) gives the dev build its own systemd unit / launchd label, so it coexists with whatever prod install you already have running.
 
 ```bash
-export FIRST_TREE_HUB_HOME=/Users/<you>/.first-tree/hub-test
-first-tree-hub connect <server-url>
-first-tree-hub client start
+./scripts/dev-cli.sh client connect <hub-url> --token <t>
+./scripts/dev-cli.sh client status
 ```
 
-- `FIRST_TREE_HUB_HOME` is read once at module load (`packages/shared/src/config/resolver.ts`) — export **before** starting the CLI.
-- Repo `.env` is **not** auto-loaded by the CLI (only by Docker Compose). Inject via `set -a; source .env; set +a`, `node --env-file=...`, `direnv`, or an alias.
-- Use an **absolute** path — `~` in env files is unreliable.
-- Server port and PostgreSQL are shared with production by design; each isolated home registers as a separate `clientId`, keeping the two clients independent.
+Full guide (rules, parallel dev installs, what's NOT isolated, teardown): [docs/local-dev-isolation.md](docs/local-dev-isolation.md).
 
 ## Repo-Local Skill
 

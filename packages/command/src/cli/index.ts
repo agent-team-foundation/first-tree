@@ -8,7 +8,7 @@ import { registerConfigCommands } from "../commands/config.js";
 import { registerOnboardCommand } from "../commands/onboard.js";
 import { registerSaaSConnectCommand } from "../commands/saas-connect.js";
 import { registerServerCommands } from "../commands/server.js";
-import { registerStatusCommand } from "../commands/status.js";
+import { registerUpdateCommand } from "../commands/update.js";
 import { runHomeMigration } from "../core/migrate-home.js";
 import { setJsonMode } from "../core/output.js";
 import { COMMAND_VERSION } from "../core/version.js";
@@ -68,8 +68,8 @@ registerAgentCommands(program);
 // Configuration
 registerConfigCommands(program);
 
-// Global status overview
-registerStatusCommand(program);
+// Self-update — user-triggered upgrade + service restart.
+registerUpdateCommand(program);
 
 // Onboarding
 registerOnboardCommand(program);

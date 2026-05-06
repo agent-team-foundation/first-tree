@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
   agentConfigSchema,
@@ -7,6 +8,7 @@ import {
   DEFAULT_HOME_DIR,
   initConfig,
   loadAgents,
+  readConfigFile,
   resetConfig,
   resetConfigMeta,
 } from "@agent-team-foundation/first-tree-hub-shared/config";
@@ -36,7 +38,9 @@ import {
   ensureFreshAccessToken,
   findStaleAliases,
   formatStaleReason,
+  getClientServiceStatus,
   handleClientOrgMismatch,
+  isServiceSupported,
   migrateLocalAgentDirs,
   printResults,
   promptMissingFields,
@@ -45,6 +49,9 @@ import {
   reconcileLocalRuntimeProviders,
   removeLocalAgent,
   resolveServerUrl,
+  restartClientService,
+  startClientService,
+  stopClientService,
   uploadClientCapabilities,
 } from "../core/index.js";
 import { print } from "../core/output.js";
@@ -62,8 +69,61 @@ export function registerClientCommands(program: Command): void {
     .command("start")
     .description("Start client — connect all configured agents to the server")
     .option("--no-interactive", "Skip interactive prompts (for Docker/CI)")
-    .action(async (options: { interactive?: boolean }) => {
+    .option("--foreground", "Run inline instead of delegating to the background service (for debugging)")
+    .action(async (options: { interactive?: boolean; foreground?: boolean }) => {
       try {
+        // Service-mode delegation. We split four cases so the user gets a
+        // single coherent command:
+        //   1. service active           → refuse, point at `client restart`
+        //   2. service installed/inactive → systemctl/launchctl start
+        //   3. service not installed    → fall through to inline run
+        //   4. --foreground             → always inline (debug / --no-service users)
+        // The supervisor itself reaches this code with --no-interactive and
+        // FIRST_TREE_HUB_SERVICE_MODE=1 set; we treat that combo as
+        // "supervisor invoking us, run inline" so we don't recursively call
+        // systemctl from inside our own ExecStart.
+        const isSupervisorChild = options.interactive === false && process.env.FIRST_TREE_HUB_SERVICE_MODE === "1";
+        const wantInline = options.foreground === true || isSupervisorChild;
+        if (!wantInline && isServiceSupported()) {
+          const svc = getClientServiceStatus();
+          if (svc.state === "active") {
+            print.line("\n");
+            print.line(`  Service is already running (${svc.platform}${svc.detail ? `, ${svc.detail}` : ""}).\n`);
+            print.line("  Use `first-tree-hub client restart` to restart, or `--foreground` to run inline.\n\n");
+            return;
+          }
+          if (svc.state === "inactive") {
+            const res = startClientService();
+            if (!res.ok) {
+              print.line(`\n  Failed to start service: ${res.reason}\n`);
+              print.line("  Try `--foreground` to run inline instead.\n\n");
+              process.exit(1);
+            }
+            const after = getClientServiceStatus();
+            print.line("\n");
+            print.line(`  Started ${after.platform} service${after.detail ? ` (${after.detail})` : ""}.\n`);
+            const journalHint =
+              after.platform === "systemd"
+                ? `  (or \`journalctl --user -u ${after.label.replace(/\.service$/, "")}\`)`
+                : "";
+            print.line(`  Logs:  ${after.logDir}${journalHint}\n\n`);
+            return;
+          }
+          if (svc.state === "unknown") {
+            // Defensive: launchctl/systemctl probe came back with shape we
+            // don't recognise. Falling through to the inline path here would
+            // race a still-supervised process for the same client.id, which
+            // is exactly the failure mode this whole PR is trying to
+            // eliminate. Refuse and let the operator inspect.
+            print.line(
+              `\n  Service state could not be determined (${svc.platform}${svc.detail ? `: ${svc.detail}` : ""}).\n`,
+            );
+            print.line("  Inspect with `first-tree-hub client doctor`, or pass `--foreground` to bypass.\n\n");
+            process.exit(1);
+          }
+          // state === "not-installed" → fall through to inline run.
+        }
+
         // Schema-driven prompts for missing required fields
         await promptMissingFields({
           schema: clientConfigSchema as Record<string, unknown>,
@@ -250,30 +310,118 @@ export function registerClientCommands(program: Command): void {
 
   client
     .command("stop")
-    .description("Stop the client (sends SIGTERM to running process)")
+    .description("Stop the background service (preserves auto-start; use `client start` to bring it back)")
     .action(() => {
-      print.line("  Client stop: use Ctrl+C or `kill` the running process.\n");
-      print.line("  Daemon mode with PID file is planned for a future release.\n");
+      if (!isServiceSupported()) {
+        print.line(`\n  Service control not supported on ${process.platform}.\n`);
+        print.line("  If running inline, use Ctrl+C or kill the process.\n\n");
+        return;
+      }
+      const svc = getClientServiceStatus();
+      if (svc.state === "not-installed") {
+        print.line("\n  No background service installed — nothing to stop.\n");
+        print.line("  If running inline, use Ctrl+C or kill the process.\n\n");
+        return;
+      }
+      if (svc.state === "inactive") {
+        print.line("\n  Service is already stopped.\n\n");
+        return;
+      }
+      const res = stopClientService();
+      if (!res.ok) {
+        print.line(`\n  Failed to stop service: ${res.reason}\n\n`);
+        process.exit(1);
+      }
+      print.line(`\n  Stopped ${svc.platform} service.\n`);
+      print.line("  Auto-start on next login is preserved. Run `first-tree-hub client start` to bring it back.\n\n");
+    });
+
+  client
+    .command("restart")
+    .description("Restart the background service")
+    .action(() => {
+      if (!isServiceSupported()) {
+        print.line(`\n  Service control not supported on ${process.platform}.\n`);
+        print.line("  Restart your inline `client start` process manually.\n\n");
+        return;
+      }
+      const svc = getClientServiceStatus();
+      if (svc.state === "not-installed") {
+        print.line("\n  No background service installed.\n");
+        print.line("  Run `first-tree-hub client connect <url>` first.\n\n");
+        process.exit(1);
+      }
+      const res = restartClientService();
+      if (!res.ok) {
+        print.line(`\n  Failed to restart service: ${res.reason}\n\n`);
+        process.exit(1);
+      }
+      const after = getClientServiceStatus();
+      print.line(`\n  Restarted ${after.platform} service${after.detail ? ` (${after.detail})` : ""}.\n\n`);
     });
 
   client
     .command("status")
-    .description("Show client and agent connection status")
+    .description("Show CLI, service, hub, and agent status (one-screen overview)")
     .action(() => {
+      print.line("\n");
+
+      // CLI version. Drift check (npm registry) is intentionally NOT run here
+      // — `status` should be fast (< 1s, no network). Users can run
+      // `first-tree-hub update --check` for that.
+      print.line(`  CLI:      ${COMMAND_VERSION}\n`);
+
+      // Service state.
+      if (isServiceSupported()) {
+        const svc = getClientServiceStatus();
+        const tail =
+          svc.platform === "systemd" ? `  (logs: journalctl --user -u ${svc.label.replace(/\.service$/, "")} -f)` : "";
+        if (svc.state === "active") {
+          print.line(`  Service:  ✓ running (${svc.platform}${svc.detail ? `, ${svc.detail}` : ""})${tail}\n`);
+        } else if (svc.state === "inactive") {
+          print.line(`  Service:  ✗ stopped (${svc.platform}${svc.detail ? `, ${svc.detail}` : ""})\n`);
+        } else if (svc.state === "not-installed") {
+          print.line("  Service:  not installed — run `first-tree-hub client connect <url>`\n");
+        } else {
+          print.line(`  Service:  unknown (${svc.platform}${svc.detail ? `, ${svc.detail}` : ""})\n`);
+        }
+      } else {
+        print.line(`  Service:  not supported on ${process.platform} (runs inline)\n`);
+      }
+
+      // Hub + clientId — read the YAML directly so an incomplete config
+      // doesn't bounce us through the schema-validation prompt path.
+      const clientYaml = join(DEFAULT_CONFIG_DIR, "client.yaml");
+      if (existsSync(clientYaml)) {
+        try {
+          const cfg = readConfigFile(clientYaml);
+          const serverUrl = getNested(cfg, "server.url");
+          const clientId = getNested(cfg, "client.id");
+          print.line(`  Hub:      ${serverUrl ?? "(not configured)"}\n`);
+          print.line(`  Client:   ${clientId ?? "(not configured)"}\n`);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          print.line(`  Hub:      (could not read ${clientYaml}: ${msg.slice(0, 60)})\n`);
+        }
+      } else {
+        print.line("  Hub:      (not configured — run `first-tree-hub client connect <url>`)\n");
+      }
+
+      // Agents.
       const agentsDir = join(DEFAULT_CONFIG_DIR, "agents");
       try {
         const agents = loadAgents({ schema: agentConfigSchema, agentsDir });
         if (agents.size === 0) {
-          print.line("  No agents configured.\n");
+          print.line("  Agents:   0 configured\n\n");
           return;
         }
-        print.line("\n  Configured agents:\n\n");
+        print.line(`  Agents:   ${agents.size} configured\n\n`);
         for (const [name, config] of agents) {
-          print.line(`  ${name.padEnd(20)} runtime: ${config.runtime.padEnd(14)} agentId: ${config.agentId}\n`);
+          print.line(`    ${name.padEnd(20)} runtime: ${config.runtime.padEnd(14)} agentId: ${config.agentId}\n`);
         }
         print.line("\n");
       } catch {
-        print.line("  No agents directory found.\n");
+        print.line("  Agents:   (no agents directory)\n\n");
       }
     });
 
@@ -492,4 +640,14 @@ function timeSince(isoDate: string): string {
   if (hours < 24) return `${hours}h ${minutes % 60}m`;
   const days = Math.floor(hours / 24);
   return `${days}d ${hours % 24}h`;
+}
+
+/** Read a `dot.path.like.this` from a parsed YAML object, returning string | null. */
+function getNested(obj: Record<string, unknown>, path: string): string | null {
+  let cur: unknown = obj;
+  for (const part of path.split(".")) {
+    if (cur === null || cur === undefined || typeof cur !== "object") return null;
+    cur = (cur as Record<string, unknown>)[part];
+  }
+  return typeof cur === "string" ? cur : null;
 }
