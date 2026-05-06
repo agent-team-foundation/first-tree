@@ -201,7 +201,7 @@ export function AgentDetailPage() {
   });
   const deleteMutation = useMutation({
     mutationFn: () => deleteAgent(uuid),
-    onSuccess: () => navigate("/agents"),
+    onSuccess: () => navigate("/team"),
   });
 
   // Test connection
@@ -460,7 +460,7 @@ export function AgentDetailPage() {
           }}
         >
           <Breadcrumb style={{ marginBottom: "var(--sp-2)" }}>
-            <BreadcrumbLink onClick={() => navigate("/agents")}>Agents</BreadcrumbLink>
+            <BreadcrumbLink onClick={() => navigate("/team")}>Agents</BreadcrumbLink>
             <BreadcrumbSep />
             <BreadcrumbCurrent mono>{agent.name ?? shortId}</BreadcrumbCurrent>
           </Breadcrumb>

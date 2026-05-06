@@ -2,13 +2,13 @@ import { PageHeader } from "../components/ui/page-header.js";
 import { BindingsPage } from "./bindings.js";
 
 /**
- * External platform connection surface. This replaces the old top-level
- * settings tab for adapter and user bindings, keeping integrations available
- * to non-admin members while team administration moves behind the user menu.
+ * External platform connection surface. Hosts adapter and user bindings.
+ * `embedded` drops the full-bleed `-m-6` wrapper so this page can be
+ * rendered inside another master-detail container (e.g. /settings).
  */
-export function IntegrationsPage() {
+export function IntegrationsPage({ embedded = false }: { embedded?: boolean } = {}) {
   return (
-    <div className="-m-6">
+    <div className={embedded ? "" : "-m-6"}>
       <PageHeader title="Integrations" subtitle="External platform bindings" />
       <div style={{ padding: "var(--sp-4) var(--sp-5) var(--sp-7)" }}>
         <BindingsPage />

@@ -3,7 +3,6 @@ import { Bot, LayoutDashboard, MessageSquare } from "lucide-react";
 import { useNavigate } from "react-router";
 import { getActivityOverview } from "../../../api/activity.js";
 import { listAgentSessions, type SessionListItem } from "../../../api/sessions.js";
-import { useAuth } from "../../../auth/auth-context.js";
 import {
   CommandDialog,
   CommandEmpty,
@@ -17,15 +16,14 @@ import { useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 
 const STATIC_ROUTES = [
   { path: "/", label: "Workspace" },
-  { path: "/agents", label: "Agents" },
-  { path: "/clients", label: "Computers" },
-  { path: "/integrations", label: "Integrations" },
+  { path: "/context", label: "Context" },
+  { path: "/team", label: "Team" },
+  { path: "/settings", label: "Settings" },
 ];
 
 export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const navigate = useNavigate();
   const agentName = useAgentNameMap();
-  const { role } = useAuth();
 
   const { data: activity } = useQuery({
     queryKey: ["activity"],
@@ -112,7 +110,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
 
         <CommandSeparator />
         <CommandGroup heading="Pages">
-          {[...STATIC_ROUTES, ...(role === "admin" ? [{ path: "/team", label: "Team" }] : [])].map((r) => (
+          {STATIC_ROUTES.map((r) => (
             <CommandItem key={r.path} value={`page ${r.label}`} onSelect={() => go(r.path)}>
               <LayoutDashboard className="mr-2 h-4 w-4 shrink-0 opacity-70" />
               <span>{r.label}</span>

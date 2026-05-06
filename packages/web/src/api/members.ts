@@ -1,4 +1,4 @@
-import type { CreateMember, MemberCreated, UpdateMember } from "@agent-team-foundation/first-tree-hub-shared";
+import type { UpdateMember } from "@agent-team-foundation/first-tree-hub-shared";
 import { api } from "./client.js";
 
 type MemberListItem = {
@@ -14,10 +14,6 @@ type MemberListItem = {
 
 export function listMembers(): Promise<MemberListItem[]> {
   return api.get<MemberListItem[]>("/members");
-}
-
-export function createMember(data: CreateMember): Promise<MemberCreated> {
-  return api.post<MemberCreated>("/members", data);
 }
 
 export function updateMember(id: string, data: UpdateMember): Promise<MemberListItem> {

@@ -1,57 +1,72 @@
-import { Navigate, useLocation, useNavigate } from "react-router";
+import { NavLink, Outlet } from "react-router";
 import { useAuth } from "../auth/auth-context.js";
-import { PageHeader } from "../components/ui/page-header.js";
-import { Tab, TabBar } from "../components/ui/tab-bar.js";
-import { InviteLinkPanel } from "./invite-link-panel.js";
-import { MembersPage } from "./members.js";
-import { OrgSettingsPage } from "./org-settings.js";
+import { cn } from "../lib/utils.js";
 
-const tabs = [
-  { key: "members", label: "Members" },
-  { key: "invite", label: "Invite link" },
-  { key: "settings", label: "Team settings" },
-] as const;
-
-type TabKey = (typeof tabs)[number]["key"];
-
-export function TeamPage() {
+/**
+ * Team layout. Non-admin users land directly on the team roster (no
+ * sidebar — only one item would be visible). Admin users see a sidebar
+ * with `Roster` and `Settings` so the admin-only configuration page
+ * stays a peer to the roster rather than buried in a header button.
+ */
+export function TeamLayout() {
   const { role } = useAuth();
-  const location = useLocation();
-  const navigate = useNavigate();
 
-  if (role === null) {
-    return (
-      <div className="text-body" style={{ padding: 20, color: "var(--fg-3)" }}>
-        Loading...
-      </div>
-    );
-  }
+  // Until role hydrates, render the bare Outlet so the page itself shows
+  // immediately. Admin sidebar appears once we know the user is admin —
+  // briefly missing for an admin during hydration is far less jarring than
+  // a wrong sidebar showing up for a non-admin.
   if (role !== "admin") {
-    return <Navigate to="/integrations" replace />;
+    return <Outlet />;
   }
-
-  const hashTab = location.hash.replace("#", "") as TabKey;
-  const active: TabKey = tabs.some((t) => t.key === hashTab) ? hashTab : "members";
-
-  const switchTab = (key: TabKey) => {
-    navigate({ hash: key }, { replace: true });
-  };
 
   return (
-    <div className="-m-6">
-      <PageHeader title="Team" subtitle="Members, invites, and organization settings" />
-      <TabBar>
-        {tabs.map((tab) => (
-          <Tab key={tab.key} active={active === tab.key} onClick={() => switchTab(tab.key)}>
-            {tab.label}
-          </Tab>
-        ))}
-      </TabBar>
-      <div style={{ padding: "var(--sp-4) var(--sp-5) var(--sp-7)" }}>
-        {active === "members" && <MembersPage />}
-        {active === "invite" && <InviteLinkPanel />}
-        {active === "settings" && <OrgSettingsPage />}
+    <div className="-m-6 flex" style={{ minHeight: "calc(100vh - var(--sp-10))" }}>
+      <aside
+        className="shrink-0 overflow-auto"
+        style={{
+          width: 200,
+          padding: "var(--sp-4) var(--sp-2)",
+        }}
+      >
+        <SubNavLink to="/team" end label="Members" />
+        <SubNavLink to="/team/settings" label="Team settings" />
+      </aside>
+
+      <div className="flex-1 min-w-0 overflow-auto">
+        <Outlet />
       </div>
     </div>
+  );
+}
+
+function SubNavLink({ to, label, end }: { to: string; label: string; end?: boolean }) {
+  return (
+    <NavLink
+      to={to}
+      end={end}
+      className={({ isActive }) =>
+        cn(
+          "block w-full text-left bg-transparent text-body transition-colors",
+          "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+          !isActive && "hover:bg-accent",
+        )
+      }
+      style={{ borderRadius: "var(--radius-input)" }}
+    >
+      {({ isActive }) => (
+        <span
+          className="flex items-center"
+          style={{
+            padding: "var(--sp-1_25) var(--sp-2_5)",
+            background: isActive ? "var(--bg-active)" : "transparent",
+            color: isActive ? "var(--fg)" : "var(--fg-3)",
+            fontWeight: isActive ? 500 : 400,
+            borderRadius: "var(--radius-input)",
+          }}
+        >
+          <span className="flex-1 truncate">{label}</span>
+        </span>
+      )}
+    </NavLink>
   );
 }

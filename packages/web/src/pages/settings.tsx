@@ -1,86 +1,60 @@
-import { ChevronRight, Cpu, Plug } from "lucide-react";
-import type { ReactNode } from "react";
-import { useNavigate } from "react-router";
-import { PageHeader } from "../components/ui/page-header.js";
-import { Panel } from "../components/ui/panel.js";
+import { NavLink, Outlet } from "react-router";
+import { cn } from "../lib/utils.js";
 
 /**
- * Settings hub. The top-level sidebar items are intentionally minimal
- * (Workspace / Context / Team / Settings). Settings absorbs the secondary
- * surfaces — connecting computers and managing platform integrations —
- * so they do not each occupy a top-level slot.
+ * Settings is a master-detail container. Same flat aesthetic as TeamLayout
+ * — no borders, no contrasting sidebar bg; active state is a soft pill.
  */
-export function SettingsPage() {
-  const navigate = useNavigate();
-
+export function SettingsLayout() {
   return (
-    <div className="-m-6">
-      <PageHeader title="Settings" subtitle="Computers and platform integrations" />
-      <div
-        className="grid grid-cols-1 md:grid-cols-2"
+    <div className="-m-6 flex" style={{ minHeight: "calc(100vh - var(--sp-10))" }}>
+      <aside
+        className="shrink-0 overflow-auto"
         style={{
-          gap: "var(--sp-3)",
-          padding: "var(--sp-4) var(--sp-5) var(--sp-7)",
+          width: 200,
+          padding: "var(--sp-4) var(--sp-2)",
         }}
       >
-        <SettingsCard
-          icon={<Cpu className="h-4 w-4" />}
-          title="Computers"
-          description="Pair the machines that host your agent runtimes — view their status, capabilities, and disconnect when needed."
-          onClick={() => navigate("/clients")}
-        />
-        <SettingsCard
-          icon={<Plug className="h-4 w-4" />}
-          title="Integrations"
-          description="Connect external platforms (Slack, Feishu, …) so agents can be reached from the tools your team already uses."
-          onClick={() => navigate("/integrations")}
-        />
+        <SubNavLink to="/settings/computers" label="Computers" />
+        <SubNavLink to="/settings/integrations" label="Integrations" />
+      </aside>
+
+      <div className="flex-1 min-w-0 overflow-auto">
+        <Outlet />
       </div>
     </div>
   );
 }
 
-function SettingsCard({
-  icon,
-  title,
-  description,
-  onClick,
-}: {
-  icon: ReactNode;
-  title: string;
-  description: string;
-  onClick: () => void;
-}) {
+function SubNavLink({ to, label }: { to: string; label: string }) {
   return (
-    <Panel>
-      <button
-        type="button"
-        onClick={onClick}
-        className="text-left transition-colors w-full"
-        style={{
-          display: "block",
-          padding: "var(--sp-4) var(--sp-4)",
-          background: "transparent",
-          border: "none",
-          cursor: "pointer",
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.background = "var(--bg-hover)";
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.background = "transparent";
-        }}
-      >
-        <div className="flex items-center" style={{ gap: 8, marginBottom: "var(--sp-1_5)", color: "var(--fg)" }}>
-          {icon}
-          <span className="text-subtitle font-medium">{title}</span>
-          <div style={{ flex: 1 }} />
-          <ChevronRight className="h-4 w-4" style={{ color: "var(--fg-4)" }} />
-        </div>
-        <div className="text-body" style={{ color: "var(--fg-3)" }}>
-          {description}
-        </div>
-      </button>
-    </Panel>
+    <NavLink
+      to={to}
+      className={({ isActive }) =>
+        cn(
+          "block w-full text-left bg-transparent text-body transition-colors",
+          "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+          !isActive && "hover:bg-accent",
+        )
+      }
+      style={{
+        borderRadius: "var(--radius-input)",
+      }}
+    >
+      {({ isActive }) => (
+        <span
+          className="flex items-center"
+          style={{
+            padding: "var(--sp-1_25) var(--sp-2_5)",
+            background: isActive ? "var(--bg-active)" : "transparent",
+            color: isActive ? "var(--fg)" : "var(--fg-3)",
+            fontWeight: isActive ? 500 : 400,
+            borderRadius: "var(--radius-input)",
+          }}
+        >
+          <span className="flex-1 truncate">{label}</span>
+        </span>
+      )}
+    </NavLink>
   );
 }

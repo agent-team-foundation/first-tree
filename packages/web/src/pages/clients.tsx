@@ -37,7 +37,12 @@ import { useUserNameMap } from "../lib/use-user-name-map.js";
 import { formatDate } from "../lib/utils.js";
 import { NewConnectionDialog } from "./clients/new-connection-dialog.js";
 
-export function ClientsPage() {
+/**
+ * `embedded` drops the full-bleed `-m-6` wrapper so this page can be rendered
+ * inside another master-detail container (e.g. /settings) whose own outer
+ * chrome has already escaped the parent padding.
+ */
+export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
   const queryClient = useQueryClient();
   const agentName = useAgentNameMap();
   const ownerName = useUserNameMap();
@@ -101,7 +106,7 @@ export function ClientsPage() {
   const totalAgentsBound = (clients ?? []).reduce((n, c) => n + c.agentCount, 0);
 
   return (
-    <div className="-m-6">
+    <div className={embedded ? "" : "-m-6"}>
       <PageHeader
         title="Computers"
         subtitle={
