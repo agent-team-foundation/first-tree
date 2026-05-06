@@ -291,6 +291,14 @@ UI 应复用当前 session chat 中间聊天区的成熟结构，但信息层级
 └──────────────────────────┴──────────────────────────────────────────┴────────────────────────┘
 ```
 
+响应式规则：
+
+- `>= 1200px`：三栏，conversation list + chat surface + context panel。
+- `768-1199px`：两栏，conversation list + chat surface。Context panel 从右侧 drawer 打开。
+- `< 768px`：单页模式。默认显示 conversation list；选中 chat 后进入 chat surface 并隐藏列表。Chat header 左侧显示 back button 返回 conversations。
+- Composer 固定在 chat surface 底部，不能被 context panel 挤压。
+- Desktop conversation list 保持稳定宽度，约 `260-280px`。
+
 ### Conversation List UI
 
 左侧是轻量 conversation inbox，不应该像当前 agent/session tree。
@@ -323,12 +331,14 @@ unread dot  title                              last activity time
 
 - 默认 row height 应保持紧凑，约 `56-64px`。
 - 第一行始终是 conversation title 和 last activity time。
-- 第二行是辅助信息：participants summary、`Watching`、operational status 或短 preview。
+- 第二行是辅助信息，优先级为：`Error` / `Blocked` > `Watching` > participants summary > last message preview。
 - 时间表示 last activity time，不是加入时间或创建时间。
 - Participant names 是 metadata，不能成为主标题。
 - Row 内不展示 chat id、session count、加入时间或完整 participant list。
 - 选中 row 使用轻量 active background 和左侧 accent border。
 - Unread mention row 使用红点和更强的 title weight；不能只依赖颜色。
+- Title 和第二行 metadata 都单行 truncate。
+- `Working` 状态应保持克制，最多是轻量 dot 或 pulse。`Error` 和 `Blocked` 可以替代 preview，因为它们需要用户注意。
 
 v1 filters：
 
@@ -379,6 +389,19 @@ v1 filters：
 - Route 应基于 `chatId` 渲染；需要 agent 信息时，从 participants 和 active sessions 推导。
 - 完成后的 tool/session details 应保持折叠，让 timeline 是协作界面，而不是日志查看器。
 
+### Context Panel UI
+
+右侧 panel 是辅助区域。它解释 chat 里有哪些人、agents 正在做什么，但不能和 timeline 抢主注意力。
+
+规则：
+
+- 默认 section 是 participants。
+- 如果存在 agent runtime，按 agent 分组展示 runtime details。
+- `Error` 和 `Blocked` agents 置顶。
+- Human-only chats 只展示 participants 和 chat metadata，不展示空 runtime 区。
+- Suspend、terminate 等 session controls 放在这里或 overflow menu，不放在主 chat header。
+- Tablet 和 mobile 上 context panel 是 drawer，不常驻显示。
+
 ### Watching Chat UI
 
 Watching chats 可读，但用户明确 join 之前不可直接回复。
@@ -399,6 +422,9 @@ Watching chats 可读，但用户明确 join 之前不可直接回复。
 - 打开 watching chat 不能自动 join。
 - Composer 替换为单一 `Join to reply` action。
 - `Join to reply` 将 watcher row 升级为 speaking member row。
+- 点击 `Join to reply` 后可以 optimistic enable composer。
+- 成功后，row 和 header 移除 `Watching` 状态。
+- 失败后，恢复 watching 状态，保留 `Join to reply`，并显示 inline error。
 - Watching 是中性状态，不是 error state。
 
 ## New Chat 流程
@@ -450,6 +476,12 @@ To: code agent ▼
 - Enter 切换当前高亮 row 的选择状态。
 - 当 search input 为空时，Backspace 删除最后一个 selected chip。
 - Escape 关闭 picker。
+- Desktop picker 是 popover。
+- Mobile picker 是 bottom sheet 或 fullscreen sheet。
+- Selected rows 显示 check icon 和 selected background。
+- Focused rows 显示清晰 focus ring。
+- Chips 可以单独删除。
+- Touch target 至少 `44px` 高。
 
 Collapsed target display：
 
@@ -513,38 +545,15 @@ Add members
 - 选择一个 row 后立即添加该 participant。
 - UI 乐观更新。
 - 如果 server 拒绝添加，则移除该 row 并显示 inline error。
+- 成功后显示 undo toast：`Product Agent added · Undo`。
+- Undo 只移除刚刚添加的 participant，并且只在 toast window 内可用。
 - 向 direct chat 添加新成员时，系统在后台将其升级为 group chat。UI 只表现为变成了 multi-participant chat，不需要用户理解“升级”概念。
 - Chat 一旦升级为 `group`，未来即使成员减少也不降级回 `direct`。
 - 添加 non-human participants 时，系统可能为其 managers 创建 watcher rows。
 
-## Conversation List
+## Conversation 标题规则
 
-Conversation list 替代当前 agent roster。
-
-```text
-┌────────────────────────────┐
-│ Conversations              │
-│ + New chat                 │
-├────────────────────────────┤
-│ ● Fix homepage layout      │
-│   Code Agent · 2m ago      │
-├────────────────────────────┤
-│   Review copied changes    │
-│   Design, Gandy +2 · 18m   │
-├────────────────────────────┤
-│   Plan next sprint         │
-│   Product Agent · Watching │
-└────────────────────────────┘
-```
-
-Row hierarchy：
-
-1. Unread `@` red dot。
-2. Conversation title，而不是 primary agent name。
-3. Collaborator metadata，包括 participants 和 `Watching` state。
-4. 当 last-message preview 没有被用作 title 时，展示 preview。
-5. Updated time。
-6. Optional badges，例如 `group`、`offline` 和未来的 `task`。
+权威 conversation-list UI 规则在 `Conversation List UI` 中定义。本节只定义 title 数据规则。
 
 Title resolution：
 

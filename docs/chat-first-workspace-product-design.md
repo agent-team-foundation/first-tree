@@ -291,6 +291,14 @@ Recommended layout:
 └──────────────────────────┴──────────────────────────────────────────┴────────────────────────┘
 ```
 
+Responsive behavior:
+
+- `>= 1200px`: three columns, conversation list + chat surface + context panel.
+- `768-1199px`: two columns, conversation list + chat surface. Context panel opens as a right drawer.
+- `< 768px`: single-pane mode. Default view is the conversation list; selecting a chat opens the chat surface and hides the list. The chat header shows a back button to return to conversations.
+- The composer stays anchored to the bottom of the chat surface and must not be squeezed by the context panel.
+- The conversation list keeps a stable width on desktop, about `260-280px`.
+
 ### Conversation List UI
 
 The left rail is a lightweight conversation inbox. It should not look like the current agent/session tree.
@@ -323,12 +331,14 @@ Rules:
 
 - Default row height should be compact, about `56-64px`.
 - The first line is always the conversation title plus last activity time.
-- The second line is supporting metadata: participant summary, `Watching`, operational status, or a short preview.
+- The second line is supporting metadata with this priority: `Error` / `Blocked` > `Watching` > participant summary > last message preview.
 - Time means last activity time, not join time or creation time.
 - Participant names are metadata, never the primary title.
 - Do not show chat id, session count, join time, or full participant lists in the row.
 - Selected row uses a subtle active background and a left accent border.
 - Unread mention rows use the red dot and stronger title weight; do not rely on color alone.
+- Title and second-line metadata are single-line truncated.
+- `Working` state should stay quiet, at most a subtle dot or pulse. `Error` and `Blocked` can replace the preview because they need attention.
 
 Filter scope for v1:
 
@@ -379,6 +389,19 @@ What to change:
 - The route should render from `chatId`; `agentId` is derived from participants and active sessions when needed.
 - Completed tool/session details should stay collapsed so the timeline remains a collaboration surface, not a log viewer.
 
+### Context Panel UI
+
+The right panel is secondary. It should explain who is in the chat and what the agents are doing without competing with the timeline.
+
+Rules:
+
+- Default section is participants.
+- If agent runtime exists, group runtime details by agent.
+- `Error` and `Blocked` agents appear first.
+- Human-only chats show participants and chat metadata only. Do not render an empty runtime section.
+- Session controls such as suspend and terminate live here or in an overflow menu, not in the main chat header.
+- On tablet and mobile, the context panel is a drawer. It is not permanently visible.
+
 ### Watching Chat UI
 
 Watching chats are readable but not directly writable until the user joins.
@@ -399,6 +422,9 @@ Rules:
 - Opening a watching chat never auto-joins the user.
 - The composer is replaced by a single `Join to reply` action.
 - `Join to reply` upgrades the watcher row to a speaking member row.
+- Clicking `Join to reply` may optimistically enable the composer while the request is pending.
+- On success, remove the `Watching` state from the row and header.
+- On failure, restore the watching state, keep `Join to reply`, and show an inline error.
 - Watching is a neutral state, not an error state.
 
 ## New Chat Flow
@@ -450,6 +476,12 @@ Rules:
 - Pressing Enter toggles the highlighted row.
 - Backspace removes the last selected chip when the search input is empty.
 - Escape closes the picker.
+- Desktop picker is a popover.
+- Mobile picker is a bottom sheet or fullscreen sheet.
+- Selected rows show a check icon and selected background.
+- Focused rows show a visible focus ring.
+- Chips can be removed individually.
+- Touch targets are at least `44px` high.
 
 Collapsed target display:
 
@@ -513,38 +545,15 @@ Behavior:
 - Selecting a row immediately adds that participant.
 - The UI updates optimistically.
 - If the server rejects the add, the row is removed and an inline error appears.
+- On success, show an undo toast: `Product Agent added · Undo`.
+- Undo removes only the participant that was just added, within the toast window.
 - Adding someone to a direct chat upgrades the chat to a group behind the scenes. The UI simply becomes a multi-participant chat.
 - Once a chat becomes `group`, it does not downgrade back to `direct` if members are later removed.
 - Adding non-human participants may create watcher rows for their managers.
 
-## Conversation List
+## Conversation Title Rules
 
-The conversation list replaces the current agent roster.
-
-```text
-┌────────────────────────────┐
-│ Conversations              │
-│ + New chat                 │
-├────────────────────────────┤
-│ ● Fix homepage layout      │
-│   Code Agent · 2m ago      │
-├────────────────────────────┤
-│   Review copied changes    │
-│   Design, Gandy +2 · 18m   │
-├────────────────────────────┤
-│   Plan next sprint         │
-│   Product Agent · Watching │
-└────────────────────────────┘
-```
-
-Row hierarchy:
-
-1. Unread `@` red dot.
-2. Conversation title, not the primary agent name.
-3. Collaborator metadata, including participants and `Watching` state.
-4. Last-message preview when it is not already used as the title.
-5. Updated time.
-6. Optional badges, such as `group`, `offline`, and future `task`.
+The canonical conversation-list UI rules live in `Conversation List UI`. This section defines title data only.
 
 Title resolution:
 
