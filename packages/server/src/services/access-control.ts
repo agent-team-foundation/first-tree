@@ -234,17 +234,17 @@ export async function requireMemberInOrg(
   db: Database,
   request: FastifyRequest,
   orgId: string,
-): Promise<{ memberId: string; role: string }> {
+): Promise<{ memberId: string; role: string; agentId: string }> {
   const m = requireMember(request);
   const [row] = await db
-    .select({ id: members.id, role: members.role })
+    .select({ id: members.id, role: members.role, agentId: members.agentId })
     .from(members)
     .where(and(eq(members.userId, m.userId), eq(members.organizationId, orgId), eq(members.status, "active")))
     .limit(1);
   if (!row) {
     throw new ForbiddenError("Not an active member of the target organization");
   }
-  return { memberId: row.id, role: row.role };
+  return { memberId: row.id, role: row.role, agentId: row.agentId };
 }
 
 /**
