@@ -12,8 +12,16 @@ import {
   type SendToAgent,
 } from "@agent-team-foundation/first-tree-hub-shared";
 
-/** Callback that returns the current member access JWT. */
-export type AccessTokenProvider = () => string | Promise<string>;
+/**
+ * Callback that returns the current member access JWT.
+ *
+ * `minValidityMs` lets the caller declare "I need a token still valid for at
+ * least N milliseconds." Implementations should refresh whenever the cached
+ * token has less than that much life remaining. Without this hint the WS
+ * proactive-refresh path would reuse a cached token that is about to expire
+ * and immediately get kicked off with `auth:expired`.
+ */
+export type AccessTokenProvider = (opts?: { minValidityMs?: number }) => string | Promise<string>;
 
 export type SdkConfig = {
   serverUrl: string;

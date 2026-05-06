@@ -411,7 +411,16 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
         this.wsLogger.debug("socket opened, sending auth");
 
         try {
-          const token = await this.getAccessToken();
+          // Ask for a token still valid past our proactive-refresh lead
+          // time, otherwise the cached token returned here would already be
+          // inside the lead window and the next proactive refresh would be
+          // a no-op — server would push `auth:expired` instead.
+          //
+          // The +5_000 is just a readability slack so the boundary check
+          // explicitly clears the lead window rather than comparing equal.
+          // Any positive epsilon would do; 5s reads as deliberate at a
+          // glance and is small enough to never matter operationally.
+          const token = await this.getAccessToken({ minValidityMs: AUTH_REFRESH_LEAD_MS + 5_000 });
           ws.send(JSON.stringify({ type: "auth", token }));
           // C5: arm the proactive refresh timer as soon as we've sent the
           // auth frame — auth:ok only confirms the token was accepted, the
@@ -451,7 +460,15 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
           return;
         }
 
-        this.wsLogger.warn({ code, wasRegistered }, "disconnected");
+        // Code 1000 is a clean close — the only one we issue ourselves is
+        // the proactive auth refresh, which is expected and recovers
+        // silently. Surface it at info so genuine drops (4401, 1006, etc.)
+        // remain warn-visible.
+        if (code === 1000) {
+          this.wsLogger.info({ code, wasRegistered }, "disconnected");
+        } else {
+          this.wsLogger.warn({ code, wasRegistered }, "disconnected");
+        }
         if (!this.closing) {
           this.emit("disconnected");
           if (wasRegistered) this.scheduleReconnect();

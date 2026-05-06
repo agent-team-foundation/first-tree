@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -53,6 +53,30 @@ describe("detectInstallMode", () => {
     mkdirSync(join(root, "stray/dir"), { recursive: true });
     writeFileSync(argv1, "// stub");
     expect(detectInstallMode(argv1)).toBe("npx");
+  });
+
+  it("classifies a global install as 'global' when invoked through a symlinked bin/", () => {
+    // Regression: standard `npm i -g` lays the binary out as
+    // `<prefix>/bin/<name> -> ../lib/node_modules/<pkg>/dist/cli/index.mjs`.
+    // process.argv[1] keeps the symlink path, so without realpath the walk
+    // starts in `<prefix>/bin/` and never reaches the package.json — the
+    // command falls through to "npx" and `update` refuses to run.
+    const prefix = join(root, "usr", "local");
+    const pkgDir = join(prefix, "lib", "node_modules", "@agent-team-foundation", "first-tree-hub");
+    mkdirSync(join(pkgDir, "dist", "cli"), { recursive: true });
+    writeFileSync(
+      join(pkgDir, "package.json"),
+      JSON.stringify({ name: "@agent-team-foundation/first-tree-hub", version: "0.10.12" }),
+    );
+    const target = join(pkgDir, "dist", "cli", "index.mjs");
+    writeFileSync(target, "// stub");
+
+    const binDir = join(prefix, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const binLink = join(binDir, "first-tree-hub");
+    symlinkSync(target, binLink);
+
+    expect(detectInstallMode(binLink)).toBe("global");
   });
 
   it("treats a dist build inside a checkout as 'source' even when an inner package.json matches our name", () => {

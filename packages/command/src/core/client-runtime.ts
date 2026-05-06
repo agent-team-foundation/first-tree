@@ -72,7 +72,7 @@ export class ClientRuntime {
       serverUrl,
       clientId,
       sdkVersion: options.currentVersion,
-      getAccessToken: () => ensureFreshAccessToken(),
+      getAccessToken: (opts) => ensureFreshAccessToken(opts),
     });
     registerBuiltinHandlers();
 
