@@ -275,6 +275,132 @@ Workspace
 └──────────────────────┴─────────────────────────────────────────────┘
 ```
 
+## UI 设计细节
+
+UI 应复用当前 session chat 中间聊天区的成熟结构，但信息层级必须从 session-first 改成 conversation-first。
+
+推荐布局：
+
+```text
+┌──────────────────────────┬──────────────────────────────────────────┬────────────────────────┐
+│ Conversation List        │ Chat Surface                             │ Context Panel           │
+│                          │                                          │                        │
+│ conversations inbox      │ header                                   │ participants           │
+│ search + filters         │ timeline                                 │ agent/session runtime   │
+│ selected chat row        │ composer                                 │ debug/details/actions   │
+└──────────────────────────┴──────────────────────────────────────────┴────────────────────────┘
+```
+
+### Conversation List UI
+
+左侧是轻量 conversation inbox，不应该像当前 agent/session tree。
+
+```text
+┌────────────────────────────────┐
+│ Conversations              +   │
+│ Search chats...                │
+│ [All] [Unread] [Watching]      │
+├────────────────────────────────┤
+│ ● Fix homepage layout      2m  │
+│   Code Agent · Check CSS...    │
+├────────────────────────────────┤
+│   Review copied changes   18m  │
+│   Design, Gandy +2             │
+├────────────────────────────────┤
+│   Plan next sprint        1h   │
+│   Product Agent · Watching     │
+└────────────────────────────────┘
+```
+
+Row anatomy：
+
+```text
+unread dot  title                              last activity time
+            participants/status · preview
+```
+
+规则：
+
+- 默认 row height 应保持紧凑，约 `56-64px`。
+- 第一行始终是 conversation title 和 last activity time。
+- 第二行是辅助信息：participants summary、`Watching`、operational status 或短 preview。
+- 时间表示 last activity time，不是加入时间或创建时间。
+- Participant names 是 metadata，不能成为主标题。
+- Row 内不展示 chat id、session count、加入时间或完整 participant list。
+- 选中 row 使用轻量 active background 和左侧 accent border。
+- Unread mention row 使用红点和更强的 title weight；不能只依赖颜色。
+
+v1 filters：
+
+- `All`
+- `Unread`
+- `Watching`
+
+不要按 `Direct`、`Group`、`Agent` 或 `Human` 拆主列表。用户主要按最近活动和注意力扫描，而不是按 chat 类型找内容。
+
+### Chat Surface UI
+
+中间区域应保留当前 session chat 的结构：
+
+```text
+┌────────────────────────────────────────────────────────────┐
+│ Fix homepage layout                         +  more        │
+│ Code Agent, Design Agent, Gandy · 2 active agents           │
+├────────────────────────────────────────────────────────────┤
+│ timeline                                                    │
+│                                                            │
+│ Gandy        10:24                                          │
+│ Please review the homepage layout                          │
+│                                                            │
+│ Code Agent   10:25                                          │
+│ thinking...                                                 │
+│ using read_file(...)                                        │
+│                                                            │
+│ Code Agent   10:26                                          │
+│ The layout issue is in ...                                  │
+├────────────────────────────────────────────────────────────┤
+│ Message this chat...                         attach  Send  │
+└────────────────────────────────────────────────────────────┘
+```
+
+从当前 session chat 复用：
+
+- header、timeline、bottom composer 结构；
+- sender/avatar/time/message rows；
+- 轻量 `thinking`、`using tool`、streaming assistant text 和 error rows；
+- attachment、mention autocomplete、keyboard send 和 inline send errors；
+- `chat.topic` 的 inline rename。
+
+需要调整：
+
+- Header title 是 conversation title，不是 primary agent name。
+- Header subtitle 是 participants 和 high-level activity，不是 debug/session facts。
+- Runtime state、session count、完整 chat id、suspend 和 terminate controls 下沉到 context panel 或 overflow menu。
+- Route 应基于 `chatId` 渲染；需要 agent 信息时，从 participants 和 active sessions 推导。
+- 完成后的 tool/session details 应保持折叠，让 timeline 是协作界面，而不是日志查看器。
+
+### Watching Chat UI
+
+Watching chats 可读，但用户明确 join 之前不可直接回复。
+
+```text
+┌────────────────────────────────────────────────────────────┐
+│ Plan next sprint                            Watching       │
+│ Product Agent · You are watching because you manage it      │
+├────────────────────────────────────────────────────────────┤
+│ timeline                                                    │
+├────────────────────────────────────────────────────────────┤
+│ [ Join to reply ]                                           │
+└────────────────────────────────────────────────────────────┘
+```
+
+规则：
+
+- 打开 watching chat 不能自动 join。
+- Composer 替换为单一 `Join to reply` action。
+- `Join to reply` 将 watcher row 升级为 speaking member row。
+- Watching 是中性状态，不是 error state。
+
 ## New Chat 流程
 
 ```mermaid

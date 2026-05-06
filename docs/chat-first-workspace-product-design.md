@@ -275,6 +275,132 @@ Workspace
 └──────────────────────┴─────────────────────────────────────────────┘
 ```
 
+## UI Design Detail
+
+The UI should reuse the current session chat's center-panel strengths, but change the information hierarchy from session-first to conversation-first.
+
+Recommended layout:
+
+```text
+┌──────────────────────────┬──────────────────────────────────────────┬────────────────────────┐
+│ Conversation List        │ Chat Surface                             │ Context Panel           │
+│                          │                                          │                        │
+│ conversations inbox      │ header                                   │ participants           │
+│ search + filters         │ timeline                                 │ agent/session runtime   │
+│ selected chat row        │ composer                                 │ debug/details/actions   │
+└──────────────────────────┴──────────────────────────────────────────┴────────────────────────┘
+```
+
+### Conversation List UI
+
+The left rail is a lightweight conversation inbox. It should not look like the current agent/session tree.
+
+```text
+┌────────────────────────────────┐
+│ Conversations              +   │
+│ Search chats...                │
+│ [All] [Unread] [Watching]      │
+├────────────────────────────────┤
+│ ● Fix homepage layout      2m  │
+│   Code Agent · Check CSS...    │
+├────────────────────────────────┤
+│   Review copied changes   18m  │
+│   Design, Gandy +2             │
+├────────────────────────────────┤
+│   Plan next sprint        1h   │
+│   Product Agent · Watching     │
+└────────────────────────────────┘
+```
+
+Row anatomy:
+
+```text
+unread dot  title                              last activity time
+            participants/status · preview
+```
+
+Rules:
+
+- Default row height should be compact, about `56-64px`.
+- The first line is always the conversation title plus last activity time.
+- The second line is supporting metadata: participant summary, `Watching`, operational status, or a short preview.
+- Time means last activity time, not join time or creation time.
+- Participant names are metadata, never the primary title.
+- Do not show chat id, session count, join time, or full participant lists in the row.
+- Selected row uses a subtle active background and a left accent border.
+- Unread mention rows use the red dot and stronger title weight; do not rely on color alone.
+
+Filter scope for v1:
+
+- `All`
+- `Unread`
+- `Watching`
+
+Do not split the primary list by `Direct`, `Group`, `Agent`, or `Human`. Users scan by recency and attention, not by chat type.
+
+### Chat Surface UI
+
+The center panel should keep the current session chat structure:
+
+```text
+┌────────────────────────────────────────────────────────────┐
+│ Fix homepage layout                         +  more        │
+│ Code Agent, Design Agent, Gandy · 2 active agents           │
+├────────────────────────────────────────────────────────────┤
+│ timeline                                                    │
+│                                                            │
+│ Gandy        10:24                                          │
+│ Please review the homepage layout                          │
+│                                                            │
+│ Code Agent   10:25                                          │
+│ thinking...                                                 │
+│ using read_file(...)                                        │
+│                                                            │
+│ Code Agent   10:26                                          │
+│ The layout issue is in ...                                  │
+├────────────────────────────────────────────────────────────┤
+│ Message this chat...                         attach  Send  │
+└────────────────────────────────────────────────────────────┘
+```
+
+What to reuse from the current session chat:
+
+- header, timeline, and bottom composer structure;
+- sender/avatar/time/message rows;
+- lightweight `thinking`, `using tool`, streaming assistant text, and error rows;
+- attachment handling, mention autocomplete, keyboard send, and inline send errors;
+- inline rename for `chat.topic`.
+
+What to change:
+
+- Header title is the conversation title, not the primary agent name.
+- Header subtitle is participants and high-level activity, not debug/session facts.
+- Runtime state, session count, full chat id, suspend, and terminate controls move to the context panel or overflow menu.
+- The route should render from `chatId`; `agentId` is derived from participants and active sessions when needed.
+- Completed tool/session details should stay collapsed so the timeline remains a collaboration surface, not a log viewer.
+
+### Watching Chat UI
+
+Watching chats are readable but not directly writable until the user joins.
+
+```text
+┌────────────────────────────────────────────────────────────┐
+│ Plan next sprint                            Watching       │
+│ Product Agent · You are watching because you manage it      │
+├────────────────────────────────────────────────────────────┤
+│ timeline                                                    │
+├────────────────────────────────────────────────────────────┤
+│ [ Join to reply ]                                           │
+└────────────────────────────────────────────────────────────┘
+```
+
+Rules:
+
+- Opening a watching chat never auto-joins the user.
+- The composer is replaced by a single `Join to reply` action.
+- `Join to reply` upgrades the watcher row to a speaking member row.
+- Watching is a neutral state, not an error state.
+
 ## New Chat Flow
 
 ```mermaid
