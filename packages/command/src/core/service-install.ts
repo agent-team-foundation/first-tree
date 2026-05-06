@@ -22,6 +22,13 @@ function runCapture(program: string, args: string[], timeoutMs: number): ShellRe
     stdio: ["ignore", "pipe", "pipe"],
   });
   if (res.status === 0) return { ok: true };
+  // spawnSync returns status === null + signal === 'SIGTERM' on timeout.
+  // Without this branch every timed-out launchctl/systemctl call surfaces
+  // as "exit unknown", which is the most likely failure mode under load
+  // (heavy WS connection counts make stop/restart take 30-45s).
+  if (res.signal) {
+    return { ok: false, stderr: `${program} timed out after ${timeoutMs}ms (signal=${res.signal})`, code: null };
+  }
   return {
     ok: false,
     stderr: (res.stderr ?? "").trim(),
@@ -37,6 +44,9 @@ function runCaptureOut(program: string, args: string[], timeoutMs: number): Shel
     stdio: ["ignore", "pipe", "pipe"],
   });
   if (res.status === 0) return { ok: true, stdout: (res.stdout ?? "").trim() };
+  if (res.signal) {
+    return { ok: false, stderr: `${program} timed out after ${timeoutMs}ms (signal=${res.signal})`, code: null };
+  }
   return { ok: false, stderr: (res.stderr ?? "").trim(), code: res.status };
 }
 
@@ -86,7 +96,15 @@ export type ServiceOpResult = { ok: true; detail?: string } | { ok: false; reaso
 export function deriveServiceSuffix(homeBasename: string): string {
   if (!homeBasename) return "";
   if (homeBasename === "hub") return "";
-  if (homeBasename.startsWith("hub-")) return homeBasename.slice("hub-".length);
+  if (homeBasename.startsWith("hub-")) {
+    const stripped = homeBasename.slice("hub-".length);
+    // Edge: a literal trailing "-" (basename === "hub-") would strip to ""
+    // and silently fall back to the prod unit name. The whole point of the
+    // suffix is that a non-default home gets its own unit, so degrade to
+    // using the basename verbatim instead — yields `…-hub-.service`, ugly
+    // but unambiguous.
+    return stripped || homeBasename;
+  }
   return homeBasename;
 }
 
@@ -302,7 +320,14 @@ function installLaunchd(): ServiceInfo {
 
   // Step 2: poll until launchd has actually evicted the label. Without this,
   // `bootstrap` collides with the still-unloading registration.
-  waitForLabelEvicted(target, LAUNCHD_LABEL, 10_000);
+  // The 10s budget is the worst case under heavy WS load; if we fall
+  // through without eviction, surface a hint so the operator knows the
+  // bootstrap retry below is doing real work (rather than papering over
+  // a different failure).
+  const evicted = waitForLabelEvicted(target, LAUNCHD_LABEL, 10_000);
+  if (!evicted) {
+    print.line("    warning: launchctl bootout still settling after 10s; bootstrap may need a retry\n");
+  }
 
   // Step 3: bootstrap with one retry. If the poll missed a late eviction,
   // a 1s wait + retry recovers instead of exploding with a cryptic error.

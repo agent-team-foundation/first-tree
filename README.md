@@ -69,7 +69,7 @@ The interactive setup will guide you through PostgreSQL provisioning, Context Tr
 ```bash
 first-tree-hub server doctor   # Check server environment readiness
 first-tree-hub client doctor   # Check client environment readiness
-first-tree-hub status          # Server health + configured agents
+first-tree-hub client status   # CLI version, service state, hub, agents
 ```
 
 ## Documentation

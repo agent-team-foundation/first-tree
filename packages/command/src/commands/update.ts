@@ -5,6 +5,7 @@ import {
   detectInstallMode,
   fetchLatestVersion,
   getClientServiceStatus,
+  installClientService,
   installGlobalLatest,
   isServiceSupported,
   PACKAGE_NAME,
@@ -93,6 +94,27 @@ export function registerUpdateCommand(program: Command): void {
         print.line("  Run `first-tree-hub client connect <url>` to set one up.\n\n");
         return;
       }
+
+      // Refresh the unit file from the new build BEFORE restarting. Why this
+      // matters: installations that predate this release ship with
+      // `Restart=always` baked into their unit, which makes `client stop`
+      // unable to terminate the service. Just swapping the npm package would
+      // leave that broken unit in place — the operator wouldn't pick up the
+      // `Restart=on-failure` semantics until they manually re-ran
+      // `client connect`. installClientService is idempotent (bootout +
+      // bootstrap on launchd, daemon-reload + enable --now on systemd), so
+      // running it on every update gives existing machines a free unit
+      // refresh on top of the binary swap. Best-effort: a unit-rewrite
+      // failure logs but doesn't block the binary upgrade — we still attempt
+      // the restart against the old unit.
+      try {
+        installClientService();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        print.line(`  warning: unit-file refresh failed: ${msg}\n`);
+        print.line("  Continuing with restart against the old unit.\n");
+      }
+
       if (svc.state === "inactive") {
         print.line("  Service is stopped — leaving it stopped. Use `client start` to bring it up.\n\n");
         return;

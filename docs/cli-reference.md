@@ -25,8 +25,9 @@ first-tree-hub
 │   └── admin:create [-u <username>] [-p <password>]
 ├── client
 │   ├── connect <server-url> [--token <token>] [--no-service]   (legacy/self-host)
-│   ├── start [--no-interactive]
+│   ├── start [--no-interactive] [--foreground]
 │   ├── stop
+│   ├── restart
 │   ├── status
 │   └── doctor
 ├── agent
@@ -52,7 +53,7 @@ first-tree-hub
 │   [--id] [--type] [--display-name] [--role] [--domains]
 │   [--delegate-mention]
 │   [--assistant] [--server] [--feishu-bot-app-id] [--feishu-bot-app-secret]
-└── status
+└── update [--check] [--no-restart]
 ```
 
 ## connect
@@ -111,13 +112,16 @@ Client runtime — connects all configured agents to the server.
 # "Connect a machine" dialog, which includes a one-time token)
 first-tree-hub client connect <server-url> --token <token>
 
-# Start all configured agents (uses saved credentials)
-first-tree-hub client start
+# Service lifecycle (delegates to systemd / launchd when a service is installed)
+first-tree-hub client start          # Start the background service
+first-tree-hub client start --foreground   # Run inline instead (debug / no-service users)
+first-tree-hub client stop           # Stop the service (preserves auto-start on next login)
+first-tree-hub client restart        # Restart the service
 
 # Check environment readiness (includes background-service state)
 first-tree-hub client doctor
 
-# Show locally configured agents
+# One-screen overview: CLI version, service state, hub URL, configured agents
 first-tree-hub client status
 
 # Transfer ownership of this machine's client.yaml to the currently
@@ -148,15 +152,18 @@ mandatory so a typo doesn't strip the previous owner's machine. See
 
 ### Manual service operations
 
-The CLI does not expose subcommands for installing/uninstalling/tailing the background service — those concerns are folded into `client connect` (install) and `client doctor` (status), and the rest is handled at the OS level.
+`client start / stop / restart` cover day-to-day service control. Install happens during `client connect`; uninstall is a manual OS-level step (see *Decommission* below). `client status` and `client doctor` report state.
 
 **Tail logs:**
 
 ```bash
-# Live tail (current log file)
+# Linux: journald is authoritative under the new unit (StandardOutput=journal)
+journalctl --user -u first-tree-hub-client -f
+
+# Or read the rotating NDJSON file the client itself writes:
 tail -f ~/.first-tree/hub/logs/client.log
 
-# Search across rotated files (.log + .log.1 ... .log.7, max 10 MB each)
+# Rotated files: .log + .log.1 ... .log.7, max 10 MB each
 ls -lt ~/.first-tree/hub/logs/
 ```
 
@@ -290,6 +297,18 @@ first-tree-hub client start
 ```
 
 See [onboarding-guide.md](onboarding-guide.md) for the full walkthrough.
+
+## update
+
+Self-update for the CLI. Queries the npm registry for the latest published version, installs it globally, refreshes the systemd unit / launchd plist on top of the new bits, then restarts the client service.
+
+```bash
+first-tree-hub update              # Install latest + refresh unit + restart service
+first-tree-hub update --check      # Only check; print "update available" or "already on latest"
+first-tree-hub update --no-restart # Install latest + refresh unit, but leave the running service alone
+```
+
+`--no-restart` is for staged rollouts where the operator wants to time the cutover. Refusing to run from a source checkout (anywhere with a `.git` ancestor) is intentional — keeps a dev build from accidentally `npm i -g`-overwriting a prod global.
 
 ## Environment Variables
 

@@ -154,10 +154,7 @@ function escapeForRegex(s: string): string {
  * Artifactory mirrors.
  */
 export function fetchLatestVersion(timeoutMs = 10_000): { ok: true; version: string } | { ok: false; reason: string } {
-  const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
-  const sibling = join(dirname(process.execPath), npmCmd);
-  const program = existsSync(sibling) ? sibling : npmCmd;
-  const res = spawnSync(program, ["view", PACKAGE_NAME, "version"], {
+  const res = spawnSync(resolveNpmCommand(), ["view", PACKAGE_NAME, "version"], {
     encoding: "utf-8",
     timeout: timeoutMs,
     stdio: ["ignore", "pipe", "pipe"],

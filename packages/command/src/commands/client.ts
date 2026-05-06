@@ -109,6 +109,18 @@ export function registerClientCommands(program: Command): void {
             print.line(`  Logs:  ${after.logDir}${journalHint}\n\n`);
             return;
           }
+          if (svc.state === "unknown") {
+            // Defensive: launchctl/systemctl probe came back with shape we
+            // don't recognise. Falling through to the inline path here would
+            // race a still-supervised process for the same client.id, which
+            // is exactly the failure mode this whole PR is trying to
+            // eliminate. Refuse and let the operator inspect.
+            print.line(
+              `\n  Service state could not be determined (${svc.platform}${svc.detail ? `: ${svc.detail}` : ""}).\n`,
+            );
+            print.line("  Inspect with `first-tree-hub client doctor`, or pass `--foreground` to bypass.\n\n");
+            process.exit(1);
+          }
           // state === "not-installed" → fall through to inline run.
         }
 

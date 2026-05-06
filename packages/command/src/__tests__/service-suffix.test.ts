@@ -33,4 +33,12 @@ describe("deriveServiceSuffix", () => {
     // `first-tree-hub-client-.service`.
     expect(deriveServiceSuffix("")).toBe("");
   });
+
+  it("does not silently collapse to prod when the basename is 'hub-' (trailing dash)", () => {
+    // Stripping the "hub-" prefix from "hub-" yields "" — without the
+    // explicit fallback this would land in the same branch as the canonical
+    // "hub" basename and the dev install would collide with prod's unit.
+    // Pinned: degrade to the verbatim basename instead.
+    expect(deriveServiceSuffix("hub-")).toBe("hub-");
+  });
 });
