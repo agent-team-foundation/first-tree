@@ -11,9 +11,9 @@ import { UserMenu } from "./user-menu.js";
 
 const navTabs = [
   { to: "/", label: "Workspace", end: true, kbd: "⌘1" },
-  { to: "/agents", label: "Agents", end: false, kbd: "⌘2" },
-  { to: "/clients", label: "Computers", end: false, kbd: "⌘3" },
-  { to: "/integrations", label: "Integrations", end: false, kbd: "⌘4" },
+  { to: "/context", label: "Context", end: false, kbd: "⌘2" },
+  { to: "/team", label: "Team", end: false, kbd: "⌘3" },
+  { to: "/settings", label: "Settings", end: false, kbd: "⌘4" },
 ];
 
 export function Layout() {

@@ -1,5 +1,5 @@
 import type { OrgBrief } from "@agent-team-foundation/first-tree-hub-shared";
-import { Check, LogOut, Plus, UserPlus, Users } from "lucide-react";
+import { Check, LogOut, Plus, UserPlus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { api } from "../api/client.js";
@@ -161,25 +161,6 @@ export function UserMenu() {
                     ))}
                   </div>
                 )}
-              </div>
-            )}
-
-            {/* Current-team actions */}
-            {currentRole === "admin" && (
-              <div className="border-b py-1" style={{ borderColor: "var(--border)" }}>
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setOpen(false);
-                    navigate("/team");
-                  }}
-                  className="flex w-full items-center gap-2 px-4 py-1.5 text-left text-body hover:bg-accent transition-colors"
-                  style={{ color: "var(--fg)" }}
-                >
-                  <Users className="h-3.5 w-3.5" />
-                  <span>Manage team</span>
-                </button>
               </div>
             )}
 

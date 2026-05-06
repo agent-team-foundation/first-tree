@@ -7,11 +7,13 @@ import { PulseProvider } from "./hooks/pulse-context.js";
 import { AgentDetailPage } from "./pages/agent-detail.js";
 import { AgentsPage } from "./pages/agents.js";
 import { ClientsPage } from "./pages/clients.js";
+import { ContextPage } from "./pages/context.js";
 import { IntegrationsPage } from "./pages/integrations.js";
 import { InviteAcceptPage } from "./pages/invite-accept.js";
 import { LoginPage } from "./pages/login.js";
 import { MembershipPage } from "./pages/membership.js";
 import { OAuthCompletePage } from "./pages/oauth-complete.js";
+import { SettingsPage } from "./pages/settings.js";
 import { TeamPage } from "./pages/team.js";
 import { WorkspacePage } from "./pages/workspace/index.js";
 
@@ -48,13 +50,14 @@ export function App() {
                 }
               >
                 <Route index element={<WorkspacePage />} />
+                <Route path="context" element={<ContextPage />} />
                 <Route path="agents" element={<AgentsPage />} />
                 <Route path="agents/:uuid" element={<AgentDetailPage />} />
                 <Route path="clients" element={<ClientsPage />} />
                 <Route path="integrations" element={<IntegrationsPage />} />
                 <Route path="membership" element={<MembershipPage />} />
                 <Route path="team" element={<TeamPage />} />
-                <Route path="settings" element={<SettingsRedirect />} />
+                <Route path="settings" element={<SettingsPage />} />
                 <Route path="admin" element={<AdminRedirect />} />
               </Route>
             </Route>
@@ -63,11 +66,6 @@ export function App() {
       </AuthProvider>
     </QueryClientProvider>
   );
-}
-
-function SettingsRedirect() {
-  const location = useLocation();
-  return <Navigate to={`/integrations${location.search}${location.hash}`} replace />;
 }
 
 function AdminRedirect() {
