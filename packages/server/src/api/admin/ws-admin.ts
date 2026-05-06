@@ -1,5 +1,5 @@
 import { AGENT_STATUSES, AGENT_VISIBILITY } from "@agent-team-foundation/first-tree-hub-shared";
-import { and, eq, ne, or } from "drizzle-orm";
+import { and, eq, ne, or, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { jwtVerify } from "jose";
 import type { WebSocket } from "ws";
@@ -19,6 +19,13 @@ import type { Notifier } from "../../services/notifier.js";
 type SocketMeta = {
   organizationId: string;
   memberId: string;
+  /**
+   * The 1:1 human agent for the (user, org) of this socket. Used by the
+   * chat-first workspace `chat:message` push: a chat audience is expressed
+   * in agent uuids (chat_participants + chat_subscriptions), so we match
+   * each socket against that set by `humanAgentId`.
+   */
+  humanAgentId: string;
   visibleAgentIds: Set<string>;
 };
 
@@ -86,6 +93,82 @@ export function adminWsRoutes(notifier: Notifier, jwtSecret: string) {
     broadcastOrgScoped({ type: "session:state", ...payload });
   });
 
+  // Chat-first workspace: `chat:message` is per-chat, not per-org. We resolve
+  // the audience as `chat_participants ∪ chat_subscriptions` (both keyed by
+  // human agent uuid for our purposes) and dispatch only to sockets whose
+  // `humanAgentId` is in that set. Best-effort — DB errors / dropped frames
+  // are tolerated by the web client which falls back to refetch on reconnect.
+  notifier.onChatMessage(({ chatId }) => {
+    void dispatchChatMessage(chatId);
+  });
+
+  /**
+   * Per-chat audience cache. Without this, every chat message issues one
+   * audience-resolution query — at 100 msg/s that's 100 round-trips/s for a
+   * payload that rarely changes (participant joins/leaves are bursty).
+   * 5-second TTL keeps the cache fresh enough for product UX (a newly added
+   * member sees "live" updates within 5s of the next message after they
+   * joined; their initial /me/chats refetch covers the gap).
+   */
+  const AUDIENCE_TTL_MS = 5_000;
+  const audienceCache = new Map<string, { audience: Set<string>; expiresAt: number }>();
+
+  async function resolveAudience(chatId: string): Promise<Set<string> | null> {
+    const now = Date.now();
+    const cached = audienceCache.get(chatId);
+    if (cached && cached.expiresAt > now) return cached.audience;
+    try {
+      const rows = await getDbForChatLookup().execute<{ agent_id: string }>(sql`
+        SELECT agent_id FROM chat_participants WHERE chat_id = ${chatId}
+        UNION
+        SELECT agent_id FROM chat_subscriptions WHERE chat_id = ${chatId}
+      `);
+      const audience = new Set(rows.map((r) => r.agent_id));
+      audienceCache.set(chatId, { audience, expiresAt: now + AUDIENCE_TTL_MS });
+      // Opportunistic cleanup so the cache doesn't grow unbounded for
+      // long-lived processes that touch many chats.
+      if (audienceCache.size > 1024) {
+        for (const [k, v] of audienceCache) {
+          if (v.expiresAt <= now) audienceCache.delete(k);
+        }
+      }
+      return audience;
+    } catch {
+      return null;
+    }
+  }
+
+  async function dispatchChatMessage(chatId: string): Promise<void> {
+    if (adminSockets.size === 0) return;
+    const audience = await resolveAudience(chatId);
+    if (!audience || audience.size === 0) return;
+
+    const frame = JSON.stringify({ type: "chat:message", chatId });
+    for (const [ws, meta] of adminSockets) {
+      if (ws.readyState !== 1) continue;
+      if (!audience.has(meta.humanAgentId)) continue;
+      try {
+        ws.send(frame);
+      } catch {
+        // socket-level errors are surfaced via close handler
+      }
+    }
+  }
+
+  // The DB handle is captured per-request below; keep a back-reference so the
+  // notifier callback (which has no fastify request scope) can run a small
+  // lookup. Set on first WS upgrade and reused thereafter.
+  let cachedDbForChatLookup: Database | null = null;
+  function getDbForChatLookup(): Database {
+    if (!cachedDbForChatLookup) {
+      throw new Error("admin WS: db not initialised yet");
+    }
+    return cachedDbForChatLookup;
+  }
+  function rememberDb(db: Database): void {
+    if (!cachedDbForChatLookup) cachedDbForChatLookup = db;
+  }
+
   return async (app: FastifyInstance): Promise<void> => {
     // See ws-client.ts for why config.otel is disabled on WS upgrade routes.
     app.get("/admin", { websocket: true, config: { otel: false } }, async (socket, request) => {
@@ -129,7 +212,7 @@ export function adminWsRoutes(notifier: Notifier, jwtSecret: string) {
       // no longer an active member of the org. Must run on every handshake;
       // a JWT for a revoked membership cannot keep watching the dashboard.
       const [memberRow] = await app.db
-        .select({ id: members.id, role: members.role })
+        .select({ id: members.id, role: members.role, agentId: members.agentId })
         .from(members)
         .where(
           and(eq(members.userId, userId), eq(members.organizationId, organizationId), eq(members.status, "active")),
@@ -145,12 +228,25 @@ export function adminWsRoutes(notifier: Notifier, jwtSecret: string) {
 
       setWsConnectionAttrs(socket, { organizationId, memberId });
 
+      // Cache the db handle for the chat-message notifier callback (which has
+      // no fastify scope). Idempotent.
+      rememberDb(app.db);
+
       // Visibility cached at connect time. New agents added mid-session won't
       // appear in pulses until the dashboard reconnects — acceptable trade-off
       // vs running this query per pulse tick.
       const visibleAgentIds = await loadVisibleAgentIds(app.db, organizationId, memberId);
 
-      adminSockets.set(socket, { organizationId, memberId, visibleAgentIds });
+      // Resolve the (user, org) human agent uuid. members.agentId is unique
+      // and non-null after migration 0024.
+      const [humanAgentRow] = await app.db
+        .select({ uuid: agents.uuid })
+        .from(agents)
+        .where(eq(agents.uuid, memberRow.agentId))
+        .limit(1);
+      const humanAgentId = humanAgentRow?.uuid ?? memberRow.agentId;
+
+      adminSockets.set(socket, { organizationId, memberId, humanAgentId, visibleAgentIds });
       socket.send(JSON.stringify({ type: "admin:connected" }));
 
       socket.on("close", (code) => {

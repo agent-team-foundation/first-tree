@@ -15,6 +15,7 @@ import { BadRequestError, ForbiddenError, NotFoundError } from "../errors.js";
 import { createLogger, messageAttrs, withSpan } from "../observability/index.js";
 import { upsertSessionState } from "./activity.js";
 import { findOrCreateDirectChat } from "./chat.js";
+import { applyAfterFanOut, fireChatMessageKick } from "./chat-projection.js";
 
 const log = createLogger("message");
 
@@ -267,6 +268,21 @@ async function sendMessageInner(
     await tx.update(chats).set({ updatedAt: new Date() }).where(eq(chats.id, chatId));
 
     if (!msg) throw new Error("Unexpected: INSERT RETURNING produced no row");
+
+    // 6. Chat-first workspace projection (append-only, post-fan-out).
+    //    Updates chats.last_message_*, increments speaker + watcher mention
+    //    counters. New code; no existing path is modified — see
+    //    docs/chat-first-workspace-product-design.md "Risk Constraints".
+    const previewText = typeof outboundContent === "string" ? outboundContent.trim() : "";
+    await applyAfterFanOut(tx, {
+      chatId,
+      messageId: msg.id,
+      senderId,
+      mentionedAgentIds: mergedMentions,
+      contentPreview: previewText,
+      messageCreatedAt: msg.createdAt,
+    });
+
     return {
       message: msg,
       recipients,
@@ -298,6 +314,11 @@ async function sendMessageInner(
       );
     }
   }
+
+  // Best-effort chat-first workspace kick — speakers also get the existing
+  // inbox NOTIFY; this is what reaches watcher rows (no inbox entry → no
+  // wake-up otherwise). Failure is dropped; web reconnect refetches.
+  fireChatMessageKick(chatId, txResult.message.id);
 
   return { message: txResult.message, recipients: txResult.recipients };
 }

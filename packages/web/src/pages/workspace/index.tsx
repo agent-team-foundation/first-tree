@@ -1,82 +1,57 @@
-import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect } from "react";
 import { useSearchParams } from "react-router";
-import { listAgentSessions } from "../../api/sessions.js";
 import { useAdminWs } from "../../hooks/use-admin-ws.js";
 import { CenterPanel } from "./center/index.js";
-import { ContextPanel } from "./context/index.js";
-import { AgentRoster } from "./roster/index.js";
+import { ConversationList, DRAFT_CHAT_ID } from "./conversations/index.js";
 
+/**
+ * Workspace shell — chat-first. The left rail is `ConversationList`; the
+ * center routes by `?c=<chatId>` (or the special `?c=draft` marker for
+ * an inline new-chat draft).
+ *
+ * Legacy URL compat:
+ *   - `?a=<agentId>&c=<chatId>` redirects to `?c=<chatId>` (a is ignored).
+ *   - `?a=<agentId>` (no chat) clears to `/` — agents are no longer the
+ *     primary navigation key.
+ */
 export function WorkspacePage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const selectedAgentId = searchParams.get("a");
   const selectedChatId = searchParams.get("c");
+  const legacyAgentId = searchParams.get("a");
 
   useAdminWs();
 
-  const selectAgent = useCallback(
-    (agentId: string | null) => {
-      if (!agentId) {
-        setSearchParams({});
-      } else {
-        setSearchParams({ a: agentId });
-      }
-    },
-    [setSearchParams],
-  );
+  // Legacy redirects: chat-first workspace navigates by `?c=` only.
+  useEffect(() => {
+    if (legacyAgentId && selectedChatId) {
+      // `?a=&c=` → `?c=` — drop the agent hint, keep the chat.
+      setSearchParams({ c: selectedChatId }, { replace: true });
+      return;
+    }
+    if (legacyAgentId && !selectedChatId) {
+      // `?a=` alone → `/` — agents aren't navigation targets.
+      setSearchParams({}, { replace: true });
+    }
+  }, [legacyAgentId, selectedChatId, setSearchParams]);
 
   const selectChat = useCallback(
-    (agentId: string, chatId: string) => {
-      setSearchParams({ a: agentId, c: chatId });
+    (chatId: string) => {
+      setSearchParams({ c: chatId });
     },
     [setSearchParams],
   );
 
-  const { data: agentSessions } = useQuery({
-    queryKey: ["agent-sessions", selectedAgentId],
-    queryFn: () => (selectedAgentId ? listAgentSessions(selectedAgentId) : Promise.resolve([])),
-    enabled: !!selectedAgentId && !selectedChatId,
-  });
-
-  // Auto-redirect: when an agent is selected but no chat, jump to the most recent
-  // non-terminated chat. Server already hides `evicted` from this listing; the
-  // local filter is a belt-and-suspenders guard during optimistic-update windows.
-  useEffect(() => {
-    if (!selectedAgentId || selectedChatId) return;
-    if (!agentSessions || agentSessions.length === 0) return;
-    const latest = [...agentSessions]
-      .filter((s) => s.state !== "evicted")
-      .sort((a, b) => (b.lastActivityAt ?? "").localeCompare(a.lastActivityAt ?? ""))[0];
-    if (latest) {
-      setSearchParams({ a: selectedAgentId, c: latest.chatId }, { replace: true });
-    }
-  }, [selectedAgentId, selectedChatId, agentSessions, setSearchParams]);
+  const openDraft = useCallback(() => {
+    setSearchParams({ c: DRAFT_CHAT_ID });
+  }, [setSearchParams]);
 
   return (
     <div className="flex flex-1 overflow-hidden">
-      <AgentRoster
-        selectedAgentId={selectedAgentId}
-        selectedChatId={selectedChatId}
-        onSelectAgent={selectAgent}
-        onSelectChat={selectChat}
-      />
+      <ConversationList selectedChatId={selectedChatId} onSelectChat={selectChat} onNewChat={openDraft} />
 
       <main className="flex-1 flex flex-col overflow-hidden min-w-0" style={{ background: "var(--bg)" }}>
-        <CenterPanel selectedAgentId={selectedAgentId} selectedChatId={selectedChatId} />
+        <CenterPanel selectedChatId={selectedChatId} onSelectChat={selectChat} />
       </main>
-
-      {selectedAgentId && (
-        <aside
-          className="shrink-0 flex flex-col overflow-hidden"
-          style={{
-            width: 290,
-            borderLeft: "var(--hairline) solid var(--border)",
-            background: "var(--bg-raised)",
-          }}
-        >
-          <ContextPanel selectedAgentId={selectedAgentId} selectedChatId={selectedChatId} />
-        </aside>
-      )}
     </div>
   );
 }
