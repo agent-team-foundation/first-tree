@@ -81,10 +81,41 @@ export const serverConfigSchema = defineConfig({
   cors: optional({
     origin: field(z.string(), { env: "FIRST_TREE_HUB_CORS_ORIGIN" }),
   }),
+  /**
+   * Trust upstream proxy headers (e.g. `x-forwarded-for`) for `req.ip`. Required
+   * in production where Hub sits behind Cloudflare / a reverse proxy — otherwise
+   * `req.ip` resolves to the proxy and every IP-keyed rate-limit key collapses
+   * to the same value. Default false; safe for local development.
+   */
+  trustProxy: field(z.boolean().default(false), { env: "FIRST_TREE_HUB_TRUST_PROXY" }),
   rateLimit: optional({
+    /** Default cap applied to all routes that don't override; overridden per-route below. */
     max: field(z.number().default(100), { env: "FIRST_TREE_HUB_RATE_LIMIT_MAX" }),
+    /** Cap on `/auth/login`, `/auth/connect-token`, and other token-issuing paths. */
     loginMax: field(z.number().default(5), { env: "FIRST_TREE_HUB_RATE_LIMIT_LOGIN_MAX" }),
+    /** Cap on `/webhooks/github`. */
     webhookMax: field(z.number().default(60), { env: "FIRST_TREE_HUB_RATE_LIMIT_WEBHOOK_MAX" }),
+    /**
+     * Per-agent cap on outbound message writes (`POST /agent/chats/:chatId/messages`
+     * and `POST /agent/agents/:name/messages`). Tighter than the global default
+     * because automated agents are the common loop-failure mode.
+     */
+    agentMessageMax: field(z.number().default(30), { env: "FIRST_TREE_HUB_RATE_LIMIT_AGENT_MESSAGE_MAX" }),
+  }),
+  ws: optional({
+    /**
+     * Maximum payload size (bytes) for a single WebSocket frame on the
+     * client/admin sockets. Protects the server against single-frame OOM via a
+     * malicious or buggy client. Default 256 KiB — large enough to fit
+     * legitimate `session:event` frames whose `tool_call.payload.args` may
+     * carry full file contents (Claude Code's Write/Edit `new_string`, Bash
+     * heredoc payloads, MCP tools forwarding diffs/AST), while still bounding
+     * worst-case memory per frame. Image content travels via HTTP, not WS.
+     * Real OOM attackers send MB+, not KiB — this is a guardrail, not a DoS
+     * shield. Tighten or loosen via `FIRST_TREE_HUB_WS_MAX_PAYLOAD` once we
+     * have production P99 frame-size data.
+     */
+    maxPayload: field(z.number().int().min(1024).default(262_144), { env: "FIRST_TREE_HUB_WS_MAX_PAYLOAD" }),
   }),
   inbox: optional({
     /**
