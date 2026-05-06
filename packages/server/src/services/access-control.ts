@@ -42,7 +42,32 @@ export type MemberScope = {
   role: string;
 };
 
-/** Extract MemberScope from an authenticated request. Single definition, used by all routes. */
+/**
+ * Extract MemberScope from an authenticated request. Single definition, used by all routes.
+ *
+ * **Org-scoped admin routes must NOT use the result of this directly for
+ * data filtering.** The returned scope is keyed to the JWT default member,
+ * which is whatever org `auth.login` happened to pick at issuance time —
+ * not the org the user has selected in the dropdown (`localStorage.
+ * selectedOrganizationId`). Pair every `memberScope(request)` in
+ * `packages/server/src/api/admin/*.ts` with one of:
+ *
+ *   - `resolveAdminScope(db, request, baseScope, request.query.organizationId)`
+ *     for routes that accept `?organizationId=` and want a uniformly rotated
+ *     scope (every field keyed to the target org).
+ *   - `requireMemberInOrg(db, request, orgId)` when only the membership
+ *     `(memberId, role, agentId)` is needed for a specific org (e.g. the
+ *     creator HUMAN in chat-create).
+ *   - `assertCanManage(db, scope, agentUuid)` / `assertAgentVisible(db, scope, agentUuid)`
+ *     for routes operating on a single agent — both already rebind authority
+ *     to the agent's own org.
+ *
+ * `__tests__/admin-routes-org-scope-invariant.test.ts` pins this rule via a
+ * grep over the admin route directory. If you intentionally land an admin
+ * read/write route that targets only the JWT default org (no
+ * cross-org switch awareness), update the whitelist there with a comment
+ * explaining why.
+ */
 export function memberScope(request: FastifyRequest): MemberScope {
   const m = requireMember(request);
   return {
@@ -273,9 +298,18 @@ export async function resolveAdminScope(
     return scope;
   }
   const probe = await requireMemberInOrg(db, request, requestedOrganizationId);
+  // Rotate every per-org field together. Leaving `humanAgentId` at the JWT
+  // default would yield a half-rotated scope: `(memberId, organizationId,
+  // role)` keyed to the target org, but `humanAgentId` still pointing at the
+  // caller's HUMAN agent in their JWT default org. No current consumer of
+  // `resolveAdminScope` reads `humanAgentId`, but the next admin route that
+  // adopts this helper and happens to use it (e.g. assertChatAccess-style
+  // "highlight my chats" filter) would silently reproduce the cross-org bug
+  // class that #220/#222 are cleaning up.
   return {
     ...scope,
     memberId: probe.memberId,
+    humanAgentId: probe.agentId,
     organizationId: requestedOrganizationId,
     role: probe.role,
   };
