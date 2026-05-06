@@ -3,9 +3,11 @@ import { join } from "node:path";
 import type { MessageFormat } from "@agent-team-foundation/first-tree-hub-shared";
 import {
   agentConfigSchema,
+  clientConfigSchema,
   DEFAULT_CONFIG_DIR,
   DEFAULT_DATA_DIR,
   loadAgents,
+  resolveConfigReadonly,
   setConfigValue,
 } from "@agent-team-foundation/first-tree-hub-shared/config";
 import { cleanWorkspaces, FirstTreeHubSDK, SdkError, SessionRegistry } from "@first-tree-hub/client";
@@ -13,10 +15,9 @@ import { confirm } from "@inquirer/prompts";
 import type { Command } from "commander";
 import { fail, success } from "../cli/output.js";
 import { resolveReplyToFromEnv } from "../core/agent-messaging.js";
-import { findStaleAliases, removeLocalAgent } from "../core/agent-prune.js";
 import { ensureFreshAccessToken, resolveServerUrl, saveAgentConfig } from "../core/bootstrap.js";
 import { bindFeishuBot, bindFeishuUser } from "../core/feishu.js";
-import { promptAddAgent } from "../core/index.js";
+import { findStaleAliases, formatStaleReason, promptAddAgent, removeLocalAgent } from "../core/index.js";
 import { print } from "../core/output.js";
 import { registerAgentConfigCommands } from "./agent-config.js";
 
@@ -142,6 +143,24 @@ async function resolveAgent(serverUrl: string, adminToken: string, agentName: st
   return found;
 }
 
+/**
+ * Read the persisted `client.id` from `client.yaml`. Required by `agent
+ * prune` to filter the user-scoped `listMyAgents` response down to "what
+ * actually binds on THIS machine". `fail()` instead of throwing so the
+ * "no client.yaml — run client connect first" path renders as a clean
+ * CLI error rather than a stack trace.
+ */
+function readClientId(): string {
+  const cfg = resolveConfigReadonly({ schema: clientConfigSchema, role: "client" }) as {
+    client?: { id?: unknown };
+  };
+  const id = cfg.client?.id;
+  if (typeof id !== "string" || id.length === 0) {
+    fail("MISSING_CLIENT_ID", "No client.id found in client.yaml. Run `first-tree-hub connect <token>` first.", 2);
+  }
+  return id;
+}
+
 // ── Main registration ─────────────────────────────────────────────────
 
 export function registerAgentCommands(program: Command): void {
@@ -207,16 +226,18 @@ export function registerAgentCommands(program: Command): void {
   // typo `agent add` left a junk dir.
   agent
     .command("prune")
-    .description("Remove local agent aliases that are no longer pinned to this client (or that you don't own)")
+    .description("Remove local agent aliases that won't bind on this client (unowned, pinned elsewhere, or unreadable)")
     .option("--yes", "Skip the interactive confirmation prompt")
     .option("--dry-run", "Only list what would be removed; don't touch the filesystem")
     .option("--server <url>", "Hub server URL")
     .action(async (options: { yes?: boolean; dryRun?: boolean; server?: string }) => {
       try {
         const serverUrl = resolveServerUrl(options.server);
+        const clientId = readClientId();
+        const sdk = new FirstTreeHubSDK({ serverUrl, getAccessToken: () => ensureFreshAccessToken() });
         const stale = await findStaleAliases({
-          serverUrl,
-          getAccessToken: () => ensureFreshAccessToken(),
+          clientId,
+          listPinnedAgents: () => sdk.listMyAgents(),
         });
 
         if (stale.length === 0) {
@@ -226,7 +247,8 @@ export function registerAgentCommands(program: Command): void {
 
         print.line(`\n  ${stale.length} stale ${stale.length === 1 ? "alias" : "aliases"}:\n\n`);
         for (const s of stale) {
-          print.line(`    - ${s.name.padEnd(30)} (agentId: ${s.agentId})\n`);
+          const id = s.agentId ?? "—";
+          print.line(`    - ${s.name.padEnd(30)} ${id.padEnd(38)} ${formatStaleReason(s.reason)}\n`);
         }
         print.line("\n");
 
@@ -246,11 +268,24 @@ export function registerAgentCommands(program: Command): void {
           }
         }
 
+        // Per-alias try/catch so a single permission/lock error doesn't
+        // skip the rest of the cleanup. Failures are reported inline; the
+        // user can re-run prune to retry the failed entries.
+        let removed = 0;
+        let failed = 0;
         for (const s of stale) {
-          removeLocalAgent(s.name);
-          print.line(`  ✓ removed ${s.name}\n`);
+          try {
+            removeLocalAgent(s.name);
+            print.line(`  ✓ removed ${s.name}\n`);
+            removed++;
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            print.line(`  ✗ ${s.name} (${msg.slice(0, 80)})\n`);
+            failed++;
+          }
         }
-        print.line(`\n  ${stale.length} alias(es) pruned.\n\n`);
+        print.line(`\n  ${removed} pruned${failed > 0 ? `, ${failed} failed (re-run to retry)` : ""}.\n\n`);
+        if (failed > 0) process.exitCode = 1;
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         fail("PRUNE_ERROR", msg);

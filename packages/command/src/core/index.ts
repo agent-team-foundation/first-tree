@@ -5,8 +5,8 @@ export { createOwner, hasUser } from "./admin.js";
 // Agent messaging helpers
 export { resolveReplyToFromEnv } from "./agent-messaging.js";
 // Local agent alias hygiene (stale alias detection + deletion)
-export type { StaleAlias } from "./agent-prune.js";
-export { findStaleAliases, removeLocalAgent } from "./agent-prune.js";
+export type { PinnedAgent, StaleAlias, StaleAliasReason } from "./agent-prune.js";
+export { findStaleAliases, formatStaleReason, removeLocalAgent } from "./agent-prune.js";
 // Bootstrap / credentials
 export {
   ensureFreshAccessToken,

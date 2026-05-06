@@ -15,6 +15,7 @@ import {
   ClientOrgMismatchError,
   ClientUserMismatchError,
   configureClientLoggerForService,
+  FirstTreeHubSDK,
   probeCapabilities,
 } from "@first-tree-hub/client";
 import { confirm } from "@inquirer/prompts";
@@ -34,6 +35,7 @@ import {
   declineUpdate,
   ensureFreshAccessToken,
   findStaleAliases,
+  formatStaleReason,
   handleClientOrgMismatch,
   migrateLocalAgentDirs,
   printResults,
@@ -214,17 +216,26 @@ export function registerClientCommands(program: Command): void {
     .action(async () => {
       print.line("\n  First Tree Hub Client Doctor\n\n");
       // The "Agents" line cross-references local aliases against the
-      // server's pinned-agent set. Without a configured server URL we
-      // can't talk to anything; fall back to the legacy local-only count.
+      // server's pinned-agent set, filtered to THIS client.id (so the
+      // verdict matches what R-RUN will accept). Without a configured
+      // server URL we can't talk to anything; fall back to the legacy
+      // local-only count.
       let agentCheck: Awaited<ReturnType<typeof reconcileAgentConfigs>>;
       try {
         const serverUrl = resolveServerUrl();
+        const cfg = await initConfig({ schema: clientConfigSchema, role: "client" });
+        const sdk = new FirstTreeHubSDK({ serverUrl, getAccessToken: () => ensureFreshAccessToken() });
         agentCheck = await reconcileAgentConfigs({
-          serverUrl,
-          getAccessToken: () => ensureFreshAccessToken(),
+          clientId: cfg.client.id,
+          listPinnedAgents: () => sdk.listMyAgents(),
         });
       } catch {
         agentCheck = checkAgentConfigs();
+      } finally {
+        // Doctor is read-only; release the singleton so subsequent
+        // commands re-resolve config cleanly.
+        resetConfig();
+        resetConfigMeta();
       }
       const results = [
         checkNodeVersion(),
@@ -325,7 +336,7 @@ export function registerClientCommands(program: Command): void {
     .description(
       "Transfer ownership of this machine to your account (unpins the previous owner's agents from this machine)",
     )
-    .option("--confirm", "Skip the interactive confirmation prompt")
+    .option("--confirm", "Skip confirmation prompts (claim + auto-prune stale aliases)")
     .option("--server <url>", "Hub server URL")
     .action(async (options: { confirm?: boolean; server?: string }) => {
       try {
@@ -380,25 +391,28 @@ export function registerClientCommands(program: Command): void {
         // doctor keeps reporting the inflated "N configured" count.
         // Detect + offer to prune in the same breath as the claim.
         try {
+          const sdk = new FirstTreeHubSDK({ serverUrl, getAccessToken: () => ensureFreshAccessToken() });
           const stale = await findStaleAliases({
-            serverUrl,
-            getAccessToken: () => ensureFreshAccessToken(),
+            clientId,
+            listPinnedAgents: () => sdk.listMyAgents(),
           });
           if (stale.length === 0) {
             print.line("  No stale local aliases — local config already matches the server.\n");
           } else {
             print.line(
-              `\n  ${stale.length} local ${stale.length === 1 ? "alias" : "aliases"} no longer pinned to this client:\n\n`,
+              `\n  ${stale.length} local ${stale.length === 1 ? "alias" : "aliases"} won't bind on this client:\n\n`,
             );
             for (const s of stale) {
-              print.line(`    - ${s.name.padEnd(30)} (agentId: ${s.agentId})\n`);
+              const id = s.agentId ?? "—";
+              print.line(`    - ${s.name.padEnd(30)} ${id.padEnd(38)} ${formatStaleReason(s.reason)}\n`);
             }
             print.line("\n");
 
             // `--confirm` was the operator pre-acknowledging the claim
             // itself; reusing the flag here keeps `client claim --confirm`
             // a fully non-interactive command (which the docs and the
-            // CLIENT_USER_MISMATCH error message both rely on).
+            // CLIENT_USER_MISMATCH error message both rely on). The flag
+            // description on the command spells this scope out.
             const approved =
               options.confirm === true
                 ? true
@@ -408,11 +422,22 @@ export function registerClientCommands(program: Command): void {
                   }).catch(() => false);
 
             if (approved) {
+              let removed = 0;
+              let failed = 0;
               for (const s of stale) {
-                removeLocalAgent(s.name);
-                print.line(`  ✓ removed ${s.name}\n`);
+                try {
+                  removeLocalAgent(s.name);
+                  print.line(`  ✓ removed ${s.name}\n`);
+                  removed++;
+                } catch (err) {
+                  const msg = err instanceof Error ? err.message : String(err);
+                  print.line(`  ✗ ${s.name} (${msg.slice(0, 80)})\n`);
+                  failed++;
+                }
               }
-              print.line(`\n  ${stale.length} alias(es) pruned.\n`);
+              print.line(
+                `\n  ${removed} pruned${failed > 0 ? `, ${failed} failed (re-run \`agent prune\` to retry)` : ""}.\n`,
+              );
             } else {
               print.line("  Skipped. Run `first-tree-hub agent prune` later to clean up.\n");
             }

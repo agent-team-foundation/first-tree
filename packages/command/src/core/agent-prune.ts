@@ -1,55 +1,135 @@
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
-import {
-  agentConfigSchema,
-  DEFAULT_CONFIG_DIR,
-  DEFAULT_DATA_DIR,
-  loadAgents,
-} from "@agent-team-foundation/first-tree-hub-shared/config";
-import { FirstTreeHubSDK } from "@first-tree-hub/client";
+import { DEFAULT_CONFIG_DIR, DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
+import { parse as parseYaml } from "yaml";
+import { z } from "zod";
 
 /**
- * A local agent alias whose `agent.yaml::agentId` is no longer in the set
- * the server reports as pinned to this client + owned by the caller.
+ * Why a local alias is no longer usable from this client. Surfaced to
+ * operators in `client doctor`, `agent prune`, and the post-claim cleanup
+ * — knowing *why* a dir is stale changes the next action (delete vs. go
+ * run it on the other machine).
  *
- * Stale aliases are the dominant cause of the "client doctor says N agents,
- * runtime only binds M" mismatch — they accumulate across `client claim`,
- * agent deletion, and bare-typo `agent add` mistakes (e.g. an alias named
- * `d`). Runtime tries to bind them every start, fails the R-RUN check,
- * and only logs a generic `failed to start agent`.
+ * - `unreadable`        — agent.yaml missing, malformed, or has no agentId.
+ * - `unowned`           — server doesn't return this agentId at all under
+ *                         the current user (deleted, or never owned).
+ * - `pinned-elsewhere`  — agentId belongs to the user but is pinned to a
+ *                         *different* client. R-RUN would reject `bind`
+ *                         on this machine; the agent is alive on the other.
  */
+export type StaleAliasReason =
+  | { kind: "unreadable"; error: string }
+  | { kind: "unowned" }
+  | { kind: "pinned-elsewhere"; clientId: string };
+
 export type StaleAlias = {
   name: string;
-  agentId: string;
+  /** Null when the YAML couldn't be parsed enough to extract an agentId. */
+  agentId: string | null;
+  reason: StaleAliasReason;
 };
 
+export type PinnedAgent = { agentId: string; clientId: string };
+
+const minimalAgentYamlSchema = z
+  .object({
+    agentId: z.string().min(1),
+  })
+  .passthrough();
+
 /**
- * Compare local `agents/<name>/agent.yaml::agentId` against the server's
- * `/api/v1/clients/me/agents` (every agent pinned to a client owned by
- * the caller). Returns the set of local alias dirs that don't map to
- * any server-side row — safe to delete.
+ * Cross-reference local `agents/<name>/agent.yaml` files against the
+ * server's pinned-agent set, returning every alias that won't bind on
+ * THIS client.
+ *
+ * Why we don't use `loadAgents`:
+ * `shared/config/loader.loadAgents` is fail-fast — one malformed
+ * agent.yaml throws and the whole scan dies. The dominant prune target
+ * IS the malformed dir (typo `agent add d`, half-written yaml, missing
+ * agentId), so we walk dirs ourselves and degrade per-entry instead.
+ *
+ * Why we filter by clientId, not just userId:
+ * `listPinnedAgents` (`/api/v1/clients/me/agents`) returns every agent
+ * pinned to ANY client this user owns (cross-machine). For prune the
+ * relevant question is "will R-RUN accept it on THIS machine", which
+ * needs `agents.client_id === current client.id`. Anything pinned on
+ * another client is reported with `pinned-elsewhere` so the operator
+ * can either re-pin or delete the local alias deliberately.
  */
 export async function findStaleAliases(opts: {
-  serverUrl: string;
-  getAccessToken: () => Promise<string>;
+  clientId: string;
+  listPinnedAgents: () => Promise<PinnedAgent[]>;
+  /** Override for tests; defaults to `$FIRST_TREE_HUB_HOME/config/agents`. */
+  agentsDir?: string;
 }): Promise<StaleAlias[]> {
-  const agentsDir = join(DEFAULT_CONFIG_DIR, "agents");
+  const agentsDir = opts.agentsDir ?? join(DEFAULT_CONFIG_DIR, "agents");
   if (!existsSync(agentsDir)) return [];
 
-  const local = loadAgents({ schema: agentConfigSchema, agentsDir });
-  if (local.size === 0) return [];
-
-  const sdk = new FirstTreeHubSDK({ serverUrl: opts.serverUrl, getAccessToken: opts.getAccessToken });
-  const remote = await sdk.listMyAgents();
-  const pinnedAgentIds = new Set(remote.map((a) => a.agentId));
+  const remote = await opts.listPinnedAgents();
+  const pinnedHere = new Set<string>();
+  const pinnedElsewhere = new Map<string, string>();
+  for (const r of remote) {
+    if (r.clientId === opts.clientId) pinnedHere.add(r.agentId);
+    else pinnedElsewhere.set(r.agentId, r.clientId);
+  }
 
   const stale: StaleAlias[] = [];
-  for (const [name, cfg] of local) {
-    if (!pinnedAgentIds.has(cfg.agentId)) {
-      stale.push({ name, agentId: cfg.agentId });
+  for (const entry of readdirSync(agentsDir)) {
+    const agentDir = join(agentsDir, entry);
+    let isDir = false;
+    try {
+      isDir = statSync(agentDir).isDirectory();
+    } catch {
+      // Vanished between readdir and stat; ignore.
+      continue;
+    }
+    if (!isDir) continue;
+
+    const yamlPath = join(agentDir, "agent.yaml");
+    if (!existsSync(yamlPath)) {
+      stale.push({ name: entry, agentId: null, reason: { kind: "unreadable", error: "missing agent.yaml" } });
+      continue;
+    }
+
+    let agentId: string;
+    try {
+      const raw = parseYaml(readFileSync(yamlPath, "utf-8")) as unknown;
+      const parsed = minimalAgentYamlSchema.safeParse(raw);
+      if (!parsed.success) {
+        const issue = parsed.error.issues[0]?.message ?? "schema error";
+        stale.push({ name: entry, agentId: null, reason: { kind: "unreadable", error: issue } });
+        continue;
+      }
+      agentId = parsed.data.agentId;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      stale.push({ name: entry, agentId: null, reason: { kind: "unreadable", error: msg } });
+      continue;
+    }
+
+    if (pinnedHere.has(agentId)) continue;
+
+    const otherClient = pinnedElsewhere.get(agentId);
+    if (otherClient !== undefined) {
+      stale.push({ name: entry, agentId, reason: { kind: "pinned-elsewhere", clientId: otherClient } });
+    } else {
+      stale.push({ name: entry, agentId, reason: { kind: "unowned" } });
     }
   }
+
   return stale;
+}
+
+/** Human-readable suffix for the per-alias listing. */
+export function formatStaleReason(reason: StaleAliasReason): string {
+  switch (reason.kind) {
+    case "unreadable":
+      return `unreadable: ${reason.error}`;
+    case "unowned":
+      return "no longer owned by you (deleted or transferred)";
+    case "pinned-elsewhere":
+      return `pinned to another client: ${reason.clientId}`;
+  }
 }
 
 /**
@@ -57,9 +137,6 @@ export async function findStaleAliases(opts: {
  * tree under `data/workspaces/<name>`, and the session-mapping file under
  * `data/sessions/<name>.json`. Mirrors what `agent remove` does, exposed
  * separately so prune and claim can share it.
- *
- * Best-effort: missing paths are silently ignored (the alias might have
- * been removed manually after a previous failed prune).
  */
 export function removeLocalAgent(name: string): void {
   rmSync(join(DEFAULT_CONFIG_DIR, "agents", name), { recursive: true, force: true });
