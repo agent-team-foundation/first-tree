@@ -1,8 +1,7 @@
 import { extractMentions, type MentionParticipant } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUp, AtSign, Check, MessageSquare, Paperclip, Pause, Pencil, Plus, Square, X } from "lucide-react";
-import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router";
+import { ArrowUp, AtSign, Check, MessageSquare, Paperclip, Pencil, Plus, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getActivityOverview } from "../../../api/activity.js";
 import {
   type FileMessageContent,
@@ -25,11 +24,7 @@ import {
   listAgentSessions,
   listSessionEvents,
   type SessionEventRow,
-  type SessionListItem,
-  type SessionMutationResponse,
   sessionQueryKey,
-  suspendSession,
-  terminateSession,
 } from "../../../api/sessions.js";
 import { useAuth } from "../../../auth/auth-context.js";
 import { FirstTreeLogo } from "../../../components/first-tree-logo.js";
@@ -38,8 +33,6 @@ import {
   type MentionCandidate,
   useMentionAutocomplete,
 } from "../../../components/mention-autocomplete.js";
-import { Button } from "../../../components/ui/button.js";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog.js";
 import { Markdown } from "../../../components/ui/markdown.js";
 import { StateDot } from "../../../components/ui/state-dot.js";
 import { useAgentIdentityMap, useAgentNameMap } from "../../../lib/use-agent-name-map.js";
@@ -109,240 +102,6 @@ function ReadReceipt({ msg, myAgentId }: { msg: MessageWithDelivery; myAgentId: 
     <span className="mono text-caption" style={{ color: "var(--fg-4)" }} title="Sent">
       ✓ sent
     </span>
-  );
-}
-
-function SessionControls({
-  agentId,
-  chatId,
-  session,
-}: {
-  agentId: string;
-  chatId: string;
-  session: SessionListItem | null;
-}) {
-  const queryClient = useQueryClient();
-  const [, setSearchParams] = useSearchParams();
-  const [terminateOpen, setTerminateOpen] = useState(false);
-  const [terminateError, setTerminateError] = useState<string | null>(null);
-
-  const sessionKey = sessionQueryKey(agentId, chatId);
-  const agentSessionsKey = agentSessionsQueryKey(agentId);
-
-  const setSessionStateInCaches = (state: SessionListItem["state"]): void => {
-    queryClient.setQueryData<SessionListItem>(sessionKey, (old) => (old ? { ...old, state } : old));
-    queryClient.setQueryData<SessionListItem[]>(agentSessionsKey, (old) =>
-      old ? old.map((s) => (s.chatId === chatId ? { ...s, state } : s)) : old,
-    );
-  };
-
-  const suspendMut = useMutation<
-    SessionMutationResponse,
-    Error,
-    void,
-    { previousSession: SessionListItem | undefined; previousList: SessionListItem[] | undefined }
-  >({
-    mutationFn: () => suspendSession(agentId, chatId),
-    onMutate: async () => {
-      // Cancel both caches — the roster's 10s poller would otherwise clobber
-      // the optimistic `suspended` flip mid-flight.
-      await queryClient.cancelQueries({ queryKey: sessionKey });
-      await queryClient.cancelQueries({ queryKey: agentSessionsKey });
-      const previousSession = queryClient.getQueryData<SessionListItem>(sessionKey);
-      const previousList = queryClient.getQueryData<SessionListItem[]>(agentSessionsKey);
-      setSessionStateInCaches("suspended");
-      return { previousSession, previousList };
-    },
-    onError: (_err, _vars, ctx) => {
-      if (ctx?.previousSession) queryClient.setQueryData(sessionKey, ctx.previousSession);
-      if (ctx?.previousList) queryClient.setQueryData(agentSessionsKey, ctx.previousList);
-    },
-    onSuccess: (res) => {
-      setSessionStateInCaches(res.state);
-    },
-  });
-
-  const terminateMut = useMutation<
-    SessionMutationResponse,
-    Error,
-    void,
-    { previousSession: SessionListItem | undefined; previousList: SessionListItem[] | undefined }
-  >({
-    mutationFn: () => terminateSession(agentId, chatId),
-    onMutate: async () => {
-      await queryClient.cancelQueries({ queryKey: sessionKey });
-      await queryClient.cancelQueries({ queryKey: agentSessionsKey });
-      const previousSession = queryClient.getQueryData<SessionListItem>(sessionKey);
-      const previousList = queryClient.getQueryData<SessionListItem[]>(agentSessionsKey);
-      queryClient.setQueryData<SessionListItem[]>(agentSessionsKey, (old) =>
-        old ? old.filter((s) => s.chatId !== chatId) : old,
-      );
-      return { previousSession, previousList };
-    },
-    onError: (err, _vars, ctx) => {
-      if (ctx?.previousSession) queryClient.setQueryData(sessionKey, ctx.previousSession);
-      if (ctx?.previousList) queryClient.setQueryData(agentSessionsKey, ctx.previousList);
-      setTerminateError(err instanceof Error ? err.message : "Terminate failed");
-    },
-    onSuccess: (res, _vars, ctx) => {
-      // The admin API is lenient: a no-op response (e.g. the session was
-      // reactivated between dialog-open and confirm) returns transitioned=false
-      // with the current authoritative state. Only hide + navigate when the
-      // row is actually gone.
-      if (res.state !== "evicted") {
-        if (ctx?.previousList) queryClient.setQueryData(agentSessionsKey, ctx.previousList);
-        setSessionStateInCaches(res.state);
-        setTerminateError(`Session is ${res.state}; terminate only applies to suspended sessions.`);
-        return;
-      }
-      setTerminateError(null);
-      setTerminateOpen(false);
-      setSearchParams({ a: agentId });
-    },
-  });
-
-  const isActive = session?.state === "active";
-  const isSuspended = session?.state === "suspended";
-
-  if (!isActive && !isSuspended) return null;
-
-  return (
-    <>
-      <div
-        className="inline-flex items-center"
-        style={{
-          gap: 4,
-          padding: 4,
-          border: "var(--hairline) solid var(--border)",
-          borderRadius: "var(--radius-panel)",
-          background: "var(--bg-sunken)",
-        }}
-      >
-        {isActive && (
-          <button
-            type="button"
-            onClick={() => suspendMut.mutate()}
-            disabled={suspendMut.isPending}
-            className="inline-flex items-center transition-colors text-label"
-            style={{
-              gap: 6,
-              padding: "var(--sp-1) var(--sp-2_5)",
-              color: "var(--fg-2)",
-              borderRadius: "var(--radius-input)",
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
-            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-          >
-            <Pause className="h-3 w-3" /> Suspend
-            <span className="kbd" style={{ marginLeft: 2 }}>
-              ⌘⇧P
-            </span>
-          </button>
-        )}
-        {isSuspended && (
-          <button
-            type="button"
-            onClick={() => {
-              setTerminateError(null);
-              setTerminateOpen(true);
-            }}
-            disabled={terminateMut.isPending}
-            className="inline-flex items-center transition-colors text-label font-semibold"
-            style={{
-              gap: 6,
-              padding: "var(--sp-1) var(--sp-2_5)",
-              color: "var(--state-error)",
-              background: "color-mix(in oklch, var(--state-error) 18%, transparent)",
-              borderRadius: "var(--radius-input)",
-            }}
-            onMouseEnter={(e) =>
-              (e.currentTarget.style.background = "color-mix(in oklch, var(--state-error) 28%, transparent)")
-            }
-            onMouseLeave={(e) =>
-              (e.currentTarget.style.background = "color-mix(in oklch, var(--state-error) 18%, transparent)")
-            }
-          >
-            <Square className="h-3 w-3" /> Terminate
-          </button>
-        )}
-      </div>
-
-      <TerminateSessionDialog
-        open={terminateOpen}
-        onOpenChange={(o) => {
-          if (!terminateMut.isPending) setTerminateOpen(o);
-          if (!o) setTerminateError(null);
-        }}
-        session={session}
-        chatId={chatId}
-        error={terminateError}
-        pending={terminateMut.isPending}
-        onConfirm={() => terminateMut.mutate()}
-      />
-    </>
-  );
-}
-
-function TerminateSessionDialog(props: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  session: SessionListItem | null;
-  chatId: string;
-  pending: boolean;
-  error: string | null;
-  onConfirm: () => void;
-}) {
-  const { open, onOpenChange, session, chatId, pending, error, onConfirm } = props;
-  function submit(e: FormEvent) {
-    e.preventDefault();
-    if (!pending) onConfirm();
-  }
-  const shortId = chatId.slice(0, 8);
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Terminate session?</DialogTitle>
-        </DialogHeader>
-        <form onSubmit={submit} className="space-y-4">
-          <p className="text-body text-muted-foreground">
-            Ending this session is permanent. It is removed from the workspace and cannot be resumed. Chat history is
-            preserved; a new message will start a fresh session.
-          </p>
-          <div
-            className="mono text-label"
-            style={{
-              padding: "var(--sp-2) var(--sp-2_5)",
-              borderRadius: "var(--radius-input)",
-              background: "var(--bg-sunken)",
-              border: "var(--hairline) solid var(--border)",
-              color: "var(--fg-2)",
-              display: "grid",
-              gap: 4,
-            }}
-          >
-            <span>
-              chat: <span className="font-medium">{shortId}…</span>
-            </span>
-            {session?.lastActivityAt && <span>last activity: {formatRelative(session.lastActivityAt)}</span>}
-            {typeof session?.messageCount === "number" && <span>messages: {session.messageCount}</span>}
-          </div>
-          {error && (
-            <p className="mono text-label" style={{ color: "var(--state-error)" }}>
-              {error}
-            </p>
-          )}
-          <DialogFooter>
-            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={pending}>
-              Cancel
-            </Button>
-            <Button type="submit" variant="destructive" disabled={pending}>
-              {pending ? "Terminating…" : "Terminate"}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
   );
 }
 
@@ -1046,144 +805,109 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
     <div className="flex-1 flex flex-col overflow-hidden">
       {/* Chat header. Spans the full panel width with generous side
           breathing (sp-10) so it reads as the panel's "context bar".
-          Title anchors to the left edge of the breathing zone,
-          SessionControls anchors to the right. Timeline/composer below
-          sit in a narrower centered column; the header intentionally
-          exceeds them to frame the focused reading area without
-          competing with it. */}
+          Title + participants column anchors to the left; the right
+          edge is intentionally empty after the SessionControls
+          (Suspend/Terminate) removal — those were dev/runtime concerns
+          that don't belong in the chat-first user surface. Future
+          chat-level actions (mute, archive, leave) will land here in
+          an overflow menu. */}
       <div
-        className="grid items-center shrink-0"
+        className="flex items-center shrink-0"
         style={{
-          gridTemplateColumns: "1fr auto",
-          gap: 10,
           padding: "var(--sp-2_5) var(--sp-10)",
           borderBottom: "var(--hairline) solid var(--border)",
         }}
       >
-        <div className="min-w-0">
-          <div className="flex items-center" style={{ gap: 8 }}>
-            <StateDot state={runtimeState} size={8} />
-            {renaming ? (
-              <>
-                <input
-                  ref={renameInputRef}
-                  value={renameDraft}
-                  onChange={(e) => setRenameDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      commitRename();
-                    } else if (e.key === "Escape") {
-                      e.preventDefault();
-                      setRenaming(false);
-                    }
-                  }}
-                  disabled={renameMut.isPending}
-                  maxLength={500}
-                  placeholder="Chat name"
-                  className="outline-none text-subtitle"
-                  style={{
-                    flex: 1,
-                    minWidth: 0,
-                    color: "var(--fg)",
-                    background: "var(--bg-sunken)",
-                    border: "var(--hairline) solid var(--border)",
-                    borderRadius: "var(--radius-input)",
-                    padding: "var(--sp-0_5) var(--sp-1_5)",
-                  }}
-                />
-                <button
-                  type="button"
-                  onClick={commitRename}
-                  disabled={renameMut.isPending}
-                  title="Save"
-                  className="inline-flex items-center"
-                  style={{ color: "var(--accent)", padding: 2 }}
-                >
-                  <Check className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setRenaming(false)}
-                  disabled={renameMut.isPending}
-                  title="Cancel"
-                  className="inline-flex items-center"
-                  style={{ color: "var(--fg-3)", padding: 2 }}
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              </>
-            ) : (
-              <>
-                <span className="truncate text-subtitle" style={{ color: "var(--fg)" }}>
-                  {chatDetail?.topic || session?.summary || `Chat · ${chatId.slice(0, 8)}`}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setRenameDraft(chatDetail?.topic ?? "");
-                    setRenaming(true);
-                  }}
-                  title="Rename chat"
-                  className="inline-flex items-center transition-colors"
-                  style={{ color: "var(--fg-4)", padding: 2 }}
-                  onMouseEnter={(e) => (e.currentTarget.style.color = "var(--fg-2)")}
-                  onMouseLeave={(e) => (e.currentTarget.style.color = "var(--fg-4)")}
-                >
-                  <Pencil className="h-3 w-3" />
-                </button>
-              </>
-            )}
-            <span
-              className="mono text-caption"
-              style={{
-                color: "var(--fg-4)",
-                padding: "var(--hairline) var(--sp-1_25)",
-                border: "var(--hairline) solid var(--border)",
-                borderRadius: "var(--radius-chip)",
-              }}
-            >
-              {chatId}
-            </span>
-          </div>
-          <div
-            className="flex items-center flex-wrap text-caption"
-            style={{
-              color: "var(--fg-3)",
-              marginTop: 4,
-              gap: 6,
-            }}
-          >
-            <ParticipantsHeader
-              chatId={chatId}
-              participantIds={chatDetail?.participants?.map((p) => p.agentId) ?? [agentId]}
-              candidates={mentionCandidates}
-              onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
-            />
-            <span>·</span>
-            <span>started {formatRelative(session?.startedAt ?? null)}</span>
-            <span>·</span>
-            <span>{msgCount} msgs</span>
-            <span>·</span>
-            <span>
-              runtime{" "}
-              <span
-                className="mono"
-                style={{
-                  color:
-                    runtimeState === "error"
-                      ? "var(--state-error)"
-                      : runtimeState === "working"
-                        ? "var(--fg-2)"
-                        : "var(--fg-2)",
+        {/* Identity (state + title + rename) — left-anchored, truncates
+            when long. ✏️ rename button is hover-only. */}
+        <div className="group flex items-center min-w-0" style={{ gap: 8, flex: 1 }}>
+          <StateDot state={runtimeState} size={8} />
+          {renaming ? (
+            <>
+              <input
+                ref={renameInputRef}
+                value={renameDraft}
+                onChange={(e) => setRenameDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    commitRename();
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    setRenaming(false);
+                  }
                 }}
+                disabled={renameMut.isPending}
+                maxLength={500}
+                placeholder="Chat name"
+                className="outline-none text-subtitle"
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  color: "var(--fg)",
+                  background: "var(--bg-sunken)",
+                  border: "var(--hairline) solid var(--border)",
+                  borderRadius: "var(--radius-input)",
+                  padding: "var(--sp-0_5) var(--sp-1_5)",
+                }}
+              />
+              <button
+                type="button"
+                onClick={commitRename}
+                disabled={renameMut.isPending}
+                title="Save"
+                className="inline-flex items-center"
+                style={{ color: "var(--accent)", padding: 2 }}
               >
-                {runtimeLabel}
+                <Check className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setRenaming(false)}
+                disabled={renameMut.isPending}
+                title="Cancel"
+                className="inline-flex items-center"
+                style={{ color: "var(--fg-3)", padding: 2 }}
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </>
+          ) : (
+            <>
+              <span
+                className="truncate text-subtitle"
+                title={`${chatId} · started ${formatRelative(session?.startedAt ?? null)} · ${msgCount} msgs · ${runtimeLabel}`}
+                style={{ color: "var(--fg)" }}
+              >
+                {chatDetail?.topic || session?.summary || `Chat · ${chatId.slice(0, 8)}`}
               </span>
-            </span>
-          </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setRenameDraft(chatDetail?.topic ?? "");
+                  setRenaming(true);
+                }}
+                title="Rename chat"
+                aria-label="Rename chat"
+                className="inline-flex items-center transition-opacity opacity-0 group-hover:opacity-100"
+                style={{ color: "var(--fg-3)", padding: 2 }}
+              >
+                <Pencil className="h-3 w-3" />
+              </button>
+            </>
+          )}
         </div>
-        <SessionControls agentId={agentId} chatId={chatId} session={session ?? null} />
+        {/* Audience — chips + add button. Right-anchored. The metadata
+            strip (`started 2h · 12 msgs · idle`) was removed: state is
+            already conveyed by `StateDot`'s color, message count is
+            implicit in the visible timeline, and start time is rare
+            enough to live in the title's hover tooltip. */}
+        <ParticipantsHeader
+          chatId={chatId}
+          participantIds={chatDetail?.participants?.map((p) => p.agentId) ?? [agentId]}
+          candidates={mentionCandidates}
+          onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
+        />
       </div>
 
       {/* Timeline. Scroll viewport stays full-width so the scrollbar hugs

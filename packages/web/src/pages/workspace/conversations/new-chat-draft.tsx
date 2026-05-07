@@ -236,9 +236,7 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
                   setCursor(e.currentTarget.selectionStart ?? draft.length);
                 }}
                 placeholder={
-                  chips.length >= 2
-                    ? "Describe the task. Use @ to address one or more."
-                    : "Describe the task…"
+                  chips.length >= 2 ? "Describe the task. Use @ to address one or more." : "Describe the task…"
                 }
                 rows={1}
                 onKeyDown={(e) => {

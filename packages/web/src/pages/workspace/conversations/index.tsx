@@ -53,15 +53,13 @@ function formatRowTime(iso: string | null): string {
 }
 
 function buildSubtitle(row: MeChatRow): string {
-  // Priority per the design doc: `Watching` > participant summary > preview.
-  if (row.membershipKind === "watching") return "Watching";
-  if (row.participants.length > 0) {
-    const names = row.participants.map((p) => p.displayName).filter((n) => n.length > 0);
-    if (names.length > 0) {
-      const head = names.slice(0, 2).join(", ");
-      const extra = names.length > 2 ? ` +${names.length - 2}` : "";
-      return `${head}${extra}`;
-    }
+  // Subtitle = the most informative second-line content. The title row
+  // already shows participant names (when no topic), so duplicating them
+  // here is wasted vertical space. Priority: preview > "Watching"
+  // marker for watcher rows. Empty string if neither — caller renders
+  // an em-dash placeholder.
+  if (row.membershipKind === "watching") {
+    return row.lastMessagePreview ? `Watching · ${row.lastMessagePreview}` : "Watching";
   }
   return row.lastMessagePreview ?? "";
 }
@@ -152,75 +150,89 @@ export function ConversationList({
         borderRight: "var(--hairline) solid var(--border)",
       }}
     >
-      {/* Header */}
+      {/* Header. Two stacked rows by semantic grouping:
+          (1) creation action — `+ New chat`, gets a full-width hero
+              button so its primacy is signaled by position and width.
+          (2) list-manipulation controls — filter pills (left) + ghost
+              search input (right). Both operate on the existing list,
+              so they share a row. Search is whisper-quiet (no border,
+              no fill, caption-sized) so the filter pills remain the
+              row's visual anchor. Filter pills auto-hide when they
+              have nothing to count. */}
       <div
-        className="shrink-0"
+        className="shrink-0 flex flex-col"
         style={{
+          gap: 6,
           padding: "var(--sp-2_5) var(--sp-3) var(--sp-2)",
           borderBottom: "var(--hairline) solid var(--border-faint)",
         }}
       >
-        <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
-          <span className="mono uppercase text-eyebrow" style={{ color: "var(--fg-3)" }}>
-            Conversations
-          </span>
-          <button
-            type="button"
-            onClick={onNewChat}
-            className="inline-flex items-center mono text-eyebrow uppercase"
-            style={{
-              gap: 4,
-              padding: "var(--sp-0_5) var(--sp-1_5)",
-              border: "var(--hairline) solid var(--border)",
-              borderRadius: "var(--radius-input)",
-              background: selectedChatId === DRAFT_CHAT_ID ? "var(--bg-active)" : "transparent",
-              color: selectedChatId === DRAFT_CHAT_ID ? "var(--accent)" : "var(--fg-2)",
-              cursor: "pointer",
-            }}
-            title="New chat"
-          >
-            <Plus className="h-3 w-3" />
-            New
-          </button>
-        </div>
-        <div className="relative">
-          <Search
-            className="h-3.5 w-3.5 absolute pointer-events-none"
-            style={{
-              left: 8,
-              top: "50%",
-              transform: "translateY(-50%)",
-              color: "var(--fg-4)",
-            }}
-          />
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search…"
-            className="w-full outline-none text-body"
-            style={{
-              padding: "var(--sp-1_25) var(--sp-2) var(--sp-1_25) var(--sp-6_5)",
-              background: "var(--bg-sunken)",
-              border: "var(--hairline) solid var(--border)",
-              borderRadius: "var(--radius-input)",
-              color: "var(--fg)",
-            }}
-          />
-        </div>
-        <div className="flex gap-1" style={{ marginTop: 8 }}>
-          {FILTER_PILLS.map((p) => (
-            <FilterPill
-              key={p.value}
-              active={filter === p.value}
-              count={p.value === "unread" ? totalUnread : p.value === "watching" ? totalWatching : allRows.length}
-              onClick={() => {
-                setFilter(p.value);
-                resetExtras();
+        <button
+          type="button"
+          onClick={onNewChat}
+          className="w-full inline-flex items-center transition-colors text-body hover:bg-[var(--bg-hover)]"
+          style={{
+            gap: 6,
+            padding: "var(--sp-1_25) var(--sp-2)",
+            border: "var(--hairline) solid var(--border)",
+            borderRadius: "var(--radius-input)",
+            background: selectedChatId === DRAFT_CHAT_ID ? "var(--bg-active)" : "transparent",
+            color: selectedChatId === DRAFT_CHAT_ID ? "var(--accent)" : "var(--fg)",
+            cursor: "pointer",
+            fontWeight: 500,
+          }}
+          title="New chat"
+        >
+          <Plus className="h-3.5 w-3.5" strokeWidth={2} />
+          New chat
+        </button>
+        <div className="flex items-center" style={{ gap: 8 }}>
+          <div className="flex gap-1 shrink-0">
+            {FILTER_PILLS.map((p) => {
+              // Auto-hide non-"all" pills when their count is zero — they
+              // serve no purpose if the user can't filter to anything.
+              // Always show the active pill so the user can still toggle off.
+              const count =
+                p.value === "unread" ? totalUnread : p.value === "watching" ? totalWatching : allRows.length;
+              if (p.value !== "all" && count === 0 && filter !== p.value) return null;
+              return (
+                <FilterPill
+                  key={p.value}
+                  active={filter === p.value}
+                  count={count}
+                  onClick={() => {
+                    setFilter(p.value);
+                    resetExtras();
+                  }}
+                >
+                  {p.label}
+                </FilterPill>
+              );
+            })}
+          </div>
+          <div className="relative" style={{ flex: 1, minWidth: 0 }}>
+            <Search
+              className="h-3 w-3 absolute pointer-events-none"
+              style={{
+                left: 6,
+                top: "50%",
+                transform: "translateY(-50%)",
+                color: "var(--fg-4)",
               }}
-            >
-              {p.label}
-            </FilterPill>
-          ))}
+            />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search…"
+              className="w-full outline-none text-caption"
+              style={{
+                padding: "var(--sp-0_5) var(--sp-1) var(--sp-0_5) var(--sp-4_5)",
+                background: "transparent",
+                border: "none",
+                color: "var(--fg-2)",
+              }}
+            />
+          </div>
         </div>
       </div>
 
@@ -254,67 +266,53 @@ export function ConversationList({
               <button
                 type="button"
                 onClick={() => onSelectChat(row.chatId)}
-                className={cn("w-full text-left transition-colors grid items-center", "hover:bg-[var(--bg-hover)]")}
+                className={cn("w-full text-left transition-colors flex flex-col", "hover:bg-[var(--bg-hover)]")}
                 style={{
-                  gridTemplateColumns: "var(--sp-3) 1fr auto",
-                  columnGap: 8,
-                  padding: "var(--sp-2) var(--sp-2_5) var(--sp-2) var(--sp-3)",
+                  padding: "var(--sp-2) var(--sp-3)",
                   background: isSelected ? "var(--bg-active)" : "transparent",
                   borderLeft: `var(--hairline-bold) solid ${isSelected ? "var(--accent)" : "transparent"}`,
                 }}
               >
-                <div className="flex items-center justify-center" style={{ width: "var(--sp-3)" }}>
-                  {hasUnread ? (
+                <div className="flex items-baseline" style={{ gap: 6 }}>
+                  {hasUnread && (
                     <span
                       aria-label={`${row.unreadMentionCount} unread mentions`}
                       role="status"
                       style={{
-                        width: 8,
-                        height: 8,
+                        width: 6,
+                        height: 6,
                         borderRadius: "50%",
                         background: "var(--state-error)",
-                        display: "inline-block",
+                        flexShrink: 0,
+                        alignSelf: "center",
                       }}
                     />
-                  ) : null}
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-baseline" style={{ gap: 6 }}>
-                    <span
-                      className="truncate text-body"
-                      style={{
-                        color: "var(--fg)",
-                        fontWeight: hasUnread ? 600 : 500,
-                        flex: 1,
-                        minWidth: 0,
-                      }}
-                    >
-                      {row.title}
-                    </span>
-                    {row.lastMessageAt && (
-                      <span className="mono text-caption shrink-0" style={{ color: "var(--fg-4)" }}>
-                        {formatRowTime(row.lastMessageAt)}
-                      </span>
-                    )}
-                  </div>
-                  <div className="truncate text-body" style={{ color: "var(--fg-3)", marginTop: 1 }}>
-                    {subtitle || "—"}
-                  </div>
-                </div>
-                <div className="flex flex-col items-end gap-0.5">
-                  {row.membershipKind === "watching" && (
-                    <span
-                      className="mono uppercase text-eyebrow"
-                      style={{
-                        padding: "var(--hairline) var(--sp-1_25)",
-                        borderRadius: 2,
-                        color: "var(--fg-3)",
-                        background: "var(--bg-sunken)",
-                      }}
-                    >
-                      watching
+                  )}
+                  <span
+                    className="truncate text-subtitle"
+                    style={{
+                      color: hasUnread ? "var(--fg)" : "var(--fg-2)",
+                      fontWeight: hasUnread ? 700 : 500,
+                      flex: 1,
+                      minWidth: 0,
+                    }}
+                  >
+                    {row.title}
+                  </span>
+                  {row.lastMessageAt && (
+                    <span className="mono text-caption shrink-0" style={{ color: "var(--fg-4)" }}>
+                      {formatRowTime(row.lastMessageAt)}
                     </span>
                   )}
+                </div>
+                <div
+                  className="truncate text-body"
+                  style={{
+                    color: hasUnread ? "var(--fg-2)" : "var(--fg-3)",
+                    marginTop: 2,
+                  }}
+                >
+                  {subtitle || "—"}
                 </div>
               </button>
             </div>
