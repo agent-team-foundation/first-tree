@@ -1,5 +1,7 @@
 # Context Tab 实现计划
 
+> V2 推荐方案已经把主体验从 Map-first 调整为 Impact-first。实现时应优先参考 [context-tab-product-design-v2.zh-CN.md](context-tab-product-design-v2.zh-CN.md)。本文档中的技术选型仍适用,但 Web 实现顺序应以 V2 的 Impact Feed / Impact Detail 为先。
+
 ## 目标
 
 把 Context Tree 转译成 Hub 中可感知的 agent decision context surface。当前版本交付 snapshot-level context visibility,让用户看到:
