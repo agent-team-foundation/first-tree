@@ -1,4 +1,4 @@
-# Context Tab 产品设计 V2
+# Context Tab Impact-first 产品设计
 
 ## 状态
 
@@ -6,23 +6,7 @@
 
 - [agent-team-foundation/first-tree-all#101](https://github.com/agent-team-foundation/first-tree-all/issues/101) — user-facing context-tree visualization
 - 依赖上游导航重构: [agent-team-foundation/first-tree-all#100](https://github.com/agent-team-foundation/first-tree-all/issues/100)
-- V1: [context-tab-product-design.zh-CN.md](context-tab-product-design.zh-CN.md)
 - 实现计划: [context-tab-implementation-plan.zh-CN.md](context-tab-implementation-plan.zh-CN.md)
-
-## 为什么需要 V2
-
-V1 的方向是对的:不把 `/context` 做成 markdown file browser,而是表达 Context Tree 是 agents 背后的团队认知树。
-
-但 V1 的信息架构仍然偏 **Map-first**。用户第一眼会看到 tree structure,容易把产品理解成“Context Tree viewer”。这不够强地传达本需求的核心价值:
-
-> 用户需要先感知 Context Tree 如何影响 agents 的判断和行动,再需要地图去理解这些变化在树上的位置。
-
-V2 把主体验改成 **Impact-first**:
-
-- 先表达 agents 背后有一份 team context source。
-- 再展示哪些 Context Tree 变化可能影响 agent decision context。
-- 然后用 Tree Map 作为定位和空间理解工具。
-- 最后进入 owner / related context / source file 的治理动作。
 
 ## 核心判断
 
@@ -37,9 +21,23 @@ Context Tree 的第一用户是 **agent**。Hub `/context` 的第一任务不是
 
 > 在 Hub 中提供一个 Agent Context Impact surface,让用户优先看到哪些 Context Tree 变化可能影响 agents 的判断和行动,再通过 Tree Map 理解变化在团队认知树中的位置。
 
+## 设计原则
+
+1. **Impact-first, not map-first**  
+   用户第一眼应该看到“哪些变化可能影响 agent decision context”,而不是先看到一张 tree map。
+
+2. **Agent-context-first, not document-first**  
+   页面不把 markdown 文件作为主对象,而是把文件变化转译成 agent context source、decision impact、owner 和 related context。
+
+3. **Signal before proof**  
+   当前可以表达“这份 team context 可供 agents 使用”和“变化可能影响 agent 判断”。在没有 runtime telemetry 前,不能声称某个具体 agent 已经读取某个节点。
+
+4. **Map as locator**  
+   Tree Map 保留,但职责是空间定位和结构理解,不是主解释器。
+
 ## 体验目标
 
-| 目标 | 用户问题 | V2 表达 |
+| 目标 | 用户问题 | 设计表达 |
 | --- | --- | --- |
 | Context source visible | agents 背后的 team context 是否可用? | Header 显示 current / stale / unavailable |
 | Growth visible | Context Tree 最近如何生长? | Change summary: added / edited / removed |
@@ -49,7 +47,7 @@ Context Tree 的第一用户是 **agent**。Hub `/context` 的第一任务不是
 
 ## 页面结构
 
-V2 首屏结构:
+首屏结构:
 
 ```text
 Context
@@ -80,11 +78,14 @@ Added 3 · Edited 8 · Removed 1                 [Mark all seen]
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-V2 不是取消 Tree Map,而是改变它的职责:
+页面分区:
 
-- **Impact Feed** 是主解释器,回答“为什么这个变化值得看”。
-- **Tree Map Overview** 是定位工具,回答“这个变化在团队认知树哪里”。
-- **Files View** 是辅助深看,回答“源文件是什么”。
+- **Context Signal**:团队认知树是否可用、是否新鲜。
+- **Change Summary**:自上次查看后 tree 如何生长。
+- **Impact Feed**:主区域,展示可能影响 agent decision context 的变化。
+- **Tree Map Overview**:辅助区域,展示变化在树上的位置。
+- **Impact Detail**:治理入口,展示 owner、related context、source commit。
+- **Files View**:辅助深看,展示源文件和 markdown preview。
 
 ## 主区域: Impact Feed
 
@@ -112,7 +113,7 @@ Source: agent-hub/web-console.md
 
 ## Tree Map Overview
 
-Tree Map 在 V2 中是 overview,不是主体验。
+Tree Map 是 overview,不是主体验。
 
 规则:
 
@@ -188,9 +189,9 @@ Team context is current
 8 agents using latest context · 12 changes since your last view
 ```
 
-## 数据模型调整
+## 数据模型
 
-V1 的 `nodes[]` / `edges[]` 仍然保留,但 V2 增加 `impacts[]`,让 Web 可以直接渲染 Impact Feed。
+`nodes[]` / `edges[]` 用于 Tree Map 和 Files View。`impacts[]` 用于 Impact Feed,避免前端临时从 node diff 推断产品语义。
 
 ```text
 ContextTreeSnapshot
@@ -240,12 +241,10 @@ agentUsage
 └─ affectedSessionIds[]
 ```
 
-## 实现计划调整
-
-V2 的实现顺序应该改成:
+## 实现顺序
 
 1. **Server snapshot + impacts API**  
-   先产出 `nodes[]`、`changes[]`、`impacts[]`。Impact Feed 不能放到前端临时拼。
+   先产出 `nodes[]`、`changes[]`、`impacts[]`。Impact Feed 不放到前端临时拼。
 
 2. **Web Impact-first baseline**  
    Header、Change Summary、Impact Feed、Impact Detail、Files View。此阶段即使没有 Tree Map,也能传达核心价值。
@@ -263,7 +262,7 @@ Obsidian 可以做辅助深看,不作为主实现。
 原因:
 
 - Obsidian 是 document-first / graph-first;
-- V2 是 impact-first / agent-context-first;
+- 本设计是 impact-first / agent-context-first;
 - Obsidian 不承担 Hub member JWT、org 权限、server snapshot、stale state、last-seen baseline;
 - Obsidian 不能表达 per-agent readiness 或 session usage telemetry。
 
@@ -278,19 +277,8 @@ Obsidian 可以做辅助深看,不作为主实现。
 - 用 Obsidian plugin 承担 `/context` 主界面;
 - 把 Hub `/context` 变成 vault viewer。
 
-## V2 与 V1 的差异
-
-| 维度 | V1 | V2 |
-| --- | --- | --- |
-| 主体验 | Tree Map | Impact Feed |
-| Tree Map 职责 | 默认主视图 | Overview / spatial locator |
-| 用户第一眼 | tree structure + changes | changes that may affect agent decisions |
-| Detail | Node Detail | Impact Detail + Node Detail |
-| API | nodes / edges / changes | impacts + nodes / edges / changes |
-| 风险 | 容易变成 tree viewer | 更贴近 value perception |
-
 ## 推荐结论
 
-采用 V2。
+采用 Impact-first 方案。
 
-V1 可以作为技术可落地的基础,但 V2 更符合本需求目标:让用户感知 Context Tree 的价值,即 agents 背后有一棵正在生长、正在影响判断和行动、可以被治理的团队认知树。
+这个方案更符合本需求目标:让用户感知 Context Tree 的价值,即 agents 背后有一棵正在生长、正在影响判断和行动、可以被治理的团队认知树。
