@@ -27,8 +27,9 @@
  *     direct `@`-mention targets.
  */
 
-import { sql } from "drizzle-orm";
+import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
+import { chatParticipants, chatSubscriptions } from "../db/schema/chats.js";
 
 // biome-ignore lint/suspicious/noExplicitAny: cross-schema compatibility
 type DbLike = PgDatabase<PgQueryResultHKT, any, any>;
@@ -112,34 +113,52 @@ export async function applyAfterFanOut(tx: DbLike, input: ApplyAfterFanOutInput)
 
   if (mentionedAgentIds.length === 0) return;
 
-  // Drizzle's sql tag will inline the array as parameters.
   // 2a. Speaker counters — exclude sender; also a no-op when no row matches.
-  await tx.execute(sql`
-    UPDATE chat_participants
-       SET unread_mention_count = unread_mention_count + 1
-     WHERE chat_id = ${chatId}
-       AND agent_id = ANY(${mentionedAgentIds})
-       AND agent_id <> ${senderId}
-  `);
+  // Use drizzle's `inArray` so the JS string[] binds correctly through the
+  // postgres-js array path.
+  await tx
+    .update(chatParticipants)
+    .set({ unreadMentionCount: sql`${chatParticipants.unreadMentionCount} + 1` })
+    .where(
+      and(
+        eq(chatParticipants.chatId, chatId),
+        inArray(chatParticipants.agentId, mentionedAgentIds),
+        ne(chatParticipants.agentId, senderId),
+      ),
+    );
 
   // 2b. Watcher counters — propagate to manager's human-agent row in
-  //     chat_subscriptions for any non-human mentioned agent. The CTE keeps
-  //     the manager-resolution close to the UPDATE so a future schema change
-  //     to `agents.manager_id` shows up in one place. Sender exclusion is
-  //     not needed here: a watcher row never represents the sender (sender
-  //     is, by definition, a speaker).
-  await tx.execute(sql`
-    WITH targets AS (
-      SELECT DISTINCT m.agent_id AS human_agent_id
-        FROM agents a
-        JOIN members m ON m.id = a.manager_id
-       WHERE a.uuid = ANY(${mentionedAgentIds})
-         AND a.type <> 'human'
-         AND m.status = 'active'
-    )
-    UPDATE chat_subscriptions cs
-       SET unread_mention_count = unread_mention_count + 1
-     WHERE cs.chat_id = ${chatId}
-       AND cs.agent_id IN (SELECT human_agent_id FROM targets)
-  `);
+  //     chat_subscriptions for any non-human mentioned agent. We resolve the
+  //     manager's human agents in a small SELECT first (so the surrounding
+  //     UPDATE can also use drizzle's `inArray` builder), and bail early if
+  //     no managers exist. Sender exclusion is not needed: a watcher row
+  //     never represents the sender (sender is, by definition, a speaker).
+  const managerRowsRaw = (await tx.execute(sql`
+    SELECT DISTINCT m.agent_id AS human_agent_id
+      FROM agents a
+      JOIN members m ON m.id = a.manager_id
+     WHERE a.uuid IN ${makeUuidList(mentionedAgentIds)}
+       AND a.type <> 'human'
+       AND m.status = 'active'
+  `)) as unknown as Array<{ human_agent_id: string }>;
+  const managerHumanAgentIds = managerRowsRaw.map((r) => r.human_agent_id);
+  if (managerHumanAgentIds.length === 0) return;
+
+  await tx
+    .update(chatSubscriptions)
+    .set({ unreadMentionCount: sql`${chatSubscriptions.unreadMentionCount} + 1` })
+    .where(and(eq(chatSubscriptions.chatId, chatId), inArray(chatSubscriptions.agentId, managerHumanAgentIds)));
+}
+
+/**
+ * Build a parenthesised, comma-separated list of bound parameters: `(?, ?, ?)`.
+ * Used in raw SQL where drizzle's `inArray` can't be directly applied (e.g.
+ * inside a hand-rolled SELECT). Always called with a non-empty list — the
+ * caller short-circuits the empty case.
+ */
+function makeUuidList(ids: string[]) {
+  return sql`(${sql.join(
+    ids.map((id) => sql`${id}`),
+    sql`, `,
+  )})`;
 }
