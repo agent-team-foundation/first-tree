@@ -28,6 +28,7 @@ import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from ".
 import { uuidv7 } from "../uuid.js";
 import { agentVisibilityCondition, type MemberScope } from "./access-control.js";
 import { resolveDefaultOrgId } from "./organization.js";
+import { recomputeWatchersForAgent } from "./watcher.js";
 
 /**
  * Names beginning with `__` are reserved for Hub-internal pseudo agents
@@ -628,6 +629,13 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
   const [updated] = await db.update(agents).set(updates).where(eq(agents.uuid, agent.uuid)).returning();
 
   if (!updated) throw new Error("Unexpected: UPDATE RETURNING produced no row");
+  // If the manager was reassigned, watcher rows anchored on the old
+  // manager need to drop and the new manager's rows need to appear.
+  // Recompute is keyed by agent (not chat) since this single agent may
+  // participate in many chats.
+  if (data.managerId !== undefined && data.managerId !== agent.managerId) {
+    await recomputeWatchersForAgent(db, agent.uuid);
+  }
   return updated;
 }
 

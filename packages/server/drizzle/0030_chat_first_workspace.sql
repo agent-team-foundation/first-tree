@@ -48,8 +48,12 @@ CREATE TABLE IF NOT EXISTS "chat_subscriptions" (
   "created_at" timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT "chat_subscriptions_chat_id_fkey"
     FOREIGN KEY ("chat_id") REFERENCES "chats"("id") ON DELETE CASCADE,
+  -- Cascade on agent delete so `services/agent.ts:deleteAgent`'s hard
+  -- delete after suspension doesn't 500 on watcher rows anchored to a
+  -- removed agent. Mirrors the chat_id FK above; the asymmetry was
+  -- otherwise surprising (B4 in PR review).
   CONSTRAINT "chat_subscriptions_agent_id_fkey"
-    FOREIGN KEY ("agent_id") REFERENCES "agents"("uuid"),
+    FOREIGN KEY ("agent_id") REFERENCES "agents"("uuid") ON DELETE CASCADE,
   CONSTRAINT "chat_subscriptions_pkey"
     PRIMARY KEY ("chat_id", "agent_id")
 );
@@ -62,11 +66,24 @@ CREATE INDEX IF NOT EXISTS "idx_chat_subscriptions_agent"
 -- Backfill projection: one INSERT-shaped UPDATE driven by a DISTINCT ON
 -- subquery so messages is touched once. Avoids the correlated subquery
 -- variant that runs two scans per chat row.
+--
+-- Preview must match `chat-projection.ts:applyAfterFanOut`'s live-write
+-- semantics: a clean unquoted string for text messages, NULL for
+-- structured content (file / image / etc.). `content::text` would
+-- serialize JSONB to wire form (with quotes for strings, `{...}` for
+-- objects), producing visible inconsistency between backfilled and
+-- live-written rows. `jsonb_typeof` + `#>> '{}'` extracts the bare
+-- string only when content is a JSON string; otherwise NULL (B3 in
+-- PR review).
 WITH last_msg AS (
   SELECT DISTINCT ON ("chat_id")
     "chat_id",
     "created_at",
-    LEFT("content"::text, 200) AS "preview"
+    CASE
+      WHEN jsonb_typeof("content") = 'string'
+        THEN LEFT("content" #>> '{}', 200)
+      ELSE NULL
+    END AS "preview"
   FROM "messages"
   ORDER BY "chat_id", "created_at" DESC
 )
