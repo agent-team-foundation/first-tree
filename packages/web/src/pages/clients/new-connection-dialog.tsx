@@ -10,7 +10,7 @@ const POLL_MS = 3_000;
 const SUCCESS_HOLD_MS = 1_200;
 
 /**
- * "Connect a new computer" modal — replaces the always-on ConnectStrip.
+ * "Connect computer" modal — replaces the always-on ConnectStrip.
  *
  * Lifecycle:
  *   1. open=true        → snapshot existing client ids → mint a connect token
@@ -96,7 +96,7 @@ export function NewConnectionDialog({ open, onOpenChange }: { open: boolean; onO
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Connect a new computer</DialogTitle>
+          <DialogTitle>Connect computer</DialogTitle>
           <DialogDescription>Run this command on the machine you want to pair with this Hub.</DialogDescription>
         </DialogHeader>
 

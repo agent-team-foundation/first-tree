@@ -8,7 +8,7 @@ import { Label } from "../components/ui/label.js";
 /**
  * Shared "create or edit a platform binding" form.
  *
- * Used by the Settings (formerly /bindings) page. Bot bindings (adapters) and
+ * Used by the Integrations page. Bot bindings (adapters) and
  * user bindings (adapter mappings) share enough of the platform-picker /
  * status-picker / credentials JSON UX that splitting them would just
  * duplicate code; the differentiator is `binding.kind`.

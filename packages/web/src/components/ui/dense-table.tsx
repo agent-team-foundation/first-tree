@@ -7,14 +7,16 @@ import { cn } from "../../lib/utils.js";
 // - Hairline row separators
 // - No outer border (meant to live inside a Panel).
 
-const DenseTable = forwardRef<HTMLTableElement, HTMLAttributes<HTMLTableElement>>(({ className, ...props }, ref) => (
-  <table
-    ref={ref}
-    className={cn("w-full", className)}
-    style={{ borderCollapse: "separate", borderSpacing: 0 }}
-    {...props}
-  />
-));
+const DenseTable = forwardRef<HTMLTableElement, HTMLAttributes<HTMLTableElement>>(
+  ({ className, style, ...props }, ref) => (
+    <table
+      ref={ref}
+      className={cn("w-full", className)}
+      style={{ borderCollapse: "separate", borderSpacing: 0, ...style }}
+      {...props}
+    />
+  ),
+);
 DenseTable.displayName = "DenseTable";
 
 const DenseTableHeader = forwardRef<HTMLTableSectionElement, HTMLAttributes<HTMLTableSectionElement>>(
@@ -54,15 +56,15 @@ const DenseTableHead = forwardRef<HTMLTableCellElement, ThHTMLAttributes<HTMLTab
   ({ className, style, ...props }, ref) => (
     <th
       ref={ref}
-      // `text-eyebrow` bundles 10 / 600 / 0.1em — size was bumped from 9.5
-      // to 10 in the unified scale so Windows ClearType renders headers
-      // cleanly. `font-medium` was removed because the token sets 600.
-      className={cn("mono text-left uppercase text-eyebrow whitespace-nowrap", className)}
+      // Flat header: sentence-case proportional text, no mono / uppercase /
+      // sunken background. Reads like a friendly column label rather than
+      // a database schema row. A faint hairline separates header from body.
+      className={cn("text-left text-label whitespace-nowrap", className)}
       style={{
-        padding: "var(--sp-2) var(--sp-3)",
-        color: "var(--fg-4)",
-        background: "var(--bg-sunken)",
-        borderBottom: "var(--hairline) solid var(--border)",
+        padding: "var(--sp-2) var(--sp-3_5)",
+        color: "var(--fg-3)",
+        fontWeight: 500,
+        borderBottom: "var(--hairline) solid var(--border-faint)",
         ...style,
       }}
       {...props}
@@ -77,7 +79,7 @@ const DenseTableCell = forwardRef<HTMLTableCellElement, TdHTMLAttributes<HTMLTab
       ref={ref}
       className={cn("align-middle text-body", className)}
       style={{
-        padding: "var(--sp-2_25) var(--sp-3)",
+        padding: "var(--sp-2_25) var(--sp-3_5)",
         borderBottom: "var(--hairline) solid var(--border-faint)",
         ...style,
       }}
