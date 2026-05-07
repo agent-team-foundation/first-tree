@@ -92,7 +92,7 @@ describe("me-chat resolveChatTitle", () => {
 
   it("returns a sentinel when no other participants exist", () => {
     const title = resolveChatTitle(null, null, [{ agentId: me, displayName: "Me", type: "human" }], me);
-    expect(title).toBe("(no participants)");
+    expect(title).toBe("Empty chat");
   });
 
   it("ignores empty topic strings (treated as falsy)", () => {

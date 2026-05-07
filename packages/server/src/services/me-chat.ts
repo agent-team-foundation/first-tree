@@ -286,7 +286,13 @@ export function resolveChatTitle(
   if (topic && topic.length > 0) return topic;
   if (firstMessageSummary && firstMessageSummary.length > 0) return firstMessageSummary;
   const others = participants.filter((p) => p.agentId !== selfAgentId);
-  if (others.length === 0) return "(no participants)";
+  // Reachable transiently — e.g., a watcher loads a chat in the brief
+  // window between `recomputeChatWatchers` removing the last managed
+  // agent and the watcher row itself being dropped, or right after an
+  // admin removes the last non-self speaker. Show a neutral, user-
+  // facing label rather than the parenthesized engineering sentinel
+  // it used to render.
+  if (others.length === 0) return "Empty chat";
   if (others.length <= 3) return others.map((p) => p.displayName).join(", ");
   return `${others[0]?.displayName}, ${others[1]?.displayName} +${others.length - 2}`;
 }

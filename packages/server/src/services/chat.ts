@@ -6,6 +6,7 @@ import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatParticipants, chats } from "../db/schema/chats.js";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
+import { invalidateChatAudience } from "./chat-audience-cache.js";
 
 /** Structural DB type so both `Database` and transaction clients work. */
 type DbLike = Pick<PostgresJsDatabase<Record<string, never>>, "select" | "update">;
@@ -223,6 +224,7 @@ export async function ensureParticipant(db: Database, chatId: string, agentId: s
       .values({ chatId, agentId, mode: "full" })
       .onConflictDoNothing({ target: [chatParticipants.chatId, chatParticipants.agentId] });
   });
+  invalidateChatAudience(chatId);
 }
 
 export async function addParticipant(db: Database, chatId: string, requesterId: string, data: AddParticipant) {
@@ -279,6 +281,7 @@ export async function addParticipant(db: Database, chatId: string, requesterId: 
       mode: data.mode ?? "full",
     });
   });
+  invalidateChatAudience(chatId);
 
   return db.select().from(chatParticipants).where(eq(chatParticipants.chatId, chatId));
 }
@@ -300,6 +303,7 @@ export async function removeParticipant(db: Database, chatId: string, requesterI
   if (!removed) {
     throw new NotFoundError(`Agent "${targetAgentId}" is not a participant of this chat`);
   }
+  invalidateChatAudience(chatId);
 
   return db.select().from(chatParticipants).where(eq(chatParticipants.chatId, chatId));
 }
@@ -483,6 +487,7 @@ export async function joinChat(db: Database, chatId: string, memberId: string, h
       mode: "full",
     });
   });
+  invalidateChatAudience(chatId);
 
   return db.select().from(chatParticipants).where(eq(chatParticipants.chatId, chatId));
 }
@@ -500,6 +505,7 @@ export async function leaveChat(db: Database, chatId: string, humanAgentId: stri
   if (!removed) {
     throw new NotFoundError("Not a participant of this chat");
   }
+  invalidateChatAudience(chatId);
 
   return db.select().from(chatParticipants).where(eq(chatParticipants.chatId, chatId));
 }

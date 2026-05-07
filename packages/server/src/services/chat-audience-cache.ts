@@ -26,6 +26,9 @@
 
 import { sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
+import { createLogger } from "../observability/index.js";
+
+const log = createLogger("ChatAudienceCache");
 
 const TTL_MS = 5_000;
 const MAX_ENTRIES = 1024;
@@ -55,7 +58,13 @@ export async function getCachedAudience(db: Database, chatId: string): Promise<S
       }
     }
     return audience;
-  } catch {
+  } catch (err) {
+    // Returning null causes `dispatchChatMessage` to skip the push for
+    // this event. Web reconnects refetch on their own, so transient
+    // failures here just mean a few seconds of latency instead of a
+    // missed message — but a sustained log here would mean the realtime
+    // path is silently degraded, which is worth surfacing.
+    log.warn({ err, chatId }, "failed to resolve chat audience");
     return null;
   }
 }
