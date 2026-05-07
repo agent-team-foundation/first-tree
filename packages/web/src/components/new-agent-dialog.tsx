@@ -215,7 +215,10 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
     setSelectedClientId(sorted[0]?.id ?? null);
   }, [clients, selectedClientId]);
 
-  // Fetch capabilities for the currently selected client.
+  // Fetch capabilities for the currently selected client + keep them fresh.
+  // Polls on the same cadence as `listClients` so a runtime the user just
+  // installed (or signed into) on the host shows up without making them close
+  // and reopen the dialog. Mirrors `OnboardingView`'s detect loop.
   useEffect(() => {
     if (!selectedClientId) {
       setCapabilities(null);
@@ -224,9 +227,11 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
       return;
     }
     let cancelled = false;
-    const seq = ++capsSeqRef.current;
+    // Reset any stale error from the previous selectedClientId — the new
+    // client should start in "Detecting…" until its first fetch lands.
     setCapabilitiesError(null);
-    void (async () => {
+    const fetchCaps = async (): Promise<void> => {
+      const seq = ++capsSeqRef.current;
       try {
         const res = await getClientCapabilities(selectedClientId);
         if (cancelled || seq !== capsSeqRef.current) return;
@@ -235,14 +240,18 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
         setCapabilitiesError(null);
       } catch (err) {
         if (cancelled || seq !== capsSeqRef.current) return;
-        // Surface the error so the runtime section can stop spinning on
-        // "Detecting…" and tell the user something actionable. Previous
-        // capabilities for a different client are dropped via `client !== capabilitiesClientId`.
+        // Surface the error so RuntimeSection can stop spinning on
+        // "Detecting…". Once any fetch has succeeded for this client,
+        // `capabilitiesLoaded` is true and the error is visually hidden,
+        // so transient poll failures don't flicker the UI.
         setCapabilitiesError(err instanceof Error ? err.message : "Failed to read computer capabilities");
       }
-    })();
+    };
+    void fetchCaps();
+    const handle = setInterval(fetchCaps, CLIENT_DETECT_POLL_MS);
     return () => {
       cancelled = true;
+      clearInterval(handle);
     };
   }, [selectedClientId]);
 
