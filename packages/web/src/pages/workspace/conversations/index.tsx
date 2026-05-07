@@ -20,12 +20,6 @@ export const DRAFT_CHAT_ID = "draft" as const;
 
 type Filter = "all" | "unread" | "watching";
 
-const FILTER_PILLS: { value: Filter; label: string }[] = [
-  { value: "all", label: "all" },
-  { value: "unread", label: "unread" },
-  { value: "watching", label: "watching" },
-];
-
 function formatRowTime(iso: string | null): string {
   if (!iso) return "";
   const d = new Date(iso);
@@ -139,7 +133,6 @@ export function ConversationList({
   }, [baseCursor]);
 
   const totalUnread = useMemo(() => allRows.reduce((acc, r) => acc + (r.unreadMentionCount > 0 ? 1 : 0), 0), [allRows]);
-  const totalWatching = useMemo(() => allRows.filter((r) => r.membershipKind === "watching").length, [allRows]);
 
   return (
     <aside
@@ -187,34 +180,32 @@ export function ConversationList({
           New chat
         </button>
         <div className="flex items-center" style={{ gap: 8 }}>
+          {/* Filter pills. Only `unread` is exposed: `all` is the
+              default state (no UI affordance needed) and `watching`
+              is a niche power-user concept that's better surfaced
+              implicitly through the row's `Watching · ...` subtitle.
+              The unread pill itself only shows up when there's
+              something to filter to — clicking the active pill
+              toggles back to `all`. */}
           <div className="flex gap-1 shrink-0">
-            {FILTER_PILLS.map((p) => {
-              // Auto-hide non-"all" pills when their count is zero — they
-              // serve no purpose if the user can't filter to anything.
-              // Always show the active pill so the user can still toggle off.
-              const count =
-                p.value === "unread" ? totalUnread : p.value === "watching" ? totalWatching : allRows.length;
-              if (p.value !== "all" && count === 0 && filter !== p.value) return null;
-              return (
-                <FilterPill
-                  key={p.value}
-                  active={filter === p.value}
-                  count={count}
-                  onClick={() => {
-                    setFilter(p.value);
-                    resetExtras();
-                  }}
-                >
-                  {p.label}
-                </FilterPill>
-              );
-            })}
+            {totalUnread > 0 && (
+              <FilterPill
+                active={filter === "unread"}
+                count={totalUnread}
+                onClick={() => {
+                  setFilter(filter === "unread" ? "all" : "unread");
+                  resetExtras();
+                }}
+              >
+                unread
+              </FilterPill>
+            )}
           </div>
           <div className="relative" style={{ flex: 1, minWidth: 0 }}>
             <Search
               className="h-3 w-3 absolute pointer-events-none"
               style={{
-                left: 6,
+                left: 4,
                 top: "50%",
                 transform: "translateY(-50%)",
                 color: "var(--fg-4)",
@@ -226,7 +217,7 @@ export function ConversationList({
               placeholder="Search…"
               className="w-full outline-none text-caption"
               style={{
-                padding: "var(--sp-0_5) var(--sp-1) var(--sp-0_5) var(--sp-4_5)",
+                padding: "var(--sp-0_5) var(--sp-1) var(--sp-0_5) var(--sp-5)",
                 background: "transparent",
                 border: "none",
                 color: "var(--fg-2)",
@@ -259,7 +250,13 @@ export function ConversationList({
         )}
         {filteredRows.map((row) => {
           const isSelected = selectedChatId === row.chatId;
-          const subtitle = buildSubtitle(row);
+          const rawSubtitle = buildSubtitle(row);
+          // 1-message chats have `firstMessagePreview === lastMessagePreview`,
+          // which makes the row's title (auto-titled from first message) and
+          // subtitle (last message preview) identical. Suppress the subtitle
+          // in that case — duplicating the same string twice on a row reads
+          // as a bug. Falls back to the em-dash placeholder below.
+          const subtitle = rawSubtitle && rawSubtitle !== row.title ? rawSubtitle : "";
           const hasUnread = row.unreadMentionCount > 0;
           return (
             <div key={row.chatId} style={{ borderBottom: "var(--hairline) solid var(--border-faint)" }}>

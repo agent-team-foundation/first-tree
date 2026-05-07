@@ -33,12 +33,36 @@ describe("me-chat resolveChatTitle", () => {
   const me = "agent-self";
 
   it("prefers chat.topic when present", () => {
-    const title = resolveChatTitle("Fix homepage", [], me);
+    const title = resolveChatTitle("Fix homepage", null, [], me);
     expect(title).toBe("Fix homepage");
+  });
+
+  it("uses first-message summary when topic is empty", () => {
+    const title = resolveChatTitle(
+      null,
+      "请帮我重构这个文件",
+      [
+        { agentId: me, displayName: "Me", type: "human" },
+        { agentId: "a", displayName: "Code Agent", type: "personal_assistant" },
+      ],
+      me,
+    );
+    expect(title).toBe("请帮我重构这个文件");
+  });
+
+  it("topic outranks first-message summary", () => {
+    const title = resolveChatTitle(
+      "Manual Title",
+      "请帮我重构这个文件",
+      [{ agentId: "a", displayName: "Code Agent", type: "personal_assistant" }],
+      me,
+    );
+    expect(title).toBe("Manual Title");
   });
 
   it("falls back to comma-joined participant displayNames (≤3 others)", () => {
     const title = resolveChatTitle(
+      null,
       null,
       [
         { agentId: me, displayName: "Me", type: "human" },
@@ -53,6 +77,7 @@ describe("me-chat resolveChatTitle", () => {
   it("collapses to '+N' for 4+ other participants", () => {
     const title = resolveChatTitle(
       null,
+      null,
       [
         { agentId: me, displayName: "Me", type: "human" },
         { agentId: "a", displayName: "Alice", type: "human" },
@@ -66,13 +91,14 @@ describe("me-chat resolveChatTitle", () => {
   });
 
   it("returns a sentinel when no other participants exist", () => {
-    const title = resolveChatTitle(null, [{ agentId: me, displayName: "Me", type: "human" }], me);
+    const title = resolveChatTitle(null, null, [{ agentId: me, displayName: "Me", type: "human" }], me);
     expect(title).toBe("(no participants)");
   });
 
   it("ignores empty topic strings (treated as falsy)", () => {
     const title = resolveChatTitle(
       "",
+      null,
       [
         { agentId: me, displayName: "Me", type: "human" },
         { agentId: "a", displayName: "Code Agent", type: "personal_assistant" },

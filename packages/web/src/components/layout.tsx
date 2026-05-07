@@ -56,10 +56,7 @@ export function Layout() {
             <FirstTreeLogo width={16} height={18} style={{ color: "var(--fg)" }} />
             {/* Brand uses the `text-title` token (16 / 600 / -0.2 letter-spacing). */}
             <span className="text-title" style={{ color: "var(--fg)" }}>
-              First Tree{" "}
-              <span className="font-normal" style={{ color: "var(--fg-3)" }}>
-                Hub
-              </span>
+              First Tree
             </span>
           </span>
           <DisconnectChip />

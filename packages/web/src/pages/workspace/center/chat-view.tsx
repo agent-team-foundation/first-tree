@@ -1,6 +1,6 @@
 import { extractMentions, type MentionParticipant } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUp, AtSign, Check, MessageSquare, Paperclip, Pencil, Plus, X } from "lucide-react";
+import { ArrowUp, AtSign, Check, MessageSquare, Paperclip, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getActivityOverview } from "../../../api/activity.js";
 import {
@@ -21,10 +21,8 @@ import {
   asAssistantTextPayload,
   asErrorPayload,
   asToolCallPayload,
-  listAgentSessions,
   listSessionEvents,
   type SessionEventRow,
-  sessionQueryKey,
 } from "../../../api/sessions.js";
 import { useAuth } from "../../../auth/auth-context.js";
 import { FirstTreeLogo } from "../../../components/first-tree-logo.js";
@@ -34,10 +32,8 @@ import {
   useMentionAutocomplete,
 } from "../../../components/mention-autocomplete.js";
 import { Markdown } from "../../../components/ui/markdown.js";
-import { StateDot } from "../../../components/ui/state-dot.js";
 import { useAgentIdentityMap, useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { cn } from "../../../lib/utils.js";
-import { resolveAgentState } from "../../../utils/agent-state.js";
 import { filterEventsForTimeline } from "../../../utils/session-timeline.js";
 
 function formatClockTime(iso: string): string {
@@ -51,19 +47,6 @@ function formatClockTime(iso: string): string {
   }).formatToParts(d);
   const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? "";
   return `${get("month")}/${get("day")} ${get("hour")}:${get("minute")}`;
-}
-
-function formatRelative(iso: string | null): string {
-  if (!iso) return "—";
-  const ms = Date.now() - new Date(iso).getTime();
-  const s = Math.round(ms / 1000);
-  if (s < 60) return `${s}s ago`;
-  const m = Math.round(s / 60);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.round(m / 60);
-  if (h < 24) return `${h}h ago`;
-  const d = Math.round(h / 24);
-  return `${d}d ago`;
 }
 
 function formatDuration(ms: number): string {
@@ -510,12 +493,6 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
     refetchInterval: 5_000,
   });
 
-  const { data: session } = useQuery({
-    queryKey: sessionQueryKey(agentId, chatId),
-    queryFn: () => listAgentSessions(agentId).then((sessions) => sessions.find((s) => s.chatId === chatId) ?? null),
-    refetchInterval: 5_000,
-  });
-
   const { data: chatDetail } = useQuery({
     queryKey: ["chat-detail", chatId],
     queryFn: () => getChat(chatId),
@@ -797,9 +774,6 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
       });
     },
   });
-  const runtimeLabel = session?.runtimeState ?? "idle";
-  const runtimeState = resolveAgentState(session?.runtimeState ?? null, agentId ? "connected" : null);
-  const msgCount = session?.messageCount ?? messagesData?.items?.length ?? 0;
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -812,102 +786,139 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
           chat-level actions (mute, archive, leave) will land here in
           an overflow menu. */}
       <div
-        className="flex items-center shrink-0"
+        className="shrink-0"
         style={{
-          padding: "var(--sp-2_5) var(--sp-10)",
+          padding: "var(--sp-2_5) var(--sp-6)",
           borderBottom: "var(--hairline) solid var(--border)",
         }}
       >
-        {/* Identity (state + title + rename) — left-anchored, truncates
-            when long. ✏️ rename button is hover-only. */}
-        <div className="group flex items-center min-w-0" style={{ gap: 8, flex: 1 }}>
-          <StateDot state={runtimeState} size={8} />
-          {renaming ? (
-            <>
-              <input
-                ref={renameInputRef}
-                value={renameDraft}
-                onChange={(e) => setRenameDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    commitRename();
-                  } else if (e.key === "Escape") {
-                    e.preventDefault();
-                    setRenaming(false);
-                  }
-                }}
-                disabled={renameMut.isPending}
-                maxLength={500}
-                placeholder="Chat name"
-                className="outline-none text-subtitle"
-                style={{
-                  flex: 1,
-                  minWidth: 0,
-                  color: "var(--fg)",
-                  background: "var(--bg-sunken)",
-                  border: "var(--hairline) solid var(--border)",
-                  borderRadius: "var(--radius-input)",
-                  padding: "var(--sp-0_5) var(--sp-1_5)",
-                }}
-              />
-              <button
-                type="button"
-                onClick={commitRename}
-                disabled={renameMut.isPending}
-                title="Save"
-                className="inline-flex items-center"
-                style={{ color: "var(--accent)", padding: 2 }}
-              >
-                <Check className="h-3.5 w-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={() => setRenaming(false)}
-                disabled={renameMut.isPending}
-                title="Cancel"
-                className="inline-flex items-center"
-                style={{ color: "var(--fg-3)", padding: 2 }}
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </>
-          ) : (
-            <>
-              <span
-                className="truncate text-subtitle"
-                title={`${chatId} · started ${formatRelative(session?.startedAt ?? null)} · ${msgCount} msgs · ${runtimeLabel}`}
-                style={{ color: "var(--fg)" }}
-              >
-                {chatDetail?.topic || session?.summary || `Chat · ${chatId.slice(0, 8)}`}
-              </span>
+        {/* Header content sits in the same centered reading column as
+            the timeline + composer below — title's left edge aligns
+            with message avatars, chips' right edge aligns with the
+            composer's right edge. The outer band still bleeds to the
+            panel edges (border-bottom + side padding) so the header
+            keeps its frame role; only the content centers. */}
+        <div
+          className="flex items-center"
+          style={{
+            maxWidth: "clamp(55rem, 75%, 70rem)",
+            margin: "0 auto",
+            width: "100%",
+            gap: 10,
+          }}
+        >
+          {/* Identity — title is the sole click-to-rename affordance
+              (Slack / Linear pattern). The hover-only ✏️ pencil was
+              dropped after the title itself became clickable: two
+              affordances for the same action add visual noise without
+              improving discoverability. The per-agent `StateDot` was
+              also dropped — in chat-first, runtime is a per-agent
+              concept that belongs on each chip avatar (D-4), not on
+              the chat header. */}
+          <div className="flex items-center min-w-0" style={{ gap: 8, flex: 1 }}>
+            {renaming ? (
+              <>
+                <input
+                  ref={renameInputRef}
+                  value={renameDraft}
+                  onChange={(e) => setRenameDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      commitRename();
+                    } else if (e.key === "Escape") {
+                      e.preventDefault();
+                      setRenaming(false);
+                    }
+                  }}
+                  disabled={renameMut.isPending}
+                  maxLength={500}
+                  placeholder="Chat name"
+                  className="outline-none text-subtitle"
+                  // Auto-grow with content (modern CSS `field-sizing: content`)
+                  // so the ✓/× buttons sit immediately after the last typed
+                  // character instead of floating at the panel's right edge.
+                  // `minWidth` keeps the input usable from an empty draft;
+                  // `maxWidth` prevents it from pushing chips off-screen on
+                  // very long input. Browsers without `field-sizing` support
+                  // (older Safari/Firefox) fall back to a sensible default
+                  // sized by the input element's intrinsic width.
+                  style={{
+                    fieldSizing: "content",
+                    minWidth: 200,
+                    maxWidth: 480,
+                    color: "var(--fg)",
+                    background: "var(--bg-sunken)",
+                    border: "var(--hairline) solid var(--border)",
+                    borderRadius: "var(--radius-input)",
+                    padding: "var(--sp-0_5) var(--sp-1_5)",
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={commitRename}
+                  disabled={renameMut.isPending}
+                  title="Save"
+                  className="inline-flex items-center"
+                  style={{ color: "var(--accent)", padding: 2 }}
+                >
+                  <Check className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRenaming(false)}
+                  disabled={renameMut.isPending}
+                  title="Cancel"
+                  className="inline-flex items-center"
+                  style={{ color: "var(--fg-3)", padding: 2 }}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </>
+            ) : (
               <button
                 type="button"
                 onClick={() => {
-                  setRenameDraft(chatDetail?.topic ?? "");
+                  // Pre-fill with the rendered title (manual topic OR
+                  // auto-generated from first message) so "rename" reads
+                  // as "edit current name" rather than "type from blank".
+                  // If user commits unchanged, topic gets set to the
+                  // auto-title string — harmless since the resolver still
+                  // displays the same text on next read.
+                  setRenameDraft(chatDetail?.topic ?? chatDetail?.title ?? "");
                   setRenaming(true);
                 }}
-                title="Rename chat"
-                aria-label="Rename chat"
-                className="inline-flex items-center transition-opacity opacity-0 group-hover:opacity-100"
-                style={{ color: "var(--fg-3)", padding: 2 }}
+                title="Click to rename"
+                className="truncate text-subtitle text-left min-w-0"
+                style={{
+                  color: "var(--fg)",
+                  background: "transparent",
+                  border: "none",
+                  padding: 0,
+                  cursor: "pointer",
+                }}
               >
-                <Pencil className="h-3 w-3" />
+                {chatDetail?.title ?? "…"}
               </button>
-            </>
-          )}
+            )}
+          </div>
+          {/* Audience — chips + add button. Right-anchored. Includes
+              the viewer's own agent: in chat-first the user is a real
+              participant and seeing themselves in the audience makes
+              the membership state explicit. Self's display name comes
+              through `agentIdentity` rather than `mentionCandidates`
+              (the latter excludes self by design — you don't @ yourself).
+              The [+] dropdown anchors to the right edge of the button
+              so it grows leftward, avoiding panel-edge overflow when
+              the chip row is long. */}
+          <ParticipantsHeader
+            chatId={chatId}
+            participantIds={chatDetail?.participants?.map((p) => p.agentId) ?? [agentId]}
+            candidates={mentionCandidates}
+            agentIdentity={agentIdentity}
+            onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
+          />
         </div>
-        {/* Audience — chips + add button. Right-anchored. The metadata
-            strip (`started 2h · 12 msgs · idle`) was removed: state is
-            already conveyed by `StateDot`'s color, message count is
-            implicit in the visible timeline, and start time is rare
-            enough to live in the title's hover tooltip. */}
-        <ParticipantsHeader
-          chatId={chatId}
-          participantIds={chatDetail?.participants?.map((p) => p.agentId) ?? [agentId]}
-          candidates={mentionCandidates}
-          onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
-        />
       </div>
 
       {/* Timeline. Scroll viewport stays full-width so the scrollbar hugs
@@ -1174,10 +1185,6 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
                     }
                   }}
                 />
-                <span>/suspend</span>
-                <span>/resume</span>
-                <span>/branch</span>
-                <span>/promote</span>
               </span>
               <span className="flex items-center" style={{ gap: 8 }}>
                 {uploading && (
@@ -1253,11 +1260,16 @@ function ParticipantsHeader({
   chatId,
   participantIds,
   candidates,
+  agentIdentity,
   onAdded,
 }: {
   chatId: string;
   participantIds: string[];
   candidates: MentionCandidate[];
+  /** Identity resolver covering ALL agents (incl. the viewer's own,
+   *  which `mentionCandidates` excludes). Lets the chip row label
+   *  self correctly instead of falling back to a UUID prefix. */
+  agentIdentity: (uuid: string | null | undefined) => { name: string | null; displayName: string } | null;
   onAdded: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -1290,8 +1302,12 @@ function ParticipantsHeader({
   return (
     <div className="inline-flex items-center flex-wrap" style={{ gap: 4 }}>
       {participantIds.map((id) => {
-        const cand = candidates.find((c) => c.agentId === id);
-        const label = cand?.displayName ?? cand?.name ?? id.slice(0, 8);
+        // Prefer `agentIdentity` (covers self) over `candidates`
+        // (excludes self by design — see useMentionAutocomplete callers).
+        // Falls back to UUID prefix only if both are empty, which
+        // shouldn't happen for in-org agents.
+        const ident = agentIdentity(id);
+        const label = ident?.displayName ?? ident?.name ?? id.slice(0, 8);
         return (
           <span
             key={id}
@@ -1331,9 +1347,13 @@ function ParticipantsHeader({
             role="listbox"
             aria-label="Add participant"
             className="absolute z-20 max-h-56 overflow-auto rounded-md border shadow-lg"
+            // Right-anchored so the dropdown grows leftward from the
+            // [+] button instead of rightward — chip rows tend to push
+            // [+] near the panel edge, where left-anchoring would cause
+            // the dropdown to overflow off-screen.
             style={{
               top: "calc(100% + var(--sp-1))",
-              left: 0,
+              right: 0,
               minWidth: 280,
               background: "var(--bg-raised)",
               borderColor: "var(--border)",

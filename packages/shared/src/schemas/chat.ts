@@ -56,6 +56,15 @@ export type Chat = z.infer<typeof chatSchema>;
 
 export const chatDetailSchema = chatSchema.extend({
   participants: z.array(chatParticipantSchema),
+  /** Server-resolved display title. Priority: `topic` > first message
+   *  preview > participant join. Clients should render this directly
+   *  rather than re-implementing the fallback chain. */
+  title: z.string(),
+  /** First message body's text summary (≤ 50 code points), or null if
+   *  the chat has no messages yet (or the first message is a file/image
+   *  with no `text` field). Exposed alongside the resolved `title` so
+   *  callers can use it for tooltips / hover descriptions. */
+  firstMessagePreview: z.string().nullable(),
 });
 export type ChatDetail = z.infer<typeof chatDetailSchema>;
 

@@ -29,7 +29,9 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatParticipants, chatSubscriptions, chats } from "../db/schema/chats.js";
+import { messages } from "../db/schema/messages.js";
 import { BadRequestError, NotFoundError } from "../errors.js";
+import { extractSummary } from "./session.js";
 import {
   ensureCanJoin,
   joinAsParticipant,
@@ -217,9 +219,31 @@ export async function listMeChats(
     participantsByChat.set(p.chatId, list);
   }
 
+  // First-message lookup for the page — drives the auto-title fallback in
+  // `resolveChatTitle` so chats without a manual `topic` get a meaningful
+  // identity (`"请帮我重构这个文件"` rather than just the participant join,
+  // which often duplicates the chip row). Mirrors `session.ts:listAgentSessions`'s
+  // `selectDistinctOn` pattern over `idx_messages_chat_time`. Read-time
+  // (vs a denormalized projection column) so editing/deleting the first
+  // message naturally flows into the title without a separate write path.
+  const firstMessageRows =
+    chatIds.length > 0
+      ? await db
+          .selectDistinctOn([messages.chatId], { chatId: messages.chatId, content: messages.content })
+          .from(messages)
+          .where(inArray(messages.chatId, chatIds))
+          .orderBy(messages.chatId, messages.createdAt)
+      : [];
+
+  const firstMessageSummary = new Map<string, string>();
+  for (const row of firstMessageRows) {
+    const s = extractSummary(row.content);
+    if (s) firstMessageSummary.set(row.chatId, s);
+  }
+
   const rows: MeChatRow[] = pageRaw.map((r) => {
     const participants = participantsByChat.get(r.chat_id) ?? [];
-    const title = resolveChatTitle(r.topic, participants, humanAgentId);
+    const title = resolveChatTitle(r.topic, firstMessageSummary.get(r.chat_id) ?? null, participants, humanAgentId);
     return {
       chatId: r.chat_id,
       type: r.type,
@@ -241,15 +265,25 @@ export async function listMeChats(
 }
 
 /**
- * Title resolution: chat.topic > short participant summary. v1 does not
- * generate titles from message content (see "Open Questions" §"Title").
+ * Title resolution priority:
+ *
+ *   1. `chat.topic` (manual, set via `PATCH /admin/chats/:id`)
+ *   2. First message summary (auto, ≤ 50 chars from `extractSummary`)
+ *   3. Participant join (fallback when chat has no messages yet)
+ *
+ * The first-message fallback is the chat-first equivalent of how
+ * ChatGPT / Claude.ai name conversations from the user's opening
+ * prompt — gives same-agent multi-chats distinct identities and
+ * removes the "title duplicates participants chip row" anti-pattern.
  */
 export function resolveChatTitle(
   topic: string | null,
+  firstMessageSummary: string | null,
   participants: MeChatRow["participants"],
   selfAgentId: string,
 ): string {
   if (topic && topic.length > 0) return topic;
+  if (firstMessageSummary && firstMessageSummary.length > 0) return firstMessageSummary;
   const others = participants.filter((p) => p.agentId !== selfAgentId);
   if (others.length === 0) return "(no participants)";
   if (others.length <= 3) return others.map((p) => p.displayName).join(", ");
