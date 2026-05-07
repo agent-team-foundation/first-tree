@@ -110,12 +110,16 @@ describe("Invitation lifecycle", () => {
       displayName: "Peer",
       username: `peer-${otherUserId.slice(0, 8)}`,
     });
-    const tokens = await signTokensForMember(app.config.secrets.jwtSecret, {
-      userId: otherUserId,
-      memberId: peer.id,
-      organizationId: peer.organizationId,
-      role: "member",
-    });
+    const tokens = await signTokensForMember(
+      app.config.secrets.jwtSecret,
+      {
+        userId: otherUserId,
+        memberId: peer.id,
+        organizationId: peer.organizationId,
+        role: "member",
+      },
+      app.config.auth,
+    );
     const res = await app.inject({
       method: "POST",
       url: `/api/v1/admin/organizations/${admin.organizationId}/invitations/rotate`,

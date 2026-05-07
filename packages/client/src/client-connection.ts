@@ -94,6 +94,14 @@ type ClientConnectionEvents = {
   "session:command": [command: SessionCommand];
   "session:reconcile:result": [result: SessionReconcileResult];
   "auth:expired": [];
+  /**
+   * Unrecoverable auth failure — the credential provider rejected with an
+   * `AuthRefreshFailedError` (refresh token expired/revoked). The connection
+   * has stopped trying to reconnect; the consumer should surface a recovery
+   * prompt to the operator (re-run `first-tree-hub connect <token>`) and
+   * usually exit so a supervisor can back off instead of looping at 1 Hz.
+   */
+  "auth:fatal": [error: Error];
   "server:welcome": [welcome: ServerWelcome];
 };
 
@@ -407,7 +415,12 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
 
       ws.on("open", async () => {
         this.ws = ws;
-        this.reconnectAttempt = 0;
+        // Don't reset reconnectAttempt here — a TCP/WS handshake succeeding
+        // but the auth phase failing is exactly the loop the client.log
+        // captured at 19:40 (1 Hz reconnect storm with `failed to obtain
+        // access token`). Resetting on `open` collapsed the exponential
+        // backoff to attempt=1 forever. Reset on the application-layer
+        // success signal — `client:registered` — instead.
         this.wsLogger.debug("socket opened, sending auth");
 
         try {
@@ -428,7 +441,23 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
           this.scheduleProactiveAuthRefresh(token);
         } catch (err) {
           this.authLogger.error({ err }, "failed to obtain access token");
-          settle(reject, err instanceof Error ? err : new Error(String(err)));
+          // Refresh token expired / revoked is unrecoverable from inside the
+          // process — no amount of retrying will succeed without the
+          // operator running `first-tree-hub connect <new-token>`. Mark the
+          // connection closed so `ws.on("close")` doesn't reschedule, and
+          // surface an `auth:fatal` event so the consumer (typically the
+          // CLI) can print a recovery prompt and exit, letting systemd /
+          // launchd back off instead of looping at the WS reconnect base.
+          //
+          // `name` duck-typed instead of `instanceof` so this file doesn't
+          // pull a runtime dependency on the command package (one-way:
+          // command depends on client, not the other way around).
+          const e = err instanceof Error ? err : new Error(String(err));
+          if (e.name === "AuthRefreshFailedError") {
+            this.closing = true;
+            this.emit("auth:fatal", e);
+          }
+          settle(reject, e);
           ws.close();
         }
       });
@@ -573,6 +602,11 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     if (type === "client:registered") {
       const isReconnect = this.boundAgents.size > 0 || this.desiredBindings.size > 0;
       this.registered = true;
+      // Application-layer success — only now is it safe to reset the backoff
+      // counter. A TCP-only success (`ws.on("open")`) is not enough; an auth
+      // failure between `open` and `client:registered` would otherwise
+      // collapse the exponential backoff to attempt=1.
+      this.reconnectAttempt = 0;
       this.startHeartbeat();
       this.wsLogger.info({ isReconnect }, "registered");
       this.emit("connected");
@@ -762,6 +796,9 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   }
 
   private scheduleReconnect(): void {
+    // Guard against an entry from auth:fatal / disconnect() racing with the
+    // close handler — `closing=true` means "no more reconnects", honoured here.
+    if (this.closing) return;
     this.reconnectAttempt++;
     this.emit("reconnecting", this.reconnectAttempt);
 

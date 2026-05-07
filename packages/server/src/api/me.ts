@@ -114,6 +114,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     const { token, expiresIn } = await authService.generateConnectToken(
       { userId: m.userId, memberId: m.memberId, organizationId: m.organizationId, role: m.role },
       app.config.secrets.jwtSecret,
+      app.config.auth,
       issuer,
     );
 
@@ -177,12 +178,16 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       name: body.name,
       displayName: body.displayName,
     });
-    const tokens = await authService.signTokensForMember(app.config.secrets.jwtSecret, {
-      userId: m.userId,
-      memberId: created.memberId,
-      organizationId: created.organizationId,
-      role: "admin",
-    });
+    const tokens = await authService.signTokensForMember(
+      app.config.secrets.jwtSecret,
+      {
+        userId: m.userId,
+        memberId: created.memberId,
+        organizationId: created.organizationId,
+        role: "admin",
+      },
+      app.config.auth,
+    );
     return reply.status(201).send({
       organization: {
         id: created.organizationId,
@@ -230,12 +235,16 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         userAgent: request.headers["user-agent"] ?? null,
       });
 
-      const tokens = await authService.signTokensForMember(app.config.secrets.jwtSecret, {
-        userId: m.userId,
-        memberId: member.id,
-        organizationId: member.organizationId,
-        role: member.role,
-      });
+      const tokens = await authService.signTokensForMember(
+        app.config.secrets.jwtSecret,
+        {
+          userId: m.userId,
+          memberId: member.id,
+          organizationId: member.organizationId,
+          role: member.role,
+        },
+        app.config.auth,
+      );
       return reply.status(200).send({
         organizationId: member.organizationId,
         memberId: member.id,

@@ -41,6 +41,7 @@ import {
   getClientServiceStatus,
   handleClientOrgMismatch,
   isServiceSupported,
+  loadCredentials,
   migrateLocalAgentDirs,
   printResults,
   promptMissingFields,
@@ -407,6 +408,33 @@ export function registerClientCommands(program: Command): void {
         print.line("  Hub:      (not configured — run `first-tree-hub client connect <url>`)\n");
       }
 
+      // Auth health — local-only check on the persisted refresh token's `exp`
+      // claim. Mirrors the supervisor's reality: a "running" service whose
+      // refresh token is past expiry is just looping at 1Hz on `/auth/refresh`
+      // and will never come back online without operator action. Done locally
+      // (not via `/me`) to keep this command < 1s and offline-safe.
+      const creds = loadCredentials();
+      if (creds) {
+        const exp = decodeJwtExpSeconds(creds.refreshToken);
+        if (exp == null) {
+          print.line("  Auth:     ⚠ could not parse refresh token (corrupt credentials)\n");
+        } else {
+          const remainingSec = exp - Math.floor(Date.now() / 1000);
+          if (remainingSec <= 0) {
+            print.line("  Auth:     ✗ refresh token EXPIRED — re-run `first-tree-hub connect <token>`\n");
+            print.line("              (get a fresh token from your Hub's Web admin → Computers → New Connection)\n");
+          } else if (remainingSec < 2 * 86400) {
+            const hours = Math.floor(remainingSec / 3600);
+            print.line(`  Auth:     ⚠ refresh token expires in ~${hours}h — reclaim soon to stay online\n`);
+          } else {
+            const days = Math.floor(remainingSec / 86400);
+            print.line(`  Auth:     ✓ refresh token valid for ~${days}d\n`);
+          }
+        }
+      } else {
+        print.line("  Auth:     (no credentials — run `first-tree-hub client connect <url>`)\n");
+      }
+
       // Agents.
       const agentsDir = join(DEFAULT_CONFIG_DIR, "agents");
       try {
@@ -650,4 +678,24 @@ function getNested(obj: Record<string, unknown>, path: string): string | null {
     cur = (cur as Record<string, unknown>)[part];
   }
   return typeof cur === "string" ? cur : null;
+}
+
+/**
+ * Pull the `exp` claim (in seconds since epoch) out of a JWT without
+ * verifying the signature — the `client status` auth-health line just
+ * needs the wall-clock countdown, not a trust decision. Returns null
+ * for malformed tokens so the caller can render a friendly fallback
+ * instead of crashing.
+ */
+function decodeJwtExpSeconds(token: string): number | null {
+  const parts = token.split(".");
+  if (parts.length < 2 || !parts[1]) return null;
+  try {
+    const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const pad = b64.length % 4 === 0 ? "" : "=".repeat(4 - (b64.length % 4));
+    const payload = JSON.parse(Buffer.from(b64 + pad, "base64").toString("utf-8")) as { exp?: unknown };
+    return typeof payload.exp === "number" ? payload.exp : null;
+  } catch {
+    return null;
+  }
 }
