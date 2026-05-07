@@ -5,7 +5,7 @@ import { type FormEvent, useEffect, useState } from "react";
 import { getOrganization, updateOrganization } from "../api/organizations.js";
 import { useAuth } from "../auth/auth-context.js";
 import { Button } from "../components/ui/button.js";
-import { Panel, PanelBody, PanelHeader, PanelTitle } from "../components/ui/panel.js";
+import { FlatSectionHeader } from "../components/ui/flat-section-header.js";
 
 /**
  * Admin-only panel for renaming the team (`organizations.display_name` and
@@ -63,55 +63,62 @@ export function TeamIdentityPanel() {
   };
 
   return (
-    <Panel>
-      <PanelHeader>
-        <PanelTitle>Team identity</PanelTitle>
-        <div className="flex items-center gap-1.5">
-          {saved && (
-            <span className="mono text-caption" style={{ color: "var(--accent-dim)" }}>
-              saved
-            </span>
-          )}
-          <Button type="submit" form="team-identity-form" size="xs" disabled={mutation.isPending || !orgQuery.data}>
-            <Check className="h-3 w-3" />
-            {mutation.isPending ? "Saving…" : "Save"}
-          </Button>
-        </div>
-      </PanelHeader>
-      <PanelBody>
-        {orgQuery.isLoading ? (
-          <div className="text-body" style={{ color: "var(--fg-3)" }}>
-            Loading…
-          </div>
-        ) : orgQuery.error ? (
-          <div className="text-body" style={{ color: "var(--state-error)" }}>
-            {orgQuery.error instanceof Error ? orgQuery.error.message : "Failed to load team"}
-          </div>
-        ) : (
-          <form id="team-identity-form" onSubmit={handleSubmit}>
-            <Field
-              label="Team name"
-              hint="Shown in the team switcher and dashboard header."
-              value={displayName}
-              onChange={setDisplayName}
-            />
-            <Field
-              label="URL slug"
-              hint="Lowercase letters, digits, hyphens. Used in invite URLs."
-              value={slug}
-              onChange={(v) => setSlug(v.toLowerCase())}
-              mono
-              pattern="[a-z0-9][a-z0-9-]*"
-            />
-            {mutation.error instanceof Error && (
-              <div className="text-body" style={{ color: "var(--state-error)", marginTop: "var(--sp-2)" }}>
-                {mutation.error.message}
-              </div>
+    <section>
+      <FlatSectionHeader
+        right={
+          <div className="flex items-center gap-1.5">
+            {saved && (
+              <span className="mono text-caption" style={{ color: "var(--accent-dim)" }}>
+                saved
+              </span>
             )}
-          </form>
-        )}
-      </PanelBody>
-    </Panel>
+            <Button
+              type="submit"
+              form="team-identity-form"
+              size="xs"
+              variant="outline"
+              disabled={mutation.isPending || !orgQuery.data}
+            >
+              <Check className="h-3 w-3" />
+              {mutation.isPending ? "Saving…" : "Save"}
+            </Button>
+          </div>
+        }
+      >
+        Team identity
+      </FlatSectionHeader>
+      {orgQuery.isLoading ? (
+        <div className="text-body" style={{ color: "var(--fg-3)", padding: "var(--sp-3) var(--sp-1)" }}>
+          Loading…
+        </div>
+      ) : orgQuery.error ? (
+        <div className="text-body" style={{ color: "var(--state-error)", padding: "var(--sp-3) var(--sp-1)" }}>
+          {orgQuery.error instanceof Error ? orgQuery.error.message : "Failed to load team"}
+        </div>
+      ) : (
+        <form id="team-identity-form" onSubmit={handleSubmit}>
+          <Field
+            label="Team name"
+            hint="Shown in the team switcher and dashboard header."
+            value={displayName}
+            onChange={setDisplayName}
+          />
+          <Field
+            label="URL slug"
+            hint="Lowercase letters, digits, hyphens. Used in invite URLs."
+            value={slug}
+            onChange={(v) => setSlug(v.toLowerCase())}
+            mono
+            pattern="[a-z0-9][a-z0-9-]*"
+          />
+          {mutation.error instanceof Error && (
+            <div className="text-body" style={{ color: "var(--state-error)", marginTop: "var(--sp-2)" }}>
+              {mutation.error.message}
+            </div>
+          )}
+        </form>
+      )}
+    </section>
   );
 }
 
@@ -135,7 +142,7 @@ function Field({
       className="grid items-start gap-5"
       style={{
         gridTemplateColumns: "1fr var(--sp-45)",
-        padding: "var(--sp-3_5) 0",
+        padding: "var(--sp-3_5) var(--sp-1)",
         borderTop: "var(--hairline) solid var(--border-faint)",
       }}
     >
