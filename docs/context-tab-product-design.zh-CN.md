@@ -43,9 +43,9 @@ First Tree Hub 的 `/context` 不是要把 Context Tree 改造成 human wiki,而
 
 ## 用户故事
 
-### Story 1: 感知 Context Tree 正在作为 agent context 可用
+### Story 1: 感知 agents 的判断背后有 Context Tree
 
-作为 First Tree Hub 用户,我打开 `/context` 时,想看到 Context Tree snapshot 是否已同步并可用,这样我能理解 agents 不是只靠零散 prompt,而是在读取一棵团队认知树来判断和行动。
+作为 First Tree Hub 用户,我打开 `/context` 时,想感知 agents 的判断和行动不是只靠零散 prompt,而是建立在一棵已同步的团队认知树上。这样当我看到 agent 的输出、协作请求或执行结果时,能理解它背后有一层可观察、可维护的 context source。
 
 验收标准:
 
@@ -53,9 +53,9 @@ First Tree Hub 的 `/context` 不是要把 Context Tree 改造成 human wiki,而
 - 显示 repo branch、head commit、最近同步时间。
 - 本需求不暗示每个 agent 实际加载了哪个 commit。
 
-### Story 2: 看到自上次查看后的 agent context 变化
+### Story 2: 感知团队认知树正在生长
 
-作为 human/operator,我想看到自上次查看后 Context Tree 发生了多少变化,这样我知道 agents 用于判断和行动的上下文是否出现了需要关注的新变化。
+作为 human/operator,我想看到自上次查看后 Context Tree 新增、修改、删除了哪些内容,这样我能感知这棵树不是静态文档,而是在随团队工作持续生长,并持续改变 agents 用于判断和行动的上下文。
 
 验收标准:
 
@@ -63,9 +63,9 @@ First Tree Hub 的 `/context` 不是要把 Context Tree 改造成 human wiki,而
 - 分开显示 added / edited / removed。
 - 支持 `Mark all seen`,把当前 head commit 写入本地 last-seen baseline。
 
-### Story 3: 在树结构中定位变化
+### Story 3: 理解变化会影响哪块 agent context
 
-作为 human/operator,我想在树图上看到变化分布在哪些 domain / subdomain,这样我不用从文件路径或 commit log 推断它属于 agent 将读取的哪块团队认知。
+作为 human/operator,我想在树图上看到变化分布在哪些 domain / subdomain,这样我能判断这些变化会影响 agents 对哪块团队知识的理解,以及可能影响哪些后续协作判断。
 
 验收标准:
 
@@ -73,9 +73,9 @@ First Tree Hub 的 `/context` 不是要把 Context Tree 改造成 human wiki,而
 - changed nodes 在 Tree Map 上高亮。
 - ancestor/domain 节点聚合子树变化数量。
 
-### Story 4: 判断变化是否需要我介入
+### Story 4: 从变化找到责任人和决策上下文
 
-作为 human/operator,我点击变化节点时,想看到 owner、path、变化类型、关联节点和内容预览,这样我可以判断是否相关,以及该找谁确认。
+作为 human/operator,当某个 context 变化可能影响团队决策、agent 行动或跨域协作时,我想点击节点看到 owner、path、关联节点和内容预览,这样我可以判断是否需要介入、找谁确认、以及这个变化连接到哪些上下文。
 
 验收标准:
 
