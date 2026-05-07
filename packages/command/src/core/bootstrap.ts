@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   clientConfigSchema,
@@ -70,6 +70,41 @@ export class AuthRefreshFailedError extends Error {
 }
 
 /**
+ * Thrown when `/auth/refresh` returns 429. Carries the server-suggested
+ * retry-after (or a sane default) so the WS reconnect loop can wait at
+ * least that long instead of pounding the limiter inside the same window
+ * with its default 1/2/4/8s exponential backoff — which would just keep
+ * the rate-limit bucket full and stretch the outage. Defaults to 30s when
+ * the server omits the header.
+ */
+export class AuthRefreshRateLimitedError extends Error {
+  readonly retryAfterMs: number;
+  constructor(retryAfterMs: number, message?: string) {
+    super(message ?? `Refresh request rate-limited; retry after ${Math.round(retryAfterMs / 1000)}s.`);
+    this.name = "AuthRefreshRateLimitedError";
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+/**
+ * Parse an HTTP `Retry-After` header. Accepts either an integer seconds
+ * value (the form fastify-rate-limit emits) or an RFC 7231 HTTP-date.
+ * Returns ms, or `null` when the header is absent / malformed.
+ */
+function parseRetryAfterMs(header: string | null): number | null {
+  if (!header) return null;
+  const trimmed = header.trim();
+  const seconds = Number(trimmed);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const date = Date.parse(trimmed);
+  if (Number.isFinite(date)) {
+    const delta = date - Date.now();
+    return delta > 0 ? delta : 0;
+  }
+  return null;
+}
+
+/**
  * In-flight refresh promise. Multiple callers (WS handshake, proactive
  * refresh timer, every SDK request) can see an expired token within the same
  * millisecond — without dedupe each would fire an independent `/auth/refresh`
@@ -128,6 +163,10 @@ export async function ensureFreshAccessToken(opts?: { minValidityMs?: number }):
           "(get a fresh token from the Web Computers page → New Connection).",
       );
     }
+    if (res.status === 429) {
+      const retryAfterMs = parseRetryAfterMs(res.headers.get("retry-after")) ?? 30_000;
+      throw new AuthRefreshRateLimitedError(retryAfterMs);
+    }
     if (!res.ok) {
       throw new Error(`Refresh request failed with status ${res.status}.`);
     }
@@ -164,11 +203,37 @@ function isTokenStale(token: string, minValidityMs: number): boolean {
   }
 }
 
-/** Persist credentials to disk. */
+/**
+ * Persist credentials to disk atomically.
+ *
+ * Plain `writeFileSync` opens with `O_TRUNC` then writes — between those
+ * calls the file is empty, and a concurrent `loadCredentials()` (e.g. a
+ * background daemon refreshing while the user runs a foreground CLI command)
+ * reads "" → `JSON.parse` throws → we fall back to "no credentials" and
+ * surface a misleading "run `client connect` again" error. write-to-temp +
+ * rename gives readers an all-or-nothing view: they see the old file or the
+ * new file, never a half-written one. Server-side the sliding-window design
+ * already accepts last-writer-wins semantics for the refresh token itself
+ * (see auth service comment), so atomicity at the file level is enough.
+ */
 export function saveCredentials(creds: StoredCredentials): void {
   const dir = dirname(CREDENTIALS_PATH);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  writeFileSync(CREDENTIALS_PATH, JSON.stringify(creds, null, 2), { mode: 0o600 });
+  const tmp = `${CREDENTIALS_PATH}.tmp.${process.pid}`;
+  try {
+    writeFileSync(tmp, JSON.stringify(creds, null, 2), { mode: 0o600 });
+    renameSync(tmp, CREDENTIALS_PATH);
+  } catch (err) {
+    // Best-effort cleanup so a failed write doesn't leave behind orphan
+    // temp files. Swallow the unlink error — the original failure is what
+    // the caller cares about.
+    try {
+      unlinkSync(tmp);
+    } catch {
+      // ignore
+    }
+    throw err;
+  }
 }
 
 /**

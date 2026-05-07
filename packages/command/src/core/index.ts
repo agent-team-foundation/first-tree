@@ -10,6 +10,7 @@ export { findStaleAliases, formatStaleReason, removeLocalAgent } from "./agent-p
 // Bootstrap / credentials
 export {
   AuthRefreshFailedError,
+  AuthRefreshRateLimitedError,
   ensureFreshAccessToken,
   ensureFreshAdminToken,
   loadCredentials,
