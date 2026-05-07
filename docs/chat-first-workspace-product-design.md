@@ -683,6 +683,15 @@ To minimise regression risk in the message + inbox path:
    member action.
 6. **Realtime `chat:message` is best-effort.** Failure must log + swallow.
 7. **Watcher recompute is set-based.** Never use it on `join` / `leave`.
+8. **Audience cache is single-instance correct only (v1).** The
+   in-process cache in `services/chat-audience-cache.ts` (TTL 5s) does
+   not propagate participant-set changes across replicas. Until a
+   `chat:audience` PG NOTIFY channel is added (v1.1 follow-up), Hub
+   deployments MUST run as a single API instance, **or** route admin-WS
+   connections with sticky session affinity. Without one of those, an
+   add-participant on replica A leaves replica B serving stale audiences
+   for up to 5 seconds, during which the newly-added speaker won't
+   receive `chat:message` pushes. (Reviewer #228 finding 4.)
 
 ---
 
