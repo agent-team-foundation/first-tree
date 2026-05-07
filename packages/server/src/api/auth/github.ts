@@ -217,12 +217,16 @@ async function completeOauthFlow(
     return reply.status(500).send({ error: "Failed to resolve membership" });
   }
 
-  const tokens = await signTokensForMember(app.config.secrets.jwtSecret, {
-    userId,
-    memberId: memberInfo.memberId,
-    organizationId: memberInfo.organizationId,
-    role: memberInfo.role,
-  });
+  const tokens = await signTokensForMember(
+    app.config.secrets.jwtSecret,
+    {
+      userId,
+      memberId: memberInfo.memberId,
+      organizationId: memberInfo.organizationId,
+      role: memberInfo.role,
+    },
+    app.config.auth,
+  );
 
   const fragment = new URLSearchParams({
     access: tokens.accessToken,

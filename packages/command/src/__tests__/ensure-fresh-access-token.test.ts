@@ -82,14 +82,70 @@ describe("ensureFreshAccessToken — safety margin", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("throws a recognisable error when refresh fails", async () => {
+  it("throws AuthRefreshFailedError on 401 so the WS layer can fail-stop", async () => {
     const stale = makeJwt({ exp: Math.floor(Date.now() / 1000) - 60 });
     await writeCredentials(stale);
 
     fetchMock.mockResolvedValue(new Response(null, { status: 401 }));
 
-    const { ensureFreshAccessToken } = await import("../core/bootstrap.js");
-    await expect(ensureFreshAccessToken()).rejects.toThrow(/refresh failed/);
+    const { ensureFreshAccessToken, AuthRefreshFailedError } = await import("../core/bootstrap.js");
+    await expect(ensureFreshAccessToken()).rejects.toThrow(AuthRefreshFailedError);
+    // Message is operator-facing; spot-check the recovery hint instead of the
+    // word "failed" so future copy edits don't break the test.
+    await expect(ensureFreshAccessToken()).rejects.toThrow(/Re-run `first-tree-hub connect/);
+  });
+
+  it("throws a generic Error (not AuthRefreshFailedError) on non-401 failures so transient outages still retry", async () => {
+    const stale = makeJwt({ exp: Math.floor(Date.now() / 1000) - 60 });
+    await writeCredentials(stale);
+
+    fetchMock.mockResolvedValue(new Response(null, { status: 503 }));
+
+    const { ensureFreshAccessToken, AuthRefreshFailedError } = await import("../core/bootstrap.js");
+    await expect(ensureFreshAccessToken()).rejects.not.toThrow(AuthRefreshFailedError);
+  });
+
+  // Regression for the original incident: server now sliding-windows refresh
+  // tokens (rotates on every /auth/refresh), so the client MUST persist the
+  // rotated token. Without this the cap never moves and the client still
+  // hits the absolute refresh expiry — exactly the failure mode that
+  // motivated this whole PR.
+  it("persists the rotated refreshToken to credentials.json on a sliding-window refresh", async () => {
+    const stale = makeJwt({ exp: Math.floor(Date.now() / 1000) - 5 });
+    const refreshed = makeJwt({ exp: Math.floor(Date.now() / 1000) + 1800 });
+    await writeCredentials(stale);
+
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ accessToken: refreshed, refreshToken: "rotated-refresh-abc" })),
+    );
+
+    const { ensureFreshAccessToken, loadCredentials } = await import("../core/bootstrap.js");
+    await ensureFreshAccessToken();
+
+    const persisted = loadCredentials();
+    expect(persisted?.refreshToken).toBe("rotated-refresh-abc");
+    expect(persisted?.accessToken).toBe(refreshed);
+  });
+
+  // Cross-version safety: if the client is upgraded ahead of the server
+  // (rolling deploy), the legacy server still returns just `{accessToken}`.
+  // We must not blow away the existing refresh token in that case — that
+  // would force the user to re-claim immediately even though their old
+  // refresh token is still valid.
+  it("keeps the existing refreshToken when the server returns only accessToken (legacy server)", async () => {
+    const stale = makeJwt({ exp: Math.floor(Date.now() / 1000) - 5 });
+    const refreshed = makeJwt({ exp: Math.floor(Date.now() / 1000) + 1800 });
+    await writeCredentials(stale);
+
+    // Legacy /auth/refresh shape — no refreshToken field.
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ accessToken: refreshed })));
+
+    const { ensureFreshAccessToken, loadCredentials } = await import("../core/bootstrap.js");
+    await ensureFreshAccessToken();
+
+    const persisted = loadCredentials();
+    expect(persisted?.refreshToken).toBe("refresh-xyz"); // unchanged from the seed
+    expect(persisted?.accessToken).toBe(refreshed);
   });
 
   it("deduplicates concurrent refresh calls into a single HTTP round-trip", async () => {

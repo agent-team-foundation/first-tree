@@ -16,6 +16,7 @@ function client(overrides: Partial<HubClient>): HubClient {
     id: overrides.id ?? "client-1",
     userId: ME,
     status: "disconnected",
+    authState: "ok",
     sdkVersion: "v1.0.0",
     hostname: "host",
     os: "macOS",

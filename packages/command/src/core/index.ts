@@ -9,6 +9,7 @@ export type { PinnedAgent, StaleAlias, StaleAliasReason } from "./agent-prune.js
 export { findStaleAliases, formatStaleReason, removeLocalAgent } from "./agent-prune.js";
 // Bootstrap / credentials
 export {
+  AuthRefreshFailedError,
   ensureFreshAccessToken,
   ensureFreshAdminToken,
   loadCredentials,

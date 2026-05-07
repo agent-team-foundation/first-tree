@@ -7,9 +7,18 @@ import { members } from "../db/schema/members.js";
 import { users } from "../db/schema/users.js";
 import { UnauthorizedError } from "../errors.js";
 
-const ACCESS_TOKEN_EXPIRY = "30m";
-const REFRESH_TOKEN_EXPIRY = "7d";
-const CONNECT_TOKEN_EXPIRY = "10m";
+/**
+ * Token lifetime configuration. Driven by `FIRST_TREE_HUB_AUTH_*_EXPIRY`
+ * env vars (see shared/server-config.ts). Refresh tokens slide: every
+ * successful refresh issues a fresh pair, so an active client never
+ * hits the absolute expiry — the configured `refreshTokenExpiry` is
+ * the safety net for clients that go offline for a while.
+ */
+export type AuthTokenExpiries = {
+  accessTokenExpiry: string;
+  refreshTokenExpiry: string;
+  connectTokenExpiry: string;
+};
 
 /** In-memory set of consumed connect token JTIs. Entries auto-expire after 10 minutes. */
 const consumedConnectJtis = new Map<string, number>();
@@ -29,11 +38,36 @@ async function signToken(
   payload: Omit<TokenPayload, "type"> & { type: TokenPayload["type"] },
   expiry: string,
 ): Promise<string> {
+  // Stamp a fresh jti on every issuance. Without it, two refreshes inside
+  // the same wall-clock second produce byte-identical tokens (same iat,
+  // same payload, deterministic HS256), which defeats the sliding-window
+  // intent — `credentials.json` writes the "new" token over the "old" but
+  // the bytes are equal, so the cap doesn't actually slide forward and a
+  // separate process holding the prior token can't tell them apart.
   return new SignJWT({ ...payload })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
+    .setJti(randomUUID())
     .setExpirationTime(expiry)
     .sign(secret);
+}
+
+/**
+ * Convert an `ms`-style expiry string (e.g. `"30m"`, `"30d"`, `"1w"`) to
+ * seconds. Used to surface the connect token's `expiresIn` in the API
+ * response. Mirrors the subset of `jose.setExpirationTime` we use; falls
+ * through with a clear error on malformed config so a typo in the env var
+ * surfaces at boot, not days later when the first token expires.
+ */
+export function expiryToSeconds(expiry: string): number {
+  const m = /^(\d+)\s*(s|m|h|d|w)$/.exec(expiry.trim());
+  if (!m) {
+    throw new Error(`Invalid expiry "${expiry}" — expected forms like "30s", "10m", "2h", "30d", "1w".`);
+  }
+  const n = Number(m[1]);
+  const u = m[2] as "s" | "m" | "h" | "d" | "w";
+  const mult = { s: 1, m: 60, h: 3600, d: 86400, w: 604800 } as const;
+  return n * mult[u];
 }
 
 /**
@@ -44,6 +78,7 @@ async function signToken(
 export async function signTokensForMember(
   jwtSecretKey: string,
   member: { userId: string; memberId: string; organizationId: string; role: string },
+  expiries: Pick<AuthTokenExpiries, "accessTokenExpiry" | "refreshTokenExpiry">,
 ): Promise<{ accessToken: string; refreshToken: string }> {
   const secret = new TextEncoder().encode(jwtSecretKey);
   const tokenBase = {
@@ -52,12 +87,18 @@ export async function signTokensForMember(
     organizationId: member.organizationId,
     role: member.role,
   };
-  const accessToken = await signToken(secret, { ...tokenBase, type: "access" }, ACCESS_TOKEN_EXPIRY);
-  const refreshToken = await signToken(secret, { ...tokenBase, type: "refresh" }, REFRESH_TOKEN_EXPIRY);
+  const accessToken = await signToken(secret, { ...tokenBase, type: "access" }, expiries.accessTokenExpiry);
+  const refreshToken = await signToken(secret, { ...tokenBase, type: "refresh" }, expiries.refreshTokenExpiry);
   return { accessToken, refreshToken };
 }
 
-export async function login(db: Database, username: string, password: string, jwtSecretKey: string) {
+export async function login(
+  db: Database,
+  username: string,
+  password: string,
+  jwtSecretKey: string,
+  expiries: Pick<AuthTokenExpiries, "accessTokenExpiry" | "refreshTokenExpiry">,
+) {
   const [user] = await db.select().from(users).where(eq(users.username, username)).limit(1);
 
   if (!user || user.status !== "active") {
@@ -96,12 +137,16 @@ export async function login(db: Database, username: string, password: string, jw
     throw new UnauthorizedError("No organization membership found");
   }
 
-  const tokens = await signTokensForMember(jwtSecretKey, {
-    userId: user.id,
-    memberId: member.id,
-    organizationId: member.organizationId,
-    role: member.role,
-  });
+  const tokens = await signTokensForMember(
+    jwtSecretKey,
+    {
+      userId: user.id,
+      memberId: member.id,
+      organizationId: member.organizationId,
+      role: member.role,
+    },
+    expiries,
+  );
 
   // Update last login
   await db.update(users).set({ updatedAt: new Date() }).where(eq(users.id, user.id));
@@ -109,7 +154,24 @@ export async function login(db: Database, username: string, password: string, jw
   return tokens;
 }
 
-export async function refreshAccessToken(db: Database, refreshToken: string, jwtSecretKey: string) {
+/**
+ * Refresh an access token. Sliding-window: the response also carries a
+ * fresh refresh token whose lifetime restarts from now, so an actively-used
+ * client never hits the absolute `refreshTokenExpiry`. The previously
+ * issued refresh token remains valid until its own `exp` — we deliberately
+ * do **not** maintain a server-side jti revocation set. Same-process
+ * concurrent refreshes therefore both succeed; the surviving refresh token
+ * is whichever one the client persists last. The alternative (server-side
+ * invalidation) is more defensive against token theft but introduces races
+ * across systemd-supervised restarts and reconnect storms — a tradeoff
+ * we're not paying for here.
+ */
+export async function refreshAccessToken(
+  db: Database,
+  refreshToken: string,
+  jwtSecretKey: string,
+  expiries: Pick<AuthTokenExpiries, "accessTokenExpiry" | "refreshTokenExpiry">,
+): Promise<{ accessToken: string; refreshToken: string }> {
   const secret = new TextEncoder().encode(jwtSecretKey);
 
   let payload: TokenPayload;
@@ -146,9 +208,11 @@ export async function refreshAccessToken(db: Database, refreshToken: string, jwt
     throw new UnauthorizedError("Membership not found");
   }
 
-  const tokenBase = { sub: user.id, memberId: member.id, organizationId: member.organizationId, role: member.role };
-  const accessToken = await signToken(secret, { ...tokenBase, type: "access" }, ACCESS_TOKEN_EXPIRY);
-  return { accessToken };
+  return signTokensForMember(
+    jwtSecretKey,
+    { userId: user.id, memberId: member.id, organizationId: member.organizationId, role: member.role },
+    expiries,
+  );
 }
 
 /**
@@ -164,6 +228,7 @@ export async function refreshAccessToken(db: Database, refreshToken: string, jwt
 export async function generateConnectToken(
   member: { userId: string; memberId: string; organizationId: string; role: string },
   jwtSecretKey: string,
+  expiries: Pick<AuthTokenExpiries, "connectTokenExpiry">,
   iss?: string,
 ): Promise<{ token: string; expiresIn: number }> {
   const secret = new TextEncoder().encode(jwtSecretKey);
@@ -178,10 +243,10 @@ export async function generateConnectToken(
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setJti(jti)
-    .setExpirationTime(CONNECT_TOKEN_EXPIRY);
+    .setExpirationTime(expiries.connectTokenExpiry);
   if (iss) builder.setIssuer(iss);
   const token = await builder.sign(secret);
-  return { token, expiresIn: 600 };
+  return { token, expiresIn: expiryToSeconds(expiries.connectTokenExpiry) };
 }
 
 /**
@@ -193,6 +258,7 @@ export async function exchangeConnectToken(
   db: Database,
   connectToken: string,
   jwtSecretKey: string,
+  expiries: Pick<AuthTokenExpiries, "accessTokenExpiry" | "refreshTokenExpiry">,
 ): Promise<{ accessToken: string; refreshToken: string }> {
   const secret = new TextEncoder().encode(jwtSecretKey);
 
@@ -244,10 +310,14 @@ export async function exchangeConnectToken(
     throw new UnauthorizedError("Membership not found");
   }
 
-  return signTokensForMember(jwtSecretKey, {
-    userId: user.id,
-    memberId: member.id,
-    organizationId: member.organizationId,
-    role: member.role,
-  });
+  return signTokensForMember(
+    jwtSecretKey,
+    {
+      userId: user.id,
+      memberId: member.id,
+      organizationId: member.organizationId,
+      role: member.role,
+    },
+    expiries,
+  );
 }

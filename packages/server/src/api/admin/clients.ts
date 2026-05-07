@@ -4,6 +4,7 @@ import { z } from "zod";
 import { ForbiddenError } from "../../errors.js";
 import { memberScope, requireMemberInOrg, resolveAdminScope } from "../../services/access-control.js";
 import * as activityService from "../../services/activity.js";
+import { expiryToSeconds } from "../../services/auth.js";
 import * as clientService from "../../services/client.js";
 import { forceDisconnectClient } from "../../services/connection-manager.js";
 import { serializeDate } from "../../utils.js";
@@ -25,10 +26,12 @@ export async function adminClientRoutes(app: FastifyInstance): Promise<void> {
           return clientService.listClientsForOrgAdmin(app.db, organizationId);
         })()
       : await clientService.listClients(app.db, { userId: scope.userId });
+    const refreshExpirySeconds = expiryToSeconds(app.config.auth.refreshTokenExpiry);
     return clients.map((c) => ({
       id: c.id,
       userId: c.userId,
       status: c.status,
+      authState: clientService.deriveAuthState(c, refreshExpirySeconds),
       sdkVersion: c.sdkVersion,
       hostname: c.hostname,
       os: c.os,
@@ -68,10 +71,12 @@ export async function adminClientRoutes(app: FastifyInstance): Promise<void> {
     const metadata = (client.metadata ?? {}) as Record<string, unknown>;
     const capabilities =
       metadata.capabilities && typeof metadata.capabilities === "object" ? metadata.capabilities : {};
+    const refreshExpirySeconds = expiryToSeconds(app.config.auth.refreshTokenExpiry);
     return {
       id: client.id,
       userId: client.userId,
       status: client.status,
+      authState: clientService.deriveAuthState(client, refreshExpirySeconds),
       sdkVersion: client.sdkVersion,
       hostname: client.hostname,
       os: client.os,

@@ -10,6 +10,22 @@ export const CLIENT_STATUSES = {
 export const clientStatusSchema = z.enum(["connected", "disconnected"]);
 export type ClientStatus = z.infer<typeof clientStatusSchema>;
 
+/**
+ * Auth health channel surfaced to the Web admin dashboard. Computed
+ * server-side per request from the row's offline duration vs the
+ * configured refresh-token TTL — there is no DB column. See
+ * `deriveAuthState` server-side.
+ *
+ *   - `ok`      — online, or recently offline (cached refresh token can
+ *                 plausibly still mint access tokens).
+ *   - `expired` — offline longer than the refresh-token TTL; the client
+ *                 cannot recover on its own. The operator mints a fresh
+ *                 connect token via the Web "+ New Connection" button
+ *                 (or the inline Reconnect button on the row).
+ */
+export const clientAuthStateSchema = z.enum(["ok", "expired"]);
+export type ClientAuthState = z.infer<typeof clientAuthStateSchema>;
+
 // -- Client --
 
 export const clientSchema = z.object({
@@ -17,6 +33,8 @@ export const clientSchema = z.object({
   /** Owning user id (nullable until a legacy client re-registers under an authenticated JWT). */
   userId: z.string().nullable(),
   status: clientStatusSchema,
+  /** See {@link clientAuthStateSchema}. Computed server-side; not persisted. */
+  authState: clientAuthStateSchema,
   sdkVersion: z.string().max(50).nullable(),
   hostname: z.string().max(100).nullable(),
   os: z.string().max(50).nullable(),

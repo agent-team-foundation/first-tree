@@ -55,6 +55,21 @@ export function resolveAccessToken(): string {
 }
 
 /**
+ * Thrown when `/auth/refresh` returns 401 — i.e. the persisted refresh
+ * token has expired or been revoked, so no amount of retrying will get
+ * us back online without operator action. Callers (the WS reconnect
+ * loop in particular) catch this distinctly from generic network/HTTP
+ * errors so they can stop the 1Hz reconnect-and-fail thrash and ask
+ * systemd/launchd to back off.
+ */
+export class AuthRefreshFailedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AuthRefreshFailedError";
+  }
+}
+
+/**
  * In-flight refresh promise. Multiple callers (WS handshake, proactive
  * refresh timer, every SDK request) can see an expired token within the same
  * millisecond — without dedupe each would fire an independent `/auth/refresh`
@@ -75,6 +90,14 @@ const DEFAULT_MIN_VALIDITY_MS = 30_000;
  * token has less than that much life left. The WS proactive-refresh path
  * passes a value that overlaps its lead window so it never receives a
  * token already inside the "about to expire" zone.
+ *
+ * Sliding-window note: the server now rotates the refresh token on every
+ * successful `/auth/refresh`. We persist the rotated token alongside the
+ * new access token so an actively-used client never hits the absolute
+ * `refreshTokenExpiry` ceiling. If the response omits `refreshToken`
+ * (i.e. an older server) we keep the existing one — the cost is just
+ * losing the sliding behaviour against that backend, not a correctness
+ * regression.
  */
 export async function ensureFreshAccessToken(opts?: { minValidityMs?: number }): Promise<string> {
   const minValidityMs = opts?.minValidityMs ?? DEFAULT_MIN_VALIDITY_MS;
@@ -99,12 +122,23 @@ export async function ensureFreshAccessToken(opts?: { minValidityMs?: number }):
       signal: AbortSignal.timeout(10_000),
     });
 
+    if (res.status === 401) {
+      throw new AuthRefreshFailedError(
+        "Refresh token rejected by server. Re-run `first-tree-hub connect <token>` " +
+          "(get a fresh token from the Web Computers page → New Connection).",
+      );
+    }
     if (!res.ok) {
-      throw new Error("Access token expired and refresh failed. Run `first-tree-hub client connect <server-url>`.");
+      throw new Error(`Refresh request failed with status ${res.status}.`);
     }
 
-    const data = (await res.json()) as { accessToken: string };
-    saveCredentials({ ...creds, accessToken: data.accessToken });
+    const data = (await res.json()) as { accessToken: string; refreshToken?: string };
+    saveCredentials({
+      ...creds,
+      accessToken: data.accessToken,
+      // Older servers won't echo a rotated refreshToken back — keep the existing one.
+      refreshToken: data.refreshToken ?? creds.refreshToken,
+    });
     return data.accessToken;
   })();
 

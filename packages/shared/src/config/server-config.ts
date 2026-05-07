@@ -47,6 +47,20 @@ export const serverConfigSchema = defineConfig({
       secret: true,
     }),
   },
+  /**
+   * JWT lifetimes. All accept the `ms`-style format ("30m", "30d", "12h", …)
+   * understood by `jose`'s `setExpirationTime`.
+   *
+   * Refresh tokens slide: every successful `/auth/refresh` issues a fresh
+   * pair, so an active client never hits the absolute expiry. The default
+   * 30d window is the safety net for clients that go offline for a while —
+   * tighten it for high-security deployments, loosen for kiosk/lab boxes.
+   */
+  auth: {
+    accessTokenExpiry: field(z.string().default("30m"), { env: "FIRST_TREE_HUB_AUTH_ACCESS_TOKEN_EXPIRY" }),
+    refreshTokenExpiry: field(z.string().default("30d"), { env: "FIRST_TREE_HUB_AUTH_REFRESH_TOKEN_EXPIRY" }),
+    connectTokenExpiry: field(z.string().default("10m"), { env: "FIRST_TREE_HUB_AUTH_CONNECT_TOKEN_EXPIRY" }),
+  },
   contextTree: optional({
     repo: field(z.string(), {
       env: "FIRST_TREE_HUB_CONTEXT_TREE_REPO",

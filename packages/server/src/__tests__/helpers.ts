@@ -51,6 +51,11 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
       jwtSecret: process.env.JWT_SECRET ?? "test-jwt-secret-key-for-vitest",
       encryptionKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     },
+    auth: {
+      accessTokenExpiry: "30m",
+      refreshTokenExpiry: "30d",
+      connectTokenExpiry: "10m",
+    },
     github: {
       webhookSecret: "test-webhook-secret",
       allowedOrg: "test-org",
