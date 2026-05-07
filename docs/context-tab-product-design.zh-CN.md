@@ -20,6 +20,27 @@ First Tree Hub 的 `/context` 不是要把 Context Tree 改造成 human wiki,而
 - **Operational**:让 operator 知道 agents 用于判断和行动的 context 是否可用、是否新鲜、哪里变了、谁负责。
 - **Perception**:让用户感知 First Tree 的核心价值不是 markdown 文件,而是 agents 会读取、用于判断和行动的团队认知树。
 
+## 核心场景与交付边界
+
+本需求的核心场景是:
+
+> human/operator 打开 Hub,想理解 agents 背后的团队认知树是否已经同步、是否正在生长、哪里发生了会影响 agents 判断和行动的变化,以及这些变化由谁负责。
+
+因此本需求交付的是 **snapshot-level context visibility**:
+
+- Hub 已经拿到哪份 Context Tree snapshot;
+- 这份 agent context 自上次查看后发生了哪些变化;
+- 变化在树结构中的位置;
+- 每个变化节点的 owner、关联和内容线索。
+
+更强的 **per-agent context readiness** 也是这个产品方向的一部分,但不是当前交付承诺:
+
+- 哪些 agents 已经使用最新 context;
+- 哪些 agents 落后于 tree head;
+- 哪些 session 实际注入或读取了 context。
+
+原因不是它不重要,而是它需要新的 per-agent readiness / usage telemetry。当前没有可靠数据前,UI 不能承诺 `8 agents using latest context` / `3 agents behind latest context` 这类状态。
+
 ## 当前范围
 
 本需求只做四层信号,其中前三层是核心交互,第一层是首屏感知:
@@ -133,7 +154,10 @@ Context snapshot synced 18m ago
 
 `Map` 是默认视图。`Files` 保留文件浏览,但只是辅助视角。
 
-当前 header 只表达 snapshot-level availability:Hub Server 已经拿到一份可供 agents 后续使用的 Context Tree snapshot。它不表达 agents 已经加载或使用了该 snapshot。
+Header 的目标体验分两层:
+
+1. **当前可交付层**:snapshot-level availability。Hub Server 已经拿到一份可供 agents 后续使用的 Context Tree snapshot。
+2. **目标感知层**:agent context readiness。用户能看到 agents 是否已经使用最新 context。
 
 更强的产品表达,例如:
 
@@ -145,7 +169,7 @@ Team context changed
 12 changes at head · 3 agents behind latest context
 ```
 
-需要 per-agent context readiness / usage telemetry 支撑,不属于本需求。当前设计保留这个方向,但不在 UI 中承诺 agent count。
+这类表达属于本需求要服务的产品方向,但需要 per-agent context readiness / usage telemetry 支撑。当前实现先交付 snapshot-level availability,同时在 UI 文案和 DTO 中为 readiness 留出扩展位置;没有可靠数据前不在 UI 中承诺 agent count。
 
 ### Tree Map
 
@@ -319,7 +343,7 @@ usageSignal
 └─ severity: ok | warning | error
 ```
 
-当前 Usage signal 只说明 Hub Server 是否有可用 Context Tree snapshot。它不能说明:
+当前 Usage signal 先说明 Hub Server 是否有可用 Context Tree snapshot。后续 readiness 信号需要继续回答:
 
 - 每个 agent 是否使用了最新 context commit;
 - 有多少 agents 已同步到最新 context;
