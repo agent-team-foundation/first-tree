@@ -6,7 +6,8 @@ const HOSTNAME_MAX_PX = 160;
 /**
  * Topbar warning chip — surfaces in `Layout` whenever any of the caller's
  * own computers is disconnected and still has agents bound. Click jumps to
- * `/clients`. Renders nothing in the healthy case so the topbar stays clean.
+ * the Computers settings page. Renders nothing in the healthy case so the
+ * topbar stays clean.
  */
 export function DisconnectChip() {
   const navigate = useNavigate();
@@ -21,7 +22,7 @@ export function DisconnectChip() {
   return (
     <button
       type="button"
-      onClick={() => navigate("/clients")}
+      onClick={() => navigate("/settings/computers")}
       title={tooltip}
       aria-label={tooltip}
       className="inline-flex items-center cursor-pointer text-body font-medium"

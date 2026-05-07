@@ -26,6 +26,10 @@ import { formatDate } from "../../lib/utils.js";
 import { InviteLinkPanel } from "../invite-link-panel.js";
 import { MembersPage } from "../members.js";
 
+type AgentsData = {
+  items: Agent[];
+};
+
 /**
  * Team page — single surface combining People (login users / org members)
  * and Agents (bots) into one cohesive "this is the team" view. Two tables
@@ -47,13 +51,13 @@ export function TeamPage() {
     queryFn: listMembers,
   });
 
-  const { data: agentsData } = useQuery({
+  const agentsQuery = useQuery({
     queryKey: ["agents", "team-page"],
     queryFn: () => listAgents({ limit: 100 }),
   });
 
   const peopleCount = members?.length ?? 0;
-  const botCount = (agentsData?.items ?? []).filter((a) => a.type !== "human").length;
+  const botCount = (agentsQuery.data?.items ?? []).filter((a) => a.type !== "human").length;
 
   return (
     <>
@@ -78,7 +82,7 @@ export function TeamPage() {
         }}
       >
         <PeopleSection />
-        <AgentsSection />
+        <AgentsSection data={agentsQuery.data} isLoading={agentsQuery.isLoading} error={agentsQuery.error} />
       </div>
 
       <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
@@ -102,17 +106,20 @@ function PeopleSection() {
   );
 }
 
-function AgentsSection() {
+function AgentsSection({
+  data,
+  isLoading,
+  error,
+}: {
+  data: AgentsData | undefined;
+  isLoading: boolean;
+  error: unknown;
+}) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const resolveMember = useMemberNameMap();
   const { memberId } = useAuth();
   const [createOpen, setCreateOpen] = useState(false);
-
-  const { data, isLoading, error } = useQuery({
-    queryKey: ["agents", "team-page"],
-    queryFn: () => listAgents({ limit: 100 }),
-  });
 
   const { data: activity } = useQuery({
     queryKey: ["activity"],

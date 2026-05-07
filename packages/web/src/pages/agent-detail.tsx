@@ -561,7 +561,7 @@ export function AgentDetailPage() {
               <Button
                 variant="outline"
                 size="xs"
-                onClick={() => navigate(`/integrations?agent=${agent.uuid}`)}
+                onClick={() => navigate(`/settings/integrations?agent=${agent.uuid}`)}
                 title="Manage platform bindings in Integrations"
               >
                 <Link2 className="h-3 w-3" />
