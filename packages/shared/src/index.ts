@@ -1,7 +1,7 @@
 // Schemas
 
 // -- Mention extraction (shared by server fan-out resolver and client auto-forward) --
-export { extractMentions, MENTION_REGEX, type MentionParticipant, scanMentionTokens } from "./mentions.js";
+export { extractMentions, MENTION_REGEX, type MentionParticipant, scanMentionTokens, stripCode } from "./mentions.js";
 // -- OAuth-callback open-redirect guard --
 export { DEFAULT_SAFE_REDIRECT, safeRedirectPath } from "./safe-redirect.js";
 export {

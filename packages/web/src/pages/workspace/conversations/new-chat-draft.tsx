@@ -173,10 +173,19 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
 
   const handleSend = async (): Promise<void> => {
     if (!canSend) return;
+    // Merge `bodyMentions` into the participant list synchronously.
+    // The `bodyMentions → chips` promote effect runs asynchronously
+    // (via `useEffect`), so a fast user who types `@bob` and presses
+    // Enter immediately can land in `handleSend` before `chips` has
+    // absorbed bob — without this merge, `createMeChat` would create
+    // the chat without bob and bob's `@`-token would silently drop on
+    // the server (no such participant). Compute the union here so the
+    // committed audience always reflects what the user just typed.
+    const participantIds = Array.from(new Set([...chips, ...bodyMentions]));
     setError(null);
     setSending(true);
     try {
-      await createMut.mutateAsync({ participantIds: chips, text: draft });
+      await createMut.mutateAsync({ participantIds, text: draft });
     } finally {
       setSending(false);
     }

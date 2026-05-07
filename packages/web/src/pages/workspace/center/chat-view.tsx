@@ -675,7 +675,14 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
   // Includes BOTH chat participants and outsiders — picking an outsider
   // implicitly invites them via `addMeChatParticipants` at send time, which
   // turns a 1:1 into a group server-side. Self is excluded; any agent
-  // without a slug (`name`) is skipped because mentions need one.
+  // without a slug (`name`) is skipped because mentions need one — even
+  // current chat participants. This is intentional: the server's
+  // `extractMentions` matches `@<token>` against `agents.name`, so a
+  // participant with `name=null` (legacy / soft-deleted row) cannot be
+  // addressed via `@` regardless. They still show in `ParticipantsHeader`
+  // chips (which uses `agentIdentity.displayName`); the picker just won't
+  // offer them. Fixing this requires the server to backfill missing
+  // `agents.name`, not a client-side workaround.
   const mentionCandidates = useMemo<MentionCandidate[]>(() => {
     const ids = new Set<string>();
     for (const p of chatDetail?.participants ?? []) ids.add(p.agentId);
@@ -833,7 +840,14 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
                   }}
                   disabled={renameMut.isPending}
                   maxLength={500}
-                  placeholder="Chat name"
+                  // Placeholder echoes the rendered title (auto-generated
+                  // from the first message when no topic is set). This
+                  // signals "leave blank to keep the current name" without
+                  // pre-filling the input with the auto-title — a pre-fill
+                  // would make a no-op commit silently promote the auto-
+                  // title to a sticky `topic`, locking it against future
+                  // first-message edits.
+                  placeholder={chatDetail?.title ?? "Chat name"}
                   className="outline-none text-subtitle"
                   // Auto-grow with content (modern CSS `field-sizing: content`)
                   // so the ✓/× buttons sit immediately after the last typed
@@ -879,13 +893,16 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
               <button
                 type="button"
                 onClick={() => {
-                  // Pre-fill with the rendered title (manual topic OR
-                  // auto-generated from first message) so "rename" reads
-                  // as "edit current name" rather than "type from blank".
-                  // If user commits unchanged, topic gets set to the
-                  // auto-title string — harmless since the resolver still
-                  // displays the same text on next read.
-                  setRenameDraft(chatDetail?.topic ?? chatDetail?.title ?? "");
+                  // Pre-fill with `topic` only (the existing manual
+                  // override). When `topic` is null, leave the input
+                  // empty so the auto-title shown as placeholder
+                  // signals "type to override, leave blank to keep
+                  // tracking the first message". A no-op commit thus
+                  // sends `null` to the server (clearing topic = stay
+                  // in auto-title mode), not the auto-title string —
+                  // which would have locked the title against future
+                  // first-message edits.
+                  setRenameDraft(chatDetail?.topic ?? "");
                   setRenaming(true);
                 }}
                 title="Click to rename"

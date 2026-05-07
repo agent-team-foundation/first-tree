@@ -31,6 +31,7 @@ import { agents } from "../db/schema/agents.js";
 import { chatParticipants, chatSubscriptions, chats } from "../db/schema/chats.js";
 import { messages } from "../db/schema/messages.js";
 import { BadRequestError, NotFoundError } from "../errors.js";
+import { invalidateChatAudience } from "./chat-audience-cache.js";
 import { extractSummary } from "./session.js";
 import {
   ensureCanJoin,
@@ -353,6 +354,9 @@ export async function createMeChat(
     await recomputeChatWatchers(tx, chatId);
   });
 
+  // Fresh chat — no cache entry exists yet, but populate consistency
+  // for the rare case a `chat:message` dispatch races with creation.
+  invalidateChatAudience(chatId);
   return { chatId };
 }
 
@@ -429,7 +433,11 @@ export async function addMeChatParticipants(
     // Direct → group upgrade: 3+ speakers triggers it. We mirror the rule
     // here (and not via services/chat.ts) so we can write the upgrade and
     // the inserts in the same tx without a circular import.
-    if (existing.length + toInsert.length >= 3 && chat.type === "direct") {
+    const isUpgradingToGroup = existing.length + toInsert.length >= 3 && chat.type === "direct";
+    const isAlreadyGroup = chat.type === "group";
+    const isGroupAfter = isUpgradingToGroup || isAlreadyGroup;
+
+    if (isUpgradingToGroup) {
       await tx.update(chats).set({ type: "group", updatedAt: new Date() }).where(eq(chats.id, chatId));
       const nonHumans = await tx
         .select({ uuid: agents.uuid })
@@ -452,9 +460,21 @@ export async function addMeChatParticipants(
       }
     }
 
+    // Pick each new participant's mode based on the *post-upgrade* chat
+    // type. If the chat is (or just became) a group, non-human agents go
+    // in as `mention_only` — otherwise they'd respond to every message
+    // and defeat the auto-quieting that direct→group did to the existing
+    // non-humans. Humans always stay `full`.
+    const typeByAgent = new Map(found.map((a) => [a.uuid, a.type]));
     await tx
       .insert(chatParticipants)
-      .values(toInsert.map((agentId) => ({ chatId, agentId, role: "member" as const, mode: "full" as const })))
+      .values(
+        toInsert.map((agentId) => {
+          const agentType = typeByAgent.get(agentId);
+          const mode: "full" | "mention_only" = isGroupAfter && agentType !== "human" ? "mention_only" : "full";
+          return { chatId, agentId, role: "member" as const, mode };
+        }),
+      )
       .onConflictDoNothing();
 
     // Drop watcher rows for any of the new speakers (mutual exclusion).
@@ -464,6 +484,11 @@ export async function addMeChatParticipants(
 
     await recomputeChatWatchers(tx, chatId);
   });
+
+  // Bust the WS audience cache so the next `chat:message` dispatch
+  // resolves the fresh participant set. Without this, newly added
+  // speakers would miss pushes for up to the cache TTL.
+  invalidateChatAudience(chatId);
 }
 
 // ---------------------------------------------------------------------------
@@ -497,10 +522,12 @@ export async function joinMeChat(db: Database, chatId: string, humanAgentId: str
   const membership = await resolveChatMembership(db, chatId, humanAgentId);
   ensureCanJoin(membership);
   await joinAsParticipant(db, chatId, humanAgentId);
+  invalidateChatAudience(chatId);
 }
 
 export async function leaveMeChat(db: Database, chatId: string, humanAgentId: string): Promise<MeChatLeaveResponse> {
   const result = await leaveAsParticipant(db, chatId, humanAgentId);
+  invalidateChatAudience(chatId);
   return result;
 }
 

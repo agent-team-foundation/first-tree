@@ -1,4 +1,4 @@
-import { MENTION_REGEX, type SessionState } from "@agent-team-foundation/first-tree-hub-shared";
+import { MENTION_REGEX, type SessionState, stripCode } from "@agent-team-foundation/first-tree-hub-shared";
 import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
@@ -35,7 +35,13 @@ export function extractSummary(content: unknown, maxLen = SUMMARY_MAX_LENGTH): s
     text = content;
   }
   if (!text) return null;
-  const cleaned = text.replace(MENTION_REGEX, "").replace(/\s+/g, " ").trim();
+  // `stripCode` first so identifier-shaped tokens inside Markdown
+  // code regions (`` `@param` ``, fenced blocks) aren't misclassified
+  // as mentions and stripped — that would produce titles like
+  // `"Use  decorator"` from `"Use \`@param\` decorator"`. Mirrors
+  // `extractMentions`'s pipeline so routing and titling agree on what
+  // counts as a real mention vs a code reference.
+  const cleaned = stripCode(text).replace(MENTION_REGEX, "").replace(/\s+/g, " ").trim();
   if (!cleaned) return null;
   return Array.from(cleaned).slice(0, maxLen).join("");
 }

@@ -1,5 +1,5 @@
 import { AGENT_STATUSES, AGENT_VISIBILITY } from "@agent-team-foundation/first-tree-hub-shared";
-import { and, eq, ne, or, sql } from "drizzle-orm";
+import { and, eq, ne, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { jwtVerify } from "jose";
 import type { WebSocket } from "ws";
@@ -8,6 +8,7 @@ import { agents } from "../../db/schema/agents.js";
 import { members } from "../../db/schema/members.js";
 import { endWsConnectionSpan, setWsConnectionAttrs, startWsConnectionSpan } from "../../observability/index.js";
 import { registerAdminBroadcaster } from "../../services/admin-broadcast.js";
+import { getCachedAudience } from "../../services/chat-audience-cache.js";
 import type { Notifier } from "../../services/notifier.js";
 
 /**
@@ -102,45 +103,14 @@ export function adminWsRoutes(notifier: Notifier, jwtSecret: string) {
     void dispatchChatMessage(chatId);
   });
 
-  /**
-   * Per-chat audience cache. Without this, every chat message issues one
-   * audience-resolution query — at 100 msg/s that's 100 round-trips/s for a
-   * payload that rarely changes (participant joins/leaves are bursty).
-   * 5-second TTL keeps the cache fresh enough for product UX (a newly added
-   * member sees "live" updates within 5s of the next message after they
-   * joined; their initial /me/chats refetch covers the gap).
-   */
-  const AUDIENCE_TTL_MS = 5_000;
-  const audienceCache = new Map<string, { audience: Set<string>; expiresAt: number }>();
-
-  async function resolveAudience(chatId: string): Promise<Set<string> | null> {
-    const now = Date.now();
-    const cached = audienceCache.get(chatId);
-    if (cached && cached.expiresAt > now) return cached.audience;
-    try {
-      const rows = await getDbForChatLookup().execute<{ agent_id: string }>(sql`
-        SELECT agent_id FROM chat_participants WHERE chat_id = ${chatId}
-        UNION
-        SELECT agent_id FROM chat_subscriptions WHERE chat_id = ${chatId}
-      `);
-      const audience = new Set(rows.map((r) => r.agent_id));
-      audienceCache.set(chatId, { audience, expiresAt: now + AUDIENCE_TTL_MS });
-      // Opportunistic cleanup so the cache doesn't grow unbounded for
-      // long-lived processes that touch many chats.
-      if (audienceCache.size > 1024) {
-        for (const [k, v] of audienceCache) {
-          if (v.expiresAt <= now) audienceCache.delete(k);
-        }
-      }
-      return audience;
-    } catch {
-      return null;
-    }
-  }
+  // Per-chat audience cache lives in `services/chat-audience-cache.ts`
+  // so the participant-mutation paths can call `invalidateChatAudience`
+  // after their tx commits — without that hook, a freshly-added speaker
+  // would miss `chat:message` pushes for up to the TTL window.
 
   async function dispatchChatMessage(chatId: string): Promise<void> {
     if (adminSockets.size === 0) return;
-    const audience = await resolveAudience(chatId);
+    const audience = await getCachedAudience(getDbForChatLookup(), chatId);
     if (!audience || audience.size === 0) return;
 
     const frame = JSON.stringify({ type: "chat:message", chatId });
