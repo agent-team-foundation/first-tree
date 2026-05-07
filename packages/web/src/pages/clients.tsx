@@ -5,7 +5,7 @@ import {
   type RuntimeProvider,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, Plus, Trash2, Unplug } from "lucide-react";
+import { ChevronDown, ChevronRight, KeyRound, Plus, Trash2, Unplug } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
   type ClientWithCapabilities,
@@ -37,7 +37,12 @@ import { useUserNameMap } from "../lib/use-user-name-map.js";
 import { formatDate } from "../lib/utils.js";
 import { NewConnectionDialog } from "./clients/new-connection-dialog.js";
 
-export function ClientsPage() {
+/**
+ * `embedded` drops the full-bleed `-m-6` wrapper so this page can be rendered
+ * inside another master-detail container (e.g. /settings) whose own outer
+ * chrome has already escaped the parent padding.
+ */
+export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
   const queryClient = useQueryClient();
   const agentName = useAgentNameMap();
   const ownerName = useUserNameMap();
@@ -99,15 +104,22 @@ export function ClientsPage() {
 
   const connectedCount = (clients ?? []).filter((c) => c.status === "connected").length;
   const totalAgentsBound = (clients ?? []).reduce((n, c) => n + c.agentCount, 0);
+  const authBrokenCount = (clients ?? []).filter((c) => c.authState !== "ok").length;
 
   return (
-    <div className="-m-6">
+    <div className={embedded ? "" : "-m-6"}>
       <PageHeader
         title="Computers"
         subtitle={
           clients && clients.length > 0 ? (
             <>
               {clients.length} total · {connectedCount} connected · {totalAgentsBound} agents bound
+              {authBrokenCount > 0 && (
+                <>
+                  {" · "}
+                  <span style={{ color: "var(--state-error)" }}>{authBrokenCount} need re-auth</span>
+                </>
+              )}
             </>
           ) : null
         }
@@ -115,7 +127,7 @@ export function ClientsPage() {
           <div className="flex items-center gap-1.5">
             <Button size="xs" onClick={() => setNewConnectionOpen(true)}>
               <Plus className="h-3 w-3" />
-              New Connection
+              Connect computer
             </Button>
           </div>
         }
@@ -253,7 +265,7 @@ export function ClientsPage() {
         {!clients || clients.length === 0 ? (
           <Panel>
             <div className="text-center py-10 text-body" style={{ color: "var(--fg-3)" }}>
-              No computers. Use the button above to generate a connect command.
+              No computers connected. Use the button above to generate a connect command.
             </div>
           </Panel>
         ) : (
@@ -303,6 +315,7 @@ export function ClientsPage() {
                         setRetireError(null);
                         setConfirmRetire(client);
                       }}
+                      onReconnect={() => setNewConnectionOpen(true)}
                     />
                   );
                 })}
@@ -434,6 +447,31 @@ function ProviderRow({ provider, entry }: { provider: RuntimeProvider; entry: Ca
   }
 }
 
+/**
+ * Distinguishes "credentials died" from "machine offline". Server derives
+ * the state from offline duration vs configured refresh-token TTL, so the
+ * pill flips on its own once the row has been disconnected long enough.
+ */
+function AuthExpiredChip() {
+  return (
+    <span
+      className="mono inline-flex items-center gap-1.5 uppercase text-caption"
+      style={{ color: "var(--state-error)" }}
+    >
+      <span
+        style={{
+          width: 7,
+          height: 7,
+          borderRadius: "50%",
+          background: "var(--state-error)",
+          display: "inline-block",
+        }}
+      />
+      AUTH EXPIRED
+    </span>
+  );
+}
+
 function ClientRow({
   client,
   boundAgents,
@@ -444,6 +482,7 @@ function ClientRow({
   onToggle,
   onDisconnect,
   onRetire,
+  onReconnect,
 }: {
   client: HubClient;
   boundAgents: RuntimeAgent[];
@@ -454,8 +493,14 @@ function ClientRow({
   onToggle: () => void;
   onDisconnect: () => void;
   onRetire: () => void;
+  onReconnect: () => void;
 }) {
   const colSpan = showOwner ? 9 : 8;
+  const isOffline = client.status !== "connected";
+  // Auth health takes priority over the connection state when rendering the
+  // row's status pill: "auth expired" must outrank the plain "offline" so
+  // the user knows it isn't going to come back without intervention.
+  const authBroken = client.authState !== "ok";
   const statusState = client.status === "connected" ? "idle" : "offline";
   return (
     <>
@@ -477,11 +522,29 @@ function ClientRow({
         <DenseTableCell className="mono text-caption" style={{ color: "var(--fg-4)" }}>
           {client.connectedAt ? formatDate(client.connectedAt) : "—"}
         </DenseTableCell>
-        <DenseTableCell>
-          <StateChip state={statusState} />
-        </DenseTableCell>
+        <DenseTableCell>{authBroken ? <AuthExpiredChip /> : <StateChip state={statusState} />}</DenseTableCell>
         <DenseTableCell style={{ width: 1, whiteSpace: "nowrap" }}>
           <div className="flex gap-1 justify-end">
+            {isOffline && (
+              // Reconnect is offered for any disconnected row, not only `expired`:
+              // "I want to repoint this machine" / "credentials got nuked locally"
+              // are common pre-30d-window needs that the explicit `auth_state`
+              // path doesn't catch. The button is highlighted red when the auth
+              // is provably gone (>refresh TTL) so the visual urgency still
+              // tracks the explicit-failure case.
+              <Button
+                variant="ghost"
+                size="xs"
+                className="text-label"
+                style={authBroken ? { color: "var(--state-error)" } : undefined}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onReconnect();
+                }}
+              >
+                <KeyRound className="h-3 w-3" /> Reconnect
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="xs"

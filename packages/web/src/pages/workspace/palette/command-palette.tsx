@@ -16,10 +16,9 @@ import { useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 
 const STATIC_ROUTES = [
   { path: "/", label: "Workspace" },
-  { path: "/agents", label: "Agents" },
-  { path: "/clients", label: "Computers" },
+  { path: "/context", label: "Context" },
+  { path: "/team", label: "Team" },
   { path: "/settings", label: "Settings" },
-  { path: "/admin", label: "Admin" },
 ];
 
 export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {

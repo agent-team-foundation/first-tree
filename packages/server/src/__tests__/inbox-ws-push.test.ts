@@ -250,6 +250,11 @@ describe("inbox WS data-plane claim helpers", () => {
     }
     // Every drained entry must be marked delivered atomically with the claim.
     for (const e of drained) expect(e.status).toBe("delivered");
+    // Pin the bigserial → number conversion on the backlog path too. The WS
+    // push frame schema validates `entryId: z.number()`; if `claimBacklog`
+    // ever regresses to raw SQL, every push frame would be dropped client-
+    // side as malformed. See issue #194.
+    for (const e of drained) expect(typeof e.id).toBe("number");
   });
 
   it("ackEntryByIdForBoundAgents acks only entries in the supplied inbox set", async () => {

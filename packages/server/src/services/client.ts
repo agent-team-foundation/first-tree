@@ -304,6 +304,34 @@ export async function listClientsForOrgAdmin(db: Database, orgId: string) {
   return attachAgentCounts(db, rows);
 }
 
+/**
+ * Infer whether the client's locally-cached refresh token can plausibly
+ * still mint access tokens. Used by the Web admin dashboard to render an
+ * "AUTH EXPIRED" pill on rows whose offline duration has exceeded the
+ * server's configured refresh-token TTL.
+ *
+ * Uses `lastSeenAt` (not `connectedAt`) because a healthy long-lived
+ * client slides the refresh token continuously, so the absolute connect
+ * time is no proxy for liveness. `lastSeenAt` is updated on register,
+ * heartbeat, and the final disconnect — it lower-bounds the issue time
+ * of the refresh token the client most likely still holds.
+ *
+ * Pure function, no DB access; the column-less design means there's no
+ * server-side revocation path yet — every "expired" decision is purely
+ * time-based. If we ever want admin-driven revocation, add a column
+ * back and OR its value into this function.
+ */
+export function deriveAuthState(
+  row: { status: string; lastSeenAt: Date },
+  refreshTokenExpirySeconds: number,
+): "ok" | "expired" {
+  if (row.status === "disconnected") {
+    const offlineMs = Date.now() - row.lastSeenAt.getTime();
+    if (offlineMs > refreshTokenExpirySeconds * 1000) return "expired";
+  }
+  return "ok";
+}
+
 async function attachAgentCounts<T extends { id: string }>(
   db: Database,
   rows: T[],

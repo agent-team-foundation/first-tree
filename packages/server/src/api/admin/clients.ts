@@ -2,8 +2,9 @@ import { updateClientCapabilitiesSchema } from "@agent-team-foundation/first-tre
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { ForbiddenError } from "../../errors.js";
-import { memberScope, requireMemberInOrg } from "../../services/access-control.js";
+import { memberScope, requireMemberInOrg, resolveAdminScope } from "../../services/access-control.js";
 import * as activityService from "../../services/activity.js";
+import { expiryToSeconds } from "../../services/auth.js";
 import * as clientService from "../../services/client.js";
 import { forceDisconnectClient } from "../../services/connection-manager.js";
 import { serializeDate } from "../../utils.js";
@@ -25,10 +26,12 @@ export async function adminClientRoutes(app: FastifyInstance): Promise<void> {
           return clientService.listClientsForOrgAdmin(app.db, organizationId);
         })()
       : await clientService.listClients(app.db, { userId: scope.userId });
+    const refreshExpirySeconds = expiryToSeconds(app.config.auth.refreshTokenExpiry);
     return clients.map((c) => ({
       id: c.id,
       userId: c.userId,
       status: c.status,
+      authState: clientService.deriveAuthState(c, refreshExpirySeconds),
       sdkVersion: c.sdkVersion,
       hostname: c.hostname,
       os: c.os,
@@ -68,10 +71,12 @@ export async function adminClientRoutes(app: FastifyInstance): Promise<void> {
     const metadata = (client.metadata ?? {}) as Record<string, unknown>;
     const capabilities =
       metadata.capabilities && typeof metadata.capabilities === "object" ? metadata.capabilities : {};
+    const refreshExpirySeconds = expiryToSeconds(app.config.auth.refreshTokenExpiry);
     return {
       id: client.id,
       userId: client.userId,
       status: client.status,
+      authState: clientService.deriveAuthState(client, refreshExpirySeconds),
       sdkVersion: client.sdkVersion,
       hostname: client.hostname,
       os: client.os,
@@ -114,10 +119,23 @@ export async function adminClientRoutes(app: FastifyInstance): Promise<void> {
   });
 }
 
+const activityQuerySchema = z.object({ organizationId: z.string().min(1).optional() });
+
 export async function adminActivityRoutes(app: FastifyInstance): Promise<void> {
   // GET /admin/agents/activity — activity overview (visibility-scoped)
+  //
+  // Honors `?organizationId=` so the multi-org caller's selected-org context
+  // (injected by the web's api-client `decoratePath`) actually drives which
+  // tenant's runtime activity is returned. Without this, every consumer of
+  // the `["activity"]` query (Workspace roster + middle area, Agents tab
+  // RUNTIME column, Computers BOUND AGENTS, command palette) silently shows
+  // JWT-default-org data while the dropdown shows a different org —
+  // follow-up to PR #220 which patched the analogous gap on the create
+  // path.
   app.get("/", async (request) => {
-    const scope = memberScope(request);
+    const baseScope = memberScope(request);
+    const { organizationId } = activityQuerySchema.parse(request.query);
+    const scope = await resolveAdminScope(app.db, request, baseScope, organizationId);
     const overview = await activityService.getActivityOverview(app.db);
     const runningAgents = await activityService.listAgentsWithRuntime(app.db, scope);
 

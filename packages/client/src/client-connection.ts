@@ -94,6 +94,14 @@ type ClientConnectionEvents = {
   "session:command": [command: SessionCommand];
   "session:reconcile:result": [result: SessionReconcileResult];
   "auth:expired": [];
+  /**
+   * Unrecoverable auth failure — the credential provider rejected with an
+   * `AuthRefreshFailedError` (refresh token expired/revoked). The connection
+   * has stopped trying to reconnect; the consumer should surface a recovery
+   * prompt to the operator (re-run `first-tree-hub connect <token>`) and
+   * usually exit so a supervisor can back off instead of looping at 1 Hz.
+   */
+  "auth:fatal": [error: Error];
   "server:welcome": [welcome: ServerWelcome];
 };
 
@@ -192,6 +200,13 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   /** Fires ~60s before JWT exp so we reconnect with a fresh token first. */
   private authRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
+  /**
+   * If the most recent refresh attempt was rate-limited (HTTP 429), the
+   * server-suggested wait in ms — consumed by the next `scheduleReconnect`
+   * to floor its delay so we don't keep retrying inside the same 60s
+   * limiter window. Cleared after one use.
+   */
+  private nextReconnectMinDelayMs = 0;
   private closing = false;
   private registered = false;
   /** Count of `server:welcome` frames received; drives `isReconnect` flag. */
@@ -407,7 +422,12 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
 
       ws.on("open", async () => {
         this.ws = ws;
-        this.reconnectAttempt = 0;
+        // Don't reset reconnectAttempt here — a TCP/WS handshake succeeding
+        // but the auth phase failing is exactly the loop the client.log
+        // captured at 19:40 (1 Hz reconnect storm with `failed to obtain
+        // access token`). Resetting on `open` collapsed the exponential
+        // backoff to attempt=1 forever. Reset on the application-layer
+        // success signal — `client:registered` — instead.
         this.wsLogger.debug("socket opened, sending auth");
 
         try {
@@ -428,7 +448,33 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
           this.scheduleProactiveAuthRefresh(token);
         } catch (err) {
           this.authLogger.error({ err }, "failed to obtain access token");
-          settle(reject, err instanceof Error ? err : new Error(String(err)));
+          // Refresh token expired / revoked is unrecoverable from inside the
+          // process — no amount of retrying will succeed without the
+          // operator running `first-tree-hub connect <new-token>`. Mark the
+          // connection closed so `ws.on("close")` doesn't reschedule, and
+          // surface an `auth:fatal` event so the consumer (typically the
+          // CLI) can print a recovery prompt and exit, letting systemd /
+          // launchd back off instead of looping at the WS reconnect base.
+          //
+          // `name` duck-typed instead of `instanceof` so this file doesn't
+          // pull a runtime dependency on the command package (one-way:
+          // command depends on client, not the other way around).
+          const e = err instanceof Error ? err : new Error(String(err));
+          if (e.name === "AuthRefreshFailedError") {
+            this.closing = true;
+            this.emit("auth:fatal", e);
+          } else if (e.name === "AuthRefreshRateLimitedError") {
+            // Pull the server-suggested wait off the typed error and stash it
+            // for the next scheduleReconnect; falls back to 30s if absent.
+            // Without this floor the WS layer's 1/2/4/8s exponential backoff
+            // hammers the rate-limit window from below and stretches the
+            // outage from "1 minute" to "however long until the bucket
+            // empties under our own load".
+            const retryAfterMs = (e as { retryAfterMs?: number }).retryAfterMs ?? 30_000;
+            this.nextReconnectMinDelayMs = Math.max(this.nextReconnectMinDelayMs, retryAfterMs);
+            this.authLogger.warn({ retryAfterMs }, "refresh rate-limited; deferring reconnect");
+          }
+          settle(reject, e);
           ws.close();
         }
       });
@@ -573,6 +619,11 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     if (type === "client:registered") {
       const isReconnect = this.boundAgents.size > 0 || this.desiredBindings.size > 0;
       this.registered = true;
+      // Application-layer success — only now is it safe to reset the backoff
+      // counter. A TCP-only success (`ws.on("open")`) is not enough; an auth
+      // failure between `open` and `client:registered` would otherwise
+      // collapse the exponential backoff to attempt=1.
+      this.reconnectAttempt = 0;
       this.startHeartbeat();
       this.wsLogger.info({ isReconnect }, "registered");
       this.emit("connected");
@@ -762,11 +813,34 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   }
 
   private scheduleReconnect(): void {
+    // Guard against an entry from auth:fatal / disconnect() racing with the
+    // close handler — `closing=true` means "no more reconnects", honoured here.
+    if (this.closing) return;
     this.reconnectAttempt++;
     this.emit("reconnecting", this.reconnectAttempt);
 
-    const delay = Math.min(RECONNECT_BASE_MS * 2 ** (this.reconnectAttempt - 1), RECONNECT_MAX_MS);
-    this.wsLogger.debug({ attempt: this.reconnectAttempt, delayMs: delay }, "scheduling reconnect");
+    const exponential = Math.min(RECONNECT_BASE_MS * 2 ** (this.reconnectAttempt - 1), RECONNECT_MAX_MS);
+    // Honour a 429 Retry-After from the most recent refresh attempt: take
+    // whichever is larger, then consume the floor so subsequent attempts
+    // (after the limiter window opens up again) revert to the normal
+    // exponential schedule. Without this, the next attempt would also
+    // wait ≥retryAfter, effectively halting reconnects until manual reset.
+    const floor = this.nextReconnectMinDelayMs;
+    this.nextReconnectMinDelayMs = 0;
+    let delay = Math.max(exponential, floor);
+    if (floor > 0) {
+      // ±20% jitter applies only to the 429 path, where multiple clients
+      // sharing an IP (NAT / CI pool) can otherwise all hit the same
+      // Retry-After deadline simultaneously and reform the limiter spike.
+      // Organic exponential backoff doesn't need jitter — each connection
+      // entered the loop at its own arbitrary moment already.
+      const jitter = delay * 0.2 * (Math.random() * 2 - 1);
+      delay = Math.max(0, Math.round(delay + jitter));
+    }
+    this.wsLogger.debug(
+      { attempt: this.reconnectAttempt, delayMs: delay, floorMs: floor || undefined },
+      "scheduling reconnect",
+    );
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       if (!this.closing) {
@@ -827,6 +901,18 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
    * before the server's scheduleAuthExpiry timer fires. Short-lived tokens
    * (exp <= lead window) skip the proactive reconnect entirely — we let the
    * server push `auth:expired` and handle that path.
+   *
+   * Order is "refresh-then-close", not "close-then-let-reconnect-refresh".
+   * The earlier shape relied on the new connection's open handler to do the
+   * `/auth/refresh` HTTP, which forced ≥1s of WS downtime per cycle even on
+   * the happy path (one base reconnect delay + the refresh round-trip) and
+   * compounded badly under 429: every retry attempt also closed/reopened the
+   * WS, holding the agent offline for 15-20s while the limiter cooled down.
+   * Refreshing first lets us swap the new token onto a still-open WS with no
+   * observable disconnect when the refresh succeeds; the original close-and-
+   * reconnect flow only runs on failure as a last-ditch fallback (it'll hit
+   * the same 429 on its next retry, but at least the Retry-After floor is
+   * now wired up so we don't pile attempts inside the same window).
    */
   private scheduleProactiveAuthRefresh(token: string): void {
     this.clearAuthRefreshTimer();
@@ -836,12 +922,52 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     if (delay <= 0) return;
     this.authLogger.debug({ delayMs: delay }, "scheduled proactive auth refresh");
     this.authRefreshTimer = setTimeout(() => {
-      this.authRefreshTimer = null;
-      if (this.closing) return;
-      this.authLogger.info("triggering proactive auth refresh");
-      // Silent reconnect: close gracefully, the close handler reconnects and
-      // the new connection asks getAccessToken() for a fresh JWT.
-      this.ws?.close(1000, "proactive auth refresh");
+      void this.runProactiveAuthRefresh();
     }, delay);
+  }
+
+  private async runProactiveAuthRefresh(): Promise<void> {
+    this.authRefreshTimer = null;
+    if (this.closing) return;
+    this.authLogger.info("triggering proactive auth refresh");
+    try {
+      // Force a fetch — the cached token is by definition still inside the
+      // 60s lead window here, so we ask for >lead validity to make
+      // ensureFreshAccessToken treat it as stale and call /auth/refresh.
+      // The returned token is also written to credentials.json by the
+      // bootstrap layer, so the reconnect that follows can pick it up
+      // without a second HTTP round-trip.
+      await this.getAccessToken({ minValidityMs: AUTH_REFRESH_LEAD_MS + 5_000 });
+    } catch (err) {
+      const e = err instanceof Error ? err : new Error(String(err));
+      if (e.name === "AuthRefreshRateLimitedError") {
+        // Stash Retry-After for the close-handler-driven scheduleReconnect
+        // that fires below — without this it would reuse the 1s base delay
+        // and hammer the limiter inside the same 60s window.
+        const retryAfterMs = (e as { retryAfterMs?: number }).retryAfterMs ?? 30_000;
+        this.nextReconnectMinDelayMs = Math.max(this.nextReconnectMinDelayMs, retryAfterMs);
+        this.authLogger.warn({ retryAfterMs }, "proactive refresh rate-limited; deferring reconnect");
+      } else if (e.name === "AuthRefreshFailedError") {
+        // Refresh token revoked/expired — surface fatal so the consumer
+        // (CLI) can prompt for `connect` instead of looping. Skip the
+        // close-and-reconnect dance since reconnecting would just throw
+        // the same error from the open handler.
+        this.closing = true;
+        this.emit("auth:fatal", e);
+        return;
+      } else {
+        this.authLogger.warn({ err: e }, "proactive refresh failed; falling back to reconnect path");
+      }
+      // Fall through to close — the legacy reconnect-driven retry path
+      // takes over from here.
+    }
+
+    // Close gracefully whether refresh succeeded or not. On success the
+    // close handler triggers a reconnect whose open handler reads the
+    // freshly-cached token (no second /auth/refresh), collapsing the
+    // disconnect window to a single TCP/WS handshake (~1 RTT). On failure
+    // it falls back to the original close-then-retry flow with the
+    // 429-aware backoff floor in place.
+    this.ws?.close(1000, "proactive auth refresh");
   }
 }

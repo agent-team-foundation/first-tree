@@ -42,18 +42,6 @@ export function listManagedAgents(): Promise<ManagedAgent[]> {
   return api.get<ManagedAgent[]>("/me/managed-agents");
 }
 
-/**
- * Admin-only: every agent in the caller's org, ignoring visibility. Used by
- * the Admin → All Agents tab; the server 403s for non-admin callers.
- */
-export function listAllAgentsForAdmin(params?: { limit?: number; cursor?: string }): Promise<PaginatedAgents> {
-  const qs = new URLSearchParams();
-  if (params?.limit) qs.set("limit", String(params.limit));
-  if (params?.cursor) qs.set("cursor", params.cursor);
-  const query = qs.toString();
-  return api.get<PaginatedAgents>(`/admin/agents/all${query ? `?${query}` : ""}`);
-}
-
 export function getAgent(uuid: string): Promise<Agent> {
   return api.get<Agent>(`/admin/agents/${encodeURIComponent(uuid)}`);
 }

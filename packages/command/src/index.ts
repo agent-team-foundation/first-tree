@@ -11,6 +11,8 @@ export { deriveHubUrlFromToken, HubUrlDerivationError } from "./commands/saas-co
 // Core types
 export type { CheckResult, ServiceInfo, ServiceOpResult, ServiceState, StartOptions } from "./core/index.js";
 export {
+  AuthRefreshFailedError,
+  AuthRefreshRateLimitedError,
   bindFeishuBot,
   bindFeishuUser,
   blank,

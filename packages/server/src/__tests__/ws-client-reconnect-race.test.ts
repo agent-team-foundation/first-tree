@@ -1,0 +1,161 @@
+import { eq } from "drizzle-orm";
+import type { FastifyInstance } from "fastify";
+import { SignJWT } from "jose";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import WebSocket from "ws";
+import { clients } from "../db/schema/clients.js";
+import { createTestAdmin, createTestApp } from "./helpers.js";
+
+/**
+ * Regression test for the May 7 staging incident: a client reconnects
+ * (typical `systemctl restart` flow), the new socket finishes register
+ * and the row becomes `connected`, but the *old* socket's `socket.on
+ * ("close")` handler — running asynchronously — then awaits
+ * `disconnectClient` and stamps `status='disconnected'`, clobbering the
+ * fresh state. From the operator's perspective everything is healthy
+ * (CLI, doctor, agents bound) but the Web admin shows "offline".
+ *
+ * The fix in ws-client.ts gates the DB write on
+ * `connectionManager.isActiveClientConnection(clientId, socket)` — the
+ * old socket sees `false` (the new socket has already taken over) and
+ * skips the write.
+ *
+ * This test reproduces the race deterministically by opening two
+ * sockets under the same clientId in sequence; the second register
+ * triggers the connection-manager's "ALREADY_CONNECTED" close on the
+ * first socket. We then wait for the first socket's onClose handler to
+ * complete and assert the row remained `connected`.
+ */
+describe("WS client reconnect race — late onClose must not clobber a fresh status", () => {
+  let app: FastifyInstance;
+  let wsUrl: string;
+  let userId: string;
+  let memberId: string;
+  let orgId: string;
+  let role: string;
+  const jwtSecret = process.env.JWT_SECRET ?? "test-jwt-secret-key-for-vitest";
+
+  async function signAccess(): Promise<string> {
+    const secret = new TextEncoder().encode(jwtSecret);
+    const now = Math.floor(Date.now() / 1000);
+    return new SignJWT({
+      sub: userId,
+      memberId,
+      organizationId: orgId,
+      role,
+      type: "access",
+    })
+      .setProtectedHeader({ alg: "HS256" })
+      .setIssuedAt(now)
+      .setExpirationTime(now + 300)
+      .sign(secret);
+  }
+
+  /**
+   * Open a WS, send `auth` + `client:register`, resolve once the server
+   * has acknowledged registration (`client:registered` frame). Returns
+   * the open WebSocket so the caller can close it (or wait for the
+   * server to close it).
+   */
+  async function authAndRegister(token: string, clientId: string): Promise<WebSocket> {
+    const ws = new WebSocket(wsUrl);
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("register timeout")), 5000);
+      ws.on("open", () => ws.send(JSON.stringify({ type: "auth", token })));
+      ws.on("message", (raw) => {
+        const msg = JSON.parse(raw.toString()) as { type: string };
+        if (msg.type === "auth:ok") {
+          ws.send(JSON.stringify({ type: "client:register", clientId }));
+        } else if (msg.type === "client:registered") {
+          clearTimeout(timer);
+          resolve();
+        } else if (msg.type === "client:register:rejected") {
+          clearTimeout(timer);
+          reject(new Error(`register rejected: ${JSON.stringify(msg)}`));
+        }
+      });
+      ws.on("error", (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+    });
+    return ws;
+  }
+
+  beforeAll(async () => {
+    app = await createTestApp();
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const addr = app.server.address();
+    if (!addr || typeof addr === "string") throw new Error("test server has no address");
+    wsUrl = `ws://127.0.0.1:${addr.port}/api/v1/agent/ws/client`;
+  });
+
+  beforeEach(async () => {
+    const admin = await createTestAdmin(app, { username: `race-${crypto.randomUUID().slice(0, 8)}` });
+    userId = admin.userId;
+    memberId = admin.memberId;
+    const { members } = await import("../db/schema/members.js");
+    const [m] = await app.db.select().from(members).where(eq(members.id, memberId)).limit(1);
+    if (!m) throw new Error("member row missing after setup");
+    orgId = m.organizationId;
+    role = m.role;
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it("preserves clients.status='connected' when the displaced socket's onClose lands after the new register", async () => {
+    const token = await signAccess();
+    const clientId = `client_${crypto.randomUUID().slice(0, 8)}`;
+
+    // First connection — registers and becomes the active socket.
+    const ws1 = await authAndRegister(token, clientId);
+
+    // Track when ws1 actually finishes closing on the server side. The
+    // close is initiated by setClientConnection during ws2's register
+    // (code 4009 ALREADY_CONNECTED), and onClose runs asynchronously
+    // afterwards. We can't directly observe the server's handler, but
+    // the client-side `close` event is a tight upper bound — onClose's
+    // own awaits run within a few ms after the network close.
+    const ws1Closed = new Promise<void>((resolve) => ws1.on("close", () => resolve()));
+
+    // Second connection under the same clientId — server's
+    // setClientConnection forces close on ws1, and ws2's register
+    // writes status='connected'.
+    const ws2 = await authAndRegister(token, clientId);
+
+    // Wait for ws1's close + a small buffer so onClose's awaited DB
+    // write (if any — the fix should suppress it) lands before we
+    // sample.
+    await ws1Closed;
+    await new Promise((r) => setTimeout(r, 100));
+
+    const [row] = await app.db.select().from(clients).where(eq(clients.id, clientId));
+
+    // Without the fix, this would be 'disconnected' — ws1's onClose
+    // would have stamped it after ws2's register. With the fix, ws1's
+    // handler sees `isActiveClientConnection(...)=false` (the slot now
+    // points at ws2) and skips the DB write.
+    expect(row?.status).toBe("connected");
+
+    ws2.close();
+  }, 10_000);
+
+  it("still writes 'disconnected' when the only socket closes (no replacement)", async () => {
+    // Sanity: the fix must not break the normal disconnect path. A
+    // single client opening then closing must end up disconnected in
+    // the DB, otherwise we'd have leaked the entire status signal.
+    const token = await signAccess();
+    const clientId = `client_${crypto.randomUUID().slice(0, 8)}`;
+
+    const ws = await authAndRegister(token, clientId);
+    const closed = new Promise<void>((resolve) => ws.on("close", () => resolve()));
+    ws.close();
+    await closed;
+    await new Promise((r) => setTimeout(r, 100));
+
+    const [row] = await app.db.select().from(clients).where(eq(clients.id, clientId));
+    expect(row?.status).toBe("disconnected");
+  }, 10_000);
+});

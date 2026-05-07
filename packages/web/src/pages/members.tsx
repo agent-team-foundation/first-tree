@@ -1,11 +1,10 @@
 import { MEMBER_ROLES } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Copy, Pencil, Plus, Trash2 } from "lucide-react";
+import { Pencil, Trash2 } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
-import { createMember, deleteMember, listMembers, updateMember } from "../api/members.js";
+import { deleteMember, listMembers, updateMember } from "../api/members.js";
 import { useAuth } from "../auth/auth-context.js";
 import { Button } from "../components/ui/button.js";
-import { DenseBadge } from "../components/ui/dense-badge.js";
 import {
   DenseTable,
   DenseTableBody,
@@ -14,18 +13,9 @@ import {
   DenseTableHeader,
   DenseTableRow,
 } from "../components/ui/dense-table.js";
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "../components/ui/dialog.js";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog.js";
 import { Input } from "../components/ui/input.js";
 import { Label } from "../components/ui/label.js";
-import { Panel } from "../components/ui/panel.js";
-import { SectionHeader, UppercaseLabel } from "../components/ui/section-header.js";
 import { formatDate } from "../lib/utils.js";
 
 const roleValues = Object.values(MEMBER_ROLES);
@@ -37,23 +27,16 @@ type MemberRow = {
   role: string;
 };
 
-function initials(displayName: string, username: string): string {
-  const source = displayName?.trim() || username;
-  const parts = source.split(/[\s._-]+/).filter(Boolean);
-  if (parts.length >= 2) {
-    const first = parts[0] ?? "";
-    const second = parts[1] ?? "";
-    return `${first[0] ?? ""}${second[0] ?? ""}`.toUpperCase();
-  }
-  return source.slice(0, 2).toUpperCase();
-}
-
+/**
+ * Members table — view, edit role / display name, remove. New members join
+ * via the Invite link flow (admin-only button on /team); the legacy
+ * username/password create path was retired with the org-decoupled auth
+ * refactor.
+ */
 export function MembersPage() {
   const queryClient = useQueryClient();
-  const { memberId: selfId } = useAuth();
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [form, setForm] = useState({ username: "", displayName: "", role: "member" });
-  const [createdPassword, setCreatedPassword] = useState<string | null>(null);
+  const { memberId: selfId, role } = useAuth();
+  const isAdmin = role === "admin";
   const [editTarget, setEditTarget] = useState<MemberRow | null>(null);
 
   const {
@@ -65,34 +48,10 @@ export function MembersPage() {
     queryFn: listMembers,
   });
 
-  const createMut = useMutation({
-    mutationFn: () =>
-      createMember({
-        username: form.username,
-        displayName: form.displayName,
-        role: form.role as "admin" | "member",
-      }),
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["members"] });
-      setCreatedPassword(data.password);
-    },
-  });
-
   const deleteMut = useMutation({
     mutationFn: deleteMember,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["members"] }),
   });
-
-  function closeDialog() {
-    setDialogOpen(false);
-    setForm({ username: "", displayName: "", role: "member" });
-    setCreatedPassword(null);
-  }
-
-  function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    createMut.mutate();
-  }
 
   function handleDelete(id: string) {
     if (window.confirm("Delete this member? Their human agent will also be deactivated.")) {
@@ -102,98 +61,7 @@ export function MembersPage() {
 
   return (
     <>
-      <Panel>
-        <SectionHeader
-          right={
-            <Dialog open={dialogOpen} onOpenChange={(open) => (open ? setDialogOpen(true) : closeDialog())}>
-              <DialogTrigger asChild>
-                <Button size="xs" className="normal-case tracking-normal">
-                  <Plus className="h-3 w-3" />
-                  Add member
-                </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>{createdPassword ? "Member Created" : "Create Member"}</DialogTitle>
-                </DialogHeader>
-                {createdPassword ? (
-                  <div className="space-y-4">
-                    <p className="text-body" style={{ color: "var(--fg-3)" }}>
-                      Member created. Share the password below — it will only be shown once.
-                    </p>
-                    <div
-                      className="flex items-center gap-2 rounded-md p-3"
-                      style={{ background: "var(--bg-sunken)", border: "var(--hairline) solid var(--border-faint)" }}
-                    >
-                      <code className="flex-1 text-body mono">{createdPassword}</code>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => navigator.clipboard.writeText(createdPassword)}
-                        title="Copy password"
-                      >
-                        <Copy className="h-4 w-4" />
-                      </Button>
-                    </div>
-                    <DialogFooter>
-                      <Button onClick={closeDialog}>Done</Button>
-                    </DialogFooter>
-                  </div>
-                ) : (
-                  <form onSubmit={handleSubmit} className="space-y-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="member-username">Username</Label>
-                      <Input
-                        id="member-username"
-                        type="text"
-                        value={form.username}
-                        onChange={(e) => setForm({ ...form, username: e.target.value })}
-                        required
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="member-name">Display Name</Label>
-                      <Input
-                        id="member-name"
-                        value={form.displayName}
-                        onChange={(e) => setForm({ ...form, displayName: e.target.value })}
-                        required
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="member-role">Role</Label>
-                      <select
-                        id="member-role"
-                        value={form.role}
-                        onChange={(e) => setForm({ ...form, role: e.target.value })}
-                        className="flex h-9 w-full rounded-[var(--radius-input)] border border-input bg-transparent px-3 py-1 text-body shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                      >
-                        {roleValues.map((r) => (
-                          <option key={r} value={r}>
-                            {r}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    {createMut.error instanceof Error && (
-                      <div className="text-body" style={{ color: "var(--state-error)" }}>
-                        {createMut.error.message}
-                      </div>
-                    )}
-                    <DialogFooter>
-                      <Button type="submit" disabled={createMut.isPending}>
-                        {createMut.isPending ? "Creating..." : "Create"}
-                      </Button>
-                    </DialogFooter>
-                  </form>
-                )}
-              </DialogContent>
-            </Dialog>
-          }
-        >
-          Members · {members?.length ?? 0}
-        </SectionHeader>
-
+      <section>
         {isLoading ? (
           <div className="text-center py-8 text-body" style={{ color: "var(--fg-3)" }}>
             Loading…
@@ -204,18 +72,18 @@ export function MembersPage() {
           </div>
         ) : members?.length === 0 ? (
           <div className="text-center py-8 text-body" style={{ color: "var(--fg-3)" }}>
-            No members
+            {isAdmin ? "No members yet — share the Invite link to add teammates." : "No members yet."}
           </div>
         ) : (
-          <DenseTable>
+          <DenseTable className="table-fixed">
             <DenseTableHeader>
               <DenseTableRow>
-                <DenseTableHead style={{ width: 30 }} />
-                <DenseTableHead>Username</DenseTableHead>
-                <DenseTableHead>Name</DenseTableHead>
-                <DenseTableHead>Role</DenseTableHead>
-                <DenseTableHead>Created</DenseTableHead>
-                <DenseTableHead style={{ width: 1 }} />
+                <DenseTableHead style={{ width: 160 }}>Display name</DenseTableHead>
+                <DenseTableHead style={{ width: 140 }}>Username</DenseTableHead>
+                <DenseTableHead style={{ width: 120 }}>Role</DenseTableHead>
+                <DenseTableHead style={{ width: 150 }}>Created</DenseTableHead>
+                <DenseTableHead aria-hidden />
+                {isAdmin && <DenseTableHead style={{ width: 80, textAlign: "right" }} />}
               </DenseTableRow>
             </DenseTableHeader>
             <DenseTableBody>
@@ -224,69 +92,67 @@ export function MembersPage() {
                 return (
                   <DenseTableRow key={m.id}>
                     <DenseTableCell>
-                      <span
-                        className="mono inline-flex items-center justify-center text-caption font-semibold"
-                        style={{
-                          width: 22,
-                          height: 22,
-                          borderRadius: "var(--radius-input)",
-                          background: isSelf ? "var(--accent-bg)" : "var(--bg-active)",
-                          border: "var(--hairline) solid var(--border-strong)",
-                          color: isSelf ? "var(--accent-dim)" : "var(--fg-2)",
-                        }}
-                      >
-                        {initials(m.displayName, m.username)}
+                      <span className="font-medium">{m.displayName}</span>
+                      {isSelf && (
+                        <span className="text-label italic" style={{ marginLeft: 6, color: "var(--fg-3)" }}>
+                          (you)
+                        </span>
+                      )}
+                    </DenseTableCell>
+                    <DenseTableCell>
+                      <span className="mono text-label" style={{ color: "var(--fg-3)" }}>
+                        @{m.username}
                       </span>
                     </DenseTableCell>
-                    <DenseTableCell>
-                      <span className="mono font-medium">{m.username}</span>
-                      {isSelf && <UppercaseLabel style={{ marginLeft: 6 }}>you</UppercaseLabel>}
-                    </DenseTableCell>
-                    <DenseTableCell style={{ color: "var(--fg-2)" }}>{m.displayName}</DenseTableCell>
-                    <DenseTableCell>
-                      <DenseBadge tone={m.role === "admin" ? "accent" : "neutral"}>{m.role}</DenseBadge>
+                    <DenseTableCell className="text-label" style={{ color: "var(--fg-3)" }}>
+                      {m.role === "admin" ? "Admin" : "Member"}
                     </DenseTableCell>
                     <DenseTableCell className="mono text-caption" style={{ color: "var(--fg-4)" }}>
                       {formatDate(m.createdAt)}
                     </DenseTableCell>
-                    <DenseTableCell style={{ whiteSpace: "nowrap" }}>
-                      <div className="flex gap-0.5 justify-end">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7"
-                          onClick={() =>
-                            setEditTarget({
-                              id: m.id,
-                              username: m.username,
-                              displayName: m.displayName,
-                              role: m.role,
-                            })
-                          }
-                          title="Edit"
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7"
-                          onClick={() => handleDelete(m.id)}
-                          disabled={deleteMut.isPending}
-                          title="Delete"
-                          style={{ color: "var(--fg-4)" }}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    </DenseTableCell>
+                    <DenseTableCell aria-hidden />
+                    {isAdmin && (
+                      <DenseTableCell style={{ whiteSpace: "nowrap" }}>
+                        <div className="flex gap-0.5 justify-end">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7"
+                            onClick={() =>
+                              setEditTarget({
+                                id: m.id,
+                                username: m.username,
+                                displayName: m.displayName,
+                                role: m.role,
+                              })
+                            }
+                            title="Edit"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                          {!isSelf && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7"
+                              onClick={() => handleDelete(m.id)}
+                              disabled={deleteMut.isPending}
+                              title="Delete"
+                              style={{ color: "var(--fg-4)" }}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
+                        </div>
+                      </DenseTableCell>
+                    )}
                   </DenseTableRow>
                 );
               })}
             </DenseTableBody>
           </DenseTable>
         )}
-      </Panel>
+      </section>
 
       <EditMemberDialog
         target={editTarget}

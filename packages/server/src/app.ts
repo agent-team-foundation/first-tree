@@ -63,6 +63,7 @@ import {
 } from "./observability/index.js";
 import { type AdapterManager, createAdapterManager } from "./services/adapter-manager.js";
 import { broadcastToAdmins } from "./services/admin-broadcast.js";
+import { expiryToSeconds } from "./services/auth.js";
 import { type BackgroundTasks, createBackgroundTasks } from "./services/background-tasks.js";
 import { registerChatMessageDispatcher } from "./services/chat-projection.js";
 import { createConfigService } from "./services/config-service.js";
@@ -101,6 +102,22 @@ function resolveCommandVersion(injected: string | undefined): string {
 }
 
 export async function buildApp(config: Config) {
+  // Validate token-lifetime config eagerly so a typo in
+  // `FIRST_TREE_HUB_AUTH_*_EXPIRY` fails the boot, not the first
+  // /connect-tokens call hours later. Both server entry points
+  // (the standalone bin and the CLI's `server start`) flow through
+  // buildApp, so this single check covers both.
+  try {
+    expiryToSeconds(config.auth.accessTokenExpiry);
+    expiryToSeconds(config.auth.refreshTokenExpiry);
+    expiryToSeconds(config.auth.connectTokenExpiry);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `${msg} — check FIRST_TREE_HUB_AUTH_*_EXPIRY env vars (got access=${config.auth.accessTokenExpiry}, refresh=${config.auth.refreshTokenExpiry}, connect=${config.auth.connectTokenExpiry}).`,
+    );
+  }
+
   applyLoggerConfig({
     level: config.observability.logging.level,
     format: config.observability.logging.format,

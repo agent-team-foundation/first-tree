@@ -80,6 +80,24 @@ export class ClientRuntime {
       print.status("⚠️", "access token expired — reconnecting after refresh...");
     });
 
+    // Refresh token rejected by the server — the local credentials cannot
+    // refresh themselves out of this state, so retrying is pointless and the
+    // 1Hz reconnect storm just burns CPU + log volume. Print recovery
+    // instructions and exit 75 (TEMPFAIL) so systemd/launchd applies its
+    // restart backoff instead of letting us thrash. The operator gets a
+    // fresh token from the Web Computers page → New Connection and re-runs
+    // `first-tree-hub connect <token>`.
+    this.connection.on("auth:fatal", (err) => {
+      print.blank();
+      print.status("✗", "auth expired — service is shutting down to break the reconnect loop.");
+      print.status("", err.message);
+      print.status("", "Recovery: get a new connect token from your Hub's Web admin");
+      print.status("", "          (Computers → + New Connection), then re-run the command shown.");
+      // Honour the unit test environment which will assert via process.exit
+      // mocks; in production this triggers the supervisor's restart backoff.
+      process.exit(75);
+    });
+
     // Surface transport-level errors (TLS resets, DNS hiccups, WS handshake
     // failures) to the operator. ClientConnection's own reconnect loop handles
     // recovery; the process-wide crash guard lives in ClientConnection itself.

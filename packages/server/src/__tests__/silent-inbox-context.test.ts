@@ -115,6 +115,14 @@ describe("silent inbox + preceding context", () => {
       "third silent",
     ]);
 
+    // Pin the runtime types of the bigserial / integer columns. The HTTP poll
+    // path historically returned `id` and `retryCount` as JS strings because
+    // the raw-SQL `tx.execute` bypassed Drizzle's column-mode conversion;
+    // anything downstream that strictly validated `z.number()` would reject
+    // the frame. See issue #194.
+    expect(typeof entry.id).toBe("number");
+    expect(typeof entry.retryCount).toBe("number");
+
     // All silent rows should now be acked.
     const remaining = await app.db
       .select({ notify: inboxEntries.notify, status: inboxEntries.status })

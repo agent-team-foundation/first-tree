@@ -1,11 +1,24 @@
 import { NavLink, Outlet } from "react-router";
+import { useAuth } from "../auth/auth-context.js";
 import { cn } from "../lib/utils.js";
 
 /**
- * Settings is a master-detail container. Same flat aesthetic as TeamLayout
- * — no borders, no contrasting sidebar bg; active state is a soft pill.
+ * Team layout. Non-admin users land directly on the team roster (no
+ * sidebar — only one item would be visible). Admin users see a sidebar
+ * with `Roster` and `Settings` so the admin-only configuration page
+ * stays a peer to the roster rather than buried in a header button.
  */
-export function SettingsLayout() {
+export function TeamLayout() {
+  const { role } = useAuth();
+
+  // Until role hydrates, render the bare Outlet so the page itself shows
+  // immediately. Admin sidebar appears once we know the user is admin —
+  // briefly missing for an admin during hydration is far less jarring than
+  // a wrong sidebar showing up for a non-admin.
+  if (role !== "admin") {
+    return <Outlet />;
+  }
+
   return (
     <div className="-m-6 flex" style={{ minHeight: "calc(100vh - var(--sp-10))" }}>
       <aside
@@ -15,8 +28,8 @@ export function SettingsLayout() {
           padding: "var(--sp-4) var(--sp-2)",
         }}
       >
-        <SubNavLink to="/settings/computers" label="Computers" />
-        <SubNavLink to="/settings/integrations" label="Integrations" />
+        <SubNavLink to="/team" end label="Members" />
+        <SubNavLink to="/team/settings" label="Team settings" />
       </aside>
 
       <div className="flex-1 min-w-0 overflow-auto">
@@ -26,10 +39,11 @@ export function SettingsLayout() {
   );
 }
 
-function SubNavLink({ to, label }: { to: string; label: string }) {
+function SubNavLink({ to, label, end }: { to: string; label: string; end?: boolean }) {
   return (
     <NavLink
       to={to}
+      end={end}
       className={({ isActive }) =>
         cn(
           "block w-full text-left bg-transparent text-body transition-colors",
@@ -37,9 +51,7 @@ function SubNavLink({ to, label }: { to: string; label: string }) {
           !isActive && "hover:bg-accent",
         )
       }
-      style={{
-        borderRadius: "var(--radius-input)",
-      }}
+      style={{ borderRadius: "var(--radius-input)" }}
     >
       {({ isActive }) => (
         <span

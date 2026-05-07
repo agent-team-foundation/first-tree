@@ -31,6 +31,8 @@ export type HubClient = {
   id: string;
   userId: string | null;
   status: string;
+  /** Server-derived from offline duration vs refresh-token TTL. See clientAuthStateSchema in shared. */
+  authState: "ok" | "expired";
   sdkVersion: string | null;
   hostname: string | null;
   os: string | null;
@@ -58,7 +60,7 @@ export function getClient(clientId: string): Promise<HubClient> {
 /**
  * Fetch this client's reported runtime-provider capabilities. Returns the
  * client's full row plus its `metadata.capabilities` blob (Option C). Used
- * by the Settings → Computers section to surface SDK install + auth state
+ * by the Computers page to surface SDK install + auth state
  * per provider.
  */
 export type ClientWithCapabilities = HubClient & {

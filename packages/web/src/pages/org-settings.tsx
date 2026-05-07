@@ -4,7 +4,7 @@ import { Check } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import { getConfigs, updateConfigs } from "../api/system-config.js";
 import { Button } from "../components/ui/button.js";
-import { Panel, PanelHeader, PanelTitle } from "../components/ui/panel.js";
+import { FlatSectionHeader } from "../components/ui/flat-section-header.js";
 import { UppercaseLabel } from "../components/ui/section-header.js";
 import { TeamIdentityPanel } from "./team-identity-panel.js";
 
@@ -99,49 +99,50 @@ export function OrgSettingsPage() {
   }
 
   return (
-    <div className="space-y-4">
+    <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-4)" }}>
       <TeamIdentityPanel />
       <form onSubmit={handleSubmit}>
-        <Panel>
-          <PanelHeader>
-            <PanelTitle>System configuration</PanelTitle>
-            <div className="flex items-center gap-1.5">
-              {saved && (
-                <span className="mono text-caption" style={{ color: "var(--accent-dim)" }}>
-                  saved
-                </span>
-              )}
-              <Button type="button" variant="ghost" size="xs" onClick={handleReset} disabled={mutation.isPending}>
-                Reset defaults
-              </Button>
-              <Button type="submit" size="xs" disabled={mutation.isPending}>
-                <Check className="h-3 w-3" />
-                {mutation.isPending ? "Saving…" : "Save changes"}
-              </Button>
+        <section>
+          <FlatSectionHeader
+            right={
+              <div className="flex items-center gap-1.5">
+                {saved && (
+                  <span className="mono text-caption" style={{ color: "var(--accent-dim)" }}>
+                    saved
+                  </span>
+                )}
+                <Button type="button" variant="ghost" size="xs" onClick={handleReset} disabled={mutation.isPending}>
+                  Reset defaults
+                </Button>
+                <Button type="submit" size="xs" variant="outline" disabled={mutation.isPending}>
+                  <Check className="h-3 w-3" />
+                  {mutation.isPending ? "Saving…" : "Save changes"}
+                </Button>
+              </div>
+            }
+          >
+            System configuration
+          </FlatSectionHeader>
+          {isLoading ? (
+            <div className="text-body" style={{ color: "var(--fg-3)", padding: "var(--sp-3) var(--sp-1)" }}>
+              Loading…
             </div>
-          </PanelHeader>
-          <div style={{ padding: "var(--sp-1) var(--sp-4) var(--sp-3_5)" }}>
-            {isLoading ? (
-              <div className="py-6 text-body" style={{ color: "var(--fg-3)" }}>
-                Loading…
-              </div>
-            ) : (
-              CONFIG_FIELDS.map((field) => (
-                <ConfigRow
-                  key={field.key}
-                  field={field}
-                  value={values[field.key] ?? ""}
-                  onChange={(v) => setValues({ ...values, [field.key]: v })}
-                />
-              ))
-            )}
-            {mutation.error instanceof Error && (
-              <div className="text-body pt-2" style={{ color: "var(--state-error)" }}>
-                {mutation.error.message}
-              </div>
-            )}
-          </div>
-        </Panel>
+          ) : (
+            CONFIG_FIELDS.map((field) => (
+              <ConfigRow
+                key={field.key}
+                field={field}
+                value={values[field.key] ?? ""}
+                onChange={(v) => setValues({ ...values, [field.key]: v })}
+              />
+            ))
+          )}
+          {mutation.error instanceof Error && (
+            <div className="text-body pt-2" style={{ color: "var(--state-error)" }}>
+              {mutation.error.message}
+            </div>
+          )}
+        </section>
       </form>
     </div>
   );
@@ -154,7 +155,7 @@ function ConfigRow({ field, value, onChange }: { field: ConfigMeta; value: strin
       className="grid items-start gap-5"
       style={{
         gridTemplateColumns: "1fr var(--sp-45)",
-        padding: "var(--sp-3_5) 0",
+        padding: "var(--sp-3_5) var(--sp-1)",
         borderTop: "var(--hairline) solid var(--border-faint)",
       }}
     >

@@ -273,4 +273,129 @@ describe("Admin Agents API", () => {
       expect(res.statusCode).toBe(403);
     });
   });
+
+  /**
+   * `POST /admin/agents/:uuid/chats` used to read `requireMember(request)` and
+   * use the JWT-default-org HUMAN agent as the chat creator, even when the
+   * target agent lived in a non-default org. The inline onboarding flow then
+   * tripped `createChat`'s cross-organization guard ("Cross-organization chat
+   * not allowed: <uuid>") right after a successful agent create. The fix
+   * resolves the creator from the *target agent's* org via
+   * `requireMemberInOrg`.
+   */
+  describe("chat-create resolves creator in target agent's org", () => {
+    async function attachOrg(
+      app: FastifyInstance,
+      userId: string,
+      role: "admin" | "member",
+    ): Promise<{ orgId: string; memberId: string; humanAgentId: string }> {
+      const orgId = `org-chat-${crypto.randomUUID().slice(0, 8)}`;
+      const memberId = uuidv7();
+      let humanAgentId = "";
+      await app.db.transaction(async (tx) => {
+        await tx
+          .insert(organizations)
+          .values({ id: orgId, name: `chat-${crypto.randomUUID().slice(0, 6)}`, displayName: "Chat Side" });
+        const human = await createAgent(tx as unknown as typeof app.db, {
+          name: `chat-h-${crypto.randomUUID().slice(0, 6)}`,
+          type: "human",
+          displayName: "Chat Human",
+          managerId: memberId,
+          organizationId: orgId,
+        });
+        humanAgentId = human.uuid;
+        await tx.insert(members).values({ id: memberId, userId, organizationId: orgId, agentId: human.uuid, role });
+      });
+      return { orgId, memberId, humanAgentId };
+    }
+
+    it("creates a direct chat when the target agent lives in a non-default org", async () => {
+      const app = getApp();
+      const alice = await createAdminContext(app);
+      const orgB = await attachOrg(app, alice.userId, "admin");
+
+      // Agent in non-default org B; managed by Alice's org-B member.
+      const target = await createAgent(app.db, {
+        name: `chat-target-${crypto.randomUUID().slice(0, 6)}`,
+        type: "autonomous_agent",
+        displayName: "Chat Target",
+        managerId: orgB.memberId,
+        clientId: alice.clientId,
+        organizationId: orgB.orgId,
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/admin/agents/${target.uuid}/chats`,
+        headers: { authorization: `Bearer ${alice.accessToken}` },
+        payload: {},
+      });
+      expect(res.statusCode).toBe(201);
+      const body = res.json<{ id: string; participants: Array<{ agentId: string }> }>();
+      // Both the target and Alice's org-B human must be participants — the
+      // pre-fix code would have used Alice's default-org human, blowing up
+      // with the cross-organization guard before reaching this assertion.
+      const ids = body.participants.map((p) => p.agentId);
+      expect(ids).toContain(target.uuid);
+      expect(ids).toContain(orgB.humanAgentId);
+    });
+
+    it("404s when the caller has no membership in the target agent's org", async () => {
+      const app = getApp();
+      const alice = await createAdminContext(app);
+
+      // Stand up a separate org with a fresh user (Bob) as admin. Two
+      // createTestAdmin calls would both land in resolveDefaultOrgId, so
+      // we provision Bob's org inline.
+      const { users } = await import("../db/schema/users.js");
+      const bobOrgId = `org-chat-bob-${crypto.randomUUID().slice(0, 8)}`;
+      const bobMemberId = uuidv7();
+      const bobUserId = uuidv7();
+      const targetUuid = await app.db.transaction(async (tx) => {
+        await tx.insert(users).values({
+          id: bobUserId,
+          username: `bob-${crypto.randomUUID().slice(0, 6)}`,
+          passwordHash: "$2b$04$xxxxxxxxxxxxxxxxxxxxxxyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+          displayName: "Bob",
+        });
+        await tx.insert(organizations).values({ id: bobOrgId, name: bobOrgId.slice(0, 30), displayName: "Bob's Org" });
+        const bobHuman = await createAgent(tx as unknown as typeof app.db, {
+          name: `bob-h-${crypto.randomUUID().slice(0, 6)}`,
+          type: "human",
+          displayName: "Bob Human",
+          managerId: bobMemberId,
+          organizationId: bobOrgId,
+        });
+        await tx.insert(members).values({
+          id: bobMemberId,
+          userId: bobUserId,
+          organizationId: bobOrgId,
+          agentId: bobHuman.uuid,
+          role: "admin",
+        });
+        // Bob's autonomous agent in his own org — Alice has no membership here.
+        const bobAgent = await createAgent(tx as unknown as typeof app.db, {
+          name: `bob-target-${crypto.randomUUID().slice(0, 6)}`,
+          type: "autonomous_agent",
+          displayName: "Bob's Target",
+          managerId: bobMemberId,
+          organizationId: bobOrgId,
+        });
+        return bobAgent.uuid;
+      });
+
+      // Alice tries to start a chat with Bob's agent. The route's
+      // `assertAgentVisible` runs first and 404s on non-members of the
+      // target's org (404 rather than 403 prevents UUID enumeration). The
+      // post-fix `requireMemberInOrg` is unreachable on this path — both
+      // layers agree the request is not authorized.
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/admin/agents/${targetUuid}/chats`,
+        headers: { authorization: `Bearer ${alice.accessToken}` },
+        payload: {},
+      });
+      expect(res.statusCode).toBe(404);
+    });
+  });
 });

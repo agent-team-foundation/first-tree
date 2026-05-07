@@ -420,14 +420,24 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
-  /** POST /admin/agents/:uuid/chats — create a new workspace chat with the target agent */
+  /** POST /admin/agents/:uuid/chats — create a new workspace chat with the target agent.
+   *
+   * The chat creator is the user's HUMAN agent in the *target agent's* org,
+   * not in the JWT default org. Otherwise a multi-org user creating a chat
+   * with an agent outside their JWT default org gets `createChat`'s
+   * cross-organization guard ("Cross-organization chat not allowed: …"),
+   * even though the human is a member of the target agent's org.
+   * Symptom hit by the inline onboarding flow when the user creates a new
+   * agent in a non-default org and the auto-chat step fires.
+   */
   app.post<{ Params: { uuid: string } }>("/:uuid/chats", async (request, reply) => {
     const { uuid: targetAgentId } = request.params;
     const scope = memberScope(request);
     await assertAgentVisible(app.db, scope, targetAgentId);
 
-    const member = requireMember(request);
-    const result = await createChat(app.db, member.agentId, {
+    const targetAgent = await agentService.getAgent(app.db, targetAgentId);
+    const probe = await requireMemberInOrg(app.db, request, targetAgent.organizationId);
+    const result = await createChat(app.db, probe.agentId, {
       type: "direct",
       participantIds: [targetAgentId],
     });

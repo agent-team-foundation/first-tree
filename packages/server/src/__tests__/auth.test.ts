@@ -75,7 +75,7 @@ describe("Admin Auth", () => {
   });
 
   describe("POST /api/v1/auth/refresh", () => {
-    it("returns new access token", async () => {
+    it("returns a fresh access+refresh pair (sliding window)", async () => {
       const app = getApp();
       const admin = await createTestAdmin(app);
       const res = await app.inject({
@@ -84,7 +84,11 @@ describe("Admin Auth", () => {
         payload: { refreshToken: admin.refreshToken },
       });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toHaveProperty("accessToken");
+      const body = res.json<{ accessToken: string; refreshToken: string }>();
+      expect(body.accessToken).toBeTruthy();
+      expect(body.refreshToken).toBeTruthy();
+      // Sliding window: rotated refresh token must differ from the one we sent.
+      expect(body.refreshToken).not.toBe(admin.refreshToken);
     });
 
     it("rejects invalid refresh token", async () => {
@@ -95,6 +99,25 @@ describe("Admin Auth", () => {
         payload: { refreshToken: "invalid" },
       });
       expect(res.statusCode).toBe(401);
+    });
+
+    it("the rotated refresh token can itself be used to refresh again", async () => {
+      const app = getApp();
+      const admin = await createTestAdmin(app);
+      const first = await app.inject({
+        method: "POST",
+        url: "/api/v1/auth/refresh",
+        payload: { refreshToken: admin.refreshToken },
+      });
+      expect(first.statusCode).toBe(200);
+      const next = first.json<{ refreshToken: string }>().refreshToken;
+      const second = await app.inject({
+        method: "POST",
+        url: "/api/v1/auth/refresh",
+        payload: { refreshToken: next },
+      });
+      expect(second.statusCode).toBe(200);
+      expect(second.json()).toHaveProperty("accessToken");
     });
   });
 });
