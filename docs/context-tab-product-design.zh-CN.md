@@ -9,74 +9,67 @@
 
 ## 核心判断
 
-Context Tree 的第一用户是 **agent**。它不是普通文档库,而是 agent 用来理解团队边界、决策背景、owner 和跨域关系的团队认知层。
+Context Tree 的第一用户是 **agent**。它不是普通文档库,而是 agents 用来理解团队边界、决策背景、owner 和跨域关系的团队认知层。
 
-First Tree Hub 的 `/context` 不是要把 Context Tree 改造成 human wiki,而是做 **agent context radar**:
+First Tree Hub 的 `/context` 要让这层后台能力变成可感知的产品体验:
 
-> 把后台被 agents 使用的 Context Tree,转化成 human/operator 可感知的同步、结构、变化和责任信号。
+> 用户应该明确感知到:agents 的判断和行动背后,有一棵正在被维护、正在生长、可以被治理的团队认知树。
 
-本需求的产品使命有两个:
+因此 `/context` 不是 human wiki,也不是纯文件浏览器。它是 **agent context radar**:把 agents 使用的 Context Tree 转译成 human/operator 能理解的结构、变化和责任信号。
 
-- **Operational**:让 operator 知道 agents 用于判断和行动的 context 是否可用、是否新鲜、哪里变了、谁负责。
-- **Perception**:让用户感知 First Tree 的核心价值不是 markdown 文件,而是 agents 会读取、用于判断和行动的团队认知树。
+一句话方案:
 
-## 核心场景与交付边界
+> 在 Hub 里提供一张 Agent Context Map,让用户看到 agents 背后的团队认知树当前是否可用、最近如何生长、变化影响哪块决策上下文、以及该由谁治理。
 
-本需求的核心场景是:
+## 用户应形成的认知
 
-> human/operator 打开 Hub,想理解 agents 背后的团队认知树是否已经同步、是否正在生长、哪里发生了会影响 agents 判断和行动的变化,以及这些变化由谁负责。
+用户打开 `/context` 后,应该形成三个判断:
 
-因此本需求交付的是 **snapshot-level context visibility**:
+1. **Agents are grounded**  
+   agents 不是只靠零散 prompt 工作,而是有一个团队维护的 context source。
 
-- Hub 已经拿到哪份 Context Tree snapshot;
-- 这份 agent context 自上次查看后发生了哪些变化;
-- 变化在树结构中的位置;
-- 每个变化节点的 owner、关联和内容线索。
+2. **Team context is alive**  
+   这棵树会随团队工作持续生长,并改变 agents 用于判断和行动的上下文。
 
-更强的 **per-agent context readiness** 也是这个产品方向的一部分,但不是当前交付承诺:
+3. **I can govern it**  
+   如果某个 context 变化影响团队决策、agent 行动或跨域协作,我能看到它在哪里、谁负责、和哪些上下文有关。
 
-- 哪些 agents 已经使用最新 context;
-- 哪些 agents 落后于 tree head;
-- 哪些 session 实际注入或读取了 context。
+## 核心场景排序
 
-原因不是它不重要,而是它需要新的 per-agent readiness / usage telemetry。当前没有可靠数据前,UI 不能承诺 `8 agents using latest context` / `3 agents behind latest context` 这类状态。
+| 优先级 | 场景 | 用户价值 | 本需求表达 |
+| --- | --- | --- | --- |
+| P0 | 建立对 agent 判断来源的信任 | 用户知道 agents 不是黑盒执行,而是依赖一棵团队维护的 Context Tree | 首屏 Header 表达 context snapshot 可用性和同步状态 |
+| P0 | 感知团队认知树正在生长 | 用户看到 tree 的变化会持续影响 agents 的理解、判断和行动 | `changes since your last view`、added / edited / removed |
+| P0 | 判断变化影响的知识区域 | 用户能把变化放回 agent 可导航的团队知识版图里 | 默认 Tree Map,domain/subdomain 聚合变化 |
+| P1 | 从变化进入治理动作 | 用户能找到 owner、关联节点和内容线索,判断是否需要确认或介入 | Node Detail 显示 owners、path、links、preview |
+| P2 | 精确看到每个 agent 是否已使用最新 context | 用户能判断某些 agent 的行动是否落后于最新团队认知 | 属于正确方向,但需要 per-agent readiness / usage telemetry |
 
-## 当前范围
+这里的关键判断是: **agent 使用感知属于本需求的核心价值,但当前只能先做 snapshot-level 的产品表达**。如果没有这个表达,`/context` 会退化成文件 diff 浏览器;如果没有 telemetry 就展示 agent count,又会让 UI 承诺不存在的数据。
 
-本需求只做四层信号,其中前三层是核心交互,第一层是首屏感知:
+## 体验目标
 
-| 信号 | 回答的问题 | 当前表达 |
+| 目标 | 用户问题 | 设计表达 |
 | --- | --- | --- |
-| Usage signal | 这棵树是否已被 Hub 同步,并可作为 agents 判断和行动的 context source? | Header 显示 snapshot synced / stale / unavailable |
-| Freshness signal | agents 用于判断和行动的 context 自上次查看后有没有变化? | 变化数量和 added / edited / removed 统计 |
-| Structure signal | 变化在 agent 可导航的团队认知结构里哪里? | 默认 Tree Map,domain/subdomain 聚合变化 |
-| Accountability signal | 这个变化该找谁、和哪些上下文有关? | Node Detail 显示 owners、path、links、preview |
-
-不做:
-
-- Context Tree 编辑器。
-- 通用 graph database 浏览器。
-- 默认展示全量 `soft_links` 网络。
-- 跨设备 last-seen 同步。
-- per-agent commit readiness 或真实读取 telemetry。
-- Header 中不展示 `8 agents using latest context` / `3 agents behind latest context` 这类 per-agent 状态;当前没有可靠数据支撑。
-- 替代 GitHub PR review / CODEOWNERS / First Tree 写入流程。
+| Context source visible | agents 背后的 context source 是否可用? | Header 显示 Team context current / stale / unavailable |
+| Growth visible | 这棵团队认知树最近如何生长? | added / edited / removed 变化统计 |
+| Structure visible | 变化发生在 agent 可导航的知识版图哪里? | 默认 Tree Map,domain/subdomain 聚合变化 |
+| Governance visible | 这个变化该找谁、会连到哪些上下文? | Node Detail 显示 owners、path、links、preview |
 
 ## 用户故事
 
-### Story 1: 感知 agents 的判断背后有 Context Tree
+### Story 1: 看到 agents 的判断来源
 
-作为 First Tree Hub 用户,我打开 `/context` 时,想感知 agents 的判断和行动不是只靠零散 prompt,而是建立在一棵已同步的团队认知树上。这样当我看到 agent 的输出、协作请求或执行结果时,能理解它背后有一层可观察、可维护的 context source。
+作为 First Tree Hub 用户,当我看到 agent 的输出、协作请求或执行结果时,我希望能在 `/context` 看到它背后依赖的是一棵已同步的团队认知树,从而理解 agent 的判断来源不是黑盒。
 
 验收标准:
 
-- 首屏显示 `Context snapshot synced` / `Snapshot stale` / `Snapshot unavailable`。
+- 产品文案优先使用 `Team context is current` / `Team context needs attention` / `Team context unavailable`。
 - 显示 repo branch、head commit、最近同步时间。
-- 本需求不暗示每个 agent 实际加载了哪个 commit。
+- 文案表达的是 context source 可用性,不暗示每个 agent 已实际加载该 commit。
 
-### Story 2: 感知团队认知树正在生长
+### Story 2: 看到团队认知树正在生长
 
-作为 human/operator,我想看到自上次查看后 Context Tree 新增、修改、删除了哪些内容,这样我能感知这棵树不是静态文档,而是在随团队工作持续生长,并持续改变 agents 用于判断和行动的上下文。
+作为 human/operator,我希望看到自上次查看后 Context Tree 新增、修改、删除了哪些内容,从而感知团队认知不是静态文档,而是在持续影响 agents 的判断和行动。
 
 验收标准:
 
@@ -84,9 +77,9 @@ First Tree Hub 的 `/context` 不是要把 Context Tree 改造成 human wiki,而
 - 分开显示 added / edited / removed。
 - 支持 `Mark all seen`,把当前 head commit 写入本地 last-seen baseline。
 
-### Story 3: 理解变化会影响哪块 agent context
+### Story 3: 理解变化影响哪块 agent context
 
-作为 human/operator,我想在树图上看到变化分布在哪些 domain / subdomain,这样我能判断这些变化会影响 agents 对哪块团队知识的理解,以及可能影响哪些后续协作判断。
+作为 human/operator,我希望在树图上看到变化分布在哪些 domain / subdomain,从而判断这些变化会影响 agents 对哪块团队知识的理解,以及可能影响哪些后续协作判断。
 
 验收标准:
 
@@ -94,9 +87,9 @@ First Tree Hub 的 `/context` 不是要把 Context Tree 改造成 human wiki,而
 - changed nodes 在 Tree Map 上高亮。
 - ancestor/domain 节点聚合子树变化数量。
 
-### Story 4: 从变化找到责任人和决策上下文
+### Story 4: 从变化进入治理动作
 
-作为 human/operator,当某个 context 变化可能影响团队决策、agent 行动或跨域协作时,我想点击节点看到 owner、path、关联节点和内容预览,这样我可以判断是否需要介入、找谁确认、以及这个变化连接到哪些上下文。
+作为 human/operator,当某个 context 变化可能影响团队决策、agent 行动或跨域协作时,我希望点击节点就能看到 owner、path、关联节点和内容预览,从而判断是否需要介入、找谁确认、以及这个变化连接到哪些上下文。
 
 验收标准:
 
@@ -104,6 +97,26 @@ First Tree Hub 的 `/context` 不是要把 Context Tree 改造成 human wiki,而
 - 显示 title、owners、path、change type、related links、preview。
 - changed node 显示最近变化 commit / 时间。
 - removed node 显示 previous path 和 removed 状态。
+
+## 本需求交付什么
+
+本需求交付的是 **让用户感知 agents 背后的团队认知树**。当前实现用 snapshot-level context visibility 完成这个目标:
+
+- **Context source**:Hub 已经拿到哪份 Context Tree snapshot,这份 snapshot 是否可作为 agents 的团队上下文来源。
+- **Context growth**:这份 agent context 自上次查看后新增、修改、删除了什么。
+- **Context map**:变化在树结构中的位置,以及归属哪个 domain / subdomain。
+- **Context governance**:每个变化节点的 owner、关联节点和内容线索。
+
+本需求暂不做以下能力,避免偏离“感知和理解”这个核心体验:
+
+- Context Tree 编辑器。
+- 通用 graph database 浏览器。
+- 默认展示全量 `soft_links` 网络。
+- 跨设备 last-seen 同步。
+- 替代 GitHub PR review / CODEOWNERS / First Tree 写入流程。
+- per-agent readiness 的精确计数和真实读取 telemetry。
+
+`8 agents using latest context` / `3 agents behind latest context` 这类表达不是错误方向,反而是后续更完整的目标体验:它能直接回答“哪些 agent 已经基于最新团队认知行动”。但它需要新的 per-agent readiness / usage telemetry,例如 agent 当前加载的 context commit、session 注入记录或读取记录。当前没有可靠数据前,UI 只表达 snapshot 可用性和 tree growth,并在数据模型上预留 readiness 扩展。
 
 ## 产品模型
 
@@ -125,9 +138,11 @@ first-tree-hub:context:lastSeenCommit:<repo>:<branch>
 
 后续如果需要跨设备一致,再升级为 server-side user preference。
 
-### Hub 是只读消费者
+### 本 tab 是只读感知面
 
-Hub 只消费 Context Tree snapshot,不写入 Context Tree。编辑、review、owner approval 仍走 Git-native tree repo / PR / CODEOWNERS 流程。
+本 tab 只消费 Context Tree snapshot,不在页面内写入 Context Tree。编辑、review、owner approval 仍走 Git-native tree repo / PR / CODEOWNERS 流程。
+
+这不否定 Hub 与 Context Tree 后续更深的 authoring integration。这里的边界只是:本需求先解决“用户能否感知 agents 背后的团队认知树”,不把可视化页扩展成 Tree 编辑器。
 
 ## UI 方案
 
@@ -135,7 +150,7 @@ Hub 只消费 Context Tree snapshot,不写入 Context Tree。编辑、review、o
 
 ```text
 Context
-Context snapshot synced 18m ago
+Team context is current
 12 changes since your last view · main@9e664e
                                       [Map] [Files] [Mark all seen]
 
@@ -154,22 +169,30 @@ Context snapshot synced 18m ago
 
 `Map` 是默认视图。`Files` 保留文件浏览,但只是辅助视角。
 
-Header 的目标体验分两层:
+Header 承担本需求最重要的产品表达:用户一进入页面,先看到“agents 背后的 Context Tree snapshot 已经被 Hub 同步 / 已过期 / 不可用”,再看到“这棵团队认知树自上次查看后如何变化”。它不是单纯报 commit,而是在建立 agent context source 的存在感。
 
-1. **当前可交付层**:snapshot-level availability。Hub Server 已经拿到一份可供 agents 后续使用的 Context Tree snapshot。
-2. **目标感知层**:agent context readiness。用户能看到 agents 是否已经使用最新 context。
+推荐文案:
 
-更强的产品表达,例如:
+```text
+Team context is current
+12 changes since your last view · main@9e664e
+```
+
+异常时:
+
+```text
+Team context needs attention
+12 changes at head · snapshot is stale
+```
+
+等有 per-agent readiness / usage telemetry 后,Header 再升级为:
 
 ```text
 Team context is current
 12 changes since your last view · 8 agents using latest context
-
-Team context changed
-12 changes at head · 3 agents behind latest context
 ```
 
-这类表达属于本需求要服务的产品方向,但需要 per-agent context readiness / usage telemetry 支撑。当前实现先交付 snapshot-level availability,同时在 UI 文案和 DTO 中为 readiness 留出扩展位置;没有可靠数据前不在 UI 中承诺 agent count。
+当前不展示 agent count,但页面的叙事必须始终围绕 agents 背后的团队认知树,而不是围绕 markdown 文件本身。
 
 ### Tree Map
 
@@ -245,7 +268,7 @@ agent-hub/
 ### 有变化
 
 1. human/operator 进入 `/context`。
-2. Header 显示 usage signal:`Context snapshot synced 18m ago`。
+2. Header 显示 context source signal:`Team context is current`。
 3. Header 显示 freshness signal:`12 changes since your last view`。
 4. Map 展示整棵树并高亮 changed nodes。
 5. 默认选中最近 changed node,右侧显示 Node Detail。
@@ -254,7 +277,7 @@ agent-hub/
 ### 无变化
 
 ```text
-Context snapshot synced 18m ago
+Team context is current
 No changes since your last view · main@9e664e
 ```
 
@@ -310,7 +333,7 @@ ContextTreeSnapshot
 ├─ headCommit
 ├─ syncedAt
 ├─ snapshotStatus: active | stale | unavailable
-├─ usageSignal
+├─ contextSourceSignal
 ├─ nodes[]
 ├─ edges[]
 └─ changes[]
@@ -337,13 +360,13 @@ ContextTreeEdge
 ```
 
 ```text
-usageSignal
-├─ label: Context snapshot synced | Snapshot stale | Snapshot unavailable
+contextSourceSignal
+├─ label: Team context is current | Team context needs attention | Team context unavailable
 ├─ detail
 └─ severity: ok | warning | error
 ```
 
-当前 Usage signal 先说明 Hub Server 是否有可用 Context Tree snapshot。后续 readiness 信号需要继续回答:
+当前 context source signal 先说明 Hub Server 是否有可用 Context Tree snapshot。后续 readiness 信号需要继续回答:
 
 - 每个 agent 是否使用了最新 context commit;
 - 有多少 agents 已同步到最新 context;
