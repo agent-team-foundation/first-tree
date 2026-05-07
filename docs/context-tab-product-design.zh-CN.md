@@ -6,6 +6,7 @@
 
 - [agent-team-foundation/first-tree-all#101](https://github.com/agent-team-foundation/first-tree-all/issues/101) — user-facing context-tree visualization
 - 依赖上游导航重构: [agent-team-foundation/first-tree-all#100](https://github.com/agent-team-foundation/first-tree-all/issues/100)
+- 实现计划: [context-tab-implementation-plan.zh-CN.md](context-tab-implementation-plan.zh-CN.md)
 
 ## 核心判断
 
