@@ -466,6 +466,24 @@ export async function addMeChatParticipants(
       }
     }
 
+    // State-carry: any toInsert agent that was previously a watcher must
+    // carry its `lastReadAt` / `unreadMentionCount` over. Single DELETE
+    // RETURNING gives us both the watcher cleanup (mutual exclusion with
+    // chat_participants) and the prior read state in one round-trip; we
+    // index by agentId and feed each entry into the participant INSERT.
+    // Without this, `markRead` would silently reset the user's red-dot
+    // counter on a watcher → participant transition (regression flagged
+    // by review #228 issue #1).
+    const carriedRows = await tx
+      .delete(chatSubscriptions)
+      .where(and(eq(chatSubscriptions.chatId, chatId), inArray(chatSubscriptions.agentId, toInsert)))
+      .returning({
+        agentId: chatSubscriptions.agentId,
+        lastReadAt: chatSubscriptions.lastReadAt,
+        unreadMentionCount: chatSubscriptions.unreadMentionCount,
+      });
+    const carriedByAgent = new Map(carriedRows.map((r) => [r.agentId, r] as const));
+
     // Pick each new participant's mode based on the *post-upgrade* chat
     // type. If the chat is (or just became) a group, non-human agents go
     // in as `mention_only` — otherwise they'd respond to every message
@@ -478,15 +496,18 @@ export async function addMeChatParticipants(
         toInsert.map((agentId) => {
           const agentType = typeByAgent.get(agentId);
           const mode: "full" | "mention_only" = isGroupAfter && agentType !== "human" ? "mention_only" : "full";
-          return { chatId, agentId, role: "member" as const, mode };
+          const carried = carriedByAgent.get(agentId);
+          return {
+            chatId,
+            agentId,
+            role: "member" as const,
+            mode,
+            lastReadAt: carried?.lastReadAt ?? null,
+            unreadMentionCount: carried?.unreadMentionCount ?? 0,
+          };
         }),
       )
       .onConflictDoNothing();
-
-    // Drop watcher rows for any of the new speakers (mutual exclusion).
-    await tx
-      .delete(chatSubscriptions)
-      .where(and(eq(chatSubscriptions.chatId, chatId), inArray(chatSubscriptions.agentId, toInsert)));
 
     await recomputeChatWatchers(tx, chatId);
   });

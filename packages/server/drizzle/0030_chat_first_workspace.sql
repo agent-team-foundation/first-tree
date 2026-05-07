@@ -48,12 +48,16 @@ CREATE TABLE IF NOT EXISTS "chat_subscriptions" (
   "created_at" timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT "chat_subscriptions_chat_id_fkey"
     FOREIGN KEY ("chat_id") REFERENCES "chats"("id") ON DELETE CASCADE,
-  -- Cascade on agent delete so `services/agent.ts:deleteAgent`'s hard
-  -- delete after suspension doesn't 500 on watcher rows anchored to a
-  -- removed agent. Mirrors the chat_id FK above; the asymmetry was
-  -- otherwise surprising (B4 in PR review).
+  -- Intentionally NO ON DELETE clause on the agent FK. `services/agent.ts:
+  -- deleteAgent` is soft-only (UPDATE status='deleted', name=NULL — never
+  -- DELETE), so the row stays. Adding CASCADE would be dead code today and
+  -- silently legitimise a future hard-delete path; default RESTRICT instead
+  -- pins the soft-delete convention at the schema layer — any future caller
+  -- that tries a hard DELETE FROM agents will be forced to clean up
+  -- subscriptions explicitly. (asymmetry with chat_id FK is intentional —
+  -- chats can be hard-deleted by admin, agents cannot.)
   CONSTRAINT "chat_subscriptions_agent_id_fkey"
-    FOREIGN KEY ("agent_id") REFERENCES "agents"("uuid") ON DELETE CASCADE,
+    FOREIGN KEY ("agent_id") REFERENCES "agents"("uuid"),
   CONSTRAINT "chat_subscriptions_pkey"
     PRIMARY KEY ("chat_id", "agent_id")
 );
@@ -74,14 +78,16 @@ CREATE INDEX IF NOT EXISTS "idx_chat_subscriptions_agent"
 -- objects), producing visible inconsistency between backfilled and
 -- live-written rows. `jsonb_typeof` + `#>> '{}'` extracts the bare
 -- string only when content is a JSON string; otherwise NULL (B3 in
--- PR review).
+-- PR review). `trim()` mirrors `outboundContent.trim()` in
+-- `chat-projection.ts:applyAfterFanOut` so leading whitespace doesn't
+-- visually jump on the first live overwrite.
 WITH last_msg AS (
   SELECT DISTINCT ON ("chat_id")
     "chat_id",
     "created_at",
     CASE
       WHEN jsonb_typeof("content") = 'string'
-        THEN LEFT("content" #>> '{}', 200)
+        THEN LEFT(trim("content" #>> '{}'), 200)
       ELSE NULL
     END AS "preview"
   FROM "messages"

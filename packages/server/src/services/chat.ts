@@ -7,7 +7,7 @@ import { agents } from "../db/schema/agents.js";
 import { chatParticipants, chatSubscriptions, chats } from "../db/schema/chats.js";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
-import { recomputeChatWatchers } from "./watcher.js";
+import { leaveAsParticipant, recomputeChatWatchers } from "./watcher.js";
 
 /** Structural DB type so both `Database` and transaction clients work. */
 type DbLike = Pick<PostgresJsDatabase<Record<string, never>>, "select" | "update">;
@@ -540,44 +540,17 @@ export async function joinChat(db: Database, chatId: string, memberId: string, h
 /**
  * Manager leaves a chat. Removes their human agent from participants.
  * Only allowed if the human agent is a participant.
+ *
+ * Delegates the participant→watcher transition to `leaveAsParticipant`
+ * so admin-side and `/me/chats/:id/leave` share one canonical path. The
+ * earlier "recompute then UPDATE-back state" variant violated the design
+ * rule that recompute is only for set rebuild — never on a transition
+ * path (review #228 issue #2). The returned participant list is fetched
+ * after the tx commits, matching the admin route's existing contract.
  */
 export async function leaveChat(db: Database, chatId: string, humanAgentId: string) {
-  // Carry the leaver's read state into a watcher row when their managed
-  // agents are still in the chat — so a "leave" doesn't lose unread /
-  // last-read context the next time recompute restores them as a watcher.
-  // Mirrors `watcher.ts:leaveAsParticipant` for the legacy admin-side path.
-  const result = await db.transaction(async (tx) => {
-    const [removed] = await tx
-      .delete(chatParticipants)
-      .where(and(eq(chatParticipants.chatId, chatId), eq(chatParticipants.agentId, humanAgentId)))
-      .returning({
-        lastReadAt: chatParticipants.lastReadAt,
-        unreadMentionCount: chatParticipants.unreadMentionCount,
-      });
-    if (!removed) return null;
-    // Reconcile watchers: if the leaver still manages a non-human in
-    // the chat, recompute will (re-)create their watcher row. State-
-    // carry is best-effort: recompute uses the default NULL read state,
-    // so we backfill our removed read state into the watcher row if
-    // recompute (re-)created one.
-    await recomputeChatWatchers(tx, chatId);
-    if (removed.lastReadAt !== null || removed.unreadMentionCount > 0) {
-      await tx
-        .update(chatSubscriptions)
-        .set({
-          lastReadAt: removed.lastReadAt,
-          unreadMentionCount: removed.unreadMentionCount,
-        })
-        .where(and(eq(chatSubscriptions.chatId, chatId), eq(chatSubscriptions.agentId, humanAgentId)));
-    }
-    return removed;
-  });
-
-  if (!result) {
-    throw new NotFoundError("Not a participant of this chat");
-  }
+  await leaveAsParticipant(db, chatId, humanAgentId);
   invalidateChatAudience(chatId);
-
   return db.select().from(chatParticipants).where(eq(chatParticipants.chatId, chatId));
 }
 

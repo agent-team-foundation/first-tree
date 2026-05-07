@@ -283,6 +283,68 @@ describe("chat-first workspace service layer", () => {
     expect(chatRow?.type).toBe("group");
   });
 
+  it("addMeChatParticipants: carries watcher read state into the new participant row", async () => {
+    // Regression for review #228 issue #1: when a watcher is promoted via
+    // POST /me/chats/:id/participants, its lastReadAt + unreadMentionCount
+    // must move from chat_subscriptions to chat_participants. Without
+    // state-carry the user's red-dot resets to zero and they'd assume
+    // everything was already read.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const { createAgent } = await import("../services/agent.js");
+    const managed = await createAgent(app.db, {
+      name: `mng-sc-${crypto.randomUUID().slice(0, 6)}`,
+      type: "autonomous_agent",
+      displayName: "Mng-SC",
+      managerId: admin.memberId,
+      organizationId: admin.organizationId,
+      clientId: undefined,
+    });
+    const owner = await createTestAgent(app, { name: "agp-sc-owner" });
+
+    // owner-direct-with-managed → admin becomes a watcher (manager of `managed`).
+    const { chatId } = await createMeChat(app.db, owner.agent.uuid, owner.organizationId, {
+      participantIds: [managed.uuid],
+    });
+    // Seed a non-trivial watcher state: pretend the admin has 3 mentions
+    // outstanding and last read 1h ago. Direct UPDATE keeps the test
+    // independent of mention-fan-out timing.
+    const lastReadAt = new Date(Date.now() - 3600_000);
+    const { and: drizzleAnd, eq: drizzleEq } = await import("drizzle-orm");
+    const { chatSubscriptions } = await import("../db/schema/chats.js");
+    await app.db
+      .update(chatSubscriptions)
+      .set({ lastReadAt, unreadMentionCount: 3 })
+      .where(
+        drizzleAnd(
+          drizzleEq(chatSubscriptions.chatId, chatId),
+          drizzleEq(chatSubscriptions.agentId, admin.humanAgentUuid),
+        ),
+      );
+
+    // Owner adds admin as a speaking participant.
+    await addMeChatParticipants(app.db, chatId, owner.agent.uuid, owner.organizationId, {
+      participantIds: [admin.humanAgentUuid],
+    });
+
+    const [participantRow] = await app.db.execute<{
+      last_read_at: string | null;
+      unread_mention_count: number;
+    }>(sql`
+      SELECT last_read_at, unread_mention_count FROM chat_participants
+       WHERE chat_id = ${chatId} AND agent_id = ${admin.humanAgentUuid}
+    `);
+    expect(participantRow).toBeDefined();
+    expect(participantRow?.unread_mention_count).toBe(3);
+    expect(new Date(participantRow?.last_read_at ?? 0).toISOString()).toBe(lastReadAt.toISOString());
+
+    const [subRow] = await app.db.execute<{ chat_id: string }>(sql`
+      SELECT chat_id FROM chat_subscriptions
+       WHERE chat_id = ${chatId} AND agent_id = ${admin.humanAgentUuid}
+    `);
+    expect(subRow).toBeUndefined();
+  });
+
   it("addMeChatParticipants: refuses caller who is not a speaking participant", async () => {
     const app = getApp();
     const owner = await createTestAdmin(app);
