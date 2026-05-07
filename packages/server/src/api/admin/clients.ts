@@ -2,7 +2,7 @@ import { updateClientCapabilitiesSchema } from "@agent-team-foundation/first-tre
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { ForbiddenError } from "../../errors.js";
-import { memberScope, requireMemberInOrg } from "../../services/access-control.js";
+import { memberScope, requireMemberInOrg, resolveAdminScope } from "../../services/access-control.js";
 import * as activityService from "../../services/activity.js";
 import * as clientService from "../../services/client.js";
 import { forceDisconnectClient } from "../../services/connection-manager.js";
@@ -114,10 +114,23 @@ export async function adminClientRoutes(app: FastifyInstance): Promise<void> {
   });
 }
 
+const activityQuerySchema = z.object({ organizationId: z.string().min(1).optional() });
+
 export async function adminActivityRoutes(app: FastifyInstance): Promise<void> {
   // GET /admin/agents/activity — activity overview (visibility-scoped)
+  //
+  // Honors `?organizationId=` so the multi-org caller's selected-org context
+  // (injected by the web's api-client `decoratePath`) actually drives which
+  // tenant's runtime activity is returned. Without this, every consumer of
+  // the `["activity"]` query (Workspace roster + middle area, Agents tab
+  // RUNTIME column, Computers BOUND AGENTS, command palette) silently shows
+  // JWT-default-org data while the dropdown shows a different org —
+  // follow-up to PR #220 which patched the analogous gap on the create
+  // path.
   app.get("/", async (request) => {
-    const scope = memberScope(request);
+    const baseScope = memberScope(request);
+    const { organizationId } = activityQuerySchema.parse(request.query);
+    const scope = await resolveAdminScope(app.db, request, baseScope, organizationId);
     const overview = await activityService.getActivityOverview(app.db);
     const runningAgents = await activityService.listAgentsWithRuntime(app.db, scope);
 
