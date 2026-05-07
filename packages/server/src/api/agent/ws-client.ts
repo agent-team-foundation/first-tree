@@ -884,11 +884,30 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
         boundAgents.clear();
 
         if (clientId) {
+          // Reconnect-race guard. A typical `systemctl restart` produces this
+          // sequence:
+          //
+          //   t0  old client process exits → server starts processing this
+          //       onClose handler asynchronously
+          //   t1  new client process connects + registers → setClientConnection
+          //       installs the new socket as the active one for `clientId` and
+          //       writes clients.status='connected'
+          //   t2  the t0 onClose finally awaits to disconnectClient and would
+          //       happily stamp clients.status='disconnected', clobbering t1
+          //
+          // `isActiveClientConnection` returns false at t2 because the in-
+          // memory entry now points at the *new* socket, not us. Skip the DB
+          // write in that case so the new connection's `connected` status
+          // survives. Bug captured live at /clients[0].status='disconnected'
+          // with last_seen_at 13s old + a fully-registered client.log.
+          const stillActive = connectionManager.isActiveClientConnection(clientId, socket);
           connectionManager.removeClientConnection(clientId, socket);
-          try {
-            await clientService.disconnectClient(app.db, clientId);
-          } catch {
-            // best-effort
+          if (stillActive) {
+            try {
+              await clientService.disconnectClient(app.db, clientId);
+            } catch {
+              // best-effort
+            }
           }
         }
       });

@@ -1,5 +1,5 @@
 import type { InboxEntryWithMessage, PrecedingMessage } from "@agent-team-foundation/first-tree-hub-shared";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, lt, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { Database } from "../db/connection.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
@@ -8,21 +8,12 @@ import { ForbiddenError, NotFoundError } from "../errors.js";
 import { FIRST_TREE_HUB_ATTR, withSpan } from "../observability/index.js";
 import { buildClientMessagePayloadsForInbox } from "./message-dispatcher.js";
 
-/** Raw `inbox_entries` row shape returned by claim queries below. */
-type ClaimedEntryRow = {
-  id: number;
-  inbox_id: string;
-  message_id: string;
-  chat_id: string | null;
-  status: string;
-  retry_count: number;
-  created_at: string;
-  delivered_at: string | null;
-  acked_at: string | null;
-};
+/** Claimed `inbox_entries` row, typed via Drizzle `$inferSelect` so column-mode
+ *  conversions (bigserial → number, timestamp → Date) flow through. */
+type ClaimedEntry = typeof inboxEntries.$inferSelect;
 
 /** Structurally-typed DB so both `Database` and transaction clients work. */
-type TxLike = Pick<PostgresJsDatabase<Record<string, never>>, "execute" | "select">;
+type TxLike = Pick<PostgresJsDatabase<Record<string, never>>, "select" | "update" | "delete">;
 
 const DEFAULT_INBOX_TIMEOUT_SECONDS = 300;
 const DEFAULT_MAX_RETRY_COUNT = 3;
@@ -47,23 +38,28 @@ export async function pollInbox(db: Database, inboxId: string, limit: number) {
 }
 
 async function pollInboxInner(db: Database, inboxId: string, limit: number) {
-  // Use raw SQL for SELECT ... FOR UPDATE SKIP LOCKED (not supported by Drizzle query builder)
   return db.transaction(async (tx) => {
-    // 1. Claim pending NOTIFY=true entries (the active triggers). Silent rows
-    //    (notify=false) are intentionally excluded — they piggy-back on the
-    //    next active delivery in their chat as preceding context (proposal §1).
-    const claimed = await tx.execute<ClaimedEntryRow>(sql`
-      UPDATE inbox_entries
-      SET status = 'delivered', delivered_at = NOW()
-      WHERE id IN (
-        SELECT id FROM inbox_entries
-        WHERE inbox_id = ${inboxId} AND status = 'pending' AND notify = true
-        ORDER BY created_at
-        LIMIT ${limit}
-        FOR UPDATE SKIP LOCKED
-      )
-      RETURNING *
-    `);
+    // Claim pending notify=true entries (active triggers). Silent rows
+    // (notify=false) are intentionally excluded — they piggy-back on the
+    // next active delivery in their chat as preceding context (proposal §1).
+    //
+    // The subquery's `FOR UPDATE SKIP LOCKED` is what keeps concurrent
+    // pollers / WS-push handlers from claiming the same row twice. The outer
+    // UPDATE then flips status to 'delivered' on whichever rows the subquery
+    // successfully locked — canonical PG SKIP-LOCKED queue idiom.
+    const targetIds = tx
+      .select({ id: inboxEntries.id })
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.inboxId, inboxId), eq(inboxEntries.status, "pending"), eq(inboxEntries.notify, true)))
+      .orderBy(asc(inboxEntries.createdAt))
+      .limit(limit)
+      .for("update", { skipLocked: true });
+
+    const claimed = await tx
+      .update(inboxEntries)
+      .set({ status: "delivered", deliveredAt: new Date() })
+      .where(inArray(inboxEntries.id, targetIds))
+      .returning();
 
     return bundleDeliveryWithSilentContext(tx, inboxId, claimed);
   });
@@ -79,7 +75,7 @@ async function pollInboxInner(db: Database, inboxId: string, limit: number) {
  * hub-inbox-ws-data-plane §3.2 risk #1).
  *
  * Steps:
- *   1. Sort by `created_at` ASC (PG `RETURNING` does not guarantee order).
+ *   1. Sort by `createdAt` ASC (PG `RETURNING` does not guarantee order).
  *   2. For each trigger, collect silent context & bulk-ack stale silent rows.
  *   3. Fetch the trigger messages.
  *   4. Build wire payloads via the single dispatcher.
@@ -89,19 +85,19 @@ async function pollInboxInner(db: Database, inboxId: string, limit: number) {
 export async function bundleDeliveryWithSilentContext(
   tx: TxLike,
   inboxId: string,
-  claimed: ClaimedEntryRow[],
+  claimed: ClaimedEntry[],
 ): Promise<InboxEntryWithMessage[]> {
   if (claimed.length === 0) return [];
 
   // PostgreSQL's UPDATE...RETURNING does not guarantee row order, so we sort
-  // by created_at (ascending) before assembling the response. Downstream
+  // by createdAt (ascending) before assembling the response. Downstream
   // consumers — and silent-context bundling in particular — depend on
   // chronological order to split context windows correctly.
-  claimed.sort((a, b) => a.created_at.localeCompare(b.created_at));
+  claimed.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
 
   const precedingByEntryId = await collectPrecedingContext(tx, inboxId, claimed);
 
-  const messageIds = claimed.map((e) => e.message_id);
+  const messageIds = claimed.map((e) => e.messageId);
   const msgs = await tx.select().from(messages).where(inArray(messages.id, messageIds));
   const msgMap = new Map(msgs.map((m) => [m.id, m]));
 
@@ -114,10 +110,10 @@ export async function bundleDeliveryWithSilentContext(
     tx,
     inboxId,
     claimed.map((entry) => {
-      const msg = msgMap.get(entry.message_id);
-      if (!msg) throw new Error(`Unexpected: message ${entry.message_id} not found`);
+      const msg = msgMap.get(entry.messageId);
+      if (!msg) throw new Error(`Unexpected: message ${entry.messageId} not found`);
       return {
-        entryChatId: entry.chat_id,
+        entryChatId: entry.chatId,
         precedingMessages: precedingByEntryId.get(entry.id) ?? [],
         message: {
           id: msg.id,
@@ -140,23 +136,15 @@ export async function bundleDeliveryWithSilentContext(
     const payload = payloads[idx];
     if (!payload) throw new Error(`Unexpected: payload for entry ${entry.id} not built`);
     return {
-      // `inbox_entries.id` is bigserial (int8); postgres-js returns int8 as a
-      // JS string by default to preserve precision past 2^53. The raw-SQL
-      // `tx.execute<{ id: number }>` declares a number type but doesn't
-      // coerce — Drizzle only applies the column's `mode: "number"` on
-      // builder queries. The legacy HTTP poll path tolerated the string
-      // because the SDK never validated `id` as a number, but the WS push
-      // path's `inboxDeliverFrameSchema.entryId` is a strict `z.number()`,
-      // so we coerce at this single shared exit point.
-      id: Number(entry.id),
-      inboxId: entry.inbox_id,
-      messageId: entry.message_id,
-      chatId: entry.chat_id,
+      id: entry.id,
+      inboxId: entry.inboxId,
+      messageId: entry.messageId,
+      chatId: entry.chatId,
       status: entry.status,
-      retryCount: entry.retry_count,
-      createdAt: entry.created_at,
-      deliveredAt: entry.delivered_at ?? null,
-      ackedAt: entry.acked_at ?? null,
+      retryCount: entry.retryCount,
+      createdAt: entry.createdAt.toISOString(),
+      deliveredAt: entry.deliveredAt?.toISOString() ?? null,
+      ackedAt: entry.ackedAt?.toISOString() ?? null,
       message: payload,
     };
   });
@@ -195,21 +183,26 @@ export async function claimAndBuildForPush(
 ): Promise<InboxEntryWithMessage[]> {
   return withSpan("inbox.deliver.push", { "inbox.id": inboxId, "message.id": messageId }, () =>
     db.transaction(async (tx) => {
-      const claimed = await tx.execute<ClaimedEntryRow>(sql`
-          UPDATE inbox_entries
-          SET status = 'delivered', delivered_at = NOW()
-          WHERE id IN (
-            SELECT id FROM inbox_entries
-            WHERE inbox_id = ${inboxId}
-              AND message_id = ${messageId}
-              AND status = 'pending'
-              AND notify = true
-            ORDER BY created_at
-            LIMIT ${PUSH_CLAIM_BATCH_LIMIT}
-            FOR UPDATE SKIP LOCKED
-          )
-          RETURNING *
-        `);
+      const targetIds = tx
+        .select({ id: inboxEntries.id })
+        .from(inboxEntries)
+        .where(
+          and(
+            eq(inboxEntries.inboxId, inboxId),
+            eq(inboxEntries.messageId, messageId),
+            eq(inboxEntries.status, "pending"),
+            eq(inboxEntries.notify, true),
+          ),
+        )
+        .orderBy(asc(inboxEntries.createdAt))
+        .limit(PUSH_CLAIM_BATCH_LIMIT)
+        .for("update", { skipLocked: true });
+
+      const claimed = await tx
+        .update(inboxEntries)
+        .set({ status: "delivered", deliveredAt: new Date() })
+        .where(inArray(inboxEntries.id, targetIds))
+        .returning();
 
       return bundleDeliveryWithSilentContext(tx, inboxId, claimed);
     }),
@@ -240,28 +233,28 @@ export async function claimBacklogForPush(
  * `PRECEDING_CONTEXT_WINDOW_SECONDS`. Returned messages are oldest-first.
  *
  * Side effect: bulk-ack ALL silent pending rows in each chat with
- * created_at < latest_trigger.created_at — including ones that fell outside
+ * createdAt < latest_trigger.createdAt — including ones that fell outside
  * the window/cap. Otherwise stale silent rows would accumulate and re-load
  * on every poll.
  */
 async function collectPrecedingContext(
   tx: TxLike,
   inboxId: string,
-  triggers: Array<{ id: number; chat_id: string | null; created_at: string }>,
+  triggers: Array<Pick<ClaimedEntry, "id" | "chatId" | "createdAt">>,
 ): Promise<Map<number, PrecedingMessage[]>> {
   const result = new Map<number, PrecedingMessage[]>();
 
   // Group triggers by chatId so we can split the silent timeline per chat.
-  const byChat = new Map<string, typeof triggers>();
+  const byChat = new Map<string, Array<Pick<ClaimedEntry, "id" | "chatId" | "createdAt">>>();
   for (const t of triggers) {
-    if (t.chat_id === null) continue; // replyTo cross-chat entries with no chat_id can't have context
-    const list = byChat.get(t.chat_id) ?? [];
+    if (t.chatId === null) continue; // replyTo cross-chat entries with no chatId can't have context
+    const list = byChat.get(t.chatId) ?? [];
     list.push(t);
-    byChat.set(t.chat_id, list);
+    byChat.set(t.chatId, list);
   }
 
   for (const [chatId, chatTriggers] of byChat) {
-    chatTriggers.sort((a, b) => a.created_at.localeCompare(b.created_at));
+    chatTriggers.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
 
     // For each trigger, fetch silent context strictly before it (and after
     // the previous trigger in this batch). Window: 24h before the trigger.
@@ -274,51 +267,53 @@ async function collectPrecedingContext(
     // mark them acked anyway, so the agent would silently lose the messages
     // that mattered most.
     //
-    // Concurrency: `FOR UPDATE OF ie SKIP LOCKED` prevents two parallel polls
-    // on the same inbox from bundling the same silent row twice. Without it,
-    // poll A picking trigger T1 and poll B picking T2 (T2 > T1) would both
-    // include silent rows < T1 in their preceding context. With SKIP LOCKED,
-    // the second poll skips the rows the first has reserved.
-    let prevCreatedAt: string | null = null;
+    // Concurrency: `FOR UPDATE OF inboxEntries SKIP LOCKED` prevents two
+    // parallel polls on the same inbox from bundling the same silent row
+    // twice. Without it, poll A picking trigger T1 and poll B picking T2
+    // (T2 > T1) would both include silent rows < T1 in their preceding
+    // context. With SKIP LOCKED, the second poll skips the rows the first
+    // has reserved.
+    let prevCreatedAt: Date | null = null;
     for (const trigger of chatTriggers) {
-      const rows = await tx.execute<{
-        id: number;
-        message_id: string;
-        sender_id: string;
-        format: string;
-        content: unknown;
-        metadata: unknown;
-        created_at: string;
-      }>(sql`
-        SELECT ie.id, m.id AS message_id, m.sender_id, m.format, m.content, m.metadata,
-               m.created_at
-        FROM inbox_entries ie
-        JOIN messages m ON m.id = ie.message_id
-        WHERE ie.inbox_id = ${inboxId}
-          AND ie.chat_id = ${chatId}
-          AND ie.status = 'pending'
-          AND ie.notify = false
-          AND ie.created_at < ${trigger.created_at}
-          ${prevCreatedAt === null ? sql`` : sql`AND ie.created_at > ${prevCreatedAt}`}
-          AND ie.created_at > NOW() - make_interval(secs => ${PRECEDING_CONTEXT_WINDOW_SECONDS})
-        ORDER BY ie.created_at DESC
-        LIMIT ${PRECEDING_CONTEXT_MAX_ENTRIES}
-        FOR UPDATE OF ie SKIP LOCKED
-      `);
+      const rows = await tx
+        .select({
+          messageId: messages.id,
+          senderId: messages.senderId,
+          format: messages.format,
+          content: messages.content,
+          metadata: messages.metadata,
+          createdAt: messages.createdAt,
+        })
+        .from(inboxEntries)
+        .innerJoin(messages, eq(messages.id, inboxEntries.messageId))
+        .where(
+          and(
+            eq(inboxEntries.inboxId, inboxId),
+            eq(inboxEntries.chatId, chatId),
+            eq(inboxEntries.status, "pending"),
+            eq(inboxEntries.notify, false),
+            lt(inboxEntries.createdAt, trigger.createdAt),
+            prevCreatedAt === null ? undefined : gt(inboxEntries.createdAt, prevCreatedAt),
+            sql`${inboxEntries.createdAt} > NOW() - make_interval(secs => ${PRECEDING_CONTEXT_WINDOW_SECONDS})`,
+          ),
+        )
+        .orderBy(desc(inboxEntries.createdAt))
+        .limit(PRECEDING_CONTEXT_MAX_ENTRIES)
+        .for("update", { of: inboxEntries, skipLocked: true });
 
       // Reverse so the prompt-rendered block reads oldest → newest.
       const preceding: PrecedingMessage[] = rows
         .map((r) => ({
-          id: r.message_id,
-          senderId: r.sender_id,
+          id: r.messageId,
+          senderId: r.senderId,
           format: r.format,
           content: r.content,
           metadata: (r.metadata ?? {}) as Record<string, unknown>,
-          createdAt: r.created_at,
+          createdAt: r.createdAt.toISOString(),
         }))
         .reverse();
       result.set(trigger.id, preceding);
-      prevCreatedAt = trigger.created_at;
+      prevCreatedAt = trigger.createdAt;
     }
 
     // Bulk-ack ALL silent pending rows in this chat strictly before the
@@ -327,15 +322,18 @@ async function collectPrecedingContext(
     // the next trigger and grow forever.
     const latestTrigger = chatTriggers[chatTriggers.length - 1];
     if (latestTrigger) {
-      await tx.execute(sql`
-        UPDATE inbox_entries
-        SET status = 'acked', acked_at = NOW()
-        WHERE inbox_id = ${inboxId}
-          AND chat_id = ${chatId}
-          AND status = 'pending'
-          AND notify = false
-          AND created_at < ${latestTrigger.created_at}
-      `);
+      await tx
+        .update(inboxEntries)
+        .set({ status: "acked", ackedAt: new Date() })
+        .where(
+          and(
+            eq(inboxEntries.inboxId, inboxId),
+            eq(inboxEntries.chatId, chatId),
+            eq(inboxEntries.status, "pending"),
+            eq(inboxEntries.notify, false),
+            lt(inboxEntries.createdAt, latestTrigger.createdAt),
+          ),
+        );
     }
   }
 
@@ -415,25 +413,33 @@ export async function resetTimedOutEntries(
   timeoutSeconds = DEFAULT_INBOX_TIMEOUT_SECONDS,
   maxRetries = DEFAULT_MAX_RETRY_COUNT,
 ): Promise<{ reset: number; failed: number }> {
-  // Reset entries that have timed out but haven't exceeded max retries
-  const resetResult = await db.execute<{ id: number }>(sql`
-    UPDATE inbox_entries SET status = 'pending', retry_count = retry_count + 1
-    WHERE status = 'delivered'
-      AND delivered_at < NOW() - make_interval(secs => ${timeoutSeconds})
-      AND retry_count < ${maxRetries}
-    RETURNING id
-  `);
+  // Reset entries that have timed out but haven't exceeded max retries.
+  const reset = await db
+    .update(inboxEntries)
+    .set({ status: "pending", retryCount: sql`${inboxEntries.retryCount} + 1` })
+    .where(
+      and(
+        eq(inboxEntries.status, "delivered"),
+        sql`${inboxEntries.deliveredAt} < NOW() - make_interval(secs => ${timeoutSeconds})`,
+        lt(inboxEntries.retryCount, maxRetries),
+      ),
+    )
+    .returning({ id: inboxEntries.id });
 
-  // Mark entries that have exceeded max retries as failed
-  const failedResult = await db.execute<{ id: number }>(sql`
-    UPDATE inbox_entries SET status = 'failed'
-    WHERE status = 'delivered'
-      AND delivered_at < NOW() - make_interval(secs => ${timeoutSeconds})
-      AND retry_count >= ${maxRetries}
-    RETURNING id
-  `);
+  // Mark entries that have exceeded max retries as failed.
+  const failed = await db
+    .update(inboxEntries)
+    .set({ status: "failed" })
+    .where(
+      and(
+        eq(inboxEntries.status, "delivered"),
+        sql`${inboxEntries.deliveredAt} < NOW() - make_interval(secs => ${timeoutSeconds})`,
+        gte(inboxEntries.retryCount, maxRetries),
+      ),
+    )
+    .returning({ id: inboxEntries.id });
 
-  return { reset: resetResult.length, failed: failedResult.length };
+  return { reset: reset.length, failed: failed.length };
 }
 
 /** Default age (30 days) past which silent rows that no notify-true delivery
@@ -453,7 +459,7 @@ export const SILENT_ROW_GC_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
  *      `(inbox_id, message_id, chat_id)` means leaving them around blocks
  *      legitimate retries with the same key.
  *
- *   2. `notify=false AND status='pending' AND created_at < NOW() - maxAge` —
+ *   2. `notify=false AND status='pending' AND createdAt < NOW() - maxAge` —
  *      stale silent rows that no trigger ever caught up with. After 30
  *      days they're useless as preceding context (the @mention almost
  *      certainly already happened or the chat went dormant).
@@ -465,22 +471,23 @@ export async function pruneStaleSilentEntries(
   db: Database,
   maxAgeSeconds = SILENT_ROW_GC_MAX_AGE_SECONDS,
 ): Promise<{ ackedDeleted: number; stalePendingDeleted: number }> {
-  const ackedResult = await db.execute<{ id: number }>(sql`
-    DELETE FROM inbox_entries
-    WHERE notify = false
-      AND status = 'acked'
-    RETURNING id
-  `);
+  const ackedDeleted = await db
+    .delete(inboxEntries)
+    .where(and(eq(inboxEntries.notify, false), eq(inboxEntries.status, "acked")))
+    .returning({ id: inboxEntries.id });
 
-  const staleResult = await db.execute<{ id: number }>(sql`
-    DELETE FROM inbox_entries
-    WHERE notify = false
-      AND status = 'pending'
-      AND created_at < NOW() - make_interval(secs => ${maxAgeSeconds})
-    RETURNING id
-  `);
+  const stalePendingDeleted = await db
+    .delete(inboxEntries)
+    .where(
+      and(
+        eq(inboxEntries.notify, false),
+        eq(inboxEntries.status, "pending"),
+        sql`${inboxEntries.createdAt} < NOW() - make_interval(secs => ${maxAgeSeconds})`,
+      ),
+    )
+    .returning({ id: inboxEntries.id });
 
-  return { ackedDeleted: ackedResult.length, stalePendingDeleted: staleResult.length };
+  return { ackedDeleted: ackedDeleted.length, stalePendingDeleted: stalePendingDeleted.length };
 }
 
 export async function assertInboxOwner(inboxId: string, agentInboxId: string): Promise<void> {
