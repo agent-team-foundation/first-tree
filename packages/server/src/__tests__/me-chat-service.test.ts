@@ -153,13 +153,14 @@ describe("chat-first workspace service layer", () => {
       { enforceGroupMention: false },
     );
 
-    // chats projection updated
-    const [chatRow] = await app.db.execute<{
-      last_message_at: Date | null;
-      last_message_preview: string | null;
-    }>(sql`SELECT last_message_at, last_message_preview FROM chats WHERE id = ${chatId}`);
-    expect(chatRow?.last_message_at).toBeInstanceOf(Date);
-    expect(chatRow?.last_message_preview).toContain("Please review");
+    // chats projection updated. Raw `db.execute` returns timestamptz as
+    // an ISO string (no column-type metadata); we just need it non-null.
+    const projRows = (await app.db.execute(
+      sql`SELECT last_message_at, last_message_preview FROM chats WHERE id = ${chatId}`,
+    )) as unknown as Array<{ last_message_at: string | Date | null; last_message_preview: string | null }>;
+    const projRow = projRows[0];
+    expect(projRow?.last_message_at).not.toBeNull();
+    expect(projRow?.last_message_preview).toContain("Please review");
 
     // watcher counter incremented for admin (manager of `managed`)
     const list = await listMeChats(app.db, admin.humanAgentUuid, { limit: 10, filter: "all" });

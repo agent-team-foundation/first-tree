@@ -59,7 +59,7 @@ export async function recomputeChatWatchers(db: DbLike, chatId: string): Promise
   await db.execute(sql`
     INSERT INTO chat_subscriptions
       (chat_id, agent_id, kind, last_read_at, unread_mention_count, created_at)
-    SELECT DISTINCT cp.chat_id, m.agent_id, 'watching', NULL, 0, now()
+    SELECT DISTINCT cp.chat_id, m.agent_id, 'watching', NULL::timestamp with time zone, 0, now()
       FROM chat_participants cp
       JOIN agents  a ON a.uuid = cp.agent_id
       JOIN members m ON m.id   = a.manager_id

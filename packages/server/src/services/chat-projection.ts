@@ -29,7 +29,7 @@
 
 import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
-import { chatParticipants, chatSubscriptions } from "../db/schema/chats.js";
+import { chatParticipants, chatSubscriptions, chats } from "../db/schema/chats.js";
 
 // biome-ignore lint/suspicious/noExplicitAny: cross-schema compatibility
 type DbLike = PgDatabase<PgQueryResultHKT, any, any>;
@@ -96,20 +96,15 @@ export async function applyAfterFanOut(tx: DbLike, input: ApplyAfterFanOutInput)
   const previewClipped = contentPreview.length > 0 ? contentPreview.slice(0, 200) : null;
   const ts = messageCreatedAt ?? new Date();
 
-  // 1. Chats projection — single statement.
+  // 1. Chats projection — single statement via the typed builder so the Date
+  // → timestamptz binding goes through drizzle's column-type serializer.
+  // (Raw `sql` template hands the Date straight to postgres-js, which can't
+  // serialize it without an explicit serializer setting.)
   // NOTE: `updated_at` is intentionally NOT touched here. `services/message.ts`
   // step 5 has already set `chats.updated_at = NOW()` earlier in the same
-  // transaction; setting it again to `messageCreatedAt` (which is the message
-  // row's createdAt — set by the messages.created_at default) would be a
-  // redundant write that may leave the value slightly behind real time on
-  // hosts where the message timestamp resolves to an earlier instant than
-  // the projection step.
-  await tx.execute(sql`
-    UPDATE chats
-       SET last_message_at      = ${ts},
-           last_message_preview = ${previewClipped}
-     WHERE id = ${chatId}
-  `);
+  // transaction; setting it again to `messageCreatedAt` would be a
+  // redundant write that may leave the value slightly behind real time.
+  await tx.update(chats).set({ lastMessageAt: ts, lastMessagePreview: previewClipped }).where(eq(chats.id, chatId));
 
   if (mentionedAgentIds.length === 0) return;
 

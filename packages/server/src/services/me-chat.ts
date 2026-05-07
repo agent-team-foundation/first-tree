@@ -117,25 +117,24 @@ export async function listMeChats(
   // PostgreSQL's planner and was previously buggy (NULL `<` non-null is
   // NULL, not false, but NULL `<` NULL is also NULL — so naive `<` filter
   // dropped NULL rows on case 3).
+  // postgres-js can't serialize a JS Date when it's bound through a raw
+  // `sql` template (no column-type metadata) — the typed builders normally
+  // do this for us. Pre-stringify to ISO so the param goes through as text
+  // and the `::timestamptz` cast in SQL handles the rest.
+  const cursorTsIso = cursor?.lastMessageAt ? cursor.lastMessageAt.toISOString() : null;
   const cursorPredicate = !cursor
     ? sql`TRUE`
     : cursor.lastMessageAt === null
       ? sql`(c.last_message_at IS NULL AND c.id < ${cursor.chatId})`
       : sql`(c.last_message_at IS NULL
-             OR c.last_message_at < ${cursor.lastMessageAt}::timestamptz
-             OR (c.last_message_at = ${cursor.lastMessageAt}::timestamptz AND c.id < ${cursor.chatId}))`;
+             OR c.last_message_at < ${cursorTsIso}::timestamptz
+             OR (c.last_message_at = ${cursorTsIso}::timestamptz AND c.id < ${cursor.chatId}))`;
 
-  const rawRows = await db.execute<{
-    chat_id: string;
-    type: string;
-    topic: string | null;
-    parent_chat_id: string | null;
-    last_message_at: Date | null;
-    last_message_preview: string | null;
-    participant_count: string;
-    membership_kind: "participant" | "watching";
-    unread_mention_count: number;
-  }>(sql`
+  // postgres-js returns timestamptz as ISO strings when bound through a raw
+  // `sql\`...\`` template (no column-type metadata), unlike drizzle's typed
+  // select which would parse to Date. We accept either shape and coerce
+  // below so the response uses ISO strings consistently.
+  const rawRows = (await db.execute(sql`
     WITH membership AS (
       SELECT chat_id, 'participant'::text AS membership_kind, unread_mention_count
         FROM chat_participants
@@ -172,12 +171,27 @@ export async function listMeChats(
        AND ${cursorPredicate}
      ORDER BY c.last_message_at DESC NULLS LAST, c.id DESC
      LIMIT ${limit + 1}
-  `);
+  `)) as unknown as Array<{
+    chat_id: string;
+    type: string;
+    topic: string | null;
+    parent_chat_id: string | null;
+    last_message_at: Date | string | null;
+    last_message_preview: string | null;
+    participant_count: number | string;
+    membership_kind: "participant" | "watching";
+    unread_mention_count: number;
+  }>;
+
+  const toDate = (v: Date | string | null): Date | null => {
+    if (v === null) return null;
+    return v instanceof Date ? v : new Date(v);
+  };
 
   const hasMore = rawRows.length > limit;
   const pageRaw = hasMore ? rawRows.slice(0, limit) : rawRows;
   const last = pageRaw[pageRaw.length - 1];
-  const nextCursor = hasMore && last ? encodeCursor(last.last_message_at, last.chat_id) : null;
+  const nextCursor = hasMore && last ? encodeCursor(toDate(last.last_message_at), last.chat_id) : null;
 
   if (pageRaw.length === 0) return { rows: [], nextCursor: null };
 
@@ -214,7 +228,7 @@ export async function listMeChats(
       topic: r.topic,
       participants,
       participantCount: Number(r.participant_count),
-      lastMessageAt: r.last_message_at ? r.last_message_at.toISOString() : null,
+      lastMessageAt: toDate(r.last_message_at)?.toISOString() ?? null,
       lastMessagePreview: r.last_message_preview,
       unreadMentionCount: r.unread_mention_count,
       canReply: r.membership_kind === "participant",

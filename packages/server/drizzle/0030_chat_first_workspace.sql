@@ -80,9 +80,19 @@ UPDATE "chats" c
 -- Watcher backfill: every active member whose managed (non-human) agent
 -- participates in a chat where the member's own human agent is NOT a
 -- speaking participant. Idempotent via ON CONFLICT.
+--
+-- The explicit NULL casts are required: PostgreSQL infers a bare NULL in a
+-- VALUES/SELECT list as `text`, which then fails to coerce to the target
+-- columns (timestamptz / integer respectively).
 INSERT INTO "chat_subscriptions"
   ("chat_id", "agent_id", "kind", "last_read_at", "unread_mention_count", "created_at")
-SELECT DISTINCT cp."chat_id", m."agent_id", 'watching', NULL, 0, now()
+SELECT DISTINCT
+       cp."chat_id",
+       m."agent_id",
+       'watching',
+       NULL::timestamp with time zone,
+       0,
+       now()
   FROM "chat_participants" cp
   JOIN "agents"  a ON a."uuid" = cp."agent_id"
   JOIN "members" m ON m."id"   = a."manager_id"
