@@ -7,10 +7,20 @@
  *   Cleared by AuthContext once the user's wizard reaches `completed`.
  * - `draft` (sessionStorage): keeps the inline onboarding form stable while
  *   the user navigates between app tabs before creating their first agent.
+ * - `firstTreeBootstrap` (sessionStorage): set by OnboardingView right
+ *   before navigating to the new chat. ChatView reads it once the chat is
+ *   ready and auto-sends a one-time message asking the agent to install
+ *   the First-Tree skill in the current repository. Stored as the chatId
+ *   so a stale flag doesn't fire on an unrelated chat. Eagerly cleared
+ *   the moment the bootstrap mutation kicks off so a slow tab-close
+ *   doesn't double-send on reopen — failed sends require a manual retry.
+ *   Lives in sessionStorage (not the URL) so the chat-first workspace
+ *   refactor's `?c=` redirect can't strip it on the way in.
  */
 
 const JOIN_PATH_KEY = "onboarding:joinPath";
 const DRAFT_KEY_PREFIX = "onboarding:draft";
+const FIRST_TREE_BOOTSTRAP_KEY = "onboarding:first-tree-bootstrap";
 
 export type OnboardingJoinPath = "solo" | "invite";
 export type OnboardingDraft = {
@@ -90,4 +100,27 @@ export function writeOnboardingDraft(scope: string, draft: OnboardingDraft): voi
 export function clearOnboardingDraft(scope: string): void {
   if (typeof window === "undefined") return;
   window.sessionStorage.removeItem(onboardingDraftKey(scope));
+}
+
+/**
+ * Mark a chatId as needing the First-Tree bootstrap message on next mount.
+ * Called by OnboardingView right before navigating into the chat. Idempotent
+ * — overwriting a stale chatId is fine; only the most recently scheduled
+ * chat is honored.
+ */
+export function markFirstTreeBootstrap(chatId: string): void {
+  if (typeof window === "undefined") return;
+  window.sessionStorage.setItem(FIRST_TREE_BOOTSTRAP_KEY, chatId);
+}
+
+/** Read the pending bootstrap chatId, or null if none is scheduled. */
+export function readFirstTreeBootstrap(): string | null {
+  if (typeof window === "undefined") return null;
+  return window.sessionStorage.getItem(FIRST_TREE_BOOTSTRAP_KEY);
+}
+
+/** Drop the bootstrap flag — call as soon as the message has been queued. */
+export function clearFirstTreeBootstrap(): void {
+  if (typeof window === "undefined") return;
+  window.sessionStorage.removeItem(FIRST_TREE_BOOTSTRAP_KEY);
 }

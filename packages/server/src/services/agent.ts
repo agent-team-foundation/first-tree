@@ -158,6 +158,11 @@ async function resolveAgentClient(
   }
 
   if (!data.clientId) {
+    // Late-bind path: admins may create an agent first and PATCH a clientId
+    // later (see agent-pinned-notification tests). The web user-facing
+    // creation surfaces (OnboardingView, NewAgentDialog) refuse to submit
+    // without a clientId; direct API callers (curl, scripts, internal
+    // tooling) can still create detached agents by design.
     return null;
   }
 

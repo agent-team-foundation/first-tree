@@ -1,8 +1,8 @@
 import { extractMentions, type MentionParticipant } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUp, AtSign, Check, MessageSquare, Paperclip, Plus, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getActivityOverview } from "../../../api/activity.js";
+import { Check, MessageSquare, Paperclip, Pause, Pencil, Send, Square, X } from "lucide-react";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router";
 import {
   type FileMessageContent,
   getChat,
@@ -15,14 +15,19 @@ import {
   sendFileMessage,
 } from "../../../api/chats.js";
 import { getImage, putImage } from "../../../api/image-store.js";
-import { addMeChatParticipants } from "../../../api/me-chats.js";
 import {
   agentSessionsQueryKey,
   asAssistantTextPayload,
   asErrorPayload,
   asToolCallPayload,
+  listAgentSessions,
   listSessionEvents,
   type SessionEventRow,
+  type SessionListItem,
+  type SessionMutationResponse,
+  sessionQueryKey,
+  suspendSession,
+  terminateSession,
 } from "../../../api/sessions.js";
 import { useAuth } from "../../../auth/auth-context.js";
 import { FirstTreeLogo } from "../../../components/first-tree-logo.js";
@@ -31,10 +36,25 @@ import {
   type MentionCandidate,
   useMentionAutocomplete,
 } from "../../../components/mention-autocomplete.js";
+import { Button } from "../../../components/ui/button.js";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../../components/ui/dialog.js";
 import { Markdown } from "../../../components/ui/markdown.js";
+import { StateDot } from "../../../components/ui/state-dot.js";
 import { useAgentIdentityMap, useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { cn } from "../../../lib/utils.js";
+import { resolveAgentState } from "../../../utils/agent-state.js";
+import { clearFirstTreeBootstrap, readFirstTreeBootstrap } from "../../../utils/onboarding-flags.js";
 import { filterEventsForTimeline } from "../../../utils/session-timeline.js";
+
+/**
+ * One-shot bootstrap message sent into the user's brand-new agent chat
+ * right after onboarding completes. Asks the agent to fetch + install the
+ * First-Tree skill in the repo it's running against. The exact wording is
+ * a product contract — keep in sync with anything the agent's prompt /
+ * skill description expects to see verbatim.
+ */
+const FIRST_TREE_BOOTSTRAP_MESSAGE =
+  "Use the latest First-Tree CLI to install the skill in the current repository and complete the onboarding process: https://github.com/agent-team-foundation/first-tree";
 
 function formatClockTime(iso: string): string {
   const d = new Date(iso);
@@ -47,6 +67,19 @@ function formatClockTime(iso: string): string {
   }).formatToParts(d);
   const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? "";
   return `${get("month")}/${get("day")} ${get("hour")}:${get("minute")}`;
+}
+
+function formatRelative(iso: string | null): string {
+  if (!iso) return "—";
+  const ms = Date.now() - new Date(iso).getTime();
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s ago`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.round(h / 24);
+  return `${d}d ago`;
 }
 
 function formatDuration(ms: number): string {
@@ -85,6 +118,240 @@ function ReadReceipt({ msg, myAgentId }: { msg: MessageWithDelivery; myAgentId: 
     <span className="mono text-caption" style={{ color: "var(--fg-4)" }} title="Sent">
       ✓ sent
     </span>
+  );
+}
+
+function SessionControls({
+  agentId,
+  chatId,
+  session,
+}: {
+  agentId: string;
+  chatId: string;
+  session: SessionListItem | null;
+}) {
+  const queryClient = useQueryClient();
+  const [, setSearchParams] = useSearchParams();
+  const [terminateOpen, setTerminateOpen] = useState(false);
+  const [terminateError, setTerminateError] = useState<string | null>(null);
+
+  const sessionKey = sessionQueryKey(agentId, chatId);
+  const agentSessionsKey = agentSessionsQueryKey(agentId);
+
+  const setSessionStateInCaches = (state: SessionListItem["state"]): void => {
+    queryClient.setQueryData<SessionListItem>(sessionKey, (old) => (old ? { ...old, state } : old));
+    queryClient.setQueryData<SessionListItem[]>(agentSessionsKey, (old) =>
+      old ? old.map((s) => (s.chatId === chatId ? { ...s, state } : s)) : old,
+    );
+  };
+
+  const suspendMut = useMutation<
+    SessionMutationResponse,
+    Error,
+    void,
+    { previousSession: SessionListItem | undefined; previousList: SessionListItem[] | undefined }
+  >({
+    mutationFn: () => suspendSession(agentId, chatId),
+    onMutate: async () => {
+      // Cancel both caches — the roster's 10s poller would otherwise clobber
+      // the optimistic `suspended` flip mid-flight.
+      await queryClient.cancelQueries({ queryKey: sessionKey });
+      await queryClient.cancelQueries({ queryKey: agentSessionsKey });
+      const previousSession = queryClient.getQueryData<SessionListItem>(sessionKey);
+      const previousList = queryClient.getQueryData<SessionListItem[]>(agentSessionsKey);
+      setSessionStateInCaches("suspended");
+      return { previousSession, previousList };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.previousSession) queryClient.setQueryData(sessionKey, ctx.previousSession);
+      if (ctx?.previousList) queryClient.setQueryData(agentSessionsKey, ctx.previousList);
+    },
+    onSuccess: (res) => {
+      setSessionStateInCaches(res.state);
+    },
+  });
+
+  const terminateMut = useMutation<
+    SessionMutationResponse,
+    Error,
+    void,
+    { previousSession: SessionListItem | undefined; previousList: SessionListItem[] | undefined }
+  >({
+    mutationFn: () => terminateSession(agentId, chatId),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: sessionKey });
+      await queryClient.cancelQueries({ queryKey: agentSessionsKey });
+      const previousSession = queryClient.getQueryData<SessionListItem>(sessionKey);
+      const previousList = queryClient.getQueryData<SessionListItem[]>(agentSessionsKey);
+      queryClient.setQueryData<SessionListItem[]>(agentSessionsKey, (old) =>
+        old ? old.filter((s) => s.chatId !== chatId) : old,
+      );
+      return { previousSession, previousList };
+    },
+    onError: (err, _vars, ctx) => {
+      if (ctx?.previousSession) queryClient.setQueryData(sessionKey, ctx.previousSession);
+      if (ctx?.previousList) queryClient.setQueryData(agentSessionsKey, ctx.previousList);
+      setTerminateError(err instanceof Error ? err.message : "Terminate failed");
+    },
+    onSuccess: (res, _vars, ctx) => {
+      // The admin API is lenient: a no-op response (e.g. the session was
+      // reactivated between dialog-open and confirm) returns transitioned=false
+      // with the current authoritative state. Only hide + navigate when the
+      // row is actually gone.
+      if (res.state !== "evicted") {
+        if (ctx?.previousList) queryClient.setQueryData(agentSessionsKey, ctx.previousList);
+        setSessionStateInCaches(res.state);
+        setTerminateError(`Session is ${res.state}; terminate only applies to suspended sessions.`);
+        return;
+      }
+      setTerminateError(null);
+      setTerminateOpen(false);
+      setSearchParams({ a: agentId });
+    },
+  });
+
+  const isActive = session?.state === "active";
+  const isSuspended = session?.state === "suspended";
+
+  if (!isActive && !isSuspended) return null;
+
+  return (
+    <>
+      <div
+        className="inline-flex items-center"
+        style={{
+          gap: 4,
+          padding: 4,
+          border: "var(--hairline) solid var(--border)",
+          borderRadius: "var(--radius-panel)",
+          background: "var(--bg-sunken)",
+        }}
+      >
+        {isActive && (
+          <button
+            type="button"
+            onClick={() => suspendMut.mutate()}
+            disabled={suspendMut.isPending}
+            className="inline-flex items-center transition-colors text-label"
+            style={{
+              gap: 6,
+              padding: "var(--sp-1) var(--sp-2_5)",
+              color: "var(--fg-2)",
+              borderRadius: "var(--radius-input)",
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
+            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+          >
+            <Pause className="h-3 w-3" /> Suspend
+            <span className="kbd" style={{ marginLeft: 2 }}>
+              ⌘⇧P
+            </span>
+          </button>
+        )}
+        {isSuspended && (
+          <button
+            type="button"
+            onClick={() => {
+              setTerminateError(null);
+              setTerminateOpen(true);
+            }}
+            disabled={terminateMut.isPending}
+            className="inline-flex items-center transition-colors text-label font-semibold"
+            style={{
+              gap: 6,
+              padding: "var(--sp-1) var(--sp-2_5)",
+              color: "var(--state-error)",
+              background: "color-mix(in oklch, var(--state-error) 18%, transparent)",
+              borderRadius: "var(--radius-input)",
+            }}
+            onMouseEnter={(e) =>
+              (e.currentTarget.style.background = "color-mix(in oklch, var(--state-error) 28%, transparent)")
+            }
+            onMouseLeave={(e) =>
+              (e.currentTarget.style.background = "color-mix(in oklch, var(--state-error) 18%, transparent)")
+            }
+          >
+            <Square className="h-3 w-3" /> Terminate
+          </button>
+        )}
+      </div>
+
+      <TerminateSessionDialog
+        open={terminateOpen}
+        onOpenChange={(o) => {
+          if (!terminateMut.isPending) setTerminateOpen(o);
+          if (!o) setTerminateError(null);
+        }}
+        session={session}
+        chatId={chatId}
+        error={terminateError}
+        pending={terminateMut.isPending}
+        onConfirm={() => terminateMut.mutate()}
+      />
+    </>
+  );
+}
+
+function TerminateSessionDialog(props: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  session: SessionListItem | null;
+  chatId: string;
+  pending: boolean;
+  error: string | null;
+  onConfirm: () => void;
+}) {
+  const { open, onOpenChange, session, chatId, pending, error, onConfirm } = props;
+  function submit(e: FormEvent) {
+    e.preventDefault();
+    if (!pending) onConfirm();
+  }
+  const shortId = chatId.slice(0, 8);
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Terminate session?</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={submit} className="space-y-4">
+          <p className="text-body text-muted-foreground">
+            Ending this session is permanent. It is removed from the workspace and cannot be resumed. Chat history is
+            preserved; a new message will start a fresh session.
+          </p>
+          <div
+            className="mono text-label"
+            style={{
+              padding: "var(--sp-2) var(--sp-2_5)",
+              borderRadius: "var(--radius-input)",
+              background: "var(--bg-sunken)",
+              border: "var(--hairline) solid var(--border)",
+              color: "var(--fg-2)",
+              display: "grid",
+              gap: 4,
+            }}
+          >
+            <span>
+              chat: <span className="font-medium">{shortId}…</span>
+            </span>
+            {session?.lastActivityAt && <span>last activity: {formatRelative(session.lastActivityAt)}</span>}
+            {typeof session?.messageCount === "number" && <span>messages: {session.messageCount}</span>}
+          </div>
+          {error && (
+            <p className="mono text-label" style={{ color: "var(--state-error)" }}>
+              {error}
+            </p>
+          )}
+          <DialogFooter>
+            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={pending}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="destructive" disabled={pending}>
+              {pending ? "Terminating…" : "Terminate"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -493,19 +760,16 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
     refetchInterval: 5_000,
   });
 
+  const { data: session } = useQuery({
+    queryKey: sessionQueryKey(agentId, chatId),
+    queryFn: () => listAgentSessions(agentId).then((sessions) => sessions.find((s) => s.chatId === chatId) ?? null),
+    refetchInterval: 5_000,
+  });
+
   const { data: chatDetail } = useQuery({
     queryKey: ["chat-detail", chatId],
     queryFn: () => getChat(chatId),
     enabled: !!chatId,
-  });
-
-  /** Org-wide agent list for the `@` picker. We surface every agent the
-   *  user can address — not just current chat participants — so `@`-ing
-   *  someone outside the chat acts as both an invite and a mention. */
-  const { data: activity } = useQuery({
-    queryKey: ["activity"],
-    queryFn: getActivityOverview,
-    refetchInterval: 15_000,
   });
 
   const sendMut = useMutation({
@@ -561,21 +825,6 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
     // Group-chat send guard: don't fire requests we know the server (with
     // proposal §3 enforcement) or downstream `mention_only` agents will drop.
     if (requiresMention && draftMentions.length === 0) return;
-
-    // "Mention to invite": any `@<name>` pointing at an agent outside the
-    // current chat is treated as both an address and an invitation. We add
-    // them first so by the time the message is processed, the server's
-    // `extractMentions` resolves successfully and direct-chats auto-upgrade
-    // to groups via `maybeUpgradeDirectToGroup`. Idempotent on the server.
-    if (draftOutsiders.length > 0) {
-      try {
-        await addMeChatParticipants(chatId, { participantIds: draftOutsiders });
-        await queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] });
-      } catch (err) {
-        setUploadError(err instanceof Error ? err.message : "Failed to add participants");
-        return;
-      }
-    }
 
     if (images.length > 0) {
       setUploading(true);
@@ -661,42 +910,32 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
     }
   }, [itemCount]);
 
+  const participantsLabel = chatDetail?.participants
+    ? chatDetail.participants
+        .map((p) => {
+          const name = agentName(p.agentId);
+          return `@${name.length > 20 ? `${name.slice(0, 17)}…` : name}`;
+        })
+        .join(" ")
+    : `@${agentName(agentId)}`;
   const displayName = agentName(agentId);
 
-  /** Set of agentIds currently in the chat. Used to (a) detect "outsiders"
-   *  the user `@`-mentions and (b) skip the redundant addParticipants call
-   *  when everyone they mention is already in the room. */
-  const chatParticipantIds = useMemo(() => {
-    return new Set(chatDetail?.participants?.map((p) => p.agentId) ?? []);
-  }, [chatDetail?.participants]);
-
-  // Mention autocomplete candidates: every org agent the user might address,
-  // resolved to their `{name, displayName}` via the shared identity map.
-  // Includes BOTH chat participants and outsiders — picking an outsider
-  // implicitly invites them via `addMeChatParticipants` at send time, which
-  // turns a 1:1 into a group server-side. Self is excluded; any agent
-  // without a slug (`name`) is skipped because mentions need one — even
-  // current chat participants. This is intentional: the server's
-  // `extractMentions` matches `@<token>` against `agents.name`, so a
-  // participant with `name=null` (legacy / soft-deleted row) cannot be
-  // addressed via `@` regardless. They still show in `ParticipantsHeader`
-  // chips (which uses `agentIdentity.displayName`); the picker just won't
-  // offer them. Fixing this requires the server to backfill missing
-  // `agents.name`, not a client-side workaround.
+  // Mention autocomplete candidates — participants of this chat resolved to
+  // their `{name, displayName}` via the shared identity map. Filter out
+  // rows with no `name` since mentions need a slug target to insert. The
+  // current viewer's own agent is also excluded so the picker never offers
+  // self-mention (which the server filters anyway).
   const mentionCandidates = useMemo<MentionCandidate[]>(() => {
-    const ids = new Set<string>();
-    for (const p of chatDetail?.participants ?? []) ids.add(p.agentId);
-    for (const a of activity?.agents ?? []) ids.add(a.agentId);
-    if (ids.size === 0) ids.add(agentId);
+    const sourceIds = chatDetail?.participants?.map((p) => p.agentId) ?? [agentId];
     const out: MentionCandidate[] = [];
-    for (const id of ids) {
+    for (const id of sourceIds) {
       if (id === myAgentId) continue;
       const ident = agentIdentity(id);
       if (!ident || !ident.name) continue;
       out.push({ agentId: id, name: ident.name, displayName: ident.displayName });
     }
     return out;
-  }, [chatDetail?.participants, activity?.agents, agentId, agentIdentity, myAgentId]);
+  }, [chatDetail?.participants, agentId, agentIdentity, myAgentId]);
 
   /**
    * "Needs explicit @mention" guard: a real group, OR a direct chat where the
@@ -711,6 +950,33 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
     const meIn = chatDetail.participants.some((p) => p.agentId === myAgentId);
     return chatDetail.type === "direct" && !meIn && chatDetail.participants.length >= 2;
   }, [chatDetail, myAgentId]);
+
+  // First-Tree bootstrap: when OnboardingView routes the user into their
+  // brand-new agent's chat, it stashes the chatId in sessionStorage. We
+  // detect it here and auto-send a one-time setup instruction — the agent's
+  // first task is to install the First-Tree skill in its repo. Suppresses
+  // the "Hi {name}!" greeting prefill via `prefilledChatsRef`. Eagerly
+  // clears the sessionStorage flag the moment we kick the mutation so a
+  // slow network or tab-close can't double-send on reopen. On send
+  // failure we restore the bootstrap text into the draft so the user can
+  // hit Enter to retry — without this the chat is wedged: greeting is
+  // suppressed (ref still set), no auto-resend, and an empty input.
+  useEffect(() => {
+    if (prefilledChatsRef.current.has(chatId)) return;
+    if (!messagesData || !eventsData || !chatDetail) return;
+    if (items.length > 0) return;
+    if (sendMut.isPending) return;
+    const pendingChatId = readFirstTreeBootstrap();
+    if (pendingChatId !== chatId) return;
+    prefilledChatsRef.current.add(chatId);
+    clearFirstTreeBootstrap();
+    sendMut.mutate(FIRST_TREE_BOOTSTRAP_MESSAGE, {
+      onError: () => {
+        setDraft(FIRST_TREE_BOOTSTRAP_MESSAGE);
+        setCursor(FIRST_TREE_BOOTSTRAP_MESSAGE.length);
+      },
+    });
+  }, [chatId, messagesData, eventsData, chatDetail, items.length, sendMut.isPending, sendMut.mutate]);
 
   // First-message pre-fill: when the user lands on a brand-new empty chat
   // (typical right after onboarding's "Create" succeeds), drop a friendly
@@ -745,23 +1011,14 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
     });
   }, [chatId, agentId, messagesData, eventsData, chatDetail, items.length, draft.length, displayName, requiresMention]);
 
-  /** All agentIds the draft text addresses via `@<name>` tokens — computed
-   * unconditionally (not just for groups) so the "outsider invite" path
-   * below can detect mentions of agents not yet in the chat. The send-gate
-   * for groups still uses `requiresMention && draftMentions.length === 0`. */
+  /** Local mirror of the server's mention resolution. Empty when nothing in
+   * `draft` resolves to a participant — drives the send-button gate so we
+   * don't hit the network with a request the server will 400. */
   const draftMentions = useMemo(() => {
+    if (!requiresMention) return [];
     const ps: MentionParticipant[] = mentionCandidates.map((c) => ({ agentId: c.agentId, name: c.name }));
     return extractMentions(draft, ps);
-  }, [draft, mentionCandidates]);
-
-  /** Mentions in the draft that point at agents NOT currently in the chat.
-   * Sending a message that addresses these will first POST to
-   * `/me/chats/:id/participants` to add them, which turns a direct chat
-   * into a group via the server's `maybeUpgradeDirectToGroup` helper. */
-  const draftOutsiders = useMemo(() => {
-    if (chatParticipantIds.size === 0) return [];
-    return draftMentions.filter((id) => !chatParticipantIds.has(id));
-  }, [draftMentions, chatParticipantIds]);
+  }, [draft, mentionCandidates, requiresMention]);
 
   const mention = useMentionAutocomplete({
     value: draft,
@@ -781,48 +1038,25 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
       });
     },
   });
+  const runtimeLabel = session?.runtimeState ?? "idle";
+  const runtimeState = resolveAgentState(session?.runtimeState ?? null, agentId ? "connected" : null);
+  const msgCount = session?.messageCount ?? messagesData?.items?.length ?? 0;
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      {/* Chat header. Spans the full panel width with generous side
-          breathing (sp-10) so it reads as the panel's "context bar".
-          Title + participants column anchors to the left; the right
-          edge is intentionally empty after the SessionControls
-          (Suspend/Terminate) removal — those were dev/runtime concerns
-          that don't belong in the chat-first user surface. Future
-          chat-level actions (mute, archive, leave) will land here in
-          an overflow menu. */}
+      {/* Chat header */}
       <div
-        className="shrink-0"
+        className="grid items-center shrink-0"
         style={{
-          padding: "var(--sp-2_5) var(--sp-6)",
+          gridTemplateColumns: "1fr auto",
+          gap: 10,
+          padding: "var(--sp-2_5) var(--sp-3_5)",
           borderBottom: "var(--hairline) solid var(--border)",
         }}
       >
-        {/* Header content sits in the same centered reading column as
-            the timeline + composer below — title's left edge aligns
-            with message avatars, chips' right edge aligns with the
-            composer's right edge. The outer band still bleeds to the
-            panel edges (border-bottom + side padding) so the header
-            keeps its frame role; only the content centers. */}
-        <div
-          className="flex items-center"
-          style={{
-            maxWidth: "clamp(55rem, 75%, 70rem)",
-            margin: "0 auto",
-            width: "100%",
-            gap: 10,
-          }}
-        >
-          {/* Identity — title is the sole click-to-rename affordance
-              (Slack / Linear pattern). The hover-only ✏️ pencil was
-              dropped after the title itself became clickable: two
-              affordances for the same action add visual noise without
-              improving discoverability. The per-agent `StateDot` was
-              also dropped — in chat-first, runtime is a per-agent
-              concept that belongs on each chip avatar (D-4), not on
-              the chat header. */}
-          <div className="flex items-center min-w-0" style={{ gap: 8, flex: 1 }}>
+        <div className="min-w-0">
+          <div className="flex items-center" style={{ gap: 8 }}>
+            <StateDot state={runtimeState} size={8} />
             {renaming ? (
               <>
                 <input
@@ -840,27 +1074,11 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
                   }}
                   disabled={renameMut.isPending}
                   maxLength={500}
-                  // Placeholder echoes the rendered title (auto-generated
-                  // from the first message when no topic is set). This
-                  // signals "leave blank to keep the current name" without
-                  // pre-filling the input with the auto-title — a pre-fill
-                  // would make a no-op commit silently promote the auto-
-                  // title to a sticky `topic`, locking it against future
-                  // first-message edits.
-                  placeholder={chatDetail?.title ?? "Chat name"}
+                  placeholder="Chat name"
                   className="outline-none text-subtitle"
-                  // Auto-grow with content (modern CSS `field-sizing: content`)
-                  // so the ✓/× buttons sit immediately after the last typed
-                  // character instead of floating at the panel's right edge.
-                  // `minWidth` keeps the input usable from an empty draft;
-                  // `maxWidth` prevents it from pushing chips off-screen on
-                  // very long input. Browsers without `field-sizing` support
-                  // (older Safari/Firefox) fall back to a sensible default
-                  // sized by the input element's intrinsic width.
                   style={{
-                    fieldSizing: "content",
-                    minWidth: 200,
-                    maxWidth: 480,
+                    flex: 1,
+                    minWidth: 0,
                     color: "var(--fg)",
                     background: "var(--bg-sunken)",
                     border: "var(--hairline) solid var(--border)",
@@ -890,518 +1108,351 @@ export function ChatView({ agentId, chatId }: { agentId: string; chatId: string 
                 </button>
               </>
             ) : (
-              <button
-                type="button"
-                onClick={() => {
-                  // Pre-fill with `topic` only (the existing manual
-                  // override). When `topic` is null, leave the input
-                  // empty so the auto-title shown as placeholder
-                  // signals "type to override, leave blank to keep
-                  // tracking the first message". A no-op commit thus
-                  // sends `null` to the server (clearing topic = stay
-                  // in auto-title mode), not the auto-title string —
-                  // which would have locked the title against future
-                  // first-message edits.
-                  setRenameDraft(chatDetail?.topic ?? "");
-                  setRenaming(true);
-                }}
-                title="Click to rename"
-                className="truncate text-subtitle text-left min-w-0"
-                style={{
-                  color: "var(--fg)",
-                  background: "transparent",
-                  border: "none",
-                  padding: 0,
-                  cursor: "pointer",
-                }}
-              >
-                {chatDetail?.title ?? "…"}
-              </button>
-            )}
-          </div>
-          {/* Audience — chips + add button. Right-anchored. Includes
-              the viewer's own agent: in chat-first the user is a real
-              participant and seeing themselves in the audience makes
-              the membership state explicit. Self's display name comes
-              through `agentIdentity` rather than `mentionCandidates`
-              (the latter excludes self by design — you don't @ yourself).
-              The [+] dropdown anchors to the right edge of the button
-              so it grows leftward, avoiding panel-edge overflow when
-              the chip row is long. */}
-          <ParticipantsHeader
-            chatId={chatId}
-            participantIds={chatDetail?.participants?.map((p) => p.agentId) ?? [agentId]}
-            candidates={mentionCandidates}
-            agentIdentity={agentIdentity}
-            onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
-          />
-        </div>
-      </div>
-
-      {/* Timeline. Scroll viewport stays full-width so the scrollbar hugs
-          the panel's right edge — pushing it inward would float the column.
-          Reading column inside is capped via `maxWidth` and centered to
-          align with the composer below into one vertical thread. Side
-          padding (sp-6) prevents content from kissing the panel border on
-          narrow viewports. */}
-      <div className="flex-1 overflow-y-auto relative" style={{ padding: "var(--sp-2_5) var(--sp-6)" }}>
-        <div style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}>
-          {itemCount === 0 && (
-            <div
-              className="flex flex-col items-center text-body"
-              style={{ color: "var(--fg-3)", padding: "var(--sp-8) 0", gap: 6 }}
-            >
-              <MessageSquare className="h-8 w-8" style={{ opacity: 0.3 }} />
-              Send a message to start the conversation
-            </div>
-          )}
-          <div className="flex flex-col" style={{ gap: 4 }}>
-            {items.map((item) => {
-              if (item.kind === "event") {
-                const ev = item.data;
-                switch (ev.kind) {
-                  case "tool_call":
-                    return <ToolCallStatusRow key={item.key} event={ev} />;
-                  case "assistant_text":
-                    return <AssistantTextRow key={item.key} event={ev} agentId={agentId} agentNameFn={agentName} />;
-                  case "thinking":
-                    return <ThinkingRow key={item.key} event={ev} />;
-                  case "error":
-                    return <ErrorRow key={item.key} event={ev} />;
-                  default:
-                    // turn_end is filtered upstream; any unknown kind is dropped.
-                    return null;
-                }
-              }
-              return <TextRow key={item.key} msg={item.data} myAgentId={myAgentId} agentNameFn={agentName} />;
-            })}
-          </div>
-          <div ref={messagesEndRef} />
-        </div>
-      </div>
-
-      {/* Input. Outer band keeps full-width border-top + side padding so
-          the composer separator continues the panel's edge-to-edge frame.
-          Composer card inside is capped via `maxWidth` and centered, so it
-          aligns vertically with the timeline column above — eye tracks
-          from last message into textarea without a horizontal jump
-          (Slack / ChatGPT / Linear DM all do this). */}
-      <div
-        className="shrink-0"
-        style={{
-          padding: "var(--sp-2_5) var(--sp-6) var(--sp-3)",
-        }}
-      >
-        <div style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}>
-          {/* biome-ignore lint/a11y/noStaticElementInteractions: drop target for image upload */}
-          <div
-            style={{
-              position: "relative",
-              border: "var(--hairline) solid var(--border)",
-              borderRadius: 6,
-              background: "var(--bg-sunken)",
-            }}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={(e) => {
-              e.preventDefault();
-              addImages(Array.from(e.dataTransfer.files));
-            }}
-          >
-            {/* Image preview area — above textarea */}
-            {pendingImages.length > 0 && (
-              <div
-                className="flex items-center"
-                style={{ gap: 6, padding: "var(--sp-1_5) var(--sp-2_5) 0", overflowX: "auto" }}
-              >
-                {pendingImages.map((img) => (
-                  <div
-                    key={img.id}
-                    style={{
-                      position: "relative",
-                      flexShrink: 0,
-                      borderRadius: 4,
-                      border: "var(--hairline) solid var(--border)",
-                      overflow: "hidden",
-                    }}
-                  >
-                    <img
-                      src={img.previewUrl}
-                      alt={img.file.name}
-                      style={{ height: 32, width: "auto", display: "block", objectFit: "cover" }}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => removeImage(img.id)}
-                      style={{
-                        position: "absolute",
-                        top: 1,
-                        right: 1,
-                        width: 14,
-                        height: 14,
-                        borderRadius: "50%",
-                        background: "var(--color-overlay-scrim)",
-                        border: "none",
-                        color: "var(--bg-raised)",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        cursor: "pointer",
-                        padding: 0,
-                      }}
-                    >
-                      <X className="h-2 w-2" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            <div style={{ position: "relative" }}>
-              <MentionAutocompletePopover
-                trigger={mention.trigger}
-                results={mention.results}
-                highlightIndex={mention.highlightIndex}
-                anchorRef={textareaRef}
-                onPick={mention.pick}
-              />
-              <textarea
-                ref={textareaRef}
-                value={draft}
-                onChange={(e) => {
-                  setDraft(e.target.value);
-                  setCursor(e.target.selectionStart ?? e.target.value.length);
-                }}
-                onSelect={(e) => {
-                  setCursor(e.currentTarget.selectionStart ?? draft.length);
-                }}
-                onFocus={() => {
-                  // Group / about-to-be-group chats: prime the input with `@`
-                  // on focus so the autocomplete pops the recipient list right
-                  // away — matches the proposal §2 "must choose a receiver
-                  // before typing" UX. Once-per-chat (focusPrimedRef): we
-                  // don't want to re-stamp `@` after the user has cleared
-                  // their draft and tabbed away/back; that would constantly
-                  // fight the user when they're trying to write a fresh
-                  // empty message without addressing anyone (e.g. paste over).
-                  if (!requiresMention) return;
-                  if (focusPrimedRef.current) return;
-                  if (draft.length > 0 || mentionCandidates.length === 0) return;
-                  focusPrimedRef.current = true;
-                  setDraft("@");
-                  setCursor(1);
-                  requestAnimationFrame(() => {
-                    const el = textareaRef.current;
-                    if (!el) return;
-                    el.setSelectionRange(1, 1);
-                  });
-                }}
-                onPaste={(e) => {
-                  const files = Array.from(e.clipboardData.files);
-                  if (files.length > 0) {
-                    e.preventDefault();
-                    addImages(files);
-                  }
-                }}
-                placeholder={
-                  requiresMention
-                    ? "Type @ to pick a recipient, then your message"
-                    : `Message @${displayName}  ·  / for commands  ·  @ to mention`
-                }
-                rows={2}
-                onKeyDown={(e) => {
-                  // Mention autocomplete gets first crack at navigation keys so
-                  // ArrowUp/Down/Enter/Tab/Escape cycle candidates instead of
-                  // sending or moving the cursor.
-                  if (mention.handleKey(e)) return;
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    handleSend();
-                  }
-                }}
-                disabled={sendMut.isPending || uploading}
-                className="w-full outline-none text-subtitle font-normal"
-                style={{
-                  padding: "var(--sp-2_25) var(--sp-3) var(--sp-7_5)",
-                  background: "transparent",
-                  border: "none",
-                  resize: "none",
-                  color: "var(--fg)",
-                }}
-              />
-            </div>
-            <div
-              className="flex items-center justify-between text-caption"
-              style={{
-                position: "absolute",
-                bottom: 6,
-                left: 10,
-                right: 10,
-                color: "var(--fg-4)",
-              }}
-            >
-              <span className="mono flex items-center" style={{ gap: 10 }}>
+              <>
+                <span className="truncate text-subtitle" style={{ color: "var(--fg)" }}>
+                  {chatDetail?.topic || session?.summary || `Chat · ${chatId.slice(0, 8)}`}
+                </span>
                 <button
                   type="button"
                   onClick={() => {
-                    // Insert `@` at the cursor (or replace the current selection)
-                    // and re-focus. The mention autocomplete will pick it up
-                    // from the resulting `value`/`cursor` state — same path as
-                    // typing `@` directly. Mirrors the Feishu / Slack
-                    // explicit-button affordance for users who don't know the
-                    // keyboard trick.
-                    const el = textareaRef.current;
-                    if (!el) return;
-                    const start = el.selectionStart ?? draft.length;
-                    const end = el.selectionEnd ?? start;
-                    const next = `${draft.slice(0, start)}@${draft.slice(end)}`;
-                    setDraft(next);
-                    setCursor(start + 1);
-                    requestAnimationFrame(() => {
-                      el.focus();
-                      el.setSelectionRange(start + 1, start + 1);
-                    });
+                    setRenameDraft(chatDetail?.topic ?? "");
+                    setRenaming(true);
                   }}
-                  title="Mention an agent (or type @)"
-                  style={{
-                    background: "none",
-                    border: "none",
-                    cursor: "pointer",
-                    color: "var(--fg-3)",
-                    padding: 0,
-                    display: "inline-flex",
-                    alignItems: "center",
-                  }}
+                  title="Rename chat"
+                  className="inline-flex items-center transition-colors"
+                  style={{ color: "var(--fg-4)", padding: 2 }}
+                  onMouseEnter={(e) => (e.currentTarget.style.color = "var(--fg-2)")}
+                  onMouseLeave={(e) => (e.currentTarget.style.color = "var(--fg-4)")}
                 >
-                  <AtSign className="h-3.5 w-3.5" />
+                  <Pencil className="h-3 w-3" />
                 </button>
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  title="Attach image"
-                  style={{
-                    background: "none",
-                    border: "none",
-                    cursor: "pointer",
-                    color: "var(--fg-3)",
-                    padding: 0,
-                    display: "inline-flex",
-                    alignItems: "center",
-                  }}
-                >
-                  <Paperclip className="h-3.5 w-3.5" />
-                </button>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  style={{ display: "none" }}
-                  onChange={(e) => {
-                    if (e.target.files) {
-                      addImages(Array.from(e.target.files));
-                      e.target.value = "";
-                    }
-                  }}
-                />
-              </span>
-              <span className="flex items-center" style={{ gap: 8 }}>
-                {uploading && (
-                  <span className="mono text-caption" style={{ color: "var(--accent)" }}>
-                    uploading…
-                  </span>
-                )}
-                <button
-                  type="button"
-                  onClick={handleSend}
-                  disabled={
-                    sendMut.isPending ||
-                    uploading ||
-                    (!draft.trim() && pendingImages.length === 0) ||
-                    (requiresMention && draftMentions.length === 0)
-                  }
-                  title={
-                    requiresMention && draftMentions.length === 0
-                      ? "Pick at least one recipient with @ before sending in a group chat"
-                      : "Send (Enter)"
-                  }
-                  aria-label="Send"
-                  className={cn(
-                    "inline-flex items-center justify-center transition-opacity",
-                    (sendMut.isPending ||
-                      uploading ||
-                      (!draft.trim() && pendingImages.length === 0) ||
-                      (requiresMention && draftMentions.length === 0)) &&
-                      "opacity-40 cursor-not-allowed",
-                  )}
-                  style={{
-                    width: 28,
-                    height: 28,
-                    borderRadius: "var(--radius-input)",
-                    background: "var(--fg)",
-                    color: "var(--bg-raised)",
-                    border: "none",
-                  }}
-                >
-                  <ArrowUp className="h-3.5 w-3.5" strokeWidth={2.5} />
-                </button>
-              </span>
-            </div>
-          </div>
-          {(sendMut.isError || uploadError) && (
-            <p
-              className="mono text-label"
+              </>
+            )}
+            <span
+              className="mono text-caption"
               style={{
-                color: "var(--state-error)",
-                padding: "var(--sp-1_5) var(--sp-0_5) 0",
+                color: "var(--fg-4)",
+                padding: "var(--hairline) var(--sp-1_25)",
+                border: "var(--hairline) solid var(--border)",
+                borderRadius: "var(--radius-chip)",
               }}
             >
-              {uploadError ?? (sendMut.error instanceof Error ? sendMut.error.message : "Failed to send")}
-            </p>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/**
- * Header participant strip: renders one `@name` chip per current chat
- * member plus a `[+]` button to invite more agents (uses
- * `addMeChatParticipants`, which auto-upgrades a 1:1 chat to a group on
- * the server when the resulting count is ≥ 3).
- *
- * Removal isn't implemented yet — the server has no member-side endpoint
- * for `DELETE /me/chats/:id/participants/:agentId`. The display-only
- * `×`-less chip is intentional until that lands.
- */
-function ParticipantsHeader({
-  chatId,
-  participantIds,
-  candidates,
-  agentIdentity,
-  onAdded,
-}: {
-  chatId: string;
-  participantIds: string[];
-  candidates: MentionCandidate[];
-  /** Identity resolver covering ALL agents (incl. the viewer's own,
-   *  which `mentionCandidates` excludes). Lets the chip row label
-   *  self correctly instead of falling back to a UUID prefix. */
-  agentIdentity: (uuid: string | null | undefined) => { name: string | null; displayName: string } | null;
-  onAdded: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const containerRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const handler = (ev: MouseEvent) => {
-      if (!containerRef.current) return;
-      if (containerRef.current.contains(ev.target as Node)) return;
-      setOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [open]);
-
-  const addMut = useMutation({
-    mutationFn: (agentId: string) => addMeChatParticipants(chatId, { participantIds: [agentId] }),
-    onSuccess: () => {
-      setOpen(false);
-      onAdded();
-    },
-  });
-
-  const outsideCandidates = useMemo(
-    () => candidates.filter((c) => !participantIds.includes(c.agentId)),
-    [candidates, participantIds],
-  );
-
-  return (
-    <div className="inline-flex items-center flex-wrap" style={{ gap: 4 }}>
-      {participantIds.map((id) => {
-        // Prefer `agentIdentity` (covers self) over `candidates`
-        // (excludes self by design — see useMentionAutocomplete callers).
-        // Falls back to UUID prefix only if both are empty, which
-        // shouldn't happen for in-org agents.
-        const ident = agentIdentity(id);
-        const label = ident?.displayName ?? ident?.name ?? id.slice(0, 8);
-        return (
-          <span
-            key={id}
-            className="inline-flex items-center text-label"
-            style={{
-              padding: "var(--sp-0_5) var(--sp-1_5)",
-              borderRadius: "var(--radius-chip)",
-              background: "var(--bg-sunken)",
-              color: "var(--fg-2)",
-            }}
-          >
-            {label}
-          </span>
-        );
-      })}
-      <div ref={containerRef} style={{ position: "relative" }}>
-        <button
-          type="button"
-          onClick={() => setOpen(!open)}
-          disabled={outsideCandidates.length === 0 || addMut.isPending}
-          title={outsideCandidates.length === 0 ? "All available agents are already in this chat" : "Add participant"}
-          aria-label="Add participant"
-          className="inline-flex items-center transition-colors hover:bg-[var(--bg-sunken)]"
-          style={{
-            padding: "var(--sp-0_5) var(--sp-1)",
-            borderRadius: "var(--radius-chip)",
-            border: "var(--hairline) solid var(--border)",
-            background: "transparent",
-            color: outsideCandidates.length === 0 ? "var(--fg-4)" : "var(--fg-3)",
-            cursor: outsideCandidates.length === 0 ? "not-allowed" : "pointer",
-          }}
-        >
-          <Plus className="h-3 w-3" />
-        </button>
-        {open && outsideCandidates.length > 0 && (
+              {chatId}
+            </span>
+          </div>
           <div
-            role="listbox"
-            aria-label="Add participant"
-            className="absolute z-20 max-h-56 overflow-auto rounded-md border shadow-lg"
-            // Right-anchored so the dropdown grows leftward from the
-            // [+] button instead of rightward — chip rows tend to push
-            // [+] near the panel edge, where left-anchoring would cause
-            // the dropdown to overflow off-screen.
+            className="flex items-center text-caption"
             style={{
-              top: "calc(100% + var(--sp-1))",
-              right: 0,
-              minWidth: 280,
-              background: "var(--bg-raised)",
-              borderColor: "var(--border)",
+              color: "var(--fg-3)",
+              marginTop: 4,
+              gap: 10,
             }}
           >
-            {outsideCandidates.map((c) => (
-              <button
-                key={c.agentId}
-                type="button"
-                role="option"
-                aria-selected="false"
-                onClick={() => addMut.mutate(c.agentId)}
-                disabled={addMut.isPending}
-                className="flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-body"
+            <span className="mono">{participantsLabel}</span>
+            <span>·</span>
+            <span>started {formatRelative(session?.startedAt ?? null)}</span>
+            <span>·</span>
+            <span>{msgCount} msgs</span>
+            <span>·</span>
+            <span>
+              runtime{" "}
+              <span
+                className="mono"
                 style={{
-                  background: "transparent",
-                  color: "var(--fg)",
-                  border: "none",
-                  cursor: "pointer",
-                  whiteSpace: "nowrap",
+                  color:
+                    runtimeState === "error"
+                      ? "var(--state-error)"
+                      : runtimeState === "working"
+                        ? "var(--fg-2)"
+                        : "var(--fg-2)",
                 }}
               >
-                <span className="font-medium">{c.displayName ?? (c.name ? `@${c.name}` : "—")}</span>
-                {c.name && c.displayName && (
-                  <span className="mono text-caption" style={{ color: "var(--fg-3)" }}>
-                    @{c.name}
-                  </span>
-                )}
-              </button>
-            ))}
+                {runtimeLabel}
+              </span>
+            </span>
           </div>
+        </div>
+        <SessionControls agentId={agentId} chatId={chatId} session={session ?? null} />
+      </div>
+
+      {/* Timeline */}
+      <div className="flex-1 overflow-y-auto relative" style={{ padding: "var(--sp-2_5) var(--sp-3_5)" }}>
+        {itemCount === 0 && (
+          <div
+            className="flex flex-col items-center text-body"
+            style={{ color: "var(--fg-3)", padding: "var(--sp-8) 0", gap: 6 }}
+          >
+            <MessageSquare className="h-8 w-8" style={{ opacity: 0.3 }} />
+            Send a message to start the conversation
+          </div>
+        )}
+        <div className="flex flex-col" style={{ gap: 4 }}>
+          {items.map((item) => {
+            if (item.kind === "event") {
+              const ev = item.data;
+              switch (ev.kind) {
+                case "tool_call":
+                  return <ToolCallStatusRow key={item.key} event={ev} />;
+                case "assistant_text":
+                  return <AssistantTextRow key={item.key} event={ev} agentId={agentId} agentNameFn={agentName} />;
+                case "thinking":
+                  return <ThinkingRow key={item.key} event={ev} />;
+                case "error":
+                  return <ErrorRow key={item.key} event={ev} />;
+                default:
+                  // turn_end is filtered upstream; any unknown kind is dropped.
+                  return null;
+              }
+            }
+            return <TextRow key={item.key} msg={item.data} myAgentId={myAgentId} agentNameFn={agentName} />;
+          })}
+        </div>
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* Input */}
+      <div
+        className="shrink-0"
+        style={{
+          padding: "var(--sp-2_5) var(--sp-3_5)",
+          borderTop: "var(--hairline) solid var(--border)",
+        }}
+      >
+        {/* biome-ignore lint/a11y/noStaticElementInteractions: drop target for image upload */}
+        <div
+          style={{
+            position: "relative",
+            border: "var(--hairline) solid var(--border)",
+            borderRadius: 6,
+            background: "var(--bg-sunken)",
+          }}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => {
+            e.preventDefault();
+            addImages(Array.from(e.dataTransfer.files));
+          }}
+        >
+          {/* Image preview area — above textarea */}
+          {pendingImages.length > 0 && (
+            <div
+              className="flex items-center"
+              style={{ gap: 6, padding: "var(--sp-1_5) var(--sp-2_5) 0", overflowX: "auto" }}
+            >
+              {pendingImages.map((img) => (
+                <div
+                  key={img.id}
+                  style={{
+                    position: "relative",
+                    flexShrink: 0,
+                    borderRadius: 4,
+                    border: "var(--hairline) solid var(--border)",
+                    overflow: "hidden",
+                  }}
+                >
+                  <img
+                    src={img.previewUrl}
+                    alt={img.file.name}
+                    style={{ height: 32, width: "auto", display: "block", objectFit: "cover" }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeImage(img.id)}
+                    style={{
+                      position: "absolute",
+                      top: 1,
+                      right: 1,
+                      width: 14,
+                      height: 14,
+                      borderRadius: "50%",
+                      background: "var(--color-overlay-scrim)",
+                      border: "none",
+                      color: "var(--bg-raised)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      cursor: "pointer",
+                      padding: 0,
+                    }}
+                  >
+                    <X className="h-2 w-2" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ position: "relative" }}>
+            <MentionAutocompletePopover
+              trigger={mention.trigger}
+              results={mention.results}
+              highlightIndex={mention.highlightIndex}
+              anchorRef={textareaRef}
+              onPick={mention.pick}
+            />
+            <textarea
+              ref={textareaRef}
+              value={draft}
+              onChange={(e) => {
+                setDraft(e.target.value);
+                setCursor(e.target.selectionStart ?? e.target.value.length);
+              }}
+              onSelect={(e) => {
+                setCursor(e.currentTarget.selectionStart ?? draft.length);
+              }}
+              onFocus={() => {
+                // Group / about-to-be-group chats: prime the input with `@`
+                // on focus so the autocomplete pops the recipient list right
+                // away — matches the proposal §2 "must choose a receiver
+                // before typing" UX. Once-per-chat (focusPrimedRef): we
+                // don't want to re-stamp `@` after the user has cleared
+                // their draft and tabbed away/back; that would constantly
+                // fight the user when they're trying to write a fresh
+                // empty message without addressing anyone (e.g. paste over).
+                if (!requiresMention) return;
+                if (focusPrimedRef.current) return;
+                if (draft.length > 0 || mentionCandidates.length === 0) return;
+                focusPrimedRef.current = true;
+                setDraft("@");
+                setCursor(1);
+                requestAnimationFrame(() => {
+                  const el = textareaRef.current;
+                  if (!el) return;
+                  el.setSelectionRange(1, 1);
+                });
+              }}
+              onPaste={(e) => {
+                const files = Array.from(e.clipboardData.files);
+                if (files.length > 0) {
+                  e.preventDefault();
+                  addImages(files);
+                }
+              }}
+              placeholder={
+                requiresMention
+                  ? "Type @ to pick a recipient, then your message"
+                  : `Message @${displayName}  ·  / for commands  ·  @ to mention`
+              }
+              rows={2}
+              onKeyDown={(e) => {
+                // Mention autocomplete gets first crack at navigation keys so
+                // ArrowUp/Down/Enter/Tab/Escape cycle candidates instead of
+                // sending or moving the cursor.
+                if (mention.handleKey(e)) return;
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend();
+                }
+              }}
+              disabled={sendMut.isPending || uploading}
+              className="w-full outline-none text-subtitle font-normal"
+              style={{
+                padding: "var(--sp-2_25) var(--sp-3) var(--sp-7_5)",
+                background: "transparent",
+                border: "none",
+                resize: "none",
+                color: "var(--fg)",
+              }}
+            />
+          </div>
+          <div
+            className="flex items-center justify-between text-caption"
+            style={{
+              position: "absolute",
+              bottom: 6,
+              left: 10,
+              right: 10,
+              color: "var(--fg-4)",
+            }}
+          >
+            <span className="mono flex items-center" style={{ gap: 8 }}>
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                title="Attach image"
+                style={{
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  color: "var(--fg-3)",
+                  padding: 0,
+                  display: "inline-flex",
+                  alignItems: "center",
+                }}
+              >
+                <Paperclip className="h-3.5 w-3.5" />
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                style={{ display: "none" }}
+                onChange={(e) => {
+                  if (e.target.files) {
+                    addImages(Array.from(e.target.files));
+                    e.target.value = "";
+                  }
+                }}
+              />
+              <span>/suspend</span>
+              <span>/resume</span>
+              <span>/branch</span>
+              <span>/promote</span>
+            </span>
+            <span className="flex items-center" style={{ gap: 8 }}>
+              {uploading && (
+                <span className="mono text-caption" style={{ color: "var(--accent)" }}>
+                  uploading…
+                </span>
+              )}
+              <span>
+                <span className="kbd">⏎</span> send <span className="kbd">⇧⏎</span> new line
+              </span>
+              <button
+                type="button"
+                onClick={handleSend}
+                disabled={
+                  sendMut.isPending ||
+                  uploading ||
+                  (!draft.trim() && pendingImages.length === 0) ||
+                  (requiresMention && draftMentions.length === 0)
+                }
+                title={
+                  requiresMention && draftMentions.length === 0
+                    ? "Pick at least one recipient with @ before sending in a group chat"
+                    : undefined
+                }
+                className={cn(
+                  "inline-flex items-center transition-colors text-label font-semibold",
+                  (sendMut.isPending ||
+                    uploading ||
+                    (!draft.trim() && pendingImages.length === 0) ||
+                    (requiresMention && draftMentions.length === 0)) &&
+                    "opacity-50 cursor-not-allowed",
+                )}
+                style={{
+                  gap: 6,
+                  padding: "var(--sp-1) var(--sp-2_5)",
+                  color: "oklch(0.14 0.01 150)",
+                  background: "var(--accent)",
+                  border: "var(--hairline) solid var(--accent)",
+                  borderRadius: "var(--radius-input)",
+                }}
+              >
+                <Send className="h-3 w-3" /> Send
+              </button>
+            </span>
+          </div>
+        </div>
+        {(sendMut.isError || uploadError) && (
+          <p
+            className="mono text-label"
+            style={{
+              color: "var(--state-error)",
+              padding: "var(--sp-1_5) var(--sp-0_5) 0",
+            }}
+          >
+            {uploadError ?? (sendMut.error instanceof Error ? sendMut.error.message : "Failed to send")}
+          </p>
         )}
       </div>
     </div>

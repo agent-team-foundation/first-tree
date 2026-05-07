@@ -2,12 +2,14 @@ import {
   AGENT_NAME_MAX_LENGTH,
   AGENT_NAME_REGEX,
   type Agent,
+  type ClientCapabilities,
   isReservedAgentName,
   type RuntimeProvider,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Check, ChevronDown, Copy } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { type HubClient, listClients } from "../api/activity.js";
+import { generateConnectToken, getClientCapabilities, type HubClient, listClients } from "../api/activity.js";
 import { type AgentNameAvailability, checkAgentNameAvailability, createAgent } from "../api/agents.js";
 import { ApiError, type ValidationIssue } from "../api/client.js";
 import { useAuth } from "../auth/auth-context.js";
@@ -18,6 +20,7 @@ import { Input } from "./ui/input.js";
 import { Label } from "./ui/label.js";
 
 const DISPLAY_NAME_MAX = 200;
+const CLIENT_DETECT_POLL_MS = 3_000;
 
 type FieldKey = "name" | "displayName" | "clientId";
 type FieldErrors = Partial<Record<FieldKey | "_root", string>>;
@@ -38,35 +41,6 @@ function issuesToFieldErrors(issues: ValidationIssue[] | undefined): FieldErrors
   return out;
 }
 
-/**
- * Simplified agent creation dialog for the onboarding flow.
- *
- * Display-name-first layout (see docs/agent-naming-design.md §3.6):
- *   - "Display name" is the primary input at the top (required-feeling, unicode).
- *   - "Agent name" auto-slugifies from display name and carries the immutable
- *     `@` prefix adornment. Editing it severs the slug-follows-display-name
- *     link so the user stays in control.
- *   - A debounced availability probe calls the server so collisions and
- *     reserved words surface inline before submit.
- *
- * Hidden defaults:
- *   - type = "personal_assistant"
- *   - manager = current user
- *   - delegateMention, visibility, clientId = not surfaced
- */
-
-// Runtime selection sources its values from `RuntimeProvider`; new providers
-// extend the union in `@agent-team-foundation/first-tree-hub-shared` and the
-// dialog picks them up automatically.
-
-/**
- * Lightweight normalizer applied to every keystroke in the agent-name
- * input: downcase + fold illegal runs to `-`, but keep trailing `-` /
- * `_` so users can type `alice-bot` one character at a time. Leading
- * separators are still stripped because the server regex will reject
- * them on submit and live-feedback is more useful than tolerating an
- * input that can't be saved.
- */
 function normalizeNameInput(raw: string): string {
   return raw
     .toLowerCase()
@@ -86,64 +60,91 @@ function availabilityReasonMessage(reason: "invalid" | "reserved" | "taken"): st
   }
 }
 
-type Props = {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onCreated: (agent: Agent, runtimeProvider: RuntimeProvider) => void;
-};
+function prettyRuntimeLabel(provider: string): string {
+  if (provider === "claude-code") return "Claude Code";
+  if (provider === "codex") return "Codex";
+  return provider;
+}
 
-type Step = "form" | "pick-computer";
+function relativeTime(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  if (diff < 60_000) return "just now";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+  return `${Math.floor(diff / 86_400_000)}d ago`;
+}
+
 type AvailabilityState =
   | { status: "idle" }
   | { status: "checking" }
   | { status: "ok" }
   | { status: "bad"; reason: "invalid" | "reserved" | "taken" };
 
+type Props = {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onCreated: (agent: Agent, runtimeProvider: RuntimeProvider) => void;
+};
+
+/**
+ * Agent creation dialog used on /team for non-first-time users.
+ *
+ * Mirrors the visual language of the first-time `OnboardingView`: connected-
+ * client pill, "Powered by" runtime chips, inline command box + waiting dot
+ * for the empty state. Always shows the bound computer up front so the user
+ * never points at a black box on submit.
+ */
 export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
   const queryClient = useQueryClient();
-  const { refreshMe, organizationId } = useAuth();
+  const { refreshMe, organizationId, currentMembership } = useAuth();
+
   const [displayName, setDisplayName] = useState("");
   const [name, setName] = useState("");
   const [nameDirty, setNameDirty] = useState(false);
-  const [runtime, setRuntime] = useState<RuntimeProvider>("claude-code");
-
-  const [step, setStep] = useState<Step>("form");
-  const [candidateClients, setCandidateClients] = useState<HubClient[]>([]);
-  const [pickedClientId, setPickedClientId] = useState<string | null>(null);
-  const [probing, setProbing] = useState(false);
-  const [clientErrors, setClientErrors] = useState<FieldErrors>({});
+  const [handleExpanded, setHandleExpanded] = useState(false);
   const [availability, setAvailability] = useState<AvailabilityState>({ status: "idle" });
 
+  const [clients, setClients] = useState<HubClient[]>([]);
+  const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
+  const [capabilities, setCapabilities] = useState<ClientCapabilities | null>(null);
+  const [capabilitiesClientId, setCapabilitiesClientId] = useState<string | null>(null);
+  const [capabilitiesError, setCapabilitiesError] = useState<string | null>(null);
+  const [selectedRuntime, setSelectedRuntime] = useState<RuntimeProvider | null>(null);
+  const [connectToken, setConnectToken] = useState<string | null>(null);
+  const [connectTokenExpiresAt, setConnectTokenExpiresAt] = useState<number | null>(null);
+  const [clientErrors, setClientErrors] = useState<FieldErrors>({});
+
+  const capsSeqRef = useRef(0);
+
+  // Reset state when the dialog opens.
   useEffect(() => {
-    if (open) {
-      setDisplayName("");
-      setName("");
-      setNameDirty(false);
-      setRuntime("claude-code");
-      setStep("form");
-      setCandidateClients([]);
-      setPickedClientId(null);
-      setProbing(false);
-      setClientErrors({});
-      setAvailability({ status: "idle" });
-    }
+    if (!open) return;
+    setDisplayName("");
+    setName("");
+    setNameDirty(false);
+    setHandleExpanded(false);
+    setAvailability({ status: "idle" });
+    setClients([]);
+    setSelectedClientId(null);
+    setCapabilities(null);
+    setCapabilitiesClientId(null);
+    setCapabilitiesError(null);
+    setSelectedRuntime(null);
+    setConnectToken(null);
+    setConnectTokenExpiresAt(null);
+    setClientErrors({});
   }, [open]);
 
-  // Keep the agent name following the display name until the user
-  // explicitly edits the agent name. After `nameDirty = true`, changes to
-  // display name no longer rewrite the slug.
+  // Slug follows display name until the user explicitly edits it.
   useEffect(() => {
     if (nameDirty) return;
     setName(slugify(displayName));
   }, [displayName, nameDirty]);
 
-  // Debounced availability probe. Mirrors the client-side format check so
-  // we don't waste a round-trip when the slug can't possibly be valid; once
-  // it passes the local check, a 300ms debounce gates the network call so
-  // typing a full name doesn't fan out into per-keystroke requests.
-  const latestProbeIdRef = useRef(0);
+  // Debounced availability probe — only runs while the slug section is open
+  // (no point hitting the server while the user hasn't even seen the slug).
   useEffect(() => {
-    if (!open || !name) {
+    if (!open || !handleExpanded || !name) {
       setAvailability({ status: "idle" });
       return;
     }
@@ -155,56 +156,181 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
       setAvailability({ status: "bad", reason: "reserved" });
       return;
     }
-    const probeId = ++latestProbeIdRef.current;
+    let cancelled = false;
     setAvailability({ status: "checking" });
     const timer = window.setTimeout(() => {
       checkAgentNameAvailability(name)
         .then((res: AgentNameAvailability) => {
-          // Ignore stale responses: the user may have typed more characters
-          // while the in-flight request was pending, in which case this
-          // handler no longer speaks for the current input.
-          if (probeId !== latestProbeIdRef.current) return;
-          if (res.available) {
-            setAvailability({ status: "ok" });
-          } else {
-            setAvailability({ status: "bad", reason: res.reason });
-          }
+          if (cancelled) return;
+          setAvailability(res.available ? { status: "ok" } : { status: "bad", reason: res.reason });
         })
         .catch(() => {
-          if (probeId !== latestProbeIdRef.current) return;
-          // Network-level failure shouldn't block submission — the server
-          // validates authoritatively on POST. Fall back to idle.
+          if (cancelled) return;
           setAvailability({ status: "idle" });
         });
     }, 300);
-    return () => window.clearTimeout(timer);
-  }, [name, open]);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [name, open, handleExpanded]);
+
+  // Live-detect this user's clients while the dialog is open. Re-fetching on
+  // every tick is intentional: if the user runs `client connect` mid-flow we
+  // want the list to update without anyone touching the dialog.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    const detect = async (): Promise<void> => {
+      try {
+        const list = await listClients();
+        if (cancelled) return;
+        setClients(list);
+      } catch {
+        // best-effort
+      }
+    };
+    void detect();
+    const handle = setInterval(detect, CLIENT_DETECT_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(handle);
+    };
+  }, [open]);
+
+  // Default-pick a client: prefer connected, then most-recent lastSeenAt.
+  // Reset the pick if it disappears from the list.
+  useEffect(() => {
+    if (clients.length === 0) {
+      if (selectedClientId !== null) setSelectedClientId(null);
+      return;
+    }
+    if (selectedClientId && clients.some((c) => c.id === selectedClientId)) return;
+    const sorted = [...clients].sort((a, b) => {
+      const aOnline = a.status === "connected" ? 0 : 1;
+      const bOnline = b.status === "connected" ? 0 : 1;
+      if (aOnline !== bOnline) return aOnline - bOnline;
+      return b.lastSeenAt.localeCompare(a.lastSeenAt);
+    });
+    setSelectedClientId(sorted[0]?.id ?? null);
+  }, [clients, selectedClientId]);
+
+  // Fetch capabilities for the currently selected client.
+  useEffect(() => {
+    if (!selectedClientId) {
+      setCapabilities(null);
+      setCapabilitiesClientId(null);
+      setCapabilitiesError(null);
+      return;
+    }
+    let cancelled = false;
+    const seq = ++capsSeqRef.current;
+    setCapabilitiesError(null);
+    void (async () => {
+      try {
+        const res = await getClientCapabilities(selectedClientId);
+        if (cancelled || seq !== capsSeqRef.current) return;
+        setCapabilities(res.capabilities);
+        setCapabilitiesClientId(selectedClientId);
+        setCapabilitiesError(null);
+      } catch (err) {
+        if (cancelled || seq !== capsSeqRef.current) return;
+        // Surface the error so the runtime section can stop spinning on
+        // "Detecting…" and tell the user something actionable. Previous
+        // capabilities for a different client are dropped via `client !== capabilitiesClientId`.
+        setCapabilitiesError(err instanceof Error ? err.message : "Failed to read computer capabilities");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedClientId]);
+
+  const activeCapabilities = selectedClientId && capabilitiesClientId === selectedClientId ? capabilities : null;
+
+  const okRuntimes = useMemo<RuntimeProvider[]>(() => {
+    if (!activeCapabilities) return [];
+    return Object.entries(activeCapabilities)
+      .filter(([, entry]) => entry.state === "ok")
+      .map(([provider]) => provider as RuntimeProvider);
+  }, [activeCapabilities]);
+
+  // Auto-select first ok runtime; clear if the previous pick is no longer valid.
+  useEffect(() => {
+    setSelectedRuntime((prev) => {
+      if (!activeCapabilities) return prev;
+      if (prev && okRuntimes.includes(prev)) return prev;
+      return okRuntimes[0] ?? null;
+    });
+  }, [activeCapabilities, okRuntimes]);
+
+  // Lazy-load a connect token when the user has zero clients.
+  // When a token is still valid, schedule a timeout that clears it at expiry
+  // so the next effect run mints a fresh one — matches onboarding-view's
+  // pattern and avoids regenerating tokens just because `clients.length`
+  // flickered.
+  useEffect(() => {
+    if (!open) return;
+    if (clients.length > 0) return;
+    if (connectToken && connectTokenExpiresAt && connectTokenExpiresAt > Date.now()) {
+      const refreshAt = Math.max(connectTokenExpiresAt - Date.now(), 0);
+      const handle = window.setTimeout(() => {
+        setConnectToken(null);
+        setConnectTokenExpiresAt(null);
+      }, refreshAt);
+      return () => window.clearTimeout(handle);
+    }
+    if (connectToken) {
+      setConnectToken(null);
+      setConnectTokenExpiresAt(null);
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await generateConnectToken();
+        if (cancelled) return;
+        setConnectToken(r.token);
+        setConnectTokenExpiresAt(Date.now() + r.expiresIn * 1000);
+      } catch {
+        // best-effort; user can still close + retry
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, clients.length, connectToken, connectTokenExpiresAt]);
+
+  const selectedClient = clients.find((c) => c.id === selectedClientId) ?? null;
+  const selectedClientOnline = selectedClient?.status === "connected";
+
+  // Returning users (the audience for this dialog) already have the package
+  // installed somewhere — copying `npm install -g …` would silently clobber
+  // their local version. Show + copy the connect line only. The first-time
+  // OnboardingView still ships the install line because new users likely
+  // don't have it.
+  const cliCommand = connectToken ? `first-tree-hub connect ${connectToken}` : null;
 
   const createMut = useMutation({
-    mutationFn: async (opts: { clientId?: string }) => {
+    mutationFn: async () => {
       const effectiveDisplay = displayName.trim() || name.trim() || "Untitled assistant";
       const effectiveName = name || undefined;
+      if (!selectedClient || !selectedRuntime) {
+        throw new Error("Pick a computer with a runtime before creating.");
+      }
       return createAgent({
         name: effectiveName,
         type: "personal_assistant",
         displayName: effectiveDisplay,
-        clientId: opts.clientId,
-        runtimeProvider: runtime,
-        // Pin the agent to the org the user is currently viewing in the
-        // dropdown — the JWT default org is non-deterministic across logins
-        // (auth.ts member pick) and creating into "wherever the JWT lands"
-        // is the source of "I created it in atf, why is it in gandy02?".
+        clientId: selectedClient.id,
+        runtimeProvider: selectedRuntime,
         ...(organizationId ? { organizationId } : {}),
       });
     },
     onSuccess: (agent) => {
       queryClient.invalidateQueries({ queryKey: ["agents"] });
       queryClient.invalidateQueries({ queryKey: ["activity"] });
-      // Refresh /me so wizardStep flips to "completed" — otherwise the
-      // onboarding banner sticks around even though the user just
-      // created an agent through this non-onboarding path.
       void refreshMe();
-      onCreated(agent, runtime);
+      onCreated(agent, selectedRuntime ?? "claude-code");
     },
   });
 
@@ -242,9 +368,6 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
         errs.name = "That agent name is reserved — pick a different one.";
       }
     } else if (displayName.trim().length > 0) {
-      // Display name had content but slugify collapsed it to nothing (e.g.
-      // pure-symbol or pure-CJK input). Server would auto-generate a name,
-      // but the user probably didn't intend that — surface it.
       errs.name = "Agent name must contain at least one letter or digit (e.g. a-z, 0-9).";
     }
     if (displayName.length > DISPLAY_NAME_MAX) {
@@ -253,107 +376,26 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
     return errs;
   }
 
-  async function handleSubmit(e: FormEvent) {
+  function handleSubmit(e: FormEvent) {
     e.preventDefault();
     const errs = validateForm();
     setClientErrors(errs);
     if (Object.keys(errs).length > 0) return;
     if (availability.status === "bad") return;
-
-    setProbing(true);
-    try {
-      const clients = await listClients();
-      const connected = clients.filter((c) => c.status === "connected");
-
-      if (connected.length === 0) {
-        createMut.mutate({ clientId: undefined });
-        return;
-      }
-
-      if (connected.length === 1) {
-        createMut.mutate({ clientId: connected[0]?.id });
-        return;
-      }
-
-      const sorted = [...connected].sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
-      setCandidateClients(sorted);
-      setPickedClientId(sorted[0]?.id ?? null);
-      setStep("pick-computer");
-    } catch {
-      createMut.mutate({ clientId: undefined });
-    } finally {
-      setProbing(false);
-    }
+    if (!selectedClient || !selectedRuntime) return;
+    createMut.mutate();
   }
 
-  function handlePickerConfirm() {
-    if (!pickedClientId) return;
-    createMut.mutate({ clientId: pickedClientId });
-  }
+  const trimmedDisplay = displayName.trim();
+  const canSubmit =
+    trimmedDisplay.length > 0 &&
+    !!selectedClient &&
+    !!selectedRuntime &&
+    availability.status !== "bad" &&
+    !createMut.isPending;
 
-  const hasBlockingAvailability = availability.status === "bad";
-  const canSubmit = displayName.trim().length > 0 && !hasBlockingAvailability && !createMut.isPending && !probing;
-
-  if (step === "pick-computer") {
-    return (
-      <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Choose a computer</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            <p className="text-body text-muted-foreground">
-              Multiple computers are online. Pick where <span className="font-medium">{displayName || name}</span>{" "}
-              should run:
-            </p>
-            <div className="space-y-2">
-              {candidateClients.map((client) => {
-                const picked = pickedClientId === client.id;
-                return (
-                  <label
-                    key={client.id}
-                    className={
-                      picked
-                        ? "flex items-start gap-3 rounded-md border border-primary bg-primary/5 p-3 cursor-pointer"
-                        : "flex items-start gap-3 rounded-md border border-border p-3 cursor-pointer hover:bg-accent/30"
-                    }
-                  >
-                    <input
-                      type="radio"
-                      name="target-computer"
-                      checked={picked}
-                      onChange={() => setPickedClientId(client.id)}
-                      className="mt-1"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="text-body font-medium truncate">{client.hostname ?? client.id}</div>
-                      <div className="text-caption text-muted-foreground">
-                        {client.os ?? "unknown OS"} · last seen {new Date(client.lastSeenAt).toLocaleString()}
-                      </div>
-                    </div>
-                  </label>
-                );
-              })}
-            </div>
-            {fieldErrors.clientId && <p className="text-body text-destructive">{fieldErrors.clientId}</p>}
-            {fieldErrors._root && (
-              <div className="rounded-md border border-destructive/50 bg-destructive/5 px-3 py-2 text-body text-destructive">
-                {fieldErrors._root}
-              </div>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setStep("form")} disabled={createMut.isPending}>
-              Back
-            </Button>
-            <Button onClick={handlePickerConfirm} disabled={!pickedClientId || createMut.isPending}>
-              {createMut.isPending ? "Creating…" : "Create"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    );
-  }
+  const summarySlug = name || slugify(trimmedDisplay) || "agent";
+  const orgLabel = currentMembership?.organizationName ?? "this team";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -363,7 +405,7 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-5">
           <div className="space-y-2">
-            <Label htmlFor="new-agent-display-name">Display name</Label>
+            <Label htmlFor="new-agent-display-name">What should we call this agent?</Label>
             <Input
               id="new-agent-display-name"
               value={displayName}
@@ -371,133 +413,51 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
                 setDisplayName(e.target.value);
                 if (clientErrors.displayName) setClientErrors((prev) => ({ ...prev, displayName: undefined }));
               }}
-              placeholder="My Dev Assistant"
+              placeholder="e.g. Code Reviewer"
               autoFocus
               maxLength={DISPLAY_NAME_MAX}
               aria-invalid={fieldErrors.displayName ? true : undefined}
-              aria-describedby="new-agent-display-name-help new-agent-display-name-error"
             />
-            <p id="new-agent-display-name-help" className="text-caption text-muted-foreground">
-              How teammates see this agent in chats and lists. Can be changed anytime.
-            </p>
-            {fieldErrors.displayName && (
-              <p id="new-agent-display-name-error" className="text-caption text-destructive">
-                {fieldErrors.displayName}
-              </p>
-            )}
+            {fieldErrors.displayName && <p className="text-caption text-destructive">{fieldErrors.displayName}</p>}
+            <HandleEditor
+              expanded={handleExpanded}
+              onToggle={() => setHandleExpanded((v) => !v)}
+              name={name}
+              onChange={(next) => {
+                setName(next);
+                setNameDirty(true);
+                if (clientErrors.name) setClientErrors((prev) => ({ ...prev, name: undefined }));
+              }}
+              onBlurCleanup={() => {
+                const cleaned = slugify(name);
+                if (cleaned !== name) setName(cleaned);
+              }}
+              availability={availability}
+              error={fieldErrors.name}
+            />
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="new-agent-name">Agent name</Label>
-            <div className="flex items-stretch">
-              <span
-                aria-hidden
-                className="inline-flex items-center px-2 font-mono text-body text-muted-foreground border border-r-0 border-input rounded-l-[var(--radius-input)] bg-muted/40"
-              >
-                @
-              </span>
-              <Input
-                id="new-agent-name"
-                value={name}
-                onChange={(e) => {
-                  // `normalizeNameInput` keeps trailing `-`/`_` so users
-                  // can type `alice-bot` one char at a time; the stricter
-                  // `slugify` fires only on blur to tidy a trailing
-                  // separator the user never follows up with a letter.
-                  const next = normalizeNameInput(e.target.value);
-                  setName(next);
-                  setNameDirty(true);
-                  if (clientErrors.name) setClientErrors((prev) => ({ ...prev, name: undefined }));
-                }}
-                onBlur={(e) => {
-                  const cleaned = slugify(e.target.value);
-                  if (cleaned !== name) setName(cleaned);
-                }}
-                placeholder="my-dev-assistant"
-                className="rounded-l-none font-mono"
-                maxLength={AGENT_NAME_MAX_LENGTH}
-                aria-invalid={fieldErrors.name ? true : undefined}
-                aria-describedby="new-agent-name-help new-agent-name-error new-agent-name-status"
-              />
-            </div>
-            <p id="new-agent-name-help" className="text-caption text-muted-foreground">
-              Used in @mentions and CLI commands. Lowercase letters, digits, hyphens (-), and underscores (_). Up to{" "}
-              {AGENT_NAME_MAX_LENGTH} characters. Permanent after creation.
-            </p>
-            {/* availability chip — only renders when there's a status worth
-                announcing. We skip it for the `idle` case (no name typed, or
-                the probe network-failed) so screen readers don't land on an
-                empty paragraph via `aria-describedby`. */}
-            {name && !fieldErrors.name && availability.status !== "idle" && (
-              <p
-                id="new-agent-name-status"
-                className="text-caption"
-                style={{
-                  color:
-                    availability.status === "ok"
-                      ? "var(--state-idle)"
-                      : availability.status === "checking"
-                        ? "var(--fg-3)"
-                        : "var(--fg-4)",
-                }}
-              >
-                {availability.status === "checking" && "Checking availability…"}
-                {availability.status === "ok" && "Available."}
-              </p>
-            )}
-            {fieldErrors.name && (
-              <p id="new-agent-name-error" className="text-caption text-destructive">
-                {fieldErrors.name}
-              </p>
-            )}
+            <Label>Where will it run?</Label>
+            <ComputerSection
+              clients={clients}
+              selectedClientId={selectedClientId}
+              onSelectClient={setSelectedClientId}
+              cliCommand={cliCommand}
+            />
           </div>
 
           <div className="space-y-2">
-            <Label>Where it runs</Label>
-            <div className="space-y-2">
-              <label
-                className={
-                  runtime === "claude-code"
-                    ? "flex items-start gap-3 rounded-md border border-primary bg-primary/5 p-3 cursor-pointer"
-                    : "flex items-start gap-3 rounded-md border border-border p-3 cursor-pointer hover:bg-accent/30"
-                }
-              >
-                <input
-                  type="radio"
-                  name="runtime"
-                  checked={runtime === "claude-code"}
-                  onChange={() => setRuntime("claude-code")}
-                  className="mt-1"
-                />
-                <div>
-                  <div className="text-body font-medium">Claude Code</div>
-                  <div className="text-caption text-muted-foreground">
-                    Anthropic's Claude Code on the bound computer. (default)
-                  </div>
-                </div>
-              </label>
-              <label
-                className={
-                  runtime === "codex"
-                    ? "flex items-start gap-3 rounded-md border border-primary bg-primary/5 p-3 cursor-pointer"
-                    : "flex items-start gap-3 rounded-md border border-border p-3 cursor-pointer hover:bg-accent/30"
-                }
-              >
-                <input
-                  type="radio"
-                  name="runtime"
-                  checked={runtime === "codex"}
-                  onChange={() => setRuntime("codex")}
-                  className="mt-1"
-                />
-                <div>
-                  <div className="text-body font-medium">Codex</div>
-                  <div className="text-caption text-muted-foreground">
-                    OpenAI Codex CLI on the bound computer. Run <code>codex login</code> on the host once.
-                  </div>
-                </div>
-              </label>
-            </div>
+            <Label>Powered by</Label>
+            <RuntimeSection
+              hasClient={!!selectedClient}
+              capabilitiesLoaded={activeCapabilities !== null}
+              capabilitiesError={capabilitiesError}
+              runtimes={okRuntimes}
+              selected={selectedRuntime}
+              onSelect={setSelectedRuntime}
+              hostname={selectedClient?.hostname ?? null}
+            />
           </div>
 
           {fieldErrors._root && (
@@ -506,13 +466,417 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
             </div>
           )}
 
+          {trimmedDisplay && selectedClient && selectedRuntime && (
+            <p className="text-caption" style={{ color: "var(--fg-3)" }}>
+              Will create <span className="mono font-medium">@{summarySlug}</span> in{" "}
+              <span className="font-medium">{orgLabel}</span> on{" "}
+              <span className="font-medium">{selectedClient.hostname ?? selectedClient.id}</span>
+              {selectedClientOnline ? "" : " (offline — will start when it's back)"} using{" "}
+              <span className="font-medium">{prettyRuntimeLabel(selectedRuntime)}</span>.
+            </p>
+          )}
+
           <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
             <Button type="submit" disabled={!canSubmit}>
-              {probing ? "Checking computers…" : createMut.isPending ? "Creating…" : "Create"}
+              {createMut.isPending ? "Creating…" : "Create"}
             </Button>
           </DialogFooter>
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function HandleEditor({
+  expanded,
+  onToggle,
+  name,
+  onChange,
+  onBlurCleanup,
+  availability,
+  error,
+}: {
+  expanded: boolean;
+  onToggle: () => void;
+  name: string;
+  onChange: (next: string) => void;
+  onBlurCleanup: () => void;
+  availability: AvailabilityState;
+  error?: string;
+}) {
+  const handlePreview = name ? `@${name}` : "@—";
+  return (
+    <div className="space-y-2">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="inline-flex items-center gap-1 text-caption"
+        style={{ color: "var(--fg-3)", background: "transparent", border: 0, padding: 0, cursor: "pointer" }}
+      >
+        <span>
+          Edit handle: <span className="mono">{handlePreview}</span>
+        </span>
+        <ChevronDown
+          className="h-3 w-3"
+          style={{ transition: "transform 160ms ease", transform: expanded ? "rotate(180deg)" : "rotate(0deg)" }}
+        />
+      </button>
+      {expanded && (
+        <div className="space-y-1">
+          <div className="flex items-stretch">
+            <span
+              aria-hidden
+              className="inline-flex items-center px-2 font-mono text-body text-muted-foreground border border-r-0 border-input rounded-l-[var(--radius-input)] bg-muted/40"
+            >
+              @
+            </span>
+            <Input
+              value={name}
+              onChange={(e) => onChange(normalizeNameInput(e.target.value))}
+              onBlur={onBlurCleanup}
+              placeholder="my-dev-assistant"
+              className="rounded-l-none font-mono"
+              maxLength={AGENT_NAME_MAX_LENGTH}
+              aria-invalid={error ? true : undefined}
+            />
+          </div>
+          <p className="text-caption" style={{ color: "var(--fg-4)" }}>
+            Used in @mentions and CLI commands. Lowercase letters, digits, hyphens, underscores. Permanent after
+            creation.
+          </p>
+          {name && !error && availability.status !== "idle" && (
+            <p
+              className="text-caption"
+              style={{
+                color:
+                  availability.status === "ok"
+                    ? "var(--state-idle)"
+                    : availability.status === "checking"
+                      ? "var(--fg-3)"
+                      : "var(--fg-4)",
+              }}
+            >
+              {availability.status === "checking" && "Checking availability…"}
+              {availability.status === "ok" && "Available."}
+            </p>
+          )}
+          {error && <p className="text-caption text-destructive">{error}</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ComputerSection({
+  clients,
+  selectedClientId,
+  onSelectClient,
+  cliCommand,
+}: {
+  clients: HubClient[];
+  selectedClientId: string | null;
+  onSelectClient: (id: string) => void;
+  cliCommand: string | null;
+}) {
+  if (clients.length === 0) {
+    return <EmptyComputer cliCommand={cliCommand} />;
+  }
+
+  if (clients.length === 1) {
+    const client = clients[0];
+    if (!client) return null;
+    return <SingleComputer client={client} />;
+  }
+
+  // 2+ — picker
+  const sorted = [...clients].sort((a, b) => {
+    const aOnline = a.status === "connected" ? 0 : 1;
+    const bOnline = b.status === "connected" ? 0 : 1;
+    if (aOnline !== bOnline) return aOnline - bOnline;
+    return b.lastSeenAt.localeCompare(a.lastSeenAt);
+  });
+  const selected = clients.find((c) => c.id === selectedClientId);
+  const selectedOffline = selected && selected.status !== "connected";
+  return (
+    <div className="space-y-1">
+      <fieldset className="space-y-1" style={{ margin: 0, padding: 0, border: 0 }}>
+        <legend className="sr-only">Pick a computer</legend>
+        {sorted.map((client) => {
+          const picked = selectedClientId === client.id;
+          const online = client.status === "connected";
+          return (
+            <label
+              key={client.id}
+              className="flex items-center"
+              style={{
+                gap: "var(--sp-2)",
+                padding: "var(--sp-1_5) 0",
+                cursor: "pointer",
+                color: picked ? "var(--fg)" : "var(--fg-2)",
+              }}
+            >
+              <input
+                type="radio"
+                name="new-agent-client"
+                checked={picked}
+                onChange={() => onSelectClient(client.id)}
+                style={{ marginRight: "var(--sp-1)" }}
+              />
+              <span className="mono font-medium">{client.hostname ?? client.id.slice(0, 12)}</span>
+              <span className="text-caption" style={{ color: "var(--fg-4)" }}>
+                · {client.os ?? "unknown"} ·{" "}
+                {online ? "online" : `offline · last seen ${relativeTime(client.lastSeenAt)}`}
+              </span>
+            </label>
+          );
+        })}
+      </fieldset>
+      {selectedOffline && (
+        <p className="text-caption" style={{ color: "var(--fg-3)" }}>
+          Will be created, but won't respond until this computer wakes up.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function SingleComputer({ client }: { client: HubClient }) {
+  const online = client.status === "connected";
+  if (online) {
+    return (
+      <div
+        className="inline-flex items-center text-body"
+        style={{
+          gap: "var(--sp-2)",
+          padding: "var(--sp-1_5) var(--sp-2_5)",
+          borderRadius: 999,
+          background: "color-mix(in oklch, var(--accent) 10%, transparent)",
+          color: "color-mix(in oklch, var(--accent) 26%, var(--fg))",
+        }}
+      >
+        <Check className="h-3.5 w-3.5" />
+        <span>
+          <span className="mono font-semibold">{client.hostname ?? client.id.slice(0, 12)}</span> connected
+        </span>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-1">
+      <div
+        className="inline-flex items-center text-body"
+        style={{
+          gap: "var(--sp-2)",
+          padding: "var(--sp-1_5) var(--sp-2_5)",
+          borderRadius: 999,
+          background: "color-mix(in oklch, var(--state-warning) 10%, transparent)",
+          color: "color-mix(in oklch, var(--state-warning) 30%, var(--fg))",
+        }}
+      >
+        <span aria-hidden>⚠</span>
+        <span>
+          <span className="mono font-semibold">{client.hostname ?? client.id.slice(0, 12)}</span> offline · last seen{" "}
+          {relativeTime(client.lastSeenAt)}
+        </span>
+      </div>
+      <p className="text-caption" style={{ color: "var(--fg-3)" }}>
+        Will be created, but won't respond until this computer wakes up.
+      </p>
+    </div>
+  );
+}
+
+function EmptyComputer({ cliCommand }: { cliCommand: string | null }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = async (): Promise<void> => {
+    if (!cliCommand) return;
+    await navigator.clipboard.writeText(cliCommand);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+  const preview = cliCommand
+    ? cliCommand.length > 52
+      ? `${cliCommand.slice(0, 52)}…`
+      : cliCommand
+    : "Generating token…";
+  return (
+    <div className="space-y-2">
+      <p className="text-caption" style={{ color: "var(--fg-3)" }}>
+        This agent needs a computer to do its work. Open Terminal on that computer and run:
+      </p>
+      <div className="flex" style={{ gap: "var(--sp-2)", alignItems: "stretch" }}>
+        <pre
+          className="mono text-label"
+          title={cliCommand ?? undefined}
+          style={{
+            flex: 1,
+            minHeight: 38,
+            margin: 0,
+            padding: "var(--sp-2_5) var(--sp-3)",
+            background: "color-mix(in oklch, var(--bg-sunken) 42%, transparent)",
+            border: "var(--hairline) solid color-mix(in oklch, var(--border-faint) 58%, transparent)",
+            borderRadius: "var(--radius-input)",
+            color: "var(--fg-2)",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            minWidth: 0,
+          }}
+        >
+          {preview}
+        </pre>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={handleCopy}
+          disabled={!cliCommand}
+          style={{ alignSelf: "stretch", height: "auto", minHeight: 38 }}
+        >
+          {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+          {copied ? "Copied" : "Copy"}
+        </Button>
+      </div>
+      {cliCommand && cliCommand.length > 52 && (
+        <p className="text-caption" style={{ color: "var(--fg-4)" }}>
+          Token shortened for display — use Copy to grab the full command.
+        </p>
+      )}
+      <div
+        className="flex items-center text-body"
+        style={{
+          gap: "var(--sp-2)",
+          color: "color-mix(in oklch, var(--accent) 24%, var(--fg-3))",
+        }}
+      >
+        <PulsingDot />
+        <span>Waiting for your computer…</span>
+      </div>
+    </div>
+  );
+}
+
+function RuntimeSection({
+  hasClient,
+  capabilitiesLoaded,
+  capabilitiesError,
+  runtimes,
+  selected,
+  onSelect,
+  hostname,
+}: {
+  hasClient: boolean;
+  capabilitiesLoaded: boolean;
+  capabilitiesError: string | null;
+  runtimes: RuntimeProvider[];
+  selected: RuntimeProvider | null;
+  onSelect: (next: RuntimeProvider) => void;
+  hostname: string | null;
+}) {
+  if (!hasClient) {
+    return (
+      <p className="text-caption" style={{ color: "var(--fg-4)" }}>
+        Pick a computer first.
+      </p>
+    );
+  }
+  if (!capabilitiesLoaded) {
+    if (capabilitiesError) {
+      return (
+        <p className="text-caption" style={{ color: "var(--fg-3)" }}>
+          Can't read what's installed on {hostname ?? "this computer"} right now. Reopen this dialog after the computer
+          is back online.
+        </p>
+      );
+    }
+    return (
+      <p className="text-caption" style={{ color: "var(--fg-4)" }}>
+        Detecting installed runtimes…
+      </p>
+    );
+  }
+  if (runtimes.length === 0) {
+    return (
+      <p className="text-caption" style={{ color: "var(--fg-3)" }}>
+        No runtime ready on {hostname ?? "this computer"}. Install Claude Code or Codex on the host, then reopen this
+        dialog.
+      </p>
+    );
+  }
+  return (
+    <fieldset className="flex" style={{ gap: "var(--sp-4)", flexWrap: "wrap", margin: 0, padding: 0, border: 0 }}>
+      <legend className="sr-only">Runtime provider</legend>
+      {runtimes.map((provider) => {
+        const active = selected === provider;
+        return (
+          <label
+            key={provider}
+            className="inline-flex items-center text-body"
+            style={{
+              gap: "var(--sp-1_5)",
+              padding: "var(--sp-1) 0",
+              cursor: "pointer",
+              color: active ? "color-mix(in oklch, var(--accent) 30%, var(--fg))" : "var(--fg)",
+              fontWeight: active ? 600 : 400,
+            }}
+          >
+            <input
+              type="radio"
+              name="new-agent-runtime"
+              value={provider}
+              checked={active}
+              onChange={() => onSelect(provider)}
+              className="sr-only"
+            />
+            <span
+              aria-hidden="true"
+              className="inline-flex items-center justify-center"
+              style={{
+                width: 14,
+                height: 14,
+                borderRadius: "50%",
+                border: active ? "var(--hairline) solid var(--accent)" : "var(--hairline) solid var(--border-strong)",
+                background: active ? "color-mix(in oklch, var(--accent) 8%, transparent)" : "transparent",
+              }}
+            >
+              {active && (
+                <span
+                  style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: "50%",
+                    background: "var(--accent)",
+                  }}
+                />
+              )}
+            </span>
+            {prettyRuntimeLabel(provider)}
+          </label>
+        );
+      })}
+    </fieldset>
+  );
+}
+
+function PulsingDot() {
+  return (
+    <span
+      aria-hidden="true"
+      style={{ position: "relative", display: "inline-block", width: 8, height: 8, flexShrink: 0 }}
+    >
+      <span style={{ position: "absolute", inset: 0, borderRadius: "50%", background: "var(--accent)" }} />
+      <span
+        style={{
+          position: "absolute",
+          inset: -3,
+          borderRadius: "50%",
+          border: "var(--hairline) solid var(--accent)",
+          animation: "ring-pulse 1.8s infinite",
+          opacity: 0.55,
+        }}
+      />
+    </span>
   );
 }
