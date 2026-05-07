@@ -26,7 +26,7 @@ First Tree Hub 的 `/context` 不是要把 Context Tree 改造成 human wiki,而
 
 | 信号 | 回答的问题 | 当前表达 |
 | --- | --- | --- |
-| Usage signal | 这棵树是否已被 Hub 同步,并可作为 agents 判断和行动的 context? | Header 显示 snapshot active / stale / unavailable |
+| Usage signal | 这棵树是否已被 Hub 同步,并可作为 agents 判断和行动的 context source? | Header 显示 snapshot synced / stale / unavailable |
 | Freshness signal | agents 用于判断和行动的 context 自上次查看后有没有变化? | 变化数量和 added / edited / removed 统计 |
 | Structure signal | 变化在 agent 可导航的团队认知结构里哪里? | 默认 Tree Map,domain/subdomain 聚合变化 |
 | Accountability signal | 这个变化该找谁、和哪些上下文有关? | Node Detail 显示 owners、path、links、preview |
@@ -49,7 +49,7 @@ First Tree Hub 的 `/context` 不是要把 Context Tree 改造成 human wiki,而
 
 验收标准:
 
-- 首屏显示 `Team context active` / `Snapshot stale` / `Snapshot unavailable`。
+- 首屏显示 `Context snapshot synced` / `Snapshot stale` / `Snapshot unavailable`。
 - 显示 repo branch、head commit、最近同步时间。
 - 本需求不暗示每个 agent 实际加载了哪个 commit。
 
@@ -114,7 +114,7 @@ Hub 只消费 Context Tree snapshot,不写入 Context Tree。编辑、review、o
 
 ```text
 Context
-Team context active · snapshot synced 18m ago
+Context snapshot synced 18m ago
 12 changes since your last view · main@9e664e
                                       [Map] [Files] [Mark all seen]
 
@@ -133,7 +133,9 @@ Team context active · snapshot synced 18m ago
 
 `Map` 是默认视图。`Files` 保留文件浏览,但只是辅助视角。
 
-当前 header 只表达 snapshot-level usage。更强的产品表达,例如:
+当前 header 只表达 snapshot-level availability:Hub Server 已经拿到一份可供 agents 后续使用的 Context Tree snapshot。它不表达 agents 已经加载或使用了该 snapshot。
+
+更强的产品表达,例如:
 
 ```text
 Team context is current
@@ -219,7 +221,7 @@ agent-hub/
 ### 有变化
 
 1. human/operator 进入 `/context`。
-2. Header 显示 usage signal:`Team context active · snapshot synced 18m ago`。
+2. Header 显示 usage signal:`Context snapshot synced 18m ago`。
 3. Header 显示 freshness signal:`12 changes since your last view`。
 4. Map 展示整棵树并高亮 changed nodes。
 5. 默认选中最近 changed node,右侧显示 Node Detail。
@@ -228,7 +230,7 @@ agent-hub/
 ### 无变化
 
 ```text
-Team context active · snapshot synced 18m ago
+Context snapshot synced 18m ago
 No changes since your last view · main@9e664e
 ```
 
@@ -269,6 +271,12 @@ GET /api/v1/context-tree/snapshot?since=<commit>
 - snapshot 过期时 opportunistic refresh;
 - sync 失败时返回 stale snapshot + error state。
 
+约束:
+
+- 该 endpoint 需要 Hub member JWT,不能像 `/context-tree/info` 一样 public。
+- Hub Server 必须具备读取 configured Context Tree repo 的权限;私有 repo 需要 GitHub token、GitHub App installation、SSH deploy key 或运行环境 git credentials。
+- 如果 Server 无法读取 tree repo,UI 进入 unavailable / stale 状态,不能回退到浏览器直接访问 GitHub API。
+
 ### Snapshot DTO
 
 ```text
@@ -306,7 +314,7 @@ ContextTreeEdge
 
 ```text
 usageSignal
-├─ label: Team context active | Snapshot stale | Snapshot unavailable
+├─ label: Context snapshot synced | Snapshot stale | Snapshot unavailable
 ├─ detail
 └─ severity: ok | warning | error
 ```
