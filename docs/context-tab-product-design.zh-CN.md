@@ -166,14 +166,16 @@ first-tree-hub:context:lastSeenCommit:<repo>:<branch>
 ```text
 Context
 Team context is current
-12 changes since your last view · main@9e664e
-                                      [Map] [Files] [Mark all seen]
+Agents have a synced decision context from Context Tree · main@9e664e
+
+12 changes since your last view
+Added 3 · Edited 8 · Removed 1                 [Map] [Files] [Mark all seen]
 
 ┌──────────────────────────────────────────────┬───────────────────────┐
 │ Tree Map                                     │ Node Detail           │
 │                                              │                       │
 │ root                                         │ web-console           │
-│ ├─ agent-hub                     4 changes   │ Edited since last view│
+│ ├─ agent-hub                     4 changes   │ Decision context      │
 │ │  ├─ web-console                edited      │ Owners                │
 │ │  ├─ breeze                     added       │ baixiaohang,yuezengwu │
 │ │  └─ messaging                              │ Path                  │
@@ -184,27 +186,38 @@ Team context is current
 
 `Map` 是默认视图。`Files` 保留文件浏览,但只是辅助视角。
 
+页面结构分四层:
+
+| 区域 | 作用 | 必须表达 |
+| --- | --- | --- |
+| Context Signal | 建立“agents 背后有团队认知树”的感知 | `Team context is current` 和 synced/stale/unavailable 状态 |
+| Decision Context Line | 明确 tree 与 agent 决策的关系 | `Agents have a synced decision context from Context Tree` |
+| Change Summary | 让用户感知 tree 正在生长 | changes since last view、added / edited / removed |
+| Map + Detail | 把变化落到结构和治理动作 | changed nodes、affected domain、owners、related context |
+
 Header 承担本需求最重要的产品表达:用户一进入页面,先看到“agents 背后的 Context Tree snapshot 已经被 Hub 同步 / 已过期 / 不可用”,再看到“这棵团队认知树自上次查看后如何变化”。它不是单纯报 commit,而是在建立 agent context source 的存在感。
 
 推荐文案:
 
 ```text
 Team context is current
-12 changes since your last view · main@9e664e
+Agents have a synced decision context from Context Tree · main@9e664e
+12 changes since your last view
 ```
 
 异常时:
 
 ```text
 Team context needs attention
-12 changes at head · snapshot is stale
+Agents may be working from stale team context · last synced 2h ago
+12 changes at head
 ```
 
 等有 per-agent readiness / usage telemetry 后,Header 再升级为:
 
 ```text
 Team context is current
-12 changes since your last view · 8 agents using latest context
+8 agents using latest context · 12 changes since your last view
 ```
 
 当前不展示 agent count,但页面的叙事必须始终围绕 agents 背后的团队认知树,而不是围绕 markdown 文件本身。
@@ -238,16 +251,20 @@ Node Detail 回答三个问题:
 
 - 这个节点是什么?
 - 为什么被高亮?
+- 这个变化可能影响哪块 agent decision context?
 - 该找谁或看哪里?
 
 内容:
 
 ```text
 web-console
-Edited since your last view
+Decision context changed
 
 Path
 agent-hub/web-console.md
+
+Affected context area
+agent-hub / web console / workspace decisions
 
 Owners
 baixiaohang, yuezengwu
