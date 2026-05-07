@@ -38,6 +38,7 @@ First Tree Hub 的 `/context` 不是要把 Context Tree 改造成 human wiki,而
 - 默认展示全量 `soft_links` 网络。
 - 跨设备 last-seen 同步。
 - per-agent commit readiness 或真实读取 telemetry。
+- Header 中不展示 `8 agents using latest context` / `3 agents behind latest context` 这类 per-agent 状态;当前没有可靠数据支撑。
 - 替代 GitHub PR review / CODEOWNERS / First Tree 写入流程。
 
 ## 用户故事
@@ -131,6 +132,18 @@ Team context active · snapshot synced 18m ago
 ```
 
 `Map` 是默认视图。`Files` 保留文件浏览,但只是辅助视角。
+
+当前 header 只表达 snapshot-level usage。更强的产品表达,例如:
+
+```text
+Team context is current
+12 changes since your last view · 8 agents using latest context
+
+Team context changed
+12 changes at head · 3 agents behind latest context
+```
+
+需要 per-agent context readiness / usage telemetry 支撑,不属于本需求。当前设计保留这个方向,但不在 UI 中承诺 agent count。
 
 ### Tree Map
 
@@ -297,6 +310,14 @@ usageSignal
 ├─ detail
 └─ severity: ok | warning | error
 ```
+
+当前 Usage signal 只说明 Hub Server 是否有可用 Context Tree snapshot。它不能说明:
+
+- 每个 agent 是否使用了最新 context commit;
+- 有多少 agents 已同步到最新 context;
+- 某个 agent 在某次 session 中是否实际读取了某个节点。
+
+这些属于后续 readiness / telemetry 设计。当前文案必须避免过度承诺。
 
 ### 变化计算
 
