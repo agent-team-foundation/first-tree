@@ -105,6 +105,45 @@ describe("ensureFreshAccessToken — safety margin", () => {
     await expect(ensureFreshAccessToken()).rejects.not.toThrow(AuthRefreshFailedError);
   });
 
+  it("throws AuthRefreshRateLimitedError carrying server's Retry-After on 429", async () => {
+    const stale = makeJwt({ exp: Math.floor(Date.now() / 1000) - 5 });
+    await writeCredentials(stale);
+
+    fetchMock.mockResolvedValue(new Response(null, { status: 429, headers: { "retry-after": "45" } }));
+
+    const { ensureFreshAccessToken, AuthRefreshRateLimitedError } = await import("../core/bootstrap.js");
+    const err = await ensureFreshAccessToken().catch((e) => e);
+    expect(err).toBeInstanceOf(AuthRefreshRateLimitedError);
+    expect((err as { retryAfterMs: number }).retryAfterMs).toBe(45_000);
+  });
+
+  it("defaults Retry-After to 30s when the 429 response omits the header", async () => {
+    const stale = makeJwt({ exp: Math.floor(Date.now() / 1000) - 5 });
+    await writeCredentials(stale);
+
+    fetchMock.mockResolvedValue(new Response(null, { status: 429 }));
+
+    const { ensureFreshAccessToken, AuthRefreshRateLimitedError } = await import("../core/bootstrap.js");
+    const err = await ensureFreshAccessToken().catch((e) => e);
+    expect(err).toBeInstanceOf(AuthRefreshRateLimitedError);
+    expect((err as { retryAfterMs: number }).retryAfterMs).toBe(30_000);
+  });
+
+  it("parses HTTP-date form of Retry-After (RFC 7231 alternate form)", async () => {
+    const stale = makeJwt({ exp: Math.floor(Date.now() / 1000) - 5 });
+    await writeCredentials(stale);
+
+    const future = new Date(Date.now() + 60_000).toUTCString();
+    fetchMock.mockResolvedValue(new Response(null, { status: 429, headers: { "retry-after": future } }));
+
+    const { ensureFreshAccessToken, AuthRefreshRateLimitedError } = await import("../core/bootstrap.js");
+    const err = await ensureFreshAccessToken().catch((e) => e);
+    expect(err).toBeInstanceOf(AuthRefreshRateLimitedError);
+    // Date precision is whole seconds, so allow a small slop.
+    expect((err as { retryAfterMs: number }).retryAfterMs).toBeGreaterThan(55_000);
+    expect((err as { retryAfterMs: number }).retryAfterMs).toBeLessThanOrEqual(60_000);
+  });
+
   // Regression for the original incident: server now sliding-windows refresh
   // tokens (rotates on every /auth/refresh), so the client MUST persist the
   // rotated token. Without this the cap never moves and the client still
