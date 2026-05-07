@@ -147,7 +147,7 @@ export function ConversationList({
     <aside
       className="shrink-0 flex flex-col overflow-hidden"
       style={{
-        width: 268,
+        width: 320,
         background: "var(--bg-raised)",
         borderRight: "var(--hairline) solid var(--border)",
       }}

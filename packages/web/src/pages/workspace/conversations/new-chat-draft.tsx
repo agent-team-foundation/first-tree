@@ -1,38 +1,58 @@
+import { extractMentions, type MentionParticipant } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Send } from "lucide-react";
+import { ArrowUp, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { getActivityOverview } from "../../../api/activity.js";
+import { getActivityOverview, type RuntimeAgent } from "../../../api/activity.js";
 import { sendChatMessage } from "../../../api/chats.js";
 import { createMeChat } from "../../../api/me-chats.js";
 import { useAuth } from "../../../auth/auth-context.js";
-import { useAgentNameMap } from "../../../lib/use-agent-name-map.js";
+import {
+  MentionAutocompletePopover,
+  type MentionCandidate,
+  useMentionAutocomplete,
+} from "../../../components/mention-autocomplete.js";
+import { useAgentIdentityMap } from "../../../lib/use-agent-name-map.js";
 import { cn } from "../../../lib/utils.js";
-import { pickDefaultTarget, type TargetCandidate, TargetPicker } from "./target-picker.js";
 
 /**
- * Inline new-chat draft. Empty composer + TargetPicker. On send:
- *   1. POST /me/chats with the picked participants → newChatId
- *   2. POST /admin/chats/:newChatId/messages with the typed text
- *   3. Navigate to ?c=<newChatId> via the parent's `onCreated` callback
- *      (the parent updates URL state so the chat list highlights the
- *      freshly-created row and the center panel switches to ChatByIdView).
+ * Inline new-chat draft, A-model split between "audience" (room
+ * membership) and "inline mention" (per-message ping):
  *
- * Note: the design doc allows skipping the message body when the user just
- * wants to create the chat. We require either targets+text *or* targets
- * alone — sending an empty text just creates the chat and navigates.
+ *   - Chip row at the top of the composer is the participants list for
+ *     the chat being created. Independent of the textarea — adding a
+ *     chip never injects text, removing one never strips an `@<name>`.
+ *     Default state seeds a single MRU chip so 1:1 sends are zero-step.
+ *
+ *   - Textarea carries the message content. For 1:1 (single chip), no
+ *     `@` is required — server treats the chat as direct and skips
+ *     `enforceGroupMention`. For groups (2+ chips) the body must
+ *     explicitly `@` at least one chip to wake `mention_only` agents.
+ *     Send is gated client-side to mirror this.
+ *
+ *   - Typing `@` in the textarea opens the autocomplete (candidates =
+ *     all org agents). Picking an agent that isn't in the chip row
+ *     promotes them to a chip — "I want to address X" subsumes "X is
+ *     in the room". This unifies entry points without making them
+ *     mutually exclusive.
+ *
+ * On send: createMeChat({participantIds: chips}) → sendChatMessage with
+ * the verbatim body. Empty body with at least one chip is allowed.
  */
 
 export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => void }) {
   const queryClient = useQueryClient();
   const { agentId: myAgentId } = useAuth();
-  const agentName = useAgentNameMap();
+  const agentIdentity = useAgentIdentityMap();
 
-  const [targets, setTargets] = useState<string[]>([]);
+  const [chips, setChips] = useState<string[]>([]);
   const [draft, setDraft] = useState("");
+  const [cursor, setCursor] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const defaultPickedRef = useRef(false);
+  const seededDefaultRef = useRef(false);
+  const pickerContainerRef = useRef<HTMLDivElement>(null);
 
   const { data: activity } = useQuery({
     queryKey: ["activity"],
@@ -40,31 +60,78 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
     refetchInterval: 15_000,
   });
 
-  const candidates = useMemo<TargetCandidate[]>(() => {
+  const candidates = useMemo<MentionCandidate[]>(() => {
     const rows = activity?.agents ?? [];
-    return rows
-      .filter((a) => (myAgentId ? a.agentId !== myAgentId : true))
-      .map((a) => ({
-        agentId: a.agentId,
-        displayName: agentName(a.agentId),
-        type: a.type,
-        online: !!a.clientId,
-      }));
-  }, [activity, agentName, myAgentId]);
-
-  // Pre-pick the default target once candidates resolve. We keep the user
-  // free to change it; the auto-pick only fires while the chip row is
-  // empty so we never clobber a deliberate clear.
-  useEffect(() => {
-    if (defaultPickedRef.current) return;
-    if (targets.length > 0) return;
-    if (candidates.length === 0) return;
-    const def = pickDefaultTarget(candidates, activity?.agents ?? []);
-    if (def) {
-      setTargets([def]);
-      defaultPickedRef.current = true;
+    const out: MentionCandidate[] = [];
+    for (const row of rows) {
+      if (myAgentId && row.agentId === myAgentId) continue;
+      const ident = agentIdentity(row.agentId);
+      if (!ident || !ident.name) continue;
+      out.push({ agentId: row.agentId, name: ident.name, displayName: ident.displayName });
     }
-  }, [candidates, activity, targets.length]);
+    return out;
+  }, [activity, agentIdentity, myAgentId]);
+
+  useEffect(() => {
+    if (seededDefaultRef.current) return;
+    if (chips.length > 0) return;
+    if (candidates.length === 0) return;
+    const defaultId = pickDefault(candidates, activity?.agents ?? []);
+    if (!defaultId) return;
+    setChips([defaultId]);
+    seededDefaultRef.current = true;
+  }, [candidates, activity, chips.length]);
+
+  const bodyMentions = useMemo(() => {
+    const ps: MentionParticipant[] = candidates.map((c) => ({ agentId: c.agentId, name: c.name }));
+    return extractMentions(draft, ps);
+  }, [draft, candidates]);
+
+  const mention = useMentionAutocomplete({
+    value: draft,
+    cursor,
+    candidates,
+    disabled: sending,
+    onSelect: (update) => {
+      setDraft(update.text);
+      setCursor(update.cursor);
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (!el) return;
+        el.focus();
+        el.setSelectionRange(update.cursor, update.cursor);
+      });
+    },
+  });
+
+  /** Promote textarea-`@`-mentioned agents to chips (single source of
+   *  truth: "addressing X" ⇒ "X is in the room"). Doesn't remove chips
+   *  when `@`s are deleted — chip life cycle is governed by `×`. */
+  useEffect(() => {
+    if (bodyMentions.length === 0) return;
+    setChips((prev) => {
+      const set = new Set(prev);
+      let changed = false;
+      for (const id of bodyMentions) {
+        if (!set.has(id)) {
+          set.add(id);
+          changed = true;
+        }
+      }
+      return changed ? [...set] : prev;
+    });
+  }, [bodyMentions]);
+
+  useEffect(() => {
+    if (!pickerOpen) return;
+    const handler = (ev: MouseEvent) => {
+      if (!pickerContainerRef.current) return;
+      if (pickerContainerRef.current.contains(ev.target as Node)) return;
+      setPickerOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [pickerOpen]);
 
   const createMut = useMutation({
     mutationFn: async ({ participantIds, text }: { participantIds: string[]; text: string }) => {
@@ -77,8 +144,8 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
     },
     onSuccess: (chatId) => {
       setDraft("");
-      setTargets([]);
-      defaultPickedRef.current = false;
+      setChips([]);
+      seededDefaultRef.current = false;
       queryClient.invalidateQueries({ queryKey: ["me", "chats"] });
       onCreated(chatId);
     },
@@ -87,166 +154,164 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
     },
   });
 
-  const canSend = targets.length > 0 && !sending && !createMut.isPending;
+  const canSend = useMemo(() => {
+    if (sending || createMut.isPending) return false;
+    if (chips.length === 0) return false;
+    if (draft.trim().length === 0) return false;
+    if (chips.length >= 2 && bodyMentions.length === 0) return false;
+    return true;
+  }, [sending, createMut.isPending, chips.length, draft, bodyMentions.length]);
+
+  const sendBlockedReason = useMemo(() => {
+    if (chips.length === 0) return "Add at least one participant";
+    if (draft.trim().length === 0) return null;
+    if (chips.length >= 2 && bodyMentions.length === 0) {
+      return "Group chats need an @ to wake at least one participant";
+    }
+    return null;
+  }, [chips.length, draft, bodyMentions.length]);
 
   const handleSend = async (): Promise<void> => {
     if (!canSend) return;
     setError(null);
     setSending(true);
     try {
-      await createMut.mutateAsync({ participantIds: targets, text: draft });
+      await createMut.mutateAsync({ participantIds: chips, text: draft });
     } finally {
       setSending(false);
     }
   };
 
-  const headline =
-    targets.length === 0
-      ? "New chat"
-      : targets.length === 1
-        ? `Message ${agentName(targets[0] ?? "")}`
-        : `New group chat (${targets.length} targets)`;
+  const removeChip = (agentId: string): void => {
+    setChips((prev) => prev.filter((id) => id !== agentId));
+  };
+  const addChip = (agentId: string): void => {
+    setChips((prev) => (prev.includes(agentId) ? prev : [...prev, agentId]));
+    setPickerOpen(false);
+  };
+  const chipCandidates = useMemo(() => candidates.filter((c) => !chips.includes(c.agentId)), [candidates, chips]);
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
-      <div
-        className="shrink-0 grid items-center"
-        style={{
-          gridTemplateColumns: "1fr",
-          gap: 8,
-          padding: "var(--sp-2_5) var(--sp-3_5)",
-          borderBottom: "var(--hairline) solid var(--border)",
-        }}
-      >
-        <div>
-          <div className="flex items-center" style={{ gap: 8 }}>
-            <span className="text-subtitle" style={{ color: "var(--fg)" }}>
-              {headline}
-            </span>
-            <span
-              className="mono uppercase text-eyebrow"
-              style={{
-                padding: "var(--hairline) var(--sp-1_25)",
-                borderRadius: 2,
-                color: "var(--accent)",
-                background: "color-mix(in oklch, var(--accent) 15%, transparent)",
-              }}
-            >
-              draft
-            </span>
-          </div>
-          <div className="text-caption" style={{ color: "var(--fg-3)", marginTop: 4 }}>
-            Pick one or more targets, write a message, hit Send.
-          </div>
-        </div>
-      </div>
+    <div className="flex-1 flex flex-col overflow-hidden" style={{ background: "var(--bg-base)" }}>
+      <div className="flex-1 flex flex-col items-center justify-center" style={{ padding: "var(--sp-6)" }}>
+        <div style={{ width: "100%", maxWidth: "clamp(55rem, 75%, 70rem)" }}>
+          <p className="text-title" style={{ color: "var(--fg)", textAlign: "center", marginBottom: "var(--sp-5)" }}>
+            What's the task?
+          </p>
 
-      <div className="flex-1 overflow-y-auto" style={{ padding: "var(--sp-4) var(--sp-3_5)" }}>
-        <div style={{ maxWidth: 640, margin: "0 auto" }}>
-          <div
-            className="flex flex-col items-center text-center"
-            style={{ padding: "var(--sp-6) 0", gap: 6, color: "var(--fg-3)" }}
-          >
-            <p className="text-subtitle" style={{ color: "var(--fg-2)" }}>
-              Hi, I'm First Tree Hub.
-            </p>
-            <p className="text-body">Try asking about open tasks, summaries, or what to work on next.</p>
-          </div>
-        </div>
-      </div>
-
-      <div
-        className="shrink-0"
-        style={{
-          padding: "var(--sp-2_5) var(--sp-3_5)",
-          borderTop: "var(--hairline) solid var(--border)",
-        }}
-      >
-        <div style={{ maxWidth: 640, margin: "0 auto" }}>
-          <div style={{ marginBottom: 8 }}>
-            <TargetPicker selected={targets} onChange={setTargets} multi />
-          </div>
           <div
             style={{
-              position: "relative",
-              border: "var(--hairline) solid var(--border)",
-              borderRadius: 6,
-              background: "var(--bg-sunken)",
+              borderRadius: 10,
+              background: "var(--bg-raised)",
+              boxShadow: "var(--shadow-md)",
+              overflow: "visible",
             }}
           >
-            <textarea
-              ref={textareaRef}
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              placeholder={
-                targets.length === 0
-                  ? "Pick a target first…"
-                  : targets.length === 1
-                    ? `Message ${agentName(targets[0] ?? "")}`
-                    : "Write a message to the group…"
-              }
-              rows={2}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void handleSend();
-                }
-              }}
-              disabled={createMut.isPending || sending}
-              className="w-full outline-none text-subtitle font-normal"
-              style={{
-                padding: "var(--sp-2_25) var(--sp-3) var(--sp-7_5)",
-                background: "transparent",
-                border: "none",
-                resize: "none",
-                color: "var(--fg)",
-              }}
+            <ParticipantChips
+              chips={chips}
+              candidates={candidates}
+              chipCandidates={chipCandidates}
+              pickerOpen={pickerOpen}
+              setPickerOpen={setPickerOpen}
+              pickerContainerRef={pickerContainerRef}
+              onAdd={addChip}
+              onRemove={removeChip}
             />
-            <div
-              className="flex items-center justify-between text-caption"
-              style={{
-                position: "absolute",
-                bottom: 6,
-                left: 10,
-                right: 10,
-                color: "var(--fg-4)",
-              }}
-            >
-              <span className="mono">
-                {targets.length === 0
-                  ? "Pick at least one target."
-                  : draft.trim().length === 0
-                    ? "Send to create the chat without a message."
-                    : null}
-              </span>
-              <span className="flex items-center" style={{ gap: 8 }}>
-                <span>
-                  <span className="kbd">⏎</span> send
-                </span>
-                <button
-                  type="button"
-                  onClick={() => void handleSend()}
-                  disabled={!canSend}
-                  className={cn(
-                    "inline-flex items-center transition-colors text-label font-semibold",
-                    !canSend && "opacity-50 cursor-not-allowed",
-                  )}
+            <div style={{ position: "relative" }}>
+              <MentionAutocompletePopover
+                trigger={mention.trigger}
+                results={mention.results}
+                highlightIndex={mention.highlightIndex}
+                anchorRef={textareaRef}
+                onPick={mention.pick}
+              />
+              <textarea
+                ref={textareaRef}
+                value={draft}
+                onChange={(e) => {
+                  setDraft(e.target.value);
+                  setCursor(e.target.selectionStart ?? e.target.value.length);
+                }}
+                onSelect={(e) => {
+                  setCursor(e.currentTarget.selectionStart ?? draft.length);
+                }}
+                placeholder={
+                  chips.length >= 2
+                    ? "Describe the task. Use @ to address one or more."
+                    : "Describe the task…"
+                }
+                rows={1}
+                onKeyDown={(e) => {
+                  if (mention.handleKey(e)) return;
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    void handleSend();
+                  }
+                }}
+                disabled={sending || createMut.isPending}
+                className="w-full outline-none text-subtitle font-normal"
+                style={{
+                  padding: "var(--sp-2) var(--sp-3)",
+                  background: "transparent",
+                  border: "none",
+                  resize: "none",
+                  color: "var(--fg)",
+                }}
+              />
+              {/* Ghost-text hint that trails the user's cursor when they're
+                  typing in a group chat without an `@`. Mirrors the textarea's
+                  font/padding/wrap so the hint slots seamlessly after the
+                  last typed character on the visible line. Set
+                  `pointer-events: none` and `aria-hidden` so it's a pure
+                  visual cue — clicks fall through to the textarea. */}
+              {chips.length >= 2 && bodyMentions.length === 0 && draft.trim().length > 0 && (
+                <div
+                  aria-hidden="true"
+                  className="text-subtitle font-normal"
                   style={{
-                    gap: 6,
-                    padding: "var(--sp-1) var(--sp-2_5)",
-                    color: "oklch(0.14 0.01 150)",
-                    background: "var(--accent)",
-                    border: "var(--hairline) solid var(--accent)",
-                    borderRadius: "var(--radius-input)",
+                    position: "absolute",
+                    inset: 0,
+                    padding: "var(--sp-2) var(--sp-3)",
+                    margin: 0,
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                    pointerEvents: "none",
+                    color: "transparent",
+                    overflow: "hidden",
                   }}
                 >
-                  <Send className="h-3 w-3" /> Send
-                </button>
-              </span>
+                  {draft}
+                  <span style={{ color: "var(--fg-4)" }}>{"  ← @ a group member to send"}</span>
+                </div>
+              )}
+            </div>
+            <div className="flex items-center justify-end" style={{ padding: "var(--sp-1_5) var(--sp-2_5)" }}>
+              <button
+                type="button"
+                onClick={() => void handleSend()}
+                disabled={!canSend}
+                title={sendBlockedReason ?? "Send (Enter)"}
+                aria-label="Send"
+                className={cn(
+                  "inline-flex items-center justify-center transition-opacity",
+                  !canSend && "opacity-40 cursor-not-allowed",
+                )}
+                style={{
+                  width: 28,
+                  height: 28,
+                  borderRadius: "var(--radius-input)",
+                  background: "var(--fg)",
+                  color: "var(--bg-raised)",
+                  border: "none",
+                }}
+              >
+                <ArrowUp className="h-3.5 w-3.5" strokeWidth={2.5} />
+              </button>
             </div>
           </div>
+
           {error && (
-            <p className="mono text-label" style={{ color: "var(--state-error)", marginTop: 6 }}>
+            <p className="mono text-label" style={{ color: "var(--state-error)", marginTop: 8 }}>
               {error}
             </p>
           )}
@@ -254,4 +319,149 @@ export function NewChatDraft({ onCreated }: { onCreated: (chatId: string) => voi
       </div>
     </div>
   );
+}
+
+/** Participant chip row at the top of the composer card. Renders one
+ *  pill per chip with `×` revealed on hover, plus a `[+]` button that
+ *  anchors a small dropdown of remaining candidates. */
+function ParticipantChips({
+  chips,
+  candidates,
+  chipCandidates,
+  pickerOpen,
+  setPickerOpen,
+  pickerContainerRef,
+  onAdd,
+  onRemove,
+}: {
+  chips: string[];
+  candidates: MentionCandidate[];
+  chipCandidates: MentionCandidate[];
+  pickerOpen: boolean;
+  setPickerOpen: (open: boolean) => void;
+  pickerContainerRef: React.RefObject<HTMLDivElement | null>;
+  onAdd: (agentId: string) => void;
+  onRemove: (agentId: string) => void;
+}) {
+  return (
+    <div
+      className="flex items-center flex-wrap"
+      style={{
+        gap: 6,
+        padding: "var(--sp-1_5) var(--sp-2_5) var(--sp-1)",
+      }}
+    >
+      {chips.map((id) => {
+        const cand = candidates.find((c) => c.agentId === id);
+        const label = cand?.displayName ?? cand?.name ?? id;
+        return (
+          <span
+            key={id}
+            className="group inline-flex items-center text-label"
+            style={{
+              gap: 2,
+              padding: "var(--sp-0_5) var(--sp-1_5)",
+              borderRadius: "var(--radius-chip)",
+              background: "var(--bg-sunken)",
+              color: "var(--fg)",
+            }}
+          >
+            <span>{label}</span>
+            <button
+              type="button"
+              onClick={() => onRemove(id)}
+              title="Remove participant"
+              className="opacity-0 group-hover:opacity-100 transition-opacity"
+              style={{
+                background: "none",
+                border: "none",
+                padding: 0,
+                marginLeft: 2,
+                cursor: "pointer",
+                color: "var(--fg-3)",
+                display: "inline-flex",
+                alignItems: "center",
+              }}
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </span>
+        );
+      })}
+
+      <div ref={pickerContainerRef} style={{ position: "relative" }}>
+        <button
+          type="button"
+          onClick={() => setPickerOpen(!pickerOpen)}
+          title="Add participant"
+          aria-label="Add participant"
+          disabled={chipCandidates.length === 0}
+          className="inline-flex items-center transition-colors hover:bg-[var(--bg-sunken)]"
+          style={{
+            padding: "var(--sp-0_5) var(--sp-1)",
+            borderRadius: "var(--radius-chip)",
+            border: "var(--hairline) solid var(--border)",
+            background: "transparent",
+            color: chipCandidates.length === 0 ? "var(--fg-4)" : "var(--fg-3)",
+            cursor: chipCandidates.length === 0 ? "not-allowed" : "pointer",
+          }}
+        >
+          <Plus className="h-3 w-3" />
+        </button>
+        {pickerOpen && chipCandidates.length > 0 && (
+          <div
+            role="listbox"
+            aria-label="Add participant"
+            className="absolute z-20 max-h-56 overflow-auto rounded-md border shadow-lg"
+            style={{
+              top: "calc(100% + var(--sp-1))",
+              left: 0,
+              minWidth: 280,
+              background: "var(--bg-raised)",
+              borderColor: "var(--border)",
+            }}
+          >
+            {chipCandidates.map((c) => (
+              <button
+                key={c.agentId}
+                type="button"
+                role="option"
+                aria-selected="false"
+                onClick={() => onAdd(c.agentId)}
+                className="flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-body"
+                style={{
+                  background: "transparent",
+                  color: "var(--fg)",
+                  border: "none",
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                <span className="font-medium">{c.displayName ?? (c.name ? `@${c.name}` : "—")}</span>
+                {c.name && c.displayName && (
+                  <span className="mono text-caption" style={{ color: "var(--fg-3)" }}>
+                    @{c.name}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Pick a default seed chip when the user opens an empty draft.
+ *  Most-recently-active agent first, then any `personal_assistant`,
+ *  then whatever sorts first in the candidate list. */
+function pickDefault(candidates: MentionCandidate[], activity: RuntimeAgent[]): string | null {
+  const ids = new Set(candidates.map((c) => c.agentId));
+  const mru = [...activity]
+    .filter((a) => ids.has(a.agentId) && a.runtimeUpdatedAt)
+    .sort((a, b) => (b.runtimeUpdatedAt ?? "").localeCompare(a.runtimeUpdatedAt ?? ""))[0];
+  if (mru) return mru.agentId;
+  const pa = activity.find((a) => ids.has(a.agentId) && a.type === "personal_assistant");
+  if (pa) return pa.agentId;
+  return candidates[0]?.agentId ?? null;
 }
