@@ -36,10 +36,10 @@
     "test:coverage": "pnpm run build && vitest run --coverage"
   },
   "dependencies": {
-    "@first-tree/github-scan": "workspace:*",
     "commander": "^14.0.3"
   },
   "devDependencies": {
+    "@first-tree/github-scan": "workspace:*",
     "@types/node": "^22.19.17",
     "@vitest/coverage-v8": "4.1.5",
     "tsdown": "^0.12.0",
