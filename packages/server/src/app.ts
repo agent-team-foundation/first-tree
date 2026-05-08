@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
-import { join, resolve } from "node:path";
+import { extname, join, resolve } from "node:path";
 import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
 import { FIRST_TREE_HUB_ATTR, redactUrl } from "@agent-team-foundation/first-tree-hub-shared/observability";
 import fastifyOpenTelemetry from "@autotelic/fastify-opentelemetry";
@@ -31,6 +31,7 @@ import { bootstrapConfigRoutes } from "./api/bootstrap/config.js";
 import { chatRoutes } from "./api/chats.js";
 import { clientRoutes } from "./api/clients.js";
 import { contextTreeInfoRoutes } from "./api/context-tree-info.js";
+import { contextTreeSnapshotRoutes } from "./api/context-tree-snapshot.js";
 import { feedbackRoutes } from "./api/feedback.js";
 import { healthRoutes } from "./api/health.js";
 import { healthzRoutes } from "./api/healthz.js";
@@ -413,6 +414,13 @@ export async function buildApp(config: Config) {
 
       // ── Class A — `/me`, `/auth` (user-scoped) ──────────────────────────
       await api.register(
+        userScope("contextTreeScope", async (scope) => {
+          await scope.register(contextTreeSnapshotRoutes);
+        }),
+        { prefix: "/context-tree" },
+      );
+
+      await api.register(
         userScope("meRoutesScope", async (scope) => {
           await scope.register(meRoutes);
         }),
@@ -513,9 +521,13 @@ export async function buildApp(config: Config) {
   if (webDistPath) {
     const webRoot = resolve(webDistPath);
     if (existsSync(webRoot)) {
-      await app.register(fastifyStatic, { root: webRoot, wildcard: false });
+      await app.register(fastifyStatic, { root: webRoot });
       app.setNotFoundHandler((request, reply) => {
         if (request.url.startsWith("/api/")) {
+          return reply.status(404).send({ error: "Not found" });
+        }
+        const requestPath = request.url.split("?")[0] ?? request.url;
+        if (requestPath.startsWith("/assets/") || extname(requestPath).length > 0) {
           return reply.status(404).send({ error: "Not found" });
         }
         // SPA fallback: serve index.html for non-API routes
