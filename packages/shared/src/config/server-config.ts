@@ -62,9 +62,12 @@ export const serverConfigSchema = defineConfig({
     connectTokenExpiry: field(z.string().default("10m"), { env: "FIRST_TREE_HUB_AUTH_CONNECT_TOKEN_EXPIRY" }),
   },
   contextTree: optional({
-    repo: field(z.string(), {
+    repo: field(z.string().optional(), {
       env: "FIRST_TREE_HUB_CONTEXT_TREE_REPO",
       prompt: { message: "Context Tree repo URL (e.g. https://github.com/org/first-tree):" },
+    }),
+    localPath: field(z.string().optional(), {
+      env: "FIRST_TREE_HUB_CONTEXT_TREE_PATH",
     }),
     branch: field(z.string().default("main")),
   }),
@@ -109,6 +112,10 @@ export const serverConfigSchema = defineConfig({
     loginMax: field(z.number().default(5), { env: "FIRST_TREE_HUB_RATE_LIMIT_LOGIN_MAX" }),
     /** Cap on `/webhooks/github`. */
     webhookMax: field(z.number().default(60), { env: "FIRST_TREE_HUB_RATE_LIMIT_WEBHOOK_MAX" }),
+    /** Cap on Context Tree snapshot reads. */
+    contextTreeSnapshotMax: field(z.number().default(6), {
+      env: "FIRST_TREE_HUB_RATE_LIMIT_CONTEXT_TREE_SNAPSHOT_MAX",
+    }),
     /**
      * Per-agent cap on outbound message writes (`POST /agent/chats/:chatId/messages`
      * and `POST /agent/agents/:name/messages`). Tighter than the global default

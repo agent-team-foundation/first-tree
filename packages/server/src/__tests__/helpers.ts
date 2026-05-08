@@ -60,7 +60,13 @@ export type CreateTestAppOptions = {
 };
 
 export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<FastifyInstance> {
-  const baseRateLimit = { max: 10000, loginMax: 10000, webhookMax: 10000, agentMessageMax: 10000 };
+  const baseRateLimit = {
+    max: 10000,
+    loginMax: 10000,
+    webhookMax: 10000,
+    agentMessageMax: 10000,
+    contextTreeSnapshotMax: 10000,
+  };
   const config: Config = {
     database: {
       url: process.env.DATABASE_URL ?? "",

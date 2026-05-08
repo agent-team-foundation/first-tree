@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { dirname, extname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import type {
@@ -21,9 +21,12 @@ const ROOT_NODE_ID = "root";
 const NODE_FILE = "NODE.md";
 const EMPTY_TREE_COMMIT = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const MAX_DIFF_ENTRIES = 200;
+const MAX_MARKDOWN_FILES = 1_000;
+const MAX_MARKDOWN_FILE_BYTES = 512 * 1024;
 const SNAPSHOT_CACHE_TTL_MS = 30_000;
 const GIT_TIMEOUT_MS = 5_000;
 const GIT_MAX_BUFFER = 10 * 1024 * 1024;
+const GIT_LOG_RECORD_SEPARATOR = "\x1e";
 const CONTEXT_TREE_SNAPSHOT_WINDOWS = {
   ONE_DAY: "1d",
   SEVEN_DAYS: "7d",
@@ -59,9 +62,15 @@ type TreeBuildResult = {
 type DiffEntry = {
   type: ContextTreeChangeType;
   path: string;
+  commit: string;
+  changedAt: string | null;
   changedBy: string | null;
   summary: string | null;
 };
+
+type DiffEntryInput = Pick<DiffEntry, "type" | "path">;
+
+type ChangeMetadata = Pick<DiffEntry, "commit" | "changedAt" | "changedBy" | "summary">;
 
 type DiffReadResult = {
   entries: DiffEntry[];
@@ -81,7 +90,7 @@ export async function getContextTreeSnapshot(
 ): Promise<ContextTreeSnapshot> {
   const repo = config.contextTree?.repo ?? null;
   const branch = config.contextTree?.branch ?? null;
-  const resolved = resolveContextTreeRoot(repo);
+  const resolved = resolveContextTreeRoot(repo, config.contextTree?.localPath);
 
   if (!resolved.root) {
     return unavailableSnapshot(repo, branch, resolved.reason);
@@ -109,9 +118,9 @@ export async function getContextTreeSnapshot(
     const files = await readMarkdownFiles(resolved.root);
     const tree = buildTree(files);
     const diffResult = comparisonBaseCommit
-      ? await readDiffEntries(resolved.root, comparisonBaseCommit)
+      ? await readDiffEntries(resolved.root, comparisonBaseCommit, headCommit)
       : { entries: [], truncated: false };
-    const changes = buildChanges(diffResult.entries, tree, headCommit);
+    const changes = buildChanges(diffResult.entries, tree);
     const nodes = applyChangesToNodes(tree.nodes, changes);
     const nodesWithGhosts = addRemovedGhostNodes(nodes, changes);
     const summary = summarizeChanges(changes);
@@ -158,9 +167,11 @@ function contextStatusWarning(truncated: boolean): string | null {
   return null;
 }
 
-function resolveContextTreeRoot(repo: string | null): { root: string | null; reason: string } {
-  const envPath = process.env.FIRST_TREE_HUB_CONTEXT_TREE_PATH;
-  const candidate = envPath && envPath.trim().length > 0 ? envPath : repo;
+function resolveContextTreeRoot(
+  repo: string | null,
+  localPath: string | null | undefined,
+): { root: string | null; reason: string } {
+  const candidate = localPath && localPath.trim().length > 0 ? localPath : repo;
   if (!candidate) {
     return { root: null, reason: "Context Tree is not configured." };
   }
@@ -220,13 +231,17 @@ async function safeGitOutput(cwd: string, args: string[]): Promise<string | null
 }
 
 async function readMarkdownFiles(root: string): Promise<SourceFile[]> {
-  const paths = await walkMarkdown(root, root);
-  const files: SourceFile[] = [];
-  for (const path of paths) {
-    const raw = await readFile(join(root, path), "utf8");
-    files.push({ relativePath: path, parsed: parseMarkdown(raw) });
-  }
-  return files;
+  const paths = (await walkMarkdown(root, root)).slice(0, MAX_MARKDOWN_FILES);
+  const files = await Promise.all(
+    paths.map(async (path): Promise<SourceFile | null> => {
+      const absolutePath = join(root, path);
+      const fileStat = await stat(absolutePath);
+      if (fileStat.size > MAX_MARKDOWN_FILE_BYTES) return null;
+      const raw = await readFile(absolutePath, "utf8");
+      return { relativePath: path, parsed: parseMarkdown(raw) };
+    }),
+  );
+  return files.filter((file): file is SourceFile => file !== null);
 }
 
 function parseMarkdown(raw: string): ParsedMarkdown {
@@ -433,48 +448,108 @@ async function comparisonBaseForWindow(root: string, window: ContextTreeSnapshot
   return commitBeforeWindow && commitBeforeWindow.length > 0 ? commitBeforeWindow : EMPTY_TREE_COMMIT;
 }
 
-async function readDiffEntries(root: string, comparisonBase: string): Promise<DiffReadResult> {
+async function readDiffEntries(root: string, comparisonBase: string, headCommit: string): Promise<DiffReadResult> {
+  if (!isSafeCommit(comparisonBase) || !isSafeCommit(headCommit)) {
+    return { entries: [], truncated: false };
+  }
   try {
-    const output = await gitOutput(root, ["diff", "--name-status", comparisonBase, "HEAD", "--", "*.md"]);
+    const output = await gitOutput(root, ["diff", "--name-status", "-M", comparisonBase, "HEAD", "--", "*.md"]);
     if (!output) return { entries: [], truncated: false };
-    const entries: DiffEntry[] = [];
+    const pendingEntries: DiffEntryInput[] = [];
     for (const line of output.split("\n")) {
-      if (entries.length >= MAX_DIFF_ENTRIES) break;
+      if (pendingEntries.length >= MAX_DIFF_ENTRIES) break;
       const parts = line.split("\t").filter(Boolean);
       const status = parts[0];
       if (!status) continue;
       if (status.startsWith("R")) {
         const oldPath = parts[1];
         const newPath = parts[2];
-        if (oldPath) entries.push(await hydrateDiffEntry(root, { type: "removed", path: toPosix(oldPath) }));
-        if (entries.length >= MAX_DIFF_ENTRIES) break;
-        if (newPath) entries.push(await hydrateDiffEntry(root, { type: "added", path: toPosix(newPath) }));
+        if (oldPath) pendingEntries.push({ type: "removed", path: toPosix(oldPath) });
+        if (pendingEntries.length >= MAX_DIFF_ENTRIES) break;
+        if (newPath) pendingEntries.push({ type: "added", path: toPosix(newPath) });
         continue;
       }
       const path = parts[1];
       if (!path) continue;
-      if (status === "A") entries.push(await hydrateDiffEntry(root, { type: "added", path: toPosix(path) }));
-      if (status === "M") entries.push(await hydrateDiffEntry(root, { type: "edited", path: toPosix(path) }));
-      if (status === "D") entries.push(await hydrateDiffEntry(root, { type: "removed", path: toPosix(path) }));
+      if (status === "A") pendingEntries.push({ type: "added", path: toPosix(path) });
+      if (status === "M") pendingEntries.push({ type: "edited", path: toPosix(path) });
+      if (status === "D") pendingEntries.push({ type: "removed", path: toPosix(path) });
     }
+    const metadataByPath = await readChangeMetadataByPath(
+      root,
+      comparisonBase,
+      headCommit,
+      pendingEntries.map((entry) => entry.path),
+    );
+    const entries = pendingEntries.map((entry) => ({
+      ...entry,
+      ...(metadataByPath.get(entry.path) ?? fallbackChangeMetadata(headCommit)),
+    }));
     return { entries, truncated: output.split("\n").filter(Boolean).length > entries.length };
   } catch {
     return { entries: [], truncated: false };
   }
 }
 
-async function hydrateDiffEntry(root: string, entry: Pick<DiffEntry, "type" | "path">): Promise<DiffEntry> {
-  const changedBy = await safeGitOutput(root, ["log", "-1", "--format=%an", "HEAD", "--", entry.path]);
-  return {
-    ...entry,
-    changedBy,
-    summary: await summarizeDiffEntry(root, entry),
-  };
+async function readChangeMetadataByPath(
+  root: string,
+  comparisonBase: string,
+  headCommit: string,
+  paths: string[],
+): Promise<Map<string, ChangeMetadata>> {
+  const uniquePaths = [...new Set(paths)];
+  const metadataByPath = new Map<string, ChangeMetadata>();
+  if (uniquePaths.length === 0) return metadataByPath;
+
+  const output = await safeGitOutput(root, [
+    "log",
+    "--name-only",
+    `--format=${GIT_LOG_RECORD_SEPARATOR}%H%x00%cI%x00%an%x00%s`,
+    `${comparisonBase}..HEAD`,
+    "--",
+    ...uniquePaths,
+  ]);
+  if (!output) return metadataByPath;
+
+  for (const rawRecord of output.split(GIT_LOG_RECORD_SEPARATOR)) {
+    const record = rawRecord.trim();
+    if (!record) continue;
+    const newlineIndex = record.indexOf("\n");
+    const header = newlineIndex === -1 ? record : record.slice(0, newlineIndex);
+    const changedPaths =
+      newlineIndex === -1
+        ? []
+        : record
+            .slice(newlineIndex + 1)
+            .split("\n")
+            .map((path) => toPosix(path.trim()))
+            .filter((path) => path.length > 0);
+    const fields = header.split("\x00");
+    const commit = fields[0];
+    if (!commit || !isSafeCommit(commit)) continue;
+    const metadata: ChangeMetadata = {
+      commit,
+      changedAt: fields[1] && fields[1].length > 0 ? fields[1] : null,
+      changedBy: fields[2] && fields[2].length > 0 ? fields[2] : null,
+      summary: cleanCommitSubject(fields[3] ?? null),
+    };
+    for (const changedPath of changedPaths) {
+      if (!metadataByPath.has(changedPath)) metadataByPath.set(changedPath, metadata);
+    }
+  }
+
+  for (const path of uniquePaths) {
+    if (!metadataByPath.has(path)) metadataByPath.set(path, fallbackChangeMetadata(headCommit));
+  }
+  return metadataByPath;
 }
 
-async function summarizeDiffEntry(root: string, entry: Pick<DiffEntry, "path">): Promise<string | null> {
-  const subject = await safeGitOutput(root, ["log", "-1", "--format=%s", "HEAD", "--", entry.path]);
-  return cleanCommitSubject(subject);
+function fallbackChangeMetadata(headCommit: string): ChangeMetadata {
+  return { commit: headCommit, changedAt: null, changedBy: null, summary: null };
+}
+
+function isSafeCommit(value: string): boolean {
+  return /^[0-9a-f]{40}$/i.test(value);
 }
 
 function cleanCommitSubject(subject: string | null): string | null {
@@ -489,15 +564,15 @@ function cleanCommitSubject(subject: string | null): string | null {
   return cleaned;
 }
 
-function buildChanges(entries: DiffEntry[], tree: TreeBuildResult, headCommit: string): ContextTreeChange[] {
+function buildChanges(entries: DiffEntry[], tree: TreeBuildResult): ContextTreeChange[] {
   return entries.map((entry) => {
     const node = tree.nodeBySourcePath.get(entry.path) ?? tree.nodeByTreePath.get(stripMarkdownExtension(entry.path));
     return {
       path: entry.path,
       nodeId: node?.id ?? ghostNodeId(entry.path),
       type: entry.type,
-      commit: headCommit,
-      changedAt: null,
+      commit: entry.commit,
+      changedAt: entry.changedAt,
       changedBy: entry.changedBy,
       summary: entry.summary,
     };
@@ -523,6 +598,7 @@ function addRemovedGhostNodes(nodes: ContextTreeNode[], changes: ContextTreeChan
     if (change.type !== "removed" || !change.nodeId || nodeIds.has(change.nodeId)) continue;
     const treePath = stripMarkdownExtension(change.path);
     const dir = sourceDir(change.path);
+    const parentNodeId = dir ? dirNodeId(dir) : ROOT_NODE_ID;
     ghosts.push({
       id: change.nodeId,
       path: treePath,
@@ -530,7 +606,7 @@ function addRemovedGhostNodes(nodes: ContextTreeNode[], changes: ContextTreeChan
       title: titleFromPath(treePath),
       kind: "leaf",
       owners: [],
-      parentId: dir ? dirNodeId(dir) : ROOT_NODE_ID,
+      parentId: nodeIds.has(parentNodeId) ? parentNodeId : ROOT_NODE_ID,
       preview: null,
       relatedNodeIds: [],
       affectedContextArea: contextAreaFromPath(treePath),
@@ -743,3 +819,12 @@ function ghostNodeId(path: string): string {
 function toPosix(path: string): string {
   return sep === "/" ? path : path.split(sep).join("/");
 }
+
+export const contextTreeSnapshotTestInternals = {
+  addRemovedGhostNodes,
+  buildTreeFromRawFiles(files: Array<{ relativePath: string; raw: string }>): TreeBuildResult {
+    return buildTree(files.map((file) => ({ relativePath: file.relativePath, parsed: parseMarkdown(file.raw) })));
+  },
+  parseMarkdownFallback,
+  readDiffEntries,
+};
