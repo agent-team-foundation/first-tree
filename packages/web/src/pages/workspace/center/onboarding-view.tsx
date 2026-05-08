@@ -1,6 +1,6 @@
-import type { CapabilityEntry, ClientCapabilities, OrgBrief } from "@agent-team-foundation/first-tree-hub-shared";
+import type { ClientCapabilities, OrgBrief } from "@agent-team-foundation/first-tree-hub-shared";
 import { ArrowRight, Check, Copy } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { getClientCapabilities, type HubClient, listClients } from "../../../api/activity.js";
 import { createAgentChat } from "../../../api/chats.js";
@@ -10,7 +10,6 @@ import { Button } from "../../../components/ui/button.js";
 import { slugify } from "../../../utils/agent-naming.js";
 import {
   clearOnboardingDraft,
-  markFirstTreeBootstrap,
   onboardingDraftScope,
   readOnboardingDraft,
   readOnboardingJoinPath,
@@ -176,28 +175,25 @@ export function OnboardingView() {
 
   const activeCapabilities = connectedClient && capabilitiesClientId === connectedClient.id ? capabilities : null;
 
-  // All probed runtimes with their states — fed to RuntimeChips so it can
-  // surface non-ok states (`missing` / `unauthenticated` / `error`) with
-  // actionable hints instead of pretending the runtime doesn't exist.
-  const runtimeEntries: ReadonlyArray<readonly [string, CapabilityEntry]> = useMemo(
-    () => (activeCapabilities ? Object.entries(activeCapabilities) : []),
-    [activeCapabilities],
-  );
-  const okRuntimes = useMemo(
-    () => runtimeEntries.filter(([, entry]) => entry.state === "ok").map(([provider]) => provider),
-    [runtimeEntries],
-  );
-
   // Auto-select the first ok runtime; reset if active selection becomes invalid
-  // (client switched, runtime removed). Depends on the memoized `okRuntimes`
-  // so the auto-pick stays consistent with what RuntimeChips renders.
+  // (client switched, runtime removed). `activeCapabilities` is only non-null
+  // when the capabilities payload belongs to the currently selected client.
   useEffect(() => {
     setSelectedRuntime((prev) => {
       if (!activeCapabilities) return prev;
-      if (prev && okRuntimes.includes(prev)) return prev;
-      return okRuntimes[0] ?? null;
+      const ok = Object.entries(activeCapabilities)
+        .filter(([, entry]) => entry.state === "ok")
+        .map(([provider]) => provider);
+      if (prev && ok.includes(prev)) return prev;
+      return ok[0] ?? null;
     });
-  }, [activeCapabilities, okRuntimes]);
+  }, [activeCapabilities]);
+
+  const okRuntimes = activeCapabilities
+    ? Object.entries(activeCapabilities)
+        .filter(([, entry]) => entry.state === "ok")
+        .map(([provider]) => provider)
+    : [];
 
   const teamName = orgs.find((o) => o.id === organizationId)?.displayName ?? "";
   const trimmedName = displayName.trim();
@@ -231,16 +227,6 @@ export function OnboardingView() {
             const chat = await createAgentChat(agentUuid);
             if (token.cancelled) return;
             clearOnboardingDraft(draftScope);
-            // Hand the new chat to ChatView with the First-Tree bootstrap
-            // flag — once the chat is mounted and ready, ChatView auto-sends
-            // a one-time setup message asking the agent to install the
-            // First-Tree skill in the current repository. We deliberately
-            // do NOT set a `topic` here: the chat-first-workspace design
-            // auto-titles chats from the first message via
-            // `resolveChatTitle`, so the bootstrap line itself becomes a
-            // sensible-enough title ("Use the latest First-Tree CLI to
-            // ins…"). Users can rename via the ✏ affordance anytime.
-            markFirstTreeBootstrap(chat.id);
             await refreshMe();
             if (token.cancelled) return;
             navigate(`/?a=${encodeURIComponent(agentUuid)}&c=${encodeURIComponent(chat.id)}`, { replace: true });
@@ -331,7 +317,7 @@ export function OnboardingView() {
             trimmedName={trimmedName}
             connectedClient={connectedClient}
             cliCommand={cliCommand}
-            runtimeEntries={runtimeEntries}
+            okRuntimes={okRuntimes}
             selectedRuntime={selectedRuntime}
             setSelectedRuntime={setSelectedRuntime}
             capabilitiesLoaded={activeCapabilities !== null}
@@ -362,7 +348,7 @@ function FormBody({
   trimmedName,
   connectedClient,
   cliCommand,
-  runtimeEntries,
+  okRuntimes,
   selectedRuntime,
   setSelectedRuntime,
   capabilitiesLoaded,
@@ -377,7 +363,7 @@ function FormBody({
   trimmedName: string;
   connectedClient: HubClient | null;
   cliCommand: string | null;
-  runtimeEntries: ReadonlyArray<readonly [string, CapabilityEntry]>;
+  okRuntimes: string[];
   selectedRuntime: string | null;
   setSelectedRuntime: (next: string) => void;
   capabilitiesLoaded: boolean;
@@ -482,12 +468,12 @@ function FormBody({
               <>
                 <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
                   {connectedClient
-                    ? `${connectedClient.hostname ?? "This computer"} will run ${trimmedName} and keep it connected to Hub.`
-                    : `${trimmedName} needs a computer to run on — the one where its work happens.`}
+                    ? `This computer will run ${trimmedName} and keep it connected to Hub.`
+                    : "This agent needs a computer to do its work. Connect the one it should use."}
                 </p>
                 {!connectedClient && (
                   <p className="text-label" style={{ color: "var(--fg-4)", marginTop: "var(--sp-2)" }}>
-                    Open Terminal on that computer (it can be this one) and run:
+                    Open Terminal on that computer and run this command.
                   </p>
                 )}
 
@@ -502,11 +488,10 @@ function FormBody({
 
                 {connectedClient && (
                   <RuntimeChips
-                    entries={runtimeEntries}
+                    runtimes={okRuntimes}
                     selected={selectedRuntime}
                     onSelect={setSelectedRuntime}
                     capabilitiesLoaded={capabilitiesLoaded}
-                    hostname={connectedClient.hostname ?? null}
                   />
                 )}
               </>
@@ -751,51 +736,23 @@ function ConnectedRow({ hostname }: { hostname: string }) {
   );
 }
 
-/** Hint copy for non-ok capability states. Kept inline rather than in shared
- * because the auth/install commands are CLI-specific UX that may evolve
- * separately from the schema (e.g. "claude /login" slash command vs. running
- * the binary with no args). */
-function nonOkHint(provider: string, entry: CapabilityEntry, hostname: string | null): string {
-  const where = hostname ?? "this computer";
-  if (entry.state === "missing") {
-    return `Not installed on ${where}. Install ${prettyRuntimeLabel(provider)} on the host first.`;
-  }
-  if (entry.state === "unauthenticated") {
-    if (provider === "codex") return `Installed on ${where}, but not signed in. Run \`codex login\` on the host.`;
-    if (provider === "claude-code")
-      return `Installed on ${where}, but not signed in. Run \`claude\` on the host and complete sign-in.`;
-    return `Installed on ${where}, but not signed in. Sign in on the host.`;
-  }
-  if (entry.state === "error") {
-    return entry.error ? `Error on ${where}: ${entry.error}` : `Error on ${where} — see logs.`;
-  }
-  return "";
-}
-
 function RuntimeChips({
-  entries,
+  runtimes,
   selected,
   onSelect,
   capabilitiesLoaded,
-  hostname,
 }: {
-  entries: ReadonlyArray<readonly [string, CapabilityEntry]>;
+  runtimes: string[];
   selected: string | null;
   onSelect: (next: string) => void;
   capabilitiesLoaded: boolean;
-  hostname: string | null;
 }) {
-  if (!capabilitiesLoaded) {
+  if (runtimes.length === 0) {
     return (
       <p className="text-label" style={{ marginTop: "var(--sp-3)", color: "var(--fg-3)" }}>
-        Detecting installed runtimes…
-      </p>
-    );
-  }
-  if (entries.length === 0) {
-    return (
-      <p className="text-label" style={{ marginTop: "var(--sp-3)", color: "var(--fg-3)" }}>
-        No runtimes detected on {hostname ?? "this computer"} yet. Install Claude Code or Codex on the host.
+        {capabilitiesLoaded
+          ? "No runtime ready on this computer. Install Claude Code or Codex, then check back."
+          : "Detecting installed runtimes…"}
       </p>
     );
   }
@@ -804,29 +761,22 @@ function RuntimeChips({
       <p className="text-label" style={{ color: "var(--fg-3)", marginBottom: "var(--sp-1)" }}>
         Powered by
       </p>
-      <fieldset className="flex flex-col" style={{ gap: "var(--sp-2)", margin: 0, padding: 0, border: 0 }}>
+      <fieldset className="flex" style={{ gap: "var(--sp-4)", flexWrap: "wrap", margin: 0, padding: 0, border: 0 }}>
         <legend className="sr-only">Runtime provider</legend>
-        {entries.map(([provider, entry], index) => {
-          const isOk = entry.state === "ok";
-          const active = selected === provider && isOk;
-          const hint = isOk ? null : nonOkHint(provider, entry, hostname);
+        {runtimes.map((provider, index) => {
+          const active = selected === provider;
           return (
             <label
               key={provider}
-              className="onboarding-runtime-option inline-flex items-start text-body"
+              className="onboarding-runtime-option inline-flex items-center text-body"
               style={{
                 gap: "var(--sp-1_5)",
                 padding: "var(--sp-1) 0",
-                cursor: isOk ? "pointer" : "default",
-                color: active
-                  ? "color-mix(in oklch, var(--accent) 30%, var(--fg))"
-                  : isOk
-                    ? "var(--fg)"
-                    : "var(--fg-3)",
+                cursor: "pointer",
+                color: active ? "color-mix(in oklch, var(--accent) 30%, var(--fg))" : "var(--fg)",
                 fontWeight: active ? 600 : 400,
                 animation: `onboarding-rise 220ms ease-out ${index * 80}ms both`,
                 transition: "color 160ms ease, opacity 160ms ease, transform 160ms ease",
-                opacity: isOk ? 1 : 0.85,
               }}
             >
               <input
@@ -834,8 +784,7 @@ function RuntimeChips({
                 name="onboarding-runtime"
                 value={provider}
                 checked={active}
-                disabled={!isOk}
-                onChange={() => isOk && onSelect(provider)}
+                onChange={() => onSelect(provider)}
                 className="sr-only"
               />
               <span
@@ -844,19 +793,13 @@ function RuntimeChips({
                 style={{
                   width: 14,
                   height: 14,
-                  marginTop: 4,
                   borderRadius: "50%",
-                  border: active
-                    ? "var(--hairline) solid var(--accent)"
-                    : isOk
-                      ? "var(--hairline) solid var(--border-strong)"
-                      : "var(--hairline) solid var(--border-faint)",
+                  border: active ? "var(--hairline) solid var(--accent)" : "var(--hairline) solid var(--border-strong)",
                   background: active ? "color-mix(in oklch, var(--accent) 8%, transparent)" : "transparent",
                   boxShadow: active
                     ? "0 0 0 var(--sp-0_5) color-mix(in oklch, var(--accent) 10%, transparent)"
                     : "none",
                   transition: "border-color 160ms ease, background 160ms ease, box-shadow 160ms ease",
-                  flexShrink: 0,
                 }}
               >
                 {active && (
@@ -870,14 +813,7 @@ function RuntimeChips({
                   />
                 )}
               </span>
-              <span className="flex flex-col" style={{ gap: "var(--sp-0_5)" }}>
-                <span>{prettyRuntimeLabel(provider)}</span>
-                {hint && (
-                  <span className="text-label" style={{ color: "var(--fg-4)" }}>
-                    {hint}
-                  </span>
-                )}
-              </span>
+              {prettyRuntimeLabel(provider)}
             </label>
           );
         })}
