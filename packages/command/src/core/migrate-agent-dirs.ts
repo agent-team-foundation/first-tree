@@ -67,32 +67,25 @@ export function createApiNameResolver(serverUrl: string, getAccessToken: () => P
     if (cache) return cache;
     const token = await getAccessToken();
     const map = new Map<string, string | null>();
-    // Paginate via the admin listing's nextCursor contract — the first
-    // page returns `{ items, nextCursor }` and we follow the cursor
-    // until it's null. Hubs with >100 agents were previously silently
-    // truncated here, leaving their local dirs un-reconciled.
-    let cursor: string | null = null;
-    for (let page = 0; page < MAX_PAGES; page++) {
-      const qs = new URLSearchParams({ limit: String(PAGE_SIZE) });
-      if (cursor) qs.set("cursor", cursor);
-      const res = await fetch(`${serverUrl}/api/v1/admin/agents?${qs.toString()}`, {
-        method: "GET",
-        headers: { Authorization: `Bearer ${token}` },
-        signal: AbortSignal.timeout(10_000),
-      });
-      if (!res.ok) {
-        throw new Error(`admin agents list returned HTTP ${res.status}`);
-      }
-      const body = (await res.json()) as { items: AgentRow[]; nextCursor?: string | null };
-      for (const row of body.items) {
-        map.set(row.uuid, row.name);
-      }
-      if (!body.nextCursor) break;
-      cursor = body.nextCursor;
+    // /me/managed-agents — cross-org, returns all agents the user
+    // personally manages in a single response (no pagination).
+    const res = await fetch(`${serverUrl}/api/v1/me/managed-agents`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) {
+      throw new Error(`/me/managed-agents returned HTTP ${res.status}`);
+    }
+    const items = (await res.json()) as AgentRow[];
+    for (const row of items) {
+      map.set(row.uuid, row.name);
     }
     cache = map;
     return map;
   }
+  void PAGE_SIZE;
+  void MAX_PAGES;
 
   return {
     async resolveName(agentId: string): Promise<string | null> {

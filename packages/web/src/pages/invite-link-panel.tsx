@@ -1,6 +1,6 @@
 import { INVITATION_DEFAULT_TTL_DAYS, type InvitationView } from "@agent-team-foundation/first-tree-hub-shared";
 import { useEffect, useState } from "react";
-import { api } from "../api/client.js";
+import { api, withOrgAt } from "../api/client.js";
 import { useAuth } from "../auth/auth-context.js";
 import { Button } from "../components/ui/button.js";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card.js";
@@ -38,7 +38,7 @@ export function InviteLinkPanel() {
     if (!organizationId) return;
     void (async () => {
       try {
-        const r = await api.get<InvitationView>(`/admin/organizations/${organizationId}/invitations`);
+        const r = await api.get<InvitationView>(withOrgAt(organizationId, "/invitations"));
         setInvite(r);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load invite link");
@@ -51,7 +51,7 @@ export function InviteLinkPanel() {
     setBusy(true);
     setError(null);
     try {
-      const r = await api.post<InvitationView>(`/admin/organizations/${organizationId}/invitations/rotate`);
+      const r = await api.post<InvitationView>(withOrgAt(organizationId, "/invitations/rotate"));
       setInvite(r);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to rotate invite link");

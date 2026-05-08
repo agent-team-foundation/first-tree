@@ -234,8 +234,6 @@ export {
   meMembershipSchema,
   type OrgBrief,
   orgBriefSchema,
-  type SwitchOrg,
-  switchOrgSchema,
   type WizardStep,
   wizardStepSchema,
 } from "./schemas/me-extras.js";
@@ -376,14 +374,6 @@ export {
   type Stats,
   statsSchema,
 } from "./schemas/stats.js";
-export {
-  SYSTEM_CONFIG_DEFAULTS,
-  SYSTEM_CONFIG_KEYS,
-  type SystemConfig,
-  systemConfigSchema,
-  type UpdateSystemConfig,
-  updateSystemConfigSchema,
-} from "./schemas/system-config.js";
 export {
   type AdminCreateTask,
   type AdminUpdateTask,

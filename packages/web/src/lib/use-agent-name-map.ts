@@ -7,7 +7,7 @@ import { listAgents, listManagedAgents } from "../api/agents.js";
  * Used by pages that display agent UUIDs (delegate mentions, participants, senders, bindings).
  *
  * Two sources merged:
- *   1. `/admin/agents` — org-scoped (current selected org). Covers same-org
+ *   1. `/agents` — org-scoped (current selected org). Covers same-org
  *      teammates and any agent visible via the org roster.
  *   2. `/me/managed-agents` — user-scoped, cross-org. Covers agents the
  *      caller manages in non-default orgs, so a client that hosts agents

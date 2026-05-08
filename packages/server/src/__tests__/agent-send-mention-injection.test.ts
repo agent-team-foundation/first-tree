@@ -490,7 +490,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
 
     it("rejects bypass attempts (no @ + no metadata.mentions) with 400", async () => {
       const { sender, chatId } = await setupViaApi(crypto.randomUUID().slice(0, 6));
-      const res = await sender.request("POST", `/api/v1/admin/chats/${chatId}/messages`, {
+      const res = await sender.request("POST", `/api/v1/chats/${chatId}/messages`, {
         format: "text",
         content: "broadcast — no @",
       });
@@ -503,7 +503,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
       // inserting @ tokens. Server must not silently rewrite human-typed text.
       const uid = crypto.randomUUID().slice(0, 6);
       const { sender, peerA, chatId } = await setupViaApi(uid);
-      const res = await sender.request("POST", `/api/v1/admin/chats/${chatId}/messages`, {
+      const res = await sender.request("POST", `/api/v1/chats/${chatId}/messages`, {
         format: "text",
         content: "team status update",
         metadata: { mentions: [peerA.agent.uuid] },
@@ -515,7 +515,7 @@ describe("group-chat mention enforcement + content normalisation", () => {
     it("accepts a real picker-style send (content already has @<name>)", async () => {
       const uid = crypto.randomUUID().slice(0, 6);
       const { sender, peerA, chatId } = await setupViaApi(uid);
-      const res = await sender.request("POST", `/api/v1/admin/chats/${chatId}/messages`, {
+      const res = await sender.request("POST", `/api/v1/chats/${chatId}/messages`, {
         format: "text",
         content: `@${peerA.agent.name} how's it going?`,
       });

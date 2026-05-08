@@ -28,6 +28,13 @@ const baseConfig: Config = {
   github: { webhookSecret: undefined, allowedOrg: undefined },
   trustProxy: false,
   observability: { logging: { level: "error", format: "json", bridgeToSpanLevel: "off" } },
+  runtime: {
+    inboxTimeoutSeconds: 300,
+    maxRetryCount: 3,
+    pollingIntervalSeconds: 5,
+    presenceCleanupSeconds: 60,
+    notificationWebhookUrl: undefined,
+  },
   instanceId: "test-instance",
 };
 

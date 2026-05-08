@@ -1,5 +1,5 @@
 import type { Agent, CreateAgent, RebindAgent, UpdateAgent } from "@agent-team-foundation/first-tree-hub-shared";
-import { api } from "./client.js";
+import { api, withOrg } from "./client.js";
 
 type PaginatedAgents = {
   items: Agent[];
@@ -12,7 +12,7 @@ export function listAgents(params?: { limit?: number; cursor?: string; type?: st
   if (params?.cursor) qs.set("cursor", params.cursor);
   if (params?.type) qs.set("type", params.type);
   const query = qs.toString();
-  return api.get<PaginatedAgents>(`/admin/agents${query ? `?${query}` : ""}`);
+  return api.get<PaginatedAgents>(withOrg(`/agents${query ? `?${query}` : ""}`));
 }
 
 /**
@@ -23,7 +23,7 @@ export function listAgents(params?: { limit?: number; cursor?: string; type?: st
  *
  * The Computers panel uses this as a name-resolution source for `BOUND
  * AGENTS` rows: a client is user-scoped and may host agents from multiple
- * orgs, so the org-scoped `/admin/agents` query alone falls back to the raw
+ * orgs, so the org-scoped `/agents` query alone falls back to the raw
  * UUID for any agent outside the currently-selected org.
  */
 export type ManagedAgent = {
@@ -43,11 +43,11 @@ export function listManagedAgents(): Promise<ManagedAgent[]> {
 }
 
 export function getAgent(uuid: string): Promise<Agent> {
-  return api.get<Agent>(`/admin/agents/${encodeURIComponent(uuid)}`);
+  return api.get<Agent>(`/agents/${encodeURIComponent(uuid)}`);
 }
 
 export function createAgent(data: CreateAgent): Promise<Agent> {
-  return api.post<Agent>("/admin/agents", data);
+  return api.post<Agent>(withOrg("/agents"), data);
 }
 
 /**
@@ -62,11 +62,11 @@ export type AgentNameAvailability =
   | { available: false; reason: "invalid" | "reserved" | "taken" };
 
 export function checkAgentNameAvailability(name: string): Promise<AgentNameAvailability> {
-  return api.get<AgentNameAvailability>(`/admin/agents/names/${encodeURIComponent(name)}/availability`);
+  return api.get<AgentNameAvailability>(withOrg(`/agents/names/${encodeURIComponent(name)}/availability`));
 }
 
 export function updateAgent(uuid: string, data: UpdateAgent): Promise<Agent> {
-  return api.patch<Agent>(`/admin/agents/${encodeURIComponent(uuid)}`, data);
+  return api.patch<Agent>(`/agents/${encodeURIComponent(uuid)}`, data);
 }
 
 /**
@@ -76,19 +76,19 @@ export function updateAgent(uuid: string, data: UpdateAgent): Promise<Agent> {
  * and `clients.metadata.capabilities` is stale).
  */
 export function rebindAgent(uuid: string, data: RebindAgent): Promise<Agent> {
-  return api.patch<Agent>(`/admin/agents/${encodeURIComponent(uuid)}/rebind`, data);
+  return api.patch<Agent>(`/agents/${encodeURIComponent(uuid)}/rebind`, data);
 }
 
 export function deleteAgent(uuid: string): Promise<void> {
-  return api.delete<void>(`/admin/agents/${encodeURIComponent(uuid)}`);
+  return api.delete<void>(`/agents/${encodeURIComponent(uuid)}`);
 }
 
 export function suspendAgent(uuid: string): Promise<Agent> {
-  return api.post<Agent>(`/admin/agents/${encodeURIComponent(uuid)}/suspend`, {});
+  return api.post<Agent>(`/agents/${encodeURIComponent(uuid)}/suspend`, {});
 }
 
 export function reactivateAgent(uuid: string): Promise<Agent> {
-  return api.post<Agent>(`/admin/agents/${encodeURIComponent(uuid)}/reactivate`, {});
+  return api.post<Agent>(`/agents/${encodeURIComponent(uuid)}/reactivate`, {});
 }
 
 // -- Test Connection --
@@ -116,5 +116,5 @@ export type TestResult = {
 };
 
 export function testAgentConnection(uuid: string): Promise<TestResult> {
-  return api.post<TestResult>(`/admin/agents/${encodeURIComponent(uuid)}/test`, {});
+  return api.post<TestResult>(`/agents/${encodeURIComponent(uuid)}/test`, {});
 }

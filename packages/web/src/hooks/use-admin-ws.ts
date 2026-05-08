@@ -64,8 +64,20 @@ function connect() {
   const tokens = getStoredTokens();
   if (!tokens?.accessToken) return;
 
+  // Resolve the selected org from localStorage. The org-scoped admin WS
+  // path is `/api/v1/orgs/:orgId/ws/`. If no org is selected yet, skip
+  // connecting — the hook reconnects automatically once the auth
+  // context populates `selectedOrganizationId`.
+  let orgId: string | null = null;
+  try {
+    orgId = localStorage.getItem("first-tree-hub:selectedOrganizationId");
+  } catch {
+    orgId = null;
+  }
+  if (!orgId) return;
+
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const wsUrl = `${protocol}//${window.location.host}/api/v1/ws/admin?token=${tokens.accessToken}`;
+  const wsUrl = `${protocol}//${window.location.host}/api/v1/orgs/${encodeURIComponent(orgId)}/ws/?token=${tokens.accessToken}`;
   const socket = new WebSocket(wsUrl);
   ws = socket;
 

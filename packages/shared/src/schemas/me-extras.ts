@@ -30,12 +30,6 @@ export const createOrgFromMeSchema = z.object({
 });
 export type CreateOrgFromMe = z.infer<typeof createOrgFromMeSchema>;
 
-/** Body for `POST /auth/switch-org`. */
-export const switchOrgSchema = z.object({
-  organizationId: z.string().min(1),
-});
-export type SwitchOrg = z.infer<typeof switchOrgSchema>;
-
 /**
  * One element of `GET /me memberships`. Powers the web client's
  * `currentMembership` derivation (decouple-client-from-identity §C1).

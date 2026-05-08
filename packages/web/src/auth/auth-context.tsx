@@ -20,13 +20,21 @@ type MeUser = {
 
 type MeResponse = {
   user?: MeUser;
-  member: { id: string; role: string; agentId: string; organizationId: string };
+  defaultOrganizationId?: string | null;
   memberships?: MeMembership[];
   wizard?: { step: "connect" | "create_agent" | "completed" };
 };
 
 type AuthContextValue = {
   isAuthenticated: boolean;
+  /**
+   * `true` once `/me` has resolved at least once (success or failure) since
+   * the last login. Route guards block rendering authenticated children
+   * until this flips — otherwise pages mount and fire React-Query requests
+   * before `setApiSelectedOrganizationId` is called, and any org-scoped
+   * call that goes through `withOrg` throws.
+   */
+  meLoaded: boolean;
   user: MeUser | null;
   memberships: MeMembership[];
   /**
@@ -49,10 +57,11 @@ type AuthContextValue = {
    */
   adoptTokens: (tokens: { accessToken: string; refreshToken: string }) => Promise<void>;
   /**
-   * Switch the active organization view. Validates server-side via
-   * `POST /auth/switch-org` (204 on success) and updates
-   * `localStorage.selectedOrganizationId`. Does NOT re-issue tokens or
-   * touch the WS connection (decouple-client-from-identity §4.6).
+   * Switch the active organization view. Pure client-side state — the
+   * /orgs/:orgId/* routes themselves probe membership in real time on
+   * every request, so a stale or unauthorized selection just yields a
+   * clean 403 from the next API call. Does NOT re-issue tokens or touch
+   * the WS connection.
    */
   selectOrganization: (organizationId: string) => Promise<void>;
   refreshMe: () => Promise<void>;
@@ -93,16 +102,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setApiSelectedOrganizationId(init);
     return init;
   });
-  // Fallback for legacy `/me` shape (no `memberships` array yet) — mirror
-  // the single-member object so the UI keeps functioning during a partial
-  // rollout where the server is older than this build.
-  const [legacyMember, setLegacyMember] = useState<{
-    id: string;
-    role: string;
-    agentId: string;
-    organizationId: string;
-  } | null>(null);
   const [wizardStep, setWizardStep] = useState<"connect" | "create_agent" | "completed" | null>(null);
+  // Stays false until the first fetchMe settles. Unauthenticated visitors
+  // never need /me, so the gate also flips for them via the unauth branch
+  // below — RequireAuth only blocks the loading frame when the user IS
+  // authenticated.
+  const [meLoaded, setMeLoaded] = useState(false);
 
   const logout = useCallback(() => {
     clearStoredTokens();
@@ -113,43 +118,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
     setMemberships([]);
     setSelectedOrgId(null);
-    setLegacyMember(null);
     setWizardStep(null);
+    setMeLoaded(false);
   }, [queryClient]);
 
   const fetchMe = useCallback(async () => {
     try {
       const data = await api.get<MeResponse>("/me");
       setUser(data.user ?? null);
-      setLegacyMember(data.member);
       const ms = data.memberships ?? [];
       setMemberships(ms);
       const nextStep = data.wizard?.step ?? null;
       setWizardStep(nextStep);
-      // Drop the join-path flag once onboarding is complete so a later
-      // incomplete state (e.g. user deletes their client) doesn't reuse a
-      // stale "you've joined {team}" headline that no longer fits.
       if (nextStep === "completed") clearOnboardingJoinPath();
 
-      // Reconcile selectedOrgId with the server's view: if the stored
-      // value points at an org the user no longer belongs to (left team,
-      // org dissolved), fall through to the JWT default member, then to
-      // the first active membership.
+      // Reconcile selectedOrgId: stored value wins if still valid, else
+      // /me's `defaultOrganizationId`, else the first active membership.
       setSelectedOrgId((prev) => {
         const valid = prev && ms.some((m) => m.organizationId === prev) ? prev : null;
         if (valid) {
-          // Ensure the api-client override stays in sync with React state on
-          // the post-/me reconcile path (no-op when prev was already valid).
           setApiSelectedOrganizationId(valid);
           return valid;
         }
-        const fallback = data.member.organizationId ?? ms[0]?.organizationId ?? null;
+        const fallback = data.defaultOrganizationId ?? ms[0]?.organizationId ?? null;
         writeSelectedOrgId(fallback);
         setApiSelectedOrganizationId(fallback);
         return fallback;
       });
     } catch {
       // If /me fails, the UI falls back to hiding admin features.
+    } finally {
+      // Always flip the gate — even on error — so RequireAuth doesn't hang
+      // the dashboard forever if /me is briefly unreachable.
+      setMeLoaded(true);
     }
   }, []);
 
@@ -174,17 +175,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const selectOrganization = useCallback(
     async (organizationId: string) => {
-      // Server-side authorization probe: 204 on active member, 403 otherwise.
-      // The server no longer issues new tokens for switch-org — auth state is
-      // derived from /me + localStorage on the client.
-      await api.post<void>("/auth/switch-org", { organizationId });
+      // Pure client-side switch — the /orgs/:orgId/* routes probe
+      // membership in real time on every request, so a stale or
+      // unauthorized selection just yields a clean 403 from the next call.
       writeSelectedOrgId(organizationId);
       setApiSelectedOrganizationId(organizationId);
       // Drop every cached React Query result keyed off the previous org —
-      // the next render refetches with the new `?organizationId=` query so
-      // a non-default org never reuses the JWT default's data (codex P1 #2).
-      // Cleared *before* setSelectedOrgId so the subscriber refetch fires
-      // against the new override.
+      // the next render refetches with the new prefix so a non-default org
+      // never reuses the previous selection's data.
       queryClient.clear();
       setSelectedOrgId(organizationId);
       await fetchMe();
@@ -207,29 +205,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [logout]);
 
   const currentMembership = useMemo<MeMembership | null>(() => {
-    if (memberships.length > 0) {
-      const match = memberships.find((m) => m.organizationId === selectedOrgId);
-      if (match) return match;
-      return memberships[0] ?? null;
-    }
-    // Legacy fallback: a server without `memberships` still returns `member`.
-    if (legacyMember) {
-      const role: MeMembership["role"] = legacyMember.role === "admin" ? "admin" : "member";
-      return {
-        id: legacyMember.id,
-        organizationId: legacyMember.organizationId,
-        organizationName: "",
-        role,
-        agentId: legacyMember.agentId,
-      };
-    }
-    return null;
-  }, [memberships, selectedOrgId, legacyMember]);
+    if (memberships.length === 0) return null;
+    const match = memberships.find((m) => m.organizationId === selectedOrgId);
+    return match ?? memberships[0] ?? null;
+  }, [memberships, selectedOrgId]);
 
   return (
     <AuthContext.Provider
       value={{
         isAuthenticated,
+        meLoaded,
         user,
         memberships,
         currentMembership,

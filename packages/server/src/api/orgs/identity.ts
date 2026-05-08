@@ -1,0 +1,31 @@
+import { updateOrganizationSchema } from "@agent-team-foundation/first-tree-hub-shared";
+import type { FastifyInstance } from "fastify";
+import { requireOrgAdmin, requireOrgMembership } from "../../scope/require-org.js";
+import * as orgService from "../../services/organization.js";
+
+/**
+ * Class B — `/api/v1/orgs/:orgId` itself: read & rename the org row.
+ * Replaces the deleted `/admin/organizations/:id` GET/PATCH pair.
+ */
+export async function orgIdentityRoutes(app: FastifyInstance): Promise<void> {
+  app.get<{ Params: { orgId: string } }>("/", async (request) => {
+    const scope = await requireOrgMembership(request, app.db);
+    const org = await orgService.getOrganization(app.db, scope.organizationId);
+    return {
+      ...org,
+      createdAt: org.createdAt.toISOString(),
+      updatedAt: org.updatedAt.toISOString(),
+    };
+  });
+
+  app.patch<{ Params: { orgId: string } }>("/", { config: { otelRecordBody: true } }, async (request) => {
+    const scope = await requireOrgAdmin(request, app.db);
+    const body = updateOrganizationSchema.parse(request.body);
+    const org = await orgService.updateOrganization(app.db, scope.organizationId, body);
+    return {
+      ...org,
+      createdAt: org.createdAt.toISOString(),
+      updatedAt: org.updatedAt.toISOString(),
+    };
+  });
+}

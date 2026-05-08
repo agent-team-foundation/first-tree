@@ -7,13 +7,14 @@ describe("Feishu Adapter (WebSocket mode)", () => {
 
   async function authedRequest(app: FastifyInstance) {
     const admin = await createTestAdmin(app);
-    return (method: string, url: string, payload?: unknown) =>
+    const req = (method: string, url: string, payload?: unknown) =>
       app.inject({
         method: method as "GET" | "POST" | "PATCH" | "DELETE",
         url,
         headers: { authorization: `Bearer ${admin.accessToken}` },
         ...(payload ? { payload } : {}),
       });
+    return Object.assign(req, { admin });
   }
 
   it("creates adapter config with feishu credentials (agentId required)", async () => {
@@ -21,7 +22,7 @@ describe("Feishu Adapter (WebSocket mode)", () => {
     const req = await authedRequest(app);
     const { agent } = await createTestAgent(app, { name: "feishu-ws-agent" });
 
-    const res = await req("POST", "/api/v1/admin/adapters", {
+    const res = await req("POST", `/api/v1/orgs/${req.admin.organizationId}/adapters`, {
       platform: "feishu",
       agentId: agent.uuid,
       credentials: { app_id: "cli_ws_test", app_secret: "secret_123" },
@@ -38,7 +39,7 @@ describe("Feishu Adapter (WebSocket mode)", () => {
     const { agent } = await createTestAgent(app, { name: "feishu-reload-agent" });
 
     // Create a new adapter config
-    const createRes = await req("POST", "/api/v1/admin/adapters", {
+    const createRes = await req("POST", `/api/v1/orgs/${req.admin.organizationId}/adapters`, {
       platform: "feishu",
       agentId: agent.uuid,
       credentials: { app_id: "cli_reload_test", app_secret: "secret_reload" },
@@ -48,7 +49,7 @@ describe("Feishu Adapter (WebSocket mode)", () => {
     // adapterManager.reload() is called automatically after create
     // We can't easily test WS connection without a real Feishu server,
     // but we can verify the config was stored correctly
-    const listRes = await req("GET", "/api/v1/admin/adapters");
+    const listRes = await req("GET", `/api/v1/orgs/${req.admin.organizationId}/adapters`);
     const adapters = listRes.json();
     const found = adapters.find((a: { platform: string }) => a.platform === "feishu");
     expect(found).toBeDefined();
@@ -59,14 +60,14 @@ describe("Feishu Adapter (WebSocket mode)", () => {
     const req = await authedRequest(app);
     const { agent } = await createTestAgent(app, { name: "feishu-upd-reload-agent" });
 
-    const createRes = await req("POST", "/api/v1/admin/adapters", {
+    const createRes = await req("POST", `/api/v1/orgs/${req.admin.organizationId}/adapters`, {
       platform: "feishu",
       agentId: agent.uuid,
       credentials: { app_id: "cli_update_reload", app_secret: "secret_u" },
     });
     const created = createRes.json();
 
-    const updateRes = await req("PATCH", `/api/v1/admin/adapters/${created.id}`, {
+    const updateRes = await req("PATCH", `/api/v1/adapters/${created.id}`, {
       status: "inactive",
     });
     expect(updateRes.statusCode).toBe(200);
@@ -78,14 +79,14 @@ describe("Feishu Adapter (WebSocket mode)", () => {
     const req = await authedRequest(app);
     const { agent } = await createTestAgent(app, { name: "feishu-del-reload-agent" });
 
-    const createRes = await req("POST", "/api/v1/admin/adapters", {
+    const createRes = await req("POST", `/api/v1/orgs/${req.admin.organizationId}/adapters`, {
       platform: "feishu",
       agentId: agent.uuid,
       credentials: { app_id: "cli_delete_reload", app_secret: "secret_d" },
     });
     const created = createRes.json();
 
-    const delRes = await req("DELETE", `/api/v1/admin/adapters/${created.id}`);
+    const delRes = await req("DELETE", `/api/v1/adapters/${created.id}`);
     expect(delRes.statusCode).toBe(204);
   });
 
@@ -104,7 +105,7 @@ describe("Feishu Adapter (WebSocket mode)", () => {
     const app = getApp();
     const req = await authedRequest(app);
 
-    const res = await req("POST", "/api/v1/admin/adapters", {
+    const res = await req("POST", `/api/v1/orgs/${req.admin.organizationId}/adapters`, {
       platform: "feishu",
       credentials: { app_id: "cli_no_agent", app_secret: "secret" },
     });

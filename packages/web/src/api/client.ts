@@ -2,17 +2,13 @@ const BASE_URL = "/api/v1";
 const TOKEN_KEY = "first-tree-hub:tokens";
 
 /**
- * Currently selected organization id, mirrored from
- * `localStorage.selectedOrganizationId` via `setApiSelectedOrganizationId`.
- * Persisted in module scope so the request layer can transparently
- * inject `?organizationId=…` into admin-scoped GET requests without every
- * caller having to thread the value through (decouple-client-from-identity
- * §C / fix for codex P1 #2).
+ * Currently selected organization id, set by the auth-context after `/me`
+ * resolves. Lives in module scope (not React context) so non-React helpers
+ * — e.g. `lib/use-agent-name-map`, the admin WS hook — can read it without
+ * sitting inside a provider tree.
  *
- * Why module scope and not the auth-context: the api wrapper here is
- * import-only — making it depend on a React context would require every
- * caller to live inside the provider tree, which non-component helpers
- * (e.g. `lib/use-agent-name-map`) cannot guarantee.
+ * Read only by `withOrg`. Paths that don't go through `withOrg` are sent
+ * verbatim and don't depend on this value.
  */
 let selectedOrganizationId: string | null = null;
 
@@ -21,20 +17,33 @@ export function setApiSelectedOrganizationId(value: string | null): void {
 }
 
 /**
- * Inject the selected organization id as a query param on admin-scoped
- * paths so the server resolves the correct cross-org membership instead
- * of falling back to the JWT default org. Only `/admin/*` paths are
- * touched — `/auth/*`, `/me/*`, `/health` etc. are unaffected, matching
- * the server contract that admin endpoints accept an optional
- * `?organizationId=…` and gate it via `requireMemberInOrg`.
+ * Prefix an org-scoped path with `/orgs/<currentOrgId>/`. Use this on every
+ * call that targets a resource living inside the user's currently-viewed
+ * organization. Paths that aren't org-scoped (`/me/...`, `/auth/...`,
+ * `/agents/<uuid>/...`, `/chats/<id>/...`) are written verbatim at the call
+ * site and don't go through this helper.
+ *
+ * Throws if no org is selected. By the time any React Query query fires,
+ * the `meLoaded` gate in `RequireAuth` has already let `/me` populate the
+ * org id; a throw here therefore signals a real bug (e.g. someone calling
+ * `withOrg` outside the auth tree) rather than a transient race. Failing
+ * fast is much easier to trace than a silent 404.
  */
-function decoratePath(path: string): string {
-  if (!selectedOrganizationId) return path;
-  if (!path.startsWith("/admin/") && path !== "/admin") return path;
-  // Caller already supplied organizationId — never overwrite.
-  if (/[?&]organizationId=/.test(path)) return path;
-  const sep = path.includes("?") ? "&" : "?";
-  return `${path}${sep}organizationId=${encodeURIComponent(selectedOrganizationId)}`;
+export function withOrg(path: string): string {
+  if (!selectedOrganizationId) {
+    throw new Error(`withOrg("${path}") called before an organization is selected`);
+  }
+  return `/orgs/${encodeURIComponent(selectedOrganizationId)}${path}`;
+}
+
+/**
+ * Prefix a path with an explicit `/orgs/<orgId>/` — for tools that target
+ * an organization other than the user's currently-viewed one (invite link
+ * panel, cross-org admin views). Pure string formatter; doesn't consult
+ * the module-scope `selectedOrganizationId`.
+ */
+export function withOrgAt(orgId: string, path: string): string {
+  return `/orgs/${encodeURIComponent(orgId)}${path}`;
 }
 
 type StoredTokens = {
@@ -116,7 +125,10 @@ async function tryRefresh(refreshToken: string): Promise<StoredTokens | null> {
       });
       if (!res.ok) return null;
       const body = (await res.json()) as { accessToken: string; refreshToken?: string };
-      // Server refresh only returns accessToken — preserve existing refreshToken
+      // Sliding-window refresh: server returns a fresh refreshToken on every
+      // call (services/auth.ts:refreshAccessToken). Fall back to the existing
+      // one if the server response somehow omits it — defends against any
+      // future change that goes back to access-only refreshes.
       const updated: StoredTokens = {
         accessToken: body.accessToken,
         refreshToken: body.refreshToken ?? refreshToken,
@@ -136,12 +148,16 @@ async function tryRefresh(refreshToken: string): Promise<StoredTokens | null> {
 async function request<T>(path: string, options?: { method?: string; body?: unknown }): Promise<T> {
   const { method = "GET", body } = options ?? {};
 
-  const decoratedPath = decoratePath(path);
+  // No path rewriting here — callers prefix org-scoped paths with `withOrg` /
+  // `withOrgAt` before passing in; everything else (`/me/...`, `/auth/...`,
+  // `/agents/<uuid>/...`, etc.) is sent verbatim. Anonymous endpoints (invite
+  // preview, bootstrap probe) bypass this wrapper entirely and call
+  // `fetch()` directly without an Authorization header.
   const doFetch = (token?: string) => {
     const headers: Record<string, string> = {};
     if (token) headers.Authorization = `Bearer ${token}`;
     if (body !== undefined) headers["Content-Type"] = "application/json";
-    return fetch(`${BASE_URL}${decoratedPath}`, {
+    return fetch(`${BASE_URL}${path}`, {
       method,
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,

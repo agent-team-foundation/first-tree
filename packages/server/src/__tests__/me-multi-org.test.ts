@@ -1,7 +1,43 @@
 import { eq } from "drizzle-orm";
+import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
 import { members } from "../db/schema/members.js";
-import { createTestAdmin, useTestApp } from "./helpers.js";
+import { organizations } from "../db/schema/organizations.js";
+import { createAgent } from "../services/agent.js";
+import { uuidv7 } from "../uuid.js";
+import { createTestAdmin, seedClient, useTestApp } from "./helpers.js";
+
+/**
+ * Attach `userId` to a freshly-created org with the requested role, mirroring
+ * the helper that lives in admin-agents.test.ts. Each call returns a brand-
+ * new org, the inserted member id, and the human agent provisioned for the
+ * user in that org (so `scope.humanAgentId` is satisfied for routes that
+ * resolve membership via `requireOrgMembership`).
+ */
+async function attachOrg(
+  app: FastifyInstance,
+  userId: string,
+  role: "admin" | "member",
+): Promise<{ orgId: string; memberId: string; humanAgentId: string }> {
+  const orgId = `org-mm-${crypto.randomUUID().slice(0, 8)}`;
+  const memberId = uuidv7();
+  let humanAgentId = "";
+  await app.db.transaction(async (tx) => {
+    await tx
+      .insert(organizations)
+      .values({ id: orgId, name: `mm-${crypto.randomUUID().slice(0, 6)}`, displayName: "Multi-Org Side" });
+    const human = await createAgent(tx as unknown as typeof app.db, {
+      name: `mm-h-${crypto.randomUUID().slice(0, 6)}`,
+      type: "human",
+      displayName: "Multi-Org Human",
+      managerId: memberId,
+      organizationId: orgId,
+    });
+    humanAgentId = human.uuid;
+    await tx.insert(members).values({ id: memberId, userId, organizationId: orgId, agentId: human.uuid, role });
+  });
+  return { orgId, memberId, humanAgentId };
+}
 
 describe("Multi-org self-service", () => {
   const getApp = useTestApp();
@@ -20,7 +56,7 @@ describe("Multi-org self-service", () => {
     expect(list[0]?.role).toBe("admin");
   });
 
-  it("POST /me/organizations creates a new team and returns admin tokens for it", async () => {
+  it("POST /me/organizations creates a new team", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const res = await app.inject({
@@ -30,103 +66,65 @@ describe("Multi-org self-service", () => {
       payload: { name: `t-${crypto.randomUUID().slice(0, 8)}`, displayName: "Side Project" },
     });
     expect(res.statusCode).toBe(201);
-    const body = res.json<{
-      organization: { id: string; role: string };
-      tokens: { accessToken: string };
-    }>();
+    const body = res.json<{ organization: { id: string; role: string } }>();
     expect(body.organization.role).toBe("admin");
 
+    // Token unchanged — same userId. /me reflects the new membership.
     const me = await app.inject({
       method: "GET",
       url: "/api/v1/me",
-      headers: { authorization: `Bearer ${body.tokens.accessToken}` },
+      headers: { authorization: `Bearer ${admin.accessToken}` },
     });
     expect(me.statusCode).toBe(200);
-    expect(me.json<{ member: { organizationId: string } }>().member.organizationId).toBe(body.organization.id);
+    const meBody = me.json<{ memberships: Array<{ organizationId: string }> }>();
+    expect(meBody.memberships.some((m) => m.organizationId === body.organization.id)).toBe(true);
   });
 
-  it("POST /me/organizations/leave soft-deletes membership and invalidates tokens", async () => {
+  it("POST /me/memberships/:memberId/leave soft-deletes membership", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
-    // Create a second team so leaving the first is meaningful (we'd otherwise
-    // strand the user with zero teams, which is an explicit v1 trade-off
-    // documented in the proposal).
-    const second = await app.inject({
+    // Create a second team so leaving the first leaves the user with one membership.
+    await app.inject({
       method: "POST",
       url: "/api/v1/me/organizations",
       headers: { authorization: `Bearer ${admin.accessToken}` },
       payload: { name: `t-${crypto.randomUUID().slice(0, 8)}`, displayName: "Second" },
     });
-    const secondTokens = second.json<{ tokens: { accessToken: string } }>().tokens;
 
-    // Leave the first org via the original token.
     const leaveRes = await app.inject({
       method: "POST",
-      url: "/api/v1/me/organizations/leave",
+      url: `/api/v1/me/memberships/${admin.memberId}/leave`,
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
     expect(leaveRes.statusCode).toBe(204);
 
-    // Old token now refers to a "left" member → 401.
-    const reuse = await app.inject({
+    // DB row is flipped to status='left'
+    const rows = await app.db.select().from(members).where(eq(members.id, admin.memberId));
+    expect(rows[0]?.status).toBe("left");
+
+    // /me still works — token is keyed to userId, not memberId; the user
+    // still has one active membership in the second team.
+    const me = await app.inject({
       method: "GET",
       url: "/api/v1/me",
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
-    expect(reuse.statusCode).toBe(401);
-
-    // Second-team token still works.
-    const me = await app.inject({
-      method: "GET",
-      url: "/api/v1/me",
-      headers: { authorization: `Bearer ${secondTokens.accessToken}` },
-    });
     expect(me.statusCode).toBe(200);
-
-    // DB row is flipped to status='left'
-    const rows = await app.db.select().from(members).where(eq(members.id, admin.memberId));
-    expect(rows[0]?.status).toBe("left");
-  });
-
-  it("POST /auth/switch-org refuses orgs the user does not belong to", async () => {
-    const app = getApp();
-    const adminA = await createTestAdmin(app);
-    // Spin up another user + org via OAuth dev-callback.
-    const oauth = await app.inject({
-      method: "GET",
-      url: "/api/v1/auth/github/dev-callback?githubId=321&login=foreigner",
-    });
-    const fragment = oauth.headers.location?.split("#")[1] ?? "";
-    const params = new URLSearchParams(fragment);
-    const foreignerAccess = params.get("access");
-
-    const foreignerMe = await app.inject({
-      method: "GET",
-      url: "/api/v1/me",
-      headers: { authorization: `Bearer ${foreignerAccess}` },
-    });
-    const foreignerOrgId = foreignerMe.json<{ member: { organizationId: string } }>().member.organizationId;
-
-    // adminA tries to switch into foreigner's org → 403
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/v1/auth/switch-org",
-      headers: { authorization: `Bearer ${adminA.accessToken}` },
-      payload: { organizationId: foreignerOrgId },
-    });
-    expect(res.statusCode).toBe(403);
+    const meBody = me.json<{ memberships: Array<{ organizationId: string }> }>();
+    expect(meBody.memberships.length).toBe(1);
+    expect(meBody.memberships[0]?.organizationId).not.toBe(admin.organizationId);
   });
 });
 
 describe("Connect token carries iss claim", () => {
   const getApp = useTestApp();
 
-  it("POST /connect-tokens stamps an iss derived from request host", async () => {
+  it("POST /me/connect-tokens stamps an iss derived from request host", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const res = await app.inject({
       method: "POST",
-      url: "/api/v1/connect-tokens",
+      url: "/api/v1/me/connect-tokens",
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
     expect(res.statusCode).toBe(200);
@@ -163,5 +161,46 @@ describe("/me wizard step inference", () => {
       headers: { authorization: `Bearer ${access}` },
     });
     expect(me.json<{ wizard: { step: string } }>().wizard.step).toBe("connect");
+  });
+
+  /**
+   * Regression for #239: the wizard inference used to key off the JWT's
+   * default `memberId`, so a user whose only autonomous agent lived in a
+   * non-default org would still see `step=create_agent` even though the
+   * onboarding was actually complete. Post JWT-scope-strip, both `clients`
+   * and `agents` lookups are user-scoped (clients.user_id, members.user_id)
+   * — the regression is structurally impossible because `request.user` no
+   * longer carries `memberId`. This test pins that contract at the HTTP
+   * boundary so a future "optimization" that re-introduces a member-keyed
+   * shortcut fails CI.
+   */
+  it("returns step=completed when the only autonomous agent lives in a non-default org (regression #239)", async () => {
+    const app = getApp();
+    // createTestAdmin gives Alice a default org with only her human-self
+    // agent + admin membership — wizard should currently report `connect`
+    // (no client) for that user.
+    const alice = await createTestAdmin(app);
+
+    // Spin up a side org Alice belongs to as a member, hang a client +
+    // autonomous agent off her membership in that org. Crucially the agent
+    // is NOT in the default org returned by createTestAdmin.
+    const orgB = await attachOrg(app, alice.userId, "member");
+    const clientId = await seedClient(app, alice.userId, orgB.orgId);
+    await createAgent(app.db, {
+      name: `regression-239-${crypto.randomUUID().slice(0, 6)}`,
+      type: "autonomous_agent",
+      displayName: "Regression #239",
+      managerId: orgB.memberId,
+      organizationId: orgB.orgId,
+      clientId,
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/me",
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json<{ wizard: { step: string } }>().wizard.step).toBe("completed");
   });
 });

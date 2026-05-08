@@ -150,7 +150,7 @@ describe("Agent WS — agent:pinned push on create/bind", () => {
       const name = `pin-created-${crypto.randomUUID().slice(0, 6)}`;
       const res = await app.inject({
         method: "POST",
-        url: "/api/v1/admin/agents",
+        url: `/api/v1/orgs/${seed.organizationId}/agents`,
         headers: { authorization: `Bearer ${seed.token}` },
         payload: {
           name,
@@ -196,7 +196,7 @@ describe("Agent WS — agent:pinned push on create/bind", () => {
 
       const res = await app.inject({
         method: "PATCH",
-        url: `/api/v1/admin/agents/${unbound.uuid}`,
+        url: `/api/v1/agents/${unbound.uuid}`,
         headers: { authorization: `Bearer ${seed.token}` },
         payload: { clientId: seed.clientId },
       });
@@ -240,7 +240,7 @@ describe("Agent WS — agent:pinned push on create/bind", () => {
 
       const res = await app.inject({
         method: "POST",
-        url: "/api/v1/admin/agents",
+        url: `/api/v1/orgs/${seed.organizationId}/agents`,
         headers: { authorization: `Bearer ${seed.token}` },
         payload: {
           name: `pin-noise-${crypto.randomUUID().slice(0, 6)}`,
@@ -369,7 +369,7 @@ describe("Agent WS — agent:pinned push on create/bind", () => {
       // Touch only displayName — no clientId transition, should stay silent.
       const res = await app.inject({
         method: "PATCH",
-        url: `/api/v1/admin/agents/${existing.uuid}`,
+        url: `/api/v1/agents/${existing.uuid}`,
         headers: { authorization: `Bearer ${seed.token}` },
         payload: { displayName: "Renamed" },
       });

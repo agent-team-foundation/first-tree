@@ -4,7 +4,7 @@ import type { Database } from "../db/connection.js";
 import { adapterConfigs } from "../db/schema/adapter-configs.js";
 import { agents } from "../db/schema/agents.js";
 import { AppError, BadRequestError, ConflictError, NotFoundError } from "../errors.js";
-import type { MemberScope } from "./access-control.js";
+import type { OrgScope } from "../scope/types.js";
 import { encryptCredentials } from "./crypto.js";
 
 /** Server misconfiguration — not a client error. */
@@ -64,7 +64,7 @@ export async function listAdapterConfigs(db: Database) {
  * (`agent/feishu-bot.ts`) that only need a raw read don't accidentally pay
  * for the join.
  */
-export async function listAdapterConfigsForMember(db: Database, scope: MemberScope) {
+export async function listAdapterConfigsForMember(db: Database, scope: OrgScope) {
   const conditions = [eq(agents.organizationId, scope.organizationId), ne(agents.status, "deleted")];
   if (scope.role !== "admin") {
     conditions.push(eq(agents.managerId, scope.memberId));

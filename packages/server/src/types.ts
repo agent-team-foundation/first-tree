@@ -1,4 +1,5 @@
 import type { Database } from "./db/connection.js";
+import type { UserScope } from "./scope/types.js";
 import type { AdapterManager } from "./services/adapter-manager.js";
 import type { ConfigService } from "./services/config-service.js";
 import type { Notifier } from "./services/notifier.js";
@@ -8,14 +9,6 @@ export type AgentIdentity = {
   name: string | null;
   organizationId: string;
   inboxId: string;
-};
-
-export type MemberIdentity = {
-  userId: string;
-  memberId: string;
-  organizationId: string;
-  role: string;
-  agentId: string;
 };
 
 declare module "fastify" {
@@ -30,6 +23,7 @@ declare module "fastify" {
   }
   interface FastifyRequest {
     agent?: AgentIdentity;
-    member?: MemberIdentity;
+    /** JWT-verified user identity. Populated by `userAuthHook`. */
+    user?: UserScope;
   }
 }

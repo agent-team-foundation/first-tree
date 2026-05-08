@@ -146,12 +146,31 @@ export function formatCheckReport(items: CheckItem[]): string {
 
 // ── Create flow ──────────────────────────────────────────────────────
 
+async function resolveDefaultOrgId(serverUrl: string, accessToken: string): Promise<string> {
+  const res = await fetch(`${serverUrl}/api/v1/me`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) throw new Error(`/me HTTP ${res.status}`);
+  const me = (await res.json()) as {
+    memberships: Array<{ organizationId: string; organizationName: string }>;
+    defaultOrganizationId?: string | null;
+  };
+  if (me.defaultOrganizationId && me.memberships.some((m) => m.organizationId === me.defaultOrganizationId)) {
+    return me.defaultOrganizationId;
+  }
+  if (me.memberships.length === 1 && me.memberships[0]) return me.memberships[0].organizationId;
+  if (me.memberships.length === 0) throw new Error("You don't belong to any organization");
+  throw new Error("Multiple organizations — pass --org explicitly to onboard");
+}
+
 async function createAgentViaAdmin(
   serverUrl: string,
   accessToken: string,
+  orgId: string,
   body: Record<string, unknown>,
 ): Promise<{ uuid: string; name: string | null }> {
-  const res = await fetch(`${serverUrl}/api/v1/admin/agents`, {
+  const res = await fetch(`${serverUrl}/api/v1/orgs/${encodeURIComponent(orgId)}/agents`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -176,7 +195,8 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
   if (args.domains) metadata.domains = args.domains.split(",").map((d) => d.trim());
 
   print.line(`Creating agent "${args.id}"...\n`);
-  const primary = await createAgentViaAdmin(serverUrl, accessToken, {
+  const orgId = await resolveDefaultOrgId(serverUrl, accessToken);
+  const primary = await createAgentViaAdmin(serverUrl, accessToken, orgId, {
     name: args.id,
     type: args.type,
     displayName: args.displayName ?? args.id,
@@ -202,7 +222,7 @@ export async function onboardCreate(args: OnboardArgs): Promise<void> {
   if (args.assistant) {
     print.line(`Creating assistant "${args.assistant}"...\n`);
     try {
-      const assistant = await createAgentViaAdmin(serverUrl, accessToken, {
+      const assistant = await createAgentViaAdmin(serverUrl, accessToken, orgId, {
         name: args.assistant,
         type: "personal_assistant",
         displayName: args.assistant,

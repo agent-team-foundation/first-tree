@@ -72,7 +72,7 @@ describe("Client ownership transfer (claim)", () => {
 
     const res = await app.inject({
       method: "POST",
-      url: `/api/v1/me/clients/${s.clientId}/claim`,
+      url: `/api/v1/clients/${s.clientId}/claim`,
       headers: { authorization: `Bearer ${s.bob.accessToken}` },
       payload: {},
     });
@@ -112,7 +112,7 @@ describe("Client ownership transfer (claim)", () => {
     // Bob claims first.
     const claim1 = await app.inject({
       method: "POST",
-      url: `/api/v1/me/clients/${s.clientId}/claim`,
+      url: `/api/v1/clients/${s.clientId}/claim`,
       headers: { authorization: `Bearer ${s.bob.accessToken}` },
       payload: {},
     });
@@ -135,7 +135,7 @@ describe("Client ownership transfer (claim)", () => {
     // Alice claims back.
     const claim2 = await app.inject({
       method: "POST",
-      url: `/api/v1/me/clients/${s.clientId}/claim`,
+      url: `/api/v1/clients/${s.clientId}/claim`,
       headers: { authorization: `Bearer ${s.alice.accessToken}` },
       payload: {},
     });
@@ -168,7 +168,7 @@ describe("Client ownership transfer (claim)", () => {
     const s = await seed("idem");
     const res = await app.inject({
       method: "POST",
-      url: `/api/v1/me/clients/${s.clientId}/claim`,
+      url: `/api/v1/clients/${s.clientId}/claim`,
       headers: { authorization: `Bearer ${s.alice.accessToken}` },
       payload: {},
     });
@@ -294,7 +294,7 @@ describe("Client ownership transfer (claim)", () => {
 
     const claimRes = await app.inject({
       method: "POST",
-      url: `/api/v1/me/clients/${s.clientId}/claim`,
+      url: `/api/v1/clients/${s.clientId}/claim`,
       headers: { authorization: `Bearer ${s.bob.accessToken}` },
       payload: {},
     });

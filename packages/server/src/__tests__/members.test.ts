@@ -7,13 +7,15 @@ describe("Members API", () => {
 
   async function authedRequest(app: FastifyInstance) {
     const admin = await createTestAdmin(app, { username: `member-admin-${Date.now()}` });
-    return (method: string, url: string, payload?: Record<string, unknown>) =>
+    const orgId = admin.organizationId;
+    const req = (method: string, url: string, payload?: Record<string, unknown>) =>
       app.inject({
         method: method as "GET" | "POST" | "PATCH" | "DELETE",
-        url,
+        url: url.replace("/api/v1/members", `/api/v1/orgs/${orgId}/members`),
         headers: { authorization: `Bearer ${admin.accessToken}` },
         payload,
       });
+    return req;
   }
 
   describe("GET /api/v1/members", () => {
@@ -118,16 +120,17 @@ describe("Members API", () => {
   describe("permission enforcement", () => {
     it("member role cannot create members", async () => {
       const app = getApp();
-      const adminReq = await authedRequest(app);
+      const admin = await createTestAdmin(app, { username: `member-admin-perm-${Date.now()}` });
+      const orgId = admin.organizationId;
       const username = `member-user-${Date.now()}`;
-      const createRes = await adminReq("POST", "/api/v1/members", {
-        username,
-        displayName: "Regular Member",
-        role: "member",
+      const createRes = await app.inject({
+        method: "POST",
+        url: `/api/v1/orgs/${orgId}/members`,
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+        payload: { username, displayName: "Regular Member", role: "member" },
       });
       const { password } = createRes.json<{ password: string }>();
 
-      // Login as the regular member
       const loginRes = await app.inject({
         method: "POST",
         url: "/api/v1/auth/login",
@@ -135,10 +138,9 @@ describe("Members API", () => {
       });
       const { accessToken } = loginRes.json<{ accessToken: string }>();
 
-      // Try to create a member — should be forbidden
       const res = await app.inject({
         method: "POST",
-        url: "/api/v1/members",
+        url: `/api/v1/orgs/${orgId}/members`,
         headers: { authorization: `Bearer ${accessToken}` },
         payload: { username: "another", displayName: "Another", role: "member" },
       });

@@ -5,7 +5,7 @@ import {
   safeRedirectPath,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { signTokensForMember } from "../../services/auth.js";
+import { signTokensForUser } from "../../services/auth.js";
 import { findOrCreateUserFromGithub, type GithubProfile } from "../../services/auth-identity.js";
 import { exchangeCodeForProfile } from "../../services/github-oauth.js";
 import { findActiveByToken, recordRedemption } from "../../services/invitation.js";
@@ -158,7 +158,7 @@ async function completeOauthFlow(
   // If `next` is an /invite/<token> path, join that org instead of
   // auto-provisioning. Invite paths look like `/invite/abc123`.
   const inviteMatch = /^\/invite\/([^/?#]+)/.exec(next);
-  let memberInfo: { memberId: string; organizationId: string; role: "admin" | "member" } | null = null;
+  let resolved = false;
 
   if (inviteMatch?.[1]) {
     const token = inviteMatch[1];
@@ -166,7 +166,7 @@ async function completeOauthFlow(
     if (!inv) {
       return reply.status(404).send({ error: "Invitation not found or no longer valid" });
     }
-    const member = await ensureMembership(app.db, {
+    await ensureMembership(app.db, {
       userId,
       organizationId: inv.organizationId,
       role: inv.role === "admin" ? "admin" : "member",
@@ -179,54 +179,33 @@ async function completeOauthFlow(
       ip: request.ip,
       userAgent: request.headers["user-agent"] ?? null,
     });
-    memberInfo = {
-      memberId: member.id,
-      organizationId: member.organizationId,
-      role: member.role === "admin" ? "admin" : "member",
-    };
     joinPath = "invite";
+    resolved = true;
     // Drop the now-consumed invite path; land on the team dashboard so the
     // onboarding modal can layer on top.
     next = "/";
   } else {
     const primary = await pickPrimaryMembership(app.db, userId);
     if (primary) {
-      memberInfo = {
-        memberId: primary.memberId,
-        organizationId: primary.organizationId,
-        role: primary.role === "admin" ? "admin" : "member",
-      };
+      resolved = true;
       // joinPath stays "returning"; preserve caller's original `next` intent.
     } else {
-      const personal = await createPersonalTeam(app.db, {
+      await createPersonalTeam(app.db, {
         userId,
         loginSeed: profile.login,
         userDisplayName: profile.displayName?.trim() || profile.login,
       });
-      memberInfo = {
-        memberId: personal.memberId,
-        organizationId: personal.organizationId,
-        role: "admin",
-      };
       joinPath = "solo";
+      resolved = true;
       next = "/";
     }
   }
 
-  if (!memberInfo) {
+  if (!resolved) {
     return reply.status(500).send({ error: "Failed to resolve membership" });
   }
 
-  const tokens = await signTokensForMember(
-    app.config.secrets.jwtSecret,
-    {
-      userId,
-      memberId: memberInfo.memberId,
-      organizationId: memberInfo.organizationId,
-      role: memberInfo.role,
-    },
-    app.config.auth,
-  );
+  const tokens = await signTokensForUser(app.config.secrets.jwtSecret, userId, app.config.auth);
 
   const fragment = new URLSearchParams({
     access: tokens.accessToken,
