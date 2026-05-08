@@ -211,6 +211,21 @@ export const serverConfigSchema = defineConfig({
         env: "FIRST_TREE_HUB_OTEL_ENVIRONMENT",
       }),
       sampleRate: field(z.number().min(0).max(1).default(1)),
+      /**
+       * Whether to attach `client.ip` to HTTP root spans. **Off by default**
+       * because Hub is open-source and IP addresses are personal data under
+       * GDPR — defaulting to capture would force every self-hosted operator
+       * to think about deletion / retention. Operators who need IP-level
+       * audit (rate-limit forensics, login brute-force investigation, etc.)
+       * can opt in via the env var.
+       *
+       * `user-agent`, `referer`, `request.id`, `user.id` etc. are still
+       * captured unconditionally — those are not PII identifiers on their
+       * own and have high day-to-day debug value.
+       */
+      captureClientIp: field(z.boolean().default(false), {
+        env: "FIRST_TREE_HUB_OTEL_CAPTURE_CLIENT_IP",
+      }),
     }),
   },
 });

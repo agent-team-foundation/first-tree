@@ -1,8 +1,17 @@
 import type { AgentType } from "@agent-team-foundation/first-tree-hub-shared";
+import bcrypt from "bcrypt";
+import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll } from "vitest";
 import { buildApp } from "../app.js";
 import type { Config } from "../config.js";
+import { clients } from "../db/schema/clients.js";
+import { members } from "../db/schema/members.js";
+import { users } from "../db/schema/users.js";
+import { createAgent } from "../services/agent.js";
+import { signTokensForMember } from "../services/auth.js";
+import { resolveDefaultOrgId } from "../services/organization.js";
+import { uuidv7 } from "../uuid.js";
 
 /**
  * Reusable password-hash placeholder for tests that need a `users` row but
@@ -14,6 +23,21 @@ import type { Config } from "../config.js";
  * throwing.
  */
 export const INVALID_BCRYPT_PLACEHOLDER = `$2b$04$${"x".repeat(22)}${"y".repeat(31)}`;
+
+const DEFAULT_TEST_PASSWORD = "testpassword123";
+const TEST_JWT_SECRET = "test-jwt-secret-key-for-vitest";
+
+/**
+ * Cache the bcrypt hash for the default test password so we only pay the
+ * (cost-factor-1, ~20ms) hashing cost once per worker process. Tests that
+ * pass a custom password still hash inline.
+ */
+let defaultPasswordHash: Promise<string> | undefined;
+function hashTestPassword(password: string): Promise<string> {
+  if (password !== DEFAULT_TEST_PASSWORD) return bcrypt.hash(password, 1);
+  if (!defaultPasswordHash) defaultPasswordHash = bcrypt.hash(password, 1);
+  return defaultPasswordHash;
+}
 
 type InjectResponse = Awaited<ReturnType<FastifyInstance["inject"]>>;
 
@@ -102,9 +126,6 @@ export async function createTestAgent(
 ) {
   const admin = await createTestAdmin(app, { username: `u-${crypto.randomUUID().slice(0, 8)}` });
 
-  const { clients } = await import("../db/schema/clients.js");
-  const { members } = await import("../db/schema/members.js");
-  const { eq } = await import("drizzle-orm");
   const [member] = await app.db.select().from(members).where(eq(members.id, admin.memberId)).limit(1);
   if (!member) throw new Error("admin member missing after setup");
   const clientId = `cli-${crypto.randomUUID().slice(0, 8)}`;
@@ -115,7 +136,6 @@ export async function createTestAgent(
     status: "connected",
   });
 
-  const { createAgent } = await import("../services/agent.js");
   const type = opts.type ?? "autonomous_agent";
   const agent = await createAgent(app.db, {
     name: opts.name ?? `test-agent-${crypto.randomUUID().slice(0, 8)}`,
@@ -175,9 +195,6 @@ export function agentRequest(app: FastifyInstance, accessToken: string, agentUui
  */
 export async function seedAgentFactory(app: FastifyInstance) {
   const admin = await createTestAdmin(app, { username: `seed-${crypto.randomUUID().slice(0, 8)}` });
-  const { clients } = await import("../db/schema/clients.js");
-  const { members } = await import("../db/schema/members.js");
-  const { eq } = await import("drizzle-orm");
   const [member] = await app.db.select().from(members).where(eq(members.id, admin.memberId)).limit(1);
   if (!member) throw new Error("seed admin member missing");
   const clientId = `cli-seed-${crypto.randomUUID().slice(0, 8)}`;
@@ -188,7 +205,6 @@ export async function seedAgentFactory(app: FastifyInstance) {
     status: "connected",
   });
 
-  const { createAgent } = await import("../services/agent.js");
   return async (opts: { name?: string; type?: AgentType; displayName?: string } = {}) => {
     return createAgent(app.db, {
       name: opts.name ?? `seed-agent-${crypto.randomUUID().slice(0, 8)}`,
@@ -202,7 +218,6 @@ export async function seedAgentFactory(app: FastifyInstance) {
 
 /** Seed a claimed, connected `clients` row owned by `userId` within `organizationId`. Returns the id. */
 export async function seedClient(app: FastifyInstance, userId: string, organizationId: string): Promise<string> {
-  const { clients } = await import("../db/schema/clients.js");
   const id = `cli-${crypto.randomUUID().slice(0, 8)}`;
   await app.db.insert(clients).values({ id, userId, organizationId, status: "connected" });
   return id;
@@ -216,8 +231,6 @@ export async function seedClient(app: FastifyInstance, userId: string, organizat
  */
 export async function createAdminContext(app: FastifyInstance, opts: { username?: string; password?: string } = {}) {
   const admin = await createTestAdmin(app, opts);
-  const { members } = await import("../db/schema/members.js");
-  const { eq } = await import("drizzle-orm");
   const [member] = await app.db.select().from(members).where(eq(members.id, admin.memberId)).limit(1);
   if (!member) throw new Error("admin member missing after setup");
   const clientId = await seedClient(app, member.userId, member.organizationId);
@@ -226,16 +239,9 @@ export async function createAdminContext(app: FastifyInstance, opts: { username?
 
 /** Create a user + admin member + human agent and return JWT + memberId. */
 export async function createTestAdmin(app: FastifyInstance, opts: { username?: string; password?: string } = {}) {
-  const bcrypt = await import("bcrypt");
-  const { users } = await import("../db/schema/users.js");
-  const { members } = await import("../db/schema/members.js");
-  const { uuidv7 } = await import("../uuid.js");
-  const { createAgent } = await import("../services/agent.js");
-  const { resolveDefaultOrgId } = await import("../services/organization.js");
-
   const username = opts.username ?? `admin-${crypto.randomUUID().slice(0, 8)}`;
-  const password = opts.password ?? "testpassword123";
-  const passwordHash = await bcrypt.hash(password, 1);
+  const password = opts.password ?? DEFAULT_TEST_PASSWORD;
+  const passwordHash = await hashTestPassword(password);
 
   const userId = uuidv7();
   const orgId = await resolveDefaultOrgId(app.db);
@@ -272,11 +278,16 @@ export async function createTestAdmin(app: FastifyInstance, opts: { username?: s
     return created;
   });
 
-  const loginRes = await app.inject({
-    method: "POST",
-    url: "/api/v1/auth/login",
-    payload: { username, password },
-  });
-  const body = loginRes.json<{ accessToken: string; refreshToken: string }>();
-  return { username, password, userId, memberId, organizationId: orgId, humanAgentUuid: agent.uuid, ...body };
+  // Skip the `/auth/login` HTTP round-trip. The test app's JWT secret is
+  // pinned by createTestApp; signing in-process avoids fastify routing +
+  // bcrypt.compare + an extra DB roundtrip per test setup. Tests that
+  // explicitly exercise the login path still call `/auth/login` themselves
+  // (auth.test.ts, admin-agent-config.test.ts) — they get an *additional*
+  // pair of tokens, not the ones we sign here.
+  const tokens = await signTokensForMember(
+    TEST_JWT_SECRET,
+    { userId, memberId, organizationId: orgId, role: "admin" },
+    { accessTokenExpiry: "30m", refreshTokenExpiry: "30d" },
+  );
+  return { username, password, userId, memberId, organizationId: orgId, humanAgentUuid: agent.uuid, ...tokens };
 }

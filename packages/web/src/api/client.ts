@@ -87,6 +87,22 @@ export class ApiError extends Error {
 
 let refreshPromise: Promise<StoredTokens | null> | null = null;
 
+/**
+ * Refresh the stored access token via `/auth/refresh`. Reads the current
+ * refresh token from `localStorage` and persists the new pair on success.
+ *
+ * Exposed so non-HTTP transports (the admin WebSocket hook) can drive a
+ * refresh on auth failure and recover without waiting for an unrelated HTTP
+ * request to coincidentally trip the `request()` 401 path. Concurrent
+ * callers share `refreshPromise`, so simultaneous HTTP-401 and WS-4001
+ * recoveries fire only one `/auth/refresh` request.
+ */
+export async function refreshAccessToken(): Promise<StoredTokens | null> {
+  const tokens = getStoredTokens();
+  if (!tokens?.refreshToken) return null;
+  return tryRefresh(tokens.refreshToken);
+}
+
 async function tryRefresh(refreshToken: string): Promise<StoredTokens | null> {
   // Deduplicate concurrent refresh attempts
   if (refreshPromise) return refreshPromise;

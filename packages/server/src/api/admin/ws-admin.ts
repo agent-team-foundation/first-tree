@@ -140,8 +140,9 @@ export function adminWsRoutes(notifier: Notifier, jwtSecret: string) {
   }
 
   return async (app: FastifyInstance): Promise<void> => {
-    // See ws-client.ts for why config.otel is disabled on WS upgrade routes.
-    app.get("/admin", { websocket: true, config: { otel: false } }, async (socket, request) => {
+    // See ws-client.ts for why this route is excluded from HTTP tracing
+    // (handled in app.ts via autotelic's `ignoreRoutes`).
+    app.get("/admin", { websocket: true }, async (socket, request) => {
       startWsConnectionSpan(socket, { remoteIp: request.ip });
 
       const token = (request.query as Record<string, string>).token;

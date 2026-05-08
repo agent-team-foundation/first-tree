@@ -20,7 +20,7 @@ export async function adminAgentConfigRoutes(app: FastifyInstance): Promise<void
     return cfg;
   });
 
-  app.patch<{ Params: { uuid: string } }>("/:uuid/config", async (request) => {
+  app.patch<{ Params: { uuid: string } }>("/:uuid/config", { config: { otelRecordBody: true } }, async (request) => {
     const member = requireMember(request);
     await assertCanManage(app.db, memberScope(request), request.params.uuid);
     const body = updateAgentRuntimeConfigSchema.parse(request.body);
@@ -28,10 +28,14 @@ export async function adminAgentConfigRoutes(app: FastifyInstance): Promise<void
     return updated;
   });
 
-  app.post<{ Params: { uuid: string } }>("/:uuid/config/dry-run", async (request) => {
-    await assertCanManage(app.db, memberScope(request), request.params.uuid);
-    const body = dryRunAgentRuntimeConfigSchema.parse(request.body);
-    const result = await app.configService.dryRun(request.params.uuid, body.payload);
-    return result;
-  });
+  app.post<{ Params: { uuid: string } }>(
+    "/:uuid/config/dry-run",
+    { config: { otelRecordBody: true } },
+    async (request) => {
+      await assertCanManage(app.db, memberScope(request), request.params.uuid);
+      const body = dryRunAgentRuntimeConfigSchema.parse(request.body);
+      const result = await app.configService.dryRun(request.params.uuid, body.payload);
+      return result;
+    },
+  );
 }

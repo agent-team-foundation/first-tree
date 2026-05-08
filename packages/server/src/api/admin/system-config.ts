@@ -7,7 +7,7 @@ export async function adminSystemConfigRoutes(app: FastifyInstance): Promise<voi
     return systemConfigService.getAllConfigs(app.db);
   });
 
-  app.patch("/", async (request) => {
+  app.patch("/", { config: { otelRecordBody: true } }, async (request) => {
     const body = updateSystemConfigSchema.parse(request.body);
     const result = await systemConfigService.updateConfigs(app.db, body);
     app.notifier.notifyConfigChange("system_configs").catch(() => {});

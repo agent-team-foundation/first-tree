@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { createLogger } from "./logger.js";
-import { currentTraceId } from "./telemetry.js";
+import { currentTraceId } from "./otel-helpers.js";
 
 /**
  * Fastify plugin that:

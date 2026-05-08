@@ -1,4 +1,6 @@
+import { FIRST_TREE_HUB_ATTR } from "@agent-team-foundation/first-tree-hub-shared/observability";
 import { Client, EventDispatcher, LoggerLevel, WSClient } from "@larksuiteoapi/node-sdk";
+import { trace } from "@opentelemetry/api";
 import { and, eq, ne, sql } from "drizzle-orm";
 import type { FastifyBaseLogger } from "fastify";
 import type { Database } from "../db/connection.js";
@@ -230,14 +232,12 @@ export function createAdapterManager(
     async processOutbound() {
       if (bots.size === 0) return { sent: 0, errors: 0 };
 
-      return withSpan("adapter.outbound feishu", adapterAttrs({ platform: "feishu" }), async () => {
-        try {
-          return await processFeishuOutbound(db, findBotByAgentId, log);
-        } catch (err) {
-          log.error({ err }, "Feishu outbound processing error");
-          return { sent: 0, errors: 1 };
-        }
-      });
+      try {
+        return await processFeishuOutbound(db, findBotByAgentId, log);
+      } catch (err) {
+        log.error({ err }, "Feishu outbound processing error");
+        return { sent: 0, errors: 1 };
+      }
     },
 
     async editOutboundMessage(messageId: string, format: string, content: unknown): Promise<boolean> {
@@ -556,9 +556,6 @@ async function processFeishuOutbound(
   findBotByAgentId: (agentId: string) => ManagedBot | undefined,
   log: FastifyBaseLogger,
 ): Promise<{ sent: number; errors: number }> {
-  let sent = 0;
-  let errorCount = 0;
-
   // Claim pending inbox entries for feishu-bound human agents
   const claimed = await db.execute<{
     id: number;
@@ -579,6 +576,31 @@ async function processFeishuOutbound(
     )
     RETURNING id, inbox_id, message_id, chat_id
   `);
+
+  // Empty tick — emit no span. Without this short-circuit the worker
+  // produces a steady ~17k spans/day per bot at the 5s scheduling cadence,
+  // overwhelmingly empty. See observability overhaul rationale.
+  if (claimed.length === 0) return { sent: 0, errors: 0 };
+
+  return withSpan(
+    "adapter.outbound feishu",
+    {
+      ...adapterAttrs({ platform: "feishu" }),
+      [FIRST_TREE_HUB_ATTR.BG_TASK_NAME]: "adapter.outbound.feishu",
+      [FIRST_TREE_HUB_ATTR.BG_TASK_CLAIMED_COUNT]: claimed.length,
+    },
+    () => processFeishuOutboundClaimed(db, findBotByAgentId, log, claimed),
+  );
+}
+
+async function processFeishuOutboundClaimed(
+  db: Database,
+  findBotByAgentId: (agentId: string) => ManagedBot | undefined,
+  log: FastifyBaseLogger,
+  claimed: ReadonlyArray<{ id: number; inbox_id: string; message_id: string; chat_id: string | null }>,
+): Promise<{ sent: number; errors: number }> {
+  let sent = 0;
+  let errorCount = 0;
 
   // Dedup: when a chat has multiple feishu-bound humans, the same message
   // produces multiple inbox entries. We only send once per (message, channel).
@@ -657,6 +679,14 @@ async function processFeishuOutbound(
       log.error({ entryId: entry.id, err }, "Failed to send outbound Feishu message");
       errorCount++;
     }
+  }
+
+  // Stamp final counts onto the active span so dashboards can see how many
+  // of the claimed entries actually shipped vs. errored without a join.
+  const span = trace.getActiveSpan();
+  if (span) {
+    span.setAttribute(FIRST_TREE_HUB_ATTR.BG_TASK_SENT_COUNT, sent);
+    span.setAttribute(FIRST_TREE_HUB_ATTR.BG_TASK_ERROR_COUNT, errorCount);
   }
 
   return { sent, errors: errorCount };

@@ -56,48 +56,56 @@ function agentMessageWriteRateLimit(max: number) {
 export async function agentMessageRoutes(app: FastifyInstance): Promise<void> {
   const writeRateLimit = agentMessageWriteRateLimit(app.config.rateLimit?.agentMessageMax ?? 30);
 
-  app.post<{ Params: { chatId: string } }>("/:chatId/messages", { config: writeRateLimit }, async (request, reply) => {
-    const identity = requireAgent(request);
-    await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
-    const body = sendMessageSchema.parse(request.body);
-    const prepared = await prepareImageOutbound(app.db, app.notifier, request.params.chatId, body);
-    const { message: msg, recipients } = await messageService.sendMessage(
-      app.db,
-      request.params.chatId,
-      identity.uuid,
-      prepared,
-      { enforceGroupMention: true, normalizeMentionsInContent: true },
-    );
+  app.post<{ Params: { chatId: string } }>(
+    "/:chatId/messages",
+    { config: { ...writeRateLimit, otelRecordBody: true } },
+    async (request, reply) => {
+      const identity = requireAgent(request);
+      await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
+      const body = sendMessageSchema.parse(request.body);
+      const prepared = await prepareImageOutbound(app.db, app.notifier, request.params.chatId, body);
+      const { message: msg, recipients } = await messageService.sendMessage(
+        app.db,
+        request.params.chatId,
+        identity.uuid,
+        prepared,
+        { enforceGroupMention: true, normalizeMentionsInContent: true },
+      );
 
-    notifyRecipients(app.notifier, recipients, msg.id);
+      notifyRecipients(app.notifier, recipients, msg.id);
 
-    return reply.status(201).send({
-      ...msg,
-      createdAt: msg.createdAt.toISOString(),
-    });
-  });
+      return reply.status(201).send({
+        ...msg,
+        createdAt: msg.createdAt.toISOString(),
+      });
+    },
+  );
 
-  app.patch<{ Params: { chatId: string; messageId: string } }>("/:chatId/messages/:messageId", async (request) => {
-    const identity = requireAgent(request);
-    await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
-    const body = editMessageSchema.parse(request.body);
-    const msg = await messageService.editMessage(
-      app.db,
-      request.params.chatId,
-      request.params.messageId,
-      identity.uuid,
-      body,
-    );
+  app.patch<{ Params: { chatId: string; messageId: string } }>(
+    "/:chatId/messages/:messageId",
+    { config: { otelRecordBody: true } },
+    async (request) => {
+      const identity = requireAgent(request);
+      await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
+      const body = editMessageSchema.parse(request.body);
+      const msg = await messageService.editMessage(
+        app.db,
+        request.params.chatId,
+        request.params.messageId,
+        identity.uuid,
+        body,
+      );
 
-    app.adapterManager
-      .editOutboundMessage(msg.id, msg.format, msg.content)
-      .catch((err) => log.error({ err, messageId: msg.id }, "failed to edit outbound message"));
+      app.adapterManager
+        .editOutboundMessage(msg.id, msg.format, msg.content)
+        .catch((err) => log.error({ err, messageId: msg.id }, "failed to edit outbound message"));
 
-    return {
-      ...msg,
-      createdAt: msg.createdAt.toISOString(),
-    };
-  });
+      return {
+        ...msg,
+        createdAt: msg.createdAt.toISOString(),
+      };
+    },
+  );
 
   app.get<{ Params: { chatId: string } }>("/:chatId/messages", async (request) => {
     const identity = requireAgent(request);
@@ -117,21 +125,25 @@ export async function agentMessageRoutes(app: FastifyInstance): Promise<void> {
 export async function agentSendToAgentRoutes(app: FastifyInstance): Promise<void> {
   const writeRateLimit = agentMessageWriteRateLimit(app.config.rateLimit?.agentMessageMax ?? 30);
 
-  app.post<{ Params: { name: string } }>("/:name/messages", { config: writeRateLimit }, async (request, reply) => {
-    const identity = requireAgent(request);
-    const body = sendToAgentSchema.parse(request.body);
-    const { message: msg, recipients } = await messageService.sendToAgent(
-      app.db,
-      identity.uuid,
-      request.params.name,
-      body,
-    );
+  app.post<{ Params: { name: string } }>(
+    "/:name/messages",
+    { config: { ...writeRateLimit, otelRecordBody: true } },
+    async (request, reply) => {
+      const identity = requireAgent(request);
+      const body = sendToAgentSchema.parse(request.body);
+      const { message: msg, recipients } = await messageService.sendToAgent(
+        app.db,
+        identity.uuid,
+        request.params.name,
+        body,
+      );
 
-    notifyRecipients(app.notifier, recipients, msg.id);
+      notifyRecipients(app.notifier, recipients, msg.id);
 
-    return reply.status(201).send({
-      ...msg,
-      createdAt: msg.createdAt.toISOString(),
-    });
-  });
+      return reply.status(201).send({
+        ...msg,
+        createdAt: msg.createdAt.toISOString(),
+      });
+    },
+  );
 }
