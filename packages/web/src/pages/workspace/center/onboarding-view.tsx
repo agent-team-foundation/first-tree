@@ -72,7 +72,7 @@ type Phase = "form" | "creating" | "timeout";
 type ResolvedBody = "step1" | "step2" | "step3-intro" | "step3-placeholder";
 
 export function OnboardingView() {
-  const { onboardingStep, refreshMe, organizationId, memberId } = useAuth();
+  const { onboardingStep, refreshMe, organizationId, memberId, role } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const stepOverride = searchParams.get("step");
   const [joinPath] = useState(() => readOnboardingJoinPath());
@@ -99,18 +99,25 @@ export function OnboardingView() {
     if (stepOverride === "tree") setStep3IntroDismissed(false);
   }, [stepOverride, setStep3IntroDismissed]);
 
+  // Step 1's PATCH /orgs/:id is gated by `requireOrgAdmin` server-side, so a
+  // non-admin member who somehow lands on Step 1 (lost joinPath flag,
+  // clicked the stepper pip) would just hit a 403. Skip Step 1 for them
+  // entirely — they joined an existing team and the team-rename pillar
+  // doesn't apply.
+  const canRenameTeam = role === "admin";
+
   const body = useMemo<ResolvedBody>(() => {
-    if (stepOverride === "team") return "step1";
+    if (stepOverride === "team" && canRenameTeam) return "step1";
     if (stepOverride === "agent") return "step2";
     if (stepOverride === "tree") return step3IntroDismissed ? "step3-placeholder" : "step3-intro";
     if (onboardingStep === "completed") {
       return step3IntroDismissed ? "step3-placeholder" : "step3-intro";
     }
-    if (onboardingStep === "connect" && !step1Confirmed && joinPath !== "invite") {
+    if (onboardingStep === "connect" && !step1Confirmed && joinPath !== "invite" && canRenameTeam) {
       return "step1";
     }
     return "step2";
-  }, [stepOverride, onboardingStep, step1Confirmed, step3IntroDismissed, joinPath]);
+  }, [stepOverride, onboardingStep, step1Confirmed, step3IntroDismissed, joinPath, canRenameTeam]);
 
   const advanceToStep2 = useCallback(() => {
     setStep1Confirmed(true);

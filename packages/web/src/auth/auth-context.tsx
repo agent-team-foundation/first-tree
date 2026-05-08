@@ -1,6 +1,6 @@
 import type { MeMembership } from "@agent-team-foundation/first-tree-hub-shared";
 import { useQueryClient } from "@tanstack/react-query";
-import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { login as loginApi } from "../api/auth.js";
 import {
   api,
@@ -211,14 +211,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [fetchMe, queryClient],
   );
 
+  // Track the latest dismissal stamp in a ref so `dismissOnboarding`'s
+  // rollback path can read it synchronously without depending on the
+  // setState updater closure (concurrent rendering can drop+re-run
+  // updaters, making the captured value unreliable).
+  const dismissedAtRef = useRef<string | null>(null);
+  useEffect(() => {
+    dismissedAtRef.current = onboardingDismissedAt;
+  }, [onboardingDismissedAt]);
+
   const dismissOnboarding = useCallback(async () => {
     // Optimistic: stamp client-side immediately so the stepper unmounts
     // without a round-trip. Server returns the canonical timestamp.
-    let prior: string | null = null;
-    setOnboardingDismissedAt((p) => {
-      prior = p;
-      return new Date().toISOString();
-    });
+    const prior = dismissedAtRef.current;
+    setOnboardingDismissedAt(new Date().toISOString());
     try {
       const res = await api.patch<{ dismissedAt: string | null }>("/me/onboarding", { dismissed: true });
       if (res?.dismissedAt) setOnboardingDismissedAt(res.dismissedAt);

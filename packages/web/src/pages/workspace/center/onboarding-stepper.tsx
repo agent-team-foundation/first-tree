@@ -34,10 +34,15 @@ const STEP_LABELS: Record<StepIndex, string> = {
 };
 
 export function OnboardingStepper() {
-  const { onboardingStep, onboardingDismissedAt, dismissOnboarding } = useAuth();
+  const { onboardingStep, onboardingDismissedAt, dismissOnboarding, role } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedChatId = searchParams.get("c");
   const stepOverride = searchParams.get("step");
+
+  // Step 1 is admin-only — its Continue handler PATCHes /orgs/:id which
+  // requires `requireOrgAdmin` server-side. For non-admin members the pip
+  // is rendered but disabled (visual-only completion mark).
+  const canRenameTeam = role === "admin";
 
   // Read the per-tab Step 1 acknowledgement flag every render. The flag is
   // written by `OnboardingView`'s Step1Body Continue handler, but the
@@ -75,6 +80,9 @@ export function OnboardingStepper() {
   const handleStepClick = (s: StepIndex) => {
     if (stepStates[s] === "pending") return;
     if (s === activeStep) return;
+    // Step 1 is admin-only (PATCH /orgs/:id is requireOrgAdmin server-side).
+    // Members see the completed pip as a no-op rather than a 403 surprise.
+    if (s === 1 && !canRenameTeam) return;
     const next = new URLSearchParams(searchParams);
     // CenterPanel routes ChatByIdView before OnboardingView, so the chat
     // URL has to come off when the user revisits Steps 1 / 2 — otherwise

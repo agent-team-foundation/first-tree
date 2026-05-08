@@ -135,16 +135,24 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
    * are emitted directly; this endpoint surfaces the web-driven ones into
    * the same log stream so a single funnel query covers the full flow.
    * Body shape is enum-validated so the server won't log arbitrary names.
+   *
+   * Rate-limited to keep a buggy or hostile authenticated tab from
+   * flooding the log stream. The cap is generous relative to legitimate
+   * funnel traffic (≤ 4 events per onboarding pass).
    */
-  app.post("/me/onboarding/events", async (request, reply) => {
-    const { userId } = requireUser(request);
-    const body = onboardingEventSchema.parse(request.body);
-    app.log.info(
-      { event: `onboarding.${body.event}`, userId, ...(body.attrs ?? {}) },
-      `onboarding funnel: ${body.event}`,
-    );
-    return reply.status(204).send();
-  });
+  app.post(
+    "/me/onboarding/events",
+    { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const { userId } = requireUser(request);
+      const body = onboardingEventSchema.parse(request.body);
+      app.log.info(
+        { event: `onboarding.${body.event}`, userId, ...(body.attrs ?? {}) },
+        `onboarding funnel: ${body.event}`,
+      );
+      return reply.status(204).send();
+    },
+  );
 
   /**
    * GET /me/github/repos — list the caller's accessible GitHub repos. Used

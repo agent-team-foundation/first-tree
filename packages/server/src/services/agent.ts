@@ -319,45 +319,52 @@ export async function createAgent(
   const resolvedDisplayName = data.displayName?.trim() || name || "Unnamed Agent";
 
   try {
-    const [agent] = await db
-      .insert(agents)
-      .values({
-        uuid,
-        name,
-        organizationId: orgId,
-        type: data.type,
-        displayName: resolvedDisplayName,
-        delegateMention: data.delegateMention ?? null,
-        inboxId,
-        source: data.source ?? null,
-        visibility: data.visibility ?? defaultVisibility(data.type),
-        metadata: data.metadata ?? {},
-        managerId,
-        clientId,
-        runtimeProvider,
-      })
-      .returning();
+    // Wrap both inserts in a transaction so the agent row is never visible
+    // without its companion `agent_configs` row. Onboarding Step 2 relies
+    // on the gitRepos seed being present at the moment the agent's first
+    // chat session starts; a partial insert would land the user in an
+    // empty workspace.
+    const agent = await db.transaction(async (tx) => {
+      const [row] = await tx
+        .insert(agents)
+        .values({
+          uuid,
+          name,
+          organizationId: orgId,
+          type: data.type,
+          displayName: resolvedDisplayName,
+          delegateMention: data.delegateMention ?? null,
+          inboxId,
+          source: data.source ?? null,
+          visibility: data.visibility ?? defaultVisibility(data.type),
+          metadata: data.metadata ?? {},
+          managerId,
+          clientId,
+          runtimeProvider,
+        })
+        .returning();
 
-    if (!agent) throw new Error("Unexpected: INSERT RETURNING produced no row");
+      if (!row) throw new Error("Unexpected: INSERT RETURNING produced no row");
 
-    // Seed the version=1 config with any caller-provided overrides (today
-    // only `gitRepos`, used by onboarding Step 2 to atomically bind the
-    // picked repo). Doing this on insert avoids a follow-up PATCH race
-    // against the agent's first chat session, which would otherwise call
-    // `prepareGitWorktrees` against an empty payload.
-    const initialPayload = defaultRuntimeConfigPayload(runtimeProvider);
-    if (data.gitRepos && data.gitRepos.length > 0) {
-      initialPayload.gitRepos = data.gitRepos;
-    }
-    await db
-      .insert(agentConfigs)
-      .values({
-        agentId: agent.uuid,
-        version: 1,
-        payload: initialPayload,
-        updatedBy: "system",
-      })
-      .onConflictDoNothing();
+      // Seed the version=1 config with any caller-provided overrides
+      // (today only `gitRepos`, used by onboarding Step 2 to atomically
+      // bind the picked repo).
+      const initialPayload = defaultRuntimeConfigPayload(runtimeProvider);
+      if (data.gitRepos && data.gitRepos.length > 0) {
+        initialPayload.gitRepos = data.gitRepos;
+      }
+      await tx
+        .insert(agentConfigs)
+        .values({
+          agentId: row.uuid,
+          version: 1,
+          payload: initialPayload,
+          updatedBy: "system",
+        })
+        .onConflictDoNothing();
+
+      return row;
+    });
 
     return agent;
   } catch (err) {
