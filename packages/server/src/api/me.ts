@@ -293,18 +293,32 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
  * Infer the wizard step from observable runtime state. Refer to
  * proposal §"Onboarding 状态推断" for the rationale.
  *
- * Note: we deliberately do NOT filter by `clients.status='connected'`
- * here. The original "fact-is-state" reading would have flapped between
- * `completed` and `connect` every time the user's client briefly went
- * offline — UX disaster (the onboarding modal would re-pop). "Ever
- * connected" (= a clients row exists at all for this user/org) is still
- * fact-derived: deleting the row really does rewind the wizard, and
- * that's the explicit reset path.
+ * Both checks here are deliberately user-level — `wizardStep` represents
+ * the operator's product onboarding ("did they learn the tool yet?"),
+ * not the state of any individual team. Once a user has connected ANY
+ * machine and created ANY non-human agent in ANY of their memberships,
+ * they're done with onboarding everywhere.
+ *
+ * Earlier code keyed the agent check off `m.memberId`, which is the JWT
+ * default-org membership — effectively the membership that happened to
+ * be current the moment the access token was minted (no JWT swap on
+ * `/auth/switch-org`, decouple-client-from-identity §4.6). That made
+ * `wizardStep` flap based on which org the user signed in under, and
+ * pinned multi-org users in `create_agent` forever when their primary
+ * work happens in a non-default team — workspace then re-popped
+ * OnboardingView in every team they switched into, including ones with
+ * existing agents. Joining `members` on `userId` removes that coupling.
+ *
+ * The client check stays a simple `eq(clients.userId, …)` because
+ * `clients` already carries `user_id` directly (one client serves all of
+ * a user's orgs in the unified-token model). We deliberately do NOT
+ * filter by `clients.status='connected'`: the original "fact-is-state"
+ * reading would flap between `completed` and `connect` every time the
+ * user's client briefly went offline. "Ever connected" (= a clients row
+ * exists at all for this user) is still fact-derived: deleting the row
+ * really does rewind the wizard, and that's the explicit reset path.
  */
-async function inferWizardStep(
-  app: FastifyInstance,
-  m: { userId: string; memberId: string; organizationId: string },
-): Promise<WizardStep> {
+async function inferWizardStep(app: FastifyInstance, m: { userId: string }): Promise<WizardStep> {
   const [hasClient] = await app.db
     .select({ id: clients.id })
     .from(clients)
@@ -315,7 +329,15 @@ async function inferWizardStep(
   const [hasAgent] = await app.db
     .select({ uuid: agents.uuid })
     .from(agents)
-    .where(and(eq(agents.managerId, m.memberId), ne(agents.type, "human"), eq(agents.status, "active")))
+    .innerJoin(members, eq(members.id, agents.managerId))
+    .where(
+      and(
+        eq(members.userId, m.userId),
+        eq(members.status, "active"),
+        ne(agents.type, "human"),
+        eq(agents.status, "active"),
+      ),
+    )
     .limit(1);
   if (!hasAgent) return "create_agent";
   return "completed";
