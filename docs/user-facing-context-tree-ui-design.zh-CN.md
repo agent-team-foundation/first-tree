@@ -1,4 +1,4 @@
-# Context Tab Impact-first 产品设计
+# 面向用户的 Context Tree UI 产品设计
 
 ## 状态
 
@@ -6,11 +6,11 @@
 
 - [agent-team-foundation/first-tree-all#101](https://github.com/agent-team-foundation/first-tree-all/issues/101) — user-facing context-tree visualization
 - 依赖上游导航重构: [agent-team-foundation/first-tree-all#100](https://github.com/agent-team-foundation/first-tree-all/issues/100)
-- 实现计划: [context-tab-implementation-plan.zh-CN.md](context-tab-implementation-plan.zh-CN.md)
+- 技术方案: [user-facing-context-tree-ui-technical-plan.zh-CN.md](user-facing-context-tree-ui-technical-plan.zh-CN.md)
 
 ## 核心判断
 
-Context Tree 的第一用户是 **agent**。Hub `/context` 的第一任务不是让 human 浏览一棵树,而是让 human/operator 感知:
+Context Tree 的第一用户是 **agent**。面向用户的 Context Tree UI 的第一任务不是让 human 浏览一棵树,而是让 human/operator 感知:
 
 - agents 的判断不是黑盒,背后有 team context source;
 - 这份 context 正在随团队工作生长;
@@ -19,7 +19,7 @@ Context Tree 的第一用户是 **agent**。Hub `/context` 的第一任务不是
 
 一句话方案:
 
-> 在 Hub 中提供一个 Agent Context Impact surface,让用户优先看到哪些 Context Tree 变化可能影响 agents 的判断和行动,再通过 Tree Map 理解变化在团队认知树中的位置。
+> 在 Hub 中提供一个面向用户的 Agent Context Impact surface,让用户优先看到哪些 Context Tree 变化可能影响 agents 的判断和行动,再通过 Tree Map 理解变化在团队认知树中的位置。
 
 ## 设计原则
 

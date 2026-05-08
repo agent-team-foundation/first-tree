@@ -1,6 +1,6 @@
-# Context Tab 实现计划
+# 面向用户的 Context Tree UI 技术方案
 
-> 推荐设计已经把主体验从 Map-first 调整为 Impact-first。实现时应优先参考 [context-tab-impact-design.zh-CN.md](context-tab-impact-design.zh-CN.md)。本文档中的技术选型仍适用,但 Web 实现顺序应以 Impact Feed / Impact Detail 为先。
+> 推荐设计已经把主体验从 Map-first 调整为 Impact-first。实现时应优先参考 [user-facing-context-tree-ui-design.zh-CN.md](user-facing-context-tree-ui-design.zh-CN.md)。本文档中的技术选型仍适用,但 Web 实现顺序应以 Impact Feed / Impact Detail 为先。
 
 ## 目标
 
