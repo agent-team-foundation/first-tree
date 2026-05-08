@@ -1,161 +1,188 @@
-# Onboarding Recipe — 5 Steps
+# Onboarding Recipe (per-phase deep walkthrough)
 
-Run onboarding in this exact order. Each step has a concrete CLI call and a
-check that must pass before continuing.
+This file is the deep reference behind the SKILL.md phase summaries. SKILL.md is the source of truth for "what the agent does"; this file is the reference for "exact commands and their outputs". Read SKILL.md first.
 
-## Step 0: Inspect
+## Phase A — Pre-flight
 
-Before doing anything else, classify the current root:
+### Commands
 
 ```bash
 first-tree tree inspect --json
+first-tree --version
+gh auth status
 ```
 
-Read the `role` field. Use `references/role-decisions.md` to choose the
-binding mode for steps 2–3.
+### Reading inspect output
 
-If `role` is `tree-repo`, the user is already inside the tree repo. Stop and
-ask whether they meant to onboard a source repo. Onboarding does not run
-inside the tree repo itself.
+`tree inspect --json` returns at least:
 
-If `role` is `source-repo-bound` or `workspace-root-bound`, a binding already
-exists. Run `first-tree tree skill upgrade` to refresh shipped skills, then
-skip to step 4 (daemon) and step 5 (agents) — there is nothing to bind, but
-the daemon still needs to be installed or checked.
-
-## Step 1: Choose The Daemon Mode
-
-Ask the user one question:
-
-> Do you want the GitHub Scan daemon running on your local machine (`local`)
-> or in a hosted environment (`cloud`)?
-
-`local` is the only mode implemented today. If the user says `cloud`, tell
-them it is on the roadmap but not available yet, and continue with `local`.
-
-Do not start the daemon yet — that is step 4. Step 1 is a decision, not an
-action.
-
-## Step 2: Import Repos
-
-If `role` is `unbound-source-repo`, this step is a no-op — there is one repo,
-and it will be bound in step 3.
-
-If `role` is `unbound-workspace-root`, run:
-
-```bash
-first-tree tree workspace sync --dry-run --json
+```json
+{
+  "classification": "git-repo" | "workspace-root" | ...,
+  "role": "unbound-source-repo" | "unbound-workspace-root" | "source-repo-bound" | "workspace-root-bound" | "tree-repo" | "unknown",
+  "rootPath": "<absolute-path>",
+  "binding": {
+    "bindingMode": "standalone-source" | "shared-source" | "workspace-root" | "workspace-member" | null,
+    "treeMode": "dedicated" | "shared" | null,
+    "treeRepoName": "<name>" | undefined,
+    "treeRemoteUrl": "<url>" | undefined,
+    "workspaceId": "<id>" | undefined
+  }
+}
 ```
 
-Confirm the discovered child repos match what the user expects. Then run the
-real sync as part of step 3 (tree init handles it).
+The `binding` block only appears when role is `*-bound`. For `unbound-*` and `unknown`, the only fields you can rely on are `classification`, `role`, `rootPath`.
 
-The current CLI does not auto-generate initial tree content from child-repo
-code. After step 3 lands the tree scaffolding, ask the user whether they want
-to draft NODE.md content from the child repos manually before continuing.
+### Path computation
 
-## Step 3: Init Or Bind The Tree
+```text
+source_root          = rootPath
+tree_repo_name       = binding.treeRepoName            (only if bound)
+tree_remote_url      = binding.treeRemoteUrl           (only if bound and published)
+tree_root_candidate  = dirname(source_root) + "/" + tree_repo_name
+                       (only if bound; this is the dedicated-mode sibling)
+tmp_clone_root       = source_root + "/.first-tree/tmp/" + tree_repo_name
+                       (only used if no local checkout exists)
+```
 
-Two paths.
+If `tree_root_candidate` exists and contains `.first-tree/`, that's `tree_root`. Otherwise resolve in Phase B (post-init) or fall back to `tmp_clone_root` after `git clone`.
 
-### 3a — Create A New Tree
+### Exit gate
 
-The user does not have an existing tree:
+You should know:
+
+- The `role`.
+- `source_root` (absolute).
+- Whether `gh` is authenticated.
+- The CLI version.
+
+If `role == "tree-repo"`: stop. Tell the user, do not advance.
+
+## Phase B — Bind (unbound → bound)
+
+### Single repo (`unbound-source-repo`)
 
 ```bash
-# Single repo with its own dedicated tree
+first-tree tree skill install --root <source_root>
 first-tree tree init --tree-mode dedicated
-
-# Workspace with a new shared tree
-first-tree tree init --scope workspace --tree-mode shared --workspace-id <id>
+first-tree tree verify --tree-path <dirname(source_root)>/<source_repo_name>-tree
 ```
 
-`tree init` infers `--scope` from the inspect role unless you pass it
-explicitly. The default `--tree-path` is a sibling directory named
-`<repo>-tree` for dedicated trees.
+Default tree name = `<repo_name>-tree`. Override with `--tree-name <name>` if user has an existing tree dir name.
 
-### 3b — Bind To An Existing Tree
-
-The user already has a tree, either as a local checkout or a remote URL:
+### Workspace root (`unbound-workspace-root`)
 
 ```bash
-# Local checkout
-first-tree tree init --tree-path ../org-context --tree-mode shared
-
-# Remote URL — init will clone into a temporary path under .first-tree/tmp/
-first-tree tree init --tree-url git@github.com:acme/org-context.git --tree-mode shared
+first-tree tree skill install --root <source_root>
+# Discover children first (dry-run)
+first-tree tree workspace sync --dry-run --json
+# Confirm with user, then real init
+first-tree tree init --scope workspace --tree-mode shared --workspace-id <slug> --no-recursive
+first-tree tree verify --tree-path <dirname(source_root)>/<workspace_name>-tree
 ```
 
-Pass `--scope workspace` if the current root is a workspace.
+`--no-recursive` is the safe default — it onboards the workspace root only, not nested repos. Add `--recursive` only after explicit user confirmation.
+
+### Bind to existing tree
+
+User has an existing tree (URL or local path):
+
+```bash
+# Local path
+first-tree tree init --tree-path <abs_path> --tree-mode shared
+
+# Remote URL — CLI clones to .first-tree/tmp/
+first-tree tree init --tree-url <url> --tree-mode shared
+```
+
+For workspace, prepend `--scope workspace --workspace-id <slug>`.
 
 ### Verification
 
-After step 3, run:
+After init:
 
 ```bash
-first-tree tree inspect --json
-first-tree tree verify --tree-path <tree-root>
+first-tree tree inspect --json   # role must now be *-bound
+first-tree tree verify --tree-path <tree_root>   # must exit 0
 ```
 
-`role` must now be `source-repo-bound` or `workspace-root-bound`. `verify`
-must exit 0. If it does not, stop and report the failures — do not continue
-to step 4 with a broken binding.
+Verify output enumerates each check (NODE.md present, members/ present, .first-tree/ valid, etc.). All must pass.
 
-## Step 4: Start The Daemon
+## Phase B-refresh — Already bound
 
 ```bash
-first-tree github scan install --allow-repo <owner/repo>[,...]
+first-tree tree skill upgrade --root <source_root>
+# Workspace only:
+first-tree tree workspace sync
+first-tree tree verify --tree-path <tree_root>
 ```
 
-`install` checks `gh auth status`, writes `~/.first-tree/github-scan/config.yaml`
-if absent, and starts the daemon (launchd on macOS).
+`tree skill upgrade` is safe to rerun — it copies the latest shipped skill payloads from the CLI into `.agents/skills/` and `.claude/skills/`. Re-fixes the WHITEPAPER.md symlink if the previous install was incomplete.
 
-`--allow-repo` is required and accepts a comma-separated allowlist. Glob
-patterns like `owner/*` work. Use the smallest allowlist that covers the
-user's intent — start with the bound repo only.
+## Phase C — Draft initial tree content
 
-If `install` fails because `gh auth status` is unhealthy, stop and ask the
-user to run `gh auth login` themselves. Do not store credentials.
+See [`content-drafting.md`](content-drafting.md). That file is the single source of truth for Phase C — extraction rules, confidence labels, delivery flow.
 
-After install:
+Quick gate check before starting:
 
 ```bash
-first-tree github scan status
+# Is Phase C needed? Any hit → run Phase C.
+grep -F "The living source of truth for your organization" <tree_root>/NODE.md
+grep -F "Default bootstrap member node" <tree_root>/members/owner/NODE.md
+grep -E '^\s*industry:\s*""' <tree_root>/.first-tree/org.yaml
+```
+
+Do not check `<tree_root>/.first-tree/progress.md` — that file is the CLI's bootstrap checklist; `tree verify` fails when any line in it is unchecked, so it must remain fully ticked.
+
+## Phase D — Daemon
+
+```bash
+gh auth status                                        # must succeed
+first-tree github scan install --allow-repo <owner>/<repo>
 first-tree github scan doctor
 ```
 
-`doctor` should report `required auth scope: ok` and `lock: present`. If
-either fails, do not proceed.
+`install` performs first-run setup AND starts the daemon (launchd on macOS, systemd unit on Linux). `start` is only used to relaunch after `stop`.
 
-## Step 5: Set Up Agent Templates
+If `gh auth status` fails:
 
-`tree init` already wrote two default agent templates into the tree:
+```text
+Stop here. Tell user:
+  "GitHub Scan needs `gh` authenticated. Run:
+     gh auth login
+   Then re-run /first-tree-onboarding to resume."
+```
 
-- `.first-tree/agent-templates/developer.yaml`
-- `.first-tree/agent-templates/code-reviewer.yaml`
+Do not store credentials, do not bypass with PATs typed in chat.
 
-Ask the user which roles they actually want:
+`--allow-repo` accepts comma-separated values and glob patterns (`owner/*`). Start narrow — onboarding's job is to bind one repo, not configure org-wide policy.
 
-- developer — handles code-related PRs and issues (default on)
-- code-reviewer — focuses on PR review (default on)
-- designer / qa — schemas only; bodies are stubs today
+## Phase E — Agent templates
 
-If the user wants to drop a template, delete the file. If the user wants to
-add a new role, create a new YAML file in the same directory using
-`developer.yaml` as the schema reference. See
-`references/agent-templates.md` for the field reference.
+`tree init` already wrote two defaults into `<tree_root>/.first-tree/agent-templates/`:
 
-Do not invoke any agent runtime in this step — onboarding writes
-configuration, it does not start agents.
+- `developer.yaml`
+- `code-reviewer.yaml`
 
-## Done
+For details (schema, add/drop rules, role customization), see [`agent-templates.md`](agent-templates.md).
 
-The onboarding flow ends with:
+This phase is mostly a confirmation step. The only reason to write/edit YAML here is if the user wants a custom role beyond the two defaults.
 
-- a binding present in `<source>/AGENTS.md` or `<source>/CLAUDE.md`
-- a tree at `<tree-root>` that passes `tree verify`
-- the GitHub Scan daemon running and reporting `lock: present`
-- agent templates the user has approved
+## Phase F — Wrap-up
 
-Hand off to the user with a one-line summary that includes the tree path and
-the daemon status. Do not loop back into onboarding for a healthy install.
+```bash
+first-tree tree skill doctor --root <source_root>
+first-tree github scan doctor   # only if Phase D ran
+first-tree tree inspect --json   # final confirmation
+```
+
+If any doctor exits non-zero, **do not** print the success summary. Print the failures and stop.
+
+The success summary template is in SKILL.md Phase F. Fill it from inspect output and the recorded daemon state.
+
+## What this skill never runs
+
+- `first-tree tree publish` — release flow, not onboarding. Tree publish is a separate user-driven action when they're ready to share.
+- `first-tree github scan run` / `daemon` / `run-once` — foreground/debug loops. Use `install` (which starts the launchd service) and `doctor` instead.
+- Direct edits to managed First Tree blocks. Re-run the relevant CLI.
+- `gh repo delete` or any destructive remote ops.

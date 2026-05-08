@@ -1,8 +1,8 @@
 # Onboarding CLI Quick Reference
 
-Every command this skill calls. All accept `--help` for full flags.
+Every command this skill calls, grouped by phase (see SKILL.md for the state machine). All accept `--help` for full flags.
 
-## Inspect
+## Phase A — Inspect
 
 ```bash
 first-tree tree inspect --json
@@ -10,7 +10,7 @@ first-tree tree inspect --json
 
 Always the first call. Reports `role`, `binding`, `rootPath`, etc.
 
-## Init And Bind
+## Phase B — Init And Bind
 
 ```bash
 # Single repo, new dedicated tree
@@ -29,7 +29,7 @@ first-tree tree init --scope workspace --tree-mode shared --workspace-id <id>
 first-tree tree init --scope workspace --tree-path ../org-context --tree-mode shared
 ```
 
-## Workspace Sync
+## Phase B (workspace) — Workspace Sync
 
 ```bash
 # Discovery only
@@ -41,7 +41,7 @@ first-tree tree workspace sync
 
 Use after step 3 to pick up child repos added since the last init.
 
-## Skill Maintenance
+## Phase B / Phase B-refresh — Skill Maintenance
 
 ```bash
 first-tree tree skill install --root <path>   # write skills into a target root
@@ -53,7 +53,7 @@ first-tree tree skill link                    # repair .claude symlinks
 
 `tree skill upgrade` is safe to rerun. `doctor` is the fastest health probe.
 
-## Verification
+## Phase B / F — Verification
 
 ```bash
 first-tree tree verify                        # run from inside the tree repo
@@ -63,7 +63,7 @@ first-tree tree verify --tree-path <path>     # run from the source repo
 `verify` exits 0 only if the tree's structure is intact. Onboarding must not
 proceed past step 3 without a clean verify.
 
-## GitHub Scan Daemon
+## Phase D — GitHub Scan Daemon
 
 ```bash
 first-tree github scan install --allow-repo <owner/repo>[,...]
@@ -75,6 +75,10 @@ first-tree github scan stop
 
 `install` does both first-run setup and daemon start. `start` is for
 re-launching after `stop`. `doctor` is the read-only health check.
+
+## Phase C — Content drafting (no CLI; agent + git)
+
+Phase C is agent-driven, not CLI-driven. The only commands invoked are `git -C <tree_root>` operations (`checkout -b`, `add`, `diff`, `commit`, `push`) plus `gh pr create`. See [`content-drafting.md`](content-drafting.md).
 
 ## What Onboarding Should NEVER Run
 
