@@ -25,8 +25,9 @@ import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
 import { organizations } from "../db/schema/organizations.js";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
+import type { OrgScope } from "../scope/types.js";
 import { uuidv7 } from "../uuid.js";
-import { agentVisibilityCondition, type MemberScope } from "./access-control.js";
+import { agentVisibilityCondition } from "./access-control.js";
 import { resolveDefaultOrgId } from "./organization.js";
 import { recomputeWatchersForAgent } from "./watcher.js";
 
@@ -478,7 +479,7 @@ export async function listAgents(db: Database, orgId: string, limit: number, cur
  * service does not enforce role by itself, but it does enforce org scope
  * and the not-deleted predicate.
  */
-export async function listAgentsForAdmin(db: Database, scope: MemberScope, limit: number, cursor?: string) {
+export async function listAgentsForAdmin(db: Database, scope: OrgScope, limit: number, cursor?: string) {
   const conditions = [eq(agents.organizationId, scope.organizationId), ne(agents.status, AGENT_STATUSES.DELETED)];
   if (cursor) conditions.push(lt(agents.createdAt, new Date(cursor)));
   const where = and(...conditions);
@@ -525,7 +526,7 @@ export async function listAgentsForAdmin(db: Database, scope: MemberScope, limit
  */
 export async function listAgentsForMember(
   db: Database,
-  scope: MemberScope,
+  scope: OrgScope,
   limit: number,
   cursor?: string,
   type?: string,
@@ -587,7 +588,7 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
     if (agent.clientId !== null && agent.clientId !== data.clientId) {
       throw new BadRequestError(
         "clientId is immutable through this entry — cross-client moves go through rebindAgent " +
-          "(PATCH /admin/agents/:agentId/rebind), which runs owner / org / capability checks atomically.",
+          "(PATCH /agents/:uuid/rebind), which runs owner / org / capability checks atomically.",
       );
     }
   }
@@ -651,7 +652,7 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
  * the same owner (manager.userId) and same organization; client must report
  * the requested runtime provider in its capabilities (skipped under `force`).
  *
- * Intended caller: PATCH /admin/agents/:agentId/rebind. The Web "Re-bind"
+ * Intended caller: PATCH /agents/:uuid/rebind. The Web "Re-bind"
  * dialog routes both same-client runtime-only switches and cross-client
  * moves through this single entry.
  *

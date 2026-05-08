@@ -148,10 +148,14 @@ describe("GitHub OAuth onboarding flow", () => {
     });
     expect(me.statusCode).toBe(200);
     const body = me.json<{
-      member: { role: string; organizationId: string };
+      memberships: Array<{ role: string; organizationId: string }>;
+      defaultOrganizationId: string | null;
       wizard: { step: string };
     }>();
-    expect(body.member.role).toBe("admin");
+    // Solo signup auto-provisions one org with admin role.
+    expect(body.memberships).toHaveLength(1);
+    expect(body.memberships[0]?.role).toBe("admin");
+    expect(body.defaultOrganizationId).toBe(body.memberships[0]?.organizationId);
     expect(body.wizard.step).toBe("connect");
   });
 });

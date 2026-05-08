@@ -63,7 +63,6 @@ const TRUNCATE_TABLES = [
   "users",
   "clients",
   "processed_events",
-  "system_configs",
   "server_instances",
   "organizations",
 ].join(", ");

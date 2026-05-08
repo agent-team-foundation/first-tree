@@ -133,7 +133,7 @@ export class FirstTreeHubSDK {
    * the authoritative `agents.runtime_provider` before spawning handlers.
    */
   async listMyAgents(): Promise<Array<{ agentId: string; clientId: string; runtimeProvider: RuntimeProvider }>> {
-    return this.requestJson("/api/v1/clients/me/agents");
+    return this.requestJson("/api/v1/me/pinned-agents");
   }
 
   async isHubReachable(timeoutMs = 3_000): Promise<boolean> {

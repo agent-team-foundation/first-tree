@@ -36,25 +36,71 @@ function rootSpanOf(request: FastifyRequest): Span | undefined {
 
 /**
  * Tag the HTTP root span with the authenticated identity. Reads
- * `request.member` (set by `memberAuthHook`) and `request.agent` (set by
+ * `request.user` (set by `userAuthHook`) and `request.agent` (set by
  * `agentSelectorHook`); skips fields that aren't populated, so it's safe to
  * register on routes where one or both upstream hooks did not run.
+ *
+ * Org / member / role attributes flow through `stampOrgScope` from the
+ * scope helpers (`requireOrgMembership`, `requireAgentAccess`, …) — the
+ * JWT no longer carries them, and stamping on the auth hook would require
+ * duplicating the per-request DB lookup the scope helpers already do.
  */
 export async function attachRequestContext(request: FastifyRequest, _reply: FastifyReply): Promise<void> {
   const span = rootSpanOf(request);
   if (!span) return;
 
-  if (request.member) {
-    span.setAttribute(FIRST_TREE_HUB_ATTR.USER_ID, request.member.userId);
-    span.setAttribute(FIRST_TREE_HUB_ATTR.MEMBER_ID, request.member.memberId);
-    span.setAttribute(FIRST_TREE_HUB_ATTR.ORGANIZATION_ID, request.member.organizationId);
-    span.setAttribute(FIRST_TREE_HUB_ATTR.USER_ROLE, request.member.role);
+  if (request.user) {
+    span.setAttribute(FIRST_TREE_HUB_ATTR.USER_ID, request.user.userId);
   }
 
   if (request.agent) {
     span.setAttribute(FIRST_TREE_HUB_ATTR.AGENT_ID, request.agent.uuid);
     span.setAttribute("agent.inbox_id", request.agent.inboxId);
   }
+}
+
+/**
+ * Stamp the resolved org membership onto the HTTP root span. Called from
+ * every scope helper (`requireOrgMembership`, `requireOrgAdmin`,
+ * `requireAgentAccess`, `requireChatAccess`) after the DB lookup succeeds.
+ *
+ * Centralizing here (vs duplicating `span.setAttribute` calls in each scope
+ * helper) keeps the attribute-key namespace consistent and lets us add new
+ * tags (e.g. plan tier) in one place.
+ */
+export function stampOrgScope(
+  request: FastifyRequest,
+  scope: { organizationId: string; memberId: string; role: string },
+): void {
+  const span = rootSpanOf(request);
+  if (!span) return;
+  span.setAttribute(FIRST_TREE_HUB_ATTR.ORGANIZATION_ID, scope.organizationId);
+  span.setAttribute(FIRST_TREE_HUB_ATTR.MEMBER_ID, scope.memberId);
+  span.setAttribute(FIRST_TREE_HUB_ATTR.USER_ROLE, scope.role);
+}
+
+/**
+ * Stamp the resolved agent resource onto the HTTP root span. Called from
+ * `requireAgentAccess` (Class C `/agents/:uuid/...` routes) so the span has
+ * the agent identity even though `request.agent` is only set on Class D
+ * runtime-self routes.
+ */
+export function stampAgentResource(request: FastifyRequest, agent: { uuid: string; inboxId: string }): void {
+  const span = rootSpanOf(request);
+  if (!span) return;
+  span.setAttribute(FIRST_TREE_HUB_ATTR.AGENT_ID, agent.uuid);
+  span.setAttribute("agent.inbox_id", agent.inboxId);
+}
+
+/**
+ * Stamp the resolved chat resource onto the HTTP root span. Called from
+ * `requireChatAccess` (Class C `/chats/:chatId/...` routes).
+ */
+export function stampChatResource(request: FastifyRequest, chat: { id: string; type: string }): void {
+  const span = rootSpanOf(request);
+  if (!span) return;
+  span.setAttribute(FIRST_TREE_HUB_ATTR.CHAT_ID, chat.id);
+  span.setAttribute(FIRST_TREE_HUB_ATTR.CHAT_TYPE, chat.type);
 }
 
 /**

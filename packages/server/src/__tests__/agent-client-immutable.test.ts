@@ -18,7 +18,7 @@ describe("PATCH /admin/agents/:uuid { clientId } — one-shot", () => {
 
     const res = await app.inject({
       method: "PATCH",
-      url: `/api/v1/admin/agents/${agent.uuid}`,
+      url: `/api/v1/agents/${agent.uuid}`,
       headers: { Authorization: `Bearer ${accessToken}` },
       payload: { clientId: "another-client-id" },
     });
@@ -33,7 +33,7 @@ describe("PATCH /admin/agents/:uuid { clientId } — one-shot", () => {
 
     const res = await app.inject({
       method: "PATCH",
-      url: `/api/v1/admin/agents/${agent.uuid}`,
+      url: `/api/v1/agents/${agent.uuid}`,
       headers: { Authorization: `Bearer ${accessToken}` },
       payload: { clientId: null },
     });
@@ -50,7 +50,7 @@ describe("PATCH /admin/agents/:uuid { clientId } — one-shot", () => {
 
     const res = await app.inject({
       method: "PATCH",
-      url: `/api/v1/admin/agents/${agent.uuid}`,
+      url: `/api/v1/agents/${agent.uuid}`,
       headers: { Authorization: `Bearer ${accessToken}` },
       payload: { clientId },
     });
@@ -65,7 +65,7 @@ describe("PATCH /admin/agents/:uuid { clientId } — one-shot", () => {
 
     const res = await app.inject({
       method: "PATCH",
-      url: `/api/v1/admin/agents/${agent.uuid}`,
+      url: `/api/v1/agents/${agent.uuid}`,
       headers: { Authorization: `Bearer ${accessToken}` },
       payload: { displayName: "Renamed" },
     });

@@ -9,7 +9,7 @@ import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
 import { users } from "../db/schema/users.js";
 import { createAgent } from "../services/agent.js";
-import { signTokensForMember } from "../services/auth.js";
+import { signTokensForUser } from "../services/auth.js";
 import { resolveDefaultOrgId } from "../services/organization.js";
 import { uuidv7 } from "../uuid.js";
 
@@ -94,6 +94,13 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
     rateLimit: { ...baseRateLimit, ...opts.rateLimit },
     observability: {
       logging: { level: "error", format: "json", bridgeToSpanLevel: "off" },
+    },
+    runtime: {
+      inboxTimeoutSeconds: 300,
+      maxRetryCount: 3,
+      pollingIntervalSeconds: 5,
+      presenceCleanupSeconds: 60,
+      notificationWebhookUrl: undefined,
     },
     instanceId: "test-instance",
   };
@@ -284,10 +291,9 @@ export async function createTestAdmin(app: FastifyInstance, opts: { username?: s
   // explicitly exercise the login path still call `/auth/login` themselves
   // (auth.test.ts, admin-agent-config.test.ts) — they get an *additional*
   // pair of tokens, not the ones we sign here.
-  const tokens = await signTokensForMember(
-    TEST_JWT_SECRET,
-    { userId, memberId, organizationId: orgId, role: "admin" },
-    { accessTokenExpiry: "30m", refreshTokenExpiry: "30d" },
-  );
+  const tokens = await signTokensForUser(TEST_JWT_SECRET, userId, {
+    accessTokenExpiry: "30m",
+    refreshTokenExpiry: "30d",
+  });
   return { username, password, userId, memberId, organizationId: orgId, humanAgentUuid: agent.uuid, ...tokens };
 }

@@ -1,5 +1,5 @@
 import type { UpdateMember } from "@agent-team-foundation/first-tree-hub-shared";
-import { api } from "./client.js";
+import { api, withOrg } from "./client.js";
 
 type MemberListItem = {
   id: string;
@@ -13,13 +13,13 @@ type MemberListItem = {
 };
 
 export function listMembers(): Promise<MemberListItem[]> {
-  return api.get<MemberListItem[]>("/members");
+  return api.get<MemberListItem[]>(withOrg("/members"));
 }
 
 export function updateMember(id: string, data: UpdateMember): Promise<MemberListItem> {
-  return api.patch<MemberListItem>(`/members/${encodeURIComponent(id)}`, data);
+  return api.patch<MemberListItem>(withOrg(`/members/${encodeURIComponent(id)}`), data);
 }
 
 export function deleteMember(id: string): Promise<void> {
-  return api.delete<void>(`/members/${encodeURIComponent(id)}`);
+  return api.delete<void>(withOrg(`/members/${encodeURIComponent(id)}`));
 }

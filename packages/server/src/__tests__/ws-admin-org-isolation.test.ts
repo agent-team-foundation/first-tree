@@ -29,16 +29,10 @@ describe("Admin WS — cross-org isolation (S0)", () => {
   let wsUrl: string;
   const jwtSecret = process.env.JWT_SECRET ?? "test-jwt-secret-key-for-vitest";
 
-  async function signAdminJwt(userId: string, memberId: string, organizationId: string, role: string): Promise<string> {
+  async function signAdminJwt(userId: string): Promise<string> {
     const secret = new TextEncoder().encode(jwtSecret);
     const now = Math.floor(Date.now() / 1000);
-    return new SignJWT({
-      sub: userId,
-      memberId,
-      organizationId,
-      role,
-      type: "access",
-    })
+    return new SignJWT({ sub: userId, type: "access" })
       .setProtectedHeader({ alg: "HS256" })
       .setIssuedAt(now)
       .setExpirationTime(now + 300)
@@ -72,13 +66,13 @@ describe("Admin WS — cross-org isolation (S0)", () => {
       });
       return created;
     });
-    const token = await signAdminJwt(userId, memberId, organizationId, "admin");
-    return { userId, memberId, agent, token };
+    const token = await signAdminJwt(userId);
+    return { userId, memberId, agent, token, organizationId };
   }
 
-  function openAdminSocket(token: string): Promise<WebSocket> {
+  function openAdminSocket(token: string, organizationId: string): Promise<WebSocket> {
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(`${wsUrl}?token=${encodeURIComponent(token)}`);
+      const ws = new WebSocket(`${wsUrl}/${encodeURIComponent(organizationId)}/ws/?token=${encodeURIComponent(token)}`);
       ws.once("open", () => {
         const onMessage = (raw: WebSocket.RawData) => {
           try {
@@ -123,7 +117,7 @@ describe("Admin WS — cross-org isolation (S0)", () => {
     await app.listen({ port: 0, host: "127.0.0.1" });
     const addr = app.server.address();
     if (!addr || typeof addr === "string") throw new Error("test server has no address");
-    wsUrl = `ws://127.0.0.1:${addr.port}/api/v1/ws/admin`;
+    wsUrl = `ws://127.0.0.1:${addr.port}/api/v1/orgs`;
   });
 
   afterAll(async () => {
@@ -140,8 +134,8 @@ describe("Admin WS — cross-org isolation (S0)", () => {
     const adminA = await seedAdmin(orgAId, "a");
     const adminB = await seedAdmin(orgB.id, "b");
 
-    const wsA = await openAdminSocket(adminA.token);
-    const wsB = await openAdminSocket(adminB.token);
+    const wsA = await openAdminSocket(adminA.token, adminA.organizationId);
+    const wsB = await openAdminSocket(adminB.token, adminB.organizationId);
 
     try {
       // Start collectors first so the listeners are attached before the
@@ -180,7 +174,7 @@ describe("Admin WS — cross-org isolation (S0)", () => {
     // without it must be no-ops (the pre-S0 behavior was a fan-out-to-everyone).
     const orgAId = await resolveDefaultOrgId(app.db);
     const adminA = await seedAdmin(orgAId, "drop");
-    const wsA = await openAdminSocket(adminA.token);
+    const wsA = await openAdminSocket(adminA.token, adminA.organizationId);
 
     try {
       const { broadcastToAdmins } = await import("../services/admin-broadcast.js");

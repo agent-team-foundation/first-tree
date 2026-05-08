@@ -34,7 +34,7 @@ export function InviteAcceptPage() {
     if (!token) return;
     void (async () => {
       try {
-        const res = await fetch(`/api/v1/invite/${encodeURIComponent(token)}/preview`);
+        const res = await fetch(`/api/v1/invitations/${encodeURIComponent(token)}/preview`);
         if (!res.ok) {
           setError("This invitation is no longer valid");
           return;

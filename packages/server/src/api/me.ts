@@ -1,7 +1,6 @@
 import {
   createOrgFromMeSchema,
   joinByInvitationSchema,
-  switchOrgSchema,
   type WizardStep,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { and, eq, ne } from "drizzle-orm";
@@ -10,17 +9,11 @@ import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
 import { users } from "../db/schema/users.js";
-import { ForbiddenError, NotFoundError, UnauthorizedError } from "../errors.js";
-import { requireMember } from "../middleware/require-identity.js";
+import { NotFoundError } from "../errors.js";
+import { requireUser } from "../scope/require-user.js";
 import { listAgentsManagedByUser } from "../services/access-control.js";
 import * as authService from "../services/auth.js";
-import {
-  buildInviteUrl,
-  ensureActiveInvitation,
-  findActiveByToken,
-  getActiveInvitation,
-  recordRedemption,
-} from "../services/invitation.js";
+import { buildInviteUrl, findActiveByToken, getActiveInvitation, recordRedemption } from "../services/invitation.js";
 import {
   ensureMembership,
   leaveOrganization,
@@ -30,14 +23,17 @@ import {
 import { resolvePublicUrl } from "../utils/public-url.js";
 
 /**
- * `/me` and self-service organization routes (mounted under the member
- * auth hook). The legacy `GET /me` shape is preserved + extended with
- * `wizard` and `inviteUrl` (admin only) so the web SPA can derive its
- * landing UI without an extra round-trip.
+ * `/me` and self-service organization routes (Class A — User-scoped).
+ * Mounted under `requireUser` so the JWT only needs `sub = userId`.
+ *
+ * The web client picks the "currently selected org" from
+ * `localStorage.selectedOrganizationId`; this response surfaces a
+ * `defaultOrganizationId` to seed that selector on first login (and as a
+ * fallback when localStorage is wiped).
  */
 export async function meRoutes(app: FastifyInstance): Promise<void> {
   app.get("/me", async (request) => {
-    const m = requireMember(request);
+    const { userId } = requireUser(request);
 
     const [user] = await app.db
       .select({
@@ -47,44 +43,34 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         avatarUrl: users.avatarUrl,
       })
       .from(users)
-      .where(eq(users.id, m.userId))
+      .where(eq(users.id, userId))
       .limit(1);
 
-    const [agent] = await app.db
-      .select({
-        uuid: agents.uuid,
-        name: agents.name,
-        displayName: agents.displayName,
-        inboxId: agents.inboxId,
-      })
-      .from(agents)
-      .where(eq(agents.uuid, m.agentId))
-      .limit(1);
+    const memberships = await listActiveMemberships(app.db, userId);
+    const defaultMembership = authService.pickDefaultMembership(
+      memberships.map((m) => ({ id: m.memberId, createdAt: m.createdAt })),
+    );
+    const defaultOrgId = defaultMembership
+      ? (memberships.find((m) => m.memberId === defaultMembership.id)?.organizationId ?? null)
+      : null;
 
-    const wizardStep = await inferWizardStep(app, m);
-
+    // Surface invite URL only for users who admin at least one org. The
+    // web client picks the relevant org from `selectedOrganizationId`
+    // first; this is purely a convenience fallback for the default org.
     let inviteUrl: string | null = null;
-    if (m.role === "admin") {
-      const inv = await getActiveInvitation(app.db, m.organizationId);
-      if (inv) {
-        inviteUrl = buildInviteUrl(resolvePublicUrl(app, request), inv.token);
+    if (defaultOrgId) {
+      const defaultRow = memberships.find((m) => m.organizationId === defaultOrgId);
+      if (defaultRow?.role === "admin") {
+        const inv = await getActiveInvitation(app.db, defaultOrgId);
+        if (inv) inviteUrl = buildInviteUrl(resolvePublicUrl(app, request), inv.token);
       }
     }
 
-    // Multi-org payload (decouple-client-from-identity §C1): the web client
-    // derives `currentMembership` from `localStorage.selectedOrganizationId`
-    // joined against this list, so it never has to call /auth/switch-org just
-    // to learn which orgs the user belongs to.
-    const memberships = await listActiveMemberships(app.db, m.userId);
+    const wizardStep = await inferWizardStep(app, userId);
 
     return {
       user: user ?? null,
-      member: {
-        id: m.memberId,
-        organizationId: m.organizationId,
-        role: m.role,
-        agentId: m.agentId,
-      },
+      defaultOrganizationId: defaultOrgId,
       memberships: memberships.map((mb) => ({
         id: mb.memberId,
         organizationId: mb.organizationId,
@@ -92,48 +78,41 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         role: mb.role,
         agentId: mb.agentId,
       })),
-      agent: agent ?? null,
       wizard: { step: wizardStep },
       inviteUrl,
     };
   });
 
   /**
-   * POST /connect-tokens — generate a short-lived connect token for CLI authentication.
-   * Stamped with `iss = server.publicUrl` (or the request host as a dev fallback)
-   * so the CLI's `connect <token>` form can derive the hub URL with no extra arg.
-   *
-   * Rate-limited per-route at the same level as `/auth/login`: a "Copy
-   * commands" double-click in the wizard mustn't burn through token slots,
-   * but neither should a stolen access token mint unlimited connect tokens.
+   * POST /me/connect-tokens — short-lived connect token for the CLI.
+   * The token now carries only `sub = userId`; the CLI rejoins via
+   * `exchangeConnectToken` which probes `members` realtime.
    */
   const loginMax = app.config.rateLimit?.loginMax ?? 5;
-  app.post("/connect-tokens", { config: { rateLimit: { max: loginMax, timeWindow: "1 minute" } } }, async (request) => {
-    const m = requireMember(request);
-    const issuer = resolvePublicUrl(app, request);
-    const { token, expiresIn } = await authService.generateConnectToken(
-      { userId: m.userId, memberId: m.memberId, organizationId: m.organizationId, role: m.role },
-      app.config.secrets.jwtSecret,
-      app.config.auth,
-      issuer,
-    );
+  app.post(
+    "/me/connect-tokens",
+    { config: { rateLimit: { max: loginMax, timeWindow: "1 minute" } } },
+    async (request) => {
+      const { userId } = requireUser(request);
+      const issuer = resolvePublicUrl(app, request);
+      const { token, expiresIn } = await authService.generateConnectToken(
+        userId,
+        app.config.secrets.jwtSecret,
+        app.config.auth,
+        issuer,
+      );
+      const command = `first-tree-hub connect ${token}`;
+      return { token, expiresIn, command };
+    },
+  );
 
-    // The new top-level `first-tree-hub connect <token>` derives the URL
-    // from the token's iss claim; the legacy `client connect <url> --token`
-    // form still works. Surface the simple form.
-    const command = `first-tree-hub connect ${token}`;
-
-    return { token, expiresIn, command };
-  });
-
-  // GET /me/managed-agents — cross-org list of every agent the caller
-  // manages (decouple-client-from-identity §4.5.1 case (b)). Powers the
-  // CLI `agent list` view, which now shows a multi-org user's full
-  // managed agent set without an explicit `?organizationId=`. The web
-  // roster stays org-scoped through the `/admin/agents` endpoint.
+  /**
+   * GET /me/managed-agents — cross-org list of every agent the caller
+   * personally manages. Powers the CLI `agent list --remote` view.
+   */
   app.get("/me/managed-agents", async (request) => {
-    const m = requireMember(request);
-    const rows = await listAgentsManagedByUser(app.db, m.userId);
+    const { userId } = requireUser(request);
+    const rows = await listAgentsManagedByUser(app.db, userId);
     return rows.map((r) => ({
       uuid: r.uuid,
       name: r.name,
@@ -147,11 +126,22 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     }));
   });
 
-  // ── Self-service org management ───────────────────────────────────────────
+  /**
+   * GET /me/pinned-agents — every agent pinned to a client owned by the
+   * caller's user. Used by the SDK reconcile layer to authoritatively map
+   * `agents.runtime_provider` before spawning handlers.
+   */
+  app.get("/me/pinned-agents", async (request) => {
+    const { userId } = requireUser(request);
+    const { listMyPinnedAgents } = await import("../services/client.js");
+    return listMyPinnedAgents(app.db, { userId });
+  });
+
+  // ── Self-service org management ──────────────────────────────────────────
 
   app.get("/me/organizations", async (request) => {
-    const m = requireMember(request);
-    const rows = await listActiveMemberships(app.db, m.userId);
+    const { userId } = requireUser(request);
+    const rows = await listActiveMemberships(app.db, userId);
     return rows.map((r) => ({
       id: r.organizationId,
       name: r.orgName,
@@ -161,52 +151,40 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post("/me/organizations", { config: { otelRecordBody: true } }, async (request, reply) => {
-    const m = requireMember(request);
+    const { userId } = requireUser(request);
     const body = createOrgFromMeSchema.parse(request.body);
 
     const [u] = await app.db
       .select({ username: users.username, displayName: users.displayName })
       .from(users)
-      .where(eq(users.id, m.userId))
+      .where(eq(users.id, userId))
       .limit(1);
     if (!u) throw new NotFoundError("User not found");
 
     const created = await selfCreateOrganization(app.db, {
-      userId: m.userId,
+      userId,
       userDisplayName: u.displayName,
       username: u.username,
       name: body.name,
       displayName: body.displayName,
     });
-    const tokens = await authService.signTokensForMember(
-      app.config.secrets.jwtSecret,
-      {
-        userId: m.userId,
-        memberId: created.memberId,
-        organizationId: created.organizationId,
-        role: "admin",
-      },
-      app.config.auth,
-    );
+    // Token reuse: signing-then-returning would just produce the same
+    // user-only token the caller already holds. Skip the round-trip.
     return reply.status(201).send({
       organization: {
         id: created.organizationId,
         name: created.name,
         displayName: created.displayName,
-        role: "admin",
+        role: "admin" as const,
       },
-      tokens,
     });
   });
 
-  // Rate-limit `join`: an attacker holding a valid access token shouldn't
-  // be able to brute-force invite tokens via this endpoint. Same bucket
-  // size as login.
   app.post(
     "/me/organizations/join",
     { config: { rateLimit: { max: loginMax, timeWindow: "1 minute" }, otelRecordBody: true } },
     async (request, reply) => {
-      const m = requireMember(request);
+      const { userId } = requireUser(request);
       const body = joinByInvitationSchema.parse(request.body);
 
       const inv = await findActiveByToken(app.db, body.token);
@@ -217,12 +195,12 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       const [u] = await app.db
         .select({ username: users.username, displayName: users.displayName })
         .from(users)
-        .where(eq(users.id, m.userId))
+        .where(eq(users.id, userId))
         .limit(1);
       if (!u) throw new NotFoundError("User not found");
 
       const member = await ensureMembership(app.db, {
-        userId: m.userId,
+        userId,
         organizationId: inv.organizationId,
         role: inv.role === "admin" ? "admin" : "member",
         displayName: u.displayName,
@@ -230,149 +208,71 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       });
       await recordRedemption(app.db, {
         invitationId: inv.id,
-        userId: m.userId,
+        userId,
         ip: request.ip,
         userAgent: request.headers["user-agent"] ?? null,
       });
 
-      const tokens = await authService.signTokensForMember(
-        app.config.secrets.jwtSecret,
-        {
-          userId: m.userId,
-          memberId: member.id,
-          organizationId: member.organizationId,
-          role: member.role,
-        },
-        app.config.auth,
-      );
       return reply.status(200).send({
         organizationId: member.organizationId,
         memberId: member.id,
         role: member.role,
-        tokens,
       });
     },
   );
 
-  app.post("/me/organizations/leave", async (request, reply) => {
-    const m = requireMember(request);
-    await leaveOrganization(app.db, m.memberId);
+  app.post<{ Params: { memberId: string } }>("/me/memberships/:memberId/leave", async (request, reply) => {
+    const { userId } = requireUser(request);
+    // Confirm the member row belongs to the caller before flipping it.
+    const [row] = await app.db
+      .select({ id: members.id, userId: members.userId })
+      .from(members)
+      .where(eq(members.id, request.params.memberId))
+      .limit(1);
+    if (!row || row.userId !== userId) {
+      throw new NotFoundError(`Membership "${request.params.memberId}" not found`);
+    }
+    await leaveOrganization(app.db, row.id);
     return reply.status(204).send();
   });
 
-  // POST /auth/switch-org degrades to a server-side authorization probe:
-  // the call confirms the user is an active member of the target org and
-  // returns 204. The web client now persists the selected org locally
-  // (`localStorage.selectedOrganizationId`) and rederives every auth-context
-  // field from `/me memberships` — no more JWT swap. WS connections keep
-  // their existing bound agents (decouple-client-from-identity §4.6).
-  app.post("/auth/switch-org", { config: { otelRecordBody: true } }, async (request, reply) => {
-    const m = requireMember(request);
-    const body = switchOrgSchema.parse(request.body);
-
-    const [target] = await app.db
-      .select({ id: members.id })
-      .from(members)
-      .where(
-        and(
-          eq(members.userId, m.userId),
-          eq(members.organizationId, body.organizationId),
-          eq(members.status, "active"),
-        ),
-      )
-      .limit(1);
-    if (!target) {
-      throw new ForbiddenError("You do not belong to that organization");
-    }
-
-    return reply.status(204).send();
+  /**
+   * GET /me/wizard-step — bare endpoint for clients that don't want the
+   * full /me payload. Same logic as inferWizardStep below.
+   */
+  app.get("/me/wizard-step", async (request) => {
+    const { userId } = requireUser(request);
+    const step = await inferWizardStep(app, userId);
+    return { step };
   });
 }
 
 /**
- * Infer the wizard step from observable runtime state. Refer to
- * proposal §"Onboarding 状态推断" for the rationale.
+ * Infer the onboarding wizard step from the *user-level* facts:
+ *   - has at least one client → past "connect"
+ *   - manages at least one non-human active agent (any org) → past "create_agent"
  *
- * Note: we deliberately do NOT filter by `clients.status='connected'`
- * here. The original "fact-is-state" reading would have flapped between
- * `completed` and `connect` every time the user's client briefly went
- * offline — UX disaster (the onboarding modal would re-pop). "Ever
- * connected" (= a clients row exists at all for this user/org) is still
- * fact-derived: deleting the row really does rewind the wizard, and
- * that's the explicit reset path.
+ * Critically: the join from agents → members → userId means a user with
+ * memberships across multiple orgs has the wizard satisfied as soon as ANY
+ * org has a non-human agent — matching the user-level mental model.
  */
-async function inferWizardStep(
-  app: FastifyInstance,
-  m: { userId: string; memberId: string; organizationId: string },
-): Promise<WizardStep> {
-  const [hasClient] = await app.db
-    .select({ id: clients.id })
-    .from(clients)
-    .where(eq(clients.userId, m.userId))
-    .limit(1);
+async function inferWizardStep(app: FastifyInstance, userId: string): Promise<WizardStep> {
+  const [hasClient] = await app.db.select({ id: clients.id }).from(clients).where(eq(clients.userId, userId)).limit(1);
   if (!hasClient) return "connect";
 
   const [hasAgent] = await app.db
     .select({ uuid: agents.uuid })
     .from(agents)
-    .where(and(eq(agents.managerId, m.memberId), ne(agents.type, "human"), eq(agents.status, "active")))
+    .innerJoin(members, eq(members.id, agents.managerId))
+    .where(
+      and(
+        eq(members.userId, userId),
+        eq(members.status, "active"),
+        ne(agents.type, "human"),
+        eq(agents.status, "active"),
+      ),
+    )
     .limit(1);
   if (!hasAgent) return "create_agent";
   return "completed";
-}
-
-/**
- * Public route exported separately so it mounts BEFORE the member auth hook.
- * Just exposes the org's display name & slug for the unauthenticated `/invite/:token`
- * landing page.
- */
-export async function publicInvitePreviewRoute(app: FastifyInstance): Promise<void> {
-  const { previewInvitation } = await import("../services/invitation.js");
-  app.get<{ Params: { token: string } }>("/:token/preview", async (request, reply) => {
-    if (!request.params.token) throw new UnauthorizedError("Token required");
-    const preview = await previewInvitation(app.db, request.params.token);
-    return reply.send(preview);
-  });
-}
-
-/**
- * Admin-only invitation routes — mounted under `/admin/organizations/:id/invitations`.
- */
-export async function adminInvitationRoutes(app: FastifyInstance): Promise<void> {
-  app.get<{ Params: { id: string } }>("/", async (request) => {
-    const m = requireMember(request);
-    if (m.role !== "admin") throw new ForbiddenError("Admin role required");
-    if (request.params.id !== m.organizationId) {
-      throw new ForbiddenError("Cannot inspect invitations for another organization");
-    }
-    const inv = await ensureActiveInvitation(app.db, m.organizationId, m.userId);
-    return {
-      id: inv.id,
-      organizationId: inv.organizationId,
-      token: inv.token,
-      inviteUrl: buildInviteUrl(resolvePublicUrl(app, request), inv.token),
-      role: inv.role,
-      createdAt: inv.createdAt.toISOString(),
-      expiresAt: inv.expiresAt ? inv.expiresAt.toISOString() : null,
-    };
-  });
-
-  app.post<{ Params: { id: string } }>("/rotate", async (request) => {
-    const m = requireMember(request);
-    if (m.role !== "admin") throw new ForbiddenError("Admin role required");
-    if (request.params.id !== m.organizationId) {
-      throw new ForbiddenError("Cannot rotate invitations for another organization");
-    }
-    const { rotateInvitation } = await import("../services/invitation.js");
-    const inv = await rotateInvitation(app.db, m.organizationId, m.userId);
-    return {
-      id: inv.id,
-      organizationId: inv.organizationId,
-      token: inv.token,
-      inviteUrl: buildInviteUrl(resolvePublicUrl(app, request), inv.token),
-      role: inv.role,
-      createdAt: inv.createdAt.toISOString(),
-      expiresAt: inv.expiresAt ? inv.expiresAt.toISOString() : null,
-    };
-  });
 }

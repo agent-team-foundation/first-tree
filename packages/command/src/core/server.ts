@@ -113,18 +113,50 @@ export async function startServer(options: StartOptions): Promise<void> {
 
   const app = await buildApp(config);
 
-  // Graceful shutdown
-  const shutdown = async () => {
-    print.line("\n  Shutting down...\n");
+  // Graceful shutdown — bounded to keep Docker / k8s from having to SIGKILL.
+  //
+  // Default Docker `--time` is 10s and the typical k8s `terminationGracePeriodSeconds`
+  // is 30s; if `app.close()` (waiting on in-flight HTTP / WS / PG queries) or
+  // `shutdownTelemetry()` (flushing OTel spans over HTTP to the logfire
+  // endpoint) hangs, the orchestrator escalates to SIGKILL — losing in-flight
+  // HTTP/WS frames, leaving PG transactions un-rolled-back, dropping the
+  // span buffer. The hard ceiling below force-exits the process before that
+  // happens, so even a network-stalled telemetry flush can't run past Docker's
+  // grace window.
+  //
+  // Re-entry guard: SIGINT/SIGTERM may fire repeatedly during shutdown
+  // (e.g. user mashes ctrl+c). Without the guard, the second invocation
+  // races with the first and process.exit(0) lands non-deterministically.
+  // The guard makes the second signal a no-op: we are already trying to
+  // exit cleanly, and the force-timer covers the worst case.
+  const SHUTDOWN_FORCE_EXIT_MS = 8_000;
+  let shuttingDown = false;
+  const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    print.line(`\n  Shutting down (${signal})...\n`);
+
+    const forceTimer = setTimeout(() => {
+      print.line(`\n  Shutdown exceeded ${SHUTDOWN_FORCE_EXIT_MS}ms — forcing exit.\n`);
+      process.exit(1);
+    }, SHUTDOWN_FORCE_EXIT_MS);
+    forceTimer.unref();
+
     try {
       await app.close();
-    } finally {
-      await shutdownTelemetry();
+    } catch (err) {
+      print.line(`  app.close() failed: ${err instanceof Error ? err.message : String(err)}\n`);
     }
+    try {
+      await shutdownTelemetry();
+    } catch {
+      // shutdownTelemetry already swallows exporter errors internally; nothing more to do.
+    }
+    clearTimeout(forceTimer);
     process.exit(0);
   };
-  process.on("SIGINT", () => void shutdown());
-  process.on("SIGTERM", () => void shutdown());
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
   await app.listen({ host: config.server.host, port: config.server.port });
 

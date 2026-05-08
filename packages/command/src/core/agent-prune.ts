@@ -49,7 +49,7 @@ const minimalAgentYamlSchema = z
  * agentId), so we walk dirs ourselves and degrade per-entry instead.
  *
  * Why we filter by clientId, not just userId:
- * `listPinnedAgents` (`/api/v1/clients/me/agents`) returns every agent
+ * `listPinnedAgents` (`/api/v1/me/pinned-agents`) returns every agent
  * pinned to ANY client this user owns (cross-machine). For prune the
  * relevant question is "will R-RUN accept it on THIS machine", which
  * needs `agents.client_id === current client.id`. Anything pinned on

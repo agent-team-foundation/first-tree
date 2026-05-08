@@ -587,3 +587,9 @@ Alice 是 org A admin、org B member,持 JWT(JWT 内 organizationId 与 role cla
 | `client_uses` 流水 | 无 | 无新表 — owner 切换事件由 server 结构化日志覆盖 |
 | Role 检查来源 | `jwt.role` | **(user, requestedOrgId) 实时查 `members.role`**,扫调用点改造 |
 | CLI 命令体系 | 不动 | `client claim`;`agent --org` flag;`agent create` 多 org 用户强制 `--org` |
+
+---
+
+## 后续设计
+
+本设计把 `clients.user_id` 从 JWT 解耦,但 JWT 还在带 `memberId / organizationId / role` 这些"化石字段" — 后续 follow-up 设计 [hub-strip-jwt-ambient-scope.20260508.md](../../first-tree-context/proposals/hub-strip-jwt-ambient-scope.20260508.md) 把这三个也物理移除,JWT payload 收窄为 `{ sub, type, iat, exp, jti }`,同时把 `/admin/*` 路由按 4 个 Class 重新分类(配套规范 [http-path-conventions.md](http-path-conventions.md))。`/auth/switch-org` 端点和 `members.organizationId` 在 JWT 里的存在性一并消失。

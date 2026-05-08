@@ -178,7 +178,7 @@ export function checkAgentConfigs(): CheckResult {
 
 /**
  * Server-aware agent reconciliation. Walks `agents/<name>/agent.yaml` and
- * cross-references each `agentId` with `/api/v1/clients/me/agents`,
+ * cross-references each `agentId` with `/api/v1/me/pinned-agents`,
  * filtering by `clientId` so the "stale" verdict matches what R-RUN will
  * actually accept on this machine.
  *

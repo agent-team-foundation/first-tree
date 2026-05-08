@@ -8,26 +8,28 @@ import { members } from "../db/schema/members.js";
 import { ForbiddenError, UnauthorizedError } from "../errors.js";
 
 /**
- * Agent-scoped HTTP authentication hook. Must run **after** memberAuthHook
- * so `request.member` is populated.
+ * Agent-scoped HTTP authentication hook. Must run **after** userAuthHook
+ * so `request.user` is populated.
  *
  * Contract:
  *   1. Reads `X-Agent-Id` header.
- *   2. Loads the referenced agent (must be active, same org as the caller).
- *   3. Applies Rule R-RUN — the agent's pinned client must be owned by the
- *      caller's user. Admin role is *not* a runtime override: to run an agent
- *      on a different machine, the admin must reassign its `clientId` via a
- *      future reassign API; this milestone treats `clientId` as immutable.
- *   4. Populates `request.agent` so downstream handlers can keep using the
- *      same `AgentIdentity` shape the old `agentAuthHook` produced.
+ *   2. Loads the referenced agent (must be active).
+ *   3. Verifies the caller has an active membership in the agent's org —
+ *      cross-org access is allowed under one user, but a revoked membership
+ *      refuses immediately (multi-org switch-org fix).
+ *   4. Applies Rule R-RUN — the agent's pinned client must be owned by the
+ *      caller's user (non-human agents only). Human agents check that the
+ *      member's `agentId` matches.
+ *   5. Populates `request.agent` so downstream handlers can keep using the
+ *      same `AgentIdentity` shape.
  */
 export function agentSelectorHook(db: Database) {
   return async (request: FastifyRequest, _reply: FastifyReply): Promise<void> => {
-    const member = request.member;
-    if (!member) {
-      // memberAuthHook should already have rejected the request; fail loudly
+    const user = request.user;
+    if (!user) {
+      // userAuthHook should already have rejected the request; fail loudly
       // if we ever wire routes in the wrong order.
-      throw new UnauthorizedError("Member authentication required");
+      throw new UnauthorizedError("User authentication required");
     }
 
     const agentId = request.headers[AGENT_SELECTOR_HEADER];
@@ -55,30 +57,37 @@ export function agentSelectorHook(db: Database) {
       throw new ForbiddenError("Agent not found");
     }
 
-    if (row.organizationId !== member.organizationId) {
-      throw new ForbiddenError("Agent belongs to a different organization");
-    }
-
     if (row.status !== "active") {
       throw new ForbiddenError("Agent is not active");
     }
 
-    // Human agents represent the member themselves and have no runtime; the
-    // caller must BE that member. Skip the client-pin check for them — Rule
-    // R-RUN applies to non-human (runtime-backed) agents only.
+    // Verify the caller has an active membership in the agent's own org.
+    // No JWT default-org coupling — cross-org under a single user is
+    // allowed; a revoked membership refuses immediately.
+    const [callerMember] = await db
+      .select({ id: members.id, agentId: members.agentId })
+      .from(members)
+      .where(
+        and(
+          eq(members.userId, user.userId),
+          eq(members.organizationId, row.organizationId),
+          eq(members.status, "active"),
+        ),
+      )
+      .limit(1);
+    if (!callerMember) {
+      throw new ForbiddenError("Agent belongs to an organization the caller is not a member of");
+    }
+
+    // Human agents represent the member themselves; the caller must BE that
+    // member (their members.agent_id must match the agent UUID).
     if (row.type === "human") {
-      const [selfMember] = await db
-        .select({ id: members.id })
-        .from(members)
-        .where(and(eq(members.userId, member.userId), eq(members.agentId, row.uuid)))
-        .limit(1);
-      if (!selfMember) {
+      if (callerMember.agentId !== row.uuid) {
         throw new ForbiddenError("Agent not runnable by this user");
       }
-    } else if (!row.clientId || !row.clientUserId || row.clientUserId !== member.userId) {
+    } else if (!row.clientId || !row.clientUserId || row.clientUserId !== user.userId) {
       // Rule R-RUN: non-human agents must be pinned to a client owned by the
-      // caller. The `clientUserId` null check covers two cases: (a) a legacy
-      // client still unclaimed, (b) the agent has no client.
+      // caller's user.
       throw new ForbiddenError("Agent not runnable by this user");
     }
 

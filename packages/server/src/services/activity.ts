@@ -5,7 +5,8 @@ import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
 import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
-import { agentVisibilityCondition, type MemberScope } from "./access-control.js";
+import type { OrgScope } from "../scope/types.js";
+import { agentVisibilityCondition } from "./access-control.js";
 import type { Notifier } from "./notifier.js";
 
 /**
@@ -141,7 +142,7 @@ export async function getAgentWithRuntime(db: Database, agentId: string) {
  * List agents with active runtime state.
  * When scope is provided, filters to agents visible to the member.
  */
-export async function listAgentsWithRuntime(db: Database, scope?: MemberScope) {
+export async function listAgentsWithRuntime(db: Database, scope?: OrgScope) {
   if (!scope) {
     return db.select().from(agentPresence).where(isNotNull(agentPresence.runtimeState));
   }

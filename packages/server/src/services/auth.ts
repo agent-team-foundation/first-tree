@@ -9,10 +9,9 @@ import { UnauthorizedError } from "../errors.js";
 
 /**
  * Token lifetime configuration. Driven by `FIRST_TREE_HUB_AUTH_*_EXPIRY`
- * env vars (see shared/server-config.ts). Refresh tokens slide: every
- * successful refresh issues a fresh pair, so an active client never
- * hits the absolute expiry — the configured `refreshTokenExpiry` is
- * the safety net for clients that go offline for a while.
+ * env vars. Refresh tokens slide: every successful refresh issues a fresh
+ * pair, so an active client never hits the absolute expiry — the configured
+ * `refreshTokenExpiry` is the safety net for clients that go offline.
  */
 export type AuthTokenExpiries = {
   accessTokenExpiry: string;
@@ -24,11 +23,14 @@ export type AuthTokenExpiries = {
 const consumedConnectJtis = new Map<string, number>();
 const CONNECT_JTI_TTL_MS = 600_000;
 
+/**
+ * JWT payload shape. Carries ONLY the user identity — no org / member /
+ * role. Anything beyond `userId` is resolved per-request via the
+ * `scope/require-*` helpers, which forces every authz decision through a
+ * real-time DB probe (kills the JWT-ambient-scope bug class).
+ */
 type TokenPayload = {
   sub: string;
-  memberId: string;
-  organizationId: string;
-  role: string;
   type: "access" | "refresh" | "connect";
   iss?: string;
 };
@@ -38,12 +40,6 @@ async function signToken(
   payload: Omit<TokenPayload, "type"> & { type: TokenPayload["type"] },
   expiry: string,
 ): Promise<string> {
-  // Stamp a fresh jti on every issuance. Without it, two refreshes inside
-  // the same wall-clock second produce byte-identical tokens (same iat,
-  // same payload, deterministic HS256), which defeats the sliding-window
-  // intent — `credentials.json` writes the "new" token over the "old" but
-  // the bytes are equal, so the cap doesn't actually slide forward and a
-  // separate process holding the prior token can't tell them apart.
   return new SignJWT({ ...payload })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
@@ -52,13 +48,6 @@ async function signToken(
     .sign(secret);
 }
 
-/**
- * Convert an `ms`-style expiry string (e.g. `"30m"`, `"30d"`, `"1w"`) to
- * seconds. Used to surface the connect token's `expiresIn` in the API
- * response. Mirrors the subset of `jose.setExpirationTime` we use; falls
- * through with a clear error on malformed config so a typo in the env var
- * surfaces at boot, not days later when the first token expires.
- */
 export function expiryToSeconds(expiry: string): number {
   const m = /^(\d+)\s*(s|m|h|d|w)$/.exec(expiry.trim());
   if (!m) {
@@ -71,25 +60,35 @@ export function expiryToSeconds(expiry: string): number {
 }
 
 /**
- * Sign an `(access, refresh)` pair for the given member. Used by both the
- * legacy username/password login path and the SaaS GitHub OAuth callback,
- * so the issuance shape stays in one place.
+ * Sign an `(access, refresh)` pair carrying only `sub = userId`.
  */
-export async function signTokensForMember(
+export async function signTokensForUser(
   jwtSecretKey: string,
-  member: { userId: string; memberId: string; organizationId: string; role: string },
+  userId: string,
   expiries: Pick<AuthTokenExpiries, "accessTokenExpiry" | "refreshTokenExpiry">,
 ): Promise<{ accessToken: string; refreshToken: string }> {
   const secret = new TextEncoder().encode(jwtSecretKey);
-  const tokenBase = {
-    sub: member.userId,
-    memberId: member.memberId,
-    organizationId: member.organizationId,
-    role: member.role,
-  };
-  const accessToken = await signToken(secret, { ...tokenBase, type: "access" }, expiries.accessTokenExpiry);
-  const refreshToken = await signToken(secret, { ...tokenBase, type: "refresh" }, expiries.refreshTokenExpiry);
+  const accessToken = await signToken(secret, { sub: userId, type: "access" }, expiries.accessTokenExpiry);
+  const refreshToken = await signToken(secret, { sub: userId, type: "refresh" }, expiries.refreshTokenExpiry);
   return { accessToken, refreshToken };
+}
+
+/**
+ * Pick the user's "default" membership for the web client to land on
+ * after login. Most-recently-active membership wins; tie-break by the
+ * uuidv7 lexicographic order of `members.id` (matches insert order).
+ *
+ * Used only by `GET /me` to populate `defaultOrganizationId` — the JWT
+ * itself does NOT carry org info anymore.
+ */
+export function pickDefaultMembership<T extends { id: string; createdAt: Date }>(rows: T[]): T | null {
+  if (rows.length === 0) return null;
+  const sorted = [...rows].sort((a, b) => {
+    const t = b.createdAt.getTime() - a.createdAt.getTime();
+    if (t !== 0) return t;
+    return b.id.localeCompare(a.id);
+  });
+  return sorted[0] ?? null;
 }
 
 export async function login(
@@ -110,24 +109,12 @@ export async function login(
     throw new UnauthorizedError("Invalid username or password");
   }
 
-  // Password login: pick the most recently joined ACTIVE membership. Soft-
-  // deleted ("left") rows are ignored so a member who left their last team
-  // can't password-login back in without re-joining. Note: `createdAt` is
-  // the original insert timestamp; `ensureMembership` reactivates a left
-  // member without touching it, so a leave-and-rejoin reads as "first
-  // joined" — acceptable because the reactivation path is rare and the
-  // determinism is what we actually need.
-  //
-  // The ORDER BY is load-bearing: without it, Postgres returns memberships
-  // in implementation-defined order and a multi-org user gets a non-
-  // deterministic JWT default org across logins. That non-determinism is
-  // the upstream cause of "I created an agent in team A but it shows up in
-  // team B" — `POST /admin/agents` falls back to JWT default when the body
-  // omits `organizationId`. The `desc(id)` tiebreak guards the (rare) case
-  // of two memberships with identical `created_at`; `members.id` is
-  // uuidv7 so its lexicographic order matches insert order.
+  // The user MUST have at least one active membership to log in. The
+  // default org for the web client is derived from `/me` later; we keep
+  // the existence check here so a user with zero memberships gets a clear
+  // 401 instead of silently ending up at a no-op landing page.
   const [member] = await db
-    .select()
+    .select({ id: members.id })
     .from(members)
     .where(and(eq(members.userId, user.id), eq(members.status, "active")))
     .orderBy(desc(members.createdAt), desc(members.id))
@@ -137,18 +124,8 @@ export async function login(
     throw new UnauthorizedError("No organization membership found");
   }
 
-  const tokens = await signTokensForMember(
-    jwtSecretKey,
-    {
-      userId: user.id,
-      memberId: member.id,
-      organizationId: member.organizationId,
-      role: member.role,
-    },
-    expiries,
-  );
+  const tokens = await signTokensForUser(jwtSecretKey, user.id, expiries);
 
-  // Update last login
   await db.update(users).set({ updatedAt: new Date() }).where(eq(users.id, user.id));
 
   return tokens;
@@ -156,15 +133,7 @@ export async function login(
 
 /**
  * Refresh an access token. Sliding-window: the response also carries a
- * fresh refresh token whose lifetime restarts from now, so an actively-used
- * client never hits the absolute `refreshTokenExpiry`. The previously
- * issued refresh token remains valid until its own `exp` — we deliberately
- * do **not** maintain a server-side jti revocation set. Same-process
- * concurrent refreshes therefore both succeed; the surviving refresh token
- * is whichever one the client persists last. The alternative (server-side
- * invalidation) is more defensive against token theft but introduces races
- * across systemd-supervised restarts and reconnect storms — a tradeoff
- * we're not paying for here.
+ * fresh refresh token whose lifetime restarts from now.
  */
 export async function refreshAccessToken(
   db: Database,
@@ -179,10 +148,6 @@ export async function refreshAccessToken(
     const { payload: p } = await jwtVerify(refreshToken, secret);
     payload = p as unknown as TokenPayload;
   } catch {
-    // jwtVerify lumps "expired" / "tampered" / "wrong secret" into one error,
-    // so we can't tell them apart from the throw. The reason here records
-    // the *outcome* (signature/expiry rejection) — operators correlate by
-    // client.ip + auth.refresh.reason in the trace backend.
     throw new UnauthorizedError("Invalid or expired refresh token", {
       "auth.refresh.reason": "jwt_verify_failed",
     });
@@ -195,7 +160,6 @@ export async function refreshAccessToken(
     });
   }
 
-  // Verify user still exists and is active
   const [user] = await db
     .select({ id: users.id, status: users.status })
     .from(users)
@@ -216,53 +180,38 @@ export async function refreshAccessToken(
     });
   }
 
-  // Verify membership still exists and hasn't been left.
-  const [member] = await db
-    .select()
+  // Confirm the user still has at least one active membership; otherwise
+  // refreshing would yield a token that lets them call /me but every
+  // org-scoped route would 403. Surface the "you've been removed" state
+  // at refresh time so the client redirects to login cleanly.
+  const [anyMember] = await db
+    .select({ id: members.id })
     .from(members)
-    .where(and(eq(members.id, payload.memberId), eq(members.status, "active")))
+    .where(and(eq(members.userId, user.id), eq(members.status, "active")))
     .limit(1);
 
-  if (!member) {
-    throw new UnauthorizedError("Membership not found", {
-      "auth.refresh.reason": "membership_not_found",
+  if (!anyMember) {
+    throw new UnauthorizedError("No active membership", {
+      "auth.refresh.reason": "no_active_membership",
       "auth.refresh.user_id": payload.sub,
-      "auth.refresh.member_id": payload.memberId,
     });
   }
 
-  return signTokensForMember(
-    jwtSecretKey,
-    { userId: user.id, memberId: member.id, organizationId: member.organizationId, role: member.role },
-    expiries,
-  );
+  return signTokensForUser(jwtSecretKey, user.id, expiries);
 }
 
 /**
  * Generate a short-lived connect token for CLI authentication.
- * The connect token carries the member's identity and can be exchanged
- * for full access+refresh tokens via exchangeConnectToken().
- *
- * `iss` (when supplied) is stamped into the JWT so the CLI can derive
- * the hub URL with no additional argument. Production servers must
- * always pass it; dev callers may omit and the CLI will require an
- * explicit `--server-url` (legacy form).
  */
 export async function generateConnectToken(
-  member: { userId: string; memberId: string; organizationId: string; role: string },
+  userId: string,
   jwtSecretKey: string,
   expiries: Pick<AuthTokenExpiries, "connectTokenExpiry">,
   iss?: string,
 ): Promise<{ token: string; expiresIn: number }> {
   const secret = new TextEncoder().encode(jwtSecretKey);
   const jti = randomUUID();
-  const builder = new SignJWT({
-    sub: member.userId,
-    memberId: member.memberId,
-    organizationId: member.organizationId,
-    role: member.role,
-    type: "connect",
-  })
+  const builder = new SignJWT({ sub: userId, type: "connect" })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setJti(jti)
@@ -274,8 +223,6 @@ export async function generateConnectToken(
 
 /**
  * Exchange a connect token for full access+refresh tokens.
- * Validates the connect token, verifies the user is still active,
- * and issues a fresh token pair.
  */
 export async function exchangeConnectToken(
   db: Database,
@@ -293,25 +240,22 @@ export async function exchangeConnectToken(
     throw new UnauthorizedError("Invalid or expired connect token");
   }
 
-  if (payload.type !== "connect" || !payload.sub || !payload.memberId) {
+  if (payload.type !== "connect" || !payload.sub) {
     throw new UnauthorizedError("Invalid token type — expected connect token");
   }
 
-  // One-time use: reject if jti already consumed
   const jti = (payload as unknown as Record<string, unknown>).jti as string | undefined;
   if (jti) {
     if (consumedConnectJtis.has(jti)) {
       throw new UnauthorizedError("Connect token has already been used");
     }
     consumedConnectJtis.set(jti, Date.now());
-    // Prune expired entries
     const cutoff = Date.now() - CONNECT_JTI_TTL_MS;
     for (const [k, ts] of consumedConnectJtis) {
       if (ts < cutoff) consumedConnectJtis.delete(k);
     }
   }
 
-  // Verify user still exists and is active
   const [user] = await db
     .select({ id: users.id, status: users.status })
     .from(users)
@@ -322,25 +266,17 @@ export async function exchangeConnectToken(
     throw new UnauthorizedError("User not found or suspended");
   }
 
-  // Verify membership still exists and hasn't been left.
-  const [member] = await db
-    .select()
+  // Same membership-existence check as refreshAccessToken — clear failure
+  // mode if the connect token was minted before the user was removed.
+  const [anyMember] = await db
+    .select({ id: members.id })
     .from(members)
-    .where(and(eq(members.id, payload.memberId), eq(members.status, "active")))
+    .where(and(eq(members.userId, user.id), eq(members.status, "active")))
     .limit(1);
 
-  if (!member) {
-    throw new UnauthorizedError("Membership not found");
+  if (!anyMember) {
+    throw new UnauthorizedError("No active membership");
   }
 
-  return signTokensForMember(
-    jwtSecretKey,
-    {
-      userId: user.id,
-      memberId: member.id,
-      organizationId: member.organizationId,
-      role: member.role,
-    },
-    expiries,
-  );
+  return signTokensForUser(jwtSecretKey, user.id, expiries);
 }

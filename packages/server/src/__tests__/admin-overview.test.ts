@@ -15,7 +15,7 @@ describe("Admin Overview API", () => {
 
     const res = await app.inject({
       method: "GET",
-      url: "/api/v1/admin/overview",
+      url: `/api/v1/orgs/${admin.organizationId}/overview`,
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
     expect(res.statusCode).toBe(200);
@@ -27,7 +27,7 @@ describe("Admin Overview API", () => {
 
   it("rejects unauthenticated requests", async () => {
     const app = getApp();
-    const res = await app.inject({ method: "GET", url: "/api/v1/admin/overview" });
+    const res = await app.inject({ method: "GET", url: "/api/v1/orgs/any/overview" });
     expect(res.statusCode).toBe(401);
   });
 });

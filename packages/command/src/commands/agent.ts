@@ -128,15 +128,18 @@ function readStdin(): Promise<string | null> {
 type ResolvedAgent = { uuid: string; name: string | null; displayName: string | null };
 
 async function resolveAgent(serverUrl: string, adminToken: string, agentName: string): Promise<ResolvedAgent> {
-  const res = await fetch(`${serverUrl}/api/v1/admin/agents?limit=100`, {
+  // /me/managed-agents — cross-org list of every agent the caller manages.
+  // Avoids needing a per-org `--org` flag on every command that operates on
+  // an agent by name.
+  const res = await fetch(`${serverUrl}/api/v1/me/managed-agents`, {
     headers: { Authorization: `Bearer ${adminToken}` },
     signal: AbortSignal.timeout(10_000),
   });
   if (!res.ok) {
     fail("FETCH_ERROR", `Failed to list agents: ${res.status}`, 1);
   }
-  const data = (await res.json()) as { items: ResolvedAgent[] };
-  const found = data.items.find((a) => a.name === agentName || a.uuid === agentName);
+  const items = (await res.json()) as ResolvedAgent[];
+  const found = items.find((a) => a.name === agentName || a.uuid === agentName);
   if (!found) {
     fail("NOT_FOUND", `Agent "${agentName}" not found`, 1);
   }
@@ -221,7 +224,7 @@ export function registerAgentCommands(program: Command): void {
   // ── prune — drop local aliases the server no longer pins to me ─────
   // Counterpart to `client doctor`'s "stale aliases" warning. Walks the
   // local `agents/<name>/` dirs and removes any whose `agentId` is not
-  // returned by `/api/v1/clients/me/agents`. Common after `client claim`,
+  // returned by `/api/v1/me/pinned-agents`. Common after `client claim`,
   // after the previous owner deleted an agent server-side, or after a
   // typo `agent add` left a junk dir.
   agent
@@ -375,11 +378,19 @@ export function registerAgentCommands(program: Command): void {
     )
     .option("--runtime <runtime>", "Runtime handler (default: claude-code)", "claude-code")
     .option("--display-name <name>", "Display name")
+    .option("--org <id>", "Target organization id (required when you belong to multiple orgs)")
     .option("--server <url>", "Hub server URL")
     .action(
       async (
         name: string,
-        options: { type: string; clientId: string; runtime: string; displayName?: string; server?: string },
+        options: {
+          type: string;
+          clientId: string;
+          runtime: string;
+          displayName?: string;
+          org?: string;
+          server?: string;
+        },
       ) => {
         try {
           const serverUrl = resolveServerUrl(options.server);
@@ -389,6 +400,33 @@ export function registerAgentCommands(program: Command): void {
             "Content-Type": "application/json",
           };
 
+          // Resolve target org. Single-org users are auto-selected; multi-org
+          // users must pass `--org`. JWT no longer carries default org.
+          const meRes = await fetch(`${serverUrl}/api/v1/me`, {
+            headers: { Authorization: `Bearer ${adminToken}` },
+            signal: AbortSignal.timeout(10_000),
+          });
+          if (!meRes.ok) fail("FETCH_ERROR", `Failed to fetch /me: HTTP ${meRes.status}`, 1);
+          const me = (await meRes.json()) as {
+            memberships: Array<{ organizationId: string; organizationName: string; role: string }>;
+            defaultOrganizationId?: string | null;
+          };
+          let orgId: string;
+          if (options.org) {
+            if (!me.memberships.some((m) => m.organizationId === options.org)) {
+              fail("ORG_NOT_FOUND", `Not an active member of organization "${options.org}"`, 1);
+            }
+            orgId = options.org;
+          } else if (me.memberships.length === 1) {
+            orgId = me.memberships[0]?.organizationId ?? "";
+          } else if (me.memberships.length === 0) {
+            fail("NO_ORG", "You don't belong to any organization", 1);
+          } else {
+            const list = me.memberships.map((m) => `  ${m.organizationId}  (${m.organizationName})`).join("\n");
+            fail("AMBIGUOUS_ORG", `You belong to multiple organizations — pass --org <id>:\n${list}`, 1);
+            return;
+          }
+
           const createBody: Record<string, unknown> = {
             name,
             type: options.type,
@@ -397,7 +435,7 @@ export function registerAgentCommands(program: Command): void {
           };
           if (options.displayName) createBody.displayName = options.displayName;
 
-          const createRes = await fetch(`${serverUrl}/api/v1/admin/agents`, {
+          const createRes = await fetch(`${serverUrl}/api/v1/orgs/${encodeURIComponent(orgId)}/agents`, {
             method: "POST",
             headers,
             body: JSON.stringify(createBody),
@@ -441,7 +479,7 @@ export function registerAgentCommands(program: Command): void {
 
         const target = await resolveAgent(serverUrl, accessToken, agentName);
 
-        const patchRes = await fetch(`${serverUrl}/api/v1/admin/agents/${target.uuid}`, {
+        const patchRes = await fetch(`${serverUrl}/api/v1/agents/${target.uuid}`, {
           method: "PATCH",
           headers: {
             Authorization: `Bearer ${accessToken}`,
@@ -524,7 +562,7 @@ export function registerAgentCommands(program: Command): void {
         const accessToken = await ensureFreshAccessToken();
         const target = await resolveAgent(serverUrl, accessToken, agentName);
 
-        const patchRes = await fetch(`${serverUrl}/api/v1/admin/agents/${target.uuid}`, {
+        const patchRes = await fetch(`${serverUrl}/api/v1/agents/${target.uuid}`, {
           method: "PATCH",
           headers: {
             Authorization: `Bearer ${accessToken}`,
@@ -716,14 +754,16 @@ export function registerAgentCommands(program: Command): void {
     .action(async (name?: string, options?: { server?: string }) => {
       try {
         const serverUrl = resolveServerUrl(options?.server);
-        const response = await fetch(`${serverUrl}/api/v1/admin/agents/activity`, {
-          headers: { Authorization: `Bearer ${await ensureFreshAccessToken()}` },
+        const accessToken = await ensureFreshAccessToken();
+        // Activity is org-scoped — gather across every org the caller belongs
+        // to so a multi-org user's `status` aggregates all runtimes.
+        const meRes = await fetch(`${serverUrl}/api/v1/me`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
           signal: AbortSignal.timeout(10_000),
         });
-        if (!response.ok) {
-          fail("FETCH_ERROR", `Server returned ${response.status}`, 1);
-        }
-        const data = (await response.json()) as {
+        if (!meRes.ok) fail("FETCH_ERROR", `/me HTTP ${meRes.status}`, 1);
+        const me = (await meRes.json()) as { memberships: Array<{ organizationId: string }> };
+        type ActivityResponse = {
           total: number;
           running: number;
           byState: { idle: number; working: number; blocked: number; error: number };
@@ -737,6 +777,29 @@ export function registerAgentCommands(program: Command): void {
             totalSessions: number | null;
           }>;
         };
+        const data: ActivityResponse = {
+          total: 0,
+          running: 0,
+          byState: { idle: 0, working: 0, blocked: 0, error: 0 },
+          clients: 0,
+          agents: [],
+        };
+        for (const m of me.memberships) {
+          const r = await fetch(`${serverUrl}/api/v1/orgs/${encodeURIComponent(m.organizationId)}/activity`, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+            signal: AbortSignal.timeout(10_000),
+          });
+          if (!r.ok) continue;
+          const part = (await r.json()) as ActivityResponse;
+          data.total += part.total;
+          data.running += part.running;
+          data.byState.idle += part.byState.idle;
+          data.byState.working += part.byState.working;
+          data.byState.blocked += part.byState.blocked;
+          data.byState.error += part.byState.error;
+          data.clients += part.clients;
+          data.agents.push(...part.agents);
+        }
 
         if (name) {
           const ag = data.agents.find((a) => a.agentId === name);
@@ -789,7 +852,7 @@ export function registerAgentCommands(program: Command): void {
     .action(async (name: string, options: { server?: string }) => {
       try {
         const serverUrl = resolveServerUrl(options.server);
-        const response = await fetch(`${serverUrl}/api/v1/admin/agents/activity/${name}/reset-activity`, {
+        const response = await fetch(`${serverUrl}/api/v1/agents/${name}/reset-activity`, {
           method: "POST",
           headers: { Authorization: `Bearer ${await ensureFreshAccessToken()}` },
           signal: AbortSignal.timeout(10_000),
@@ -817,7 +880,7 @@ export function registerAgentCommands(program: Command): void {
         const adminToken = await ensureFreshAccessToken();
         const agentId = (await resolveAgent(serverUrl, adminToken, agentName)).uuid;
         const qs = options.state ? `?state=${options.state}` : "";
-        const response = await fetch(`${serverUrl}/api/v1/admin/sessions/agents/${agentId}${qs}`, {
+        const response = await fetch(`${serverUrl}/api/v1/agents/${agentId}/sessions${qs}`, {
           headers: { Authorization: `Bearer ${adminToken}` },
           signal: AbortSignal.timeout(10_000),
         });
@@ -866,7 +929,7 @@ export function registerAgentCommands(program: Command): void {
           const serverUrl = resolveServerUrl(options.server);
           const adminToken = await ensureFreshAccessToken();
           const agentId = (await resolveAgent(serverUrl, adminToken, agentName)).uuid;
-          const response = await fetch(`${serverUrl}/api/v1/admin/sessions/agents/${agentId}/${chatId}/${cmd}`, {
+          const response = await fetch(`${serverUrl}/api/v1/agents/${agentId}/sessions/${chatId}/${cmd}`, {
             method: "POST",
             headers: { Authorization: `Bearer ${adminToken}` },
             signal: AbortSignal.timeout(10_000),
@@ -900,7 +963,7 @@ export function registerAgentCommands(program: Command): void {
 
         const targetAgent = await resolveAgent(serverUrl, adminToken, agentName);
 
-        const dmRes = await fetch(`${serverUrl}/api/v1/admin/agents/${targetAgent.uuid}/chats`, {
+        const dmRes = await fetch(`${serverUrl}/api/v1/agents/${targetAgent.uuid}/chats`, {
           method: "POST",
           headers,
           signal: AbortSignal.timeout(10_000),
@@ -923,7 +986,7 @@ export function registerAgentCommands(program: Command): void {
         const pollMessages = async (): Promise<void> => {
           try {
             const qs = lastSeenAt ? `?limit=50` : `?limit=10`;
-            const msgRes = await fetch(`${serverUrl}/api/v1/admin/chats/${dm.id}/messages${qs}`, {
+            const msgRes = await fetch(`${serverUrl}/api/v1/chats/${dm.id}/messages${qs}`, {
               headers,
               signal: AbortSignal.timeout(10_000),
             });
@@ -975,7 +1038,7 @@ export function registerAgentCommands(program: Command): void {
           }
 
           try {
-            const sendRes = await fetch(`${serverUrl}/api/v1/admin/chats/${dm.id}/messages`, {
+            const sendRes = await fetch(`${serverUrl}/api/v1/chats/${dm.id}/messages`, {
               method: "POST",
               headers,
               body: JSON.stringify({ format: "text", content: text }),

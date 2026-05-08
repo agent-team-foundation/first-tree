@@ -15,7 +15,7 @@ import {
   WS_AUTH_FRAME_TIMEOUT_MS,
   wsAuthFrameSchema,
 } from "@agent-team-foundation/first-tree-hub-shared";
-import { and, eq, inArray, isNull, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { jwtVerify } from "jose";
 import type { WebSocket } from "ws";
@@ -465,21 +465,37 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               // §3.6). Default false — only an explicit `true` activates push.
               clientWantsWsInboxDeliver = data.wireCapabilities?.wsInboxDeliver === true;
 
-              if (!jwtDefaultOrgId) {
+              // Resolve a placeholder `organizationId` for the legacy NOT NULL
+              // column on `clients`. The column is no longer read by any path
+              // (decouple-client-from-identity §4.1.1) but still has the FK
+              // constraint, so we need *some* valid org id at INSERT time. Use
+              // the user's most-recently-active membership; fall back to
+              // jwtDefaultOrgId for legacy tokens that still carry it.
+              let placeholderOrgId = jwtDefaultOrgId;
+              if (!placeholderOrgId) {
+                const [m] = await app.db
+                  .select({ organizationId: members.organizationId })
+                  .from(members)
+                  .where(and(eq(members.userId, session.userId), eq(members.status, "active")))
+                  .orderBy(desc(members.createdAt), desc(members.id))
+                  .limit(1);
+                placeholderOrgId = m?.organizationId ?? null;
+              }
+              if (!placeholderOrgId) {
                 socket.send(
                   JSON.stringify({
                     type: "client:register:rejected",
-                    message: "JWT missing organizationId claim",
+                    message: "User has no active organization membership",
                   }),
                 );
-                socket.close(4401, "client register rejected");
+                socket.close(4403, "no membership");
                 return;
               }
               try {
                 await clientService.registerClient(app.db, {
                   clientId: data.clientId,
                   userId: session.userId,
-                  organizationId: jwtDefaultOrgId,
+                  organizationId: placeholderOrgId,
                   instanceId,
                   hostname: data.hostname,
                   os: data.os,

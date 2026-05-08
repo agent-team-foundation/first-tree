@@ -6,7 +6,6 @@ import * as inboxService from "./inbox.js";
 import type { KaelRuntime } from "./kael-runtime.js";
 import * as notificationService from "./notification.js";
 import * as presenceService from "./presence.js";
-import * as systemConfigService from "./system-config.js";
 
 const log = createLogger("BackgroundTasks");
 
@@ -31,9 +30,8 @@ export function createBackgroundTasks(
       // Inbox timeout reset — runs every 60 seconds
       inboxTimer = setInterval(async () => {
         try {
-          const configs = await systemConfigService.getAllConfigs(app.db);
-          const timeoutSeconds = (configs.inbox_timeout_seconds as number) ?? 300;
-          const maxRetries = (configs.max_retry_count as number) ?? 3;
+          const timeoutSeconds = app.config.runtime.inboxTimeoutSeconds;
+          const maxRetries = app.config.runtime.maxRetryCount;
           await inboxService.resetTimedOutEntries(app.db, timeoutSeconds, maxRetries);
           // Silent row GC piggy-backs on the inbox timer (no need for a
           // second timer — DELETE is rare and tiny). Uses default 30-day
@@ -56,8 +54,7 @@ export function createBackgroundTasks(
       heartbeatTimer = setInterval(async () => {
         try {
           await presenceService.heartbeatInstance(app.db, instanceId);
-          const configs = await systemConfigService.getAllConfigs(app.db);
-          const staleSeconds = (configs.presence_cleanup_seconds as number) ?? 60;
+          const staleSeconds = app.config.runtime.presenceCleanupSeconds;
           await presenceService.cleanupStalePresence(app.db, staleSeconds);
           await clientService.cleanupStaleClients(app.db, staleSeconds);
           // M1: per-agent heartbeat staleness detection

@@ -12,7 +12,7 @@ describe("Invitation lifecycle", () => {
     const admin = await createTestAdmin(app);
     const res = await app.inject({
       method: "GET",
-      url: `/api/v1/admin/organizations/${admin.organizationId}/invitations`,
+      url: `/api/v1/orgs/${admin.organizationId}/invitations`,
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
     expect(res.statusCode).toBe(200);
@@ -69,14 +69,14 @@ describe("Invitation lifecycle", () => {
     const admin = await createTestAdmin(app);
     const first = await app.inject({
       method: "GET",
-      url: `/api/v1/admin/organizations/${admin.organizationId}/invitations`,
+      url: `/api/v1/orgs/${admin.organizationId}/invitations`,
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
     const firstToken = first.json<{ token: string }>().token;
 
     const second = await app.inject({
       method: "POST",
-      url: `/api/v1/admin/organizations/${admin.organizationId}/invitations/rotate`,
+      url: `/api/v1/orgs/${admin.organizationId}/invitations/rotate`,
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
     expect(second.statusCode).toBe(200);
@@ -95,7 +95,7 @@ describe("Invitation lifecycle", () => {
     const { ensureMembership } = await import("../services/membership.js");
     const { uuidv7 } = await import("../uuid.js");
     const { users } = await import("../db/schema/users.js");
-    const { signTokensForMember } = await import("../services/auth.js");
+    const { signTokensForUser } = await import("../services/auth.js");
     const otherUserId = uuidv7();
     await app.db.insert(users).values({
       id: otherUserId,
@@ -103,26 +103,17 @@ describe("Invitation lifecycle", () => {
       passwordHash: INVALID_BCRYPT_PLACEHOLDER,
       displayName: "Peer",
     });
-    const peer = await ensureMembership(app.db, {
+    await ensureMembership(app.db, {
       userId: otherUserId,
       organizationId: admin.organizationId,
       role: "member",
       displayName: "Peer",
       username: `peer-${otherUserId.slice(0, 8)}`,
     });
-    const tokens = await signTokensForMember(
-      app.config.secrets.jwtSecret,
-      {
-        userId: otherUserId,
-        memberId: peer.id,
-        organizationId: peer.organizationId,
-        role: "member",
-      },
-      app.config.auth,
-    );
+    const tokens = await signTokensForUser(app.config.secrets.jwtSecret, otherUserId, app.config.auth);
     const res = await app.inject({
       method: "POST",
-      url: `/api/v1/admin/organizations/${admin.organizationId}/invitations/rotate`,
+      url: `/api/v1/orgs/${admin.organizationId}/invitations/rotate`,
       headers: { authorization: `Bearer ${tokens.accessToken}` },
     });
     expect(res.statusCode).toBe(403);
@@ -144,7 +135,7 @@ describe("Invitation lifecycle", () => {
 
     const res = await app.inject({
       method: "POST",
-      url: `/api/v1/admin/organizations/${otherOrgId}/invitations/rotate`,
+      url: `/api/v1/orgs/${otherOrgId}/invitations/rotate`,
       headers: { authorization: `Bearer ${adminA.accessToken}` },
     });
     expect(res.statusCode).toBe(403);
@@ -155,12 +146,12 @@ describe("Invitation lifecycle", () => {
     const admin = await createTestAdmin(app);
     const inv = await app.inject({
       method: "GET",
-      url: `/api/v1/admin/organizations/${admin.organizationId}/invitations`,
+      url: `/api/v1/orgs/${admin.organizationId}/invitations`,
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
     const token = inv.json<{ token: string }>().token;
 
-    const preview = await app.inject({ method: "GET", url: `/api/v1/invite/${token}/preview` });
+    const preview = await app.inject({ method: "GET", url: `/api/v1/invitations/${token}/preview` });
     expect(preview.statusCode).toBe(200);
     const body = preview.json<{ organizationName: string; role: string; expiresAt: string | null }>();
     expect(body.role).toBe("member");
@@ -180,18 +171,18 @@ describe("Invitation lifecycle", () => {
     const admin = await createTestAdmin(app);
     const inv = await app.inject({
       method: "GET",
-      url: `/api/v1/admin/organizations/${admin.organizationId}/invitations`,
+      url: `/api/v1/orgs/${admin.organizationId}/invitations`,
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
     const token = inv.json<{ token: string }>().token;
 
     await app.inject({
       method: "POST",
-      url: `/api/v1/admin/organizations/${admin.organizationId}/invitations/rotate`,
+      url: `/api/v1/orgs/${admin.organizationId}/invitations/rotate`,
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
 
-    const preview = await app.inject({ method: "GET", url: `/api/v1/invite/${token}/preview` });
+    const preview = await app.inject({ method: "GET", url: `/api/v1/invitations/${token}/preview` });
     expect(preview.statusCode).toBe(404);
   });
 
@@ -200,7 +191,7 @@ describe("Invitation lifecycle", () => {
     const admin = await createTestAdmin(app);
     const inv = await app.inject({
       method: "GET",
-      url: `/api/v1/admin/organizations/${admin.organizationId}/invitations`,
+      url: `/api/v1/orgs/${admin.organizationId}/invitations`,
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
     const token = inv.json<{ token: string }>().token;

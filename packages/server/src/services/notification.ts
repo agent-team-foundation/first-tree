@@ -13,7 +13,6 @@ import { clients } from "../db/schema/clients.js";
 import { notifications } from "../db/schema/notifications.js";
 import { uuidv7 } from "../uuid.js";
 import { broadcastToAdmins } from "./admin-broadcast.js";
-import * as systemConfigService from "./system-config.js";
 
 export type CreateNotificationData = {
   organizationId: string;
@@ -65,7 +64,7 @@ export async function createNotification(db: Database, data: CreateNotificationD
   // per-member agent visibility so a push about a private agent never reaches
   // members who can't see that agent via REST.
   pushToAdminWs(notification);
-  pushToWebhook(db, notification).catch(() => {});
+  pushToWebhook(notification).catch(() => {});
 
   return notification;
 }
@@ -337,8 +336,8 @@ function pushToAdminWs(notification: Record<string, unknown>): void {
   });
 }
 
-async function pushToWebhook(db: Database, notification: Record<string, unknown>): Promise<void> {
-  const webhookUrl = (await systemConfigService.getConfig(db, "notification_webhook_url")) as string | null;
+async function pushToWebhook(notification: Record<string, unknown>): Promise<void> {
+  const webhookUrl = process.env.FIRST_TREE_HUB_NOTIFICATION_WEBHOOK_URL;
   if (!webhookUrl) return;
 
   try {

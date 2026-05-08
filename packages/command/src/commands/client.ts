@@ -463,20 +463,34 @@ export function registerClientCommands(program: Command): void {
       try {
         const serverUrl = resolveServerUrl(options.server);
         const token = await ensureFreshAccessToken();
-        const response = await fetch(`${serverUrl}/api/v1/clients`, {
+        // Multi-org-aware: aggregate every org admin clients-list across
+        // all the caller's memberships. Non-admins get their own clients
+        // via /me/pinned-agents elsewhere; this CLI list is admin-only.
+        const meRes = await fetch(`${serverUrl}/api/v1/me`, {
           headers: { Authorization: `Bearer ${token}` },
           signal: AbortSignal.timeout(10_000),
         });
-        if (!response.ok) {
-          fail("FETCH_ERROR", `Server returned ${response.status}`, 1);
-        }
-        const clients = (await response.json()) as Array<{
+        if (!meRes.ok) fail("FETCH_ERROR", `/me HTTP ${meRes.status}`, 1);
+        const me = (await meRes.json()) as {
+          memberships: Array<{ organizationId: string; role: string }>;
+        };
+        const adminOrgs = me.memberships.filter((m) => m.role === "admin");
+        const clients: Array<{
           id: string;
           hostname: string | null;
           agentCount: number;
           connectedAt: string | null;
           lastSeenAt: string;
-        }>;
+        }> = [];
+        for (const m of adminOrgs) {
+          const r = await fetch(`${serverUrl}/api/v1/orgs/${encodeURIComponent(m.organizationId)}/clients`, {
+            headers: { Authorization: `Bearer ${token}` },
+            signal: AbortSignal.timeout(10_000),
+          });
+          if (!r.ok) continue;
+          const part = (await r.json()) as typeof clients;
+          clients.push(...part);
+        }
 
         if (clients.length === 0) {
           print.line("  No clients.\n");
@@ -539,7 +553,7 @@ export function registerClientCommands(program: Command): void {
         }
 
         const token = await ensureFreshAccessToken();
-        const response = await fetch(`${serverUrl}/api/v1/me/clients/${clientId}/claim`, {
+        const response = await fetch(`${serverUrl}/api/v1/clients/${encodeURIComponent(clientId)}/claim`, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${token}`,
@@ -642,7 +656,7 @@ export function registerClientCommands(program: Command): void {
       try {
         const serverUrl = resolveServerUrl(options.server);
         const token = await ensureFreshAccessToken();
-        const response = await fetch(`${serverUrl}/api/v1/clients/${clientId}/disconnect`, {
+        const response = await fetch(`${serverUrl}/api/v1/clients/${encodeURIComponent(clientId)}/disconnect`, {
           method: "POST",
           headers: { Authorization: `Bearer ${token}` },
           signal: AbortSignal.timeout(10_000),
