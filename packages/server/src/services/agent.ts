@@ -340,12 +340,21 @@ export async function createAgent(
 
     if (!agent) throw new Error("Unexpected: INSERT RETURNING produced no row");
 
+    // Seed the version=1 config with any caller-provided overrides (today
+    // only `gitRepos`, used by onboarding Step 2 to atomically bind the
+    // picked repo). Doing this on insert avoids a follow-up PATCH race
+    // against the agent's first chat session, which would otherwise call
+    // `prepareGitWorktrees` against an empty payload.
+    const initialPayload = defaultRuntimeConfigPayload(runtimeProvider);
+    if (data.gitRepos && data.gitRepos.length > 0) {
+      initialPayload.gitRepos = data.gitRepos;
+    }
     await db
       .insert(agentConfigs)
       .values({
         agentId: agent.uuid,
         version: 1,
-        payload: defaultRuntimeConfigPayload(runtimeProvider),
+        payload: initialPayload,
         updatedBy: "system",
       })
       .onConflictDoNothing();

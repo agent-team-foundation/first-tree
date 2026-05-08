@@ -266,10 +266,16 @@ export {
   createOrgFromMeSchema,
   type MeMembership,
   meMembershipSchema,
+  type OnboardingEvent,
+  type OnboardingEventName,
+  type OnboardingStep,
   type OrgBrief,
+  onboardingEventNameSchema,
+  onboardingEventSchema,
+  onboardingStepSchema,
   orgBriefSchema,
-  type WizardStep,
-  wizardStepSchema,
+  type PatchOnboarding,
+  patchOnboardingSchema,
 } from "./schemas/me-extras.js";
 export {
   type CreateMember,

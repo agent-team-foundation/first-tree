@@ -42,8 +42,10 @@ describe("GitHub OAuth onboarding flow", () => {
     expect(orgs).toHaveLength(1);
     const orgRow = orgs[0];
     if (!orgRow) throw new Error("expected default org row");
-    // Display name is the GitHub real name, not "<user>'s Personal Team".
-    expect(orgRow.displayName).toBe("Octo Cat");
+    // Default team display name is `${login}'s team` — collective-space
+    // reading per docs/new-user-onboarding-design.md §5.5; user can rename
+    // in onboarding Step 1.
+    expect(orgRow.displayName).toBe("octocat's team");
 
     // The new user is its admin.
     const memberRows = await app.db.select().from(members).where(eq(members.organizationId, orgRow.id));
@@ -150,13 +152,13 @@ describe("GitHub OAuth onboarding flow", () => {
     const body = me.json<{
       memberships: Array<{ role: string; organizationId: string }>;
       defaultOrganizationId: string | null;
-      wizard: { step: string };
+      onboarding: { step: string };
     }>();
     // Solo signup auto-provisions one org with admin role.
     expect(body.memberships).toHaveLength(1);
     expect(body.memberships[0]?.role).toBe("admin");
     expect(body.defaultOrganizationId).toBe(body.memberships[0]?.organizationId);
-    expect(body.wizard.step).toBe("connect");
+    expect(body.onboarding.step).toBe("connect");
   });
 });
 

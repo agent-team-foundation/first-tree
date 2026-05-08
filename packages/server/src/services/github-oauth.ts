@@ -19,10 +19,20 @@ export function buildAuthorizeUrl(opts: { clientId: string; redirectUri: string;
   url.searchParams.set("client_id", opts.clientId);
   url.searchParams.set("redirect_uri", opts.redirectUri);
   url.searchParams.set("state", opts.state);
-  url.searchParams.set("scope", "read:user user:email");
+  url.searchParams.set("scope", "read:user user:email repo");
   url.searchParams.set("allow_signup", "true");
   return url.toString();
 }
+
+export type ExchangeCodeResult = {
+  profile: GithubProfile;
+  /**
+   * Raw OAuth access token. Callers persist this encrypted on the
+   * `auth_identities` row so the Step 2 repo picker can hit GitHub's
+   * `/user/repos` endpoint without a second OAuth round-trip.
+   */
+  accessToken: string;
+};
 
 /**
  * Exchange an OAuth code for an access token + fetch the user profile.
@@ -39,7 +49,7 @@ export async function exchangeCodeForProfile(
   code: string,
   redirectUri: string,
   opts: { fetcher?: typeof fetch } = {},
-): Promise<GithubProfile> {
+): Promise<ExchangeCodeResult> {
   const fetcher = opts.fetcher ?? fetch;
 
   const tokenRes = await fetcher(TOKEN_URL, {
@@ -90,10 +100,66 @@ export async function exchangeCodeForProfile(
   }
 
   return {
-    githubId: String(user.id),
-    login: user.login,
-    email,
-    displayName: user.name ?? null,
-    avatarUrl: user.avatar_url ?? null,
+    profile: {
+      githubId: String(user.id),
+      login: user.login,
+      email,
+      displayName: user.name ?? null,
+      avatarUrl: user.avatar_url ?? null,
+    },
+    accessToken: tokenJson.access_token,
   };
+}
+
+/** Minimal repo descriptor returned by `GET /user/repos`. */
+export type GithubRepo = {
+  fullName: string;
+  cloneUrl: string;
+  htmlUrl: string;
+  private: boolean;
+  defaultBranch: string | null;
+  pushedAt: string | null;
+};
+
+/**
+ * Fetch the authenticated user's accessible repositories. Used by the
+ * Step 2 repo picker. Walks paginated GitHub API responses up to the cap.
+ */
+export async function listUserRepos(
+  accessToken: string,
+  opts: { fetcher?: typeof fetch; perPage?: number; maxPages?: number } = {},
+): Promise<GithubRepo[]> {
+  const fetcher = opts.fetcher ?? fetch;
+  const perPage = opts.perPage ?? 100;
+  const maxPages = opts.maxPages ?? 3;
+  const out: GithubRepo[] = [];
+  for (let page = 1; page <= maxPages; page++) {
+    const url = `https://api.github.com/user/repos?affiliation=owner,collaborator,organization_member&sort=pushed&per_page=${perPage}&page=${page}`;
+    const res = await fetcher(url, {
+      headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/vnd.github+json" },
+    });
+    if (!res.ok) {
+      throw new Error(`GitHub repo list failed (${res.status})`);
+    }
+    const rows = (await res.json()) as Array<{
+      full_name: string;
+      clone_url: string;
+      html_url: string;
+      private: boolean;
+      default_branch?: string | null;
+      pushed_at?: string | null;
+    }>;
+    for (const r of rows) {
+      out.push({
+        fullName: r.full_name,
+        cloneUrl: r.clone_url,
+        htmlUrl: r.html_url,
+        private: r.private,
+        defaultBranch: r.default_branch ?? null,
+        pushedAt: r.pushed_at ?? null,
+      });
+    }
+    if (rows.length < perPage) break;
+  }
+  return out;
 }

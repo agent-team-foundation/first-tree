@@ -225,6 +225,13 @@
       "when": 1777939200000,
       "tag": "0031_drop_system_configs",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1778025600000,
+      "tag": "0032_onboarding_dismissed_at",
+      "breakpoints": true
     }
   ]
 }

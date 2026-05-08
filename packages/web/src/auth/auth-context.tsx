@@ -22,7 +22,11 @@ type MeResponse = {
   user?: MeUser;
   defaultOrganizationId?: string | null;
   memberships?: MeMembership[];
-  wizard?: { step: "connect" | "create_agent" | "completed" };
+  onboarding?: {
+    step: "connect" | "create_agent" | "completed";
+    /** ISO timestamp when the user dismissed the onboarding stepper, else null. */
+    dismissedAt?: string | null;
+  };
 };
 
 type AuthContextValue = {
@@ -48,7 +52,18 @@ type AuthContextValue = {
   memberId: string | null;
   role: string | null;
   agentId: string | null;
-  wizardStep: "connect" | "create_agent" | "completed" | null;
+  onboardingStep: "connect" | "create_agent" | "completed" | null;
+  /**
+   * ISO timestamp when the user clicked `✕` on the onboarding stepper.
+   * Decoupled from `onboardingStep` (see docs/new-user-onboarding-design.md
+   * §8) — `null` means the stepper should render.
+   */
+  onboardingDismissedAt: string | null;
+  /**
+   * PATCH `/me/onboarding { dismissed: true }`. Optimistically flips
+   * `onboardingDismissedAt` so the stepper unmounts immediately.
+   */
+  dismissOnboarding: () => Promise<void>;
   login: (username: string, password: string) => Promise<void>;
   /**
    * Adopt a token pair handed in from a non-login surface (OAuth fragment
@@ -102,7 +117,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setApiSelectedOrganizationId(init);
     return init;
   });
-  const [wizardStep, setWizardStep] = useState<"connect" | "create_agent" | "completed" | null>(null);
+  const [onboardingStep, setOnboardingStep] = useState<"connect" | "create_agent" | "completed" | null>(null);
+  const [onboardingDismissedAt, setOnboardingDismissedAt] = useState<string | null>(null);
   // Stays false until the first fetchMe settles. Unauthenticated visitors
   // never need /me, so the gate also flips for them via the unauth branch
   // below — RequireAuth only blocks the loading frame when the user IS
@@ -118,7 +134,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
     setMemberships([]);
     setSelectedOrgId(null);
-    setWizardStep(null);
+    setOnboardingStep(null);
+    setOnboardingDismissedAt(null);
     setMeLoaded(false);
   }, [queryClient]);
 
@@ -128,8 +145,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(data.user ?? null);
       const ms = data.memberships ?? [];
       setMemberships(ms);
-      const nextStep = data.wizard?.step ?? null;
-      setWizardStep(nextStep);
+      const nextStep = data.onboarding?.step ?? null;
+      setOnboardingStep(nextStep);
+      setOnboardingDismissedAt(data.onboarding?.dismissedAt ?? null);
+      // Drop the join-path flag once onboarding is complete so a later
+      // incomplete state (e.g. user deletes their client) doesn't reuse a
+      // stale "you've joined {team}" headline that no longer fits.
       if (nextStep === "completed") clearOnboardingJoinPath();
 
       // Reconcile selectedOrgId: stored value wins if still valid, else
@@ -190,6 +211,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [fetchMe, queryClient],
   );
 
+  const dismissOnboarding = useCallback(async () => {
+    // Optimistic: stamp client-side immediately so the stepper unmounts
+    // without a round-trip. Server returns the canonical timestamp.
+    let prior: string | null = null;
+    setOnboardingDismissedAt((p) => {
+      prior = p;
+      return new Date().toISOString();
+    });
+    try {
+      const res = await api.patch<{ dismissedAt: string | null }>("/me/onboarding", { dismissed: true });
+      if (res?.dismissedAt) setOnboardingDismissedAt(res.dismissedAt);
+    } catch {
+      // Restore the prior value rather than blanket-clearing — the user
+      // may have already had a non-null timestamp from a previous dismiss.
+      setOnboardingDismissedAt(prior);
+    }
+  }, []);
+
   // Fetch member info on initial load if already authenticated
   useEffect(() => {
     if (isAuthenticated && !user) {
@@ -222,7 +261,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         memberId: currentMembership?.id ?? null,
         role: currentMembership?.role ?? null,
         agentId: currentMembership?.agentId ?? null,
-        wizardStep,
+        onboardingStep,
+        onboardingDismissedAt,
+        dismissOnboarding,
         login,
         adoptTokens,
         selectOrganization,

@@ -4,13 +4,79 @@
  * - `joinPath` (sessionStorage): set by the OAuth-complete page and the
  *   invite-accept handler. Drives the OnboardingView greeting copy
  *   ("Welcome — you've joined {team}." vs "Welcome to First Tree Hub.").
- *   Cleared by AuthContext once the user's wizard reaches `completed`.
+ *   Cleared by AuthContext once the user's onboardingStep reaches `completed`.
  * - `draft` (sessionStorage): keeps the inline onboarding form stable while
  *   the user navigates between app tabs before creating their first agent.
  */
 
 const JOIN_PATH_KEY = "onboarding:joinPath";
 const DRAFT_KEY_PREFIX = "onboarding:draft";
+const STEP1_CONFIRMED_KEY = "onboarding:step1Confirmed";
+const STEP3_INTRO_DISMISSED_KEY = "onboarding:step3IntroDismissed";
+
+/**
+ * Per-tab Step 1 acknowledgement. Server can't distinguish "team
+ * auto-created at OAuth, user hasn't confirmed yet" from "team
+ * confirmed days ago" — onboardingStep is `"connect"` in both. The
+ * `OnboardingView` body resolver and the `OnboardingStepper`
+ * active-step inference both read this so the stepper visuals match
+ * the body that's rendering.
+ */
+export function readStep1Confirmed(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.sessionStorage.getItem(STEP1_CONFIRMED_KEY) === "1";
+}
+export function writeStep1Confirmed(value: boolean): void {
+  if (typeof window === "undefined") return;
+  if (value) window.sessionStorage.setItem(STEP1_CONFIRMED_KEY, "1");
+  else window.sessionStorage.removeItem(STEP1_CONFIRMED_KEY);
+}
+
+export function readStep3IntroDismissed(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.sessionStorage.getItem(STEP3_INTRO_DISMISSED_KEY) === "1";
+}
+export function writeStep3IntroDismissed(value: boolean): void {
+  if (typeof window === "undefined") return;
+  if (value) window.sessionStorage.setItem(STEP3_INTRO_DISMISSED_KEY, "1");
+  else window.sessionStorage.removeItem(STEP3_INTRO_DISMISSED_KEY);
+}
+
+const ONBOARDING_AGENT_UUID_KEY = "onboarding:agentUuid";
+
+/**
+ * UUID of the agent created in Step 2. Step 3's [Yes, set it up] handler
+ * uses this to start the chat against the right agent on a re-visit
+ * (where `listManagedAgents` order is unspecified). Per-tab — fine for
+ * the same-session continuation case the design targets.
+ */
+export function readOnboardingAgentUuid(): string | null {
+  if (typeof window === "undefined") return null;
+  return window.sessionStorage.getItem(ONBOARDING_AGENT_UUID_KEY);
+}
+export function writeOnboardingAgentUuid(uuid: string | null): void {
+  if (typeof window === "undefined") return;
+  if (uuid) window.sessionStorage.setItem(ONBOARDING_AGENT_UUID_KEY, uuid);
+  else window.sessionStorage.removeItem(ONBOARDING_AGENT_UUID_KEY);
+}
+
+const RETURN_CHAT_ID_KEY = "onboarding:returnChatId";
+
+/**
+ * Stash a chat id when the user clicks back to Step 1 / Step 2 from the
+ * stepper while a chat is open in CenterPanel. Step 1's Continue handler
+ * pops it back into the URL on advance so the user lands back in their
+ * tree-init chat instead of `/`.
+ */
+export function readOnboardingReturnChatId(): string | null {
+  if (typeof window === "undefined") return null;
+  return window.sessionStorage.getItem(RETURN_CHAT_ID_KEY);
+}
+export function writeOnboardingReturnChatId(chatId: string | null): void {
+  if (typeof window === "undefined") return;
+  if (chatId) window.sessionStorage.setItem(RETURN_CHAT_ID_KEY, chatId);
+  else window.sessionStorage.removeItem(RETURN_CHAT_ID_KEY);
+}
 
 export type OnboardingJoinPath = "solo" | "invite";
 export type OnboardingDraft = {
@@ -18,6 +84,8 @@ export type OnboardingDraft = {
   selectedRuntime: string | null;
   connectToken: string | null;
   connectTokenExpiresAt: number | null;
+  /** Clone URL of the GitHub repo picked by the Step 2 picker. */
+  selectedRepoUrl: string | null;
 };
 
 /**
@@ -37,7 +105,7 @@ export function readOnboardingJoinPath(): OnboardingJoinPath | null {
 }
 
 /**
- * Drop the join-path flag. Called once `wizard.step` reaches `completed` so
+ * Drop the join-path flag. Called once `onboarding.step` reaches `completed` so
  * a future incomplete state (e.g. user deletes their client) doesn't reuse a
  * stale "you've joined {team}" headline that no longer fits.
  */
@@ -63,11 +131,14 @@ function parseOnboardingDraft(value: unknown): OnboardingDraft | null {
   if (connectToken !== null && typeof connectToken !== "string") return null;
   const connectTokenExpiresAt = "connectTokenExpiresAt" in value ? value.connectTokenExpiresAt : null;
   if (connectTokenExpiresAt !== null && typeof connectTokenExpiresAt !== "number") return null;
+  const selectedRepoUrl = "selectedRepoUrl" in value ? value.selectedRepoUrl : null;
+  if (selectedRepoUrl !== null && typeof selectedRepoUrl !== "string") return null;
   return {
     displayName: value.displayName,
     selectedRuntime,
     connectToken,
     connectTokenExpiresAt,
+    selectedRepoUrl,
   };
 }
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect } from "react";
 import { useSearchParams } from "react-router";
 import { useAdminWs } from "../../hooks/use-admin-ws.js";
 import { CenterPanel } from "./center/index.js";
+import { OnboardingStepper } from "./center/onboarding-stepper.js";
 import { ConversationList, DRAFT_CHAT_ID } from "./conversations/index.js";
 
 /**
@@ -50,6 +51,10 @@ export function WorkspacePage() {
       <ConversationList selectedChatId={selectedChatId} onSelectChat={selectChat} onNewChat={openDraft} />
 
       <main className="flex-1 flex flex-col overflow-hidden min-w-0" style={{ background: "var(--bg)" }}>
+        {/* Stepper sits above CenterPanel only, not above the rail
+            (docs/new-user-onboarding-design.md §4.1). It self-renders
+            nothing when the user has dismissed onboarding. */}
+        <OnboardingStepper />
         <CenterPanel selectedChatId={selectedChatId} onSelectChat={selectChat} />
       </main>
     </div>

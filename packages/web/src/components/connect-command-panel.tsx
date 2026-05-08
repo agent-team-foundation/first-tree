@@ -35,13 +35,13 @@ const COPY_FEEDBACK_MS = 1_500;
 
 /**
  * Shared panel for "run this CLI command on the machine you want to pair"
- * surfaces. Used by the onboarding wizard's connect step and the
+ * surfaces. Used by the onboarding flow's connect step and the
  * `Connect computer` modal on /clients — both render the same code block,
  * Copy button, and yellow→green status rows so the visual vocabulary stays
  * unified across the app.
  *
  * Polling and end-state semantics are intentionally NOT in this component:
- *   - Onboarding polls `/me` for the wizard to advance, then transitions
+ *   - Onboarding polls `/me` for onboardingStep to advance, then transitions
  *     to a different step (no green row needed).
  *   - The `/clients` modal polls `/clients` for a new id and shows the
  *     green row briefly before auto-closing.

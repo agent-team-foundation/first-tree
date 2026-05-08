@@ -1,11 +1,14 @@
 import {
   createOrgFromMeSchema,
   joinByInvitationSchema,
-  type WizardStep,
+  type OnboardingStep,
+  onboardingEventSchema,
+  patchOnboardingSchema,
 } from "@agent-team-foundation/first-tree-hub-shared";
-import { and, eq, ne } from "drizzle-orm";
+import { and, eq, isNull, ne } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { agents } from "../db/schema/agents.js";
+import { authIdentities } from "../db/schema/auth-identities.js";
 import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
 import { users } from "../db/schema/users.js";
@@ -13,6 +16,8 @@ import { NotFoundError } from "../errors.js";
 import { requireUser } from "../scope/require-user.js";
 import { listAgentsManagedByUser } from "../services/access-control.js";
 import * as authService from "../services/auth.js";
+import { decryptValue } from "../services/crypto.js";
+import { listUserRepos } from "../services/github-oauth.js";
 import { buildInviteUrl, findActiveByToken, getActiveInvitation, recordRedemption } from "../services/invitation.js";
 import {
   ensureMembership,
@@ -41,6 +46,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         username: users.username,
         displayName: users.displayName,
         avatarUrl: users.avatarUrl,
+        onboardingDismissedAt: users.onboardingDismissedAt,
       })
       .from(users)
       .where(eq(users.id, userId))
@@ -66,7 +72,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       }
     }
 
-    const wizardStep = await inferWizardStep(app, userId);
+    const onboardingStep = await inferOnboardingStep(app, userId);
 
     return {
       user: user ?? null,
@@ -78,9 +84,108 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         role: mb.role,
         agentId: mb.agentId,
       })),
-      wizard: { step: wizardStep },
+      onboarding: {
+        step: onboardingStep,
+        dismissedAt: user?.onboardingDismissedAt ? user.onboardingDismissedAt.toISOString() : null,
+      },
       inviteUrl,
     };
+  });
+
+  /**
+   * PATCH /me/onboarding — currently the only mutable field is
+   * `dismissed`, set when the user clicks `✕` on the onboarding stepper.
+   * Stamping NOW() server-side avoids client-clock skew. Idempotent: a
+   * second PATCH leaves the original timestamp in place.
+   *
+   * See docs/new-user-onboarding-design.md §8.4.
+   */
+  app.patch("/me/onboarding", async (request, reply) => {
+    const { userId } = requireUser(request);
+    const body = patchOnboardingSchema.parse(request.body);
+
+    if (body.dismissed === true) {
+      // Only stamp when not already set — re-clicks become a no-op rather
+      // than resetting the original dismissal time.
+      const result = await app.db
+        .update(users)
+        .set({ onboardingDismissedAt: new Date() })
+        .where(and(eq(users.id, userId), isNull(users.onboardingDismissedAt)))
+        .returning({ id: users.id });
+      if (result.length > 0) {
+        app.log.info({ event: "onboarding.dismissed", userId }, "onboarding funnel: stepper dismissed");
+      }
+    } else if (body.dismissed === false) {
+      await app.db.update(users).set({ onboardingDismissedAt: null }).where(eq(users.id, userId));
+    }
+
+    const [u] = await app.db
+      .select({ onboardingDismissedAt: users.onboardingDismissedAt })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+    return reply.status(200).send({
+      dismissedAt: u?.onboardingDismissedAt ? u.onboardingDismissedAt.toISOString() : null,
+    });
+  });
+
+  /**
+   * POST /me/onboarding/events — web-side onboarding funnel reporter.
+   * Server-side milestones (`team_created` at OAuth, `dismissed` on PATCH)
+   * are emitted directly; this endpoint surfaces the web-driven ones into
+   * the same log stream so a single funnel query covers the full flow.
+   * Body shape is enum-validated so the server won't log arbitrary names.
+   */
+  app.post("/me/onboarding/events", async (request, reply) => {
+    const { userId } = requireUser(request);
+    const body = onboardingEventSchema.parse(request.body);
+    app.log.info(
+      { event: `onboarding.${body.event}`, userId, ...(body.attrs ?? {}) },
+      `onboarding funnel: ${body.event}`,
+    );
+    return reply.status(204).send();
+  });
+
+  /**
+   * GET /me/github/repos — list the caller's accessible GitHub repos. Used
+   * by the Step 2 onboarding repo picker. The OAuth access token was
+   * captured at sign-in (encrypted at rest in `auth_identities.metadata`)
+   * so this endpoint avoids a second redirect.
+   *
+   * 503 if the user has no GitHub identity bound or the token wasn't
+   * captured (e.g. dev-callback sign-in or pre-redesign user). The web
+   * client falls back to a "Reconnect GitHub" hint in that case.
+   */
+  app.get("/me/github/repos", async (request, reply) => {
+    const { userId } = requireUser(request);
+    const [identity] = await app.db
+      .select({ metadata: authIdentities.metadata })
+      .from(authIdentities)
+      .where(and(eq(authIdentities.userId, userId), eq(authIdentities.provider, "github")))
+      .limit(1);
+    const encrypted =
+      identity?.metadata && typeof identity.metadata === "object" && "accessToken" in identity.metadata
+        ? (identity.metadata as { accessToken?: unknown }).accessToken
+        : undefined;
+    if (typeof encrypted !== "string" || !encrypted) {
+      return reply.status(503).send({ error: "GitHub access token unavailable — please reconnect your account" });
+    }
+    let token: string;
+    try {
+      token = decryptValue(encrypted, app.config.secrets.encryptionKey);
+    } catch {
+      return reply.status(503).send({ error: "GitHub access token could not be decoded — please reconnect" });
+    }
+    try {
+      const repos = await listUserRepos(token);
+      return { repos };
+    } catch (err) {
+      // Don't echo GitHub's raw error string back to the client — a 401
+      // ("Bad credentials") would leak token-revocation hints. Log the
+      // real error server-side, return a stable copy.
+      app.log.warn({ err, userId }, "list github repos failed");
+      return reply.status(502).send({ error: "Couldn't reach GitHub. Try again, or reconnect your GitHub account." });
+    }
   });
 
   /**
@@ -237,26 +342,26 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /**
-   * GET /me/wizard-step — bare endpoint for clients that don't want the
-   * full /me payload. Same logic as inferWizardStep below.
+   * GET /me/onboarding-step — bare endpoint for clients that don't want the
+   * full /me payload. Same logic as inferOnboardingStep below.
    */
-  app.get("/me/wizard-step", async (request) => {
+  app.get("/me/onboarding-step", async (request) => {
     const { userId } = requireUser(request);
-    const step = await inferWizardStep(app, userId);
+    const step = await inferOnboardingStep(app, userId);
     return { step };
   });
 }
 
 /**
- * Infer the onboarding wizard step from the *user-level* facts:
+ * Infer the onboarding step from the *user-level* facts:
  *   - has at least one client → past "connect"
  *   - manages at least one non-human active agent (any org) → past "create_agent"
  *
  * Critically: the join from agents → members → userId means a user with
- * memberships across multiple orgs has the wizard satisfied as soon as ANY
+ * memberships across multiple orgs has onboarding satisfied as soon as ANY
  * org has a non-human agent — matching the user-level mental model.
  */
-async function inferWizardStep(app: FastifyInstance, userId: string): Promise<WizardStep> {
+async function inferOnboardingStep(app: FastifyInstance, userId: string): Promise<OnboardingStep> {
   const [hasClient] = await app.db.select({ id: clients.id }).from(clients).where(eq(clients.userId, userId)).limit(1);
   if (!hasClient) return "connect";
 

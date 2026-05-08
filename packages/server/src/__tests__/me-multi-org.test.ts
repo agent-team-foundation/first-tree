@@ -142,13 +142,13 @@ describe("Connect token carries iss claim", () => {
   });
 });
 
-describe("/me wizard step inference", () => {
+describe("/me onboarding step inference", () => {
   const getApp = useTestApp();
 
   it("returns step=connect when no client/agent exists", async () => {
     const app = getApp();
     // Use a fresh OAuth user so we start clean — createTestAdmin pre-seeds
-    // a client+agent which would push the wizard past the first step.
+    // a client+agent which would push onboarding past the first step.
     const oauth = await app.inject({
       method: "GET",
       url: "/api/v1/auth/github/dev-callback?githubId=2001&login=fresh",
@@ -160,11 +160,11 @@ describe("/me wizard step inference", () => {
       url: "/api/v1/me",
       headers: { authorization: `Bearer ${access}` },
     });
-    expect(me.json<{ wizard: { step: string } }>().wizard.step).toBe("connect");
+    expect(me.json<{ onboarding: { step: string } }>().onboarding.step).toBe("connect");
   });
 
   /**
-   * Regression for #239: the wizard inference used to key off the JWT's
+   * Regression for #239: the onboarding inference used to key off the JWT's
    * default `memberId`, so a user whose only autonomous agent lived in a
    * non-default org would still see `step=create_agent` even though the
    * onboarding was actually complete. Post JWT-scope-strip, both `clients`
@@ -177,7 +177,7 @@ describe("/me wizard step inference", () => {
   it("returns step=completed when the only autonomous agent lives in a non-default org (regression #239)", async () => {
     const app = getApp();
     // createTestAdmin gives Alice a default org with only her human-self
-    // agent + admin membership — wizard should currently report `connect`
+    // agent + admin membership — onboarding should currently report `connect`
     // (no client) for that user.
     const alice = await createTestAdmin(app);
 
@@ -201,6 +201,6 @@ describe("/me wizard step inference", () => {
       headers: { authorization: `Bearer ${alice.accessToken}` },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json<{ wizard: { step: string } }>().wizard.step).toBe("completed");
+    expect(res.json<{ onboarding: { step: string } }>().onboarding.step).toBe("completed");
   });
 });

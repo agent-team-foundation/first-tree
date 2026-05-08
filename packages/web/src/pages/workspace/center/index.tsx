@@ -13,7 +13,7 @@ import { OnboardingView } from "./onboarding-view.js";
  *                          target picker.
  *   2. ChatByIdView     — `?c=<chatId>` set; chat-id-only shim around the
  *                          existing ChatView.
- *   3. OnboardingView   — wizardStep is "connect" or "create_agent". Inline
+ *   3. OnboardingView   — onboardingStep is "connect" or "create_agent". Inline
  *                          onboarding card.
  *   4. NoChatView       — onboarding complete, nothing selected.
  */
@@ -24,7 +24,7 @@ export function CenterPanel({
   selectedChatId: string | null;
   onSelectChat: (chatId: string) => void;
 }) {
-  const { wizardStep } = useAuth();
+  const { onboardingStep } = useAuth();
 
   if (selectedChatId === DRAFT_CHAT_ID) {
     return <NewChatDraft onCreated={onSelectChat} />;
@@ -34,7 +34,7 @@ export function CenterPanel({
     return <ChatByIdView chatId={selectedChatId} />;
   }
 
-  if (wizardStep !== null && wizardStep !== "completed") {
+  if (onboardingStep !== null && onboardingStep !== "completed") {
     return <OnboardingView />;
   }
 
