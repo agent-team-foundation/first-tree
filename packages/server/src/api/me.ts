@@ -160,7 +160,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     }));
   });
 
-  app.post("/me/organizations", async (request, reply) => {
+  app.post("/me/organizations", { config: { otelRecordBody: true } }, async (request, reply) => {
     const m = requireMember(request);
     const body = createOrgFromMeSchema.parse(request.body);
 
@@ -204,7 +204,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
   // size as login.
   app.post(
     "/me/organizations/join",
-    { config: { rateLimit: { max: loginMax, timeWindow: "1 minute" } } },
+    { config: { rateLimit: { max: loginMax, timeWindow: "1 minute" }, otelRecordBody: true } },
     async (request, reply) => {
       const m = requireMember(request);
       const body = joinByInvitationSchema.parse(request.body);
@@ -266,7 +266,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
   // (`localStorage.selectedOrganizationId`) and rederives every auth-context
   // field from `/me memberships` — no more JWT swap. WS connections keep
   // their existing bound agents (decouple-client-from-identity §4.6).
-  app.post("/auth/switch-org", async (request, reply) => {
+  app.post("/auth/switch-org", { config: { otelRecordBody: true } }, async (request, reply) => {
     const m = requireMember(request);
     const body = switchOrgSchema.parse(request.body);
 

@@ -126,11 +126,12 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
 
     const inboxMaxInFlightPerAgent = app.config.inbox?.maxInFlightPerAgent ?? DEFAULT_INBOX_MAX_IN_FLIGHT_PER_AGENT;
 
-    // config.otel=false skips @fastify/otel's HTTP instrumentation for the
-    // upgrade request. We already emit a long-running `ws.connection` span
-    // ourselves via startWsConnectionSpan — a parallel HTTP-style span for a
-    // protocol upgrade would double-report and never finish cleanly.
-    app.get("/client", { websocket: true, config: { otel: false } }, async (socket) => {
+    // WS upgrade is excluded from HTTP tracing in app.ts via the autotelic
+    // plugin's `ignoreRoutes` — fastify hijacks the reply on upgrade, so a
+    // `onResponse`-terminated HTTP span would never end. The connection's
+    // observability lifecycle is handled by `startWsConnectionSpan` /
+    // `endWsConnectionSpan` below, with per-message spans parented onto it.
+    app.get("/client", { websocket: true }, async (socket) => {
       startWsConnectionSpan(socket);
       let session: AuthenticatedSession | null = null;
       // JWT default org claim — kept solely so `registerClient` can satisfy

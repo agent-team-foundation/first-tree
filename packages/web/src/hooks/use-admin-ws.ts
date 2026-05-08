@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
-import { getStoredTokens } from "../api/client.js";
+import { getStoredTokens, refreshAccessToken } from "../api/client.js";
 
 type WsMessage = {
   type: string;
@@ -82,20 +82,45 @@ function connect() {
     if (socket !== ws) return;
     reconnectAttempt = 0;
   };
-  socket.onclose = () => {
+  socket.onclose = (ev) => {
     // Only the current (latest) socket's close triggers reconnect.
     // An aborted CONNECTING socket from strict-mode unmount will also close here
     // but must not touch module state.
     if (socket !== ws) return;
     ws = null;
     if (closing || refCount === 0) return;
-    reconnectAttempt++;
-    const delay = Math.min(RECONNECT_BASE_MS * 2 ** (reconnectAttempt - 1), RECONNECT_MAX_MS);
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null;
-      if (!closing && refCount > 0) connect();
-    }, delay);
+    // 4001 = server-side auth rejection (see ws-admin.ts close paths). The
+    // most common cause is an expired access token: the WS hook reads from
+    // `localStorage` but never round-trips through the HTTP refresh
+    // interceptor, so without this branch a stale token would loop forever
+    // (~3s cadence: handshake → 4001 → 2s backoff → repeat). Drive a refresh
+    // and reconnect immediately on success.
+    if (ev.code === 4001) {
+      refreshAccessToken().then((fresh) => {
+        if (closing || refCount === 0) return;
+        if (fresh) {
+          reconnectAttempt = 0;
+          connect();
+        } else {
+          // Refresh failed — fall through to standard backoff. The HTTP path
+          // will eventually surface a 401 on the next API call, dispatch
+          // `auth:logout`, and tear us down via refCount=0.
+          scheduleReconnect();
+        }
+      });
+      return;
+    }
+    scheduleReconnect();
   };
+}
+
+function scheduleReconnect() {
+  reconnectAttempt++;
+  const delay = Math.min(RECONNECT_BASE_MS * 2 ** (reconnectAttempt - 1), RECONNECT_MAX_MS);
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    if (!closing && refCount > 0) connect();
+  }, delay);
 }
 
 function teardown() {

@@ -1,5 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { FIRST_TREE_HUB_ATTR } from "@agent-team-foundation/first-tree-hub-shared/observability";
+import { trace } from "@opentelemetry/api";
 import { and, eq, sql } from "drizzle-orm";
 import type { FastifyBaseLogger } from "fastify";
 import type { Database } from "../db/connection.js";
@@ -145,22 +147,25 @@ export function createKaelRuntime(
         return { sent: 0, errors: 0 };
       }
 
-      return withSpan(
-        "kael.forward",
-        { "kael.endpoint": kaelEndpoint, "kael.agent_count": agentConfigs.size },
-        async () => {
-          let sent = 0;
-          let errorCount = 0;
-
-          try {
-            // Claim pending inbox entries for agents that have kael adapter_configs
-            const agentIds = [...agentConfigs.keys()];
-            const claimed = await db.execute<{
-              id: number;
-              inbox_id: string;
-              message_id: string;
-              chat_id: string | null;
-            }>(sql`
+      // Claim before opening a span: an empty tick (no pending entries)
+      // produces nothing to monitor. Without this short-circuit each Kael
+      // tick lights up an idle span every 5s — same noise pattern as the
+      // adapter.outbound feishu worker fixed alongside this change.
+      let claimed: Array<{
+        id: number;
+        inbox_id: string;
+        message_id: string;
+        chat_id: string | null;
+      }>;
+      try {
+        const agentIds = [...agentConfigs.keys()];
+        claimed = [
+          ...(await db.execute<{
+            id: number;
+            inbox_id: string;
+            message_id: string;
+            chat_id: string | null;
+          }>(sql`
           UPDATE inbox_entries
           SET status = 'delivered', delivered_at = NOW()
           WHERE id IN (
@@ -178,8 +183,28 @@ export function createKaelRuntime(
             FOR UPDATE OF ie SKIP LOCKED
           )
           RETURNING id, inbox_id, message_id, chat_id
-        `);
+        `)),
+        ];
+      } catch (err) {
+        log.error({ err }, "Kael claim error");
+        return { sent: 0, errors: 1 };
+      }
 
+      if (claimed.length === 0) return { sent: 0, errors: 0 };
+
+      return withSpan(
+        "kael.forward",
+        {
+          [FIRST_TREE_HUB_ATTR.KAEL_ENDPOINT]: kaelEndpoint,
+          [FIRST_TREE_HUB_ATTR.BG_TASK_NAME]: "kael.forward",
+          [FIRST_TREE_HUB_ATTR.BG_TASK_CLAIMED_COUNT]: claimed.length,
+          "kael.agent_count": agentConfigs.size,
+        },
+        async () => {
+          let sent = 0;
+          let errorCount = 0;
+
+          try {
             for (const entry of claimed) {
               try {
                 const [msg] = await db.select().from(messages).where(eq(messages.id, entry.message_id)).limit(1);
@@ -244,6 +269,14 @@ export function createKaelRuntime(
           } catch (err) {
             log.error({ err }, "Kael outbound processing error");
             return { sent: 0, errors: 1 };
+          }
+
+          // Stamp final counts onto the active span so dashboards see how
+          // many of the claimed entries actually shipped vs. errored.
+          const span = trace.getActiveSpan();
+          if (span) {
+            span.setAttribute(FIRST_TREE_HUB_ATTR.BG_TASK_SENT_COUNT, sent);
+            span.setAttribute(FIRST_TREE_HUB_ATTR.BG_TASK_ERROR_COUNT, errorCount);
           }
 
           return { sent, errors: errorCount };

@@ -6,6 +6,7 @@ import {
   type LogFormat,
   type LogLevel,
   parseLogLevel,
+  redactUrl,
   SKIP_KEYS,
 } from "@agent-team-foundation/first-tree-hub-shared/observability";
 import pino from "pino";
@@ -97,11 +98,47 @@ const outputStream = createLoggerOutputStream({
   onJsonEntry: forwardErrorIfNeeded,
 });
 
+/**
+ * Custom `req` serializer that scrubs sensitive query-parameter values from
+ * the URL before it lands in `incoming request` log lines. Stops JWTs that
+ * arrive in `?token=…` (browser WebSocket can't set Authorization headers,
+ * so the admin WS upgrade route accepts auth via query param) from leaking
+ * into log files / log shippers.
+ *
+ * Pino stores serializers under a Symbol; fastify's `createPinoLogger` picks
+ * them up via `prevLogger[serializersSym]` and merges them into the per-
+ * request child logger, overriding fastify's built-in `req` serializer.
+ *
+ * Field shape mirrors fastify's default serializer (see
+ * `node_modules/fastify/lib/logger-pino.js`) so log consumers don't break.
+ */
+type IncomingReqLike = {
+  method?: string;
+  url?: string;
+  headers?: Record<string, string | string[] | undefined>;
+  host?: string;
+  ip?: string;
+  socket?: { remotePort?: number };
+};
+
+function reqSerializer(req: IncomingReqLike): Record<string, unknown> {
+  const acceptVersion = req.headers?.["accept-version"];
+  return {
+    method: req.method,
+    url: typeof req.url === "string" ? redactUrl(req.url) : req.url,
+    version: acceptVersion,
+    host: req.host,
+    remoteAddress: req.ip,
+    remotePort: req.socket?.remotePort,
+  };
+}
+
 export const rootLogger = pino(
   {
     level: _level,
     timestamp: () => `,"time":"${formatLocalTime()}"`,
     redact: { paths: [...LOG_REDACT_PATHS], censor: LOG_REDACT_CENSOR },
+    serializers: { req: reqSerializer },
   },
   outputStream,
 );

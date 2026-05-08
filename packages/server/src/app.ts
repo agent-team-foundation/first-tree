@@ -2,11 +2,13 @@ import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
 import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
+import { FIRST_TREE_HUB_ATTR, redactUrl } from "@agent-team-foundation/first-tree-hub-shared/observability";
+import fastifyOpenTelemetry from "@autotelic/fastify-opentelemetry";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
-import Fastify, { type FastifyBaseLogger } from "fastify";
+import Fastify, { type FastifyBaseLogger, type FastifyInstance, type FastifyPluginAsync } from "fastify";
 import postgres from "postgres";
 import { ZodError } from "zod";
 import { adminAdapterMappingRoutes } from "./api/admin/adapter-mappings.js";
@@ -55,10 +57,12 @@ import { agentSelectorHook } from "./middleware/agent-selector.js";
 import { memberAuthHook, requireAdminRoleHook } from "./middleware/member-auth.js";
 import {
   applyLoggerConfig,
+  attachRequestContext,
+  bodyCaptureOnSendHook,
   createLogger,
   currentTraceId,
-  getFastifyOtelPlugin,
   observabilityPlugin,
+  reportErrorToRoot,
   rootLogger,
 } from "./observability/index.js";
 import { type AdapterManager, createAdapterManager } from "./services/adapter-manager.js";
@@ -99,6 +103,17 @@ function resolveCommandVersion(injected: string | undefined): string {
     // fall through
   }
   return "0.0.0";
+}
+
+/**
+ * Stamp `fn.name` so fastify's `getPluginName()` and `@fastify/otel` use the
+ * label we want — keeps hook spans rendering as `handler - adminAgentScope`
+ * instead of `handler - async (app) => { -- const jwtSecre…` (the
+ * `getFuncPreview()` fallback fastify uses for anonymous plugin functions).
+ */
+function namePlugin<T extends FastifyPluginAsync>(name: string, fn: T): T {
+  Object.defineProperty(fn, "name", { value: name, configurable: true });
+  return fn;
 }
 
 export async function buildApp(config: Config) {
@@ -150,12 +165,90 @@ export async function buildApp(config: Config) {
     );
   }
 
-  // Register @fastify/otel before any route — it wraps each request handler
-  // in an HTTP span that becomes the parent for business spans.
-  const otelPlugin = getFastifyOtelPlugin();
-  if (otelPlugin) {
-    await app.register(otelPlugin);
-  }
+  // HTTP tracing — `@autotelic/fastify-opentelemetry` opens one span on
+  // `onRequest`, ends it on `onResponse`. No per-hook child spans (so we
+  // never see `handler - async (app) => …` noise), and the span is exposed
+  // via `request.openTelemetry().activeSpan` so any later hook / handler
+  // can decorate it without `trace.getActiveSpan()` foot-guns.
+  //
+  // Logfire's bundled `@opentelemetry/instrumentation-fastify` is disabled
+  // in `logfire-init.ts` to avoid duplicate root spans.
+  //
+  // `formatSpanAttributes` overrides autotelic's defaults to:
+  //   - align attribute names with OTel HTTP semantic conventions
+  //     (`http.method`, `http.url`, `http.response.status_code`,
+  //     `exception.type`, `exception.message`, `exception.stacktrace`)
+  //     so dashboards / saved queries port between trace backends
+  //   - capture `user-agent`, `referer`, `request.id` unconditionally
+  //     (no PII, high day-to-day debug value)
+  //   - capture `client.ip` only when `captureClientIp` is enabled — the
+  //     opt-in honours the GDPR-friendly default discussed in the
+  //     observability overhaul. See server-config.ts for the env switch.
+  const captureClientIp = config.observability.tracing?.captureClientIp ?? false;
+  await app.register(fastifyOpenTelemetry, {
+    wrapRoutes: true,
+    formatSpanName: (request) => {
+      const route = request.routeOptions?.url;
+      const method = request.method ?? "GET";
+      if (route) return `${method} ${route}`;
+      const pathOnly = request.url.split("?")[0] ?? request.url;
+      return `${method} ${pathOnly}`;
+    },
+    formatSpanAttributes: {
+      request: (request) => {
+        const route = request.routeOptions?.url;
+        const target = request.url.split("?")[0] ?? request.url;
+        // `http.url` retains the query string for debugability but is run
+        // through `redactUrl` so JWTs in `?token=…` (admin WS upgrade) never
+        // reach the trace exporter — same vocabulary as the fastify logger's
+        // `req` serializer, see `observability/logger.ts`.
+        const attrs: Record<string, string | number | boolean> = {
+          "http.method": request.method,
+          "http.url": redactUrl(request.url),
+          "http.target": target,
+          "http.scheme": request.protocol,
+          "http.host": String(request.headers.host ?? ""),
+          "request.id": request.id,
+        };
+        if (route) attrs["http.route"] = route;
+        const ua = request.headers["user-agent"];
+        if (typeof ua === "string" && ua.length > 0) {
+          attrs["http.user_agent"] = ua.slice(0, 200);
+        }
+        const referer = request.headers.referer ?? request.headers.referrer;
+        if (typeof referer === "string" && referer.length > 0) {
+          attrs["http.referer"] = referer.slice(0, 200);
+        }
+        if (captureClientIp) {
+          attrs["client.ip"] = request.ip;
+        }
+        return attrs;
+      },
+      reply: (reply) => ({
+        "http.status_code": reply.statusCode,
+        "http.response.status_code": reply.statusCode,
+      }),
+      error: (error) => ({
+        "exception.type": error.name,
+        "exception.message": error.message,
+        "exception.stacktrace": error.stack ?? "",
+      }),
+    },
+    // Skip tracing for:
+    //   - static SPA assets, fonts, healthchecks → volume without value
+    //   - hearback feedback widget endpoints → outside the API surface
+    //   - WebSocket upgrade routes → fastify hijacks the reply, so an HTTP
+    //     root span here would never see `onResponse` and would leak.
+    //     We emit a dedicated long-running `ws.connection` span from
+    //     `ws-tracing.ts` instead.
+    ignoreRoutes: (path: string) => {
+      if (path === "/" || path === "/healthz") return true;
+      if (path.startsWith("/assets/") || path.startsWith("/fonts/")) return true;
+      if (path.startsWith("/feedback/")) return true;
+      if (path === "/api/v1/agent/ws/client" || path === "/api/v1/ws/admin") return true;
+      return false;
+    },
+  });
 
   // Request-scoped logger + x-trace-id + error correlation
   await app.register(observabilityPlugin);
@@ -200,22 +293,82 @@ export async function buildApp(config: Config) {
     hook: "preHandler",
   });
 
+  // Body-capture onSend hook — opt-in per route via `config: { otelRecordBody: true }`
+  // and only fires on `statusCode >= 400`. Registered globally so any route
+  // that flips the flag participates without extra wiring.
+  app.addHook("onSend", bodyCaptureOnSendHook);
+
   // Auth hooks
   const memberAuth = memberAuthHook(db, config.secrets.jwtSecret);
   const adminOnly = requireAdminRoleHook();
   const agentSelector = agentSelectorHook(db);
 
+  // Helper: build a member-authenticated plugin scope. Each scope mounts:
+  //   1. memberAuth (validate JWT, populate request.member)
+  //   2. attachRequestContext (stamp user/member/org id onto root span)
+  //   3. (optional) adminOnly enforcement
+  //   4. The caller-provided routes
+  // Naming the wrapper function via Object.defineProperty(fn, "name", ...)
+  // is what makes @fastify/otel hook spans render as `handler - <name>`
+  // instead of fastify's `getFuncPreview()` source-code fallback.
+  function memberScope(name: string, register: (scope: FastifyInstance) => Promise<void>): FastifyPluginAsync {
+    return namePlugin(name, async (scope) => {
+      scope.addHook("onRequest", memberAuth);
+      scope.addHook("onRequest", attachRequestContext);
+      await register(scope);
+    });
+  }
+
+  function adminScope(name: string, register: (scope: FastifyInstance) => Promise<void>): FastifyPluginAsync {
+    return namePlugin(name, async (scope) => {
+      scope.addHook("onRequest", memberAuth);
+      scope.addHook("onRequest", adminOnly);
+      scope.addHook("onRequest", attachRequestContext);
+      await register(scope);
+    });
+  }
+
+  function agentScope(name: string, register: (scope: FastifyInstance) => Promise<void>): FastifyPluginAsync {
+    return namePlugin(name, async (scope) => {
+      scope.addHook("onRequest", memberAuth);
+      scope.addHook("onRequest", agentSelector);
+      scope.addHook("onRequest", attachRequestContext);
+      await register(scope);
+    });
+  }
+
   // Error handler — enriches error body with traceId so operators can search
-  // the trace backend by `x-trace-id` or body.traceId.
+  // the trace backend by `x-trace-id` or body.traceId, AND stamps the active
+  // span with structured failure attributes via reportError. The latter
+  // matters for 4xx responses too: @fastify/otel marks any response with
+  // status < 500 as `SpanStatusCode.OK` in its onSend hook, so we record
+  // the exception explicitly here to keep the failure visible in trace
+  // backends without needing to query SpanStatus.
   app.setErrorHandler((error, request, reply) => {
     const traceId = currentTraceId();
     const traceField = traceId ? { traceId } : {};
+
     if (error instanceof AppError) {
+      // Caller-supplied attrs spread FIRST so the canonical `error.type` /
+      // `http.status_code` always win — `AppError.attrs` is a public field
+      // and we don't want a future caller to accidentally clobber the
+      // structural fields by passing them with the same key.
+      reportErrorToRoot(request, error.message, error, {
+        ...(error.attrs ?? {}),
+        [FIRST_TREE_HUB_ATTR.ERROR_TYPE]: error.name,
+        "http.status_code": error.statusCode,
+      });
       return reply.status(error.statusCode).send({ error: error.message, ...traceField });
     }
+
     if (error instanceof ZodError) {
+      reportErrorToRoot(request, "Validation error", error, {
+        [FIRST_TREE_HUB_ATTR.ERROR_TYPE]: "ZodError",
+        "validation.issue_count": error.issues.length,
+      });
       return reply.status(400).send({ error: "Validation error", details: error.issues, ...traceField });
     }
+
     // Fastify plugins (e.g. @fastify/rate-limit's 429, @fastify/jwt's 401)
     // throw errors with `statusCode` in the 4xx range. Surface them with
     // their intended status + message rather than collapsing to 500. 5xx
@@ -228,9 +381,18 @@ export async function buildApp(config: Config) {
       error.statusCode >= 400 &&
       error.statusCode < 500
     ) {
+      reportErrorToRoot(request, error.message, error, {
+        [FIRST_TREE_HUB_ATTR.ERROR_TYPE]: error.name,
+        "http.status_code": error.statusCode,
+      });
       return reply.status(error.statusCode).send({ error: error.message, ...traceField });
     }
+
     request.log.error({ err: error }, "unhandled request error");
+    reportErrorToRoot(request, "Internal server error", error, {
+      [FIRST_TREE_HUB_ATTR.ERROR_TYPE]: error instanceof Error ? error.name : "UnknownError",
+      "http.status_code": 500,
+    });
     return reply.status(500).send({ error: "Internal server error", ...traceField });
   });
 
@@ -239,7 +401,7 @@ export async function buildApp(config: Config) {
 
   // All API routes under /api/v1 prefix
   await app.register(
-    async (api) => {
+    namePlugin("apiV1Scope", async (api) => {
       // Public routes
       await api.register(healthRoutes);
       await api.register(githubWebhookRoutes, { prefix: "/webhooks" });
@@ -249,12 +411,11 @@ export async function buildApp(config: Config) {
       await api.register(contextTreeInfoRoutes, { prefix: "/context-tree" });
       await api.register(bootstrapConfigRoutes, { prefix: "/bootstrap" });
 
-      // Admin routes (JWT protected)
+      // Admin agent CRUD.
       await api.register(
-        async (adminApp) => {
-          adminApp.addHook("onRequest", memberAuth);
-          await adminApp.register(adminAgentRoutes);
-        },
+        memberScope("adminAgentScope", async (scope) => {
+          await scope.register(adminAgentRoutes);
+        }),
         { prefix: "/admin/agents" },
       );
 
@@ -267,36 +428,31 @@ export async function buildApp(config: Config) {
       // the previous plugin-scoped adminOnly hook short-circuited that, blocking
       // non-admin managers from editing behavior on agents they own.
       await api.register(
-        async (adminApp) => {
-          adminApp.addHook("onRequest", memberAuth);
-          await adminApp.register(adminAgentConfigRoutes);
-        },
+        memberScope("adminAgentConfigScope", async (scope) => {
+          await scope.register(adminAgentConfigRoutes);
+        }),
         { prefix: "/admin/agents" },
       );
 
       // Step 10: per-agent client connectivity probe
       await api.register(
-        async (adminApp) => {
-          adminApp.addHook("onRequest", memberAuth);
-          await adminApp.register(adminAgentClientStatusRoutes);
-        },
+        memberScope("adminAgentClientStatusScope", async (scope) => {
+          await scope.register(adminAgentClientStatusRoutes);
+        }),
         { prefix: "/admin/agents" },
       );
 
       await api.register(
-        async (adminApp) => {
-          adminApp.addHook("onRequest", memberAuth);
-          adminApp.addHook("onRequest", adminOnly);
-          await adminApp.register(adminSystemConfigRoutes);
-        },
+        adminScope("adminSystemConfigScope", async (scope) => {
+          await scope.register(adminSystemConfigRoutes);
+        }),
         { prefix: "/admin/system/config" },
       );
 
       await api.register(
-        async (adminApp) => {
-          adminApp.addHook("onRequest", memberAuth);
-          await adminApp.register(adminOverviewRoutes);
-        },
+        memberScope("adminOverviewScope", async (scope) => {
+          await scope.register(adminOverviewRoutes);
+        }),
         { prefix: "/admin/overview" },
       );
 
@@ -306,97 +462,90 @@ export async function buildApp(config: Config) {
       // That lets the shared /settings page surface each user's own
       // bindings without an admin flag gating the entire route.
       await api.register(
-        async (adminApp) => {
-          adminApp.addHook("onRequest", memberAuth);
-          await adminApp.register(adminAdapterRoutes);
-        },
+        memberScope("adminAdapterScope", async (scope) => {
+          await scope.register(adminAdapterRoutes);
+        }),
         { prefix: "/admin/adapters" },
       );
 
       await api.register(
-        async (adminApp) => {
-          adminApp.addHook("onRequest", memberAuth);
-          await adminApp.register(adminAdapterMappingRoutes);
-        },
+        memberScope("adminAdapterMappingScope", async (scope) => {
+          await scope.register(adminAdapterMappingRoutes);
+        }),
         { prefix: "/admin/adapter-mappings" },
       );
 
       await api.register(
-        async (adminApp) => {
-          adminApp.addHook("onRequest", memberAuth);
-          await adminApp.register(adminAdapterStatusRoutes);
-        },
+        memberScope("adminAdapterStatusScope", async (scope) => {
+          await scope.register(adminAdapterStatusRoutes);
+        }),
         { prefix: "/admin/adapters/status" },
       );
 
       await api.register(
-        async (memberApp) => {
-          memberApp.addHook("onRequest", memberAuth);
-          await memberApp.register(memberRoutes);
-        },
+        memberScope("memberRoutesScope", async (scope) => {
+          await scope.register(memberRoutes);
+        }),
         { prefix: "/members" },
       );
 
       await api.register(
-        async (memberApp) => {
-          memberApp.addHook("onRequest", memberAuth);
-          await memberApp.register(meRoutes);
-        },
+        memberScope("meRoutesScope", async (scope) => {
+          await scope.register(meRoutes);
+        }),
         { prefix: "" },
       );
 
       await api.register(
-        async (adminApp) => {
-          adminApp.addHook("onRequest", memberAuth);
-          await adminApp.register(adminChatRoutes);
-        },
+        memberScope("adminChatScope", async (scope) => {
+          await scope.register(adminChatRoutes);
+        }),
         { prefix: "/admin/chats" },
       );
 
       // Chat-first workspace member-facing chat APIs. Mounted under /me/chats
       // (NOT /admin/chats) per the design — `workspace` is a UI concept and
       // does not appear in the API path.
+      //
+      // Uses `memberScope` (not raw `addHook("onRequest", memberAuth)`) so the
+      // root span gets `attachRequestContext` too — without that, every chat
+      // request span would be missing `user.id` / `member.id` / `org.id` and
+      // become invisible to the standard "by user" / "by org" trace filters.
       await api.register(
-        async (memberApp) => {
-          memberApp.addHook("onRequest", memberAuth);
-          await memberApp.register(meChatRoutes);
-        },
+        memberScope("meChatScope", async (scope) => {
+          await scope.register(meChatRoutes);
+        }),
         { prefix: "/me/chats" },
       );
 
       // M1: Client management routes
       await api.register(
-        async (adminApp) => {
-          adminApp.addHook("onRequest", memberAuth);
-          await adminApp.register(adminClientRoutes);
-        },
+        memberScope("adminClientScope", async (scope) => {
+          await scope.register(adminClientRoutes);
+        }),
         { prefix: "/clients" },
       );
 
       // Member-scoped client routes (claim — see decouple-client-from-identity §4.4).
       await api.register(
-        async (memberApp) => {
-          memberApp.addHook("onRequest", memberAuth);
-          await memberApp.register(memberClientRoutes);
-        },
+        memberScope("memberClientScope", async (scope) => {
+          await scope.register(memberClientRoutes);
+        }),
         { prefix: "/me/clients" },
       );
 
       // M1: Agent activity routes
       await api.register(
-        async (adminApp) => {
-          adminApp.addHook("onRequest", memberAuth);
-          await adminApp.register(adminActivityRoutes);
-        },
+        memberScope("adminActivityScope", async (scope) => {
+          await scope.register(adminActivityRoutes);
+        }),
         { prefix: "/admin/agents/activity" },
       );
 
       await api.register(
-        async (adminApp) => {
-          adminApp.addHook("onRequest", memberAuth);
-          adminApp.addHook("onRequest", adminOnly);
-          await adminApp.register(adminOrganizationRoutes);
-        },
+        adminScope("adminOrganizationScope", async (scope) => {
+          await scope.register(adminOrganizationRoutes);
+        }),
         { prefix: "/admin/organizations" },
       );
 
@@ -404,64 +553,56 @@ export async function buildApp(config: Config) {
       // route handler so the org-scope check (members.organizationId
       // matches request.params.id) and the admin check live together.
       await api.register(
-        async (adminApp) => {
-          adminApp.addHook("onRequest", memberAuth);
-          await adminApp.register(adminInvitationRoutes);
-        },
+        memberScope("adminInvitationScope", async (scope) => {
+          await scope.register(adminInvitationRoutes);
+        }),
         { prefix: "/admin/organizations/:id/invitations" },
       );
 
       await api.register(
-        async (adminApp) => {
-          adminApp.addHook("onRequest", memberAuth);
-          adminApp.addHook("onRequest", adminOnly);
-          await adminApp.register(adminStatsRoutes);
-        },
+        adminScope("adminStatsScope", async (scope) => {
+          await scope.register(adminStatsRoutes);
+        }),
         { prefix: "/admin/stats" },
       );
 
       await api.register(
-        async (adminApp) => {
-          adminApp.addHook("onRequest", memberAuth);
-          await adminApp.register(adminTaskRoutes);
-        },
+        memberScope("adminTaskScope", async (scope) => {
+          await scope.register(adminTaskRoutes);
+        }),
         { prefix: "/admin/tasks" },
       );
 
       // M1: Session visibility routes
       await api.register(
-        async (adminApp) => {
-          adminApp.addHook("onRequest", memberAuth);
-          await adminApp.register(adminSessionRoutes);
-        },
+        memberScope("adminSessionScope", async (scope) => {
+          await scope.register(adminSessionRoutes);
+        }),
         { prefix: "/admin/sessions" },
       );
 
       // M1: Notification routes
       await api.register(
-        async (adminApp) => {
-          adminApp.addHook("onRequest", memberAuth);
-          await adminApp.register(adminNotificationRoutes);
-        },
+        memberScope("adminNotificationScope", async (scope) => {
+          await scope.register(adminNotificationRoutes);
+        }),
         { prefix: "/admin/notifications" },
       );
 
       // Agent routes (member JWT + X-Agent-Id selector; see middleware/agent-selector.ts)
       await api.register(
-        async (agentApp) => {
-          agentApp.addHook("onRequest", memberAuth);
-          agentApp.addHook("onRequest", agentSelector);
-          await agentApp.register(agentMeRoutes);
-          await agentApp.register(agentChatRoutes, { prefix: "/chats" });
-          await agentApp.register(agentMessageRoutes, { prefix: "/chats" });
-          await agentApp.register(agentSendToAgentRoutes, { prefix: "/agents" });
-          await agentApp.register(agentInboxRoutes, { prefix: "/inbox" });
-          await agentApp.register(agentConfigRoutes);
-          await agentApp.register(agentTaskRoutes, { prefix: "/tasks" });
+        agentScope("agentRoutesScope", async (scope) => {
+          await scope.register(agentMeRoutes);
+          await scope.register(agentChatRoutes, { prefix: "/chats" });
+          await scope.register(agentMessageRoutes, { prefix: "/chats" });
+          await scope.register(agentSendToAgentRoutes, { prefix: "/agents" });
+          await scope.register(agentInboxRoutes, { prefix: "/inbox" });
+          await scope.register(agentConfigRoutes);
+          await scope.register(agentTaskRoutes, { prefix: "/tasks" });
 
-          await agentApp.register(agentFeishuBotRoutes);
-          await agentApp.register(agentFeishuUserRoutes, { prefix: "/delegated" });
-        },
+          await scope.register(agentFeishuBotRoutes);
+          await scope.register(agentFeishuUserRoutes, { prefix: "/delegated" });
+        }),
         { prefix: "/agent" },
       );
 
@@ -472,7 +613,7 @@ export async function buildApp(config: Config) {
 
       // M1: Admin WebSocket (JWT auth via query param)
       await api.register(adminWsRoutes(notifier, config.secrets.jwtSecret), { prefix: "/ws" });
-    },
+    }),
     { prefix: "/api/v1" },
   );
 
@@ -483,7 +624,7 @@ export async function buildApp(config: Config) {
   if (config.feedback) {
     const feedbackConfig = config.feedback;
     await app.register(
-      async (scope) => {
+      namePlugin("feedbackScope", async (scope) => {
         await scope.register(feedbackRoutes, {
           repo: feedbackConfig.repo,
           githubToken: feedbackConfig.githubToken,
@@ -496,7 +637,7 @@ export async function buildApp(config: Config) {
             : undefined,
           trustProxyHeaders: feedbackConfig.trustProxyHeaders,
         });
-      },
+      }),
       { prefix: "/feedback" },
     );
   }

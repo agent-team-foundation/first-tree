@@ -20,7 +20,7 @@ export async function adminOrganizationRoutes(app: FastifyInstance): Promise<voi
     };
   });
 
-  app.post("/", async (request, reply) => {
+  app.post("/", { config: { otelRecordBody: true } }, async (request, reply) => {
     const body = createOrganizationSchema.parse(request.body);
     const org = await orgService.createOrganization(app.db, body);
     return reply.status(201).send({
@@ -39,7 +39,7 @@ export async function adminOrganizationRoutes(app: FastifyInstance): Promise<voi
     };
   });
 
-  app.patch<{ Params: { id: string } }>("/:id", async (request) => {
+  app.patch<{ Params: { id: string } }>("/:id", { config: { otelRecordBody: true } }, async (request) => {
     const resolved = await orgService.resolveOrganization(app.db, request.params.id);
     const body = updateOrganizationSchema.parse(request.body);
     const org = await orgService.updateOrganization(app.db, resolved.id, body);

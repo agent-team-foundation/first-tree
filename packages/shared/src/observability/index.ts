@@ -17,6 +17,7 @@ export {
   RESET,
   SKIP_KEYS,
 } from "./logger-core.js";
+export { REDACT_QUERY_KEYS, redactUrl } from "./redact-url.js";
 export { captureDestination, recordingDestination, silentDestination } from "./testing.js";
 export {
   FIRST_TREE_HUB_ATTR,
