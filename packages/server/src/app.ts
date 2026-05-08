@@ -416,7 +416,7 @@ export async function buildApp(config: Config) {
       await api.register(
         userScope("contextTreeScope", async (scope) => {
           await scope.register(contextTreeSnapshotRoutes);
-        },
+        }),
         { prefix: "/context-tree" },
       );
 
