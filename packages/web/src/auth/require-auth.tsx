@@ -35,7 +35,7 @@ const LandingFallback = () => <div className="landing-marketing min-h-screen bg-
  * the path the user typed never changes between auth states.
  */
 export function RequireAuth() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, meLoaded } = useAuth();
   const location = useLocation();
   if (!isAuthenticated) {
     if (location.pathname === "/") {
@@ -49,5 +49,12 @@ export function RequireAuth() {
     // who logs in lands back on the page they originally requested.
     return <Navigate to="/login" replace state={{ from: location }} />;
   }
+  // Authenticated but `/me` hasn't resolved yet — `decoratePath` would emit
+  // bare Class B paths (`/agents`, `/members`, …) and 404, and React Query
+  // wouldn't refetch when orgId later flips. Render the same neutral fallback
+  // we use for the lazy LandingPage — keeps the visual continuity and gives
+  // fetchMe one tick to populate `setApiSelectedOrganizationId` before the
+  // dashboard mounts and fires its first wave of requests.
+  if (!meLoaded) return <LandingFallback />;
   return <Outlet />;
 }

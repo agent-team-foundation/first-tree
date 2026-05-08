@@ -30,11 +30,11 @@ describe("Admin agent-config API (Step 2)", () => {
       type: "autonomous_agent",
     });
 
-    const before = await req("GET", `/api/v1/admin/agents/${agent.uuid}/config`);
+    const before = await req("GET", `/api/v1/agents/${agent.uuid}/config`);
     expect(before.statusCode).toBe(200);
     expect(before.json().version).toBe(1);
 
-    const patch = await req("PATCH", `/api/v1/admin/agents/${agent.uuid}/config`, {
+    const patch = await req("PATCH", `/api/v1/agents/${agent.uuid}/config`, {
       expectedVersion: 1,
       payload: { model: "claude-opus-4-6", prompt: { append: "你只会一句话" } },
     });
@@ -45,7 +45,7 @@ describe("Admin agent-config API (Step 2)", () => {
     // Wait for debounce window to clear so the next test isn't queued behind us.
     await app.configService.flush(agent.uuid);
 
-    const after = await req("GET", `/api/v1/admin/agents/${agent.uuid}/config`);
+    const after = await req("GET", `/api/v1/agents/${agent.uuid}/config`);
     expect(after.json().payload.model).toBe("claude-opus-4-6");
     expect(after.json().payload.prompt.append).toBe("你只会一句话");
   });
@@ -58,7 +58,7 @@ describe("Admin agent-config API (Step 2)", () => {
       type: "autonomous_agent",
     });
 
-    const r1 = await req("PATCH", `/api/v1/admin/agents/${agent.uuid}/config`, {
+    const r1 = await req("PATCH", `/api/v1/agents/${agent.uuid}/config`, {
       expectedVersion: 1,
       payload: { model: "claude-opus-4-6" },
     });
@@ -66,7 +66,7 @@ describe("Admin agent-config API (Step 2)", () => {
     await app.configService.flush(agent.uuid);
 
     // Re-using expectedVersion=1 → stale
-    const r2 = await req("PATCH", `/api/v1/admin/agents/${agent.uuid}/config`, {
+    const r2 = await req("PATCH", `/api/v1/agents/${agent.uuid}/config`, {
       expectedVersion: 1,
       payload: { model: "claude-haiku-4-5" },
     });
@@ -81,7 +81,7 @@ describe("Admin agent-config API (Step 2)", () => {
       type: "autonomous_agent",
     });
 
-    const dry = await req("POST", `/api/v1/admin/agents/${agent.uuid}/config/dry-run`, {
+    const dry = await req("POST", `/api/v1/agents/${agent.uuid}/config/dry-run`, {
       payload: { model: "claude-opus-4-6" },
     });
     expect(dry.statusCode).toBe(200);
@@ -89,7 +89,7 @@ describe("Admin agent-config API (Step 2)", () => {
     expect(body.diff).toEqual([{ path: "model", op: "replace", before: "opus", after: "claude-opus-4-6" }]);
     expect(body.next.model).toBe("claude-opus-4-6");
 
-    const get = await req("GET", `/api/v1/admin/agents/${agent.uuid}/config`);
+    const get = await req("GET", `/api/v1/agents/${agent.uuid}/config`);
     expect(get.json().payload.model).toBe("opus"); // unchanged — matches new default
   });
 
@@ -101,7 +101,7 @@ describe("Admin agent-config API (Step 2)", () => {
       type: "autonomous_agent",
     });
 
-    const patch = await req("PATCH", `/api/v1/admin/agents/${agent.uuid}/config`, {
+    const patch = await req("PATCH", `/api/v1/agents/${agent.uuid}/config`, {
       expectedVersion: 1,
       payload: {
         env: [
@@ -114,7 +114,7 @@ describe("Admin agent-config API (Step 2)", () => {
     await app.configService.flush(agent.uuid);
 
     // GET → masked
-    const get = await req("GET", `/api/v1/admin/agents/${agent.uuid}/config`);
+    const get = await req("GET", `/api/v1/agents/${agent.uuid}/config`);
     const env = get.json().payload.env as Array<{ key: string; value: string; sensitive: boolean }>;
     expect(env.find((e) => e.key === "OPENAI_API_KEY")?.value).toBe(ENV_REDACTED_PLACEHOLDER);
     expect(env.find((e) => e.key === "PLAIN_VAR")?.value).toBe("hello");
@@ -139,7 +139,7 @@ describe("Admin agent-config API (Step 2)", () => {
       type: "autonomous_agent",
     });
 
-    await req("PATCH", `/api/v1/admin/agents/${agent.uuid}/config`, {
+    await req("PATCH", `/api/v1/agents/${agent.uuid}/config`, {
       expectedVersion: 1,
       payload: { env: [{ key: "TOKEN", value: "real-secret", sensitive: true }] },
     });
@@ -148,7 +148,7 @@ describe("Admin agent-config API (Step 2)", () => {
     const value1 = decrypted1.payload.env[0]?.value;
 
     // Admin re-saves a different field; the env arrives with the placeholder.
-    await req("PATCH", `/api/v1/admin/agents/${agent.uuid}/config`, {
+    await req("PATCH", `/api/v1/agents/${agent.uuid}/config`, {
       expectedVersion: 2,
       payload: { env: [{ key: "TOKEN", value: ENV_REDACTED_PLACEHOLDER, sensitive: true }] },
     });
@@ -190,7 +190,7 @@ describe("Admin agent-config API (Step 2)", () => {
     await app.configService.flush(agent.uuid);
 
     // Exactly one commit — v1→v2, not the pre-fix "1 immediate + 1 aggregated".
-    const get = await req("GET", `/api/v1/admin/agents/${agent.uuid}/config`);
+    const get = await req("GET", `/api/v1/agents/${agent.uuid}/config`);
     expect(get.json().version).toBe(2);
   });
 
@@ -205,7 +205,7 @@ describe("Admin agent-config API (Step 2)", () => {
     const events: string[] = [];
     app.notifier.onConfigChange((p) => events.push(p));
 
-    await req("PATCH", `/api/v1/admin/agents/${agent.uuid}/config`, {
+    await req("PATCH", `/api/v1/agents/${agent.uuid}/config`, {
       expectedVersion: 1,
       payload: { model: "claude-opus-4-6" },
     });
@@ -256,7 +256,7 @@ describe("Admin agent-config API (Step 2)", () => {
 
     const res = await app.inject({
       method: "PATCH",
-      url: `/api/v1/admin/agents/${agent.uuid}/config`,
+      url: `/api/v1/agents/${agent.uuid}/config`,
       headers: { authorization: `Bearer ${fresh.accessToken}` },
       payload: { expectedVersion: 1, payload: { model: "claude-opus-4-6" } },
     });
@@ -317,7 +317,7 @@ describe("Admin agent-config API (Step 2)", () => {
     // GET — manager can read config (assertCanManage allows managerId = self).
     const get = await app.inject({
       method: "GET",
-      url: `/api/v1/admin/agents/${agent.uuid}/config`,
+      url: `/api/v1/agents/${agent.uuid}/config`,
       headers: auth,
     });
     expect(get.statusCode).toBe(200);
@@ -326,7 +326,7 @@ describe("Admin agent-config API (Step 2)", () => {
     // PATCH — manager can edit config (assertCanManage allows managerId = self).
     const patch = await app.inject({
       method: "PATCH",
-      url: `/api/v1/admin/agents/${agent.uuid}/config`,
+      url: `/api/v1/agents/${agent.uuid}/config`,
       headers: auth,
       payload: { expectedVersion: 1, payload: { model: "claude-opus-4-6" } },
     });
@@ -392,7 +392,7 @@ describe("Admin agent-config API (Step 2)", () => {
     // Card view works — agent IS visible to this member.
     const card = await app.inject({
       method: "GET",
-      url: `/api/v1/admin/agents/${agent.uuid}`,
+      url: `/api/v1/agents/${agent.uuid}`,
       headers: auth,
     });
     expect(card.statusCode).toBe(200);
@@ -401,7 +401,7 @@ describe("Admin agent-config API (Step 2)", () => {
     // But config (behavior) is not readable — manager-only.
     const cfg = await app.inject({
       method: "GET",
-      url: `/api/v1/admin/agents/${agent.uuid}/config`,
+      url: `/api/v1/agents/${agent.uuid}/config`,
       headers: auth,
     });
     expect(cfg.statusCode).toBe(404);

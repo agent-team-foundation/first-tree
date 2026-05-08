@@ -29,7 +29,7 @@ describe("Admin agent client-status (Step 10)", () => {
       managerId: ctx.memberId,
       clientId: ctx.clientId,
     });
-    const res = await req(`/api/v1/admin/agents/${agent.uuid}/client-status`);
+    const res = await req(`/api/v1/agents/${agent.uuid}/client-status`);
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.online).toBe(false);
@@ -51,7 +51,7 @@ describe("Admin agent client-status (Step 10)", () => {
       status: "online",
       clientId: ctx.clientId,
     });
-    const res = await req(`/api/v1/admin/agents/${agent.uuid}/client-status`);
+    const res = await req(`/api/v1/agents/${agent.uuid}/client-status`);
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.online).toBe(true);
@@ -73,7 +73,7 @@ describe("Admin agent client-status (Step 10)", () => {
       clientId: null,
       lastSeenAt: past,
     });
-    const res = await req(`/api/v1/admin/agents/${agent.uuid}/client-status`);
+    const res = await req(`/api/v1/agents/${agent.uuid}/client-status`);
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.online).toBe(false);

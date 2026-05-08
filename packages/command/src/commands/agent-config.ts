@@ -5,12 +5,12 @@ import { fail, success } from "../cli/output.js";
 import { ensureFreshAdminToken, resolveServerUrl } from "../core/bootstrap.js";
 
 /**
- * Step 8: `first-tree-hub agent config ...` subcommands.
+ * `first-tree-hub agent config ...` subcommands.
  *
- * Every command is a thin wrapper over the Admin HTTP API:
- *   GET    /api/v1/admin/agents/:id/config
- *   PATCH  /api/v1/admin/agents/:id/config
- *   POST   /api/v1/admin/agents/:id/config/dry-run
+ * Every command is a thin wrapper over the resource-scoped HTTP API:
+ *   GET    /api/v1/agents/:id/config
+ *   PATCH  /api/v1/agents/:id/config
+ *   POST   /api/v1/agents/:id/config/dry-run
  *
  * Sensitive env values are returned masked from the server (***).
  */
@@ -18,15 +18,15 @@ import { ensureFreshAdminToken, resolveServerUrl } from "../core/bootstrap.js";
 type ResolvedAgent = { uuid: string; name: string | null; displayName: string | null };
 
 async function resolveAgentRecord(serverUrl: string, adminToken: string, agentName: string): Promise<ResolvedAgent> {
-  const res = await fetch(`${serverUrl}/api/v1/admin/agents?limit=100`, {
+  const res = await fetch(`${serverUrl}/api/v1/me/managed-agents`, {
     headers: { Authorization: `Bearer ${adminToken}` },
     signal: AbortSignal.timeout(10_000),
   });
   if (!res.ok) {
     fail("FETCH_ERROR", `Failed to list agents: ${res.status}`, 1);
   }
-  const data = (await res.json()) as { items: ResolvedAgent[] };
-  const found = data.items.find((a) => a.name === agentName || a.uuid === agentName);
+  const items = (await res.json()) as ResolvedAgent[];
+  const found = items.find((a) => a.name === agentName || a.uuid === agentName);
   if (!found) {
     fail("NOT_FOUND", `Agent "${agentName}" not found`, 1);
   }
@@ -52,7 +52,7 @@ async function adminFetch<T>(url: string, init: RequestInit & { adminToken: stri
 }
 
 async function getCurrent(serverUrl: string, adminToken: string, agentId: string): Promise<AgentRuntimeConfig> {
-  return adminFetch<AgentRuntimeConfig>(`${serverUrl}/api/v1/admin/agents/${agentId}/config`, {
+  return adminFetch<AgentRuntimeConfig>(`${serverUrl}/api/v1/agents/${agentId}/config`, {
     method: "GET",
     adminToken,
   });
@@ -65,7 +65,7 @@ async function patchConfig(
   expectedVersion: number,
   patch: Partial<AgentRuntimeConfigPayload>,
 ): Promise<AgentRuntimeConfig> {
-  return adminFetch<AgentRuntimeConfig>(`${serverUrl}/api/v1/admin/agents/${agentId}/config`, {
+  return adminFetch<AgentRuntimeConfig>(`${serverUrl}/api/v1/agents/${agentId}/config`, {
     method: "PATCH",
     adminToken,
     body: JSON.stringify({ expectedVersion, payload: patch }),
@@ -235,7 +235,7 @@ export function registerAgentConfigCommands(parent: Command): void {
         current: AgentRuntimeConfig;
         next: AgentRuntimeConfigPayload;
         diff: Array<{ path: string; op: string; before?: unknown; after?: unknown }>;
-      }>(`${serverUrl}/api/v1/admin/agents/${uuid}/config/dry-run`, {
+      }>(`${serverUrl}/api/v1/agents/${uuid}/config/dry-run`, {
         method: "POST",
         adminToken,
         body: JSON.stringify({ payload: patch }),

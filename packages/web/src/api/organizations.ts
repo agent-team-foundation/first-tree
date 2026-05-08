@@ -1,23 +1,15 @@
-import type { Organization } from "@agent-team-foundation/first-tree-hub-shared";
+import type { Organization, UpdateOrganization } from "@agent-team-foundation/first-tree-hub-shared";
 import { api } from "./client.js";
 
 /**
- * Org-level admin + self-service surface used by `OrgSettingsPage`.
- *
- *  - `getOrganization` reads the team identity (slug + display name) for
- *    the currently-active org. Admin-only on the server.
- *  - `updateOrganization` patches `name` (slug) and/or `displayName`.
- *  - `leaveOrganization` flips the caller's `members.status` to "left".
- *    Soft-delete; tokens for this membership become 401 immediately.
+ * Read & rename the org-of-current-selection. Both calls hit
+ * `/api/v1/orgs/:orgId` directly — the api client's `decoratePath`
+ * passthrough leaves the explicit `/orgs/...` URL alone.
  */
 export function getOrganization(id: string): Promise<Organization> {
-  return api.get<Organization>(`/admin/organizations/${encodeURIComponent(id)}`);
+  return api.get<Organization>(`/orgs/${encodeURIComponent(id)}`);
 }
 
-export function updateOrganization(id: string, patch: { name?: string; displayName?: string }): Promise<Organization> {
-  return api.patch<Organization>(`/admin/organizations/${encodeURIComponent(id)}`, patch);
-}
-
-export function leaveOrganization(): Promise<void> {
-  return api.post<void>("/me/organizations/leave");
+export function updateOrganization(id: string, patch: UpdateOrganization): Promise<Organization> {
+  return api.patch<Organization>(`/orgs/${encodeURIComponent(id)}`, patch);
 }

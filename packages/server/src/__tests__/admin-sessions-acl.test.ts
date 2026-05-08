@@ -18,11 +18,16 @@ import { createAdminContext, seedClient, useTestApp } from "./helpers.js";
 describe("Admin sessions — chat-level access control", () => {
   const getApp = useTestApp();
 
-  async function createMember(app: FastifyInstance, adminAccessToken: string, displayName: string) {
+  async function createMember(
+    app: FastifyInstance,
+    adminAccessToken: string,
+    organizationId: string,
+    displayName: string,
+  ) {
     const username = `m-${displayName}-${crypto.randomUUID().slice(0, 6)}`;
     const createRes = await app.inject({
       method: "POST",
-      url: "/api/v1/members",
+      url: `/api/v1/orgs/${organizationId}/members`,
       headers: { authorization: `Bearer ${adminAccessToken}` },
       payload: { username, displayName, role: "member" },
     });
@@ -63,8 +68,8 @@ describe("Admin sessions — chat-level access control", () => {
       clientId: admin.clientId,
     });
 
-    const participant = await createMember(app, admin.accessToken, "participant");
-    const outsider = await createMember(app, admin.accessToken, "outsider");
+    const participant = await createMember(app, admin.accessToken, admin.organizationId, "participant");
+    const outsider = await createMember(app, admin.accessToken, admin.organizationId, "outsider");
 
     const chat = await createChat(app.db, participant.humanAgentId, {
       type: "direct",
@@ -79,7 +84,7 @@ describe("Admin sessions — chat-level access control", () => {
 
     const eventsAsParticipant = await app.inject({
       method: "GET",
-      url: `/api/v1/admin/sessions/agents/${targetAgent.uuid}/${chat.id}/events`,
+      url: `/api/v1/agents/${targetAgent.uuid}/sessions/${chat.id}/events`,
       headers: { authorization: `Bearer ${participant.accessToken}` },
     });
     expect(eventsAsParticipant.statusCode).toBe(200);
@@ -87,21 +92,21 @@ describe("Admin sessions — chat-level access control", () => {
 
     const eventsAsOutsider = await app.inject({
       method: "GET",
-      url: `/api/v1/admin/sessions/agents/${targetAgent.uuid}/${chat.id}/events`,
+      url: `/api/v1/agents/${targetAgent.uuid}/sessions/${chat.id}/events`,
       headers: { authorization: `Bearer ${outsider.accessToken}` },
     });
     expect(eventsAsOutsider.statusCode).toBe(404);
 
     const detailAsParticipant = await app.inject({
       method: "GET",
-      url: `/api/v1/admin/sessions/agents/${targetAgent.uuid}/${chat.id}`,
+      url: `/api/v1/agents/${targetAgent.uuid}/sessions/${chat.id}`,
       headers: { authorization: `Bearer ${participant.accessToken}` },
     });
     expect(detailAsParticipant.statusCode).toBe(200);
 
     const detailAsOutsider = await app.inject({
       method: "GET",
-      url: `/api/v1/admin/sessions/agents/${targetAgent.uuid}/${chat.id}`,
+      url: `/api/v1/agents/${targetAgent.uuid}/sessions/${chat.id}`,
       headers: { authorization: `Bearer ${outsider.accessToken}` },
     });
     expect(detailAsOutsider.statusCode).toBe(404);
@@ -110,7 +115,7 @@ describe("Admin sessions — chat-level access control", () => {
   it("supervisor (manages a participant agent) can read events even without direct participation", async () => {
     const app = getApp();
     const admin = await createAdminContext(app, { username: `acl-sup-${crypto.randomUUID().slice(0, 6)}` });
-    const supervisor = await createMember(app, admin.accessToken, "sup");
+    const supervisor = await createMember(app, admin.accessToken, admin.organizationId, "sup");
 
     // Agent managed by the supervisor; supervisor's own human is NOT in the chat.
     const supervisedAgent = await createAgent(app.db, {
@@ -121,7 +126,7 @@ describe("Admin sessions — chat-level access control", () => {
       clientId: supervisor.clientId,
     });
 
-    const otherMember = await createMember(app, admin.accessToken, "other");
+    const otherMember = await createMember(app, admin.accessToken, admin.organizationId, "other");
     const chat = await createChat(app.db, otherMember.humanAgentId, {
       type: "direct",
       participantIds: [supervisedAgent.uuid],
@@ -135,7 +140,7 @@ describe("Admin sessions — chat-level access control", () => {
 
     const res = await app.inject({
       method: "GET",
-      url: `/api/v1/admin/sessions/agents/${supervisedAgent.uuid}/${chat.id}/events`,
+      url: `/api/v1/agents/${supervisedAgent.uuid}/sessions/${chat.id}/events`,
       headers: { authorization: `Bearer ${supervisor.accessToken}` },
     });
     expect(res.statusCode).toBe(200);

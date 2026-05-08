@@ -12,20 +12,15 @@ import { getCachedAudience } from "../../services/chat-audience-cache.js";
 import type { Notifier } from "../../services/notifier.js";
 
 /**
- * Admin WebSocket: real-time push channel for Dashboard, scoped by organization
- * AND agent visibility (a member only sees pulse data for agents they are
- * allowed to see via REST).
+ * Class B — `/api/v1/orgs/:orgId/ws`. Real-time admin push channel.
+ * Org is taken from the path; JWT only needs `sub`. Membership in the
+ * target org is probed in real time on every handshake — a revoked
+ * membership refuses immediately.
  */
 
 type SocketMeta = {
   organizationId: string;
   memberId: string;
-  /**
-   * The 1:1 human agent for the (user, org) of this socket. Used by the
-   * chat-first workspace `chat:message` push: a chat audience is expressed
-   * in agent uuids (chat_participants + chat_subscriptions), so we match
-   * each socket against that set by `humanAgentId`.
-   */
   humanAgentId: string;
   visibleAgentIds: Set<string>;
 };
@@ -52,19 +47,15 @@ function filterPulseAgents(agentsMap: Record<string, unknown>, visible: Set<stri
   return out;
 }
 
-export function adminWsRoutes(notifier: Notifier, jwtSecret: string) {
+export function orgWsRoutes(notifier: Notifier, jwtSecret: string) {
   const adminSockets = new Map<WebSocket, SocketMeta>();
   const secret = new TextEncoder().encode(jwtSecret);
 
   function broadcastOrgScoped(payload: Record<string, unknown>) {
     const orgId = payload.organizationId;
-    // Drop org-less payloads so the filter never falls through to a cross-org broadcast.
     if (typeof orgId !== "string" || orgId.length === 0) return;
 
     const isPulseTick = payload.type === "pulse:tick" && typeof payload.agents === "object" && payload.agents !== null;
-    // Agent-scoped notifications carry `agentId` on the envelope — suppress
-    // the push for any socket whose member can't see that agent via REST.
-    // Notifications with null agentId are org-wide and fan out unrestricted.
     const isNotification = payload.type === "notification";
     const notificationAgentId =
       isNotification && typeof payload.agentId === "string" && payload.agentId.length > 0 ? payload.agentId : null;
@@ -73,14 +64,10 @@ export function adminWsRoutes(notifier: Notifier, jwtSecret: string) {
     for (const [ws, meta] of adminSockets) {
       if (ws.readyState !== 1 || meta.organizationId !== orgId) continue;
       if (isPulseTick) {
-        // Per-recipient filter so a member never learns about agents they can't see via REST.
         const filtered = filterPulseAgents(payload.agents as Record<string, unknown>, meta.visibleAgentIds);
         ws.send(JSON.stringify({ ...payload, agents: filtered }));
       } else {
         if (isNotification && notificationAgentId && !meta.visibleAgentIds.has(notificationAgentId)) {
-          // This member cannot see the agent — skip the push. The REST list
-          // endpoint also filters them out so the bell's unread count stays
-          // consistent with the data the dashboard actually shows.
           continue;
         }
         ws.send(sharedData as string);
@@ -94,25 +81,14 @@ export function adminWsRoutes(notifier: Notifier, jwtSecret: string) {
     broadcastOrgScoped({ type: "session:state", ...payload });
   });
 
-  // Chat-first workspace: `chat:message` is per-chat, not per-org. We resolve
-  // the audience as `chat_participants ∪ chat_subscriptions` (both keyed by
-  // human agent uuid for our purposes) and dispatch only to sockets whose
-  // `humanAgentId` is in that set. Best-effort — DB errors / dropped frames
-  // are tolerated by the web client which falls back to refetch on reconnect.
   notifier.onChatMessage(({ chatId }) => {
     void dispatchChatMessage(chatId);
   });
-
-  // Per-chat audience cache lives in `services/chat-audience-cache.ts`
-  // so the participant-mutation paths can call `invalidateChatAudience`
-  // after their tx commits — without that hook, a freshly-added speaker
-  // would miss `chat:message` pushes for up to the TTL window.
 
   async function dispatchChatMessage(chatId: string): Promise<void> {
     if (adminSockets.size === 0) return;
     const audience = await getCachedAudience(getDbForChatLookup(), chatId);
     if (!audience || audience.size === 0) return;
-
     const frame = JSON.stringify({ type: "chat:message", chatId });
     for (const [ws, meta] of adminSockets) {
       if (ws.readyState !== 1) continue;
@@ -120,19 +96,14 @@ export function adminWsRoutes(notifier: Notifier, jwtSecret: string) {
       try {
         ws.send(frame);
       } catch {
-        // socket-level errors are surfaced via close handler
+        // socket-level errors surface via close handler
       }
     }
   }
 
-  // The DB handle is captured per-request below; keep a back-reference so the
-  // notifier callback (which has no fastify request scope) can run a small
-  // lookup. Set on first WS upgrade and reused thereafter.
   let cachedDbForChatLookup: Database | null = null;
   function getDbForChatLookup(): Database {
-    if (!cachedDbForChatLookup) {
-      throw new Error("admin WS: db not initialised yet");
-    }
+    if (!cachedDbForChatLookup) throw new Error("admin WS: db not initialised yet");
     return cachedDbForChatLookup;
   }
   function rememberDb(db: Database): void {
@@ -140,38 +111,28 @@ export function adminWsRoutes(notifier: Notifier, jwtSecret: string) {
   }
 
   return async (app: FastifyInstance): Promise<void> => {
-    // See ws-client.ts for why this route is excluded from HTTP tracing
-    // (handled in app.ts via autotelic's `ignoreRoutes`).
-    app.get("/admin", { websocket: true }, async (socket, request) => {
+    app.get<{ Params: { orgId: string } }>("/", { websocket: true }, async (socket, request) => {
       startWsConnectionSpan(socket, { remoteIp: request.ip });
 
+      const orgIdFromPath = (request.params as { orgId?: string }).orgId;
       const token = (request.query as Record<string, string>).token;
-      if (!token) {
-        socket.send(JSON.stringify({ type: "error", message: "Missing token query parameter" }));
+      if (!token || !orgIdFromPath) {
+        socket.send(JSON.stringify({ type: "error", message: "Missing token or org" }));
         socket.close(4001, "Missing token");
         endWsConnectionSpan(socket, 4001);
         return;
       }
 
       let userId: string;
-      let organizationId: string;
       try {
         const { payload } = await jwtVerify(token, secret);
-        if (
-          payload.type !== "access" ||
-          typeof payload.sub !== "string" ||
-          typeof payload.organizationId !== "string"
-        ) {
+        if (payload.type !== "access" || typeof payload.sub !== "string") {
           socket.send(JSON.stringify({ type: "error", message: "Invalid token type" }));
           socket.close(4001, "Invalid token");
           endWsConnectionSpan(socket, 4001);
           return;
         }
         userId = payload.sub;
-        // JWT `organizationId` is a hint for which org the dashboard wants
-        // to watch; the authoritative membership comes from the realtime
-        // probe below (decouple-client-from-identity §D.4).
-        organizationId = payload.organizationId;
       } catch {
         socket.send(JSON.stringify({ type: "error", message: "Invalid or expired token" }));
         socket.close(4001, "Auth failed");
@@ -179,9 +140,7 @@ export function adminWsRoutes(notifier: Notifier, jwtSecret: string) {
         return;
       }
 
-      // Realtime membership probe — refuse the subscription if the user is
-      // no longer an active member of the org. Must run on every handshake;
-      // a JWT for a revoked membership cannot keep watching the dashboard.
+      const organizationId = orgIdFromPath;
       const [memberRow] = await app.db
         .select({ id: members.id, role: members.role, agentId: members.agentId })
         .from(members)
@@ -198,18 +157,10 @@ export function adminWsRoutes(notifier: Notifier, jwtSecret: string) {
       const memberId = memberRow.id;
 
       setWsConnectionAttrs(socket, { organizationId, memberId });
-
-      // Cache the db handle for the chat-message notifier callback (which has
-      // no fastify scope). Idempotent.
       rememberDb(app.db);
 
-      // Visibility cached at connect time. New agents added mid-session won't
-      // appear in pulses until the dashboard reconnects — acceptable trade-off
-      // vs running this query per pulse tick.
       const visibleAgentIds = await loadVisibleAgentIds(app.db, organizationId, memberId);
 
-      // Resolve the (user, org) human agent uuid. members.agentId is unique
-      // and non-null after migration 0024.
       const [humanAgentRow] = await app.db
         .select({ uuid: agents.uuid })
         .from(agents)

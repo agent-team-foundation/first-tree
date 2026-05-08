@@ -6,21 +6,21 @@ import type {
 import { api } from "./client.js";
 
 export function listAdapters(): Promise<AdapterConfig[]> {
-  return api.get<AdapterConfig[]>("/admin/adapters");
+  return api.get<AdapterConfig[]>("/adapters");
 }
 
 export function getAdapter(id: number): Promise<AdapterConfig> {
-  return api.get<AdapterConfig>(`/admin/adapters/${id}`);
+  return api.get<AdapterConfig>(`/adapters/${id}`);
 }
 
 export function createAdapter(data: CreateAdapterConfig): Promise<AdapterConfig> {
-  return api.post<AdapterConfig>("/admin/adapters", data);
+  return api.post<AdapterConfig>("/adapters", data);
 }
 
 export function updateAdapter(id: number, data: UpdateAdapterConfig): Promise<AdapterConfig> {
-  return api.patch<AdapterConfig>(`/admin/adapters/${id}`, data);
+  return api.patch<AdapterConfig>(`/adapters/${id}`, data);
 }
 
 export function deleteAdapter(id: number): Promise<void> {
-  return api.delete<void>(`/admin/adapters/${id}`);
+  return api.delete<void>(`/adapters/${id}`);
 }

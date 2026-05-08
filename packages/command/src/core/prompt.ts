@@ -107,7 +107,7 @@ export async function promptAddAgent(opts: { agentId?: string } = {}): Promise<{
     }));
 
   const token = await ensureFreshAccessToken();
-  const res = await fetch(`${serverUrl}/api/v1/admin/agents/${encodeURIComponent(agentId)}`, {
+  const res = await fetch(`${serverUrl}/api/v1/agents/${encodeURIComponent(agentId)}`, {
     headers: { Authorization: `Bearer ${token}` },
     signal: AbortSignal.timeout(10_000),
   });

@@ -24,7 +24,7 @@ export async function reconcileLocalRuntimeProviders(opts: {
   agentsDir: string;
   log?: LogFn;
 }): Promise<void> {
-  const res = await fetch(`${opts.serverUrl}/api/v1/clients/me/agents`, {
+  const res = await fetch(`${opts.serverUrl}/api/v1/me/pinned-agents`, {
     headers: { Authorization: `Bearer ${opts.accessToken}` },
   });
   if (!res.ok) {

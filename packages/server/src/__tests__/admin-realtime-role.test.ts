@@ -39,71 +39,66 @@ describe("PR-D: admin role is realtime, not derived from the JWT", () => {
     return { orgId, memberId };
   }
 
-  it("POST /admin/agents in a non-default org refuses when the caller is only a member there", async () => {
+  it("POST /orgs/:orgId/agents in a non-default org pins managerId to caller's member row when caller is only a member", async () => {
     const app = getApp();
-    // Alice is admin in her default org but only a `member` in org B.
     const alice = await createTestAdmin(app);
     const orgB = await attachMember(app, alice.userId, "member");
 
     const res = await app.inject({
       method: "POST",
-      url: "/api/v1/admin/agents",
+      url: `/api/v1/orgs/${encodeURIComponent(orgB.orgId)}/agents`,
       headers: { authorization: `Bearer ${alice.accessToken}` },
       payload: {
         name: `rt-bot-${crypto.randomUUID().slice(0, 6)}`,
         type: "autonomous_agent",
-        displayName: "Should Not Be Created",
-        organizationId: orgB.orgId,
+        displayName: "Member Caller",
         // try to set someone else's manager — only an admin can do this
         managerId: orgB.memberId,
       },
     });
     expect(res.statusCode).toBe(201);
-    // The realtime probe finds Alice as `member` in org B, so the body's
-    // `managerId` is ignored and the agent is pinned under her own member
-    // row in org B (the seeded human agent's manager). Confirm the realtime
-    // gate downgraded the privilege.
+    // Realtime probe finds Alice as `member` in orgB, so body.managerId is
+    // forced to her own (`scope.memberId`) regardless of what was sent.
     const body = res.json<{ managerId: string; organizationId: string }>();
     expect(body.organizationId).toBe(orgB.orgId);
     expect(body.managerId).toBe(orgB.memberId);
   });
 
-  it("GET /admin/agents/all rejects with 403 when the caller is not admin in the target org", async () => {
+  it("GET /orgs/:orgId/agents/all rejects with 403 when the caller is not admin in the target org", async () => {
     const app = getApp();
     const alice = await createTestAdmin(app);
     const orgB = await attachMember(app, alice.userId, "member");
 
     const res = await app.inject({
       method: "GET",
-      url: `/api/v1/admin/agents/all?organizationId=${encodeURIComponent(orgB.orgId)}`,
+      url: `/api/v1/orgs/${encodeURIComponent(orgB.orgId)}/agents/all`,
       headers: { authorization: `Bearer ${alice.accessToken}` },
     });
     expect(res.statusCode).toBe(403);
   });
 
-  it("GET /admin/agents/all rejects with 403 in an org the caller has zero membership in", async () => {
+  it("GET /orgs/:orgId/agents/all rejects with 403 in an org the caller has zero membership in", async () => {
     const app = getApp();
     const alice = await createTestAdmin(app);
-    // brand-new org Alice never joined
     const orgC = `org-rt-c-${crypto.randomUUID().slice(0, 8)}`;
     await app.db.insert(organizations).values({ id: orgC, name: orgC.slice(0, 30), displayName: "Outside" });
 
     const res = await app.inject({
       method: "GET",
-      url: `/api/v1/admin/agents/all?organizationId=${encodeURIComponent(orgC)}`,
+      url: `/api/v1/orgs/${encodeURIComponent(orgC)}/agents/all`,
       headers: { authorization: `Bearer ${alice.accessToken}` },
     });
     expect(res.statusCode).toBe(403);
   });
 
-  it("GET /clients?organizationId= refuses non-admins in that org", async () => {
+  it("GET /orgs/:orgId/clients refuses non-admins in that org", async () => {
     const app = getApp();
     const alice = await createTestAdmin(app);
     const orgB = await attachMember(app, alice.userId, "member");
 
     const res = await app.inject({
       method: "GET",
-      url: `/api/v1/clients?organizationId=${encodeURIComponent(orgB.orgId)}`,
+      url: `/api/v1/orgs/${encodeURIComponent(orgB.orgId)}/clients`,
       headers: { authorization: `Bearer ${alice.accessToken}` },
     });
     expect(res.statusCode).toBe(403);
@@ -141,7 +136,7 @@ describe("PR-D: admin role is realtime, not derived from the JWT", () => {
     // JWT default org differs from `orgB.orgId`.
     const res = await app.inject({
       method: "GET",
-      url: `/api/v1/admin/agents/${bot.uuid}`,
+      url: `/api/v1/agents/${bot.uuid}`,
       headers: { authorization: `Bearer ${alice.accessToken}` },
     });
     expect(res.statusCode).toBe(200);
@@ -166,7 +161,7 @@ describe("PR-D: admin role is realtime, not derived from the JWT", () => {
 
     const res = await app.inject({
       method: "PATCH",
-      url: `/api/v1/admin/agents/${bot.uuid}`,
+      url: `/api/v1/agents/${bot.uuid}`,
       headers: { authorization: `Bearer ${alice.accessToken}` },
       payload: { displayName: "Renamed Cross-Org" },
     });
@@ -191,7 +186,7 @@ describe("PR-D: admin role is realtime, not derived from the JWT", () => {
 
     const res = await app.inject({
       method: "GET",
-      url: `/api/v1/admin/agents/${bot.uuid}`,
+      url: `/api/v1/agents/${bot.uuid}`,
       headers: { authorization: `Bearer ${alice.accessToken}` },
     });
     // Same UUID exists but Alice is not a member of that org → 404 to

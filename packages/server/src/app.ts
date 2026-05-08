@@ -11,25 +11,10 @@ import websocket from "@fastify/websocket";
 import Fastify, { type FastifyBaseLogger, type FastifyInstance, type FastifyPluginAsync } from "fastify";
 import postgres from "postgres";
 import { ZodError } from "zod";
-import { adminAdapterMappingRoutes } from "./api/admin/adapter-mappings.js";
-import { adminAdapterStatusRoutes } from "./api/admin/adapter-status.js";
-import { adminAdapterRoutes } from "./api/admin/adapters.js";
-
-import { adminAgentClientStatusRoutes } from "./api/admin/agent-client-status.js";
-import { adminAgentConfigRoutes } from "./api/admin/agent-config.js";
-import { adminAgentRoutes } from "./api/admin/agents.js";
-import { adminChatRoutes } from "./api/admin/chats.js";
-import { adminActivityRoutes, adminClientRoutes } from "./api/admin/clients.js";
-import { adminNotificationRoutes } from "./api/admin/notifications.js";
-import { adminOrganizationRoutes } from "./api/admin/organizations.js";
-import { adminOverviewRoutes } from "./api/admin/overview.js";
-import { adminSessionRoutes } from "./api/admin/sessions.js";
-import { adminStatsRoutes } from "./api/admin/stats.js";
-import { adminSystemConfigRoutes } from "./api/admin/system-config.js";
-import { adminTaskRoutes } from "./api/admin/tasks.js";
-import { adminWsRoutes } from "./api/admin/ws-admin.js";
+import { adapterMappingRoutes } from "./api/adapter-mappings.js";
+import { adapterRoutes } from "./api/adapters.js";
 import { agentChatRoutes } from "./api/agent/chats.js";
-import { agentConfigRoutes } from "./api/agent/config.js";
+import { agentConfigRoutes as agentRuntimeConfigRoutes } from "./api/agent/config.js";
 import { agentFeishuBotRoutes } from "./api/agent/feishu-bot.js";
 import { agentFeishuUserRoutes } from "./api/agent/feishu-user.js";
 import { agentInboxRoutes } from "./api/agent/inbox.js";
@@ -37,24 +22,44 @@ import { agentMeRoutes } from "./api/agent/me.js";
 import { agentMessageRoutes, agentSendToAgentRoutes } from "./api/agent/messages.js";
 import { agentTaskRoutes } from "./api/agent/tasks.js";
 import { clientWsRoutes } from "./api/agent/ws-client.js";
+import { agentActivityRoutes } from "./api/agent-activity.js";
+import { agentRoutes } from "./api/agents.js";
+import { agentConfigRoutes } from "./api/agents-config.js";
 import { githubOauthRoutes } from "./api/auth/github.js";
 import { authRoutes } from "./api/auth.js";
 import { bootstrapConfigRoutes } from "./api/bootstrap/config.js";
-import { memberClientRoutes } from "./api/clients.js";
+import { chatRoutes } from "./api/chats.js";
+import { clientRoutes } from "./api/clients.js";
 import { contextTreeInfoRoutes } from "./api/context-tree-info.js";
 import { feedbackRoutes } from "./api/feedback.js";
 import { healthRoutes } from "./api/health.js";
 import { healthzRoutes } from "./api/healthz.js";
-import { adminInvitationRoutes, meRoutes, publicInvitePreviewRoute } from "./api/me.js";
-import { meChatRoutes } from "./api/me-chats.js";
-import { memberRoutes } from "./api/members.js";
+import { publicInvitationRoutes } from "./api/invitations.js";
+import { meRoutes } from "./api/me.js";
+import { orgActivityRoutes } from "./api/orgs/activity.js";
+import { orgAdapterMappingRoutes } from "./api/orgs/adapter-mappings.js";
+import { orgAdapterStatusRoutes } from "./api/orgs/adapter-status.js";
+import { orgAdapterRoutes } from "./api/orgs/adapters.js";
+import { orgAgentRoutes } from "./api/orgs/agents.js";
+import { orgChatRoutes } from "./api/orgs/chats.js";
+import { orgClientRoutes } from "./api/orgs/clients.js";
+import { orgIdentityRoutes } from "./api/orgs/identity.js";
+import { orgInvitationRoutes } from "./api/orgs/invitations.js";
+import { orgMemberRoutes } from "./api/orgs/members.js";
+import { orgNotificationRoutes } from "./api/orgs/notifications.js";
+import { orgOverviewRoutes } from "./api/orgs/overview.js";
+import { orgSessionRoutes } from "./api/orgs/sessions.js";
+import { orgTaskRoutes } from "./api/orgs/tasks.js";
+import { orgWsRoutes } from "./api/orgs/ws.js";
+import { sessionRoutes } from "./api/sessions.js";
+import { taskRoutes } from "./api/tasks.js";
 // Public agent discovery removed — visibility is now handled via agent.visibility field
 import { githubWebhookRoutes } from "./api/webhooks/github.js";
 import type { Config } from "./config.js";
 import { connectDatabase } from "./db/connection.js";
 import { AppError } from "./errors.js";
 import { agentSelectorHook } from "./middleware/agent-selector.js";
-import { memberAuthHook, requireAdminRoleHook } from "./middleware/member-auth.js";
+import { userAuthHook } from "./middleware/user-auth.js";
 import {
   applyLoggerConfig,
   attachRequestContext,
@@ -245,7 +250,10 @@ export async function buildApp(config: Config) {
       if (path === "/" || path === "/healthz") return true;
       if (path.startsWith("/assets/") || path.startsWith("/fonts/")) return true;
       if (path.startsWith("/feedback/")) return true;
-      if (path === "/api/v1/agent/ws/client" || path === "/api/v1/ws/admin") return true;
+      if (path === "/api/v1/agent/ws/client") return true;
+      // Org WS upgrade: `/api/v1/orgs/:orgId/ws/`. Use a startsWith check so
+      // every org's socket-upgrade path is excluded.
+      if (path.startsWith("/api/v1/orgs/") && path.endsWith("/ws/")) return true;
       return false;
     },
   });
@@ -286,7 +294,7 @@ export async function buildApp(config: Config) {
   // Rate limiting — global default; overridden per-route where needed.
   // `hook: "preHandler"` runs the limiter after route-level onRequest hooks
   // (memberAuth, agentSelector) so per-route keyGenerators can read
-  // `req.member` / `req.agent` populated by those hooks.
+  // `req.user` / `req.agent` populated by those hooks.
   await app.register(rateLimit, {
     max: config.rateLimit?.max ?? 100,
     timeWindow: "1 minute",
@@ -299,30 +307,22 @@ export async function buildApp(config: Config) {
   app.addHook("onSend", bodyCaptureOnSendHook);
 
   // Auth hooks
-  const memberAuth = memberAuthHook(db, config.secrets.jwtSecret);
-  const adminOnly = requireAdminRoleHook();
+  const userAuth = userAuthHook(db, config.secrets.jwtSecret);
   const agentSelector = agentSelectorHook(db);
 
-  // Helper: build a member-authenticated plugin scope. Each scope mounts:
-  //   1. memberAuth (validate JWT, populate request.member)
-  //   2. attachRequestContext (stamp user/member/org id onto root span)
-  //   3. (optional) adminOnly enforcement
-  //   4. The caller-provided routes
-  // Naming the wrapper function via Object.defineProperty(fn, "name", ...)
-  // is what makes @fastify/otel hook spans render as `handler - <name>`
-  // instead of fastify's `getFuncPreview()` source-code fallback.
-  function memberScope(name: string, register: (scope: FastifyInstance) => Promise<void>): FastifyPluginAsync {
+  // Helper: build a user-authenticated plugin scope. Each scope mounts:
+  //   1. userAuth (validate JWT, populate request.user = { userId })
+  //   2. attachRequestContext (stamp user.id onto root span)
+  //   3. The caller-provided routes
+  //
+  // Per-org and per-resource gating is handled INSIDE handlers via the
+  // `scope/require-*` helpers (`requireOrgMembership`, `requireAgentAccess`,
+  // …) — NOT at the plugin scope level. This is what kills the JWT-ambient-
+  // scope bug class: the URL carries the scope explicitly and the helpers
+  // probe membership in real time.
+  function userScope(name: string, register: (scope: FastifyInstance) => Promise<void>): FastifyPluginAsync {
     return namePlugin(name, async (scope) => {
-      scope.addHook("onRequest", memberAuth);
-      scope.addHook("onRequest", attachRequestContext);
-      await register(scope);
-    });
-  }
-
-  function adminScope(name: string, register: (scope: FastifyInstance) => Promise<void>): FastifyPluginAsync {
-    return namePlugin(name, async (scope) => {
-      scope.addHook("onRequest", memberAuth);
-      scope.addHook("onRequest", adminOnly);
+      scope.addHook("onRequest", userAuth);
       scope.addHook("onRequest", attachRequestContext);
       await register(scope);
     });
@@ -330,7 +330,7 @@ export async function buildApp(config: Config) {
 
   function agentScope(name: string, register: (scope: FastifyInstance) => Promise<void>): FastifyPluginAsync {
     return namePlugin(name, async (scope) => {
-      scope.addHook("onRequest", memberAuth);
+      scope.addHook("onRequest", userAuth);
       scope.addHook("onRequest", agentSelector);
       scope.addHook("onRequest", attachRequestContext);
       await register(scope);
@@ -402,202 +402,72 @@ export async function buildApp(config: Config) {
   // All API routes under /api/v1 prefix
   await app.register(
     namePlugin("apiV1Scope", async (api) => {
-      // Public routes
+      // ── Public routes ────────────────────────────────────────────────────
       await api.register(healthRoutes);
       await api.register(githubWebhookRoutes, { prefix: "/webhooks" });
       await api.register(authRoutes, { prefix: "/auth" });
       await api.register(githubOauthRoutes, { prefix: "/auth/github" });
-      await api.register(publicInvitePreviewRoute, { prefix: "/invite" });
+      await api.register(publicInvitationRoutes, { prefix: "/invitations" });
       await api.register(contextTreeInfoRoutes, { prefix: "/context-tree" });
       await api.register(bootstrapConfigRoutes, { prefix: "/bootstrap" });
 
-      // Admin agent CRUD.
+      // ── Class A — `/me`, `/auth` (user-scoped) ──────────────────────────
       await api.register(
-        memberScope("adminAgentScope", async (scope) => {
-          await scope.register(adminAgentRoutes);
-        }),
-        { prefix: "/admin/agents" },
-      );
-
-      // Step 2: per-agent runtime config.
-      // Per-route guards in agent-config.ts enforce the real rule:
-      //   GET    /:uuid/config          → assertAgentVisible (any visible viewer may read)
-      //   PATCH  /:uuid/config          → assertCanManage   (manager or admin may edit)
-      //   POST   /:uuid/config/dry-run  → assertCanManage   (manager or admin may preview)
-      // This mirrors agents.managerId's documented "manager retains CRUD" semantics;
-      // the previous plugin-scoped adminOnly hook short-circuited that, blocking
-      // non-admin managers from editing behavior on agents they own.
-      await api.register(
-        memberScope("adminAgentConfigScope", async (scope) => {
-          await scope.register(adminAgentConfigRoutes);
-        }),
-        { prefix: "/admin/agents" },
-      );
-
-      // Step 10: per-agent client connectivity probe
-      await api.register(
-        memberScope("adminAgentClientStatusScope", async (scope) => {
-          await scope.register(adminAgentClientStatusRoutes);
-        }),
-        { prefix: "/admin/agents" },
-      );
-
-      await api.register(
-        adminScope("adminSystemConfigScope", async (scope) => {
-          await scope.register(adminSystemConfigRoutes);
-        }),
-        { prefix: "/admin/system/config" },
-      );
-
-      await api.register(
-        memberScope("adminOverviewScope", async (scope) => {
-          await scope.register(adminOverviewRoutes);
-        }),
-        { prefix: "/admin/overview" },
-      );
-
-      // Adapter bindings are scoped by role inside the handlers:
-      //   - admin: all configs/mappings in the org
-      //   - non-admin: only those bound to agents they manage
-      // That lets the shared /settings page surface each user's own
-      // bindings without an admin flag gating the entire route.
-      await api.register(
-        memberScope("adminAdapterScope", async (scope) => {
-          await scope.register(adminAdapterRoutes);
-        }),
-        { prefix: "/admin/adapters" },
-      );
-
-      await api.register(
-        memberScope("adminAdapterMappingScope", async (scope) => {
-          await scope.register(adminAdapterMappingRoutes);
-        }),
-        { prefix: "/admin/adapter-mappings" },
-      );
-
-      await api.register(
-        memberScope("adminAdapterStatusScope", async (scope) => {
-          await scope.register(adminAdapterStatusRoutes);
-        }),
-        { prefix: "/admin/adapters/status" },
-      );
-
-      await api.register(
-        memberScope("memberRoutesScope", async (scope) => {
-          await scope.register(memberRoutes);
-        }),
-        { prefix: "/members" },
-      );
-
-      await api.register(
-        memberScope("meRoutesScope", async (scope) => {
+        userScope("meRoutesScope", async (scope) => {
           await scope.register(meRoutes);
         }),
         { prefix: "" },
       );
 
+      // ── Class B — `/orgs/:orgId/...` (org-scoped) ───────────────────────
       await api.register(
-        memberScope("adminChatScope", async (scope) => {
-          await scope.register(adminChatRoutes);
+        userScope("orgsScope", async (scope) => {
+          await scope.register(orgIdentityRoutes);
+          await scope.register(orgAgentRoutes, { prefix: "/agents" });
+          await scope.register(orgChatRoutes, { prefix: "/chats" });
+          await scope.register(orgAdapterRoutes, { prefix: "/adapters" });
+          await scope.register(orgAdapterMappingRoutes, { prefix: "/adapter-mappings" });
+          await scope.register(orgAdapterStatusRoutes, { prefix: "/adapters/status" });
+          await scope.register(orgOverviewRoutes, { prefix: "/overview" });
+          await scope.register(orgActivityRoutes, { prefix: "/activity" });
+          await scope.register(orgTaskRoutes, { prefix: "/tasks" });
+          await scope.register(orgSessionRoutes, { prefix: "/sessions" });
+          await scope.register(orgNotificationRoutes, { prefix: "/notifications" });
+          await scope.register(orgClientRoutes, { prefix: "/clients" });
+          await scope.register(orgInvitationRoutes, { prefix: "/invitations" });
+          await scope.register(orgMemberRoutes, { prefix: "/members" });
         }),
-        { prefix: "/admin/chats" },
+        { prefix: "/orgs/:orgId" },
       );
 
-      // Chat-first workspace member-facing chat APIs. Mounted under /me/chats
-      // (NOT /admin/chats) per the design — `workspace` is a UI concept and
-      // does not appear in the API path.
-      //
-      // Uses `memberScope` (not raw `addHook("onRequest", memberAuth)`) so the
-      // root span gets `attachRequestContext` too — without that, every chat
-      // request span would be missing `user.id` / `member.id` / `org.id` and
-      // become invisible to the standard "by user" / "by org" trace filters.
+      // ── Class B — Admin WS (mounted separately because of the websocket plugin scope) ─
+      await api.register(orgWsRoutes(notifier, config.secrets.jwtSecret), { prefix: "/orgs/:orgId/ws" });
+
+      // ── Class C — resource-scoped (`/agents/:uuid`, `/chats/:chatId`, …) ─
       await api.register(
-        memberScope("meChatScope", async (scope) => {
-          await scope.register(meChatRoutes);
+        userScope("resourcesScope", async (scope) => {
+          await scope.register(agentRoutes, { prefix: "/agents" });
+          await scope.register(agentConfigRoutes, { prefix: "/agents" });
+          await scope.register(agentActivityRoutes, { prefix: "/agents" });
+          await scope.register(sessionRoutes, { prefix: "/agents" });
+          await scope.register(chatRoutes, { prefix: "/chats" });
+          await scope.register(taskRoutes, { prefix: "/tasks" });
+          await scope.register(adapterRoutes, { prefix: "/adapters" });
+          await scope.register(adapterMappingRoutes, { prefix: "/adapter-mappings" });
+          await scope.register(clientRoutes, { prefix: "/clients" });
         }),
-        { prefix: "/me/chats" },
+        { prefix: "" },
       );
 
-      // M1: Client management routes
+      // ── Class D — agent runtime self ────────────────────────────────────
       await api.register(
-        memberScope("adminClientScope", async (scope) => {
-          await scope.register(adminClientRoutes);
-        }),
-        { prefix: "/clients" },
-      );
-
-      // Member-scoped client routes (claim — see decouple-client-from-identity §4.4).
-      await api.register(
-        memberScope("memberClientScope", async (scope) => {
-          await scope.register(memberClientRoutes);
-        }),
-        { prefix: "/me/clients" },
-      );
-
-      // M1: Agent activity routes
-      await api.register(
-        memberScope("adminActivityScope", async (scope) => {
-          await scope.register(adminActivityRoutes);
-        }),
-        { prefix: "/admin/agents/activity" },
-      );
-
-      await api.register(
-        adminScope("adminOrganizationScope", async (scope) => {
-          await scope.register(adminOrganizationRoutes);
-        }),
-        { prefix: "/admin/organizations" },
-      );
-
-      // Per-org invitation management — gated on admin role inside the
-      // route handler so the org-scope check (members.organizationId
-      // matches request.params.id) and the admin check live together.
-      await api.register(
-        memberScope("adminInvitationScope", async (scope) => {
-          await scope.register(adminInvitationRoutes);
-        }),
-        { prefix: "/admin/organizations/:id/invitations" },
-      );
-
-      await api.register(
-        adminScope("adminStatsScope", async (scope) => {
-          await scope.register(adminStatsRoutes);
-        }),
-        { prefix: "/admin/stats" },
-      );
-
-      await api.register(
-        memberScope("adminTaskScope", async (scope) => {
-          await scope.register(adminTaskRoutes);
-        }),
-        { prefix: "/admin/tasks" },
-      );
-
-      // M1: Session visibility routes
-      await api.register(
-        memberScope("adminSessionScope", async (scope) => {
-          await scope.register(adminSessionRoutes);
-        }),
-        { prefix: "/admin/sessions" },
-      );
-
-      // M1: Notification routes
-      await api.register(
-        memberScope("adminNotificationScope", async (scope) => {
-          await scope.register(adminNotificationRoutes);
-        }),
-        { prefix: "/admin/notifications" },
-      );
-
-      // Agent routes (member JWT + X-Agent-Id selector; see middleware/agent-selector.ts)
-      await api.register(
-        agentScope("agentRoutesScope", async (scope) => {
+        agentScope("agentRuntimeScope", async (scope) => {
           await scope.register(agentMeRoutes);
           await scope.register(agentChatRoutes, { prefix: "/chats" });
           await scope.register(agentMessageRoutes, { prefix: "/chats" });
           await scope.register(agentSendToAgentRoutes, { prefix: "/agents" });
           await scope.register(agentInboxRoutes, { prefix: "/inbox" });
-          await scope.register(agentConfigRoutes);
+          await scope.register(agentRuntimeConfigRoutes);
           await scope.register(agentTaskRoutes, { prefix: "/tasks" });
 
           await scope.register(agentFeishuBotRoutes);
@@ -606,13 +476,9 @@ export async function buildApp(config: Config) {
         { prefix: "/agent" },
       );
 
-      // Client WebSocket — JWT auth via first-frame `auth` message, then
-      // client:register + per-agent bind. Inbox notifications are fanned out
-      // through this WS via the notifier.
+      // Client WebSocket (Class D) — JWT first-frame `auth`, then
+      // client:register + per-agent bind. Inbox notifications fan out here.
       await api.register(clientWsRoutes(notifier, config.instanceId), { prefix: "/agent/ws" });
-
-      // M1: Admin WebSocket (JWT auth via query param)
-      await api.register(adminWsRoutes(notifier, config.secrets.jwtSecret), { prefix: "/ws" });
     }),
     { prefix: "/api/v1" },
   );

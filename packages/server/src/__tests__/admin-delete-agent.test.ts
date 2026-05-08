@@ -25,10 +25,10 @@ describe("Admin DELETE Agent API", () => {
     const { agent } = await createTestAgent(app, { name: "del-agent" });
     await suspendAgent(app.db, agent.uuid);
 
-    const delRes = await req("DELETE", `/api/v1/admin/agents/${agent.uuid}`);
+    const delRes = await req("DELETE", `/api/v1/agents/${agent.uuid}`);
     expect(delRes.statusCode).toBe(204);
 
-    const getRes = await req("GET", `/api/v1/admin/agents/${agent.uuid}`);
+    const getRes = await req("GET", `/api/v1/agents/${agent.uuid}`);
     expect(getRes.statusCode).toBe(404);
   });
 
@@ -43,7 +43,7 @@ describe("Admin DELETE Agent API", () => {
       clientId: ctx.clientId,
     });
 
-    const res = await req("DELETE", `/api/v1/admin/agents/${agent.uuid}`);
+    const res = await req("DELETE", `/api/v1/agents/${agent.uuid}`);
     expect(res.statusCode).toBe(400);
   });
 
@@ -59,7 +59,7 @@ describe("Admin DELETE Agent API", () => {
       clientId: ctx.clientId,
     });
     await suspendAgent(app.db, agent.uuid);
-    const delRes = await req("DELETE", `/api/v1/admin/agents/${agent.uuid}`);
+    const delRes = await req("DELETE", `/api/v1/agents/${agent.uuid}`);
     expect(delRes.statusCode).toBe(204);
 
     const recreated = await createAgent(app.db, {
@@ -76,20 +76,20 @@ describe("Admin DELETE Agent API", () => {
 
   it("deletes agent's adapter bindings", async () => {
     const app = getApp();
-    const { req } = await authedRequest(app);
+    const { req, ctx } = await authedRequest(app);
     const { agent } = await createTestAgent(app, { name: "del-adapter-agent" });
 
-    await req("POST", "/api/v1/admin/adapters", {
+    await req("POST", `/api/v1/orgs/${ctx.organizationId}/adapters`, {
       platform: "feishu",
       agentId: agent.uuid,
       credentials: { app_id: "cli_del_test", app_secret: "secret" },
     });
 
     await suspendAgent(app.db, agent.uuid);
-    const delRes = await req("DELETE", `/api/v1/admin/agents/${agent.uuid}`);
+    const delRes = await req("DELETE", `/api/v1/agents/${agent.uuid}`);
     expect(delRes.statusCode).toBe(204);
 
-    const listRes = await req("GET", "/api/v1/admin/adapters");
+    const listRes = await req("GET", `/api/v1/orgs/${ctx.organizationId}/adapters`);
     const configs = listRes.json();
     const found = configs.find((c: { agentId: string }) => c.agentId === agent.uuid);
     expect(found).toBeUndefined();
@@ -109,9 +109,9 @@ describe("Admin DELETE Agent API", () => {
 
     const agent = await createAgent(app.db, { name: "double-del", type: "human" });
     await suspendAgent(app.db, agent.uuid);
-    await req("DELETE", `/api/v1/admin/agents/${agent.uuid}`);
+    await req("DELETE", `/api/v1/agents/${agent.uuid}`);
 
-    const res = await req("DELETE", `/api/v1/admin/agents/${agent.uuid}`);
+    const res = await req("DELETE", `/api/v1/agents/${agent.uuid}`);
     expect(res.statusCode).toBe(404);
   });
 });

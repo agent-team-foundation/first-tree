@@ -47,7 +47,7 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
 
     const res = await app.inject({
       method: "POST",
-      url: `/api/v1/admin/sessions/agents/${agent.uuid}/${chat.id}/suspend`,
+      url: `/api/v1/agents/${agent.uuid}/sessions/${chat.id}/suspend`,
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
     expect(res.statusCode).toBe(200);
@@ -72,7 +72,7 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
 
     const res = await app.inject({
       method: "POST",
-      url: `/api/v1/admin/sessions/agents/${agent.uuid}/${chat.id}/suspend`,
+      url: `/api/v1/agents/${agent.uuid}/sessions/${chat.id}/suspend`,
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
     expect(res.statusCode).toBe(200);
@@ -98,7 +98,7 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
 
     const res = await app.inject({
       method: "POST",
-      url: `/api/v1/admin/sessions/agents/${agent.uuid}/${chat.id}/terminate`,
+      url: `/api/v1/agents/${agent.uuid}/sessions/${chat.id}/terminate`,
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
     expect(res.statusCode).toBe(200);
@@ -132,7 +132,7 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
 
     const res = await app.inject({
       method: "POST",
-      url: `/api/v1/admin/sessions/agents/${agent.uuid}/${chat.id}/terminate`,
+      url: `/api/v1/agents/${agent.uuid}/sessions/${chat.id}/terminate`,
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
     expect(res.statusCode).toBe(200);
@@ -155,7 +155,7 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
 
     const res = await app.inject({
       method: "POST",
-      url: `/api/v1/admin/sessions/agents/${agent.uuid}/${chat.id}/terminate`,
+      url: `/api/v1/agents/${agent.uuid}/sessions/${chat.id}/terminate`,
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
     expect(res.statusCode).toBe(200);
@@ -175,7 +175,7 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
 
     const res = await app.inject({
       method: "POST",
-      url: `/api/v1/admin/sessions/agents/${agent.uuid}/chat-does-not-exist/suspend`,
+      url: `/api/v1/agents/${agent.uuid}/sessions/chat-does-not-exist/suspend`,
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
     expect(res.statusCode).toBe(404);
@@ -195,7 +195,7 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
 
     const res = await app.inject({
       method: "POST",
-      url: `/api/v1/admin/sessions/agents/${agent.uuid}/${chat.id}/resume`,
+      url: `/api/v1/agents/${agent.uuid}/sessions/${chat.id}/resume`,
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
     expect(res.statusCode).toBe(404);
@@ -269,7 +269,7 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
 
     const defaultRes = await app.inject({
       method: "GET",
-      url: `/api/v1/admin/sessions/agents/${agent.uuid}`,
+      url: `/api/v1/agents/${agent.uuid}/sessions`,
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
     expect(defaultRes.statusCode).toBe(200);
@@ -279,7 +279,7 @@ describe("Admin sessions — Suspend / Terminate (server-authoritative)", () => 
 
     const filteredRes = await app.inject({
       method: "GET",
-      url: `/api/v1/admin/sessions/agents/${agent.uuid}?state=evicted`,
+      url: `/api/v1/agents/${agent.uuid}/sessions?state=evicted`,
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
     expect(filteredRes.statusCode).toBe(200);

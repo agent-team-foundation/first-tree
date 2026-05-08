@@ -46,7 +46,7 @@ export function retireClient(clientId: string): Promise<void> {
 }
 
 export function getActivityOverview(): Promise<ActivityOverview> {
-  return api.get<ActivityOverview>("/admin/agents/activity");
+  return api.get<ActivityOverview>("/activity");
 }
 
 export function listClients(): Promise<HubClient[]> {
@@ -76,7 +76,7 @@ export function disconnectClient(clientId: string): Promise<{ disconnected: bool
 }
 
 export function resetAgentActivity(agentId: string): Promise<{ reset: boolean }> {
-  return api.post(`/admin/agents/activity/${agentId}/reset-activity`);
+  return api.post(`/activity/${agentId}/reset-activity`);
 }
 
 export type ConnectTokenResponse = {
@@ -86,5 +86,5 @@ export type ConnectTokenResponse = {
 };
 
 export function generateConnectToken(): Promise<ConnectTokenResponse> {
-  return api.post<ConnectTokenResponse>("/connect-tokens");
+  return api.post<ConnectTokenResponse>("/me/connect-tokens");
 }

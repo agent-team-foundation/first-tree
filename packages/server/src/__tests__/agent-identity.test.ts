@@ -237,7 +237,7 @@ describe("Agent Identity (UUID + Name)", () => {
 
       const res = await app.inject({
         method: "GET",
-        url: "/api/v1/admin/agents",
+        url: `/api/v1/orgs/${admin.organizationId}/agents`,
         headers: { authorization: `Bearer ${admin.accessToken}` },
       });
 
@@ -261,7 +261,7 @@ describe("Agent Identity (UUID + Name)", () => {
 
       const res = await app.inject({
         method: "GET",
-        url: `/api/v1/admin/agents/${agent.uuid}`,
+        url: `/api/v1/agents/${agent.uuid}`,
         headers: { authorization: `Bearer ${admin.accessToken}` },
       });
 

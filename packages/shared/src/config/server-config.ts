@@ -228,6 +228,34 @@ export const serverConfigSchema = defineConfig({
       }),
     }),
   },
+  /**
+   * Runtime tunables. Replaced the deleted `/admin/system/config` HTTP
+   * surface (proposal hub-strip-jwt-ambient-scope §3.5) — these knobs are
+   * deployment-level, not customer-tunable, and get baked in via the
+   * deploy manifest (systemd / docker-compose / Fly.toml / Render env).
+   */
+  runtime: {
+    inboxTimeoutSeconds: field(z.coerce.number().int().positive().default(300), {
+      env: "FIRST_TREE_HUB_INBOX_TIMEOUT_SECONDS",
+    }),
+    maxRetryCount: field(z.coerce.number().int().nonnegative().default(3), {
+      env: "FIRST_TREE_HUB_MAX_RETRY_COUNT",
+    }),
+    pollingIntervalSeconds: field(z.coerce.number().int().positive().default(5), {
+      env: "FIRST_TREE_HUB_POLLING_INTERVAL_SECONDS",
+    }),
+    presenceCleanupSeconds: field(z.coerce.number().int().positive().default(60), {
+      env: "FIRST_TREE_HUB_PRESENCE_CLEANUP_SECONDS",
+    }),
+    /**
+     * Optional outbound webhook URL — if set, every notification is
+     * fire-and-forget POSTed here in JSON. Replaces the prior DB-backed
+     * `notification_webhook_url` config row.
+     */
+    notificationWebhookUrl: field(z.string().url().optional(), {
+      env: "FIRST_TREE_HUB_NOTIFICATION_WEBHOOK_URL",
+    }),
+  },
 });
 
 export type ServerConfig = InferConfig<typeof serverConfigSchema>;

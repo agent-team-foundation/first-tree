@@ -21,10 +21,10 @@ describe("Admin WS — pulse:tick visibility filtering", () => {
   let wsUrl: string;
   const jwtSecret = process.env.JWT_SECRET ?? "test-jwt-secret-key-for-vitest";
 
-  async function signJwt(userId: string, memberId: string, organizationId: string): Promise<string> {
+  async function signJwt(userId: string): Promise<string> {
     const secret = new TextEncoder().encode(jwtSecret);
     const now = Math.floor(Date.now() / 1000);
-    return new SignJWT({ sub: userId, memberId, organizationId, role: "member", type: "access" })
+    return new SignJWT({ sub: userId, type: "access" })
       .setProtectedHeader({ alg: "HS256" })
       .setIssuedAt(now)
       .setExpirationTime(now + 300)
@@ -53,12 +53,12 @@ describe("Admin WS — pulse:tick visibility filtering", () => {
       return human;
     });
     const clientId = await seedClient(app, userId, organizationId);
-    return { userId, memberId, humanAgent: agent, clientId, token: await signJwt(userId, memberId, organizationId) };
+    return { userId, memberId, humanAgent: agent, clientId, organizationId, token: await signJwt(userId) };
   }
 
-  function openSocket(token: string): Promise<WebSocket> {
+  function openSocket(token: string, organizationId: string): Promise<WebSocket> {
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(`${wsUrl}?token=${encodeURIComponent(token)}`);
+      const ws = new WebSocket(`${wsUrl}/${encodeURIComponent(organizationId)}/ws/?token=${encodeURIComponent(token)}`);
       ws.once("open", () => {
         const onMessage = (raw: WebSocket.RawData) => {
           try {
@@ -101,7 +101,7 @@ describe("Admin WS — pulse:tick visibility filtering", () => {
     await app.listen({ port: 0, host: "127.0.0.1" });
     const addr = app.server.address();
     if (!addr || typeof addr === "string") throw new Error("test server has no address");
-    wsUrl = `ws://127.0.0.1:${addr.port}/api/v1/ws/admin`;
+    wsUrl = `ws://127.0.0.1:${addr.port}/api/v1/orgs`;
   });
 
   afterAll(async () => {
@@ -135,8 +135,8 @@ describe("Admin WS — pulse:tick visibility filtering", () => {
       organizationId: org.id,
     });
 
-    const wsOwner = await openSocket(owner.token);
-    const wsPeer = await openSocket(peer.token);
+    const wsOwner = await openSocket(owner.token, owner.organizationId);
+    const wsPeer = await openSocket(peer.token, peer.organizationId);
 
     try {
       const ownerCollect = collectPulseTick(wsOwner, 500);

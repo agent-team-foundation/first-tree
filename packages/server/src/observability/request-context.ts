@@ -36,19 +36,21 @@ function rootSpanOf(request: FastifyRequest): Span | undefined {
 
 /**
  * Tag the HTTP root span with the authenticated identity. Reads
- * `request.member` (set by `memberAuthHook`) and `request.agent` (set by
+ * `request.user` (set by `userAuthHook`) and `request.agent` (set by
  * `agentSelectorHook`); skips fields that aren't populated, so it's safe to
  * register on routes where one or both upstream hooks did not run.
+ *
+ * Member / org attributes are no longer stamped here — they're not on the
+ * JWT anymore. Per-request scope helpers (`requireOrgMembership`, etc.)
+ * resolve them from the DB and individual handlers can decorate the span
+ * with the resolved fields if needed.
  */
 export async function attachRequestContext(request: FastifyRequest, _reply: FastifyReply): Promise<void> {
   const span = rootSpanOf(request);
   if (!span) return;
 
-  if (request.member) {
-    span.setAttribute(FIRST_TREE_HUB_ATTR.USER_ID, request.member.userId);
-    span.setAttribute(FIRST_TREE_HUB_ATTR.MEMBER_ID, request.member.memberId);
-    span.setAttribute(FIRST_TREE_HUB_ATTR.ORGANIZATION_ID, request.member.organizationId);
-    span.setAttribute(FIRST_TREE_HUB_ATTR.USER_ROLE, request.member.role);
+  if (request.user) {
+    span.setAttribute(FIRST_TREE_HUB_ATTR.USER_ID, request.user.userId);
   }
 
   if (request.agent) {

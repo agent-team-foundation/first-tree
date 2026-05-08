@@ -20,7 +20,7 @@ describe("Multi-org self-service", () => {
     expect(list[0]?.role).toBe("admin");
   });
 
-  it("POST /me/organizations creates a new team and returns admin tokens for it", async () => {
+  it("POST /me/organizations creates a new team", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const res = await app.inject({
@@ -30,103 +30,65 @@ describe("Multi-org self-service", () => {
       payload: { name: `t-${crypto.randomUUID().slice(0, 8)}`, displayName: "Side Project" },
     });
     expect(res.statusCode).toBe(201);
-    const body = res.json<{
-      organization: { id: string; role: string };
-      tokens: { accessToken: string };
-    }>();
+    const body = res.json<{ organization: { id: string; role: string } }>();
     expect(body.organization.role).toBe("admin");
 
+    // Token unchanged — same userId. /me reflects the new membership.
     const me = await app.inject({
       method: "GET",
       url: "/api/v1/me",
-      headers: { authorization: `Bearer ${body.tokens.accessToken}` },
+      headers: { authorization: `Bearer ${admin.accessToken}` },
     });
     expect(me.statusCode).toBe(200);
-    expect(me.json<{ member: { organizationId: string } }>().member.organizationId).toBe(body.organization.id);
+    const meBody = me.json<{ memberships: Array<{ organizationId: string }> }>();
+    expect(meBody.memberships.some((m) => m.organizationId === body.organization.id)).toBe(true);
   });
 
-  it("POST /me/organizations/leave soft-deletes membership and invalidates tokens", async () => {
+  it("POST /me/memberships/:memberId/leave soft-deletes membership", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
-    // Create a second team so leaving the first is meaningful (we'd otherwise
-    // strand the user with zero teams, which is an explicit v1 trade-off
-    // documented in the proposal).
-    const second = await app.inject({
+    // Create a second team so leaving the first leaves the user with one membership.
+    await app.inject({
       method: "POST",
       url: "/api/v1/me/organizations",
       headers: { authorization: `Bearer ${admin.accessToken}` },
       payload: { name: `t-${crypto.randomUUID().slice(0, 8)}`, displayName: "Second" },
     });
-    const secondTokens = second.json<{ tokens: { accessToken: string } }>().tokens;
 
-    // Leave the first org via the original token.
     const leaveRes = await app.inject({
       method: "POST",
-      url: "/api/v1/me/organizations/leave",
+      url: `/api/v1/me/memberships/${admin.memberId}/leave`,
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
     expect(leaveRes.statusCode).toBe(204);
 
-    // Old token now refers to a "left" member → 401.
-    const reuse = await app.inject({
+    // DB row is flipped to status='left'
+    const rows = await app.db.select().from(members).where(eq(members.id, admin.memberId));
+    expect(rows[0]?.status).toBe("left");
+
+    // /me still works — token is keyed to userId, not memberId; the user
+    // still has one active membership in the second team.
+    const me = await app.inject({
       method: "GET",
       url: "/api/v1/me",
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
-    expect(reuse.statusCode).toBe(401);
-
-    // Second-team token still works.
-    const me = await app.inject({
-      method: "GET",
-      url: "/api/v1/me",
-      headers: { authorization: `Bearer ${secondTokens.accessToken}` },
-    });
     expect(me.statusCode).toBe(200);
-
-    // DB row is flipped to status='left'
-    const rows = await app.db.select().from(members).where(eq(members.id, admin.memberId));
-    expect(rows[0]?.status).toBe("left");
-  });
-
-  it("POST /auth/switch-org refuses orgs the user does not belong to", async () => {
-    const app = getApp();
-    const adminA = await createTestAdmin(app);
-    // Spin up another user + org via OAuth dev-callback.
-    const oauth = await app.inject({
-      method: "GET",
-      url: "/api/v1/auth/github/dev-callback?githubId=321&login=foreigner",
-    });
-    const fragment = oauth.headers.location?.split("#")[1] ?? "";
-    const params = new URLSearchParams(fragment);
-    const foreignerAccess = params.get("access");
-
-    const foreignerMe = await app.inject({
-      method: "GET",
-      url: "/api/v1/me",
-      headers: { authorization: `Bearer ${foreignerAccess}` },
-    });
-    const foreignerOrgId = foreignerMe.json<{ member: { organizationId: string } }>().member.organizationId;
-
-    // adminA tries to switch into foreigner's org → 403
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/v1/auth/switch-org",
-      headers: { authorization: `Bearer ${adminA.accessToken}` },
-      payload: { organizationId: foreignerOrgId },
-    });
-    expect(res.statusCode).toBe(403);
+    const meBody = me.json<{ memberships: Array<{ organizationId: string }> }>();
+    expect(meBody.memberships.length).toBe(1);
+    expect(meBody.memberships[0]?.organizationId).not.toBe(admin.organizationId);
   });
 });
 
 describe("Connect token carries iss claim", () => {
   const getApp = useTestApp();
 
-  it("POST /connect-tokens stamps an iss derived from request host", async () => {
+  it("POST /me/connect-tokens stamps an iss derived from request host", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const res = await app.inject({
       method: "POST",
-      url: "/api/v1/connect-tokens",
+      url: "/api/v1/me/connect-tokens",
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
     expect(res.statusCode).toBe(200);

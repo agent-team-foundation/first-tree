@@ -20,19 +20,19 @@ export function listChats(params?: { limit?: number; cursor?: string }): Promise
   if (params?.limit) qs.set("limit", String(params.limit));
   if (params?.cursor) qs.set("cursor", params.cursor);
   const query = qs.toString();
-  return api.get<PaginatedChats>(`/admin/chats${query ? `?${query}` : ""}`);
+  return api.get<PaginatedChats>(`/chats${query ? `?${query}` : ""}`);
 }
 
 export function getChat(chatId: string): Promise<ChatDetail> {
-  return api.get<ChatDetail>(`/admin/chats/${encodeURIComponent(chatId)}`);
+  return api.get<ChatDetail>(`/chats/${encodeURIComponent(chatId)}`);
 }
 
 export function renameChat(chatId: string, topic: string | null): Promise<Chat> {
-  return api.patch<Chat>(`/admin/chats/${encodeURIComponent(chatId)}`, { topic });
+  return api.patch<Chat>(`/chats/${encodeURIComponent(chatId)}`, { topic });
 }
 
 export function sendChatMessage(chatId: string, content: string): Promise<Message> {
-  return api.post<Message>(`/admin/chats/${encodeURIComponent(chatId)}/messages`, {
+  return api.post<Message>(`/chats/${encodeURIComponent(chatId)}/messages`, {
     format: "text",
     content,
   });
@@ -69,7 +69,7 @@ export type ImageRefContent = {
 type SendFileMessageBody = FileMessageContent & { imageId?: string };
 
 export function sendFileMessage(chatId: string, content: SendFileMessageBody): Promise<Message> {
-  return api.post<Message>(`/admin/chats/${encodeURIComponent(chatId)}/messages`, {
+  return api.post<Message>(`/chats/${encodeURIComponent(chatId)}/messages`, {
     format: "file",
     content,
   });
@@ -95,7 +95,7 @@ export function readFileAsBase64(file: File): Promise<string> {
 }
 
 export function createAgentChat(agentUuid: string): Promise<{ id: string }> {
-  return api.post<{ id: string }>(`/admin/agents/${encodeURIComponent(agentUuid)}/chats`, {});
+  return api.post<{ id: string }>(`/agents/${encodeURIComponent(agentUuid)}/chats`, {});
 }
 
 export function listChatMessages(
@@ -106,5 +106,5 @@ export function listChatMessages(
   if (params?.limit) qs.set("limit", String(params.limit));
   if (params?.cursor) qs.set("cursor", params.cursor);
   const query = qs.toString();
-  return api.get<PaginatedMessages>(`/admin/chats/${encodeURIComponent(chatId)}/messages${query ? `?${query}` : ""}`);
+  return api.get<PaginatedMessages>(`/chats/${encodeURIComponent(chatId)}/messages${query ? `?${query}` : ""}`);
 }

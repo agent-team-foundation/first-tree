@@ -31,13 +31,13 @@ export function listNotifications(params?: {
   if (params?.read !== undefined) qs.set("read", String(params.read));
   if (params?.agentId) qs.set("agentId", params.agentId);
   const query = qs.toString();
-  return api.get<NotificationListResponse>(`/admin/notifications${query ? `?${query}` : ""}`);
+  return api.get<NotificationListResponse>(`/notifications${query ? `?${query}` : ""}`);
 }
 
 export function markNotificationRead(id: string): Promise<unknown> {
-  return api.post(`/admin/notifications/${id}/read`);
+  return api.post(`/notifications/${id}/read`);
 }
 
 export function markAllNotificationsRead(): Promise<unknown> {
-  return api.post("/admin/notifications/read-all");
+  return api.post("/notifications/read-all");
 }

@@ -159,7 +159,7 @@ export function OnboardingView() {
     let cancelled = false;
     void (async () => {
       try {
-        const r = await api.post<{ token: string; expiresIn: number }>("/connect-tokens", {});
+        const r = await api.post<{ token: string; expiresIn: number }>("/me/connect-tokens", {});
         if (!cancelled) {
           setConnectToken(r.token);
           setConnectTokenExpiresAt(Date.now() + r.expiresIn * 1000);
@@ -214,7 +214,7 @@ export function OnboardingView() {
         let online = false;
         try {
           const status = await api.get<{ online: boolean; clientId: string | null }>(
-            `/admin/agents/${encodeURIComponent(agentUuid)}/client-status`,
+            `/agents/${encodeURIComponent(agentUuid)}/client-status`,
           );
           if (token.cancelled) return;
           online = status.online === true;
@@ -268,7 +268,7 @@ export function OnboardingView() {
     const slug = slugify(trimmedName);
     let agentUuid: string;
     try {
-      const res = await api.post<{ uuid: string }>("/admin/agents", {
+      const res = await api.post<{ uuid: string }>("/agents", {
         type: "personal_assistant",
         displayName: trimmedName,
         ...(slug ? { name: slug } : {}),

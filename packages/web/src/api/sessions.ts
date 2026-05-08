@@ -109,7 +109,7 @@ export function listSessions(params?: {
   if (params?.state) qs.set("state", params.state);
   if (params?.agentId) qs.set("agentId", params.agentId);
   const query = qs.toString();
-  return api.get<SessionListResponse>(`/admin/sessions${query ? `?${query}` : ""}`);
+  return api.get<SessionListResponse>(`/sessions${query ? `?${query}` : ""}`);
 }
 
 export function listAgentSessions(
@@ -120,11 +120,11 @@ export function listAgentSessions(
   if (filters?.state) qs.set("state", filters.state);
   if (filters?.runtimeState) qs.set("runtimeState", filters.runtimeState);
   const query = qs.toString();
-  return api.get<SessionListItem[]>(`/admin/sessions/agents/${agentId}${query ? `?${query}` : ""}`);
+  return api.get<SessionListItem[]>(`/agents/${agentId}/sessions${query ? `?${query}` : ""}`);
 }
 
 export function getSession(agentId: string, chatId: string): Promise<SessionListItem> {
-  return api.get<SessionListItem>(`/admin/sessions/agents/${agentId}/${chatId}`);
+  return api.get<SessionListItem>(`/agents/${agentId}/sessions/${chatId}`);
 }
 
 export function listSessionEvents(
@@ -137,9 +137,7 @@ export function listSessionEvents(
   if (params?.cursor !== undefined) qs.set("cursor", String(params.cursor));
   if (params?.direction) qs.set("direction", params.direction);
   const query = qs.toString();
-  return api.get<SessionEventsResponse>(
-    `/admin/sessions/agents/${agentId}/${chatId}/events${query ? `?${query}` : ""}`,
-  );
+  return api.get<SessionEventsResponse>(`/agents/${agentId}/sessions/${chatId}/events${query ? `?${query}` : ""}`);
 }
 
 export type SessionMutationResponse = {
@@ -150,9 +148,9 @@ export type SessionMutationResponse = {
 };
 
 export function suspendSession(agentId: string, chatId: string): Promise<SessionMutationResponse> {
-  return api.post<SessionMutationResponse>(`/admin/sessions/agents/${agentId}/${chatId}/suspend`);
+  return api.post<SessionMutationResponse>(`/agents/${agentId}/sessions/${chatId}/suspend`);
 }
 
 export function terminateSession(agentId: string, chatId: string): Promise<SessionMutationResponse> {
-  return api.post<SessionMutationResponse>(`/admin/sessions/agents/${agentId}/${chatId}/terminate`);
+  return api.post<SessionMutationResponse>(`/agents/${agentId}/sessions/${chatId}/terminate`);
 }

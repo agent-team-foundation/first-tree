@@ -35,7 +35,7 @@ describe("Admin Agent Disconnect API", () => {
     let presence = await presenceService.getPresence(app.db, agent.uuid);
     expect(presence?.status).toBe("online");
 
-    const res = await req("POST", `/api/v1/admin/agents/${agent.uuid}/disconnect`);
+    const res = await req("POST", `/api/v1/agents/${agent.uuid}/disconnect`);
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body).toHaveProperty("disconnected");
@@ -55,7 +55,7 @@ describe("Admin Agent Disconnect API", () => {
       clientId: ctx.clientId,
     });
 
-    const res = await req("POST", `/api/v1/admin/agents/${agent.uuid}/disconnect`);
+    const res = await req("POST", `/api/v1/agents/${agent.uuid}/disconnect`);
     expect(res.statusCode).toBe(200);
     expect(res.json().disconnected).toBe(false);
   });
@@ -64,7 +64,7 @@ describe("Admin Agent Disconnect API", () => {
     const app = getApp();
     const { req } = await authedRequest(app);
 
-    const res = await req("POST", "/api/v1/admin/agents/nonexistent/disconnect");
+    const res = await req("POST", "/api/v1/agents/nonexistent/disconnect");
     expect(res.statusCode).toBe(404);
   });
 
@@ -72,7 +72,7 @@ describe("Admin Agent Disconnect API", () => {
     const app = getApp();
     const res = await app.inject({
       method: "POST",
-      url: "/api/v1/admin/agents/any-agent/disconnect",
+      url: "/api/v1/agents/any-agent/disconnect",
     });
     expect(res.statusCode).toBe(401);
   });

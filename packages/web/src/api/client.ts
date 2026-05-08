@@ -21,20 +21,46 @@ export function setApiSelectedOrganizationId(value: string | null): void {
 }
 
 /**
- * Inject the selected organization id as a query param on admin-scoped
- * paths so the server resolves the correct cross-org membership instead
- * of falling back to the JWT default org. Only `/admin/*` paths are
- * touched — `/auth/*`, `/me/*`, `/health` etc. are unaffected, matching
- * the server contract that admin endpoints accept an optional
- * `?organizationId=…` and gate it via `requireMemberInOrg`.
+ * Inject the selected organization id into the URL according to the
+ * three-class HTTP convention (see `docs/http-path-conventions.md`):
+ *
+ *   - Class A — `/me/*`, `/auth/*`, `/health*`, `/invitations/*` (public),
+ *     `/agent/*` — pass through unchanged.
+ *   - Class B — bare resource paths (`/agents`, `/chats`, `/notifications`,
+ *     …) — prefixed with `/orgs/:orgId/` automatically.
+ *   - Class C — single-resource paths (`/agents/:uuid/...`,
+ *     `/chats/:chatId/...`, …) — pass through unchanged; the resource
+ *     UUID is org-locating on the server side.
+ *
+ * Caller paths that already contain `/orgs/:orgId/` are honored as-is so
+ * cross-org admin tooling can target a specific org explicitly without
+ * the layer second-guessing them.
  */
 function decoratePath(path: string): string {
-  if (!selectedOrganizationId) return path;
-  if (!path.startsWith("/admin/") && path !== "/admin") return path;
-  // Caller already supplied organizationId — never overwrite.
-  if (/[?&]organizationId=/.test(path)) return path;
-  const sep = path.includes("?") ? "&" : "?";
-  return `${path}${sep}organizationId=${encodeURIComponent(selectedOrganizationId)}`;
+  // Already explicitly scoped — honor.
+  if (path.startsWith("/orgs/")) return path;
+
+  // Class A passthroughs.
+  if (
+    path.startsWith("/me") ||
+    path.startsWith("/auth") ||
+    path.startsWith("/health") ||
+    path.startsWith("/invitations/") ||
+    path.startsWith("/agent")
+  ) {
+    return path;
+  }
+
+  // Class C: single-resource paths — UUID/chatId/clientId etc. locates org on server side.
+  // Match `/<plural-resource>/<rest>` where the second segment is a non-empty token.
+  const classCMatch = /^\/(agents|chats|sessions|tasks|adapters|adapter-mappings|clients|invitations)\/[^/?#]+/.test(
+    path,
+  );
+  if (classCMatch) return path;
+
+  // Class B — needs org prefix.
+  if (!selectedOrganizationId) return path; // best-effort: server will 400 cleanly
+  return `/orgs/${encodeURIComponent(selectedOrganizationId)}${path}`;
 }
 
 type StoredTokens = {

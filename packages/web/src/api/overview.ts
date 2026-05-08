@@ -7,5 +7,5 @@ export type OverviewStats = {
 };
 
 export function getOverview(): Promise<OverviewStats> {
-  return api.get<OverviewStats>("/admin/overview");
+  return api.get<OverviewStats>("/overview");
 }

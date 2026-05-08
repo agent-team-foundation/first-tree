@@ -40,7 +40,7 @@ describe("Admin Agents API", () => {
       clientId: ctx.clientId,
     });
 
-    const getRes = await req("GET", `/api/v1/admin/agents/${agent.uuid}`);
+    const getRes = await req("GET", `/api/v1/agents/${agent.uuid}`);
     expect(getRes.statusCode).toBe(200);
     expect(getRes.json().uuid).toBe(agent.uuid);
     expect(getRes.json().inboxId).toBe(`inbox_${agent.uuid}`);
@@ -48,11 +48,11 @@ describe("Admin Agents API", () => {
 
   it("lists agents with pagination", async () => {
     const app = getApp();
-    const { req } = await authedRequest(app);
+    const { req, ctx } = await authedRequest(app);
     await createAgent(app.db, { name: "a1", type: "human" });
     await createAgent(app.db, { name: "a2", type: "human" });
 
-    const res = await req("GET", "/api/v1/admin/agents?limit=1");
+    const res = await req("GET", `/api/v1/orgs/${ctx.organizationId}/agents?limit=1`);
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.items).toHaveLength(1);
@@ -69,7 +69,7 @@ describe("Admin Agents API", () => {
       clientId: ctx.clientId,
     });
 
-    const res = await req("GET", "/api/v1/admin/agents?limit=50");
+    const res = await req("GET", `/api/v1/orgs/${ctx.organizationId}/agents?limit=50`);
     expect(res.statusCode).toBe(200);
     const body = res.json();
     const agent = body.items.find((a: { uuid: string }) => a.uuid === created.uuid);
@@ -82,7 +82,7 @@ describe("Admin Agents API", () => {
     const app = getApp();
     const { req, ctx } = await authedRequest(app);
 
-    const res = await req("POST", "/api/v1/admin/agents", {
+    const res = await req("POST", `/api/v1/orgs/${ctx.organizationId}/agents`, {
       name: "api-created",
       type: "autonomous_agent",
       displayName: "API Bot",
@@ -101,7 +101,7 @@ describe("Admin Agents API", () => {
     const { req } = await authedRequest(app);
     const agent = await createAgent(app.db, { name: "patch-target", type: "human", displayName: "Old Name" });
 
-    const res = await req("PATCH", `/api/v1/admin/agents/${agent.uuid}`, {
+    const res = await req("PATCH", `/api/v1/agents/${agent.uuid}`, {
       displayName: "New Name",
     });
     expect(res.statusCode).toBe(200);
@@ -119,12 +119,12 @@ describe("Admin Agents API", () => {
     });
 
     // Suspend
-    const suspendRes = await req("POST", `/api/v1/admin/agents/${agent.uuid}/suspend`);
+    const suspendRes = await req("POST", `/api/v1/agents/${agent.uuid}/suspend`);
     expect(suspendRes.statusCode).toBe(200);
     expect(suspendRes.json().status).toBe("suspended");
 
     // Reactivate
-    const reactivateRes = await req("POST", `/api/v1/admin/agents/${agent.uuid}/reactivate`);
+    const reactivateRes = await req("POST", `/api/v1/agents/${agent.uuid}/reactivate`);
     expect(reactivateRes.statusCode).toBe(200);
     expect(reactivateRes.json().status).toBe("active");
   });
@@ -140,18 +140,20 @@ describe("Admin Agents API", () => {
     });
 
     // Cannot delete active agent
-    const failRes = await req("DELETE", `/api/v1/admin/agents/${agent.uuid}`);
+    const failRes = await req("DELETE", `/api/v1/agents/${agent.uuid}`);
     expect(failRes.statusCode).toBe(400);
 
     // Suspend first, then delete
-    await req("POST", `/api/v1/admin/agents/${agent.uuid}/suspend`);
-    const okRes = await req("DELETE", `/api/v1/admin/agents/${agent.uuid}`);
+    await req("POST", `/api/v1/agents/${agent.uuid}/suspend`);
+    const okRes = await req("DELETE", `/api/v1/agents/${agent.uuid}`);
     expect(okRes.statusCode).toBe(204);
   });
 
   it("rejects unauthenticated requests", async () => {
     const app = getApp();
-    const res = await app.inject({ method: "GET", url: "/api/v1/admin/agents" });
+    // No-auth call — server must 401 before resolving the org. Use a
+    // throwaway org id; the response is shape-checked, not membership-checked.
+    const res = await app.inject({ method: "GET", url: "/api/v1/orgs/any/agents" });
     expect(res.statusCode).toBe(401);
   });
 
@@ -189,80 +191,34 @@ describe("Admin Agents API", () => {
       return { orgId, memberId };
     }
 
-    it("body.organizationId wins over JWT default", async () => {
+    it("creates the agent in the URL's org regardless of any body.organizationId", async () => {
       const app = getApp();
       const alice = await createTestAdmin(app);
       const orgB = await attachOrg(app, alice.userId, "admin");
 
       const res = await app.inject({
         method: "POST",
-        url: "/api/v1/admin/agents",
+        url: `/api/v1/orgs/${encodeURIComponent(orgB.orgId)}/agents`,
         headers: { authorization: `Bearer ${alice.accessToken}` },
         payload: {
-          name: `body-wins-${crypto.randomUUID().slice(0, 6)}`,
+          name: `url-wins-${crypto.randomUUID().slice(0, 6)}`,
           type: "autonomous_agent",
-          displayName: "Body Wins",
-          organizationId: orgB.orgId,
+          displayName: "URL Wins",
         },
       });
       expect(res.statusCode).toBe(201);
       expect(res.json<{ organizationId: string }>().organizationId).toBe(orgB.orgId);
     });
 
-    it("?organizationId= wins over JWT default when body omits it (decoratePath fallback)", async () => {
+    it("rejects when the URL targets an org the caller has no membership in (403)", async () => {
       const app = getApp();
       const alice = await createTestAdmin(app);
-      const orgB = await attachOrg(app, alice.userId, "admin");
-
-      const res = await app.inject({
-        method: "POST",
-        url: `/api/v1/admin/agents?organizationId=${encodeURIComponent(orgB.orgId)}`,
-        headers: { authorization: `Bearer ${alice.accessToken}` },
-        payload: {
-          name: `query-wins-${crypto.randomUUID().slice(0, 6)}`,
-          type: "autonomous_agent",
-          displayName: "Query Wins",
-          // intentionally no organizationId in body — mirrors what the web
-          // sends when the developer forgets to thread the selected org
-          // through the mutation
-        },
-      });
-      expect(res.statusCode).toBe(201);
-      expect(res.json<{ organizationId: string }>().organizationId).toBe(orgB.orgId);
-    });
-
-    it("body.organizationId wins over ?organizationId= when both are set", async () => {
-      const app = getApp();
-      const alice = await createTestAdmin(app);
-      const orgB = await attachOrg(app, alice.userId, "admin");
-      const orgC = await attachOrg(app, alice.userId, "admin");
-
-      const res = await app.inject({
-        method: "POST",
-        url: `/api/v1/admin/agents?organizationId=${encodeURIComponent(orgC.orgId)}`,
-        headers: { authorization: `Bearer ${alice.accessToken}` },
-        payload: {
-          name: `body-over-query-${crypto.randomUUID().slice(0, 6)}`,
-          type: "autonomous_agent",
-          displayName: "Body Over Query",
-          organizationId: orgB.orgId,
-        },
-      });
-      expect(res.statusCode).toBe(201);
-      // Body's orgB wins over query's orgC.
-      expect(res.json<{ organizationId: string }>().organizationId).toBe(orgB.orgId);
-    });
-
-    it("rejects ?organizationId= for an org the caller has no membership in (403 via requireMemberInOrg)", async () => {
-      const app = getApp();
-      const alice = await createTestAdmin(app);
-      // brand-new org Alice never joined
       const orgC = `org-prec-c-${crypto.randomUUID().slice(0, 8)}`;
       await app.db.insert(organizations).values({ id: orgC, name: orgC.slice(0, 30), displayName: "Outside" });
 
       const res = await app.inject({
         method: "POST",
-        url: `/api/v1/admin/agents?organizationId=${encodeURIComponent(orgC)}`,
+        url: `/api/v1/orgs/${encodeURIComponent(orgC)}/agents`,
         headers: { authorization: `Bearer ${alice.accessToken}` },
         payload: {
           name: `cross-org-no-${crypto.randomUUID().slice(0, 6)}`,
@@ -326,7 +282,7 @@ describe("Admin Agents API", () => {
 
       const res = await app.inject({
         method: "POST",
-        url: `/api/v1/admin/agents/${target.uuid}/chats`,
+        url: `/api/v1/agents/${target.uuid}/chats`,
         headers: { authorization: `Bearer ${alice.accessToken}` },
         payload: {},
       });
@@ -391,7 +347,7 @@ describe("Admin Agents API", () => {
       // layers agree the request is not authorized.
       const res = await app.inject({
         method: "POST",
-        url: `/api/v1/admin/agents/${targetUuid}/chats`,
+        url: `/api/v1/agents/${targetUuid}/chats`,
         headers: { authorization: `Bearer ${alice.accessToken}` },
         payload: {},
       });

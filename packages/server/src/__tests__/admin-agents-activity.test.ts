@@ -86,11 +86,11 @@ describe("GET /admin/agents/activity org scoping", () => {
     return { app, alice, orgB, agentA, agentB };
   }
 
-  it("returns only the JWT-default-org's agents when no organizationId is supplied", async () => {
+  it("returns only the URL org's agents", async () => {
     const { app, alice, agentA, agentB } = await setup();
     const res = await app.inject({
       method: "GET",
-      url: "/api/v1/admin/agents/activity",
+      url: `/api/v1/orgs/${encodeURIComponent(alice.organizationId)}/activity`,
       headers: { authorization: `Bearer ${alice.accessToken}` },
     });
     expect(res.statusCode).toBe(200);
@@ -99,11 +99,11 @@ describe("GET /admin/agents/activity org scoping", () => {
     expect(ids).not.toContain(agentB.uuid);
   });
 
-  it("returns the target org's agents when ?organizationId= is supplied (decoratePath fallback)", async () => {
+  it("returns the target org's agents when the URL targets it directly", async () => {
     const { app, alice, orgB, agentA, agentB } = await setup();
     const res = await app.inject({
       method: "GET",
-      url: `/api/v1/admin/agents/activity?organizationId=${encodeURIComponent(orgB.orgId)}`,
+      url: `/api/v1/orgs/${encodeURIComponent(orgB.orgId)}/activity`,
       headers: { authorization: `Bearer ${alice.accessToken}` },
     });
     expect(res.statusCode).toBe(200);
@@ -112,13 +112,13 @@ describe("GET /admin/agents/activity org scoping", () => {
     expect(ids).not.toContain(agentA.uuid);
   });
 
-  it("rejects ?organizationId= for an org the caller has no membership in (403 via requireMemberInOrg)", async () => {
+  it("rejects when the caller has no membership in the URL's org (403 via requireOrgMembership)", async () => {
     const { app, alice } = await setup();
     const outsider = `org-act-out-${crypto.randomUUID().slice(0, 8)}`;
     await app.db.insert(organizations).values({ id: outsider, name: outsider.slice(0, 30), displayName: "Outside" });
     const res = await app.inject({
       method: "GET",
-      url: `/api/v1/admin/agents/activity?organizationId=${encodeURIComponent(outsider)}`,
+      url: `/api/v1/orgs/${encodeURIComponent(outsider)}/activity`,
       headers: { authorization: `Bearer ${alice.accessToken}` },
     });
     expect(res.statusCode).toBe(403);
