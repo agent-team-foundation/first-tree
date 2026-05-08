@@ -16,7 +16,7 @@ import {
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog.js";
 import { Input } from "../components/ui/input.js";
 import { Label } from "../components/ui/label.js";
-import { formatDate } from "../lib/utils.js";
+import { formatDay } from "../lib/utils.js";
 
 const roleValues = Object.values(MEMBER_ROLES);
 
@@ -108,7 +108,7 @@ export function MembersPage() {
                       {m.role === "admin" ? "Admin" : "Member"}
                     </DenseTableCell>
                     <DenseTableCell className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-                      {formatDate(m.createdAt)}
+                      {formatDay(m.createdAt)}
                     </DenseTableCell>
                     <DenseTableCell aria-hidden />
                     {isAdmin && (
