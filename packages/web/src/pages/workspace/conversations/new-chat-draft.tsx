@@ -445,11 +445,6 @@ function ParticipantChips({
                 }}
               >
                 <span className="font-medium">{c.displayName ?? (c.name ? `@${c.name}` : "—")}</span>
-                {c.name && c.displayName && (
-                  <span className="mono text-caption" style={{ color: "var(--fg-3)" }}>
-                    @{c.name}
-                  </span>
-                )}
               </button>
             ))}
           </div>
