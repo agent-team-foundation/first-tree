@@ -1,7 +1,43 @@
 import { eq } from "drizzle-orm";
+import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
 import { members } from "../db/schema/members.js";
-import { createTestAdmin, useTestApp } from "./helpers.js";
+import { organizations } from "../db/schema/organizations.js";
+import { createAgent } from "../services/agent.js";
+import { uuidv7 } from "../uuid.js";
+import { createTestAdmin, seedClient, useTestApp } from "./helpers.js";
+
+/**
+ * Attach `userId` to a freshly-created org with the requested role, mirroring
+ * the helper that lives in admin-agents.test.ts. Each call returns a brand-
+ * new org, the inserted member id, and the human agent provisioned for the
+ * user in that org (so `scope.humanAgentId` is satisfied for routes that
+ * resolve membership via `requireOrgMembership`).
+ */
+async function attachOrg(
+  app: FastifyInstance,
+  userId: string,
+  role: "admin" | "member",
+): Promise<{ orgId: string; memberId: string; humanAgentId: string }> {
+  const orgId = `org-mm-${crypto.randomUUID().slice(0, 8)}`;
+  const memberId = uuidv7();
+  let humanAgentId = "";
+  await app.db.transaction(async (tx) => {
+    await tx
+      .insert(organizations)
+      .values({ id: orgId, name: `mm-${crypto.randomUUID().slice(0, 6)}`, displayName: "Multi-Org Side" });
+    const human = await createAgent(tx as unknown as typeof app.db, {
+      name: `mm-h-${crypto.randomUUID().slice(0, 6)}`,
+      type: "human",
+      displayName: "Multi-Org Human",
+      managerId: memberId,
+      organizationId: orgId,
+    });
+    humanAgentId = human.uuid;
+    await tx.insert(members).values({ id: memberId, userId, organizationId: orgId, agentId: human.uuid, role });
+  });
+  return { orgId, memberId, humanAgentId };
+}
 
 describe("Multi-org self-service", () => {
   const getApp = useTestApp();
@@ -125,5 +161,46 @@ describe("/me wizard step inference", () => {
       headers: { authorization: `Bearer ${access}` },
     });
     expect(me.json<{ wizard: { step: string } }>().wizard.step).toBe("connect");
+  });
+
+  /**
+   * Regression for #239: the wizard inference used to key off the JWT's
+   * default `memberId`, so a user whose only autonomous agent lived in a
+   * non-default org would still see `step=create_agent` even though the
+   * onboarding was actually complete. Post JWT-scope-strip, both `clients`
+   * and `agents` lookups are user-scoped (clients.user_id, members.user_id)
+   * — the regression is structurally impossible because `request.user` no
+   * longer carries `memberId`. This test pins that contract at the HTTP
+   * boundary so a future "optimization" that re-introduces a member-keyed
+   * shortcut fails CI.
+   */
+  it("returns step=completed when the only autonomous agent lives in a non-default org (regression #239)", async () => {
+    const app = getApp();
+    // createTestAdmin gives Alice a default org with only her human-self
+    // agent + admin membership — wizard should currently report `connect`
+    // (no client) for that user.
+    const alice = await createTestAdmin(app);
+
+    // Spin up a side org Alice belongs to as a member, hang a client +
+    // autonomous agent off her membership in that org. Crucially the agent
+    // is NOT in the default org returned by createTestAdmin.
+    const orgB = await attachOrg(app, alice.userId, "member");
+    const clientId = await seedClient(app, alice.userId, orgB.orgId);
+    await createAgent(app.db, {
+      name: `regression-239-${crypto.randomUUID().slice(0, 6)}`,
+      type: "autonomous_agent",
+      displayName: "Regression #239",
+      managerId: orgB.memberId,
+      organizationId: orgB.orgId,
+      clientId,
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/me",
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json<{ wizard: { step: string } }>().wizard.step).toBe("completed");
   });
 });
