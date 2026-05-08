@@ -1,4 +1,4 @@
-import { api } from "./client.js";
+import { api, withOrg } from "./client.js";
 
 export type Notification = {
   id: string;
@@ -31,13 +31,13 @@ export function listNotifications(params?: {
   if (params?.read !== undefined) qs.set("read", String(params.read));
   if (params?.agentId) qs.set("agentId", params.agentId);
   const query = qs.toString();
-  return api.get<NotificationListResponse>(`/notifications${query ? `?${query}` : ""}`);
+  return api.get<NotificationListResponse>(withOrg(`/notifications${query ? `?${query}` : ""}`));
 }
 
 export function markNotificationRead(id: string): Promise<unknown> {
-  return api.post(`/notifications/${id}/read`);
+  return api.post(withOrg(`/notifications/${id}/read`));
 }
 
 export function markAllNotificationsRead(): Promise<unknown> {
-  return api.post("/notifications/read-all");
+  return api.post(withOrg("/notifications/read-all"));
 }

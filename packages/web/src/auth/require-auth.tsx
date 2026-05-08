@@ -49,12 +49,13 @@ export function RequireAuth() {
     // who logs in lands back on the page they originally requested.
     return <Navigate to="/login" replace state={{ from: location }} />;
   }
-  // Authenticated but `/me` hasn't resolved yet — `decoratePath` would emit
-  // bare Class B paths (`/agents`, `/members`, …) and 404, and React Query
-  // wouldn't refetch when orgId later flips. Render the same neutral fallback
-  // we use for the lazy LandingPage — keeps the visual continuity and gives
-  // fetchMe one tick to populate `setApiSelectedOrganizationId` before the
-  // dashboard mounts and fires its first wave of requests.
+  // Authenticated but `/me` hasn't resolved yet — any org-scoped query that
+  // mounted now would call `withOrg` before `setApiSelectedOrganizationId`
+  // had a value, throw, and React Query wouldn't refetch when the org id
+  // later flips. Render the same neutral fallback we use for the lazy
+  // LandingPage — keeps visual continuity and gives `fetchMe` one tick to
+  // populate the org id before the dashboard mounts and fires its first wave
+  // of requests.
   if (!meLoaded) return <LandingFallback />;
   return <Outlet />;
 }

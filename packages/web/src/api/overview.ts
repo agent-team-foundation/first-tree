@@ -1,4 +1,4 @@
-import { api } from "./client.js";
+import { api, withOrg } from "./client.js";
 
 export type OverviewStats = {
   agents: number;
@@ -7,5 +7,5 @@ export type OverviewStats = {
 };
 
 export function getOverview(): Promise<OverviewStats> {
-  return api.get<OverviewStats>("/overview");
+  return api.get<OverviewStats>(withOrg("/overview"));
 }

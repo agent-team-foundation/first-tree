@@ -3,10 +3,10 @@ import type {
   CreateAdapterConfig,
   UpdateAdapterConfig,
 } from "@agent-team-foundation/first-tree-hub-shared";
-import { api } from "./client.js";
+import { api, withOrg } from "./client.js";
 
 export function listAdapters(): Promise<AdapterConfig[]> {
-  return api.get<AdapterConfig[]>("/adapters");
+  return api.get<AdapterConfig[]>(withOrg("/adapters"));
 }
 
 export function getAdapter(id: number): Promise<AdapterConfig> {
@@ -14,7 +14,7 @@ export function getAdapter(id: number): Promise<AdapterConfig> {
 }
 
 export function createAdapter(data: CreateAdapterConfig): Promise<AdapterConfig> {
-  return api.post<AdapterConfig>("/adapters", data);
+  return api.post<AdapterConfig>(withOrg("/adapters"), data);
 }
 
 export function updateAdapter(id: number, data: UpdateAdapterConfig): Promise<AdapterConfig> {

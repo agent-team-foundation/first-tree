@@ -1,5 +1,5 @@
 import type { SessionState } from "@agent-team-foundation/first-tree-hub-shared";
-import { api } from "./client.js";
+import { api, withOrg } from "./client.js";
 
 export type SessionListItem = {
   agentId: string;
@@ -109,7 +109,7 @@ export function listSessions(params?: {
   if (params?.state) qs.set("state", params.state);
   if (params?.agentId) qs.set("agentId", params.agentId);
   const query = qs.toString();
-  return api.get<SessionListResponse>(`/sessions${query ? `?${query}` : ""}`);
+  return api.get<SessionListResponse>(withOrg(`/sessions${query ? `?${query}` : ""}`));
 }
 
 export function listAgentSessions(

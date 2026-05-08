@@ -1,5 +1,5 @@
 import type { ClientCapabilities } from "@agent-team-foundation/first-tree-hub-shared";
-import { api } from "./client.js";
+import { api, withOrg } from "./client.js";
 
 export type AgentType = "human" | "personal_assistant" | "autonomous_agent";
 
@@ -46,11 +46,11 @@ export function retireClient(clientId: string): Promise<void> {
 }
 
 export function getActivityOverview(): Promise<ActivityOverview> {
-  return api.get<ActivityOverview>("/activity");
+  return api.get<ActivityOverview>(withOrg("/activity"));
 }
 
 export function listClients(): Promise<HubClient[]> {
-  return api.get<HubClient[]>("/clients");
+  return api.get<HubClient[]>(withOrg("/clients"));
 }
 
 export function getClient(clientId: string): Promise<HubClient> {
@@ -76,7 +76,9 @@ export function disconnectClient(clientId: string): Promise<{ disconnected: bool
 }
 
 export function resetAgentActivity(agentId: string): Promise<{ reset: boolean }> {
-  return api.post(`/activity/${agentId}/reset-activity`);
+  // The agent uuid in the path is enough for the server to resolve the
+  // owning org — no `withOrg` needed.
+  return api.post(`/agents/${encodeURIComponent(agentId)}/reset-activity`);
 }
 
 export type ConnectTokenResponse = {

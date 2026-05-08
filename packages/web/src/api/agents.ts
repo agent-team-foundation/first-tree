@@ -1,5 +1,5 @@
 import type { Agent, CreateAgent, RebindAgent, UpdateAgent } from "@agent-team-foundation/first-tree-hub-shared";
-import { api } from "./client.js";
+import { api, withOrg } from "./client.js";
 
 type PaginatedAgents = {
   items: Agent[];
@@ -12,7 +12,7 @@ export function listAgents(params?: { limit?: number; cursor?: string; type?: st
   if (params?.cursor) qs.set("cursor", params.cursor);
   if (params?.type) qs.set("type", params.type);
   const query = qs.toString();
-  return api.get<PaginatedAgents>(`/agents${query ? `?${query}` : ""}`);
+  return api.get<PaginatedAgents>(withOrg(`/agents${query ? `?${query}` : ""}`));
 }
 
 /**
@@ -47,7 +47,7 @@ export function getAgent(uuid: string): Promise<Agent> {
 }
 
 export function createAgent(data: CreateAgent): Promise<Agent> {
-  return api.post<Agent>("/agents", data);
+  return api.post<Agent>(withOrg("/agents"), data);
 }
 
 /**
@@ -62,7 +62,7 @@ export type AgentNameAvailability =
   | { available: false; reason: "invalid" | "reserved" | "taken" };
 
 export function checkAgentNameAvailability(name: string): Promise<AgentNameAvailability> {
-  return api.get<AgentNameAvailability>(`/agents/names/${encodeURIComponent(name)}/availability`);
+  return api.get<AgentNameAvailability>(withOrg(`/agents/names/${encodeURIComponent(name)}/availability`));
 }
 
 export function updateAgent(uuid: string, data: UpdateAgent): Promise<Agent> {

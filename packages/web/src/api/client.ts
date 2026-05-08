@@ -2,17 +2,13 @@ const BASE_URL = "/api/v1";
 const TOKEN_KEY = "first-tree-hub:tokens";
 
 /**
- * Currently selected organization id, mirrored from
- * `localStorage.selectedOrganizationId` via `setApiSelectedOrganizationId`.
- * Persisted in module scope so the request layer can transparently
- * inject `?organizationId=…` into admin-scoped GET requests without every
- * caller having to thread the value through (decouple-client-from-identity
- * §C / fix for codex P1 #2).
+ * Currently selected organization id, set by the auth-context after `/me`
+ * resolves. Lives in module scope (not React context) so non-React helpers
+ * — e.g. `lib/use-agent-name-map`, the admin WS hook — can read it without
+ * sitting inside a provider tree.
  *
- * Why module scope and not the auth-context: the api wrapper here is
- * import-only — making it depend on a React context would require every
- * caller to live inside the provider tree, which non-component helpers
- * (e.g. `lib/use-agent-name-map`) cannot guarantee.
+ * Read only by `withOrg`. Paths that don't go through `withOrg` are sent
+ * verbatim and don't depend on this value.
  */
 let selectedOrganizationId: string | null = null;
 
@@ -21,46 +17,33 @@ export function setApiSelectedOrganizationId(value: string | null): void {
 }
 
 /**
- * Inject the selected organization id into the URL according to the
- * three-class HTTP convention (see `docs/http-path-conventions.md`):
+ * Prefix an org-scoped path with `/orgs/<currentOrgId>/`. Use this on every
+ * call that targets a resource living inside the user's currently-viewed
+ * organization. Paths that aren't org-scoped (`/me/...`, `/auth/...`,
+ * `/agents/<uuid>/...`, `/chats/<id>/...`) are written verbatim at the call
+ * site and don't go through this helper.
  *
- *   - Class A — `/me/*`, `/auth/*`, `/health*`, `/invitations/*` (public),
- *     `/agent/*` — pass through unchanged.
- *   - Class B — bare resource paths (`/agents`, `/chats`, `/notifications`,
- *     …) — prefixed with `/orgs/:orgId/` automatically.
- *   - Class C — single-resource paths (`/agents/:uuid/...`,
- *     `/chats/:chatId/...`, …) — pass through unchanged; the resource
- *     UUID is org-locating on the server side.
- *
- * Caller paths that already contain `/orgs/:orgId/` are honored as-is so
- * cross-org admin tooling can target a specific org explicitly without
- * the layer second-guessing them.
+ * Throws if no org is selected. By the time any React Query query fires,
+ * the `meLoaded` gate in `RequireAuth` has already let `/me` populate the
+ * org id; a throw here therefore signals a real bug (e.g. someone calling
+ * `withOrg` outside the auth tree) rather than a transient race. Failing
+ * fast is much easier to trace than a silent 404.
  */
-function decoratePath(path: string): string {
-  // Already explicitly scoped — honor.
-  if (path.startsWith("/orgs/")) return path;
-
-  // Class A passthroughs.
-  if (
-    path.startsWith("/me") ||
-    path.startsWith("/auth") ||
-    path.startsWith("/health") ||
-    path.startsWith("/invitations/") ||
-    path.startsWith("/agent")
-  ) {
-    return path;
+export function withOrg(path: string): string {
+  if (!selectedOrganizationId) {
+    throw new Error(`withOrg("${path}") called before an organization is selected`);
   }
-
-  // Class C: single-resource paths — UUID/chatId/clientId etc. locates org on server side.
-  // Match `/<plural-resource>/<rest>` where the second segment is a non-empty token.
-  const classCMatch = /^\/(agents|chats|sessions|tasks|adapters|adapter-mappings|clients|invitations)\/[^/?#]+/.test(
-    path,
-  );
-  if (classCMatch) return path;
-
-  // Class B — needs org prefix.
-  if (!selectedOrganizationId) return path; // best-effort: server will 400 cleanly
   return `/orgs/${encodeURIComponent(selectedOrganizationId)}${path}`;
+}
+
+/**
+ * Prefix a path with an explicit `/orgs/<orgId>/` — for tools that target
+ * an organization other than the user's currently-viewed one (invite link
+ * panel, cross-org admin views). Pure string formatter; doesn't consult
+ * the module-scope `selectedOrganizationId`.
+ */
+export function withOrgAt(orgId: string, path: string): string {
+  return `/orgs/${encodeURIComponent(orgId)}${path}`;
 }
 
 type StoredTokens = {
@@ -162,12 +145,16 @@ async function tryRefresh(refreshToken: string): Promise<StoredTokens | null> {
 async function request<T>(path: string, options?: { method?: string; body?: unknown }): Promise<T> {
   const { method = "GET", body } = options ?? {};
 
-  const decoratedPath = decoratePath(path);
+  // No path rewriting here — callers prefix org-scoped paths with `withOrg` /
+  // `withOrgAt` before passing in; everything else (`/me/...`, `/auth/...`,
+  // `/agents/<uuid>/...`, etc.) is sent verbatim. Anonymous endpoints (invite
+  // preview, bootstrap probe) bypass this wrapper entirely and call
+  // `fetch()` directly without an Authorization header.
   const doFetch = (token?: string) => {
     const headers: Record<string, string> = {};
     if (token) headers.Authorization = `Bearer ${token}`;
     if (body !== undefined) headers["Content-Type"] = "application/json";
-    return fetch(`${BASE_URL}${decoratedPath}`, {
+    return fetch(`${BASE_URL}${path}`, {
       method,
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,

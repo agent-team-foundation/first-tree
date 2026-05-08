@@ -30,11 +30,9 @@ type AuthContextValue = {
   /**
    * `true` once `/me` has resolved at least once (success or failure) since
    * the last login. Route guards block rendering authenticated children
-   * until this flips, otherwise pages mount + fire React-Query requests
-   * before `setApiSelectedOrganizationId` is called, and Class B paths
-   * (`/agents`, `/members`, …) go bare → 404. See
-   * docs/http-path-conventions.md "Class B" for why every Class B request
-   * needs the org prefix injected by `decoratePath`.
+   * until this flips — otherwise pages mount and fire React-Query requests
+   * before `setApiSelectedOrganizationId` is called, and any org-scoped
+   * call that goes through `withOrg` throws.
    */
   meLoaded: boolean;
   user: MeUser | null;

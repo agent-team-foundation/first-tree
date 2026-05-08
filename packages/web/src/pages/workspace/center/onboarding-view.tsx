@@ -4,7 +4,7 @@ import { type ReactNode, useCallback, useEffect, useRef, useState } from "react"
 import { useNavigate } from "react-router";
 import { getClientCapabilities, type HubClient, listClients } from "../../../api/activity.js";
 import { createAgentChat } from "../../../api/chats.js";
-import { api } from "../../../api/client.js";
+import { api, withOrg } from "../../../api/client.js";
 import { useAuth } from "../../../auth/auth-context.js";
 import { Button } from "../../../components/ui/button.js";
 import { slugify } from "../../../utils/agent-naming.js";
@@ -268,7 +268,7 @@ export function OnboardingView() {
     const slug = slugify(trimmedName);
     let agentUuid: string;
     try {
-      const res = await api.post<{ uuid: string }>("/agents", {
+      const res = await api.post<{ uuid: string }>(withOrg("/agents"), {
         type: "personal_assistant",
         displayName: trimmedName,
         ...(slug ? { name: slug } : {}),

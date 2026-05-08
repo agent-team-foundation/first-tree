@@ -6,17 +6,15 @@ import type {
   MeChatLeaveResponse,
   MeChatReadResponse,
 } from "@agent-team-foundation/first-tree-hub-shared";
-import { api } from "./client.js";
+import { api, withOrg } from "./client.js";
 
 /**
  * Typed client for the chat-first workspace chat APIs.
  *
- * Class B (`/orgs/:orgId/chats`) — list / create. The api-client
- * `decoratePath` automatically prefixes the selected org id, so call sites
- * stay readable as `/chats`.
- *
- * Class C (`/chats/:chatId/...`) — per-chat operations. The chat's UUID
- * is org-locating on the server side; no org prefix needed.
+ * Org-scoped list / create endpoints (`/chats`, `/chats?...`) wrap with
+ * `withOrg` so the path resolves against the currently-selected org.
+ * Per-chat operations (`/chats/:chatId/...`) are sent verbatim — the
+ * chat's UUID is enough for the server to resolve the owning org.
  */
 
 export type ListMeChatsParams = Partial<Pick<ListMeChatsQuery, "cursor" | "limit" | "filter">>;
@@ -27,11 +25,11 @@ export function listMeChats(params?: ListMeChatsParams): Promise<ListMeChatsResp
   if (params?.cursor) qs.set("cursor", params.cursor);
   if (params?.filter) qs.set("filter", params.filter);
   const query = qs.toString();
-  return api.get<ListMeChatsResponse>(`/chats${query ? `?${query}` : ""}`);
+  return api.get<ListMeChatsResponse>(withOrg(`/chats${query ? `?${query}` : ""}`));
 }
 
 export function createMeChat(body: CreateMeChat): Promise<{ chatId: string }> {
-  return api.post<{ chatId: string }>("/chats", body);
+  return api.post<{ chatId: string }>(withOrg("/chats"), body);
 }
 
 export function markMeChatRead(chatId: string): Promise<MeChatReadResponse> {
