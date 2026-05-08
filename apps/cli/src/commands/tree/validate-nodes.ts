@@ -6,6 +6,9 @@ const OWNERS_RE = /^owners:\s*\[([^\]]*)\]/mu;
 const SOFT_LINKS_INLINE_RE = /^soft_links:\s*\[([^\]]*)\]/mu;
 const SOFT_LINKS_BLOCK_RE = /^soft_links:\s*\n((?:\s+-\s+.+\n?)+)/mu;
 const TITLE_RE = /^title:\s*['"]?(.+?)['"]?\s*$/mu;
+// Personal path = a member's own subtree under `members/<me>/`.
+// `members/NODE.md` itself is the members domain root and stays non-personal.
+const PERSONAL_PATH_RE = /^members\/[^/]+\//u;
 
 const SKIP_DIRS = new Set(["node_modules", "__pycache__"]);
 const SKIP_FILES = new Set(["AGENTS.md", "CLAUDE.md"]);
@@ -134,24 +137,35 @@ export function runValidateNodes(treeRoot: string): {
   const markdownFiles = collectMarkdownFiles(treeRoot);
 
   for (const path of markdownFiles) {
+    const relPath = rel(path, treeRoot);
+    const personal = PERSONAL_PATH_RE.test(relPath);
     const frontmatter = parseFrontmatter(path);
 
     if (frontmatter === null) {
-      errors.push(`${rel(path, treeRoot)}: missing frontmatter`);
+      // Personal files (`members/<me>/**`) may be plain markdown — the owner is
+      // inferred from the path. Non-personal files still must declare frontmatter.
+      if (!personal) {
+        errors.push(`${relPath}: missing frontmatter`);
+      }
       continue;
     }
 
-    if (!TITLE_RE.test(frontmatter)) {
-      errors.push(`${rel(path, treeRoot)}: missing 'title' field in frontmatter`);
-    }
+    // Title and owners are required only outside personal paths. Inside
+    // `members/<me>/**` the owner is the path-derived member; an explicit
+    // `owners` field is optional and not cross-checked here.
+    if (!personal) {
+      if (!TITLE_RE.test(frontmatter)) {
+        errors.push(`${relPath}: missing 'title' field in frontmatter`);
+      }
 
-    if (!OWNERS_RE.test(frontmatter)) {
-      errors.push(`${rel(path, treeRoot)}: missing 'owners' field in frontmatter`);
+      if (!OWNERS_RE.test(frontmatter)) {
+        errors.push(`${relPath}: missing 'owners' field in frontmatter`);
+      }
     }
 
     for (const softLink of parseSoftLinks(frontmatter)) {
       if (!resolveSoftLink(treeRoot, softLink)) {
-        errors.push(`${rel(path, treeRoot)}: broken soft_links target '${softLink}'`);
+        errors.push(`${relPath}: broken soft_links target '${softLink}'`);
       }
     }
   }
