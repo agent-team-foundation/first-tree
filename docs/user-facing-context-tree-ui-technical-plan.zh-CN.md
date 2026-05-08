@@ -150,13 +150,16 @@ ContextTreeStatus
 - 基于 `since` commit 计算 changes。
 - 生成 updates,把 file diff 转译为 agent decision context update。
 - 读取最后一次触碰该文件的 commit author 和 commit subject,作为 `changedBy` 与可选 `summary`。
+- 校验本地 checkout branch 与 server config 是否一致,避免错标 branch。
+- 对 git command 设置 timeout / buffer 上限,并对 diff entry 和 commit window 做上限保护。
+- 用短 TTL in-memory cache 缓解同一 `repo + branch + headCommit + since` 的重复请求。
 - 返回 active / unavailable 状态。
 
-当前实现不做 remote clone、credential refresh、server cache 或 stale snapshot fallback。如果 `contextTree.repo` 是 remote URL,需要通过 `FIRST_TREE_HUB_CONTEXT_TREE_PATH` 指向 server 可读的本地 checkout。后续生产化可以把 refresh / cache / stale fallback 补到这一层,但不改变 Web 的只读 read model。
+当前实现不做 remote clone、credential refresh 或 stale snapshot fallback。如果 `contextTree.repo` 是 remote URL,需要通过 `FIRST_TREE_HUB_CONTEXT_TREE_PATH` 指向 server 可读的本地 checkout。后续生产化可以把 refresh / persistent cache / stale fallback 补到这一层,但不改变 Web 的只读 read model。
 
 ### 性能和复用边界
 
-当前 snapshot projection 是 request-time 计算:扫描本地 markdown tree、解析 frontmatter、读取 git diff,再生成 nodes / edges / changes / updates。以当前 Context Tree 规模,这是可接受的,但它不是长期最优边界。
+当前 snapshot projection 是 request-time 计算:扫描本地 markdown tree、解析 frontmatter、读取 git diff,再生成 nodes / edges / changes / updates。实现中有短 TTL memory cache、git timeout、diff entry cap 和 commit window cap,以避免页面刷新导致重复重算;但它仍不是长期最优边界。
 
 生产化演进方向:
 
@@ -179,6 +182,10 @@ git diff --name-status <since>..HEAD -- '*.md'
 - `M` -> edited
 - `D` -> removed ghost node
 - rename 当前先视为 removed + added
+
+`since` 只接受 commit SHA,并且必须是当前 `HEAD` 的 ancestor。如果 `since` 不存在、不可达、跨 repo / branch,或距离 `HEAD` 超过当前窗口上限,server 会回退到默认 recent window,并返回 warning status,避免前端误显示“没有变化”。
+
+没有 `since` 时,server 默认展示最近 commit window。小 repo 如果不足该窗口,用 empty tree 作为 comparison base,确保首次部署也能看到当前 Context Tree 内容。
 
 左侧 Context Updates 不展示 diff 内容,避免把 markdown 半句误当成可理解摘要。`summary` 当前只来自最后一次触碰该文件的 commit subject:
 
@@ -257,10 +264,10 @@ agent-hub/web-console.md · 9e664e7
 
 ### Last seen
 
-当前使用浏览器本地存储:
+当前使用浏览器本地存储。key 按 server origin、repo、branch scoped,避免切换 Hub server / Context Tree repo / branch 时把不相关 commit 当成 `since`:
 
 ```text
-first-tree-hub:context:lastSeenCommit:<repo>:<branch>
+first-tree-hub:context:lastSeenCommit:<origin>:<repo>:<branch>
 ```
 
 `Mark all seen` 把当前 `headCommit` 写入 localStorage,并刷新 change state。

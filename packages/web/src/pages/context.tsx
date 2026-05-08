@@ -17,7 +17,8 @@ import { Panel, PanelBody, PanelHeader, PanelTitle } from "../components/ui/pane
 const LAST_SEEN_LAST_KEY = "first-tree-hub:context:lastSeenCommit";
 
 export function ContextPage() {
-  const [since, setSince] = useState(() => readLastSeenFallback());
+  const [since, setSince] = useState<string | null>(null);
+  const [lastSeenScope, setLastSeenScope] = useState<string | null>(null);
   const [selectedUpdateId, setSelectedUpdateId] = useState<string | null>(null);
   const [selectedOverviewNodeId, setSelectedOverviewNodeId] = useState<string | null>(null);
 
@@ -45,9 +46,18 @@ export function ContextPage() {
     setSelectedUpdateId(snapshot.updates[0]?.id ?? null);
   }, [selectedUpdateId, snapshot]);
 
+  useEffect(() => {
+    if (!snapshot) return;
+    const scope = lastSeenKey(snapshot);
+    if (lastSeenScope === scope) return;
+    setLastSeenScope(scope);
+    setSince(readLastSeen(snapshot));
+  }, [lastSeenScope, snapshot]);
+
   function markAllSeen() {
     if (!snapshot?.headCommit) return;
     writeLastSeen(snapshot, snapshot.headCommit);
+    setLastSeenScope(lastSeenKey(snapshot));
     setSince(snapshot.headCommit);
   }
 
@@ -662,15 +672,19 @@ function changedCounts(nodes: ContextTreeNode[]): Map<string, number> {
   return counts;
 }
 
-function readLastSeenFallback(): string | null {
-  return localStorage.getItem(LAST_SEEN_LAST_KEY);
+function readLastSeen(snapshot: ContextTreeSnapshot): string | null {
+  return localStorage.getItem(lastSeenKey(snapshot));
 }
 
 function writeLastSeen(snapshot: ContextTreeSnapshot, commit: string): void {
-  localStorage.setItem(LAST_SEEN_LAST_KEY, commit);
+  localStorage.setItem(lastSeenKey(snapshot), commit);
+}
+
+function lastSeenKey(snapshot: ContextTreeSnapshot): string {
+  const origin = window.location.origin;
   const repo = snapshot.repo ?? "unknown";
   const branch = snapshot.branch ?? "unknown";
-  localStorage.setItem(`first-tree-hub:context:lastSeenCommit:${repo}:${branch}`, commit);
+  return `${LAST_SEEN_LAST_KEY}:${origin}:${repo}:${branch}`;
 }
 
 function severityColor(severity: ContextTreeSnapshot["contextStatus"]["severity"]): string {

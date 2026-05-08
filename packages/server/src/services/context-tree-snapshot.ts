@@ -19,6 +19,14 @@ import type { Config } from "../config.js";
 const execFileAsync = promisify(execFile);
 const ROOT_NODE_ID = "root";
 const NODE_FILE = "NODE.md";
+const EMPTY_TREE_COMMIT = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+const DEFAULT_CHANGE_COMMIT_WINDOW = 20;
+const MAX_CHANGE_COMMIT_WINDOW = 50;
+const MAX_DIFF_ENTRIES = 200;
+const SNAPSHOT_CACHE_TTL_MS = 30_000;
+const GIT_TIMEOUT_MS = 5_000;
+const GIT_MAX_BUFFER = 10 * 1024 * 1024;
+const COMMIT_SHA_RE = /^[0-9a-f]{7,40}$/i;
 
 type ParsedMarkdown = {
   content: string;
@@ -44,6 +52,23 @@ type DiffEntry = {
   summary: string | null;
 };
 
+type DiffReadResult = {
+  entries: DiffEntry[];
+  truncated: boolean;
+};
+
+type ComparisonBase = {
+  commit: string | null;
+  warning: string | null;
+};
+
+type SnapshotCacheEntry = {
+  expiresAt: number;
+  snapshot: ContextTreeSnapshot;
+};
+
+const snapshotCache = new Map<string, SnapshotCacheEntry>();
+
 export async function getContextTreeSnapshot(config: Config, since: string | undefined): Promise<ContextTreeSnapshot> {
   const repo = config.contextTree?.repo ?? null;
   const branch = config.contextTree?.branch ?? null;
@@ -56,26 +81,50 @@ export async function getContextTreeSnapshot(config: Config, since: string | und
   const now = new Date().toISOString();
   try {
     const headCommit = await gitOutput(resolved.root, ["rev-parse", "HEAD"]);
+    const actualBranch = await safeGitOutput(resolved.root, ["rev-parse", "--abbrev-ref", "HEAD"]);
+    if (branch && actualBranch && actualBranch !== branch) {
+      return unavailableSnapshot(
+        repo,
+        actualBranch,
+        `Context Tree checkout is on branch "${actualBranch}", but server config expects "${branch}".`,
+      );
+    }
+
+    const comparisonBase = await resolveComparisonBase(resolved.root, since);
+    const cacheKey = snapshotCacheKey(
+      resolved.root,
+      actualBranch ?? branch,
+      headCommit,
+      comparisonBase.commit,
+      comparisonBase.warning,
+    );
+    const cached = snapshotCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return { ...cached.snapshot, syncedAt: now };
+    }
+
     const files = await readMarkdownFiles(resolved.root);
     const tree = buildTree(files);
-    const comparisonBaseCommit = since ?? (await safeGitOutput(resolved.root, ["rev-parse", "HEAD~20"]));
-    const diffEntries = comparisonBaseCommit ? await readDiffEntries(resolved.root, comparisonBaseCommit) : [];
-    const changes = buildChanges(diffEntries, tree, headCommit);
+    const diffResult = comparisonBase.commit
+      ? await readDiffEntries(resolved.root, comparisonBase.commit)
+      : { entries: [], truncated: false };
+    const changes = buildChanges(diffResult.entries, tree, headCommit);
     const nodes = applyChangesToNodes(tree.nodes, changes);
     const nodesWithGhosts = addRemovedGhostNodes(nodes, changes);
     const summary = summarizeChanges(changes);
     const updates = buildUpdates(changes, nodesWithGhosts);
+    const statusWarning = contextStatusWarning(comparisonBase.warning, diffResult.truncated);
 
-    return {
+    const snapshot: ContextTreeSnapshot = {
       repo,
-      branch: branch ?? (await safeGitOutput(resolved.root, ["rev-parse", "--abbrev-ref", "HEAD"])),
+      branch: actualBranch ?? branch,
       headCommit,
       syncedAt: now,
       snapshotStatus: "active",
       contextStatus: {
-        label: "Team context is current",
-        detail: "Agents have a synced team context snapshot available.",
-        severity: "ok",
+        label: statusWarning ? "Team context needs attention" : "Team context is current",
+        detail: statusWarning ?? "Agents have a synced team context snapshot available.",
+        severity: statusWarning ? "warning" : "ok",
       },
       summary,
       updates,
@@ -83,10 +132,31 @@ export async function getContextTreeSnapshot(config: Config, since: string | und
       edges: tree.edges,
       changes,
     };
+    snapshotCache.set(cacheKey, { expiresAt: Date.now() + SNAPSHOT_CACHE_TTL_MS, snapshot });
+    return snapshot;
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to read Context Tree snapshot";
     return unavailableSnapshot(repo, branch, message);
   }
+}
+
+function snapshotCacheKey(
+  root: string,
+  branch: string | null | undefined,
+  headCommit: string,
+  comparisonBase: string | null,
+  warning: string | null,
+): string {
+  return [root, branch ?? "unknown", headCommit, comparisonBase ?? "none", warning ?? "ok"].join(":");
+}
+
+function contextStatusWarning(baseWarning: string | null, truncated: boolean): string | null {
+  if (baseWarning && truncated) {
+    return `${baseWarning} Showing the first ${MAX_DIFF_ENTRIES} changed files.`;
+  }
+  if (baseWarning) return baseWarning;
+  if (truncated) return `Showing the first ${MAX_DIFF_ENTRIES} changed files.`;
+  return null;
 }
 
 function resolveContextTreeRoot(repo: string | null): { root: string | null; reason: string } {
@@ -134,7 +204,11 @@ function unavailableSnapshot(repo: string | null, branch: string | null, detail:
 }
 
 async function gitOutput(cwd: string, args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync("git", args, { cwd });
+  const { stdout } = await execFileAsync("git", args, {
+    cwd,
+    timeout: GIT_TIMEOUT_MS,
+    maxBuffer: GIT_MAX_BUFFER,
+  });
   return stdout.trim();
 }
 
@@ -143,6 +217,19 @@ async function safeGitOutput(cwd: string, args: string[]): Promise<string | null
     return await gitOutput(cwd, args);
   } catch {
     return null;
+  }
+}
+
+async function safeGitSucceeds(cwd: string, args: string[]): Promise<boolean> {
+  try {
+    await execFileAsync("git", args, {
+      cwd,
+      timeout: GIT_TIMEOUT_MS,
+      maxBuffer: GIT_MAX_BUFFER,
+    });
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -354,12 +441,53 @@ function relatedEdgesForFiles(
   return edges;
 }
 
-async function readDiffEntries(root: string, since: string): Promise<DiffEntry[]> {
+async function resolveComparisonBase(root: string, since: string | undefined): Promise<ComparisonBase> {
+  if (since) {
+    const validated = await validateSinceCommit(root, since);
+    if (validated.valid) {
+      return { commit: validated.commit, warning: null };
+    }
+    const fallback = await defaultComparisonBase(root);
+    return {
+      commit: fallback,
+      warning: "Showing recent context changes because the saved last-seen commit is no longer available.",
+    };
+  }
+
+  return { commit: await defaultComparisonBase(root), warning: null };
+}
+
+async function validateSinceCommit(
+  root: string,
+  since: string,
+): Promise<{ valid: true; commit: string } | { valid: false }> {
+  if (!COMMIT_SHA_RE.test(since)) return { valid: false };
+  const commit = await safeGitOutput(root, ["rev-parse", "--verify", `${since}^{commit}`]);
+  if (!commit) return { valid: false };
+  const isAncestor = await safeGitSucceeds(root, ["merge-base", "--is-ancestor", commit, "HEAD"]);
+  if (!isAncestor) return { valid: false };
+
+  const countText = await safeGitOutput(root, ["rev-list", "--count", `${commit}..HEAD`]);
+  const count = countText ? Number.parseInt(countText, 10) : Number.NaN;
+  if (!Number.isFinite(count) || count > MAX_CHANGE_COMMIT_WINDOW) return { valid: false };
+  return { valid: true, commit };
+}
+
+async function defaultComparisonBase(root: string): Promise<string | null> {
+  const output = await safeGitOutput(root, ["rev-list", `--max-count=${DEFAULT_CHANGE_COMMIT_WINDOW + 1}`, "HEAD"]);
+  const commits = output?.split("\n").filter(Boolean) ?? [];
+  if (commits.length === 0) return null;
+  if (commits.length <= DEFAULT_CHANGE_COMMIT_WINDOW) return EMPTY_TREE_COMMIT;
+  return commits[DEFAULT_CHANGE_COMMIT_WINDOW] ?? null;
+}
+
+async function readDiffEntries(root: string, since: string): Promise<DiffReadResult> {
   try {
     const output = await gitOutput(root, ["diff", "--name-status", `${since}..HEAD`, "--", "*.md"]);
-    if (!output) return [];
+    if (!output) return { entries: [], truncated: false };
     const entries: DiffEntry[] = [];
     for (const line of output.split("\n")) {
+      if (entries.length >= MAX_DIFF_ENTRIES) break;
       const parts = line.split("\t").filter(Boolean);
       const status = parts[0];
       if (!status) continue;
@@ -367,6 +495,7 @@ async function readDiffEntries(root: string, since: string): Promise<DiffEntry[]
         const oldPath = parts[1];
         const newPath = parts[2];
         if (oldPath) entries.push(await hydrateDiffEntry(root, { type: "removed", path: toPosix(oldPath) }));
+        if (entries.length >= MAX_DIFF_ENTRIES) break;
         if (newPath) entries.push(await hydrateDiffEntry(root, { type: "added", path: toPosix(newPath) }));
         continue;
       }
@@ -376,9 +505,9 @@ async function readDiffEntries(root: string, since: string): Promise<DiffEntry[]
       if (status === "M") entries.push(await hydrateDiffEntry(root, { type: "edited", path: toPosix(path) }));
       if (status === "D") entries.push(await hydrateDiffEntry(root, { type: "removed", path: toPosix(path) }));
     }
-    return entries;
+    return { entries, truncated: output.split("\n").filter(Boolean).length > entries.length };
   } catch {
-    return [];
+    return { entries: [], truncated: false };
   }
 }
 
