@@ -27,6 +27,7 @@ beforeEach(async () => {
       adapter_configs,
       inbox_entries,
       messages,
+      chat_subscriptions,
       chat_participants,
       chats,
       agent_presence,

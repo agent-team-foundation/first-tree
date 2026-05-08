@@ -44,6 +44,7 @@ import { feedbackRoutes } from "./api/feedback.js";
 import { healthRoutes } from "./api/health.js";
 import { healthzRoutes } from "./api/healthz.js";
 import { adminInvitationRoutes, meRoutes, publicInvitePreviewRoute } from "./api/me.js";
+import { meChatRoutes } from "./api/me-chats.js";
 import { memberRoutes } from "./api/members.js";
 // Public agent discovery removed — visibility is now handled via agent.visibility field
 import { githubWebhookRoutes } from "./api/webhooks/github.js";
@@ -64,6 +65,7 @@ import { type AdapterManager, createAdapterManager } from "./services/adapter-ma
 import { broadcastToAdmins } from "./services/admin-broadcast.js";
 import { expiryToSeconds } from "./services/auth.js";
 import { type BackgroundTasks, createBackgroundTasks } from "./services/background-tasks.js";
+import { registerChatMessageDispatcher } from "./services/chat-projection.js";
 import { createConfigService } from "./services/config-service.js";
 import { createKaelRuntime, type KaelRuntime } from "./services/kael-runtime.js";
 import { createNotifier, type Notifier } from "./services/notifier.js";
@@ -351,6 +353,17 @@ export async function buildApp(config: Config) {
         { prefix: "/admin/chats" },
       );
 
+      // Chat-first workspace member-facing chat APIs. Mounted under /me/chats
+      // (NOT /admin/chats) per the design — `workspace` is a UI concept and
+      // does not appear in the API path.
+      await api.register(
+        async (memberApp) => {
+          memberApp.addHook("onRequest", memberAuth);
+          await memberApp.register(meChatRoutes);
+        },
+        { prefix: "/me/chats" },
+      );
+
       // M1: Client management routes
       await api.register(
         async (adminApp) => {
@@ -549,6 +562,16 @@ export async function buildApp(config: Config) {
       adapterManager.reload().catch((err) => hotReloadLog.error({ err }, "adapter hot-reload failed (PG NOTIFY)"));
       kaelRuntime?.reload().catch((err) => hotReloadLog.error({ err }, "kael hot-reload failed (PG NOTIFY)"));
     }
+  });
+
+  // Chat-first workspace cross-process kick. The message hot path calls
+  // `fireChatMessageKick(chatId, messageId)` after each tx commits; we
+  // forward that to the live notifier so it ends up on the
+  // `chat_message_events` channel.
+  registerChatMessageDispatcher((chatId, messageId) => {
+    notifier
+      .notifyChatMessage(chatId, messageId)
+      .catch((err) => createLogger("chat-message-kick").warn({ err, chatId, messageId }, "chat:message kick failed"));
   });
 
   // Start notifier and background tasks on server start

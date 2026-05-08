@@ -5,6 +5,13 @@ const INBOX_CHANNEL = "inbox_notifications";
 const CONFIG_CHANNEL = "config_changes";
 const SESSION_STATE_CHANNEL = "session_state_changes";
 const RUNTIME_STATE_CHANNEL = "runtime_state_changes";
+/**
+ * Chat-first workspace cross-process kick. Carries `<chatId>:<messageId>`.
+ * Lets admin WS sockets translate every chat message (speaker AND watcher
+ * audience) into a `chat:message` frame, without being coupled to the
+ * inbox NOTIFY path that only reaches speakers.
+ */
+const CHAT_MESSAGE_CHANNEL = "chat_message_events";
 
 export type ConfigChangeHandler = (channel: string) => void;
 export type SessionStateChangeHandler = (payload: {
@@ -14,6 +21,7 @@ export type SessionStateChangeHandler = (payload: {
   organizationId: string;
 }) => void;
 export type RuntimeStateChangeHandler = (payload: { agentId: string; state: string; organizationId: string }) => void;
+export type ChatMessageChangeHandler = (payload: { chatId: string; messageId: string }) => void;
 
 /**
  * Per-socket push handler for the WS data plane. When a NOTIFY arrives on
@@ -48,6 +56,8 @@ export type Notifier = {
   notifySessionStateChange(agentId: string, chatId: string, state: string, organizationId: string): Promise<void>;
   /** Notify that an agent runtime state has changed (idle/working/error/…). Payload is org-scoped so admin consumers can filter. */
   notifyRuntimeStateChange(agentId: string, state: string, organizationId: string): Promise<void>;
+  /** Chat-first workspace: kick admin WS sockets to invalidate ["me","chats"] and the timeline of `chatId`. */
+  notifyChatMessage(chatId: string, messageId: string): Promise<void>;
   /**
    * Push a raw JSON frame to every socket currently subscribed to `inboxId`
    * on **this server instance only**. Unlike `notify`, does not fan out
@@ -62,6 +72,8 @@ export type Notifier = {
   onSessionStateChange(handler: SessionStateChangeHandler): void;
   /** Register a handler for runtime state change notifications */
   onRuntimeStateChange(handler: RuntimeStateChangeHandler): void;
+  /** Register a handler for chat:message change notifications. */
+  onChatMessage(handler: ChatMessageChangeHandler): void;
   /** Start listening for PG notifications */
   start(): Promise<void>;
   /** Stop listening */
@@ -76,10 +88,12 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
   const configChangeHandlers: ConfigChangeHandler[] = [];
   const sessionStateChangeHandlers: SessionStateChangeHandler[] = [];
   const runtimeStateChangeHandlers: RuntimeStateChangeHandler[] = [];
+  const chatMessageHandlers: ChatMessageChangeHandler[] = [];
   let unlistenInboxFn: (() => Promise<void>) | null = null;
   let unlistenConfigFn: (() => Promise<void>) | null = null;
   let unlistenSessionStateFn: (() => Promise<void>) | null = null;
   let unlistenRuntimeStateFn: (() => Promise<void>) | null = null;
+  let unlistenChatMessageFn: (() => Promise<void>) | null = null;
 
   function handleNotification(payload: string) {
     // payload format: "inboxId:messageId"
@@ -163,6 +177,14 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       }
     },
 
+    async notifyChatMessage(chatId: string, messageId: string) {
+      try {
+        await listenClient`SELECT pg_notify(${CHAT_MESSAGE_CHANNEL}, ${`${chatId}:${messageId}`})`;
+      } catch {
+        // fire-and-forget — realtime is best-effort, web reconnect refetches
+      }
+    },
+
     async pushFrameToInbox(inboxId: string, frame: string): Promise<number> {
       const map = subscriptions.get(inboxId);
       if (!map) return 0;
@@ -193,6 +215,10 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
 
     onRuntimeStateChange(handler: RuntimeStateChangeHandler) {
       runtimeStateChangeHandlers.push(handler);
+    },
+
+    onChatMessage(handler: ChatMessageChangeHandler) {
+      chatMessageHandlers.push(handler);
     },
 
     async start() {
@@ -245,6 +271,24 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
         }
       });
       unlistenRuntimeStateFn = runtimeStateResult.unlisten;
+
+      const chatMessageResult = await listenClient.listen(CHAT_MESSAGE_CHANNEL, (payload) => {
+        if (!payload) return;
+        // payload format: "chatId:messageId" — chatId is a UUID (no colons) so the
+        // first separator wins.
+        const sep = payload.indexOf(":");
+        if (sep <= 0) return;
+        const chatId = payload.slice(0, sep);
+        const messageId = payload.slice(sep + 1);
+        for (const handler of chatMessageHandlers) {
+          try {
+            handler({ chatId, messageId });
+          } catch {
+            // swallow — handler errors must not poison fan-out
+          }
+        }
+      });
+      unlistenChatMessageFn = chatMessageResult.unlisten;
     },
 
     async stop() {
@@ -263,6 +307,10 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       if (unlistenRuntimeStateFn) {
         await unlistenRuntimeStateFn();
         unlistenRuntimeStateFn = null;
+      }
+      if (unlistenChatMessageFn) {
+        await unlistenChatMessageFn();
+        unlistenChatMessageFn = null;
       }
     },
   };

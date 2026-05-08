@@ -6,6 +6,7 @@ import { members } from "../db/schema/members.js";
 import { organizations } from "../db/schema/organizations.js";
 import { BadRequestError, ConflictError, NotFoundError } from "../errors.js";
 import { uuidv7 } from "../uuid.js";
+import { recomputeWatchersForMember } from "./watcher.js";
 
 /**
  * Helpers used by the SaaS onboarding flow to create / reuse / leave a
@@ -39,6 +40,10 @@ export async function ensureMembership(db: Database, data: CreateMembershipForUs
       // with it may be in any state — leave it alone; it gets refreshed
       // implicitly when the member starts using the team again.
       await db.update(members).set({ status: "active" }).where(eq(members.id, existing.id));
+      // Watcher rows: re-activated member regains visibility into chats
+      // where their managed non-human agents speak. recompute restores
+      // the rows that were dropped on the prior `left` flip.
+      await recomputeWatchersForMember(db, existing.id);
       return { ...existing, status: "active" as const };
     }
     return existing;
@@ -207,11 +212,21 @@ export async function pickPrimaryMembership(db: Database, userId: string) {
  * (last admin allowed to leave, leaves an orphan team) and the cleanup is
  * a v2 sweep job.
  */
+/**
+ * Soft-leave an organization. Flips the member's row to `status='left'`
+ * and reconciles watcher rows: `recomputeChatWatchers`'s active-member
+ * predicate now drops every watcher anchored to this member, removing
+ * the chats from their `/me/chats` watching list.
+ */
 export async function leaveOrganization(db: Database, memberId: string) {
   const [existing] = await db.select().from(members).where(eq(members.id, memberId)).limit(1);
   if (!existing) throw new NotFoundError(`Membership "${memberId}" not found`);
   if (existing.status === "left") return existing;
   await db.update(members).set({ status: "left" }).where(eq(members.id, memberId));
+  // Watcher rows anchored to this member's managed non-human agents drop
+  // off — they pivot through the now-inactive member, so the active-member
+  // predicate filters them out on the next recompute.
+  await recomputeWatchersForMember(db, memberId);
   return { ...existing, status: "left" as const };
 }
 

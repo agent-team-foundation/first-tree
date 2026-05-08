@@ -43,6 +43,19 @@ function broadcast(msg: WsMessage) {
     } else if (msg.type === "session:state") {
       latestQc.invalidateQueries({ queryKey: ["activity"] });
       latestQc.invalidateQueries({ queryKey: ["sessions"] });
+    } else if (msg.type === "chat:message") {
+      // Best-effort realtime nudge for the chat-first workspace. The frame
+      // carries `{ type, chatId }` (see shared/me-chat.ts:chatMessageFrameSchema);
+      // we invalidate the chat list, the chat's message timeline, and the
+      // chat's detail panel. Failures are swallowed — the parent broadcast
+      // wraps each subscriber in try/catch and the user-facing fallback is
+      // the 5s polling refetch already wired into ChatView.
+      const chatId = typeof msg.chatId === "string" ? msg.chatId : null;
+      latestQc.invalidateQueries({ queryKey: ["me", "chats"] });
+      if (chatId) {
+        latestQc.invalidateQueries({ queryKey: ["chat-messages", chatId] });
+        latestQc.invalidateQueries({ queryKey: ["chat-detail", chatId] });
+      }
     }
   }
 }

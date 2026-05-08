@@ -1,4 +1,4 @@
-import type { SessionState } from "@agent-team-foundation/first-tree-hub-shared";
+import { MENTION_REGEX, type SessionState, stripCode } from "@agent-team-foundation/first-tree-hub-shared";
 import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
@@ -10,10 +10,24 @@ import { messages } from "../db/schema/messages.js";
 import { NotFoundError } from "../errors.js";
 import type { Notifier } from "./notifier.js";
 
-const SUMMARY_MAX_LENGTH = 50;
+export const SUMMARY_MAX_LENGTH = 50;
 
-/** Extract a plain-text summary from a message's JSONB content field. */
-function extractSummary(content: unknown, maxLen = SUMMARY_MAX_LENGTH): string | null {
+/** Extract a plain-text summary from a message's JSONB content field.
+ *  Used as the auto-title fallback in chat list rendering — see
+ *  `me-chat.ts:resolveChatTitle` and `admin/chats.ts:getChat`.
+ *
+ *  - `@<name>` mention tokens are stripped before truncation: in the
+ *    chat-first model they're routing/audience metadata, not part of
+ *    the user's intent. Leaving them in produces noisy titles like
+ *    "@hub-agent-01 帮我重构这个文件" or "你好 @hub-agent-02 看看".
+ *  - Whitespace runs (including those left behind by mention removal)
+ *    collapse to single spaces.
+ *  - If the cleaned text is empty (e.g., a message that's only
+ *    `@hub-agent-01`), returns null so the caller falls through to
+ *    the participant-join fallback.
+ *  - Slicing is code-point-aware (`Array.from + join`) so emoji /
+ *    surrogate pairs aren't split into garbled half-characters. */
+export function extractSummary(content: unknown, maxLen = SUMMARY_MAX_LENGTH): string | null {
   let text = "";
   if (typeof content === "object" && content !== null && "text" in content) {
     text = String((content as { text: unknown }).text ?? "");
@@ -21,9 +35,15 @@ function extractSummary(content: unknown, maxLen = SUMMARY_MAX_LENGTH): string |
     text = content;
   }
   if (!text) return null;
-  // Slice by code points, not UTF-16 units, to avoid splitting surrogate pairs
-  // (emoji, etc.) which would render as garbled characters in the UI.
-  return Array.from(text).slice(0, maxLen).join("");
+  // `stripCode` first so identifier-shaped tokens inside Markdown
+  // code regions (`` `@param` ``, fenced blocks) aren't misclassified
+  // as mentions and stripped — that would produce titles like
+  // `"Use  decorator"` from `"Use \`@param\` decorator"`. Mirrors
+  // `extractMentions`'s pipeline so routing and titling agree on what
+  // counts as a real mention vs a code reference.
+  const cleaned = stripCode(text).replace(MENTION_REGEX, "").replace(/\s+/g, " ").trim();
+  if (!cleaned) return null;
+  return Array.from(cleaned).slice(0, maxLen).join("");
 }
 
 export type SessionListItem = {

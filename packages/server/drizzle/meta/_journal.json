@@ -211,6 +211,13 @@
       "when": 1777766400000,
       "tag": "0029_direct_agent_only_mention_only",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1777852800000,
+      "tag": "0030_chat_first_workspace",
+      "breakpoints": true
     }
   ]
 }

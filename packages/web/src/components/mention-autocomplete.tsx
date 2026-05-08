@@ -283,7 +283,8 @@ export function MentionAutocompletePopover({
       style={{
         bottom: "calc(100% + var(--sp-1))",
         left: 0,
-        right: 0,
+        minWidth: 240,
+        maxWidth: 360,
         background: "var(--bg-raised)",
         borderColor: "var(--border)",
       }}
@@ -305,10 +306,11 @@ export function MentionAutocompletePopover({
             }}
             className="flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-body"
             style={{
-              background: active ? "var(--accent-dim)" : "transparent",
+              background: active ? "var(--bg-hover)" : "transparent",
               color: "var(--fg)",
               border: "none",
               cursor: "pointer",
+              whiteSpace: "nowrap",
             }}
           >
             <span className="font-medium">{c.displayName ?? (c.name ? `@${c.name}` : "—")}</span>

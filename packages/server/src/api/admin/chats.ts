@@ -3,8 +3,9 @@ import {
   sendMessageSchema,
   updateChatSchema,
 } from "@agent-team-foundation/first-tree-hub-shared";
-import { and, desc, eq, lt, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
+import { agents } from "../../db/schema/agents.js";
 import { chatParticipants, chats } from "../../db/schema/chats.js";
 import { inboxEntries } from "../../db/schema/inbox-entries.js";
 import { messages } from "../../db/schema/messages.js";
@@ -13,9 +14,11 @@ import { requireMember } from "../../middleware/require-identity.js";
 import { assertChatAccess, memberScope } from "../../services/access-control.js";
 import { ensureParticipant, joinChat, leaveChat, listChatsForMember } from "../../services/chat.js";
 import { prepareImageOutbound } from "../../services/image-broadcast.js";
+import { resolveChatTitle } from "../../services/me-chat.js";
 import { sendMessage } from "../../services/message.js";
 import { notifyRecipients } from "../../services/notifier.js";
 import { resolveDefaultOrgId, resolveOrganization } from "../../services/organization.js";
+import { extractSummary } from "../../services/session.js";
 
 export async function adminChatRoutes(app: FastifyInstance): Promise<void> {
   /** List all chats in org (admin-only, for audit). Members should use GET /mine. */
@@ -78,7 +81,15 @@ export async function adminChatRoutes(app: FastifyInstance): Promise<void> {
     };
   });
 
-  /** Get chat detail with participants (requires participation or supervision) */
+  /** Get chat detail with participants (requires participation or supervision).
+   *
+   *  Response includes a server-resolved `title` and `firstMessagePreview`
+   *  so the chat-view header can mirror the conversation list's title
+   *  fallback chain (`topic > first message summary > participant join`)
+   *  without re-implementing it client-side. The `firstMessagePreview`
+   *  is exposed alongside the resolved title so the client can also use
+   *  it for tooltips / debugging — the resolved `title` should be the
+   *  default render target. */
   app.get<{ Params: { chatId: string } }>("/:chatId", async (request) => {
     const { chatId } = request.params;
     const scope = memberScope(request);
@@ -90,8 +101,40 @@ export async function adminChatRoutes(app: FastifyInstance): Promise<void> {
 
     const participants = await app.db.select().from(chatParticipants).where(eq(chatParticipants.chatId, chatId));
 
+    // Auto-title fallback: read first message + resolve display names
+    // for participants so `resolveChatTitle` can do its three-tier
+    // priority walk (topic > first-msg summary > participant join).
+    const firstMsgRows = (await app.db.execute<{ content: unknown }>(sql`
+      SELECT content FROM messages
+       WHERE chat_id = ${chatId}
+       ORDER BY created_at ASC
+       LIMIT 1
+    `)) as unknown as Array<{ content: unknown }>;
+    const firstMessagePreview = firstMsgRows[0] ? extractSummary(firstMsgRows[0].content) : null;
+
+    const participantAgentIds = participants.map((p) => p.agentId);
+    const agentRows =
+      participantAgentIds.length > 0
+        ? await app.db
+            .select({ agentId: agents.uuid, displayName: agents.displayName, type: agents.type })
+            .from(agents)
+            .where(inArray(agents.uuid, participantAgentIds))
+        : [];
+    const agentMeta = new Map(agentRows.map((a) => [a.agentId, a]));
+    const participantsForTitle = participants.map((p) => {
+      const meta = agentMeta.get(p.agentId);
+      return {
+        agentId: p.agentId,
+        displayName: meta?.displayName ?? p.agentId,
+        type: meta?.type ?? "unknown",
+      };
+    });
+    const title = resolveChatTitle(chat.topic, firstMessagePreview, participantsForTitle, scope.humanAgentId);
+
     return {
       ...chat,
+      title,
+      firstMessagePreview,
       createdAt: chat.createdAt.toISOString(),
       updatedAt: chat.updatedAt.toISOString(),
       participants: participants.map((p) => ({

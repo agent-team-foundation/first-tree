@@ -1,7 +1,7 @@
 // Schemas
 
 // -- Mention extraction (shared by server fan-out resolver and client auto-forward) --
-export { extractMentions, MENTION_REGEX, type MentionParticipant, scanMentionTokens } from "./mentions.js";
+export { extractMentions, MENTION_REGEX, type MentionParticipant, scanMentionTokens, stripCode } from "./mentions.js";
 // -- OAuth-callback open-redirect guard --
 export { DEFAULT_SAFE_REDIRECT, safeRedirectPath } from "./safe-redirect.js";
 export {
@@ -200,6 +200,33 @@ export {
   joinByInvitationSchema,
   rotateInvitationSchema,
 } from "./schemas/invitation.js";
+export {
+  type AddMeChatParticipants,
+  addMeChatParticipantsSchema,
+  type ChatMessageFrame,
+  type CreateMeChat,
+  chatMessageFrameSchema,
+  createMeChatSchema,
+  type ListMeChatsQuery,
+  type ListMeChatsResponse,
+  listMeChatsQuerySchema,
+  listMeChatsResponseSchema,
+  ME_CHAT_DEFAULT_LIMIT,
+  ME_CHAT_FILTERS,
+  ME_CHAT_MAX_LIMIT,
+  type MeChatFilter,
+  type MeChatLeaveResponse,
+  type MeChatMembershipKind,
+  type MeChatParticipant,
+  type MeChatReadResponse,
+  type MeChatRow,
+  meChatFilterSchema,
+  meChatLeaveResponseSchema,
+  meChatMembershipKindSchema,
+  meChatParticipantSchema,
+  meChatReadResponseSchema,
+  meChatRowSchema,
+} from "./schemas/me-chat.js";
 export {
   type CreateOrgFromMe,
   createOrgFromMeSchema,

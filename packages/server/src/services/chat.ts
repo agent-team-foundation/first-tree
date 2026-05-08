@@ -4,8 +4,10 @@ import { and, desc, eq, inArray, lt, ne, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
-import { chatParticipants, chats } from "../db/schema/chats.js";
+import { chatParticipants, chatSubscriptions, chats } from "../db/schema/chats.js";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
+import { invalidateChatAudience } from "./chat-audience-cache.js";
+import { leaveAsParticipant, recomputeChatWatchers } from "./watcher.js";
 
 /** Structural DB type so both `Database` and transaction clients work. */
 type DbLike = Pick<PostgresJsDatabase<Record<string, never>>, "select" | "update">;
@@ -99,6 +101,13 @@ export async function createChat(db: Database, creatorId: string, data: CreateCh
     }));
 
     await tx.insert(chatParticipants).values(participantRows);
+
+    // Watcher rows: every active manager whose managed non-human agent
+    // is now in the chat (and who isn't already a speaker) should see
+    // this chat under "Watching". Without this call, watchers were
+    // only created on the `/me/chats` path — agent-to-agent / webhook /
+    // adapter / admin chats silently broke design AC #8.
+    await recomputeChatWatchers(tx, chatId);
 
     const participants = await tx.select().from(chatParticipants).where(eq(chatParticipants.chatId, chatId));
 
@@ -218,11 +227,22 @@ export async function ensureParticipant(db: Database, chatId: string, agentId: s
       current.map((p) => p.agentId),
       1,
     );
+    // Defensive: drop any pre-existing watcher row for this agent so
+    // invariant 1 holds (chat_subscriptions and chat_participants are
+    // mutually exclusive on `(chat_id, agent_id)`). Migration 0030
+    // backfilled watcher rows for every (manager, chat) pair, so a
+    // human-bridge agent calling through here on day 1 could collide.
+    await tx
+      .delete(chatSubscriptions)
+      .where(and(eq(chatSubscriptions.chatId, chatId), eq(chatSubscriptions.agentId, agentId)));
     await tx
       .insert(chatParticipants)
       .values({ chatId, agentId, mode: "full" })
       .onConflictDoNothing({ target: [chatParticipants.chatId, chatParticipants.agentId] });
+    // Reconcile watcher rows for managers of any non-human in chat.
+    await recomputeChatWatchers(tx, chatId);
   });
+  invalidateChatAudience(chatId);
 }
 
 export async function addParticipant(db: Database, chatId: string, requesterId: string, data: AddParticipant) {
@@ -273,12 +293,18 @@ export async function addParticipant(db: Database, chatId: string, requesterId: 
       currentParticipants.map((p) => p.agentId),
       1,
     );
+    // Defensive: drop watcher row for this agent (invariant 1).
+    await tx
+      .delete(chatSubscriptions)
+      .where(and(eq(chatSubscriptions.chatId, chatId), eq(chatSubscriptions.agentId, data.agentId)));
     await tx.insert(chatParticipants).values({
       chatId,
       agentId: data.agentId,
       mode: data.mode ?? "full",
     });
+    await recomputeChatWatchers(tx, chatId);
   });
+  invalidateChatAudience(chatId);
 
   return db.select().from(chatParticipants).where(eq(chatParticipants.chatId, chatId));
 }
@@ -300,6 +326,12 @@ export async function removeParticipant(db: Database, chatId: string, requesterI
   if (!removed) {
     throw new NotFoundError(`Agent "${targetAgentId}" is not a participant of this chat`);
   }
+  // Reconcile watchers: a manager who was previously anchored to the
+  // removed agent may need their watcher row dropped (if no other
+  // managed agent remains in chat) or re-created (if they had been a
+  // participant for a different reason — rare).
+  await recomputeChatWatchers(db, chatId);
+  invalidateChatAudience(chatId);
 
   return db.select().from(chatParticipants).where(eq(chatParticipants.chatId, chatId));
 }
@@ -474,15 +506,33 @@ export async function joinChat(db: Database, chatId: string, memberId: string, h
   // participants (non-human) switch to mention_only so they only respond when
   // explicitly addressed. Atomic: upgrade + insert must not interleave with
   // sendMessage's participant read (mode is part of the mention-filter rule).
+  // State-carry from any pre-existing watcher row: a manager who joins
+  // here likely had a `chat_subscriptions` row from migration 0030's
+  // backfill (or a recompute pass). Without DELETE-RETURNING + INSERT-
+  // with-state, their `last_read_at` and `unread_mention_count` would
+  // silently reset to defaults — and worse, leaving the watcher row
+  // intact would violate invariant 1 (mutual exclusion of participant
+  // / subscription on `(chat, agent)`).
   await db.transaction(async (tx) => {
+    const [carriedRow] = await tx
+      .delete(chatSubscriptions)
+      .where(and(eq(chatSubscriptions.chatId, chatId), eq(chatSubscriptions.agentId, humanAgentId)))
+      .returning({
+        lastReadAt: chatSubscriptions.lastReadAt,
+        unreadMentionCount: chatSubscriptions.unreadMentionCount,
+      });
     await maybeUpgradeDirectToGroup(tx, chatId, participantAgentIds, 1);
     await tx.insert(chatParticipants).values({
       chatId,
       agentId: humanAgentId,
       role: "member",
       mode: "full",
+      lastReadAt: carriedRow?.lastReadAt ?? null,
+      unreadMentionCount: carriedRow?.unreadMentionCount ?? 0,
     });
+    await recomputeChatWatchers(tx, chatId);
   });
+  invalidateChatAudience(chatId);
 
   return db.select().from(chatParticipants).where(eq(chatParticipants.chatId, chatId));
 }
@@ -490,17 +540,17 @@ export async function joinChat(db: Database, chatId: string, memberId: string, h
 /**
  * Manager leaves a chat. Removes their human agent from participants.
  * Only allowed if the human agent is a participant.
+ *
+ * Delegates the participant→watcher transition to `leaveAsParticipant`
+ * so admin-side and `/me/chats/:id/leave` share one canonical path. The
+ * earlier "recompute then UPDATE-back state" variant violated the design
+ * rule that recompute is only for set rebuild — never on a transition
+ * path (review #228 issue #2). The returned participant list is fetched
+ * after the tx commits, matching the admin route's existing contract.
  */
 export async function leaveChat(db: Database, chatId: string, humanAgentId: string) {
-  const [removed] = await db
-    .delete(chatParticipants)
-    .where(and(eq(chatParticipants.chatId, chatId), eq(chatParticipants.agentId, humanAgentId)))
-    .returning();
-
-  if (!removed) {
-    throw new NotFoundError("Not a participant of this chat");
-  }
-
+  await leaveAsParticipant(db, chatId, humanAgentId);
+  invalidateChatAudience(chatId);
   return db.select().from(chatParticipants).where(eq(chatParticipants.chatId, chatId));
 }
 
@@ -563,6 +613,12 @@ export async function findOrCreateDirectChat(db: Database, agentAId: string, age
       { chatId, agentId: agentAId, role: "member", mode },
       { chatId, agentId: agentBId, role: "member", mode },
     ]);
+
+    // Watcher rows: managers of either non-human end should immediately
+    // see this fresh chat under "Watching". Without this, agent-to-agent
+    // direct chats created via `sendToAgent` / webhooks / task assignment
+    // never surfaced for the manager — design AC #8 silently broke.
+    await recomputeChatWatchers(tx, chatId);
 
     if (!chat) throw new Error("Unexpected: INSERT RETURNING produced no row");
     return chat;
