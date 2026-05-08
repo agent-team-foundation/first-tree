@@ -19,7 +19,7 @@ import { FIRST_TREE_HUB_ATTR } from "@agent-team-foundation/first-tree-hub-share
 import type { Context, Span } from "@opentelemetry/api";
 import { context as otelContext, SpanStatusCode, trace } from "@opentelemetry/api";
 import type { WebSocket } from "ws";
-import { normalizeAttrs, startTrackedSpan } from "./telemetry.js";
+import { getServerTracer, normalizeAttrs, startTrackedSpan } from "./otel-helpers.js";
 
 type ConnectionEntry = {
   span: Span;
@@ -72,6 +72,11 @@ export function endWsConnectionSpan(socket: WebSocket, closeCode?: number): void
 /**
  * Run a handler inside a span parented to the connection span. If tracing is
  * disabled or no connection span exists, the handler runs unwrapped.
+ *
+ * `heartbeat` frames are excluded — a long-lived WS connection emits one
+ * every 30s with no debug value (~2.8k spans/day per client, all identical).
+ * The connection-level span captures abnormal closures, so we don't lose
+ * "heartbeats stopped" visibility by skipping these.
  */
 export async function withWsMessageSpan<T>(
   socket: WebSocket,
@@ -79,9 +84,10 @@ export async function withWsMessageSpan<T>(
   attrs: Record<string, unknown>,
   fn: () => Promise<T>,
 ): Promise<T> {
+  if (type === "heartbeat") return fn();
   const entry = connections.get(socket);
   if (!entry) return fn();
-  const tracer = trace.getTracer("@first-tree-hub/server");
+  const tracer = getServerTracer();
   const spanName = `ws.message ${type}`;
   return otelContext.with(entry.context, () =>
     tracer.startActiveSpan(

@@ -32,7 +32,7 @@ export async function adminAdapterRoutes(app: FastifyInstance): Promise<void> {
     }));
   });
 
-  app.post("/", async (request, reply) => {
+  app.post("/", { config: { otelRecordBody: true } }, async (request, reply) => {
     const body = createAdapterConfigSchema.parse(request.body);
     const scope = memberScope(request);
     await assertCanManage(app.db, scope, body.agentId);
@@ -57,7 +57,7 @@ export async function adminAdapterRoutes(app: FastifyInstance): Promise<void> {
     };
   });
 
-  app.patch<{ Params: { id: string } }>("/:id", async (request) => {
+  app.patch<{ Params: { id: string } }>("/:id", { config: { otelRecordBody: true } }, async (request) => {
     const body = updateAdapterConfigSchema.parse(request.body);
     const id = parseId(request.params.id);
     const scope = memberScope(request);

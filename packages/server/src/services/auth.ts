@@ -179,11 +179,20 @@ export async function refreshAccessToken(
     const { payload: p } = await jwtVerify(refreshToken, secret);
     payload = p as unknown as TokenPayload;
   } catch {
-    throw new UnauthorizedError("Invalid or expired refresh token");
+    // jwtVerify lumps "expired" / "tampered" / "wrong secret" into one error,
+    // so we can't tell them apart from the throw. The reason here records
+    // the *outcome* (signature/expiry rejection) — operators correlate by
+    // client.ip + auth.refresh.reason in the trace backend.
+    throw new UnauthorizedError("Invalid or expired refresh token", {
+      "auth.refresh.reason": "jwt_verify_failed",
+    });
   }
 
   if (payload.type !== "refresh" || !payload.sub) {
-    throw new UnauthorizedError("Invalid token type");
+    throw new UnauthorizedError("Invalid token type", {
+      "auth.refresh.reason": "wrong_token_type",
+      "auth.refresh.actual_type": String(payload.type ?? "<missing>"),
+    });
   }
 
   // Verify user still exists and is active
@@ -193,8 +202,18 @@ export async function refreshAccessToken(
     .where(eq(users.id, payload.sub))
     .limit(1);
 
-  if (!user || user.status !== "active") {
-    throw new UnauthorizedError("User not found or suspended");
+  if (!user) {
+    throw new UnauthorizedError("User not found or suspended", {
+      "auth.refresh.reason": "user_not_found",
+      "auth.refresh.user_id": payload.sub,
+    });
+  }
+  if (user.status !== "active") {
+    throw new UnauthorizedError("User not found or suspended", {
+      "auth.refresh.reason": "user_suspended",
+      "auth.refresh.user_id": payload.sub,
+      "auth.refresh.user_status": user.status,
+    });
   }
 
   // Verify membership still exists and hasn't been left.
@@ -205,7 +224,11 @@ export async function refreshAccessToken(
     .limit(1);
 
   if (!member) {
-    throw new UnauthorizedError("Membership not found");
+    throw new UnauthorizedError("Membership not found", {
+      "auth.refresh.reason": "membership_not_found",
+      "auth.refresh.user_id": payload.sub,
+      "auth.refresh.member_id": payload.memberId,
+    });
   }
 
   return signTokensForMember(

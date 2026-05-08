@@ -155,7 +155,7 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
     return result;
   });
 
-  app.post("/", async (request, reply) => {
+  app.post("/", { config: { otelRecordBody: true } }, async (request, reply) => {
     const scope = memberScope(request);
     const body = createAgentSchema.parse(request.body);
     const { organizationId: queryOrganizationId } = listAgentsFilterSchema.parse(request.query);
@@ -192,7 +192,7 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
-  app.patch<{ Params: { uuid: string } }>("/:uuid", async (request) => {
+  app.patch<{ Params: { uuid: string } }>("/:uuid", { config: { otelRecordBody: true } }, async (request) => {
     const scope = memberScope(request);
     await assertCanManage(app.db, scope, request.params.uuid);
     const body = updateAgentSchema.parse(request.body);
@@ -223,7 +223,7 @@ export async function adminAgentRoutes(app: FastifyInstance): Promise<void> {
    * org / capability checks atomically. Capability mismatch can be overridden
    * with `force: true` (e.g. client offline, capabilities stale).
    */
-  app.patch<{ Params: { uuid: string } }>("/:uuid/rebind", async (request) => {
+  app.patch<{ Params: { uuid: string } }>("/:uuid/rebind", { config: { otelRecordBody: true } }, async (request) => {
     const scope = memberScope(request);
     await assertCanManage(app.db, scope, request.params.uuid);
     const body = rebindAgentSchema.parse(request.body);

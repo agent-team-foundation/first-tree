@@ -67,7 +67,7 @@ export async function adminAdapterMappingRoutes(app: FastifyInstance): Promise<v
     }));
   });
 
-  app.post("/", async (request, reply) => {
+  app.post("/", { config: { otelRecordBody: true } }, async (request, reply) => {
     const body = createAdapterMappingSchema.parse(request.body);
     const scope = memberScope(request);
     await assertCanManage(app.db, scope, body.agentId);
