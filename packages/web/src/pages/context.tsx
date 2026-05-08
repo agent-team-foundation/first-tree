@@ -8,23 +8,26 @@ import { useQuery } from "@tanstack/react-query";
 import { stratify, tree } from "d3-hierarchy";
 import { AlertTriangle, CheckCircle2, Copy, FolderTree, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { getContextTreeSnapshot } from "../api/context-tree.js";
+import { type ContextTreeWindow, getContextTreeSnapshot } from "../api/context-tree.js";
 import { Button } from "../components/ui/button.js";
 import { Markdown } from "../components/ui/markdown.js";
 import { PageHeader } from "../components/ui/page-header.js";
 import { Panel, PanelBody, PanelHeader, PanelTitle } from "../components/ui/panel.js";
 
-const LAST_SEEN_LAST_KEY = "first-tree-hub:context:lastSeenCommit";
+const CONTEXT_WINDOWS: Array<{ value: ContextTreeWindow; label: string; summary: string }> = [
+  { value: "1d", label: "1 day", summary: "last 1 day" },
+  { value: "7d", label: "7 days", summary: "last 7 days" },
+  { value: "30d", label: "30 days", summary: "last 30 days" },
+];
 
 export function ContextPage() {
-  const [since, setSince] = useState<string | null>(null);
-  const [lastSeenScope, setLastSeenScope] = useState<string | null>(null);
+  const [window, setWindow] = useState<ContextTreeWindow>("7d");
   const [selectedUpdateId, setSelectedUpdateId] = useState<string | null>(null);
   const [selectedOverviewNodeId, setSelectedOverviewNodeId] = useState<string | null>(null);
 
   const query = useQuery({
-    queryKey: ["context-tree-snapshot", since],
-    queryFn: () => getContextTreeSnapshot(since ?? undefined),
+    queryKey: ["context-tree-snapshot", window],
+    queryFn: () => getContextTreeSnapshot(window),
   });
 
   const snapshot = query.data;
@@ -46,21 +49,6 @@ export function ContextPage() {
     setSelectedUpdateId(snapshot.updates[0]?.id ?? null);
   }, [selectedUpdateId, snapshot]);
 
-  useEffect(() => {
-    if (!snapshot) return;
-    const scope = lastSeenKey(snapshot);
-    if (lastSeenScope === scope) return;
-    setLastSeenScope(scope);
-    setSince(readLastSeen(snapshot));
-  }, [lastSeenScope, snapshot]);
-
-  function markAllSeen() {
-    if (!snapshot?.headCommit) return;
-    writeLastSeen(snapshot, snapshot.headCommit);
-    setLastSeenScope(lastSeenKey(snapshot));
-    setSince(snapshot.headCommit);
-  }
-
   return (
     <div className="-m-6">
       <PageHeader title="Context" subtitle="Team context available to agents, and how it is changing" />
@@ -71,12 +59,7 @@ export function ContextPage() {
         ) : null}
         {snapshot && !query.isLoading ? (
           <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
-            <ContextStatus
-              snapshot={snapshot}
-              hasLastSeen={Boolean(since)}
-              onMarkAllSeen={markAllSeen}
-              disabled={!snapshot.headCommit}
-            />
+            <ContextStatus snapshot={snapshot} window={window} onWindowChange={setWindow} />
             {snapshot.snapshotStatus === "unavailable" ? (
               <UnavailableState snapshot={snapshot} />
             ) : (
@@ -101,17 +84,16 @@ export function ContextPage() {
 
 function ContextStatus({
   snapshot,
-  hasLastSeen,
-  onMarkAllSeen,
-  disabled,
+  window,
+  onWindowChange,
 }: {
   snapshot: ContextTreeSnapshot;
-  hasLastSeen: boolean;
-  onMarkAllSeen: () => void;
-  disabled: boolean;
+  window: ContextTreeWindow;
+  onWindowChange: (window: ContextTreeWindow) => void;
 }) {
   const statusIcon =
     snapshot.contextStatus.severity === "ok" ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />;
+  const currentWindow = windowSummary(window);
   return (
     <Panel>
       <PanelBody>
@@ -138,18 +120,23 @@ function ContextStatus({
                 </div>
               </div>
             </div>
-            <Button variant="outline" size="sm" onClick={onMarkAllSeen} disabled={disabled}>
-              <CheckCircle2 size={16} />
-              Mark all seen
-            </Button>
+            <fieldset className="flex flex-wrap" style={{ gap: "var(--sp-1)" }}>
+              <legend className="sr-only">Context update window</legend>
+              {CONTEXT_WINDOWS.map((option) => (
+                <Button
+                  key={option.value}
+                  variant={option.value === window ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => onWindowChange(option.value)}
+                >
+                  {option.label}
+                </Button>
+              ))}
+            </fieldset>
           </div>
           <div className="flex flex-wrap items-center" style={{ gap: "var(--sp-2)" }}>
             <SummaryPill
-              label={
-                hasLastSeen
-                  ? `${snapshot.summary.changedNodeCount} changes since your last view`
-                  : `${snapshot.summary.changedNodeCount} recent context changes`
-              }
+              label={`${snapshot.summary.changedNodeCount} context updates in the ${currentWindow}`}
               strong
             />
             <SummaryPill label={`Added ${snapshot.summary.addedCount}`} tone="added" />
@@ -620,7 +607,7 @@ function UnavailableState({ snapshot }: { snapshot: ContextTreeSnapshot }) {
 function EmptyChanges() {
   return (
     <div className="text-body" style={{ color: "var(--fg-3)" }}>
-      No changes since your last view.
+      No context updates in this time window.
     </div>
   );
 }
@@ -672,19 +659,8 @@ function changedCounts(nodes: ContextTreeNode[]): Map<string, number> {
   return counts;
 }
 
-function readLastSeen(snapshot: ContextTreeSnapshot): string | null {
-  return localStorage.getItem(lastSeenKey(snapshot));
-}
-
-function writeLastSeen(snapshot: ContextTreeSnapshot, commit: string): void {
-  localStorage.setItem(lastSeenKey(snapshot), commit);
-}
-
-function lastSeenKey(snapshot: ContextTreeSnapshot): string {
-  const origin = window.location.origin;
-  const repo = snapshot.repo ?? "unknown";
-  const branch = snapshot.branch ?? "unknown";
-  return `${LAST_SEEN_LAST_KEY}:${origin}:${repo}:${branch}`;
+function windowSummary(window: ContextTreeWindow): string {
+  return CONTEXT_WINDOWS.find((option) => option.value === window)?.summary ?? "last 7 days";
 }
 
 function severityColor(severity: ContextTreeSnapshot["contextStatus"]["severity"]): string {

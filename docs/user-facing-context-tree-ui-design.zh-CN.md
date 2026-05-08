@@ -80,8 +80,8 @@ Context
 Team context is current
 Agents have a synced team context snapshot available · main@9e664e
 
-12 changes since your last view
-Added 3 · Edited 8 · Removed 1                 [Mark all seen]
+12 context updates in the last 7 days
+Added 3 · Edited 8 · Removed 1                 [1 day] [7 days] [30 days]
 
 ┌──────────────────────────────────────┬─────────────────────────────────┐
 │ Context Updates                      │ Selected Change                 │
@@ -221,7 +221,7 @@ Connect a Context Tree repo to show the decision context available to agents.
 
 ```text
 Team context is current
-8 agents using latest context · 12 changes since your last view
+8 agents using latest context · 12 updates in the last 7 days
 ```
 
 ## 数据模型
@@ -289,8 +289,8 @@ agentUsage
 3. **Context Tree Overview**
    用成熟的 `d3-hierarchy` 负责 tree layout,用 Hub 现有 UI primitives + React SVG 做 overview 渲染,并和 Context Updates 联动。
 
-4. **Polish**  
-   Mark all seen、stale/unavailable、removed risk group、Open in repo / optional Open in Obsidian。
+4. **Polish**
+   time-window selector、stale/unavailable、removed risk group、Open in repo / optional Open in Obsidian。
 
 ## Obsidian 的位置
 

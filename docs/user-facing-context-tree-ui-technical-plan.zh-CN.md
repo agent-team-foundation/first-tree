@@ -18,9 +18,8 @@
 ```text
 Configured Context Tree repo
   -> Hub Server snapshot service
-  -> GET /api/v1/context-tree/snapshot?since=<commit>
+  -> GET /api/v1/context-tree/snapshot?window=7d
   -> Web /context
-  -> localStorage lastSeenCommit
 ```
 
 Hub Server 是只读 snapshot provider。Web 不依赖用户本机 tree checkout,也不直接访问 GitHub API,更不写入 Context Tree repo。
@@ -58,14 +57,16 @@ Hub Server 是只读 snapshot provider。Web 不依赖用户本机 tree checkout
 | Tree render | React + SVG | 精确控制 agent context 文案、change state、selection |
 | Source preview | 折叠在 Selected Change 中 | 支持深看原始 markdown,不让 file browser 成为主体验 |
 
-不把 Obsidian plugin、React Flow 或 Cytoscape 作为主实现。原因是本需求的主目标是 Context Tree value perception,不是 document graph browsing。Obsidian 可以作为本地深看入口,例如 `Open in Obsidian`,但不承担 Hub 的权限、snapshot、stale state、last-seen 或 agent decision context 表达。
+不把 Obsidian plugin、React Flow 或 Cytoscape 作为主实现。原因是本需求的主目标是 Context Tree value perception,不是 document graph browsing。Obsidian 可以作为本地深看入口,例如 `Open in Obsidian`,但不承担 Hub 的权限、snapshot、stale state、time-window updates 或 agent decision context 表达。
 
 ## API
 
 ```text
-GET /api/v1/context-tree/snapshot?since=<commit>
+GET /api/v1/context-tree/snapshot?window=7d
 Authorization: Bearer <member-jwt>
 ```
+
+`window` 只允许 `1d`、`7d`、`30d`,默认 `7d`。
 
 返回:
 
@@ -147,24 +148,24 @@ ContextTreeStatus
 - 解析 markdown files 和 directories。
 - 生成 parent edges、soft link edges、markdown link edges。
 - 生成 preview、owners、title、affected context area。
-- 基于 `since` commit 计算 changes。
+- 基于固定时间窗口计算 changes。
 - 生成 updates,把 file diff 转译为 agent decision context update。
 - 读取最后一次触碰该文件的 commit author 和 commit subject,作为 `changedBy` 与可选 `summary`。
 - 校验本地 checkout branch 与 server config 是否一致,避免错标 branch。
-- 对 git command 设置 timeout / buffer 上限,并对 diff entry 和 commit window 做上限保护。
-- 用短 TTL in-memory cache 缓解同一 `repo + branch + headCommit + since` 的重复请求。
+- 对 git command 设置 timeout / buffer 上限,并对 diff entry 做上限保护。
+- 用短 TTL in-memory cache 缓解同一 `repo + branch + headCommit + window` 的重复请求。
 - 返回 active / unavailable 状态。
 
 当前实现不做 remote clone、credential refresh 或 stale snapshot fallback。如果 `contextTree.repo` 是 remote URL,需要通过 `FIRST_TREE_HUB_CONTEXT_TREE_PATH` 指向 server 可读的本地 checkout。后续生产化可以把 refresh / persistent cache / stale fallback 补到这一层,但不改变 Web 的只读 read model。
 
 ### 性能和复用边界
 
-当前 snapshot projection 是 request-time 计算:扫描本地 markdown tree、解析 frontmatter、读取 git diff,再生成 nodes / edges / changes / updates。实现中有短 TTL memory cache、git timeout、diff entry cap 和 commit window cap,以避免页面刷新导致重复重算;但它仍不是长期最优边界。
+当前 snapshot projection 是 request-time 计算:扫描本地 markdown tree、解析 frontmatter、读取 git diff,再生成 nodes / edges / changes / updates。实现中有短 TTL memory cache、git timeout、diff entry cap 和固定窗口枚举,以避免页面刷新导致重复重算或请求超大范围;但它仍不是长期最优边界。
 
 生产化演进方向:
 
 - 按 `repo + branch + headCommit` 缓存 nodes / edges / previews。
-- `since` 只影响 changes / updates,不要导致每次请求都重建整棵树。
+- `window` 只影响 changes / updates,不要导致每次请求都重建整棵树。
 - remote clone / pull、credential、stale snapshot fallback 放到 server refresh/cache 层。
 - 通用扫描、frontmatter 解析、soft link 解析长期应沉到 `first-tree` 包,例如 `first-tree tree export --json` 或包内 `readContextTreeSnapshot()`;Hub 只保留 auth、config、cache、API wrapper 和 Context Updates 产品表达。
 
@@ -173,7 +174,7 @@ ContextTreeStatus
 ### Diff 和摘要规则
 
 ```text
-git diff --name-status <since>..HEAD -- '*.md'
+git diff --name-status <window-base>..HEAD -- '*.md'
 ```
 
 映射:
@@ -183,9 +184,11 @@ git diff --name-status <since>..HEAD -- '*.md'
 - `D` -> removed ghost node
 - rename 当前先视为 removed + added
 
-`since` 只接受 commit SHA,并且必须是当前 `HEAD` 的 ancestor。如果 `since` 不存在、不可达、跨 repo / branch,或距离 `HEAD` 超过当前窗口上限,server 会回退到默认 recent window,并返回 warning status,避免前端误显示“没有变化”。
+`window-base` 由 server 根据固定窗口计算,不是用户提交的 commit。规则:
 
-没有 `since` 时,server 默认展示最近 commit window。小 repo 如果不足该窗口,用 empty tree 作为 comparison base,确保首次部署也能看到当前 Context Tree 内容。
+- `window=1d | 7d | 30d`;
+- 找到窗口开始时间之前最近的 commit,然后 diff 到 `HEAD`;
+- 如果 repo 的全部 commit 都在窗口内,用 empty tree 作为 comparison base,确保首次部署也能看到当前 Context Tree 内容。
 
 左侧 Context Updates 不展示 diff 内容,避免把 markdown 半句误当成可理解摘要。`summary` 当前只来自最后一次触碰该文件的 commit subject:
 
@@ -195,7 +198,6 @@ git diff --name-status <since>..HEAD -- '*.md'
 
 异常处理:
 
-- `since` 不存在或不可达:返回当前 snapshot,并用最近 N 个 commits 作为 fallback change window。
 - 没有可用 snapshot:返回 unavailable。
 - remote URL 未绑定到本地 checkout:返回 unavailable,并提示配置本地路径。
 
@@ -217,7 +219,7 @@ Source preview inside Selected Change
 Team context is current
 Agents have a synced team context snapshot available · main@9e664e
 
-12 changes since your last view
+12 context updates in the last 7 days
 Added 3 · Edited 8 · Removed 1
 ```
 
@@ -262,15 +264,15 @@ agent-hub/web-console.md · 9e664e7
 [Preview source] [Copy path]
 ```
 
-### Last seen
+### Time window
 
-当前使用浏览器本地存储。key 按 server origin、repo、branch scoped,避免切换 Hub server / Context Tree repo / branch 时把不相关 commit 当成 `since`:
+当前不做 per-user last-seen / unread 状态。页面使用固定时间窗口:
 
 ```text
-first-tree-hub:context:lastSeenCommit:<origin>:<repo>:<branch>
+1 day | 7 days | 30 days
 ```
 
-`Mark all seen` 把当前 `headCommit` 写入 localStorage,并刷新 change state。
+默认 `7 days`。这样页面表达的是“团队 context 最近如何生长”,不是“这个用户哪些没读过”。如果后续要做治理型 ack / review workflow,再引入 server-side last-seen,不使用 localStorage 作为核心状态。
 
 ## 分阶段交付
 
@@ -305,7 +307,7 @@ first-tree-hub:context:lastSeenCommit:<origin>:<repo>:<branch>
 
 ### Phase 4: Polish
 
-- `Mark all seen`。
+- time-window selector。
 - keyboard / focus / loading states。
 - responsive layout。
 - `Open in repo` / optional `Open in Obsidian`。
