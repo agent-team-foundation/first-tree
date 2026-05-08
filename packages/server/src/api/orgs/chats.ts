@@ -6,7 +6,7 @@ import {
 import { and, desc, eq, lt, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { chats } from "../../db/schema/chats.js";
-import { ForbiddenError } from "../../errors.js";
+import { BadRequestError, ForbiddenError } from "../../errors.js";
 import { requireOrgMembership } from "../../scope/require-org.js";
 import { assertAllAgentsVisibleInOrg } from "../../scope/require-resource.js";
 import { listChatsForMember } from "../../services/chat.js";
@@ -102,6 +102,11 @@ export async function orgChatRoutes(app: FastifyInstance): Promise<void> {
     const scope = await requireOrgMembership(request, app.db);
     const body = createMeChatSchema.parse(request.body);
     const targetIds = [...new Set(body.participantIds)].filter((id) => id !== scope.humanAgentId);
+    if (targetIds.length === 0) {
+      // Service layer also enforces this (services/me-chat.ts), but bail at
+      // the handler so the visibility query below isn't run on an empty list.
+      throw new BadRequestError("At least one non-self participant required");
+    }
     await assertAllAgentsVisibleInOrg(app.db, scope, targetIds);
 
     const result = await createMeChat(app.db, scope.humanAgentId, scope.organizationId, body);

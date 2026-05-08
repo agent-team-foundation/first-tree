@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { requireOrgAdmin, requireOrgMembership } from "../../scope/require-org.js";
+import { requireOrgAdmin } from "../../scope/require-org.js";
 import { expiryToSeconds } from "../../services/auth.js";
 import * as clientService from "../../services/client.js";
 import { serializeDate } from "../../utils.js";
@@ -28,7 +28,4 @@ export async function orgClientRoutes(app: FastifyInstance): Promise<void> {
       lastSeenAt: c.lastSeenAt.toISOString(),
     }));
   });
-
-  // Membership probe — used by the `/me` flow to ensure the caller has org access.
-  void requireOrgMembership;
 }

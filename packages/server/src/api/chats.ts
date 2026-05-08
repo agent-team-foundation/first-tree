@@ -10,7 +10,7 @@ import { agents } from "../db/schema/agents.js";
 import { chatParticipants, chats } from "../db/schema/chats.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
-import { requireChatAccess } from "../scope/require-resource.js";
+import { assertAllAgentsVisibleInOrg, requireChatAccess } from "../scope/require-resource.js";
 import { ensureParticipant, joinChat, leaveChat } from "../services/chat.js";
 import { prepareImageOutbound } from "../services/image-broadcast.js";
 import {
@@ -222,7 +222,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { chatId: string } }>("/:chatId/participants", async (request, reply) => {
     const { scope } = await requireChatAccess(request, app.db);
     const body = addMeChatParticipantsSchema.parse(request.body);
-    await assertAllAgentsVisibleInOrgFromBody(app, scope, body.participantIds);
+    await assertAllAgentsVisibleInOrg(app.db, scope, body.participantIds);
     await addMeChatParticipants(app.db, request.params.chatId, scope.humanAgentId, scope.organizationId, body);
     return reply.status(204).send();
   });
@@ -239,13 +239,4 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     const { scope } = await requireChatAccess(request, app.db);
     return leaveMeChat(app.db, request.params.chatId, scope.humanAgentId);
   });
-}
-
-async function assertAllAgentsVisibleInOrgFromBody(
-  app: FastifyInstance,
-  scope: { userId: string; organizationId: string; memberId: string; role: "admin" | "member"; humanAgentId: string },
-  participantIds: string[],
-): Promise<void> {
-  const { assertAllAgentsVisibleInOrg } = await import("../scope/require-resource.js");
-  await assertAllAgentsVisibleInOrg(app.db, scope, participantIds);
 }

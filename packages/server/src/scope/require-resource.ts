@@ -5,7 +5,9 @@ import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatParticipants, chats } from "../db/schema/chats.js";
 import { members } from "../db/schema/members.js";
+import { tasks } from "../db/schema/tasks.js";
 import { NotFoundError } from "../errors.js";
+import { stampAgentResource, stampChatResource, stampOrgScope } from "../observability/request-context.js";
 import { requireUser } from "./require-user.js";
 import type { OrgScope } from "./types.js";
 
@@ -99,6 +101,8 @@ export async function requireAgentAccess(
     }
   }
 
+  stampOrgScope(request, scope);
+  stampAgentResource(request, agent);
   return { agent: agent as AgentRow, scope };
 }
 
@@ -121,13 +125,21 @@ type ChatRow = {
  * participant, OR any agent the caller manages (via members.id) is a
  * participant. Admin role does NOT auto-grant chat access — chat content
  * remains private to participants and supervisors (their managers).
+ *
+ * The Params type is generic so routes that mount on a path with extra
+ * params (e.g. `/agents/:uuid/sessions/:chatId/...` for compound checks)
+ * pass `request` through verbatim without an `as unknown` cast — only
+ * `chatId` is read here, every other param is ignored.
  */
-export async function requireChatAccess(
-  request: FastifyRequest<{ Params: { chatId: string } }>,
+export async function requireChatAccess<P extends { chatId: string }>(
+  request: FastifyRequest<{ Params: P }>,
   db: Database,
 ): Promise<{ chat: ChatRow; scope: OrgScope }> {
   const { userId } = requireUser(request);
-  const { chatId } = request.params;
+  // The generic constraint guarantees `chatId` is a string; the cast is
+  // here only because Fastify's params type chain erases the `extends`
+  // bound when the request flows through hook/handler decorators.
+  const { chatId } = request.params as { chatId: string };
 
   const [chat] = await db.select().from(chats).where(eq(chats.id, chatId)).limit(1);
   if (!chat) throw new NotFoundError(`Chat "${chatId}" not found`);
@@ -148,7 +160,11 @@ export async function requireChatAccess(
     .from(chatParticipants)
     .where(and(eq(chatParticipants.chatId, chatId), eq(chatParticipants.agentId, caller.humanAgentId)))
     .limit(1);
-  if (direct) return { chat: chat as ChatRow, scope };
+  if (direct) {
+    stampOrgScope(request, scope);
+    stampChatResource(request, chat);
+    return { chat: chat as ChatRow, scope };
+  }
 
   // Supervised participant — any agent the caller manages.
   const participantRows = await db
@@ -168,6 +184,8 @@ export async function requireChatAccess(
     .limit(1);
 
   if (!managed) throw new NotFoundError(`Chat "${chatId}" not found`);
+  stampOrgScope(request, scope);
+  stampChatResource(request, chat);
   return { chat: chat as ChatRow, scope };
 }
 
@@ -208,6 +226,43 @@ export async function assertAgentManageableByUser(db: Database, userId: string, 
     throw new NotFoundError(`Agent "${agentUuid}" not found`);
   }
   return scope;
+}
+
+type TaskRow = {
+  organizationId: string;
+};
+
+/**
+ * Gate access to a task. Allowed for any active member of the task's org —
+ * mirrors the original inline gate in `api/tasks.ts` that this helper
+ * replaces. Returns both the task's org row and the caller's resolved
+ * `OrgScope`, so handlers can read `scope.memberId` for audit fields.
+ */
+export async function requireTaskAccess<P extends { taskId: string }>(
+  request: FastifyRequest<{ Params: P }>,
+  db: Database,
+): Promise<{ task: TaskRow; scope: OrgScope }> {
+  const { userId } = requireUser(request);
+  // See `requireChatAccess` for why this cast is needed despite the generic.
+  const { taskId } = request.params as { taskId: string };
+
+  const [task] = await db
+    .select({ organizationId: tasks.organizationId })
+    .from(tasks)
+    .where(eq(tasks.id, taskId))
+    .limit(1);
+  if (!task) throw new NotFoundError(`Task "${taskId}" not found`);
+
+  const caller = await resolveCallerInOrg(db, userId, task.organizationId);
+  const scope: OrgScope = {
+    userId,
+    organizationId: task.organizationId,
+    memberId: caller.memberId,
+    role: caller.role,
+    humanAgentId: caller.humanAgentId,
+  };
+  stampOrgScope(request, scope);
+  return { task, scope };
 }
 
 /**

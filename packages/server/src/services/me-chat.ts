@@ -268,7 +268,7 @@ export async function listMeChats(
 /**
  * Title resolution priority:
  *
- *   1. `chat.topic` (manual, set via `PATCH /admin/chats/:id`)
+ *   1. `chat.topic` (manual, set via `PATCH /chats/:chatId`)
  *   2. First message summary (auto, ≤ 50 chars from `extractSummary`)
  *   3. Participant join (fallback when chat has no messages yet)
  *

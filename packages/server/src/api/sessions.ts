@@ -27,7 +27,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { uuid: string; chatId: string } }>("/:uuid/sessions/:chatId", async (request) => {
     const { agent } = await requireAgentAccess(request, app.db, "visible");
     // Bind chatId for the chat-access helper.
-    await requireChatAccess(request as unknown as Parameters<typeof requireChatAccess>[0], app.db);
+    await requireChatAccess(request, app.db);
     return sessionService.getSession(app.db, agent.uuid, request.params.chatId);
   });
 
@@ -37,7 +37,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     Querystring: { limit?: string; cursor?: string; direction?: string };
   }>("/:uuid/sessions/:chatId/events", async (request) => {
     const { agent } = await requireAgentAccess(request, app.db, "visible");
-    await requireChatAccess(request as unknown as Parameters<typeof requireChatAccess>[0], app.db);
+    await requireChatAccess(request, app.db);
     const limit = request.query.limit !== undefined ? Number.parseInt(request.query.limit, 10) : undefined;
     const cursor = request.query.cursor !== undefined ? Number.parseInt(request.query.cursor, 10) : undefined;
     const direction = request.query.direction === "desc" ? "desc" : "asc";

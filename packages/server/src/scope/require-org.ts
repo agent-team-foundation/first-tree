@@ -3,6 +3,7 @@ import type { FastifyRequest } from "fastify";
 import type { Database } from "../db/connection.js";
 import { members } from "../db/schema/members.js";
 import { ForbiddenError } from "../errors.js";
+import { stampOrgScope } from "../observability/request-context.js";
 import { requireUser } from "./require-user.js";
 import type { OrgScope } from "./types.js";
 
@@ -40,13 +41,15 @@ export async function requireOrgMembership(
     throw new ForbiddenError("Membership has unknown role");
   }
 
-  return {
+  const scope: OrgScope = {
     userId,
     organizationId: orgId,
     memberId: row.id,
     role: row.role,
     humanAgentId: row.agentId,
   };
+  stampOrgScope(request, scope);
+  return scope;
 }
 
 /**

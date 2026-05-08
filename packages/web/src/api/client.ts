@@ -125,7 +125,10 @@ async function tryRefresh(refreshToken: string): Promise<StoredTokens | null> {
       });
       if (!res.ok) return null;
       const body = (await res.json()) as { accessToken: string; refreshToken?: string };
-      // Server refresh only returns accessToken — preserve existing refreshToken
+      // Sliding-window refresh: server returns a fresh refreshToken on every
+      // call (services/auth.ts:refreshAccessToken). Fall back to the existing
+      // one if the server response somehow omits it — defends against any
+      // future change that goes back to access-only refreshes.
       const updated: StoredTokens = {
         accessToken: body.accessToken,
         refreshToken: body.refreshToken ?? refreshToken,

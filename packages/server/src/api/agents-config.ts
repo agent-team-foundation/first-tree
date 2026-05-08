@@ -2,7 +2,9 @@ import {
   dryRunAgentRuntimeConfigSchema,
   updateAgentRuntimeConfigSchema,
 } from "@agent-team-foundation/first-tree-hub-shared";
+import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
+import { agentPresence } from "../db/schema/agent-presence.js";
 import { requireAgentAccess } from "../scope/require-resource.js";
 
 /**
@@ -33,9 +35,6 @@ export async function agentConfigRoutes(app: FastifyInstance): Promise<void> {
 
   app.get<{ Params: { uuid: string } }>("/:uuid/client-status", async (request) => {
     const { agent } = await requireAgentAccess(request, app.db, "visible");
-    const { eq } = await import("drizzle-orm");
-    const { agentPresence } = await import("../db/schema/agent-presence.js");
-
     const [presence] = await app.db
       .select({ status: agentPresence.status, lastSeenAt: agentPresence.lastSeenAt })
       .from(agentPresence)

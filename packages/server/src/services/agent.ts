@@ -583,7 +583,7 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
     if (agent.clientId !== null && agent.clientId !== data.clientId) {
       throw new BadRequestError(
         "clientId is immutable through this entry — cross-client moves go through rebindAgent " +
-          "(PATCH /admin/agents/:agentId/rebind), which runs owner / org / capability checks atomically.",
+          "(PATCH /agents/:uuid/rebind), which runs owner / org / capability checks atomically.",
       );
     }
   }
@@ -647,7 +647,7 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
  * the same owner (manager.userId) and same organization; client must report
  * the requested runtime provider in its capabilities (skipped under `force`).
  *
- * Intended caller: PATCH /admin/agents/:agentId/rebind. The Web "Re-bind"
+ * Intended caller: PATCH /agents/:uuid/rebind. The Web "Re-bind"
  * dialog routes both same-client runtime-only switches and cross-client
  * moves through this single entry.
  *
