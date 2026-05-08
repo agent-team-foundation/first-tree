@@ -206,15 +206,21 @@ export function collectEntries(treeRoot: string): Array<[string, string[]]> {
   return entries;
 }
 
-export function generateCodeowners(treeRoot: string, options?: { check?: boolean }): number {
+export function generateCodeowners(
+  treeRoot: string,
+  options?: { check?: boolean; alwaysInclude?: string[] },
+): number {
   const check = options?.check ?? false;
+  const alwaysInclude = options?.alwaysInclude ?? [];
   const entries = collectEntries(treeRoot);
   const codeownersFile = join(treeRoot, ".github", "CODEOWNERS");
   const lines = ["# Auto-generated from Context Tree. Do not edit manually.", ""];
 
   for (const [pattern, owners] of entries) {
-    if (owners.length > 0) {
-      lines.push(`${pattern.padEnd(50)} ${formatOwners(owners)}`);
+    const merged = alwaysInclude.length > 0 ? [...owners, ...alwaysInclude] : owners;
+
+    if (merged.length > 0) {
+      lines.push(`${pattern.padEnd(50)} ${formatOwners(merged)}`);
     }
   }
 
