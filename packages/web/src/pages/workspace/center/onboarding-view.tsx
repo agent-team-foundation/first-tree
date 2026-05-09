@@ -9,7 +9,7 @@ import { createAgentChat, sendChatMessage } from "../../../api/chats.js";
 import { api, withOrg } from "../../../api/client.js";
 import { type GithubRepo, listGithubRepos } from "../../../api/github.js";
 import { reportOnboardingEvent } from "../../../api/onboarding-events.js";
-import { putContextTreeSetting } from "../../../api/org-settings.js";
+import { getContextTreeSetting, putContextTreeSetting } from "../../../api/org-settings.js";
 import { useAuth } from "../../../auth/auth-context.js";
 import { Button } from "../../../components/ui/button.js";
 import { useToast } from "../../../components/ui/toast.js";
@@ -65,10 +65,10 @@ const CLIENT_DETECT_POLL_MS = 3_000;
  * concrete commands.
  *
  * Path A (existing tree) skips Hub bookkeeping at the end — the web
- * frontend already PUT the URL into the org's `context_tree` settings
- * namespace before sending the chat. Path B (new tree) tells the agent
- * to call back into the first-tree-hub CLI to record the freshly created
- * URL.
+ * frontend best-effort PUTs the URL into the org's `context_tree`
+ * settings namespace before sending the chat (non-fatal — agent still
+ * proceeds if the PUT fails). Path B (new tree) tells the agent to call
+ * back into the first-tree-hub CLI to record the freshly created URL.
  *
  * Single source of truth: only Step 3 IntroBody currently sends these.
  * If a future surface needs the same prompts, hoist these builders to
@@ -83,7 +83,7 @@ function buildBindBootstrap(sourceUrl: string, treeUrl: string): string {
     `Source repo: ${sourceUrl}`,
     `Existing tree: ${treeUrl}`,
     "",
-    "Your working directory already has the source repo cloned. Use the first-tree CLI to install the skill in the source repo and write the binding metadata pointing at the existing tree, then open a PR back to the source with those changes. Walk me through the PR when it's up.",
+    "Your workspace already has the source repo cloned in a subdirectory; the first-tree skill will locate it. Use the first-tree CLI to install the skill in the source repo and write the binding metadata pointing at the existing tree, then open a PR back to the source with those changes. Walk me through the PR when it's up.",
     "",
     `Reference: ${FIRST_TREE_REFERENCE_URL}`,
   ].join("\n");
@@ -95,7 +95,7 @@ function buildCreateBootstrap(sourceUrl: string): string {
     "",
     `Source repo: ${sourceUrl}`,
     "",
-    "Your working directory already has the source repo cloned. Use the first-tree CLI to install the skill in the source, scaffold a sibling tree directory, and write the binding metadata. Then push that new tree directory up to GitHub as a sibling repo under the same owner as the source, and open a PR back to the source with the skill + binding files.",
+    "Your workspace already has the source repo cloned in a subdirectory; the first-tree skill will locate it. Use the first-tree CLI to install the skill in the source, scaffold a sibling tree directory, and write the binding metadata. Then push that new tree directory up to GitHub as a sibling repo under the same owner as the source, and open a PR back to the source with the skill + binding files.",
     "",
     "Once you know the URL of the new tree repo, use the first-tree-hub CLI's `org bind-tree` command to record it on the Hub so future agents in this team can find it.",
     "",
@@ -905,6 +905,34 @@ function Step3IntroBody() {
       cancelled = true;
     };
   }, []);
+
+  // Pre-fill from the org's existing `context_tree` binding so an invitee
+  // (whose admin already configured the team tree) lands on Step 3 with
+  // the toggle defaulted to "Bind to an existing tree" and the URL filled
+  // in. Conservative: keeps the toggle visible so the user can still
+  // override; the deeper "invitees should not see Build at all" redesign
+  // is deferred to Phase B (team-level source_repos namespace), where it
+  // can fold/skip Step 3 cleanly.
+  useEffect(() => {
+    if (!organizationId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const settings = await getContextTreeSetting(organizationId);
+        if (cancelled) return;
+        if (settings.repo) {
+          setExistingTreeUrl(settings.repo);
+          setTreeMode((m) => m ?? "existing");
+        }
+      } catch {
+        // Non-fatal — admins without the namespace bound (or non-admins
+        // who can't read it) just see the empty toggle, same as before.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [organizationId]);
 
   const trimmedTreeUrl = existingTreeUrl.trim();
   const isExistingUrlValid = (() => {

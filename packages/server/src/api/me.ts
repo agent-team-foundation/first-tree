@@ -18,7 +18,7 @@ import { listAgentsManagedByUser } from "../services/access-control.js";
 import * as authService from "../services/auth.js";
 import * as clientService from "../services/client.js";
 import { decryptValue } from "../services/crypto.js";
-import { listUserRepos } from "../services/github-oauth.js";
+import { GithubApiError, listUserRepos } from "../services/github-oauth.js";
 import { buildInviteUrl, findActiveByToken, getActiveInvitation, recordRedemption } from "../services/invitation.js";
 import {
   ensureMembership,
@@ -194,6 +194,17 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       // ("Bad credentials") would leak token-revocation hints. Log the
       // real error server-side, return a stable copy.
       app.log.warn({ err, userId }, "list github repos failed");
+      // Auth failures (401 / 403) typically mean the stored token is stale
+      // or — more commonly post-`repo`-scope-expansion — was minted without
+      // the `repo` scope. Return 403 with `code: scope_missing` so the web
+      // RepoPicker surfaces the "Reconnect GitHub" path on the first call
+      // rather than after a confusing 502.
+      if (err instanceof GithubApiError && (err.status === 401 || err.status === 403)) {
+        return reply.status(403).send({
+          error: "GitHub access token is missing the `repo` scope. Please reconnect your GitHub account.",
+          code: "scope_missing",
+        });
+      }
       return reply.status(502).send({ error: "Couldn't reach GitHub. Try again, or reconnect your GitHub account." });
     }
   });

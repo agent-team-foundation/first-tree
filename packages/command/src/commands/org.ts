@@ -62,7 +62,7 @@ export function registerOrgCommands(program: Command): void {
         }
 
         print.status("•", `Bound organization to context-tree at ${url}`);
-        success({ orgId, treeUrl: url });
+        success({ orgId, repo: url });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         fail("UNEXPECTED", msg, 1);

@@ -110,12 +110,14 @@ describe("GET /me/github/repos", () => {
     expect(res.json<{ error: string }>().error).toMatch(/reconnect/i);
   });
 
-  it("returns 502 with a stable copy when the upstream call fails (does not leak provider error)", async () => {
+  it("returns 403 scope_missing when GitHub rejects the token (does not leak provider error)", async () => {
     const app = getApp();
     // Seed an OAuth user with a bogus encrypted token that decrypts to a
     // garbage string — `listUserRepos` will hit github.com which will
-    // return 401 ("Bad credentials"). The handler must wrap that in our
-    // own message; we assert no leakage.
+    // return 401 ("Bad credentials"). The handler classifies 401/403 as a
+    // scope/auth issue and steers the user to the Reconnect path; the
+    // assertion is that no provider string leaks and the response uses
+    // our `code: scope_missing` contract.
     const dev = await app.inject({
       method: "GET",
       url: "/api/v1/auth/github/dev-callback?githubId=9001&login=tokentest",
@@ -139,14 +141,17 @@ describe("GET /me/github/repos", () => {
       url: "/api/v1/me/github/repos",
       headers: { authorization: `Bearer ${access}` },
     });
-    // Either 502 (made the call, got rejected) or 503 (couldn't reach
-    // github.com from the test host — air-gapped CI). Both are fine; the
-    // critical assertion is that the response body never contains the
-    // raw provider string.
-    expect([502, 503]).toContain(res.statusCode);
-    const body = res.json<{ error: string }>();
+    // 403 = GitHub rejected the token (typical: missing `repo` scope or
+    // revoked token, both a "reconnect" affordance). 502 = made the call
+    // but got a non-auth GitHub error. 503 = couldn't reach github.com
+    // (air-gapped CI). All three are fine; the assertion is no leakage.
+    expect([403, 502, 503]).toContain(res.statusCode);
+    const body = res.json<{ error: string; code?: string }>();
     expect(body.error).not.toMatch(/Bad credentials/i);
     expect(body.error).not.toMatch(/GitHub repo list failed/i);
+    if (res.statusCode === 403) {
+      expect(body.code).toBe("scope_missing");
+    }
   });
 });
 

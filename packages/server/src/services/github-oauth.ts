@@ -122,6 +122,22 @@ export type GithubRepo = {
 };
 
 /**
+ * Thrown when GitHub's API returns a non-2xx for a token-scoped call.
+ * Carries the HTTP status so callers can distinguish auth failures (401 /
+ * 403 — typically a stale token or a missing scope after we expanded to
+ * `repo`) from transient upstream errors.
+ */
+export class GithubApiError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "GithubApiError";
+  }
+}
+
+/**
  * Fetch the authenticated user's accessible repositories. Used by the
  * Step 2 repo picker. Walks paginated GitHub API responses up to the cap.
  */
@@ -139,7 +155,7 @@ export async function listUserRepos(
       headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/vnd.github+json" },
     });
     if (!res.ok) {
-      throw new Error(`GitHub repo list failed (${res.status})`);
+      throw new GithubApiError(res.status, `GitHub repo list failed (${res.status})`);
     }
     const rows = (await res.json()) as Array<{
       full_name: string;
