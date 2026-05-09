@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type {
   AgentRuntimeConfigPayload,
   SessionEvent,
@@ -26,6 +26,13 @@ import type {
 } from "../runtime/handler.js";
 import { findImagePath } from "../runtime/image-store.js";
 import { InputController } from "../runtime/input-controller.js";
+import {
+  addLocalWorktree,
+  expandHome,
+  isAbsoluteLocalPath,
+  type LocalWorktreeOwned,
+  removeLocalWorktree,
+} from "../runtime/local-worktree.js";
 import { acquireWorkspace } from "../runtime/workspace.js";
 import { resolveClaudeCodeExecutable } from "./claude-executable.js";
 
@@ -330,6 +337,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   let appliedPayload: AgentRuntimeConfigPayload | null = null;
   /** Worktrees materialised for this session — each entry removed on shutdown. */
   const ownedWorktrees: Array<{ url: string; path: string; branchName: string }> = [];
+  /** Local-direct worktrees (Plan A) — `git worktree add` inside a user clone. */
+  const ownedLocalWorktrees: LocalWorktreeOwned[] = [];
 
   async function toSDKUserMessage(
     message: SessionMessage,
@@ -680,9 +689,21 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
 
   /**
    * Materialise the runtime config's `gitRepos` into worktrees under `cwd`.
-   * Idempotent across resumes: reuses an existing Hub-managed worktree if
-   * present, otherwise clones/fetches the bare mirror and creates a new
-   * `--detach`'d worktree at `<cwd>/<localPath>` (PRD §5.1.5).
+   * Two modes per repo entry, discriminated by `localPath`:
+   *
+   *   • Absolute / `~`-prefixed (Plan A "local-direct") — the user already
+   *     has a working clone at that path; we run `git worktree add` inside
+   *     it and materialise a session-scoped worktree at
+   *     `<cwd>/<displayName>/`. The session branch lives in the user's
+   *     real `.git/`, surviving session shutdown for the user to review.
+   *
+   *   • Empty or relative (legacy "sandbox") — Hub clones a bare mirror and
+   *     `git worktree add --detach`'s a session-scoped worktree at
+   *     `<cwd>/<localPath>/` from that mirror (PRD §5.1.5). Branch and
+   *     worktree are both ephemeral.
+   *
+   * Idempotent across resumes in both modes — a worktree dir that's already
+   * a `.git`-pointing checkout is reused.
    *
    * Fail-fast semantics per PRD D10/D13/D14: any failure aborts the session
    * and the error bubbles up to the caller (SessionManager).
@@ -692,8 +713,37 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     payload: AgentRuntimeConfigPayload | undefined,
     sessionCtx: SessionContext,
   ): Promise<void> {
-    if (!gitMirrorManager || !payload?.gitRepos?.length) return;
+    if (!payload?.gitRepos?.length) return;
     for (const repo of payload.gitRepos) {
+      // Local-direct mode: localPath is an absolute path to the user's clone.
+      // Display name in the agent workspace is `basename(repoRoot)` — derived
+      // from the actual on-disk location, not parsed out of `url`. Going via
+      // url breaks for `local://...` synthetic URLs (no path-derivable name)
+      // and could collide on `<workspace>/repo` when `deriveRepoLocalPath`
+      // falls back to its empty-string default.
+      if (repo.localPath && isAbsoluteLocalPath(repo.localPath)) {
+        const repoRoot = expandHome(repo.localPath);
+        const displayName = basename(repoRoot) || "repo";
+        const targetPath = join(workspace, displayName);
+        const branchName = `agent/${sessionCtx.chatId}`;
+        sessionCtx.log(`Git: preparing local clone ${repoRoot} → ${displayName}${repo.ref ? ` @ ${repo.ref}` : ""}`);
+        const owned = await addLocalWorktree({
+          repoRoot,
+          targetPath,
+          branchName,
+          ref: repo.ref,
+          log: (m) => sessionCtx.log(m),
+        });
+        ownedLocalWorktrees.push(owned);
+        continue;
+      }
+
+      // Sandbox mode (legacy) — needs the bare-mirror manager. Silently
+      // skip when absent (matches the pre-Plan-A behavior + parity with
+      // codex.ts). A misconfigured deploy with real sandbox repos surfaces
+      // via the missing worktree at session start rather than as a hard
+      // session-start error.
+      if (!gitMirrorManager) continue;
       const localPath = repo.localPath ?? deriveRepoLocalPath(repo.url);
       const targetPath = join(workspace, localPath);
       sessionCtx.log(`Git: preparing ${repo.url} → ${localPath}${repo.ref ? ` @ ${repo.ref}` : ""}`);
@@ -734,17 +784,25 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
 
   /** Tear down all worktrees this session owns; best-effort. */
   async function cleanupGitWorktrees(sessionCtx: SessionContext): Promise<void> {
-    if (!gitMirrorManager) return;
-    while (ownedWorktrees.length > 0) {
-      const entry = ownedWorktrees.pop();
-      if (!entry) continue;
-      try {
-        await gitMirrorManager.removeWorktree(entry);
-      } catch (err) {
-        sessionCtx.log(
-          `Git: removeWorktree(${entry.path}) failed — ${err instanceof Error ? err.message : String(err)}`,
-        );
+    if (gitMirrorManager) {
+      while (ownedWorktrees.length > 0) {
+        const entry = ownedWorktrees.pop();
+        if (!entry) continue;
+        try {
+          await gitMirrorManager.removeWorktree(entry);
+        } catch (err) {
+          sessionCtx.log(
+            `Git: removeWorktree(${entry.path}) failed — ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
       }
+    }
+    // Local-direct worktrees: branch is intentionally preserved so the user
+    // can review/merge/discard via their normal git workflow.
+    while (ownedLocalWorktrees.length > 0) {
+      const owned = ownedLocalWorktrees.pop();
+      if (!owned) continue;
+      await removeLocalWorktree(owned, (m) => sessionCtx.log(m));
     }
   }
 

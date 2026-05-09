@@ -33,6 +33,7 @@ export type {
 } from "./runtime/handler.js";
 export { getHandlerFactory, registerHandler } from "./runtime/handler.js";
 export { InputController } from "./runtime/input-controller.js";
+export { probeLocalGitRepos } from "./runtime/local-git-repos.js";
 export type { AgentRuntimeOptions } from "./runtime/runtime.js";
 export { AgentRuntime } from "./runtime/runtime.js";
 export { SessionManager } from "./runtime/session-manager.js";

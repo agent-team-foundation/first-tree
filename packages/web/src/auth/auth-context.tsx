@@ -64,6 +64,12 @@ type AuthContextValue = {
    * `onboardingDismissedAt` so the stepper unmounts immediately.
    */
   dismissOnboarding: () => Promise<void>;
+  /**
+   * PATCH `/me/onboarding { dismissed: false }`. Clears
+   * `onboardingDismissedAt` so the stepper renders again. Used by the
+   * Settings → Setup "Resume setup" toggle.
+   */
+  restoreOnboarding: () => Promise<void>;
   login: (username: string, password: string) => Promise<void>;
   /**
    * Adopt a token pair handed in from a non-login surface (OAuth fragment
@@ -235,6 +241,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const restoreOnboarding = useCallback(async () => {
+    // Optimistic clear so the stepper reappears immediately.
+    const prior = dismissedAtRef.current;
+    setOnboardingDismissedAt(null);
+    try {
+      await api.patch<{ dismissedAt: string | null }>("/me/onboarding", { dismissed: false });
+    } catch {
+      setOnboardingDismissedAt(prior);
+    }
+  }, []);
+
   // Fetch member info on initial load if already authenticated
   useEffect(() => {
     if (isAuthenticated && !user) {
@@ -270,6 +287,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         onboardingStep,
         onboardingDismissedAt,
         dismissOnboarding,
+        restoreOnboarding,
         login,
         adoptTokens,
         selectOrganization,

@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { useSearchParams } from "react-router";
 import { useAuth } from "../../../auth/auth-context.js";
-import { readStep1Confirmed, writeOnboardingReturnChatId } from "../../../utils/onboarding-flags.js";
+import { readStep1Confirmed, readStep3IntroDismissed } from "../../../utils/onboarding-flags.js";
 
 /**
  * OnboardingStepper — the 3-step progress indicator that lives above
@@ -28,21 +28,16 @@ type StepIndex = 1 | 2 | 3;
 type CircleState = "pending" | "active" | "completed" | "error";
 
 const STEP_LABELS: Record<StepIndex, string> = {
-  1: "Create team",
-  2: "Connect agent",
-  3: "Init context-tree",
+  1: "Name your team",
+  2: "Set up your agent",
+  3: "Build your context-tree",
 };
 
 export function OnboardingStepper() {
-  const { onboardingStep, onboardingDismissedAt, dismissOnboarding, role } = useAuth();
+  const { onboardingStep, onboardingDismissedAt, dismissOnboarding } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedChatId = searchParams.get("c");
   const stepOverride = searchParams.get("step");
-
-  // Step 1 is admin-only — its Continue handler PATCHes /orgs/:id which
-  // requires `requireOrgAdmin` server-side. For non-admin members the pip
-  // is rendered but disabled (visual-only completion mark).
-  const canRenameTeam = role === "admin";
 
   // Read the per-tab Step 1 acknowledgement flag every render. The flag is
   // written by `OnboardingView`'s Step1Body Continue handler, but the
@@ -71,6 +66,19 @@ export function OnboardingStepper() {
   if (onboardingStep === null) return null;
   if (onboardingDismissedAt) return null;
 
+  // Dismiss is gated on Step 2 being done — i.e., the user has both a
+  // connected client and at least one non-human agent. Letting users hide
+  // the stepper before that lands them on an empty workspace with no
+  // guidance for "what now?". Once Step 2 completes the workspace is
+  // functional, so dismissing is a legitimate "I'll skip Step 3" choice.
+  const canDismiss = onboardingStep === "completed";
+  // Hide the stepper when the user has explicitly skipped Step 3 (clicked
+  // "I'll do it later") AND is now active in some chat — they've moved on
+  // to real work, the stepper is just nag at this point. The [Yes, build
+  // it] path doesn't set `step3IntroDismissed`, so the tree-init chat
+  // keeps the stepper visible per design §4.1.
+  if (selectedChatId && readStep3IntroDismissed()) return null;
+
   const stepStates: Record<StepIndex, CircleState> = {
     1: stateFor(1, activeStep, onboardingStep),
     2: stateFor(2, activeStep, onboardingStep),
@@ -78,30 +86,15 @@ export function OnboardingStepper() {
   };
 
   const handleStepClick = (s: StepIndex) => {
-    if (stepStates[s] === "pending") return;
-    if (s === activeStep) return;
-    // Step 1 is admin-only (PATCH /orgs/:id is requireOrgAdmin server-side).
-    // Members see the completed pip as a no-op rather than a 403 surprise.
-    if (s === 1 && !canRenameTeam) return;
+    // Only Step 3 routes through here (callers gate onClick to that single
+    // case). Drop any `?c=` so CenterPanel falls through to OnboardingView
+    // (ChatByIdView would otherwise mask the Step 3 body), then set
+    // `?step=tree` which makes OnboardingView clear `step3IntroDismissed`
+    // and render the IntroBody.
+    if (s !== 3) return;
     const next = new URLSearchParams(searchParams);
-    // CenterPanel routes ChatByIdView before OnboardingView, so the chat
-    // URL has to come off when the user revisits Steps 1 / 2 — otherwise
-    // the form never renders. Stash the chat id so Step 1 / 2 Continue
-    // can restore it instead of stranding the user on `/`.
-    if (s === 1) {
-      if (selectedChatId) writeOnboardingReturnChatId(selectedChatId);
-      next.delete("c");
-      next.set("step", "team");
-    } else if (s === 2) {
-      if (selectedChatId) writeOnboardingReturnChatId(selectedChatId);
-      next.delete("c");
-      next.set("step", "agent");
-    } else {
-      // Step 3 is the chat home — clear any stash so we don't bounce back
-      // through it later.
-      writeOnboardingReturnChatId(null);
-      next.set("step", "tree");
-    }
+    next.delete("c");
+    next.set("step", "tree");
     setSearchParams(next, { replace: false });
   };
 
@@ -116,7 +109,10 @@ export function OnboardingStepper() {
         background: "var(--bg)",
       }}
     >
-      <ol className="flex items-center flex-1 min-w-0" style={{ gap: 0, listStyle: "none", margin: 0, padding: 0 }}>
+      <ol
+        className="flex items-center justify-center flex-1 min-w-0"
+        style={{ gap: 0, listStyle: "none", margin: 0, padding: 0 }}
+      >
         {([1, 2, 3] as StepIndex[]).map((s, idx) => {
           const state = stepStates[s];
           const next = ([1, 2, 3] as StepIndex[])[idx + 1];
@@ -127,7 +123,15 @@ export function OnboardingStepper() {
                 index={s}
                 state={state}
                 label={STEP_LABELS[s]}
-                onClick={state === "completed" ? () => handleStepClick(s) : undefined}
+                // Completed pips are progress indicators, not navigation —
+                // edits to team / agent live in Settings, and revisiting an
+                // onboarding form for a completed step creates state
+                // conflicts (e.g., re-clicking Step 2's Create button).
+                // Only Step 3's active pip stays clickable: Step 3 has no
+                // terminal server-tracked completion, and clicking it from
+                // any chat (including a manual one that masks OnboardingView)
+                // is the only way back to the IntroBody.
+                onClick={s === 3 && state === "active" ? () => handleStepClick(s) : undefined}
               />
               {next ? <ConnectionLine solid={lineSolid} /> : null}
             </li>
@@ -138,9 +142,10 @@ export function OnboardingStepper() {
       <button
         type="button"
         onClick={() => void dismissOnboarding()}
-        title="Hide setup steps"
+        disabled={!canDismiss}
+        title={canDismiss ? "Hide setup steps" : "Finish setting up your agent first"}
         aria-label="Hide setup steps"
-        className="cursor-pointer"
+        className={canDismiss ? "cursor-pointer" : "cursor-not-allowed"}
         style={{
           flexShrink: 0,
           width: 24,
@@ -151,12 +156,13 @@ export function OnboardingStepper() {
           background: "transparent",
           border: 0,
           borderRadius: "var(--rd-1)",
-          color: "var(--fg-2)",
+          color: canDismiss ? "var(--fg-2)" : "var(--fg-4)",
           fontSize: 14,
           lineHeight: 1,
+          opacity: canDismiss ? 1 : 0.5,
         }}
         onMouseEnter={(e) => {
-          e.currentTarget.style.background = "var(--surface-2)";
+          if (canDismiss) e.currentTarget.style.background = "var(--surface-2)";
         }}
         onMouseLeave={(e) => {
           e.currentTarget.style.background = "transparent";
@@ -206,7 +212,11 @@ function StepCircle({
   label: string;
   onClick?: () => void;
 }) {
-  const clickable = state === "completed" && !!onClick;
+  // Clickability is decided by the caller (which passes `onClick` only when
+  // the click would have an effect). Letting `onClick` presence drive
+  // cursor/disabled here means active-state Step 3 can be clicked to
+  // re-open the IntroBody from placeholder, while pending pips stay inert.
+  const clickable = !!onClick;
   const circle = renderCircle(state, index);
   return (
     <button
@@ -266,25 +276,42 @@ function renderCircle(state: CircleState, index: StepIndex) {
     return (
       <span
         aria-hidden="true"
-        className="mono"
-        style={{
-          width: baseSize,
-          height: baseSize,
-          borderRadius: "50%",
-          background: "var(--accent)",
-          border: "var(--hairline-bold) solid var(--accent)",
-          boxShadow: "0 0 0 var(--sp-1) var(--accent-ring)",
-          display: "inline-flex",
-          alignItems: "center",
-          justifyContent: "center",
-          color: "white",
-          fontSize: 12,
-          fontWeight: 600,
-          lineHeight: 1,
-          flexShrink: 0,
-        }}
+        style={{ position: "relative", width: baseSize, height: baseSize, flexShrink: 0, display: "inline-block" }}
       >
-        {index}
+        {/* Outer ripple — same `ring-pulse` keyframe used by PulsingDot
+            and DisconnectChip elsewhere in the app, kept subtle (hairline
+            accent border, 0.5 base opacity) so it doesn't out-compete
+            body content. */}
+        <span
+          style={{
+            position: "absolute",
+            inset: -3,
+            borderRadius: "50%",
+            border: "var(--hairline) solid var(--accent)",
+            animation: "ring-pulse 1.8s infinite",
+            opacity: 0.5,
+          }}
+        />
+        {/* Solid filled circle with the step number */}
+        <span
+          className="mono"
+          style={{
+            position: "absolute",
+            inset: 0,
+            borderRadius: "50%",
+            background: "var(--accent)",
+            border: "var(--hairline-bold) solid var(--accent)",
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "white",
+            fontSize: 12,
+            fontWeight: 600,
+            lineHeight: 1,
+          }}
+        >
+          {index}
+        </span>
       </span>
     );
   }

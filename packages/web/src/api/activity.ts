@@ -1,4 +1,4 @@
-import type { ClientCapabilities } from "@agent-team-foundation/first-tree-hub-shared";
+import type { ClientCapabilities, LocalGitRepoSummaries } from "@agent-team-foundation/first-tree-hub-shared";
 import { api, withOrg } from "./client.js";
 
 export type AgentType = "human" | "personal_assistant" | "autonomous_agent";
@@ -62,9 +62,14 @@ export function getClient(clientId: string): Promise<HubClient> {
  * client's full row plus its `metadata.capabilities` blob (Option C). Used
  * by the Computers page to surface SDK install + auth state
  * per provider.
+ *
+ * `localGitRepos` is the host's working-clone snapshot — present on clients
+ * that shipped the scanner; absent (or empty) on older clients. Used by the
+ * Step 3 onboarding picker to offer "pick from your local repos".
  */
 export type ClientWithCapabilities = HubClient & {
   capabilities: ClientCapabilities;
+  localGitRepos: LocalGitRepoSummaries;
 };
 
 export function getClientCapabilities(clientId: string): Promise<ClientWithCapabilities> {

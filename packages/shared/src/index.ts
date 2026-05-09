@@ -153,6 +153,10 @@ export {
   capabilityEntrySchema,
   capabilityStateSchema,
   clientCapabilitiesSchema,
+  type LocalGitRepoSummaries,
+  type LocalGitRepoSummary,
+  localGitRepoSummariesSchema,
+  localGitRepoSummarySchema,
   type UpdateClientCapabilities,
   updateClientCapabilitiesSchema,
 } from "./schemas/client-capabilities.js";

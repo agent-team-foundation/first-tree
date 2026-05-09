@@ -13,9 +13,14 @@ import { OnboardingView } from "./onboarding-view.js";
  *                          target picker.
  *   2. ChatByIdView     — `?c=<chatId>` set; chat-id-only shim around the
  *                          existing ChatView.
- *   3. OnboardingView   — onboardingStep is "connect" or "create_agent". Inline
- *                          onboarding card.
- *   4. NoChatView       — onboarding complete, nothing selected.
+ *   3. OnboardingView   — user is in the onboarding flow. This includes
+ *                          `onboardingStep === "completed"` because Step 3
+ *                          (Build context-tree) is purely client-driven and
+ *                          not tracked by `inferOnboardingStep` server-side.
+ *                          OnboardingView's internal body resolver branches
+ *                          by step (1 / 2 / 3 intro / 3 placeholder).
+ *   4. NoChatView       — onboarding dismissed via the stepper `✕`, nothing
+ *                          selected.
  */
 export function CenterPanel({
   selectedChatId,
@@ -24,7 +29,7 @@ export function CenterPanel({
   selectedChatId: string | null;
   onSelectChat: (chatId: string) => void;
 }) {
-  const { onboardingStep } = useAuth();
+  const { onboardingStep, onboardingDismissedAt } = useAuth();
 
   if (selectedChatId === DRAFT_CHAT_ID) {
     return <NewChatDraft onCreated={onSelectChat} />;
@@ -34,7 +39,7 @@ export function CenterPanel({
     return <ChatByIdView chatId={selectedChatId} />;
   }
 
-  if (onboardingStep !== null && onboardingStep !== "completed") {
+  if (onboardingStep !== null && !onboardingDismissedAt) {
     return <OnboardingView />;
   }
 

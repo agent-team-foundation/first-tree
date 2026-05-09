@@ -17,6 +17,7 @@ export function SettingsLayout() {
       >
         <SubNavLink to="/settings/computers" label="Computers" />
         <SubNavLink to="/settings/integrations" label="Integrations" />
+        <SubNavLink to="/settings/setup" label="Setup" />
       </aside>
 
       <div className="flex-1 min-w-0 overflow-auto">

@@ -11,6 +11,7 @@ import { LoginPage } from "./pages/login.js";
 import { OAuthCompletePage } from "./pages/oauth-complete.js";
 import { SettingsComputersPage } from "./pages/settings/computers.js";
 import { SettingsIntegrationsPage } from "./pages/settings/integrations.js";
+import { SettingsSetupPage } from "./pages/settings/setup.js";
 import { SettingsLayout } from "./pages/settings.js";
 import { TeamPage } from "./pages/team/index.js";
 import { TeamSettingsPage } from "./pages/team/settings.js";
@@ -64,6 +65,7 @@ export function App() {
                   <Route index element={<Navigate to="computers" replace />} />
                   <Route path="computers" element={<SettingsComputersPage />} />
                   <Route path="integrations" element={<SettingsIntegrationsPage />} />
+                  <Route path="setup" element={<SettingsSetupPage />} />
                 </Route>
 
                 {/* Backwards-compat redirects for old top-level + sub-tab routes */}

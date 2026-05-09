@@ -1,6 +1,8 @@
 import {
   type ClientCapabilities,
   clientCapabilitiesSchema,
+  type LocalGitRepoSummaries,
+  localGitRepoSummariesSchema,
   type RuntimeProvider,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { and, eq, inArray, ne, sql } from "drizzle-orm";
@@ -236,16 +238,30 @@ export async function listMyPinnedAgents(
  * `clients.metadata.capabilities` (Option C — no dedicated column); other
  * `metadata` subkeys are preserved on merge.
  *
+ * Optional `localGitRepos` is the host's working-clone snapshot used by the
+ * Step 3 onboarding picker — stored under `clients.metadata.localGitRepos`.
+ * Passing `undefined` leaves the existing value untouched; passing an array
+ * (including the empty one) replaces it.
+ *
  * Caller is expected to have already passed `assertClientOwner`.
  */
 export async function updateClientCapabilities(
   db: Database,
   clientId: string,
   capabilities: ClientCapabilities,
+  localGitRepos?: LocalGitRepoSummaries,
 ): Promise<void> {
   const parsed = clientCapabilitiesSchema.safeParse(capabilities);
   if (!parsed.success) {
     throw new BadRequestError(`Invalid capabilities payload: ${parsed.error.message}`);
+  }
+  let parsedRepos: LocalGitRepoSummaries | undefined;
+  if (localGitRepos !== undefined) {
+    const r = localGitRepoSummariesSchema.safeParse(localGitRepos);
+    if (!r.success) {
+      throw new BadRequestError(`Invalid localGitRepos payload: ${r.error.message}`);
+    }
+    parsedRepos = r.data;
   }
 
   const [client] = await db
@@ -258,7 +274,8 @@ export async function updateClientCapabilities(
   }
 
   const baseMetadata = (client.metadata ?? {}) as Record<string, unknown>;
-  const merged = { ...baseMetadata, capabilities: parsed.data };
+  const merged: Record<string, unknown> = { ...baseMetadata, capabilities: parsed.data };
+  if (parsedRepos !== undefined) merged.localGitRepos = parsedRepos;
 
   await db.update(clients).set({ metadata: merged }).where(eq(clients.id, clientId));
 }
