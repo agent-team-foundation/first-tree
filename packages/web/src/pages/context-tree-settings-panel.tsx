@@ -92,7 +92,7 @@ export function ContextTreeSettingsPanel() {
         <form id="context-tree-form" onSubmit={handleSubmit}>
           <Field
             label="Repo URL"
-            hint="HTTPS or SSH URL of the Context Tree git repository for this team."
+            hint="HTTPS URL of the Context Tree git repository for this team."
             value={repo}
             onChange={setRepo}
             mono

@@ -59,21 +59,23 @@ export function ContextPage() {
         ) : null}
         {snapshot && !query.isLoading ? (
           <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
-            <ContextStatus snapshot={snapshot} window={window} onWindowChange={setWindow} />
             {snapshot.snapshotStatus === "unavailable" ? (
               <UnavailableState snapshot={snapshot} />
             ) : (
-              <UpdatesView
-                snapshot={snapshot}
-                selectedUpdate={selectedUpdate}
-                selectedUpdateNode={selectedUpdateNode}
-                selectedOverviewNodeId={selectedOverviewNode}
-                onSelectUpdate={(update) => {
-                  setSelectedUpdateId(update.id);
-                  setSelectedOverviewNodeId(update.nodeId);
-                }}
-                onSelectOverviewNode={setSelectedOverviewNodeId}
-              />
+              <>
+                <ContextStatus snapshot={snapshot} window={window} onWindowChange={setWindow} />
+                <UpdatesView
+                  snapshot={snapshot}
+                  selectedUpdate={selectedUpdate}
+                  selectedUpdateNode={selectedUpdateNode}
+                  selectedOverviewNodeId={selectedOverviewNode}
+                  onSelectUpdate={(update) => {
+                    setSelectedUpdateId(update.id);
+                    setSelectedOverviewNodeId(update.nodeId);
+                  }}
+                  onSelectOverviewNode={setSelectedOverviewNodeId}
+                />
+              </>
             )}
           </div>
         ) : null}
@@ -587,6 +589,11 @@ function ErrorState({ message }: { message: string }) {
 }
 
 function UnavailableState({ snapshot }: { snapshot: ContextTreeSnapshot }) {
+  const title = snapshot.repo ? "Context Tree sync unavailable" : "Connect Context Tree";
+  const detail = snapshot.repo
+    ? "Hub cannot read the team Context Tree yet. Agents and users will see context here after the server can sync the configured repo."
+    : "Connect a Context Tree repo to show the team knowledge agents can use.";
+  const repoLabel = snapshot.repo ? redactRepoForDisplay(snapshot.repo) : null;
   return (
     <Panel>
       <PanelBody>
@@ -594,14 +601,25 @@ function UnavailableState({ snapshot }: { snapshot: ContextTreeSnapshot }) {
           <AlertTriangle size={18} style={{ color: "var(--warn)" }} />
           <div>
             <div className="font-semibold" style={{ color: "var(--fg)" }}>
-              {snapshot.contextStatus.label}
+              {title}
             </div>
-            <div style={{ marginTop: "var(--sp-1)" }}>{snapshot.contextStatus.detail}</div>
+            <div style={{ marginTop: "var(--sp-1)" }}>{detail}</div>
+            {snapshot.repo || snapshot.branch ? (
+              <div className="text-label" style={{ color: "var(--fg-3)", marginTop: "var(--sp-2)" }}>
+                {repoLabel ? `Repo: ${repoLabel}` : null}
+                {snapshot.repo && snapshot.branch ? " · " : null}
+                {snapshot.branch ? `Branch: ${snapshot.branch}` : null}
+              </div>
+            ) : null}
           </div>
         </div>
       </PanelBody>
     </Panel>
   );
+}
+
+function redactRepoForDisplay(repo: string): string {
+  return repo.replace(/(https?:\/\/)[^/@\s]+@/g, "$1[redacted]@");
 }
 
 function EmptyChanges() {

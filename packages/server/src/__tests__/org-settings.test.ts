@@ -160,6 +160,22 @@ describe("org-settings service", () => {
     ).rejects.toThrow();
   });
 
+  it("rejects non-HTTPS or credential-bearing Context Tree repo URLs", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const putRepo = (repo: string) =>
+      orgSettingsService.putOrgSetting(
+        app.db,
+        admin.organizationId,
+        "context_tree",
+        { repo },
+        { updatedBy: admin.userId, encryptionKey: TEST_ENCRYPTION_KEY },
+      );
+
+    await expect(putRepo("ssh://git@github.com/example/tree.git")).rejects.toThrow();
+    await expect(putRepo("https://user:secret@github.com/example/tree.git")).rejects.toThrow();
+  });
+
   it("putOrgSetting bumps version on subsequent writes", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);

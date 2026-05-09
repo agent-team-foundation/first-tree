@@ -213,9 +213,11 @@ Agents may be working from stale team context · last synced 2h ago
 没有可用 snapshot:
 
 ```text
-Team context unavailable
-Connect a Context Tree repo to show the decision context available to agents.
+Context Tree sync unavailable
+Hub cannot read the team Context Tree yet. Agents and users will see context here after the server can sync the configured repo.
 ```
+
+不可用态只显示单一 setup / sync state,不显示 update count、Added / Edited / Removed 或时间窗口。原因是这时系统没有可读 snapshot,不能把它表达成“0 个更新”。
 
 等有 per-agent readiness telemetry 后,Header 才升级为:
 
