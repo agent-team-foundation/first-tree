@@ -279,14 +279,10 @@ function Step1Body({ organizationId, onContinue }: { organizationId: string | nu
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col" style={{ gap: "var(--sp-5)" }}>
-      <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
-        <h1 className="text-title font-semibold" style={{ margin: 0, color: "var(--fg)" }}>
-          Create team
-        </h1>
-        <p className="text-body" style={{ margin: 0, color: "var(--fg-3)" }}>
-          This is the collective space agents and people share. You can rename it later.
-        </p>
-      </div>
+      <p className="text-body" style={{ margin: 0, color: "var(--fg-3)" }}>
+        Welcome to your <span style={{ color: "var(--fg-2)" }}>agent team</span> — where humans and AIs collaborate.
+        Let&apos;s name it.
+      </p>
 
       <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
         <label htmlFor="onboarding-team-name" className="text-label" style={{ color: "var(--fg-3)" }}>
@@ -686,7 +682,6 @@ function Step2FormBody({
 }) {
   const nameInputRef = useRef<HTMLInputElement | null>(null);
   const inviteHasTeam = joinPath === "invite" && teamName;
-  const introLeadText = inviteHasTeam ? `Welcome — you've joined ${teamName}` : "Welcome to First Tree Hub";
 
   const noRuntime = capabilitiesLoaded && okRuntimes.length === 0 && !!connectedClient;
   const nextStepText = !trimmedName
@@ -706,22 +701,29 @@ function Step2FormBody({
 
   return (
     <>
-      <div
-        className="flex flex-col items-start"
-        style={{
-          gap: "var(--sp-4)",
-          paddingTop: 0,
-        }}
-      >
-        <p className="text-label" style={{ margin: 0, color: "var(--fg-3)", maxWidth: 420 }}>
-          <span style={{ color: "var(--fg-2)" }}>{introLeadText}</span>
-          <span style={{ color: "var(--fg-4)" }}> · </span>
-          Where agents and humans work as one team.
-        </p>
-        <h1 className="text-title font-semibold" style={{ margin: 0, color: "var(--fg)" }}>
-          Connect agent
-        </h1>
-      </div>
+      <p className="text-body" style={{ margin: 0, color: "var(--fg-3)", maxWidth: 540 }}>
+        {inviteHasTeam ? (
+          <>
+            You&apos;ve joined{" "}
+            <span className="font-semibold" style={{ color: "var(--fg-2)" }}>
+              {teamName}
+            </span>
+            . Let&apos;s set up your first agent — a{" "}
+            <span className="font-semibold" style={{ color: "var(--fg-2)" }}>
+              code agent
+            </span>{" "}
+            that helps with your code.
+          </>
+        ) : (
+          <>
+            Let&apos;s set up your first agent — a{" "}
+            <span className="font-semibold" style={{ color: "var(--fg-2)" }}>
+              code agent
+            </span>{" "}
+            that helps with your code.
+          </>
+        )}
+      </p>
 
       <div style={{ marginTop: "var(--sp-5)", position: "relative" }}>
         <StepRailLine />
@@ -1031,16 +1033,10 @@ function Step3IntroBody() {
 
   return (
     <>
-      <div className="flex flex-col items-start" style={{ gap: "var(--sp-4)", paddingTop: 0 }}>
-        <p className="text-label" style={{ margin: 0, color: "var(--fg-3)", maxWidth: 420 }}>
-          <span style={{ color: "var(--fg-2)" }}>Final step</span>
-          <span style={{ color: "var(--fg-4)" }}> · </span>
-          Set up the shared knowledge base your agent reads and updates.
-        </p>
-        <h1 className="text-title font-semibold" style={{ margin: 0, color: "var(--fg)" }}>
-          Build your context-tree
-        </h1>
-      </div>
+      <p className="text-body" style={{ margin: 0, color: "var(--fg-3)", maxWidth: 540 }}>
+        Build your <span style={{ color: "var(--fg-2)" }}>context-tree</span> with your agent — your team&apos;s shared
+        knowledge that grows with your code.
+      </p>
 
       <div style={{ marginTop: "var(--sp-5)", position: "relative" }}>
         <StepRailLine />
