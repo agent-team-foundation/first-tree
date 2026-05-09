@@ -17,6 +17,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  contextTreeSnapshotTestInternals.clearRemoteSyncState();
   await rm(testDir, { recursive: true, force: true });
 });
 
@@ -189,14 +190,53 @@ Body`);
     await writeFile(join(remoteDir, "NODE.md"), "---\ntitle: Remote Context\n---\nGuidance\n");
     await commitAllAt(remoteDir, "docs: add remote context");
 
-    const managedRoot = await contextTreeSnapshotTestInternals.materializeRemoteContextTree(
+    const materialized = await contextTreeSnapshotTestInternals.materializeRemoteContextTree(
       remoteDir,
       "main",
       cacheRoot,
     );
 
+    const { root: managedRoot } = materialized;
     expect(managedRoot.startsWith(cacheRoot)).toBe(true);
     expect(managedRoot).not.toBe(remoteDir);
     await expect(readFile(join(managedRoot, "NODE.md"), "utf8")).resolves.toContain("Remote Context");
+  });
+
+  it("uses an existing managed checkout when remote refresh fails", async () => {
+    const remoteDir = join(testDir, "remote-source");
+    const cacheRoot = join(testDir, "managed-cache");
+    await initRepoAt(remoteDir);
+    await writeFile(join(remoteDir, "NODE.md"), "---\ntitle: Stale Context\n---\nGuidance\n");
+    await commitAllAt(remoteDir, "docs: add remote context");
+
+    const first = await contextTreeSnapshotTestInternals.materializeRemoteContextTree(remoteDir, "main", cacheRoot);
+    contextTreeSnapshotTestInternals.clearRemoteSyncState();
+    await rm(remoteDir, { recursive: true, force: true });
+
+    const second = await contextTreeSnapshotTestInternals.materializeRemoteContextTree(remoteDir, "main", cacheRoot);
+
+    expect(second.root).toBe(first.root);
+    expect(second.staleReason).toContain("Showing the last synced Context Tree snapshot");
+    await expect(readFile(join(second.root, "NODE.md"), "utf8")).resolves.toContain("Stale Context");
+
+    const cached = await contextTreeSnapshotTestInternals.materializeRemoteContextTree(remoteDir, "main", cacheRoot);
+    expect(cached.staleReason).toBe(second.staleReason);
+  });
+
+  it("wires GitHub token auth through askpass without putting the token in git args", async () => {
+    const cacheRoot = join(testDir, "managed-cache");
+
+    const env = await contextTreeSnapshotTestInternals.gitAuthEnv(
+      "https://github.com/agent-team-foundation/first-tree-context",
+      cacheRoot,
+      "ghp_secret",
+    );
+
+    expect(env?.GIT_TERMINAL_PROMPT).toBe("0");
+    expect(env?.GIT_USERNAME).toBe("x-access-token");
+    expect(env?.GIT_PASSWORD).toBe("ghp_secret");
+    expect(env?.GIT_ASKPASS).toBeDefined();
+    const askpass = await readFile(env?.GIT_ASKPASS ?? "", "utf8");
+    expect(askpass).not.toContain("ghp_secret");
   });
 });

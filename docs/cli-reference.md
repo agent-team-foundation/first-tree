@@ -331,7 +331,7 @@ Most environment variables use the `FIRST_TREE_HUB_` prefix. `onboard` also acce
 | `FIRST_TREE_HUB_ENCRYPTION_KEY` | Adapter credential encryption key | auto: random generated |
 | `FIRST_TREE_HUB_CONTEXT_TREE_REPO` | Context Tree repository URL (optional). Hub server syncs this into a managed readonly checkout for the Context UI. | — |
 | `FIRST_TREE_HUB_CONTEXT_TREE_PATH` | Optional server-local Context Tree checkout override for development or self-host debugging. | — |
-| `FIRST_TREE_HUB_GITHUB_TOKEN` | GitHub API token (optional, for webhooks) | — |
+| `FIRST_TREE_HUB_CONTEXT_TREE_GITHUB_TOKEN` | Read-only GitHub token for private Context Tree repos. Only used when syncing `https://github.com/...` Context Tree repos. | — |
 | `FIRST_TREE_HUB_WEB_DIST_PATH` | Web static files path | auto-discovered |
 | `FIRST_TREE_HUB_PUBLIC_URL` | Public-facing hub URL. Stamped as the `iss` claim on connect tokens (so `connect <token>` derives the hub URL with no extra arg) and used to build invite-link URLs + the GitHub OAuth callback. **Required in production.** | request `Host` (dev only) |
 | `FIRST_TREE_HUB_GITHUB_OAUTH_CLIENT_ID` | GitHub OAuth App client ID. Enables `/signup` + `/auth/github/start`. Both client id AND secret must be set together. | — |
@@ -383,7 +383,6 @@ See [observability.md](observability.md) for the full config reference, backend 
 ```
 ~/.first-tree/hub/
 ├── .onboard-state.json           # Saved args for onboard resume
-├── context-tree/                 # Auto-managed clone (optional, for organizational context)
 ├── config/                      # Configuration (human-edited)
 │   ├── server.yaml
 │   ├── client.yaml
@@ -391,6 +390,7 @@ See [observability.md](observability.md) for the full config reference, backend 
 │       ├── my-agent/agent.yaml
 │       └── another/agent.yaml
 └── data/                        # Runtime data (system-managed)
+    ├── context-tree-repos/       # Server-managed readonly Context Tree mirrors
     ├── sessions/                # Agent session registry
     ├── workspaces/              # Per-chat isolated workspaces
     │   └── <agent-name>/

@@ -69,6 +69,10 @@ export const serverConfigSchema = defineConfig({
     localPath: field(z.string().optional(), {
       env: "FIRST_TREE_HUB_CONTEXT_TREE_PATH",
     }),
+    githubToken: field(z.string().optional(), {
+      env: "FIRST_TREE_HUB_CONTEXT_TREE_GITHUB_TOKEN",
+      secret: true,
+    }),
     branch: field(z.string().default("main")),
   }),
   github: {

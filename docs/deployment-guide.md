@@ -38,7 +38,7 @@ These must be set for Docker / CI / `--no-interactive` deployments. Interactive 
 |----------|---------|-------------|
 | `FIRST_TREE_HUB_CONTEXT_TREE_REPO` | — | Context Tree repo URL (optional, for organizational context and the Context UI managed mirror) |
 | `FIRST_TREE_HUB_CONTEXT_TREE_PATH` | — | Optional server-local Context Tree checkout override for development or self-host debugging |
-| `FIRST_TREE_HUB_GITHUB_TOKEN` | — | GitHub token (optional, for webhooks) |
+| `FIRST_TREE_HUB_CONTEXT_TREE_GITHUB_TOKEN` | — | Read-only GitHub token for private Context Tree repos |
 | `FIRST_TREE_HUB_GITHUB_WEBHOOK_SECRET` | — | GitHub webhook secret (only needed if using github webhooks) |
 | `FIRST_TREE_HUB_GITHUB_ALLOWED_ORG` | — | GitHub org for agent registration access control (optional) |
 | `FIRST_TREE_HUB_PORT` | `8000` | Server port |

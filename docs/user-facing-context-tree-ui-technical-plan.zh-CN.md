@@ -155,9 +155,9 @@ ContextTreeStatus
 - 校验本地 checkout branch 与 server config 是否一致,避免错标 branch。
 - 对 git command 设置 timeout / buffer 上限,并对 diff entry 做上限保护。
 - 用短 TTL in-memory cache 缓解同一 `repo + branch + headCommit + window` 的重复请求。
-- 返回 active / unavailable 状态;不可用态表达 sync/access 问题,不把 server 机器环境变量暴露给用户。
+- 返回 active / stale / unavailable 状态;refresh 失败但已有 managed checkout 时返回 stale snapshot,只有没有可读 snapshot 时才返回 unavailable。
 
-当前实现支持 remote repo 自动 materialize:当 `contextTree.repo` 是 remote URL 或 `owner/repo` shorthand 时,Hub Server 会 clone/fetch 到 `$FIRST_TREE_HUB_HOME/data/context-tree-repos/<hash>` 并从该 managed checkout 生成 snapshot。`contextTree.localPath` 保留为本地开发、self-host debug 或特殊部署 override,不是线上默认路径。
+当前实现支持 remote repo 自动 materialize:当 `contextTree.repo` 是 remote URL 或 `owner/repo` shorthand 时,Hub Server 会 clone/fetch 到 `$FIRST_TREE_HUB_HOME/data/context-tree-repos/<hash>` 并从该 managed checkout 生成 snapshot。`contextTree.localPath` 保留为本地开发、self-host debug 或特殊部署 override,不是线上默认路径。私有 GitHub repo 通过 `FIRST_TREE_HUB_CONTEXT_TREE_GITHUB_TOKEN` 提供只读 token;token 只用于 server-side git sync,不暴露给 Web。
 
 ### 性能和复用边界
 
@@ -167,7 +167,7 @@ ContextTreeStatus
 
 - 按 `repo + branch + headCommit` 缓存 nodes / edges / previews。
 - `window` 只影响 changes / updates,不要导致每次请求都重建整棵树。
-- credential refresh、stale snapshot fallback 放到 server refresh/cache 层。
+- credential refresh 和更完整的 background refresh 可继续沉到 server refresh/cache 层;当前版本已经具备 request-time sync 的 stale snapshot fallback。
 - 通用扫描、frontmatter 解析、soft link 解析长期应沉到 `first-tree` 包,例如 `first-tree tree export --json` 或包内 `readContextTreeSnapshot()`;Hub 只保留 auth、config、cache、API wrapper 和 Context Updates 产品表达。
 
 这样既避免 request-time 重复计算,也避免 Hub 长期拥有一套越来越厚的 Context Tree parser。
@@ -200,7 +200,8 @@ git diff --name-status <window-base>..HEAD -- '*.md'
 异常处理:
 
 - 没有可用 snapshot:返回 unavailable。
-- remote URL 未绑定到本地 checkout:返回 unavailable,并提示配置本地路径。
+- remote sync 失败但已有 managed checkout:返回 stale,并继续展示上一次可读 snapshot。
+- remote sync 失败且没有 managed checkout:返回 unavailable,提示 Hub Server 无法读取配置的 Context Tree repo。
 
 ## Web 实现
 
