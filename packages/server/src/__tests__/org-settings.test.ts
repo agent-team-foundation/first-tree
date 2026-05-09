@@ -218,6 +218,99 @@ describe("org-settings service", () => {
     expect(after).toEqual({ branch: "main" });
   });
 
+  it("source_repos defaults to empty list when no row exists", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+
+    const out = await orgSettingsService.getOrgSetting(app.db, admin.organizationId, "source_repos");
+    expect(out).toEqual({ repos: [] });
+  });
+
+  it("source_repos round-trips a list of entries", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+
+    const put = await orgSettingsService.putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "source_repos",
+      {
+        repos: [
+          { url: "https://github.com/example/one" },
+          { url: "https://github.com/example/two", defaultBranch: "develop" },
+        ],
+      },
+      { updatedBy: admin.userId, encryptionKey: TEST_ENCRYPTION_KEY },
+    );
+    expect(put).toEqual({
+      repos: [
+        { url: "https://github.com/example/one" },
+        { url: "https://github.com/example/two", defaultBranch: "develop" },
+      ],
+    });
+
+    const re = await orgSettingsService.getOrgSetting(app.db, admin.organizationId, "source_repos");
+    expect(re).toEqual(put);
+  });
+
+  it("source_repos PUT with undefined repos leaves the list intact", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+
+    await orgSettingsService.putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "source_repos",
+      { repos: [{ url: "https://github.com/example/keep" }] },
+      { updatedBy: admin.userId, encryptionKey: TEST_ENCRYPTION_KEY },
+    );
+
+    // No `repos` field in the PUT body — current list must survive.
+    const after = await orgSettingsService.putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "source_repos",
+      {},
+      { updatedBy: admin.userId, encryptionKey: TEST_ENCRYPTION_KEY },
+    );
+    expect(after).toEqual({ repos: [{ url: "https://github.com/example/keep" }] });
+  });
+
+  it("source_repos PUT with empty array clears the list", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+
+    await orgSettingsService.putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "source_repos",
+      { repos: [{ url: "https://github.com/example/will-clear" }] },
+      { updatedBy: admin.userId, encryptionKey: TEST_ENCRYPTION_KEY },
+    );
+    const cleared = await orgSettingsService.putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "source_repos",
+      { repos: [] },
+      { updatedBy: admin.userId, encryptionKey: TEST_ENCRYPTION_KEY },
+    );
+    expect(cleared).toEqual({ repos: [] });
+  });
+
+  it("source_repos rejects malformed url at the schema layer", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await expect(
+      orgSettingsService.putOrgSetting(
+        app.db,
+        admin.organizationId,
+        "source_repos",
+        { repos: [{ url: "not-a-url" }] },
+        { updatedBy: admin.userId, encryptionKey: TEST_ENCRYPTION_KEY },
+      ),
+    ).rejects.toThrow();
+  });
+
   it("rejects unknown namespace with BadRequestError", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
@@ -363,6 +456,59 @@ describe("org-settings API (admin gating + masking)", () => {
     });
     expect(get.json()).toEqual({ webhookSecretConfigured: true, webhookUrl: "" });
     expect(get.body).not.toContain("do-not-leak-me");
+  });
+
+  it("admin can GET, PUT, DELETE source_repos via the generic route", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const url = `/api/v1/orgs/${admin.organizationId}/settings/source_repos`;
+
+    const get1 = await app.inject({
+      method: "GET",
+      url,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(get1.statusCode).toBe(200);
+    expect(get1.json()).toEqual({ repos: [] });
+
+    const put = await app.inject({
+      method: "PUT",
+      url,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { repos: [{ url: "https://github.com/example/api" }] },
+    });
+    expect(put.statusCode).toBe(200);
+    expect(put.json()).toEqual({ repos: [{ url: "https://github.com/example/api" }] });
+
+    const del = await app.inject({
+      method: "DELETE",
+      url,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(del.statusCode).toBe(204);
+
+    const get2 = await app.inject({
+      method: "GET",
+      url,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(get2.json()).toEqual({ repos: [] });
+  });
+
+  it("non-admin member is forbidden from source_repos GET / PUT / DELETE", async () => {
+    const app = getApp();
+    const { admin, member } = await adminAndMember(app);
+    const url = `/api/v1/orgs/${admin.organizationId}/settings/source_repos`;
+
+    for (const method of ["GET", "PUT", "DELETE"] as const) {
+      const res = await app.inject({
+        method,
+        url,
+        headers: { authorization: `Bearer ${member.accessToken}` },
+        ...(method === "PUT" ? { payload: { repos: [] } } : {}),
+      });
+      expect(res.statusCode, `${method} should be 403 for non-admin`).toBe(403);
+    }
   });
 
   it("PUT empty-string webhookSecret returns 400 (#3)", async () => {

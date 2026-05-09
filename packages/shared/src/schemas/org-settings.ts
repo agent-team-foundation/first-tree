@@ -75,6 +75,31 @@ export const orgGithubIntegrationOutputSchema = z.object({
   webhookUrl: z.string(),
 });
 
+// -- source_repos --
+
+const sourceRepoEntrySchema = z.object({
+  url: z.string().url(),
+  defaultBranch: z.string().min(1).optional(),
+});
+
+export const orgSourceReposStorageSchema = z.object({
+  repos: z.array(sourceRepoEntrySchema).default([]),
+});
+
+export const orgSourceReposInputSchema = z.object({
+  /**
+   * Replace the full repo list. `undefined` leaves the existing list
+   * unchanged. `[]` clears it. There is no per-entry input form yet —
+   * onboarding writes the whole list each time, and the Team Settings
+   * card removes by re-PUTting the surviving entries.
+   */
+  repos: z.array(sourceRepoEntrySchema).optional(),
+});
+
+export const orgSourceReposOutputSchema = z.object({
+  repos: z.array(sourceRepoEntrySchema),
+});
+
 // -- registry --
 
 export const ORG_SETTINGS_NAMESPACES = {
@@ -87,6 +112,11 @@ export const ORG_SETTINGS_NAMESPACES = {
     storage: orgGithubIntegrationStorageSchema,
     input: orgGithubIntegrationInputSchema,
     output: orgGithubIntegrationOutputSchema,
+  },
+  source_repos: {
+    storage: orgSourceReposStorageSchema,
+    input: orgSourceReposInputSchema,
+    output: orgSourceReposOutputSchema,
   },
 } as const;
 
@@ -107,6 +137,10 @@ export type OrgContextTreeOutput = OrgSettingOutput<"context_tree">;
 export type OrgGithubIntegrationStorage = OrgSettingStorage<"github_integration">;
 export type OrgGithubIntegrationInput = OrgSettingInput<"github_integration">;
 export type OrgGithubIntegrationOutput = OrgSettingOutput<"github_integration">;
+
+export type OrgSourceReposStorage = OrgSettingStorage<"source_repos">;
+export type OrgSourceReposInput = OrgSettingInput<"source_repos">;
+export type OrgSourceReposOutput = OrgSettingOutput<"source_repos">;
 
 export const orgSettingNamespaceSchema = z.enum(
   ORG_SETTINGS_NAMESPACE_KEYS as [OrgSettingNamespace, ...OrgSettingNamespace[]],
