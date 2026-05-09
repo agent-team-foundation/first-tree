@@ -10,6 +10,7 @@ import { type GithubRepo, listGithubRepos } from "../../../api/github.js";
 import { reportOnboardingEvent } from "../../../api/onboarding-events.js";
 import { useAuth } from "../../../auth/auth-context.js";
 import { Button } from "../../../components/ui/button.js";
+import { useToast } from "../../../components/ui/toast.js";
 import { slugify } from "../../../utils/agent-naming.js";
 import {
   clearOnboardingDraft,
@@ -19,12 +20,10 @@ import {
   readOnboardingJoinPath,
   readOnboardingReturnChatId,
   readStep1Confirmed,
-  readStep3IntroDismissed,
   writeOnboardingAgentUuid,
   writeOnboardingDraft,
   writeOnboardingReturnChatId,
   writeStep1Confirmed,
-  writeStep3IntroDismissed,
 } from "../../../utils/onboarding-flags.js";
 
 /**
@@ -37,16 +36,20 @@ import {
  *                        → Step1Body
  *   onboardingStep "connect" / "create_agent"
  *                        → Step2Body  (agent form + computer connect)
- *   onboardingStep "completed" + Step 3 intro not dismissed (per-tab)
- *                        → Step3IntroBody
- *   onboardingStep "completed" + Step 3 intro dismissed
- *                        → Step3PlaceholderBody
+ *   onboardingStep "completed"
+ *                        → Step3IntroBody  (CTA "Set up first-tree?")
+ *
+ * Visibility of this view is gated by `CenterPanel`:
+ * `onboardingStep !== null && !onboardingDismissedAt`. "I'll do it later"
+ * and the stepper `✕` both PATCH `onboardingDismissedAt = now()` (and emit
+ * a toast pointing at Settings → Setup), so dismiss behaviour is uniform —
+ * server-side and cross-tab. There is no per-tab "dismiss Step 3 intro"
+ * state any more.
  *
  * The OnboardingStepper at the workspace-shell level renders independently
- * from this view (visibility tied to `users.onboarding_dismissed_at`, not
- * `onboardingStep`). The chat-init transition (sub-state B) is handled by
- * `CenterPanel` routing — once `?c=<chatId>` is set, this view doesn't
- * render at all.
+ * (visibility tied to `users.onboarding_dismissed_at`, not `onboardingStep`).
+ * The chat-init transition (sub-state B) is handled by `CenterPanel` routing —
+ * once `?c=<chatId>` is set, this view doesn't render at all.
  */
 
 const RUNTIME_READY_TIMEOUT_MS = 30_000;
@@ -69,7 +72,7 @@ const STEP3_BOOTSTRAP_MESSAGE =
 
 type Phase = "form" | "creating" | "timeout";
 
-type ResolvedBody = "step1" | "step2" | "step3-intro" | "step3-placeholder";
+type ResolvedBody = "step1" | "step2" | "step3-intro";
 
 export function OnboardingView() {
   const { onboardingStep, refreshMe, organizationId, memberId, role } = useAuth();
@@ -82,22 +85,11 @@ export function OnboardingView() {
   // "confirmed days ago". Per-tab is fine: a user who reloads land on the
   // same machine still has the flag.
   const [step1Confirmed, setStep1ConfirmedState] = useState(() => readStep1Confirmed());
-  const [step3IntroDismissed, setStep3IntroDismissedState] = useState(() => readStep3IntroDismissed());
 
   const setStep1Confirmed = useCallback((v: boolean) => {
     writeStep1Confirmed(v);
     setStep1ConfirmedState(v);
   }, []);
-  const setStep3IntroDismissed = useCallback((v: boolean) => {
-    writeStep3IntroDismissed(v);
-    setStep3IntroDismissedState(v);
-  }, []);
-
-  // When the user clicks the "Tree" pip in the stepper, OnboardingStepper
-  // sets ?step=tree. That intent should re-show the intro card (per O-5).
-  useEffect(() => {
-    if (stepOverride === "tree") setStep3IntroDismissed(false);
-  }, [stepOverride, setStep3IntroDismissed]);
 
   // Step 1's PATCH /orgs/:id is gated by `requireOrgAdmin` server-side, so a
   // non-admin member who somehow lands on Step 1 (lost joinPath flag,
@@ -109,15 +101,13 @@ export function OnboardingView() {
   const body = useMemo<ResolvedBody>(() => {
     if (stepOverride === "team" && canRenameTeam) return "step1";
     if (stepOverride === "agent") return "step2";
-    if (stepOverride === "tree") return step3IntroDismissed ? "step3-placeholder" : "step3-intro";
-    if (onboardingStep === "completed") {
-      return step3IntroDismissed ? "step3-placeholder" : "step3-intro";
-    }
+    if (stepOverride === "tree") return "step3-intro";
+    if (onboardingStep === "completed") return "step3-intro";
     if (onboardingStep === "connect" && !step1Confirmed && joinPath !== "invite" && canRenameTeam) {
       return "step1";
     }
     return "step2";
-  }, [stepOverride, onboardingStep, step1Confirmed, step3IntroDismissed, joinPath, canRenameTeam]);
+  }, [stepOverride, onboardingStep, step1Confirmed, joinPath, canRenameTeam]);
 
   const advanceToStep2 = useCallback(() => {
     setStep1Confirmed(true);
@@ -148,15 +138,8 @@ export function OnboardingView() {
           <Step1Body organizationId={organizationId} onContinue={advanceToStep2} />
         ) : body === "step2" ? (
           <Step2Body organizationId={organizationId} memberId={memberId} joinPath={joinPath} refreshMe={refreshMe} />
-        ) : body === "step3-intro" ? (
-          <Step3IntroBody
-            onLater={() => {
-              void reportOnboardingEvent("tree_intro_dismissed");
-              setStep3IntroDismissed(true);
-            }}
-          />
         ) : (
-          <Step3PlaceholderBody onReopen={() => setStep3IntroDismissed(false)} />
+          <Step3IntroBody />
         )}
       </div>
     </div>
@@ -879,11 +862,28 @@ function Step2FormBody({
 
 // ─── Step 3 ──────────────────────────────────────────────────────────────
 
-function Step3IntroBody({ onLater }: { onLater: () => void }) {
+function Step3IntroBody() {
   const navigate = useNavigate();
   const { dismissOnboarding } = useAuth();
+  const { addToast } = useToast();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const showSetupHiddenToast = useCallback(() => {
+    addToast({
+      title: "Setup hidden",
+      description: "Resume any time in Settings → Setup.",
+      action: { label: "Open settings", onClick: () => navigate("/settings/setup") },
+    });
+  }, [addToast, navigate]);
+
+  // "I'll do it later" — server dismiss + toast. Same recovery path as
+  // clicking the stepper `✕` (single source of truth, server-side flag).
+  const handleLater = useCallback(() => {
+    void reportOnboardingEvent("tree_intro_dismissed");
+    void dismissOnboarding();
+    showSetupHiddenToast();
+  }, [dismissOnboarding, showSetupHiddenToast]);
 
   const handleYes = useCallback(async () => {
     setError(null);
@@ -917,9 +917,11 @@ function Step3IntroBody({ onLater }: { onLater: () => void }) {
       }
       void reportOnboardingEvent("tree_chat_started", { agentUuid: agent.uuid, chatId: chat.id });
       // Step 3 succeeded — onboarding is now naturally complete. Auto-dismiss
-      // the stepper so it doesn't linger on top of the user's first chat.
-      // Best-effort; failure here doesn't block navigation. The "Resume
-      // setup" entry in Settings → Setup can bring it back if needed.
+      // the stepper so it doesn't linger above the user's first chat. No
+      // toast here: the user is mid-success path (entering the chat they
+      // just created) — a "Setup hidden" nudge would just be noise. The
+      // recovery hint is reserved for the ✕ / "I'll do it later" paths
+      // where the user might genuinely lose track of how to come back.
       void dismissOnboarding();
       navigate(`/?c=${encodeURIComponent(chat.id)}`, { replace: false });
     } catch (err) {
@@ -978,38 +980,11 @@ function Step3IntroBody({ onLater }: { onLater: () => void }) {
         <Button type="button" disabled={busy} onClick={() => void handleYes()}>
           {busy ? "Starting…" : "Yes, set it up"}
         </Button>
-        <Button type="button" variant="outline" onClick={onLater} disabled={busy}>
+        <Button type="button" variant="outline" onClick={handleLater} disabled={busy}>
           I&apos;ll do it later
         </Button>
       </div>
     </div>
-  );
-}
-
-function Step3PlaceholderBody({ onReopen }: { onReopen: () => void }) {
-  // Clickable so the placeholder isn't a dead end — the same "reopen Step 3
-  // intro" intent as clicking the Step 3 pip in the stepper. Renders as a
-  // borderless button so it reads as a hint, not as a card.
-  return (
-    <button
-      type="button"
-      onClick={onReopen}
-      className="flex w-full text-left transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-      style={{
-        gap: "var(--sp-2)",
-        padding: "var(--sp-4)",
-        color: "var(--fg-3)",
-        background: "transparent",
-        border: "none",
-        borderRadius: "var(--radius-input)",
-        cursor: "pointer",
-      }}
-    >
-      <p className="text-body" style={{ margin: 0 }}>
-        Click <span className="font-semibold">Build your context-tree</span> in the stepper above when you&apos;re
-        ready.
-      </p>
-    </button>
   );
 }
 

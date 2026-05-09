@@ -1,7 +1,8 @@
 import { useMemo } from "react";
-import { useSearchParams } from "react-router";
+import { useNavigate, useSearchParams } from "react-router";
 import { useAuth } from "../../../auth/auth-context.js";
-import { readStep1Confirmed, readStep3IntroDismissed } from "../../../utils/onboarding-flags.js";
+import { useToast } from "../../../components/ui/toast.js";
+import { readStep1Confirmed } from "../../../utils/onboarding-flags.js";
 
 /**
  * OnboardingStepper — the 3-step progress indicator that lives above
@@ -35,6 +36,8 @@ const STEP_LABELS: Record<StepIndex, string> = {
 
 export function OnboardingStepper() {
   const { onboardingStep, onboardingDismissedAt, dismissOnboarding } = useAuth();
+  const { addToast } = useToast();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedChatId = searchParams.get("c");
   const stepOverride = searchParams.get("step");
@@ -72,12 +75,15 @@ export function OnboardingStepper() {
   // guidance for "what now?". Once Step 2 completes the workspace is
   // functional, so dismissing is a legitimate "I'll skip Step 3" choice.
   const canDismiss = onboardingStep === "completed";
-  // Hide the stepper when the user has explicitly skipped Step 3 (clicked
-  // "I'll do it later") AND is now active in some chat — they've moved on
-  // to real work, the stepper is just nag at this point. The [Yes, build
-  // it] path doesn't set `step3IntroDismissed`, so the tree-init chat
-  // keeps the stepper visible per design §4.1.
-  if (selectedChatId && readStep3IntroDismissed()) return null;
+
+  const handleDismiss = () => {
+    void dismissOnboarding();
+    addToast({
+      title: "Setup hidden",
+      description: "Resume any time in Settings → Setup.",
+      action: { label: "Open settings", onClick: () => navigate("/settings/setup") },
+    });
+  };
 
   const stepStates: Record<StepIndex, CircleState> = {
     1: stateFor(1, activeStep, onboardingStep),
@@ -141,7 +147,7 @@ export function OnboardingStepper() {
 
       <button
         type="button"
-        onClick={() => void dismissOnboarding()}
+        onClick={handleDismiss}
         disabled={!canDismiss}
         title={canDismiss ? "Hide setup steps" : "Finish setting up your agent first"}
         aria-label="Hide setup steps"

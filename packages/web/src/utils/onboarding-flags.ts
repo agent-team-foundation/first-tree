@@ -12,7 +12,6 @@
 const JOIN_PATH_KEY = "onboarding:joinPath";
 const DRAFT_KEY_PREFIX = "onboarding:draft";
 const STEP1_CONFIRMED_KEY = "onboarding:step1Confirmed";
-const STEP3_INTRO_DISMISSED_KEY = "onboarding:step3IntroDismissed";
 
 /**
  * Per-tab Step 1 acknowledgement. Server can't distinguish "team
@@ -30,16 +29,6 @@ export function writeStep1Confirmed(value: boolean): void {
   if (typeof window === "undefined") return;
   if (value) window.sessionStorage.setItem(STEP1_CONFIRMED_KEY, "1");
   else window.sessionStorage.removeItem(STEP1_CONFIRMED_KEY);
-}
-
-export function readStep3IntroDismissed(): boolean {
-  if (typeof window === "undefined") return false;
-  return window.sessionStorage.getItem(STEP3_INTRO_DISMISSED_KEY) === "1";
-}
-export function writeStep3IntroDismissed(value: boolean): void {
-  if (typeof window === "undefined") return;
-  if (value) window.sessionStorage.setItem(STEP3_INTRO_DISMISSED_KEY, "1");
-  else window.sessionStorage.removeItem(STEP3_INTRO_DISMISSED_KEY);
 }
 
 const ONBOARDING_AGENT_UUID_KEY = "onboarding:agentUuid";
