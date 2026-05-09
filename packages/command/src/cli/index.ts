@@ -6,6 +6,7 @@ import { registerAgentCommands } from "../commands/agent.js";
 import { registerClientCommands } from "../commands/client.js";
 import { registerConfigCommands } from "../commands/config.js";
 import { registerOnboardCommand } from "../commands/onboard.js";
+import { registerOrgCommands } from "../commands/org.js";
 import { registerSaaSConnectCommand } from "../commands/saas-connect.js";
 import { registerServerCommands } from "../commands/server.js";
 import { registerUpdateCommand } from "../commands/update.js";
@@ -73,5 +74,8 @@ registerUpdateCommand(program);
 
 // Onboarding
 registerOnboardCommand(program);
+
+// Organization-level operations (e.g. set tree URL during Step 3)
+registerOrgCommands(program);
 
 program.parse();

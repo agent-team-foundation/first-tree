@@ -3,6 +3,7 @@ import { ArrowRight, Check, Copy } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { getClientCapabilities, type HubClient, listClients } from "../../../api/activity.js";
+import { getAgentConfig } from "../../../api/agent-config.js";
 import { listManagedAgents } from "../../../api/agents.js";
 import { createAgentChat, sendChatMessage } from "../../../api/chats.js";
 import { api, withOrg } from "../../../api/client.js";
@@ -55,19 +56,76 @@ const RUNTIME_READY_POLL_MS = 1_000;
 const CLIENT_DETECT_POLL_MS = 3_000;
 
 /**
- * Bootstrap message sent on the user's behalf when they click [Yes, set it
- * up] in Step 3 IntroBody. Verbose for a reason — the agent does NOT have
- * the first-tree skill loaded yet (installing it IS the goal of Step 3),
- * so the message must self-bootstrap the agent's knowledge of (a) which
- * CLI to use, (b) the action to take, (c) the URL to consult.
+ * Two bootstrap-message variants Step 3 IntroBody dispatches based on the
+ * user's "do you already have a tree?" choice. Both:
  *
- * Currently only Step 3 IntroBody sends this. If a future surface (e.g.
- * NewAgentDialog auto-send) needs the same prompt, hoist this constant to
- * `packages/shared` so both import the same string. See
- * docs/new-user-onboarding-design.md §7.3 (decision O-6).
+ *   - clone the source repo (cloud-only model — no user-local clone is
+ *     touched; everything happens in the agent's sandbox);
+ *   - run `first-tree tree init` to scaffold or bind the tree;
+ *   - open a PR back to the source repo with the skill + binding files.
+ *
+ * Path B (creating a new tree) additionally tells the agent to push the
+ * new tree to GitHub via `gh repo create` and then record the URL on the
+ * organization via `first-tree-hub org set-tree-url`. Path A skips both —
+ * the URL is already known and the web frontend PATCHes
+ * `organizations.tree_url` directly before sending the chat.
+ *
+ * Verbose on purpose: the agent has no first-tree skill loaded yet
+ * (installing it is the goal). It needs a self-contained recipe.
+ *
+ * Single source of truth: only Step 3 IntroBody currently sends these.
+ * If a future surface needs the same prompts, hoist these builders to
+ * `packages/shared` so both import the same strings.
  */
-const STEP3_BOOTSTRAP_MESSAGE =
-  "Use the latest First-Tree CLI to install the skill in the current repository and complete the onboarding process: https://github.com/agent-team-foundation/first-tree";
+function extractGithubSlug(url: string): string | null {
+  try {
+    const u = new URL(url);
+    if (!u.hostname.endsWith("github.com")) return null;
+    const parts = u.pathname
+      .replace(/^\//, "")
+      .replace(/\.git$/, "")
+      .split("/");
+    if (parts.length < 2 || !parts[0] || !parts[1]) return null;
+    return `${parts[0]}/${parts[1]}`;
+  } catch {
+    return null;
+  }
+}
+
+function buildBindBootstrap(sourceUrl: string, treeUrl: string): string {
+  const slug = extractGithubSlug(sourceUrl) ?? sourceUrl;
+  return [
+    "Bind my source repo to an existing context-tree.",
+    "",
+    `Source repo: ${sourceUrl}`,
+    `Existing tree: ${treeUrl}`,
+    "",
+    "Steps:",
+    `  1. \`gh repo clone ${slug}\` to clone the source repo into your working directory.`,
+    "  2. `cd` into the cloned directory.",
+    `  3. \`npx first-tree tree init --tree-url ${treeUrl}\` — this installs the first-tree skill in the source repo and writes the binding metadata.`,
+    "  4. `gh pr create` to open a PR with the skill + binding files. Use a clear title (e.g. `Bind to context-tree`).",
+    "  5. Walk me through what got changed and what's in the PR.",
+  ].join("\n");
+}
+
+function buildCreateBootstrap(sourceUrl: string): string {
+  const slug = extractGithubSlug(sourceUrl) ?? sourceUrl;
+  return [
+    "Create a brand-new context-tree for my source repo.",
+    "",
+    `Source repo: ${sourceUrl}`,
+    "",
+    "Steps:",
+    `  1. \`gh repo clone ${slug}\` to clone the source repo.`,
+    "  2. `cd` into the cloned directory.",
+    "  3. `npx first-tree tree init` — the CLI installs the first-tree skill in the source, scaffolds a sibling `<repo>-tree` directory, and writes binding metadata into the source.",
+    "  4. Push the new tree directory to GitHub: `cd ../<repo>-tree && gh repo create <owner>/<repo>-tree --public --source=. --push` (substitute the actual owner and repo name).",
+    "  5. From the source clone, `gh pr create` to open a PR with the skill + binding files.",
+    "  6. Once the new tree repo URL is known, run `first-tree-hub org set-tree-url <new-tree-url>` so the Hub records the binding for future agents.",
+    "  7. Walk me through what was created (which directories, which PRs) so I can review.",
+  ].join("\n");
+}
 
 type Phase = "form" | "creating" | "timeout";
 
@@ -866,12 +924,28 @@ function Step2FormBody({
 
 // ─── Step 3 ──────────────────────────────────────────────────────────────
 
+type TreeMode = "existing" | "new";
+
 function Step3IntroBody() {
   const navigate = useNavigate();
-  const { dismissOnboarding } = useAuth();
+  const { dismissOnboarding, organizationId } = useAuth();
   const { addToast } = useToast();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [treeMode, setTreeMode] = useState<TreeMode | null>(null);
+  const [existingTreeUrl, setExistingTreeUrl] = useState("");
+
+  const trimmedTreeUrl = existingTreeUrl.trim();
+  const isExistingUrlValid = (() => {
+    if (treeMode !== "existing") return true;
+    if (!trimmedTreeUrl) return false;
+    try {
+      const u = new URL(trimmedTreeUrl);
+      return u.protocol === "https:" || u.protocol === "http:";
+    } catch {
+      return false;
+    }
+  })();
 
   const showSetupHiddenToast = useCallback(() => {
     addToast({
@@ -889,18 +963,16 @@ function Step3IntroBody() {
     showSetupHiddenToast();
   }, [dismissOnboarding, showSetupHiddenToast]);
 
-  const handleYes = useCallback(async () => {
+  const handleContinue = useCallback(async () => {
+    if (!treeMode) return;
+    if (treeMode === "existing" && !isExistingUrlValid) return;
     setError(null);
     setBusy(true);
     try {
       // Resolve the onboarding agent in priority order:
-      //   1. The UUID stashed at Step 2 success — the canonical "agent the
-      //      user just created" pointer, robust across re-visits.
-      //   2. Most recently created managed agent (UUID v7 is time-ordered,
-      //      so a descending sort gives newest first).
+      //   1. The UUID stashed at Step 2 success.
+      //   2. Most recently created managed agent (UUID v7 sort desc).
       //   3. Any non-human managed agent.
-      // Each fallback narrows the ambiguity that "first non-human" had —
-      // managed-agents response order was previously unspecified.
       const stashedUuid = readOnboardingAgentUuid();
       const managed = await listManagedAgents();
       const nonHuman = managed.filter((a) => a.type !== "human");
@@ -911,59 +983,148 @@ function Step3IntroBody() {
       if (!agent) {
         throw new Error("No agent available to chat with — finish Step 2 first.");
       }
-      const chat = await createAgentChat(agent.uuid);
-      // Best-effort: if the bootstrap message fails (e.g. transient network
-      // hiccup), the user still lands in the empty chat and can retype.
-      try {
-        await sendChatMessage(chat.id, STEP3_BOOTSTRAP_MESSAGE);
-      } catch {
-        // intentionally non-fatal
+
+      // Bootstrap needs the source repo URL — read from the agent's
+      // gitRepos config (set during Step 2). If empty, the user landed
+      // here with a malformed Step 2; surface the gap.
+      const cfg = await getAgentConfig(agent.uuid);
+      const sourceUrl = cfg.payload.gitRepos[0]?.url?.trim();
+      if (!sourceUrl) {
+        throw new Error("Your agent isn't bound to a source repo. Go back to Step 2 and pick one.");
       }
-      void reportOnboardingEvent("tree_chat_started", { agentUuid: agent.uuid, chatId: chat.id });
-      // Step 3 succeeded — onboarding is now naturally complete. Auto-dismiss
-      // the stepper so it doesn't linger above the user's first chat. No
-      // toast here: the user is mid-success path (entering the chat they
-      // just created) — a "Setup hidden" nudge would just be noise. The
-      // recovery hint is reserved for the ✕ / "I'll do it later" paths
-      // where the user might genuinely lose track of how to come back.
+
+      // Path A: persist the existing tree URL to the org NOW. Agent will
+      // still write `.first-tree/local-tree.json` to the source repo via
+      // PR (proper binding), but Hub already has the URL cached so future
+      // agents in this org can find it without re-reading source files.
+      if (treeMode === "existing" && organizationId) {
+        try {
+          await api.patch(`/orgs/${encodeURIComponent(organizationId)}`, { treeUrl: trimmedTreeUrl });
+        } catch (err) {
+          // Non-fatal — the agent will still bind in chat. Log + continue.
+          // eslint-disable-next-line no-console
+          console.warn("Step 3: PATCH /orgs treeUrl failed; agent will still proceed", err);
+        }
+      }
+
+      const chat = await createAgentChat(agent.uuid);
+      const bootstrap =
+        treeMode === "existing" ? buildBindBootstrap(sourceUrl, trimmedTreeUrl) : buildCreateBootstrap(sourceUrl);
+      try {
+        await sendChatMessage(chat.id, bootstrap);
+      } catch {
+        // intentionally non-fatal — user lands in the empty chat
+      }
+      void reportOnboardingEvent("tree_chat_started", {
+        agentUuid: agent.uuid,
+        chatId: chat.id,
+        treeMode,
+      });
+      // Step 3 launched — auto-dismiss the stepper so it doesn't linger
+      // above the user's first chat. No toast here (mid-success path).
       void dismissOnboarding();
       navigate(`/?c=${encodeURIComponent(chat.id)}`, { replace: false });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to start the tree-init chat");
       setBusy(false);
     }
-  }, [navigate, dismissOnboarding]);
+  }, [treeMode, isExistingUrlValid, trimmedTreeUrl, organizationId, navigate, dismissOnboarding]);
+
+  const canContinue = treeMode !== null && !busy && (treeMode === "new" || isExistingUrlValid);
 
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-5)" }}>
       <h1 className="text-title font-semibold" style={{ margin: 0, color: "var(--fg)" }}>
-        Init context-tree
+        Build your context-tree
       </h1>
       <p className="text-body" style={{ margin: 0, color: "var(--fg-2)" }}>
-        Your agent is ready. Set up first-tree on it now? It takes ~2 minutes — the agent does the scaffolding, you
-        confirm a couple of choices.
+        Your agent will set up first-tree for the source repo you picked in Step 2. Tell us if your team already has a
+        context-tree repo so the agent can bind to it instead of creating a new one.
       </p>
 
-      <div
-        style={{
-          padding: "var(--sp-3) var(--sp-4)",
-          background: "var(--surface-2)",
-          border: "var(--hairline) solid var(--border-faint)",
-          borderRadius: "var(--radius-input)",
-        }}
+      <fieldset
+        className="flex flex-col"
+        style={{ gap: "var(--sp-3)", margin: 0, padding: 0, border: "none" }}
+        disabled={busy}
       >
-        <p className="text-label font-semibold" style={{ margin: 0, color: "var(--fg-2)" }}>
-          What this does
-        </p>
-        <ul
-          className="text-body"
-          style={{ margin: "var(--sp-2) 0 0 var(--sp-4)", padding: 0, color: "var(--fg-3)", listStyle: "disc" }}
+        <legend className="text-label font-semibold" style={{ marginBottom: "var(--sp-1)", color: "var(--fg-2)" }}>
+          Do you already have a context-tree for this team?
+        </legend>
+
+        <label
+          className="flex items-start"
+          style={{
+            gap: "var(--sp-2)",
+            padding: "var(--sp-2_5) var(--sp-3)",
+            border: "var(--hairline) solid var(--border-faint)",
+            borderRadius: "var(--radius-input)",
+            background: treeMode === "existing" ? "var(--bg-active)" : "transparent",
+            cursor: "pointer",
+          }}
         >
-          <li>Creates a sibling tree repo and scaffolds it</li>
-          <li>Installs the first-tree skill in both repos</li>
-          <li>Writes binding metadata so updates auto-sync</li>
-        </ul>
-      </div>
+          <input
+            type="radio"
+            name="tree-mode"
+            value="existing"
+            checked={treeMode === "existing"}
+            onChange={() => setTreeMode("existing")}
+            style={{ marginTop: "var(--sp-0_5)", flexShrink: 0 }}
+          />
+          <span className="flex-1 min-w-0" style={{ display: "flex", flexDirection: "column", gap: "var(--sp-1)" }}>
+            <span className="text-body" style={{ color: "var(--fg)" }}>
+              Yes, paste the GitHub URL
+            </span>
+            {treeMode === "existing" ? (
+              <input
+                type="url"
+                aria-label="Existing tree GitHub URL"
+                value={existingTreeUrl}
+                onChange={(e) => setExistingTreeUrl(e.target.value)}
+                placeholder="https://github.com/your-org/your-tree"
+                className="text-body"
+                style={{
+                  padding: "var(--sp-1_5) var(--sp-2_5)",
+                  background: "var(--bg)",
+                  border: "var(--hairline) solid var(--border)",
+                  borderRadius: "var(--radius-input)",
+                  color: "var(--fg)",
+                  outline: "none",
+                  fontFamily: "var(--font-mono)",
+                }}
+              />
+            ) : null}
+          </span>
+        </label>
+
+        <label
+          className="flex items-start"
+          style={{
+            gap: "var(--sp-2)",
+            padding: "var(--sp-2_5) var(--sp-3)",
+            border: "var(--hairline) solid var(--border-faint)",
+            borderRadius: "var(--radius-input)",
+            background: treeMode === "new" ? "var(--bg-active)" : "transparent",
+            cursor: "pointer",
+          }}
+        >
+          <input
+            type="radio"
+            name="tree-mode"
+            value="new"
+            checked={treeMode === "new"}
+            onChange={() => setTreeMode("new")}
+            style={{ marginTop: "var(--sp-0_5)", flexShrink: 0 }}
+          />
+          <span className="flex-1 min-w-0" style={{ display: "flex", flexDirection: "column", gap: "var(--sp-0_5)" }}>
+            <span className="text-body" style={{ color: "var(--fg)" }}>
+              No, let my agent create one
+            </span>
+            <span className="text-caption" style={{ color: "var(--fg-3)" }}>
+              The agent will scaffold a new GitHub repo for the tree and PR the binding back to your source repo.
+            </span>
+          </span>
+        </label>
+      </fieldset>
 
       {error ? (
         <div
@@ -981,8 +1142,8 @@ function Step3IntroBody() {
       ) : null}
 
       <div className="flex" style={{ gap: "var(--sp-2)" }}>
-        <Button type="button" disabled={busy} onClick={() => void handleYes()}>
-          {busy ? "Starting…" : "Yes, set it up"}
+        <Button type="button" disabled={!canContinue} onClick={() => void handleContinue()}>
+          {busy ? "Starting…" : "Continue"}
         </Button>
         <Button type="button" variant="outline" onClick={handleLater} disabled={busy}>
           I&apos;ll do it later

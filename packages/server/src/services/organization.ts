@@ -68,6 +68,10 @@ export async function updateOrganization(db: Database, id: string, data: UpdateO
   if (data.maxAgents !== undefined) updates.maxAgents = data.maxAgents;
   if (data.maxMessagesPerMinute !== undefined) updates.maxMessagesPerMinute = data.maxMessagesPerMinute;
   if (data.features !== undefined) updates.features = data.features;
+  // Pass `null` to explicitly unbind; pass a string to bind. Drizzle treats
+  // `undefined` as "no change" so omitting the field from the PATCH body
+  // leaves the existing binding alone.
+  if (data.treeUrl !== undefined) updates.treeUrl = data.treeUrl;
 
   try {
     const [org] = await db.update(organizations).set(updates).where(eq(organizations.id, id)).returning();
