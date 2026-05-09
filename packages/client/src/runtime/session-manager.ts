@@ -4,6 +4,7 @@ import type {
   SessionEvent,
   SessionState,
 } from "@agent-team-foundation/first-tree-hub-shared";
+import { tryResolveQuestionAnswer } from "../handlers/ask-user-bridge.js";
 import type { pino } from "../observability/logger.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import type { AgentConfigCache } from "./agent-config-cache.js";
@@ -135,6 +136,23 @@ export class SessionManager {
   async dispatch(entry: InboxEntryWithMessage): Promise<void> {
     const chatId = entry.chatId ?? entry.message.chatId;
     const messageId = entry.message.id;
+
+    // 0. AskUserQuestion bridge: a `question_answer` message is a system-level
+    //    signal that resolves an in-flight `canUseTool` Promise — never a
+    //    user-facing message that should start/wake an LLM session. Short-
+    //    circuit BEFORE dedup / config-refresh / echo-suppression: those
+    //    guards target normal text traffic and would either drop the answer
+    //    (dedup is keyed by (chat,msg)) or burn an unnecessary refresh.
+    //    The bridge tolerates a stale answer (no waiter for this id) by
+    //    returning false; we ack either way so the inbox row clears.
+    if (entry.message.format === "question_answer") {
+      const resolved = tryResolveQuestionAnswer(entry.message.content);
+      if (!resolved) {
+        this.config.log.warn({ chatId, messageId }, "question_answer arrived without a matching pending question");
+      }
+      await this.ackEntry(entry.id, chatId);
+      return;
+    }
 
     // 1. Deduplication — key by (chatId, messageId), not messageId alone.
     // replyTo cross-chat routing legitimately fan-outs the same message into
