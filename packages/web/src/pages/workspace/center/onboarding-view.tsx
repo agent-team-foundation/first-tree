@@ -362,7 +362,11 @@ function Step2Body({
       : null;
   const initialConnectTokenExpiresAt = initialConnectToken ? (initialDraft?.connectTokenExpiresAt ?? null) : null;
 
-  const [displayName, setDisplayName] = useState(() => initialDraft?.displayName ?? "");
+  // Default agent name: "Coder" — most onboarding agents are code agents
+  // (per the Step 2 lead). User can rename in the input or via agent
+  // settings later. The draft override wins so we don't clobber a name
+  // a returning user already typed.
+  const [displayName, setDisplayName] = useState(() => initialDraft?.displayName ?? "Coder");
   const [selectedRuntime, setSelectedRuntime] = useState<string | null>(() => initialDraft?.selectedRuntime ?? null);
   const [connectedClient, setConnectedClient] = useState<HubClient | null>(null);
   const [capabilities, setCapabilities] = useState<ClientCapabilities | null>(null);
