@@ -148,8 +148,13 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const { userId } = requireUser(request);
       const body = onboardingEventSchema.parse(request.body);
+      // Spread client `attrs` FIRST so the trusted server fields below
+      // (`event`, `userId`) cannot be overwritten by a hostile caller —
+      // `attrs` is a freeform Record<string, primitive> per the schema, so
+      // a client could otherwise send `attrs: { event: "...", userId: "..." }`
+      // and forge funnel attribution (post-merge codex review #248).
       app.log.info(
-        { event: `onboarding.${body.event}`, userId, ...(body.attrs ?? {}) },
+        { ...(body.attrs ?? {}), event: `onboarding.${body.event}`, userId },
         `onboarding funnel: ${body.event}`,
       );
       return reply.status(204).send();

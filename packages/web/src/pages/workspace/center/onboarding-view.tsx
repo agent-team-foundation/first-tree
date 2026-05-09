@@ -906,13 +906,19 @@ function Step3IntroBody() {
     };
   }, []);
 
-  // Pre-fill from the org's existing `context_tree` binding so an invitee
-  // (whose admin already configured the team tree) lands on Step 3 with
-  // the toggle defaulted to "Bind to an existing tree" and the URL filled
-  // in. Conservative: keeps the toggle visible so the user can still
-  // override; the deeper "invitees should not see Build at all" redesign
-  // is deferred to Phase B (team-level source_repos namespace), where it
-  // can fold/skip Step 3 cleanly.
+  // Pre-fill from the org's existing `context_tree` binding when the
+  // caller can read it. Today this only fires for **admins** —
+  // `GET /orgs/:orgId/settings/:namespace` is admin-gated server-side, so
+  // a non-admin invitee's call 403s and we silently fall through to the
+  // empty toggle (same behaviour as before this change). The conservative
+  // value here is for admins re-running onboarding.
+  //
+  // The proper invitee fix — either relaxing the GET to org members for
+  // non-secret namespaces, or surfacing the binding through `/me`, plus
+  // hiding the Bind/Create toggle entirely so an invitee cannot
+  // accidentally spawn a duplicate tree — is deferred to Phase B, which
+  // also introduces the `source_repos` namespace and lets Step 3
+  // collapse/skip cleanly for invitees.
   useEffect(() => {
     if (!organizationId) return;
     let cancelled = false;
