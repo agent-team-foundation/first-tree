@@ -278,7 +278,6 @@ export function Step2Body({
       writeOnboardingAgentUuid(agentUuid);
       void reportOnboardingEvent("agent_created", {
         runtimeProvider: selectedRuntime,
-        repoBound: false,
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create agent");
