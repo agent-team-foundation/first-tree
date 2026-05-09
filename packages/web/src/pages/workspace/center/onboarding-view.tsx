@@ -1067,7 +1067,7 @@ function Step3IntroBody() {
               fontWeight: selectedRepoUrl ? 600 : 500,
             }}
           >
-            Do you already have a context-tree?
+            Existing tree, or fresh start?
           </h2>
           {selectedRepoUrl ? (
             <fieldset
@@ -1166,13 +1166,12 @@ function Step3IntroBody() {
               fontWeight: treeModeChosen ? 600 : 500,
             }}
           >
-            Pair with your agent to build it
+            Hand off to your agent
           </h2>
           {treeModeChosen ? (
             <>
               <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
-                Your agent will install the first-tree skill, scaffold (or bind) the tree, and open a PR back to your
-                source repo with the binding metadata.
+                Your agent will install the first-tree skill, {treeMode === "existing" ? "bind to your tree" : "scaffold a fresh tree"}, and open a PR back to your source repo with the binding metadata.
               </p>
 
               {error ? (
@@ -1232,7 +1231,7 @@ function RepoPickerSection({
         fontWeight: disabled ? 500 : 600,
       }}
     >
-      What will {agentName} work on?
+      Pick the repo this tree will serve
     </h2>
   );
 
@@ -1282,7 +1281,7 @@ function RepoPickerSection({
     <div style={{ animation: "subtle-fade 200ms ease-out" }}>
       {heading}
       <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
-        Pick the repository the agent will read, write, and open PRs against.
+        Your agent will read this repo's code and organize what it learns into the tree.
       </p>
       <select
         aria-label="GitHub repository"
