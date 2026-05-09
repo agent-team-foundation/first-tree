@@ -4,7 +4,7 @@ import { Button } from "../../components/ui/button.js";
 import { PageHeader } from "../../components/ui/page-header.js";
 
 /**
- * Settings → Setup. Surfaces the onboarding stepper's enable/disable
+ * Settings → Onboarding. Surfaces the onboarding stepper's enable/disable
  * state so users can come back to the guided setup after dismissing it
  * (or vice versa). The stepper itself is reversible via PATCH
  * `/me/onboarding`; this is the UI affordance that exposes that.
@@ -13,7 +13,7 @@ import { PageHeader } from "../../components/ui/page-header.js";
  * cheap (one click), and without a recovery path it becomes a hostile
  * one-way action. This page is the recovery path.
  */
-export function SettingsSetupPage() {
+export function SettingsOnboardingPage() {
   const { onboardingStep, onboardingDismissedAt, dismissOnboarding, restoreOnboarding } = useAuth();
   const isDismissed = !!onboardingDismissedAt;
 
@@ -25,7 +25,7 @@ export function SettingsSetupPage() {
 
   return (
     <div>
-      <PageHeader title="Setup" subtitle="Onboarding guide controls" />
+      <PageHeader title="Onboarding" subtitle="Guided setup controls" />
       <div style={{ padding: "var(--sp-4) var(--sp-5) var(--sp-7)", maxWidth: 640 }}>
         <div
           style={{
@@ -37,7 +37,7 @@ export function SettingsSetupPage() {
         >
           <div className="flex items-baseline" style={{ gap: "var(--sp-2)", marginBottom: "var(--sp-1)" }}>
             <h2 className="text-subtitle font-semibold" style={{ margin: 0, color: "var(--fg)" }}>
-              Setup guide
+              Onboarding guide
             </h2>
             {isDismissed ? null : (
               <span
@@ -63,7 +63,7 @@ export function SettingsSetupPage() {
           <div style={{ marginTop: "var(--sp-4)" }}>
             {isDismissed ? (
               <Button type="button" onClick={() => void restoreOnboarding()}>
-                Resume setup
+                Resume onboarding
               </Button>
             ) : (
               <Button
@@ -73,7 +73,7 @@ export function SettingsSetupPage() {
                 disabled={!canHide}
                 title={canHide ? undefined : "Finish setting up your agent first"}
               >
-                Hide setup guide
+                Hide onboarding guide
               </Button>
             )}
           </div>

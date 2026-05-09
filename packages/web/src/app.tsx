@@ -12,7 +12,7 @@ import { LoginPage } from "./pages/login.js";
 import { OAuthCompletePage } from "./pages/oauth-complete.js";
 import { SettingsComputersPage } from "./pages/settings/computers.js";
 import { SettingsIntegrationsPage } from "./pages/settings/integrations.js";
-import { SettingsSetupPage } from "./pages/settings/setup.js";
+import { SettingsOnboardingPage } from "./pages/settings/onboarding.js";
 import { SettingsLayout } from "./pages/settings.js";
 import { TeamPage } from "./pages/team/index.js";
 import { TeamSettingsPage } from "./pages/team/settings.js";
@@ -68,7 +68,10 @@ export function App() {
                     <Route path="team" element={<TeamSettingsPage />} />
                     <Route path="computers" element={<SettingsComputersPage />} />
                     <Route path="integrations" element={<SettingsIntegrationsPage />} />
-                    <Route path="setup" element={<SettingsSetupPage />} />
+                    <Route path="onboarding" element={<SettingsOnboardingPage />} />
+                    {/* Old name was "setup" — keep the redirect so existing
+                        in-app links / saved bookmarks keep working. */}
+                    <Route path="setup" element={<Navigate to="/settings/onboarding" replace />} />
                   </Route>
 
                   {/* Backwards-compat redirects for old top-level + sub-tab routes */}

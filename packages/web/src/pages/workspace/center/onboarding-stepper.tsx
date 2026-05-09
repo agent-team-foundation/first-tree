@@ -88,8 +88,8 @@ export function OnboardingStepper() {
     void dismissOnboarding();
     addToast({
       title: "Setup hidden",
-      description: "Resume any time in Settings → Setup.",
-      action: { label: "Open settings", onClick: () => navigate("/settings/setup") },
+      description: "Resume any time in Settings → Onboarding.",
+      action: { label: "Open settings", onClick: () => navigate("/settings/onboarding") },
     });
   };
 
