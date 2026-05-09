@@ -16,7 +16,7 @@ export const organizations = pgTable("organizations", {
    * Optional context-tree GitHub URL bound to this organization. Set during
    * Step 3 onboarding (either by the user pasting an existing tree URL, or
    * by the agent reporting a freshly-created tree's URL via
-   * `first-tree-hub org set-tree-url`). Null until the user finishes Step 3
+   * `first-tree-hub org bind-tree`). Null until the user finishes Step 3
    * or skips onboarding entirely. Hub treats this as a cache — the
    * source-of-truth binding lives in each source repo's
    * `.first-tree/local-tree.json`; this column lets onboarding UI and future

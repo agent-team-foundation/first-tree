@@ -122,7 +122,7 @@ function buildCreateBootstrap(sourceUrl: string): string {
     "  3. `npx first-tree tree init` — the CLI installs the first-tree skill in the source, scaffolds a sibling `<repo>-tree` directory, and writes binding metadata into the source.",
     "  4. Push the new tree directory to GitHub: `cd ../<repo>-tree && gh repo create <owner>/<repo>-tree --public --source=. --push` (substitute the actual owner and repo name).",
     "  5. From the source clone, `gh pr create` to open a PR with the skill + binding files.",
-    "  6. Once the new tree repo URL is known, run `first-tree-hub org set-tree-url <new-tree-url>` so the Hub records the binding for future agents.",
+    "  6. Once the new tree repo URL is known, run `first-tree-hub org bind-tree <new-tree-url>` so the Hub records the binding for future agents.",
     "  7. Walk me through what was created (which directories, which PRs) so I can review.",
   ].join("\n");
 }
