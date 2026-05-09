@@ -261,6 +261,17 @@ first-tree-hub agent pull --ack
 
 Messaging commands require an agent token (see Agent env vars below). Use `FIRST_TREE_HUB_SERVER_URL` to override the server URL for these low-level agent commands.
 
+### Agent → user structured questions (Claude runtime)
+
+Claude-runtime agents can pause execution mid-turn and prompt the operator with a structured `AskUserQuestion` (single- or multi-select, up to 4 parallel questions, optional HTML / Markdown previews per option). The Hub bridges this through the inbox so the question lands on the Web chat as a clickable card; the operator's choice is then fed back to the agent and the turn continues.
+
+- **Activation**: automatic for any agent on `runtimeProvider: claude-code` — no CLI flag.
+- **UI**: the question renders inline in the chat timeline as a card with three states (pending / answered / superseded).
+- **Lifecycle**: a pending question is auto-superseded when the chat session is archived (`agent session terminate`) or when the owning client is reclaimed by a different user (`first-tree-hub client claim`). The agent receives a clean deny in either case.
+- **Codex runtime**: not supported. The Codex SDK has no ask-user surface; codex-runtime agents that try to emit a question are rejected with HTTP 403 by the server (`assertSenderMayEmitQuestion`).
+
+No CLI command is required to use the feature — it shows up automatically when a Claude-runtime agent calls `AskUserQuestion` during a turn.
+
 ## config
 
 ```bash
