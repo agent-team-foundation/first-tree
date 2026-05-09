@@ -2,6 +2,7 @@ import { Check } from "lucide-react";
 import { useAuth } from "../../auth/auth-context.js";
 import { Button } from "../../components/ui/button.js";
 import { PageHeader } from "../../components/ui/page-header.js";
+import { SettingsSection } from "../../components/ui/settings-section.js";
 
 /**
  * Settings → Onboarding. Surfaces the onboarding stepper's enable/disable
@@ -24,61 +25,52 @@ export function SettingsOnboardingPage() {
   const canHide = onboardingStep === "completed";
 
   return (
-    <div>
+    <>
       <PageHeader title="Onboarding" subtitle="Guided setup controls" />
-      <div style={{ padding: "var(--sp-4) var(--sp-5) var(--sp-7)", maxWidth: 640 }}>
-        <div
-          style={{
-            padding: "var(--sp-4)",
-            background: "var(--surface-1)",
-            border: "var(--hairline) solid var(--border-faint)",
-            borderRadius: "var(--radius-input)",
-          }}
+      <div style={{ padding: "var(--sp-2) var(--sp-5) var(--sp-7)" }}>
+        <SettingsSection
+          title="Onboarding guide"
+          description={
+            isDismissed
+              ? "The stepper is hidden. Bring it back if you want to walk through Step 3 (build your context-tree)."
+              : "The stepper is shown above your workspace. You can hide it any time once your agent is set up."
+          }
+          right={isDismissed ? null : <ActiveBadge />}
+          isFirst
         >
-          <div className="flex items-baseline" style={{ gap: "var(--sp-2)", marginBottom: "var(--sp-1)" }}>
-            <h2 className="text-subtitle font-semibold" style={{ margin: 0, color: "var(--fg)" }}>
-              Onboarding guide
-            </h2>
-            {isDismissed ? null : (
-              <span
-                className="text-label"
-                style={{
-                  color: "color-mix(in oklch, var(--accent) 30%, var(--fg))",
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "var(--sp-1)",
-                }}
-              >
-                <Check className="h-3 w-3" />
-                Active
-              </span>
-            )}
-          </div>
-          <p className="text-body" style={{ margin: 0, color: "var(--fg-3)" }}>
-            {isDismissed
-              ? "The onboarding stepper is hidden. Bring it back if you want to walk through Step 3 (build your context-tree)."
-              : "The onboarding stepper is shown above your workspace. You can hide it any time once your agent is set up."}
-          </p>
-
-          <div style={{ marginTop: "var(--sp-4)" }}>
-            {isDismissed ? (
-              <Button type="button" onClick={() => void restoreOnboarding()}>
-                Resume onboarding
-              </Button>
-            ) : (
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => void dismissOnboarding()}
-                disabled={!canHide}
-                title={canHide ? undefined : "Finish setting up your agent first"}
-              >
-                Hide onboarding guide
-              </Button>
-            )}
-          </div>
-        </div>
+          {isDismissed ? (
+            <Button type="button" size="sm" onClick={() => void restoreOnboarding()}>
+              Resume onboarding
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => void dismissOnboarding()}
+              disabled={!canHide}
+              title={canHide ? undefined : "Finish setting up your agent first"}
+            >
+              Hide onboarding guide
+            </Button>
+          )}
+        </SettingsSection>
       </div>
-    </div>
+    </>
+  );
+}
+
+function ActiveBadge() {
+  return (
+    <span
+      className="text-label inline-flex items-center"
+      style={{
+        gap: "var(--sp-1)",
+        color: "color-mix(in oklch, var(--accent) 35%, var(--fg))",
+      }}
+    >
+      <Check className="h-3 w-3" />
+      Active
+    </span>
   );
 }
