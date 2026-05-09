@@ -529,13 +529,23 @@ function AdminBindCreateBody() {
       // via PR (proper binding), but Hub already has the URL cached so
       // future agents in this org can find it without re-reading source
       // files.
+      //
+      // Non-fatal — the agent's own gitRepos was saved above so the chat
+      // will proceed. But unlike the source_repos write (which only
+      // affects whether the next invitee sees a one-click confirm card),
+      // a missing tree binding means future invitees see "team has no
+      // tree" and route to InviteeWaitingBody — surface this with a toast
+      // so the admin knows to re-bind from Team Settings before inviting.
       if (treeMode === "existing" && organizationId) {
         try {
           await putContextTreeSetting(organizationId, { repo: trimmedTreeUrl });
         } catch (err) {
-          // Non-fatal — the agent will still bind in chat. Log + continue.
           // eslint-disable-next-line no-console
           console.warn("Step 3: PUT context_tree settings failed; agent will still proceed", err);
+          addToast({
+            title: "Tree binding wasn't saved to Hub yet",
+            description: "Your agent will still proceed. You can re-bind from Team Settings later.",
+          });
         }
       }
 
@@ -562,7 +572,16 @@ function AdminBindCreateBody() {
       setError(err instanceof Error ? err.message : "Failed to start the tree-init chat");
       setBusy(false);
     }
-  }, [selectedRepoUrl, treeMode, isExistingUrlValid, trimmedTreeUrl, organizationId, navigate, dismissOnboarding]);
+  }, [
+    selectedRepoUrl,
+    treeMode,
+    isExistingUrlValid,
+    trimmedTreeUrl,
+    organizationId,
+    navigate,
+    dismissOnboarding,
+    addToast,
+  ]);
 
   const canContinue = !!selectedRepoUrl && treeMode !== null && !busy && (treeMode === "new" || isExistingUrlValid);
   const treeModeChosen = !!treeMode && (treeMode === "new" || isExistingUrlValid);
