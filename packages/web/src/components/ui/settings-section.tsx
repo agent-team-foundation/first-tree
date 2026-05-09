@@ -40,7 +40,7 @@ export function SettingsSection({
             {title}
           </h2>
           {description && (
-            <p className="text-label m-0" style={{ color: "var(--fg-3)", marginTop: 2 }}>
+            <p className="text-label m-0" style={{ color: "var(--fg-3)", marginTop: "var(--sp-0_5)" }}>
               {description}
             </p>
           )}

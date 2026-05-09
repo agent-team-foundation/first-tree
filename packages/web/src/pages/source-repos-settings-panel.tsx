@@ -133,7 +133,7 @@ function RepoRow({
           {url}
         </div>
         {defaultBranch && (
-          <div className="text-label" style={{ color: "var(--fg-4)", marginTop: 2 }}>
+          <div className="text-label" style={{ color: "var(--fg-4)", marginTop: "var(--sp-0_5)" }}>
             branch: {defaultBranch}
           </div>
         )}
@@ -152,7 +152,7 @@ function RepoRow({
             width: 24,
             height: 24,
             border: 0,
-            borderRadius: "var(--rd-1)",
+            borderRadius: "var(--radius-input)",
             background: "transparent",
             color: "var(--fg-3)",
             cursor: isRemoving ? "not-allowed" : "pointer",
@@ -167,7 +167,7 @@ function RepoRow({
             e.currentTarget.style.color = "var(--fg-3)";
           }}
         >
-          <X className="h-3_5 w-3_5" style={{ width: 14, height: 14 }} />
+          <X className="h-3.5 w-3.5" />
         </button>
       )}
     </li>

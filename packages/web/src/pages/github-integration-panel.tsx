@@ -153,7 +153,7 @@ function WebhookUrlNotice() {
           color: "var(--state-warning, var(--fg-3))",
         }}
       >
-        <AlertTriangle className="h-4 w-4 shrink-0" style={{ marginTop: 2 }} />
+        <AlertTriangle className="h-4 w-4 shrink-0" style={{ marginTop: "var(--sp-0_5)" }} />
         <span>
           The Hub's public URL is not configured. Please contact your site administrator to enable the GitHub webhook.
         </span>

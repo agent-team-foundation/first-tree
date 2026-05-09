@@ -327,6 +327,34 @@ describe("org-settings service", () => {
     ).rejects.toThrow();
   });
 
+  it("source_repos rejects http:// URLs (HTTPS-only)", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await expect(
+      orgSettingsService.putOrgSetting(
+        app.db,
+        admin.organizationId,
+        "source_repos",
+        { repos: [{ url: "http://github.com/example/insecure" }] },
+        { updatedBy: admin.userId, encryptionKey: TEST_ENCRYPTION_KEY },
+      ),
+    ).rejects.toThrow(/HTTPS/);
+  });
+
+  it("source_repos rejects URLs with embedded credentials", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await expect(
+      orgSettingsService.putOrgSetting(
+        app.db,
+        admin.organizationId,
+        "source_repos",
+        { repos: [{ url: "https://user:secret@github.com/example/leaky" }] },
+        { updatedBy: admin.userId, encryptionKey: TEST_ENCRYPTION_KEY },
+      ),
+    ).rejects.toThrow(/credentials/);
+  });
+
   it("rejects unknown namespace with BadRequestError", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
