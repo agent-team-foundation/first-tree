@@ -91,7 +91,8 @@ console.log("[e2e-askuser] server ready");
 // connection the server holds — no new postgres dep needed.
 const { sql: drizzleSql } = await import("drizzle-orm");
 async function truncateAll() {
-  await app.db.execute(drizzleSql.raw(`
+  await app.db.execute(
+    drizzleSql.raw(`
     TRUNCATE TABLE pending_questions, inbox_entries, messages,
       agent_chat_sessions, agent_presence, chat_participants,
       chat_subscriptions, chats, agents, members, clients,
@@ -102,7 +103,8 @@ async function truncateAll() {
       session_events, server_instances, processed_events,
       tasks, task_chats
     RESTART IDENTITY CASCADE
-  `));
+  `),
+  );
 }
 await truncateAll();
 // truncate wiped the default-org row that buildApp's onReady hook created;
@@ -119,7 +121,7 @@ async function bootstrapUser() {
     await tx.insert(sharedDbSchema.users).values({
       id: userId,
       username,
-      passwordHash: "$2b$04$" + "x".repeat(22) + "y".repeat(31),
+      passwordHash: `$2b$04$${"x".repeat(22)}${"y".repeat(31)}`,
       displayName: "E2E Tester",
     });
     const created = await createAgent(tx, {
@@ -248,12 +250,9 @@ console.log("\n[e2e-askuser] case 1: happy-path roundtrip");
   expect(answerContent?.answers["Should I rebase or merge?"] === "Rebase", "answer content carries selected option");
 
   // Second submit on the same correlation should 409 (already answered).
-  const dupRes = await inject(
-    "POST",
-    `/api/v1/chats/${chat.id}/questions/${correlationId}/answer`,
-    ctx.accessToken,
-    { answers: { "Should I rebase or merge?": "Merge" } },
-  );
+  const dupRes = await inject("POST", `/api/v1/chats/${chat.id}/questions/${correlationId}/answer`, ctx.accessToken, {
+    answers: { "Should I rebase or merge?": "Merge" },
+  });
   expect(dupRes.statusCode === 409, `duplicate answer returns 409 (got ${dupRes.statusCode})`);
 }
 
@@ -302,7 +301,10 @@ console.log("\n[e2e-askuser] case 2: codex runtime defense");
     });
   } catch (err) {
     threw = true;
-    expect(/Codex runtime cannot emit/.test(err.message), `codex sender rejected with expected message (${err.message})`);
+    expect(
+      /Codex runtime cannot emit/.test(err.message),
+      `codex sender rejected with expected message (${err.message})`,
+    );
   }
   expect(threw, "codex sender threw on sendMessage");
 
@@ -373,12 +375,9 @@ console.log("\n[e2e-askuser] case 3: archiveSession marks pending question super
   expect(row?.supersededReason === "chat_archived", "supersede reason = chat_archived");
 
   // Posting an answer on a superseded question must return 409.
-  const lateRes = await inject(
-    "POST",
-    `/api/v1/chats/${chat.id}/questions/${correlationId}/answer`,
-    ctx.accessToken,
-    { answers: { "Continue?": "Yes" } },
-  );
+  const lateRes = await inject("POST", `/api/v1/chats/${chat.id}/questions/${correlationId}/answer`, ctx.accessToken, {
+    answers: { "Continue?": "Yes" },
+  });
   expect(lateRes.statusCode === 409, `late answer on superseded returns 409 (got ${lateRes.statusCode})`);
 }
 
@@ -428,7 +427,7 @@ console.log("\n[e2e-askuser] case 4: claimClient marks pending superseded for un
   await app.db.insert(sharedDbSchema.users).values({
     id: newOwnerId,
     username: `e2e-newowner-${randomUUID().slice(0, 6)}`,
-    passwordHash: "$2b$04$" + "x".repeat(22) + "y".repeat(31),
+    passwordHash: `$2b$04$${"x".repeat(22)}${"y".repeat(31)}`,
     displayName: "New Owner",
   });
   await app.db.insert(sharedDbSchema.members).values({
@@ -476,10 +475,7 @@ console.log("\n[e2e-askuser] case 5: client bridge resolves on inbox question_an
   });
   expect(matched, "bridge accepted the matching answer");
 
-  const result = await Promise.race([
-    waiter,
-    new Promise((resolve) => setTimeout(() => resolve("timeout"), 2000)),
-  ]);
+  const result = await Promise.race([waiter, new Promise((resolve) => setTimeout(() => resolve("timeout"), 2000))]);
   expect(result?.status === "answered", "waiter resolved as answered");
   expect(result?.answers?.foo === "bar", "waiter received answers verbatim");
   expect(pendingQuestionCount() === 0, "bridge cleaned up after resolve");
@@ -529,12 +525,9 @@ console.log("\n[e2e-askuser] case 6: agent inbox.pull surfaces question_answer e
     },
   });
 
-  await inject(
-    "POST",
-    `/api/v1/chats/${chat.id}/questions/${correlationId}/answer`,
-    ctx.accessToken,
-    { answers: { "Ship it?": "Yes" } },
-  );
+  await inject("POST", `/api/v1/chats/${chat.id}/questions/${correlationId}/answer`, ctx.accessToken, {
+    answers: { "Ship it?": "Yes" },
+  });
 
   // The peer agent's inbox should now hold the answer message — exactly
   // what SessionManager.dispatch would receive via WS push or HTTP poll.

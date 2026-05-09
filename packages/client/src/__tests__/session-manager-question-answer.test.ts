@@ -137,7 +137,7 @@ describe("SessionManager.dispatch — question_answer short-circuit", () => {
     await sm.shutdown();
   });
 
-  it("acks the entry even when no waiter is registered (stale answer)", async () => {
+  it("falls through to normal dispatch when no waiter is registered (stale answer after suspend)", async () => {
     const handler = createMockHandler();
     const sdk = mockSdk();
     const sm = createSessionManager(handler, sdk);
@@ -145,14 +145,21 @@ describe("SessionManager.dispatch — question_answer short-circuit", () => {
     await sm.dispatch(
       makeAnswerEntry({
         entryId: 100,
-        chatId: "chat-1",
+        chatId: "chat-stale",
         correlationId: "tu_unknown",
         answers: { q: "v" },
       }),
     );
 
+    // No live waiter → SessionManager must NOT short-circuit. The answer
+    // flows through normal dispatch so the suspended SDK can resume with
+    // the answer as fresh user input. Verifies handler.start was called
+    // (this chat had no prior session row, so dispatch creates one).
+    expect(handler.start).toHaveBeenCalledTimes(1);
+    // The handler's start ackEntry path eventually acks; we verify ack
+    // happens at least once. Exact timing depends on the ack-channel
+    // configuration but the contract is "entry must not stay pending".
     expect(sdk.ack).toHaveBeenCalledWith(100);
-    expect(handler.start).not.toHaveBeenCalled();
 
     await sm.shutdown();
   });

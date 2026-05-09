@@ -111,7 +111,6 @@ vi.mock("@openai/codex-sdk", () => {
     }
   }
   class FakeCodex {
-    constructor(_opts?: unknown) {}
     startThread(_opts?: unknown) {
       return new FakeThread();
     }

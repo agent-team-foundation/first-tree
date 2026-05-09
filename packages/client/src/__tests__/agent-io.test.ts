@@ -93,6 +93,35 @@ describe("formatInboundContent", () => {
     expect(await formatInboundContent(msg, cache)).toBe("[From: agent-ghost]\n\nhi");
   });
 
+  it("renders question_answer messages as Q/A pairs so a resumed session can read them as input", async () => {
+    const sdk = mkSdk(async () => participants);
+    const cache = createParticipantCache(sdk, "chat-1", () => {});
+    const msg: SessionMessage = {
+      id: "m-qa",
+      chatId: "chat-1",
+      senderId: "agent-a",
+      format: "question_answer",
+      content: {
+        correlationId: "tu_xyz",
+        answers: {
+          "Should I rebase or merge?": "Rebase",
+          "Should I run tests?": "Yes — full suite",
+        },
+      },
+      metadata: null,
+    };
+    const out = await formatInboundContent(msg, cache);
+    // Sanity-pin: prefixed with the bridge instruction so the LLM doesn't
+    // re-issue AskUserQuestion for the same questions; carries each Q/A pair.
+    expect(out).toContain("[From: alice]");
+    expect(out).toContain("user has answered an earlier AskUserQuestion");
+    expect(out).toContain("Q: Should I rebase or merge?");
+    expect(out).toContain("A: Rebase");
+    expect(out).toContain("Q: Should I run tests?");
+    expect(out).toContain("A: Yes — full suite");
+    expect(out).not.toContain("correlationId"); // raw payload field never leaks to the prompt
+  });
+
   it("serialises non-string content to JSON under the same attribution", async () => {
     const sdk = mkSdk(async () => participants);
     const cache = createParticipantCache(sdk, "chat-1", () => {});

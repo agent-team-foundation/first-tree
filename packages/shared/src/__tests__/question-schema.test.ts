@@ -91,12 +91,31 @@ describe("questionItemSchema", () => {
     expect(res.success).toBe(false);
   });
 
-  it("rejects header longer than 12 chars", () => {
+  it("accepts a 13-char header (SDK occasionally emits slightly over 12)", () => {
     const res = questionItemSchema.safeParse({
       ...validQuestion,
-      header: "TooLongHeaderHere",
+      header: "ThirteenChars",
+    });
+    expect(res.success).toBe(true);
+  });
+
+  it("rejects header longer than 24 chars", () => {
+    const res = questionItemSchema.safeParse({
+      ...validQuestion,
+      header: "ThisHeaderIsWayTooLongForTheChip",
     });
     expect(res.success).toBe(false);
+  });
+
+  it("accepts options with omitted preview field (SDK shape when no preview generated)", () => {
+    const res = questionItemSchema.safeParse({
+      ...validQuestion,
+      options: [
+        { label: "A", description: "alpha" }, // no preview key at all
+        { label: "B", description: "beta" },
+      ],
+    });
+    expect(res.success).toBe(true);
   });
 
   it("rejects empty question text", () => {

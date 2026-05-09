@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   clearAllPendingQuestionsForTest,
+  hasPendingForChat,
   pendingQuestionCount,
   registerPendingQuestion,
   rejectPendingForAgent,
@@ -71,6 +72,16 @@ describe("ask-user-bridge", () => {
     const matched = tryResolveQuestionAnswer({ correlationId: "tu_b1", answers: { q: "v" } });
     expect(matched).toBe(true);
     await expect(b1).resolves.toEqual({ status: "answered", answers: { q: "v" } });
+  });
+
+  it("hasPendingForChat reports true only for the matching (agent, chat) pair", () => {
+    void registerPendingQuestion({ correlationId: "tu_x1", agentId: "agent-a", chatId: "chat-1" });
+    void registerPendingQuestion({ correlationId: "tu_x2", agentId: "agent-b", chatId: "chat-1" });
+
+    expect(hasPendingForChat("agent-a", "chat-1")).toBe(true);
+    expect(hasPendingForChat("agent-b", "chat-1")).toBe(true);
+    expect(hasPendingForChat("agent-a", "chat-2")).toBe(false);
+    expect(hasPendingForChat("agent-c", "chat-1")).toBe(false);
   });
 
   it("re-registering the same correlationId resolves the previous waiter as denied", async () => {

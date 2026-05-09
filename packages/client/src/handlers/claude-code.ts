@@ -38,7 +38,7 @@ import type {
 import { findImagePath } from "../runtime/image-store.js";
 import { InputController } from "../runtime/input-controller.js";
 import { acquireWorkspace } from "../runtime/workspace.js";
-import { registerPendingQuestion, rejectPendingForAgent } from "./ask-user-bridge.js";
+import { clearPendingForAgent, registerPendingQuestion, rejectPendingForAgent } from "./ask-user-bridge.js";
 import { resolveClaudeCodeExecutable } from "./claude-executable.js";
 
 const MAX_RETRIES = 2;
@@ -977,6 +977,22 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
 
     async suspend() {
       ctx?.log("Suspending session");
+
+      // Silently drop any in-flight AskUserQuestion waiters BEFORE killing
+      // the SDK transport. Resolving them here would unblock canUseTool,
+      // which would then try to write the PermissionResult through a stdin
+      // we're about to close — the SDK throws an uncaught
+      // 'ProcessTransport is not ready for writing'. Leaving the awaiter
+      // Promise stranded is fine: the SDK process is going away and its
+      // stack frames GC with it. If the user eventually answers,
+      // SessionManager.dispatch sees no matching waiter and routes the
+      // `format=question_answer` message through the normal resume path
+      // (the answer becomes regular input on the next turn).
+      const sessionCtx = ctx;
+      if (sessionCtx) {
+        const dropped = clearPendingForAgent(sessionCtx.agent.agentId);
+        if (dropped > 0) sessionCtx.log(`Cleared ${dropped} pending AskUserQuestion entries on suspend`);
+      }
 
       if (inputController) {
         inputController.end();

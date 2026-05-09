@@ -23,23 +23,32 @@ import { z } from "zod";
  * messages are immutable once written.
  */
 
-/** Single option inside a question. `preview` is optional rich content rendered above the label. */
+/**
+ * Single option inside a question. `preview` is rich content rendered above
+ * the label — the SDK's tool input emits it as `string | undefined` (the
+ * field is omitted when the model didn't generate any preview content), so
+ * we accept undefined / null / string and normalise downstream renderers
+ * to treat all three the same way.
+ */
 export const questionOptionSchema = z.object({
   label: z.string().min(1),
   description: z.string(),
-  /** SDK-emitted HTML or Markdown snippet. `null` when no preview was generated. */
-  preview: z.string().nullable(),
+  /** SDK-emitted HTML or Markdown snippet. Optional — the SDK omits this field when there's no preview. */
+  preview: z.string().nullable().optional(),
 });
 export type QuestionOption = z.infer<typeof questionOptionSchema>;
 
 /**
- * One question. `header` is a chip-style short tag — SDK enforces ≤12 chars and we
- * mirror that constraint here so malformed agent input fails parse before reaching UI.
+ * One question. `header` is a chip-style short tag. The SDK schema docs
+ * describe ≤12 chars but in practice the model occasionally emits
+ * slightly longer headers; we keep the rule loose (≤24) so a stylistic
+ * regression doesn't fail-closed at canUseTool and abandon the entire
+ * tool call. The UI truncates visually if needed.
  */
 export const questionItemSchema = z.object({
   /** The question text. Used as the answer-dictionary key in `QuestionAnswerMessageContent.answers`. */
   question: z.string().min(1),
-  header: z.string().min(1).max(12),
+  header: z.string().min(1).max(24),
   options: z.array(questionOptionSchema).min(2).max(4),
   multiSelect: z.boolean(),
 });
