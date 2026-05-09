@@ -1066,7 +1066,7 @@ function Step3IntroBody() {
               fontWeight: selectedRepoUrl ? 600 : 500,
             }}
           >
-            Existing tree, or fresh start?
+            Bind or create the tree
           </h2>
           {selectedRepoUrl ? (
             <fieldset
@@ -1165,14 +1165,12 @@ function Step3IntroBody() {
               fontWeight: treeModeChosen ? 600 : 500,
             }}
           >
-            Hand off to your agent
+            Let your agent build it
           </h2>
           {treeModeChosen ? (
             <>
               <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
-                Your agent will install the first-tree skill,{" "}
-                {treeMode === "existing" ? "bind to your tree" : "scaffold a fresh tree"}, and open a PR back to your
-                source repo with the binding metadata.
+                It&apos;ll install the skill, set up the tree, and open a PR back to your source repo.
               </p>
 
               {error ? (
@@ -1230,7 +1228,7 @@ function RepoPickerSection({
         fontWeight: disabled ? 500 : 600,
       }}
     >
-      Pick the repo this tree will serve
+      Connect your source repo
     </h2>
   );
 
@@ -1280,7 +1278,7 @@ function RepoPickerSection({
     <div style={{ animation: "subtle-fade 200ms ease-out" }}>
       {heading}
       <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
-        Your agent will read this repo's code and organize what it learns into the tree.
+        The code your tree will organize knowledge about.
       </p>
       <select
         aria-label="GitHub repository"
