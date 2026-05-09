@@ -144,7 +144,8 @@ ContextTreeStatus
 职责:
 
 - 读取 server config 中的 Context Tree repo / branch。
-- 读取 `FIRST_TREE_HUB_CONTEXT_TREE_PATH` 或 server config 指向的本地 Context Tree checkout。
+- 以 server config 中的 remote Context Tree repo / branch 作为 source of truth。
+- Hub Server 自动把 remote repo 同步到 server-managed readonly checkout;`FIRST_TREE_HUB_CONTEXT_TREE_PATH` / `contextTree.localPath` 仅作为 dev/self-host override。
 - 解析 markdown files 和 directories。
 - 生成 parent edges、soft link edges、markdown link edges。
 - 生成 preview、owners、title、affected context area。
@@ -154,9 +155,9 @@ ContextTreeStatus
 - 校验本地 checkout branch 与 server config 是否一致,避免错标 branch。
 - 对 git command 设置 timeout / buffer 上限,并对 diff entry 做上限保护。
 - 用短 TTL in-memory cache 缓解同一 `repo + branch + headCommit + window` 的重复请求。
-- 返回 active / unavailable 状态。
+- 返回 active / unavailable 状态;不可用态表达 sync/access 问题,不把 server 机器环境变量暴露给用户。
 
-当前实现不做 remote clone、credential refresh 或 stale snapshot fallback。如果 `contextTree.repo` 是 remote URL,需要通过 `FIRST_TREE_HUB_CONTEXT_TREE_PATH` 指向 server 可读的本地 checkout。后续生产化可以把 refresh / persistent cache / stale fallback 补到这一层,但不改变 Web 的只读 read model。
+当前实现支持 remote repo 自动 materialize:当 `contextTree.repo` 是 remote URL 或 `owner/repo` shorthand 时,Hub Server 会 clone/fetch 到 `$FIRST_TREE_HUB_HOME/data/context-tree-repos/<hash>` 并从该 managed checkout 生成 snapshot。`contextTree.localPath` 保留为本地开发、self-host debug 或特殊部署 override,不是线上默认路径。
 
 ### 性能和复用边界
 
@@ -166,7 +167,7 @@ ContextTreeStatus
 
 - 按 `repo + branch + headCommit` 缓存 nodes / edges / previews。
 - `window` 只影响 changes / updates,不要导致每次请求都重建整棵树。
-- remote clone / pull、credential、stale snapshot fallback 放到 server refresh/cache 层。
+- credential refresh、stale snapshot fallback 放到 server refresh/cache 层。
 - 通用扫描、frontmatter 解析、soft link 解析长期应沉到 `first-tree` 包,例如 `first-tree tree export --json` 或包内 `readContextTreeSnapshot()`;Hub 只保留 auth、config、cache、API wrapper 和 Context Updates 产品表达。
 
 这样既避免 request-time 重复计算,也避免 Hub 长期拥有一套越来越厚的 Context Tree parser。

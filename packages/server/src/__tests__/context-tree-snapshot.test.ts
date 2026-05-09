@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -30,16 +30,25 @@ async function gitOutput(cwd: string, args: string[]): Promise<string> {
 }
 
 async function initRepo(): Promise<string> {
-  await git(testDir, ["init"]);
-  await git(testDir, ["config", "user.name", "Context Reviewer"]);
-  await git(testDir, ["config", "user.email", "context-reviewer@example.com"]);
-  return testDir;
+  return initRepoAt(testDir);
+}
+
+async function initRepoAt(cwd: string): Promise<string> {
+  await mkdir(cwd, { recursive: true });
+  await git(cwd, ["init", "--initial-branch=main"]);
+  await git(cwd, ["config", "user.name", "Context Reviewer"]);
+  await git(cwd, ["config", "user.email", "context-reviewer@example.com"]);
+  return cwd;
 }
 
 async function commitAll(message: string): Promise<string> {
-  await git(testDir, ["add", "."]);
-  await git(testDir, ["commit", "-m", message]);
-  return gitOutput(testDir, ["rev-parse", "HEAD"]);
+  return commitAllAt(testDir, message);
+}
+
+async function commitAllAt(cwd: string, message: string): Promise<string> {
+  await git(cwd, ["add", "."]);
+  await git(cwd, ["commit", "-m", message]);
+  return gitOutput(cwd, ["rev-parse", "HEAD"]);
 }
 
 describe("Context Tree snapshot service", () => {
@@ -171,5 +180,23 @@ Body`);
     expect(diff.entries).toEqual([]);
     expect(existsSync(payloadPath)).toBe(false);
     expect(existsSync(`${payloadPath}..HEAD`)).toBe(false);
+  });
+
+  it("materializes a remote repo into a managed checkout", async () => {
+    const remoteDir = join(testDir, "remote-source");
+    const cacheRoot = join(testDir, "managed-cache");
+    await initRepoAt(remoteDir);
+    await writeFile(join(remoteDir, "NODE.md"), "---\ntitle: Remote Context\n---\nGuidance\n");
+    await commitAllAt(remoteDir, "docs: add remote context");
+
+    const managedRoot = await contextTreeSnapshotTestInternals.materializeRemoteContextTree(
+      remoteDir,
+      "main",
+      cacheRoot,
+    );
+
+    expect(managedRoot.startsWith(cacheRoot)).toBe(true);
+    expect(managedRoot).not.toBe(remoteDir);
+    await expect(readFile(join(managedRoot, "NODE.md"), "utf8")).resolves.toContain("Remote Context");
   });
 });

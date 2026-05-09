@@ -329,7 +329,8 @@ Most environment variables use the `FIRST_TREE_HUB_` prefix. `onboard` also acce
 | `FIRST_TREE_HUB_HOST` | Bind address | `127.0.0.1` |
 | `FIRST_TREE_HUB_JWT_SECRET` | JWT signing key | auto: random generated |
 | `FIRST_TREE_HUB_ENCRYPTION_KEY` | Adapter credential encryption key | auto: random generated |
-| `FIRST_TREE_HUB_CONTEXT_TREE_REPO` | Context Tree repository URL (optional) | — |
+| `FIRST_TREE_HUB_CONTEXT_TREE_REPO` | Context Tree repository URL (optional). Hub server syncs this into a managed readonly checkout for the Context UI. | — |
+| `FIRST_TREE_HUB_CONTEXT_TREE_PATH` | Optional server-local Context Tree checkout override for development or self-host debugging. | — |
 | `FIRST_TREE_HUB_GITHUB_TOKEN` | GitHub API token (optional, for webhooks) | — |
 | `FIRST_TREE_HUB_WEB_DIST_PATH` | Web static files path | auto-discovered |
 | `FIRST_TREE_HUB_PUBLIC_URL` | Public-facing hub URL. Stamped as the `iss` claim on connect tokens (so `connect <token>` derives the hub URL with no extra arg) and used to build invite-link URLs + the GitHub OAuth callback. **Required in production.** | request `Host` (dev only) |
