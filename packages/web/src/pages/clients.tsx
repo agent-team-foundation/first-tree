@@ -518,7 +518,7 @@ function ClientRow({
             {isOffline && (
               <button
                 type="button"
-                className="hover:underline"
+                className="rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 style={{ color: authBroken ? "var(--state-error)" : "var(--fg-2)" }}
                 onClick={(e) => {
                   e.stopPropagation();
@@ -530,7 +530,7 @@ function ClientRow({
             )}
             <button
               type="button"
-              className="hover:underline"
+              className="rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               style={{ color: "var(--fg-2)" }}
               onClick={(e) => {
                 e.stopPropagation();
@@ -541,7 +541,7 @@ function ClientRow({
             </button>
             <button
               type="button"
-              className="hover:underline"
+              className="rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               style={{ color: "var(--fg-4)" }}
               onClick={(e) => {
                 e.stopPropagation();

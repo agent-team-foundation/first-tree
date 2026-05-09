@@ -89,6 +89,7 @@ Example: `GET /api/v1/agent/me`, `POST /api/v1/agent/chats/:chatId/messages`, `W
 - ❌ Top-level `/ws` or custom suffixes like `/realtime`, `/socket`
 - ❌ `enum` for path params; use `as const` / Zod literals
 - ❌ Reintroducing `memberScope`, `resolveAdminScope`, `requireMemberInOrg`, `requireAdminRoleHook` — all deleted
+- ❌ **Role-conditional response set** — a single route returning different resource collections based on caller role (e.g. members get their own clients, admins get the org's clients). Split into Class A + Class B and let the frontend pick. URLs describe data, not "what to show whom"
 
 ## Pre-commit checklist
 
@@ -99,3 +100,4 @@ Example: `GET /api/v1/agent/me`, `POST /api/v1/agent/chats/:chatId/messages`, `W
 - [ ] No reads of `request.user.organizationId` / `memberId` / `role`
 - [ ] WebSocket under owning scope with `/ws` suffix
 - [ ] Multi-org test coverage for any new Class B / C route
+- [ ] Response set depends only on path params + scope, not on caller role

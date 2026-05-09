@@ -12,24 +12,6 @@ import { serializeDate } from "../utils.js";
  * org doesn't appear in this URL because it doesn't gate access.
  */
 export async function clientRoutes(app: FastifyInstance): Promise<void> {
-  app.get("/", async (request) => {
-    const { userId } = requireUser(request);
-    const list = await clientService.listClients(app.db, { userId });
-    const refreshExpirySeconds = expiryToSeconds(app.config.auth.refreshTokenExpiry);
-    return list.map((c) => ({
-      id: c.id,
-      userId: c.userId,
-      status: c.status,
-      authState: clientService.deriveAuthState(c, refreshExpirySeconds),
-      sdkVersion: c.sdkVersion,
-      hostname: c.hostname,
-      os: c.os,
-      agentCount: c.agentCount,
-      connectedAt: serializeDate(c.connectedAt),
-      lastSeenAt: c.lastSeenAt.toISOString(),
-    }));
-  });
-
   app.get<{ Params: { clientId: string } }>("/:clientId", async (request) => {
     const { userId } = requireUser(request);
     await clientService.assertClientOwner(app.db, request.params.clientId, { userId });

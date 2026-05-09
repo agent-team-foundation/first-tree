@@ -50,7 +50,7 @@ export function getActivityOverview(): Promise<ActivityOverview> {
 }
 
 export function listClients(): Promise<HubClient[]> {
-  return api.get<HubClient[]>("/clients");
+  return api.get<HubClient[]>("/me/clients");
 }
 
 export function getClient(clientId: string): Promise<HubClient> {
