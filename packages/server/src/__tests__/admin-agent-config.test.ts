@@ -50,6 +50,50 @@ describe("Admin agent-config API (Step 2)", () => {
     expect(after.json().payload.prompt.append).toBe("你只会一句话");
   });
 
+  it("PATCH with a subset of fields leaves omitted fields untouched", async () => {
+    // Regression: Zod 4's `.partial()` keeps inner `ZodDefault`s, so a
+    // schema with `.default()` per field would silently fill the patch with
+    // defaults for omitted keys — wiping the user's saved prompt / model /
+    // env / git when they edit just one section.
+    const app = getApp();
+    const req = await authedRequest(app);
+    const agent = await (await seedAgentFactory(app))({
+      name: `cfg-partial-${crypto.randomUUID().slice(0, 8)}`,
+      type: "autonomous_agent",
+    });
+
+    // Seed every field with a non-default value so a stray default is visible.
+    const seed = await req("PATCH", `/api/v1/agents/${agent.uuid}/config`, {
+      expectedVersion: 1,
+      payload: {
+        prompt: { append: "stay-put-prompt" },
+        model: "claude-sonnet-4-6",
+        env: [{ key: "FOO", value: "bar", sensitive: false }],
+        gitRepos: [{ url: "https://example.com/r.git" }],
+      },
+    });
+    expect(seed.statusCode).toBe(200);
+    await app.configService.flush(agent.uuid);
+
+    // Touch only `mcpServers`. The service must preserve the other 4 fields.
+    const partial = await req("PATCH", `/api/v1/agents/${agent.uuid}/config`, {
+      expectedVersion: 2,
+      payload: {
+        mcpServers: [{ name: "demo", transport: "stdio", command: "echo" }],
+      },
+    });
+    expect(partial.statusCode).toBe(200);
+    await app.configService.flush(agent.uuid);
+
+    const after = await req("GET", `/api/v1/agents/${agent.uuid}/config`);
+    const payload = after.json().payload;
+    expect(payload.prompt.append).toBe("stay-put-prompt");
+    expect(payload.model).toBe("claude-sonnet-4-6");
+    expect(payload.env).toEqual([{ key: "FOO", value: "bar", sensitive: false }]);
+    expect(payload.gitRepos).toEqual([{ url: "https://example.com/r.git" }]);
+    expect(payload.mcpServers).toEqual([{ name: "demo", transport: "stdio", command: "echo" }]);
+  });
+
   it("PATCH with stale expectedVersion returns 409", async () => {
     const app = getApp();
     const req = await authedRequest(app);
