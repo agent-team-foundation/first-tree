@@ -2,8 +2,12 @@ import { NavLink, Outlet } from "react-router";
 import { cn } from "../lib/utils.js";
 
 /**
- * Settings is a master-detail container. Same flat aesthetic as TeamLayout
- * — no borders, no contrasting sidebar bg; active state is a soft pill.
+ * Settings is a master-detail container. Flat aesthetic — no borders, no
+ * contrasting sidebar bg; active state is a soft pill.
+ *
+ * `Team` is the org-scoped panel collection (Identity / Context Tree /
+ * Source repos / GitHub integration) — written-side admin-only, with
+ * `Source repos` readable by members. The other entries are user-scoped.
  */
 export function SettingsLayout() {
   return (
@@ -15,6 +19,7 @@ export function SettingsLayout() {
           padding: "var(--sp-4) var(--sp-2)",
         }}
       >
+        <SubNavLink to="/settings/team" label="Team" />
         <SubNavLink to="/settings/computers" label="Computers" />
         <SubNavLink to="/settings/integrations" label="Integrations" />
         <SubNavLink to="/settings/setup" label="Setup" />

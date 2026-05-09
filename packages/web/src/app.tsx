@@ -16,7 +16,6 @@ import { SettingsSetupPage } from "./pages/settings/setup.js";
 import { SettingsLayout } from "./pages/settings.js";
 import { TeamPage } from "./pages/team/index.js";
 import { TeamSettingsPage } from "./pages/team/settings.js";
-import { TeamLayout } from "./pages/team.js";
 import { WorkspacePage } from "./pages/workspace/index.js";
 
 const queryClient = new QueryClient({
@@ -56,15 +55,17 @@ export function App() {
                   <Route path="context" element={<ContextPage />} />
                   <Route path="agents/:uuid" element={<AgentDetailPage />} />
 
-                  {/* Team — Roster (default) + Settings (admin) */}
-                  <Route path="team" element={<TeamLayout />}>
-                    <Route index element={<TeamPage />} />
-                    <Route path="settings" element={<TeamSettingsPage />} />
-                  </Route>
+                  {/* Team — flat roster page, no sub-nav. Org-scoped admin
+                      configuration lives under /settings/team (it's a Settings
+                      surface, not a peer of the people-and-agents view). */}
+                  <Route path="team" element={<TeamPage />} />
 
-                  {/* Settings master-detail */}
+                  {/* Settings master-detail. `team` is the org-scoped panel
+                      collection (Identity / Context Tree / Source repos /
+                      GitHub integration); the rest are user-scoped. */}
                   <Route path="settings" element={<SettingsLayout />}>
                     <Route index element={<Navigate to="computers" replace />} />
+                    <Route path="team" element={<TeamSettingsPage />} />
                     <Route path="computers" element={<SettingsComputersPage />} />
                     <Route path="integrations" element={<SettingsIntegrationsPage />} />
                     <Route path="setup" element={<SettingsSetupPage />} />
@@ -77,6 +78,7 @@ export function App() {
                   <Route path="team/members" element={<Navigate to="/team" replace />} />
                   <Route path="team/agents" element={<Navigate to="/team" replace />} />
                   <Route path="team/invite" element={<Navigate to="/team" replace />} />
+                  <Route path="team/settings" element={<Navigate to="/settings/team" replace />} />
                   <Route path="admin" element={<AdminRedirect />} />
                 </Route>
               </Route>
