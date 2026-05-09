@@ -28,14 +28,40 @@ import { z } from "zod";
 
 // -- context_tree --
 
+const orgContextTreeRepoUrlSchema = z
+  .string()
+  .url()
+  .refine(
+    (value) => {
+      try {
+        const url = new URL(value);
+        return url.protocol === "https:";
+      } catch {
+        return false;
+      }
+    },
+    { message: "Context Tree repo URL must use HTTPS." },
+  )
+  .refine(
+    (value) => {
+      try {
+        const url = new URL(value);
+        return url.username.length === 0 && url.password.length === 0;
+      } catch {
+        return false;
+      }
+    },
+    { message: "Context Tree repo URL must not include credentials." },
+  );
+
 export const orgContextTreeStorageSchema = z.object({
-  repo: z.string().url().optional(),
+  repo: orgContextTreeRepoUrlSchema.optional(),
   branch: z.string().default("main"),
 });
 
 export const orgContextTreeInputSchema = z.object({
-  /** Set / replace (must be a valid URL). `null` clears. `undefined` leaves unchanged. */
-  repo: z.string().url().min(1).nullish(),
+  /** Set / replace (must be an HTTPS URL without credentials). `null` clears. `undefined` leaves unchanged. */
+  repo: orgContextTreeRepoUrlSchema.nullish(),
   /** Set / replace (non-empty). `null` clears (server falls back to "main"). `undefined` leaves unchanged. */
   branch: z.string().min(1).nullish(),
 });

@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { readdir, readFile, stat } from "node:fs/promises";
+import { chmod, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, extname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import type {
@@ -13,6 +14,7 @@ import type {
   ContextTreeSummary,
   ContextTreeUpdate,
 } from "@agent-team-foundation/first-tree-hub-shared";
+import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
 import matter from "gray-matter";
 
 const execFileAsync = promisify(execFile);
@@ -24,8 +26,11 @@ const MAX_MARKDOWN_FILES = 1_000;
 const MAX_MARKDOWN_FILE_BYTES = 512 * 1024;
 const SNAPSHOT_CACHE_TTL_MS = 30_000;
 const GIT_TIMEOUT_MS = 5_000;
+const GIT_SYNC_TIMEOUT_MS = 120_000;
 const GIT_MAX_BUFFER = 10 * 1024 * 1024;
 const GIT_LOG_RECORD_SEPARATOR = "\x1e";
+const REMOTE_SYNC_TTL_MS = 60_000;
+const REMOTE_FAILURE_TTL_MS = 30_000;
 const CONTEXT_TREE_SNAPSHOT_WINDOWS = {
   ONE_DAY: "1d",
   SEVEN_DAYS: "7d",
@@ -81,7 +86,32 @@ type SnapshotCacheEntry = {
   snapshot: ContextTreeSnapshot;
 };
 
+type ResolvedContextTreeRoot = {
+  root: string | null;
+  reason: string;
+  staleReason: string | null;
+};
+
+type RemoteSyncResult = {
+  staleReason: string | null;
+};
+
+type RemoteSyncFailure = {
+  failedAt: number;
+  reason: string;
+};
+
+type GitOutputOptions = {
+  timeout?: number;
+  env?: NodeJS.ProcessEnv;
+  disableHooks?: boolean;
+};
+
 const snapshotCache = new Map<string, SnapshotCacheEntry>();
+const remoteSyncPromises = new Map<string, Promise<RemoteSyncResult>>();
+const remoteLastSyncedAt = new Map<string, number>();
+const remoteLastSyncWarnings = new Map<string, string>();
+const remoteLastFailures = new Map<string, RemoteSyncFailure>();
 
 /**
  * Per-organization Context Tree binding. Resolved from `organization_settings`
@@ -92,6 +122,7 @@ export type ContextTreeBinding = {
   repo?: string;
   branch?: string;
   localPath?: string;
+  githubToken?: string;
 };
 
 export async function getContextTreeSnapshot(
@@ -100,7 +131,7 @@ export async function getContextTreeSnapshot(
 ): Promise<ContextTreeSnapshot> {
   const repo = binding.repo ?? null;
   const branch = binding.branch ?? null;
-  const resolved = resolveContextTreeRoot(repo, binding.localPath);
+  const resolved = await resolveContextTreeRoot(repo, binding.localPath, branch, binding.githubToken);
 
   if (!resolved.root) {
     return unavailableSnapshot(repo, branch, resolved.reason);
@@ -114,7 +145,7 @@ export async function getContextTreeSnapshot(
       return unavailableSnapshot(
         repo,
         actualBranch,
-        `Context Tree checkout is on branch "${actualBranch}", but server config expects "${branch}".`,
+        `Context Tree checkout is on branch "${actualBranch}", but the configured Context Tree branch is "${branch}".`,
       );
     }
 
@@ -122,7 +153,10 @@ export async function getContextTreeSnapshot(
     const cacheKey = snapshotCacheKey(resolved.root, actualBranch ?? branch, headCommit, comparisonBaseCommit, window);
     const cached = snapshotCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
-      return { ...cached.snapshot, syncedAt: now };
+      const staleCacheRecovered = cached.snapshot.snapshotStatus === "stale" && !resolved.staleReason;
+      if (!staleCacheRecovered) {
+        return withSnapshotStatus(cached.snapshot, now, statusWarningFromResolved(resolved.staleReason, null));
+      }
     }
 
     const files = await readMarkdownFiles(resolved.root);
@@ -135,19 +169,15 @@ export async function getContextTreeSnapshot(
     const nodesWithGhosts = addRemovedGhostNodes(nodes, changes);
     const summary = summarizeChanges(changes);
     const updates = buildUpdates(changes, nodesWithGhosts);
-    const statusWarning = contextStatusWarning(diffResult.truncated);
+    const statusWarning = statusWarningFromResolved(resolved.staleReason, diffResult.truncated);
 
     const snapshot: ContextTreeSnapshot = {
       repo,
       branch: actualBranch ?? branch,
       headCommit,
       syncedAt: now,
-      snapshotStatus: "active",
-      contextStatus: {
-        label: statusWarning ? "Team context needs attention" : "Team context is current",
-        detail: statusWarning ?? "Agents have a synced team context snapshot available.",
-        severity: statusWarning ? "warning" : "ok",
-      },
+      snapshotStatus: statusWarning?.stale ? "stale" : "active",
+      contextStatus: contextStatus(statusWarning),
       summary,
       updates,
       nodes: nodesWithGhosts,
@@ -172,35 +202,274 @@ function snapshotCacheKey(
   return [root, branch ?? "unknown", headCommit, comparisonBase ?? "none", window].join(":");
 }
 
-function contextStatusWarning(truncated: boolean): string | null {
-  if (truncated) return `Showing the first ${MAX_DIFF_ENTRIES} changed files.`;
+function statusWarningFromResolved(
+  staleReason: string | null,
+  truncated: boolean | null,
+): { detail: string; stale: boolean } | null {
+  if (staleReason) {
+    const suffix = truncated ? ` Showing the first ${MAX_DIFF_ENTRIES} changed files.` : "";
+    return { detail: `${staleReason}${suffix}`, stale: true };
+  }
+  if (truncated) return { detail: `Showing the first ${MAX_DIFF_ENTRIES} changed files.`, stale: false };
   return null;
 }
 
-function resolveContextTreeRoot(
+async function resolveContextTreeRoot(
   repo: string | null,
   localPath: string | null | undefined,
-): { root: string | null; reason: string } {
-  const candidate = localPath && localPath.trim().length > 0 ? localPath : repo;
-  if (!candidate) {
-    return { root: null, reason: "Context Tree is not configured." };
+  branch: string | null,
+  githubToken?: string | null,
+): Promise<ResolvedContextTreeRoot> {
+  if (localPath && localPath.trim().length > 0) {
+    const root = resolveLocalPath(localPath);
+    if (existsSync(root)) return { root, reason: "ok", staleReason: null };
+    return { root: null, reason: `Context Tree checkout not found at ${root}.`, staleReason: null };
   }
 
-  const normalized = candidate.startsWith("file://") ? candidate.slice("file://".length) : candidate;
-  const root = isAbsolute(normalized) ? normalize(normalized) : resolve(process.cwd(), normalized);
+  if (!repo) {
+    return { root: null, reason: "Context Tree is not configured.", staleReason: null };
+  }
+
+  if (isRemoteRepo(repo)) {
+    const resolvedBranch = branch ?? "main";
+    if (!isSafeBranchName(resolvedBranch)) {
+      return {
+        root: null,
+        reason: `Configured Context Tree branch "${resolvedBranch}" is invalid.`,
+        staleReason: null,
+      };
+    }
+    try {
+      const materialized = await materializeRemoteContextTree(repo, resolvedBranch, undefined, githubToken);
+      return { root: materialized.root, reason: "ok", staleReason: materialized.staleReason };
+    } catch (error) {
+      return {
+        root: null,
+        reason: `Hub could not sync the configured Context Tree repo. Check repo access and branch "${resolvedBranch}". ${errorMessage(error)}`,
+        staleReason: null,
+      };
+    }
+  }
+
+  const root = resolveLocalPath(repo);
   if (existsSync(root)) {
-    return { root, reason: "ok" };
+    return { root, reason: "ok", staleReason: null };
   }
 
-  if (/^https?:\/\//.test(normalized) || /^[^/]+\/[^/]+$/.test(normalized)) {
+  return { root: null, reason: `Context Tree checkout not found at ${root}.`, staleReason: null };
+}
+
+function resolveLocalPath(value: string): string {
+  const normalized = value.startsWith("file://") ? value.slice("file://".length) : value;
+  return isAbsolute(normalized) ? normalize(normalized) : resolve(process.cwd(), normalized);
+}
+
+function isRemoteRepo(value: string): boolean {
+  return (
+    /^https?:\/\//.test(value) || /^file:\/\//.test(value) || /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?$/.test(value)
+  );
+}
+
+function normalizeRemoteRepoUrl(value: string): string {
+  if (/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?$/.test(value)) {
+    return `https://github.com/${value}`;
+  }
+  return value;
+}
+
+function managedContextTreeCacheRoot(): string {
+  return join(DEFAULT_DATA_DIR, "context-tree-repos");
+}
+
+function managedContextTreePath(repoUrl: string, branch: string, cacheRoot = managedContextTreeCacheRoot()): string {
+  const hash = createHash("sha256").update(`${repoUrl}\0${branch}`).digest("hex");
+  return join(cacheRoot, hash);
+}
+
+async function materializeRemoteContextTree(
+  repo: string,
+  branch: string,
+  cacheRoot = managedContextTreeCacheRoot(),
+  githubToken?: string | null,
+): Promise<{ root: string; staleReason: string | null }> {
+  const repoUrl = normalizeRemoteRepoUrl(repo);
+  const root = managedContextTreePath(repoUrl, branch, cacheRoot);
+  const lastSyncedAt = remoteLastSyncedAt.get(root);
+  if (lastSyncedAt && Date.now() - lastSyncedAt < REMOTE_SYNC_TTL_MS && existsSync(join(root, ".git"))) {
+    return { root, staleReason: remoteLastSyncWarnings.get(root) ?? null };
+  }
+  const lastFailure = remoteLastFailures.get(root);
+  if (lastFailure && Date.now() - lastFailure.failedAt < REMOTE_FAILURE_TTL_MS && !existsSync(join(root, ".git"))) {
+    throw new Error(lastFailure.reason);
+  }
+
+  const existing = remoteSyncPromises.get(root);
+  if (existing) {
+    const result = await existing;
+    return { root, staleReason: result.staleReason };
+  }
+
+  const syncPromise = syncRemoteContextTree(repoUrl, branch, root, cacheRoot, githubToken);
+  remoteSyncPromises.set(root, syncPromise);
+  try {
+    const syncResult = await syncPromise;
+    remoteLastSyncedAt.set(root, Date.now());
+    remoteLastFailures.delete(root);
+    if (syncResult.staleReason) {
+      remoteLastSyncWarnings.set(root, syncResult.staleReason);
+    } else {
+      remoteLastSyncWarnings.delete(root);
+    }
+    return { root, staleReason: syncResult.staleReason };
+  } catch (error) {
+    if (!existsSync(join(root, ".git"))) {
+      remoteLastFailures.set(root, {
+        failedAt: Date.now(),
+        reason: `Previous Context Tree sync failed recently. ${errorMessage(error)}`,
+      });
+    }
+    throw error;
+  } finally {
+    remoteSyncPromises.delete(root);
+  }
+}
+
+async function syncRemoteContextTree(
+  repoUrl: string,
+  branch: string,
+  root: string,
+  cacheRoot: string,
+  githubToken?: string | null,
+): Promise<RemoteSyncResult> {
+  await mkdir(cacheRoot, { recursive: true });
+  const env = await gitAuthEnv(repoUrl, cacheRoot, githubToken);
+  if (!existsSync(join(root, ".git"))) {
+    await rm(root, { recursive: true, force: true });
+    await gitOutput(cacheRoot, ["clone", "--branch", branch, "--single-branch", repoUrl, root], {
+      timeout: GIT_SYNC_TIMEOUT_MS,
+      env,
+      disableHooks: true,
+    });
+    return { staleReason: null };
+  }
+
+  try {
+    await gitOutput(root, ["remote", "set-url", "origin", repoUrl], {
+      timeout: GIT_TIMEOUT_MS,
+      disableHooks: true,
+    });
+    await gitOutput(root, ["fetch", "origin", branch, "--prune"], {
+      timeout: GIT_SYNC_TIMEOUT_MS,
+      env,
+      disableHooks: true,
+    });
+    await gitOutput(root, ["checkout", "-B", branch, `origin/${branch}`], {
+      timeout: GIT_TIMEOUT_MS,
+      disableHooks: true,
+    });
+    return { staleReason: null };
+  } catch (error) {
+    if (existsSync(join(root, ".git"))) {
+      return {
+        staleReason: `Showing the last synced Context Tree snapshot because Hub could not refresh the configured repo. ${errorMessage(error)}`,
+      };
+    }
+    throw error;
+  }
+}
+
+async function gitAuthEnv(
+  repoUrl: string,
+  cacheRoot: string,
+  githubToken?: string | null,
+): Promise<NodeJS.ProcessEnv | undefined> {
+  if (!githubToken || !isGithubHttpsRepo(repoUrl)) return undefined;
+  const askpassPath = join(cacheRoot, ".tools", "git-askpass.sh");
+  if (!existsSync(askpassPath)) {
+    await mkdir(dirname(askpassPath), { recursive: true });
+    await writeFile(
+      askpassPath,
+      [
+        "#!/bin/sh",
+        'case "$1" in',
+        '*Username*) printf "%s\\n" "$GIT_USERNAME" ;;',
+        '*) printf "%s\\n" "$GIT_PASSWORD" ;;',
+        "esac",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await chmod(askpassPath, 0o700);
+  }
+  return {
+    ...process.env,
+    GIT_ASKPASS: askpassPath,
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_USERNAME: "x-access-token",
+    GIT_PASSWORD: githubToken,
+  };
+}
+
+function isGithubHttpsRepo(repoUrl: string): boolean {
+  try {
+    const url = new URL(repoUrl);
+    return url.protocol === "https:" && url.hostname.toLowerCase() === "github.com";
+  } catch {
+    return false;
+  }
+}
+
+function contextStatus(warning: { detail: string; stale: boolean } | null): ContextTreeSnapshot["contextStatus"] {
+  if (warning?.stale) {
     return {
-      root: null,
-      reason:
-        "Context Tree repo is configured as a remote URL. Set FIRST_TREE_HUB_CONTEXT_TREE_PATH to a readable local checkout for this version.",
+      label: "Team context is stale",
+      detail: warning.detail,
+      severity: "warning",
     };
   }
+  if (warning) {
+    return {
+      label: "Team context needs attention",
+      detail: warning.detail,
+      severity: "warning",
+    };
+  }
+  return {
+    label: "Team context is current",
+    detail: "Agents have a synced team context snapshot available.",
+    severity: "ok",
+  };
+}
 
-  return { root: null, reason: `Context Tree checkout not found at ${root}.` };
+function withSnapshotStatus(
+  snapshot: ContextTreeSnapshot,
+  syncedAt: string,
+  warning: { detail: string; stale: boolean } | null,
+): ContextTreeSnapshot {
+  return {
+    ...snapshot,
+    syncedAt,
+    snapshotStatus: warning?.stale ? "stale" : snapshot.snapshotStatus,
+    contextStatus: warning ? contextStatus(warning) : snapshot.contextStatus,
+  };
+}
+
+function isSafeBranchName(branch: string): boolean {
+  if (branch.startsWith("-")) return false;
+  if (branch.includes("..") || branch.includes("@{") || branch.includes("\\")) return false;
+  return /^[A-Za-z0-9._/-]+$/.test(branch);
+}
+
+function errorMessage(error: unknown): string {
+  if (!(error instanceof Error) || error.message.trim().length === 0) return "";
+  return redactSecret(error.message.trim().split("\n")[0] ?? "");
+}
+
+function redactSecret(message: string): string {
+  return message
+    .replace(/(https?:\/\/)[^/@\s]+@/g, "$1[redacted]@")
+    .replace(/\bghp_[A-Za-z0-9_]+/g, "[redacted]")
+    .replace(/\bgithub_pat_[A-Za-z0-9_]+/g, "[redacted]");
 }
 
 function unavailableSnapshot(repo: string | null, branch: string | null, detail: string): ContextTreeSnapshot {
@@ -223,11 +492,13 @@ function unavailableSnapshot(repo: string | null, branch: string | null, detail:
   };
 }
 
-async function gitOutput(cwd: string, args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync("git", args, {
+async function gitOutput(cwd: string, args: string[], options?: GitOutputOptions): Promise<string> {
+  const gitArgs = options?.disableHooks ? ["-c", "core.hooksPath=/dev/null", ...args] : args;
+  const { stdout } = await execFileAsync("git", gitArgs, {
     cwd,
-    timeout: GIT_TIMEOUT_MS,
+    timeout: options?.timeout ?? GIT_TIMEOUT_MS,
     maxBuffer: GIT_MAX_BUFFER,
+    env: options?.env,
   });
   return stdout.trim();
 }
@@ -835,6 +1106,18 @@ export const contextTreeSnapshotTestInternals = {
   buildTreeFromRawFiles(files: Array<{ relativePath: string; raw: string }>): TreeBuildResult {
     return buildTree(files.map((file) => ({ relativePath: file.relativePath, parsed: parseMarkdown(file.raw) })));
   },
+  clearRemoteSyncState(): void {
+    snapshotCache.clear();
+    remoteLastSyncedAt.clear();
+    remoteLastSyncWarnings.clear();
+    remoteLastFailures.clear();
+    remoteSyncPromises.clear();
+  },
+  gitAuthEnv,
+  managedContextTreePath,
+  materializeRemoteContextTree,
   parseMarkdownFallback,
   readDiffEntries,
+  redactSecret,
+  resolveContextTreeRoot,
 };

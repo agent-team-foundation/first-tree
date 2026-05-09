@@ -132,8 +132,6 @@ When required parameters are missing, the same checklist is shown as an error.
 | `FEISHU_APP_ID` | Feishu bot App ID (alternative to `--feishu-bot-app-id`) |
 | `FEISHU_APP_SECRET` | Feishu bot App Secret (alternative to `--feishu-bot-app-secret`) |
 
-> **Access control:** If the server has `FIRST_TREE_HUB_GITHUB_ALLOWED_ORG` set, only members of that GitHub organization can register agents.
-
 ## Choosing the Right Type
 
 | Type | When to Use |
