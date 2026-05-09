@@ -61,25 +61,10 @@ export const serverConfigSchema = defineConfig({
     refreshTokenExpiry: field(z.string().default("30d"), { env: "FIRST_TREE_HUB_AUTH_REFRESH_TOKEN_EXPIRY" }),
     connectTokenExpiry: field(z.string().default("10m"), { env: "FIRST_TREE_HUB_AUTH_CONNECT_TOKEN_EXPIRY" }),
   },
-  contextTree: optional({
-    repo: field(z.string().optional(), {
-      env: "FIRST_TREE_HUB_CONTEXT_TREE_REPO",
-      prompt: { message: "Context Tree repo URL (e.g. https://github.com/org/first-tree):" },
-    }),
-    localPath: field(z.string().optional(), {
-      env: "FIRST_TREE_HUB_CONTEXT_TREE_PATH",
-    }),
-    branch: field(z.string().default("main")),
-  }),
-  github: {
-    webhookSecret: field(z.string().optional(), {
-      env: "FIRST_TREE_HUB_GITHUB_WEBHOOK_SECRET",
-      secret: true,
-    }),
-    allowedOrg: field(z.string().optional(), {
-      env: "FIRST_TREE_HUB_GITHUB_ALLOWED_ORG",
-    }),
-  },
+  // Context Tree (repo / branch / localPath) and GitHub integration
+  // (webhook secret / allowed org) used to live here as global config.
+  // They are now per-org settings in the `organization_settings` table —
+  // admins configure them through Team Settings. See issue #255.
   oauth: optional({
     /**
      * GitHub OAuth App credentials for SaaS sign-in. The "half configured"

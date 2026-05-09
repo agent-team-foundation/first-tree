@@ -132,7 +132,6 @@ async function main(): Promise<void> {
       jwtSecret,
       encryptionKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     },
-    github: { webhookSecret: "e2e", allowedOrg: "e2e" },
     rateLimit: { max: 10000, loginMax: 10000, webhookMax: 10000 },
     instanceId: "e2e-instance",
     logger: false,

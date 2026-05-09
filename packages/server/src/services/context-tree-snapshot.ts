@@ -14,7 +14,6 @@ import type {
   ContextTreeUpdate,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import matter from "gray-matter";
-import type { Config } from "../config.js";
 
 const execFileAsync = promisify(execFile);
 const ROOT_NODE_ID = "root";
@@ -84,13 +83,24 @@ type SnapshotCacheEntry = {
 
 const snapshotCache = new Map<string, SnapshotCacheEntry>();
 
+/**
+ * Per-organization Context Tree binding. Resolved from `organization_settings`
+ * by the calling route — this service stays decoupled from any single-tenant
+ * global config so each org gets its own tree.
+ */
+export type ContextTreeBinding = {
+  repo?: string;
+  branch?: string;
+  localPath?: string;
+};
+
 export async function getContextTreeSnapshot(
-  config: Config,
+  binding: ContextTreeBinding,
   window: ContextTreeSnapshotWindow = CONTEXT_TREE_SNAPSHOT_WINDOWS.SEVEN_DAYS,
 ): Promise<ContextTreeSnapshot> {
-  const repo = config.contextTree?.repo ?? null;
-  const branch = config.contextTree?.branch ?? null;
-  const resolved = resolveContextTreeRoot(repo, config.contextTree?.localPath);
+  const repo = binding.repo ?? null;
+  const branch = binding.branch ?? null;
+  const resolved = resolveContextTreeRoot(repo, binding.localPath);
 
   if (!resolved.root) {
     return unavailableSnapshot(repo, branch, resolved.reason);

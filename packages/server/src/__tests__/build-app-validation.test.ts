@@ -25,7 +25,6 @@ const baseConfig: Config = {
     encryptionKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   },
   auth: { accessTokenExpiry: "30m", refreshTokenExpiry: "30d", connectTokenExpiry: "10m" },
-  github: { webhookSecret: undefined, allowedOrg: undefined },
   trustProxy: false,
   observability: { logging: { level: "error", format: "json", bridgeToSpanLevel: "off" } },
   runtime: {

@@ -15,7 +15,6 @@ import {
   setConfigValue,
 } from "../resolver.js";
 import { defineConfig, field, optional } from "../schema.js";
-import { serverConfigSchema } from "../server-config.js";
 import { getConfig, resetConfig } from "../singleton.js";
 
 let testDir: string;
@@ -248,23 +247,6 @@ describe("optional groups", () => {
 
     expect(config.extra?.repo).toBe("org/repo");
     expect(config.extra?.branch).toBe("main");
-  });
-});
-
-describe("server contextTree config", () => {
-  it("activates contextTree from FIRST_TREE_HUB_CONTEXT_TREE_PATH without requiring repo", async () => {
-    vi.stubEnv("FIRST_TREE_HUB_DATABASE_URL", "postgresql://user:pass@localhost:5432/hub");
-    vi.stubEnv("FIRST_TREE_HUB_CONTEXT_TREE_PATH", "/tmp/first-tree-context");
-
-    const config = await initConfig({
-      schema: serverConfigSchema,
-      role: "server",
-      configDir: testDir,
-    });
-
-    expect(config.contextTree?.localPath).toBe("/tmp/first-tree-context");
-    expect(config.contextTree?.repo).toBeUndefined();
-    expect(config.contextTree?.branch).toBe("main");
   });
 });
 
