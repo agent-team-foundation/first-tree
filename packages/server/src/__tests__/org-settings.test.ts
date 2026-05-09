@@ -406,12 +406,12 @@ describe("org-settings API (admin gating + masking)", () => {
     expect(get2.json()).toEqual({ branch: "main" });
   });
 
-  it("non-admin member is forbidden from GET / PUT / DELETE", async () => {
+  it("non-admin member is forbidden from PUT / DELETE on context_tree (write is admin-only)", async () => {
     const app = getApp();
     const { admin, member } = await adminAndMember(app);
     const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree`;
 
-    for (const method of ["GET", "PUT", "DELETE"] as const) {
+    for (const method of ["PUT", "DELETE"] as const) {
       const res = await app.inject({
         method,
         url,
@@ -495,20 +495,48 @@ describe("org-settings API (admin gating + masking)", () => {
     expect(get2.json()).toEqual({ repos: [] });
   });
 
-  it("non-admin member is forbidden from source_repos GET / PUT / DELETE", async () => {
+  it("member can GET source_repos and context_tree (readPolicy: member) but cannot PUT / DELETE", async () => {
     const app = getApp();
     const { admin, member } = await adminAndMember(app);
-    const url = `/api/v1/orgs/${admin.organizationId}/settings/source_repos`;
 
-    for (const method of ["GET", "PUT", "DELETE"] as const) {
-      const res = await app.inject({
-        method,
+    for (const ns of ["source_repos", "context_tree"] as const) {
+      const url = `/api/v1/orgs/${admin.organizationId}/settings/${ns}`;
+
+      const get = await app.inject({
+        method: "GET",
         url,
         headers: { authorization: `Bearer ${member.accessToken}` },
-        ...(method === "PUT" ? { payload: { repos: [] } } : {}),
       });
-      expect(res.statusCode, `${method} should be 403 for non-admin`).toBe(403);
+      expect(get.statusCode, `GET ${ns} should be 200 for member`).toBe(200);
+
+      const put = await app.inject({
+        method: "PUT",
+        url,
+        headers: { authorization: `Bearer ${member.accessToken}` },
+        payload: ns === "source_repos" ? { repos: [] } : { branch: "x" },
+      });
+      expect(put.statusCode, `PUT ${ns} should be 403 for member`).toBe(403);
+
+      const del = await app.inject({
+        method: "DELETE",
+        url,
+        headers: { authorization: `Bearer ${member.accessToken}` },
+      });
+      expect(del.statusCode, `DELETE ${ns} should be 403 for member`).toBe(403);
     }
+  });
+
+  it("member is still forbidden from GET github_integration (readPolicy: admin)", async () => {
+    const app = getApp();
+    const { admin, member } = await adminAndMember(app);
+    const url = `/api/v1/orgs/${admin.organizationId}/settings/github_integration`;
+
+    const res = await app.inject({
+      method: "GET",
+      url,
+      headers: { authorization: `Bearer ${member.accessToken}` },
+    });
+    expect(res.statusCode).toBe(403);
   });
 
   it("PUT empty-string webhookSecret returns 400 (#3)", async () => {

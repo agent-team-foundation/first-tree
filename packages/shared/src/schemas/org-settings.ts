@@ -120,23 +120,49 @@ export const orgSourceReposOutputSchema = z.object({
 
 // -- registry --
 
+/**
+ * GET-side ACL per namespace.
+ *   "admin"  — only org admins can read. Use when the masked output still
+ *              leaks "configured / not-configured" booleans for secret
+ *              fields, or any other admin-only signal.
+ *   "member" — any active org member can read. Use for namespaces with no
+ *              secret fields where members legitimately need the value
+ *              (e.g. invitee Step 3 reads `context_tree.repo` to show the
+ *              team's bound tree before joining; same for `source_repos`).
+ *
+ * Write-side (PUT / DELETE) is always admin-only — non-admins must not
+ * mutate org-wide config regardless of namespace policy.
+ */
+export type OrgSettingReadPolicy = "admin" | "member";
+
 export const ORG_SETTINGS_NAMESPACES = {
   context_tree: {
     storage: orgContextTreeStorageSchema,
     input: orgContextTreeInputSchema,
     output: orgContextTreeOutputSchema,
+    readPolicy: "member",
   },
   github_integration: {
     storage: orgGithubIntegrationStorageSchema,
     input: orgGithubIntegrationInputSchema,
     output: orgGithubIntegrationOutputSchema,
+    readPolicy: "admin",
   },
   source_repos: {
     storage: orgSourceReposStorageSchema,
     input: orgSourceReposInputSchema,
     output: orgSourceReposOutputSchema,
+    readPolicy: "member",
   },
-} as const;
+} as const satisfies Record<
+  string,
+  {
+    storage: z.ZodTypeAny;
+    input: z.ZodTypeAny;
+    output: z.ZodTypeAny;
+    readPolicy: OrgSettingReadPolicy;
+  }
+>;
 
 export const ORG_SETTINGS_NAMESPACE_KEYS = Object.keys(ORG_SETTINGS_NAMESPACES) as ReadonlyArray<
   keyof typeof ORG_SETTINGS_NAMESPACES

@@ -6,15 +6,23 @@ import { Button } from "../components/ui/button.js";
 import { FlatSectionHeader } from "../components/ui/flat-section-header.js";
 
 /**
- * Admin-only Team Settings card showing the team-level list of source
- * repositories. Onboarding writes one entry on Step 3; this card lets an
- * admin review what's bound and remove individual entries. There is no
- * "Add repo" form here yet — picking a repo requires an OAuth-scoped GitHub
- * picker and that lives in the onboarding flow today. A second pass will
- * extract the picker into a reusable component.
+ * Team Settings card showing the team-level list of source repositories.
+ *
+ * Admins get full management — list + per-entry Remove. Members see the
+ * same list but read-only, with a footer explaining that only admins can
+ * edit. The `source_repos` namespace's server-side `readPolicy: "member"`
+ * makes the GET succeed for non-admins; PUT stays admin-only so the
+ * Remove button is hidden for members rather than just disabled (avoids
+ * a 403 the UI can't recover from gracefully).
+ *
+ * Onboarding writes one entry on Step 3 (admin path). There is no
+ * "Add repo" form here yet — picking a repo requires an OAuth-scoped
+ * GitHub picker and that lives in the onboarding flow today. A second
+ * pass will extract the picker into a reusable component.
  */
 export function SourceReposSettingsPanel() {
-  const { organizationId } = useAuth();
+  const { organizationId, role } = useAuth();
+  const isAdmin = role === "admin";
   const queryClient = useQueryClient();
 
   const settingQuery = useQuery({
@@ -74,23 +82,26 @@ export function SourceReposSettingsPanel() {
                   </div>
                 )}
               </div>
-              <Button
-                type="button"
-                size="xs"
-                variant="outline"
-                disabled={removeMutation.isPending}
-                onClick={() => removeMutation.mutate(repo.url)}
-              >
-                <Trash2 className="h-3 w-3" />
-                Remove
-              </Button>
+              {isAdmin && (
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  disabled={removeMutation.isPending}
+                  onClick={() => removeMutation.mutate(repo.url)}
+                >
+                  <Trash2 className="h-3 w-3" />
+                  Remove
+                </Button>
+              )}
             </li>
           ))}
         </ul>
       )}
       <div className="text-label" style={{ color: "var(--fg-3)", padding: "var(--sp-2) var(--sp-1) 0" }}>
-        Removing a repo here only clears the team-level binding. Existing agent runtimes keep their per-agent gitRepos
-        until an admin restarts the agent or edits its config directly.
+        {isAdmin
+          ? "Removing a repo here only clears the team-level binding. Existing agent runtimes keep their per-agent gitRepos until an admin restarts the agent or edits its config directly."
+          : "Read-only — only team admins can edit this list."}
       </div>
       {removeMutation.error instanceof Error && (
         <div className="text-body" style={{ color: "var(--state-error)", marginTop: "var(--sp-2)" }}>

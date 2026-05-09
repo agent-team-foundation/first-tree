@@ -345,6 +345,7 @@ export {
   type OrgSettingInput,
   type OrgSettingNamespace,
   type OrgSettingOutput,
+  type OrgSettingReadPolicy,
   type OrgSettingStorage,
   type OrgSourceReposInput,
   type OrgSourceReposOutput,
