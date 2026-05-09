@@ -26,10 +26,11 @@ const MAX_MARKDOWN_FILES = 1_000;
 const MAX_MARKDOWN_FILE_BYTES = 512 * 1024;
 const SNAPSHOT_CACHE_TTL_MS = 30_000;
 const GIT_TIMEOUT_MS = 5_000;
-const GIT_SYNC_TIMEOUT_MS = 60_000;
+const GIT_SYNC_TIMEOUT_MS = 120_000;
 const GIT_MAX_BUFFER = 10 * 1024 * 1024;
 const GIT_LOG_RECORD_SEPARATOR = "\x1e";
 const REMOTE_SYNC_TTL_MS = 60_000;
+const REMOTE_FAILURE_TTL_MS = 30_000;
 const CONTEXT_TREE_SNAPSHOT_WINDOWS = {
   ONE_DAY: "1d",
   SEVEN_DAYS: "7d",
@@ -95,6 +96,11 @@ type RemoteSyncResult = {
   staleReason: string | null;
 };
 
+type RemoteSyncFailure = {
+  failedAt: number;
+  reason: string;
+};
+
 type GitOutputOptions = {
   timeout?: number;
   env?: NodeJS.ProcessEnv;
@@ -105,6 +111,7 @@ const snapshotCache = new Map<string, SnapshotCacheEntry>();
 const remoteSyncPromises = new Map<string, Promise<RemoteSyncResult>>();
 const remoteLastSyncedAt = new Map<string, number>();
 const remoteLastSyncWarnings = new Map<string, string>();
+const remoteLastFailures = new Map<string, RemoteSyncFailure>();
 
 /**
  * Per-organization Context Tree binding. Resolved from `organization_settings`
@@ -275,7 +282,7 @@ function managedContextTreeCacheRoot(): string {
 }
 
 function managedContextTreePath(repoUrl: string, branch: string, cacheRoot = managedContextTreeCacheRoot()): string {
-  const hash = createHash("sha256").update(`${repoUrl}\0${branch}`).digest("hex").slice(0, 16);
+  const hash = createHash("sha256").update(`${repoUrl}\0${branch}`).digest("hex");
   return join(cacheRoot, hash);
 }
 
@@ -291,6 +298,10 @@ async function materializeRemoteContextTree(
   if (lastSyncedAt && Date.now() - lastSyncedAt < REMOTE_SYNC_TTL_MS && existsSync(join(root, ".git"))) {
     return { root, staleReason: remoteLastSyncWarnings.get(root) ?? null };
   }
+  const lastFailure = remoteLastFailures.get(root);
+  if (lastFailure && Date.now() - lastFailure.failedAt < REMOTE_FAILURE_TTL_MS && !existsSync(join(root, ".git"))) {
+    throw new Error(lastFailure.reason);
+  }
 
   const existing = remoteSyncPromises.get(root);
   if (existing) {
@@ -303,12 +314,21 @@ async function materializeRemoteContextTree(
   try {
     const syncResult = await syncPromise;
     remoteLastSyncedAt.set(root, Date.now());
+    remoteLastFailures.delete(root);
     if (syncResult.staleReason) {
       remoteLastSyncWarnings.set(root, syncResult.staleReason);
     } else {
       remoteLastSyncWarnings.delete(root);
     }
     return { root, staleReason: syncResult.staleReason };
+  } catch (error) {
+    if (!existsSync(join(root, ".git"))) {
+      remoteLastFailures.set(root, {
+        failedAt: Date.now(),
+        reason: `Previous Context Tree sync failed recently. ${errorMessage(error)}`,
+      });
+    }
+    throw error;
   } finally {
     remoteSyncPromises.delete(root);
   }
@@ -364,21 +384,23 @@ async function gitAuthEnv(
   githubToken?: string | null,
 ): Promise<NodeJS.ProcessEnv | undefined> {
   if (!githubToken || !isGithubHttpsRepo(repoUrl)) return undefined;
-  await mkdir(cacheRoot, { recursive: true });
-  const askpassPath = join(cacheRoot, "git-askpass.sh");
-  await writeFile(
-    askpassPath,
-    [
-      "#!/bin/sh",
-      'case "$1" in',
-      '*Username*) printf "%s\\n" "$GIT_USERNAME" ;;',
-      '*) printf "%s\\n" "$GIT_PASSWORD" ;;',
-      "esac",
-      "",
-    ].join("\n"),
-    "utf8",
-  );
-  await chmod(askpassPath, 0o700);
+  const askpassPath = join(cacheRoot, ".tools", "git-askpass.sh");
+  if (!existsSync(askpassPath)) {
+    await mkdir(dirname(askpassPath), { recursive: true });
+    await writeFile(
+      askpassPath,
+      [
+        "#!/bin/sh",
+        'case "$1" in',
+        '*Username*) printf "%s\\n" "$GIT_USERNAME" ;;',
+        '*) printf "%s\\n" "$GIT_PASSWORD" ;;',
+        "esac",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await chmod(askpassPath, 0o700);
+  }
   return {
     ...process.env,
     GIT_ASKPASS: askpassPath,
@@ -444,7 +466,10 @@ function errorMessage(error: unknown): string {
 }
 
 function redactSecret(message: string): string {
-  return message.replace(/(https?:\/\/)[^/@\s]+@/g, "$1[redacted]@");
+  return message
+    .replace(/(https?:\/\/)[^/@\s]+@/g, "$1[redacted]@")
+    .replace(/\bghp_[A-Za-z0-9_]+/g, "[redacted]")
+    .replace(/\bgithub_pat_[A-Za-z0-9_]+/g, "[redacted]");
 }
 
 function unavailableSnapshot(repo: string | null, branch: string | null, detail: string): ContextTreeSnapshot {
@@ -1085,9 +1110,11 @@ export const contextTreeSnapshotTestInternals = {
     snapshotCache.clear();
     remoteLastSyncedAt.clear();
     remoteLastSyncWarnings.clear();
+    remoteLastFailures.clear();
     remoteSyncPromises.clear();
   },
   gitAuthEnv,
+  managedContextTreePath,
   materializeRemoteContextTree,
   parseMarkdownFallback,
   readDiffEntries,

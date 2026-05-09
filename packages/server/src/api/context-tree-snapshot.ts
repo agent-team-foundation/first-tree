@@ -3,7 +3,7 @@ import type { ServerConfig } from "@agent-team-foundation/first-tree-hub-shared/
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { requireUser } from "../scope/require-user.js";
-import { getContextTreeSnapshot, type ContextTreeBinding } from "../services/context-tree-snapshot.js";
+import { type ContextTreeBinding, getContextTreeSnapshot } from "../services/context-tree-snapshot.js";
 import { getOrgContextTree, resolveUserPrimaryOrgId } from "../services/org-settings.js";
 
 const querySchema = z

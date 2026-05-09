@@ -145,7 +145,7 @@ ContextTreeStatus
 
 - 读取当前用户所在组织的 Context Tree repo / branch 设置。
 - 以组织级 remote Context Tree repo / branch 作为 source of truth。
-- Hub Server 自动把 remote repo 同步到 server-managed readonly checkout;repo / branch 由 Team Settings 配置,不是 server-wide global config。
+- Hub Server 自动把 remote repo 同步到 server-managed mirror;repo / branch 由 Team Settings 配置,不是 server-wide global config。
 - 解析 markdown files 和 directories。
 - 生成 parent edges、soft link edges、markdown link edges。
 - 生成 preview、owners、title、affected context area。

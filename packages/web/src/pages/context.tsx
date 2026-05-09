@@ -593,6 +593,7 @@ function UnavailableState({ snapshot }: { snapshot: ContextTreeSnapshot }) {
   const detail = snapshot.repo
     ? "Hub cannot read the team Context Tree yet. Agents and users will see context here after the server can sync the configured repo."
     : "Connect a Context Tree repo to show the team knowledge agents can use.";
+  const repoLabel = snapshot.repo ? redactRepoForDisplay(snapshot.repo) : null;
   return (
     <Panel>
       <PanelBody>
@@ -605,7 +606,7 @@ function UnavailableState({ snapshot }: { snapshot: ContextTreeSnapshot }) {
             <div style={{ marginTop: "var(--sp-1)" }}>{detail}</div>
             {snapshot.repo || snapshot.branch ? (
               <div className="text-label" style={{ color: "var(--fg-3)", marginTop: "var(--sp-2)" }}>
-                {snapshot.repo ? `Repo: ${snapshot.repo}` : null}
+                {repoLabel ? `Repo: ${repoLabel}` : null}
                 {snapshot.repo && snapshot.branch ? " · " : null}
                 {snapshot.branch ? `Branch: ${snapshot.branch}` : null}
               </div>
@@ -615,6 +616,10 @@ function UnavailableState({ snapshot }: { snapshot: ContextTreeSnapshot }) {
       </PanelBody>
     </Panel>
   );
+}
+
+function redactRepoForDisplay(repo: string): string {
+  return repo.replace(/(https?:\/\/)[^/@\s]+@/g, "$1[redacted]@");
 }
 
 function EmptyChanges() {

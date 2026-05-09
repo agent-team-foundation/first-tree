@@ -217,6 +217,17 @@ Body`);
     await expect(readFile(join(managedRoot, "NODE.md"), "utf8")).resolves.toContain("Remote Context");
   });
 
+  it("uses a full sha256 digest for managed checkout paths", () => {
+    const managedPath = contextTreeSnapshotTestInternals.managedContextTreePath(
+      "https://github.com/example/tree",
+      "main",
+      join(testDir, "managed-cache"),
+    );
+    const hash = managedPath.split("/").at(-1) ?? "";
+
+    expect(hash).toMatch(/^[a-f0-9]{64}$/);
+  });
+
   it("builds a snapshot from an organization remote repo binding", async () => {
     const remoteDir = join(testDir, "remote-source");
     await initRepoAt(remoteDir);
@@ -236,6 +247,17 @@ Body`);
         }),
       ]),
     );
+  });
+
+  it("rejects unsafe branch names before remote sync", async () => {
+    const snapshot = await getContextTreeSnapshot(
+      { repo: "https://github.com/example/tree", branch: "--upload-pack=evil" },
+      "7d",
+    );
+
+    expect(snapshot.snapshotStatus).toBe("unavailable");
+    expect(snapshot.contextStatus.detail).toContain("branch");
+    expect(snapshot.contextStatus.detail).toContain("invalid");
   });
 
   it("uses an existing managed checkout when remote refresh fails", async () => {
@@ -259,6 +281,39 @@ Body`);
     expect(cached.staleReason).toBe(second.staleReason);
   });
 
+  it("caches first-clone failures briefly to avoid repeated clone attempts", async () => {
+    const missingRemote = join(testDir, "missing-remote");
+    const cacheRoot = join(testDir, "managed-cache");
+
+    await expect(
+      contextTreeSnapshotTestInternals.materializeRemoteContextTree(missingRemote, "main", cacheRoot),
+    ).rejects.toThrow();
+    await expect(
+      contextTreeSnapshotTestInternals.materializeRemoteContextTree(missingRemote, "main", cacheRoot),
+    ).rejects.toThrow("Previous Context Tree sync failed recently.");
+  });
+
+  it("cleans an incomplete managed checkout before retrying first clone", async () => {
+    const remoteDir = join(testDir, "remote-source");
+    const cacheRoot = join(testDir, "managed-cache");
+    await initRepoAt(remoteDir);
+    await writeFile(join(remoteDir, "NODE.md"), "---\ntitle: Clean Retry\n---\nGuidance\n");
+    await commitAllAt(remoteDir, "docs: add remote context");
+    const managedRoot = contextTreeSnapshotTestInternals.managedContextTreePath(remoteDir, "main", cacheRoot);
+    await mkdir(managedRoot, { recursive: true });
+    await writeFile(join(managedRoot, "partial-clone-leftover"), "stale");
+
+    const materialized = await contextTreeSnapshotTestInternals.materializeRemoteContextTree(
+      remoteDir,
+      "main",
+      cacheRoot,
+    );
+
+    expect(materialized.root).toBe(managedRoot);
+    expect(existsSync(join(managedRoot, "partial-clone-leftover"))).toBe(false);
+    await expect(readFile(join(managedRoot, "NODE.md"), "utf8")).resolves.toContain("Clean Retry");
+  });
+
   it("wires GitHub token auth through askpass without putting the token in git args", async () => {
     const cacheRoot = join(testDir, "managed-cache");
 
@@ -272,6 +327,7 @@ Body`);
     expect(env?.GIT_USERNAME).toBe("x-access-token");
     expect(env?.GIT_PASSWORD).toBe("ghp_secret");
     expect(env?.GIT_ASKPASS).toBeDefined();
+    expect(env?.GIT_ASKPASS).toContain(join("managed-cache", ".tools", "git-askpass.sh"));
     const askpass = await readFile(env?.GIT_ASKPASS ?? "", "utf8");
     expect(askpass).not.toContain("ghp_secret");
   });
@@ -282,5 +338,11 @@ Body`);
         "fatal: could not read from https://user:secret@github.com/example/private.git",
       ),
     ).toBe("fatal: could not read from https://[redacted]@github.com/example/private.git");
+    expect(contextTreeSnapshotTestInternals.redactSecret("fatal: token ghp_secret123 failed")).toBe(
+      "fatal: token [redacted] failed",
+    );
+    expect(contextTreeSnapshotTestInternals.redactSecret("fatal: token github_pat_secret123 failed")).toBe(
+      "fatal: token [redacted] failed",
+    );
   });
 });
