@@ -9,6 +9,7 @@ import { createAgentChat, sendChatMessage } from "../../../api/chats.js";
 import { api, withOrg } from "../../../api/client.js";
 import { type GithubRepo, listGithubRepos } from "../../../api/github.js";
 import { reportOnboardingEvent } from "../../../api/onboarding-events.js";
+import { putContextTreeSetting } from "../../../api/org-settings.js";
 import { useAuth } from "../../../auth/auth-context.js";
 import { Button } from "../../../components/ui/button.js";
 import { useToast } from "../../../components/ui/toast.js";
@@ -57,73 +58,50 @@ const CLIENT_DETECT_POLL_MS = 3_000;
 
 /**
  * Two bootstrap-message variants Step 3 IntroBody dispatches based on the
- * user's "do you already have a tree?" choice. Both:
+ * user's "do you already have a tree?" choice. Prose, not shell recipes —
+ * the agent has the first-tree skill (and the source repo, materialised
+ * via `gitRepos`) ready in its workspace, so the message just describes
+ * the goal and references the CLI surfaces by name. The skill knows the
+ * concrete commands.
  *
- *   - clone the source repo (cloud-only model — no user-local clone is
- *     touched; everything happens in the agent's sandbox);
- *   - run `first-tree tree init` to scaffold or bind the tree;
- *   - open a PR back to the source repo with the skill + binding files.
- *
- * Path B (creating a new tree) additionally tells the agent to push the
- * new tree to GitHub via `gh repo create` and then record the URL on the
- * organization via `first-tree-hub org set-tree-url`. Path A skips both —
- * the URL is already known and the web frontend PATCHes
- * `organizations.tree_url` directly before sending the chat.
- *
- * Verbose on purpose: the agent has no first-tree skill loaded yet
- * (installing it is the goal). It needs a self-contained recipe.
+ * Path A (existing tree) skips Hub bookkeeping at the end — the web
+ * frontend already PUT the URL into the org's `context_tree` settings
+ * namespace before sending the chat. Path B (new tree) tells the agent
+ * to call back into the first-tree-hub CLI to record the freshly created
+ * URL.
  *
  * Single source of truth: only Step 3 IntroBody currently sends these.
  * If a future surface needs the same prompts, hoist these builders to
  * `packages/shared` so both import the same strings.
  */
-function extractGithubSlug(url: string): string | null {
-  try {
-    const u = new URL(url);
-    if (!u.hostname.endsWith("github.com")) return null;
-    const parts = u.pathname
-      .replace(/^\//, "")
-      .replace(/\.git$/, "")
-      .split("/");
-    if (parts.length < 2 || !parts[0] || !parts[1]) return null;
-    return `${parts[0]}/${parts[1]}`;
-  } catch {
-    return null;
-  }
-}
+const FIRST_TREE_REFERENCE_URL = "https://github.com/agent-team-foundation/first-tree";
 
 function buildBindBootstrap(sourceUrl: string, treeUrl: string): string {
-  const slug = extractGithubSlug(sourceUrl) ?? sourceUrl;
   return [
     "Bind my source repo to an existing context-tree.",
     "",
     `Source repo: ${sourceUrl}`,
     `Existing tree: ${treeUrl}`,
     "",
-    "Steps:",
-    `  1. \`gh repo clone ${slug}\` to clone the source repo into your working directory.`,
-    "  2. `cd` into the cloned directory.",
-    `  3. \`npx first-tree tree init --tree-url ${treeUrl}\` — this installs the first-tree skill in the source repo and writes the binding metadata.`,
-    "  4. `gh pr create` to open a PR with the skill + binding files. Use a clear title (e.g. `Bind to context-tree`).",
-    "  5. Walk me through what got changed and what's in the PR.",
+    "Your working directory already has the source repo cloned. Use the first-tree CLI to install the skill in the source repo and write the binding metadata pointing at the existing tree, then open a PR back to the source with those changes. Walk me through the PR when it's up.",
+    "",
+    `Reference: ${FIRST_TREE_REFERENCE_URL}`,
   ].join("\n");
 }
 
 function buildCreateBootstrap(sourceUrl: string): string {
-  const slug = extractGithubSlug(sourceUrl) ?? sourceUrl;
   return [
     "Create a brand-new context-tree for my source repo.",
     "",
     `Source repo: ${sourceUrl}`,
     "",
-    "Steps:",
-    `  1. \`gh repo clone ${slug}\` to clone the source repo.`,
-    "  2. `cd` into the cloned directory.",
-    "  3. `npx first-tree tree init` — the CLI installs the first-tree skill in the source, scaffolds a sibling `<repo>-tree` directory, and writes binding metadata into the source.",
-    "  4. Push the new tree directory to GitHub: `cd ../<repo>-tree && gh repo create <owner>/<repo>-tree --public --source=. --push` (substitute the actual owner and repo name).",
-    "  5. From the source clone, `gh pr create` to open a PR with the skill + binding files.",
-    "  6. Once the new tree repo URL is known, run `first-tree-hub org bind-tree <new-tree-url>` so the Hub records the binding for future agents.",
-    "  7. Walk me through what was created (which directories, which PRs) so I can review.",
+    "Your working directory already has the source repo cloned. Use the first-tree CLI to install the skill in the source, scaffold a sibling tree directory, and write the binding metadata. Then push that new tree directory up to GitHub as a sibling repo under the same owner as the source, and open a PR back to the source with the skill + binding files.",
+    "",
+    "Once you know the URL of the new tree repo, use the first-tree-hub CLI's `org bind-tree` command to record it on the Hub so future agents in this team can find it.",
+    "",
+    "When everything is up, walk me through what was created — which directory, which repo, which PR.",
+    "",
+    `Reference: ${FIRST_TREE_REFERENCE_URL}`,
   ].join("\n");
 }
 
@@ -993,17 +971,19 @@ function Step3IntroBody() {
         payload: { gitRepos: [{ url: selectedRepoUrl }] },
       });
 
-      // Path A: persist the existing tree URL to the org NOW. Agent will
-      // still write `.first-tree/local-tree.json` to the source repo via
-      // PR (proper binding), but Hub already has the URL cached so future
-      // agents in this org can find it without re-reading source files.
+      // Path A: persist the existing tree URL to the org NOW via the
+      // generic per-org settings surface (`context_tree` namespace). Agent
+      // will still write `.first-tree/local-tree.json` to the source repo
+      // via PR (proper binding), but Hub already has the URL cached so
+      // future agents in this org can find it without re-reading source
+      // files.
       if (treeMode === "existing" && organizationId) {
         try {
-          await api.patch(`/orgs/${encodeURIComponent(organizationId)}`, { treeUrl: trimmedTreeUrl });
+          await putContextTreeSetting(organizationId, { repo: trimmedTreeUrl });
         } catch (err) {
           // Non-fatal — the agent will still bind in chat. Log + continue.
           // eslint-disable-next-line no-console
-          console.warn("Step 3: PATCH /orgs treeUrl failed; agent will still proceed", err);
+          console.warn("Step 3: PUT context_tree settings failed; agent will still proceed", err);
         }
       }
 

@@ -8,9 +8,9 @@ import { print } from "../core/output.js";
  *
  * Today this only ships `bind-tree`, called by Step 3 onboarding agents
  * after they create a fresh context-tree GitHub repo so the Hub records
- * the binding in `organizations.tree_url`. The verb mirrors first-tree
- * CLI's own `tree bind` vocabulary so agents reading "bind-tree" know what
- * it means without translation. See
+ * the binding in the org's `context_tree` settings namespace. The verb
+ * mirrors first-tree CLI's own `tree bind` vocabulary so agents reading
+ * "bind-tree" know what it means without translation. See
  * docs/new-user-onboarding-design.md §7.4 (Path B).
  */
 export function registerOrgCommands(program: Command): void {
@@ -44,17 +44,21 @@ export function registerOrgCommands(program: Command): void {
         // to guess for users with multiple orgs and no default.
         const orgId = options.org?.trim() || (await resolveDefaultOrgId(serverUrl, accessToken));
 
-        const res = await fetch(`${serverUrl}/api/v1/orgs/${encodeURIComponent(orgId)}`, {
-          method: "PATCH",
+        const res = await fetch(`${serverUrl}/api/v1/orgs/${encodeURIComponent(orgId)}/settings/context_tree`, {
+          method: "PUT",
           headers: {
             Authorization: `Bearer ${accessToken}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ treeUrl: url }),
+          body: JSON.stringify({ repo: url }),
         });
         if (!res.ok) {
           const text = await res.text().catch(() => "");
-          fail("PATCH_FAILED", `hub returned ${res.status} on PATCH /orgs/${orgId}: ${text.slice(0, 256)}`, 1);
+          fail(
+            "PUT_FAILED",
+            `hub returned ${res.status} on PUT /orgs/${orgId}/settings/context_tree: ${text.slice(0, 256)}`,
+            1,
+          );
         }
 
         print.status("•", `Bound organization to context-tree at ${url}`);

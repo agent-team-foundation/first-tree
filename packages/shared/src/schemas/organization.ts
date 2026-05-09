@@ -39,13 +39,6 @@ export const updateOrganizationSchema = z.object({
   maxAgents: z.number().int().min(0).optional(),
   maxMessagesPerMinute: z.number().int().min(0).optional(),
   features: z.record(z.string(), z.unknown()).optional(),
-  /**
-   * Bind this org to a context-tree GitHub repository. Pass the URL string
-   * to set, or `null` to unbind. See `organizations.tree_url` (drizzle
-   * migration 0033) for the persistence model. Restricted to admins via the
-   * route's `requireOrgAdmin` gate.
-   */
-  treeUrl: z.string().url().nullable().optional(),
 });
 export type UpdateOrganization = z.infer<typeof updateOrganizationSchema>;
 
@@ -56,8 +49,6 @@ export const organizationSchema = z.object({
   maxAgents: z.number(),
   maxMessagesPerMinute: z.number(),
   features: z.record(z.string(), z.unknown()),
-  /** Optional context-tree GitHub URL. Null until Step 3 onboarding succeeds. */
-  treeUrl: z.string().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
