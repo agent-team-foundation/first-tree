@@ -17,6 +17,7 @@ import { fail } from "../cli/output.js";
 import {
   ClientRuntime,
   COMMAND_VERSION,
+  cliFetch,
   createApiNameResolver,
   createExecuteUpdate,
   ensureFreshAccessToken,
@@ -159,7 +160,7 @@ async function authenticateWithToken(
   url: string,
   token: string,
 ): Promise<{ accessToken: string; refreshToken: string }> {
-  const res = await fetch(`${url}/api/v1/auth/connect-token`, {
+  const res = await cliFetch(`${url}/api/v1/auth/connect-token`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ token }),
@@ -183,7 +184,7 @@ async function authenticateInteractive(url: string): Promise<{ accessToken: stri
   const username = await input({ message: "  Username:" });
   const pw = await password({ message: "  Password:" });
 
-  const loginRes = await fetch(`${url}/api/v1/auth/login`, {
+  const loginRes = await cliFetch(`${url}/api/v1/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username, password: pw }),

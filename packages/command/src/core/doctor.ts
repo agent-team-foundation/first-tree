@@ -10,6 +10,7 @@ import {
   serverConfigSchema,
 } from "@agent-team-foundation/first-tree-hub-shared/config";
 import { findStaleAliases, formatStaleReason, type PinnedAgent, type StaleAlias } from "./agent-prune.js";
+import { cliFetch } from "./cli-fetch.js";
 import { blank, print } from "./output.js";
 import { getClientServiceStatus } from "./service-install.js";
 
@@ -109,7 +110,7 @@ export async function checkServerHealth(): Promise<CheckResult> {
   const url = `http://${host}:${port}/healthz`;
 
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+    const res = await cliFetch(url, { signal: AbortSignal.timeout(3000) });
     if (res.ok) {
       return { label: "Server Health", ok: true, detail: `running at ${host}:${port}` };
     }
@@ -141,7 +142,7 @@ export async function checkServerReachable(): Promise<CheckResult> {
   }
 
   try {
-    const res = await fetch(`${serverUrl}/healthz`, { signal: AbortSignal.timeout(5000) });
+    const res = await cliFetch(`${serverUrl}/healthz`, { signal: AbortSignal.timeout(5000) });
     if (res.ok) {
       return { label: "Server URL", ok: true, detail: serverUrl };
     }
@@ -304,7 +305,7 @@ export async function checkWebSocket(): Promise<CheckResult> {
 
   const wsUrl = serverUrl.replace(/^http/, "ws");
   try {
-    const res = await fetch(`${serverUrl}/healthz`, { signal: AbortSignal.timeout(3000) });
+    const res = await cliFetch(`${serverUrl}/healthz`, { signal: AbortSignal.timeout(3000) });
     if (res.ok) {
       return { label: "WebSocket", ok: true, detail: `${wsUrl} (server reachable)` };
     }

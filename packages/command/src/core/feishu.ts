@@ -1,4 +1,5 @@
 import { AGENT_SELECTOR_HEADER } from "@agent-team-foundation/first-tree-hub-shared";
+import { cliFetch } from "./cli-fetch.js";
 
 /**
  * Feishu-related core operations: bind-bot, bind-user.
@@ -15,7 +16,7 @@ export async function bindFeishuBot(
   appId: string,
   appSecret: string,
 ): Promise<void> {
-  const res = await fetch(`${serverUrl}/api/v1/agent/me/feishu-bot`, {
+  const res = await cliFetch(`${serverUrl}/api/v1/agent/me/feishu-bot`, {
     method: "PUT",
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -39,7 +40,7 @@ export async function bindFeishuUser(
   feishuUserId: string,
   displayName?: string,
 ): Promise<void> {
-  const res = await fetch(`${serverUrl}/api/v1/agent/delegated/${encodeURIComponent(humanAgentId)}/feishu-user`, {
+  const res = await cliFetch(`${serverUrl}/api/v1/agent/delegated/${encodeURIComponent(humanAgentId)}/feishu-user`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${accessToken}`,

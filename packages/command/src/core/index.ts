@@ -20,6 +20,7 @@ export {
   saveAgentConfig,
   saveCredentials,
 } from "./bootstrap.js";
+export { cliFetch } from "./cli-fetch.js";
 // Local client identity rotation (on CLIENT_ORG_MISMATCH)
 export { handleClientOrgMismatch, rotateClientIdWithBackup } from "./client-reidentify.js";
 export type { ClientRuntimeOptions } from "./client-runtime.js";
@@ -88,4 +89,4 @@ export type { ExecuteUpdateResult, InstallMode } from "./update.js";
 export { detectInstallMode, fetchLatestVersion, installGlobalLatest, PACKAGE_NAME } from "./update.js";
 export { createExecuteUpdate, declineUpdate, promptUpdate, SELF_RESTART_EXIT_CODE } from "./update-glue.js";
 // Command package version (bundle self-identification)
-export { COMMAND_VERSION } from "./version.js";
+export { CLI_USER_AGENT, COMMAND_VERSION } from "./version.js";

@@ -24,6 +24,7 @@ import { confirm } from "@inquirer/prompts";
 import type { Command } from "commander";
 import { fail } from "../cli/output.js";
 import {
+  CLI_USER_AGENT,
   ClientRuntime,
   COMMAND_VERSION,
   checkAgentConfigs,
@@ -32,6 +33,7 @@ import {
   checkNodeVersion,
   checkServerReachable,
   checkWebSocket,
+  cliFetch,
   createApiNameResolver,
   createExecuteUpdate,
   declineUpdate,
@@ -285,7 +287,11 @@ export function registerClientCommands(program: Command): void {
       try {
         const serverUrl = resolveServerUrl();
         const cfg = await initConfig({ schema: clientConfigSchema, role: "client" });
-        const sdk = new FirstTreeHubSDK({ serverUrl, getAccessToken: (opts) => ensureFreshAccessToken(opts) });
+        const sdk = new FirstTreeHubSDK({
+          serverUrl,
+          getAccessToken: (opts) => ensureFreshAccessToken(opts),
+          userAgent: CLI_USER_AGENT,
+        });
         agentCheck = await reconcileAgentConfigs({
           clientId: cfg.client.id,
           listPinnedAgents: () => sdk.listMyAgents(),
@@ -466,7 +472,7 @@ export function registerClientCommands(program: Command): void {
         // Multi-org-aware: aggregate every org admin clients-list across
         // all the caller's memberships. Non-admins get their own clients
         // via /me/pinned-agents elsewhere; this CLI list is admin-only.
-        const meRes = await fetch(`${serverUrl}/api/v1/me`, {
+        const meRes = await cliFetch(`${serverUrl}/api/v1/me`, {
           headers: { Authorization: `Bearer ${token}` },
           signal: AbortSignal.timeout(10_000),
         });
@@ -483,7 +489,7 @@ export function registerClientCommands(program: Command): void {
           lastSeenAt: string;
         }> = [];
         for (const m of adminOrgs) {
-          const r = await fetch(`${serverUrl}/api/v1/orgs/${encodeURIComponent(m.organizationId)}/clients`, {
+          const r = await cliFetch(`${serverUrl}/api/v1/orgs/${encodeURIComponent(m.organizationId)}/clients`, {
             headers: { Authorization: `Bearer ${token}` },
             signal: AbortSignal.timeout(10_000),
           });
@@ -553,7 +559,7 @@ export function registerClientCommands(program: Command): void {
         }
 
         const token = await ensureFreshAccessToken();
-        const response = await fetch(`${serverUrl}/api/v1/clients/${encodeURIComponent(clientId)}/claim`, {
+        const response = await cliFetch(`${serverUrl}/api/v1/clients/${encodeURIComponent(clientId)}/claim`, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${token}`,
@@ -581,7 +587,11 @@ export function registerClientCommands(program: Command): void {
         // doctor keeps reporting the inflated "N configured" count.
         // Detect + offer to prune in the same breath as the claim.
         try {
-          const sdk = new FirstTreeHubSDK({ serverUrl, getAccessToken: (opts) => ensureFreshAccessToken(opts) });
+          const sdk = new FirstTreeHubSDK({
+            serverUrl,
+            getAccessToken: (opts) => ensureFreshAccessToken(opts),
+            userAgent: CLI_USER_AGENT,
+          });
           const stale = await findStaleAliases({
             clientId,
             listPinnedAgents: () => sdk.listMyAgents(),
@@ -656,7 +666,7 @@ export function registerClientCommands(program: Command): void {
       try {
         const serverUrl = resolveServerUrl(options.server);
         const token = await ensureFreshAccessToken();
-        const response = await fetch(`${serverUrl}/api/v1/clients/${encodeURIComponent(clientId)}/disconnect`, {
+        const response = await cliFetch(`${serverUrl}/api/v1/clients/${encodeURIComponent(clientId)}/disconnect`, {
           method: "POST",
           headers: { Authorization: `Bearer ${token}` },
           signal: AbortSignal.timeout(10_000),

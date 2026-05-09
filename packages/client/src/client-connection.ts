@@ -31,6 +31,13 @@ export type ClientConnectionConfig = {
    * after reconnecting.
    */
   getAccessToken: AccessTokenProvider;
+  /**
+   * Optional `User-Agent` string forwarded to every per-agent SDK created by
+   * `agent:bound`. Distinct from `sdkVersion` (which is the value advertised
+   * to the server in `client:register`); this one only decorates outbound
+   * HTTP traffic so trace backends can identify the install. See SdkConfig.userAgent.
+   */
+  userAgent?: string;
 };
 
 export type BoundAgent = {
@@ -191,6 +198,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   readonly clientId: string;
   private readonly serverUrl: string;
   private readonly sdkVersion: string | undefined;
+  private readonly userAgent: string | undefined;
   private readonly getAccessToken: AccessTokenProvider;
 
   private ws: WebSocket | null = null;
@@ -263,6 +271,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     this.clientId = config.clientId ?? process.env.FIRST_TREE_HUB_CLIENT_ID ?? `client_${randomUUID().slice(0, 8)}`;
     this.serverUrl = config.serverUrl.replace(/\/+$/, "");
     this.sdkVersion = config.sdkVersion;
+    this.userAgent = config.userAgent;
     this.getAccessToken = config.getAccessToken;
     this.wsLogger = createLogger("ws").child({ clientId: this.clientId });
     this.authLogger = createLogger("auth").child({ clientId: this.clientId });
@@ -397,7 +406,11 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     return new Promise((resolve, reject) => {
       const wsUrl = `${this.serverUrl.replace(/^http/, "ws")}/api/v1/agent/ws/client`;
       this.wsLogger.info({ url: wsUrl }, "connecting");
-      const ws = new WebSocket(wsUrl);
+      // UA on the WS upgrade request closes a forensic gap: failures during
+      // the upgrade (4401 close, expired token, handshake aborts) happen
+      // before `client:register` lands, so without UA the trace has no install
+      // identifier at all. Issue #246.
+      const ws = new WebSocket(wsUrl, this.userAgent ? { headers: { "User-Agent": this.userAgent } } : undefined);
       let settled = false;
 
       const settle = (fn: typeof resolve | typeof reject, value?: unknown) => {
@@ -645,6 +658,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
           serverUrl: this.serverUrl,
           getAccessToken: this.getAccessToken,
           agentId,
+          userAgent: this.userAgent,
         });
         const agent: BoundAgent = {
           agentId,

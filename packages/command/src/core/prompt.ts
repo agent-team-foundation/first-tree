@@ -8,6 +8,7 @@ import {
 } from "@agent-team-foundation/first-tree-hub-shared/config";
 import { input, password, select } from "@inquirer/prompts";
 import { ensureFreshAccessToken, loadCredentials, resolveServerUrl } from "./bootstrap.js";
+import { cliFetch } from "./cli-fetch.js";
 
 /**
  * Check if interactive mode is available.
@@ -107,7 +108,7 @@ export async function promptAddAgent(opts: { agentId?: string } = {}): Promise<{
     }));
 
   const token = await ensureFreshAccessToken();
-  const res = await fetch(`${serverUrl}/api/v1/agents/${encodeURIComponent(agentId)}`, {
+  const res = await cliFetch(`${serverUrl}/api/v1/agents/${encodeURIComponent(agentId)}`, {
     headers: { Authorization: `Bearer ${token}` },
     signal: AbortSignal.timeout(10_000),
   });
