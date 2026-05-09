@@ -86,14 +86,28 @@ export async function assertSenderMayEmitQuestion(tx: TxLike, senderAgentId: str
  *      400 if superseded — both surface as ConflictError so the caller knows
  *      the question is no longer answerable).
  *   3. Validate that the answer keys match the original `questions[]`.
- *   4. Send a `format=question_answer` message via the regular message
- *      pipeline (so fan-out, NOTIFY and inbox delivery happen unchanged).
- *   5. Flip status to `answered`.
+ *   4. Flip status to `answered` INSIDE the lock-tx, before releasing the
+ *      row lock. This is the linearisation point: the second concurrent
+ *      submitter (waiting on the same row lock) will, on its turn, see
+ *      status=answered and exit with ConflictError BEFORE it can write a
+ *      second `format=question_answer` message.
+ *   5. Send the `format=question_answer` message OUTSIDE the lock-tx
+ *      (sendMessage opens its own transaction; nesting wasn't supported by
+ *      the existing call site). At this point we hold an exclusive logical
+ *      claim — only one submitter ever reaches this step per correlationId.
  *
  * `submitterAgentId` is the human agent on whose behalf the answer is
  * written (it must be a participant of the question's chat). Returns the
  * created `question_answer` message id so the route can include it in the
  * 201 response.
+ *
+ * Failure semantics: if step 5 (sendMessage) fails after status was flipped,
+ * we revert the row to `pending` so the user can retry. This is best-effort —
+ * the revert UPDATE is guarded by `status='answered'` to avoid clobbering a
+ * supersede that might race in. If the revert itself fails, the row is
+ * stranded as `answered` with no answer message; an operator would need to
+ * intervene, but a sendMessage failure (local DB tx) is already
+ * extraordinarily rare.
  */
 export async function submitAnswer(
   db: Database,
@@ -105,9 +119,12 @@ export async function submitAnswer(
     answers: Record<string, string>;
   },
 ): Promise<{ messageId: string; recipients: string[] }> {
-  // Step 1+2+3: validate inside a SELECT-FOR-UPDATE so two concurrent
-  // submissions race cleanly (the second sees status=answered and 409s).
-  const { questionRow } = await db.transaction(async (tx) => {
+  // Step 1-4: validate AND flip status inside a SELECT-FOR-UPDATE so two
+  // concurrent submissions are linearised by the row lock. Without the flip
+  // here, both submitters could pass the status=pending check, both could
+  // commit, both could call sendMessage outside the tx, and the inbox would
+  // see two answer messages — a bug we hit in field testing.
+  const questionRow = await db.transaction(async (tx) => {
     const [row] = await tx
       .select({
         id: pendingQuestions.id,
@@ -167,16 +184,19 @@ export async function submitAnswer(
       }
     }
 
-    return { questionRow: row };
+    // Step 4: flip status while still holding the row lock.
+    await tx
+      .update(pendingQuestions)
+      .set({ status: "answered", answeredAt: new Date() })
+      .where(eq(pendingQuestions.id, args.correlationId));
+
+    return row;
   });
 
-  // Step 4: send the answer message. We do this OUTSIDE the lock-tx because
-  // sendMessage opens its own transaction (fan-out + chat-projection); nesting
-  // would deadlock. The narrow window between unlock and the final UPDATE
-  // below is bounded by the unique-PK on `pending_questions.id`, so a parallel
-  // submitAnswer on the same correlationId would still see status=pending
-  // here, but its UPDATE-with-WHERE-status=pending in step 5 will lose the
-  // race and bail out with ConflictError.
+  // Step 5: send the answer message. By the time we get here we hold an
+  // exclusive claim on the row (any concurrent submitter is now seeing
+  // status=answered and 409ing in step 1-4 above), so this writes exactly
+  // one answer message per question.
   const answerContent: QuestionAnswerMessageContent = {
     correlationId: args.correlationId,
     answers: args.answers,
@@ -184,31 +204,40 @@ export async function submitAnswer(
   // Final parse to surface a clear error if something upstream mutated shape.
   questionAnswerMessageContentSchema.parse(answerContent);
 
-  const result = await sendMessage(db, args.chatId, args.submitterAgentId, {
-    format: "question_answer",
-    content: answerContent,
-    inReplyTo: questionRow.messageId,
-    source: "hub_ui",
-  });
-
-  // Step 5: flip status — guarded by `WHERE status='pending'` so a concurrent
-  // submitAnswer (rare; would have to race past the lock-tx) still produces
-  // exactly one answered row.
-  const flipped = await db
-    .update(pendingQuestions)
-    .set({ status: "answered", answeredAt: new Date() })
-    .where(and(eq(pendingQuestions.id, args.correlationId), eq(pendingQuestions.status, "pending")))
-    .returning({ id: pendingQuestions.id });
-
-  if (flipped.length === 0) {
-    // Lost the race — another submitter committed first. The answer message
-    // we just emitted is still valid (the agent learns that a duplicate
-    // arrived); but signal the conflict to the caller.
-    log.warn(
-      { correlationId: args.correlationId, chatId: args.chatId },
-      "submitAnswer lost the race; status was already flipped",
+  let result: Awaited<ReturnType<typeof sendMessage>>;
+  try {
+    result = await sendMessage(db, args.chatId, args.submitterAgentId, {
+      format: "question_answer",
+      content: answerContent,
+      inReplyTo: questionRow.messageId,
+      source: "hub_ui",
+    });
+  } catch (err) {
+    // Best-effort revert: status was flipped to 'answered' but we never
+    // emitted the answer message, so the agent would never see the answer
+    // and the user couldn't retry. Roll back to 'pending' so a retry can
+    // succeed. Guarded on status='answered' to avoid clobbering a
+    // supersede that landed in between.
+    log.error(
+      { correlationId: args.correlationId, chatId: args.chatId, err: err instanceof Error ? err.message : String(err) },
+      "sendMessage failed after status flip; reverting pending_questions row to 'pending'",
     );
-    throw new ConflictError(`Question "${args.correlationId}" was answered concurrently`);
+    try {
+      await db
+        .update(pendingQuestions)
+        .set({ status: "pending", answeredAt: null })
+        .where(and(eq(pendingQuestions.id, args.correlationId), eq(pendingQuestions.status, "answered")));
+    } catch (revertErr) {
+      log.error(
+        {
+          correlationId: args.correlationId,
+          chatId: args.chatId,
+          revertErr: revertErr instanceof Error ? revertErr.message : String(revertErr),
+        },
+        "revert UPDATE also failed; row may be stranded as 'answered' without an answer message",
+      );
+    }
+    throw err;
   }
 
   // Notify all recipients of the answer message — same path as a normal user

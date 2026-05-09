@@ -12,6 +12,7 @@ import { createAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
 import { claimClient } from "../services/client.js";
 import { sendMessage } from "../services/message.js";
+import { submitAnswer } from "../services/questions.js";
 import { archiveSession, suspendSession } from "../services/session.js";
 import { createAdminContext, createTestAdmin, seedClient, useTestApp } from "./helpers.js";
 
@@ -214,6 +215,62 @@ describe("submitAnswer — POST /api/v1/chats/:chatId/questions/:correlationId/a
       payload: { answers: { "Wrong question text?": "Yes" } },
     });
     expect(res.statusCode).toBe(400);
+  });
+
+  it("two concurrent submissions: exactly one wins, exactly one question_answer message is written", async () => {
+    // Regression test for the "double-write" race we caught in code review.
+    // Before the fix, both concurrent submitters would (a) pass the
+    // SELECT-FOR-UPDATE + status=pending check serially (because the lock-tx
+    // released before sendMessage), (b) call sendMessage(format=question_answer)
+    // independently, and (c) only the second UPDATE-WHERE-status=pending
+    // would lose the race — but BOTH answer messages had already landed in
+    // the inbox. Now: status flip happens INSIDE the lock-tx, so the second
+    // submitter sees status=answered and 409s before reaching sendMessage.
+    const app = getApp();
+    const { admin, peerAgent, chatId } = await setupQuestionScenario(app);
+
+    const correlationId = `tu_${crypto.randomUUID().slice(0, 12)}`;
+    await sendMessage(app.db, chatId, peerAgent.uuid, {
+      format: "question",
+      content: buildQuestionContent(correlationId),
+    });
+
+    const [resA, resB] = await Promise.allSettled([
+      submitAnswer(app.db, undefined, {
+        correlationId,
+        chatId,
+        submitterAgentId: admin.humanAgentUuid,
+        answers: { "Should I proceed?": "Yes" },
+      }),
+      submitAnswer(app.db, undefined, {
+        correlationId,
+        chatId,
+        submitterAgentId: admin.humanAgentUuid,
+        answers: { "Should I proceed?": "No" },
+      }),
+    ]);
+
+    const fulfilled = [resA, resB].filter((r) => r.status === "fulfilled");
+    const rejected = [resA, resB].filter((r) => r.status === "rejected");
+    expect(fulfilled.length).toBe(1);
+    expect(rejected.length).toBe(1);
+    // The loser must be a 409 (ConflictError), not a 5xx — anything else
+    // would mean the race went somewhere unexpected.
+    const reason = (rejected[0] as PromiseRejectedResult).reason as Error & { statusCode?: number };
+    expect(reason.message).toMatch(/no longer pending|answered concurrently/);
+
+    // CRITICAL: exactly one question_answer message was written. Two would
+    // mean the bug came back.
+    const answerRows = await app.db
+      .select()
+      .from(messages)
+      .where(eq(messages.format, "question_answer"));
+    const forThisChat = answerRows.filter((m) => m.chatId === chatId);
+    expect(forThisChat.length).toBe(1);
+
+    // And the row is `answered`, not `pending`, after the dust settles.
+    const [row] = await app.db.select().from(pendingQuestions).where(eq(pendingQuestions.id, correlationId)).limit(1);
+    expect(row?.status).toBe("answered");
   });
 
   it("returns 409 once the question has been superseded", async () => {
