@@ -1040,8 +1040,8 @@ function Step3IntroBody() {
   return (
     <>
       <p className="text-body" style={{ margin: 0, color: "var(--fg-3)", maxWidth: 720 }}>
-        Build your <span style={{ color: "var(--fg-2)" }}>context-tree</span> with your agent — your team&apos;s shared
-        knowledge that grows with your code.
+        Build the <span style={{ color: "var(--fg-2)" }}>context-tree</span> — your team&apos;s shared knowledge that
+        grows with your code.
       </p>
 
       <div style={{ marginTop: "var(--sp-5)", position: "relative" }}>
