@@ -1,26 +1,26 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Trash2 } from "lucide-react";
+import { X } from "lucide-react";
 import { getSourceReposSetting, putSourceReposSetting } from "../api/org-settings.js";
 import { useAuth } from "../auth/auth-context.js";
-import { Button } from "../components/ui/button.js";
-import { FlatSectionHeader } from "../components/ui/flat-section-header.js";
+import { SettingsSection } from "../components/ui/settings-section.js";
 
 /**
- * Team Settings card showing the team-level list of source repositories.
+ * Team Settings section showing the team-level list of source
+ * repositories.
  *
- * Admins get full management — list + per-entry Remove. Members see the
- * same list but read-only, with a footer explaining that only admins can
- * edit. The `source_repos` namespace's server-side `readPolicy: "member"`
- * makes the GET succeed for non-admins; PUT stays admin-only so the
- * Remove button is hidden for members rather than just disabled (avoids
- * a 403 the UI can't recover from gracefully).
+ * Admins get full management — list + per-entry remove (hover-revealed
+ * `×` icon). Members see the same list but read-only with a footer
+ * explaining that only admins can edit. The `source_repos` namespace's
+ * server-side `readPolicy: "member"` makes the GET succeed for non-admins;
+ * PUT stays admin-only so the Remove control is hidden for members rather
+ * than just disabled (avoids a 403 the UI can't recover from gracefully).
  *
  * Onboarding writes one entry on Step 3 (admin path). There is no
  * "Add repo" form here yet — picking a repo requires an OAuth-scoped
  * GitHub picker and that lives in the onboarding flow today. A second
  * pass will extract the picker into a reusable component.
  */
-export function SourceReposSettingsPanel() {
+export function SourceReposSettingsPanel({ isFirst = false }: { isFirst?: boolean }) {
   const { organizationId, role } = useAuth();
   const isAdmin = role === "admin";
   const queryClient = useQueryClient();
@@ -45,71 +45,131 @@ export function SourceReposSettingsPanel() {
 
   const repos = settingQuery.data?.repos ?? [];
 
+  const countBadge =
+    repos.length > 0 ? (
+      <span className="text-label" style={{ color: "var(--fg-4)" }}>
+        {repos.length}
+      </span>
+    ) : null;
+
   return (
-    <section>
-      <FlatSectionHeader count={repos.length}>Source repos</FlatSectionHeader>
+    <SettingsSection
+      title="Source repos"
+      description={
+        isAdmin
+          ? "Repos your team's agents are bound to. New repos are added during agent onboarding."
+          : "Repos your team's agents are bound to. Read-only — only admins can edit."
+      }
+      right={countBadge}
+      isFirst={isFirst}
+    >
       {settingQuery.isLoading ? (
-        <div className="text-body" style={{ color: "var(--fg-3)", padding: "var(--sp-3) var(--sp-1)" }}>
+        <div className="text-body" style={{ color: "var(--fg-3)" }}>
           Loading…
         </div>
       ) : settingQuery.error ? (
-        <div className="text-body" style={{ color: "var(--state-error)", padding: "var(--sp-3) var(--sp-1)" }}>
+        <div className="text-body" style={{ color: "var(--state-error)" }}>
           {settingQuery.error instanceof Error ? settingQuery.error.message : "Failed to load setting"}
         </div>
       ) : repos.length === 0 ? (
-        <div className="text-body" style={{ color: "var(--fg-3)", padding: "var(--sp-3) var(--sp-1)" }}>
-          No source repos bound to this team yet. New repos are added during agent onboarding.
+        <div
+          className="text-body"
+          style={{
+            color: "var(--fg-3)",
+            padding: "var(--sp-3) var(--sp-2_5)",
+            background: "var(--bg-sunken)",
+            borderRadius: "var(--radius-input)",
+          }}
+        >
+          No source repos bound yet.
         </div>
       ) : (
         <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
           {repos.map((repo) => (
-            <li
+            <RepoRow
               key={repo.url}
-              className="grid items-center gap-5"
-              style={{
-                gridTemplateColumns: "1fr auto",
-                padding: "var(--sp-3_5) var(--sp-1)",
-                borderTop: "var(--hairline) solid var(--border-faint)",
-              }}
-            >
-              <div style={{ minWidth: 0 }}>
-                <div className="text-body mono" style={{ color: "var(--fg)", overflowWrap: "anywhere" }}>
-                  {repo.url}
-                </div>
-                {repo.defaultBranch && (
-                  <div className="text-label" style={{ color: "var(--fg-3)", marginTop: 2 }}>
-                    branch: {repo.defaultBranch}
-                  </div>
-                )}
-              </div>
-              {isAdmin && (
-                <Button
-                  type="button"
-                  size="xs"
-                  variant="outline"
-                  disabled={removeMutation.isPending}
-                  onClick={() => removeMutation.mutate(repo.url)}
-                >
-                  <Trash2 className="h-3 w-3" />
-                  Remove
-                </Button>
-              )}
-            </li>
+              url={repo.url}
+              defaultBranch={repo.defaultBranch}
+              isAdmin={isAdmin}
+              isRemoving={removeMutation.isPending}
+              onRemove={() => removeMutation.mutate(repo.url)}
+            />
           ))}
         </ul>
-      )}
-      {repos.length > 0 && (
-        <div className="text-label" style={{ color: "var(--fg-3)", padding: "var(--sp-2) var(--sp-1) 0" }}>
-          {isAdmin
-            ? "Removing a repo here only clears the team-level binding. Existing agent runtimes keep their per-agent gitRepos until an admin restarts the agent or edits its config directly."
-            : "Read-only — only team admins can edit this list."}
-        </div>
       )}
       {removeMutation.error instanceof Error && (
         <div className="text-body" style={{ color: "var(--state-error)", marginTop: "var(--sp-2)" }}>
           {removeMutation.error.message}
         </div>
       )}
-    </section>
+    </SettingsSection>
+  );
+}
+
+function RepoRow({
+  url,
+  defaultBranch,
+  isAdmin,
+  isRemoving,
+  onRemove,
+}: {
+  url: string;
+  defaultBranch?: string;
+  isAdmin: boolean;
+  isRemoving: boolean;
+  onRemove: () => void;
+}) {
+  return (
+    <li
+      className="group flex items-center"
+      style={{
+        gap: "var(--sp-3)",
+        padding: "var(--sp-2) var(--sp-2_5)",
+        borderRadius: "var(--radius-input)",
+      }}
+    >
+      <div className="flex-1 min-w-0">
+        <div className="text-body mono" style={{ color: "var(--fg)", overflowWrap: "anywhere" }}>
+          {url}
+        </div>
+        {defaultBranch && (
+          <div className="text-label" style={{ color: "var(--fg-4)", marginTop: 2 }}>
+            branch: {defaultBranch}
+          </div>
+        )}
+      </div>
+      {isAdmin && (
+        <button
+          type="button"
+          aria-label={`Remove ${url}`}
+          disabled={isRemoving}
+          onClick={onRemove}
+          className="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 24,
+            height: 24,
+            border: 0,
+            borderRadius: "var(--rd-1)",
+            background: "transparent",
+            color: "var(--fg-3)",
+            cursor: isRemoving ? "not-allowed" : "pointer",
+            flexShrink: 0,
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = "var(--surface-2)";
+            e.currentTarget.style.color = "var(--fg)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = "transparent";
+            e.currentTarget.style.color = "var(--fg-3)";
+          }}
+        >
+          <X className="h-3_5 w-3_5" style={{ width: 14, height: 14 }} />
+        </button>
+      )}
+    </li>
   );
 }

@@ -32,10 +32,10 @@ export function OrgSettingsPage() {
   const isAdmin = role === "admin";
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-4)" }}>
-      {isAdmin && <TeamIdentityPanel />}
+    <div>
+      {isAdmin && <TeamIdentityPanel isFirst />}
       {isAdmin && <ContextTreeSettingsPanel />}
-      <SourceReposSettingsPanel />
+      <SourceReposSettingsPanel isFirst={!isAdmin} />
     </div>
   );
 }

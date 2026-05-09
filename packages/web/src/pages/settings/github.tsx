@@ -26,7 +26,7 @@ export function SettingsGithubPage() {
     <>
       <PageHeader title="GitHub" subtitle="Webhook URL + secret for routing GitHub events to your agents" />
       <div style={{ padding: "var(--sp-2) var(--sp-5) var(--sp-7)" }}>
-        <GithubIntegrationPanel />
+        <GithubIntegrationPanel isFirst />
       </div>
     </>
   );

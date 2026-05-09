@@ -1,22 +1,19 @@
 import type { Organization } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import { getOrganization, updateOrganization } from "../api/organizations.js";
 import { useAuth } from "../auth/auth-context.js";
 import { Button } from "../components/ui/button.js";
-import { FlatSectionHeader } from "../components/ui/flat-section-header.js";
+import { SettingsField, SettingsFormFooter } from "../components/ui/settings-field.js";
+import { SettingsSection } from "../components/ui/settings-section.js";
 
 /**
- * Admin-only panel for renaming the team (`organizations.display_name` and
- * the URL slug `organizations.name`). Implements proposal §决策 #17.
- *
- * The auto-provisioned default team's name is the user's GitHub login
- * (slug) and real name (display name) — already a friendly default — so
- * there's no separate "rename hint" surface; admins who want to customize
- * just edit the form below.
+ * Admin-only section for renaming the team (`organizations.display_name`).
+ * The auto-provisioned default team's name is the user's GitHub real name
+ * (display name) — already a friendly default — so there's no separate
+ * "rename hint" surface; admins who want to customize just edit the form.
  */
-export function TeamIdentityPanel() {
+export function TeamIdentityPanel({ isFirst = false }: { isFirst?: boolean }) {
   const { organizationId } = useAuth();
   const queryClient = useQueryClient();
 
@@ -57,102 +54,36 @@ export function TeamIdentityPanel() {
   };
 
   return (
-    <section>
-      <FlatSectionHeader
-        right={
-          <div className="flex items-center gap-1.5">
-            {saved && (
-              <span className="mono text-caption" style={{ color: "var(--accent-dim)" }}>
-                saved
-              </span>
-            )}
-            <Button
-              type="submit"
-              form="team-identity-form"
-              size="xs"
-              variant="outline"
-              disabled={mutation.isPending || !orgQuery.data}
-            >
-              <Check className="h-3 w-3" />
-              {mutation.isPending ? "Saving…" : "Save"}
-            </Button>
-          </div>
-        }
-      >
-        Team identity
-      </FlatSectionHeader>
+    <SettingsSection title="Identity" isFirst={isFirst}>
       {orgQuery.isLoading ? (
-        <div className="text-body" style={{ color: "var(--fg-3)", padding: "var(--sp-3) var(--sp-1)" }}>
+        <div className="text-body" style={{ color: "var(--fg-3)" }}>
           Loading…
         </div>
       ) : orgQuery.error ? (
-        <div className="text-body" style={{ color: "var(--state-error)", padding: "var(--sp-3) var(--sp-1)" }}>
+        <div className="text-body" style={{ color: "var(--state-error)" }}>
           {orgQuery.error instanceof Error ? orgQuery.error.message : "Failed to load team"}
         </div>
       ) : (
-        <form id="team-identity-form" onSubmit={handleSubmit}>
-          <Field
+        <form onSubmit={handleSubmit}>
+          <SettingsField
             label="Team name"
             hint="Shown in the team switcher and dashboard header."
             value={displayName}
             onChange={setDisplayName}
+            saved={saved}
           />
           {mutation.error instanceof Error && (
-            <div className="text-body" style={{ color: "var(--state-error)", marginTop: "var(--sp-2)" }}>
+            <div className="text-body" style={{ color: "var(--state-error)", marginBottom: "var(--sp-2)" }}>
               {mutation.error.message}
             </div>
           )}
+          <SettingsFormFooter>
+            <Button type="submit" size="sm" variant="outline" disabled={mutation.isPending || !orgQuery.data}>
+              {mutation.isPending ? "Saving…" : "Save"}
+            </Button>
+          </SettingsFormFooter>
         </form>
       )}
-    </section>
-  );
-}
-
-function Field({
-  label,
-  hint,
-  value,
-  onChange,
-  mono,
-  pattern,
-}: {
-  label: string;
-  hint: string;
-  value: string;
-  onChange: (next: string) => void;
-  mono?: boolean;
-  pattern?: string;
-}) {
-  return (
-    <div
-      className="grid items-start gap-5"
-      style={{
-        gridTemplateColumns: "var(--sp-45) 1fr",
-        padding: "var(--sp-3_5) var(--sp-1)",
-        borderTop: "var(--hairline) solid var(--border-faint)",
-      }}
-    >
-      <div>
-        <div className="text-body font-medium" style={{ color: "var(--fg)" }}>
-          {label}
-        </div>
-        <div className="text-label" style={{ color: "var(--fg-3)", marginTop: 2 }}>
-          {hint}
-        </div>
-      </div>
-      <input
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        pattern={pattern}
-        className={`w-full outline-none text-body ${mono ? "mono" : ""}`}
-        style={{
-          padding: "var(--sp-1_25) var(--sp-2_5)",
-          background: "var(--bg-sunken)",
-          border: "var(--hairline) solid var(--border)",
-          borderRadius: "var(--radius-input)",
-          color: "var(--fg)",
-        }}
-      />
-    </div>
+    </SettingsSection>
   );
 }
