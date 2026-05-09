@@ -30,6 +30,69 @@ export type MentionCandidate = {
   displayName: string | null;
 };
 
+/**
+ * Compute the set of `displayName`s that appear more than once in the
+ * visible candidate list. Used by the picker UIs to decide whether to
+ * surface the secondary `@<name>` line for disambiguation. Candidates
+ * with no `displayName` are ignored — they fall back to `@<name>`
+ * already and don't need a secondary label.
+ */
+export function ambiguousDisplayNames(candidates: MentionCandidate[]): Set<string> {
+  const counts = new Map<string, number>();
+  for (const c of candidates) {
+    if (!c.displayName) continue;
+    counts.set(c.displayName, (counts.get(c.displayName) ?? 0) + 1);
+  }
+  const out = new Set<string>();
+  for (const [k, n] of counts) {
+    if (n > 1) out.add(k);
+  }
+  return out;
+}
+
+/**
+ * Should the candidate row render the secondary `@<name>` label?
+ *
+ * Yes when:
+ *   - `displayName` differs from `name` (e.g. friendly title "Alice's
+ *     assistant" vs handle "alice-assistant"), OR
+ *   - another visible candidate shares the same `displayName` (collision).
+ *
+ * In all other cases the handle is identical to the rendered display
+ * name, so showing it twice is pure noise. Hover always discloses the
+ * handle via the row's `title` attribute regardless.
+ */
+export function shouldShowHandle(c: MentionCandidate, ambiguous: Set<string>): boolean {
+  if (!c.name || !c.displayName) return false;
+  if (c.displayName !== c.name) return true;
+  return ambiguous.has(c.displayName);
+}
+
+/**
+ * Single-line candidate label used by every mention-style picker
+ * (autocomplete popover, ParticipantsHeader [+] dropdown, NewChatDraft
+ * chip-add dropdown). Centralizes the display-name + conditional
+ * `@<handle>` rendering so the format only needs to change in one
+ * place.
+ *
+ * Caller is responsible for the surrounding `<button>` / wrapper
+ * (click handlers, `title` attribute, hover/active state) — the label
+ * intentionally stays presentational.
+ */
+export function MentionLabel({ candidate, ambiguous }: { candidate: MentionCandidate; ambiguous: Set<string> }) {
+  const fallback = candidate.name ? `@${candidate.name}` : "—";
+  return (
+    <>
+      <span className="font-medium">{candidate.displayName ?? fallback}</span>
+      {shouldShowHandle(candidate, ambiguous) && (
+        <span className="mono text-caption" style={{ color: "var(--fg-3)" }}>
+          @{candidate.name}
+        </span>
+      )}
+    </>
+  );
+}
+
 type ActiveTrigger = {
   /** Text index of the leading `@` (the char at `triggerIndex` is `@`). */
   triggerIndex: number;
@@ -289,39 +352,38 @@ export function MentionAutocompletePopover({
         borderColor: "var(--border)",
       }}
     >
-      {results.map((c, i) => {
-        const active = i === highlightIndex;
-        return (
-          <button
-            key={c.agentId}
-            type="button"
-            role="option"
-            aria-selected={active}
-            data-mention-index={i}
-            onMouseDown={(e) => {
-              // preventDefault keeps the textarea focused so `selectionStart`
-              // can still be used to compute the insertion point.
-              e.preventDefault();
-              onPick(c);
-            }}
-            className="flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-body"
-            style={{
-              background: active ? "var(--bg-hover)" : "transparent",
-              color: "var(--fg)",
-              border: "none",
-              cursor: "pointer",
-              whiteSpace: "nowrap",
-            }}
-          >
-            <span className="font-medium">{c.displayName ?? (c.name ? `@${c.name}` : "—")}</span>
-            {c.name && c.displayName && (
-              <span className="mono text-caption" style={{ color: "var(--fg-3)" }}>
-                @{c.name}
-              </span>
-            )}
-          </button>
-        );
-      })}
+      {(() => {
+        const ambiguous = ambiguousDisplayNames(results);
+        return results.map((c, i) => {
+          const active = i === highlightIndex;
+          return (
+            <button
+              key={c.agentId}
+              type="button"
+              role="option"
+              aria-selected={active}
+              data-mention-index={i}
+              title={c.name ? `@${c.name}` : undefined}
+              onMouseDown={(e) => {
+                // preventDefault keeps the textarea focused so `selectionStart`
+                // can still be used to compute the insertion point.
+                e.preventDefault();
+                onPick(c);
+              }}
+              className="flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-body"
+              style={{
+                background: active ? "var(--bg-hover)" : "transparent",
+                color: "var(--fg)",
+                border: "none",
+                cursor: "pointer",
+                whiteSpace: "nowrap",
+              }}
+            >
+              <MentionLabel candidate={c} ambiguous={ambiguous} />
+            </button>
+          );
+        });
+      })()}
     </div>
   );
 }
