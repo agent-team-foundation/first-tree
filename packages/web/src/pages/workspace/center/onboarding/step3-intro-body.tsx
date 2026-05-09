@@ -518,7 +518,11 @@ function AdminBindCreateBody() {
     if (!trimmedTreeUrl) return false;
     try {
       const u = new URL(trimmedTreeUrl);
-      return u.protocol === "https:" || u.protocol === "http:";
+      // https only — this URL is written to the team-wide
+      // `context_tree.repo` namespace, so an admin pasting `http://` (a
+      // common typo on GitHub URLs) would propagate to every invitee's
+      // bootstrap message and agent gitRepos.
+      return u.protocol === "https:";
     } catch {
       return false;
     }
