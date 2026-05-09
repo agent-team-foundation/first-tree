@@ -21,8 +21,8 @@ import {
   listActiveMemberships,
   selfCreateOrganization,
 } from "../services/membership.js";
-import { serializeDate } from "../utils.js";
 import { resolvePublicUrl } from "../utils/public-url.js";
+import { serializeDate } from "../utils.js";
 
 /**
  * `/me` and self-service organization routes (Class A — User-scoped).
