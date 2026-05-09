@@ -126,7 +126,13 @@ export function runValidateMembers(treeRoot: string): {
   const allErrors: string[] = [];
   let memberCount = 0;
 
-  function walk(dir: string): void {
+  // Top-level directories under `members/` must each be a member node
+  // (have NODE.md). Nested directories deeper than that are allowed to
+  // exist as non-node containers — personal research notes, attachments,
+  // assistants without a node yet, etc. Nested dirs that DO carry a
+  // NODE.md are still validated as nested members (preserves the
+  // `<member>/<member>-assistant/NODE.md` pattern).
+  function walk(dir: string, requireNode: boolean): void {
     for (const child of readdirSync(dir).sort()) {
       const childPath = join(dir, child);
 
@@ -140,18 +146,20 @@ export function runValidateMembers(treeRoot: string): {
 
       const nodePath = join(childPath, "NODE.md");
       if (!existsSync(nodePath)) {
-        allErrors.push(`${rel(childPath, treeRoot)}/: directory exists but missing NODE.md`);
-        walk(childPath);
+        if (requireNode) {
+          allErrors.push(`${rel(childPath, treeRoot)}/: directory exists but missing NODE.md`);
+          walk(childPath, false);
+        }
         continue;
       }
 
       memberCount += 1;
       allErrors.push(...validateMember(nodePath, treeRoot));
-      walk(childPath);
+      walk(childPath, false);
     }
   }
 
-  walk(membersDir);
+  walk(membersDir, true);
 
   if (memberCount === 0) {
     allErrors.push("members/: no member nodes were found");
