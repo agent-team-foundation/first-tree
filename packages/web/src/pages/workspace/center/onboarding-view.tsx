@@ -1,35 +1,113 @@
 import type { ClientCapabilities, OrgBrief } from "@agent-team-foundation/first-tree-hub-shared";
-import { ArrowRight, Check, Copy } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router";
+import { ArrowRight, Check, ChevronDown, Copy } from "lucide-react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router";
 import { getClientCapabilities, type HubClient, listClients } from "../../../api/activity.js";
-import { createAgentChat } from "../../../api/chats.js";
+import { getAgentConfig, updateAgentConfig } from "../../../api/agent-config.js";
+import { listManagedAgents } from "../../../api/agents.js";
+import { createAgentChat, sendChatMessage } from "../../../api/chats.js";
 import { api, withOrg } from "../../../api/client.js";
+import { type GithubRepo, listGithubRepos } from "../../../api/github.js";
+import { reportOnboardingEvent } from "../../../api/onboarding-events.js";
+import { getContextTreeSetting, putContextTreeSetting } from "../../../api/org-settings.js";
 import { useAuth } from "../../../auth/auth-context.js";
 import { Button } from "../../../components/ui/button.js";
+import { useToast } from "../../../components/ui/toast.js";
 import { slugify } from "../../../utils/agent-naming.js";
 import {
   clearOnboardingDraft,
   onboardingDraftScope,
+  readOnboardingAgentUuid,
   readOnboardingDraft,
   readOnboardingJoinPath,
+  readStep1Confirmed,
+  writeOnboardingAgentUuid,
   writeOnboardingDraft,
+  writeStep1Confirmed,
 } from "../../../utils/onboarding-flags.js";
 
 /**
- * Inline onboarding panel — replaces the previous OnboardingBanner +
- * OnboardingModal pair. Renders directly in CenterPanel when wizardStep is
- * not `completed` and the user hasn't selected a chat. The whole "create your
- * first agent" flow lives here: name input, computer connect, runtime pick,
- * and the post-Create wait state. On runtime-online we navigate to the new
- * chat URL; the chat view handles the empty-chat pre-fill ("Hi {name}!").
+ * Inline onboarding panel — body branches on `onboardingStep` + URL state +
+ * a per-tab session-storage flag for the Step 1 acknowledgement, per
+ * docs/new-user-onboarding-design.md §4.2 / §9.
+ *
+ *   stepOverride "team"  → Step1Body  (team rename)
+ *   no override + step1 unconfirmed + onboardingStep "connect" + solo
+ *                        → Step1Body
+ *   onboardingStep "connect" / "create_agent"
+ *                        → Step2Body  (agent form + computer connect)
+ *   onboardingStep "completed"
+ *                        → Step3IntroBody  (CTA "Set up first-tree?")
+ *
+ * Visibility of this view is gated by `CenterPanel`:
+ * `onboardingStep !== null && !onboardingDismissedAt`. "I'll do it later"
+ * and the stepper `✕` both PATCH `onboardingDismissedAt = now()` (and emit
+ * a toast pointing at Settings → Setup), so dismiss behaviour is uniform —
+ * server-side and cross-tab. There is no per-tab "dismiss Step 3 intro"
+ * state any more.
+ *
+ * The OnboardingStepper at the workspace-shell level renders independently
+ * (visibility tied to `users.onboarding_dismissed_at`, not `onboardingStep`).
+ * The chat-init transition (sub-state B) is handled by `CenterPanel` routing —
+ * once `?c=<chatId>` is set, this view doesn't render at all.
  */
 
 const RUNTIME_READY_TIMEOUT_MS = 30_000;
 const RUNTIME_READY_POLL_MS = 1_000;
 const CLIENT_DETECT_POLL_MS = 3_000;
 
+/**
+ * Two bootstrap-message variants Step 3 IntroBody dispatches based on the
+ * user's "do you already have a tree?" choice. Prose, not shell recipes —
+ * the agent has the first-tree skill (and the source repo, materialised
+ * via `gitRepos`) ready in its workspace, so the message just describes
+ * the goal and references the CLI surfaces by name. The skill knows the
+ * concrete commands.
+ *
+ * Path A (existing tree) skips Hub bookkeeping at the end — the web
+ * frontend best-effort PUTs the URL into the org's `context_tree`
+ * settings namespace before sending the chat (non-fatal — agent still
+ * proceeds if the PUT fails). Path B (new tree) tells the agent to call
+ * back into the first-tree-hub CLI to record the freshly created URL.
+ *
+ * Single source of truth: only Step 3 IntroBody currently sends these.
+ * If a future surface needs the same prompts, hoist these builders to
+ * `packages/shared` so both import the same strings.
+ */
+const FIRST_TREE_REFERENCE_URL = "https://github.com/agent-team-foundation/first-tree";
+
+function buildBindBootstrap(sourceUrl: string, treeUrl: string): string {
+  return [
+    "Bind my source repo to an existing context-tree.",
+    "",
+    `Source repo: ${sourceUrl}`,
+    `Existing tree: ${treeUrl}`,
+    "",
+    "Your workspace already has the source repo cloned in a subdirectory; the first-tree skill will locate it. Use the first-tree CLI to install the skill in the source repo and write the binding metadata pointing at the existing tree, then open a PR back to the source with those changes. Walk me through the PR when it's up.",
+    "",
+    `Reference: ${FIRST_TREE_REFERENCE_URL}`,
+  ].join("\n");
+}
+
+function buildCreateBootstrap(sourceUrl: string): string {
+  return [
+    "Create a brand-new context-tree for my source repo.",
+    "",
+    `Source repo: ${sourceUrl}`,
+    "",
+    "Your workspace already has the source repo cloned in a subdirectory; the first-tree skill will locate it. Use the first-tree CLI to install the skill in the source, scaffold a sibling tree directory, and write the binding metadata. Then push that new tree directory up to GitHub as a sibling repo under the same owner as the source, and open a PR back to the source with the skill + binding files.",
+    "",
+    "Once you know the URL of the new tree repo, use the first-tree-hub CLI's `org bind-tree` command to record it on the Hub so future agents in this team can find it.",
+    "",
+    "When everything is up, walk me through what was created — which directory, which repo, which PR.",
+    "",
+    `Reference: ${FIRST_TREE_REFERENCE_URL}`,
+  ].join("\n");
+}
+
 type Phase = "form" | "creating" | "timeout";
+
+type ResolvedBody = "step1" | "step2" | "step3-intro";
 
 function prettyRuntimeLabel(provider: string): string {
   if (provider === "claude-code") return "Claude Code";
@@ -38,7 +116,220 @@ function prettyRuntimeLabel(provider: string): string {
 }
 
 export function OnboardingView() {
-  const { refreshMe, organizationId, memberId } = useAuth();
+  const { onboardingStep, refreshMe, organizationId, memberId, role } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const stepOverride = searchParams.get("step");
+  const [joinPath] = useState(() => readOnboardingJoinPath());
+
+  // Step 1 confirmation is a session-only flag — DB rows are pre-created at
+  // OAuth time so the server can't distinguish "haven't confirmed yet" from
+  // "confirmed days ago". Per-tab is fine: a user who reloads land on the
+  // same machine still has the flag.
+  const [step1Confirmed, setStep1ConfirmedState] = useState(() => readStep1Confirmed());
+
+  const setStep1Confirmed = useCallback((v: boolean) => {
+    writeStep1Confirmed(v);
+    setStep1ConfirmedState(v);
+  }, []);
+
+  // Step 1's PATCH /orgs/:id is gated by `requireOrgAdmin` server-side, so a
+  // non-admin member who somehow lands on Step 1 (lost joinPath flag,
+  // clicked the stepper pip) would just hit a 403. Skip Step 1 for them
+  // entirely — they joined an existing team and the team-rename pillar
+  // doesn't apply.
+  const canRenameTeam = role === "admin";
+
+  const body = useMemo<ResolvedBody>(() => {
+    if (stepOverride === "team" && canRenameTeam) return "step1";
+    if (stepOverride === "agent") return "step2";
+    if (stepOverride === "tree") return "step3-intro";
+    if (onboardingStep === "completed") return "step3-intro";
+    if (onboardingStep === "connect" && !step1Confirmed && joinPath !== "invite" && canRenameTeam) {
+      return "step1";
+    }
+    return "step2";
+  }, [stepOverride, onboardingStep, step1Confirmed, joinPath, canRenameTeam]);
+
+  const advanceToStep2 = useCallback(() => {
+    setStep1Confirmed(true);
+    const next = new URLSearchParams(searchParams);
+    next.delete("step");
+    setSearchParams(next, { replace: true });
+  }, [setStep1Confirmed, searchParams, setSearchParams]);
+
+  return (
+    <div
+      className="flex-1 overflow-auto"
+      style={{
+        display: "flex",
+        justifyContent: "center",
+        padding: "clamp(var(--sp-16), 12vh, var(--sp-45)) var(--sp-4) var(--sp-12)",
+      }}
+    >
+      <div style={{ width: "100%", maxWidth: 720 }}>
+        {body === "step1" ? (
+          <Step1Body organizationId={organizationId} onContinue={advanceToStep2} />
+        ) : body === "step2" ? (
+          <Step2Body organizationId={organizationId} memberId={memberId} joinPath={joinPath} refreshMe={refreshMe} />
+        ) : (
+          <Step3IntroBody />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Step 1 ──────────────────────────────────────────────────────────────
+
+function Step1Body({ organizationId, onContinue }: { organizationId: string | null; onContinue: () => void }) {
+  const [orgs, setOrgs] = useState<OrgBrief[]>([]);
+  const [name, setName] = useState("");
+  const [initialName, setInitialName] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // Distinguish "still loading the seed name" from "loaded but the user
+  // emptied the input" — without this distinction we can't tell whether
+  // to disable Continue defensively (load failed → don't let them PATCH a
+  // typed-by-hand name that overwrites the auto-generated default they
+  // never saw).
+  const [orgsLoaded, setOrgsLoaded] = useState(false);
+  const [orgsLoadError, setOrgsLoadError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const list = await api.get<OrgBrief[]>("/me/organizations");
+        setOrgs(list);
+      } catch (err) {
+        setOrgsLoadError(err instanceof Error ? err.message : "Failed to load your team");
+      } finally {
+        setOrgsLoaded(true);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    const seed = orgs.find((o) => o.id === organizationId)?.displayName ?? "";
+    setName(seed);
+    setInitialName(seed);
+  }, [orgs, organizationId]);
+
+  // Focus the input + place caret at end once the seed value lands (per §5.1).
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el || !initialName) return;
+    el.focus();
+    const len = el.value.length;
+    el.setSelectionRange(len, len);
+  }, [initialName]);
+
+  const trimmed = name.trim();
+  // Refuse to submit while orgs haven't loaded (we don't know the seed) or
+  // while the load errored out (the user is staring at an empty input we
+  // can't seed — letting them PATCH would overwrite the auto-generated
+  // name they never saw).
+  const canSubmit = trimmed.length > 0 && !saving && orgsLoaded && !orgsLoadError;
+
+  const handleSubmit = useCallback(
+    async (event?: React.FormEvent) => {
+      event?.preventDefault();
+      if (!canSubmit || !organizationId) return;
+      setError(null);
+      try {
+        const renamed = trimmed !== initialName.trim();
+        if (renamed) {
+          setSaving(true);
+          await api.patch(`/orgs/${encodeURIComponent(organizationId)}`, {
+            displayName: trimmed,
+          });
+          void reportOnboardingEvent("team_renamed");
+        }
+        onContinue();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to rename team");
+      } finally {
+        setSaving(false);
+      }
+    },
+    [canSubmit, organizationId, trimmed, initialName, onContinue],
+  );
+
+  return (
+    <form onSubmit={handleSubmit} className="flex flex-col" style={{ gap: "var(--sp-5)" }}>
+      <p className="text-body" style={{ margin: 0, color: "var(--fg-3)" }}>
+        Name your <span style={{ color: "var(--fg-2)" }}>agent team</span> — where humans and AIs collaborate.
+      </p>
+
+      <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
+        <label htmlFor="onboarding-team-name" className="text-label" style={{ color: "var(--fg-3)" }}>
+          Team name
+        </label>
+        <input
+          ref={inputRef}
+          id="onboarding-team-name"
+          aria-label="Team display name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          maxLength={200}
+          disabled={saving}
+          className="text-body"
+          style={{
+            padding: "var(--sp-2) var(--sp-3)",
+            background: "var(--bg)",
+            border: "var(--hairline) solid var(--border)",
+            borderRadius: "var(--radius-input)",
+            color: "var(--fg)",
+            outline: "none",
+            caretColor: "var(--accent)",
+          }}
+          onFocus={(event) => {
+            event.currentTarget.style.borderColor = "var(--accent)";
+          }}
+          onBlur={(event) => {
+            event.currentTarget.style.borderColor = "var(--border)";
+          }}
+        />
+      </div>
+
+      {error || orgsLoadError ? (
+        <div
+          className="text-body"
+          style={{
+            padding: "var(--sp-2_5) var(--sp-3)",
+            background: "color-mix(in oklch, var(--state-error) 12%, transparent)",
+            border: "var(--hairline) solid color-mix(in oklch, var(--state-error) 28%, transparent)",
+            borderRadius: "var(--radius-input)",
+            color: "var(--state-error)",
+          }}
+        >
+          {error ?? `Couldn't load your team — ${orgsLoadError}. Refresh the page and try again.`}
+        </div>
+      ) : null}
+
+      <div className="flex justify-end">
+        <Button type="submit" disabled={!canSubmit}>
+          <span>Continue</span>
+          <ArrowRight className="h-4 w-4" />
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+// ─── Step 2 ──────────────────────────────────────────────────────────────
+
+function Step2Body({
+  organizationId,
+  memberId,
+  joinPath,
+  refreshMe,
+}: {
+  organizationId: string | null;
+  memberId: string | null;
+  joinPath: "solo" | "invite" | null;
+  refreshMe: () => Promise<void>;
+}) {
   const navigate = useNavigate();
   const draftScope = onboardingDraftScope(organizationId, memberId);
   const initialDraft = readOnboardingDraft(draftScope);
@@ -48,7 +339,11 @@ export function OnboardingView() {
       : null;
   const initialConnectTokenExpiresAt = initialConnectToken ? (initialDraft?.connectTokenExpiresAt ?? null) : null;
 
-  const [displayName, setDisplayName] = useState(() => initialDraft?.displayName ?? "");
+  // Default agent name: "Coder" — most onboarding agents are code agents
+  // (per the Step 2 lead). User can rename in the input or via agent
+  // settings later. The draft override wins so we don't clobber a name
+  // a returning user already typed.
+  const [displayName, setDisplayName] = useState(() => initialDraft?.displayName ?? "Coder");
   const [selectedRuntime, setSelectedRuntime] = useState<string | null>(() => initialDraft?.selectedRuntime ?? null);
   const [connectedClient, setConnectedClient] = useState<HubClient | null>(null);
   const [capabilities, setCapabilities] = useState<ClientCapabilities | null>(null);
@@ -58,14 +353,8 @@ export function OnboardingView() {
   const [orgs, setOrgs] = useState<OrgBrief[]>([]);
   const [phase, setPhase] = useState<Phase>("form");
   const [error, setError] = useState<string | null>(null);
-  // Read once on mount — joinPath flips only at sign-in / invite-accept.
-  const [joinPath] = useState(() => readOnboardingJoinPath());
 
-  // Persisted across timeout retries so [Try again] does not recreate
-  // (and collide on the unique slug).
   const createdAgentRef = useRef<string | null>(null);
-  // Cancellation token for the active poll loop. Flipped on unmount so any
-  // in-flight `await` boundary returns early without stale state writes.
   const pollCancelRef = useRef<{ cancelled: boolean } | null>(null);
   const capabilitiesClientIdRef = useRef<string | null>(null);
   const detectSeqRef = useRef(0);
@@ -77,25 +366,25 @@ export function OnboardingView() {
   }, []);
 
   useEffect(() => {
-    writeOnboardingDraft(draftScope, { displayName, selectedRuntime, connectToken, connectTokenExpiresAt });
+    writeOnboardingDraft(draftScope, {
+      displayName,
+      selectedRuntime,
+      connectToken,
+      connectTokenExpiresAt,
+    });
   }, [draftScope, displayName, selectedRuntime, connectToken, connectTokenExpiresAt]);
 
-  // Greeting source: org displayName for the invite welcome line.
   useEffect(() => {
     void (async () => {
       try {
         const list = await api.get<OrgBrief[]>("/me/organizations");
         setOrgs(list);
       } catch {
-        // best-effort; greeting falls back to generic copy
+        // best-effort
       }
     })();
   }, []);
 
-  // Detect the user's most recently active connected client + capabilities.
-  // Re-fetching capabilities on every tick is the intentional fix for staleness:
-  // if the user installs a runtime mid-onboarding, the radio list updates
-  // without anything being remounted.
   useEffect(() => {
     if (phase !== "form") return;
     let cancelled = false;
@@ -122,7 +411,7 @@ export function OnboardingView() {
             setCapabilitiesClientId(latest.id);
             setCapabilities(withCaps.capabilities);
           } catch {
-            // transient — keep last capabilities; next tick retries
+            // transient
           }
         } else {
           capabilitiesClientIdRef.current = null;
@@ -141,7 +430,6 @@ export function OnboardingView() {
     };
   }, [phase]);
 
-  // Lazy-load a connect token when no client is bound yet.
   useEffect(() => {
     if (connectedClient) return;
     if (connectToken && connectTokenExpiresAt && connectTokenExpiresAt > Date.now()) {
@@ -175,17 +463,16 @@ export function OnboardingView() {
 
   const activeCapabilities = connectedClient && capabilitiesClientId === connectedClient.id ? capabilities : null;
 
-  // Auto-select the first ok runtime; reset if active selection becomes invalid
-  // (client switched, runtime removed). `activeCapabilities` is only non-null
-  // when the capabilities payload belongs to the currently selected client.
+  // Auto-pick the first ok runtime per §6.5 (claude-code preferred). No
+  // runtime UI in onboarding; multi-runtime picker lives in NewAgentDialog.
   useEffect(() => {
     setSelectedRuntime((prev) => {
       if (!activeCapabilities) return prev;
-      const ok = Object.entries(activeCapabilities)
-        .filter(([, entry]) => entry.state === "ok")
-        .map(([provider]) => provider);
-      if (prev && ok.includes(prev)) return prev;
-      return ok[0] ?? null;
+      const ok = pickPreferredRuntime(activeCapabilities);
+      if (prev && ok && Object.keys(activeCapabilities).includes(prev) && activeCapabilities[prev]?.state === "ok") {
+        return prev;
+      }
+      return ok;
     });
   }, [activeCapabilities]);
 
@@ -220,25 +507,21 @@ export function OnboardingView() {
           online = status.online === true;
         } catch {
           if (token.cancelled) return;
-          // transient — keep polling
         }
         if (online) {
+          // End of Step 2: agent + computer are wired up. Hand off to Step 3
+          // by clearing the draft, refreshing /me (so onboardingStep flips
+          // to "completed"), and landing on `/`. CenterPanel routes to
+          // OnboardingView → Step3IntroBody, where the user opts in to the
+          // tree-init chat. See docs/new-user-onboarding-design.md §6.6.
+          clearOnboardingDraft(draftScope);
           try {
-            const chat = await createAgentChat(agentUuid);
-            if (token.cancelled) return;
-            clearOnboardingDraft(draftScope);
             await refreshMe();
-            if (token.cancelled) return;
-            navigate(`/?a=${encodeURIComponent(agentUuid)}&c=${encodeURIComponent(chat.id)}`, { replace: true });
-          } catch (err) {
-            if (token.cancelled) return;
-            // Reuse the timeout UI when chat creation fails: the agent +
-            // runtime are fine, only the chat creation step failed; [Try
-            // again] re-runs pollUntilReady → finds online=true → retries
-            // createAgentChat.
-            setError(err instanceof Error ? err.message : "Failed to open chat");
-            setPhase("timeout");
+          } catch {
+            // best-effort — the next /me refresh will catch up
           }
+          if (token.cancelled) return;
+          navigate("/", { replace: true });
           return;
         }
         if (Date.now() - startedAt > RUNTIME_READY_TIMEOUT_MS) {
@@ -263,30 +546,37 @@ export function OnboardingView() {
     if (!connectedClient || !selectedRuntime || !trimmedName) return;
     setError(null);
     setPhase("creating");
-    // Empty slug (e.g. all-CJK input) → omit `name` so the server stores
-    // NULL; user can set a handle later in Settings if they need @mention.
     const slug = slugify(trimmedName);
     let agentUuid: string;
     try {
+      // Step 2 creates an unbound agent — `gitRepos` stays empty until
+      // Step 3 picks the source repo. The agent is fully functional in
+      // this state for general (non-code) chat; code-context binding is
+      // a Step 3 concern. See docs/new-user-onboarding-design.md §6/§7.
       const res = await api.post<{ uuid: string }>(withOrg("/agents"), {
         type: "personal_assistant",
         displayName: trimmedName,
         ...(slug ? { name: slug } : {}),
         clientId: connectedClient.id,
         runtimeProvider: selectedRuntime,
-        // Pin the agent to the org the user has selected in the dropdown.
-        // Without this the server falls back to JWT default org, which is
-        // non-deterministic across logins (auth.ts password-login member pick)
-        // and silently lands the agent in the wrong tenant.
         ...(organizationId ? { organizationId } : {}),
       });
       agentUuid = res.uuid;
       createdAgentRef.current = agentUuid;
+      // Stash for Step 3 — uuidv7 sort would also work, but an explicit
+      // "the user just created THIS agent" hint avoids picking the wrong
+      // agent if the user has more than one managed agent on a re-visit.
+      writeOnboardingAgentUuid(agentUuid);
+      void reportOnboardingEvent("agent_created", {
+        runtimeProvider: selectedRuntime,
+        repoBound: false,
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create agent");
       setPhase("form");
       return;
     }
+
     await pollUntilReady(agentUuid);
   }, [trimmedName, connectedClient, selectedRuntime, pollUntilReady, organizationId]);
 
@@ -298,49 +588,49 @@ export function OnboardingView() {
     await pollUntilReady(agentUuid);
   }, [pollUntilReady]);
 
+  if (phase === "creating") {
+    return <CreatingBody nameOrFallback={nameOrFallback} />;
+  }
+  if (phase === "timeout") {
+    return (
+      <TimeoutBody
+        nameOrFallback={nameOrFallback}
+        hostname={connectedClient?.hostname ?? null}
+        error={error}
+        onRetry={handleRetry}
+      />
+    );
+  }
+
   return (
-    <div
-      className="flex-1 overflow-auto"
-      style={{
-        display: "flex",
-        justifyContent: "center",
-        padding: "clamp(var(--sp-16), 12vh, var(--sp-45)) var(--sp-4) var(--sp-12)",
-      }}
-    >
-      <div style={{ width: "100%", maxWidth: 560 }}>
-        {phase === "form" && (
-          <FormBody
-            joinPath={joinPath}
-            teamName={teamName}
-            displayName={displayName}
-            setDisplayName={setDisplayName}
-            trimmedName={trimmedName}
-            connectedClient={connectedClient}
-            cliCommand={cliCommand}
-            okRuntimes={okRuntimes}
-            selectedRuntime={selectedRuntime}
-            setSelectedRuntime={setSelectedRuntime}
-            capabilitiesLoaded={activeCapabilities !== null}
-            error={error}
-            canCreate={canCreate}
-            onCreate={handleCreate}
-          />
-        )}
-        {phase === "creating" && <CreatingBody nameOrFallback={nameOrFallback} />}
-        {phase === "timeout" && (
-          <TimeoutBody
-            nameOrFallback={nameOrFallback}
-            hostname={connectedClient?.hostname ?? null}
-            error={error}
-            onRetry={handleRetry}
-          />
-        )}
-      </div>
-    </div>
+    <Step2FormBody
+      joinPath={joinPath}
+      teamName={teamName}
+      displayName={displayName}
+      setDisplayName={setDisplayName}
+      trimmedName={trimmedName}
+      connectedClient={connectedClient}
+      cliCommand={cliCommand}
+      capabilitiesLoaded={activeCapabilities !== null}
+      okRuntimes={okRuntimes}
+      selectedRuntime={selectedRuntime}
+      setSelectedRuntime={setSelectedRuntime}
+      error={error}
+      canCreate={canCreate}
+      onCreate={handleCreate}
+    />
   );
 }
 
-function FormBody({
+function pickPreferredRuntime(caps: ClientCapabilities): string | null {
+  const ok = (provider: string) => caps[provider]?.state === "ok";
+  if (ok("claude-code")) return "claude-code";
+  if (ok("codex")) return "codex";
+  const first = Object.entries(caps).find(([, entry]) => entry.state === "ok");
+  return first ? first[0] : null;
+}
+
+function Step2FormBody({
   joinPath,
   teamName,
   displayName,
@@ -348,10 +638,10 @@ function FormBody({
   trimmedName,
   connectedClient,
   cliCommand,
+  capabilitiesLoaded,
   okRuntimes,
   selectedRuntime,
   setSelectedRuntime,
-  capabilitiesLoaded,
   error,
   canCreate,
   onCreate,
@@ -363,24 +653,27 @@ function FormBody({
   trimmedName: string;
   connectedClient: HubClient | null;
   cliCommand: string | null;
+  capabilitiesLoaded: boolean;
   okRuntimes: string[];
   selectedRuntime: string | null;
-  setSelectedRuntime: (next: string) => void;
-  capabilitiesLoaded: boolean;
+  setSelectedRuntime: (next: string | null) => void;
   error: string | null;
   canCreate: boolean;
   onCreate: () => void;
 }) {
   const nameInputRef = useRef<HTMLInputElement | null>(null);
   const inviteHasTeam = joinPath === "invite" && teamName;
-  const introLeadText = inviteHasTeam ? `Welcome — you've joined ${teamName}` : "Welcome to First Tree Hub";
+
+  const noRuntime = capabilitiesLoaded && okRuntimes.length === 0 && !!connectedClient;
   const nextStepText = !trimmedName
     ? "Next: name your agent."
     : !connectedClient
       ? "Next: connect the computer where they'll work."
-      : !selectedRuntime
-        ? "Next: choose a runtime."
-        : "Ready to create.";
+      : noRuntime
+        ? "Install Claude Code (or Codex) on that computer, then sign in."
+        : !selectedRuntime
+          ? "Detecting installed runtimes…"
+          : "Ready to create.";
 
   useEffect(() => {
     if (trimmedName) return;
@@ -389,22 +682,29 @@ function FormBody({
 
   return (
     <>
-      <div
-        className="flex flex-col items-start"
-        style={{
-          gap: "var(--sp-4)",
-          paddingTop: 0,
-        }}
-      >
-        <p className="text-label" style={{ margin: 0, color: "var(--fg-3)", maxWidth: 420 }}>
-          <span style={{ color: "var(--fg-2)" }}>{introLeadText}</span>
-          <span style={{ color: "var(--fg-4)" }}> · </span>
-          Where agents and humans work as one team.
-        </p>
-        <h1 className="text-title font-semibold" style={{ margin: 0, color: "var(--fg)" }}>
-          Let's create your first agent.
-        </h1>
-      </div>
+      <p className="text-body" style={{ margin: 0, color: "var(--fg-3)", maxWidth: 720 }}>
+        {inviteHasTeam ? (
+          <>
+            You&apos;ve joined{" "}
+            <span className="font-semibold" style={{ color: "var(--fg-2)" }}>
+              {teamName}
+            </span>
+            . Set up your first agent — a{" "}
+            <span className="font-semibold" style={{ color: "var(--fg-2)" }}>
+              code agent
+            </span>{" "}
+            that helps with your code.
+          </>
+        ) : (
+          <>
+            Set up your first agent — a{" "}
+            <span className="font-semibold" style={{ color: "var(--fg-2)" }}>
+              code agent
+            </span>{" "}
+            that helps with your code.
+          </>
+        )}
+      </p>
 
       <div style={{ marginTop: "var(--sp-5)", position: "relative" }}>
         <StepRailLine />
@@ -416,7 +716,7 @@ function FormBody({
               className="text-body font-normal"
               style={{ color: "var(--fg-2)", whiteSpace: "nowrap" }}
             >
-              What should we call this agent?
+              Name your agent
             </label>
             <input
               ref={nameInputRef}
@@ -461,15 +761,15 @@ function FormBody({
                 fontWeight: trimmedName ? 600 : 500,
               }}
             >
-              Where will {trimmedName || "this agent"} run?
+              Connect a computer
             </h2>
 
             {trimmedName ? (
               <>
                 <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
                   {connectedClient
-                    ? `This computer will run ${trimmedName} and keep it connected to Hub.`
-                    : "This agent needs a computer to do its work. Connect the one it should use."}
+                    ? `${trimmedName} will run on this computer and stay connected to Hub.`
+                    : `${trimmedName} needs a computer to run on. Connect one with the command below.`}
                 </p>
                 {!connectedClient && (
                   <p className="text-label" style={{ color: "var(--fg-4)", marginTop: "var(--sp-2)" }}>
@@ -478,21 +778,20 @@ function FormBody({
                 )}
 
                 {connectedClient ? (
-                  <ConnectedRow hostname={connectedClient.hostname ?? connectedClient.id} />
+                  <>
+                    <ConnectedRow hostname={connectedClient.hostname ?? connectedClient.id} />
+                    <RuntimeChips
+                      runtimes={okRuntimes}
+                      selected={selectedRuntime}
+                      onSelect={setSelectedRuntime}
+                      capabilitiesLoaded={capabilitiesLoaded}
+                    />
+                  </>
                 ) : (
                   <>
                     <CommandBox command={cliCommand} />
                     <WaitingRow />
                   </>
-                )}
-
-                {connectedClient && (
-                  <RuntimeChips
-                    runtimes={okRuntimes}
-                    selected={selectedRuntime}
-                    onSelect={setSelectedRuntime}
-                    capabilitiesLoaded={capabilitiesLoaded}
-                  />
                 )}
               </>
             ) : null}
@@ -570,6 +869,625 @@ function FormBody({
   );
 }
 
+// ─── Step 3 ──────────────────────────────────────────────────────────────
+
+type TreeMode = "existing" | "new";
+
+function Step3IntroBody() {
+  const navigate = useNavigate();
+  const { dismissOnboarding, organizationId } = useAuth();
+  const { addToast } = useToast();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [treeMode, setTreeMode] = useState<TreeMode | null>(null);
+  const [existingTreeUrl, setExistingTreeUrl] = useState("");
+  const [selectedRepoUrl, setSelectedRepoUrl] = useState<string | null>(null);
+  const [repos, setRepos] = useState<GithubRepo[] | null>(null);
+  const [reposError, setReposError] = useState<string | null>(null);
+
+  // Lazy-load the GitHub repo list once when Step 3 mounts. Plan B keeps
+  // source picker here (not Step 2) so agent creation in Step 2 stays
+  // independent of GitHub OAuth health — agent already exists by the time
+  // this runs, so an OAuth hiccup only blocks Step 3, not the user's
+  // entire onboarding.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const list = await listGithubRepos();
+        if (cancelled) return;
+        setRepos(list);
+      } catch (err) {
+        if (!cancelled) setReposError(err instanceof Error ? err.message : "Failed to list GitHub repositories");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Pre-fill from the org's existing `context_tree` binding when the
+  // caller can read it. Today this only fires for **admins** —
+  // `GET /orgs/:orgId/settings/:namespace` is admin-gated server-side, so
+  // a non-admin invitee's call 403s and we silently fall through to the
+  // empty toggle (same behaviour as before this change). The conservative
+  // value here is for admins re-running onboarding.
+  //
+  // The proper invitee fix — either relaxing the GET to org members for
+  // non-secret namespaces, or surfacing the binding through `/me`, plus
+  // hiding the Bind/Create toggle entirely so an invitee cannot
+  // accidentally spawn a duplicate tree — is deferred to Phase B, which
+  // also introduces the `source_repos` namespace and lets Step 3
+  // collapse/skip cleanly for invitees.
+  useEffect(() => {
+    if (!organizationId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const settings = await getContextTreeSetting(organizationId);
+        if (cancelled) return;
+        if (settings.repo) {
+          setExistingTreeUrl(settings.repo);
+          setTreeMode((m) => m ?? "existing");
+        }
+      } catch {
+        // Non-fatal — admins without the namespace bound (or non-admins
+        // who can't read it) just see the empty toggle, same as before.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [organizationId]);
+
+  const trimmedTreeUrl = existingTreeUrl.trim();
+  const isExistingUrlValid = (() => {
+    if (treeMode !== "existing") return true;
+    if (!trimmedTreeUrl) return false;
+    try {
+      const u = new URL(trimmedTreeUrl);
+      return u.protocol === "https:" || u.protocol === "http:";
+    } catch {
+      return false;
+    }
+  })();
+
+  const showSetupHiddenToast = useCallback(() => {
+    addToast({
+      title: "Setup hidden",
+      description:
+        "Resume any time in Settings → Setup. Your agent isn't bound to a source repo yet — add one in Agent settings when ready.",
+      action: { label: "Open settings", onClick: () => navigate("/settings/setup") },
+    });
+  }, [addToast, navigate]);
+
+  // "I'll do it later" — server dismiss + toast. Same recovery path as
+  // clicking the stepper `✕` (single source of truth, server-side flag).
+  // The toast also nudges the user about the unbound source repo (Plan B
+  // moves source picker into Step 3, so skipping leaves the agent without
+  // an explicit code repo binding).
+  const handleLater = useCallback(() => {
+    void reportOnboardingEvent("tree_intro_dismissed");
+    void dismissOnboarding();
+    showSetupHiddenToast();
+  }, [dismissOnboarding, showSetupHiddenToast]);
+
+  const handleContinue = useCallback(async () => {
+    if (!selectedRepoUrl) return;
+    if (!treeMode) return;
+    if (treeMode === "existing" && !isExistingUrlValid) return;
+    setError(null);
+    setBusy(true);
+    try {
+      // Resolve the onboarding agent in priority order:
+      //   1. The UUID stashed at Step 2 success.
+      //   2. Most recently created managed agent (UUID v7 sort desc).
+      //   3. Any non-human managed agent.
+      const stashedUuid = readOnboardingAgentUuid();
+      const managed = await listManagedAgents();
+      const nonHuman = managed.filter((a) => a.type !== "human");
+      const agent =
+        (stashedUuid ? managed.find((a) => a.uuid === stashedUuid) : undefined) ??
+        nonHuman.slice().sort((a, b) => b.uuid.localeCompare(a.uuid))[0] ??
+        managed[0];
+      if (!agent) {
+        throw new Error("No agent available to chat with — finish Step 2 first.");
+      }
+
+      // Plan B: bind the source repo to the agent NOW (before chat starts)
+      // so `prepareGitWorktrees` can clone it on session start. Step 2
+      // creates an unbound agent; Step 3 is where the binding happens.
+      // Sequential await — chat creation below races the runtime config
+      // PATCH otherwise.
+      const cfg = await getAgentConfig(agent.uuid);
+      await updateAgentConfig(agent.uuid, {
+        expectedVersion: cfg.version,
+        payload: { gitRepos: [{ url: selectedRepoUrl }] },
+      });
+
+      // Path A: persist the existing tree URL to the org NOW via the
+      // generic per-org settings surface (`context_tree` namespace). Agent
+      // will still write `.first-tree/local-tree.json` to the source repo
+      // via PR (proper binding), but Hub already has the URL cached so
+      // future agents in this org can find it without re-reading source
+      // files.
+      if (treeMode === "existing" && organizationId) {
+        try {
+          await putContextTreeSetting(organizationId, { repo: trimmedTreeUrl });
+        } catch (err) {
+          // Non-fatal — the agent will still bind in chat. Log + continue.
+          // eslint-disable-next-line no-console
+          console.warn("Step 3: PUT context_tree settings failed; agent will still proceed", err);
+        }
+      }
+
+      const chat = await createAgentChat(agent.uuid);
+      const bootstrap =
+        treeMode === "existing"
+          ? buildBindBootstrap(selectedRepoUrl, trimmedTreeUrl)
+          : buildCreateBootstrap(selectedRepoUrl);
+      try {
+        await sendChatMessage(chat.id, bootstrap);
+      } catch {
+        // intentionally non-fatal — user lands in the empty chat
+      }
+      void reportOnboardingEvent("tree_chat_started", {
+        agentUuid: agent.uuid,
+        chatId: chat.id,
+        treeMode,
+      });
+      // Step 3 launched — auto-dismiss the stepper so it doesn't linger
+      // above the user's first chat. No toast here (mid-success path).
+      void dismissOnboarding();
+      navigate(`/?c=${encodeURIComponent(chat.id)}`, { replace: false });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to start the tree-init chat");
+      setBusy(false);
+    }
+  }, [selectedRepoUrl, treeMode, isExistingUrlValid, trimmedTreeUrl, organizationId, navigate, dismissOnboarding]);
+
+  const canContinue = !!selectedRepoUrl && treeMode !== null && !busy && (treeMode === "new" || isExistingUrlValid);
+
+  const treeModeChosen = !!treeMode && (treeMode === "new" || isExistingUrlValid);
+
+  return (
+    <>
+      <p className="text-body" style={{ margin: 0, color: "var(--fg-3)", maxWidth: 720 }}>
+        Build the <span style={{ color: "var(--fg-2)" }}>context-tree</span> — your team&apos;s shared knowledge that
+        grows with your code.
+      </p>
+
+      <div style={{ marginTop: "var(--sp-5)", position: "relative" }}>
+        <StepRailLine />
+
+        <StepFrame number="01" state={selectedRepoUrl ? "complete" : "active"}>
+          <RepoPickerSection
+            disabled={busy}
+            repos={repos}
+            error={reposError}
+            selectedRepoUrl={selectedRepoUrl}
+            onSelect={setSelectedRepoUrl}
+          />
+        </StepFrame>
+
+        <StepFrame number="02" state={treeModeChosen ? "complete" : selectedRepoUrl ? "active" : "idle"}>
+          <h2
+            className="text-subtitle font-semibold"
+            style={{
+              margin: 0,
+              color: selectedRepoUrl ? "var(--fg)" : "var(--fg-4)",
+              fontWeight: selectedRepoUrl ? 600 : 500,
+            }}
+          >
+            Bind or create the tree
+          </h2>
+          {selectedRepoUrl ? (
+            <div style={{ marginTop: "var(--sp-3)", display: "flex", flexDirection: "column", gap: "var(--sp-3)" }}>
+              {/* Segmented toggle — two-option choice as a single inline
+                control instead of stacked radio cards. Real <input
+                type="radio"> sit under the labels for screen readers; the
+                visible "buttons" are styled labels. The conditional URL
+                input below grows in only when "Bind to existing" is the
+                active side, so the layout doesn't reserve dead space for
+                the "Create new" path. */}
+              <fieldset
+                aria-label="Bind or create the tree"
+                disabled={busy}
+                style={{
+                  display: "inline-flex",
+                  alignSelf: "flex-start",
+                  padding: "var(--sp-0_5)",
+                  margin: 0,
+                  background: "var(--surface-2)",
+                  border: "var(--hairline) solid var(--border-faint)",
+                  borderRadius: "var(--radius-input)",
+                  gap: "var(--sp-0_5)",
+                }}
+              >
+                <legend className="sr-only">Bind or create the tree</legend>
+                {(
+                  [
+                    { value: "existing", label: "Bind to an existing tree" },
+                    { value: "new", label: "Create a new tree" },
+                  ] as const
+                ).map((opt) => {
+                  const active = treeMode === opt.value;
+                  return (
+                    <label
+                      key={opt.value}
+                      className="text-body transition-colors"
+                      style={{
+                        padding: "var(--sp-1_5) var(--sp-3)",
+                        background: active ? "var(--bg)" : "transparent",
+                        borderRadius: "calc(var(--radius-input) - var(--sp-0_5))",
+                        color: active ? "var(--fg)" : "var(--fg-3)",
+                        fontWeight: active ? 600 : 400,
+                        boxShadow: active ? "var(--shadow-sm)" : "none",
+                        cursor: busy ? "not-allowed" : "pointer",
+                        userSelect: "none",
+                      }}
+                    >
+                      <input
+                        type="radio"
+                        name="tree-mode"
+                        value={opt.value}
+                        checked={active}
+                        onChange={() => setTreeMode(opt.value)}
+                        className="sr-only"
+                      />
+                      {opt.label}
+                    </label>
+                  );
+                })}
+              </fieldset>
+
+              {treeMode === "existing" ? (
+                <div className="flex flex-col" style={{ gap: "var(--sp-1)" }}>
+                  <label htmlFor="onboarding-existing-tree-url" className="text-label" style={{ color: "var(--fg-3)" }}>
+                    Tree GitHub URL
+                  </label>
+                  <input
+                    id="onboarding-existing-tree-url"
+                    type="url"
+                    value={existingTreeUrl}
+                    onChange={(e) => setExistingTreeUrl(e.target.value)}
+                    placeholder="https://github.com/your-org/your-tree"
+                    disabled={busy}
+                    className="text-body"
+                    style={{
+                      padding: "var(--sp-2) var(--sp-3)",
+                      background: "var(--bg)",
+                      border: "var(--hairline) solid var(--border)",
+                      borderRadius: "var(--radius-input)",
+                      color: "var(--fg)",
+                      outline: "none",
+                      fontFamily: "var(--font-mono)",
+                    }}
+                  />
+                </div>
+              ) : null}
+
+              {treeMode === "new" ? (
+                <p className="text-label" style={{ margin: 0, color: "var(--fg-3)" }}>
+                  Your agent will scaffold a new GitHub repo for the tree and bind it to your source repo.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+        </StepFrame>
+
+        <StepFrame number="03" state={treeModeChosen ? "active" : "idle"}>
+          <h2
+            className="text-subtitle font-semibold"
+            style={{
+              margin: 0,
+              color: treeModeChosen ? "var(--fg)" : "var(--fg-4)",
+              fontWeight: treeModeChosen ? 600 : 500,
+            }}
+          >
+            Let your agent build it
+          </h2>
+          {treeModeChosen ? (
+            <>
+              <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
+                It&apos;ll install the skill, set up the tree, and open a PR back to your source repo.
+              </p>
+
+              {error ? (
+                <div
+                  className="text-body"
+                  style={{
+                    marginTop: "var(--sp-3)",
+                    padding: "var(--sp-2_5) var(--sp-3)",
+                    background: "color-mix(in oklch, var(--state-error) 12%, transparent)",
+                    border: "var(--hairline) solid color-mix(in oklch, var(--state-error) 28%, transparent)",
+                    borderRadius: "var(--radius-input)",
+                    color: "var(--state-error)",
+                  }}
+                >
+                  {error}
+                </div>
+              ) : null}
+
+              <div className="flex" style={{ marginTop: "var(--sp-3)", gap: "var(--sp-2)" }}>
+                <Button type="button" disabled={!canContinue} onClick={() => void handleContinue()}>
+                  {busy ? "Starting…" : "Continue"}
+                </Button>
+                <Button type="button" variant="outline" onClick={handleLater} disabled={busy}>
+                  I&apos;ll do it later
+                </Button>
+              </div>
+            </>
+          ) : null}
+        </StepFrame>
+      </div>
+    </>
+  );
+}
+
+// ─── Shared Step 2 visual primitives ─────────────────────────────────────
+
+function RepoPickerSection({
+  disabled,
+  repos,
+  error,
+  selectedRepoUrl,
+  onSelect,
+}: {
+  disabled: boolean;
+  repos: GithubRepo[] | null;
+  error: string | null;
+  selectedRepoUrl: string | null;
+  onSelect: (url: string | null) => void;
+}) {
+  const heading = (
+    <h2
+      className="text-subtitle font-semibold"
+      style={{
+        color: disabled ? "var(--fg-4)" : "var(--fg)",
+        fontWeight: disabled ? 500 : 600,
+      }}
+    >
+      Pick the source repo
+    </h2>
+  );
+
+  if (disabled) {
+    return <div>{heading}</div>;
+  }
+
+  if (error) {
+    return (
+      <div style={{ animation: "subtle-fade 200ms ease-out" }}>
+        {heading}
+        <p className="text-label" style={{ color: "var(--fg-3)", marginTop: "var(--sp-2)" }}>
+          {error}. Reconnect your GitHub account to grant repo access.
+        </p>
+        <div style={{ marginTop: "var(--sp-2)" }}>
+          <Button type="button" variant="outline" size="sm" asChild>
+            <a href="/api/v1/auth/github/start?next=/">Reconnect GitHub</a>
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (repos === null) {
+    return (
+      <div style={{ animation: "subtle-fade 200ms ease-out" }}>
+        {heading}
+        <p className="text-label" style={{ color: "var(--fg-3)", marginTop: "var(--sp-2)" }}>
+          Loading your GitHub repositories…
+        </p>
+      </div>
+    );
+  }
+
+  if (repos.length === 0) {
+    return (
+      <div style={{ animation: "subtle-fade 200ms ease-out" }}>
+        {heading}
+        <p className="text-label" style={{ color: "var(--fg-3)", marginTop: "var(--sp-2)" }}>
+          No repositories found on your GitHub account. Create one and refresh this page.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ animation: "subtle-fade 200ms ease-out" }}>
+      {heading}
+      <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
+        The code your tree will organize knowledge about.
+      </p>
+      <RepoPickerPopover repos={repos} selectedRepoUrl={selectedRepoUrl} onSelect={onSelect} />
+    </div>
+  );
+}
+
+function RepoPickerPopover({
+  repos,
+  selectedRepoUrl,
+  onSelect,
+}: {
+  repos: GithubRepo[];
+  selectedRepoUrl: string | null;
+  onSelect: (url: string | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Click-outside + Escape, mirroring user-menu.tsx's popover pattern.
+  useEffect(() => {
+    if (!open) return;
+    const onMouseDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("mousedown", onMouseDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onMouseDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  // Group by owner — `<owner>/<repo>` is GitHub's canonical fullName, so
+  // splitting on the first `/` is reliable. Owners sorted alphabetically;
+  // repos within an owner keep server-returned order (most-recently-pushed
+  // first per `pushedAt desc`).
+  const groups = useMemo(() => {
+    const byOwner = new Map<string, GithubRepo[]>();
+    for (const r of repos) {
+      const owner = r.fullName.split("/")[0] ?? "";
+      const list = byOwner.get(owner);
+      if (list) list.push(r);
+      else byOwner.set(owner, [r]);
+    }
+    return [...byOwner.entries()].sort(([a], [b]) => a.localeCompare(b));
+  }, [repos]);
+
+  const selectedRepo = repos.find((r) => r.cloneUrl === selectedRepoUrl) ?? null;
+
+  return (
+    <div ref={ref} className="relative" style={{ marginTop: "var(--sp-2)" }}>
+      <button
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className="text-body"
+        style={{
+          width: "100%",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: "var(--sp-2)",
+          padding: "var(--sp-2) var(--sp-3)",
+          background: "var(--bg)",
+          border: "var(--hairline) solid var(--border)",
+          borderRadius: "var(--radius-input)",
+          color: selectedRepo ? "var(--fg)" : "var(--fg-3)",
+          outline: "none",
+          cursor: "pointer",
+          textAlign: "left",
+        }}
+      >
+        <span className="truncate" style={{ minWidth: 0, flex: 1 }}>
+          {selectedRepo ? selectedRepo.fullName : "Select a repository…"}
+        </span>
+        <ChevronDown
+          className="h-4 w-4"
+          style={{
+            color: "var(--fg-3)",
+            transition: "transform 120ms ease",
+            transform: open ? "rotate(180deg)" : "none",
+            flexShrink: 0,
+          }}
+        />
+      </button>
+
+      {open && (
+        <div
+          role="listbox"
+          aria-label="GitHub repository"
+          className="absolute z-30 rounded-md border bg-popover shadow-md"
+          style={{
+            top: "calc(100% + var(--sp-1))",
+            left: 0,
+            right: 0,
+            maxHeight: "min(56vh, 30rem)",
+            overflowY: "auto",
+            padding: "var(--sp-1) 0",
+          }}
+        >
+          {groups.map(([owner, ownerRepos], groupIdx) => (
+            <div key={owner}>
+              {groupIdx > 0 && (
+                <div
+                  aria-hidden="true"
+                  style={{
+                    margin: "var(--sp-1) 0",
+                    height: "var(--hairline)",
+                    background: "var(--border-faint)",
+                  }}
+                />
+              )}
+              <div
+                className="text-eyebrow"
+                style={{
+                  padding: "var(--sp-1) var(--sp-3)",
+                  color: "var(--fg-3)",
+                }}
+              >
+                {owner}
+              </div>
+              {ownerRepos.map((repo) => {
+                const selected = repo.cloneUrl === selectedRepoUrl;
+                const repoName = repo.fullName.slice(owner.length + 1);
+                return (
+                  <button
+                    key={repo.cloneUrl}
+                    type="button"
+                    role="option"
+                    aria-selected={selected}
+                    onClick={() => {
+                      onSelect(repo.cloneUrl);
+                      setOpen(false);
+                    }}
+                    className="text-body transition-colors w-full"
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "var(--sp-2)",
+                      padding: "var(--sp-1_5) var(--sp-3)",
+                      background: selected ? "var(--accent-bg)" : "transparent",
+                      color: selected ? "var(--accent)" : "var(--fg)",
+                      border: "none",
+                      cursor: "pointer",
+                      textAlign: "left",
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!selected) e.currentTarget.style.background = "var(--surface-1)";
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!selected) e.currentTarget.style.background = "transparent";
+                    }}
+                  >
+                    <span style={{ width: 14, display: "inline-flex", flexShrink: 0 }}>
+                      {selected ? <Check className="h-3.5 w-3.5" /> : null}
+                    </span>
+                    <span className="truncate" style={{ minWidth: 0, flex: 1 }}>
+                      {repoName}
+                    </span>
+                    {repo.private && (
+                      <span
+                        className="mono uppercase text-caption"
+                        style={{
+                          padding: "var(--hairline) var(--sp-1_75)",
+                          borderRadius: "var(--radius-chip)",
+                          color: "var(--fg-3)",
+                          border: "var(--hairline) solid var(--border)",
+                          background: "var(--bg-sunken)",
+                          flexShrink: 0,
+                        }}
+                      >
+                        private
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StepRailLine() {
   return (
     <div
@@ -630,10 +1548,6 @@ function StepFrame({
   );
 }
 
-/**
- * Shared command-box visual for Step 2. Shows a readable preview of the
- * connect line while keeping the full install + connect command copy-only.
- */
 function CommandBox({ command }: { command: string | null }) {
   const [copied, setCopied] = useState(false);
 
@@ -714,28 +1628,13 @@ function WaitingRow() {
   );
 }
 
-function ConnectedRow({ hostname }: { hostname: string }) {
-  return (
-    <div
-      className="inline-flex items-center text-body"
-      style={{
-        gap: "var(--sp-2)",
-        marginTop: "var(--sp-2_5)",
-        padding: "var(--sp-1_5) var(--sp-2_5)",
-        borderRadius: 999,
-        background: "color-mix(in oklch, var(--accent) 10%, transparent)",
-        color: "color-mix(in oklch, var(--accent) 26%, var(--fg))",
-        animation: "onboarding-pop 260ms cubic-bezier(0.2, 0.9, 0.2, 1.15)",
-      }}
-    >
-      <Check className="h-3.5 w-3.5" />
-      <span>
-        <span className="mono font-semibold">{hostname}</span> connected
-      </span>
-    </div>
-  );
-}
-
+/**
+ * "Powered by" runtime selector — appears under the connected-computer
+ * row in Step 2. Auto-pinned to the preferred runtime (Claude Code →
+ * Codex) via `pickPreferredRuntime`; the chips let the operator override
+ * if they want the other one. Renders nothing useful while capabilities
+ * are still loading or no `ok` runtime exists on the connected client.
+ */
 function RuntimeChips({
   runtimes,
   selected,
@@ -791,8 +1690,8 @@ function RuntimeChips({
                 aria-hidden="true"
                 className="inline-flex items-center justify-center"
                 style={{
-                  width: 14,
-                  height: 14,
+                  width: "var(--sp-3_5)",
+                  height: "var(--sp-3_5)",
                   borderRadius: "50%",
                   border: active ? "var(--hairline) solid var(--accent)" : "var(--hairline) solid var(--border-strong)",
                   background: active ? "color-mix(in oklch, var(--accent) 8%, transparent)" : "transparent",
@@ -805,8 +1704,8 @@ function RuntimeChips({
                 {active && (
                   <span
                     style={{
-                      width: 6,
-                      height: 6,
+                      width: "var(--sp-1_5)",
+                      height: "var(--sp-1_5)",
                       borderRadius: "50%",
                       background: "var(--accent)",
                     }}
@@ -818,6 +1717,28 @@ function RuntimeChips({
           );
         })}
       </fieldset>
+    </div>
+  );
+}
+
+function ConnectedRow({ hostname }: { hostname: string }) {
+  return (
+    <div
+      className="inline-flex items-center text-body"
+      style={{
+        gap: "var(--sp-2)",
+        marginTop: "var(--sp-2_5)",
+        padding: "var(--sp-1_5) var(--sp-2_5)",
+        borderRadius: 999,
+        background: "color-mix(in oklch, var(--accent) 10%, transparent)",
+        color: "color-mix(in oklch, var(--accent) 26%, var(--fg))",
+        animation: "onboarding-pop 260ms cubic-bezier(0.2, 0.9, 0.2, 1.15)",
+      }}
+    >
+      <Check className="h-3.5 w-3.5" />
+      <span>
+        <span className="mono font-semibold">{hostname}</span> connected
+      </span>
     </div>
   );
 }
@@ -892,7 +1813,7 @@ function TimeoutBody({
         <div className="text-body" style={{ color: "var(--fg-2)" }}>
           <p>This usually means:</p>
           <ul style={{ paddingLeft: "var(--sp-4)", listStyle: "disc", marginTop: "var(--sp-1_5)" }}>
-            <li>The runtime can't start on {computerLabel} (missing API key, etc.)</li>
+            <li>The runtime can&apos;t start on {computerLabel} (missing API key, etc.)</li>
             <li>The connection to {computerLabel} dropped</li>
           </ul>
           <p style={{ marginTop: "var(--sp-2)" }}>

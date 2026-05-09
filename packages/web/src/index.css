@@ -265,6 +265,7 @@
   --border-strong: oklch(0.82 0.008 150);
   --border-faint: oklch(0.94 0.005 150);
 
+  --shadow-sm: 0 1px 2px oklch(0 0 0 / 0.06);
   --shadow-md: 0 4px 12px oklch(0 0 0 / 0.08);
 
   /* State pairs for callouts / inline notices (light mode).
@@ -388,6 +389,7 @@
   --border-strong: oklch(0.34 0.01 150);
   --border-faint: oklch(0.2 0.006 150);
 
+  --shadow-sm: 0 1px 2px oklch(0 0 0 / 0.3);
   --shadow-md: 0 4px 12px oklch(0 0 0 / 0.4);
 
   /* State pairs — dark-mode variants (softer bg, higher-L fg for contrast). */
@@ -560,6 +562,17 @@
   }
   50% {
     transform: scaleY(1);
+  }
+}
+
+@keyframes toast-slide-in {
+  0% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 
