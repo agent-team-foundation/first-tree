@@ -1030,132 +1030,165 @@ function Step3IntroBody() {
   const canContinue = !!selectedRepoUrl && treeMode !== null && !busy && (treeMode === "new" || isExistingUrlValid);
 
   return (
-    <div className="flex flex-col" style={{ gap: "var(--sp-5)" }}>
-      <h1 className="text-title font-semibold" style={{ margin: 0, color: "var(--fg)" }}>
-        Build your context-tree
-      </h1>
-      <p className="text-body" style={{ margin: 0, color: "var(--fg-2)" }}>
-        Pick the source repo your agent will work on, then tell us whether your team already has a context-tree to bind
-        to or wants the agent to create one.
-      </p>
-
-      <RepoPickerSection
-        disabled={busy}
-        repos={repos}
-        error={reposError}
-        selectedRepoUrl={selectedRepoUrl}
-        onSelect={setSelectedRepoUrl}
-        agentName="your agent"
-      />
-
-      <fieldset
-        className="flex flex-col"
-        style={{ gap: "var(--sp-3)", margin: 0, padding: 0, border: "none" }}
-        disabled={busy || !selectedRepoUrl}
-      >
-        <legend className="text-label font-semibold" style={{ marginBottom: "var(--sp-1)", color: "var(--fg-2)" }}>
-          Do you already have a context-tree for this team?
-        </legend>
-
-        <label
-          className="flex items-start"
-          style={{
-            gap: "var(--sp-2)",
-            padding: "var(--sp-2_5) var(--sp-3)",
-            border: "var(--hairline) solid var(--border-faint)",
-            borderRadius: "var(--radius-input)",
-            background: treeMode === "existing" ? "var(--bg-active)" : "transparent",
-            cursor: "pointer",
-          }}
-        >
-          <input
-            type="radio"
-            name="tree-mode"
-            value="existing"
-            checked={treeMode === "existing"}
-            onChange={() => setTreeMode("existing")}
-            style={{ marginTop: "var(--sp-0_5)", flexShrink: 0 }}
-          />
-          <span className="flex-1 min-w-0" style={{ display: "flex", flexDirection: "column", gap: "var(--sp-1)" }}>
-            <span className="text-body" style={{ color: "var(--fg)" }}>
-              Yes, paste the GitHub URL
-            </span>
-            {treeMode === "existing" ? (
-              <input
-                type="url"
-                aria-label="Existing tree GitHub URL"
-                value={existingTreeUrl}
-                onChange={(e) => setExistingTreeUrl(e.target.value)}
-                placeholder="https://github.com/your-org/your-tree"
-                className="text-body"
-                style={{
-                  padding: "var(--sp-1_5) var(--sp-2_5)",
-                  background: "var(--bg)",
-                  border: "var(--hairline) solid var(--border)",
-                  borderRadius: "var(--radius-input)",
-                  color: "var(--fg)",
-                  outline: "none",
-                  fontFamily: "var(--font-mono)",
-                }}
-              />
-            ) : null}
-          </span>
-        </label>
-
-        <label
-          className="flex items-start"
-          style={{
-            gap: "var(--sp-2)",
-            padding: "var(--sp-2_5) var(--sp-3)",
-            border: "var(--hairline) solid var(--border-faint)",
-            borderRadius: "var(--radius-input)",
-            background: treeMode === "new" ? "var(--bg-active)" : "transparent",
-            cursor: "pointer",
-          }}
-        >
-          <input
-            type="radio"
-            name="tree-mode"
-            value="new"
-            checked={treeMode === "new"}
-            onChange={() => setTreeMode("new")}
-            style={{ marginTop: "var(--sp-0_5)", flexShrink: 0 }}
-          />
-          <span className="flex-1 min-w-0" style={{ display: "flex", flexDirection: "column", gap: "var(--sp-0_5)" }}>
-            <span className="text-body" style={{ color: "var(--fg)" }}>
-              No, let my agent create one
-            </span>
-            <span className="text-caption" style={{ color: "var(--fg-3)" }}>
-              The agent will scaffold a new GitHub repo for the tree and PR the binding back to your source repo.
-            </span>
-          </span>
-        </label>
-      </fieldset>
-
-      {error ? (
-        <div
-          className="text-body"
-          style={{
-            padding: "var(--sp-2_5) var(--sp-3)",
-            background: "color-mix(in oklch, var(--state-error) 12%, transparent)",
-            border: "var(--hairline) solid color-mix(in oklch, var(--state-error) 28%, transparent)",
-            borderRadius: "var(--radius-input)",
-            color: "var(--state-error)",
-          }}
-        >
-          {error}
-        </div>
-      ) : null}
-
-      <div className="flex" style={{ gap: "var(--sp-2)" }}>
-        <Button type="button" disabled={!canContinue} onClick={() => void handleContinue()}>
-          {busy ? "Starting…" : "Continue"}
-        </Button>
-        <Button type="button" variant="outline" onClick={handleLater} disabled={busy}>
-          I&apos;ll do it later
-        </Button>
+    <>
+      <div className="flex flex-col items-start" style={{ gap: "var(--sp-4)", paddingTop: 0 }}>
+        <p className="text-label" style={{ margin: 0, color: "var(--fg-3)", maxWidth: 420 }}>
+          <span style={{ color: "var(--fg-2)" }}>Final step</span>
+          <span style={{ color: "var(--fg-4)" }}> · </span>
+          Set up the shared knowledge base your agent reads and updates.
+        </p>
+        <h1 className="text-title font-semibold" style={{ margin: 0, color: "var(--fg)" }}>
+          Build your context-tree
+        </h1>
       </div>
-    </div>
+
+      <div style={{ marginTop: "var(--sp-5)", position: "relative" }}>
+        <StepRailLine />
+
+        <StepFrame number="01" state={selectedRepoUrl ? "complete" : "active"}>
+          <RepoPickerSection
+            disabled={busy}
+            repos={repos}
+            error={reposError}
+            selectedRepoUrl={selectedRepoUrl}
+            onSelect={setSelectedRepoUrl}
+            agentName="your agent"
+          />
+        </StepFrame>
+
+        <StepFrame
+          number="02"
+          state={
+            treeMode && (treeMode === "new" || isExistingUrlValid) ? "active" : selectedRepoUrl ? "active" : "idle"
+          }
+        >
+          <h2
+            className="text-subtitle font-semibold"
+            style={{
+              margin: 0,
+              color: selectedRepoUrl ? "var(--fg)" : "var(--fg-4)",
+              fontWeight: selectedRepoUrl ? 600 : 500,
+            }}
+          >
+            Do you already have a context-tree for this team?
+          </h2>
+          <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
+            If you've set one up before, paste its GitHub URL so your agent binds to it. Otherwise the agent will
+            scaffold a fresh tree and PR the binding back to your source repo.
+          </p>
+
+          <fieldset
+            className="flex flex-col"
+            style={{ gap: "var(--sp-3)", margin: "var(--sp-3) 0 0", padding: 0, border: "none" }}
+            disabled={busy || !selectedRepoUrl}
+          >
+            <legend className="sr-only">Existing context-tree?</legend>
+
+            <label
+              className="flex items-start"
+              style={{
+                gap: "var(--sp-2)",
+                padding: "var(--sp-2_5) var(--sp-3)",
+                border: "var(--hairline) solid var(--border-faint)",
+                borderRadius: "var(--radius-input)",
+                background: treeMode === "existing" ? "var(--bg-active)" : "transparent",
+                cursor: selectedRepoUrl ? "pointer" : "not-allowed",
+              }}
+            >
+              <input
+                type="radio"
+                name="tree-mode"
+                value="existing"
+                checked={treeMode === "existing"}
+                onChange={() => setTreeMode("existing")}
+                style={{ marginTop: "var(--sp-0_5)", flexShrink: 0 }}
+              />
+              <span className="flex-1 min-w-0" style={{ display: "flex", flexDirection: "column", gap: "var(--sp-1)" }}>
+                <span className="text-body" style={{ color: "var(--fg)" }}>
+                  Yes, paste the GitHub URL
+                </span>
+                {treeMode === "existing" ? (
+                  <input
+                    type="url"
+                    aria-label="Existing tree GitHub URL"
+                    value={existingTreeUrl}
+                    onChange={(e) => setExistingTreeUrl(e.target.value)}
+                    placeholder="https://github.com/your-org/your-tree"
+                    className="text-body"
+                    style={{
+                      padding: "var(--sp-1_5) var(--sp-2_5)",
+                      background: "var(--bg)",
+                      border: "var(--hairline) solid var(--border)",
+                      borderRadius: "var(--radius-input)",
+                      color: "var(--fg)",
+                      outline: "none",
+                      fontFamily: "var(--font-mono)",
+                    }}
+                  />
+                ) : null}
+              </span>
+            </label>
+
+            <label
+              className="flex items-start"
+              style={{
+                gap: "var(--sp-2)",
+                padding: "var(--sp-2_5) var(--sp-3)",
+                border: "var(--hairline) solid var(--border-faint)",
+                borderRadius: "var(--radius-input)",
+                background: treeMode === "new" ? "var(--bg-active)" : "transparent",
+                cursor: selectedRepoUrl ? "pointer" : "not-allowed",
+              }}
+            >
+              <input
+                type="radio"
+                name="tree-mode"
+                value="new"
+                checked={treeMode === "new"}
+                onChange={() => setTreeMode("new")}
+                style={{ marginTop: "var(--sp-0_5)", flexShrink: 0 }}
+              />
+              <span
+                className="flex-1 min-w-0"
+                style={{ display: "flex", flexDirection: "column", gap: "var(--sp-0_5)" }}
+              >
+                <span className="text-body" style={{ color: "var(--fg)" }}>
+                  No, let my agent create one
+                </span>
+                <span className="text-caption" style={{ color: "var(--fg-3)" }}>
+                  The agent will scaffold a new GitHub repo for the tree and PR the binding back to your source repo.
+                </span>
+              </span>
+            </label>
+          </fieldset>
+
+          {error ? (
+            <div
+              className="text-body"
+              style={{
+                marginTop: "var(--sp-3)",
+                padding: "var(--sp-2_5) var(--sp-3)",
+                background: "color-mix(in oklch, var(--state-error) 12%, transparent)",
+                border: "var(--hairline) solid color-mix(in oklch, var(--state-error) 28%, transparent)",
+                borderRadius: "var(--radius-input)",
+                color: "var(--state-error)",
+              }}
+            >
+              {error}
+            </div>
+          ) : null}
+
+          <div className="flex" style={{ marginTop: "var(--sp-4)", gap: "var(--sp-2)" }}>
+            <Button type="button" disabled={!canContinue} onClick={() => void handleContinue()}>
+              {busy ? "Starting…" : "Continue"}
+            </Button>
+            <Button type="button" variant="outline" onClick={handleLater} disabled={busy}>
+              I&apos;ll do it later
+            </Button>
+          </div>
+        </StepFrame>
+      </div>
+    </>
   );
 }
 
