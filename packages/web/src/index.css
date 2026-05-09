@@ -580,6 +580,24 @@
   animation: subtle-fade 180ms ease-out;
 }
 
+/*
+ * Settings → Save affordance. Hairline-bordered ✓ button that sits flush
+ * next to its input. Rest state is just the outline so the row stays
+ * light; hover lifts ink + fills with the sunken bg so the active state
+ * reads as clearly clickable. Focus-visible swaps the border for the
+ * accent ring (subtle but unmistakable for keyboard users).
+ */
+.settings-save-button:hover:not(:disabled) {
+  color: var(--fg);
+  background: var(--bg-sunken);
+  border-color: var(--fg-4);
+}
+
+.settings-save-button:focus-visible {
+  outline: var(--hairline-bold) solid var(--accent-ring);
+  outline-offset: var(--sp-0_5);
+}
+
 .onboarding-runtime-option {
   border-radius: var(--radius-input);
   outline: var(--hairline) solid transparent;

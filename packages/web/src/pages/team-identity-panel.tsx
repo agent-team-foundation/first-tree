@@ -3,8 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useEffect, useState } from "react";
 import { getOrganization, updateOrganization } from "../api/organizations.js";
 import { useAuth } from "../auth/auth-context.js";
-import { Button } from "../components/ui/button.js";
-import { SettingsField } from "../components/ui/settings-field.js";
+import { SettingsField, SettingsSaveButton } from "../components/ui/settings-field.js";
 import { SettingsSection } from "../components/ui/settings-section.js";
 
 /**
@@ -71,11 +70,7 @@ export function TeamIdentityPanel({ isFirst = false }: { isFirst?: boolean }) {
             value={displayName}
             onChange={setDisplayName}
             saved={saved}
-            rightSlot={
-              <Button type="submit" size="sm" variant="outline" disabled={mutation.isPending || !orgQuery.data}>
-                {mutation.isPending ? "Saving…" : "Save"}
-              </Button>
-            }
+            rightSlot={<SettingsSaveButton pending={mutation.isPending} disabled={!orgQuery.data} />}
           />
           {mutation.error instanceof Error && (
             <div className="text-body" style={{ color: "var(--state-error)" }}>

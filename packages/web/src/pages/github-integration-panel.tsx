@@ -4,7 +4,7 @@ import { type FormEvent, useState } from "react";
 import { getGithubIntegrationSetting, putGithubIntegrationSetting } from "../api/org-settings.js";
 import { useAuth } from "../auth/auth-context.js";
 import { Button } from "../components/ui/button.js";
-import { SettingsField } from "../components/ui/settings-field.js";
+import { SettingsField, SettingsSaveButton } from "../components/ui/settings-field.js";
 import { SettingsSection } from "../components/ui/settings-section.js";
 
 /**
@@ -122,11 +122,7 @@ export function GithubIntegrationPanel({ isFirst = false }: { isFirst?: boolean 
               type="password"
               placeholder={replacing ? "Enter new secret" : "(none)"}
               saved={saved}
-              rightSlot={
-                <Button type="submit" size="sm" variant="outline" disabled={mutation.isPending || !settingQuery.data}>
-                  {mutation.isPending ? "Saving…" : "Save"}
-                </Button>
-              }
+              rightSlot={<SettingsSaveButton pending={mutation.isPending} disabled={!settingQuery.data} />}
             />
           )}
           {mutation.error instanceof Error && (
