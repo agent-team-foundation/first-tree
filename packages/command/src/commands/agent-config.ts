@@ -3,6 +3,7 @@ import type { AgentRuntimeConfig, AgentRuntimeConfigPayload } from "@agent-team-
 import type { Command } from "commander";
 import { fail, success } from "../cli/output.js";
 import { ensureFreshAdminToken, resolveServerUrl } from "../core/bootstrap.js";
+import { cliFetch } from "../core/cli-fetch.js";
 
 /**
  * `first-tree-hub agent config ...` subcommands.
@@ -18,7 +19,7 @@ import { ensureFreshAdminToken, resolveServerUrl } from "../core/bootstrap.js";
 type ResolvedAgent = { uuid: string; name: string | null; displayName: string | null };
 
 async function resolveAgentRecord(serverUrl: string, adminToken: string, agentName: string): Promise<ResolvedAgent> {
-  const res = await fetch(`${serverUrl}/api/v1/me/managed-agents`, {
+  const res = await cliFetch(`${serverUrl}/api/v1/me/managed-agents`, {
     headers: { Authorization: `Bearer ${adminToken}` },
     signal: AbortSignal.timeout(10_000),
   });
@@ -35,7 +36,7 @@ async function resolveAgentRecord(serverUrl: string, adminToken: string, agentNa
 
 async function adminFetch<T>(url: string, init: RequestInit & { adminToken: string }): Promise<T> {
   const { adminToken, headers, ...rest } = init;
-  const res = await fetch(url, {
+  const res = await cliFetch(url, {
     ...rest,
     headers: {
       Authorization: `Bearer ${adminToken}`,

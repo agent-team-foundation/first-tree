@@ -67,3 +67,12 @@ export function resolveCommandVersion(moduleUrl: string = import.meta.url): stri
 }
 
 export const COMMAND_VERSION: string = resolveCommandVersion();
+
+/**
+ * `User-Agent` string sent on every CLI-originated HTTP request (SDK fetches,
+ * `/auth/refresh`, etc.). Without this Node defaults to `User-Agent: node`,
+ * which hides install / version / platform context from server-side trace
+ * backends — see issue #246. The format follows RFC 7231 §5.5.3 conventions
+ * (`product/version (comment)`).
+ */
+export const CLI_USER_AGENT = `first-tree-hub-cli/${COMMAND_VERSION} (${process.platform} ${process.arch})`;

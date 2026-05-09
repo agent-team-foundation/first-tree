@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ClientCapabilities, RuntimeProvider } from "@agent-team-foundation/first-tree-hub-shared";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { cliFetch } from "./cli-fetch.js";
 
 type LogFn = (level: "info" | "warn", msg: string) => void;
 
@@ -24,7 +25,7 @@ export async function reconcileLocalRuntimeProviders(opts: {
   agentsDir: string;
   log?: LogFn;
 }): Promise<void> {
-  const res = await fetch(`${opts.serverUrl}/api/v1/me/pinned-agents`, {
+  const res = await cliFetch(`${opts.serverUrl}/api/v1/me/pinned-agents`, {
     headers: { Authorization: `Bearer ${opts.accessToken}` },
   });
   if (!res.ok) {
@@ -77,7 +78,7 @@ export async function uploadClientCapabilities(opts: {
   clientId: string;
   capabilities: ClientCapabilities;
 }): Promise<void> {
-  const res = await fetch(`${opts.serverUrl}/api/v1/clients/${encodeURIComponent(opts.clientId)}/capabilities`, {
+  const res = await cliFetch(`${opts.serverUrl}/api/v1/clients/${encodeURIComponent(opts.clientId)}/capabilities`, {
     method: "PATCH",
     headers: {
       Authorization: `Bearer ${opts.accessToken}`,

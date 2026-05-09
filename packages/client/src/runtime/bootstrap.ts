@@ -17,6 +17,7 @@ export async function syncContextTree(
   serverUrl: string,
   getAccessToken: AccessTokenProvider,
   log: (msg: string) => void,
+  userAgent?: string,
 ): Promise<string | null> {
   // 1. Check git is available
   try {
@@ -30,7 +31,7 @@ export async function syncContextTree(
   let repo: string;
   let branch: string;
   try {
-    const sdk = new FirstTreeHubSDK({ serverUrl, getAccessToken });
+    const sdk = new FirstTreeHubSDK({ serverUrl, getAccessToken, userAgent });
     const config = await sdk.getContextTreeConfig();
     if (!config.repo) {
       log("Context Tree sync skipped: not configured on server");

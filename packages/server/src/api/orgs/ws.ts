@@ -112,7 +112,11 @@ export function orgWsRoutes(notifier: Notifier, jwtSecret: string) {
 
   return async (app: FastifyInstance): Promise<void> => {
     app.get<{ Params: { orgId: string } }>("/", { websocket: true }, async (socket, request) => {
-      startWsConnectionSpan(socket, { remoteIp: request.ip });
+      const ua = request.headers["user-agent"];
+      startWsConnectionSpan(socket, {
+        remoteIp: request.ip,
+        userAgent: typeof ua === "string" ? ua.slice(0, 200) : undefined,
+      });
 
       const orgIdFromPath = (request.params as { orgId?: string }).orgId;
       const token = (request.query as Record<string, string>).token;

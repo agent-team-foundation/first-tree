@@ -38,6 +38,14 @@ export type SdkConfig = {
    * `request.agent`. Omit for admin/member-only calls (/me, /auth/*).
    */
   agentId?: string;
+  /**
+   * Optional `User-Agent` header sent on every request. Without it Node's
+   * default `User-Agent: node` lands in trace backends — useless for forensics
+   * (issue #246). Construction lives in the caller (typically the `command`
+   * package's `CLI_USER_AGENT` constant) so the SDK has no compile-time
+   * dependency on a specific CLI version or platform discovery.
+   */
+  userAgent?: string;
 };
 
 export type RegisterResult = {
@@ -75,11 +83,13 @@ export class FirstTreeHubSDK {
   private readonly _baseUrl: string;
   private readonly getAccessToken: AccessTokenProvider;
   private readonly _agentId: string | undefined;
+  private readonly _userAgent: string | undefined;
 
   constructor(config: SdkConfig) {
     this._baseUrl = config.serverUrl.replace(/\/+$/, "");
     this.getAccessToken = config.getAccessToken;
     this._agentId = config.agentId;
+    this._userAgent = config.userAgent;
   }
 
   /** Server base URL (without trailing slash). */
@@ -139,7 +149,12 @@ export class FirstTreeHubSDK {
   async isHubReachable(timeoutMs = 3_000): Promise<boolean> {
     try {
       const url = `${this._baseUrl}/api/v1/health`;
-      const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+      // Health is anonymous — can't go through `doFetch` (which calls
+      // `getAccessToken`). Stamp UA explicitly so this anonymous probe
+      // is grouped with the rest of the install's traffic in trace backends.
+      const headers: Record<string, string> = {};
+      if (this._userAgent) headers["User-Agent"] = this._userAgent;
+      const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs), headers });
       return response.ok;
     } catch {
       return false;
@@ -220,6 +235,9 @@ export class FirstTreeHubSDK {
     };
     if (this._agentId) {
       headers[AGENT_SELECTOR_HEADER] = this._agentId;
+    }
+    if (this._userAgent) {
+      headers["User-Agent"] = this._userAgent;
     }
     if (init?.body) {
       headers["Content-Type"] = "application/json";

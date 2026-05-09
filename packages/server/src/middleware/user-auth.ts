@@ -4,6 +4,7 @@ import { jwtVerify } from "jose";
 import type { Database } from "../db/connection.js";
 import { users } from "../db/schema/users.js";
 import { UnauthorizedError } from "../errors.js";
+import { classifyJoseError, decodeJwtForTrace, untrustedAttrs } from "../observability/jwt-trace.js";
 
 /**
  * Replaces `memberAuthHook`. Verifies the JWT, confirms the user is still
@@ -32,9 +33,12 @@ export function userAuthHook(db: Database, jwtSecret: string) {
     try {
       const { payload: p } = await jwtVerify(token, secret);
       payload = p as typeof payload;
-    } catch {
+    } catch (err) {
+      // see jwt-trace.ts for the trace-only safety contract
+      const untrusted = decodeJwtForTrace(token);
       throw new UnauthorizedError("Invalid or expired token", {
-        "auth.failure_reason": "jwt_verify_failed",
+        "auth.failure_reason": classifyJoseError(err),
+        ...untrustedAttrs("auth", untrusted),
       });
     }
 

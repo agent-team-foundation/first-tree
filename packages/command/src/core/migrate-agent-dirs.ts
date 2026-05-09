@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, renameSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
+import { cliFetch } from "./cli-fetch.js";
 import { print } from "./output.js";
 
 /**
@@ -69,7 +70,7 @@ export function createApiNameResolver(serverUrl: string, getAccessToken: () => P
     const map = new Map<string, string | null>();
     // /me/managed-agents — cross-org, returns all agents the user
     // personally manages in a single response (no pagination).
-    const res = await fetch(`${serverUrl}/api/v1/me/managed-agents`, {
+    const res = await cliFetch(`${serverUrl}/api/v1/me/managed-agents`, {
       method: "GET",
       headers: { Authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(10_000),

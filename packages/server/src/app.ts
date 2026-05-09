@@ -65,6 +65,7 @@ import {
   applyLoggerConfig,
   attachRequestContext,
   bodyCaptureOnSendHook,
+  buildRateLimitError,
   createLogger,
   currentTraceId,
   observabilityPlugin,
@@ -296,10 +297,16 @@ export async function buildApp(config: Config) {
   // `hook: "preHandler"` runs the limiter after route-level onRequest hooks
   // (memberAuth, agentSelector) so per-route keyGenerators can read
   // `req.user` / `req.agent` populated by those hooks.
+  //
+  // `errorResponseBuilder` runs during the rate-limit throw path, before
+  // setErrorHandler enriches with traceId. The body of the builder lives
+  // in observability/rate-limit-error-builder.ts so the span-stamping
+  // side effect can be unit-tested without booting an app.
   await app.register(rateLimit, {
     max: config.rateLimit?.max ?? 100,
     timeWindow: "1 minute",
     hook: "preHandler",
+    errorResponseBuilder: buildRateLimitError,
   });
 
   // Body-capture onSend hook — opt-in per route via `config: { otelRecordBody: true }`

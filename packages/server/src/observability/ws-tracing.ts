@@ -39,12 +39,21 @@ export function startWsConnectionSpan(
     clientId?: string;
     organizationId?: string;
     remoteIp?: string;
+    /**
+     * `User-Agent` from the WS upgrade request. Stamped under the same
+     * `http.user_agent` key as HTTP root spans so dashboards can `group by`
+     * one attribute across both transports — important for upgrade-time
+     * failures (4401 close, expired token) that fire before the `client:register`
+     * frame would have supplied `clientId`. Issue #246.
+     */
+    userAgent?: string;
   } = {},
 ): void {
   const span = startTrackedSpan("ws.connection", {
     [FIRST_TREE_HUB_ATTR.CLIENT_ID]: attrs.clientId,
     [FIRST_TREE_HUB_ATTR.ORGANIZATION_ID]: attrs.organizationId,
     [FIRST_TREE_HUB_ATTR.WS_REMOTE_IP]: attrs.remoteIp,
+    [FIRST_TREE_HUB_ATTR.HTTP_USER_AGENT]: attrs.userAgent,
   });
   if (!span) return;
   const ctx = trace.setSpan(otelContext.active(), span);
