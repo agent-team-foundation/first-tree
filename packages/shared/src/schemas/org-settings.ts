@@ -26,9 +26,12 @@ import { z } from "zod";
 // explicit `null` form. Users who want to clear a field send `null`,
 // users who pass `""` get a validation error from `min(1)` below.
 
-// -- context_tree --
-
-const orgContextTreeRepoUrlSchema = z
+// Shared URL schema for repo URLs persisted in per-org settings — HTTPS-only
+// and free of embedded credentials. Used by both `context_tree.repo` and
+// `source_repos[].url`. Both end up cloned by user agents, so both face the
+// same hazards: `http://` enables MITM-able clones, and credentialed URLs
+// (`https://user:pass@host/...`) leak secrets through logs / API responses.
+const httpsRepoUrlSchema = z
   .string()
   .url()
   .refine(
@@ -40,7 +43,7 @@ const orgContextTreeRepoUrlSchema = z
         return false;
       }
     },
-    { message: "Context Tree repo URL must use HTTPS." },
+    { message: "Repo URL must use HTTPS." },
   )
   .refine(
     (value) => {
@@ -51,17 +54,19 @@ const orgContextTreeRepoUrlSchema = z
         return false;
       }
     },
-    { message: "Context Tree repo URL must not include credentials." },
+    { message: "Repo URL must not include credentials." },
   );
 
+// -- context_tree --
+
 export const orgContextTreeStorageSchema = z.object({
-  repo: orgContextTreeRepoUrlSchema.optional(),
+  repo: httpsRepoUrlSchema.optional(),
   branch: z.string().default("main"),
 });
 
 export const orgContextTreeInputSchema = z.object({
   /** Set / replace (must be an HTTPS URL without credentials). `null` clears. `undefined` leaves unchanged. */
-  repo: orgContextTreeRepoUrlSchema.nullish(),
+  repo: httpsRepoUrlSchema.nullish(),
   /** Set / replace (non-empty). `null` clears (server falls back to "main"). `undefined` leaves unchanged. */
   branch: z.string().min(1).nullish(),
 });
@@ -101,20 +106,95 @@ export const orgGithubIntegrationOutputSchema = z.object({
   webhookUrl: z.string(),
 });
 
+// -- source_repos --
+
+export const orgSourceReposStorageSchema = z.object({
+  repos: z
+    .array(
+      z.object({
+        url: httpsRepoUrlSchema,
+        defaultBranch: z.string().optional(),
+      }),
+    )
+    .default([]),
+});
+
+export const orgSourceReposInputSchema = z.object({
+  /**
+   * Replace the full repo list. `undefined` leaves the existing list
+   * unchanged. `[]` clears it. There is no per-entry input form yet —
+   * onboarding writes the whole list each time, and the Team Settings
+   * card removes by re-PUTting the surviving entries.
+   *
+   * `url` reuses `httpsRepoUrlSchema` — same HTTPS-only / no-credentials
+   * hardening as `context_tree.repo`. `defaultBranch` is `min(1)` here on
+   * the input boundary — the storage schema is wider so historical /
+   * backfilled rows with an empty `defaultBranch` aren't rejected on read.
+   */
+  repos: z
+    .array(
+      z.object({
+        url: httpsRepoUrlSchema,
+        defaultBranch: z.string().min(1).optional(),
+      }),
+    )
+    .optional(),
+});
+
+export const orgSourceReposOutputSchema = z.object({
+  repos: z.array(
+    z.object({
+      url: z.string(),
+      defaultBranch: z.string().optional(),
+    }),
+  ),
+});
+
 // -- registry --
+
+/**
+ * GET-side ACL per namespace.
+ *   "admin"  — only org admins can read. Use when the masked output still
+ *              leaks "configured / not-configured" booleans for secret
+ *              fields, or any other admin-only signal.
+ *   "member" — any active org member can read. Use for namespaces with no
+ *              secret fields where members legitimately need the value
+ *              (e.g. invitee Step 3 reads `context_tree.repo` to show the
+ *              team's bound tree before joining; same for `source_repos`).
+ *
+ * Write-side (PUT / DELETE) is always admin-only — non-admins must not
+ * mutate org-wide config regardless of namespace policy.
+ */
+export type OrgSettingReadPolicy = "admin" | "member";
 
 export const ORG_SETTINGS_NAMESPACES = {
   context_tree: {
     storage: orgContextTreeStorageSchema,
     input: orgContextTreeInputSchema,
     output: orgContextTreeOutputSchema,
+    readPolicy: "member",
   },
   github_integration: {
     storage: orgGithubIntegrationStorageSchema,
     input: orgGithubIntegrationInputSchema,
     output: orgGithubIntegrationOutputSchema,
+    readPolicy: "admin",
   },
-} as const;
+  source_repos: {
+    storage: orgSourceReposStorageSchema,
+    input: orgSourceReposInputSchema,
+    output: orgSourceReposOutputSchema,
+    readPolicy: "member",
+  },
+} as const satisfies Record<
+  string,
+  {
+    storage: z.ZodTypeAny;
+    input: z.ZodTypeAny;
+    output: z.ZodTypeAny;
+    readPolicy: OrgSettingReadPolicy;
+  }
+>;
 
 export const ORG_SETTINGS_NAMESPACE_KEYS = Object.keys(ORG_SETTINGS_NAMESPACES) as ReadonlyArray<
   keyof typeof ORG_SETTINGS_NAMESPACES
@@ -133,6 +213,10 @@ export type OrgContextTreeOutput = OrgSettingOutput<"context_tree">;
 export type OrgGithubIntegrationStorage = OrgSettingStorage<"github_integration">;
 export type OrgGithubIntegrationInput = OrgSettingInput<"github_integration">;
 export type OrgGithubIntegrationOutput = OrgSettingOutput<"github_integration">;
+
+export type OrgSourceReposStorage = OrgSettingStorage<"source_repos">;
+export type OrgSourceReposInput = OrgSettingInput<"source_repos">;
+export type OrgSourceReposOutput = OrgSettingOutput<"source_repos">;
 
 export const orgSettingNamespaceSchema = z.enum(
   ORG_SETTINGS_NAMESPACE_KEYS as [OrgSettingNamespace, ...OrgSettingNamespace[]],

@@ -345,7 +345,11 @@ export {
   type OrgSettingInput,
   type OrgSettingNamespace,
   type OrgSettingOutput,
+  type OrgSettingReadPolicy,
   type OrgSettingStorage,
+  type OrgSourceReposInput,
+  type OrgSourceReposOutput,
+  type OrgSourceReposStorage,
   orgContextTreeInputSchema,
   orgContextTreeOutputSchema,
   orgContextTreeStorageSchema,
@@ -353,6 +357,9 @@ export {
   orgGithubIntegrationOutputSchema,
   orgGithubIntegrationStorageSchema,
   orgSettingNamespaceSchema,
+  orgSourceReposInputSchema,
+  orgSourceReposOutputSchema,
+  orgSourceReposStorageSchema,
 } from "./schemas/org-settings.js";
 export {
   type CreateOrganization,

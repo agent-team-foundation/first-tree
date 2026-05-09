@@ -1,11 +1,12 @@
 import {
   isOrgSettingNamespace,
+  ORG_SETTINGS_NAMESPACES,
   type OrgSettingNamespace,
   type OrgSettingOutput,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import type { FastifyInstance } from "fastify";
 import { BadRequestError } from "../../errors.js";
-import { requireOrgAdmin } from "../../scope/require-org.js";
+import { requireOrgAdmin, requireOrgMembership } from "../../scope/require-org.js";
 import * as orgSettingsService from "../../services/org-settings.js";
 
 /**
@@ -16,14 +17,21 @@ import * as orgSettingsService from "../../services/org-settings.js";
  * adding a new config group only requires registering it there — no new
  * route file.
  *
- * All three verbs are admin-only. Even GET, because the masked output
- * still leaks "configured / not-configured" booleans for secret fields,
- * which we don't want to expose to non-admin members.
+ * GET gating is per-namespace via `readPolicy` in the registry: namespaces
+ * with no secret fields (`context_tree`, `source_repos`) are readable by
+ * any active org member, so an invitee can see what tree and repos the
+ * team is bound to before joining the chat. Namespaces whose masked output
+ * still leaks a `…Configured` boolean (`github_integration`) stay
+ * admin-only. PUT and DELETE are always admin-only regardless of
+ * namespace — non-admins must never mutate org-wide config.
  */
 export async function orgSettingsRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { orgId: string; namespace: string } }>("/:namespace", async (request) => {
-    const scope = await requireOrgAdmin(request, app.db);
     const namespace = parseNamespace(request.params.namespace);
+    const scope =
+      ORG_SETTINGS_NAMESPACES[namespace].readPolicy === "member"
+        ? await requireOrgMembership(request, app.db)
+        : await requireOrgAdmin(request, app.db);
     const out = await orgSettingsService.getOrgSetting(app.db, scope.organizationId, namespace);
     return enrichOutput(namespace, out, scope.organizationId, app.config.server.publicUrl);
   });

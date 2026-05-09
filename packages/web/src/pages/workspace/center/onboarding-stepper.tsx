@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { useAuth } from "../../../auth/auth-context.js";
 import { useToast } from "../../../components/ui/toast.js";
-import { readStep1Confirmed } from "../../../utils/onboarding-flags.js";
+import { readOnboardingJoinPath, readStep1Confirmed } from "../../../utils/onboarding-flags.js";
 
 /**
  * OnboardingStepper — the 3-step progress indicator that lives above
@@ -48,6 +48,13 @@ export function OnboardingStepper() {
   // each render is cheap (sessionStorage.getItem is sync) and keeps the
   // stepper visuals consistent with whichever body the view chose to show.
   const step1Confirmed = readStep1Confirmed();
+  // Invitees skip Step 1 entirely — the team already exists, OnboardingView
+  // jumps straight to Step2Body. Treat invite path as Step 1 inherently
+  // confirmed so the stepper highlights the body actually rendering. Without
+  // this the stepper sticks on Step 1 forever for invitees because they
+  // never go through Step1Body's Continue handler that sets `step1Confirmed`.
+  const joinPath = readOnboardingJoinPath();
+  const isInvitee = joinPath === "invite";
 
   const activeStep = useMemo<StepIndex>(() => {
     if (stepOverride === "team") return 1;
@@ -59,9 +66,10 @@ export function OnboardingStepper() {
     // onboardingStep === "connect": team auto-created at OAuth but the
     // user may not have confirmed Step 1 yet. Honor the per-tab flag so
     // the stepper Active circle matches the body actually rendering.
-    if (onboardingStep === "connect" && !step1Confirmed) return 1;
+    // Invitees inherit a confirmed Step 1 (team is pre-existing, no rename).
+    if (onboardingStep === "connect" && !step1Confirmed && !isInvitee) return 1;
     return 2;
-  }, [stepOverride, selectedChatId, onboardingStep, step1Confirmed]);
+  }, [stepOverride, selectedChatId, onboardingStep, step1Confirmed, isInvitee]);
 
   // A user with no auth is irrelevant here — onboardingStep null implies
   // the /me round-trip hasn't landed yet; render nothing rather than a
@@ -80,8 +88,8 @@ export function OnboardingStepper() {
     void dismissOnboarding();
     addToast({
       title: "Setup hidden",
-      description: "Resume any time in Settings → Setup.",
-      action: { label: "Open settings", onClick: () => navigate("/settings/setup") },
+      description: "Resume any time in Settings → Onboarding.",
+      action: { label: "Open settings", onClick: () => navigate("/settings/onboarding") },
     });
   };
 
