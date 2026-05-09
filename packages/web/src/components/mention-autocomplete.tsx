@@ -68,6 +68,31 @@ export function shouldShowHandle(c: MentionCandidate, ambiguous: Set<string>): b
   return ambiguous.has(c.displayName);
 }
 
+/**
+ * Single-line candidate label used by every mention-style picker
+ * (autocomplete popover, ParticipantsHeader [+] dropdown, NewChatDraft
+ * chip-add dropdown). Centralizes the display-name + conditional
+ * `@<handle>` rendering so the format only needs to change in one
+ * place.
+ *
+ * Caller is responsible for the surrounding `<button>` / wrapper
+ * (click handlers, `title` attribute, hover/active state) — the label
+ * intentionally stays presentational.
+ */
+export function MentionLabel({ candidate, ambiguous }: { candidate: MentionCandidate; ambiguous: Set<string> }) {
+  const fallback = candidate.name ? `@${candidate.name}` : "—";
+  return (
+    <>
+      <span className="font-medium">{candidate.displayName ?? fallback}</span>
+      {shouldShowHandle(candidate, ambiguous) && (
+        <span className="mono text-caption" style={{ color: "var(--fg-3)" }}>
+          @{candidate.name}
+        </span>
+      )}
+    </>
+  );
+}
+
 type ActiveTrigger = {
   /** Text index of the leading `@` (the char at `triggerIndex` is `@`). */
   triggerIndex: number;
@@ -331,7 +356,6 @@ export function MentionAutocompletePopover({
         const ambiguous = ambiguousDisplayNames(results);
         return results.map((c, i) => {
           const active = i === highlightIndex;
-          const showHandle = shouldShowHandle(c, ambiguous);
           return (
             <button
               key={c.agentId}
@@ -355,12 +379,7 @@ export function MentionAutocompletePopover({
                 whiteSpace: "nowrap",
               }}
             >
-              <span className="font-medium">{c.displayName ?? (c.name ? `@${c.name}` : "—")}</span>
-              {showHandle && (
-                <span className="mono text-caption" style={{ color: "var(--fg-3)" }}>
-                  @{c.name}
-                </span>
-              )}
+              <MentionLabel candidate={c} ambiguous={ambiguous} />
             </button>
           );
         });

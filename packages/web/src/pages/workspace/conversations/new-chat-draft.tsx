@@ -10,7 +10,7 @@ import {
   ambiguousDisplayNames,
   MentionAutocompletePopover,
   type MentionCandidate,
-  shouldShowHandle,
+  MentionLabel,
   useMentionAutocomplete,
 } from "../../../components/mention-autocomplete.js";
 import { useAgentIdentityMap } from "../../../lib/use-agent-name-map.js";
@@ -449,12 +449,7 @@ function ParticipantChips({
                     whiteSpace: "nowrap",
                   }}
                 >
-                  <span className="font-medium">{c.displayName ?? (c.name ? `@${c.name}` : "—")}</span>
-                  {shouldShowHandle(c, ambiguous) && (
-                    <span className="mono text-caption" style={{ color: "var(--fg-3)" }}>
-                      @{c.name}
-                    </span>
-                  )}
+                  <MentionLabel candidate={c} ambiguous={ambiguous} />
                 </button>
               ));
             })()}
