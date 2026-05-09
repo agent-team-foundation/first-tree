@@ -21,9 +21,22 @@ export const MESSAGE_FORMATS = {
   FILE: "file",
   /** System-generated task notification. Content shape: TaskMessageContent (see schemas/task.ts). */
   TASK: "task",
+  /** Agent → user structured ask-user prompt. Content shape: QuestionMessageContent (see schemas/question.ts). */
+  QUESTION: "question",
+  /** User → agent answer to a prior question. Content shape: QuestionAnswerMessageContent (see schemas/question.ts). */
+  QUESTION_ANSWER: "question_answer",
 } as const;
 
-export const messageFormatSchema = z.enum(["text", "markdown", "card", "reference", "file", "task"]);
+export const messageFormatSchema = z.enum([
+  "text",
+  "markdown",
+  "card",
+  "reference",
+  "file",
+  "task",
+  "question",
+  "question_answer",
+]);
 export type MessageFormat = z.infer<typeof messageFormatSchema>;
 
 export const sendMessageSchema = z.object({
