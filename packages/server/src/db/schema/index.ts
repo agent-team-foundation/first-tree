@@ -16,6 +16,7 @@ export { messages } from "./messages.js";
 export { notifications } from "./notifications.js";
 export { organizationSettings } from "./organization-settings.js";
 export { organizations } from "./organizations.js";
+export { pendingQuestions } from "./pending-questions.js";
 export { serverInstances } from "./server-instances.js";
 export { sessionEvents } from "./session-events.js";
 export { taskChats, tasks } from "./tasks.js";

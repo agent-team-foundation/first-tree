@@ -11,6 +11,7 @@ import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
 import { BadRequestError, ClientUserMismatchError, ConflictError, NotFoundError } from "../errors.js";
 import { runtimeFieldsReset } from "./presence.js";
+import { markSupersededByAgents } from "./questions.js";
 
 /**
  * Assert the caller can act on this client. Throws 404 for both "not found"
@@ -151,6 +152,10 @@ export async function claimClient(
           .update(agentPresence)
           .set({ status: "offline", clientId: null, ...runtimeFieldsReset(now) })
           .where(inArray(agentPresence.agentId, unpinnedAgentIds));
+        // Pending ask-user questions on the unpinned agents can no longer be
+        // delivered back — their owning client is detaching. Mark superseded
+        // in the same transaction so a rollback unwinds it together.
+        await markSupersededByAgents(tx, unpinnedAgentIds, "client_claimed");
       }
     }
 
