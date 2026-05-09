@@ -280,8 +280,7 @@ function Step1Body({ organizationId, onContinue }: { organizationId: string | nu
   return (
     <form onSubmit={handleSubmit} className="flex flex-col" style={{ gap: "var(--sp-5)" }}>
       <p className="text-body" style={{ margin: 0, color: "var(--fg-3)" }}>
-        Welcome to your <span style={{ color: "var(--fg-2)" }}>agent team</span> — where humans and AIs collaborate.
-        Let&apos;s name it.
+        Name your <span style={{ color: "var(--fg-2)" }}>agent team</span> — where humans and AIs collaborate.
       </p>
 
       <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
@@ -712,7 +711,7 @@ function Step2FormBody({
             <span className="font-semibold" style={{ color: "var(--fg-2)" }}>
               {teamName}
             </span>
-            . Let&apos;s set up your first agent — a{" "}
+            . Set up your first agent — a{" "}
             <span className="font-semibold" style={{ color: "var(--fg-2)" }}>
               code agent
             </span>{" "}
@@ -720,7 +719,7 @@ function Step2FormBody({
           </>
         ) : (
           <>
-            Let&apos;s set up your first agent — a{" "}
+            Set up your first agent — a{" "}
             <span className="font-semibold" style={{ color: "var(--fg-2)" }}>
               code agent
             </span>{" "}
@@ -1069,90 +1068,97 @@ function Step3IntroBody() {
             Bind or create the tree
           </h2>
           {selectedRepoUrl ? (
-            <fieldset
-              className="flex flex-col"
-              style={{ gap: "var(--sp-3)", margin: "var(--sp-2) 0 0", padding: 0, border: "none" }}
-              disabled={busy}
-            >
-              <legend className="sr-only">Existing context-tree?</legend>
-
-              <label
-                className="flex items-start"
+            <div style={{ marginTop: "var(--sp-3)", display: "flex", flexDirection: "column", gap: "var(--sp-3)" }}>
+              {/* Segmented toggle — two-option choice as a single inline
+                control instead of stacked radio cards. Real <input
+                type="radio"> sit under the labels for screen readers; the
+                visible "buttons" are styled labels. The conditional URL
+                input below grows in only when "Bind to existing" is the
+                active side, so the layout doesn't reserve dead space for
+                the "Create new" path. */}
+              <fieldset
+                aria-label="Bind or create the tree"
+                disabled={busy}
                 style={{
-                  gap: "var(--sp-2)",
-                  padding: "var(--sp-2_5) var(--sp-3)",
+                  display: "inline-flex",
+                  alignSelf: "flex-start",
+                  padding: "var(--sp-0_5)",
+                  margin: 0,
+                  background: "var(--surface-2)",
                   border: "var(--hairline) solid var(--border-faint)",
                   borderRadius: "var(--radius-input)",
-                  background: treeMode === "existing" ? "var(--bg-active)" : "transparent",
-                  cursor: "pointer",
+                  gap: "var(--sp-0_5)",
                 }}
               >
-                <input
-                  type="radio"
-                  name="tree-mode"
-                  value="existing"
-                  checked={treeMode === "existing"}
-                  onChange={() => setTreeMode("existing")}
-                  style={{ marginTop: "var(--sp-0_5)", flexShrink: 0 }}
-                />
-                <span
-                  className="flex-1 min-w-0"
-                  style={{ display: "flex", flexDirection: "column", gap: "var(--sp-1)" }}
-                >
-                  <span className="text-body" style={{ color: "var(--fg)" }}>
-                    Yes — paste the GitHub URL of the existing tree
-                  </span>
-                  {treeMode === "existing" ? (
-                    <input
-                      type="url"
-                      aria-label="Existing tree GitHub URL"
-                      value={existingTreeUrl}
-                      onChange={(e) => setExistingTreeUrl(e.target.value)}
-                      placeholder="https://github.com/your-org/your-tree"
-                      className="text-body"
+                <legend className="sr-only">Bind or create the tree</legend>
+                {(
+                  [
+                    { value: "existing", label: "Bind to an existing tree" },
+                    { value: "new", label: "Create a new tree" },
+                  ] as const
+                ).map((opt) => {
+                  const active = treeMode === opt.value;
+                  return (
+                    <label
+                      key={opt.value}
+                      className="text-body transition-colors"
                       style={{
-                        padding: "var(--sp-1_5) var(--sp-2_5)",
-                        background: "var(--bg)",
-                        border: "var(--hairline) solid var(--border)",
-                        borderRadius: "var(--radius-input)",
-                        color: "var(--fg)",
-                        outline: "none",
-                        fontFamily: "var(--font-mono)",
+                        padding: "var(--sp-1_5) var(--sp-3)",
+                        background: active ? "var(--bg)" : "transparent",
+                        borderRadius: "calc(var(--radius-input) - var(--sp-0_5))",
+                        color: active ? "var(--fg)" : "var(--fg-3)",
+                        fontWeight: active ? 600 : 400,
+                        boxShadow: active ? "var(--shadow-sm)" : "none",
+                        cursor: busy ? "not-allowed" : "pointer",
+                        userSelect: "none",
                       }}
-                    />
-                  ) : null}
-                </span>
-              </label>
+                    >
+                      <input
+                        type="radio"
+                        name="tree-mode"
+                        value={opt.value}
+                        checked={active}
+                        onChange={() => setTreeMode(opt.value)}
+                        className="sr-only"
+                      />
+                      {opt.label}
+                    </label>
+                  );
+                })}
+              </fieldset>
 
-              <label
-                className="flex items-start"
-                style={{
-                  gap: "var(--sp-2)",
-                  padding: "var(--sp-2_5) var(--sp-3)",
-                  border: "var(--hairline) solid var(--border-faint)",
-                  borderRadius: "var(--radius-input)",
-                  background: treeMode === "new" ? "var(--bg-active)" : "transparent",
-                  cursor: "pointer",
-                }}
-              >
-                <input
-                  type="radio"
-                  name="tree-mode"
-                  value="new"
-                  checked={treeMode === "new"}
-                  onChange={() => setTreeMode("new")}
-                  style={{ marginTop: "var(--sp-0_5)", flexShrink: 0 }}
-                />
-                <span
-                  className="flex-1 min-w-0"
-                  style={{ display: "flex", flexDirection: "column", gap: "var(--sp-0_5)" }}
-                >
-                  <span className="text-body" style={{ color: "var(--fg)" }}>
-                    No — let my agent create one
-                  </span>
-                </span>
-              </label>
-            </fieldset>
+              {treeMode === "existing" ? (
+                <div className="flex flex-col" style={{ gap: "var(--sp-1)" }}>
+                  <label htmlFor="onboarding-existing-tree-url" className="text-label" style={{ color: "var(--fg-3)" }}>
+                    Tree GitHub URL
+                  </label>
+                  <input
+                    id="onboarding-existing-tree-url"
+                    type="url"
+                    value={existingTreeUrl}
+                    onChange={(e) => setExistingTreeUrl(e.target.value)}
+                    placeholder="https://github.com/your-org/your-tree"
+                    disabled={busy}
+                    className="text-body"
+                    style={{
+                      padding: "var(--sp-2) var(--sp-3)",
+                      background: "var(--bg)",
+                      border: "var(--hairline) solid var(--border)",
+                      borderRadius: "var(--radius-input)",
+                      color: "var(--fg)",
+                      outline: "none",
+                      fontFamily: "var(--font-mono)",
+                    }}
+                  />
+                </div>
+              ) : null}
+
+              {treeMode === "new" ? (
+                <p className="text-label" style={{ margin: 0, color: "var(--fg-3)" }}>
+                  Your agent will scaffold a new GitHub repo for the tree and bind it to your source repo.
+                </p>
+              ) : null}
+            </div>
           ) : null}
         </StepFrame>
 
