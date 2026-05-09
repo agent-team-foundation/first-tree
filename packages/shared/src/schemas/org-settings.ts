@@ -77,13 +77,15 @@ export const orgGithubIntegrationOutputSchema = z.object({
 
 // -- source_repos --
 
-const sourceRepoEntrySchema = z.object({
-  url: z.string().url(),
-  defaultBranch: z.string().min(1).optional(),
-});
-
 export const orgSourceReposStorageSchema = z.object({
-  repos: z.array(sourceRepoEntrySchema).default([]),
+  repos: z
+    .array(
+      z.object({
+        url: z.string().url(),
+        defaultBranch: z.string().optional(),
+      }),
+    )
+    .default([]),
 });
 
 export const orgSourceReposInputSchema = z.object({
@@ -92,12 +94,28 @@ export const orgSourceReposInputSchema = z.object({
    * unchanged. `[]` clears it. There is no per-entry input form yet —
    * onboarding writes the whole list each time, and the Team Settings
    * card removes by re-PUTting the surviving entries.
+   *
+   * `defaultBranch` is `min(1)` here on the input boundary — the storage
+   * schema is wider so historical / backfilled rows with an empty
+   * `defaultBranch` aren't rejected on read.
    */
-  repos: z.array(sourceRepoEntrySchema).optional(),
+  repos: z
+    .array(
+      z.object({
+        url: z.string().url(),
+        defaultBranch: z.string().min(1).optional(),
+      }),
+    )
+    .optional(),
 });
 
 export const orgSourceReposOutputSchema = z.object({
-  repos: z.array(sourceRepoEntrySchema),
+  repos: z.array(
+    z.object({
+      url: z.string(),
+      defaultBranch: z.string().optional(),
+    }),
+  ),
 });
 
 // -- registry --
