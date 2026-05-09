@@ -6,6 +6,7 @@ import type { Database } from "../db/connection.js";
 import { members } from "../db/schema/members.js";
 import { users } from "../db/schema/users.js";
 import { UnauthorizedError } from "../errors.js";
+import { classifyJoseError, decodeJwtForTrace, untrustedAttrs } from "../observability/jwt-trace.js";
 
 /**
  * Token lifetime configuration. Driven by `FIRST_TREE_HUB_AUTH_*_EXPIRY`
@@ -147,9 +148,12 @@ export async function refreshAccessToken(
   try {
     const { payload: p } = await jwtVerify(refreshToken, secret);
     payload = p as unknown as TokenPayload;
-  } catch {
+  } catch (err) {
+    // see jwt-trace.ts for the trace-only safety contract
+    const untrusted = decodeJwtForTrace(refreshToken);
     throw new UnauthorizedError("Invalid or expired refresh token", {
-      "auth.refresh.reason": "jwt_verify_failed",
+      "auth.refresh.reason": classifyJoseError(err),
+      ...untrustedAttrs("auth.refresh", untrusted),
     });
   }
 
@@ -236,12 +240,19 @@ export async function exchangeConnectToken(
   try {
     const { payload: p } = await jwtVerify(connectToken, secret);
     payload = p as unknown as TokenPayload;
-  } catch {
-    throw new UnauthorizedError("Invalid or expired connect token");
+  } catch (err) {
+    const untrusted = decodeJwtForTrace(connectToken);
+    throw new UnauthorizedError("Invalid or expired connect token", {
+      "auth.connect.reason": classifyJoseError(err),
+      ...untrustedAttrs("auth.connect", untrusted),
+    });
   }
 
   if (payload.type !== "connect" || !payload.sub) {
-    throw new UnauthorizedError("Invalid token type — expected connect token");
+    throw new UnauthorizedError("Invalid token type — expected connect token", {
+      "auth.connect.reason": "wrong_token_type",
+      "auth.connect.actual_type": String(payload.type ?? "<missing>"),
+    });
   }
 
   const jti = (payload as unknown as Record<string, unknown>).jti as string | undefined;

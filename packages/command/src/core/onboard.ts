@@ -6,6 +6,7 @@ import {
   setConfigValue,
 } from "@agent-team-foundation/first-tree-hub-shared/config";
 import { ensureFreshAccessToken, loadCredentials, resolveServerUrl, saveAgentConfig } from "./bootstrap.js";
+import { cliFetch } from "./cli-fetch.js";
 import { print } from "./output.js";
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -72,7 +73,7 @@ export async function onboardCheck(args: OnboardArgs): Promise<CheckItem[]> {
     items.push({ key: "server", label: "Server URL", status: "ok", value: serverUrl });
 
     try {
-      const res = await fetch(`${serverUrl}/api/v1/health`);
+      const res = await cliFetch(`${serverUrl}/api/v1/health`);
       items.push({
         key: "server_reachable",
         label: "Server reachable",
@@ -147,7 +148,7 @@ export function formatCheckReport(items: CheckItem[]): string {
 // ── Create flow ──────────────────────────────────────────────────────
 
 async function resolveDefaultOrgId(serverUrl: string, accessToken: string): Promise<string> {
-  const res = await fetch(`${serverUrl}/api/v1/me`, {
+  const res = await cliFetch(`${serverUrl}/api/v1/me`, {
     headers: { Authorization: `Bearer ${accessToken}` },
     signal: AbortSignal.timeout(10_000),
   });
@@ -170,7 +171,7 @@ async function createAgentViaAdmin(
   orgId: string,
   body: Record<string, unknown>,
 ): Promise<{ uuid: string; name: string | null }> {
-  const res = await fetch(`${serverUrl}/api/v1/orgs/${encodeURIComponent(orgId)}/agents`, {
+  const res = await cliFetch(`${serverUrl}/api/v1/orgs/${encodeURIComponent(orgId)}/agents`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${accessToken}`,

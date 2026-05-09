@@ -5,6 +5,7 @@ import {
   DEFAULT_CONFIG_DIR,
   resolveConfigReadonly,
 } from "@agent-team-foundation/first-tree-hub-shared/config";
+import { cliFetch } from "./cli-fetch.js";
 
 const CREDENTIALS_PATH = join(DEFAULT_CONFIG_DIR, "credentials.json");
 
@@ -150,7 +151,7 @@ export async function ensureFreshAccessToken(opts?: { minValidityMs?: number }):
   }
 
   inflightRefresh = (async () => {
-    const res = await fetch(`${creds.serverUrl}/api/v1/auth/refresh`, {
+    const res = await cliFetch(`${creds.serverUrl}/api/v1/auth/refresh`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ refreshToken: creds.refreshToken }),

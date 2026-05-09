@@ -22,7 +22,7 @@ import { FlatSectionHeader } from "../../components/ui/flat-section-header.js";
 import { PageHeader } from "../../components/ui/page-header.js";
 import { StateChip } from "../../components/ui/state-chip.js";
 import { useMemberNameMap } from "../../lib/use-member-name-map.js";
-import { formatDate } from "../../lib/utils.js";
+import { formatDay } from "../../lib/utils.js";
 import { InviteLinkPanel } from "../invite-link-panel.js";
 import { MembersPage } from "../members.js";
 
@@ -183,16 +183,21 @@ function AgentsSection({
             No agents yet — create one with “New agent”.
           </div>
         ) : (
-          <DenseTable>
+          <DenseTable className="table-fixed">
             <DenseTableHeader>
               <DenseTableRow>
+                {/* First two columns mirror the Humans table widths (160 / 140)
+                    so Display name and the @handle column align across both
+                    tables. Trailing columns differ because the fields differ;
+                    aligning those would mean either dropping data or
+                    inventing dead cells in the Humans table. */}
                 <DenseTableHead style={{ width: 160 }}>Display name</DenseTableHead>
                 <DenseTableHead style={{ width: 140 }}>Agent name</DenseTableHead>
-                <DenseTableHead style={{ minWidth: 150 }}>Type</DenseTableHead>
-                <DenseTableHead style={{ minWidth: 160 }}>Managed by</DenseTableHead>
-                <DenseTableHead style={{ minWidth: 100 }}>Visibility</DenseTableHead>
-                <DenseTableHead style={{ minWidth: 110 }}>Status</DenseTableHead>
-                <DenseTableHead style={{ minWidth: 150 }}>Created</DenseTableHead>
+                <DenseTableHead style={{ width: 150 }}>Type</DenseTableHead>
+                <DenseTableHead style={{ width: 160 }}>Managed by</DenseTableHead>
+                <DenseTableHead style={{ width: 100 }}>Visibility</DenseTableHead>
+                <DenseTableHead style={{ width: 110 }}>Status</DenseTableHead>
+                <DenseTableHead style={{ width: 150 }}>Created</DenseTableHead>
               </DenseTableRow>
             </DenseTableHeader>
             <DenseTableBody>
@@ -236,7 +241,7 @@ function AgentsSection({
                       <StateChip state={runtime?.runtimeState ?? null} />
                     </DenseTableCell>
                     <DenseTableCell className="mono text-caption" style={{ color: "var(--fg-4)" }}>
-                      {formatDate(a.createdAt)}
+                      {formatDay(a.createdAt)}
                     </DenseTableCell>
                   </DenseTableRow>
                 );
