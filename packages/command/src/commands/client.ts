@@ -19,7 +19,6 @@ import {
   configureClientLoggerForService,
   FirstTreeHubSDK,
   probeCapabilities,
-  probeLocalGitRepos,
 } from "@first-tree-hub/client";
 import { confirm } from "@inquirer/prompts";
 import type { Command } from "commander";
@@ -175,7 +174,6 @@ export function registerClientCommands(program: Command): void {
         // registration — see post-start block — because the `clients` row is
         // created lazily during the `client:register` handshake.
         let probedCapabilities: Awaited<ReturnType<typeof probeCapabilities>> | null = null;
-        let probedLocalGitRepos: Awaited<ReturnType<typeof probeLocalGitRepos>> | null = null;
         try {
           const accessToken = await ensureFreshAccessToken();
           probedCapabilities = await probeCapabilities();
@@ -188,15 +186,6 @@ export function registerClientCommands(program: Command): void {
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           print.status("⚠️", `runtime-provider reconcile skipped: ${msg}`);
-        }
-        // Local git repo scan is independent of runtime-provider reconcile —
-        // a transient hub failure above must not silently kill the picker
-        // data. Best-effort: any scanner error returns the partial list.
-        try {
-          probedLocalGitRepos = await probeLocalGitRepos();
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          print.status("⚠️", `local repo scan skipped: ${msg}`);
         }
         const agents = loadAgents({ schema: agentConfigSchema, agentsDir });
 
@@ -234,7 +223,6 @@ export function registerClientCommands(program: Command): void {
               accessToken,
               clientId: config.client.id,
               capabilities: probedCapabilities,
-              ...(probedLocalGitRepos ? { localGitRepos: probedLocalGitRepos } : {}),
             });
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);

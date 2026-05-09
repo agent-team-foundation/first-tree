@@ -1,10 +1,6 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type {
-  ClientCapabilities,
-  LocalGitRepoSummaries,
-  RuntimeProvider,
-} from "@agent-team-foundation/first-tree-hub-shared";
+import type { ClientCapabilities, RuntimeProvider } from "@agent-team-foundation/first-tree-hub-shared";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
 type LogFn = (level: "info" | "warn", msg: string) => void;
@@ -74,28 +70,20 @@ export async function reconcileLocalRuntimeProviders(opts: {
  * Member-scoped capabilities upload. Server stores the snapshot under
  * `clients.metadata.capabilities`. Best-effort: failure does not block
  * client startup since capabilities only matter for UI / admin checks.
- *
- * `localGitRepos` is an optional snapshot of the host's working clones —
- * see `probeLocalGitRepos` in `@first-tree-hub/client`. When present, the
- * server stores it under `clients.metadata.localGitRepos` so the Hub's
- * Step 3 onboarding picker can offer "pick from your local repos".
  */
 export async function uploadClientCapabilities(opts: {
   serverUrl: string;
   accessToken: string;
   clientId: string;
   capabilities: ClientCapabilities;
-  localGitRepos?: LocalGitRepoSummaries;
 }): Promise<void> {
-  const body: Record<string, unknown> = { capabilities: opts.capabilities };
-  if (opts.localGitRepos) body.localGitRepos = opts.localGitRepos;
   const res = await fetch(`${opts.serverUrl}/api/v1/clients/${encodeURIComponent(opts.clientId)}/capabilities`, {
     method: "PATCH",
     headers: {
       Authorization: `Bearer ${opts.accessToken}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ capabilities: opts.capabilities }),
   });
   if (!res.ok) {
     throw new Error(`hub returned ${res.status} on PATCH /clients/${opts.clientId}/capabilities`);

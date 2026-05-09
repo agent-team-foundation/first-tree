@@ -10,12 +10,7 @@ import {
   resetConfigMeta,
   setConfigValue,
 } from "@agent-team-foundation/first-tree-hub-shared/config";
-import {
-  ClientOrgMismatchError,
-  ClientUserMismatchError,
-  probeCapabilities,
-  probeLocalGitRepos,
-} from "@first-tree-hub/client";
+import { ClientOrgMismatchError, ClientUserMismatchError, probeCapabilities } from "@first-tree-hub/client";
 import { input, password, select } from "@inquirer/prompts";
 import type { Command } from "commander";
 import { fail } from "../cli/output.js";
@@ -312,7 +307,6 @@ export function registerConnectCommand(parent: Command): void {
         // AFTER WS register (post-start block) because the `clients` row is
         // created lazily during the `client:register` handshake.
         let probedCapabilities: Awaited<ReturnType<typeof probeCapabilities>> | null = null;
-        let probedLocalGitRepos: Awaited<ReturnType<typeof probeLocalGitRepos>> | null = null;
         try {
           const accessToken = await ensureFreshAccessToken();
           probedCapabilities = await probeCapabilities();
@@ -325,15 +319,6 @@ export function registerConnectCommand(parent: Command): void {
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           print.status("⚠️", `runtime-provider reconcile skipped: ${msg}`);
-        }
-        // Local git repo scan is independent of runtime-provider reconcile —
-        // a transient hub failure above must not silently kill the picker
-        // data. Best-effort: any scanner error returns the partial list.
-        try {
-          probedLocalGitRepos = await probeLocalGitRepos();
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          print.status("⚠️", `local repo scan skipped: ${msg}`);
         }
         const agents = loadAgents({ schema: agentConfigSchema, agentsDir });
 
@@ -363,7 +348,6 @@ export function registerConnectCommand(parent: Command): void {
               accessToken,
               clientId: config.client.id,
               capabilities: probedCapabilities,
-              ...(probedLocalGitRepos ? { localGitRepos: probedLocalGitRepos } : {}),
             });
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);

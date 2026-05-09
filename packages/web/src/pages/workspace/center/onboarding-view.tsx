@@ -1,12 +1,12 @@
-import type { ClientCapabilities, LocalGitRepoSummary, OrgBrief } from "@agent-team-foundation/first-tree-hub-shared";
+import type { ClientCapabilities, OrgBrief } from "@agent-team-foundation/first-tree-hub-shared";
 import { ArrowRight, Check, Copy } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { getClientCapabilities, type HubClient, listClients } from "../../../api/activity.js";
-import { getAgentConfig, updateAgentConfig } from "../../../api/agent-config.js";
-import { listManagedAgents, type ManagedAgent } from "../../../api/agents.js";
+import { listManagedAgents } from "../../../api/agents.js";
 import { createAgentChat, sendChatMessage } from "../../../api/chats.js";
 import { api, withOrg } from "../../../api/client.js";
+import { type GithubRepo, listGithubRepos } from "../../../api/github.js";
 import { reportOnboardingEvent } from "../../../api/onboarding-events.js";
 import { useAuth } from "../../../auth/auth-context.js";
 import { Button } from "../../../components/ui/button.js";
@@ -68,12 +68,6 @@ const STEP3_BOOTSTRAP_MESSAGE =
   "Use the latest First-Tree CLI to install the skill in the current repository and complete the onboarding process: https://github.com/agent-team-foundation/first-tree";
 
 type Phase = "form" | "creating" | "timeout";
-
-function prettyRuntimeLabel(provider: string): string {
-  if (provider === "claude-code") return "Claude Code";
-  if (provider === "codex") return "Codex";
-  return provider;
-}
 
 type ResolvedBody = "step1" | "step2" | "step3-intro" | "step3-placeholder";
 
@@ -234,10 +228,14 @@ function Step1Body({ organizationId, onContinue }: { organizationId: string | nu
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col" style={{ gap: "var(--sp-5)" }}>
-      <p className="text-body" style={{ margin: 0, color: "var(--fg-3)" }}>
-        Welcome to your <span style={{ color: "var(--fg-2)" }}>agent team</span> — where humans and AIs collaborate.
-        Let&apos;s name it.
-      </p>
+      <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
+        <h1 className="text-title font-semibold" style={{ margin: 0, color: "var(--fg)" }}>
+          Create team
+        </h1>
+        <p className="text-body" style={{ margin: 0, color: "var(--fg-3)" }}>
+          This is the collective space agents and people share. You can rename it later.
+        </p>
+      </div>
 
       <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
         <label htmlFor="onboarding-team-name" className="text-label" style={{ color: "var(--fg-3)" }}>
@@ -317,10 +315,11 @@ function Step2Body({
       : null;
   const initialConnectTokenExpiresAt = initialConnectToken ? (initialDraft?.connectTokenExpiresAt ?? null) : null;
 
-  // Pre-fill with `Coder` so a user who doesn't care about naming can hit
-  // Continue immediately. Mirrors the Step 1 default `{login}'s team`.
-  const [displayName, setDisplayName] = useState(() => initialDraft?.displayName ?? "Coder");
+  const [displayName, setDisplayName] = useState(() => initialDraft?.displayName ?? "");
   const [selectedRuntime, setSelectedRuntime] = useState<string | null>(() => initialDraft?.selectedRuntime ?? null);
+  const [selectedRepoUrl, setSelectedRepoUrl] = useState<string | null>(() => initialDraft?.selectedRepoUrl ?? null);
+  const [repos, setRepos] = useState<GithubRepo[] | null>(null);
+  const [reposError, setReposError] = useState<string | null>(null);
   const [connectedClient, setConnectedClient] = useState<HubClient | null>(null);
   const [capabilities, setCapabilities] = useState<ClientCapabilities | null>(null);
   const [capabilitiesClientId, setCapabilitiesClientId] = useState<string | null>(null);
@@ -347,9 +346,27 @@ function Step2Body({
       selectedRuntime,
       connectToken,
       connectTokenExpiresAt,
-      selectedRepoUrl: null,
+      selectedRepoUrl,
     });
-  }, [draftScope, displayName, selectedRuntime, connectToken, connectTokenExpiresAt]);
+  }, [draftScope, displayName, selectedRuntime, connectToken, connectTokenExpiresAt, selectedRepoUrl]);
+
+  // Lazy-load the repo list once. Cached in state for the lifetime of the
+  // mount; the list is not re-fetched on every keystroke.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const list = await listGithubRepos();
+        if (cancelled) return;
+        setRepos(list);
+      } catch (err) {
+        if (!cancelled) setReposError(err instanceof Error ? err.message : "Failed to list GitHub repositories");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     void (async () => {
@@ -516,32 +533,38 @@ function Step2Body({
     connectedClient &&
     selectedRuntime &&
     okRuntimes.includes(selectedRuntime) &&
+    selectedRepoUrl &&
     phase === "form"
   );
 
   const handleCreate = useCallback(async () => {
-    if (!connectedClient || !selectedRuntime || !trimmedName) return;
+    if (!connectedClient || !selectedRuntime || !trimmedName || !selectedRepoUrl) return;
     setError(null);
     setPhase("creating");
     const slug = slugify(trimmedName);
     let agentUuid: string;
     try {
-      // Repo is picked in Step 3 (where it's actually used as the
-      // context-tree anchor) — not here. The agent ships with empty
-      // `gitRepos`; Step3IntroBody PATCHes the config before creating
-      // the chat session.
       const res = await api.post<{ uuid: string }>(withOrg("/agents"), {
         type: "personal_assistant",
         displayName: trimmedName,
         ...(slug ? { name: slug } : {}),
         clientId: connectedClient.id,
         runtimeProvider: selectedRuntime,
+        // Atomic with the agent insert — server seeds the version=1 config
+        // with these gitRepos. Avoids the PATCH-vs-first-chat race.
+        gitRepos: [{ url: selectedRepoUrl }],
         ...(organizationId ? { organizationId } : {}),
       });
       agentUuid = res.uuid;
       createdAgentRef.current = agentUuid;
+      // Stash for Step 3 — uuidv7 sort would also work, but an explicit
+      // "the user just created THIS agent" hint avoids picking the wrong
+      // agent if the user has more than one managed agent on a re-visit.
       writeOnboardingAgentUuid(agentUuid);
-      void reportOnboardingEvent("agent_created", { runtimeProvider: selectedRuntime });
+      void reportOnboardingEvent("agent_created", {
+        runtimeProvider: selectedRuntime,
+        repoBound: true,
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create agent");
       setPhase("form");
@@ -549,7 +572,7 @@ function Step2Body({
     }
 
     await pollUntilReady(agentUuid);
-  }, [trimmedName, connectedClient, selectedRuntime, pollUntilReady, organizationId]);
+  }, [trimmedName, connectedClient, selectedRuntime, selectedRepoUrl, pollUntilReady, organizationId]);
 
   const handleRetry = useCallback(async () => {
     const agentUuid = createdAgentRef.current;
@@ -585,7 +608,10 @@ function Step2Body({
       capabilitiesLoaded={activeCapabilities !== null}
       okRuntimes={okRuntimes}
       selectedRuntime={selectedRuntime}
-      onSelectRuntime={setSelectedRuntime}
+      repos={repos}
+      reposError={reposError}
+      selectedRepoUrl={selectedRepoUrl}
+      onSelectRepo={setSelectedRepoUrl}
       error={error}
       canCreate={canCreate}
       onCreate={handleCreate}
@@ -612,7 +638,10 @@ function Step2FormBody({
   capabilitiesLoaded,
   okRuntimes,
   selectedRuntime,
-  onSelectRuntime,
+  repos,
+  reposError,
+  selectedRepoUrl,
+  onSelectRepo,
   error,
   canCreate,
   onCreate,
@@ -627,26 +656,30 @@ function Step2FormBody({
   capabilitiesLoaded: boolean;
   okRuntimes: string[];
   selectedRuntime: string | null;
-  onSelectRuntime: (next: string) => void;
+  repos: GithubRepo[] | null;
+  reposError: string | null;
+  selectedRepoUrl: string | null;
+  onSelectRepo: (url: string | null) => void;
   error: string | null;
   canCreate: boolean;
   onCreate: () => void;
 }) {
   const nameInputRef = useRef<HTMLInputElement | null>(null);
   const inviteHasTeam = joinPath === "invite" && teamName;
+  const introLeadText = inviteHasTeam ? `Welcome — you've joined ${teamName}` : "Welcome to First Tree Hub";
 
   const noRuntime = capabilitiesLoaded && okRuntimes.length === 0 && !!connectedClient;
-  // Step 2 has only Name + Computer now; repo selection moved to Step 3
-  // where it actually feeds the context-tree anchor.
   const nextStepText = !trimmedName
     ? "Next: name your agent."
-    : !connectedClient
-      ? "Next: connect the computer where this agent will run."
-      : noRuntime
-        ? "Install Claude Code (or Codex) on that computer, then sign in."
-        : !selectedRuntime
-          ? "Detecting installed runtimes…"
-          : "Ready to create.";
+    : !selectedRepoUrl
+      ? "Next: pick the repository this agent will work on."
+      : !connectedClient
+        ? "Next: connect the computer where they'll work."
+        : noRuntime
+          ? "Install Claude Code (or Codex) on that computer, then sign in."
+          : !selectedRuntime
+            ? "Detecting installed runtimes…"
+            : "Ready to create.";
 
   useEffect(() => {
     if (trimmedName) return;
@@ -655,29 +688,22 @@ function Step2FormBody({
 
   return (
     <>
-      <p className="text-body" style={{ margin: 0, color: "var(--fg-3)", maxWidth: 540 }}>
-        {inviteHasTeam ? (
-          <>
-            You&apos;ve joined{" "}
-            <span className="font-semibold" style={{ color: "var(--fg-2)" }}>
-              {teamName}
-            </span>
-            . Let&apos;s set up your first agent — a{" "}
-            <span className="font-semibold" style={{ color: "var(--fg-2)" }}>
-              code agent
-            </span>{" "}
-            that helps with your code.
-          </>
-        ) : (
-          <>
-            Let&apos;s set up your first agent — a{" "}
-            <span className="font-semibold" style={{ color: "var(--fg-2)" }}>
-              code agent
-            </span>{" "}
-            that helps with your code.
-          </>
-        )}
-      </p>
+      <div
+        className="flex flex-col items-start"
+        style={{
+          gap: "var(--sp-4)",
+          paddingTop: 0,
+        }}
+      >
+        <p className="text-label" style={{ margin: 0, color: "var(--fg-3)", maxWidth: 420 }}>
+          <span style={{ color: "var(--fg-2)" }}>{introLeadText}</span>
+          <span style={{ color: "var(--fg-4)" }}> · </span>
+          Where agents and humans work as one team.
+        </p>
+        <h1 className="text-title font-semibold" style={{ margin: 0, color: "var(--fg)" }}>
+          Connect agent
+        </h1>
+      </div>
 
       <div style={{ marginTop: "var(--sp-5)", position: "relative" }}>
         <StepRailLine />
@@ -725,22 +751,30 @@ function Step2FormBody({
           </div>
         </StepFrame>
 
-        <StepFrame
-          number="02"
-          state={connectedClient && selectedRuntime ? "complete" : trimmedName ? "active" : "idle"}
-        >
-          <div style={{ animation: trimmedName ? "subtle-fade 200ms ease-out" : undefined }}>
+        <StepFrame number="02" state={selectedRepoUrl ? "complete" : trimmedName ? "active" : "idle"}>
+          <RepoPickerSection
+            disabled={!trimmedName}
+            repos={repos}
+            error={reposError}
+            selectedRepoUrl={selectedRepoUrl}
+            onSelect={onSelectRepo}
+            agentName={trimmedName || "this agent"}
+          />
+        </StepFrame>
+
+        <StepFrame number="03" state={canCreate ? "complete" : selectedRepoUrl ? "active" : "idle"}>
+          <div style={{ animation: selectedRepoUrl ? "subtle-fade 200ms ease-out" : undefined }}>
             <h2
               className="text-subtitle font-semibold"
               style={{
-                color: trimmedName ? "var(--fg)" : "var(--fg-4)",
-                fontWeight: trimmedName ? 600 : 500,
+                color: selectedRepoUrl ? "var(--fg)" : "var(--fg-4)",
+                fontWeight: selectedRepoUrl ? 600 : 500,
               }}
             >
-              Which computer should it run on?
+              Where will {trimmedName || "this agent"} run?
             </h2>
 
-            {trimmedName ? (
+            {selectedRepoUrl ? (
               <>
                 <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
                   {connectedClient
@@ -762,13 +796,10 @@ function Step2FormBody({
                   </>
                 )}
 
-                {connectedClient ? (
-                  <RuntimeChips
-                    runtimes={okRuntimes}
-                    selected={selectedRuntime}
-                    onSelect={onSelectRuntime}
-                    capabilitiesLoaded={capabilitiesLoaded}
-                  />
+                {noRuntime ? (
+                  <p className="text-label" style={{ marginTop: "var(--sp-3)", color: "var(--fg-3)" }}>
+                    No runtime ready on this computer. Install Claude Code (or Codex) and sign in, then check back.
+                  </p>
                 ) : null}
               </>
             ) : null}
@@ -848,121 +879,34 @@ function Step2FormBody({
 
 // ─── Step 3 ──────────────────────────────────────────────────────────────
 
-type ResolvedAgent = ManagedAgent;
-
-/**
- * Resolve the onboarding agent in priority order:
- *   1. The UUID stashed at Step 2 success.
- *   2. Most recently created managed agent (uuidv7 sort).
- *   3. Any non-human managed agent.
- */
-async function resolveOnboardingAgent(): Promise<ResolvedAgent | null> {
-  const stashedUuid = readOnboardingAgentUuid();
-  const managed = await listManagedAgents();
-  const nonHuman = managed.filter((a) => a.type !== "human");
-  return (
-    (stashedUuid ? managed.find((a) => a.uuid === stashedUuid) : undefined) ??
-    nonHuman.slice().sort((a, b) => b.uuid.localeCompare(a.uuid))[0] ??
-    managed[0] ??
-    null
-  );
-}
-
-/**
- * Discriminated picker selection. The `kind` distinguishes the two paths
- * because their state machines differ — typing in the manual input must not
- * unset a list pick, and clearing it must not unset a list pick either.
- */
-type LocalSelection =
-  | { kind: "list"; localPath: string; originUrl: string; name: string }
-  | { kind: "manual"; localPath: string };
-
-/**
- * Mirror of the client-side `isAbsoluteLocalPath` predicate. Step 3 must
- * refuse to PATCH `gitRepos[].localPath` with a relative string — the
- * client handler only takes the local-direct branch when the path is
- * absolute, and a relative path falls through to the legacy sandbox branch
- * (which then tries to `git clone "local://relative/path"` and fails in a
- * confusing way).
- */
-function isAbsoluteRepoPath(p: string): boolean {
-  if (!p) return false;
-  return p === "~" || p.startsWith("~/") || p.startsWith("/");
-}
-
 function Step3IntroBody({ onLater }: { onLater: () => void }) {
   const navigate = useNavigate();
   const { dismissOnboarding } = useAuth();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [agent, setAgent] = useState<ResolvedAgent | null>(null);
-  const [agentResolveError, setAgentResolveError] = useState<string | null>(null);
-  const [localRepos, setLocalRepos] = useState<LocalGitRepoSummary[] | null>(null);
-  const [reposError, setReposError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<LocalSelection | null>(null);
-  const [manualPath, setManualPath] = useState("");
-
-  // Resolve the agent + its bound client up front. The Step 2 flow stashes
-  // the agent uuid in sessionStorage and pins it to a client — so by the
-  // time we arrive in Step 3 both should be available. If the user has no
-  // managed agent yet (rare race), surface a clear error and let them
-  // retry by re-entering Step 3.
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const a = await resolveOnboardingAgent();
-        if (cancelled) return;
-        if (!a) {
-          setAgentResolveError("No agent available — finish Step 2 first.");
-          return;
-        }
-        setAgent(a);
-        if (!a.clientId) {
-          // Agent exists but isn't pinned to a client. We can't list local
-          // repos in that case; degrade to manual-path-only mode.
-          setLocalRepos([]);
-          setReposError("Your agent isn't connected to a computer yet — type the repo path manually below.");
-          return;
-        }
-        const detail = await getClientCapabilities(a.clientId);
-        if (cancelled) return;
-        setLocalRepos(detail.localGitRepos ?? []);
-      } catch (err) {
-        if (!cancelled) {
-          setReposError(err instanceof Error ? err.message : "Failed to list local repositories");
-          setLocalRepos([]);
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   const handleYes = useCallback(async () => {
-    if (!selected || !agent) return;
     setError(null);
     setBusy(true);
     try {
-      // Bind the picked repo BEFORE creating the chat session so the
-      // agent's `prepareGitWorktrees` step sees a non-empty `gitRepos`
-      // payload (with `localPath` absolute) when the first message arrives.
-      // Sequential await is sufficient — no race because chat creation is
-      // the next line.
-      const cfg = await getAgentConfig(agent.uuid);
-      // url is identity-only when localPath is absolute (handler skips the
-      // Hub mirror clone entirely). Use the working clone's origin URL
-      // when known, fall back to a `local:` URI built from the path so
-      // the schema's `url.min(1)` invariant is satisfied without inventing
-      // a misleading https:// URL.
-      const knownOrigin = selected.kind === "list" ? selected.originUrl : "";
-      const url = knownOrigin || `local://${selected.localPath}`;
-      await updateAgentConfig(agent.uuid, {
-        expectedVersion: cfg.version,
-        payload: { gitRepos: [{ url, localPath: selected.localPath }] },
-      });
-
+      // Resolve the onboarding agent in priority order:
+      //   1. The UUID stashed at Step 2 success — the canonical "agent the
+      //      user just created" pointer, robust across re-visits.
+      //   2. Most recently created managed agent (UUID v7 is time-ordered,
+      //      so a descending sort gives newest first).
+      //   3. Any non-human managed agent.
+      // Each fallback narrows the ambiguity that "first non-human" had —
+      // managed-agents response order was previously unspecified.
+      const stashedUuid = readOnboardingAgentUuid();
+      const managed = await listManagedAgents();
+      const nonHuman = managed.filter((a) => a.type !== "human");
+      const agent =
+        (stashedUuid ? managed.find((a) => a.uuid === stashedUuid) : undefined) ??
+        nonHuman.slice().sort((a, b) => b.uuid.localeCompare(a.uuid))[0] ??
+        managed[0];
+      if (!agent) {
+        throw new Error("No agent available to chat with — finish Step 2 first.");
+      }
       const chat = await createAgentChat(agent.uuid);
       // Best-effort: if the bootstrap message fails (e.g. transient network
       // hiccup), the user still lands in the empty chat and can retype.
@@ -982,85 +926,70 @@ function Step3IntroBody({ onLater }: { onLater: () => void }) {
       setError(err instanceof Error ? err.message : "Failed to start the tree-init chat");
       setBusy(false);
     }
-  }, [selected, agent, navigate, dismissOnboarding]);
-
-  const canStart = !!selected && !!agent && !busy;
+  }, [navigate, dismissOnboarding]);
 
   return (
-    <>
-      <p className="text-body" style={{ margin: 0, color: "var(--fg-3)" }}>
-        Build your <span style={{ color: "var(--fg-2)" }}>context-tree</span> with your agent — your team&apos;s shared
-        knowledge that grows with your code.
+    <div className="flex flex-col" style={{ gap: "var(--sp-5)" }}>
+      <h1 className="text-title font-semibold" style={{ margin: 0, color: "var(--fg)" }}>
+        Init context-tree
+      </h1>
+      <p className="text-body" style={{ margin: 0, color: "var(--fg-2)" }}>
+        Your agent is ready. Set up first-tree on it now? It takes ~2 minutes — the agent does the scaffolding, you
+        confirm a couple of choices.
       </p>
 
-      <div style={{ marginTop: "var(--sp-5)", position: "relative" }}>
-        <StepRailLine />
-
-        <StepFrame number="01" state={selected ? "complete" : "active"}>
-          <h2 className="text-subtitle font-semibold" style={{ margin: 0, color: "var(--fg)" }}>
-            Which repository should your context-tree live next to?
-          </h2>
-          <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
-            Pick a repo on your computer — your agent works on a session branch in that repo, so the tree lands next to
-            your code.
-          </p>
-          <div style={{ marginTop: "var(--sp-2)" }}>
-            <LocalRepoPickerBody
-              repos={localRepos}
-              error={reposError}
-              selected={selected}
-              onSelect={setSelected}
-              manualPath={manualPath}
-              onManualPathChange={setManualPath}
-            />
-          </div>
-        </StepFrame>
-
-        <StepFrame number="02" state={selected ? "active" : "idle"}>
-          <h2
-            className="text-subtitle font-semibold"
-            style={{
-              margin: 0,
-              color: selected ? "var(--fg)" : "var(--fg-4)",
-              fontWeight: selected ? 600 : 500,
-            }}
-          >
-            Pair with your agent to build the tree
-          </h2>
-          <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
-            The agent you just set up will scaffold the sibling repo, install the first-tree skill, and write binding
-            metadata on a session branch you can review.
-          </p>
-          {error || agentResolveError ? (
-            <div
-              className="text-body"
-              style={{
-                marginTop: "var(--sp-2)",
-                padding: "var(--sp-2_5) var(--sp-3)",
-                background: "color-mix(in oklch, var(--state-error) 12%, transparent)",
-                border: "var(--hairline) solid color-mix(in oklch, var(--state-error) 28%, transparent)",
-                borderRadius: "var(--radius-input)",
-                color: "var(--state-error)",
-              }}
-            >
-              {error || agentResolveError}
-            </div>
-          ) : null}
-          <div className="flex" style={{ marginTop: "var(--sp-3)", gap: "var(--sp-2)" }}>
-            <Button type="button" disabled={!canStart} onClick={() => void handleYes()}>
-              {busy ? "Starting…" : "Yes, build it"}
-            </Button>
-            <Button type="button" variant="outline" onClick={onLater} disabled={busy}>
-              I&apos;ll do it later
-            </Button>
-          </div>
-        </StepFrame>
+      <div
+        style={{
+          padding: "var(--sp-3) var(--sp-4)",
+          background: "var(--surface-2)",
+          border: "var(--hairline) solid var(--border-faint)",
+          borderRadius: "var(--radius-input)",
+        }}
+      >
+        <p className="text-label font-semibold" style={{ margin: 0, color: "var(--fg-2)" }}>
+          What this does
+        </p>
+        <ul
+          className="text-body"
+          style={{ margin: "var(--sp-2) 0 0 var(--sp-4)", padding: 0, color: "var(--fg-3)", listStyle: "disc" }}
+        >
+          <li>Creates a sibling tree repo and scaffolds it</li>
+          <li>Installs the first-tree skill in both repos</li>
+          <li>Writes binding metadata so updates auto-sync</li>
+        </ul>
       </div>
-    </>
+
+      {error ? (
+        <div
+          className="text-body"
+          style={{
+            padding: "var(--sp-2_5) var(--sp-3)",
+            background: "color-mix(in oklch, var(--state-error) 12%, transparent)",
+            border: "var(--hairline) solid color-mix(in oklch, var(--state-error) 28%, transparent)",
+            borderRadius: "var(--radius-input)",
+            color: "var(--state-error)",
+          }}
+        >
+          {error}
+        </div>
+      ) : null}
+
+      <div className="flex" style={{ gap: "var(--sp-2)" }}>
+        <Button type="button" disabled={busy} onClick={() => void handleYes()}>
+          {busy ? "Starting…" : "Yes, set it up"}
+        </Button>
+        <Button type="button" variant="outline" onClick={onLater} disabled={busy}>
+          I&apos;ll do it later
+        </Button>
+      </div>
+    </div>
   );
 }
 
 function Step3PlaceholderBody({ onReopen }: { onReopen: () => void }) {
+  // Clickable so the placeholder isn't a dead end — the same "reopen Step 3
+  // intro" intent as clicking the Step 3 pip in the stepper. Renders as a
+  // borderless button so it reads as a hint, not as a card.
   return (
     <button
       type="button"
@@ -1086,199 +1015,105 @@ function Step3PlaceholderBody({ onReopen }: { onReopen: () => void }) {
 
 // ─── Shared Step 2 visual primitives ─────────────────────────────────────
 
-/**
- * Step 3 picker — pick from the user's local clones (scanned by the client
- * at startup, surfaced via `clients.localGitRepos`). Filter input narrows
- * the list as it grows; manual-path input is the escape hatch for repos
- * outside the scanner's roots.
- */
-function LocalRepoPickerBody({
+function RepoPickerSection({
+  disabled,
   repos,
   error,
-  selected,
+  selectedRepoUrl,
   onSelect,
-  manualPath,
-  onManualPathChange,
+  agentName,
 }: {
-  repos: LocalGitRepoSummary[] | null;
+  disabled: boolean;
+  repos: GithubRepo[] | null;
   error: string | null;
-  selected: LocalSelection | null;
-  onSelect: (sel: LocalSelection | null) => void;
-  manualPath: string;
-  onManualPathChange: (value: string) => void;
+  selectedRepoUrl: string | null;
+  onSelect: (url: string | null) => void;
+  agentName: string;
 }) {
-  const [filter, setFilter] = useState("");
-
-  const trimmedManual = manualPath.trim();
-  const manualIsAbsolute = trimmedManual === "" ? null : isAbsoluteRepoPath(trimmedManual);
-
-  const handleManualChange = useCallback(
-    (value: string) => {
-      onManualPathChange(value);
-      const trimmed = value.trim();
-      // Only the manual-path branch is allowed to clear/set itself; never
-      // unset a list pick from typing here. The discriminator on
-      // `LocalSelection` makes this contractually clear.
-      if (!trimmed || !isAbsoluteRepoPath(trimmed)) {
-        if (selected?.kind === "manual") onSelect(null);
-        return;
-      }
-      onSelect({ kind: "manual", localPath: trimmed });
-    },
-    [onSelect, onManualPathChange, selected],
+  const heading = (
+    <h2
+      className="text-subtitle font-semibold"
+      style={{
+        color: disabled ? "var(--fg-4)" : "var(--fg)",
+        fontWeight: disabled ? 500 : 600,
+      }}
+    >
+      What will {agentName} work on?
+    </h2>
   );
 
-  const filtered = useMemo(() => {
-    if (!repos) return null;
-    const needle = filter.trim().toLowerCase();
-    if (!needle) return repos;
-    return repos.filter(
-      (r) =>
-        r.name.toLowerCase().includes(needle) ||
-        r.localPath.toLowerCase().includes(needle) ||
-        r.originUrl.toLowerCase().includes(needle),
+  if (disabled) {
+    return <div>{heading}</div>;
+  }
+
+  if (error) {
+    return (
+      <div style={{ animation: "subtle-fade 200ms ease-out" }}>
+        {heading}
+        <p className="text-label" style={{ color: "var(--fg-3)", marginTop: "var(--sp-2)" }}>
+          {error}. Reconnect your GitHub account to grant repo access.
+        </p>
+        <div style={{ marginTop: "var(--sp-2)" }}>
+          <Button type="button" variant="outline" size="sm" asChild>
+            <a href="/api/v1/auth/github/start?next=/">Reconnect GitHub</a>
+          </Button>
+        </div>
+      </div>
     );
-  }, [repos, filter]);
+  }
+
+  if (repos === null) {
+    return (
+      <div style={{ animation: "subtle-fade 200ms ease-out" }}>
+        {heading}
+        <p className="text-label" style={{ color: "var(--fg-3)", marginTop: "var(--sp-2)" }}>
+          Loading your GitHub repositories…
+        </p>
+      </div>
+    );
+  }
+
+  if (repos.length === 0) {
+    return (
+      <div style={{ animation: "subtle-fade 200ms ease-out" }}>
+        {heading}
+        <p className="text-label" style={{ color: "var(--fg-3)", marginTop: "var(--sp-2)" }}>
+          No repositories found on your GitHub account. Create one and refresh this page.
+        </p>
+      </div>
+    );
+  }
 
   return (
-    <div className="flex flex-col" style={{ gap: "var(--sp-3)" }}>
-      {repos === null ? (
-        <p className="text-label" style={{ color: "var(--fg-3)", margin: 0 }}>
-          Loading repositories from your computer…
-        </p>
-      ) : (
-        <>
-          {repos.length > 0 ? (
-            <>
-              <input
-                type="text"
-                value={filter}
-                onChange={(e) => setFilter(e.target.value)}
-                placeholder="Filter by name…"
-                aria-label="Filter local repositories"
-                className="text-body"
-                style={{
-                  padding: "var(--sp-2) var(--sp-3)",
-                  background: "var(--bg)",
-                  border: "var(--hairline) solid var(--border)",
-                  borderRadius: "var(--radius-input)",
-                  color: "var(--fg)",
-                  outline: "none",
-                }}
-              />
-              <ul
-                style={{
-                  listStyle: "none",
-                  margin: 0,
-                  padding: 0,
-                  maxHeight: 240,
-                  overflow: "auto",
-                  border: "var(--hairline) solid var(--border-faint)",
-                  borderRadius: "var(--radius-input)",
-                  background: "var(--bg)",
-                }}
-              >
-                {filtered && filtered.length === 0 ? (
-                  <li className="text-label" style={{ padding: "var(--sp-2_5) var(--sp-3)", color: "var(--fg-4)" }}>
-                    No matches.
-                  </li>
-                ) : (
-                  (filtered ?? []).map((r) => {
-                    const isSelected = selected?.kind === "list" && selected.localPath === r.localPath;
-                    return (
-                      <li key={r.localPath}>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            onSelect({
-                              kind: "list",
-                              localPath: r.localPath,
-                              originUrl: r.originUrl,
-                              name: r.name,
-                            });
-                            onManualPathChange("");
-                          }}
-                          className="flex w-full items-center text-left transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                          style={{
-                            padding: "var(--sp-2) var(--sp-3)",
-                            gap: "var(--sp-2)",
-                            background: isSelected ? "var(--bg-active)" : "transparent",
-                            border: "none",
-                            cursor: "pointer",
-                          }}
-                        >
-                          <span className="flex-1 min-w-0">
-                            <span
-                              className="text-body"
-                              style={{
-                                color: "var(--fg)",
-                                fontWeight: isSelected ? 600 : 400,
-                                display: "block",
-                              }}
-                            >
-                              {r.name}
-                            </span>
-                            <span className="text-caption" style={{ color: "var(--fg-4)", display: "block" }}>
-                              {r.localPath}
-                            </span>
-                          </span>
-                          {isSelected ? <Check className="h-4 w-4" style={{ color: "var(--accent)" }} /> : null}
-                        </button>
-                      </li>
-                    );
-                  })
-                )}
-              </ul>
-            </>
-          ) : null}
-
-          {error ? (
-            <p className="text-label" style={{ color: "var(--fg-3)", margin: 0 }}>
-              {error}
-            </p>
-          ) : null}
-
-          {repos.length === 0 && !error ? (
-            <p className="text-label" style={{ color: "var(--fg-3)", margin: 0 }}>
-              No repos detected under common roots (~/code, ~/github, ~/projects, ~/work). Type a path below.
-            </p>
-          ) : null}
-
-          <div className="flex flex-col" style={{ gap: "var(--sp-1)" }}>
-            <label htmlFor="onboarding-manual-repo-path" className="text-label" style={{ color: "var(--fg-3)" }}>
-              {repos.length > 0 ? "Not in the list?" : "Repository path"}
-            </label>
-            <input
-              id="onboarding-manual-repo-path"
-              type="text"
-              value={manualPath}
-              onChange={(e) => handleManualChange(e.target.value)}
-              placeholder="/Users/you/code/your-repo"
-              className="text-body"
-              style={{
-                padding: "var(--sp-2) var(--sp-3)",
-                background: "var(--bg)",
-                border: "var(--hairline) solid var(--border)",
-                borderRadius: "var(--radius-input)",
-                color: "var(--fg)",
-                outline: "none",
-                fontFamily: "var(--font-mono)",
-              }}
-            />
-            <p
-              className="text-caption"
-              style={{
-                color: manualIsAbsolute === false ? "var(--state-error)" : "var(--fg-4)",
-                margin: 0,
-              }}
-            >
-              {manualIsAbsolute === false
-                ? "Path must be absolute — start with / or ~/."
-                : "Absolute path on the computer running your agent."}
-            </p>
-          </div>
-        </>
-      )}
+    <div style={{ animation: "subtle-fade 200ms ease-out" }}>
+      {heading}
+      <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
+        Pick the repository the agent will read, write, and open PRs against.
+      </p>
+      <select
+        aria-label="GitHub repository"
+        value={selectedRepoUrl ?? ""}
+        onChange={(e) => onSelect(e.target.value || null)}
+        className="text-body"
+        style={{
+          marginTop: "var(--sp-2)",
+          width: "100%",
+          padding: "var(--sp-2) var(--sp-3)",
+          background: "var(--bg)",
+          border: "var(--hairline) solid var(--border)",
+          borderRadius: "var(--radius-input)",
+          color: "var(--fg)",
+          outline: "none",
+        }}
+      >
+        <option value="">Select a repository…</option>
+        {repos.map((repo) => (
+          <option key={repo.cloneUrl} value={repo.cloneUrl}>
+            {repo.fullName}
+            {repo.private ? " · private" : ""}
+          </option>
+        ))}
+      </select>
     </div>
   );
 }
@@ -1346,15 +1181,10 @@ function StepFrame({
 function CommandBox({ command }: { command: string | null }) {
   const [copied, setCopied] = useState(false);
 
-  // The command is two lines: `npm install -g <pkg>` then the connect call.
-  // Show both — installing the CLI is a prerequisite the user otherwise
-  // misses. Truncate the connect token in the visible preview to keep the
-  // box from wrapping; the Copy button still grabs the verbatim string.
   const lines = command ? command.split("\n") : [];
-  const installLine = lines.find((l) => l.startsWith("npm ")) ?? "";
   const connectLine = lines.find((l) => l.startsWith("first-tree-hub")) ?? "";
   const connectPrefix = "first-tree-hub connect ";
-  const connectPreview = connectLine.startsWith(connectPrefix)
+  const commandPreview = connectLine.startsWith(connectPrefix)
     ? `${connectPrefix}${connectLine.slice(connectPrefix.length, connectPrefix.length + 22)}…`
     : connectLine.length > 52
       ? `${connectLine.slice(0, 52)}…`
@@ -1372,22 +1202,22 @@ function CommandBox({ command }: { command: string | null }) {
       <div className="flex" style={{ gap: "var(--sp-2)", alignItems: "stretch" }}>
         <pre
           className="mono text-label"
-          title={command ?? ""}
+          title={connectLine}
           style={{
             flex: 1,
+            minHeight: 38,
             margin: 0,
             padding: "var(--sp-2_5) var(--sp-3)",
             background: "color-mix(in oklch, var(--bg-sunken) 42%, transparent)",
             border: "var(--hairline) solid color-mix(in oklch, var(--border-faint) 58%, transparent)",
             borderRadius: "var(--radius-input)",
             color: "var(--fg-2)",
-            whiteSpace: "pre",
+            whiteSpace: "nowrap",
             overflow: "hidden",
             minWidth: 0,
-            lineHeight: 1.5,
           }}
         >
-          {command ? `${installLine}\n${connectPreview}` : "Generating token…"}
+          {commandPreview || "Generating token…"}
         </pre>
         <Button
           type="button"
@@ -1401,6 +1231,7 @@ function CommandBox({ command }: { command: string | null }) {
             borderColor: "color-mix(in oklch, var(--border) 58%, transparent)",
             boxShadow: "none",
             height: "auto",
+            minHeight: 38,
           }}
         >
           {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
@@ -1445,92 +1276,6 @@ function ConnectedRow({ hostname }: { hostname: string }) {
       <span>
         <span className="mono font-semibold">{hostname}</span> connected
       </span>
-    </div>
-  );
-}
-
-function RuntimeChips({
-  runtimes,
-  selected,
-  onSelect,
-  capabilitiesLoaded,
-}: {
-  runtimes: string[];
-  selected: string | null;
-  onSelect: (next: string) => void;
-  capabilitiesLoaded: boolean;
-}) {
-  if (runtimes.length === 0) {
-    return (
-      <p className="text-label" style={{ marginTop: "var(--sp-3)", color: "var(--fg-3)" }}>
-        {capabilitiesLoaded
-          ? "No runtime ready on this computer. Install Claude Code or Codex, then check back."
-          : "Detecting installed runtimes…"}
-      </p>
-    );
-  }
-  return (
-    <div style={{ marginTop: "var(--sp-3)" }}>
-      <p className="text-label" style={{ color: "var(--fg-3)", marginBottom: "var(--sp-1)" }}>
-        Powered by
-      </p>
-      <fieldset className="flex" style={{ gap: "var(--sp-4)", flexWrap: "wrap", margin: 0, padding: 0, border: 0 }}>
-        <legend className="sr-only">Runtime provider</legend>
-        {runtimes.map((provider, index) => {
-          const active = selected === provider;
-          return (
-            <label
-              key={provider}
-              className="onboarding-runtime-option inline-flex items-center text-body"
-              style={{
-                gap: "var(--sp-1_5)",
-                padding: "var(--sp-1) 0",
-                cursor: "pointer",
-                color: active ? "color-mix(in oklch, var(--accent) 30%, var(--fg))" : "var(--fg)",
-                fontWeight: active ? 600 : 400,
-                animation: `onboarding-rise 220ms ease-out ${index * 80}ms both`,
-                transition: "color 160ms ease, opacity 160ms ease, transform 160ms ease",
-              }}
-            >
-              <input
-                type="radio"
-                name="onboarding-runtime"
-                value={provider}
-                checked={active}
-                onChange={() => onSelect(provider)}
-                className="sr-only"
-              />
-              <span
-                aria-hidden="true"
-                className="inline-flex items-center justify-center"
-                style={{
-                  width: 14,
-                  height: 14,
-                  borderRadius: "50%",
-                  border: active ? "var(--hairline) solid var(--accent)" : "var(--hairline) solid var(--border-strong)",
-                  background: active ? "color-mix(in oklch, var(--accent) 8%, transparent)" : "transparent",
-                  boxShadow: active
-                    ? "0 0 0 var(--sp-0_5) color-mix(in oklch, var(--accent) 10%, transparent)"
-                    : "none",
-                  transition: "border-color 160ms ease, background 160ms ease, box-shadow 160ms ease",
-                }}
-              >
-                {active && (
-                  <span
-                    style={{
-                      width: 6,
-                      height: 6,
-                      borderRadius: "50%",
-                      background: "var(--accent)",
-                    }}
-                  />
-                )}
-              </span>
-              {prettyRuntimeLabel(provider)}
-            </label>
-          );
-        })}
-      </fieldset>
     </div>
   );
 }

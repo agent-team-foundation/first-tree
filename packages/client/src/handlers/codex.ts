@@ -1,5 +1,5 @@
 import { existsSync, rmSync } from "node:fs";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import {
   type AgentRuntimeConfigPayload,
   deriveRepoLocalPath,
@@ -10,13 +10,6 @@ import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import { bootstrapWorkspace, FIRST_TREE_WORKSPACE_MARKER } from "../runtime/bootstrap.js";
 import type { GitMirrorManager } from "../runtime/git-mirror-manager.js";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
-import {
-  addLocalWorktree,
-  expandHome,
-  isAbsoluteLocalPath,
-  type LocalWorktreeOwned,
-  removeLocalWorktree,
-} from "../runtime/local-worktree.js";
 import { acquireWorkspace } from "../runtime/workspace.js";
 
 /**
@@ -40,17 +33,6 @@ type Worktree = { url: string; path: string; branchName: string };
 export function buildCodexThreadOptions(payload: AgentRuntimeConfigPayload, workspaceCwd: string): ThreadOptions {
   const additionalDirectories: string[] = [];
   for (const repo of payload.gitRepos) {
-    // Local-direct mode: the worktree lives at `<workspaceCwd>/<displayName>`
-    // (materialised into the agent workspace by `addLocalWorktree`), so the
-    // additional dir mirrors the sandbox case — agent always sees a
-    // `<workspace>/<name>` shape regardless of where the source clone lives.
-    if (repo.localPath && isAbsoluteLocalPath(repo.localPath)) {
-      // Match `prepareGitWorktrees` below: displayName comes from the
-      // user's clone path, not the (possibly synthetic) `url`.
-      const displayName = basename(expandHome(repo.localPath)) || "repo";
-      additionalDirectories.push(join(workspaceCwd, displayName));
-      continue;
-    }
     const localPath = repo.localPath ?? deriveRepoLocalPath(repo.url);
     if (!localPath) continue;
     additionalDirectories.push(join(workspaceCwd, localPath));
@@ -107,7 +89,6 @@ export const createCodexHandler: HandlerFactory = (config) => {
   let drainScheduled = false;
   const queuedMessages: SessionMessage[] = [];
   const ownedWorktrees: Worktree[] = [];
-  const ownedLocalWorktrees: LocalWorktreeOwned[] = [];
 
   function buildEnv(sessionCtx: SessionContext): Record<string, string> {
     // Footgun F1: when `CodexOptions.env` is provided the SDK does NOT
@@ -178,30 +159,8 @@ export const createCodexHandler: HandlerFactory = (config) => {
     workspaceCwd: string,
     chatId: string,
   ): Promise<void> {
+    if (!gitMirrorManager) return;
     for (const repo of payload.gitRepos) {
-      // Local-direct (Plan A): user's working clone, session-scoped branch.
-      if (repo.localPath && isAbsoluteLocalPath(repo.localPath)) {
-        const repoRoot = expandHome(repo.localPath);
-        const displayName = basename(repoRoot) || "repo";
-        const targetPath = join(workspaceCwd, displayName);
-        const branchName = `agent/${chatId}`;
-        try {
-          const owned = await addLocalWorktree({
-            repoRoot,
-            targetPath,
-            branchName,
-            ref: repo.ref,
-            log: (m) => ctx?.log(m),
-          });
-          ownedLocalWorktrees.push(owned);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          ctx?.log(`codex local worktree skipped (${repoRoot}): ${msg}`);
-        }
-        continue;
-      }
-      // Sandbox (legacy) — needs the bare-mirror manager.
-      if (!gitMirrorManager) continue;
       const localPath = repo.localPath ?? deriveRepoLocalPath(repo.url);
       if (!localPath) continue;
       const targetPath = join(workspaceCwd, localPath);
@@ -623,10 +582,6 @@ export const createCodexHandler: HandlerFactory = (config) => {
         }
         ownedWorktrees.length = 0;
       }
-      for (const owned of ownedLocalWorktrees) {
-        await removeLocalWorktree(owned, (m) => ctx?.log(m));
-      }
-      ownedLocalWorktrees.length = 0;
 
       if (cwd && existsSync(cwd)) {
         try {
