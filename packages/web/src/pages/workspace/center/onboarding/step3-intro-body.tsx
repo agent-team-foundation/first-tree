@@ -60,43 +60,59 @@ export function Step3IntroBody() {
 
 // ── Invitee router ────────────────────────────────────────────────────────
 
+type InviteeLoadState =
+  | { kind: "loading" }
+  | { kind: "error"; message: string }
+  | { kind: "loaded"; tree: OrgContextTreeOutput | null; repos: OrgSourceReposOutput | null };
+
 function InviteeStep3Body() {
   const { organizationId } = useAuth();
-  const [teamCtxTree, setTeamCtxTree] = useState<OrgContextTreeOutput | null>(null);
-  const [teamSourceRepos, setTeamSourceRepos] = useState<OrgSourceReposOutput | null>(null);
-  const [loaded, setLoaded] = useState(false);
+  const [state, setState] = useState<InviteeLoadState>({ kind: "loading" });
+  // Bumping this re-runs the effect for the explicit retry button.
+  const [reloadKey, setReloadKey] = useState(0);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reloadKey IS the dep — bumping it re-fires the fetch.
   useEffect(() => {
     if (!organizationId) {
-      setLoaded(true);
+      setState({ kind: "loaded", tree: null, repos: null });
       return;
     }
     let cancelled = false;
+    setState({ kind: "loading" });
     void (async () => {
-      // Both namespaces relax their GET to member-readable in the
-      // source_repos namespace PR, so the invitee's read no longer 403s
-      // like it did in pre-Phase-B. A failure here (network blip, server
-      // hiccup) collapses to "neither configured" and renders the waiting
-      // body — same blast radius as a true unbound team, and the invitee's
-      // own agent isn't blocked.
-      const [tree, repos] = await Promise.all([
-        getContextTreeSetting(organizationId).catch(() => null),
-        getSourceReposSetting(organizationId).catch(() => null),
-      ]);
-      if (cancelled) return;
-      setTeamCtxTree(tree);
-      setTeamSourceRepos(repos);
-      setLoaded(true);
+      // Both namespaces are member-readable since the source_repos PR, so invitees no
+      // longer 403 here. A throw means a real failure (network blip, 5xx);
+      // surface it as a retry-able error rather than collapsing to
+      // "neither configured" — that branch auto-dismisses the onboarding
+      // server-side, so a transient blip on first paint would permanently
+      // route a fully-configured team's invitee out of the Confirm flow.
+      try {
+        const [tree, repos] = await Promise.all([
+          getContextTreeSetting(organizationId),
+          getSourceReposSetting(organizationId),
+        ]);
+        if (cancelled) return;
+        setState({ kind: "loaded", tree, repos });
+      } catch (err) {
+        if (cancelled) return;
+        setState({
+          kind: "error",
+          message: err instanceof Error ? err.message : "Failed to load team setup",
+        });
+      }
     })();
     return () => {
       cancelled = true;
     };
-  }, [organizationId]);
+  }, [organizationId, reloadKey]);
 
-  if (!loaded) return <InviteeLoadingBody />;
+  if (state.kind === "loading") return <InviteeLoadingBody />;
+  if (state.kind === "error") {
+    return <InviteeLoadErrorBody message={state.message} onRetry={() => setReloadKey((k) => k + 1)} />;
+  }
 
-  const treeUrl = teamCtxTree?.repo ?? "";
-  const repos = teamSourceRepos?.repos ?? [];
+  const treeUrl = state.tree?.repo ?? "";
+  const repos = state.repos?.repos ?? [];
 
   if (treeUrl && repos.length > 0) {
     return <InviteeConfirmBody treeUrl={treeUrl} teamRepos={repos} />;
@@ -105,6 +121,31 @@ function InviteeStep3Body() {
     return <InviteePickerBody treeUrl={treeUrl} />;
   }
   return <InviteeWaitingBody />;
+}
+
+function InviteeLoadErrorBody({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div
+      style={{
+        padding: "var(--sp-5) var(--sp-4)",
+        background: "var(--surface-1)",
+        border: "var(--hairline) solid var(--border-faint)",
+        borderRadius: "var(--radius-card)",
+      }}
+    >
+      <h2 className="text-subtitle font-semibold" style={{ margin: 0, color: "var(--fg)" }}>
+        Couldn&apos;t load your team&apos;s setup
+      </h2>
+      <p className="text-body" style={{ marginTop: "var(--sp-2)", color: "var(--fg-3)" }}>
+        {message}. This is usually a transient network issue.
+      </p>
+      <div style={{ marginTop: "var(--sp-3)" }}>
+        <Button type="button" onClick={onRetry}>
+          Try again
+        </Button>
+      </div>
+    </div>
+  );
 }
 
 function InviteeLoadingBody() {
