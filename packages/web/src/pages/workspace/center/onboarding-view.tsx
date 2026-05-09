@@ -188,7 +188,7 @@ export function OnboardingView() {
         padding: "clamp(var(--sp-16), 12vh, var(--sp-45)) var(--sp-4) var(--sp-12)",
       }}
     >
-      <div style={{ width: "100%", maxWidth: 560 }}>
+      <div style={{ width: "100%", maxWidth: 720 }}>
         {body === "step1" ? (
           <Step1Body organizationId={organizationId} onContinue={advanceToStep2} />
         ) : body === "step2" ? (
@@ -705,7 +705,7 @@ function Step2FormBody({
 
   return (
     <>
-      <p className="text-body" style={{ margin: 0, color: "var(--fg-3)", maxWidth: 540 }}>
+      <p className="text-body" style={{ margin: 0, color: "var(--fg-3)", maxWidth: 720 }}>
         {inviteHasTeam ? (
           <>
             You&apos;ve joined{" "}
@@ -1039,9 +1039,9 @@ function Step3IntroBody() {
 
   return (
     <>
-      <p className="text-body" style={{ margin: 0, color: "var(--fg-3)", maxWidth: 540 }}>
-        Build your <span style={{ color: "var(--fg-2)" }}>context-tree</span> — shared knowledge that grows with your
-        code.
+      <p className="text-body" style={{ margin: 0, color: "var(--fg-3)", maxWidth: 720 }}>
+        Build your <span style={{ color: "var(--fg-2)" }}>context-tree</span> with your agent — your team&apos;s shared
+        knowledge that grows with your code.
       </p>
 
       <div style={{ marginTop: "var(--sp-5)", position: "relative" }}>
