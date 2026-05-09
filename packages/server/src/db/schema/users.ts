@@ -9,6 +9,14 @@ export const users = pgTable("users", {
   avatarUrl: text("avatar_url"),
   /** "active" | "suspended" */
   status: text("status").notNull().default("active"),
+  /**
+   * Set when the user clicks `✕` on the onboarding stepper. Decoupled from
+   * `onboardingStep` so the stepper can keep rendering across all three
+   * UI steps (server-side onboardingStep flips to `completed` at the end of
+   * Step 2 — Step 3 is purely client-driven). NULL = stepper renders.
+   * See docs/new-user-onboarding-design.md §8.
+   */
+  onboardingDismissedAt: timestamp("onboarding_dismissed_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

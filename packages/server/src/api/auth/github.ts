@@ -7,6 +7,7 @@ import {
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { signTokensForUser } from "../../services/auth.js";
 import { findOrCreateUserFromGithub, type GithubProfile } from "../../services/auth-identity.js";
+import { encryptValue } from "../../services/crypto.js";
 import { exchangeCodeForProfile } from "../../services/github-oauth.js";
 import { findActiveByToken, recordRedemption } from "../../services/invitation.js";
 import { createPersonalTeam, ensureMembership, pickPrimaryMembership } from "../../services/membership.js";
@@ -66,7 +67,11 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
       client_id: oauthCfg.clientId,
       redirect_uri: redirectUri,
       state: token,
-      scope: "read:user user:email",
+      // `repo` scope is required by the Step 2 repo picker
+      // (docs/new-user-onboarding-design.md §6.3 / O-1). We grant it at
+      // login rather than on-demand mid-onboarding so the picker works
+      // immediately when the user reaches Step 2 without a second redirect.
+      scope: "read:user user:email repo",
       allow_signup: "true",
     });
     return reply.redirect(`https://github.com/login/oauth/authorize?${params}`, 302);
@@ -101,19 +106,22 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
 
     const redirectUri = `${resolvePublicUrl(app, request)}/api/v1/auth/github/callback`;
     let profile: GithubProfile;
+    let accessToken: string;
     try {
-      profile = await exchangeCodeForProfile(
+      const result = await exchangeCodeForProfile(
         { clientId: oauthCfg.clientId, clientSecret: oauthCfg.clientSecret },
         code,
         redirectUri,
       );
+      profile = result.profile;
+      accessToken = result.accessToken;
     } catch (err) {
       const msg = err instanceof Error ? err.message : "GitHub exchange failed";
       app.log.warn({ err }, "github oauth code exchange failed");
       return reply.status(401).send({ error: msg });
     }
 
-    return completeOauthFlow(app, request, reply, profile, next);
+    return completeOauthFlow(app, request, reply, profile, next, accessToken);
   });
 
   app.get("/dev-callback", async (request, reply) => {
@@ -135,7 +143,12 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
       displayName: params.displayName ?? params.login,
       avatarUrl: null,
     };
-    return completeOauthFlow(app, request, reply, profile, next);
+    // Optional dev-only PAT injection so the Step 2 repo picker has a real
+    // GitHub access token to call APIs with. Set `DEV_GITHUB_PAT=ghp_...` in
+    // the dev env to enable. Never read in production (the early-return
+    // above already guards `dev-callback` itself).
+    const devPat = process.env.DEV_GITHUB_PAT?.trim() || null;
+    return completeOauthFlow(app, request, reply, profile, next, devPat);
   });
 }
 
@@ -145,8 +158,17 @@ async function completeOauthFlow(
   reply: FastifyReply,
   profile: GithubProfile,
   next: string,
+  /**
+   * Raw GitHub OAuth access token. Persisted (encrypted) so the Step 2
+   * repo picker can call GitHub APIs without a second OAuth round-trip.
+   * `null` for `dev-callback` (no real GitHub round-trip happened).
+   */
+  rawAccessToken: string | null,
 ) {
-  const { userId } = await findOrCreateUserFromGithub(app.db, profile);
+  const encryptedAccessToken = rawAccessToken
+    ? encryptValue(rawAccessToken, app.config.secrets.encryptionKey)
+    : undefined;
+  const { userId } = await findOrCreateUserFromGithub(app.db, profile, { encryptedAccessToken });
 
   // Track which signup path the user took. Surfaced to the SPA via the
   // post-OAuth fragment so the onboarding modal can pick context-aware copy.
@@ -190,14 +212,29 @@ async function completeOauthFlow(
       resolved = true;
       // joinPath stays "returning"; preserve caller's original `next` intent.
     } else {
-      await createPersonalTeam(app.db, {
+      const personal = await createPersonalTeam(app.db, {
         userId,
         loginSeed: profile.login,
+        // Per docs/new-user-onboarding-design.md §5.5, default team name is
+        // `${login}'s team` — reads as a collective space, matches Linear's
+        // convention. The user can rename in Step 1 of onboarding.
+        teamDisplayName: `${profile.login}'s team`,
         userDisplayName: profile.displayName?.trim() || profile.login,
       });
       joinPath = "solo";
       resolved = true;
       next = "/";
+      // Onboarding funnel: structured log marker. Picked up by logfire/otel
+      // pipelines via `event: "onboarding.team_created"` for funnel views.
+      app.log.info(
+        {
+          event: "onboarding.team_created",
+          userId,
+          organizationId: personal.organizationId,
+          source: "oauth-bootstrap",
+        },
+        "onboarding funnel: team auto-created at OAuth bootstrap",
+      );
     }
   }
 

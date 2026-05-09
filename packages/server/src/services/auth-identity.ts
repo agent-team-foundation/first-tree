@@ -25,18 +25,30 @@ export type GithubProfile = {
  * treats it as a plain string and rejects every password — that's the
  * intended behaviour: SaaS users cannot fall back to password login.
  */
-export async function findOrCreateUserFromGithub(db: Database, profile: GithubProfile): Promise<{ userId: string }> {
+export async function findOrCreateUserFromGithub(
+  db: Database,
+  profile: GithubProfile,
+  opts: { encryptedAccessToken?: string } = {},
+): Promise<{ userId: string }> {
   const [existing] = await db
-    .select({ userId: authIdentities.userId })
+    .select({ userId: authIdentities.userId, metadata: authIdentities.metadata })
     .from(authIdentities)
     .where(and(eq(authIdentities.provider, "github"), eq(authIdentities.identifier, profile.githubId)))
     .limit(1);
 
   if (existing) {
-    if (profile.email) {
+    const patch: Record<string, unknown> = {};
+    if (profile.email) patch.email = profile.email;
+    if (opts.encryptedAccessToken) {
+      // Refresh the stored token on every sign-in so a re-OAuth (e.g. user
+      // expanded scopes) takes effect immediately.
+      const merged = { ...(existing.metadata ?? {}), accessToken: opts.encryptedAccessToken, login: profile.login };
+      patch.metadata = merged;
+    }
+    if (Object.keys(patch).length > 0) {
       await db
         .update(authIdentities)
-        .set({ email: profile.email, updatedAt: new Date() })
+        .set({ ...patch, updatedAt: new Date() })
         .where(and(eq(authIdentities.provider, "github"), eq(authIdentities.identifier, profile.githubId)));
     }
     return { userId: existing.userId };
@@ -59,6 +71,8 @@ export async function findOrCreateUserFromGithub(db: Database, profile: GithubPr
       displayName: profile.displayName?.trim() || profile.login,
       avatarUrl: profile.avatarUrl ?? null,
     });
+    const metadata: Record<string, unknown> = { login: profile.login };
+    if (opts.encryptedAccessToken) metadata.accessToken = opts.encryptedAccessToken;
     await tx.insert(authIdentities).values({
       id: uuidv7(),
       userId,
@@ -66,7 +80,7 @@ export async function findOrCreateUserFromGithub(db: Database, profile: GithubPr
       identifier: profile.githubId,
       email: profile.email,
       verifiedAt: new Date(),
-      metadata: { login: profile.login },
+      metadata,
     });
   });
 

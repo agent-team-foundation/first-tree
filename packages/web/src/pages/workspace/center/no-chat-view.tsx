@@ -3,7 +3,7 @@ import { FirstTreeLogo } from "../../../components/first-tree-logo.js";
 /**
  * Center-panel placeholder shown when onboarding is complete but no chat
  * is selected. Sibling of ChatView and OnboardingView; CenterPanel picks
- * one of the three based on URL params + wizardStep.
+ * one of the three based on URL params + onboardingStep.
  */
 export function NoChatView() {
   return (

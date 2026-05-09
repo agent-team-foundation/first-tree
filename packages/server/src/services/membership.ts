@@ -97,7 +97,9 @@ type CreatePersonalTeamInput = {
   userId: string;
   /** GitHub login slug, used as the seed for the team slug. */
   loginSeed: string;
-  /** Display label for the user — fed into the personal team's display name. */
+  /** Display label for the personal team (e.g. `${login}'s team`). */
+  teamDisplayName: string;
+  /** Display label for the user's human agent. */
   userDisplayName: string;
 };
 
@@ -108,14 +110,15 @@ type CreatePersonalTeamInput = {
  *   - First try: `${login}` (lowercased, sanitized)
  *   - On collision: append a 4-char hex disambiguator
  *
- * Display name is the user's GitHub real name (or login as fallback). No
- * "Personal Team" suffix — the user might invite teammates later, and we
- * don't want a label that reads like a private sandbox to be the team name
- * other members see. Users rename freely via Settings.
+ * Default team display name is `${login}'s team` (set by the caller — see
+ * docs/new-user-onboarding-design.md §5.5). Reads as "this is a collective
+ * space" from day one so a later teammate-invite doesn't surface a label
+ * that looks like a private sandbox. Users can rename via Step 1 of the
+ * onboarding flow or Settings.
  */
 export async function createPersonalTeam(db: Database, input: CreatePersonalTeamInput) {
   const baseSlug = sanitizeOrgSlug(input.loginSeed);
-  const displayName = input.userDisplayName;
+  const displayName = input.teamDisplayName;
 
   const orgId = uuidv7();
   const slug = await insertOrgWithSlugRetry(db, orgId, baseSlug, displayName);

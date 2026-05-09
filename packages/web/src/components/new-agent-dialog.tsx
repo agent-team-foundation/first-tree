@@ -200,7 +200,7 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
     onSuccess: (agent) => {
       queryClient.invalidateQueries({ queryKey: ["agents"] });
       queryClient.invalidateQueries({ queryKey: ["activity"] });
-      // Refresh /me so wizardStep flips to "completed" — otherwise the
+      // Refresh /me so onboardingStep flips to "completed" — otherwise the
       // onboarding banner sticks around even though the user just
       // created an agent through this non-onboarding path.
       void refreshMe();
