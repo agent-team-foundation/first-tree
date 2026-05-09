@@ -1054,7 +1054,6 @@ function Step3IntroBody() {
             error={reposError}
             selectedRepoUrl={selectedRepoUrl}
             onSelect={setSelectedRepoUrl}
-            agentName="your agent"
           />
         </StepFrame>
 
@@ -1171,7 +1170,9 @@ function Step3IntroBody() {
           {treeModeChosen ? (
             <>
               <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
-                Your agent will install the first-tree skill, {treeMode === "existing" ? "bind to your tree" : "scaffold a fresh tree"}, and open a PR back to your source repo with the binding metadata.
+                Your agent will install the first-tree skill,{" "}
+                {treeMode === "existing" ? "bind to your tree" : "scaffold a fresh tree"}, and open a PR back to your
+                source repo with the binding metadata.
               </p>
 
               {error ? (
@@ -1214,14 +1215,12 @@ function RepoPickerSection({
   error,
   selectedRepoUrl,
   onSelect,
-  agentName,
 }: {
   disabled: boolean;
   repos: GithubRepo[] | null;
   error: string | null;
   selectedRepoUrl: string | null;
   onSelect: (url: string | null) => void;
-  agentName: string;
 }) {
   const heading = (
     <h2
