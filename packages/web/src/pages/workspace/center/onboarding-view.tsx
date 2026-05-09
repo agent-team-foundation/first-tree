@@ -738,7 +738,7 @@ function Step2FormBody({
               className="text-body font-normal"
               style={{ color: "var(--fg-2)", whiteSpace: "nowrap" }}
             >
-              What should we call this agent?
+              Name your agent
             </label>
             <input
               ref={nameInputRef}
@@ -783,15 +783,15 @@ function Step2FormBody({
                 fontWeight: trimmedName ? 600 : 500,
               }}
             >
-              Where will {trimmedName || "this agent"} run?
+              Connect a computer
             </h2>
 
             {trimmedName ? (
               <>
                 <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
                   {connectedClient
-                    ? `This computer will run ${trimmedName} and keep it connected to Hub.`
-                    : "This agent needs a computer to do its work. Connect the one it should use."}
+                    ? `${trimmedName} will run on this computer and stay connected to Hub.`
+                    : `${trimmedName} needs a computer to run on. Connect one with the command below.`}
                 </p>
                 {!connectedClient && (
                   <p className="text-label" style={{ color: "var(--fg-4)", marginTop: "var(--sp-2)" }}>
