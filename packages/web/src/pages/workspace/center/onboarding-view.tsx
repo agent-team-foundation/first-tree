@@ -1248,7 +1248,7 @@ function RepoPickerSection({
         fontWeight: disabled ? 500 : 600,
       }}
     >
-      Connect your source repo
+      Pick the source repo
     </h2>
   );
 

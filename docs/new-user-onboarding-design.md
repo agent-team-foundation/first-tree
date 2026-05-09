@@ -1,6 +1,6 @@
 # New-User Onboarding Redesign — Design Doc
 
-**Status:** Draft / under discussion. Lock before implementation.
+**Status:** Implemented in PR #248 with **amendments** — see §13 for the locked decisions that were reversed during implementation. Read §13 alongside §6 / §7 / §8 / §11 for the actual shipped behaviour.
 **Branch:** `feat/onboarding-redesign`
 **Scope:** Hosted Hub (first-tree.ai) post-signup onboarding for brand-new users.
 **Out of scope:** Local self-hosted onboarding (`first-tree-hub start`) — covered in [docs/onboarding-redesign.md](onboarding-redesign.md). NewAgentDialog rewrite — covered in PR #237.
@@ -699,7 +699,181 @@ Implementation order, smallest-shippable-first:
 
 ---
 
-## 13. References
+## 13. Plan B Amendments — locked decisions reversed during implementation
+
+The original §4-§12 above froze a set of locked decisions before the implementation
+started. During PR #248 several of those decisions were re-evaluated and reversed.
+This section records each reversal, why it happened, and the actual shipped
+behaviour. The earlier sections are preserved so readers can see the original
+reasoning and the trade-off that was re-examined.
+
+When §13 contradicts §6 / §7 / §8 / §11, **§13 wins** — it describes what shipped.
+
+### 13.1 Repo picker moved from Step 2 to Step 3
+
+**Original lock (§6.3, decision Q-2.A):** GitHub repo picker lives inside Step 2
+alongside agent name + computer connect, so the user makes one cohesive
+"create the agent" decision. O-1's OAuth `repo` scope upgrade was justified
+specifically by Step 2's picker needing immediate availability.
+
+**Reversal:** repo picker now lives inside Step 3 (`Step3IntroBody → RepoPickerSection`).
+
+**Why:**
+- Step 2's "create agent" must succeed even when GitHub OAuth is sluggish or the
+  user's encrypted token is stale (e.g. after the `repo` scope upgrade — see
+  `code: scope_missing` handling in [packages/server/src/api/me.ts](../packages/server/src/api/me.ts)).
+  Coupling agent creation to a `/user/repos` call makes a transient GitHub blip
+  block onboarding entirely.
+- Step 3 is where the user is making the "context tree" decision; binding the
+  source repo at the same moment is mentally adjacent (the tree is the source
+  repo's knowledge layer).
+- The agent created in Step 2 stays usable for non-code chat without a
+  `gitRepos` binding; binding can fail without orphaning the agent.
+
+**Behavioural consequence:** Step 2 creates an unbound agent (`gitRepos = []`).
+Step 3 calls `updateAgentConfig({ gitRepos: [{ url }] })` after the user picks a
+repo, immediately before creating the chat. `prepareGitWorktrees` in
+[packages/client/src/handlers/claude-code.ts](../packages/client/src/handlers/claude-code.ts)
+materialises the clone into the agent's session cwd subdirectory before the
+bootstrap message runs.
+
+**O-1 still applies:** the `repo` OAuth scope is still required at sign-in, just
+for Step 3's picker rather than Step 2's.
+
+### 13.2 Bootstrap message rewritten as natural-language prose, not a single verbatim line
+
+**Original lock (§7.3, decision O-6):** the bootstrap message is a single verbatim
+line shared with PR #237 and any other first-tree install trigger:
+> `Use the latest First-Tree CLI to install the skill in the current repository and complete the onboarding process: https://github.com/agent-team-foundation/first-tree`
+
+**Reversal:** bootstrap is now two prose helpers (`buildBindBootstrap` /
+`buildCreateBootstrap`) selected by the user's "have a tree?" choice. Both
+describe what to accomplish in natural language and reference the
+`first-tree` / `first-tree-hub` CLIs by name; neither inlines literal shell
+commands.
+
+**Why:**
+- Established cross-session preference: Hub→agent first-message prose stays in
+  natural language ("use the X CLI to do Y + URL"), with no inlined shell
+  commands. Affirmed in conversation 2026-05-08; predates and supersedes O-6.
+- The agent already has the first-tree skill loaded and the source repo
+  materialised in its workspace via `gitRepos` — the message just states the
+  goal; the skill knows the concrete commands.
+- Path A vs Path B (existing tree vs new tree) want different downstream
+  bookkeeping — Path A skips the `org bind-tree` callback because the URL is
+  already known, Path B includes it because the agent will discover the URL
+  after `gh repo create`. A single verbatim line cannot express both.
+
+**Single-source-of-truth promise (O-6):** still aspirationally true within the
+PR — only `Step3IntroBody` invokes these builders. If a future surface (e.g.
+PR #237's auto-send path) needs the same prompts, hoist the helpers to
+`packages/shared` so both import the same strings. This is a code-organisation
+follow-up, not a decision to revisit.
+
+### 13.3 Step 3 IntroBody became a 3-substep form, not a single intro card
+
+**Original lock (§7.2 / §7.3):** Step 3 is a single intro card with `[Yes, set
+it up]` / `[I'll do it later]` buttons; all tree-related decisions ("have a
+tree? which one?") happen inside the chat with the agent (Q-3.B specifies
+quick-reply chips in chat).
+
+**Reversal:** Step 3 IntroBody is a vertical 3-substep frame:
+1. Pick source repo
+2. Toggle "Bind to existing tree" / "Create a new tree" (+ URL field if Bind)
+3. `Continue` button → creates chat + sends bootstrap
+
+**Why:**
+- The agent's `ask-user` flow has a known compatibility issue with Claude Code
+  and Codex runtimes (P0 owned by `yuezengwu`). Until that lands, in-chat
+  quick-reply chips would be unreliable.
+- Decisions made in the form before chat starts let the bootstrap message be
+  fully self-contained — no back-and-forth with the agent before useful work
+  begins.
+- The form gives the user a clear sense of what's about to happen
+  (which repo, which tree mode) before committing.
+
+**Migration back to in-chat decisions (Q-3.B):** revisit once `ask-user`
+compatibility is fixed. The form-based approach is intentional for the
+current runtime constraints, not a permanent rejection of in-chat flow.
+
+### 13.4 Stepper auto-dismisses after Step 3 chat starts
+
+**Original lock (§7.4 / §8):** the stepper persists in Step 3 chat mode as
+"the only signal you're still in onboarding". §8.1's entire decoupling rationale
+exists to keep the stepper rendering during Step 3 chat.
+
+**Reversal:** `Step3IntroBody.handleContinue` calls `dismissOnboarding()`
+immediately after creating the chat, before navigating to `?c=<chatId>`. The
+stepper unmounts as the user enters their first chat.
+
+**Why:**
+- The new chat is the workspace's primary surface from this moment on —
+  onboarding chrome above it is visual noise, not guidance.
+- §8's decoupling is still valuable for the dismiss control flow (single
+  server-side flag, cross-tab consistency, recovery via `/settings/setup`),
+  it just no longer exists *to keep stepper visible during chat*.
+- The user has full agency to bring the stepper back via
+  `Settings → Setup → Resume setup`.
+
+**Side note:** the dismiss path also writes to `users.onboarding_dismissed_at`
+exactly as `[I'll do it later]` and the stepper's `✕` do — three triggers,
+single state field. The success path skips the "Setup hidden" toast (mid-success
+is the wrong moment to nudge about hiding); the other two trigger it.
+
+### 13.5 Scope additions beyond the original §4-§10 surface
+
+The original §4.6 explicitly deferred a `/settings/setup` "Resume setup" page
+to v1+. §6 / §7 didn't anticipate any CLI surface or per-org settings
+namespace. Three additions shipped:
+
+- **`/settings/setup` page + Resume setup button** — built in v1 because the
+  stepper `✕` becomes a hostile one-way action without a recovery path. Same
+  flag-flip mechanics as the design assumed; just a UI affordance for the
+  user-visible inverse.
+- **`first-tree-hub org bind-tree <url>` CLI subcommand** — the agent invoked
+  in Step 3's "Create new tree" path needs to record the freshly-created tree
+  URL on the Hub so future agents in the team can find it. Doing this via the
+  user's existing CLI credentials (rather than a new HTTP route the agent
+  would need to learn) follows the same pattern as `first-tree-hub client
+  connect`. Test coverage for the CLI command itself is currently nil — flagged
+  as a follow-up, not a merge blocker.
+- **`organization_settings(context_tree)` namespace usage** — the Hub-side cache
+  of the team's tree URL. Originally proposed as `organizations.tree_url`
+  (column added then removed); rebased onto main's per-org settings
+  infrastructure (#257) which provides a generic namespaced surface. The
+  CLI subcommand and Step 3 Path A both read/write through this namespace.
+
+### 13.6 Other minor deviations worth recording
+
+- **Stepper `✕` dismiss gate** (§4.6): design described `✕` as
+  always-clickable. Implementation gates it on `onboardingStep === "completed"`
+  to prevent dismissing onto an empty workspace. Same gate also applies to the
+  `/settings/setup` "Hide setup guide" affordance for symmetry.
+- **Runtime `Powered by` chip** (§6.5): design removed the runtime indicator
+  from Step 2. Implementation restored it as a small chip after the Plan B
+  picker move — knowing which runtime the agent will use is a low-cost signal
+  even when the runtime isn't user-selectable.
+
+### 13.7 What is **not** reversed
+
+For clarity, these remain as locked in §4-§12:
+
+- 3-step structure (team / agent / context-tree) — unchanged
+- Server-inferred `onboardingStep` enum (`connect` / `create_agent` /
+  `completed`) — unchanged; rename from `wizardStep` per §8.5 is in
+- `users.onboarding_dismissed_at` column + visibility decoupling — unchanged
+- OAuth `repo` scope upgrade at signup — unchanged (still required, just for
+  Step 3's picker now)
+- Default team name `{login}'s team` — unchanged
+- Step 4 (GitHub Automation) deferred — unchanged
+- Invite-flow specifics — still a follow-up; conservative pre-fill from
+  `context_tree.repo` ships in this PR but only helps admins (GET is
+  admin-gated server-side); the proper invitee redesign is part of Phase B
+  alongside the `source_repos` namespace
+
+---
+
+## 14. References
 
 - Existing local-scenario doc: [docs/onboarding-redesign.md](onboarding-redesign.md)
 - Current OnboardingView: [packages/web/src/pages/workspace/center/onboarding-view.tsx](../packages/web/src/pages/workspace/center/onboarding-view.tsx)

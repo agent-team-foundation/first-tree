@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { authIdentities } from "../db/schema/auth-identities.js";
 import { users } from "../db/schema/users.js";
 import { encryptValue } from "../services/crypto.js";
@@ -151,6 +151,58 @@ describe("GET /me/github/repos", () => {
     expect(body.error).not.toMatch(/GitHub repo list failed/i);
     if (res.statusCode === 403) {
       expect(body.code).toBe("scope_missing");
+    }
+  });
+
+  it("returns 403 scope_missing deterministically when GitHub returns 401 (mocked, no network)", async () => {
+    const app = getApp();
+    // Seed an OAuth user with a real encrypted token. The token value
+    // doesn't matter — we stub `globalThis.fetch` to deterministically
+    // return 401 for any github.com call, exercising the
+    // GithubApiError(401) → 403 scope_missing branch independently of
+    // network reachability (the prior test accepts [403, 502, 503] to
+    // stay green in air-gapped CI; this one pins the 403 path).
+    const dev = await app.inject({
+      method: "GET",
+      url: "/api/v1/auth/github/dev-callback?githubId=9002&login=tokentest401",
+    });
+    const fragment = dev.headers.location?.split("#")[1] ?? "";
+    const access = new URLSearchParams(fragment).get("access");
+    expect(access).toBeTruthy();
+
+    const [identity] = await app.db.select().from(authIdentities).where(eq(authIdentities.identifier, "9002")).limit(1);
+    if (!identity) throw new Error("expected auth identity");
+    const encrypted = encryptValue("any_token_we_will_intercept", app.config.secrets.encryptionKey);
+    await app.db
+      .update(authIdentities)
+      .set({ metadata: { ...(identity.metadata ?? {}), accessToken: encrypted } })
+      .where(eq(authIdentities.id, identity.id));
+
+    const originalFetch = globalThis.fetch;
+    type FetchInput = Parameters<typeof globalThis.fetch>[0];
+    type FetchInit = Parameters<typeof globalThis.fetch>[1];
+    const fetchSpy = vi.fn(async (input: FetchInput, init?: FetchInit): Promise<Response> => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes("api.github.com")) {
+        return new Response("Bad credentials", { status: 401 });
+      }
+      return originalFetch(input, init);
+    });
+    globalThis.fetch = fetchSpy as typeof fetch;
+
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/v1/me/github/repos",
+        headers: { authorization: `Bearer ${access}` },
+      });
+      expect(res.statusCode).toBe(403);
+      const body = res.json<{ error: string; code: string }>();
+      expect(body.code).toBe("scope_missing");
+      expect(body.error).not.toMatch(/Bad credentials/i);
+      expect(body.error).toMatch(/reconnect/i);
+    } finally {
+      globalThis.fetch = originalFetch;
     }
   });
 });
