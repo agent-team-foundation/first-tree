@@ -1,5 +1,5 @@
 import type { ClientCapabilities, OrgBrief } from "@agent-team-foundation/first-tree-hub-shared";
-import { ArrowRight, Check, Copy } from "lucide-react";
+import { ArrowRight, Check, ChevronDown, Copy } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { getClientCapabilities, type HubClient, listClients } from "../../../api/activity.js";
@@ -1266,30 +1266,190 @@ function RepoPickerSection({
       <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
         The code your tree will organize knowledge about.
       </p>
-      <select
-        aria-label="GitHub repository"
-        value={selectedRepoUrl ?? ""}
-        onChange={(e) => onSelect(e.target.value || null)}
+      <RepoPickerPopover repos={repos} selectedRepoUrl={selectedRepoUrl} onSelect={onSelect} />
+    </div>
+  );
+}
+
+function RepoPickerPopover({
+  repos,
+  selectedRepoUrl,
+  onSelect,
+}: {
+  repos: GithubRepo[];
+  selectedRepoUrl: string | null;
+  onSelect: (url: string | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Click-outside + Escape, mirroring user-menu.tsx's popover pattern.
+  useEffect(() => {
+    if (!open) return;
+    const onMouseDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("mousedown", onMouseDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onMouseDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  // Group by owner — `<owner>/<repo>` is GitHub's canonical fullName, so
+  // splitting on the first `/` is reliable. Owners sorted alphabetically;
+  // repos within an owner keep server-returned order (most-recently-pushed
+  // first per `pushedAt desc`).
+  const groups = useMemo(() => {
+    const byOwner = new Map<string, GithubRepo[]>();
+    for (const r of repos) {
+      const owner = r.fullName.split("/")[0] ?? "";
+      const list = byOwner.get(owner);
+      if (list) list.push(r);
+      else byOwner.set(owner, [r]);
+    }
+    return [...byOwner.entries()].sort(([a], [b]) => a.localeCompare(b));
+  }, [repos]);
+
+  const selectedRepo = repos.find((r) => r.cloneUrl === selectedRepoUrl) ?? null;
+
+  return (
+    <div ref={ref} className="relative" style={{ marginTop: "var(--sp-2)" }}>
+      <button
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
         className="text-body"
         style={{
-          marginTop: "var(--sp-2)",
           width: "100%",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: "var(--sp-2)",
           padding: "var(--sp-2) var(--sp-3)",
           background: "var(--bg)",
           border: "var(--hairline) solid var(--border)",
           borderRadius: "var(--radius-input)",
-          color: "var(--fg)",
+          color: selectedRepo ? "var(--fg)" : "var(--fg-3)",
           outline: "none",
+          cursor: "pointer",
+          textAlign: "left",
         }}
       >
-        <option value="">Select a repository…</option>
-        {repos.map((repo) => (
-          <option key={repo.cloneUrl} value={repo.cloneUrl}>
-            {repo.fullName}
-            {repo.private ? " · private" : ""}
-          </option>
-        ))}
-      </select>
+        <span className="truncate" style={{ minWidth: 0, flex: 1 }}>
+          {selectedRepo ? selectedRepo.fullName : "Select a repository…"}
+        </span>
+        <ChevronDown
+          className="h-4 w-4"
+          style={{
+            color: "var(--fg-3)",
+            transition: "transform 120ms ease",
+            transform: open ? "rotate(180deg)" : "none",
+            flexShrink: 0,
+          }}
+        />
+      </button>
+
+      {open && (
+        <div
+          role="listbox"
+          aria-label="GitHub repository"
+          className="absolute z-30 rounded-md border bg-popover shadow-md"
+          style={{
+            top: "calc(100% + var(--sp-1))",
+            left: 0,
+            right: 0,
+            maxHeight: "min(56vh, 30rem)",
+            overflowY: "auto",
+            padding: "var(--sp-1) 0",
+          }}
+        >
+          {groups.map(([owner, ownerRepos], groupIdx) => (
+            <div key={owner}>
+              {groupIdx > 0 && (
+                <div
+                  aria-hidden="true"
+                  style={{
+                    margin: "var(--sp-1) 0",
+                    height: "var(--hairline)",
+                    background: "var(--border-faint)",
+                  }}
+                />
+              )}
+              <div
+                className="text-eyebrow"
+                style={{
+                  padding: "var(--sp-1) var(--sp-3)",
+                  color: "var(--fg-3)",
+                }}
+              >
+                {owner}
+              </div>
+              {ownerRepos.map((repo) => {
+                const selected = repo.cloneUrl === selectedRepoUrl;
+                const repoName = repo.fullName.slice(owner.length + 1);
+                return (
+                  <button
+                    key={repo.cloneUrl}
+                    type="button"
+                    role="option"
+                    aria-selected={selected}
+                    onClick={() => {
+                      onSelect(repo.cloneUrl);
+                      setOpen(false);
+                    }}
+                    className="text-body transition-colors w-full"
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "var(--sp-2)",
+                      padding: "var(--sp-1_5) var(--sp-3)",
+                      background: selected ? "var(--accent-bg)" : "transparent",
+                      color: selected ? "var(--accent)" : "var(--fg)",
+                      border: "none",
+                      cursor: "pointer",
+                      textAlign: "left",
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!selected) e.currentTarget.style.background = "var(--surface-1)";
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!selected) e.currentTarget.style.background = "transparent";
+                    }}
+                  >
+                    <span style={{ width: 14, display: "inline-flex", flexShrink: 0 }}>
+                      {selected ? <Check className="h-3.5 w-3.5" /> : null}
+                    </span>
+                    <span className="truncate" style={{ minWidth: 0, flex: 1 }}>
+                      {repoName}
+                    </span>
+                    {repo.private && (
+                      <span
+                        className="mono uppercase text-caption"
+                        style={{
+                          padding: "var(--hairline) var(--sp-1_75)",
+                          borderRadius: "var(--radius-chip)",
+                          color: "var(--fg-3)",
+                          border: "var(--hairline) solid var(--border)",
+                          background: "var(--bg-sunken)",
+                          flexShrink: 0,
+                        }}
+                      >
+                        private
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
