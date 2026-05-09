@@ -16,6 +16,7 @@ import { NotFoundError } from "../errors.js";
 import { requireUser } from "../scope/require-user.js";
 import { listAgentsManagedByUser } from "../services/access-control.js";
 import * as authService from "../services/auth.js";
+import * as clientService from "../services/client.js";
 import { decryptValue } from "../services/crypto.js";
 import { listUserRepos } from "../services/github-oauth.js";
 import { buildInviteUrl, findActiveByToken, getActiveInvitation, recordRedemption } from "../services/invitation.js";
@@ -26,6 +27,7 @@ import {
   selfCreateOrganization,
 } from "../services/membership.js";
 import { resolvePublicUrl } from "../utils/public-url.js";
+import { serializeDate } from "../utils.js";
 
 /**
  * `/me` and self-service organization routes (Class A — User-scoped).
@@ -248,6 +250,33 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     const { userId } = requireUser(request);
     const { listMyPinnedAgents } = await import("../services/client.js");
     return listMyPinnedAgents(app.db, { userId });
+  });
+
+  /**
+   * GET /me/clients — cross-org list of every client owned by the caller.
+   * A client is owned by exactly one user (clients.user_id) and the same
+   * machine can carry agents from any org the user belongs to, so this
+   * surface is org-agnostic — Class A by the decision tree in
+   * `docs/http-path-conventions.md`. Powers Settings → Computers in the
+   * web UI; the org-admin audit view (`/orgs/:orgId/clients`) stays for
+   * a future "team device audit" surface.
+   */
+  app.get("/me/clients", async (request) => {
+    const { userId } = requireUser(request);
+    const list = await clientService.listClients(app.db, { userId });
+    const refreshExpirySeconds = authService.expiryToSeconds(app.config.auth.refreshTokenExpiry);
+    return list.map((c) => ({
+      id: c.id,
+      userId: c.userId,
+      status: c.status,
+      authState: clientService.deriveAuthState(c, refreshExpirySeconds),
+      sdkVersion: c.sdkVersion,
+      hostname: c.hostname,
+      os: c.os,
+      agentCount: c.agentCount,
+      connectedAt: serializeDate(c.connectedAt),
+      lastSeenAt: c.lastSeenAt.toISOString(),
+    }));
   });
 
   // ── Self-service org management ──────────────────────────────────────────

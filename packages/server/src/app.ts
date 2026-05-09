@@ -50,6 +50,7 @@ import { orgMemberRoutes } from "./api/orgs/members.js";
 import { orgNotificationRoutes } from "./api/orgs/notifications.js";
 import { orgOverviewRoutes } from "./api/orgs/overview.js";
 import { orgSessionRoutes } from "./api/orgs/sessions.js";
+import { orgSettingsRoutes } from "./api/orgs/settings.js";
 import { orgTaskRoutes } from "./api/orgs/tasks.js";
 import { orgWsRoutes } from "./api/orgs/ws.js";
 import { sessionRoutes } from "./api/sessions.js";
@@ -65,6 +66,7 @@ import {
   applyLoggerConfig,
   attachRequestContext,
   bodyCaptureOnSendHook,
+  buildRateLimitError,
   createLogger,
   currentTraceId,
   observabilityPlugin,
@@ -296,10 +298,16 @@ export async function buildApp(config: Config) {
   // `hook: "preHandler"` runs the limiter after route-level onRequest hooks
   // (memberAuth, agentSelector) so per-route keyGenerators can read
   // `req.user` / `req.agent` populated by those hooks.
+  //
+  // `errorResponseBuilder` runs during the rate-limit throw path, before
+  // setErrorHandler enriches with traceId. The body of the builder lives
+  // in observability/rate-limit-error-builder.ts so the span-stamping
+  // side effect can be unit-tested without booting an app.
   await app.register(rateLimit, {
     max: config.rateLimit?.max ?? 100,
     timeWindow: "1 minute",
     hook: "preHandler",
+    errorResponseBuilder: buildRateLimitError,
   });
 
   // Body-capture onSend hook — opt-in per route via `config: { otelRecordBody: true }`
@@ -409,12 +417,12 @@ export async function buildApp(config: Config) {
       await api.register(authRoutes, { prefix: "/auth" });
       await api.register(githubOauthRoutes, { prefix: "/auth/github" });
       await api.register(publicInvitationRoutes, { prefix: "/invitations" });
-      await api.register(contextTreeInfoRoutes, { prefix: "/context-tree" });
       await api.register(bootstrapConfigRoutes, { prefix: "/bootstrap" });
 
       // ── Class A — `/me`, `/auth` (user-scoped) ──────────────────────────
       await api.register(
         userScope("contextTreeScope", async (scope) => {
+          await scope.register(contextTreeInfoRoutes);
           await scope.register(contextTreeSnapshotRoutes);
         }),
         { prefix: "/context-tree" },
@@ -444,6 +452,7 @@ export async function buildApp(config: Config) {
           await scope.register(orgClientRoutes, { prefix: "/clients" });
           await scope.register(orgInvitationRoutes, { prefix: "/invitations" });
           await scope.register(orgMemberRoutes, { prefix: "/members" });
+          await scope.register(orgSettingsRoutes, { prefix: "/settings" });
         }),
         { prefix: "/orgs/:orgId" },
       );

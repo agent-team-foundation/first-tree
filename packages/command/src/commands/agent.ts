@@ -16,9 +16,11 @@ import type { Command } from "commander";
 import { fail, success } from "../cli/output.js";
 import { resolveReplyToFromEnv } from "../core/agent-messaging.js";
 import { ensureFreshAccessToken, resolveServerUrl, saveAgentConfig } from "../core/bootstrap.js";
+import { cliFetch } from "../core/cli-fetch.js";
 import { bindFeishuBot, bindFeishuUser } from "../core/feishu.js";
 import { findStaleAliases, formatStaleReason, promptAddAgent, removeLocalAgent } from "../core/index.js";
 import { print } from "../core/output.js";
+import { CLI_USER_AGENT } from "../core/version.js";
 import { registerAgentConfigCommands } from "./agent-config.js";
 
 const DEFAULT_WORKSPACE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -80,6 +82,7 @@ function createSdk(agentName?: string): FirstTreeHubSDK {
     serverUrl,
     getAccessToken: (opts) => ensureFreshAccessToken(opts),
     agentId,
+    userAgent: CLI_USER_AGENT,
   });
 }
 
@@ -131,7 +134,7 @@ async function resolveAgent(serverUrl: string, adminToken: string, agentName: st
   // /me/managed-agents — cross-org list of every agent the caller manages.
   // Avoids needing a per-org `--org` flag on every command that operates on
   // an agent by name.
-  const res = await fetch(`${serverUrl}/api/v1/me/managed-agents`, {
+  const res = await cliFetch(`${serverUrl}/api/v1/me/managed-agents`, {
     headers: { Authorization: `Bearer ${adminToken}` },
     signal: AbortSignal.timeout(10_000),
   });
@@ -237,7 +240,11 @@ export function registerAgentCommands(program: Command): void {
       try {
         const serverUrl = resolveServerUrl(options.server);
         const clientId = readClientId();
-        const sdk = new FirstTreeHubSDK({ serverUrl, getAccessToken: (opts) => ensureFreshAccessToken(opts) });
+        const sdk = new FirstTreeHubSDK({
+          serverUrl,
+          getAccessToken: (opts) => ensureFreshAccessToken(opts),
+          userAgent: CLI_USER_AGENT,
+        });
         const stale = await findStaleAliases({
           clientId,
           listPinnedAgents: () => sdk.listMyAgents(),
@@ -331,7 +338,7 @@ export function registerAgentCommands(program: Command): void {
       try {
         const serverUrl = resolveServerUrl(options.server);
         const token = await ensureFreshAccessToken();
-        const res = await fetch(`${serverUrl}/api/v1/me/managed-agents`, {
+        const res = await cliFetch(`${serverUrl}/api/v1/me/managed-agents`, {
           headers: { Authorization: `Bearer ${token}` },
           signal: AbortSignal.timeout(10_000),
         });
@@ -402,7 +409,7 @@ export function registerAgentCommands(program: Command): void {
 
           // Resolve target org. Single-org users are auto-selected; multi-org
           // users must pass `--org`. JWT no longer carries default org.
-          const meRes = await fetch(`${serverUrl}/api/v1/me`, {
+          const meRes = await cliFetch(`${serverUrl}/api/v1/me`, {
             headers: { Authorization: `Bearer ${adminToken}` },
             signal: AbortSignal.timeout(10_000),
           });
@@ -435,7 +442,7 @@ export function registerAgentCommands(program: Command): void {
           };
           if (options.displayName) createBody.displayName = options.displayName;
 
-          const createRes = await fetch(`${serverUrl}/api/v1/orgs/${encodeURIComponent(orgId)}/agents`, {
+          const createRes = await cliFetch(`${serverUrl}/api/v1/orgs/${encodeURIComponent(orgId)}/agents`, {
             method: "POST",
             headers,
             body: JSON.stringify(createBody),
@@ -470,7 +477,7 @@ export function registerAgentCommands(program: Command): void {
         const accessToken = await ensureFreshAccessToken();
 
         // Look up the authenticated member's id via /me
-        const meRes = await fetch(`${serverUrl}/api/v1/me`, {
+        const meRes = await cliFetch(`${serverUrl}/api/v1/me`, {
           headers: { Authorization: `Bearer ${accessToken}` },
           signal: AbortSignal.timeout(10_000),
         });
@@ -479,7 +486,7 @@ export function registerAgentCommands(program: Command): void {
 
         const target = await resolveAgent(serverUrl, accessToken, agentName);
 
-        const patchRes = await fetch(`${serverUrl}/api/v1/agents/${target.uuid}`, {
+        const patchRes = await cliFetch(`${serverUrl}/api/v1/agents/${target.uuid}`, {
           method: "PATCH",
           headers: {
             Authorization: `Bearer ${accessToken}`,
@@ -562,7 +569,7 @@ export function registerAgentCommands(program: Command): void {
         const accessToken = await ensureFreshAccessToken();
         const target = await resolveAgent(serverUrl, accessToken, agentName);
 
-        const patchRes = await fetch(`${serverUrl}/api/v1/agents/${target.uuid}`, {
+        const patchRes = await cliFetch(`${serverUrl}/api/v1/agents/${target.uuid}`, {
           method: "PATCH",
           headers: {
             Authorization: `Bearer ${accessToken}`,
@@ -757,7 +764,7 @@ export function registerAgentCommands(program: Command): void {
         const accessToken = await ensureFreshAccessToken();
         // Activity is org-scoped — gather across every org the caller belongs
         // to so a multi-org user's `status` aggregates all runtimes.
-        const meRes = await fetch(`${serverUrl}/api/v1/me`, {
+        const meRes = await cliFetch(`${serverUrl}/api/v1/me`, {
           headers: { Authorization: `Bearer ${accessToken}` },
           signal: AbortSignal.timeout(10_000),
         });
@@ -785,7 +792,7 @@ export function registerAgentCommands(program: Command): void {
           agents: [],
         };
         for (const m of me.memberships) {
-          const r = await fetch(`${serverUrl}/api/v1/orgs/${encodeURIComponent(m.organizationId)}/activity`, {
+          const r = await cliFetch(`${serverUrl}/api/v1/orgs/${encodeURIComponent(m.organizationId)}/activity`, {
             headers: { Authorization: `Bearer ${accessToken}` },
             signal: AbortSignal.timeout(10_000),
           });
@@ -852,7 +859,7 @@ export function registerAgentCommands(program: Command): void {
     .action(async (name: string, options: { server?: string }) => {
       try {
         const serverUrl = resolveServerUrl(options.server);
-        const response = await fetch(`${serverUrl}/api/v1/agents/${name}/reset-activity`, {
+        const response = await cliFetch(`${serverUrl}/api/v1/agents/${name}/reset-activity`, {
           method: "POST",
           headers: { Authorization: `Bearer ${await ensureFreshAccessToken()}` },
           signal: AbortSignal.timeout(10_000),
@@ -880,7 +887,7 @@ export function registerAgentCommands(program: Command): void {
         const adminToken = await ensureFreshAccessToken();
         const agentId = (await resolveAgent(serverUrl, adminToken, agentName)).uuid;
         const qs = options.state ? `?state=${options.state}` : "";
-        const response = await fetch(`${serverUrl}/api/v1/agents/${agentId}/sessions${qs}`, {
+        const response = await cliFetch(`${serverUrl}/api/v1/agents/${agentId}/sessions${qs}`, {
           headers: { Authorization: `Bearer ${adminToken}` },
           signal: AbortSignal.timeout(10_000),
         });
@@ -929,7 +936,7 @@ export function registerAgentCommands(program: Command): void {
           const serverUrl = resolveServerUrl(options.server);
           const adminToken = await ensureFreshAccessToken();
           const agentId = (await resolveAgent(serverUrl, adminToken, agentName)).uuid;
-          const response = await fetch(`${serverUrl}/api/v1/agents/${agentId}/sessions/${chatId}/${cmd}`, {
+          const response = await cliFetch(`${serverUrl}/api/v1/agents/${agentId}/sessions/${chatId}/${cmd}`, {
             method: "POST",
             headers: { Authorization: `Bearer ${adminToken}` },
             signal: AbortSignal.timeout(10_000),
@@ -963,7 +970,7 @@ export function registerAgentCommands(program: Command): void {
 
         const targetAgent = await resolveAgent(serverUrl, adminToken, agentName);
 
-        const dmRes = await fetch(`${serverUrl}/api/v1/agents/${targetAgent.uuid}/chats`, {
+        const dmRes = await cliFetch(`${serverUrl}/api/v1/agents/${targetAgent.uuid}/chats`, {
           method: "POST",
           headers,
           signal: AbortSignal.timeout(10_000),
@@ -986,7 +993,7 @@ export function registerAgentCommands(program: Command): void {
         const pollMessages = async (): Promise<void> => {
           try {
             const qs = lastSeenAt ? `?limit=50` : `?limit=10`;
-            const msgRes = await fetch(`${serverUrl}/api/v1/chats/${dm.id}/messages${qs}`, {
+            const msgRes = await cliFetch(`${serverUrl}/api/v1/chats/${dm.id}/messages${qs}`, {
               headers,
               signal: AbortSignal.timeout(10_000),
             });
@@ -1038,7 +1045,7 @@ export function registerAgentCommands(program: Command): void {
           }
 
           try {
-            const sendRes = await fetch(`${serverUrl}/api/v1/chats/${dm.id}/messages`, {
+            const sendRes = await cliFetch(`${serverUrl}/api/v1/chats/${dm.id}/messages`, {
               method: "POST",
               headers,
               body: JSON.stringify({ format: "text", content: text }),

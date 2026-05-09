@@ -17,6 +17,7 @@ import { fail } from "../cli/output.js";
 import {
   ClientRuntime,
   COMMAND_VERSION,
+  cliFetch,
   createApiNameResolver,
   createExecuteUpdate,
   ensureFreshAccessToken,
@@ -137,7 +138,7 @@ async function promptReplaceOrCancel(newMemberId: string): Promise<"proceed" | "
 }
 
 async function exchangeToken(url: string, token: string): Promise<{ accessToken: string; refreshToken: string }> {
-  const res = await fetch(`${url}/api/v1/auth/connect-token`, {
+  const res = await cliFetch(`${url}/api/v1/auth/connect-token`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ token }),

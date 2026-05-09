@@ -15,6 +15,7 @@ import {
 import { stringify as stringifyYaml } from "yaml";
 import { ensureFreshAccessToken } from "./bootstrap.js";
 import { print } from "./output.js";
+import { CLI_USER_AGENT } from "./version.js";
 
 type AgentEntry = {
   name: string;
@@ -72,6 +73,7 @@ export class ClientRuntime {
       serverUrl,
       clientId,
       sdkVersion: options.currentVersion,
+      userAgent: CLI_USER_AGENT,
       getAccessToken: (opts) => ensureFreshAccessToken(opts),
     });
     registerBuiltinHandlers();

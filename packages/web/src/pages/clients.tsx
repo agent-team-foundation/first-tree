@@ -5,7 +5,7 @@ import {
   type RuntimeProvider,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, KeyRound, Plus, Trash2, Unplug } from "lucide-react";
+import { ChevronDown, ChevronRight, Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
   type ClientWithCapabilities,
@@ -18,7 +18,6 @@ import {
   retireClient,
 } from "../api/activity.js";
 import { ApiError } from "../api/client.js";
-import { useAuth } from "../auth/auth-context.js";
 import { Button } from "../components/ui/button.js";
 import {
   DenseTable,
@@ -33,7 +32,6 @@ import { Panel } from "../components/ui/panel.js";
 import { SectionHeader, UppercaseLabel } from "../components/ui/section-header.js";
 import { StateChip } from "../components/ui/state-chip.js";
 import { useAgentNameMap } from "../lib/use-agent-name-map.js";
-import { useUserNameMap } from "../lib/use-user-name-map.js";
 import { formatDate } from "../lib/utils.js";
 import { NewConnectionDialog } from "./clients/new-connection-dialog.js";
 
@@ -45,10 +43,11 @@ import { NewConnectionDialog } from "./clients/new-connection-dialog.js";
 export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
   const queryClient = useQueryClient();
   const agentName = useAgentNameMap();
-  const ownerName = useUserNameMap();
-  const { role } = useAuth();
-  const isAdmin = role === "admin";
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  // Personal scope: a user typically has 1-3 computers, so expand by default
+  // and only let them collapse rows they actively want to hide. New clients
+  // arriving via the 10s poll auto-expand too — we only treat the closed set
+  // as "rows the user explicitly closed".
+  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => new Set());
   const [confirmDisconnect, setConfirmDisconnect] = useState<HubClient | null>(null);
   const [confirmRetire, setConfirmRetire] = useState<HubClient | null>(null);
   const [retireError, setRetireError] = useState<string | null>(null);
@@ -270,35 +269,23 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
           </Panel>
         ) : (
           <Panel>
-            <SectionHeader
-              right={
-                // SectionHeader is uppercased with 0.1em tracking; this helper
-                // text inside its `right` slot overrides back to a plain mono
-                // caption so it reads as prose, not an eyebrow.
-                <span className="mono text-caption normal-case tracking-normal" style={{ color: "var(--fg-3)" }}>
-                  click a row to expand
-                </span>
-              }
-            >
-              Registered · {clients.length}
-            </SectionHeader>
+            <SectionHeader>Registered · {clients.length}</SectionHeader>
             <DenseTable>
               <DenseTableHeader>
                 <DenseTableRow>
                   <DenseTableHead style={{ width: 16 }} />
                   <DenseTableHead>Hostname</DenseTableHead>
-                  {isAdmin && <DenseTableHead>Owner</DenseTableHead>}
                   <DenseTableHead>OS</DenseTableHead>
                   <DenseTableHead>SDK</DenseTableHead>
                   <DenseTableHead>Agents</DenseTableHead>
                   <DenseTableHead>Connected</DenseTableHead>
                   <DenseTableHead>Status</DenseTableHead>
-                  <DenseTableHead />
+                  <DenseTableHead aria-hidden />
                 </DenseTableRow>
               </DenseTableHeader>
               <DenseTableBody>
                 {clients.map((client) => {
-                  const isExpanded = expandedId === client.id;
+                  const isExpanded = !collapsedIds.has(client.id);
                   const boundAgents = getClientAgents(client.id);
                   return (
                     <ClientRow
@@ -307,9 +294,14 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
                       boundAgents={boundAgents}
                       isExpanded={isExpanded}
                       agentName={agentName}
-                      showOwner={isAdmin}
-                      ownerName={ownerName}
-                      onToggle={() => setExpandedId(isExpanded ? null : client.id)}
+                      onToggle={() =>
+                        setCollapsedIds((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(client.id)) next.delete(client.id);
+                          else next.add(client.id);
+                          return next;
+                        })
+                      }
                       onDisconnect={() => setConfirmDisconnect(client)}
                       onRetire={() => {
                         setRetireError(null);
@@ -389,7 +381,7 @@ function ProviderRow({ provider, entry }: { provider: RuntimeProvider; entry: Ca
   if (!entry) {
     return (
       <div className="flex items-center gap-2.5 text-body" style={{ opacity: 0.7 }}>
-        <span className="mono font-medium" style={{ minWidth: 180 }}>
+        <span className="font-medium" style={{ minWidth: 140 }}>
           {label}
         </span>
         <span className="text-caption" style={{ color: "var(--fg-4)" }}>
@@ -402,7 +394,7 @@ function ProviderRow({ provider, entry }: { provider: RuntimeProvider; entry: Ca
     case "ok":
       return (
         <div className="flex items-center gap-2.5 text-body">
-          <span className="mono font-medium" style={{ minWidth: 180 }}>
+          <span className="font-medium" style={{ minWidth: 140 }}>
             {label}
           </span>
           <span className="text-caption" style={{ color: "var(--state-idle)" }}>
@@ -413,7 +405,7 @@ function ProviderRow({ provider, entry }: { provider: RuntimeProvider; entry: Ca
     case "unauthenticated":
       return (
         <div className="flex items-center gap-2.5 text-body">
-          <span className="mono font-medium" style={{ minWidth: 180 }}>
+          <span className="font-medium" style={{ minWidth: 140 }}>
             {label}
           </span>
           <span className="text-caption" style={{ color: "var(--state-blocked)" }}>
@@ -425,7 +417,7 @@ function ProviderRow({ provider, entry }: { provider: RuntimeProvider; entry: Ca
     case "missing":
       return (
         <div className="flex items-center gap-2.5 text-body" style={{ opacity: 0.7 }}>
-          <span className="mono font-medium" style={{ minWidth: 180 }}>
+          <span className="font-medium" style={{ minWidth: 140 }}>
             {label}
           </span>
           <span className="text-caption" style={{ color: "var(--fg-4)" }}>
@@ -436,7 +428,7 @@ function ProviderRow({ provider, entry }: { provider: RuntimeProvider; entry: Ca
     case "error":
       return (
         <div className="flex items-center gap-2.5 text-body">
-          <span className="mono font-medium" style={{ minWidth: 180 }}>
+          <span className="font-medium" style={{ minWidth: 140 }}>
             {label}
           </span>
           <span className="text-caption" style={{ color: "var(--state-error)" }}>
@@ -477,8 +469,6 @@ function ClientRow({
   boundAgents,
   isExpanded,
   agentName,
-  showOwner,
-  ownerName,
   onToggle,
   onDisconnect,
   onRetire,
@@ -488,14 +478,12 @@ function ClientRow({
   boundAgents: RuntimeAgent[];
   isExpanded: boolean;
   agentName: (uuid: string | null | undefined) => string;
-  showOwner: boolean;
-  ownerName: (userId: string | null | undefined) => string;
   onToggle: () => void;
   onDisconnect: () => void;
   onRetire: () => void;
   onReconnect: () => void;
 }) {
-  const colSpan = showOwner ? 9 : 8;
+  const colSpan = 8;
   const isOffline = client.status !== "connected";
   // Auth health takes priority over the connection state when rendering the
   // row's status pill: "auth expired" must outrank the plain "offline" so
@@ -511,7 +499,6 @@ function ClientRow({
           </span>
         </DenseTableCell>
         <DenseTableCell className="font-medium">{client.hostname ?? "—"}</DenseTableCell>
-        {showOwner && <DenseTableCell style={{ color: "var(--fg-2)" }}>{ownerName(client.userId)}</DenseTableCell>}
         <DenseTableCell style={{ color: "var(--fg-3)" }}>{client.os ?? "—"}</DenseTableCell>
         <DenseTableCell className="mono text-label" style={{ color: "var(--fg-3)" }}>
           {client.sdkVersion ?? "—"}
@@ -523,51 +510,46 @@ function ClientRow({
           {client.connectedAt ? formatDate(client.connectedAt) : "—"}
         </DenseTableCell>
         <DenseTableCell>{authBroken ? <AuthExpiredChip /> : <StateChip state={statusState} />}</DenseTableCell>
+        {/* Plain text actions, always visible. The row already gives them a
+            dedicated rightmost cell with whitespace-nowrap, so the three
+            options sit in their own column rather than crowding the data. */}
         <DenseTableCell style={{ width: 1, whiteSpace: "nowrap" }}>
-          <div className="flex gap-1 justify-end">
+          <div className="flex items-center justify-end text-label" style={{ gap: "var(--sp-3_5)" }}>
             {isOffline && (
-              // Reconnect is offered for any disconnected row, not only `expired`:
-              // "I want to repoint this machine" / "credentials got nuked locally"
-              // are common pre-30d-window needs that the explicit `auth_state`
-              // path doesn't catch. The button is highlighted red when the auth
-              // is provably gone (>refresh TTL) so the visual urgency still
-              // tracks the explicit-failure case.
-              <Button
-                variant="ghost"
-                size="xs"
-                className="text-label"
-                style={authBroken ? { color: "var(--state-error)" } : undefined}
+              <button
+                type="button"
+                className="rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                style={{ color: authBroken ? "var(--state-error)" : "var(--fg-2)" }}
                 onClick={(e) => {
                   e.stopPropagation();
                   onReconnect();
                 }}
               >
-                <KeyRound className="h-3 w-3" /> Reconnect
-              </Button>
+                Reconnect
+              </button>
             )}
-            <Button
-              variant="ghost"
-              size="xs"
-              className="text-label"
+            <button
+              type="button"
+              className="rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              style={{ color: "var(--fg-2)" }}
               onClick={(e) => {
                 e.stopPropagation();
                 onDisconnect();
               }}
             >
-              <Unplug className="h-3 w-3" /> Disconnect
-            </Button>
-            <Button
-              variant="ghost"
-              size="xs"
-              className="text-label"
+              Disconnect
+            </button>
+            <button
+              type="button"
+              className="rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               style={{ color: "var(--fg-4)" }}
               onClick={(e) => {
                 e.stopPropagation();
                 onRetire();
               }}
             >
-              <Trash2 className="h-3 w-3" /> Retire
-            </Button>
+              Retire
+            </button>
           </div>
         </DenseTableCell>
       </DenseTableRow>
@@ -576,29 +558,27 @@ function ClientRow({
           <DenseTableCell />
           <DenseTableCell colSpan={colSpan - 1} style={{ padding: "var(--sp-2_5) var(--sp-3) var(--sp-3_5)" }}>
             <CapabilityMatrix clientId={client.id} enabled={isExpanded} />
-            <UppercaseLabel style={{ display: "block", marginTop: "var(--sp-3)", marginBottom: 6 }}>
-              Bound agents · {boundAgents.length}
-            </UppercaseLabel>
-            {boundAgents.length === 0 ? (
-              <div className="text-body" style={{ color: "var(--fg-3)" }}>
-                No agents bound to this computer
-              </div>
-            ) : (
-              <div className="flex flex-col gap-1">
-                {boundAgents.map((a) => (
-                  <div key={a.agentId} className="flex items-center gap-2.5 text-body">
-                    <span className="mono font-medium" style={{ minWidth: 180 }}>
-                      {agentName(a.agentId)}
-                    </span>
-                    <StateChip state={a.runtimeState} />
-                    {a.activeSessions !== null && (
-                      <span className="mono tnum text-caption" style={{ color: "var(--fg-3)" }}>
-                        {a.activeSessions} / {a.totalSessions ?? 0} sessions
+            {boundAgents.length > 0 && (
+              <>
+                <UppercaseLabel style={{ display: "block", marginTop: "var(--sp-3)", marginBottom: 6 }}>
+                  Bound agents · {boundAgents.length}
+                </UppercaseLabel>
+                <div className="flex flex-col gap-1">
+                  {boundAgents.map((a) => (
+                    <div key={a.agentId} className="flex items-center gap-2.5 text-body">
+                      <span className="font-medium" style={{ minWidth: 140 }}>
+                        {agentName(a.agentId)}
                       </span>
-                    )}
-                  </div>
-                ))}
-              </div>
+                      <StateChip state={a.runtimeState} />
+                      {a.activeSessions !== null && (
+                        <span className="mono tnum text-caption" style={{ color: "var(--fg-3)" }}>
+                          {a.activeSessions} / {a.totalSessions ?? 0} sessions
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </>
             )}
           </DenseTableCell>
         </tr>

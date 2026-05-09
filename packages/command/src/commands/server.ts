@@ -6,6 +6,7 @@ import {
   checkNodeVersion,
   checkServerConfig,
   checkServerHealth,
+  cliFetch,
   createOwner,
   printResults,
   runMigrations,
@@ -74,7 +75,7 @@ export function registerServerCommands(program: Command): void {
       // P0: simple health check against local server
       const url = process.env.FIRST_TREE_HUB_SERVER_URL ?? "http://localhost:8000";
       try {
-        const res = await fetch(`${url}/api/v1/health`);
+        const res = await cliFetch(`${url}/api/v1/health`);
         if (res.ok) {
           const data = await res.json();
           // Emit the raw /api/v1/health payload — existing scripts consume

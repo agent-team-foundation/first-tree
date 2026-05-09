@@ -14,6 +14,7 @@ export { invitationRedemptions, invitations } from "./invitations.js";
 export { members } from "./members.js";
 export { messages } from "./messages.js";
 export { notifications } from "./notifications.js";
+export { organizationSettings } from "./organization-settings.js";
 export { organizations } from "./organizations.js";
 export { serverInstances } from "./server-instances.js";
 export { sessionEvents } from "./session-events.js";

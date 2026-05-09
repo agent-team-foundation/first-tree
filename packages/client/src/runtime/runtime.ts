@@ -26,6 +26,13 @@ export type AgentRuntimeOptions = {
    */
   currentVersion?: string;
   /**
+   * Optional `User-Agent` forwarded to every per-agent SDK and to the
+   * Context-Tree config fetch in `start()`. Issue #246: without this trace
+   * backends only see Node's default `User-Agent: node` and can't distinguish
+   * installs / CLI versions when investigating refresh storms or auth failures.
+   */
+  userAgent?: string;
+  /**
    * Self-update config + command-layer callbacks. Grouped so half-wired
    * configurations (e.g. config without prompt) can't silently disable the
    * manager.
@@ -42,6 +49,7 @@ export class AgentRuntime {
   private readonly clientConnection: ClientConnection;
   private readonly getAccessToken: AccessTokenProvider;
   private readonly currentVersion: string | undefined;
+  private readonly userAgent: string | undefined;
   private readonly updateHooks: UpdateHooks | undefined;
   private updateManager: UpdateManager | null = null;
   private stopping = false;
@@ -52,6 +60,7 @@ export class AgentRuntime {
     this.shutdownTimeout = options.shutdownTimeout ?? DEFAULT_SHUTDOWN_TIMEOUT;
     this.getAccessToken = options.getAccessToken;
     this.currentVersion = options.currentVersion;
+    this.userAgent = options.userAgent;
     this.updateHooks = options.update;
     this.logger = createLogger("runtime");
 
@@ -59,6 +68,7 @@ export class AgentRuntime {
       serverUrl: this.config.server,
       clientId: options.clientId,
       sdkVersion: options.currentVersion,
+      userAgent: options.userAgent,
       getAccessToken: this.getAccessToken,
     });
 
@@ -98,8 +108,11 @@ export class AgentRuntime {
 
   async start(): Promise<void> {
     const contextTreeLogger = createLogger("context-tree");
-    const contextTreePath = await syncContextTree(this.config.server, this.getAccessToken, (msg) =>
-      contextTreeLogger.info(msg),
+    const contextTreePath = await syncContextTree(
+      this.config.server,
+      this.getAccessToken,
+      (msg) => contextTreeLogger.info(msg),
+      this.userAgent,
     );
     if (!contextTreePath) {
       this.logger.info(

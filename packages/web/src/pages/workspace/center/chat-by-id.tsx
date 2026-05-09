@@ -4,7 +4,6 @@ import { useEffect, useMemo, useRef } from "react";
 import { getChat } from "../../../api/chats.js";
 import { joinMeChat, listMeChats, markMeChatRead } from "../../../api/me-chats.js";
 import { useAuth } from "../../../auth/auth-context.js";
-import { Button } from "../../../components/ui/button.js";
 import { ChatView } from "./chat-view.js";
 
 /**
@@ -134,66 +133,17 @@ export function ChatByIdView({ chatId }: { chatId: string }) {
 
   if (isWatching) {
     return (
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <div
-          className="shrink-0"
-          style={{
-            padding: "var(--sp-2_5) var(--sp-3_5)",
-            borderBottom: "var(--hairline) solid var(--border)",
-          }}
-        >
-          <div className="flex items-center" style={{ gap: 8 }}>
-            <span className="text-subtitle" style={{ color: "var(--fg)" }}>
-              {meRow?.title ?? "Chat"}
-            </span>
-            <span
-              className="mono uppercase text-eyebrow"
-              style={{
-                padding: "var(--hairline) var(--sp-1_25)",
-                borderRadius: 2,
-                color: "var(--fg-3)",
-                background: "var(--bg-sunken)",
-              }}
-            >
-              watching
-            </span>
-          </div>
-          <div className="text-caption" style={{ color: "var(--fg-3)", marginTop: 4 }}>
-            You can read this chat. Join to reply.
-          </div>
-        </div>
-        <div className="flex-1 overflow-hidden">
-          {/* Read-only timeline — render the same ChatView; the composer
-              state is hidden by the `Join to reply` overlay below. */}
-          <ChatView agentId={primaryAgent} chatId={chatId} />
-        </div>
-        <div
-          className="shrink-0"
-          style={{
-            padding: "var(--sp-2_5) var(--sp-3_5)",
-            borderTop: "var(--hairline) solid var(--border)",
-            background: "var(--bg-raised)",
-          }}
-        >
-          <div style={{ maxWidth: 640, margin: "0 auto" }}>
-            <Button
-              type="button"
-              onClick={() => joinMut.mutate()}
-              disabled={joinMut.isPending}
-              style={{
-                width: "100%",
-              }}
-            >
-              {joinMut.isPending ? "Joining…" : "Join to reply"}
-            </Button>
-            {joinMut.isError && (
-              <p className="mono text-label" style={{ color: "var(--state-error)", marginTop: 6 }}>
-                {joinMut.error instanceof Error ? joinMut.error.message : "Failed to join"}
-              </p>
-            )}
-          </div>
-        </div>
-      </div>
+      <ChatView
+        agentId={primaryAgent}
+        chatId={chatId}
+        readOnly
+        titleFallback={meRow?.title ?? null}
+        joinAction={{
+          onJoin: () => joinMut.mutate(),
+          joining: joinMut.isPending,
+          error: joinMut.isError ? (joinMut.error instanceof Error ? joinMut.error.message : "Failed to join") : null,
+        }}
+      />
     );
   }
 

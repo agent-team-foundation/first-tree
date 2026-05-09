@@ -131,8 +131,12 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
     // `onResponse`-terminated HTTP span would never end. The connection's
     // observability lifecycle is handled by `startWsConnectionSpan` /
     // `endWsConnectionSpan` below, with per-message spans parented onto it.
-    app.get("/client", { websocket: true }, async (socket) => {
-      startWsConnectionSpan(socket);
+    app.get("/client", { websocket: true }, async (socket, request) => {
+      const ua = request.headers["user-agent"];
+      startWsConnectionSpan(socket, {
+        remoteIp: request.ip,
+        userAgent: typeof ua === "string" ? ua.slice(0, 200) : undefined,
+      });
       let session: AuthenticatedSession | null = null;
       // JWT default org claim — kept solely so `registerClient` can satisfy
       // the legacy `clients.organization_id` NOT NULL constraint as a
