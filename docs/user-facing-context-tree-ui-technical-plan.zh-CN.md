@@ -157,7 +157,7 @@ ContextTreeStatus
 - 用短 TTL in-memory cache 缓解同一 `repo + branch + headCommit + window` 的重复请求。
 - 返回 active / stale / unavailable 状态;refresh 失败但已有 managed checkout 时返回 stale snapshot,只有没有可读 snapshot 时才返回 unavailable。
 
-当前实现支持 remote repo 自动 materialize:当组织的 Context Tree repo 是 remote URL 时,Hub Server 会 clone/fetch 到 `$FIRST_TREE_HUB_HOME/data/context-tree-repos/<hash>` 并从该 managed checkout 生成 snapshot。私有 GitHub repo 通过 `FIRST_TREE_HUB_CONTEXT_TREE_GITHUB_TOKEN` 提供部署级只读 token;token 只用于 server-side git sync,不暴露给 Web。
+当前实现支持 remote repo 自动 materialize:当组织的 Context Tree repo 是 HTTPS remote URL 时,Hub Server 会 clone/fetch 到 `$FIRST_TREE_HUB_HOME/data/context-tree-repos/<hash>` 并从该 managed checkout 生成 snapshot。私有 GitHub repo 通过 `FIRST_TREE_HUB_CONTEXT_TREE_GITHUB_TOKEN` 提供部署级只读 token;token 只用于 server-side git sync,不暴露给 Web,且只会应用到 `FIRST_TREE_HUB_CONTEXT_TREE_GITHUB_TOKEN_REPOS` 显式 allowlist 中的 GitHub repos。
 
 ### 性能和复用边界
 

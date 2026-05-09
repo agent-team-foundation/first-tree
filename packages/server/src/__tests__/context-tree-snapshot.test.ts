@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import type { ContextTreeChange, ContextTreeNode } from "@agent-team-foundation/first-tree-hub-shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { contextTreeGithubTokenForRepo } from "../api/context-tree-snapshot.js";
 import { contextTreeSnapshotTestInternals, getContextTreeSnapshot } from "../services/context-tree-snapshot.js";
 
 const execFileAsync = promisify(execFile);
@@ -53,6 +54,20 @@ async function commitAllAt(cwd: string, message: string): Promise<string> {
 }
 
 describe("Context Tree snapshot service", () => {
+  it("only applies the deployment GitHub token to allowlisted repos", () => {
+    const syncConfig = {
+      githubToken: "ghp_secret",
+      githubTokenRepos: "agent-team-foundation/first-tree-context, Example/Other.git",
+    };
+
+    expect(
+      contextTreeGithubTokenForRepo("https://github.com/agent-team-foundation/first-tree-context.git", syncConfig),
+    ).toBe("ghp_secret");
+    expect(contextTreeGithubTokenForRepo("https://github.com/example/other", syncConfig)).toBe("ghp_secret");
+    expect(contextTreeGithubTokenForRepo("https://github.com/example/not-allowed", syncConfig)).toBeUndefined();
+    expect(contextTreeGithubTokenForRepo("https://user:secret@github.com/example/other", syncConfig)).toBeUndefined();
+  });
+
   it("parses fallback frontmatter lists", () => {
     const parsed = contextTreeSnapshotTestInternals.parseMarkdownFallback(`---
 title: "Client Runtime"
@@ -259,5 +274,13 @@ Body`);
     expect(env?.GIT_ASKPASS).toBeDefined();
     const askpass = await readFile(env?.GIT_ASKPASS ?? "", "utf8");
     expect(askpass).not.toContain("ghp_secret");
+  });
+
+  it("redacts URL-embedded credentials from surfaced git errors", () => {
+    expect(
+      contextTreeSnapshotTestInternals.redactSecret(
+        "fatal: could not read from https://user:secret@github.com/example/private.git",
+      ),
+    ).toBe("fatal: could not read from https://[redacted]@github.com/example/private.git");
   });
 });

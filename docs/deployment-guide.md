@@ -37,6 +37,7 @@ These must be set for Docker / CI / `--no-interactive` deployments. Interactive 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `FIRST_TREE_HUB_CONTEXT_TREE_GITHUB_TOKEN` | — | Optional deployment-level read token for private Context Tree repos configured in Team Settings |
+| `FIRST_TREE_HUB_CONTEXT_TREE_GITHUB_TOKEN_REPOS` | — | Comma-separated GitHub repo allowlist (`owner/repo`) that may use the Context Tree read token |
 | `FIRST_TREE_HUB_PORT` | `8000` | Server port |
 | `FIRST_TREE_HUB_JWT_SECRET` | auto-generated | JWT signing secret |
 | `FIRST_TREE_HUB_ENCRYPTION_KEY` | auto-generated | Adapter credential encryption key |

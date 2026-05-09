@@ -74,6 +74,9 @@ export const serverConfigSchema = defineConfig({
       env: "FIRST_TREE_HUB_CONTEXT_TREE_GITHUB_TOKEN",
       secret: true,
     }),
+    githubTokenRepos: field(z.string().optional(), {
+      env: "FIRST_TREE_HUB_CONTEXT_TREE_GITHUB_TOKEN_REPOS",
+    }),
   }),
   oauth: optional({
     /**

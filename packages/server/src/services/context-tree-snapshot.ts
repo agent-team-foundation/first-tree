@@ -444,7 +444,7 @@ function errorMessage(error: unknown): string {
 }
 
 function redactSecret(message: string): string {
-  return message.replace(/x-access-token:[^@\s]+@/g, "x-access-token:[redacted]@");
+  return message.replace(/(https?:\/\/)[^/@\s]+@/g, "$1[redacted]@");
 }
 
 function unavailableSnapshot(repo: string | null, branch: string | null, detail: string): ContextTreeSnapshot {
@@ -1091,5 +1091,6 @@ export const contextTreeSnapshotTestInternals = {
   materializeRemoteContextTree,
   parseMarkdownFallback,
   readDiffEntries,
+  redactSecret,
   resolveContextTreeRoot,
 };
