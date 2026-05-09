@@ -162,3 +162,21 @@ export function clearOnboardingDraft(scope: string): void {
   if (typeof window === "undefined") return;
   window.sessionStorage.removeItem(onboardingDraftKey(scope));
 }
+
+/**
+ * Drop every `onboarding:*` sessionStorage key. Called on logout so a
+ * subsequent login (e.g. after a dev DB reset) doesn't inherit stale
+ * Step 1/3 confirmations, agent UUID, return-chat hint, or scoped drafts
+ * from the prior identity. Iterates the namespace so future flags added
+ * with the same prefix are covered automatically.
+ */
+export function clearOnboardingSessionFlags(): void {
+  if (typeof window === "undefined") return;
+  const ss = window.sessionStorage;
+  const toRemove: string[] = [];
+  for (let i = 0; i < ss.length; i++) {
+    const k = ss.key(i);
+    if (k?.startsWith("onboarding:")) toRemove.push(k);
+  }
+  for (const k of toRemove) ss.removeItem(k);
+}

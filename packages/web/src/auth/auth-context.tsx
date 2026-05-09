@@ -9,7 +9,7 @@ import {
   setApiSelectedOrganizationId,
   setStoredTokens,
 } from "../api/client.js";
-import { clearOnboardingJoinPath } from "../utils/onboarding-flags.js";
+import { clearOnboardingJoinPath, clearOnboardingSessionFlags } from "../utils/onboarding-flags.js";
 
 type MeUser = {
   id: string;
@@ -136,6 +136,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     writeSelectedOrgId(null);
     setApiSelectedOrganizationId(null);
     queryClient.clear();
+    // Drop per-tab onboarding flags so the next login (different user, or
+    // same user post-DB-reset in dev) doesn't inherit a stale "Step 1
+    // confirmed" / "Step 3 dismissed" / agent uuid / draft from the prior
+    // identity.
+    clearOnboardingSessionFlags();
     setIsAuthenticated(false);
     setUser(null);
     setMemberships([]);
