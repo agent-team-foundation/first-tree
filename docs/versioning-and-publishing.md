@@ -16,11 +16,21 @@ effect on what downstream consumers receive.
 
 | Package | Path | Published | Bump rule |
 |---|---|---|---|
-| `@agent-team-foundation/first-tree-hub` | `packages/command` | Yes (`publishConfig.access: public`) | **Bump on every PR that changes any source file in `command`, `client`, or `shared`.** This tarball is the unified CLI consumers install; without a new version the bundled change cannot reach `npm ci`. |
-| `@agent-team-foundation/first-tree-hub-shared` | `packages/shared` | Yes | **Bump when the externally-importable surface of `shared` changes** — exported Zod schemas, types, or constants that another npm package could consume. Internal-only edits to `shared` still require the `command` bump above; they do not require a `shared` bump. |
+| `@agent-team-foundation/first-tree-hub` | `packages/command` | Yes (`publishConfig.access: public`) | **Bump on every PR that changes `command` or `client` source, or `shared` modules actually imported by `command` / `client`.** This tarball is the unified CLI consumers install — only changes that flow through it need a new version. |
+| `@agent-team-foundation/first-tree-hub-shared` | `packages/shared` | Yes | **Bump when the externally-importable surface of `shared` changes** — exported Zod schemas, types, or constants that another npm package could consume. Internal-only edits to `shared` may still require the `command` bump above (if `command` / `client` import them); they do not require a `shared` bump. |
 | `@first-tree-hub/client` | `packages/client` | No (`private: true`) | Do not bump — version is inert. Bump `command` instead. |
-| `@first-tree-hub/server` | `packages/server` | No (`private: true`) | Do not bump — version is inert. Bump `command` instead. |
-| `@first-tree-hub/web` | `packages/web` | No (`private: true`) | Do not bump — version is inert. Bump `command` instead. |
+| `@first-tree-hub/server` | `packages/server` | No (`private: true`) | Do not bump — version is inert. Server reaches users via the docker image and SaaS cloud deploy, **not via the npm tarball**. Server-only changes (and `shared` modules consumed only by server) therefore do not require a `command` bump. |
+| `@first-tree-hub/web` | `packages/web` | No (`private: true`) | Do not bump — version is inert. Web reaches users via docker / cloud deploy, not npm; same rule as `server`. |
+
+### When does a `shared` change require a `command` bump?
+
+`shared` is a single package but its modules split into two consumer
+camps:
+
+- **`command` / `client` consumers** — types and Zod schemas imported by the CLI or the agent runtime (e.g. agent runtime config, websocket frames, organization schemas surfaced through `/me`). Changes here **must** bump `command`.
+- **`server` / `web` consumers only** — admin-API contract schemas, server-config Zod, server-internal types, web-only output shapes. Changes here ship via docker / cloud and **do not** need a `command` bump.
+
+When unsure, grep `packages/command/src` and `packages/client/src` for the export name. No hits → server/web-only → no bump.
 
 ## Choosing the next version
 

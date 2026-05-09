@@ -327,6 +327,28 @@ export {
   githubStartQuerySchema,
 } from "./schemas/oauth.js";
 export {
+  isOrgSettingNamespace,
+  ORG_SETTINGS_NAMESPACE_KEYS,
+  ORG_SETTINGS_NAMESPACES,
+  type OrgContextTreeInput,
+  type OrgContextTreeOutput,
+  type OrgContextTreeStorage,
+  type OrgGithubIntegrationInput,
+  type OrgGithubIntegrationOutput,
+  type OrgGithubIntegrationStorage,
+  type OrgSettingInput,
+  type OrgSettingNamespace,
+  type OrgSettingOutput,
+  type OrgSettingStorage,
+  orgContextTreeInputSchema,
+  orgContextTreeOutputSchema,
+  orgContextTreeStorageSchema,
+  orgGithubIntegrationInputSchema,
+  orgGithubIntegrationOutputSchema,
+  orgGithubIntegrationStorageSchema,
+  orgSettingNamespaceSchema,
+} from "./schemas/org-settings.js";
+export {
   type CreateOrganization,
   type CreateOrganizationInput,
   createOrganizationSchema,

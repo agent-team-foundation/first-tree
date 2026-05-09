@@ -143,21 +143,21 @@ ContextTreeStatus
 
 职责:
 
-- 读取 server config 中的 Context Tree repo / branch。
-- 以 server config 中的 remote Context Tree repo / branch 作为 source of truth。
-- Hub Server 自动把 remote repo 同步到 server-managed readonly checkout;`FIRST_TREE_HUB_CONTEXT_TREE_PATH` / `contextTree.localPath` 仅作为 dev/self-host override。
+- 读取当前用户所在组织的 Context Tree repo / branch 设置。
+- 以组织级 remote Context Tree repo / branch 作为 source of truth。
+- Hub Server 自动把 remote repo 同步到 server-managed readonly checkout;repo / branch 由 Team Settings 配置,不是 server-wide global config。
 - 解析 markdown files 和 directories。
 - 生成 parent edges、soft link edges、markdown link edges。
 - 生成 preview、owners、title、affected context area。
 - 基于固定时间窗口计算 changes。
 - 生成 updates,把 file diff 转译为 agent decision context update。
 - 读取最后一次触碰该文件的 commit author 和 commit subject,作为 `changedBy` 与可选 `summary`。
-- 校验本地 checkout branch 与 server config 是否一致,避免错标 branch。
+- 校验 managed checkout branch 与组织配置是否一致,避免错标 branch。
 - 对 git command 设置 timeout / buffer 上限,并对 diff entry 做上限保护。
 - 用短 TTL in-memory cache 缓解同一 `repo + branch + headCommit + window` 的重复请求。
 - 返回 active / stale / unavailable 状态;refresh 失败但已有 managed checkout 时返回 stale snapshot,只有没有可读 snapshot 时才返回 unavailable。
 
-当前实现支持 remote repo 自动 materialize:当 `contextTree.repo` 是 remote URL 或 `owner/repo` shorthand 时,Hub Server 会 clone/fetch 到 `$FIRST_TREE_HUB_HOME/data/context-tree-repos/<hash>` 并从该 managed checkout 生成 snapshot。`contextTree.localPath` 保留为本地开发、self-host debug 或特殊部署 override,不是线上默认路径。私有 GitHub repo 通过 `FIRST_TREE_HUB_CONTEXT_TREE_GITHUB_TOKEN` 提供只读 token;token 只用于 server-side git sync,不暴露给 Web。
+当前实现支持 remote repo 自动 materialize:当组织的 Context Tree repo 是 remote URL 时,Hub Server 会 clone/fetch 到 `$FIRST_TREE_HUB_HOME/data/context-tree-repos/<hash>` 并从该 managed checkout 生成 snapshot。私有 GitHub repo 通过 `FIRST_TREE_HUB_CONTEXT_TREE_GITHUB_TOKEN` 提供部署级只读 token;token 只用于 server-side git sync,不暴露给 Web。
 
 ### 性能和复用边界
 

@@ -1,51 +1,50 @@
-import type { Organization } from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
-import { getOrganization, updateOrganization } from "../api/organizations.js";
+import { getContextTreeSetting, putContextTreeSetting } from "../api/org-settings.js";
 import { useAuth } from "../auth/auth-context.js";
 import { Button } from "../components/ui/button.js";
 import { FlatSectionHeader } from "../components/ui/flat-section-header.js";
 
 /**
- * Admin-only panel for renaming the team (`organizations.display_name` and
- * the URL slug `organizations.name`). Implements proposal §决策 #17.
+ * Admin-only panel for the per-org Context Tree binding (repo / branch /
+ * localPath). Replaces the legacy global FIRST_TREE_HUB_CONTEXT_TREE_*
+ * env vars; each org now points at its own tree.
  *
- * The auto-provisioned default team's name is the user's GitHub login
- * (slug) and real name (display name) — already a friendly default — so
- * there's no separate "rename hint" surface; admins who want to customize
- * just edit the form below.
+ * Changes apply to *new* agent sessions: client agents fetch the latest
+ * binding at startup, existing sessions keep the value they were spun up
+ * with. Admins should advise members to restart agents after editing.
  */
-export function TeamIdentityPanel() {
+export function ContextTreeSettingsPanel() {
   const { organizationId } = useAuth();
   const queryClient = useQueryClient();
 
-  const orgQuery = useQuery({
-    queryKey: ["organization", organizationId],
-    queryFn: () => (organizationId ? getOrganization(organizationId) : Promise.reject(new Error("no org"))),
+  const settingQuery = useQuery({
+    queryKey: ["org-setting", organizationId, "context_tree"],
+    queryFn: () => (organizationId ? getContextTreeSetting(organizationId) : Promise.reject(new Error("no org"))),
     enabled: !!organizationId,
   });
 
-  const [displayName, setDisplayName] = useState("");
+  const [repo, setRepo] = useState("");
+  const [branch, setBranch] = useState("");
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
-    if (!orgQuery.data) return;
-    setDisplayName(orgQuery.data.displayName);
-  }, [orgQuery.data]);
+    if (!settingQuery.data) return;
+    setRepo(settingQuery.data.repo ?? "");
+    setBranch(settingQuery.data.branch ?? "main");
+  }, [settingQuery.data]);
 
   const mutation = useMutation({
     mutationFn: () => {
-      if (!organizationId || !orgQuery.data) throw new Error("organization not loaded");
-      const trimmedDisplay = displayName.trim();
-      if (!trimmedDisplay || trimmedDisplay === orgQuery.data.displayName) return Promise.resolve(orgQuery.data);
-      return updateOrganization(organizationId, { displayName: trimmedDisplay });
+      if (!organizationId) throw new Error("organization not loaded");
+      return putContextTreeSetting(organizationId, {
+        repo: repo.trim() ? repo.trim() : null,
+        branch: branch.trim() ? branch.trim() : null,
+      });
     },
-    onSuccess: (next: Organization) => {
-      queryClient.setQueryData(["organization", organizationId], next);
-      // /me/organizations cached in UserMenu — bust so the dropdown
-      // displayName updates without a reload.
-      queryClient.invalidateQueries({ queryKey: ["me-organizations"] });
+    onSuccess: (next) => {
+      queryClient.setQueryData(["org-setting", organizationId, "context_tree"], next);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     },
@@ -68,10 +67,10 @@ export function TeamIdentityPanel() {
             )}
             <Button
               type="submit"
-              form="team-identity-form"
+              form="context-tree-form"
               size="xs"
               variant="outline"
-              disabled={mutation.isPending || !orgQuery.data}
+              disabled={mutation.isPending || !settingQuery.data}
             >
               <Check className="h-3 w-3" />
               {mutation.isPending ? "Saving…" : "Save"}
@@ -79,24 +78,37 @@ export function TeamIdentityPanel() {
           </div>
         }
       >
-        Team identity
+        Context Tree
       </FlatSectionHeader>
-      {orgQuery.isLoading ? (
+      {settingQuery.isLoading ? (
         <div className="text-body" style={{ color: "var(--fg-3)", padding: "var(--sp-3) var(--sp-1)" }}>
           Loading…
         </div>
-      ) : orgQuery.error ? (
+      ) : settingQuery.error ? (
         <div className="text-body" style={{ color: "var(--state-error)", padding: "var(--sp-3) var(--sp-1)" }}>
-          {orgQuery.error instanceof Error ? orgQuery.error.message : "Failed to load team"}
+          {settingQuery.error instanceof Error ? settingQuery.error.message : "Failed to load setting"}
         </div>
       ) : (
-        <form id="team-identity-form" onSubmit={handleSubmit}>
+        <form id="context-tree-form" onSubmit={handleSubmit}>
           <Field
-            label="Team name"
-            hint="Shown in the team switcher and dashboard header."
-            value={displayName}
-            onChange={setDisplayName}
+            label="Repo URL"
+            hint="HTTPS or SSH URL of the Context Tree git repository for this team."
+            value={repo}
+            onChange={setRepo}
+            mono
+            placeholder="https://github.com/your-org/first-tree-context"
           />
+          <Field
+            label="Branch"
+            hint="Branch checked out by client agents on startup."
+            value={branch}
+            onChange={setBranch}
+            mono
+            placeholder="main"
+          />
+          <div className="text-label" style={{ color: "var(--fg-3)", padding: "var(--sp-2) var(--sp-1) 0" }}>
+            Changes apply to new agent sessions. Members should restart agents to pick up updated tree contents.
+          </div>
           {mutation.error instanceof Error && (
             <div className="text-body" style={{ color: "var(--state-error)", marginTop: "var(--sp-2)" }}>
               {mutation.error.message}
@@ -114,14 +126,14 @@ function Field({
   value,
   onChange,
   mono,
-  pattern,
+  placeholder,
 }: {
   label: string;
   hint: string;
   value: string;
   onChange: (next: string) => void;
   mono?: boolean;
-  pattern?: string;
+  placeholder?: string;
 }) {
   return (
     <div
@@ -143,7 +155,7 @@ function Field({
       <input
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        pattern={pattern}
+        placeholder={placeholder}
         className={`w-full outline-none text-body ${mono ? "mono" : ""}`}
         style={{
           padding: "var(--sp-1_25) var(--sp-2_5)",

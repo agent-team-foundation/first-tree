@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import type { ContextTreeChange, ContextTreeNode } from "@agent-team-foundation/first-tree-hub-shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { contextTreeSnapshotTestInternals } from "../services/context-tree-snapshot.js";
+import { contextTreeSnapshotTestInternals, getContextTreeSnapshot } from "../services/context-tree-snapshot.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -200,6 +200,27 @@ Body`);
     expect(managedRoot.startsWith(cacheRoot)).toBe(true);
     expect(managedRoot).not.toBe(remoteDir);
     await expect(readFile(join(managedRoot, "NODE.md"), "utf8")).resolves.toContain("Remote Context");
+  });
+
+  it("builds a snapshot from an organization remote repo binding", async () => {
+    const remoteDir = join(testDir, "remote-source");
+    await initRepoAt(remoteDir);
+    await writeFile(join(remoteDir, "NODE.md"), "---\ntitle: Remote Context\nowners: [alice]\n---\nGuidance\n");
+    await commitAllAt(remoteDir, "docs: add remote context");
+
+    const snapshot = await getContextTreeSnapshot({ repo: `file://${remoteDir}`, branch: "main" }, "7d");
+
+    expect(snapshot.snapshotStatus).toBe("active");
+    expect(snapshot.repo).toBe(`file://${remoteDir}`);
+    expect(snapshot.branch).toBe("main");
+    expect(snapshot.nodes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          title: "Remote Context",
+          owners: ["alice"],
+        }),
+      ]),
+    );
   });
 
   it("uses an existing managed checkout when remote refresh fails", async () => {

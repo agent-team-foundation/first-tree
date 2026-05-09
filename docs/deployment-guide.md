@@ -36,11 +36,7 @@ These must be set for Docker / CI / `--no-interactive` deployments. Interactive 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `FIRST_TREE_HUB_CONTEXT_TREE_REPO` | — | Context Tree repo URL (optional, for organizational context and the Context UI managed mirror) |
-| `FIRST_TREE_HUB_CONTEXT_TREE_PATH` | — | Optional server-local Context Tree checkout override for development or self-host debugging |
-| `FIRST_TREE_HUB_CONTEXT_TREE_GITHUB_TOKEN` | — | Read-only GitHub token for private Context Tree repos |
-| `FIRST_TREE_HUB_GITHUB_WEBHOOK_SECRET` | — | GitHub webhook secret (only needed if using github webhooks) |
-| `FIRST_TREE_HUB_GITHUB_ALLOWED_ORG` | — | GitHub org for agent registration access control (optional) |
+| `FIRST_TREE_HUB_CONTEXT_TREE_GITHUB_TOKEN` | — | Optional deployment-level read token for private Context Tree repos configured in Team Settings |
 | `FIRST_TREE_HUB_PORT` | `8000` | Server port |
 | `FIRST_TREE_HUB_JWT_SECRET` | auto-generated | JWT signing secret |
 | `FIRST_TREE_HUB_ENCRYPTION_KEY` | auto-generated | Adapter credential encryption key |
@@ -96,7 +92,7 @@ The default [Caddyfile](../deploy/Caddyfile) is minimal. To add custom headers, 
 
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/template?referralCode=first-tree-hub)
 
-Railway auto-detects the Dockerfile, provisions PostgreSQL, and exposes the service with HTTPS. Optionally set `FIRST_TREE_HUB_GITHUB_ALLOWED_ORG` to restrict agent registration to a specific GitHub organization.
+Railway auto-detects the Dockerfile, provisions PostgreSQL, and exposes the service with HTTPS. Configure Context Tree and GitHub integration per organization from Team Settings after the server is running.
 
 ### Render
 

@@ -1,7 +1,9 @@
 import { contextTreeSnapshotSchema } from "@agent-team-foundation/first-tree-hub-shared";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
+import { requireUser } from "../scope/require-user.js";
 import { getContextTreeSnapshot } from "../services/context-tree-snapshot.js";
+import { getOrgContextTree, resolveUserPrimaryOrgId } from "../services/org-settings.js";
 
 const querySchema = z
   .object({
@@ -23,7 +25,13 @@ export async function contextTreeSnapshotRoutes(app: FastifyInstance): Promise<v
     },
     async (request) => {
       const query = querySchema.parse(request.query);
-      const snapshot = await getContextTreeSnapshot(app.config, query.window ?? "7d");
+      const { userId } = requireUser(request);
+      const orgId = await resolveUserPrimaryOrgId(app.db, userId);
+      const binding = orgId ? await getOrgContextTree(app.db, orgId) : {};
+      const snapshot = await getContextTreeSnapshot(
+        { ...binding, githubToken: app.config.contextTreeSync?.githubToken },
+        query.window ?? "7d",
+      );
       return contextTreeSnapshotSchema.parse(snapshot);
     },
   );

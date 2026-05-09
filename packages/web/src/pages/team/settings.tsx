@@ -19,7 +19,7 @@ export function TeamSettingsPage() {
 
   return (
     <>
-      <PageHeader title="Team settings" subtitle="Organization name, slug, and metadata" />
+      <PageHeader title="Team settings" subtitle="Identity, Context Tree, GitHub integration" />
       <div style={{ padding: "var(--sp-2) var(--sp-5) var(--sp-7)" }}>
         <OrgSettingsPage />
       </div>

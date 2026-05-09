@@ -16,7 +16,6 @@ import type {
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { DEFAULT_DATA_DIR } from "@agent-team-foundation/first-tree-hub-shared/config";
 import matter from "gray-matter";
-import type { Config } from "../config.js";
 
 const execFileAsync = promisify(execFile);
 const ROOT_NODE_ID = "root";
@@ -107,18 +106,25 @@ const remoteSyncPromises = new Map<string, Promise<RemoteSyncResult>>();
 const remoteLastSyncedAt = new Map<string, number>();
 const remoteLastSyncWarnings = new Map<string, string>();
 
+/**
+ * Per-organization Context Tree binding. Resolved from `organization_settings`
+ * by the calling route — this service stays decoupled from any single-tenant
+ * global config so each org gets its own tree.
+ */
+export type ContextTreeBinding = {
+  repo?: string;
+  branch?: string;
+  localPath?: string;
+  githubToken?: string;
+};
+
 export async function getContextTreeSnapshot(
-  config: Config,
+  binding: ContextTreeBinding,
   window: ContextTreeSnapshotWindow = CONTEXT_TREE_SNAPSHOT_WINDOWS.SEVEN_DAYS,
 ): Promise<ContextTreeSnapshot> {
-  const repo = config.contextTree?.repo ?? null;
-  const branch = config.contextTree?.branch ?? null;
-  const resolved = await resolveContextTreeRoot(
-    repo,
-    config.contextTree?.localPath,
-    branch,
-    config.contextTree?.githubToken,
-  );
+  const repo = binding.repo ?? null;
+  const branch = binding.branch ?? null;
+  const resolved = await resolveContextTreeRoot(repo, binding.localPath, branch, binding.githubToken);
 
   if (!resolved.root) {
     return unavailableSnapshot(repo, branch, resolved.reason);
@@ -132,7 +138,7 @@ export async function getContextTreeSnapshot(
       return unavailableSnapshot(
         repo,
         actualBranch,
-        `Context Tree checkout is on branch "${actualBranch}", but server config expects "${branch}".`,
+        `Context Tree checkout is on branch "${actualBranch}", but the configured Context Tree branch is "${branch}".`,
       );
     }
 
@@ -1076,6 +1082,7 @@ export const contextTreeSnapshotTestInternals = {
     return buildTree(files.map((file) => ({ relativePath: file.relativePath, parsed: parseMarkdown(file.raw) })));
   },
   clearRemoteSyncState(): void {
+    snapshotCache.clear();
     remoteLastSyncedAt.clear();
     remoteLastSyncWarnings.clear();
     remoteSyncPromises.clear();
