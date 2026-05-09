@@ -1,15 +1,29 @@
 import { NavLink, Outlet } from "react-router";
+import { useAuth } from "../auth/auth-context.js";
 import { cn } from "../lib/utils.js";
 
 /**
  * Settings is a master-detail container. Flat aesthetic — no borders, no
  * contrasting sidebar bg; active state is a soft pill.
  *
- * `Team` is the org-scoped panel collection (Identity / Context Tree /
- * Source repos / GitHub integration) — written-side admin-only, with
- * `Source repos` readable by members. The other entries are user-scoped.
+ * Sub-tabs:
+ *   Team           — org-scoped Identity / Context Tree / Source repos
+ *                    (Source repos read-only for members; the rest are
+ *                    admin-only and hidden from member's view of the page)
+ *   Computers      — user-scoped: machines connected to Hub
+ *   GitHub         — admin-only: webhook URL + secret for routing GitHub
+ *                    issue / comment events to agents
+ *   Integrations   — IM bridges (Feishu / Slack adapter CRUD)
+ *   Onboarding     — guided-setup stepper enable / disable
+ *
+ * `GitHub` is hidden from the member sidebar because both reads and writes
+ * are admin-gated server-side — surfacing the entry would just lead to a
+ * 403 inside.
  */
 export function SettingsLayout() {
+  const { role } = useAuth();
+  const isAdmin = role === "admin";
+
   return (
     <div className="-m-6 flex" style={{ minHeight: "calc(100vh - var(--sp-10))" }}>
       <aside
@@ -21,6 +35,7 @@ export function SettingsLayout() {
       >
         <SubNavLink to="/settings/team" label="Team" />
         <SubNavLink to="/settings/computers" label="Computers" />
+        {isAdmin && <SubNavLink to="/settings/github" label="GitHub" />}
         <SubNavLink to="/settings/integrations" label="Integrations" />
         <SubNavLink to="/settings/onboarding" label="Onboarding" />
       </aside>

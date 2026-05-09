@@ -11,6 +11,7 @@ import { InviteAcceptPage } from "./pages/invite-accept.js";
 import { LoginPage } from "./pages/login.js";
 import { OAuthCompletePage } from "./pages/oauth-complete.js";
 import { SettingsComputersPage } from "./pages/settings/computers.js";
+import { SettingsGithubPage } from "./pages/settings/github.js";
 import { SettingsIntegrationsPage } from "./pages/settings/integrations.js";
 import { SettingsOnboardingPage } from "./pages/settings/onboarding.js";
 import { SettingsLayout } from "./pages/settings.js";
@@ -67,6 +68,7 @@ export function App() {
                     <Route index element={<Navigate to="computers" replace />} />
                     <Route path="team" element={<TeamSettingsPage />} />
                     <Route path="computers" element={<SettingsComputersPage />} />
+                    <Route path="github" element={<SettingsGithubPage />} />
                     <Route path="integrations" element={<SettingsIntegrationsPage />} />
                     <Route path="onboarding" element={<SettingsOnboardingPage />} />
                     {/* Old name was "setup" — keep the redirect so existing

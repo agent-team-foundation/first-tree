@@ -19,8 +19,7 @@ export function TeamSettingsPage() {
   // GithubIntegration) stay admin-only because their underlying APIs are
   // admin-gated for write and showing an empty form to a non-admin
   // confuses more than it helps.
-  const subtitle =
-    role === "admin" ? "Identity, Context Tree, GitHub integration" : "Repos your team's agents are bound to";
+  const subtitle = role === "admin" ? "Identity, Context Tree, source repos" : "Repos your team's agents are bound to";
 
   return (
     <>
