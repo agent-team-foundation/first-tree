@@ -207,6 +207,82 @@ describe("GET /me/github/repos", () => {
   });
 });
 
+describe("POST /me/onboarding/events", () => {
+  const getApp = useTestApp();
+
+  it("rejects forged event/userId smuggled in attrs (#248 codex review)", async () => {
+    // Pre-fix the spread order was `{ event, userId, ...attrs }`, so a
+    // hostile authenticated tab could POST
+    //   attrs: { event: "fake.event", userId: "victim-uid" }
+    // and have those values overwrite the JWT-derived `userId` and the
+    // Zod-validated event in the structured log line, corrupting funnel
+    // attribution.
+    //
+    // The fix flips the order to `{ ...attrs, event, userId }` so the
+    // server-controlled fields always win. This test pins that behavior
+    // by capturing the actual log payload via a vi spy on app.log.info.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+
+    const captured: Array<Record<string, unknown>> = [];
+    const infoSpy = vi.spyOn(app.log, "info").mockImplementation(((...args: unknown[]) => {
+      const obj = args[0];
+      if (obj && typeof obj === "object") captured.push(obj as Record<string, unknown>);
+      return app.log;
+    }) as typeof app.log.info);
+
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/me/onboarding/events",
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+        payload: {
+          event: "agent_created",
+          attrs: {
+            event: "onboarding.fake_forged_event",
+            userId: "attacker-controlled-user-id",
+            extra: "legit-attr-keeps-working",
+          },
+        },
+      });
+      expect(res.statusCode).toBe(204);
+    } finally {
+      infoSpy.mockRestore();
+    }
+
+    // Find the funnel line and confirm server-controlled fields stand.
+    const funnelEntry = captured.find((c) => typeof c.event === "string" && String(c.event).startsWith("onboarding."));
+    expect(funnelEntry).toBeDefined();
+    expect(funnelEntry?.event).toBe("onboarding.agent_created");
+    expect(funnelEntry?.userId).toBe(admin.userId);
+    // Non-conflicting attrs keys must still flow through — the schema lets
+    // callers attach arbitrary primitives for funnel context.
+    expect(funnelEntry?.extra).toBe("legit-attr-keeps-working");
+  });
+
+  it("rejects unauthenticated callers", async () => {
+    const app = getApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/me/onboarding/events",
+      payload: { event: "agent_created" },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("rejects unknown event names with 400 (Zod enum)", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/me/onboarding/events",
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { event: "totally_made_up_event" },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+});
+
 describe("/me onboarding payload", () => {
   const getApp = useTestApp();
 
