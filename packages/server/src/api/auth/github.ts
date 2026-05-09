@@ -143,7 +143,12 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
       displayName: params.displayName ?? params.login,
       avatarUrl: null,
     };
-    return completeOauthFlow(app, request, reply, profile, next, null);
+    // Optional dev-only PAT injection so the Step 2 repo picker has a real
+    // GitHub access token to call APIs with. Set `DEV_GITHUB_PAT=ghp_...` in
+    // the dev env to enable. Never read in production (the early-return
+    // above already guards `dev-callback` itself).
+    const devPat = process.env.DEV_GITHUB_PAT?.trim() || null;
+    return completeOauthFlow(app, request, reply, profile, next, devPat);
   });
 }
 
