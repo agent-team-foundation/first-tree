@@ -116,15 +116,3 @@ function SavedIndicator() {
     </span>
   );
 }
-
-/**
- * Form-bottom action footer. Sits flush right, separated from the last
- * field by the field's own marginBottom — no extra top spacing here.
- */
-export function SettingsFormFooter({ children }: { children: ReactNode }) {
-  return (
-    <div className="flex items-center justify-end" style={{ gap: "var(--sp-2)", marginTop: "var(--sp-2)" }}>
-      {children}
-    </div>
-  );
-}

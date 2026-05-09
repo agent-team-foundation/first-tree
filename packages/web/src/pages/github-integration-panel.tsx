@@ -4,7 +4,7 @@ import { type FormEvent, useState } from "react";
 import { getGithubIntegrationSetting, putGithubIntegrationSetting } from "../api/org-settings.js";
 import { useAuth } from "../auth/auth-context.js";
 import { Button } from "../components/ui/button.js";
-import { SettingsField, SettingsFormFooter } from "../components/ui/settings-field.js";
+import { SettingsField } from "../components/ui/settings-field.js";
 import { SettingsSection } from "../components/ui/settings-section.js";
 
 /**
@@ -106,6 +106,7 @@ export function GithubIntegrationPanel({ isFirst = false }: { isFirst?: boolean 
           )}
           {secretConfigured && !replacing ? (
             <SecretStatusRow
+              saved={saved}
               onReplace={() => {
                 setReplacing(true);
                 setSecretInput("");
@@ -121,18 +122,18 @@ export function GithubIntegrationPanel({ isFirst = false }: { isFirst?: boolean 
               type="password"
               placeholder={replacing ? "Enter new secret" : "(none)"}
               saved={saved}
+              rightSlot={
+                <Button type="submit" size="sm" variant="outline" disabled={mutation.isPending || !settingQuery.data}>
+                  {mutation.isPending ? "Saving…" : "Save"}
+                </Button>
+              }
             />
           )}
           {mutation.error instanceof Error && (
-            <div className="text-body" style={{ color: "var(--state-error)", marginBottom: "var(--sp-2)" }}>
+            <div className="text-body" style={{ color: "var(--state-error)" }}>
               {mutation.error.message}
             </div>
           )}
-          <SettingsFormFooter>
-            <Button type="submit" size="sm" variant="outline" disabled={mutation.isPending || !settingQuery.data}>
-              {mutation.isPending ? "Saving…" : "Save"}
-            </Button>
-          </SettingsFormFooter>
         </form>
       )}
     </SettingsSection>
@@ -165,28 +166,41 @@ function WebhookUrlNotice() {
   );
 }
 
-function SecretStatusRow({ onReplace }: { onReplace: () => void }) {
+function SecretStatusRow({ saved, onReplace }: { saved: boolean; onReplace: () => void }) {
   return (
     <div style={{ marginBottom: "var(--sp-4)" }}>
-      <div className="text-body font-medium" style={{ color: "var(--fg)" }}>
-        Webhook secret
+      <div className="flex items-baseline justify-between" style={{ gap: "var(--sp-2)" }}>
+        <span className="text-body font-medium" style={{ color: "var(--fg)" }}>
+          Webhook secret
+        </span>
+        {saved && (
+          <span
+            className="text-label inline-flex items-center fade-in"
+            style={{
+              gap: "var(--sp-1)",
+              color: "color-mix(in oklch, var(--accent) 35%, var(--fg))",
+            }}
+          >
+            ✓ Saved
+          </span>
+        )}
       </div>
       <p className="text-label" style={{ color: "var(--fg-3)", margin: "var(--sp-0_5) 0 var(--sp-2)" }}>
         Configured. Replace to rotate; webhook signature verification will fail until GitHub is also updated.
       </p>
-      <div
-        className="flex items-center justify-between"
-        style={{
-          gap: "var(--sp-2)",
-          padding: "var(--sp-1_5) var(--sp-2_5)",
-          background: "var(--bg-sunken)",
-          borderRadius: "var(--radius-input)",
-        }}
-      >
-        <span className="mono text-body" style={{ color: "var(--fg-2)" }}>
+      <div className="flex items-stretch" style={{ gap: "var(--sp-2)" }}>
+        <div
+          className="flex-1 mono text-body flex items-center"
+          style={{
+            padding: "var(--sp-1_5) var(--sp-2_5)",
+            background: "var(--bg-sunken)",
+            borderRadius: "var(--radius-input)",
+            color: "var(--fg-2)",
+          }}
+        >
           ••••••••
-        </span>
-        <Button type="button" size="sm" variant="ghost" onClick={onReplace}>
+        </div>
+        <Button type="button" size="sm" variant="outline" onClick={onReplace}>
           Replace
         </Button>
       </div>
