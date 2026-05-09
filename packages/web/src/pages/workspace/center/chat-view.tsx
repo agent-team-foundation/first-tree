@@ -27,10 +27,13 @@ import {
 import { useAuth } from "../../../auth/auth-context.js";
 import { FirstTreeLogo } from "../../../components/first-tree-logo.js";
 import {
+  ambiguousDisplayNames,
   MentionAutocompletePopover,
   type MentionCandidate,
+  shouldShowHandle,
   useMentionAutocomplete,
 } from "../../../components/mention-autocomplete.js";
+import { Button } from "../../../components/ui/button.js";
 import { Markdown } from "../../../components/ui/markdown.js";
 import { useAgentIdentityMap, useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { cn } from "../../../lib/utils.js";
@@ -454,18 +457,26 @@ export function ChatView({
   agentId,
   chatId,
   readOnly = false,
-  onJoin,
-  joining = false,
-  joinError = null,
+  titleFallback,
+  joinAction,
 }: {
   agentId: string;
   chatId: string;
   /** When true, render watching mode: timeline only, no rename, no [+] participant,
    *  composer slot replaced with a Join panel. */
   readOnly?: boolean;
-  onJoin?: () => void;
-  joining?: boolean;
-  joinError?: string | null;
+  /** Pre-loaded title shown while `chatDetail` is still fetching — typically
+   *  the row's `title` from the `me/chats` cache the chat list already has hot.
+   *  Without it, the header flashes "…" on every cold open. */
+  titleFallback?: string | null;
+  /** Bundled join contract: when present in `readOnly`, the Join panel renders
+   *  the button + inline error/loading. All three travel together — passing
+   *  `error` without `onJoin` would render a dead error with no recovery. */
+  joinAction?: {
+    onJoin: () => void;
+    joining: boolean;
+    error: string | null;
+  };
 }) {
   const queryClient = useQueryClient();
   const agentName = useAgentNameMap();
@@ -743,6 +754,10 @@ export function ChatView({
   // name would otherwise stamp "Hi <uuid>! …" and the Set guard prevents
   // a fix-up once the map loads. We just wait for it.
   useEffect(() => {
+    // Watchers don't see the composer; stamping a greeting into `draft`
+    // is invisible at best and at worst contaminates `prefilledChatsRef`
+    // so that joining-then-typing skips the greeting on the next mount.
+    if (readOnly) return;
     if (prefilledChatsRef.current.has(chatId)) return;
     if (!messagesData || !eventsData || !chatDetail) return;
     if (items.length > 0) return;
@@ -759,7 +774,18 @@ export function ChatView({
       el.focus();
       el.setSelectionRange(greeting.length, greeting.length);
     });
-  }, [chatId, agentId, messagesData, eventsData, chatDetail, items.length, draft.length, displayName, requiresMention]);
+  }, [
+    chatId,
+    agentId,
+    messagesData,
+    eventsData,
+    chatDetail,
+    items.length,
+    draft.length,
+    displayName,
+    requiresMention,
+    readOnly,
+  ]);
 
   /** All agentIds the draft text addresses via `@<name>` tokens — computed
    * unconditionally (not just for groups) so the "outsider invite" path
@@ -842,7 +868,7 @@ export function ChatView({
             {readOnly ? (
               <>
                 <span className="truncate text-subtitle min-w-0" style={{ color: "var(--fg)" }}>
-                  {chatDetail?.title ?? "…"}
+                  {chatDetail?.title ?? titleFallback ?? "…"}
                 </span>
                 <span
                   className="mono uppercase text-eyebrow shrink-0"
@@ -980,13 +1006,13 @@ export function ChatView({
           narrow viewports. */}
       <div className="flex-1 overflow-y-auto relative" style={{ padding: "var(--sp-2_5) var(--sp-6)" }}>
         <div style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}>
-          {itemCount === 0 && !readOnly && (
+          {itemCount === 0 && (
             <div
               className="flex flex-col items-center text-body"
               style={{ color: "var(--fg-3)", padding: "var(--sp-8) 0", gap: 6 }}
             >
               <MessageSquare className="h-8 w-8" style={{ opacity: 0.3 }} />
-              Send a message to start the conversation
+              {readOnly ? "No messages yet" : "Send a message to start the conversation"}
             </div>
           )}
           <div className="flex flex-col" style={{ gap: 4 }}>
@@ -1043,30 +1069,23 @@ export function ChatView({
                 <div className="text-body" style={{ color: "var(--fg-2)" }}>
                   You're watching this chat — read-only.
                 </div>
-                {joinError && (
+                {joinAction?.error && (
                   <div className="mono text-label" style={{ color: "var(--state-error)", marginTop: 2 }}>
-                    {joinError}
+                    {joinAction.error}
                   </div>
                 )}
               </div>
-              {onJoin && (
-                <button
+              {joinAction && (
+                <Button
                   type="button"
-                  onClick={onJoin}
-                  disabled={joining}
-                  className="shrink-0 text-body"
-                  style={{
-                    padding: "var(--sp-1) var(--sp-2_5)",
-                    borderRadius: "var(--radius-input)",
-                    border: "var(--hairline) solid var(--border)",
-                    background: "var(--bg-raised)",
-                    color: "var(--fg)",
-                    cursor: joining ? "default" : "pointer",
-                    opacity: joining ? 0.6 : 1,
-                  }}
+                  variant="secondary"
+                  size="sm"
+                  className="shrink-0"
+                  onClick={joinAction.onJoin}
+                  disabled={joinAction.joining}
                 >
-                  {joining ? "Joining…" : "Join to reply"}
-                </button>
+                  {joinAction.joining ? "Joining…" : "Join to reply"}
+                </Button>
               )}
             </div>
           ) : (
@@ -1459,26 +1478,35 @@ function ParticipantsHeader({
                 borderColor: "var(--border)",
               }}
             >
-              {outsideCandidates.map((c) => (
-                <button
-                  key={c.agentId}
-                  type="button"
-                  role="option"
-                  aria-selected="false"
-                  onClick={() => addMut.mutate(c.agentId)}
-                  disabled={addMut.isPending}
-                  className="flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-body"
-                  style={{
-                    background: "transparent",
-                    color: "var(--fg)",
-                    border: "none",
-                    cursor: "pointer",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  <span className="font-medium">{c.displayName ?? (c.name ? `@${c.name}` : "—")}</span>
-                </button>
-              ))}
+              {(() => {
+                const ambiguous = ambiguousDisplayNames(outsideCandidates);
+                return outsideCandidates.map((c) => (
+                  <button
+                    key={c.agentId}
+                    type="button"
+                    role="option"
+                    aria-selected="false"
+                    title={c.name ? `@${c.name}` : undefined}
+                    onClick={() => addMut.mutate(c.agentId)}
+                    disabled={addMut.isPending}
+                    className="flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-body"
+                    style={{
+                      background: "transparent",
+                      color: "var(--fg)",
+                      border: "none",
+                      cursor: "pointer",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    <span className="font-medium">{c.displayName ?? (c.name ? `@${c.name}` : "—")}</span>
+                    {shouldShowHandle(c, ambiguous) && (
+                      <span className="mono text-caption" style={{ color: "var(--fg-3)" }}>
+                        @{c.name}
+                      </span>
+                    )}
+                  </button>
+                ));
+              })()}
             </div>
           )}
         </div>

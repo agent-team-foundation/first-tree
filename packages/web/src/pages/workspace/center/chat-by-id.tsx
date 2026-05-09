@@ -137,9 +137,12 @@ export function ChatByIdView({ chatId }: { chatId: string }) {
         agentId={primaryAgent}
         chatId={chatId}
         readOnly
-        onJoin={() => joinMut.mutate()}
-        joining={joinMut.isPending}
-        joinError={joinMut.isError ? (joinMut.error instanceof Error ? joinMut.error.message : "Failed to join") : null}
+        titleFallback={meRow?.title ?? null}
+        joinAction={{
+          onJoin: () => joinMut.mutate(),
+          joining: joinMut.isPending,
+          error: joinMut.isError ? (joinMut.error instanceof Error ? joinMut.error.message : "Failed to join") : null,
+        }}
       />
     );
   }

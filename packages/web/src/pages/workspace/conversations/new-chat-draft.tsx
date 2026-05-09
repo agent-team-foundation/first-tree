@@ -7,8 +7,10 @@ import { sendChatMessage } from "../../../api/chats.js";
 import { createMeChat } from "../../../api/me-chats.js";
 import { useAuth } from "../../../auth/auth-context.js";
 import {
+  ambiguousDisplayNames,
   MentionAutocompletePopover,
   type MentionCandidate,
+  shouldShowHandle,
   useMentionAutocomplete,
 } from "../../../components/mention-autocomplete.js";
 import { useAgentIdentityMap } from "../../../lib/use-agent-name-map.js";
@@ -428,25 +430,34 @@ function ParticipantChips({
               borderColor: "var(--border)",
             }}
           >
-            {chipCandidates.map((c) => (
-              <button
-                key={c.agentId}
-                type="button"
-                role="option"
-                aria-selected="false"
-                onClick={() => onAdd(c.agentId)}
-                className="flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-body"
-                style={{
-                  background: "transparent",
-                  color: "var(--fg)",
-                  border: "none",
-                  cursor: "pointer",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                <span className="font-medium">{c.displayName ?? (c.name ? `@${c.name}` : "—")}</span>
-              </button>
-            ))}
+            {(() => {
+              const ambiguous = ambiguousDisplayNames(chipCandidates);
+              return chipCandidates.map((c) => (
+                <button
+                  key={c.agentId}
+                  type="button"
+                  role="option"
+                  aria-selected="false"
+                  title={c.name ? `@${c.name}` : undefined}
+                  onClick={() => onAdd(c.agentId)}
+                  className="flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-body"
+                  style={{
+                    background: "transparent",
+                    color: "var(--fg)",
+                    border: "none",
+                    cursor: "pointer",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  <span className="font-medium">{c.displayName ?? (c.name ? `@${c.name}` : "—")}</span>
+                  {shouldShowHandle(c, ambiguous) && (
+                    <span className="mono text-caption" style={{ color: "var(--fg-3)" }}>
+                      @{c.name}
+                    </span>
+                  )}
+                </button>
+              ));
+            })()}
           </div>
         )}
       </div>
