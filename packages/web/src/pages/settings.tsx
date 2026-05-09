@@ -13,7 +13,7 @@ import { cn } from "../lib/utils.js";
  *   Computers      — user-scoped: machines connected to Hub
  *   GitHub         — admin-only: webhook URL + secret for routing GitHub
  *                    issue / comment events to agents
- *   Integrations   — IM bridges (Feishu / Slack adapter CRUD)
+ *   Messaging      — IM bridges (Feishu / Slack adapter CRUD)
  *   Onboarding     — guided-setup stepper enable / disable
  *
  * `GitHub` is hidden from the member sidebar because both reads and writes
@@ -36,7 +36,7 @@ export function SettingsLayout() {
         <SubNavLink to="/settings/team" label="Team" />
         <SubNavLink to="/settings/computers" label="Computers" />
         {isAdmin && <SubNavLink to="/settings/github" label="GitHub" />}
-        <SubNavLink to="/settings/integrations" label="Integrations" />
+        <SubNavLink to="/settings/integrations" label="Messaging" />
         <SubNavLink to="/settings/onboarding" label="Onboarding" />
       </aside>
 
