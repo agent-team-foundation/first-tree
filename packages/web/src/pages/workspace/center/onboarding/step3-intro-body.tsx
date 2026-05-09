@@ -7,7 +7,12 @@ import { listManagedAgents, type ManagedAgent } from "../../../../api/agents.js"
 import { createAgentChat, sendChatMessage } from "../../../../api/chats.js";
 import { type GithubRepo, listGithubRepos } from "../../../../api/github.js";
 import { reportOnboardingEvent } from "../../../../api/onboarding-events.js";
-import { getContextTreeSetting, getSourceReposSetting, putContextTreeSetting } from "../../../../api/org-settings.js";
+import {
+  getContextTreeSetting,
+  getSourceReposSetting,
+  putContextTreeSetting,
+  putSourceReposSetting,
+} from "../../../../api/org-settings.js";
 import { useAuth } from "../../../../auth/auth-context.js";
 import { Button } from "../../../../components/ui/button.js";
 import { type ToastInput, useToast } from "../../../../components/ui/toast.js";
@@ -497,6 +502,26 @@ function AdminBindCreateBody() {
         expectedVersion: cfg.version,
         payload: { gitRepos: [{ url: selectedRepoUrl }] },
       });
+
+      // Phase B: mirror the chosen source repo to the team-level
+      // `source_repos` namespace so subsequent invitees route through
+      // InviteeConfirmBody (one-click join) rather than InviteePickerBody
+      // (re-walk GitHub OAuth). This is the admin's first-time write —
+      // a single-entry list that overwrites whatever was there before.
+      // Admins managing multiple source repos do so via Team Settings;
+      // onboarding doesn't try to merge.
+      //
+      // Non-fatal — agent's own gitRepos already saved above, so a failure
+      // here only means the next invitee will see the picker instead of
+      // the confirm card.
+      if (organizationId) {
+        try {
+          await putSourceReposSetting(organizationId, { repos: [{ url: selectedRepoUrl }] });
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn("Step 3: PUT source_repos failed; agent gitRepos already saved", err);
+        }
+      }
 
       // Path A: persist the existing tree URL to the org NOW via the
       // generic per-org settings surface (`context_tree` namespace). Agent
