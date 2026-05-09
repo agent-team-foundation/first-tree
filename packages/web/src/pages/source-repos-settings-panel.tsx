@@ -98,11 +98,13 @@ export function SourceReposSettingsPanel() {
           ))}
         </ul>
       )}
-      <div className="text-label" style={{ color: "var(--fg-3)", padding: "var(--sp-2) var(--sp-1) 0" }}>
-        {isAdmin
-          ? "Removing a repo here only clears the team-level binding. Existing agent runtimes keep their per-agent gitRepos until an admin restarts the agent or edits its config directly."
-          : "Read-only — only team admins can edit this list."}
-      </div>
+      {repos.length > 0 && (
+        <div className="text-label" style={{ color: "var(--fg-3)", padding: "var(--sp-2) var(--sp-1) 0" }}>
+          {isAdmin
+            ? "Removing a repo here only clears the team-level binding. Existing agent runtimes keep their per-agent gitRepos until an admin restarts the agent or edits its config directly."
+            : "Read-only — only team admins can edit this list."}
+        </div>
+      )}
       {removeMutation.error instanceof Error && (
         <div className="text-body" style={{ color: "var(--state-error)", marginTop: "var(--sp-2)" }}>
           {removeMutation.error.message}
