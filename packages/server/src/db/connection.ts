@@ -11,7 +11,7 @@ export function connectDatabase(url: string) {
 // AWS RDS / Aurora enforces rds.force_ssl=1 and serves a cert that isn't in
 // Node's default CA bundle — skip verification for RDS hosts only. Everything
 // else (testcontainers, local Docker, self-host) stays on the no-SSL default.
-function sslOptions(url: string) {
+export function sslOptions(url: string) {
   try {
     if (new URL(url).hostname.endsWith(".rds.amazonaws.com")) {
       return { ssl: { rejectUnauthorized: false } };
