@@ -228,6 +228,29 @@ export const agentRuntimeConfigSchema = z.object({
 export type AgentRuntimeConfig = z.infer<typeof agentRuntimeConfigSchema>;
 
 /**
+ * Write-side shape with no `.default()` per field.
+ *
+ * `agentRuntimeConfigPayloadShape` carries `.default()` on every field for the
+ * read path (so legacy DB rows parse cleanly). On the PATCH side those defaults
+ * are actively harmful: Zod 4's `.partial()` makes a field optional but keeps
+ * the inner `ZodDefault`, so a body like `{ mcpServers: [...] }` parses to a
+ * fully-populated patch where the omitted fields are filled with their
+ * defaults — the service layer's `patch.x ?? current.x` then sees a truthy
+ * default and *replaces* the user's saved value with empty. Mirroring the 5
+ * fields here without defaults keeps "field absent" → `undefined` in the
+ * parsed patch, which is what the merge logic expects.
+ */
+const agentRuntimeConfigPatchShape = z
+  .object({
+    prompt: promptConfigSchema,
+    model: z.string(),
+    mcpServers: z.array(mcpServerSchema),
+    env: z.array(envEntrySchema),
+    gitRepos: z.array(gitRepoSchema),
+  })
+  .partial();
+
+/**
  * Patch payload for PATCH /api/v1/admin/agents/:uuid/config.
  *
  * - `expectedVersion` enforces optimistic locking; mismatch → 409.
@@ -235,12 +258,12 @@ export type AgentRuntimeConfig = z.infer<typeof agentRuntimeConfigSchema>;
  */
 export const updateAgentRuntimeConfigSchema = z.object({
   expectedVersion: z.number().int().positive(),
-  payload: agentRuntimeConfigPayloadShape.partial(),
+  payload: agentRuntimeConfigPatchShape,
 });
 export type UpdateAgentRuntimeConfig = z.infer<typeof updateAgentRuntimeConfigSchema>;
 
 export const dryRunAgentRuntimeConfigSchema = z.object({
-  payload: agentRuntimeConfigPayloadShape.partial(),
+  payload: agentRuntimeConfigPatchShape,
 });
 export type DryRunAgentRuntimeConfig = z.infer<typeof dryRunAgentRuntimeConfigSchema>;
 
