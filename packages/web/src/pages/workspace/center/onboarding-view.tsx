@@ -131,6 +131,12 @@ type Phase = "form" | "creating" | "timeout";
 
 type ResolvedBody = "step1" | "step2" | "step3-intro";
 
+function prettyRuntimeLabel(provider: string): string {
+  if (provider === "claude-code") return "Claude Code";
+  if (provider === "codex") return "Codex";
+  return provider;
+}
+
 export function OnboardingView() {
   const { onboardingStep, refreshMe, organizationId, memberId, role } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -631,6 +637,7 @@ function Step2Body({
       capabilitiesLoaded={activeCapabilities !== null}
       okRuntimes={okRuntimes}
       selectedRuntime={selectedRuntime}
+      setSelectedRuntime={setSelectedRuntime}
       error={error}
       canCreate={canCreate}
       onCreate={handleCreate}
@@ -657,6 +664,7 @@ function Step2FormBody({
   capabilitiesLoaded,
   okRuntimes,
   selectedRuntime,
+  setSelectedRuntime,
   error,
   canCreate,
   onCreate,
@@ -671,6 +679,7 @@ function Step2FormBody({
   capabilitiesLoaded: boolean;
   okRuntimes: string[];
   selectedRuntime: string | null;
+  setSelectedRuntime: (next: string | null) => void;
   error: string | null;
   canCreate: boolean;
   onCreate: () => void;
@@ -786,19 +795,21 @@ function Step2FormBody({
                 )}
 
                 {connectedClient ? (
-                  <ConnectedRow hostname={connectedClient.hostname ?? connectedClient.id} />
+                  <>
+                    <ConnectedRow hostname={connectedClient.hostname ?? connectedClient.id} />
+                    <RuntimeChips
+                      runtimes={okRuntimes}
+                      selected={selectedRuntime}
+                      onSelect={setSelectedRuntime}
+                      capabilitiesLoaded={capabilitiesLoaded}
+                    />
+                  </>
                 ) : (
                   <>
                     <CommandBox command={cliCommand} />
                     <WaitingRow />
                   </>
                 )}
-
-                {noRuntime ? (
-                  <p className="text-label" style={{ marginTop: "var(--sp-3)", color: "var(--fg-3)" }}>
-                    No runtime ready on this computer. Install Claude Code (or Codex) and sign in, then check back.
-                  </p>
-                ) : null}
               </>
             ) : null}
           </div>
@@ -1389,6 +1400,99 @@ function WaitingRow() {
     >
       <PulsingDot />
       <span>Waiting for your computer…</span>
+    </div>
+  );
+}
+
+/**
+ * "Powered by" runtime selector — appears under the connected-computer
+ * row in Step 2. Auto-pinned to the preferred runtime (Claude Code →
+ * Codex) via `pickPreferredRuntime`; the chips let the operator override
+ * if they want the other one. Renders nothing useful while capabilities
+ * are still loading or no `ok` runtime exists on the connected client.
+ */
+function RuntimeChips({
+  runtimes,
+  selected,
+  onSelect,
+  capabilitiesLoaded,
+}: {
+  runtimes: string[];
+  selected: string | null;
+  onSelect: (next: string) => void;
+  capabilitiesLoaded: boolean;
+}) {
+  if (runtimes.length === 0) {
+    return (
+      <p className="text-label" style={{ marginTop: "var(--sp-3)", color: "var(--fg-3)" }}>
+        {capabilitiesLoaded
+          ? "No runtime ready on this computer. Install Claude Code or Codex, then check back."
+          : "Detecting installed runtimes…"}
+      </p>
+    );
+  }
+  return (
+    <div style={{ marginTop: "var(--sp-3)" }}>
+      <p className="text-label" style={{ color: "var(--fg-3)", marginBottom: "var(--sp-1)" }}>
+        Powered by
+      </p>
+      <fieldset className="flex" style={{ gap: "var(--sp-4)", flexWrap: "wrap", margin: 0, padding: 0, border: 0 }}>
+        <legend className="sr-only">Runtime provider</legend>
+        {runtimes.map((provider, index) => {
+          const active = selected === provider;
+          return (
+            <label
+              key={provider}
+              className="onboarding-runtime-option inline-flex items-center text-body"
+              style={{
+                gap: "var(--sp-1_5)",
+                padding: "var(--sp-1) 0",
+                cursor: "pointer",
+                color: active ? "color-mix(in oklch, var(--accent) 30%, var(--fg))" : "var(--fg)",
+                fontWeight: active ? 600 : 400,
+                animation: `onboarding-rise 220ms ease-out ${index * 80}ms both`,
+                transition: "color 160ms ease, opacity 160ms ease, transform 160ms ease",
+              }}
+            >
+              <input
+                type="radio"
+                name="onboarding-runtime"
+                value={provider}
+                checked={active}
+                onChange={() => onSelect(provider)}
+                className="sr-only"
+              />
+              <span
+                aria-hidden="true"
+                className="inline-flex items-center justify-center"
+                style={{
+                  width: "var(--sp-3_5)",
+                  height: "var(--sp-3_5)",
+                  borderRadius: "50%",
+                  border: active ? "var(--hairline) solid var(--accent)" : "var(--hairline) solid var(--border-strong)",
+                  background: active ? "color-mix(in oklch, var(--accent) 8%, transparent)" : "transparent",
+                  boxShadow: active
+                    ? "0 0 0 var(--sp-0_5) color-mix(in oklch, var(--accent) 10%, transparent)"
+                    : "none",
+                  transition: "border-color 160ms ease, background 160ms ease, box-shadow 160ms ease",
+                }}
+              >
+                {active && (
+                  <span
+                    style={{
+                      width: "var(--sp-1_5)",
+                      height: "var(--sp-1_5)",
+                      borderRadius: "50%",
+                      background: "var(--accent)",
+                    }}
+                  />
+                )}
+              </span>
+              {prettyRuntimeLabel(provider)}
+            </label>
+          );
+        })}
+      </fieldset>
     </div>
   );
 }
