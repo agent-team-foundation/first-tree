@@ -86,10 +86,6 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
       refreshTokenExpiry: "30d",
       connectTokenExpiry: "10m",
     },
-    github: {
-      webhookSecret: "test-webhook-secret",
-      allowedOrg: "test-org",
-    },
     oauth: {
       github: {
         clientId: "test-github-client",

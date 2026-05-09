@@ -50,6 +50,7 @@ import { orgMemberRoutes } from "./api/orgs/members.js";
 import { orgNotificationRoutes } from "./api/orgs/notifications.js";
 import { orgOverviewRoutes } from "./api/orgs/overview.js";
 import { orgSessionRoutes } from "./api/orgs/sessions.js";
+import { orgSettingsRoutes } from "./api/orgs/settings.js";
 import { orgTaskRoutes } from "./api/orgs/tasks.js";
 import { orgWsRoutes } from "./api/orgs/ws.js";
 import { sessionRoutes } from "./api/sessions.js";
@@ -416,12 +417,12 @@ export async function buildApp(config: Config) {
       await api.register(authRoutes, { prefix: "/auth" });
       await api.register(githubOauthRoutes, { prefix: "/auth/github" });
       await api.register(publicInvitationRoutes, { prefix: "/invitations" });
-      await api.register(contextTreeInfoRoutes, { prefix: "/context-tree" });
       await api.register(bootstrapConfigRoutes, { prefix: "/bootstrap" });
 
       // ── Class A — `/me`, `/auth` (user-scoped) ──────────────────────────
       await api.register(
         userScope("contextTreeScope", async (scope) => {
+          await scope.register(contextTreeInfoRoutes);
           await scope.register(contextTreeSnapshotRoutes);
         }),
         { prefix: "/context-tree" },
@@ -451,6 +452,7 @@ export async function buildApp(config: Config) {
           await scope.register(orgClientRoutes, { prefix: "/clients" });
           await scope.register(orgInvitationRoutes, { prefix: "/invitations" });
           await scope.register(orgMemberRoutes, { prefix: "/members" });
+          await scope.register(orgSettingsRoutes, { prefix: "/settings" });
         }),
         { prefix: "/orgs/:orgId" },
       );
