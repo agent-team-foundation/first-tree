@@ -49,24 +49,6 @@ export function writeOnboardingAgentUuid(uuid: string | null): void {
   else window.sessionStorage.removeItem(ONBOARDING_AGENT_UUID_KEY);
 }
 
-const RETURN_CHAT_ID_KEY = "onboarding:returnChatId";
-
-/**
- * Stash a chat id when the user clicks back to Step 1 / Step 2 from the
- * stepper while a chat is open in CenterPanel. Step 1's Continue handler
- * pops it back into the URL on advance so the user lands back in their
- * tree-init chat instead of `/`.
- */
-export function readOnboardingReturnChatId(): string | null {
-  if (typeof window === "undefined") return null;
-  return window.sessionStorage.getItem(RETURN_CHAT_ID_KEY);
-}
-export function writeOnboardingReturnChatId(chatId: string | null): void {
-  if (typeof window === "undefined") return;
-  if (chatId) window.sessionStorage.setItem(RETURN_CHAT_ID_KEY, chatId);
-  else window.sessionStorage.removeItem(RETURN_CHAT_ID_KEY);
-}
-
 export type OnboardingJoinPath = "solo" | "invite";
 export type OnboardingDraft = {
   displayName: string;

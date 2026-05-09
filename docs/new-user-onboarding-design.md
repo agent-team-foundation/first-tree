@@ -193,11 +193,11 @@ Stage D — Step 2 client never came online (error):
 
 Position: anchored to the **right end of the stepper row**, vertically center-aligned with the circles. It's outside the step circles' horizontal extent, so the line between Step 3 and `✕` is just dead space (no connecting line, no "step 4" visual).
 
-Click `✕` → PATCH `users.onboarding_dismissed_at = NOW()` → stepper unmounts → workspace renders normally.
+Click `✕` → PATCH `users.onboarding_dismissed_at = NOW()` → stepper unmounts → workspace renders normally. A toast appears (`"Setup hidden — resume any time in Settings → Setup"`, with an `Open settings` action) so the user has a discoverable way back.
 
-Hover state: cursor `pointer`, button background lightens slightly. Tooltip on hover: `Hide setup steps`.
+Hover state: cursor `pointer`, button background lightens slightly. Tooltip on hover: `Hide setup steps`. The button is **disabled** until `onboardingStep === "completed"` — letting users hide the stepper before Step 2 is done lands them on an empty workspace with no guidance for "what now?".
 
-The dismiss action is **irreversible from the UI**. To bring the stepper back, the user would need a Settings escape hatch (not built v1).
+The dismiss action is **reversible** via `Settings → Setup → Resume setup` (built v1; same `restoreOnboarding` action that PATCHes `dismissed_at = NULL`). The Settings entry mirrors the stepper `✕` gate exactly — both require `onboardingStep === "completed"` to hide; both surface the same toast on dismiss.
 
 ---
 
@@ -383,18 +383,18 @@ Note: `gitRepos` materialization is automatic on first chat session start (see [
 
 ## 7. Step 3 — Init context-tree
 
-### 7.1 The three sub-states
+### 7.1 The two sub-states
 
-Step 3 has **three visually distinct states**:
+Step 3 has **two visually distinct states** (down from three — sub-state A' was retired in favour of a unified server-side dismiss; see §8.3):
 
-**Sub-state A: no chat created, intro card not yet dismissed** → `OnboardingView` renders `Step3IntroBody` (intro card with [Yes, set it up] / [I'll do it later])
-**Sub-state A': intro card dismissed via [I'll do it later], no chat yet** → `OnboardingView` renders `Step3PlaceholderBody` — a single line: `Click "Tree" in the stepper above when you're ready.`
+**Sub-state A: no chat created, onboarding not dismissed** → `OnboardingView` renders `Step3IntroBody` (intro card with [Yes, set it up] / [I'll do it later])
 **Sub-state B: chat exists** → `ChatByIdView` renders the plain unwrapped `ChatView`
 
 Transitions:
-- A → A': user clicks [I'll do it later]; client-side state flips intro-dismissed flag (sessionStorage; per-tab; not persisted server-side)
-- A' → A: user clicks the "Tree" step in stepper (which clears the intro-dismissed flag and re-shows IntroBody)
-- A → B (or A' → B): user clicks [Yes, set it up] in IntroBody (only available in sub-state A)
+- A → B: user clicks [Yes, set it up] in IntroBody. Server creates chat, frontend navigates to `?c=<chatId>`. The handler also PATCHes `onboarding_dismissed_at = NOW()` so the stepper unmounts above the new chat (no orphan onboarding chrome above real work).
+- A → (dismissed): user clicks [I'll do it later] (or `✕` on the stepper). Both paths PATCH `onboarding_dismissed_at = NOW()` and surface the same toast (§8.3); workspace falls through to `NoChatView`.
+
+The previously per-tab "intro dismissed" flag is gone — there is one server-side flag (`onboarding_dismissed_at`) and three triggers that all set it. Recovery is `Settings → Setup → Resume setup`.
 
 ### 7.2 Sub-state A — Step3IntroBody wireframe
 
@@ -522,10 +522,13 @@ Plan C sidesteps this entirely: keep `onboardingStep` doing exactly what it does
 
 ### 8.3 What this means in practice
 
-- After Step 2 completes, `onboardingStep` server-side returns `"completed"`. Stepper still renders because `dismissed_at IS NULL`. Step 3 IntroBody renders in OnboardingView body. User clicks Yes → chat opens, ChatByIdView takes over CenterPanel, but stepper still renders above (because `dismissed_at IS NULL`).
-- During Step 3 chat, the user clicks `✕` on stepper → PATCH `dismissed_at = NOW()` → stepper unmounts. Workspace looks normal. onboardingStep is still `"completed"` server-side; nothing else changes.
+- After Step 2 completes, `onboardingStep` server-side returns `"completed"`. Stepper still renders because `dismissed_at IS NULL`. Step 3 IntroBody renders in OnboardingView body.
+- User clicks **[Yes, set it up]** → chat created, frontend navigates to `?c=<chatId>`. The same handler PATCHes `dismissed_at = NOW()` so the stepper unmounts immediately — the new chat is the workspace's primary surface and onboarding chrome above it is just noise.
+- User clicks **[I'll do it later]** → PATCH `dismissed_at = NOW()`. Same as `✕`. CenterPanel falls through to `NoChatView`.
+- User clicks **`✕`** on stepper → PATCH `dismissed_at = NOW()`. Same.
+- All three dismissal paths surface a toast: `"Setup hidden — resume any time in Settings → Setup"` with an `Open settings` action that navigates to `/settings/setup`. (Exception: the [Yes, set it up] success path skips the toast — the user is mid-success entering their first chat, so the "Setup hidden" nudge would be noise.)
 - Next time user logs in: `dismissed_at` is set → no stepper. Workspace is the chat-first default. User finds their agent and chats freely.
-- If user clears `dismissed_at` somehow (DB edit, Settings rebind in a future v2) → stepper reappears in the same state it would have been (active step inferred from current `onboardingStep`).
+- Recovery: `/settings/setup` exposes a `Resume setup` button that PATCHes `dismissed_at = NULL`. The page also gates `Hide setup guide` on `onboardingStep === "completed"` — same gate the stepper `✕` uses.
 
 ### 8.4 Schema change required
 

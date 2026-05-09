@@ -18,11 +18,9 @@ import {
   readOnboardingAgentUuid,
   readOnboardingDraft,
   readOnboardingJoinPath,
-  readOnboardingReturnChatId,
   readStep1Confirmed,
   writeOnboardingAgentUuid,
   writeOnboardingDraft,
-  writeOnboardingReturnChatId,
   writeStep1Confirmed,
 } from "../../../utils/onboarding-flags.js";
 
@@ -63,9 +61,10 @@ const CLIENT_DETECT_POLL_MS = 3_000;
  * so the message must self-bootstrap the agent's knowledge of (a) which
  * CLI to use, (b) the action to take, (c) the URL to consult.
  *
- * Single source of truth shared with the NewAgentDialog auto-send and any
- * future first-tree install trigger. See docs/new-user-onboarding-design.md
- * §7.3 (decision O-6).
+ * Currently only Step 3 IntroBody sends this. If a future surface (e.g.
+ * NewAgentDialog auto-send) needs the same prompt, hoist this constant to
+ * `packages/shared` so both import the same string. See
+ * docs/new-user-onboarding-design.md §7.3 (decision O-6).
  */
 const STEP3_BOOTSTRAP_MESSAGE =
   "Use the latest First-Tree CLI to install the skill in the current repository and complete the onboarding process: https://github.com/agent-team-foundation/first-tree";
@@ -113,14 +112,6 @@ export function OnboardingView() {
     setStep1Confirmed(true);
     const next = new URLSearchParams(searchParams);
     next.delete("step");
-    // If the user got here by clicking Step 1 from inside a Step 3 chat,
-    // bounce them back to that chat instead of `/` so they don't lose
-    // their tree-init conversation. One-shot — clear after consuming.
-    const returnChatId = readOnboardingReturnChatId();
-    if (returnChatId) {
-      writeOnboardingReturnChatId(null);
-      next.set("c", returnChatId);
-    }
     setSearchParams(next, { replace: true });
   }, [setStep1Confirmed, searchParams, setSearchParams]);
 
@@ -154,6 +145,13 @@ function Step1Body({ organizationId, onContinue }: { organizationId: string | nu
   const [initialName, setInitialName] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Distinguish "still loading the seed name" from "loaded but the user
+  // emptied the input" — without this distinction we can't tell whether
+  // to disable Continue defensively (load failed → don't let them PATCH a
+  // typed-by-hand name that overwrites the auto-generated default they
+  // never saw).
+  const [orgsLoaded, setOrgsLoaded] = useState(false);
+  const [orgsLoadError, setOrgsLoadError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -161,8 +159,10 @@ function Step1Body({ organizationId, onContinue }: { organizationId: string | nu
       try {
         const list = await api.get<OrgBrief[]>("/me/organizations");
         setOrgs(list);
-      } catch {
-        // best-effort
+      } catch (err) {
+        setOrgsLoadError(err instanceof Error ? err.message : "Failed to load your team");
+      } finally {
+        setOrgsLoaded(true);
       }
     })();
   }, []);
@@ -183,7 +183,11 @@ function Step1Body({ organizationId, onContinue }: { organizationId: string | nu
   }, [initialName]);
 
   const trimmed = name.trim();
-  const canSubmit = trimmed.length > 0 && !saving;
+  // Refuse to submit while orgs haven't loaded (we don't know the seed) or
+  // while the load errored out (the user is staring at an empty input we
+  // can't seed — letting them PATCH would overwrite the auto-generated
+  // name they never saw).
+  const canSubmit = trimmed.length > 0 && !saving && orgsLoaded && !orgsLoadError;
 
   const handleSubmit = useCallback(
     async (event?: React.FormEvent) => {
@@ -251,7 +255,7 @@ function Step1Body({ organizationId, onContinue }: { organizationId: string | nu
         />
       </div>
 
-      {error ? (
+      {error || orgsLoadError ? (
         <div
           className="text-body"
           style={{
@@ -262,7 +266,7 @@ function Step1Body({ organizationId, onContinue }: { organizationId: string | nu
             color: "var(--state-error)",
           }}
         >
-          {error}
+          {error ?? `Couldn't load your team — ${orgsLoadError}. Refresh the page and try again.`}
         </div>
       ) : null}
 

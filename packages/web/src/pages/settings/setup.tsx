@@ -17,10 +17,11 @@ export function SettingsSetupPage() {
   const { onboardingStep, onboardingDismissedAt, dismissOnboarding, restoreOnboarding } = useAuth();
   const isDismissed = !!onboardingDismissedAt;
 
-  // Re-derive the same "completed" check the stepper uses. Only relevant
-  // if the user has completed Step 2 — `inferOnboardingStep === "completed"`
-  // means they have at least one client + one non-human agent.
-  const stepperFunctional = onboardingStep === "completed" || onboardingStep === "create_agent";
+  // Mirror the stepper `✕` gate exactly — only `completed` (i.e. has at
+  // least one client + one non-human managed agent) lets you hide. Letting
+  // a `create_agent`-state user dismiss from here but not from the stepper
+  // itself is the kind of asymmetric affordance that makes UI feel buggy.
+  const canHide = onboardingStep === "completed";
 
   return (
     <div>
@@ -69,8 +70,8 @@ export function SettingsSetupPage() {
                 type="button"
                 variant="outline"
                 onClick={() => void dismissOnboarding()}
-                disabled={!stepperFunctional}
-                title={stepperFunctional ? undefined : "Finish setting up your agent first"}
+                disabled={!canHide}
+                title={canHide ? undefined : "Finish setting up your agent first"}
               >
                 Hide setup guide
               </Button>
