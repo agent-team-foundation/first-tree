@@ -5,6 +5,20 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
 
+// Mirror of packages/server/src/db/connection.ts — kept local to avoid pulling
+// the server package into the command CLI bundle. RDS/Aurora enforces
+// rds.force_ssl=1 with a cert outside Node's default CA bundle.
+function sslOptions(url: string) {
+  try {
+    if (new URL(url).hostname.endsWith(".rds.amazonaws.com")) {
+      return { ssl: { rejectUnauthorized: false } };
+    }
+  } catch {
+    // Not a parseable URL — let postgres-js report the error.
+  }
+  return {};
+}
+
 /**
  * Resolve the drizzle migrations directory.
  * 1. npm install: embedded at dist/drizzle/ (relative to the built CLI)
@@ -59,7 +73,9 @@ export async function runMigrations(databaseUrl: string): Promise<number> {
   // Fail fast if journal timestamps are out of order
   validateJournalOrder(migrationsFolder);
 
-  const client = postgres(databaseUrl, { max: 1 });
+  const ssl = sslOptions(databaseUrl);
+
+  const client = postgres(databaseUrl, { max: 1, ...ssl });
   const db = drizzle(client);
 
   try {
@@ -69,7 +85,7 @@ export async function runMigrations(databaseUrl: string): Promise<number> {
   }
 
   // Count tables as a rough indicator of migration state
-  const countClient = postgres(databaseUrl, { max: 1 });
+  const countClient = postgres(databaseUrl, { max: 1, ...ssl });
   try {
     const result = await countClient`
       SELECT count(*)::int AS count

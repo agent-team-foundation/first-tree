@@ -58,7 +58,7 @@ import { taskRoutes } from "./api/tasks.js";
 // Public agent discovery removed — visibility is now handled via agent.visibility field
 import { githubWebhookRoutes } from "./api/webhooks/github.js";
 import type { Config } from "./config.js";
-import { connectDatabase } from "./db/connection.js";
+import { connectDatabase, sslOptions } from "./db/connection.js";
 import { AppError } from "./errors.js";
 import { agentSelectorHook } from "./middleware/agent-selector.js";
 import { userAuthHook } from "./middleware/user-auth.js";
@@ -276,7 +276,7 @@ export async function buildApp(config: Config) {
   app.log.info({ commandVersion }, "Hub server advertising command version");
 
   // Notifier: dedicated PG connection for LISTEN/NOTIFY
-  const listenClient = postgres(config.database.url, { max: 1 });
+  const listenClient = postgres(config.database.url, { max: 1, ...sslOptions(config.database.url) });
   const notifier = createNotifier(listenClient);
 
   // WebSocket plugin. `maxPayload` caps a single inbound frame so a hostile
