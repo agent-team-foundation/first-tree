@@ -956,8 +956,8 @@ function Step3IntroBody() {
     addToast({
       title: "Setup hidden",
       description:
-        "Resume any time in Settings → Setup. Your agent isn't bound to a source repo yet — add one in Agent settings when ready.",
-      action: { label: "Open settings", onClick: () => navigate("/settings/setup") },
+        "Resume any time in Settings → Onboarding. Your agent isn't bound to a source repo yet — add one in Agent settings when ready.",
+      action: { label: "Open settings", onClick: () => navigate("/settings/onboarding") },
     });
   }, [addToast, navigate]);
 

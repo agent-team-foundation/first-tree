@@ -1,13 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Check, Copy } from "lucide-react";
-import { type FormEvent, useEffect, useState } from "react";
+import { AlertTriangle, Copy } from "lucide-react";
+import { type FormEvent, useState } from "react";
 import { getGithubIntegrationSetting, putGithubIntegrationSetting } from "../api/org-settings.js";
 import { useAuth } from "../auth/auth-context.js";
 import { Button } from "../components/ui/button.js";
-import { FlatSectionHeader } from "../components/ui/flat-section-header.js";
+import { SettingsField, SettingsSaveButton } from "../components/ui/settings-field.js";
+import { SettingsSection } from "../components/ui/settings-section.js";
 
 /**
- * Admin-only panel for the per-org GitHub integration: just the webhook
+ * Admin-only section for the per-org GitHub integration: just the webhook
  * secret used to verify GitHub-signed requests for this team.
  *
  * The webhook URL is computed server-side from `server.publicUrl` — when
@@ -18,7 +19,7 @@ import { FlatSectionHeader } from "../components/ui/flat-section-header.js";
  * The plaintext secret is never echoed back; once configured, the panel
  * only shows a "configured" status with a "Replace" affordance.
  */
-export function GithubIntegrationPanel() {
+export function GithubIntegrationPanel({ isFirst = false }: { isFirst?: boolean }) {
   const { organizationId } = useAuth();
   const queryClient = useQueryClient();
 
@@ -33,20 +34,12 @@ export function GithubIntegrationPanel() {
   const [saved, setSaved] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  useEffect(() => {
-    if (!settingQuery.data) return;
-    // Don't clear secret input mid-edit — only sync on first load.
-  }, [settingQuery.data]);
-
   const webhookUrl = settingQuery.data?.webhookUrl ?? "";
 
   const mutation = useMutation({
     mutationFn: () => {
       if (!organizationId) throw new Error("organization not loaded");
       const trimmedSecret = secretInput.trim();
-      // Only send `webhookSecret` when the admin actually typed something
-      // (or explicitly cleared after pressing Replace). Otherwise leave
-      // the cipher untouched.
       if (trimmedSecret.length === 0 && !replacing) {
         return Promise.resolve(settingQuery.data);
       }
@@ -79,240 +72,131 @@ export function GithubIntegrationPanel() {
   const secretConfigured = settingQuery.data?.webhookSecretConfigured ?? false;
 
   return (
-    <section>
-      <FlatSectionHeader
-        right={
-          <div className="flex items-center gap-1.5">
-            {saved && (
-              <span className="mono text-caption" style={{ color: "var(--accent-dim)" }}>
-                saved
-              </span>
-            )}
-            <Button
-              type="submit"
-              form="github-integration-form"
-              size="xs"
-              variant="outline"
-              disabled={mutation.isPending || !settingQuery.data}
-            >
-              <Check className="h-3 w-3" />
-              {mutation.isPending ? "Saving…" : "Save"}
-            </Button>
-          </div>
-        }
-      >
-        GitHub integration
-      </FlatSectionHeader>
+    <SettingsSection
+      title="GitHub webhook"
+      description="Routes GitHub issue and comment events to your team's agents."
+      isFirst={isFirst}
+    >
       {settingQuery.isLoading ? (
-        <div className="text-body" style={{ color: "var(--fg-3)", padding: "var(--sp-3) var(--sp-1)" }}>
+        <div className="text-body" style={{ color: "var(--fg-3)" }}>
           Loading…
         </div>
       ) : settingQuery.error ? (
-        <div className="text-body" style={{ color: "var(--state-error)", padding: "var(--sp-3) var(--sp-1)" }}>
+        <div className="text-body" style={{ color: "var(--state-error)" }}>
           {settingQuery.error instanceof Error ? settingQuery.error.message : "Failed to load setting"}
         </div>
       ) : (
-        <form id="github-integration-form" onSubmit={handleSubmit}>
+        <form onSubmit={handleSubmit}>
           {webhookUrl ? (
-            <ReadOnlyField
+            <SettingsField
               label="Webhook URL"
               hint="Configure this URL in GitHub repo / org Settings → Webhooks. Never changes."
               value={webhookUrl}
+              readOnly
+              mono
               rightSlot={
-                <Button type="button" size="xs" variant="ghost" onClick={copyWebhookUrl}>
+                <Button type="button" size="sm" variant="outline" onClick={copyWebhookUrl}>
                   <Copy className="h-3 w-3" />
                   {copied ? "Copied" : "Copy"}
                 </Button>
               }
             />
           ) : (
-            <NoticeRow
-              label="Webhook URL"
-              message="The Hub's public URL is not configured. Please contact your site administrator to enable the GitHub webhook."
-            />
+            <WebhookUrlNotice />
           )}
           {secretConfigured && !replacing ? (
             <SecretStatusRow
+              saved={saved}
               onReplace={() => {
                 setReplacing(true);
                 setSecretInput("");
               }}
             />
           ) : (
-            <Field
+            <SettingsField
               label="Webhook secret"
               hint="Paste the value you used when configuring the GitHub webhook. Stored encrypted; never echoed back."
               value={secretInput}
               onChange={setSecretInput}
               mono
-              placeholder={replacing ? "Enter new secret" : "(none)"}
               type="password"
+              placeholder={replacing ? "Enter new secret" : "(none)"}
+              saved={saved}
+              rightSlot={<SettingsSaveButton pending={mutation.isPending} disabled={!settingQuery.data} />}
             />
           )}
           {mutation.error instanceof Error && (
-            <div className="text-body" style={{ color: "var(--state-error)", marginTop: "var(--sp-2)" }}>
+            <div className="text-body" style={{ color: "var(--state-error)" }}>
               {mutation.error.message}
             </div>
           )}
         </form>
       )}
-    </section>
+    </SettingsSection>
   );
 }
 
-function Field({
-  label,
-  hint,
-  value,
-  onChange,
-  mono,
-  placeholder,
-  type,
-}: {
-  label: string;
-  hint: string;
-  value: string;
-  onChange: (next: string) => void;
-  mono?: boolean;
-  placeholder?: string;
-  type?: string;
-}) {
+function WebhookUrlNotice() {
   return (
-    <div
-      className="grid items-start gap-5"
-      style={{
-        gridTemplateColumns: "var(--sp-45) 1fr",
-        padding: "var(--sp-3_5) var(--sp-1)",
-        borderTop: "var(--hairline) solid var(--border-faint)",
-      }}
-    >
-      <div>
-        <div className="text-body font-medium" style={{ color: "var(--fg)" }}>
-          {label}
-        </div>
-        <div className="text-label" style={{ color: "var(--fg-3)", marginTop: 2 }}>
-          {hint}
-        </div>
-      </div>
-      <input
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        type={type ?? "text"}
-        placeholder={placeholder}
-        className={`w-full outline-none text-body ${mono ? "mono" : ""}`}
-        style={{
-          padding: "var(--sp-1_25) var(--sp-2_5)",
-          background: "var(--bg-sunken)",
-          border: "var(--hairline) solid var(--border)",
-          borderRadius: "var(--radius-input)",
-          color: "var(--fg)",
-        }}
-      />
-    </div>
-  );
-}
-
-function ReadOnlyField({
-  label,
-  hint,
-  value,
-  rightSlot,
-}: {
-  label: string;
-  hint: string;
-  value: string;
-  rightSlot?: React.ReactNode;
-}) {
-  return (
-    <div
-      className="grid items-start gap-5"
-      style={{
-        gridTemplateColumns: "var(--sp-45) 1fr",
-        padding: "var(--sp-3_5) var(--sp-1)",
-        borderTop: "var(--hairline) solid var(--border-faint)",
-      }}
-    >
-      <div>
-        <div className="text-body font-medium" style={{ color: "var(--fg)" }}>
-          {label}
-        </div>
-        <div className="text-label" style={{ color: "var(--fg-3)", marginTop: 2 }}>
-          {hint}
-        </div>
+    <div style={{ marginBottom: "var(--sp-4)" }}>
+      <div className="text-body font-medium" style={{ color: "var(--fg)" }}>
+        Webhook URL
       </div>
       <div
-        className="mono text-body flex items-center justify-between gap-2"
+        className="flex items-start text-body"
         style={{
-          padding: "var(--sp-1_25) var(--sp-2_5)",
+          gap: "var(--sp-2)",
+          marginTop: "var(--sp-2)",
+          padding: "var(--sp-2) var(--sp-2_5)",
           background: "var(--bg-sunken)",
-          border: "var(--hairline) solid var(--border)",
-          borderRadius: "var(--radius-input)",
-          color: "var(--fg-3)",
-          overflow: "hidden",
-        }}
-      >
-        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{value}</span>
-        {rightSlot}
-      </div>
-    </div>
-  );
-}
-
-function NoticeRow({ label, message }: { label: string; message: string }) {
-  return (
-    <div
-      className="grid items-start gap-5"
-      style={{
-        gridTemplateColumns: "var(--sp-45) 1fr",
-        padding: "var(--sp-3_5) var(--sp-1)",
-        borderTop: "var(--hairline) solid var(--border-faint)",
-      }}
-    >
-      <div>
-        <div className="text-body font-medium" style={{ color: "var(--fg)" }}>
-          {label}
-        </div>
-      </div>
-      <div
-        className="flex items-start gap-2 text-body"
-        style={{
-          padding: "var(--sp-1_25) var(--sp-2_5)",
-          background: "var(--bg-sunken)",
-          border: "var(--hairline) solid var(--border)",
           borderRadius: "var(--radius-input)",
           color: "var(--state-warning, var(--fg-3))",
         }}
       >
-        <AlertTriangle className="h-4 w-4 shrink-0" style={{ marginTop: 2 }} />
-        <span>{message}</span>
+        <AlertTriangle className="h-4 w-4 shrink-0" style={{ marginTop: "var(--sp-0_5)" }} />
+        <span>
+          The Hub's public URL is not configured. Please contact your site administrator to enable the GitHub webhook.
+        </span>
       </div>
     </div>
   );
 }
 
-function SecretStatusRow({ onReplace }: { onReplace: () => void }) {
+function SecretStatusRow({ saved, onReplace }: { saved: boolean; onReplace: () => void }) {
   return (
-    <div
-      className="grid items-center gap-5"
-      style={{
-        gridTemplateColumns: "var(--sp-45) 1fr",
-        padding: "var(--sp-3_5) var(--sp-1)",
-        borderTop: "var(--hairline) solid var(--border-faint)",
-      }}
-    >
-      <div>
-        <div className="text-body font-medium" style={{ color: "var(--fg)" }}>
+    <div style={{ marginBottom: "var(--sp-4)" }}>
+      <div className="flex items-baseline justify-between" style={{ gap: "var(--sp-2)" }}>
+        <span className="text-body font-medium" style={{ color: "var(--fg)" }}>
           Webhook secret
-        </div>
-        <div className="text-label" style={{ color: "var(--fg-3)", marginTop: 2 }}>
-          Configured. Replace to rotate; webhook signature verification will fail until GitHub is also updated.
-        </div>
-      </div>
-      <div className="flex items-center justify-between gap-2">
-        <span className="mono text-body" style={{ color: "var(--accent-dim)" }}>
-          ••••••••
         </span>
-        <Button type="button" size="xs" variant="ghost" onClick={onReplace}>
+        {saved && (
+          <span
+            className="text-label inline-flex items-center fade-in"
+            style={{
+              gap: "var(--sp-1)",
+              color: "color-mix(in oklch, var(--accent) 35%, var(--fg))",
+            }}
+          >
+            ✓ Saved
+          </span>
+        )}
+      </div>
+      <p className="text-label" style={{ color: "var(--fg-3)", margin: "var(--sp-0_5) 0 var(--sp-2)" }}>
+        Configured. Replace to rotate; webhook signature verification will fail until GitHub is also updated.
+      </p>
+      <div className="flex items-stretch" style={{ gap: "var(--sp-2)" }}>
+        <div
+          className="flex-1 mono text-body flex items-center"
+          style={{
+            padding: "var(--sp-1_5) var(--sp-2_5)",
+            background: "var(--bg-sunken)",
+            borderRadius: "var(--radius-input)",
+            color: "var(--fg-2)",
+          }}
+        >
+          ••••••••
+        </div>
+        <Button type="button" size="sm" variant="outline" onClick={onReplace}>
           Replace
         </Button>
       </div>

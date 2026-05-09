@@ -99,6 +99,14 @@ function applyInputDelta<K extends OrgSettingNamespace>(
     };
     return next as OrgSettingStorage<K>;
   }
+  if (namespace === "source_repos") {
+    const cur = current as OrgSettingStorage<"source_repos">;
+    const inp = input as OrgSettingInput<"source_repos">;
+    const next: OrgSettingStorage<"source_repos"> = {
+      repos: inp.repos === undefined ? cur.repos : inp.repos,
+    };
+    return next as OrgSettingStorage<K>;
+  }
   // Exhaustiveness — adding a new namespace forces a compile error here.
   const _exhaustive: never = namespace;
   return _exhaustive;
@@ -124,6 +132,13 @@ function toOutput<K extends OrgSettingNamespace>(namespace: K, storage: OrgSetti
     const out: OrgSettingOutput<"github_integration"> = {
       webhookSecretConfigured: typeof s.webhookSecretCipher === "string" && s.webhookSecretCipher.length > 0,
       webhookUrl: "",
+    };
+    return out as OrgSettingOutput<K>;
+  }
+  if (namespace === "source_repos") {
+    const s = storage as OrgSettingStorage<"source_repos">;
+    const out: OrgSettingOutput<"source_repos"> = {
+      repos: s.repos,
     };
     return out as OrgSettingOutput<K>;
   }

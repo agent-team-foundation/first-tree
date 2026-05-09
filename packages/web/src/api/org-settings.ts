@@ -3,6 +3,8 @@ import type {
   OrgContextTreeOutput,
   OrgGithubIntegrationInput,
   OrgGithubIntegrationOutput,
+  OrgSourceReposInput,
+  OrgSourceReposOutput,
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { api } from "./client.js";
 
@@ -35,4 +37,16 @@ export function putGithubIntegrationSetting(
 
 export function deleteGithubIntegrationSetting(orgId: string): Promise<void> {
   return api.delete<void>(path(orgId, "github_integration"));
+}
+
+export function getSourceReposSetting(orgId: string): Promise<OrgSourceReposOutput> {
+  return api.get<OrgSourceReposOutput>(path(orgId, "source_repos"));
+}
+
+export function putSourceReposSetting(orgId: string, body: OrgSourceReposInput): Promise<OrgSourceReposOutput> {
+  return api.put<OrgSourceReposOutput>(path(orgId, "source_repos"), body);
+}
+
+export function deleteSourceReposSetting(orgId: string): Promise<void> {
+  return api.delete<void>(path(orgId, "source_repos"));
 }
