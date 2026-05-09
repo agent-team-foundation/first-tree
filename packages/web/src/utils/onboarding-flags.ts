@@ -55,8 +55,6 @@ export type OnboardingDraft = {
   selectedRuntime: string | null;
   connectToken: string | null;
   connectTokenExpiresAt: number | null;
-  /** Clone URL of the GitHub repo picked by the Step 2 picker. */
-  selectedRepoUrl: string | null;
 };
 
 /**
@@ -102,14 +100,11 @@ function parseOnboardingDraft(value: unknown): OnboardingDraft | null {
   if (connectToken !== null && typeof connectToken !== "string") return null;
   const connectTokenExpiresAt = "connectTokenExpiresAt" in value ? value.connectTokenExpiresAt : null;
   if (connectTokenExpiresAt !== null && typeof connectTokenExpiresAt !== "number") return null;
-  const selectedRepoUrl = "selectedRepoUrl" in value ? value.selectedRepoUrl : null;
-  if (selectedRepoUrl !== null && typeof selectedRepoUrl !== "string") return null;
   return {
     displayName: value.displayName,
     selectedRuntime,
     connectToken,
     connectTokenExpiresAt,
-    selectedRepoUrl,
   };
 }
 

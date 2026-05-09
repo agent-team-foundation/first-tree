@@ -3,7 +3,7 @@ import { ArrowRight, Check, Copy } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { getClientCapabilities, type HubClient, listClients } from "../../../api/activity.js";
-import { getAgentConfig } from "../../../api/agent-config.js";
+import { getAgentConfig, updateAgentConfig } from "../../../api/agent-config.js";
 import { listManagedAgents } from "../../../api/agents.js";
 import { createAgentChat, sendChatMessage } from "../../../api/chats.js";
 import { api, withOrg } from "../../../api/client.js";
@@ -362,9 +362,6 @@ function Step2Body({
 
   const [displayName, setDisplayName] = useState(() => initialDraft?.displayName ?? "");
   const [selectedRuntime, setSelectedRuntime] = useState<string | null>(() => initialDraft?.selectedRuntime ?? null);
-  const [selectedRepoUrl, setSelectedRepoUrl] = useState<string | null>(() => initialDraft?.selectedRepoUrl ?? null);
-  const [repos, setRepos] = useState<GithubRepo[] | null>(null);
-  const [reposError, setReposError] = useState<string | null>(null);
   const [connectedClient, setConnectedClient] = useState<HubClient | null>(null);
   const [capabilities, setCapabilities] = useState<ClientCapabilities | null>(null);
   const [capabilitiesClientId, setCapabilitiesClientId] = useState<string | null>(null);
@@ -391,27 +388,8 @@ function Step2Body({
       selectedRuntime,
       connectToken,
       connectTokenExpiresAt,
-      selectedRepoUrl,
     });
-  }, [draftScope, displayName, selectedRuntime, connectToken, connectTokenExpiresAt, selectedRepoUrl]);
-
-  // Lazy-load the repo list once. Cached in state for the lifetime of the
-  // mount; the list is not re-fetched on every keystroke.
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const list = await listGithubRepos();
-        if (cancelled) return;
-        setRepos(list);
-      } catch (err) {
-        if (!cancelled) setReposError(err instanceof Error ? err.message : "Failed to list GitHub repositories");
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  }, [draftScope, displayName, selectedRuntime, connectToken, connectTokenExpiresAt]);
 
   useEffect(() => {
     void (async () => {
@@ -578,26 +556,26 @@ function Step2Body({
     connectedClient &&
     selectedRuntime &&
     okRuntimes.includes(selectedRuntime) &&
-    selectedRepoUrl &&
     phase === "form"
   );
 
   const handleCreate = useCallback(async () => {
-    if (!connectedClient || !selectedRuntime || !trimmedName || !selectedRepoUrl) return;
+    if (!connectedClient || !selectedRuntime || !trimmedName) return;
     setError(null);
     setPhase("creating");
     const slug = slugify(trimmedName);
     let agentUuid: string;
     try {
+      // Step 2 creates an unbound agent — `gitRepos` stays empty until
+      // Step 3 picks the source repo. The agent is fully functional in
+      // this state for general (non-code) chat; code-context binding is
+      // a Step 3 concern. See docs/new-user-onboarding-design.md §6/§7.
       const res = await api.post<{ uuid: string }>(withOrg("/agents"), {
         type: "personal_assistant",
         displayName: trimmedName,
         ...(slug ? { name: slug } : {}),
         clientId: connectedClient.id,
         runtimeProvider: selectedRuntime,
-        // Atomic with the agent insert — server seeds the version=1 config
-        // with these gitRepos. Avoids the PATCH-vs-first-chat race.
-        gitRepos: [{ url: selectedRepoUrl }],
         ...(organizationId ? { organizationId } : {}),
       });
       agentUuid = res.uuid;
@@ -608,7 +586,7 @@ function Step2Body({
       writeOnboardingAgentUuid(agentUuid);
       void reportOnboardingEvent("agent_created", {
         runtimeProvider: selectedRuntime,
-        repoBound: true,
+        repoBound: false,
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create agent");
@@ -617,7 +595,7 @@ function Step2Body({
     }
 
     await pollUntilReady(agentUuid);
-  }, [trimmedName, connectedClient, selectedRuntime, selectedRepoUrl, pollUntilReady, organizationId]);
+  }, [trimmedName, connectedClient, selectedRuntime, pollUntilReady, organizationId]);
 
   const handleRetry = useCallback(async () => {
     const agentUuid = createdAgentRef.current;
@@ -653,10 +631,6 @@ function Step2Body({
       capabilitiesLoaded={activeCapabilities !== null}
       okRuntimes={okRuntimes}
       selectedRuntime={selectedRuntime}
-      repos={repos}
-      reposError={reposError}
-      selectedRepoUrl={selectedRepoUrl}
-      onSelectRepo={setSelectedRepoUrl}
       error={error}
       canCreate={canCreate}
       onCreate={handleCreate}
@@ -683,10 +657,6 @@ function Step2FormBody({
   capabilitiesLoaded,
   okRuntimes,
   selectedRuntime,
-  repos,
-  reposError,
-  selectedRepoUrl,
-  onSelectRepo,
   error,
   canCreate,
   onCreate,
@@ -701,10 +671,6 @@ function Step2FormBody({
   capabilitiesLoaded: boolean;
   okRuntimes: string[];
   selectedRuntime: string | null;
-  repos: GithubRepo[] | null;
-  reposError: string | null;
-  selectedRepoUrl: string | null;
-  onSelectRepo: (url: string | null) => void;
   error: string | null;
   canCreate: boolean;
   onCreate: () => void;
@@ -716,15 +682,13 @@ function Step2FormBody({
   const noRuntime = capabilitiesLoaded && okRuntimes.length === 0 && !!connectedClient;
   const nextStepText = !trimmedName
     ? "Next: name your agent."
-    : !selectedRepoUrl
-      ? "Next: pick the repository this agent will work on."
-      : !connectedClient
-        ? "Next: connect the computer where they'll work."
-        : noRuntime
-          ? "Install Claude Code (or Codex) on that computer, then sign in."
-          : !selectedRuntime
-            ? "Detecting installed runtimes…"
-            : "Ready to create.";
+    : !connectedClient
+      ? "Next: connect the computer where they'll work."
+      : noRuntime
+        ? "Install Claude Code (or Codex) on that computer, then sign in."
+        : !selectedRuntime
+          ? "Detecting installed runtimes…"
+          : "Ready to create.";
 
   useEffect(() => {
     if (trimmedName) return;
@@ -796,30 +760,19 @@ function Step2FormBody({
           </div>
         </StepFrame>
 
-        <StepFrame number="02" state={selectedRepoUrl ? "complete" : trimmedName ? "active" : "idle"}>
-          <RepoPickerSection
-            disabled={!trimmedName}
-            repos={repos}
-            error={reposError}
-            selectedRepoUrl={selectedRepoUrl}
-            onSelect={onSelectRepo}
-            agentName={trimmedName || "this agent"}
-          />
-        </StepFrame>
-
-        <StepFrame number="03" state={canCreate ? "complete" : selectedRepoUrl ? "active" : "idle"}>
-          <div style={{ animation: selectedRepoUrl ? "subtle-fade 200ms ease-out" : undefined }}>
+        <StepFrame number="02" state={canCreate ? "complete" : trimmedName ? "active" : "idle"}>
+          <div style={{ animation: trimmedName ? "subtle-fade 200ms ease-out" : undefined }}>
             <h2
               className="text-subtitle font-semibold"
               style={{
-                color: selectedRepoUrl ? "var(--fg)" : "var(--fg-4)",
-                fontWeight: selectedRepoUrl ? 600 : 500,
+                color: trimmedName ? "var(--fg)" : "var(--fg-4)",
+                fontWeight: trimmedName ? 600 : 500,
               }}
             >
               Where will {trimmedName || "this agent"} run?
             </h2>
 
-            {selectedRepoUrl ? (
+            {trimmedName ? (
               <>
                 <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
                   {connectedClient
@@ -934,6 +887,30 @@ function Step3IntroBody() {
   const [error, setError] = useState<string | null>(null);
   const [treeMode, setTreeMode] = useState<TreeMode | null>(null);
   const [existingTreeUrl, setExistingTreeUrl] = useState("");
+  const [selectedRepoUrl, setSelectedRepoUrl] = useState<string | null>(null);
+  const [repos, setRepos] = useState<GithubRepo[] | null>(null);
+  const [reposError, setReposError] = useState<string | null>(null);
+
+  // Lazy-load the GitHub repo list once when Step 3 mounts. Plan B keeps
+  // source picker here (not Step 2) so agent creation in Step 2 stays
+  // independent of GitHub OAuth health — agent already exists by the time
+  // this runs, so an OAuth hiccup only blocks Step 3, not the user's
+  // entire onboarding.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const list = await listGithubRepos();
+        if (cancelled) return;
+        setRepos(list);
+      } catch (err) {
+        if (!cancelled) setReposError(err instanceof Error ? err.message : "Failed to list GitHub repositories");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const trimmedTreeUrl = existingTreeUrl.trim();
   const isExistingUrlValid = (() => {
@@ -950,13 +927,17 @@ function Step3IntroBody() {
   const showSetupHiddenToast = useCallback(() => {
     addToast({
       title: "Setup hidden",
-      description: "Resume any time in Settings → Setup.",
+      description:
+        "Resume any time in Settings → Setup. Your agent isn't bound to a source repo yet — add one in Agent settings when ready.",
       action: { label: "Open settings", onClick: () => navigate("/settings/setup") },
     });
   }, [addToast, navigate]);
 
   // "I'll do it later" — server dismiss + toast. Same recovery path as
   // clicking the stepper `✕` (single source of truth, server-side flag).
+  // The toast also nudges the user about the unbound source repo (Plan B
+  // moves source picker into Step 3, so skipping leaves the agent without
+  // an explicit code repo binding).
   const handleLater = useCallback(() => {
     void reportOnboardingEvent("tree_intro_dismissed");
     void dismissOnboarding();
@@ -964,6 +945,7 @@ function Step3IntroBody() {
   }, [dismissOnboarding, showSetupHiddenToast]);
 
   const handleContinue = useCallback(async () => {
+    if (!selectedRepoUrl) return;
     if (!treeMode) return;
     if (treeMode === "existing" && !isExistingUrlValid) return;
     setError(null);
@@ -984,14 +966,16 @@ function Step3IntroBody() {
         throw new Error("No agent available to chat with — finish Step 2 first.");
       }
 
-      // Bootstrap needs the source repo URL — read from the agent's
-      // gitRepos config (set during Step 2). If empty, the user landed
-      // here with a malformed Step 2; surface the gap.
+      // Plan B: bind the source repo to the agent NOW (before chat starts)
+      // so `prepareGitWorktrees` can clone it on session start. Step 2
+      // creates an unbound agent; Step 3 is where the binding happens.
+      // Sequential await — chat creation below races the runtime config
+      // PATCH otherwise.
       const cfg = await getAgentConfig(agent.uuid);
-      const sourceUrl = cfg.payload.gitRepos[0]?.url?.trim();
-      if (!sourceUrl) {
-        throw new Error("Your agent isn't bound to a source repo. Go back to Step 2 and pick one.");
-      }
+      await updateAgentConfig(agent.uuid, {
+        expectedVersion: cfg.version,
+        payload: { gitRepos: [{ url: selectedRepoUrl }] },
+      });
 
       // Path A: persist the existing tree URL to the org NOW. Agent will
       // still write `.first-tree/local-tree.json` to the source repo via
@@ -1009,7 +993,9 @@ function Step3IntroBody() {
 
       const chat = await createAgentChat(agent.uuid);
       const bootstrap =
-        treeMode === "existing" ? buildBindBootstrap(sourceUrl, trimmedTreeUrl) : buildCreateBootstrap(sourceUrl);
+        treeMode === "existing"
+          ? buildBindBootstrap(selectedRepoUrl, trimmedTreeUrl)
+          : buildCreateBootstrap(selectedRepoUrl);
       try {
         await sendChatMessage(chat.id, bootstrap);
       } catch {
@@ -1028,9 +1014,9 @@ function Step3IntroBody() {
       setError(err instanceof Error ? err.message : "Failed to start the tree-init chat");
       setBusy(false);
     }
-  }, [treeMode, isExistingUrlValid, trimmedTreeUrl, organizationId, navigate, dismissOnboarding]);
+  }, [selectedRepoUrl, treeMode, isExistingUrlValid, trimmedTreeUrl, organizationId, navigate, dismissOnboarding]);
 
-  const canContinue = treeMode !== null && !busy && (treeMode === "new" || isExistingUrlValid);
+  const canContinue = !!selectedRepoUrl && treeMode !== null && !busy && (treeMode === "new" || isExistingUrlValid);
 
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-5)" }}>
@@ -1038,14 +1024,23 @@ function Step3IntroBody() {
         Build your context-tree
       </h1>
       <p className="text-body" style={{ margin: 0, color: "var(--fg-2)" }}>
-        Your agent will set up first-tree for the source repo you picked in Step 2. Tell us if your team already has a
-        context-tree repo so the agent can bind to it instead of creating a new one.
+        Pick the source repo your agent will work on, then tell us whether your team already has a context-tree to bind
+        to or wants the agent to create one.
       </p>
+
+      <RepoPickerSection
+        disabled={busy}
+        repos={repos}
+        error={reposError}
+        selectedRepoUrl={selectedRepoUrl}
+        onSelect={setSelectedRepoUrl}
+        agentName="your agent"
+      />
 
       <fieldset
         className="flex flex-col"
         style={{ gap: "var(--sp-3)", margin: 0, padding: 0, border: "none" }}
-        disabled={busy}
+        disabled={busy || !selectedRepoUrl}
       >
         <legend className="text-label font-semibold" style={{ marginBottom: "var(--sp-1)", color: "var(--fg-2)" }}>
           Do you already have a context-tree for this team?
