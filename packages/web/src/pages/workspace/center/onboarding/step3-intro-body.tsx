@@ -1,22 +1,415 @@
+import type { OrgContextTreeOutput, OrgSourceReposOutput } from "@agent-team-foundation/first-tree-hub-shared";
 import { Check, ChevronDown } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { getAgentConfig, updateAgentConfig } from "../../../../api/agent-config.js";
-import { listManagedAgents } from "../../../../api/agents.js";
+import { listManagedAgents, type ManagedAgent } from "../../../../api/agents.js";
 import { createAgentChat, sendChatMessage } from "../../../../api/chats.js";
 import { type GithubRepo, listGithubRepos } from "../../../../api/github.js";
 import { reportOnboardingEvent } from "../../../../api/onboarding-events.js";
-import { getContextTreeSetting, putContextTreeSetting } from "../../../../api/org-settings.js";
+import { getContextTreeSetting, getSourceReposSetting, putContextTreeSetting } from "../../../../api/org-settings.js";
 import { useAuth } from "../../../../auth/auth-context.js";
 import { Button } from "../../../../components/ui/button.js";
-import { useToast } from "../../../../components/ui/toast.js";
+import { type ToastInput, useToast } from "../../../../components/ui/toast.js";
 import { readOnboardingAgentUuid } from "../../../../utils/onboarding-flags.js";
 import { buildBindBootstrap, buildCreateBootstrap } from "./bootstrap-prose.js";
 import { StepFrame, StepRailLine } from "./step-frame.js";
 
 type TreeMode = "existing" | "new";
 
+/**
+ * Step 3 router. The body the user sees depends on (a) their role and (b)
+ * what the team admin has already configured.
+ *
+ *   admin                                 → AdminBindCreateBody
+ *                                            (Bind/Create toggle, source picker,
+ *                                             writes both `context_tree` and
+ *                                             `source_repos` namespaces)
+ *
+ *   member, team has tree + source_repos  → InviteeConfirmBody
+ *                                            (cognitive ack — Confirm button
+ *                                             binds the agent to the team's
+ *                                             already-chosen tree + repo)
+ *
+ *   member, team has only tree            → InviteePickerBody
+ *                                            (read-only "joining tree X" +
+ *                                             GitHub OAuth source repo picker
+ *                                             for the invitee's own agent;
+ *                                             does NOT mutate team source_repos)
+ *
+ *   member, team has neither              → InviteeWaitingBody
+ *                                            (auto-dismisses onboarding so the
+ *                                             invitee isn't blocked while their
+ *                                             admin finishes setup)
+ *
+ * The role-branch matters because the admin and invitee mental models are
+ * different — admin is *configuring* the team, invitee is *joining* one
+ * already configured. Same UI for both confused invitees into spawning
+ * duplicate trees in pre-Phase-B onboarding.
+ */
 export function Step3IntroBody() {
+  const { role } = useAuth();
+  if (role === "admin") return <AdminBindCreateBody />;
+  return <InviteeStep3Body />;
+}
+
+// ── Invitee router ────────────────────────────────────────────────────────
+
+function InviteeStep3Body() {
+  const { organizationId } = useAuth();
+  const [teamCtxTree, setTeamCtxTree] = useState<OrgContextTreeOutput | null>(null);
+  const [teamSourceRepos, setTeamSourceRepos] = useState<OrgSourceReposOutput | null>(null);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    if (!organizationId) {
+      setLoaded(true);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      // Both namespaces relax their GET to member-readable in the
+      // source_repos namespace PR, so the invitee's read no longer 403s
+      // like it did in pre-Phase-B. A failure here (network blip, server
+      // hiccup) collapses to "neither configured" and renders the waiting
+      // body — same blast radius as a true unbound team, and the invitee's
+      // own agent isn't blocked.
+      const [tree, repos] = await Promise.all([
+        getContextTreeSetting(organizationId).catch(() => null),
+        getSourceReposSetting(organizationId).catch(() => null),
+      ]);
+      if (cancelled) return;
+      setTeamCtxTree(tree);
+      setTeamSourceRepos(repos);
+      setLoaded(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [organizationId]);
+
+  if (!loaded) return <InviteeLoadingBody />;
+
+  const treeUrl = teamCtxTree?.repo ?? "";
+  const repos = teamSourceRepos?.repos ?? [];
+
+  if (treeUrl && repos.length > 0) {
+    return <InviteeConfirmBody treeUrl={treeUrl} teamRepos={repos} />;
+  }
+  if (treeUrl) {
+    return <InviteePickerBody treeUrl={treeUrl} />;
+  }
+  return <InviteeWaitingBody />;
+}
+
+function InviteeLoadingBody() {
+  return (
+    <p className="text-body" style={{ margin: 0, color: "var(--fg-3)" }}>
+      Checking your team's setup…
+    </p>
+  );
+}
+
+// ── Invitee bodies ────────────────────────────────────────────────────────
+
+function InviteeConfirmBody({ treeUrl, teamRepos }: { treeUrl: string; teamRepos: OrgSourceReposOutput["repos"] }) {
+  const navigate = useNavigate();
+  const { dismissOnboarding } = useAuth();
+  const { addToast } = useToast();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // Single repo: pre-selected so Confirm is one click. Multi-repo: invitee
+  // picks from the team-bound list (NOT a GitHub OAuth picker — invitee
+  // writing team `source_repos` is the wrong mental model and the API
+  // would 403 anyway).
+  const [chosenRepoUrl, setChosenRepoUrl] = useState<string | null>(
+    teamRepos.length === 1 ? (teamRepos[0]?.url ?? null) : null,
+  );
+
+  const handleConfirm = useCallback(async () => {
+    if (!chosenRepoUrl) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const agent = await resolveOnboardingAgent();
+      const cfg = await getAgentConfig(agent.uuid);
+      await updateAgentConfig(agent.uuid, {
+        expectedVersion: cfg.version,
+        payload: { gitRepos: [{ url: chosenRepoUrl }] },
+      });
+      const chat = await createAgentChat(agent.uuid);
+      const bootstrap = buildBindBootstrap(chosenRepoUrl, treeUrl);
+      try {
+        await sendChatMessage(chat.id, bootstrap);
+      } catch {
+        // intentionally non-fatal — user lands in the empty chat
+      }
+      void reportOnboardingEvent("tree_chat_started", {
+        agentUuid: agent.uuid,
+        chatId: chat.id,
+        treeMode: "existing",
+        joinPath: "invite",
+      });
+      void dismissOnboarding();
+      navigate(`/?c=${encodeURIComponent(chat.id)}`, { replace: false });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to start the chat");
+      setBusy(false);
+    }
+  }, [chosenRepoUrl, treeUrl, navigate, dismissOnboarding]);
+
+  const handleLater = useCallback(() => {
+    void reportOnboardingEvent("tree_intro_dismissed", { joinPath: "invite" });
+    void dismissOnboarding();
+    addToast(buildSetupHiddenToast(navigate));
+  }, [dismissOnboarding, addToast, navigate]);
+
+  return (
+    <>
+      <p className="text-body" style={{ margin: 0, color: "var(--fg-3)", maxWidth: 720 }}>
+        Your team has already set up its <span style={{ color: "var(--fg-2)" }}>context-tree</span>. Confirm to bind
+        your agent.
+      </p>
+
+      <div style={{ marginTop: "var(--sp-5)", display: "flex", flexDirection: "column", gap: "var(--sp-4)" }}>
+        <ReadOnlyValueRow label="Tree" value={treeUrl} />
+
+        {teamRepos.length === 1 ? (
+          <ReadOnlyValueRow label="Source repo" value={teamRepos[0]?.url ?? ""} />
+        ) : (
+          <fieldset
+            disabled={busy}
+            style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)", margin: 0, padding: 0, border: 0 }}
+          >
+            <legend className="text-label" style={{ color: "var(--fg-3)", padding: 0, marginBottom: "var(--sp-1)" }}>
+              Pick the source repo to bind your agent to
+            </legend>
+            {teamRepos.map((repo) => {
+              const active = chosenRepoUrl === repo.url;
+              return (
+                <label
+                  key={repo.url}
+                  className="text-body"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "var(--sp-2)",
+                    padding: "var(--sp-2) var(--sp-3)",
+                    background: active ? "color-mix(in oklch, var(--accent) 8%, var(--bg))" : "var(--bg)",
+                    border: active
+                      ? "var(--hairline) solid var(--accent)"
+                      : "var(--hairline) solid var(--border-faint)",
+                    borderRadius: "var(--radius-input)",
+                    cursor: busy ? "not-allowed" : "pointer",
+                    color: active ? "var(--fg)" : "var(--fg-2)",
+                    fontWeight: active ? 600 : 400,
+                  }}
+                >
+                  <input
+                    type="radio"
+                    name="invitee-source-repo"
+                    value={repo.url}
+                    checked={active}
+                    onChange={() => setChosenRepoUrl(repo.url)}
+                    className="sr-only"
+                  />
+                  <span className="mono truncate" style={{ minWidth: 0, flex: 1 }}>
+                    {repo.url}
+                  </span>
+                </label>
+              );
+            })}
+          </fieldset>
+        )}
+
+        {error ? <ErrorBanner>{error}</ErrorBanner> : null}
+
+        <div className="flex" style={{ gap: "var(--sp-2)" }}>
+          <Button type="button" disabled={!chosenRepoUrl || busy} onClick={() => void handleConfirm()}>
+            {busy ? "Starting…" : "Confirm"}
+          </Button>
+          <Button type="button" variant="outline" onClick={handleLater} disabled={busy}>
+            I&apos;ll do it later
+          </Button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function InviteePickerBody({ treeUrl }: { treeUrl: string }) {
+  const navigate = useNavigate();
+  const { dismissOnboarding } = useAuth();
+  const { addToast } = useToast();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [repos, setRepos] = useState<GithubRepo[] | null>(null);
+  const [reposError, setReposError] = useState<string | null>(null);
+  const [selectedRepoUrl, setSelectedRepoUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const list = await listGithubRepos();
+        if (cancelled) return;
+        setRepos(list);
+      } catch (err) {
+        if (!cancelled) setReposError(err instanceof Error ? err.message : "Failed to list GitHub repositories");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleContinue = useCallback(async () => {
+    if (!selectedRepoUrl) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const agent = await resolveOnboardingAgent();
+      const cfg = await getAgentConfig(agent.uuid);
+      await updateAgentConfig(agent.uuid, {
+        expectedVersion: cfg.version,
+        payload: { gitRepos: [{ url: selectedRepoUrl }] },
+      });
+      // Deliberately NOT writing the invitee's pick back into the team's
+      // `source_repos` namespace — that's an admin-write surface (server
+      // would 403 too). The invitee's repo is a personal agent binding,
+      // not a team-wide statement.
+      const chat = await createAgentChat(agent.uuid);
+      const bootstrap = buildBindBootstrap(selectedRepoUrl, treeUrl);
+      try {
+        await sendChatMessage(chat.id, bootstrap);
+      } catch {
+        // intentionally non-fatal
+      }
+      void reportOnboardingEvent("tree_chat_started", {
+        agentUuid: agent.uuid,
+        chatId: chat.id,
+        treeMode: "existing",
+        joinPath: "invite",
+      });
+      void dismissOnboarding();
+      navigate(`/?c=${encodeURIComponent(chat.id)}`, { replace: false });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to start the chat");
+      setBusy(false);
+    }
+  }, [selectedRepoUrl, treeUrl, navigate, dismissOnboarding]);
+
+  const handleLater = useCallback(() => {
+    void reportOnboardingEvent("tree_intro_dismissed", { joinPath: "invite" });
+    void dismissOnboarding();
+    addToast(buildSetupHiddenToast(navigate));
+  }, [dismissOnboarding, addToast, navigate]);
+
+  return (
+    <>
+      <p className="text-body" style={{ margin: 0, color: "var(--fg-3)", maxWidth: 720 }}>
+        Joining your team&apos;s <span style={{ color: "var(--fg-2)" }}>context-tree</span>. Pick the source repo
+        you&apos;ll work with.
+      </p>
+
+      <div style={{ marginTop: "var(--sp-5)", position: "relative" }}>
+        <StepRailLine />
+
+        <StepFrame number="01" state="complete">
+          <ReadOnlyValueRow label="Tree" value={treeUrl} />
+        </StepFrame>
+
+        <StepFrame number="02" state={selectedRepoUrl ? "complete" : "active"}>
+          <RepoPickerSection
+            disabled={busy}
+            repos={repos}
+            error={reposError}
+            selectedRepoUrl={selectedRepoUrl}
+            onSelect={setSelectedRepoUrl}
+          />
+        </StepFrame>
+
+        <StepFrame number="03" state={selectedRepoUrl ? "active" : "idle"}>
+          <h2
+            className="text-subtitle font-semibold"
+            style={{
+              margin: 0,
+              color: selectedRepoUrl ? "var(--fg)" : "var(--fg-4)",
+              fontWeight: selectedRepoUrl ? 600 : 500,
+            }}
+          >
+            Let your agent join the tree
+          </h2>
+          {selectedRepoUrl ? (
+            <>
+              <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
+                It&apos;ll install the skill and bind your source repo to the existing team tree.
+              </p>
+
+              {error ? <ErrorBanner style={{ marginTop: "var(--sp-3)" }}>{error}</ErrorBanner> : null}
+
+              <div className="flex" style={{ marginTop: "var(--sp-3)", gap: "var(--sp-2)" }}>
+                <Button type="button" disabled={!selectedRepoUrl || busy} onClick={() => void handleContinue()}>
+                  {busy ? "Starting…" : "Continue"}
+                </Button>
+                <Button type="button" variant="outline" onClick={handleLater} disabled={busy}>
+                  I&apos;ll do it later
+                </Button>
+              </div>
+            </>
+          ) : null}
+        </StepFrame>
+      </div>
+    </>
+  );
+}
+
+function InviteeWaitingBody() {
+  const { dismissOnboarding } = useAuth();
+  const { addToast } = useToast();
+  const firedRef = useRef(false);
+
+  useEffect(() => {
+    if (firedRef.current) return;
+    firedRef.current = true;
+    void reportOnboardingEvent("tree_intro_dismissed", { joinPath: "invite", reason: "team_unconfigured" });
+    void dismissOnboarding();
+    addToast({
+      title: "Your team admin hasn't finished setup",
+      description:
+        "Ask your admin to bind a context-tree and source repo. You can keep using your agent for general chat in the meantime.",
+    });
+    // Intentionally no toast `action` — there's nothing the invitee can do
+    // from this side. The card itself surfaces what's missing.
+  }, [dismissOnboarding, addToast]);
+
+  // Render a calm placeholder while `dismissOnboarding` flips the
+  // server-side flag and `/me` re-fetches. CenterPanel re-renders without
+  // OnboardingView once the flag lands; the few hundred ms of placeholder
+  // beats a flash of empty space.
+  return (
+    <div
+      style={{
+        padding: "var(--sp-5) var(--sp-4)",
+        background: "var(--surface-1)",
+        border: "var(--hairline) solid var(--border-faint)",
+        borderRadius: "var(--radius-card)",
+      }}
+    >
+      <h2 className="text-subtitle font-semibold" style={{ margin: 0, color: "var(--fg)" }}>
+        Your team admin hasn&apos;t finished setup yet
+      </h2>
+      <p className="text-body" style={{ marginTop: "var(--sp-2)", color: "var(--fg-3)" }}>
+        Once they bind a source repo and a context-tree, this view will guide you to bind your agent. For now, you can
+        chat with your agent for anything that doesn&apos;t need code context.
+      </p>
+    </div>
+  );
+}
+
+// ── Admin body (existing Bind/Create toggle, unchanged) ───────────────────
+
+function AdminBindCreateBody() {
   const navigate = useNavigate();
   const { dismissOnboarding, organizationId } = useAuth();
   const { addToast } = useToast();
@@ -49,19 +442,10 @@ export function Step3IntroBody() {
     };
   }, []);
 
-  // Pre-fill from the org's existing `context_tree` binding when the
-  // caller can read it. Today this only fires for **admins** —
-  // `GET /orgs/:orgId/settings/:namespace` is admin-gated server-side, so
-  // a non-admin invitee's call 403s and we silently fall through to the
-  // empty toggle (same behaviour as before this change). The conservative
-  // value here is for admins re-running onboarding.
-  //
-  // The proper invitee fix — either relaxing the GET to org members for
-  // non-secret namespaces, or surfacing the binding through `/me`, plus
-  // hiding the Bind/Create toggle entirely so an invitee cannot
-  // accidentally spawn a duplicate tree — is deferred to Phase B, which
-  // also introduces the `source_repos` namespace and lets Step 3
-  // collapse/skip cleanly for invitees.
+  // Pre-fill from the org's existing `context_tree` binding so admins
+  // re-running onboarding land on the URL they already configured. The
+  // namespace is now member-readable, but only admins reach this body —
+  // invitees route to the dedicated invitee path above.
   useEffect(() => {
     if (!organizationId) return;
     let cancelled = false;
@@ -74,8 +458,7 @@ export function Step3IntroBody() {
           setTreeMode((m) => m ?? "existing");
         }
       } catch {
-        // Non-fatal — admins without the namespace bound (or non-admins
-        // who can't read it) just see the empty toggle, same as before.
+        // Non-fatal — the empty toggle is the right starting state.
       }
     })();
     return () => {
@@ -95,25 +478,11 @@ export function Step3IntroBody() {
     }
   })();
 
-  const showSetupHiddenToast = useCallback(() => {
-    addToast({
-      title: "Setup hidden",
-      description:
-        "Resume any time in Settings → Setup. Your agent isn't bound to a source repo yet — add one in Agent settings when ready.",
-      action: { label: "Open settings", onClick: () => navigate("/settings/setup") },
-    });
-  }, [addToast, navigate]);
-
-  // "I'll do it later" — server dismiss + toast. Same recovery path as
-  // clicking the stepper `✕` (single source of truth, server-side flag).
-  // The toast also nudges the user about the unbound source repo (Plan B
-  // moves source picker into Step 3, so skipping leaves the agent without
-  // an explicit code repo binding).
   const handleLater = useCallback(() => {
     void reportOnboardingEvent("tree_intro_dismissed");
     void dismissOnboarding();
-    showSetupHiddenToast();
-  }, [dismissOnboarding, showSetupHiddenToast]);
+    addToast(buildSetupHiddenToast(navigate));
+  }, [dismissOnboarding, addToast, navigate]);
 
   const handleContinue = useCallback(async () => {
     if (!selectedRepoUrl) return;
@@ -122,26 +491,7 @@ export function Step3IntroBody() {
     setError(null);
     setBusy(true);
     try {
-      // Resolve the onboarding agent in priority order:
-      //   1. The UUID stashed at Step 2 success.
-      //   2. Most recently created managed agent (UUID v7 sort desc).
-      //   3. Any non-human managed agent.
-      const stashedUuid = readOnboardingAgentUuid();
-      const managed = await listManagedAgents();
-      const nonHuman = managed.filter((a) => a.type !== "human");
-      const agent =
-        (stashedUuid ? managed.find((a) => a.uuid === stashedUuid) : undefined) ??
-        nonHuman.slice().sort((a, b) => b.uuid.localeCompare(a.uuid))[0] ??
-        managed[0];
-      if (!agent) {
-        throw new Error("No agent available to chat with — finish Step 2 first.");
-      }
-
-      // Plan B: bind the source repo to the agent NOW (before chat starts)
-      // so `prepareGitWorktrees` can clone it on session start. Step 2
-      // creates an unbound agent; Step 3 is where the binding happens.
-      // Sequential await — chat creation below races the runtime config
-      // PATCH otherwise.
+      const agent = await resolveOnboardingAgent();
       const cfg = await getAgentConfig(agent.uuid);
       await updateAgentConfig(agent.uuid, {
         expectedVersion: cfg.version,
@@ -190,7 +540,6 @@ export function Step3IntroBody() {
   }, [selectedRepoUrl, treeMode, isExistingUrlValid, trimmedTreeUrl, organizationId, navigate, dismissOnboarding]);
 
   const canContinue = !!selectedRepoUrl && treeMode !== null && !busy && (treeMode === "new" || isExistingUrlValid);
-
   const treeModeChosen = !!treeMode && (treeMode === "new" || isExistingUrlValid);
 
   return (
@@ -336,21 +685,7 @@ export function Step3IntroBody() {
                 It&apos;ll install the skill, set up the tree, and open a PR back to your source repo.
               </p>
 
-              {error ? (
-                <div
-                  className="text-body"
-                  style={{
-                    marginTop: "var(--sp-3)",
-                    padding: "var(--sp-2_5) var(--sp-3)",
-                    background: "color-mix(in oklch, var(--state-error) 12%, transparent)",
-                    border: "var(--hairline) solid color-mix(in oklch, var(--state-error) 28%, transparent)",
-                    borderRadius: "var(--radius-input)",
-                    color: "var(--state-error)",
-                  }}
-                >
-                  {error}
-                </div>
-              ) : null}
+              {error ? <ErrorBanner style={{ marginTop: "var(--sp-3)" }}>{error}</ErrorBanner> : null}
 
               <div className="flex" style={{ marginTop: "var(--sp-3)", gap: "var(--sp-2)" }}>
                 <Button type="button" disabled={!canContinue} onClick={() => void handleContinue()}>
@@ -365,6 +700,82 @@ export function Step3IntroBody() {
         </StepFrame>
       </div>
     </>
+  );
+}
+
+// ── Shared helpers ────────────────────────────────────────────────────────
+
+/**
+ * Resolve the onboarding agent in priority order:
+ *   1. The UUID stashed at Step 2 success.
+ *   2. Most recently created managed agent (UUID v7 sort desc).
+ *   3. Any non-human managed agent.
+ *
+ * Throws when no eligible agent exists — the caller must surface the
+ * "finish Step 2 first" message.
+ */
+async function resolveOnboardingAgent(): Promise<ManagedAgent> {
+  const stashedUuid = readOnboardingAgentUuid();
+  const managed = await listManagedAgents();
+  const nonHuman = managed.filter((a) => a.type !== "human");
+  const agent =
+    (stashedUuid ? managed.find((a) => a.uuid === stashedUuid) : undefined) ??
+    nonHuman.slice().sort((a, b) => b.uuid.localeCompare(a.uuid))[0] ??
+    managed[0];
+  if (!agent) {
+    throw new Error("No agent available to chat with — finish Step 2 first.");
+  }
+  return agent;
+}
+
+function buildSetupHiddenToast(navigate: ReturnType<typeof useNavigate>): ToastInput {
+  return {
+    title: "Setup hidden",
+    description:
+      "Resume any time in Settings → Setup. Your agent isn't bound to a source repo yet — add one in Agent settings when ready.",
+    action: { label: "Open settings", onClick: () => navigate("/settings/setup") },
+  };
+}
+
+function ReadOnlyValueRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex flex-col" style={{ gap: "var(--sp-1)" }}>
+      <span className="text-label" style={{ color: "var(--fg-3)" }}>
+        {label}
+      </span>
+      <span
+        className="mono text-body truncate"
+        style={{
+          padding: "var(--sp-2) var(--sp-3)",
+          background: "var(--surface-1)",
+          border: "var(--hairline) solid var(--border-faint)",
+          borderRadius: "var(--radius-input)",
+          color: "var(--fg-2)",
+          minWidth: 0,
+        }}
+        title={value}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
+
+function ErrorBanner({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
+  return (
+    <div
+      className="text-body"
+      style={{
+        padding: "var(--sp-2_5) var(--sp-3)",
+        background: "color-mix(in oklch, var(--state-error) 12%, transparent)",
+        border: "var(--hairline) solid color-mix(in oklch, var(--state-error) 28%, transparent)",
+        borderRadius: "var(--radius-input)",
+        color: "var(--state-error)",
+        ...style,
+      }}
+    >
+      {children}
+    </div>
   );
 }
 
