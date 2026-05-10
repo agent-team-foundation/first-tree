@@ -36,9 +36,7 @@ const config = {
   server: { port: PORT, host: HOST, publicUrl: undefined },
   secrets: {
     jwtSecret: process.env.JWT_SECRET_KEY ?? process.env.JWT_SECRET ?? "demo-jwt-secret",
-    encryptionKey:
-      process.env.ENCRYPTION_KEY ??
-      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    encryptionKey: process.env.ENCRYPTION_KEY ?? "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   },
   auth: { accessTokenExpiry: "30m", refreshTokenExpiry: "30d", connectTokenExpiry: "10m" },
   github: { webhookSecret: "demo-webhook", allowedOrg: "demo" },

@@ -261,10 +261,7 @@ describe("submitAnswer — POST /api/v1/chats/:chatId/questions/:correlationId/a
 
     // CRITICAL: exactly one question_answer message was written. Two would
     // mean the bug came back.
-    const answerRows = await app.db
-      .select()
-      .from(messages)
-      .where(eq(messages.format, "question_answer"));
+    const answerRows = await app.db.select().from(messages).where(eq(messages.format, "question_answer"));
     const forThisChat = answerRows.filter((m) => m.chatId === chatId);
     expect(forThisChat.length).toBe(1);
 

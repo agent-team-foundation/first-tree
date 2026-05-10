@@ -62,7 +62,8 @@ const config = {
 const app = await buildApp(config);
 await app.ready();
 
-await app.db.execute(drizzleSql.raw(`
+await app.db.execute(
+  drizzleSql.raw(`
   TRUNCATE TABLE pending_questions, inbox_entries, messages,
     agent_chat_sessions, agent_presence, chat_participants,
     chat_subscriptions, chats, agents, members, clients,
@@ -73,7 +74,8 @@ await app.db.execute(drizzleSql.raw(`
     session_events, server_instances, processed_events,
     tasks, task_chats
   RESTART IDENTITY CASCADE
-`));
+`),
+);
 await ensureDefaultOrganization(app.db);
 
 // Match the hardcoded login.tsx dev-callback href:
