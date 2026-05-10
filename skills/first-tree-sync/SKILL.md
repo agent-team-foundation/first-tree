@@ -1,9 +1,9 @@
 ---
 name: first-tree-sync
-version: 0.4.0-alpha.1
+version: 0.4.0-alpha.2
 cliCompat:
   first-tree: ">=0.4.0 <0.5.0"
-description: Audit and repair drift between merged code and the Context Tree. Use when the tree may be stale, wrong, outdated, or missing coverage for recent code changes; after a large merge; before release; or when a GitHub notification was routed `route=sync`. Sync owns broad drift discovery and classification across one tree. Use `first-tree-write` instead when the user already gave you a specific PR / doc / note to write into the tree.
+description: Audit and repair drift between merged code and the Context Tree in both directions — tree→code (does code still support tree facts?) and code→tree (does the tree register everything code now contains?). Use when the tree may be stale, wrong, outdated, or missing coverage for recent code changes; after a large merge; before release; on a freshly onboarded tree; or when a GitHub notification was routed `route=sync`. Sync owns broad drift discovery, structural skeleton repair, and substantive write hand-off across one tree. Use `first-tree-write` instead when the user already gave you a specific PR / doc / note to write into the tree.
 ---
 
 # First Tree Sync
@@ -16,15 +16,24 @@ Read these first:
 
 ## What This Skill Does
 
-Compare a Context Tree against the source repo(s) it describes, classify
-every disagreement into one of six drift types, and route each finding to
-auto-fix, needs-human, or skip.
+Compare a Context Tree against the source repo(s) it describes in **both
+directions**:
+
+- **tree→code** — for each tree node, does the code still support it?
+  (catches `tree-stale`, `tree-wrong`, `tree-outdated`, `cross-domain-broken`,
+  `ownership-stale`)
+- **code→tree** — for each piece of source structure, does the tree
+  register it? (catches `code-not-synced`)
+
+Classify every gap, then route each finding to auto-fix, hand-off-to-write,
+needs-human, or skip.
 
 Two phases, in order:
 
-1. **audit** — produce a `drifts[]` list. Read-only, human-paced.
-2. **fix** — for each drift, decide auto-fix / needs-human / skip and act
-   on that decision.
+1. **audit** — produce a `drifts[]` list. Read-only, human-paced. Combines
+   a tree→code pass (Phase 1–3) with a code→tree sweep (Phase 4).
+2. **fix** — for each drift, decide auto-fix / write-handoff / needs-human
+   / skip and act on that decision.
 
 Each phase has a dedicated reference; follow them in order.
 
@@ -39,13 +48,18 @@ Each phase has a dedicated reference; follow them in order.
 ## The Six Drift Types
 
 ```
-tree-stale            — tree node was true; code moved
-tree-wrong            — tree node never matched code
-tree-outdated         — superseded by a newer decision
-code-not-synced       — code change has no tree counterpart
-cross-domain-broken   — soft_links target gone or wrong
-ownership-stale       — owners list no longer matches reality
+tree-stale                   — tree node was true; code moved
+tree-wrong                   — tree node never matched code
+tree-outdated                — superseded by a newer decision
+code-not-synced/structural   — code structure exists; tree skeleton does not register it
+code-not-synced/substantive  — code decision/constraint exists; tree does not record it
+cross-domain-broken          — soft_links target gone or wrong
+ownership-stale              — owners list no longer matches reality
 ```
+
+`code-not-synced` has two subtypes because the fix shape is different:
+structural gaps need registration (sync handles), substantive gaps need
+authorship (write handles). See `references/drift-taxonomy.md`.
 
 Definitions, signals, and worked examples in
 [references/drift-taxonomy.md](references/drift-taxonomy.md).
@@ -80,11 +94,19 @@ and tree manually; the fix phase opens PRs via `gh`.
   `owners:` lists.
 - **Audit produces a list; fix takes actions.** Do not write tree updates
   inside the audit phase.
-- **Sync does not introduce new decision content.** "The tree could say more"
-  is not drift — that is `first-tree-write`'s job. The narrow exception is a
-  purely additive structural fix needed to reflect code or workspace reality
-  that already exists (for example, registering a newly bound repo in
-  `source-repos.md`).
+- **Sync may add structural skeletons; substantive content goes through
+  write.** `code-not-synced` splits into two subtypes (see
+  `references/drift-taxonomy.md`):
+  - **structural** — new dir / submodule / dependency / member that the
+    tree's skeleton does not yet register. Sync may auto-fix with a stub
+    node or registry entry.
+  - **substantive** — new decision / constraint / rationale (e.g. a new
+    AGENTS.md section, a merged RFC). Sync surfaces the source pointer
+    and hands off to `first-tree-write`, which applies the "default to
+    not writing" filter.
+
+  Sync never composes decision prose from code. "The tree could say more"
+  about an existing topic is not drift — that is `first-tree-write`'s job.
 
 ## References
 

@@ -48,18 +48,63 @@ Don't delete history — preserve the rationale.
 
 ## `code-not-synced`
 
-The code side made a change that should have produced a tree update but
-didn't. The tree is silent on something it should now cover.
+The code side has something the tree does not register. Split into two
+subtypes because the fix shape is fundamentally different — registration
+vs authorship.
 
-**Signals:** a merged PR introduces a new service / cross-repo dep / public
-contract / ownership shift, and no corresponding tree node exists.
+### `code-not-synced/structural`
 
-**Example:** a new repo joined the workspace last week; the tree's
-`source-repos.md` and the relevant domain `NODE.md` make no mention of it.
+The tree's **skeleton** does not yet cover a piece of source structure
+that demonstrably exists. The fix is registration, not authorship — a
+stub node, a list entry, or a registry update. No decision is being
+invented.
 
-**Fix bias:** add the missing tree node. This is the boundary case where
-sync may hand off to `first-tree-write` if the user already provided the
-specific source PR — see `references/boundary.md`.
+**Signals:**
+
+- a top-level source directory has no entry in the relevant `NODE.md`
+  domain list
+- `.gitmodules` lists a submodule path not present in the tree's
+  `source-repos.md`
+- `package.json` / `pyproject.toml` / `go.mod` / `Cargo.toml` declares a
+  decision-relevant dependency (framework, runtime, datastore) that is
+  absent from `.first-tree/org.yaml`'s `techStackConstraints`
+- a newly bound source repo is not yet registered in `source-repos.md`
+- an active contributor (commits within the last 6 months) is not
+  present under `members/`
+
+**Example:** the source repo's top-level `papers/` directory exists but
+the tree's `NODE.md` domain list does not mention it. Sync adds a
+one-line domain entry and an empty `papers/NODE.md` stub with `title`
+and `owners: []` frontmatter — no body prose.
+
+**Fix bias:** auto-fix with the smallest correct skeleton edit. Do not
+draft decision content for the new node — that is write's job on a
+follow-up source pointer.
+
+### `code-not-synced/substantive`
+
+A merged PR / doc / `AGENTS.md` section establishes a decision,
+constraint, or rationale that the tree does not record. Adding this
+requires **authorship**, not registration — the "default to not writing"
+filter and node-shape rules from `first-tree-write` apply.
+
+**Signals:**
+
+- a new RFC / decision doc lands under `docs/rfcs/`, `docs/decisions/`,
+  `adr/`, or similar, with no tree counterpart
+- `AGENTS.md` / `CLAUDE.md` grows a new section that explains a policy,
+  red line, workflow, or constraint, and the tree is silent on it
+- a merged PR's body or commit message states a constraint or ownership
+  rule not yet captured anywhere in the tree
+
+**Example:** the source repo's `AGENTS.md` adds a new section on the
+agent's memory-management policy; no tree node references it. Sync emits
+a finding with the section heading and line range as `sourcePointer`,
+and routes to `first-tree-write`. Sync never drafts the substance itself.
+
+**Fix bias:** always hand off to `first-tree-write` with the source
+pointer. Sync surfaces what should be written and stops. See
+`references/boundary.md`.
 
 ## `cross-domain-broken`
 
@@ -95,12 +140,18 @@ are a high-trust operation — flag for human approval rather than auto-PR.
 
 - A finding fits **exactly one** category. If two seem to fit, pick the
   more specific one (`tree-outdated` over `tree-stale`, `ownership-stale`
-  over `tree-wrong`).
+  over `tree-wrong`, `code-not-synced/substantive` over
+  `code-not-synced/structural` when the gap requires authoring decision
+  prose).
 - If you cannot classify, the finding is not yet a drift — it is a
   question. Ask the user before reporting it.
-- "The tree could be more detailed" is **not** drift. Sync looks for facts
-  that disagree, not for absent depth. Use `first-tree-write` to add
-  content.
+- "The tree could be more detailed" about an existing topic is **not**
+  drift. Use `first-tree-write` to deepen existing nodes. But a missing
+  skeleton entry for source structure that demonstrably exists **is**
+  drift — that is `code-not-synced/structural` and sync fixes it.
+- Use `code-not-synced/structural` for registration (skeleton, stub,
+  list entry, frontmatter). Use `code-not-synced/substantive` only when
+  the fix requires composing decision prose, rationale, or constraints.
 
 ## Code Is The Ground Truth
 
