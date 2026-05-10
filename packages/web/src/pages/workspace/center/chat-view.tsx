@@ -1,4 +1,9 @@
-import { extractMentions, type MentionParticipant } from "@agent-team-foundation/first-tree-hub-shared";
+import {
+  extractMentions,
+  type MentionParticipant,
+  type QuestionAnswerMessageContent,
+  type QuestionMessageContent,
+} from "@agent-team-foundation/first-tree-hub-shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, AtSign, Check, Eye, MessageSquare, Paperclip, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -25,6 +30,12 @@ import {
   type SessionEventRow,
 } from "../../../api/sessions.js";
 import { useAuth } from "../../../auth/auth-context.js";
+import {
+  isQuestionAnswerContent,
+  isQuestionContent,
+  QuestionMessage,
+  type QuestionStatus,
+} from "../../../components/chat/question-message.js";
 import { FirstTreeLogo } from "../../../components/first-tree-logo.js";
 import {
   ambiguousDisplayNames,
@@ -443,6 +454,87 @@ function ImageFromRef({ content }: { content: ImageRefContent }) {
   );
 }
 
+function QuestionMessageRow({
+  msg,
+  chatId,
+  content,
+  answer,
+  status,
+  agentNameFn,
+}: {
+  msg: MessageWithDelivery;
+  chatId: string;
+  content: QuestionMessageContent;
+  answer: QuestionAnswerMessageContent | null;
+  status: QuestionStatus;
+  agentNameFn: (id: string) => string;
+}) {
+  const senderName = agentNameFn(msg.senderId);
+  return (
+    <div
+      className="grid"
+      style={{
+        gridTemplateColumns: "var(--sp-5) 1fr",
+        columnGap: 8,
+        padding: "var(--sp-1_5) 0",
+      }}
+    >
+      <Avatar name={senderName} isSelf={false} />
+      <div className="min-w-0 flex flex-col" style={{ gap: "var(--sp-1)" }}>
+        <div className="flex items-baseline" style={{ gap: 8 }}>
+          <span className="mono text-body font-semibold" style={{ color: "var(--accent)" }}>
+            {senderName}
+          </span>
+          <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
+            {formatClockTime(msg.createdAt)}
+          </span>
+        </div>
+        <QuestionMessage chatId={chatId} questionMessageId={msg.id} content={content} answer={answer} status={status} />
+      </div>
+    </div>
+  );
+}
+
+/** Compact recap row for `format=question_answer`. Mirrors the style of a
+ *  user text reply but flagged so it's clear this came from the answer card. */
+function QuestionAnswerRow({ msg, agentNameFn }: { msg: MessageWithDelivery; agentNameFn: (id: string) => string }) {
+  const parsed = isQuestionAnswerContent(msg.content) ? msg.content : null;
+  const senderName = agentNameFn(msg.senderId);
+  const summary = parsed
+    ? Object.entries(parsed.answers)
+        .map(([q, a]) => `${q.replace(/\s+\?$/u, "?")}: ${a}`)
+        .join(" · ")
+    : "(answer)";
+  return (
+    <div
+      className="grid"
+      style={{
+        gridTemplateColumns: "var(--sp-5) 1fr",
+        columnGap: 8,
+        padding: "var(--sp-1_5) 0",
+      }}
+    >
+      <Avatar name={senderName} isSelf />
+      <div className="min-w-0">
+        <div className="flex items-baseline" style={{ gap: 8 }}>
+          <span className="mono text-body font-semibold" style={{ color: "var(--fg)" }}>
+            {senderName}
+          </span>
+          <span className="mono text-caption" style={{ color: "var(--fg-4)" }}>
+            {formatClockTime(msg.createdAt)}
+          </span>
+          <span className="mono text-caption" style={{ color: "var(--fg-3)" }}>
+            answered question
+          </span>
+        </div>
+        <div className="text-body" style={{ color: "var(--fg-2)", marginTop: 2 }}>
+          {summary}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 type PendingImage = {
   id: string;
   file: File;
@@ -680,6 +772,25 @@ export function ChatView({
     out.sort((a, b) => a.at.localeCompare(b.at));
     return out;
   }, [messagesData, eventsData]);
+
+  /**
+   * For every `format=question` message we render, we need the matching
+   * `question_answer` (when one has landed). Build a (correlationId →
+   * answer-content) lookup once per messages refresh — there's no separate
+   * pending-status endpoint yet, so the presence of the answer message is
+   * the canonical "answered" signal. v1 collapses superseded into pending
+   * since we don't have a WS-pushed supersede signal yet (commit 6).
+   */
+  const answersByCorrelationId = useMemo(() => {
+    const map = new Map<string, QuestionAnswerMessageContent>();
+    for (const m of messagesData?.items ?? []) {
+      if (m.format !== "question_answer") continue;
+      if (isQuestionAnswerContent(m.content)) {
+        map.set(m.content.correlationId, m.content);
+      }
+    }
+    return map;
+  }, [messagesData]);
 
   const itemCount = items.length;
   useEffect(() => {
@@ -1033,7 +1144,26 @@ export function ChatView({
                     return null;
                 }
               }
-              return <TextRow key={item.key} msg={item.data} myAgentId={myAgentId} agentNameFn={agentName} />;
+              const msg = item.data;
+              if (msg.format === "question" && isQuestionContent(msg.content)) {
+                const answer = answersByCorrelationId.get(msg.content.correlationId) ?? null;
+                const status: QuestionStatus = answer ? "answered" : "pending";
+                return (
+                  <QuestionMessageRow
+                    key={item.key}
+                    msg={msg}
+                    chatId={chatId}
+                    content={msg.content}
+                    answer={answer}
+                    status={status}
+                    agentNameFn={agentName}
+                  />
+                );
+              }
+              if (msg.format === "question_answer") {
+                return <QuestionAnswerRow key={item.key} msg={msg} agentNameFn={agentName} />;
+              }
+              return <TextRow key={item.key} msg={msg} myAgentId={myAgentId} agentNameFn={agentName} />;
             })}
           </div>
           <div ref={messagesEndRef} />
