@@ -19,18 +19,15 @@
 
 export const FIRST_TREE_REFERENCE_URL = "https://github.com/agent-team-foundation/first-tree";
 
-function formatSourceList(sourceUrls: readonly string[]): { label: string; lines: string[] } {
+function formatSourceList(sourceUrls: readonly string[]): string[] {
   if (sourceUrls.length === 1) {
-    return { label: "Source repo", lines: [`Source repo: ${sourceUrls[0]}`] };
+    return [`Source repo: ${sourceUrls[0]}`];
   }
-  return {
-    label: "Source repos",
-    lines: ["Source repos:", ...sourceUrls.map((u) => `- ${u}`)],
-  };
+  return ["Source repos:", ...sourceUrls.map((u) => `- ${u}`)];
 }
 
 export function buildBindBootstrap(sourceUrls: readonly string[], treeUrl: string): string {
-  const sources = formatSourceList(sourceUrls);
+  const sourceLines = formatSourceList(sourceUrls);
   const opener =
     sourceUrls.length === 1
       ? "Bind my source repo to an existing context-tree."
@@ -42,7 +39,7 @@ export function buildBindBootstrap(sourceUrls: readonly string[], treeUrl: strin
   return [
     opener,
     "",
-    ...sources.lines,
+    ...sourceLines,
     `Existing tree: ${treeUrl}`,
     "",
     skillLine,
@@ -52,7 +49,7 @@ export function buildBindBootstrap(sourceUrls: readonly string[], treeUrl: strin
 }
 
 export function buildCreateBootstrap(sourceUrls: readonly string[]): string {
-  const sources = formatSourceList(sourceUrls);
+  const sourceLines = formatSourceList(sourceUrls);
   const opener =
     sourceUrls.length === 1
       ? "Create a brand-new context-tree for my source repo."
@@ -64,7 +61,7 @@ export function buildCreateBootstrap(sourceUrls: readonly string[]): string {
   return [
     opener,
     "",
-    ...sources.lines,
+    ...sourceLines,
     "",
     skillLine,
     "",

@@ -264,14 +264,28 @@ function InviteeConfirmBody({ treeUrl, teamRepos }: { treeUrl: string; teamRepos
                 >
                   <input
                     type="checkbox"
-                    name="invitee-source-repo"
                     value={repo.url}
                     checked={active}
                     onChange={() => toggleChosenRepo(repo.url)}
                     className="sr-only"
                   />
-                  <span style={{ width: 14, display: "inline-flex", flexShrink: 0 }}>
-                    {active ? <Check className="h-3.5 w-3.5" /> : null}
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      width: "var(--sp-3_5)",
+                      height: "var(--sp-3_5)",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      flexShrink: 0,
+                      border: active ? "var(--hairline) solid var(--accent)" : "var(--hairline) solid var(--border)",
+                      borderRadius: "var(--radius-chip)",
+                      background: active ? "var(--accent)" : "transparent",
+                      color: "var(--bg)",
+                      transition: "background 120ms ease, border-color 120ms ease",
+                    }}
+                  >
+                    {active ? <Check className="h-3 w-3" strokeWidth={3} /> : null}
                   </span>
                   <span className="mono truncate" style={{ minWidth: 0, flex: 1 }}>
                     {repo.url}
