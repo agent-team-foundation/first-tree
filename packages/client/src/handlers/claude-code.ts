@@ -803,6 +803,12 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   }
 
   const contextTreePath = (config.contextTreePath as string | undefined) ?? null;
+  const contextTreeRepoUrl = (config.contextTreeRepoUrl as string | undefined) ?? null;
+  // `agentName` is the operator-chosen stable identifier (`config.yaml`'s
+  // `agents.<name>` key). Used as `--workspace-id` for first-tree integrate
+  // so a single agent's multi-chat workspaces all bind to the same skill
+  // workspace identity instead of churning a new id per chat.
+  const agentName = (config.agentName as string | undefined) ?? null;
 
   /**
    * Materialise the runtime config's `gitRepos` into worktrees under `cwd`.
@@ -892,7 +898,10 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       installFirstTreeIntegration({
         workspacePath: workspace,
         contextTreePath,
-        workspaceId: sessionCtx.chatId,
+        // Prefer the operator-stable agent name; fall back to chatId for
+        // pre-refactor handler configs that don't yet thread `agentName`.
+        workspaceId: agentName ?? sessionCtx.chatId,
+        treeRepoUrl: contextTreeRepoUrl ?? undefined,
         log: (msg) => sessionCtx.log(msg),
       });
     }

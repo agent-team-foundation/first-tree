@@ -7,7 +7,7 @@ import {
 } from "@agent-team-foundation/first-tree-hub-shared";
 import { Codex, type Input, type Thread, type ThreadItem, type ThreadOptions } from "@openai/codex-sdk";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
-import { bootstrapWorkspace, FIRST_TREE_WORKSPACE_MARKER } from "../runtime/bootstrap.js";
+import { bootstrapWorkspace, FIRST_TREE_WORKSPACE_MARKER, installFirstTreeIntegration } from "../runtime/bootstrap.js";
 import type { GitMirrorManager } from "../runtime/git-mirror-manager.js";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
 import { acquireWorkspace } from "../runtime/workspace.js";
@@ -78,6 +78,8 @@ export const createCodexHandler: HandlerFactory = (config) => {
   const agentConfigCache = (config.agentConfigCache as AgentConfigCache | undefined) ?? null;
   const gitMirrorManager = (config.gitMirrorManager as GitMirrorManager | undefined) ?? null;
   const contextTreePath = (config.contextTreePath as string | undefined) ?? null;
+  const contextTreeRepoUrl = (config.contextTreeRepoUrl as string | undefined) ?? null;
+  const agentName = (config.agentName as string | undefined) ?? null;
 
   let cwd: string | null = null;
   let codex: Codex | null = null;
@@ -432,6 +434,18 @@ export const createCodexHandler: HandlerFactory = (config) => {
     await runTurn(inputs.join("\n\n"), sessionCtx);
   }
 
+  /** Install the first-tree skill + binding block; no-op when context tree is unconfigured. */
+  function ensureFirstTreeBinding(workspace: string, sessionCtx: SessionContext): void {
+    if (!contextTreePath) return;
+    installFirstTreeIntegration({
+      workspacePath: workspace,
+      contextTreePath,
+      workspaceId: agentName ?? sessionCtx.chatId,
+      treeRepoUrl: contextTreeRepoUrl ?? undefined,
+      log: (msg) => sessionCtx.log(msg),
+    });
+  }
+
   return {
     async start(message, sessionCtx) {
       ctx = sessionCtx;
@@ -460,6 +474,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
         chatId: sessionCtx.chatId,
         briefing: { format: "agents-md", content: buildAgentBriefing(payload) },
       });
+      ensureFirstTreeBinding(cwd, sessionCtx);
 
       await prepareGitWorktrees(payload, cwd, sessionCtx.chatId);
 
@@ -509,6 +524,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
         chatId: sessionCtx.chatId,
         briefing: { format: "agents-md", content: buildAgentBriefing(payload) },
       });
+      ensureFirstTreeBinding(cwd, sessionCtx);
 
       await prepareGitWorktrees(payload, cwd, sessionCtx.chatId);
 

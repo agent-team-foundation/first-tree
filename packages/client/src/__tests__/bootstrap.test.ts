@@ -251,11 +251,12 @@ describe("installFirstTreeIntegration", () => {
     expect(result).toBe(true);
     expect(calls).toHaveLength(1);
     expect(calls[0]?.command).toBe("first-tree");
+    // No `--source-path` flag: the first-tree CLI resolves the source from
+    // the process cwd (set via options.cwd below). Passing a flag the CLI
+    // doesn't recognise made every invocation exit 1.
     expect(calls[0]?.args).toEqual([
       "tree",
       "integrate",
-      "--source-path",
-      workspace,
       "--tree-path",
       treePath,
       "--mode",
@@ -321,6 +322,95 @@ describe("installFirstTreeIntegration", () => {
     });
 
     expect(result).toBe(false);
+    expect(logs.join("\n")).toContain("First-tree integration skipped");
+  });
+
+  it("falls back to npx when the PATH first-tree rejects --tree-url as unknown option", () => {
+    // Regression for the silent-fail when an outdated CLI is on PATH:
+    // Commander prints "error: unknown option '--tree-url'" + exits 1.
+    // Without retry, integration was permanently skipped on those machines.
+    const workspace = join(tmpBase, "integrate-old-cli");
+    const treePath = join(tmpBase, "ctx-old-cli");
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(treePath, { recursive: true });
+
+    let call = 0;
+    const { exec, calls } = makeRecordingExec(() => {
+      call += 1;
+      if (call === 1) {
+        throw new Error("Command failed: first-tree tree integrate ...\nerror: unknown option '--tree-url'");
+      }
+    });
+
+    const logs: string[] = [];
+    const result = installFirstTreeIntegration({
+      workspacePath: workspace,
+      contextTreePath: treePath,
+      workspaceId: "agent-a",
+      treeRepoUrl: "https://example.com/tree.git",
+      log: (m) => logs.push(m),
+      exec,
+    });
+
+    expect(result, logs.join("\n")).toBe(true);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.command).toBe("npx");
+    expect(logs.join("\n")).toContain("falling back");
+  });
+
+  it("falls back to npx when the PATH first-tree returns 'unknown command'", () => {
+    const workspace = join(tmpBase, "integrate-old-subcmd");
+    const treePath = join(tmpBase, "ctx-old-subcmd");
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(treePath, { recursive: true });
+
+    let call = 0;
+    const { exec, calls } = makeRecordingExec(() => {
+      call += 1;
+      if (call === 1) {
+        throw new Error("Command failed: first-tree tree integrate ...\nerror: unknown command 'integrate'");
+      }
+    });
+
+    const logs: string[] = [];
+    const result = installFirstTreeIntegration({
+      workspacePath: workspace,
+      contextTreePath: treePath,
+      workspaceId: "agent-a",
+      treeRepoUrl: "https://example.com/tree.git",
+      log: (m) => logs.push(m),
+      exec,
+    });
+
+    expect(result, logs.join("\n")).toBe(true);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.command).toBe("npx");
+  });
+
+  it("does NOT retry on legitimate run-time errors (e.g. integration failure unrelated to CLI version)", () => {
+    // Distinguish "CLI doesn't understand us" (retry) from "CLI ran but
+    // refused this input" (don't retry — retrying just doubles the time
+    // before the operator sees the real error).
+    const workspace = join(tmpBase, "integrate-legit-err");
+    const treePath = join(tmpBase, "ctx-legit-err");
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(treePath, { recursive: true });
+
+    const { exec, calls } = makeRecordingExec(() => {
+      throw new Error("Command failed: first-tree tree integrate ...\nfatal: not a git repository");
+    });
+
+    const logs: string[] = [];
+    const result = installFirstTreeIntegration({
+      workspacePath: workspace,
+      contextTreePath: treePath,
+      workspaceId: "agent-a",
+      log: (m) => logs.push(m),
+      exec,
+    });
+
+    expect(result).toBe(false);
+    expect(calls).toHaveLength(1);
     expect(logs.join("\n")).toContain("First-tree integration skipped");
   });
 

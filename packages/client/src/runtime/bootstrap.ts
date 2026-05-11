@@ -8,17 +8,29 @@ import type { AgentIdentity } from "./handler.js";
 const CONTEXT_TREE_DIR = join(DEFAULT_DATA_DIR, "context-tree");
 
 /**
+ * Resolved Context Tree binding the runtime threads through every layer:
+ * the local checkout path AND the upstream coordinates `first-tree tree
+ * integrate` needs to write a complete `local-tree.json` (without the URL
+ * the skill cannot pull/push later).
+ */
+export type ContextTreeBinding = {
+  path: string;
+  repoUrl: string;
+  branch: string;
+};
+
+/**
  * Sync the shared Context Tree git clone.
  *
  * Clones on first run, pulls on subsequent runs.
- * Returns the clone path on success, null on failure (graceful degradation).
+ * Returns the binding on success, null on failure (graceful degradation).
  */
 export async function syncContextTree(
   serverUrl: string,
   getAccessToken: AccessTokenProvider,
   log: (msg: string) => void,
   userAgent?: string,
-): Promise<string | null> {
+): Promise<ContextTreeBinding | null> {
   // 1. Check git is available
   try {
     execFileSync("git", ["--version"], { stdio: "ignore" });
@@ -79,7 +91,7 @@ export async function syncContextTree(
       });
       log(`Context Tree cloned from ${repo} (branch: ${branch})`);
     }
-    return CONTEXT_TREE_DIR;
+    return { path: CONTEXT_TREE_DIR, repoUrl: repo, branch };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log(`Context Tree sync failed: ${msg}`);
@@ -101,7 +113,7 @@ export async function syncContextTree(
           timeout: 60_000,
         });
         log("Context Tree re-cloned successfully");
-        return CONTEXT_TREE_DIR;
+        return { path: CONTEXT_TREE_DIR, repoUrl: repo, branch };
       } catch {
         log("Context Tree re-clone also failed, continuing without context");
       }
@@ -110,7 +122,7 @@ export async function syncContextTree(
     // Return existing clone path if available (preserves local work on transient errors)
     if (existsSync(join(CONTEXT_TREE_DIR, ".git"))) {
       log("Using existing Context Tree clone despite sync failure");
-      return CONTEXT_TREE_DIR;
+      return { path: CONTEXT_TREE_DIR, repoUrl: repo, branch };
     }
 
     return null;
@@ -256,11 +268,13 @@ export function installFirstTreeIntegration(options: InstallFirstTreeIntegration
   const { workspacePath, contextTreePath, workspaceId, treeRepoUrl, log } = options;
   const exec = options.exec ?? defaultInstallExec;
 
+  // `first-tree tree integrate` resolves the source/workspace path from the
+  // process cwd — it does NOT accept a `--source-path` flag. We set
+  // `cwd: workspacePath` below; passing a flag the CLI doesn't recognise
+  // makes every invocation exit 1 with "unknown option '--source-path'".
   const integrateArgs = [
     "tree",
     "integrate",
-    "--source-path",
-    workspacePath,
     "--tree-path",
     contextTreePath,
     "--mode",
@@ -291,10 +305,19 @@ export function installFirstTreeIntegration(options: InstallFirstTreeIntegration
       return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      // Reasons the PATH attempt should fall through to npx@latest:
+      //   - the binary isn't on PATH at all (ENOENT / "command not found")
+      //   - the installed binary is older than the flags/subcommands we use
+      //     (Commander rejects unknown options with `error: unknown option`
+      //     and unknown subcommands with `error: unknown command`). Without
+      //     this, an outdated `first-tree` on PATH wedges the integration
+      //     in a silent-fail state — npx@latest would have worked.
       const binaryMissing = /ENOENT|not found|command not found/i.test(msg);
+      const unsupportedByThisCli = /unknown (?:option|command|argument)|unrecognized option/i.test(msg);
+      const shouldRetry = binaryMissing || unsupportedByThisCli;
       const isLastAttempt = index === attempts.length - 1;
-      if (binaryMissing && !isLastAttempt) {
-        // Try the next attempt (e.g. `first-tree` not on PATH → try npx).
+      if (shouldRetry && !isLastAttempt) {
+        log(`First-tree integration via ${attempt.label} unusable; falling back: ${msg.slice(0, 160)}`);
         continue;
       }
       log(`First-tree integration skipped (${attempt.label}): ${msg.slice(0, 200)}`);
