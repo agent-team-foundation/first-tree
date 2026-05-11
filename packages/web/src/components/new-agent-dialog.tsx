@@ -166,8 +166,11 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
   // Connect-token state for the zero-computer recovery affordance. We only
   // generate one when 0 clients are connected; the dialog then shows the
   // real `first-tree-hub connect <token>` command instead of a useless
-  // bare-command hint (codex review caught this).
+  // bare-command hint (codex review caught this). We hold the full
+  // command string from the server response so the CLI binary name stays
+  // a server-side concern — if it ever changes the dialog won't drift.
   const [connectToken, setConnectToken] = useState<string | null>(null);
+  const [connectCommand, setConnectCommand] = useState<string | null>(null);
   const [connectTokenExpiresAt, setConnectTokenExpiresAt] = useState<number | null>(null);
   const [tokenCopied, setTokenCopied] = useState(false);
 
@@ -188,6 +191,7 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
       setCapabilities(null);
       setCapabilitiesClientId(null);
       setConnectToken(null);
+      setConnectCommand(null);
       setConnectTokenExpiresAt(null);
       setTokenCopied(false);
       setClientErrors({});
@@ -340,14 +344,16 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
     if (connectToken) {
       // Expired token still hanging around — clear it before fetching anew.
       setConnectToken(null);
+      setConnectCommand(null);
       setConnectTokenExpiresAt(null);
     }
     let cancelled = false;
     void (async () => {
       try {
-        const r = await api.post<{ token: string; expiresIn: number }>("/me/connect-tokens", {});
+        const r = await api.post<{ token: string; expiresIn: number; command: string }>("/me/connect-tokens", {});
         if (cancelled) return;
         setConnectToken(r.token);
+        setConnectCommand(r.command);
         setConnectTokenExpiresAt(Date.now() + r.expiresIn * 1000);
       } catch {
         // Best-effort. The UI shows "Generating token…" until the user
@@ -548,7 +554,16 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
 
           {editingHandle && (
             <div className="space-y-2">
-              <Label htmlFor="new-agent-name">Agent name</Label>
+              <div className="flex items-baseline justify-between gap-3">
+                <Label htmlFor="new-agent-name">Agent name</Label>
+                <button
+                  type="button"
+                  onClick={() => setEditingHandle(false)}
+                  className="text-caption text-muted-foreground underline underline-offset-2 hover:text-primary focus:outline-none focus-visible:text-primary"
+                >
+                  Done
+                </button>
+              </div>
               <div className="flex items-stretch">
                 <span
                   aria-hidden
@@ -671,11 +686,11 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
               <p className="text-caption text-muted-foreground">Detecting connected computers…</p>
             ) : connectedClients.length === 0 ? (
               <ZeroComputerBlock
-                connectToken={connectToken}
+                command={connectCommand}
                 copied={tokenCopied}
                 onCopy={async () => {
-                  if (!connectToken) return;
-                  await navigator.clipboard.writeText(`first-tree-hub connect ${connectToken}`);
+                  if (!connectCommand) return;
+                  await navigator.clipboard.writeText(connectCommand);
                   setTokenCopied(true);
                   window.setTimeout(() => setTokenCopied(false), 1500);
                 }}
@@ -775,15 +790,14 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
  * this state without leaving the dialog.
  */
 function ZeroComputerBlock({
-  connectToken,
+  command,
   copied,
   onCopy,
 }: {
-  connectToken: string | null;
+  command: string | null;
   copied: boolean;
   onCopy: () => void;
 }) {
-  const command = connectToken ? `first-tree-hub connect ${connectToken}` : null;
   return (
     <div className="rounded-md border border-border bg-muted/30 p-3 space-y-2">
       <div className="text-body font-medium">No computer connected yet.</div>
