@@ -423,7 +423,7 @@ function Step2FormBody({
               aria-label="Agent display name"
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
-              placeholder="e.g. Buddy, Helper, Code Reviewer"
+              placeholder="e.g. Buddy, Helper"
               maxLength={200}
               className="onboarding-name-input text-body font-medium"
               style={{

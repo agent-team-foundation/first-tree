@@ -466,8 +466,8 @@ function InviteeWaitingBody() {
         Your team admin hasn&apos;t finished setup yet
       </h2>
       <p className="text-body" style={{ marginTop: "var(--sp-2)", color: "var(--fg-3)" }}>
-        Once they bind a source repo and a context-tree, this view will guide your agent to join. For now, your agent
-        can help with anything that doesn&apos;t depend on your team&apos;s shared knowledge.
+        Once they finish setup, this view will guide your agent to join. For now, your agent can help with anything that
+        doesn&apos;t depend on your team&apos;s shared knowledge.
       </p>
     </div>
   );
