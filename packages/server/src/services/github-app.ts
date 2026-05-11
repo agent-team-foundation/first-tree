@@ -1,27 +1,35 @@
 import { importPKCS8, SignJWT } from "jose";
+import type { GithubProfile } from "./auth-identity.js";
 
 /**
- * GitHub App service helpers — the three primitives that ride on top of an
- * App's private key:
+ * GitHub App service helpers. Two surfaces that ride on top of an App's
+ * private key + OAuth client credentials:
  *
- *   1. `createAppJwt`        — sign the short-lived (≤10min) App JWT that
- *                              identifies Hub-as-an-App to GitHub.
- *   2. `mintInstallationToken` — exchange the App JWT for a per-installation
- *                              server-to-server token (~1h TTL). Used when
- *                              Hub itself needs to act as the App on a
- *                              tenant's repos (Phase 4 identity convergence;
- *                              not yet wired into request paths).
- *   3. `refreshAppUserToken` — slide an expiring user-to-server access token
- *                              by trading in its refresh token. Powers the
- *                              ~8h-TTL user session that replaces the
- *                              never-expires legacy OAuth token.
+ *   App-private-key (server-to-server):
+ *   - `createAppJwt`           — short-lived (≤10min) JWT identifying
+ *                                 Hub-as-this-App to GitHub.
+ *   - `mintInstallationToken`  — exchange the App JWT for a per-installation
+ *                                 token (~1h TTL). Used when Hub acts as the
+ *                                 App on a tenant's repos (Phase 4 identity
+ *                                 convergence — not yet wired into request
+ *                                 paths).
  *
- * Design context: `docs/github-app-design-zh.md` §3 ("one installation, three
- * capabilities") + §5.4 ("services/github-app.ts").
+ *   App-OAuth (user-to-server, replaces the legacy OAuth App flow):
+ *   - `buildAppAuthorizeUrl`         — the start URL for the combined OAuth
+ *                                       + install flow (design doc D1).
+ *   - `exchangeCodeForAppUserProfile` — callback-side token exchange that
+ *                                       returns the user's profile, the
+ *                                       access + refresh tokens, and their
+ *                                       absolute expiries.
+ *   - `refreshAppUserToken`           — slide an expiring access token by
+ *                                       trading in its refresh token.
  *
- * Stateless by construction: this module imports no DB / config singletons.
- * Callers thread the App credentials in explicitly — the wiring layer that
- * pulls them from env arrives in PR-C.
+ * Design context: `docs/github-app-design-zh.md` §3 ("one installation,
+ * three capabilities") + §5.4 ("services/github-app.ts").
+ *
+ * Stateless by construction: no DB / config singletons. Callers thread
+ * credentials in explicitly so the module is trivially safe under
+ * concurrent request handlers.
  */
 
 const APP_JWT_ALG = "RS256";
@@ -39,6 +47,9 @@ const APP_JWT_IAT_SKEW_SECONDS = 60;
 
 const APP_INSTALLATION_TOKEN_URL = (id: number) => `https://api.github.com/app/installations/${id}/access_tokens`;
 const OAUTH_TOKEN_URL = "https://github.com/login/oauth/access_token";
+const OAUTH_AUTHORIZE_URL = "https://github.com/login/oauth/authorize";
+const USER_API_URL = "https://api.github.com/user";
+const USER_EMAILS_API_URL = "https://api.github.com/user/emails";
 
 /**
  * Errors from any GitHub API call this module makes. Carries the HTTP
@@ -238,5 +249,167 @@ export async function refreshAppUserToken(
     refreshToken: body.refresh_token,
     refreshTokenExpiresAt: refreshExpiresAt.toISOString(),
     scope: body.scope ?? "",
+  };
+}
+
+/**
+ * Build the App's combined OAuth + install authorization URL. Per design
+ * doc D1 ("login → install in one redirect"), this is the SAME endpoint
+ * GitHub uses for both flows when the App has "Request user authorization
+ * (OAuth) during installation" enabled — first install lands the user on
+ * the install dialog → consents → GitHub bounces back to `redirect_uri`
+ * with both `code` (OAuth) and `installation_id` (the new install).
+ * Returning users skip the install dialog and just receive `code`.
+ *
+ * `state` is the signed JWT minted by `oauth-state.ts` — same CSRF defense
+ * as the legacy OAuth flow.
+ *
+ * Permissions are NOT in the URL — the App declares them once in its
+ * GitHub-side settings (design doc D0b) and the install dialog renders
+ * them automatically. Asking again in the URL would let an attacker
+ * craft a downgrade prompt.
+ */
+export function buildAppAuthorizeUrl(opts: { clientId: string; redirectUri: string; state: string }): string {
+  const url = new URL(OAUTH_AUTHORIZE_URL);
+  url.searchParams.set("client_id", opts.clientId);
+  url.searchParams.set("redirect_uri", opts.redirectUri);
+  url.searchParams.set("state", opts.state);
+  url.searchParams.set("allow_signup", "true");
+  return url.toString();
+}
+
+export type ExchangeAppCodeResult = {
+  profile: GithubProfile;
+  accessToken: string;
+  accessTokenExpiresAt: string;
+  refreshToken: string;
+  refreshTokenExpiresAt: string;
+  scope: string;
+  /**
+   * Forwarded from the callback `installation_id` query param, NOT from
+   * the token response. GitHub puts it in the redirect URL when the user
+   * just installed the App; returning users (who already had the App
+   * installed) won't carry it. Caller is responsible for plumbing this
+   * through alongside the exchanged code.
+   */
+  installationId: number | null;
+};
+
+/**
+ * App-flavoured `exchangeCodeForProfile`: trade the callback `code` for
+ * the user's profile + a full token pair (access + refresh + expiries).
+ *
+ * Why this exists alongside `github-oauth.ts.exchangeCodeForProfile`:
+ *   - Same endpoint (`/login/oauth/access_token`) but with App
+ *     client_id/secret instead of OAuth App credentials.
+ *   - Response carries `refresh_token` + `expires_in` +
+ *     `refresh_token_expires_in` (8h / 6mo TTLs) that the OAuth-only
+ *     version doesn't return.
+ *   - The token-rotation semantics (`refresh_token` will be reissued on
+ *     every refresh) mean the caller MUST persist all four fields, not
+ *     just `accessToken`.
+ *
+ * The OAuth-only helper stays put for the brief window between this
+ * commit and the OAuth-flow rewrite; D3 cutover deletes it outright.
+ */
+export async function exchangeCodeForAppUserProfile(
+  opts: {
+    clientId: string;
+    clientSecret: string;
+    code: string;
+    redirectUri: string;
+    installationId: number | null;
+  },
+  callOpts: { fetcher?: typeof fetch; now?: () => Date } = {},
+): Promise<ExchangeAppCodeResult> {
+  const fetcher = callOpts.fetcher ?? fetch;
+  const now = callOpts.now ?? (() => new Date());
+
+  const tokenRes = await fetcher(OAUTH_TOKEN_URL, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify({
+      client_id: opts.clientId,
+      client_secret: opts.clientSecret,
+      code: opts.code,
+      redirect_uri: opts.redirectUri,
+    }),
+  });
+  if (!tokenRes.ok) {
+    throw new GithubAppApiError(tokenRes.status, `GitHub App user-token exchange failed (${tokenRes.status})`);
+  }
+  const body = (await tokenRes.json()) as {
+    access_token?: string;
+    expires_in?: number;
+    refresh_token?: string;
+    refresh_token_expires_in?: number;
+    scope?: string;
+    token_type?: string;
+    error?: string;
+    error_description?: string;
+  };
+  if (body.error || !body.access_token || !body.refresh_token) {
+    // Same 200-with-error convention as `refreshAppUserToken` — normalize
+    // to 401 so route layer maps to "re-login / re-consent".
+    const description = body.error_description ?? body.error ?? "missing access_token / refresh_token";
+    throw new GithubAppApiError(401, `GitHub App user-token exchange rejected: ${description}`);
+  }
+  if (typeof body.expires_in !== "number" || typeof body.refresh_token_expires_in !== "number") {
+    // App MUST have "Expire user authorization tokens" enabled in its
+    // settings page — otherwise we'd persist a row that lies about its
+    // TTL. Fail loud rather than silently downgrade to "never expires".
+    throw new GithubAppApiError(
+      500,
+      "GitHub App user-token exchange missing expires_in — App must have user-token expiration enabled",
+    );
+  }
+  const issuedAt = now();
+  const accessExpiresAt = new Date(issuedAt.getTime() + body.expires_in * 1000);
+  const refreshExpiresAt = new Date(issuedAt.getTime() + body.refresh_token_expires_in * 1000);
+
+  // Fetch profile via `/user`; fall back to `/user/emails` when GitHub
+  // hides the primary email on the public profile (private-email setting).
+  // Mirrors `github-oauth.ts.exchangeCodeForProfile`; the legacy helper
+  // stays put until D3 cutover deletes it.
+  const userRes = await fetcher(USER_API_URL, {
+    headers: { Authorization: `Bearer ${body.access_token}`, Accept: "application/vnd.github+json" },
+  });
+  if (!userRes.ok) {
+    throw new GithubAppApiError(userRes.status, `GitHub /user fetch failed (${userRes.status})`);
+  }
+  const user = (await userRes.json()) as {
+    id: number;
+    login: string;
+    name?: string | null;
+    email?: string | null;
+    avatar_url?: string | null;
+  };
+
+  let email = user.email ?? null;
+  if (!email) {
+    const emailsRes = await fetcher(USER_EMAILS_API_URL, {
+      headers: { Authorization: `Bearer ${body.access_token}`, Accept: "application/vnd.github+json" },
+    });
+    if (emailsRes.ok) {
+      const emails = (await emailsRes.json()) as Array<{ email: string; primary: boolean; verified: boolean }>;
+      const primary = emails.find((e) => e.primary && e.verified) ?? emails.find((e) => e.verified);
+      email = primary?.email ?? null;
+    }
+  }
+
+  return {
+    profile: {
+      githubId: String(user.id),
+      login: user.login,
+      email,
+      displayName: user.name ?? null,
+      avatarUrl: user.avatar_url ?? null,
+    },
+    accessToken: body.access_token,
+    accessTokenExpiresAt: accessExpiresAt.toISOString(),
+    refreshToken: body.refresh_token,
+    refreshTokenExpiresAt: refreshExpiresAt.toISOString(),
+    scope: body.scope ?? "",
+    installationId: opts.installationId,
   };
 }

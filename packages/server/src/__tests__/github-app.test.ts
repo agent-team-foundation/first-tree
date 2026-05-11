@@ -1,7 +1,14 @@
 import { generateKeyPairSync } from "node:crypto";
 import { decodeJwt, decodeProtectedHeader, importPKCS8, jwtVerify } from "jose";
 import { beforeAll, describe, expect, it } from "vitest";
-import { createAppJwt, GithubAppApiError, mintInstallationToken, refreshAppUserToken } from "../services/github-app.js";
+import {
+  buildAppAuthorizeUrl,
+  createAppJwt,
+  exchangeCodeForAppUserProfile,
+  GithubAppApiError,
+  mintInstallationToken,
+  refreshAppUserToken,
+} from "../services/github-app.js";
 
 /**
  * Service-layer unit tests for `services/github-app.ts`. Pure module tests;
@@ -221,6 +228,165 @@ describe("services/github-app", () => {
         name: "GithubAppApiError",
         status: 502,
       });
+    });
+  });
+
+  describe("buildAppAuthorizeUrl", () => {
+    it("builds an authorize URL with client_id / redirect_uri / state / allow_signup", () => {
+      const url = buildAppAuthorizeUrl({
+        clientId: "Iv23liABCDEF",
+        redirectUri: "https://hub.example.com/api/v1/auth/github/callback",
+        state: "signed.state.jwt",
+      });
+      const parsed = new URL(url);
+      expect(parsed.origin + parsed.pathname).toBe("https://github.com/login/oauth/authorize");
+      expect(parsed.searchParams.get("client_id")).toBe("Iv23liABCDEF");
+      expect(parsed.searchParams.get("redirect_uri")).toBe("https://hub.example.com/api/v1/auth/github/callback");
+      expect(parsed.searchParams.get("state")).toBe("signed.state.jwt");
+      expect(parsed.searchParams.get("allow_signup")).toBe("true");
+      // Permissions are declared on the App's GitHub-side settings page,
+      // NOT in the URL (design doc D0b). Including them here would let
+      // an attacker craft a downgrade prompt.
+      expect(parsed.searchParams.get("scope")).toBeNull();
+      expect(parsed.searchParams.get("permissions")).toBeNull();
+    });
+  });
+
+  describe("exchangeCodeForAppUserProfile", () => {
+    const fixedNow = new Date("2026-05-11T10:00:00.000Z");
+
+    it("trades the code for profile + token pair + expiries", async () => {
+      const calls: Array<{ url: string; init?: RequestInit }> = [];
+      const fakeFetch: typeof fetch = async (url, init) => {
+        calls.push({ url: String(url), init });
+        if (String(url) === "https://github.com/login/oauth/access_token") {
+          return new Response(
+            JSON.stringify({
+              access_token: "ghu_initial",
+              expires_in: 28800,
+              refresh_token: "ghr_initial",
+              refresh_token_expires_in: 15897600,
+              scope: "repo,user:email",
+              token_type: "bearer",
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        if (String(url) === "https://api.github.com/user") {
+          return new Response(
+            JSON.stringify({
+              id: 583231,
+              login: "octocat",
+              name: "Octo Cat",
+              email: "octo@example.com",
+              avatar_url: "https://github.com/avatars/octocat.png",
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      };
+      const result = await exchangeCodeForAppUserProfile(
+        {
+          clientId: "cid",
+          clientSecret: "csec",
+          code: "code-from-callback",
+          redirectUri: "https://hub.example.com/cb",
+          installationId: 9999,
+        },
+        { fetcher: fakeFetch, now: () => fixedNow },
+      );
+      // The token-exchange POST and the /user GET — no /user/emails because
+      // the profile carried a public email.
+      expect(calls).toHaveLength(2);
+      expect(calls[0]?.init?.method).toBe("POST");
+      expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({
+        client_id: "cid",
+        client_secret: "csec",
+        code: "code-from-callback",
+        redirect_uri: "https://hub.example.com/cb",
+      });
+      expect(result.profile).toEqual({
+        githubId: "583231",
+        login: "octocat",
+        email: "octo@example.com",
+        displayName: "Octo Cat",
+        avatarUrl: "https://github.com/avatars/octocat.png",
+      });
+      expect(result.accessToken).toBe("ghu_initial");
+      expect(result.accessTokenExpiresAt).toBe("2026-05-11T18:00:00.000Z");
+      expect(result.refreshToken).toBe("ghr_initial");
+      expect(result.refreshTokenExpiresAt).toBe("2026-11-11T10:00:00.000Z");
+      expect(result.installationId).toBe(9999);
+    });
+
+    it("falls back to /user/emails when the profile hides the primary email", async () => {
+      const fakeFetch: typeof fetch = async (url) => {
+        if (String(url) === "https://github.com/login/oauth/access_token") {
+          return new Response(
+            JSON.stringify({
+              access_token: "a",
+              expires_in: 28800,
+              refresh_token: "r",
+              refresh_token_expires_in: 15897600,
+              scope: "",
+              token_type: "bearer",
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        if (String(url) === "https://api.github.com/user") {
+          return new Response(JSON.stringify({ id: 1, login: "u", email: null, name: null, avatar_url: null }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (String(url) === "https://api.github.com/user/emails") {
+          return new Response(
+            JSON.stringify([
+              { email: "secondary@example.com", primary: false, verified: true },
+              { email: "primary@example.com", primary: true, verified: true },
+            ]),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      };
+      const result = await exchangeCodeForAppUserProfile(
+        { clientId: "c", clientSecret: "s", code: "x", redirectUri: "r", installationId: null },
+        { fetcher: fakeFetch, now: () => fixedNow },
+      );
+      expect(result.profile.email).toBe("primary@example.com");
+      expect(result.installationId).toBeNull();
+    });
+
+    it("normalizes a 200-with-error body to a 401 GithubAppApiError", async () => {
+      const fakeFetch: typeof fetch = async () =>
+        new Response(JSON.stringify({ error: "bad_verification_code", error_description: "Wrong code." }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      await expect(
+        exchangeCodeForAppUserProfile(
+          { clientId: "c", clientSecret: "s", code: "x", redirectUri: "r", installationId: null },
+          { fetcher: fakeFetch },
+        ),
+      ).rejects.toMatchObject({ name: "GithubAppApiError", status: 401 });
+    });
+
+    it("rejects loudly when expires_in is missing (App misconfigured)", async () => {
+      const fakeFetch: typeof fetch = async () =>
+        new Response(JSON.stringify({ access_token: "a", refresh_token: "r", scope: "" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      const err = (await exchangeCodeForAppUserProfile(
+        { clientId: "c", clientSecret: "s", code: "x", redirectUri: "r", installationId: null },
+        { fetcher: fakeFetch },
+      ).catch((e: unknown) => e)) as GithubAppApiError;
+      expect(err).toBeInstanceOf(GithubAppApiError);
+      expect(err.status).toBe(500);
+      expect(err.message).toContain("expires_in");
     });
   });
 });
