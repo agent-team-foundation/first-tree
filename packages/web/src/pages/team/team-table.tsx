@@ -167,6 +167,7 @@ function GroupHeaderRow({ group, open, onToggle }: { group: TeamGroup; open: boo
           <button
             type="button"
             onClick={onToggle}
+            aria-expanded={open}
             className="inline-flex items-baseline gap-2 text-eyebrow uppercase"
             style={{
               color: "var(--fg-3)",

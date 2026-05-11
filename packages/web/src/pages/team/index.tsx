@@ -92,6 +92,9 @@ export function TeamPage() {
   }, [activity?.agents]);
 
   const members = membersQuery.data ?? [];
+  // type === "human" agents are the user-mirrors auto-created for every
+  // member (chat-identity proxies). The Humans section above already shows
+  // them as people, so the agents groups must hide them to avoid double-listing.
   const agents = (agentsQuery.data?.items ?? []).filter((a) => a.type !== "human");
 
   const adminCount = members.filter((m) => m.role === "admin").length;
@@ -112,7 +115,13 @@ export function TeamPage() {
   });
   const deleteMemberMut = useMutation({
     mutationFn: deleteMember,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["members"] }),
+    // The server reassigns the removed member's managed agents to a fallback
+    // admin (services/member.ts:deleteMember), so the agents query is stale
+    // too. Invalidate both to keep the manager column accurate.
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["members"] });
+      queryClient.invalidateQueries({ queryKey: ["agents"] });
+    },
   });
   const deleteAgentMut = useMutation({
     mutationFn: deleteAgent,
@@ -149,7 +158,10 @@ export function TeamPage() {
 
   function getHumanActions(row: HumanRow): RowAction[] {
     const actions: RowAction[] = [];
-    if (isAdmin || row.isSelf) {
+    // PATCH /orgs/:orgId/members/:id is admin-only (server gates with
+    // requireOrgAdmin). Surfacing "Edit profile" to non-admin self would
+    // produce a guaranteed 403 on submit — match the server's rule.
+    if (isAdmin) {
       actions.push({
         key: "edit",
         label: "Edit profile",
@@ -257,7 +269,7 @@ export function TeamPage() {
           </div>
         ) : agentsQuery.error || membersQuery.error ? (
           <div className="text-center py-8 text-body" style={{ color: "var(--state-error)" }}>
-            Failed to load: {String((agentsQuery.error ?? membersQuery.error) as Error)}
+            Failed to load: {formatError(agentsQuery.error ?? membersQuery.error)}
           </div>
         ) : (
           <TeamTable
@@ -306,6 +318,10 @@ export function TeamPage() {
 
 function plural(n: number, word: string): string {
   return n === 1 ? word : `${word}s`;
+}
+
+function formatError(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 function FilterBar({
@@ -411,8 +427,11 @@ function buildGroups(args: {
 
   const groups: TeamGroup[] = [];
   if (showHumans) {
+    // Distinct key per filter so a future collapsible-Humans group doesn't
+    // leak its open/closed state across "all" ↔ "admins" toggles (React
+    // reconciles GroupBody by key).
     groups.push({
-      key: "humans",
+      key: adminOnly ? "admins" : "humans",
       title: adminOnly ? "Admins" : "Humans",
       count: humanRows.length,
       rows: humanRows,
