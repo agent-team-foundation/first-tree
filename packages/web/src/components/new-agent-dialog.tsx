@@ -11,7 +11,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { getClientCapabilities, type HubClient, listClients } from "../api/activity.js";
 import { type AgentNameAvailability, checkAgentNameAvailability, createAgent } from "../api/agents.js";
-import { ApiError, type ValidationIssue } from "../api/client.js";
+import { ApiError, api, type ValidationIssue } from "../api/client.js";
 import { useAuth } from "../auth/auth-context.js";
 import { slugify } from "../utils/agent-naming.js";
 import { Button } from "./ui/button.js";
@@ -163,6 +163,13 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
   const [pickedClientId, setPickedClientId] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<ClientCapabilities | null>(null);
   const [capabilitiesClientId, setCapabilitiesClientId] = useState<string | null>(null);
+  // Connect-token state for the zero-computer recovery affordance. We only
+  // generate one when 0 clients are connected; the dialog then shows the
+  // real `first-tree-hub connect <token>` command instead of a useless
+  // bare-command hint (codex review caught this).
+  const [connectToken, setConnectToken] = useState<string | null>(null);
+  const [connectTokenExpiresAt, setConnectTokenExpiresAt] = useState<number | null>(null);
+  const [tokenCopied, setTokenCopied] = useState(false);
 
   const [clientErrors, setClientErrors] = useState<FieldErrors>({});
   const [availability, setAvailability] = useState<AvailabilityState>({ status: "idle" });
@@ -180,6 +187,9 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
       setPickedClientId(null);
       setCapabilities(null);
       setCapabilitiesClientId(null);
+      setConnectToken(null);
+      setConnectTokenExpiresAt(null);
+      setTokenCopied(false);
       setClientErrors({});
       setAvailability({ status: "idle" });
     }
@@ -311,6 +321,46 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
     };
   }, [pickedClientId]);
 
+  // Connect-token generation. Only fires when the dialog is open AND the
+  // user has zero connected computers — so an existing user creating their
+  // Nth agent doesn't burn a token just by opening the dialog. Mirrors
+  // onboarding step 2's token-refresh logic: schedule a clear at expiry
+  // and let the next render fetch a fresh one.
+  useEffect(() => {
+    if (!open) return;
+    if (connectedClients.length > 0) return;
+    if (connectToken && connectTokenExpiresAt && connectTokenExpiresAt > Date.now()) {
+      const refreshAt = Math.max(connectTokenExpiresAt - Date.now(), 0);
+      const handle = window.setTimeout(() => {
+        setConnectToken(null);
+        setConnectTokenExpiresAt(null);
+      }, refreshAt);
+      return () => window.clearTimeout(handle);
+    }
+    if (connectToken) {
+      // Expired token still hanging around — clear it before fetching anew.
+      setConnectToken(null);
+      setConnectTokenExpiresAt(null);
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await api.post<{ token: string; expiresIn: number }>("/me/connect-tokens", {});
+        if (cancelled) return;
+        setConnectToken(r.token);
+        setConnectTokenExpiresAt(Date.now() + r.expiresIn * 1000);
+      } catch {
+        // Best-effort. The UI shows "Generating token…" until the user
+        // reopens the dialog; we don't surface this as a hard error since
+        // the user's primary path (connect any machine that's already
+        // configured) doesn't depend on it.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, connectedClients.length, connectToken, connectTokenExpiresAt]);
+
   // Capabilities tied to the *currently* picked client only — guards
   // against acting on stale data right after the user switches machines.
   const activeCapabilities = pickedClientId && capabilitiesClientId === pickedClientId ? capabilities : null;
@@ -441,7 +491,10 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
         <DialogHeader>
           <DialogTitle>New Agent</DialogTitle>
         </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-5">
+        {/* min-w-0 lets the grid item (this form) shrink below its
+            content's intrinsic width — without it, a long command/token in
+            the zero-computer state would push the dialog past max-w-lg. */}
+        <form onSubmit={handleSubmit} className="space-y-5 min-w-0">
           <div className="space-y-2">
             <Label htmlFor="new-agent-display-name">Display name</Label>
             <Input
@@ -617,13 +670,16 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
             {!clientsLoaded ? (
               <p className="text-caption text-muted-foreground">Detecting connected computers…</p>
             ) : connectedClients.length === 0 ? (
-              <div className="rounded-md border border-border bg-muted/30 p-3 space-y-1">
-                <div className="text-body font-medium">No computer connected yet.</div>
-                <div className="text-caption text-muted-foreground">
-                  Run <code className="font-mono">first-tree-hub connect</code> on the machine where this agent should
-                  live. We&apos;ll pick it up here automatically.
-                </div>
-              </div>
+              <ZeroComputerBlock
+                connectToken={connectToken}
+                copied={tokenCopied}
+                onCopy={async () => {
+                  if (!connectToken) return;
+                  await navigator.clipboard.writeText(`first-tree-hub connect ${connectToken}`);
+                  setTokenCopied(true);
+                  window.setTimeout(() => setTokenCopied(false), 1500);
+                }}
+              />
             ) : connectedClients.length === 1 ? (
               <SingleComputerCard client={connectedClients[0]} />
             ) : (
@@ -709,6 +765,48 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * Empty-state block for "0 computers connected." Shows the real
+ * `first-tree-hub connect <token>` command (with a one-shot connect
+ * token generated by the parent) so the user can actually recover from
+ * this state without leaving the dialog.
+ */
+function ZeroComputerBlock({
+  connectToken,
+  copied,
+  onCopy,
+}: {
+  connectToken: string | null;
+  copied: boolean;
+  onCopy: () => void;
+}) {
+  const command = connectToken ? `first-tree-hub connect ${connectToken}` : null;
+  return (
+    <div className="rounded-md border border-border bg-muted/30 p-3 space-y-2">
+      <div className="text-body font-medium">No computer connected yet.</div>
+      <div className="text-caption text-muted-foreground">
+        Run this on the machine where this agent should live. We&apos;ll pick it up here automatically.
+      </div>
+      <div className="flex items-stretch gap-2 min-w-0">
+        <code
+          className="block flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-caption px-2 py-1.5 bg-muted/50 border border-border rounded"
+          title={command ?? undefined}
+        >
+          {command ?? "Generating token…"}
+        </code>
+        <button
+          type="button"
+          onClick={onCopy}
+          disabled={!command}
+          className="shrink-0 px-3 py-1.5 text-caption font-medium border border-border rounded hover:bg-accent/30 disabled:opacity-50"
+        >
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+    </div>
   );
 }
 
